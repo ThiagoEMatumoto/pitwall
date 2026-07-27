@@ -27,6 +27,7 @@ function Indicator({
   const util = Math.max(0, Math.min(100, window.utilization))
   return (
     <div
+      className="flex items-center gap-1.5"
       style={{ opacity: stale ? 0.55 : 1 }}
       title={`${label}: ${util.toFixed(0)}% • reseta em ${formatCountdown(window.resetsAt)}${
         stale ? ' • desatualizado' : ''
@@ -38,6 +39,13 @@ function Indicator({
         label={label}
         value={`${util.toFixed(0)}%`}
       />
+      <span
+        className="font-mono text-[10px] tabular-nums"
+        style={{ color: 'var(--color-text-dim)', opacity: 0.7 }}
+        aria-label={`reseta em ${formatCountdown(window.resetsAt)}`}
+      >
+        ↻ {formatCountdown(window.resetsAt)}
+      </span>
     </div>
   )
 }
