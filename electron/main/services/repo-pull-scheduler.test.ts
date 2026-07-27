@@ -48,6 +48,21 @@ describe('repo-pull-scheduler', () => {
     expect(pullAllWithToastsMock).toHaveBeenCalledTimes(1)
   })
 
+  it('pref ausente: agenda mesmo assim (ligado por padrão)', () => {
+    setPrefs({})
+    rescheduleAutoPull()
+
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(30 * 60 * 1000)
+    expect(pullAllWithToastsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('pref ausente: runAutoPullNow roda', async () => {
+    setPrefs({})
+    await runAutoPullNow()
+    expect(pullAllWithToastsMock).toHaveBeenCalledTimes(1)
+  })
+
   it('desligado: não cria timer', () => {
     setPrefs({ [AUTO_PULL_ENABLED_KEY]: false })
     rescheduleAutoPull()

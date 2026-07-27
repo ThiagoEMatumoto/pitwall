@@ -32,6 +32,7 @@ import * as sessionsTitleSource from './030_sessions_title_source'
 import * as taskOrigin from './031_task_origin'
 import * as featureAppDev from './032_feature_app_dev'
 import * as repoPullRuns from './033_repo_pull_runs'
+import * as resetRepoDefaultBranch from './034_reset_repo_default_branch'
 
 interface Migration {
   version: number
@@ -79,6 +80,7 @@ export const migrations: Migration[] = [
   taskOrigin,
   featureAppDev,
   repoPullRuns,
+  resetRepoDefaultBranch,
 ]
 
 export function runMigrations(db: Database.Database): void {

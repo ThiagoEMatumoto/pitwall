@@ -112,7 +112,7 @@ function GeneralTab({ open }: { open: boolean }) {
   const showHandoffsInline = useProjectsPrefsStore((s) => s.showHandoffsInline)
   const setShowHandoffsInline = useProjectsPrefsStore((s) => s.setShowHandoffsInline)
   const [autoCloneMissing, setAutoCloneMissing] = useState(true)
-  const [autoPullEnabled, setAutoPullEnabled] = useState(false)
+  const [autoPullEnabled, setAutoPullEnabled] = useState(true)
   const [autoPullIntervalMinutes, setAutoPullIntervalMinutes] = useState(AUTO_PULL_INTERVAL_DEFAULT)
   const [autoApproveHandoffs, setAutoApproveHandoffs] = useState(false)
   const [maxActiveHandoffs, setMaxActiveHandoffs] = useState(HANDOFFS_MAX_ACTIVE_DEFAULT)
@@ -131,7 +131,7 @@ function GeneralTab({ open }: { open: boolean }) {
     void vaultApi.getRoot().then(setRoot)
     void prefsApi.get<string>('scratch_dir').then((dir) => setScratchDir(dir ?? ''))
     void prefsApi.get<boolean>('autoCloneMissing').then((v) => setAutoCloneMissing(v ?? true))
-    void prefsApi.get<boolean>('autoPullEnabled').then((v) => setAutoPullEnabled(v ?? false))
+    void prefsApi.get<boolean>('autoPullEnabled').then((v) => setAutoPullEnabled(v ?? true))
     void prefsApi
       .get<number>('autoPullIntervalMinutes')
       .then((v) => setAutoPullIntervalMinutes(v ?? AUTO_PULL_INTERVAL_DEFAULT))
@@ -359,8 +359,9 @@ function GeneralTab({ open }: { open: boolean }) {
               Atualizar repos automaticamente
             </div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Periodicamente dá `git pull --ff-only` em todos os repos locais, pulando os que têm
-              alterações não-commitadas ou commits locais adiante. Desligado por padrão.
+              Periodicamente busca o estado do remote (`git fetch`) de todos os repos locais e dá
+              `git pull --ff-only` nos que estão limpos, pulando os que têm alterações
+              não-commitadas ou commits locais adiante. Ligado por padrão.
             </div>
           </div>
           <input

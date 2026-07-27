@@ -27,6 +27,7 @@ import { SessionsModal } from '@/features/sessions/SessionsModal'
 import { SpawnSessionDialog } from '@/features/sessions/SpawnSessionDialog'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore, ACTIVE_HANDOFF_STATUSES } from '@/store/handoffsStore'
+import { useRepoPullStore } from '@/store/repoPullStore'
 import { useProjectsPrefsStore } from '@/lib/projects-prefs-store'
 import { repoApi } from '@/lib/ipc'
 import type { Handoff, LinkKind, Project, Repo, UpdateRepoInput } from '../../../shared/types/ipc'
@@ -167,6 +168,9 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
   const [editOpen, setEditOpen] = useState(false)
   const [spawnOpen, setSpawnOpen] = useState(false)
   const openSession = useAppStore((s) => s.openSession)
+  // Atraso medido no último pull (auto ou manual). > 0 = o ff-only não deu conta
+  // (branch suja/divergente) e o repo segue para trás do origin.
+  const behind = useRepoPullStore((s) => s.statusByRepo[repo.id]?.behind ?? 0)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: repo.id,
   })
@@ -200,6 +204,15 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
           </span>
           <span className="truncate">{repo.label}</span>
         </button>
+
+        {behind > 0 && (
+          <span
+            className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-text-dim)]"
+            title={`${behind} commit${behind === 1 ? '' : 's'} atrás do origin no último pull`}
+          >
+            {behind} atrás
+          </span>
+        )}
 
         <Menu
           open={menuOpen}

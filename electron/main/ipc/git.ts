@@ -9,7 +9,7 @@ import { getDb } from '../services/db'
 import { backfillRepoRemotes } from '../services/git-remote'
 import { cloneMissingRepos, listMissingRepos } from '../services/repo-clone'
 import { pullAllRepos, pullOneRepo } from '../services/repo-pull'
-import { recordPullRun, type PullRunTrigger } from '../services/repo-pull-store'
+import { getLastPullRun, recordPullRun, type PullRunTrigger } from '../services/repo-pull-store'
 import { emitToast } from '../services/notifications'
 import { validateBlankRepoName } from './blank-repo'
 import type { CloneMissingResult, PullRepoResult } from '../../../shared/types/ipc'
@@ -65,9 +65,11 @@ export async function cloneMissingWithToasts(): Promise<CloneMissingResult[]> {
 }
 
 // Puxa (ff-only) todos os repos emitindo toast de progresso por-repo + um resumo
-// final. Compartilhado pelo handler manual (repos:pull-all) e pelo cron opt-in
+// final. Compartilhado pelo handler manual (repos:pull-all) e pelo cron
 // (repo-pull-scheduler.ts) — `trigger` distingue os dois na run persistida.
-// Silencioso (sem toast) quando não há repos a atualizar; a run ainda é gravada.
+// O resumo SEMPRE aparece no disparo manual (mesmo com 0 atualizados: o usuário
+// clicou e precisa de resposta) e sempre que houve erro; no cron, só quando há
+// algo a mostrar.
 export async function pullAllWithToasts(trigger: PullRunTrigger): Promise<PullRepoResult[]> {
   const startedAt = Date.now()
   const results = await pullAllRepos(({ index, total, label }) => {
@@ -77,7 +79,7 @@ export async function pullAllWithToasts(trigger: PullRunTrigger): Promise<PullRe
   const pulled = results.filter((r) => r.status === 'pulled').length
   const skipped = results.filter((r) => r.status === 'skipped').length
   const errored = results.filter((r) => r.status === 'error').length
-  if (pulled > 0 || errored > 0) {
+  if (trigger === 'manual' || pulled > 0 || errored > 0) {
     const parts = [`${pulled} atualizado${pulled === 1 ? '' : 's'}`]
     if (skipped > 0) parts.push(`${skipped} pulado${skipped === 1 ? '' : 's'}`)
     if (errored > 0) parts.push(`${errored} com erro`)
@@ -212,6 +214,10 @@ export function registerGitIpc(): void {
     const sel = pullOneSchema.parse(payload)
     return pullOneRepo(sel)
   })
+
+  // Última run de pull (auto ou manual) recortada por repo — alimenta o badge
+  // "N atrás" na sidebar. null quando nunca rodou.
+  ipcMain.handle('repos:last-run', () => getLastPullRun())
 
   ipcMain.handle('repo:create-blank', async (_e, payload: unknown) => {
     const { vaultPath, name, gitInit } = createBlankSchema.parse(payload)

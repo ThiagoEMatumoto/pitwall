@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
-import type { PullRepoResult } from '../../../shared/types/ipc'
+import type { LastPullRun, PullRepoResult, RepoPullStatus } from '../../../shared/types/ipc'
 
 // Store de repo_pull_runs (migration 033) — histórico do auto-pull. Escopo
 // mínimo: só grava e lista, sem update (uma run é imutável, gravada de uma vez
@@ -99,4 +99,25 @@ export function listPullRuns(filter?: ListPullRunsFilter): RepoPullRun[] {
     .prepare(`SELECT * FROM repo_pull_runs ORDER BY started_at DESC LIMIT ?`)
     .all(limit) as RepoPullRunRow[]
   return rows.map(rowToRun)
+}
+
+function worstBehind(result: PullRepoResult): number | undefined {
+  const values = (result.branches ?? [])
+    .map((b) => b.behind)
+    .filter((n): n is number => typeof n === 'number')
+  return values.length > 0 ? Math.max(...values) : undefined
+}
+
+// Recorte da última run pra UI: só o que a sidebar precisa por repo (status +
+// pior atraso entre as branches). Reusa listPullRuns — a run já guarda o
+// snapshot completo, não há query nova.
+export function getLastPullRun(): LastPullRun | null {
+  const [run] = listPullRuns({ limit: 1 })
+  if (!run) return null
+  const repos: RepoPullStatus[] = run.results.map((r) => ({
+    repoId: r.repoId,
+    status: r.status,
+    behind: worstBehind(r),
+  }))
+  return { finishedAt: run.finishedAt, trigger: run.trigger, repos }
 }

@@ -1,10 +1,10 @@
 import { getPref } from './prefs-store'
 import { pullAllWithToasts } from '../ipc/git'
 
-// Cron opt-in de auto-pull dos repos de projeto. Extraído de index.ts pra poder
-// ser chamado também pelo handler prefs:set — sem isso, ligar o toggle ou mudar o
-// intervalo com o app já aberto só tinha efeito depois de reiniciar (o
-// agendamento só era montado uma vez, no boot).
+// Cron de auto-pull dos repos de projeto, LIGADO por padrão (opt-out). Extraído
+// de index.ts pra poder ser chamado também pelo handler prefs:set — sem isso,
+// ligar o toggle ou mudar o intervalo com o app já aberto só tinha efeito depois
+// de reiniciar (o agendamento só era montado uma vez, no boot).
 
 export const AUTO_PULL_ENABLED_KEY = 'autoPullEnabled'
 export const AUTO_PULL_INTERVAL_MINUTES_KEY = 'autoPullIntervalMinutes'
@@ -12,9 +12,10 @@ export const AUTO_PULL_INTERVAL_MINUTES_KEY = 'autoPullIntervalMinutes'
 let autoPullTimer: ReturnType<typeof setInterval> | null = null
 
 // Pull ff-only best-effort de todos os repos locais, gated pela pref
-// autoPullEnabled. Best-effort: qualquer falha é logada e o boot/tick segue.
+// autoPullEnabled (default TRUE: sem a pref gravada, roda). Best-effort:
+// qualquer falha é logada e o boot/tick segue.
 export async function runAutoPullNow(): Promise<void> {
-  if (!getPref(AUTO_PULL_ENABLED_KEY, false)) return
+  if (!getPref(AUTO_PULL_ENABLED_KEY, true)) return
   try {
     await pullAllWithToasts('auto')
   } catch (err) {
@@ -32,7 +33,7 @@ export function rescheduleAutoPull(): void {
     clearInterval(autoPullTimer)
     autoPullTimer = null
   }
-  if (!getPref(AUTO_PULL_ENABLED_KEY, false)) return
+  if (!getPref(AUTO_PULL_ENABLED_KEY, true)) return
   const minutes = Math.max(1, getPref(AUTO_PULL_INTERVAL_MINUTES_KEY, 30))
   autoPullTimer = setInterval(() => void runAutoPullNow(), minutes * 60 * 1000)
 }
