@@ -63,6 +63,60 @@ function listPullTargets(): PullTarget[] {
   return out
 }
 
+// `fetch origin --prune` SEM refspec de destino, primeiro passo de todo pull.
+// Refresca TODOS os remote-tracking refs de uma vez (origin/main, origin/staging,
+// ...) — é o que `git worktree add ... origin/main` consome, e o que o
+// `fetch origin def:def` de pullDefaultBranch não cobre (ele só toca a default,
+// e nem chega a rodar quando a default está em checkout). Não mexe em working
+// tree nem em refs locais, então roda incondicionalmente: repo sujo ou divergente
+// também. Devolve null no sucesso — o breakdown por-branch continua sendo sobre
+// branches, só a falha precisa aparecer lá.
+async function fetchRemote(git: SimpleGit, url: string): Promise<BranchPullOutcome | null> {
+  try {
+    await git.raw([...authArgs(url), 'fetch', 'origin', '--prune'])
+    return null
+  } catch (err) {
+    return { branch: 'origin', status: 'error', detail: (err as Error).message }
+  }
+}
+
+// Quantos commits o ref local está atrás do remote-tracking, medido DEPOIS do
+// fetch e do fast-forward (branch puxada → 0; pulada → o atraso real).
+// undefined quando um dos refs não existe.
+async function countBehind(git: SimpleGit, branch: string): Promise<number | undefined> {
+  try {
+    const out = await git.raw([
+      'rev-list',
+      '--count',
+      `refs/heads/${branch}..refs/remotes/origin/${branch}`,
+    ])
+    const n = Number(out.trim())
+    return Number.isFinite(n) ? n : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function withBehind(git: SimpleGit, outcome: BranchPullOutcome): Promise<BranchPullOutcome> {
+  const behind = await countBehind(git, outcome.branch)
+  return behind === undefined ? outcome : { ...outcome, behind }
+}
+
+// Branch default derivada do DISCO, não do DB. `origin/HEAD` pode não estar
+// resolvido localmente (clone antigo, repo adicionado à mão); nesse caso
+// `set-head -a` pergunta ao remote e escreve o ref — gated pela existência de
+// origin, e a rede já está quente do fetch acima.
+async function resolveDefaultBranch(git: SimpleGit, url: string): Promise<string | null> {
+  const def = await readDefaultBranch(git)
+  if (def || !url) return def
+  try {
+    await git.raw([...authArgs(url), 'remote', 'set-head', 'origin', '-a'])
+  } catch {
+    return null
+  }
+  return readDefaultBranch(git)
+}
+
 // Pull ff-only da branch em checkout (mantém o comportamento original: um
 // remote divergente FALHA em vez de mesclar; repo sujo/com commits locais é
 // pulado, nunca destruído).
@@ -126,11 +180,12 @@ export function deriveOverallStatus(
   return { status: 'skipped', detail }
 }
 
-// Pull de UM repo, cobrindo até duas unidades de trabalho: a branch em checkout
-// (fast-forward via `pull`, comportamento original) e a branch default (via
-// `fetch` sem checkout, quando diverge da atual — é o fix: sem isso a default
-// nunca avança enquanto o usuário estiver numa feature branch). Nunca destrói
-// trabalho: repos sujos/divergentes são pulados na unidade correspondente.
+// Pull de UM repo em três unidades de trabalho: o `fetch origin` incondicional
+// (refresca TODOS os remote-tracking refs — é o que as worktrees consomem), o
+// fast-forward da branch em checkout (via `pull`) e o do ref local da default
+// (via `fetch def:def`, sem checkout, quando diverge da atual). Nunca destrói
+// trabalho: repos sujos/divergentes são pulados nas unidades de fast-forward, e
+// o fetch não toca working tree nem refs locais.
 export async function pullRepo(target: PullTarget): Promise<PullRepoResult> {
   const base = { repoId: target.repoId, label: target.label, path: target.path }
   if (!existsSync(join(target.path, '.git'))) {
@@ -138,17 +193,37 @@ export async function pullRepo(target: PullTarget): Promise<PullRepoResult> {
   }
   try {
     const git = netGit(target.path)
-    const status: StatusResult = await git.status()
-    const current = status.current
-    const def = target.defaultBranch ?? (await readDefaultBranch(git))
 
     // A URL do remote decide se o credential-helper do gh entra (http[s]) ou não
     // (file://). Preferimos a origin real do disco; caímos pro remote_url do DB.
     const url = (await readOriginUrl(target.path)).remoteUrl ?? target.remoteUrl ?? ''
 
     const branches: BranchPullOutcome[] = []
-    if (current) branches.push(await pullCurrentBranch(git, current, status, url))
-    if (def && def !== current) branches.push(await pullDefaultBranch(git, url, def))
+    // Antes de qualquer leitura de estado. Sem origin (repo local-only) não há o
+    // que buscar.
+    if (url) {
+      const failure = await fetchRemote(git, url)
+      if (failure) branches.push(failure)
+    }
+
+    const status: StatusResult = await git.status()
+    const current = status.current
+    const resolvedDef = await resolveDefaultBranch(git, url)
+    // Auto-heal do DB: a row podia ter uma feature branch como "default", gravada
+    // pelo fallback ruim de readDefaultBranch (removido).
+    if (resolvedDef && resolvedDef !== target.defaultBranch) {
+      getDb()
+        .prepare('UPDATE repos SET default_branch = ? WHERE id = ?')
+        .run(resolvedDef, target.repoId)
+    }
+    const def = resolvedDef ?? target.defaultBranch
+
+    if (current) {
+      branches.push(await withBehind(git, await pullCurrentBranch(git, current, status, url)))
+    }
+    if (def && def !== current) {
+      branches.push(await withBehind(git, await pullDefaultBranch(git, url, def)))
+    }
 
     const { status: overall, detail } = deriveOverallStatus(branches)
     return { ...base, status: overall, detail, branches }

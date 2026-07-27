@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -80,14 +80,18 @@ describe('pullRepo (integração — repos git temporários)', () => {
       defaultBranch: 'main',
     })
 
-    // (a) o ref local `main` avançou e alcançou o origin.
+    // (a) o remote-tracking ref avançou — é ELE que `git worktree add ...
+    // origin/main` consome.
+    expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
+    // (b) o ref local `main` avançou e alcançou o origin.
     expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
-    // (b) a feature branch (checkout atual) ficou intocada.
+    // (c) a feature branch (checkout atual) ficou intocada.
     expect(git(clonePath, 'rev-parse', 'feat/x')).toBe(featBefore)
     expect(git(clonePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/x')
-    // (c) `branches` reflete os dois resultados.
+    // (d) `branches` reflete os dois resultados (o fetch bem-sucedido é silencioso).
     expect(result.branches).toHaveLength(2)
     expect(result.branches?.find((b) => b.branch === 'main')?.status).toBe('pulled')
+    expect(result.branches?.find((b) => b.branch === 'main')?.behind).toBe(0)
     expect(result.branches?.find((b) => b.branch === 'feat/x')?.status).toBe('up-to-date')
     expect(result.status).toBe('pulled')
   })
@@ -107,11 +111,47 @@ describe('pullRepo (integração — repos git temporários)', () => {
       defaultBranch: 'main',
     })
 
+    expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
     expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
     expect(git(clonePath, 'rev-parse', 'feat/x')).toBe(featBefore)
     expect(result.branches?.find((b) => b.branch === 'main')?.status).toBe('pulled')
     const featOutcome = result.branches?.find((b) => b.branch === 'feat/x')
     expect(featOutcome?.status).toBe('skipped')
     expect(featOutcome?.detail).toBe('dirty')
+  })
+
+  // Cenário do `leia` (67 commits atrás): o usuário está NA branch default com a
+  // working tree suja. Antes do fix nenhum fetch acontecia — pullDefaultBranch só
+  // roda quando def !== current, e pullCurrentBranch pulava por dirty. Agora o
+  // `fetch origin` incondicional refresca origin/main mesmo assim.
+  it('na branch default com working tree suja: origin/main avança, ref local fica parado', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const originMain = git(originPath, 'rev-parse', 'main')
+    git(clonePath, 'checkout', 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    expect(mainBefore).not.toBe(originMain)
+    writeFileSync(join(clonePath, 'file.txt'), 'dirty')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    // O remote-tracking ref ficou fresco...
+    expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
+    // ...e nada do trabalho local foi destruído: ref local parado e diff intacto.
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+    expect(readFileSync(join(clonePath, 'file.txt'), 'utf8')).toBe('dirty')
+    expect(git(clonePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+
+    expect(result.branches).toHaveLength(1)
+    const mainOutcome = result.branches?.[0]
+    expect(mainOutcome?.branch).toBe('main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('dirty')
+    expect(mainOutcome?.behind).toBe(1)
   })
 })

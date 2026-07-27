@@ -59,22 +59,28 @@ export interface CloneMissingResult {
   detail?: string
 }
 
-// Resultado de UMA branch dentro do pull de um repo (branch atual OU default —
-// ver comentário de PullRepoResult). Mesmo vocabulário de status que o agregado.
+// Resultado de UMA unidade dentro do pull de um repo (branch atual, default, ou
+// o pseudo-branch 'origin' quando o fetch do remote falha — ver comentário de
+// PullRepoResult). Mesmo vocabulário de status que o agregado. `behind` = quantos
+// commits o ref local ficou atrás do remote-tracking DEPOIS do pull (0 quando
+// avançou, > 0 quando a branch foi pulada); ausente se algum ref não existe.
 export interface BranchPullOutcome {
   branch: string
   status: 'pulled' | 'up-to-date' | 'skipped' | 'error'
   detail?: string
+  behind?: number
 }
 
-// Resultado por-repo de um pull-all/pull-one (Fase 2 do repo-sync). Cada pull
-// cobre até DUAS branches — a atual (checkout, fast-forward via `pull`) e a
-// default (via `fetch origin def:def`, sem checkout, quando diverge da atual) —
-// detalhadas em `branches`. `status`/`detail` no topo são o AGREGADO
+// Resultado por-repo de um pull-all/pull-one (Fase 2 do repo-sync). Cada pull faz
+// um `fetch origin --prune` incondicional (refresca todos os remote-tracking
+// refs) e depois tenta o fast-forward de até DUAS branches — a atual (checkout,
+// via `pull`) e a default (via `fetch origin def:def`, sem checkout, quando
+// diverge da atual) — detalhadas em `branches`. O fetch só aparece em `branches`
+// quando FALHA (entrada 'origin'). `status`/`detail` no topo são o AGREGADO
 // (deriveOverallStatus em repo-pull.ts), preservado pra não quebrar a agregação
 // de toasts existente em git.ts. 'skipped' carrega o motivo em detail
 // ('dirty' | 'diverged' | 'sem .git'); 'pulled' = algo avançou; 'up-to-date' =
-// tudo já em dia; 'error' = alguma branch falhou.
+// tudo já em dia; 'error' = alguma unidade falhou.
 export interface PullRepoResult {
   repoId: string
   label: string
@@ -82,6 +88,22 @@ export interface PullRepoResult {
   status: 'pulled' | 'up-to-date' | 'skipped' | 'error'
   detail?: string
   branches?: BranchPullOutcome[]
+}
+
+// Recorte por-repo da ÚLTIMA run persistida em repo_pull_runs, pra UI mostrar
+// "quanto este repo está atrás" sem reprocessar git. `behind` = o maior atraso
+// entre as branches do repo (a que mais dói é a que ficou mais pra trás);
+// ausente quando nenhuma branch reportou atraso (ex.: fetch falhou).
+export interface RepoPullStatus {
+  repoId: string
+  status: PullRepoResult['status']
+  behind?: number
+}
+
+export interface LastPullRun {
+  finishedAt: number
+  trigger: 'auto' | 'manual'
+  repos: RepoPullStatus[]
 }
 
 // ---- Grafo de dependências entre repos (multi-repo orchestration) ----
@@ -2056,6 +2078,7 @@ export interface Api {
     cloneMissing(): Promise<CloneMissingResult[]>
     pullAll(): Promise<PullRepoResult[]>
     pullOne(selector: { repoId?: string; path?: string }): Promise<PullRepoResult>
+    lastPullRun(): Promise<LastPullRun | null>
   }
   workspace: {
     getActive(): Promise<string | null>

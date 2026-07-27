@@ -189,6 +189,7 @@ const api: Api = {
     pullAll: () => invoke('repos:pull-all'),
     pullOne: (selector: { repoId?: string; path?: string }) =>
       invoke('repos:pull-one', selector),
+    lastPullRun: () => invoke('repos:last-run'),
   },
   workspace: {
     getActive: () => invoke('workspace:get-active'),

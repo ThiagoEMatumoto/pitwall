@@ -31,6 +31,7 @@ import { Icon } from '@/components/ui/Icon'
 import { Button, ControlPill } from '@/features/brand'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { useAppStore } from '@/store/appStore'
+import { useRepoPullStore } from '@/store/repoPullStore'
 import { repoApi } from '@/lib/ipc'
 import type {
   CloneMissingResult,
@@ -63,6 +64,8 @@ export function ProjectsSidebar() {
   const [cloneFailures, setCloneFailures] = useState<CloneMissingResult[]>([])
   const [cloneError, setCloneError] = useState<string | null>(null)
 
+  const refreshPullStatus = useRepoPullStore((s) => s.refresh)
+
   const refreshMissing = useCallback(() => {
     return repoApi
       .listMissing()
@@ -72,9 +75,16 @@ export function ProjectsSidebar() {
       })
   }, [])
 
-  useEffect(() => {
+  // Faltantes e atraso (badge "N atrás") revalidam juntos: os dois só mudam
+  // depois de um pull/clone, e o pull do cron acontece sem avisar o renderer.
+  const revalidate = useCallback(() => {
     void refreshMissing()
-  }, [projects.length, refreshMissing])
+    void refreshPullStatus()
+  }, [refreshMissing, refreshPullStatus])
+
+  useEffect(() => {
+    revalidate()
+  }, [projects.length, revalidate])
 
   // Revalida quando a janela volta ao foco/visível e num intervalo curto enquanto
   // visível. O intervalo é pausado quando a aba fica oculta (document.hidden) pra
@@ -84,7 +94,7 @@ export function ProjectsSidebar() {
 
     function startPolling() {
       if (intervalId) return
-      intervalId = setInterval(() => void refreshMissing(), MISSING_POLL_MS)
+      intervalId = setInterval(revalidate, MISSING_POLL_MS)
     }
     function stopPolling() {
       if (intervalId) {
@@ -93,13 +103,13 @@ export function ProjectsSidebar() {
       }
     }
     function onFocus() {
-      void refreshMissing()
+      revalidate()
     }
     function onVisibility() {
       if (document.hidden) {
         stopPolling()
       } else {
-        void refreshMissing()
+        revalidate()
         startPolling()
       }
     }
@@ -113,7 +123,7 @@ export function ProjectsSidebar() {
       document.removeEventListener('visibilitychange', onVisibility)
       stopPolling()
     }
-  }, [refreshMissing])
+  }, [revalidate])
 
   async function cloneMissing() {
     setCloningMissing(true)
@@ -132,15 +142,15 @@ export function ProjectsSidebar() {
   }
 
   // O resumo (X atualizados, Y pulados) sai via toast do main; aqui só gerimos
-  // o estado de "em andamento" do botão. Ao final revalida os faltantes, já que
-  // um pull pode ter feito um repo aparecer/sumir.
+  // o estado de "em andamento" do botão. Ao final revalida os faltantes (um pull
+  // pode ter feito um repo aparecer/sumir) e o atraso por repo.
   async function pullAll() {
     setPullingAll(true)
     try {
       await repoApi.pullAll()
     } finally {
       setPullingAll(false)
-      void refreshMissing()
+      revalidate()
     }
   }
 
