@@ -4,7 +4,7 @@ import { PitwallLogo } from '@/features/brand'
 import { appApi, shellApi } from '@/lib/ipc'
 import type { AppInfo } from '../../../shared/types/ipc'
 
-const REPO_URL = 'https://github.com/ThiagoEMatumoto/claude-manager'
+const REPO_URL = 'https://github.com/ThiagoEMatumoto/pitwall'
 const RELEASES_URL = `${REPO_URL}/releases/latest`
 
 function issueUrl(title: string, body: string): string {

@@ -28,7 +28,7 @@ npmRebuild: false
 publish:
   provider: github
   owner: ThiagoEMatumoto
-  repo: claude-manager
+  repo: pitwall
 linux:
   target:
     - AppImage
