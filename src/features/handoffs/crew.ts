@@ -33,6 +33,24 @@ export function activeCrew(handoffs: Handoff[]): Handoff[] {
   return handoffs.filter((h) => ACTIVE_HANDOFF_STATUSES.has(h.status))
 }
 
+// Filhas que ficam FORA das superfícies de sessão do usuário (barra, switcher,
+// command palette, Home): as de handoff ativo que ainda não têm pane aberta.
+// Enquanto só rodam, elas vivem no dock; assim que ele abre o terminal de uma,
+// ela vira sessão de primeira classe — com chip na barra e entrada no switcher,
+// como qualquer aba aberta — e some de novo quando ele fecha a aba.
+export function hiddenCrewSessionIds(
+  handoffs: Handoff[],
+  liveSessions: LiveSessionInfo[],
+  openCcSessionIds: Set<string>,
+): Set<string> {
+  const childIds = childSessionIds(handoffs)
+  const hidden = new Set<string>()
+  for (const s of liveSessions) {
+    if (childIds.has(s.id) && !openCcSessionIds.has(s.ccSessionId)) hidden.add(s.id)
+  }
+  return hidden
+}
+
 // Endereço das filhas do dock no vocabulário das notificações: o evento do main
 // vem com ccSessionId, e o dock raciocina em Session.id. Serve pra calar o aviso
 // que o dock já dá (ver NotificationToast). Puro → testável.

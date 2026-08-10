@@ -14,7 +14,7 @@ import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { relativeTime } from '@/lib/time'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
-import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
+import { useVisibleLiveSessions } from './useGlobalSessions'
 import { useWaitingCount } from './useWaitingCount'
 import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
@@ -64,7 +64,10 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   const focusPaneId = useAppStore((s) => s.focusPaneId)
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
   const endSession = useAppStore((s) => s.endSession)
-  const handoffs = useHandoffsStore((s) => s.handoffs)
+  // Filhas de handoff sem pane aberta vivem no Crew Dock, não na barra — senão o
+  // usuário fica com N chips pra monitorar. Abriu o terminal de uma, ela ganha
+  // chip aqui como qualquer sessão (ver useVisibleLiveSessions).
+  const visibleSessions = useVisibleLiveSessions()
   const waitingCount = useWaitingCount()
   const pinnedIds = useStripPinsStore((s) => s.pinnedIds)
   const pinsLoaded = useStripPinsStore((s) => s.loaded)
@@ -94,14 +97,6 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     if (!pinsLoaded || liveSessions.length === 0) return
     void prunePins(new Set(liveSessions.map((item) => item.id)), pendingEndSessionIds())
   }, [pinsLoaded, liveSessions, prunePins])
-
-  // Filhas de handoffs ativos vivem no rollup do painel Handoffs, não na lista
-  // flat — senão o usuário fica com N chips pra monitorar.
-  const childIds = useMemo(() => childSessionIds(handoffs), [handoffs])
-  const visibleSessions = useMemo(
-    () => liveSessions.filter((item) => !childIds.has(item.id)),
-    [liveSessions, childIds],
-  )
 
   // Fixados primeiro (ordem de fixação); resto na ordem original. Sem
   // auto-reorder por status — o sinal de "aguardando" é a cor/badge.
