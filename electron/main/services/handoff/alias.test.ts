@@ -83,18 +83,29 @@ describe('buildHandoffAlias', () => {
     ).toBe('gustavo-auth-refactor')
   })
 
-  it('cai no sufixo numérico só quando o pool inteiro está ocupado', () => {
-    const taken = ['mauricio-auth-refactor', 'rafael-auth-refactor', 'gustavo-auth-refactor']
+  it('empresta nome de outro papel quando o pool do papel esgota', () => {
+    const taken = ['mauricio-auth-refactor', 'rafael-outra-coisa', 'gustavo-mais-uma']
+    expect(buildHandoffAlias({ role: 'implementer', task: 'Auth refactor', taken })).toBe(
+      'otavio-auth-refactor',
+    )
+  })
+
+  it('cai no sufixo numérico só quando o roster inteiro está ocupado', () => {
+    // 9 nomes = cap de handoffs ativos (5) com folga; na prática não se chega aqui.
+    const taken = [
+      'mauricio-a',
+      'rafael-b',
+      'gustavo-c',
+      'otavio-d',
+      'marina-e',
+      'caio-f',
+      'renata-g',
+      'joaquim-h',
+      'lia-i',
+    ]
     expect(buildHandoffAlias({ role: 'implementer', task: 'Auth refactor', taken })).toBe(
       'mauricio-auth-refactor-2',
     )
-    expect(
-      buildHandoffAlias({
-        role: 'implementer',
-        task: 'Auth refactor',
-        taken: [...taken, 'mauricio-auth-refactor-2'],
-      }),
-    ).toBe('mauricio-auth-refactor-3')
   })
 
   it('compara o ocupado ignorando caixa e espaços em volta', () => {
@@ -107,10 +118,22 @@ describe('buildHandoffAlias', () => {
     ).toBe('rafael-auth-refactor')
   })
 
-  it('escopos diferentes NÃO colidem (o mesmo nome se repete)', () => {
+  it('o nome é único entre as sessões vivas, mesmo com escopos diferentes', () => {
+    // A razão de ser do alias: "manda pro Maurício" tem que resolver UMA sessão.
+    // Se o nome se repetisse por escopo, voltaríamos a depender do sufixo.
     const taken = ['mauricio-auth-refactor']
     expect(buildHandoffAlias({ role: 'implementer', task: 'Billing webhook', taken })).toBe(
-      'mauricio-billing-webhook',
+      'rafael-billing-webhook',
     )
+  })
+
+  it('não reserva nome para alias no formato antigo (handoff: repo)', () => {
+    expect(
+      buildHandoffAlias({
+        role: 'implementer',
+        task: 'Auth refactor',
+        taken: ['handoff: legal-app'],
+      }),
+    ).toBe('mauricio-auth-refactor')
   })
 })
