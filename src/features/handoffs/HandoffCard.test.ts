@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-// HandoffsPanel importa @/lib/ipc, que lê window.api no module-eval. As funções
+// HandoffCard importa @/lib/ipc, que lê window.api no module-eval. As funções
 // puras testadas aqui não tocam a API, mas o import precisa de um stub mínimo.
 // Stub ANTES do import dinâmico do componente (top-level await garante a ordem).
 import { vi } from 'vitest'
@@ -10,7 +10,7 @@ vi.stubGlobal('window', {
 })
 
 const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor } = await import(
-  './HandoffsPanel'
+  './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
 

@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store/appStore'
-import { StatusBadge, liveBadgeFor } from '@/features/handoffs/HandoffsPanel'
+import { StatusBadge, liveBadgeFor } from '@/features/handoffs/HandoffCard'
 import type { Handoff } from '../../../shared/types/ipc'
 
 interface Props {
