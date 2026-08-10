@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CircleSlash,
   CornerDownLeft,
+  MoreHorizontal,
   Play,
   Send,
   TerminalSquare,
@@ -10,6 +11,7 @@ import {
   ThumbsUp,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { Menu } from '@/components/ui/Menu'
 import { handoffsApi, prefsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -161,6 +163,7 @@ interface Props {
 
 export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
   const [expanded, setExpanded] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
@@ -278,6 +281,11 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
   const live = isLiveHandoff ? liveBadgeFor(childLive?.status) : null
   const needsInput = handoff.status === 'needs_input'
   const highlight = needsInput || (live?.attention ?? false)
+  // UM selo por card. Com a filha viva, o estado DELA é o sinal que importa —
+  // "aguardando você" diz tudo que "Em andamento" diria, e mais. needs_input
+  // vence porque aí quem tem que agir é a mãe. Fora do ar (pendente, concluído,
+  // falhou) sobra o status do handoff.
+  const liveBadgeWins = !!live && !needsInput
   const lastText = childLive?.lastText?.trim() || null
   const activityLabel = liveActivityLabel(childLive?.lastActivityAt ?? null, Date.now())
   const ctxLabel = contextLabel(childLive?.tokens)
@@ -285,10 +293,15 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
   // Input de intervenção: só quando a filha está VIVA (childLive presente). Em
   // needs_input/waiting o tom vira "Responder" com placeholder contextual.
   const canSend = !!childLive
-  const sendLabel = needsInput || childLive?.status === 'waiting' ? 'Responder' : 'Enviar'
+  // Rótulo do botão e placeholder saem da MESMA condição: o campo não pode
+  // convidar a "enviar mensagem" enquanto o botão diz "Responder".
+  const answering = needsInput || childLive?.status === 'waiting'
+  const sendLabel = answering ? 'Responder' : 'Enviar'
   const sendPlaceholder = needsInput
     ? 'Responder à pergunta da filha…'
-    : 'Enviar mensagem para a filha…'
+    : answering
+      ? 'Responder à filha…'
+      : 'Enviar mensagem para a filha…'
 
   async function sendMessage() {
     const text = message.trim()
@@ -306,10 +319,12 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
     }
   }
 
+  // shrink-0 no card: numa coluna rolável (o dock), sem isto o flex comprime o
+  // último card e corta o rodapé dele em vez de deixar a lista rolar.
   return (
     <div
       data-testid="handoff-card"
-      className="rounded-[14px] border bg-[var(--color-surface)] p-3"
+      className="shrink-0 rounded-[14px] border bg-[var(--color-surface)] p-3"
       style={{
         borderColor: highlight ? 'var(--color-warning)' : 'var(--color-border)',
         background: highlight
@@ -323,9 +338,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
             <span className="truncate text-sm font-medium text-[var(--color-text)]">
               {alias ? alias.name : `→ ${repoLabel}`}
             </span>
-            <StatusBadge status={handoff.status} />
-            {live &&
-              (tight ? (
+            {liveBadgeWins && live ? (
+              tight ? (
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
                   style={{ background: live.color }}
@@ -333,7 +347,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
                 />
               ) : (
                 <span
-                  className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+                  className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
                   style={{
                     color: live.color,
                     borderColor: `color-mix(in srgb, ${live.color} 45%, transparent)`,
@@ -344,7 +358,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: live.color }} />
                   {live.label}
                 </span>
-              ))}
+              )
+            ) : (
+              <StatusBadge status={handoff.status} />
+            )}
           </div>
           {alias && (
             <div
@@ -390,28 +407,48 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
               {formatDate(handoff.createdAt)}
             </span>
           )}
-          {childLive && (
-            <button
-              type="button"
-              onClick={() => void focusOrOpenSession(childLive)}
-              title="Anexar o terminal desta sessão-filha"
-              className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-            >
-              <Icon as={TerminalSquare} size={12} />
-              {!tight && 'Abrir terminal'}
-            </button>
-          )}
-          {canForceFail && (
-            <button
-              type="button"
-              onClick={() => void forceFail()}
-              disabled={failing}
-              title="Marcar este handoff como falho (recovery manual)"
-              className="flex items-center gap-1 rounded border border-[var(--color-danger)]/40 px-2 py-0.5 text-[11px] text-[var(--color-danger)] transition hover:bg-[var(--color-danger)]/10 disabled:opacity-50"
-            >
-              <Icon as={AlertTriangle} size={12} />
-              {!tight && (failing ? 'Falhando…' : 'Forçar falha')}
-            </button>
+          {(childLive || canForceFail) && (
+            <div className="flex items-center gap-1">
+              {childLive && (
+                <button
+                  type="button"
+                  onClick={() => void focusOrOpenSession(childLive)}
+                  title="Anexar o terminal desta sessão-filha"
+                  className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                >
+                  <Icon as={TerminalSquare} size={12} />
+                  {!tight && 'Abrir terminal'}
+                </button>
+              )}
+              {/* Recovery manual mora no menu: é destrutivo e o dock abre
+                  sozinho — no mesmo peso de "Abrir terminal" seria convite a
+                  clique errado. portal: a lista do dock rola (overflow), e o
+                  painel absolute seria recortado por ela. */}
+              {canForceFail && (
+                <Menu
+                  open={menuOpen}
+                  onClose={() => setMenuOpen(false)}
+                  portal
+                  items={[
+                    {
+                      label: failing ? 'Falhando…' : 'Forçar falha',
+                      danger: true,
+                      onClick: () => void forceFail(),
+                    },
+                  ]}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen((v) => !v)}
+                    title="Mais ações"
+                    aria-label="Mais ações"
+                    className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  >
+                    <Icon as={MoreHorizontal} size={14} />
+                  </button>
+                </Menu>
+              )}
+            </div>
           )}
           {isInterrupted && resumable && (
             <button
@@ -478,7 +515,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
               borderColor: highlight ? 'var(--color-warning)' : 'var(--color-accent)',
             }}
           >
-            <Icon as={needsInput || childLive?.status === 'waiting' ? CornerDownLeft : Send} size={12} />
+            <Icon as={answering ? CornerDownLeft : Send} size={12} />
             {sending ? 'Enviando…' : sendLabel}
           </button>
         </form>

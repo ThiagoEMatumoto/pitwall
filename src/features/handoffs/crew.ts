@@ -12,6 +12,15 @@ export interface AliasParts {
   scope: string | null
 }
 
+// Rótulo visível dos nomes do roster (ver ROLE_NAMES em
+// electron/main/services/handoff/alias.ts). O alias técnico é kebab sem acento —
+// ele é o ENDEREÇO do SendMessage e não pode mudar —, mas na tela o nome da
+// pessoa aparece escrito como se escreve.
+const DISPLAY_NAMES: Record<string, string> = {
+  mauricio: 'Maurício',
+  otavio: 'Otávio',
+}
+
 // Alias `<nome>-<escopo>` (ver electron/main/services/handoff/alias.ts): o nome é
 // sempre a primeira palavra do kebab; o resto (incluindo sufixo numérico de
 // desambiguação) é o escopo. Null quando não há alias — handoff legado ou filha
@@ -22,7 +31,7 @@ export function splitAlias(alias: string | null | undefined): AliasParts | null 
   const [first, ...rest] = raw.split('-').filter(Boolean)
   if (!first) return null
   return {
-    name: first.charAt(0).toUpperCase() + first.slice(1),
+    name: DISPLAY_NAMES[first.toLowerCase()] ?? first.charAt(0).toUpperCase() + first.slice(1),
     scope: rest.join('-') || null,
   }
 }
