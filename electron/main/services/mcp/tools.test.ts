@@ -754,6 +754,12 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(spawned).toHaveLength(1)
     expect(spawned[0].name).toBe('mauricio-refatorar-autenticacao-oauth')
     expect(spawned[0].permissionMode).toBe('acceptEdits')
+    // O briefing entregue à filha anuncia o MESMO apelido pelo qual ela é
+    // endereçada — o alias não pode divergir entre o -n e o system prompt.
+    expect(spawned[0].systemPromptText).toContain(
+      'Seu apelido: mauricio-refatorar-autenticacao-oauth',
+    )
+    expect(spawned[0].systemPromptText).toContain('<cross-session-message>')
 
     // A UI não spawna mais — o broadcast do main é o que a mantém viva.
     const last = notify.calls.at(-1)

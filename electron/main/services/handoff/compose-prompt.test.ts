@@ -15,6 +15,7 @@ describe('composeHandoffPrompt', () => {
     edges,
     featureTitle: 'Observabilidade',
     handoffId: 'h-123',
+    alias: 'mauricio-h-123',
   })
 
   it('contém as 4 seções do template', () => {
@@ -65,6 +66,7 @@ describe('composeHandoffPrompt', () => {
         task: 't',
         edges: [{ kind, label: null, direction: 'from-mother' }],
         handoffId: 'h-x',
+        alias: 'mauricio-h-x',
       })
       expect(p).toContain(phrase)
     }
@@ -77,6 +79,7 @@ describe('composeHandoffPrompt', () => {
       task: 't',
       edges: [{ kind: 'whatever', label: null, direction: 'from-mother' }],
       handoffId: 'h-x',
+      alias: 'mauricio-h-x',
     })
     expect(p).toContain('se relaciona com')
   })
@@ -88,6 +91,7 @@ describe('composeHandoffPrompt', () => {
       task: 't',
       edges: [],
       handoffId: 'h-prog',
+      alias: 'mauricio-h-prog',
     })
     expect(p).toContain('handoff_progress')
     expect(p).toContain('handoff_report')
@@ -101,10 +105,45 @@ describe('composeHandoffPrompt', () => {
       task: 't',
       edges: [],
       handoffId: 'h-ask',
+      alias: 'mauricio-h-ask',
     })
     expect(p).toContain('handoff_ask')
     expect(p).toContain('handoffId="h-ask"')
     expect(p).toMatch(/decis|arquitetural/i)
+  })
+
+  it('anuncia a identidade da filha: apelido, escopo e handoffId', () => {
+    expect(prompt).toContain('## Identidade')
+    expect(prompt).toContain('Seu apelido: mauricio-h-123')
+    expect(prompt).toContain('Seu escopo: backend — Adicionar endpoint de health-check')
+    expect(prompt).toContain('handoffId: h-123')
+  })
+
+  it('define o canal de volta sem depender de saber quem é a mãe de antemão', () => {
+    expect(prompt).toContain('## Canais')
+    // O interlocutor é quem escreveu primeiro; a resposta copia o `from`.
+    expect(prompt).toMatch(/remetente da primeira mensagem/i)
+    expect(prompt).toContain('<cross-session-message>')
+    expect(prompt).toContain('SendMessage')
+  })
+
+  it('proíbe falar com o humano e com outras filhas (convenção, não enforcement)', () => {
+    expect(prompt).toMatch(/NÃO fala com o humano/i)
+    expect(prompt).toMatch(/NÃO fala com outras sessões filhas/i)
+  })
+
+  it('exige evidência positiva no report e nega "parece pronto"', () => {
+    expect(prompt).toMatch(/EVID[ÊE]NCIA POSITIVA/i)
+    expect(prompt).toContain('comando rodado + output observado')
+    expect(prompt).toMatch(/Parece pronto/i)
+  })
+
+  it('traz circuit breaker de 3 tentativas e o formato de BLOQUEIO', () => {
+    expect(prompt).toMatch(/3 tentativas/i)
+    expect(prompt).toContain('BLOQUEIO:')
+    expect(prompt).toContain('OPÇÕES:')
+    expect(prompt).toContain('RECOMENDO:')
+    expect(prompt).toContain('CUSTO DE ERRAR:')
   })
 
   it('plan mode injeta restrição read-only; auto-edits avisa do denylist', () => {
@@ -114,6 +153,7 @@ describe('composeHandoffPrompt', () => {
       task: 't',
       edges: [],
       handoffId: 'h1',
+      alias: 'mauricio-h1',
       mode: 'plan',
     })
     expect(plan).toMatch(/PLAN MODE|read-only/i)
@@ -124,6 +164,7 @@ describe('composeHandoffPrompt', () => {
       task: 't',
       edges: [],
       handoffId: 'h2',
+      alias: 'mauricio-h2',
       mode: 'auto-edits',
     })
     expect(auto).toMatch(/auto-edits|destrutivos/i)

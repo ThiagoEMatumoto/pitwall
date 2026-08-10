@@ -769,6 +769,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
           edges,
           featureTitle,
           handoffId,
+          alias,
           mode,
         })
 
@@ -834,7 +835,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_result',
       title: 'Poll handoff result',
       description:
-        'Poll a handoff by id. Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus live child activity { liveStatus, lastActivityAt, lastText, tokens }. status=needs_input means the child asked a question (pendingQuestion) and is waiting — answer it with handoff_message(handoffId, text). liveStatus (working|waiting|idle|ended) reflects the child PTY in real time: use it to tell genuine progress from a stall. Keep polling until status=done (then read summary) or rejected/failed.',
+        'Read the durable state and live TELEMETRY of one handoff — not the conversation channel (that is SendMessage to the child alias). Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus { liveStatus, lastActivityAt, lastText, tokens }, which cross-session messaging does NOT give you: liveStatus (working|waiting|idle|ended) reflects the child PTY in real time, so it is how you tell genuine progress from a stall. status=needs_input means the child raised a blocker (pendingQuestion) and stopped — answer it over SendMessage, or with handoff_message as fallback. Read this at supervision ticks; do not busy-poll in place of talking to the child.',
       inputSchema: handoffResultSchema,
       handler: (args) => {
         const { handoffId } = handoffResultSchema.parse(args)
@@ -868,7 +869,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_message',
       title: 'Message the child session',
       description:
-        'Called by the MOTHER to send a message into the running child session — typically to ANSWER a needs_input question, or to give mid-flight guidance. The text is pasted into the child’s REPL. Requires the handoff to be in-flight (running or needs_input) AND the child PTY alive. After this, the child resumes (status returns to running). Use handoff_result to read the child’s pendingQuestion first.',
+        'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). Read the pending blocker with handoff_result first.',
       inputSchema: handoffMessageSchema,
       handler: (args) => {
         const { handoffId, text } = handoffMessageSchema.parse(args)
@@ -898,7 +899,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_ask',
       title: 'Ask the mother a question',
       description:
-        'Called by the CHILD session when it needs a decision or input from the mother/human before it can continue (architectural choice, ambiguity, missing credential). Records the question and moves the handoff to needs_input — the mother sees it via handoff_result(pendingQuestion) and replies with handoff_message. Do NOT use for routine progress (use handoff_progress) or to report completion (use handoff_report).',
+        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
       inputSchema: handoffAskSchema,
       handler: (args) => {
         const { handoffId, question } = handoffAskSchema.parse(args)
