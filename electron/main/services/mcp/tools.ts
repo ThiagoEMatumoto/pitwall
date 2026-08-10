@@ -860,12 +860,13 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_list',
       title: 'List handoffs',
       description:
-        'List handoffs (optionally filtered by status), most recent first. Returns { handoffId, targetRepo, status, mode, currentStep, task }. Use to recover a lost handoffId or to see active work per repo before delegating again.',
+        'List handoffs (optionally filtered by status), most recent first. Returns { handoffId, alias, targetRepo, status, mode, currentStep, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
       inputSchema: handoffListSchema,
       handler: (args) => {
         const { status } = handoffListSchema.parse(args)
         const items = handoffStore.list(status ? { status } : undefined).map((h) => ({
           handoffId: h.id,
+          alias: handoffStore.childAlias(h.childSessionId),
           targetRepo: h.targetRepoLabel,
           status: h.status,
           mode: h.mode,

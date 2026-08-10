@@ -12,6 +12,27 @@ import { SPAWNABLE_MODEL_ALIASES } from '../../../shared/models'
 // híbrido nativo da CLI: Opus no plan mode, Sonnet na execução).
 export const SPAWN_MODEL_WHITELIST = new Set<string>(SPAWNABLE_MODEL_ALIASES)
 
+// Settings entregues via `--settings <json-inline>` a CADA sessão-filha de
+// handoff — NUNCA global. `crossSessionInbound: accept` deixa a filha RECEBER
+// SendMessage do orquestrador; sem isso a mensagem fica `held` silenciosamente e
+// o canal peer parece funcionar sem funcionar. Global afetaria todas as sessões
+// do usuário, inclusive as que ele não quer expostas.
+export const HANDOFF_CHILD_SETTINGS_JSON = '{"crossSessionInbound":"accept"}'
+
+// Modo do handoff → --permission-mode da filha. 'interactive' fica sem flag
+// (legado: o claude pergunta cada ação). Espelha permissionModeFor do renderer
+// (src/store/handoffsStore.ts) — o main é quem decide quando o spawn parte da MCP.
+export function permissionModeForHandoffMode(mode: string | null | undefined): string | null {
+  switch (mode) {
+    case 'plan':
+      return 'plan'
+    case 'auto-edits':
+      return 'acceptEdits'
+    default:
+      return null
+  }
+}
+
 // Whitelist do --effort: espelha a defesa-em-profundidade do --model.
 export const SPAWN_EFFORT_WHITELIST = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 

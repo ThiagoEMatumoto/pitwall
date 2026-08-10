@@ -239,6 +239,11 @@ export interface HandoffSpawnContext {
   projectName: string
   projectIcon: string | null
   projectColor: string | null
+  // Alias da filha (`<nome>-<escopo>`, ex.: 'mauricio-auth-refactor'), resolvido
+  // no MAIN contra as sessões vivas. Vira o `-n <name>` do spawn e, por tabela, o
+  // endereço do SendMessage. Só usado no caminho com gate humano ligado — no
+  // caminho normal o main gera e spawna sozinho.
+  alias: string
 }
 
 export interface CreateHandoffInput {
@@ -574,6 +579,13 @@ export interface SpawnSessionInput {
   // Ferramentas a NEGAR via `--disallowedTools <specs...>` (ex.: 'Bash(rm:*)').
   // Denylist destrutivo do handoff auto-edits. Cada spec é validado/escapado.
   disallowedTools?: string[]
+  // Marca o spawn como sessão-filha de handoff. Efeitos (decididos no MAIN, não
+  // aqui — o renderer não consegue injetar settings arbitrários):
+  //  1. `--settings '{"crossSessionInbound":"accept"}'` POR filha, pra ela receber
+  //     SendMessage do orquestrador (sem isso a mensagem fica `held` em silêncio);
+  //  2. `name` espelhado em sessions.title com title_source='manual' — o alias é o
+  //     ENDEREÇO do peer e o rename automático do Claude Code não pode sobrescrevê-lo.
+  handoffChild?: boolean
   cols?: number
   rows?: number
 }

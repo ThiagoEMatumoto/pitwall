@@ -314,6 +314,9 @@ interface AppState {
     systemPromptText?: string
     permissionMode?: PermissionMode
     disallowedTools?: string[]
+    // Filha de handoff: o main fixa o título (alias = endereço do peer) e passa
+    // `--settings crossSessionInbound=accept` só nessa sessão.
+    handoffChild?: boolean
   }) => Promise<string>
   // Sessão avulsa: spawn sem repo (cwd = scratch dir do backend).
   openQuickSession: () => Promise<void>
@@ -492,6 +495,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       systemPromptText: input.systemPromptText,
       permissionMode: input.permissionMode,
       disallowedTools: input.disallowedTools,
+      handoffChild: input.handoffChild,
     })
     void get().refreshLiveSessions()
     return session.id

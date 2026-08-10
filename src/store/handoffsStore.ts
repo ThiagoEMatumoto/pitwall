@@ -103,11 +103,15 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
       // rollup (abrível sob demanda). O modo do handoff vira permissionMode.
       const childSessionId = await useAppStore.getState().spawnSessionBackground({
         repoId: ctx.repo.id,
-        name: `handoff: ${ctx.repo.label}`,
+        // Alias `<nome>-<escopo>` resolvido no main (único contra as sessões
+        // vivas). É o `-n <name>` do spawn e, por tabela, o endereço do
+        // SendMessage — nada de `handoff: <repo>`, que colide e vira hex.
+        name: ctx.alias,
         featureId: handoff?.featureId ?? undefined,
         initialPrompt: kickoff,
         systemPromptText: editedPrompt,
         permissionMode: permissionModeFor(handoff?.mode ?? 'interactive'),
+        handoffChild: true,
       })
       await handoffsApi.markRunning({ id, childSessionId })
       await get().load()

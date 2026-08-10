@@ -5,6 +5,7 @@ import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
 import { injectIntoChild } from '../services/handoff/inject'
+import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import type { HandoffSpawnContext, LinkKind, Handoff, HandoffStatus, Repo } from '../../../shared/types/ipc'
 
 interface RepoJoinRow {
@@ -162,11 +163,20 @@ export function registerHandoffsIpc(): void {
       )
       .get(handoff.targetRepoId) as RepoJoinRow | undefined
     if (!row) throw new Error(`Repo-alvo do handoff não encontrado: ${handoff.targetRepoId}`)
+    // Alias resolvido AQUI (e não no create) porque a unicidade é contra as
+    // sessões vivas AGORA. Determinístico para o mesmo (papel, task, ocupados) —
+    // o mesmo alias que o briefing já anunciou à filha, salvo colisão nova.
+    const alias = buildHandoffAlias({
+      role: roleForHandoffMode(handoff.mode),
+      task: handoff.task,
+      taken: store.activeSessionNames(),
+    })
     return {
       repo: toRepo(row),
       projectName: row.project_name,
       projectIcon: row.project_icon ?? null,
       projectColor: row.project_color ?? null,
+      alias,
     }
   })
 }

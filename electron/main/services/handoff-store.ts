@@ -150,6 +150,26 @@ export function get(id: string): Handoff | null {
   return row ? toEntity(row) : null
 }
 
+// Nomes já ocupados por sessões VIVAS — base de unicidade do alias da filha (o
+// alias vira o `-n <name>` e é espelhado em sessions.title). Colisão de nome faz
+// a CLI desambiguar com hex ilegível no ListAgents, então é o que evitamos aqui.
+export function activeSessionNames(): string[] {
+  const rows = getDb()
+    .prepare("SELECT title FROM sessions WHERE status = 'running' AND title IS NOT NULL")
+    .all() as { title: string }[]
+  return rows.map((r) => r.title)
+}
+
+// Alias da filha de um handoff (null se ainda não spawnou ou se a sessão sumiu).
+// Fonte da verdade = sessions.title, fixado como 'manual' no spawn.
+export function childAlias(childSessionId: string | null): string | null {
+  if (!childSessionId) return null
+  const row = getDb()
+    .prepare('SELECT title FROM sessions WHERE id = ?')
+    .get(childSessionId) as { title: string | null } | undefined
+  return row?.title ?? null
+}
+
 export function list(opts?: { status?: HandoffStatus | HandoffStatus[] }): Handoff[] {
   const db = getDb()
   let rows: HandoffRow[]
