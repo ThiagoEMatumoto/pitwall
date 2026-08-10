@@ -158,12 +158,16 @@ export interface ConnectHubToAllInput {
 // ---- Handoffs cross-repo (multi-repo orchestration) ----
 //
 // Uma sessão-mãe (Claude) pede pra abrir uma sessão-filha noutro repo com um
-// prompt estruturado; passa por gate humano; a filha reporta um resumo de volta.
+// prompt estruturado; a filha é despachada direto (sem gate humano, salvo a pref
+// handoffs.requireApproval) e reporta um resumo de volta.
 // status app-level: pending → approved → running → done | rejected | failed.
 // needs_input é um estado VIVO (não-terminal) DENTRO de running: a filha
 // levantou uma pergunta (handoff_ask) e aguarda a mãe responder (handoff_message,
 // que a faz voltar pra running). Transições extras:
-//   running ⇄ needs_input  (handoff_ask / handoff_message ou handoff_progress).
+//   running ⇄ needs_input  (handoff_ask / handoff_message).
+// SÓ a resposta da mãe encerra a pergunta. handoff_progress durante needs_input
+// grava o passo mas PRESERVA pergunta e status — antes ele zerava
+// pending_question, e 33% das perguntas morriam assim sem a mãe nunca ver.
 // needs_input conta como in-flight (teto/dedup/reconciliação) — NÃO é terminal.
 //
 // 'interrupted' é um estado RECUPERÁVEL: a sessão-filha morreu (PTY exit no boot

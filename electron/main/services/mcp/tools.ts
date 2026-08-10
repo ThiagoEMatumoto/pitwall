@@ -574,8 +574,8 @@ const sessionHandoffSchema = z.object({
   // (edita, com denylist destrutivo) p/ implementação; 'interactive' = pergunta
   // tudo (legado). Default: 'plan' (seguro). O humano confirma no gate.
   mode: handoffMode.optional(),
-  // Cria mesmo havendo um handoff ativo pro mesmo repo-alvo (default: bloqueia
-  // duplicado e devolve o existente).
+  // Despacha mesmo havendo um handoff ativo pro mesmo repo-alvo (default: recusa
+  // com erro, sem entregar o handle da filha que já está lá).
   force: z.boolean().optional(),
 })
 
@@ -658,7 +658,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If an active handoff to the same target already exists it returns that one (pass force=true to override); at most 5 handoffs may be active at once. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error (that child may belong to another mother session — you do not inherit it); pass force=true to dispatch a second one anyway. At most 5 handoffs may be active at once. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -703,20 +703,19 @@ function handoffTools(notify: McpNotify): ToolDef[] {
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
 
         // Dedup por alvo: evita dois agentes mutando o mesmo repo em paralelo
-        // (causa-raiz de quase-acidente). Devolve o handoff existente em vez de
-        // criar duplicado, salvo force=true.
+        // (causa-raiz de quase-acidente). O predicado é por REPO, não por sessão-mãe
+        // (mother_session_id ainda não é gravado), então o handoff ativo encontrado
+        // pode ser de OUTRA mãe — devolver o handle dele (handoffId/alias/status)
+        // fazia esta mãe adotar uma filha alheia e conversar com ela. Recusa com
+        // erro informativo; force=true segue despachando uma segunda.
         if (!input.force) {
           const existing = handoffStore.findActiveByTarget(target.id)
           if (existing) {
             const existingAlias = handoffStore.childAlias(existing.childSessionId)
+            const who = existingAlias ? `a filha "${existingAlias}"` : 'uma filha (ainda sem alias)'
             return ok({
-              handoffId: existing.id,
-              alias: existingAlias,
-              status: existing.status,
               duplicate: true,
-              message: existingAlias
-                ? `Já existe um handoff ativo (${existing.status}) para ${target.label}, tocado por "${existingAlias}". Fale com ela via SendMessage({ to: "${existingAlias}", ... }) em vez de abrir outra, ou passe force=true para criar mesmo assim.`
-                : `Já existe um handoff ativo (${existing.status}) para ${target.label}. Acompanhe com handoff_result("${existing.id}") ou passe force=true para criar outro mesmo assim.`,
+              error: `${target.label} já tem ${who} ativa (status: ${existing.status}) — e ela pode NÃO ser sua: o dedup é por repo-alvo, não por sessão-mãe. Não assuma o controle de uma filha que você não despachou. Se este trabalho é seu e precisa rodar mesmo assim, chame de novo com force: true; senão aguarde a atual concluir.`,
             })
           }
         }
@@ -835,7 +834,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_result',
       title: 'Poll handoff result',
       description:
-        'Read the durable state and live TELEMETRY of one handoff — not the conversation channel (that is SendMessage to the child alias). Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus { liveStatus, lastActivityAt, lastText, tokens }, which cross-session messaging does NOT give you: liveStatus (working|waiting|idle|ended) reflects the child PTY in real time, so it is how you tell genuine progress from a stall. status=needs_input means the child raised a blocker (pendingQuestion) and stopped — answer it over SendMessage, or with handoff_message as fallback. Read this at supervision ticks; do not busy-poll in place of talking to the child.',
+        'Read the durable state and live TELEMETRY of one handoff — not the conversation channel (that is SendMessage to the child alias). Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus { liveStatus, lastActivityAt, lastText, tokens }, which cross-session messaging does NOT give you: liveStatus (working|waiting|idle|ended) reflects the child PTY in real time, so it is how you tell genuine progress from a stall. status=needs_input means the child raised a blocker (pendingQuestion) — answer it over SendMessage, or with handoff_message as fallback. needs_input only clears when the answer goes through handoff_message or the app inbox; the child reporting progress does NOT clear it, so a needs_input whose currentStep keeps advancing means the child already got your answer off-band and resumed. Read this at supervision ticks; do not busy-poll in place of talking to the child.',
       inputSchema: handoffResultSchema,
       handler: (args) => {
         const { handoffId } = handoffResultSchema.parse(args)
@@ -899,7 +898,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_ask',
       title: 'Ask the mother a question',
       description:
-        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
+        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Asking again before the mother answers STACKS the new question onto the pending one (nothing is dropped). Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
       inputSchema: handoffAskSchema,
       handler: (args) => {
         const { handoffId, question } = handoffAskSchema.parse(args)
@@ -934,7 +933,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'handoff_progress',
       title: 'Report handoff progress',
       description:
-        'Called by the CHILD session to report a NON-TERMINAL progress step (does NOT mark done). Use this throughout the work so the mother’s polls are informative. Only handoff_report marks the work done.',
+        'Called by the CHILD session to report a NON-TERMINAL progress step (does NOT mark done). Use this throughout the work so the mother’s polls are informative. It does NOT close a blocker you raised with handoff_ask: the handoff stays needs_input until the mother answers. Only handoff_report marks the work done.',
       inputSchema: handoffProgressSchema,
       handler: (args) => {
         const { handoffId, step } = handoffProgressSchema.parse(args)
@@ -942,6 +941,17 @@ function handoffTools(notify: McpNotify): ToolDef[] {
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
         const updated = handoffStore.progress(handoffId, step)
         notify.broadcast('handoff:updated', updated)
+        // Progresso não responde pergunta aberta: se a filha segue bloqueada,
+        // devolve o bloqueio junto (antes o progresso apagava a pergunta e a mãe
+        // nunca chegava a vê-la).
+        if (updated.status === 'needs_input') {
+          return ok({
+            status: updated.status,
+            currentStep: updated.currentStep,
+            pendingQuestion: updated.pendingQuestion,
+            note: 'Progresso registrado, mas sua pergunta continua ABERTA — o handoff segue needs_input até a mãe responder. Não trate isto como resposta.',
+          })
+        }
         return ok({ status: updated.status, currentStep: updated.currentStep })
       },
     },
@@ -957,7 +967,17 @@ function handoffTools(notify: McpNotify): ToolDef[] {
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
         const updated = handoffStore.report(handoffId, summary)
         notify.broadcast('handoff:updated', updated)
-        return ok({ status: 'done' })
+        // Segundo report no mesmo handoff: o store preserva o summary original e
+        // guarda este na trilha. Avisa em vez de responder um 'done' que finge
+        // sucesso — antes o resultado duplicado sumia silenciosamente.
+        if (existing.status === 'done') {
+          return ok({
+            status: updated.status,
+            duplicate: true,
+            warning: `handoff ${handoffId} já havia sido reportado — o summary original foi MANTIDO e este segundo ficou só na trilha de eventos. Se o resultado mudou de verdade, avise a mãe por SendMessage.`,
+          })
+        }
+        return ok({ status: updated.status })
       },
     },
   ]

@@ -105,11 +105,43 @@ describe('handoff-store', () => {
       expect(after.questionAskedAt).not.toBeNull()
     })
 
-    it('ask: NÃO transiciona fora de running (ex.: pending)', () => {
+    it('ask: NÃO transiciona fora do estado vivo (ex.: pending)', () => {
       const h = newHandoff() // pending
       const after = store.ask(h.id, 'cedo demais')
       expect(after.status).toBe('pending')
       expect(after.pendingQuestion).toBeNull()
+      expect(events(h.id).map((e) => e.event)).toEqual(['create'])
+    })
+
+    // REGRESSÃO: a 2ª pergunta seguida era descartada em silêncio (o UPDATE só
+    // pegava status='running', então virava no-op SEM evento — bloqueio invisível).
+    it('ask durante needs_input EMPILHA a 2ª pergunta em vez de descartá-la', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      const first = store.ask(h.id, 'qual lib de validação?')
+      const after = store.ask(h.id, 'e posso mexer no schema?')
+
+      expect(after.status).toBe('needs_input')
+      expect(after.pendingQuestion).toBe('qual lib de validação?\n\ne posso mexer no schema?')
+      // "bloqueada desde" = instante da PRIMEIRA pergunta.
+      expect(after.questionAskedAt).toBe(first.questionAskedAt)
+      const asks = events(h.id).filter((e) => e.event === 'ask')
+      expect(asks.map((e) => e.detail)).toEqual([
+        'qual lib de validação?',
+        'e posso mexer no schema?',
+      ])
+      expect(asks[1]).toMatchObject({ from_status: 'needs_input', to_status: 'needs_input' })
+    })
+
+    it('ask após resume começa uma pergunta NOVA (não empilha na já respondida)', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      store.ask(h.id, 'primeira')
+      store.resume(h.id)
+      const after = store.ask(h.id, 'segunda')
+      expect(after.pendingQuestion).toBe('segunda')
     })
 
     it('resume: needs_input → running e limpa a pergunta', () => {
@@ -131,15 +163,85 @@ describe('handoff-store', () => {
       expect(after.status).toBe('running')
     })
 
-    it('progress após ask: retoma (needs_input → running) e limpa a pergunta', () => {
+    // REGRESSÃO (bug medido no DB real: 3 de 12 perguntas morreram assim). A filha
+    // perguntava, seguia trabalhando, chamava handoff_progress — e o progresso
+    // apagava a própria pergunta, devolvendo o status pra running. A mãe nunca via
+    // o bloqueio.
+    it('progress durante needs_input PRESERVA a pergunta e o status (só a mãe encerra)', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      const asked = store.ask(h.id, 'qual lib de validação?')
+      const after = store.progress(h.id, 'segui pelo caminho A enquanto espero')
+
+      expect(after.status).toBe('needs_input')
+      expect(after.pendingQuestion).toBe('qual lib de validação?')
+      expect(after.questionAskedAt).toBe(asked.questionAskedAt)
+      // O passo é gravado mesmo assim: a UI continua vendo a filha avançar.
+      expect(after.currentStep).toBe('segui pelo caminho A enquanto espero')
+    })
+
+    it('progress durante needs_input loga needs_input → needs_input (não forja um resume)', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
       store.ask(h.id, 'pergunta')
-      const after = store.progress(h.id, 'retomei: rodando testes')
+      store.progress(h.id, 'passo durante o bloqueio')
+
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'progress',
+        from_status: 'needs_input',
+        to_status: 'needs_input',
+        detail: 'passo durante o bloqueio',
+      })
+    })
+
+    it('só o resume (resposta da mãe) encerra a pergunta, mesmo após progressos', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      store.ask(h.id, 'pergunta')
+      store.progress(h.id, 'passo 1')
+      store.progress(h.id, 'passo 2')
+      expect(store.get(h.id)?.pendingQuestion).toBe('pergunta')
+
+      const after = store.resume(h.id)
       expect(after.status).toBe('running')
-      expect(after.currentStep).toBe('retomei: rodando testes')
       expect(after.pendingQuestion).toBeNull()
+      expect(after.questionAskedAt).toBeNull()
+      // O último passo reportado sobrevive ao resume.
+      expect(after.currentStep).toBe('passo 2')
+    })
+  })
+
+  describe('report duplicado', () => {
+    // REGRESSÃO: aconteceu 2× no DB real (done→done). O 2º report sobrescrevia o
+    // summary já consumido pela mãe e passava como sucesso indistinguível.
+    it('2º report preserva o summary original e loga reportDuplicate', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      store.report(h.id, 'resultado original')
+      const after = store.report(h.id, 'resultado repetido')
+
+      expect(after.status).toBe('done')
+      expect(after.summary).toBe('resultado original')
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'reportDuplicate',
+        from_status: 'done',
+        to_status: 'done',
+        detail: 'resultado repetido',
+      })
+    })
+
+    it('report a partir de interrupted ainda conclui (retomada legítima)', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      store.failIfRunning(h.id, 'filha morreu')
+      const after = store.report(h.id, 'terminei depois de retomar')
+      expect(after.status).toBe('done')
+      expect(after.summary).toBe('terminei depois de retomar')
     })
   })
 

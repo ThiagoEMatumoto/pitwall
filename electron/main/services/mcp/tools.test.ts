@@ -691,10 +691,12 @@ describe('composeJobKickoff (web-audit playbook)', () => {
 })
 
 describe('mcp tools — session_handoff sem gate', () => {
+  // Todos opcionais: o retorno varia por caminho (spawn ok / gate pending / dedup
+  // recusado / falha de spawn) e o dedup NÃO devolve mais handle nenhum.
   interface HandoffResult {
-    handoffId: string
-    alias: string | null
-    status: string
+    handoffId?: string
+    alias?: string | null
+    status?: string
     duplicate?: boolean
     error?: string
   }
@@ -713,6 +715,11 @@ describe('mcp tools — session_handoff sem gate', () => {
 
   beforeEach(() => {
     spawned = []
+    // O DB persiste entre os casos deste arquivo: sem limpar, os handoffs ativos
+    // acumulam e estouram o teto (maxActive=5) em quem rodar por último. Handoffs
+    // antes de sessions (FK child_session_id).
+    getDb().prepare('DELETE FROM handoffs').run()
+    getDb().prepare('DELETE FROM sessions').run()
     // Fake do seam: registra o input e devolve uma sessão real no DB (markRunning
     // tem FK pra sessions).
     setSpawnHandoffChild((input) => {
@@ -787,7 +794,10 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(spawned).toHaveLength(0)
   })
 
-  it('dedup por repo-alvo continua barrando e devolve o alias de quem já está lá', () => {
+  // REGRESSÃO: o dedup é por REPO-alvo, não por sessão-mãe (mother_session_id nem
+  // é gravado). Devolver { handoffId, alias, status } fazia uma segunda mãe adotar
+  // a filha de OUTRA mãe e passar a conversar com ela.
+  it('dedup por repo-alvo RECUSA com erro em vez de entregar o handle da filha alheia', () => {
     seedRepo('search', '/repos/search')
     const first = call<HandoffResult>('session_handoff', {
       targetRepo: 'search',
@@ -798,10 +808,29 @@ describe('mcp tools — session_handoff sem gate', () => {
       targetRepo: 'search',
       task: 'Outra coisa qualquer',
     })
+
     expect(dup.duplicate).toBe(true)
-    expect(dup.handoffId).toBe(first.handoffId)
-    expect(dup.alias).toBe(first.alias)
+    // Nada de handle utilizável: sem handoffId/alias/status pra adotar.
+    expect(dup.handoffId).toBeUndefined()
+    expect(dup.alias).toBeUndefined()
+    expect(dup.status).toBeUndefined()
+    // Erro informativo: diz quem já está lá e como forçar.
+    expect(dup.error).toContain(first.alias as string)
+    expect(dup.error).toMatch(/force: true/)
     expect(spawned).toHaveLength(1)
+  })
+
+  it('force: true despacha a segunda filha mesmo com o repo-alvo ocupado', () => {
+    seedRepo('payments', '/repos/payments')
+    call<HandoffResult>('session_handoff', { targetRepo: 'payments', task: 'Primeira tarefa' })
+    const second = call<HandoffResult>('session_handoff', {
+      targetRepo: 'payments',
+      task: 'Segunda tarefa',
+      force: true,
+    })
+    expect(second.status).toBe('running')
+    expect(second.error).toBeUndefined()
+    expect(spawned).toHaveLength(2)
   })
 
   it('falha de spawn não deixa o handoff preso: vira failed com o erro', () => {
