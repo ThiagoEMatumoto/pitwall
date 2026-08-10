@@ -19,11 +19,15 @@ import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-promp
 // Seam de injeção mãe→filha (importa SÓ de inject.ts, não de ipc/sessions.ts —
 // evita arrastar electron/ipcMain pros handlers e permite mockar nos testes).
 import { injectIntoChild } from '../handoff/inject'
+// Seam de spawn da filha (impl real em ipc/sessions.ts) — mesma motivação do
+// injectIntoChild acima: nada de electron/ipcMain nos handlers.
+import { spawnHandoffChild } from '../handoff/spawn-child'
+import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
 import { getActivityFor } from '../session-activity'
 import { ptyManager } from '../pty-manager'
 import { getDb } from '../db'
 import { getPref } from '../prefs-store'
-import { OBSERVE_ONLY_PERMISSION_MODES } from '../spawn-flags'
+import { OBSERVE_ONLY_PERMISSION_MODES, permissionModeForHandoffMode } from '../spawn-flags'
 import { randomUUID } from 'node:crypto'
 import type {
   FeatureObjectiveLink,
@@ -654,7 +658,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo by creating a handoff. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). Creates a pending handoff that requires human approval in the app, then spawns a child session in that mode. If an active handoff to the same target already exists it returns that one (pass force=true to override). Returns a handoffId; poll handoff_result(handoffId) until status=done, then synthesize the summary.',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If an active handoff to the same target already exists it returns that one (pass force=true to override); at most 5 handoffs may be active at once. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -704,11 +708,15 @@ function handoffTools(notify: McpNotify): ToolDef[] {
         if (!input.force) {
           const existing = handoffStore.findActiveByTarget(target.id)
           if (existing) {
+            const existingAlias = handoffStore.childAlias(existing.childSessionId)
             return ok({
               handoffId: existing.id,
+              alias: existingAlias,
               status: existing.status,
               duplicate: true,
-              message: `Já existe um handoff ativo (${existing.status}) para ${target.label}. Faça polling com handoff_result("${existing.id}") ou passe force=true para criar outro mesmo assim.`,
+              message: existingAlias
+                ? `Já existe um handoff ativo (${existing.status}) para ${target.label}, tocado por "${existingAlias}". Fale com ela via SendMessage({ to: "${existingAlias}", ... }) em vez de abrir outra, ou passe force=true para criar mesmo assim.`
+                : `Já existe um handoff ativo (${existing.status}) para ${target.label}. Acompanhe com handoff_result("${existing.id}") ou passe force=true para criar outro mesmo assim.`,
             })
           }
         }
@@ -744,6 +752,15 @@ function handoffTools(notify: McpNotify): ToolDef[] {
           : null
 
         const handoffId = randomUUID()
+        const mode = input.mode ?? 'plan'
+        // Alias = identidade endereçável da filha. Resolvido ANTES do compose
+        // porque o briefing anuncia à filha o próprio apelido, e antes do spawn
+        // porque é o `-n <name>` — o endereço do SendMessage.
+        const alias = buildHandoffAlias({
+          role: roleForHandoffMode(mode),
+          task: input.task,
+          taken: handoffStore.activeSessionNames(),
+        })
         const composed = composeHandoffPrompt({
           targetRepoLabel: target.label,
           targetRepoPath: target.path,
@@ -752,7 +769,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
           edges,
           featureTitle,
           handoffId,
-          mode: input.mode ?? 'plan',
+          mode,
         })
 
         const handoff = handoffStore.create({
@@ -766,15 +783,51 @@ function handoffTools(notify: McpNotify): ToolDef[] {
           task: input.task,
           contextJson: input.context ?? null,
           composedPrompt: composed,
-          mode: input.mode ?? 'plan',
+          mode,
         })
-        notify.broadcast('handoff:updated', handoff)
-        return ok({
-          handoffId,
-          status: 'pending',
-          message:
-            'Handoff criado e aguardando aprovação humana no app. Faça polling com handoff_result(handoffId) — quando status=done, leia o summary.',
-        })
+
+        // Kill-switch: com handoffs.requireApproval ligado o handoff nasce pending
+        // e o gate humano da UI decide (e spawna pelo renderer). Default false —
+        // delegar não pede aprovação.
+        if (getPref('handoffs.requireApproval', false)) {
+          notify.broadcast('handoff:updated', handoff)
+          return ok({
+            handoffId,
+            alias: null,
+            status: 'pending',
+            message:
+              'Aprovação humana está LIGADA (pref handoffs.requireApproval): o handoff aguarda o gate no app. Acompanhe com handoff_list/handoff_result — o alias aparece quando a filha subir.',
+          })
+        }
+
+        // Spawn direto no MAIN (seam spawn-child), sem passar pelo renderer. O
+        // broadcast abaixo é o que mantém a UI viva agora que ela não spawna mais.
+        try {
+          const kickoff = `Comece a tarefa do handoff descrita no seu contexto de sistema. Ao terminar, chame a MCP tool handoff_report com handoffId="${handoffId}".`
+          const child = spawnHandoffChild({
+            repoId: target.id,
+            name: alias,
+            featureId: input.featureId ?? null,
+            initialPrompt: kickoff,
+            systemPromptText: composed,
+            permissionMode: permissionModeForHandoffMode(mode),
+          })
+          const running = handoffStore.markRunning(handoffId, child.id)
+          notify.broadcast('handoff:updated', running)
+          return ok({
+            handoffId,
+            alias,
+            status: running.status,
+            message: `Filha "${alias}" despachada para ${target.label}. Mande AGORA a primeira SendMessage({ to: "${alias}", ... }) — é ela que abre o canal de volta (a filha responde a quem escreveu primeiro).`,
+          })
+        } catch (err) {
+          // Spawn falhou (repo sumiu do disco, PTY não subiu): o handoff não pode
+          // ficar preso em pending — vira failed com o erro visível no inbox.
+          const msg = err instanceof Error ? err.message : String(err)
+          const failed = handoffStore.fail(handoffId, msg)
+          notify.broadcast('handoff:updated', failed)
+          return ok({ handoffId, alias: null, status: failed.status, error: msg })
+        }
       },
     },
     {

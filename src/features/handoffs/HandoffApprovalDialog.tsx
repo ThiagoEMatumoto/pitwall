@@ -4,11 +4,13 @@ import { Button } from '@/components/ui/Button'
 import { prefsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { pendingHandoffs, useHandoffsStore } from '@/store/handoffsStore'
-import { HANDOFFS_AUTO_APPROVE_KEY } from './useHandoffs'
+import { HANDOFFS_REQUIRE_APPROVAL_KEY } from './useHandoffs'
 
-// Gate humano de handoffs cross-repo. Sempre montado no AppShell; decide abrir
-// sozinho quando há pendente(s) E o auto-approve está desligado. Mostra um por vez
-// (o mais antigo), com o prompt composto editável.
+// Gate humano de handoffs cross-repo — DESLIGADO por default. Sempre montado no
+// AppShell, mas só abre quando a pref handoffs.requireApproval está ligada (o
+// kill-switch): no caminho normal a filha nasce direto pelo main e o usuário é
+// avisado por toast (handoffsStore), não por modal. Ligado, mostra um pendente
+// por vez (o mais antigo), com o prompt composto editável.
 export function HandoffApprovalDialog() {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const approve = useHandoffsStore((s) => s.approve)
@@ -23,7 +25,7 @@ export function HandoffApprovalDialog() {
     [pending],
   )
 
-  const [autoApprove, setAutoApprove] = useState(false)
+  const [requireApproval, setRequireApproval] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -33,7 +35,9 @@ export function HandoffApprovalDialog() {
   // Lê o pref e reage a mudanças (Settings emite via prefs:updated? usamos o valor
   // no mount + re-leitura sempre que o handoff atual muda, suficiente pro fluxo).
   useEffect(() => {
-    void prefsApi.get<boolean>(HANDOFFS_AUTO_APPROVE_KEY).then((v) => setAutoApprove(v ?? false))
+    void prefsApi
+      .get<boolean>(HANDOFFS_REQUIRE_APPROVAL_KEY)
+      .then((v) => setRequireApproval(v ?? false))
   }, [handoff?.id])
 
   // Pré-preenche o textarea quando o handoff muda.
@@ -41,7 +45,7 @@ export function HandoffApprovalDialog() {
     setPrompt(handoff?.composedPrompt ?? '')
   }, [handoff])
 
-  const open = !!handoff && !autoApprove
+  const open = !!handoff && requireApproval
 
   async function onApprove() {
     if (!handoff) return

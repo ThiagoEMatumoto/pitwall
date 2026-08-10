@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { handoffsApi } from '@/lib/ipc'
+import { showToast } from '@/features/notifications/toast-store'
 import { useAppStore } from './appStore'
 import type { Handoff, HandoffMode, PermissionMode } from '../../shared/types/ipc'
 
@@ -40,6 +41,24 @@ function notifyTerminal(h: Handoff): void {
   } catch {
     // Notification indisponível (ambiente sem suporte/permissão) — no-op.
   }
+}
+
+// A filha agora nasce no MAIN (MCP → spawnSession), sem passar pelo renderer —
+// então nada aqui refresca liveSessions por conta do spawn. Este é o gancho: ao
+// ver a transição pra running, puxa o snapshot vivo (a filha aparece no rollup) e
+// avisa por TOAST em vez do antigo modal bloqueante. O alias vem de
+// sessions.title (fixado no spawn); sem ele ainda no snapshot, cai no repo.
+async function notifyDispatched(h: Handoff): Promise<void> {
+  await useAppStore.getState().refreshLiveSessions()
+  const child = useAppStore.getState().liveSessions.find((s) => s.id === h.childSessionId)
+  const alias = child?.title?.trim() || null
+  const repo = h.targetRepoLabel ?? h.targetRepoId
+  showToast({
+    title: alias ? `${alias} despachada → ${repo}` : `Handoff despachado → ${repo}`,
+    body: h.task,
+    actionLabel: child ? 'Abrir' : undefined,
+    onAction: child ? () => void useAppStore.getState().focusOrOpenSession(child) : undefined,
+  })
 }
 
 // Dono único da assinatura de onUpdated — assinada uma vez (StrictMode-safe),
@@ -135,12 +154,18 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
     updatedStarted = true
     offUpdated = handoffsApi.onUpdated((payload) => {
       const updated = asHandoff(payload)
-      if (updated && (updated.status === 'done' || updated.status === 'failed')) {
-        // Notifica só na TRANSIÇÃO pra terminal (estado anterior != done/failed),
-        // pra reconciliações/rebroadcasts não re-notificarem o mesmo handoff.
+      if (updated) {
+        // Notifica só na TRANSIÇÃO (estado anterior diferente), pra reconciliações
+        // /rebroadcasts não re-notificarem o mesmo handoff.
         const prev = get().handoffs.find((h) => h.id === updated.id)
-        if (prev && prev.status !== updated.status) {
-          notifyTerminal(updated)
+        const changed = prev?.status !== updated.status
+        if (changed && (updated.status === 'done' || updated.status === 'failed')) {
+          if (prev) notifyTerminal(updated)
+        }
+        // Despacho sem gate: prev pode nem existir (create+spawn no mesmo tick do
+        // main), então a ausência de prev também conta como transição.
+        if (changed && updated.status === 'running' && updated.childSessionId) {
+          void notifyDispatched(updated)
         }
       }
       void get().load()

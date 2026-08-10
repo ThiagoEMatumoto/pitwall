@@ -3,6 +3,7 @@
 // electron mockado (app.getPath → tmp) e o notify espiado. Mesma estratégia
 // dos testes de migration: schema real via runMigrations, sem janela.
 import { rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', async () => {
@@ -23,6 +24,8 @@ import { buildTools, type McpNotify, type ToolDef } from './tools'
 // Módulos leves (sem electron): store lê só o DB mockado; composeJobKickoff é puro.
 import * as jobStore from '../scheduled-job-store'
 import { composeJobKickoff } from '../job-kickoff'
+import { setSpawnHandoffChild, type SpawnHandoffChildInput } from '../handoff/spawn-child'
+import { setPref } from '../prefs-store'
 import type {
   Feature,
   JobRun,
@@ -684,5 +687,127 @@ describe('composeJobKickoff (web-audit playbook)', () => {
     })
     expect(kickoff).toContain('printenv LEGAL_UI_STAGING_PASSWORD')
     expect(kickoff.toLowerCase()).not.toContain('senha real')
+  })
+})
+
+describe('mcp tools — session_handoff sem gate', () => {
+  interface HandoffResult {
+    handoffId: string
+    alias: string | null
+    status: string
+    duplicate?: boolean
+    error?: string
+  }
+
+  let spawned: SpawnHandoffChildInput[]
+
+  function seedRepo(label: string, path: string): void {
+    const db = getDb()
+    db.prepare(
+      'INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('proj-handoff', 'Projeto handoff', Date.now(), Date.now())
+    db.prepare(
+      'INSERT OR IGNORE INTO repos (id, project_id, label, path, role, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(`repo-${label}`, 'proj-handoff', label, path, null, 0, Date.now())
+  }
+
+  beforeEach(() => {
+    spawned = []
+    // Fake do seam: registra o input e devolve uma sessão real no DB (markRunning
+    // tem FK pra sessions).
+    setSpawnHandoffChild((input) => {
+      spawned.push(input)
+      // Id único por spawn: o DB deste arquivo persiste entre os testes, e um id
+      // repetido estouraria a PK de sessions (mascarando o caso sob teste).
+      const id = `sess-${randomUUID()}`
+      getDb()
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at)
+           VALUES (?, ?, ?, ?, 'manual', NULL, 'running', ?, NULL)`,
+        )
+        .run(id, input.repoId, `cc-${id}`, input.name, Date.now())
+      return {
+        id,
+        repoId: input.repoId,
+        ccSessionId: `cc-${id}`,
+        title: input.name,
+        titleSource: 'manual',
+        paneId: null,
+        status: 'running',
+        startedAt: Date.now(),
+        endedAt: null,
+      }
+    })
+    setPref('handoffs.requireApproval', false)
+  })
+
+  it('spawna direto (running, sem pending) e devolve o alias endereçável', () => {
+    seedRepo('backend', '/repos/backend')
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'backend',
+      task: 'Refatorar autenticação (OAuth)',
+      mode: 'auto-edits',
+    })
+
+    expect(res.status).toBe('running')
+    expect(res.alias).toBe('mauricio-refatorar-autenticacao-oauth')
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0].name).toBe('mauricio-refatorar-autenticacao-oauth')
+    expect(spawned[0].permissionMode).toBe('acceptEdits')
+
+    // A UI não spawna mais — o broadcast do main é o que a mantém viva.
+    const last = notify.calls.at(-1)
+    expect(last?.[0]).toBe('handoff:updated')
+    expect((last?.[1] as { status: string }).status).toBe('running')
+
+    // E o alias volta pelo handoff_list (fonte da verdade do roster).
+    const { items } = call<{ items: Array<{ handoffId: string; alias: string | null }> }>(
+      'handoff_list',
+      {},
+    )
+    expect(items.find((i) => i.handoffId === res.handoffId)?.alias).toBe(
+      'mauricio-refatorar-autenticacao-oauth',
+    )
+  })
+
+  it('kill-switch handoffs.requireApproval=true volta a nascer pending, sem spawnar', () => {
+    seedRepo('billing', '/repos/billing')
+    setPref('handoffs.requireApproval', true)
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'billing',
+      task: 'Corrigir webhook',
+    })
+    expect(res.status).toBe('pending')
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('dedup por repo-alvo continua barrando e devolve o alias de quem já está lá', () => {
+    seedRepo('search', '/repos/search')
+    const first = call<HandoffResult>('session_handoff', {
+      targetRepo: 'search',
+      task: 'Indexar documentos',
+      mode: 'auto-edits',
+    })
+    const dup = call<HandoffResult>('session_handoff', {
+      targetRepo: 'search',
+      task: 'Outra coisa qualquer',
+    })
+    expect(dup.duplicate).toBe(true)
+    expect(dup.handoffId).toBe(first.handoffId)
+    expect(dup.alias).toBe(first.alias)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it('falha de spawn não deixa o handoff preso: vira failed com o erro', () => {
+    seedRepo('ghost', '/repos/ghost')
+    setSpawnHandoffChild(() => {
+      throw new Error('Repositório não existe no disco: /repos/ghost')
+    })
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'ghost',
+      task: 'Qualquer coisa',
+    })
+    expect(res.status).toBe('failed')
+    expect(res.error).toMatch(/não existe no disco/)
   })
 })
