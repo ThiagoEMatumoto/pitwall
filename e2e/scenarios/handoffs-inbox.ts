@@ -51,8 +51,10 @@ const { app, page } = await launchApp()
 const { stop } = captureLogs(app, page)
 try {
   await waitReady(page)
-  // Há 1 pending → o gate (HandoffApprovalDialog) abre por cima. Rejeita pra
-  // liberar a navegação (o inbox mostra o pending virando rejected).
+  // O gate humano é opt-in (pref handoffs.requireApproval, default off), então
+  // normalmente NÃO há modal — o pendente seedado é despachado sozinho. Se a pref
+  // estiver ligada no userData copiado, o modal aparece: rejeita pra liberar a
+  // navegação (o inbox mostra o pending virando rejected).
   const gateReject = page.getByRole('button', { name: /rejeitar/i }).first()
   if (await gateReject.count()) {
     await gateReject.click()
