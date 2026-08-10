@@ -94,6 +94,29 @@ export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessio
   return count
 }
 
+// Card sob foco de teclado depois de a lista mudar (filha entrou, saiu, ou a
+// atenção reordenou): segura o card atual se ele sobreviveu, senão cai no
+// primeiro. Null só com a lista vazia — aí o dock nem monta.
+export function resolveCrewFocus(ids: string[], currentId: string | null): string | null {
+  if (ids.length === 0) return null
+  if (currentId && ids.includes(currentId)) return currentId
+  return ids[0]
+}
+
+// Passo do ↑/↓ dentro do dock, sobre a lista JÁ ordenada (orderCrew). Clampa nas
+// pontas em vez de dar wrap: a lista é curta e voltar ao topo sozinho desorienta
+// mais do que ajuda. Sem foco ainda, entra pela ponta de onde a tecla veio.
+export function stepCrewFocus(
+  ids: string[],
+  currentId: string | null,
+  delta: number,
+): string | null {
+  if (ids.length === 0) return null
+  const i = currentId ? ids.indexOf(currentId) : -1
+  if (i < 0) return delta > 0 ? ids[0] : ids[ids.length - 1]
+  return ids[Math.min(ids.length - 1, Math.max(0, i + delta))]
+}
+
 // Ordem do dock: quem espera você primeiro; o resto mantém a ordem do store
 // (created_at DESC). Sem reordenar por status vivo — só a atenção promove.
 export function orderCrew(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): Handoff[] {

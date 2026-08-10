@@ -17,6 +17,8 @@ const {
   crewNeedsAttention,
   crewAttentionCount,
   orderCrew,
+  resolveCrewFocus,
+  stepCrewFocus,
 } = await import('./crew')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -224,5 +226,54 @@ describe('orderCrew', () => {
     ]
     const sessions = [live({ id: 's2', status: 'working' })]
     expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b'])
+  })
+})
+
+describe('resolveCrewFocus', () => {
+  it('lista vazia → null (o dock nem monta)', () => {
+    expect(resolveCrewFocus([], 'a')).toBeNull()
+    expect(resolveCrewFocus([], null)).toBeNull()
+  })
+
+  it('sem foco atual → primeiro card', () => {
+    expect(resolveCrewFocus(['a', 'b'], null)).toBe('a')
+  })
+
+  it('mantém o foco quando o card sobrevive à mudança da lista', () => {
+    expect(resolveCrewFocus(['a', 'b', 'c'], 'c')).toBe('c')
+  })
+
+  it('card sumiu (filha encerrou) → cai no primeiro', () => {
+    expect(resolveCrewFocus(['a', 'b'], 'z')).toBe('a')
+  })
+
+  it('reordenação por atenção não move o foco', () => {
+    expect(resolveCrewFocus(['b', 'a'], 'a')).toBe('a')
+  })
+})
+
+describe('stepCrewFocus', () => {
+  it('lista vazia → null', () => {
+    expect(stepCrewFocus([], 'a', 1)).toBeNull()
+  })
+
+  it('anda pra frente e pra trás', () => {
+    expect(stepCrewFocus(['a', 'b', 'c'], 'a', 1)).toBe('b')
+    expect(stepCrewFocus(['a', 'b', 'c'], 'c', -1)).toBe('b')
+  })
+
+  it('clampa nas pontas em vez de dar wrap', () => {
+    expect(stepCrewFocus(['a', 'b'], 'b', 1)).toBe('b')
+    expect(stepCrewFocus(['a', 'b'], 'a', -1)).toBe('a')
+  })
+
+  it('sem foco: ↓ entra pelo topo, ↑ entra pelo fim', () => {
+    expect(stepCrewFocus(['a', 'b', 'c'], null, 1)).toBe('a')
+    expect(stepCrewFocus(['a', 'b', 'c'], null, -1)).toBe('c')
+  })
+
+  it('foco em card que já saiu da lista entra pela ponta da direção', () => {
+    expect(stepCrewFocus(['a', 'b'], 'z', 1)).toBe('a')
+    expect(stepCrewFocus(['a', 'b'], 'z', -1)).toBe('b')
   })
 })
