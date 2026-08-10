@@ -44,6 +44,7 @@ import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
 import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
+import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
 
@@ -470,6 +471,16 @@ export function AppShell() {
         setNewSessionOpen(true)
         return
       }
+      // Ctrl+J: leva o foco pro Crew Dock (expandindo se estiver colapsado). É a
+      // porta de entrada do quick look — com o foco DENTRO do dock, ↑/↓ navegam
+      // os cards e Espaço abre o peek. Sem equipe não há o que focar: a tecla
+      // segue pro xterm em vez de abrir um painel vazio.
+      if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
+        if (crewDockWidth === 0) return
+        e.preventDefault()
+        useCrewDockStore.getState().requestFocus()
+        return
+      }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
@@ -478,7 +489,7 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [overrides, toggleFiles])
+  }, [overrides, toggleFiles, crewDockWidth])
 
   // Abre Configurações sob demanda (ex: error state do Terminal, renderizado pelo
   // dockview fora desta árvore — ver requestOpenSettings).

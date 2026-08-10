@@ -7,7 +7,14 @@ import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
-import { activeCrew, crewNeedsAttention, orderCrew, splitAlias } from './crew'
+import {
+  activeCrew,
+  crewNeedsAttention,
+  orderCrew,
+  resolveCrewFocus,
+  splitAlias,
+  stepCrewFocus,
+} from './crew'
 import { RAIL_WIDTH, clampWidth, dockExpanded, useCrewDockStore } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -85,6 +92,9 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const expand = useCrewDockStore((s) => s.expand)
   const collapse = useCrewDockStore((s) => s.collapse)
   const openPeek = useCrewDockStore((s) => s.openPeek)
+  const focusedId = useCrewDockStore((s) => s.focusedId)
+  const setFocusedId = useCrewDockStore((s) => s.setFocusedId)
+  const focusNonce = useCrewDockStore((s) => s.focusNonce)
   const ttlHours = useHeartbeatTtl()
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -94,6 +104,68 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
 
   const expanded = dockExpanded({ collapsed, autoRevealed })
   const shownWidth = dragWidth ?? width
+
+  // ── Teclado: Ctrl+J entra, ↑/↓ andam, Espaço/Enter espiam, Esc sai ─────────
+  const listRef = useRef<HTMLDivElement>(null)
+  // Anel de foco só quando o dock REALMENTE tem o foco — senão o card 0 ficaria
+  // marcado o tempo todo, prometendo um teclado que não está ali.
+  const [dockFocused, setDockFocused] = useState(false)
+  // Quem tinha o foco antes do Ctrl+J (tipicamente o textarea do xterm). O Esc
+  // no dock devolve pra lá: sair rápido é metade do valor de entrar rápido.
+  const originRef = useRef<HTMLElement | null>(null)
+
+  const ids = useMemo(() => crew.map((h) => h.id), [crew])
+  // Lido dentro de handlers/efeitos que não devem re-rodar a cada mudança da lista.
+  const idsRef = useRef(ids)
+  idsRef.current = ids
+
+  // Filha entrou/saiu (ou a atenção reordenou): mantém o cursor num card que
+  // ainda existe. setFocusedId é no-op quando o valor não muda.
+  useEffect(() => {
+    setFocusedId(resolveCrewFocus(ids, useCrewDockStore.getState().focusedId))
+  }, [ids, setFocusedId])
+
+  function focusCard(id: string) {
+    listRef.current?.querySelector<HTMLElement>(`[data-crew-card="${CSS.escape(id)}"]`)?.focus()
+  }
+
+  // Pedido de foco do AppShell (Ctrl+J). Nonce, não booleano: pedir duas vezes
+  // seguidas tem que disparar duas vezes.
+  useEffect(() => {
+    if (focusNonce === 0) return
+    const active = document.activeElement
+    // Ctrl+J com o foco já no dock não pode sobrescrever a origem real.
+    if (!(active instanceof HTMLElement) || !listRef.current?.contains(active)) {
+      originRef.current = active instanceof HTMLElement ? active : null
+    }
+    const target = useCrewDockStore.getState().focusedId ?? idsRef.current[0]
+    if (!target) return
+    // rAF: o expand() do requestFocus pode ter acabado de montar estes cards.
+    requestAnimationFrame(() => focusCard(target))
+  }, [focusNonce])
+
+  function leaveDock(card: HTMLElement) {
+    const origin = originRef.current
+    if (origin?.isConnected && !listRef.current?.contains(origin)) origin.focus()
+    else card.blur()
+  }
+
+  function onCardKeyDown(e: React.KeyboardEvent<HTMLDivElement>, id: string) {
+    // Só age com o foco no CARD (o wrapper). Dentro do textarea de resposta o
+    // evento bubbla até aqui com outro target — lá, Espaço é espaço.
+    if (e.target !== e.currentTarget) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const next = stepCrewFocus(idsRef.current, id, e.key === 'ArrowDown' ? 1 : -1)
+      if (next) focusCard(next)
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault()
+      openPeek(id)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      leaveDock(e.currentTarget)
+    }
+  }
 
   // Só o primeiro "esperando" ganha O Ápice (regra da casa: um pulso por vista).
   const apexId = crew.find((h) =>
@@ -165,15 +237,44 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
             </button>
           </header>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+          <div
+            ref={listRef}
+            onFocus={() => setDockFocused(true)}
+            onBlur={() => setDockFocused(false)}
+            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
+          >
             {crew.map((h) => (
-              <HandoffCard
+              // Wrapper focável de verdade: sem um elemento que receba foco, o
+              // Espaço vazaria pro xterm em vez de abrir o peek. tabIndex -1
+              // porque a entrada é pelo Ctrl+J — os botões/textarea de dentro do
+              // card já ocupam a ordem natural do Tab.
+              <div
                 key={h.id}
-                handoff={h}
-                ttlHours={ttlHours}
-                tier={tier}
-                onPeek={() => openPeek(h.id)}
-              />
+                data-crew-card={h.id}
+                tabIndex={-1}
+                // Foco (do teclado ou do mouse) é a verdade: o cursor do store
+                // segue o DOM, não o contrário.
+                onFocus={() => setFocusedId(h.id)}
+                onKeyDown={(e) => onCardKeyDown(e, h.id)}
+                className={`shrink-0 rounded-[14px] outline-none ${
+                  dockFocused && h.id === focusedId
+                    ? 'ring-1 ring-[var(--color-accent)] ring-offset-0'
+                    : ''
+                }`}
+              >
+                <HandoffCard
+                  handoff={h}
+                  ttlHours={ttlHours}
+                  tier={tier}
+                  onPeek={() => {
+                    // Foca o card ANTES de abrir: o peek guarda o activeElement
+                    // como origem, e devolver o foco ao card (não ao botão) deixa
+                    // as setas prontas assim que o overlay fecha.
+                    focusCard(h.id)
+                    openPeek(h.id)
+                  }}
+                />
+              </div>
             ))}
           </div>
         </>

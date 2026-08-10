@@ -66,6 +66,16 @@ export const COMMANDS: Command[] = [
     defaultCombo: { mod: true, key: 'n' },
     editable: true,
   },
+  // Porta de entrada do teclado pro Crew Dock. Precisa de modificador: dentro do
+  // dock, ↑/↓ e Espaço bastam, mas fora dele o Espaço puro vai direto pro xterm
+  // (o attachCustomKeyEventHandler do Terminal só intercepta copy/paste).
+  {
+    id: 'crew.focus',
+    label: 'Focar a equipe (sessões-filhas)',
+    context: 'Global',
+    defaultCombo: { mod: true, key: 'j' },
+    editable: true,
+  },
   {
     id: 'files.togglePanel',
     label: 'Alternar painel de arquivos',

@@ -62,6 +62,9 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   // Padrão novo no repo: sem isto o "fecha rápido" larga o usuário no vazio, que
   // é exatamente o atrito que esta tela existe pra eliminar.
   const originRef = useRef<HTMLElement | null>(null)
+  // Fechar promovendo a aba é a exceção: lá o foco pertence ao terminal recém
+  // aberto, e devolvê-lo ao card do dock roubaria a sessão de quem pediu ela.
+  const skipRestoreRef = useRef(false)
 
   useEffect(() => {
     const active = document.activeElement
@@ -69,6 +72,7 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
     // rAF: mesmo padrão do refocus do Composer — foca depois do paint.
     requestAnimationFrame(() => inputRef.current?.focus())
     return () => {
+      if (skipRestoreRef.current) return
       const origin = originRef.current
       requestAnimationFrame(() => {
         if (origin?.isConnected) origin.focus()
@@ -103,6 +107,7 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
 
   function promoteToTerminal() {
     if (!live) return
+    skipRestoreRef.current = true
     void focusOrOpenSession(live)
     onClose()
   }
