@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CircleSlash,
   CornerDownLeft,
+  Eye,
   MoreHorizontal,
   Play,
   Send,
@@ -159,9 +160,12 @@ interface Props {
   ttlHours: number
   // Largura disponível no container (dock estreito vs inbox largo).
   tier?: PanelTier
+  // Abre o quick look (CrewPeek) desta filha. Só o dock passa — no inbox, que já
+  // é uma área inteira, o overlay não acrescentaria nada.
+  onPeek?: () => void
 }
 
-export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
+export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
@@ -187,6 +191,11 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
   // Sem heartbeat: só faz sentido pra running. Calculado no render — a lista
   // recarrega periodicamente via watch, mantendo o "há Xh" razoavelmente fresco.
   const stale = isStale(handoff, ttlHours, Date.now())
+
+  // Quick look: só faz sentido com filha spawnada (é o transcript DELA que o
+  // overlay renderiza). Continua valendo com a PTY morta — ler a conversa de uma
+  // filha que acabou de cair é justamente quando mais se quer.
+  const canPeek = !!onPeek && !!handoff.childSessionId
 
   // Recovery manual: força failed via IPC handoffs:fail. Disponível pra running e
   // pra approved travado (aprovado mas a filha nunca subiu). Confirmação evita
@@ -407,8 +416,19 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide' }: Props) {
               {formatDate(handoff.createdAt)}
             </span>
           )}
-          {(childLive || canForceFail) && (
+          {(childLive || canForceFail || canPeek) && (
             <div className="flex items-center gap-1">
+              {canPeek && (
+                <button
+                  type="button"
+                  onClick={onPeek}
+                  title="Espiar a conversa desta filha (Espaço)"
+                  className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                >
+                  <Icon as={Eye} size={12} />
+                  {!tight && 'Espiar'}
+                </button>
+              )}
               {childLive && (
                 <button
                   type="button"

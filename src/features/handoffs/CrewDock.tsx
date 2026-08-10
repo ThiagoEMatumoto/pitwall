@@ -84,6 +84,7 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const setWidth = useCrewDockStore((s) => s.setWidth)
   const expand = useCrewDockStore((s) => s.expand)
   const collapse = useCrewDockStore((s) => s.collapse)
+  const openPeek = useCrewDockStore((s) => s.openPeek)
   const ttlHours = useHeartbeatTtl()
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -166,7 +167,13 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
 
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
             {crew.map((h) => (
-              <HandoffCard key={h.id} handoff={h} ttlHours={ttlHours} tier={tier} />
+              <HandoffCard
+                key={h.id}
+                handoff={h}
+                ttlHours={ttlHours}
+                tier={tier}
+                onPeek={() => openPeek(h.id)}
+              />
             ))}
           </div>
         </>

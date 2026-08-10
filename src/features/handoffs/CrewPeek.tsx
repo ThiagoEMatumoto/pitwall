@@ -1,0 +1,312 @@
+import { useEffect, useRef, useState } from 'react'
+import { CornerDownLeft, TerminalSquare, X } from 'lucide-react'
+import { Icon } from '@/components/ui/Icon'
+import { ChatView } from '@/features/sessions/chat/ChatView'
+import { handoffsApi } from '@/lib/ipc'
+import { useAppStore } from '@/store/appStore'
+import { useHandoffsStore } from '@/store/handoffsStore'
+import { contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
+import { splitAlias } from './crew'
+import { useCrewDockStore } from './crew-dock-store'
+import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+
+// Quick look de uma sessão-filha: abre por cima de tudo, mostra a conversa dela
+// renderizada, deixa responder, e some. O degrau do meio entre "ver o dot piscar"
+// e "abrir a aba" — olhar e desbloquear em segundos SEM mexer no layout de
+// trabalho (nenhuma pane nasce, o dockview segue montado por trás).
+//
+// Montado como irmão de <main> no AppShell, no mesmo padrão do SessionSwitcher
+// (fixed + backdrop + `if (!open) return null`), e não pelo Dialog.tsx — que
+// trava max-h-[85vh] sem parametrização e o peek quer a altura toda.
+//
+// Custo de GPU: zero. O ChatView lê o transcript JSONL por IPC e não importa
+// xterm/WebGL, então o peek não consome nenhum dos 8 contextos do cap.
+
+export function CrewPeek() {
+  const peekId = useCrewDockStore((s) => s.peekId)
+  const closePeek = useCrewDockStore((s) => s.closePeek)
+  const handoffs = useHandoffsStore((s) => s.handoffs)
+  const liveSessions = useAppStore((s) => s.liveSessions)
+
+  const handoff = peekId ? (handoffs.find((h) => h.id === peekId) ?? null) : null
+  const live = handoff?.childSessionId
+    ? (liveSessions.find((s) => s.id === handoff.childSessionId) ?? null)
+    : null
+
+  // Fecha sozinho se o handoff sumiu da lista (concluiu, falhou) enquanto o
+  // overlay estava aberto — melhor que deixar um painel órfão na tela.
+  useEffect(() => {
+    if (peekId && !handoff) closePeek()
+  }, [peekId, handoff, closePeek])
+
+  if (!handoff) return null
+  // key: trocar de filha remonta o painel (e o ChatView), zerando o transcript
+  // assinado e o texto meio digitado da anterior.
+  return <CrewPeekPanel key={handoff.id} handoff={handoff} live={live} onClose={closePeek} />
+}
+
+interface PanelProps {
+  handoff: Handoff
+  live: LiveSessionInfo | null
+  onClose: () => void
+}
+
+function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
+  const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
+  const load = useHandoffsStore((s) => s.load)
+  const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Quem estava focado quando o peek abriu (o card do dock, ou o botão clicado).
+  // Padrão novo no repo: sem isto o "fecha rápido" larga o usuário no vazio, que
+  // é exatamente o atrito que esta tela existe pra eliminar.
+  const originRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    const active = document.activeElement
+    originRef.current = active instanceof HTMLElement ? active : null
+    // rAF: mesmo padrão do refocus do Composer — foca depois do paint.
+    requestAnimationFrame(() => inputRef.current?.focus())
+    return () => {
+      const origin = originRef.current
+      requestAnimationFrame(() => {
+        if (origin?.isConnected) origin.focus()
+      })
+    }
+  }, [])
+
+  // Esc fecha de qualquer lugar do overlay (inclusive de dentro do textarea).
+  // Listener de janela em capture porque o peek é a camada de cima: nenhum outro
+  // handler de Esc deve ver esta tecla antes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  const alias = splitAlias(live?.title)
+  const repoLabel = handoff.targetRepoLabel ?? handoff.targetRepoId
+  const badge = liveBadgeFor(live?.status)
+  const activityLabel = liveActivityLabel(live?.lastActivityAt ?? null, Date.now())
+  const ctxLabel = contextLabel(live?.tokens)
+
+  // A filha está bloqueada esperando a mãe. É o único momento em que pode haver
+  // um menu TUI aberto na tela dela — e o único em que o aviso de read-only
+  // (abaixo) tem serventia.
+  const answering = handoff.status === 'needs_input' || live?.status === 'waiting'
+
+  function promoteToTerminal() {
+    if (!live) return
+    void focusOrOpenSession(live)
+    onClose()
+  }
+
+  // RESPOSTA: handoffs:send-message, chaveado pelo handoffId — NUNCA
+  // sessionsApi.write. Só este caminho chama store.resume(id) e encerra o
+  // needs_input; qualquer outro canal entregaria o texto mas deixaria o card
+  // âmbar aceso à toa (o main não observa o SendMessage do MCP).
+  async function send() {
+    const text = message.trim()
+    if (!text || sending) return
+    setSending(true)
+    setError(null)
+    try {
+      await handoffsApi.sendMessage({ id: handoff.id, text })
+      setMessage('')
+    } catch (err) {
+      // Filha morreu entre o render e o envio é o caso comum: mostra o motivo e
+      // preserva o texto pro usuário não perder o que digitou.
+      setError(err instanceof Error ? err.message : 'Não foi possível entregar a mensagem.')
+    } finally {
+      setSending(false)
+      await load()
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-6"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="pw-rise flex h-[88vh] w-[56rem] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl">
+        <header className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border)] px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="truncate text-base font-medium text-[var(--color-text)]">
+                {alias ? alias.name : `→ ${repoLabel}`}
+              </span>
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
+                style={{
+                  color: badge.color,
+                  borderColor: `color-mix(in srgb, ${badge.color} 45%, transparent)`,
+                  background: `color-mix(in srgb, ${badge.color} 12%, transparent)`,
+                }}
+                title="Estado ao vivo da sessão-filha"
+              >
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: badge.color }} />
+                {badge.label}
+              </span>
+            </div>
+            <div className="truncate text-[11px] text-[var(--color-text-dim)]">
+              {alias?.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
+              {activityLabel && <span title="Última atividade da filha">{activityLabel}</span>}
+              {ctxLabel && <span title="Tokens de contexto em uso">{ctxLabel}</span>}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {live && (
+              <button
+                type="button"
+                onClick={promoteToTerminal}
+                title="Abrir a sessão-filha numa aba de terminal (re-attacha a PTY viva)"
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+              >
+                <Icon as={TerminalSquare} size={13} />
+                Abrir no terminal
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              title="Fechar (Esc)"
+              aria-label="Fechar"
+              className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+            >
+              <Icon as={X} size={16} />
+            </button>
+          </div>
+        </header>
+
+        {/* relative + min-h-0: o ChatView se posiciona com absolute inset-0. */}
+        <div className="relative min-h-0 flex-1">
+          {handoff.childSessionId ? (
+            <ChatView
+              sessionId={handoff.childSessionId}
+              status={live?.status}
+              // Sem onRespond: os cards interativos ficam read-only aqui (o
+              // clique deles digita no xterm, que o peek não monta). O botão do
+              // banner de espera do ChatView vira "abrir no terminal" — o único
+              // lugar onde um menu TUI é de fato clicável.
+              onToggleMode={live ? promoteToTerminal : undefined}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--color-text-dim)]">
+              A sessão-filha ainda não subiu — não há conversa pra mostrar.
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 border-t border-[var(--color-border)] p-3">
+          {/* Limitação assumida: menu TUI (escolher opção numerada) é desenhado
+              no xterm e parseado do buffer dele — sem xterm, o card é só leitura.
+              Dizer isso na cara, com a saída ao lado, em vez de deixar o usuário
+              clicando em algo inerte. */}
+          {answering && (
+            <div
+              className="mb-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',
+                background: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
+                color: 'var(--color-text)',
+              }}
+            >
+              <span className="flex-1">
+                Responder em texto funciona daqui. Escolher opção de menu (plano, permissão,
+                pergunta numerada) só no terminal — o menu é desenhado por ele.
+              </span>
+              {live && (
+                <button
+                  type="button"
+                  onClick={promoteToTerminal}
+                  className="flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 font-medium transition hover:border-[var(--color-warning)]"
+                >
+                  <Icon as={TerminalSquare} size={13} />
+                  Abrir no terminal
+                </button>
+              )}
+            </div>
+          )}
+
+          {handoff.status === 'needs_input' && handoff.pendingQuestion && (
+            <div
+              className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-sm"
+              style={{
+                borderColor: 'var(--color-warning)',
+                background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+                color: 'var(--color-text)',
+              }}
+            >
+              <div className="mb-1 text-[11px] font-medium text-[var(--color-warning)]">
+                A filha perguntou:
+              </div>
+              {handoff.pendingQuestion}
+            </div>
+          )}
+
+          {error && <div className="mb-2 text-xs text-[var(--color-danger)]">{error}</div>}
+
+          <form
+            className="flex items-start gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void send()
+            }}
+          >
+            <textarea
+              ref={inputRef}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void send()
+                }
+              }}
+              rows={2}
+              disabled={!live}
+              placeholder={
+                live
+                  ? answering
+                    ? 'Responder à filha…'
+                    : 'Enviar mensagem para a filha…'
+                  : 'A sessão-filha não está mais viva.'
+              }
+              className="min-h-[44px] flex-1 resize-y rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!live || sending || message.trim().length === 0}
+              title="Enviar (Enter)"
+              className="flex shrink-0 items-center gap-1 rounded border px-3 py-2 text-xs font-medium transition disabled:opacity-40"
+              style={{
+                color: answering ? 'var(--color-warning)' : 'var(--color-accent)',
+                borderColor: answering ? 'var(--color-warning)' : 'var(--color-accent)',
+              }}
+            >
+              <Icon as={CornerDownLeft} size={13} />
+              {sending ? 'Enviando…' : answering ? 'Responder' : 'Enviar'}
+            </button>
+          </form>
+
+          <div className="mt-2 flex items-center gap-3 text-[10px] text-[var(--color-text-dim)]">
+            <span>↵ enviar</span>
+            <span>shift+↵ nova linha</span>
+            <span>esc fechar</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

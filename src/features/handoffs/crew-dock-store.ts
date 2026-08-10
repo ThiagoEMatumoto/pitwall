@@ -54,12 +54,28 @@ interface CrewDockState {
   // de espera esvaziar (senão o dock briga com quem acabou de fechá-lo).
   muted: boolean
 
+  // Card sob o cursor de teclado (id do handoff). Vive aqui, e não no painel,
+  // porque o Ctrl+J chega pelo AppShell — fora da árvore do dock.
+  focusedId: string | null
+  // Handoff aberto no quick look (CrewPeek). null = nenhum overlay.
+  peekId: string | null
+  // Nonce do pedido de foco: o AppShell incrementa, o dock (já expandido e
+  // renderizado) reage focando o card. Um id não serviria — pedir foco duas
+  // vezes pro mesmo card não mudaria o valor e o efeito não rodaria.
+  focusNonce: number
+
   expand: () => void
   collapse: () => void
   toggle: () => void
   setWidth: (width: number) => void
   // Chamado a cada mudança do número de filhas aguardando.
   syncAttention: (hasAttention: boolean) => void
+
+  setFocusedId: (id: string | null) => void
+  // Ctrl+J: abre o dock (se preciso) e pede o foco pro card corrente.
+  requestFocus: () => void
+  openPeek: (id: string) => void
+  closePeek: () => void
 }
 
 const persisted = readPersisted()
@@ -74,6 +90,9 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   width: persisted.width,
   autoRevealed: false,
   muted: false,
+  focusedId: null,
+  peekId: null,
+  focusNonce: 0,
 
   expand: () => {
     writePersisted({ collapsed: false, width: get().width })
@@ -107,4 +126,18 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
     // Ninguém mais esperando: recolhe o que o auto-reveal abriu e rearma o gatilho.
     if (autoRevealed || muted) set({ autoRevealed: false, muted: false })
   },
+
+  setFocusedId: (focusedId) => {
+    if (get().focusedId !== focusedId) set({ focusedId })
+  },
+
+  requestFocus: () => {
+    // Colapsado não tem card no DOM pra receber foco — expande antes de pedir.
+    if (!dockExpanded(get())) get().expand()
+    set({ focusNonce: get().focusNonce + 1 })
+  },
+
+  openPeek: (peekId) => set({ peekId, focusedId: peekId }),
+
+  closePeek: () => set({ peekId: null }),
 }))

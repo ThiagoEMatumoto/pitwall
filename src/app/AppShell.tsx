@@ -43,6 +43,7 @@ import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
 import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
+import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
 
@@ -768,6 +769,10 @@ export function AppShell() {
           área projects, e o dock precisa continuar visível em qualquer área (as
           filhas seguem trabalhando enquanto você olha métricas/features). */}
       <CrewDock />
+
+      {/* Quick look da filha em foco: overlay por cima de tudo, no padrão do
+          SessionSwitcher (o dockview segue montado por trás, nenhuma pane nasce). */}
+      <CrewPeek />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HandoffApprovalDialog />
