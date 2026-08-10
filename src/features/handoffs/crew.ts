@@ -1,4 +1,4 @@
-import { ACTIVE_HANDOFF_STATUSES } from '@/store/handoffsStore'
+import { ACTIVE_HANDOFF_STATUSES, childSessionIds } from '@/store/handoffsStore'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Domínio da "equipe": as sessões-filhas de handoffs ativos. Elas ficam FORA da
@@ -31,6 +31,21 @@ export function splitAlias(alias: string | null | undefined): AliasParts | null 
 // esconde). Sem eles o dock não existe — nada delegado, nenhum pixel gasto.
 export function activeCrew(handoffs: Handoff[]): Handoff[] {
   return handoffs.filter((h) => ACTIVE_HANDOFF_STATUSES.has(h.status))
+}
+
+// Endereço das filhas do dock no vocabulário das notificações: o evento do main
+// vem com ccSessionId, e o dock raciocina em Session.id. Serve pra calar o aviso
+// que o dock já dá (ver NotificationToast). Puro → testável.
+export function crewCcSessionIds(
+  handoffs: Handoff[],
+  liveSessions: LiveSessionInfo[],
+): Set<string> {
+  const childIds = childSessionIds(handoffs)
+  const cc = new Set<string>()
+  for (const s of liveSessions) {
+    if (childIds.has(s.id)) cc.add(s.ccSessionId)
+  }
+  return cc
 }
 
 // A filha está esperando a mãe? Duas fontes: o status vivo do PTY ('waiting') e o

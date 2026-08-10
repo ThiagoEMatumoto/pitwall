@@ -7,7 +7,7 @@ import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
-import { crewNeedsAttention, orderCrew, splitAlias } from './crew'
+import { activeCrew, crewNeedsAttention, orderCrew, splitAlias } from './crew'
 import { RAIL_WIDTH, clampWidth, dockExpanded, useCrewDockStore } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -18,6 +18,19 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 // WebGL é 8; "Abrir terminal" continua sendo ação explícita, dentro do card).
 // Montado como IRMÃO de <main> no AppShell — vive fora do plano de abas do
 // dockview, então não mistura com as sessões-mãe nem some fora da área projetos.
+
+// Largura que o dock ocupa AGORA (0 = sem equipe, o dock nem monta). Quem
+// desenha por cima da janela — a pilha de toasts — se desloca por ela: um aviso
+// não pode cobrir o painel de onde ele veio.
+export function useCrewDockWidth(): number {
+  const handoffs = useHandoffsStore((s) => s.handoffs)
+  const collapsed = useCrewDockStore((s) => s.collapsed)
+  const autoRevealed = useCrewDockStore((s) => s.autoRevealed)
+  const width = useCrewDockStore((s) => s.width)
+  const hasCrew = useMemo(() => activeCrew(handoffs).length > 0, [handoffs])
+  if (!hasCrew) return 0
+  return dockExpanded({ collapsed, autoRevealed }) ? width : RAIL_WIDTH
+}
 
 function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
   if (live) return liveBadgeFor(live.status).color

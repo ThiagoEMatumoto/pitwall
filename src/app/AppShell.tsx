@@ -42,7 +42,7 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
-import { CrewDock } from '@/features/handoffs/CrewDock'
+import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
 
@@ -150,6 +150,9 @@ export function AppShell() {
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const overrides = useKeybindingsStore((s) => s.overrides)
   const loadKeybindings = useKeybindingsStore((s) => s.load)
+  // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
+  // largura dele pra não cobrir os cards das filhas (e o input de resposta).
+  const crewDockWidth = useCrewDockWidth()
 
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
@@ -775,7 +778,10 @@ export function AppShell() {
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
-      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+      <div
+        className="pointer-events-none fixed bottom-4 z-50 flex flex-col items-end gap-2"
+        style={{ right: crewDockWidth + 16 }}
+      >
         <UpdateToast />
         <NotificationToast />
       </div>
