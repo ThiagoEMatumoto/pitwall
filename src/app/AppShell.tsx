@@ -42,6 +42,7 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
+import { CrewDock } from '@/features/handoffs/CrewDock'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
 
@@ -759,6 +760,11 @@ export function AppShell() {
           </div>
         </div>
       </main>
+
+      {/* Irmão de <main>, não filho: o bloco de projetos fica `hidden` fora da
+          área projects, e o dock precisa continuar visível em qualquer área (as
+          filhas seguem trabalhando enquanto você olha métricas/features). */}
+      <CrewDock />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HandoffApprovalDialog />
