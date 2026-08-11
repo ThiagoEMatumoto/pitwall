@@ -43,6 +43,15 @@ export interface McpNotify {
   affectedObjectivesForFeatureLinks(links: FeatureObjectiveLink[]): void
 }
 
+// Identidade carimbada pelo APP no spawn da sessão (mcp-config por sessão →
+// ?s=<sessions.id> → server.ts). Nunca vem do modelo. null = sessão sem carimbo
+// (config global legada) — o dedup de handoff volta ao escopo por repo.
+export interface McpRequestContext {
+  motherSessionId: string | null
+}
+
+export const ANONYMOUS_CONTEXT: McpRequestContext = { motherSessionId: null }
+
 export interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
   structuredContent: Record<string, unknown>
@@ -621,7 +630,7 @@ const handoffAskSchema = z.object({
   question: z.string().min(1).max(4096),
 })
 
-function handoffTools(notify: McpNotify): ToolDef[] {
+function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
   return [
     {
       name: 'repo_connections_get',
@@ -653,7 +662,7 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error (that child may belong to another mother session — you do not inherit it); pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it; pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -665,21 +674,33 @@ function handoffTools(notify: McpNotify): ToolDef[] {
         const target = resolveRepo(input.targetRepo)
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
 
-        // Dedup por alvo: evita dois agentes mutando o mesmo repo em paralelo
-        // (causa-raiz de quase-acidente). O predicado é por REPO, não por sessão-mãe
-        // (mother_session_id ainda não é gravado), então o handoff ativo encontrado
-        // pode ser de OUTRA mãe — devolver o handle dele (handoffId/alias/status)
-        // fazia esta mãe adotar uma filha alheia e conversar com ela. Recusa com
+        // Dedup por alvo em TRÊS níveis (evita dois agentes mutando o mesmo repo
+        // em paralelo, causa-raiz de quase-acidente). Nunca devolve o handle do
+        // handoff encontrado: entregar { handoffId, alias, status } fazia uma mãe
+        // adotar a filha de OUTRA e passar a conversar com ela. Sempre recusa com
         // erro informativo; force=true segue despachando uma segunda.
         if (!input.force) {
-          const existing = handoffStore.findActiveByTarget(target.id)
-          if (existing) {
-            const existingAlias = handoffStore.childAlias(existing.childSessionId)
-            const who = existingAlias ? `a filha "${existingAlias}"` : 'uma filha (ainda sem alias)'
-            return ok({
-              duplicate: true,
-              error: `${target.label} já tem ${who} ativa (status: ${existing.status}) — e ela pode NÃO ser sua: o dedup é por repo-alvo, não por sessão-mãe. Não assuma o controle de uma filha que você não despachou. Se este trabalho é seu e precisa rodar mesmo assim, chame de novo com force: true; senão aguarde a atual concluir.`,
-            })
+          const mother = ctx.motherSessionId
+          // Nível 1: handoff ativo despachado por MIM neste repo. Só existe
+          // quando o app carimbou a identidade (mcp-config por sessão).
+          const mine = mother ? handoffStore.findActiveByTarget(target.id, mother) : null
+          // Níveis 2 e 3: qualquer handoff ativo no repo-alvo. Escopar SÓ pela
+          // mãe reabriria duas mães mutando o mesmo repo — o acidente que este
+          // dedup existe pra evitar. Sem identidade (nível 3) este é o único
+          // predicado, e é o mais estrito: mantém o comportamento legado.
+          const anyActive = mine ?? handoffStore.findActiveByTarget(target.id)
+          if (anyActive) {
+            const alias = handoffStore.childAlias(anyActive.childSessionId)
+            const who = alias ? `a filha "${alias}"` : 'uma filha (ainda sem alias)'
+            const status = `(status: ${anyActive.status})`
+            const tail =
+              'Se este trabalho é seu e precisa rodar mesmo assim, chame de novo com force: true; senão aguarde a atual concluir.'
+            const error = mine
+              ? `Você JÁ despachou ${who} para ${target.label} ${status} — ela é sua. Fale com ela por SendMessage({ to: "${alias ?? ''}" }) ou acompanhe por handoff_result em vez de despachar outra. ${tail}`
+              : mother
+                ? `${target.label} já tem ${who} ativa ${status} e ela NÃO é sua — foi despachada por outra sessão-mãe. Não assuma o controle de uma filha que você não despachou. ${tail}`
+                : `${target.label} já tem ${who} ativa ${status} — e ela pode NÃO ser sua: sem identidade da sessão-mãe, o dedup é por repo-alvo. Não assuma o controle de uma filha que você não despachou. ${tail}`
+            return ok({ duplicate: true, error })
           }
         }
 
@@ -737,7 +758,8 @@ function handoffTools(notify: McpNotify): ToolDef[] {
 
         const handoff = handoffStore.create({
           id: handoffId,
-          motherSessionId: null,
+          // Carimbo do app (null quando a sessão veio da config global legada).
+          motherSessionId: ctx.motherSessionId,
           targetRepoId: target.id,
           // Origem da delegação (a mãe), pra instrumentação cross-repo. Null se a
           // MCP não passou fromRepo.
@@ -1134,20 +1156,27 @@ function repoPullTools(): ToolDef[] {
   ]
 }
 
-export function buildTools(notify: McpNotify): ToolDef[] {
+export function buildTools(
+  notify: McpNotify,
+  ctx: McpRequestContext = ANONYMOUS_CONTEXT,
+): ToolDef[] {
   return [
     ...overviewTools(),
     ...objectiveTools(notify),
     ...taskTools(notify),
     ...featureTools(notify),
-    ...handoffTools(notify),
+    ...handoffTools(notify, ctx),
     ...scheduledJobTools(notify),
     ...repoPullTools(),
   ]
 }
 
-export function registerTools(server: McpServer, notify: McpNotify): void {
-  for (const tool of buildTools(notify)) {
+export function registerTools(
+  server: McpServer,
+  notify: McpNotify,
+  ctx: McpRequestContext = ANONYMOUS_CONTEXT,
+): void {
+  for (const tool of buildTools(notify, ctx)) {
     server.registerTool(
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.inputSchema },

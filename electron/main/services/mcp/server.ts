@@ -19,9 +19,12 @@ import {
   loadOrCreateToken,
   mcpClientConfigPath,
   mcpConfigPath,
+  sessionMcpConfigDir,
+  sweepSessionMcpConfigs,
   writeMcpClientConfig,
   writeMcpRuntimeInfo,
 } from './config'
+import { readMotherSessionId } from './session-identity'
 import { registerTools, type McpNotify } from './tools'
 import { SERVER_INSTRUCTIONS } from './instructions'
 import {
@@ -72,6 +75,7 @@ export interface StartMcpOptions {
   notify?: McpNotify
   configFilePath?: string
   clientConfigFilePath?: string
+  sessionConfigDir?: string
 }
 
 export interface McpServerHandle {
@@ -92,6 +96,7 @@ export function getMcpRuntime(): McpServerHandle | null {
 export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpServerHandle | null> {
   const configFilePath = opts.configFilePath ?? mcpConfigPath()
   const clientConfigFilePath = opts.clientConfigFilePath ?? mcpClientConfigPath()
+  const sessionConfigDir = opts.sessionConfigDir ?? sessionMcpConfigDir()
   const token = opts.token ?? loadOrCreateToken(configFilePath)
   const port = opts.port ?? getMcpPort()
   const notify = opts.notify ?? defaultNotify
@@ -103,13 +108,19 @@ export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpSer
       if (url.pathname !== '/mcp') return deny(res, 404, 'not found')
       if (!tokenMatches(req.headers.authorization, token)) return deny(res, 401, 'unauthorized')
 
+      // Identidade da sessão-mãe carimbada pelo app no spawn (mcp-config por
+      // sessão). Como o McpServer já é criado POR REQUEST, o contexto é
+      // naturalmente por request — sem AsyncLocalStorage. null = config global
+      // legada → o dedup de handoff cai no escopo por repo.
+      const motherSessionId = readMotherSessionId({ url, headers: req.headers })
+
       // Stateless: instâncias novas por request, descartadas no fim da resposta.
       // instructions: injetadas pelo client no contexto da sessão (auto-tracking).
       const mcp = new McpServer(
         { name: 'claude-manager', version: app.getVersion() },
         { instructions: SERVER_INSTRUCTIONS },
       )
-      registerTools(mcp, notify)
+      registerTools(mcp, notify, { motherSessionId })
       const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
       res.on('close', () => {
         void transport.close()
@@ -138,7 +149,11 @@ export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpSer
         // server stale (ex: userData copiado pra E2E) → remove, a menos que
         // pertençam a outra instância viva (ver decideStaleConfigCleanup).
         try {
-          const decision = cleanupStaleMcpConfigs(configFilePath, clientConfigFilePath)
+          const decision = cleanupStaleMcpConfigs(
+            configFilePath,
+            clientConfigFilePath,
+            sessionConfigDir,
+          )
           if (decision === 'keep') {
             console.warn('[mcp] mcp.json belongs to another live instance — leaving config files')
           }
@@ -154,6 +169,9 @@ export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpSer
       try {
         writeMcpRuntimeInfo({ url, token, pid: process.pid }, configFilePath)
         writeMcpClientConfig({ url, token, pid: process.pid }, clientConfigFilePath)
+        // Nenhuma PTY sobrevive ao quit: configs por sessão que restaram no
+        // diretório são órfãs (e apontariam pra uma porta/token antigos).
+        sweepSessionMcpConfigs(sessionConfigDir)
       } catch (err) {
         console.error('[mcp] failed to write mcp config files (server stays up):', err)
       }

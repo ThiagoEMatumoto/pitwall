@@ -682,5 +682,46 @@ describe('handoff-store', () => {
       // Dedup libera: um novo handoff pro mesmo alvo é permitido.
       expect(store.findActiveByTarget('r1')).toBeNull()
     })
+
+    // Escopo por sessão-mãe: sem ele, duas mães ativas compartilhavam o mesmo
+    // predicado por repo e uma podia receber a filha da outra.
+    describe('escopo por sessão-mãe', () => {
+      const MOTHER_A = 'mother-a'
+      const MOTHER_B = 'mother-b'
+
+      const handoffOf = (motherSessionId: string | null, targetRepoId = 'r1') =>
+        store.create({ targetRepoId, motherSessionId, task: 't', composedPrompt: 'p' })
+
+      it('escopado à mãe A ignora o handoff ativo da mãe B', () => {
+        const b = handoffOf(MOTHER_B)
+        expect(store.findActiveByTarget('r1', MOTHER_A)).toBeNull()
+        expect(store.findActiveByTarget('r1', MOTHER_B)?.id).toBe(b.id)
+      })
+
+      it('acha o próprio handoff mesmo com outra mãe ativa no mesmo repo', () => {
+        handoffOf(MOTHER_B)
+        const a = handoffOf(MOTHER_A)
+        expect(store.findActiveByTarget('r1', MOTHER_A)?.id).toBe(a.id)
+      })
+
+      it('sem mãe (null/omitido) volta ao escopo GLOBAL por repo — o mais estrito', () => {
+        const b = handoffOf(MOTHER_B)
+        expect(store.findActiveByTarget('r1')?.id).toBe(b.id)
+        expect(store.findActiveByTarget('r1', null)?.id).toBe(b.id)
+        expect(store.findActiveByTarget('r1', undefined)?.id).toBe(b.id)
+      })
+
+      it('escopo por mãe NÃO enxerga handoff legado (mother_session_id null)', () => {
+        const legacy = handoffOf(null)
+        expect(store.findActiveByTarget('r1', MOTHER_A)).toBeNull()
+        // Mas o escopo global continua barrando — é o fallback seguro.
+        expect(store.findActiveByTarget('r1')?.id).toBe(legacy.id)
+      })
+
+      it('escopo por mãe respeita o repo-alvo', () => {
+        handoffOf(MOTHER_A, 'r1')
+        expect(store.findActiveByTarget('r2', MOTHER_A)).toBeNull()
+      })
+    })
   })
 })
