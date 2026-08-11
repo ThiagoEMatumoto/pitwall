@@ -155,15 +155,17 @@ describe('pullRepo (integração — repos git temporários)', () => {
     expect(mainOutcome?.behind).toBe(1)
   })
 
-  // Cenário do `applicant-portal` (119 commits atrás): a default está em checkout
-  // numa worktree VINCULADA. `status.current` só enxerga a principal (feat/x), e
-  // o `fetch origin main:main` era recusado pelo git — erro mudo em toda run.
-  it('default em checkout numa worktree vinculada: skip explícito, sem erro', async () => {
+  // Cenário do `legal-core` (35 commits atrás): a default está em checkout numa
+  // worktree VINCULADA e LIMPA. `status.current` só enxerga a principal (feat/x)
+  // e o `fetch origin main:main` é recusado pelo git — antes o repo acumulava
+  // atraso PRA SEMPRE. Agora o fast-forward roda dentro da própria worktree.
+  it('default em worktree vinculada limpa: fast-forward aplicado na worktree', async () => {
     const { originPath, clonePath } = setupRepos(dir)
     const originMain = git(originPath, 'rev-parse', 'main')
     const mainBefore = git(clonePath, 'rev-parse', 'main')
     expect(mainBefore).not.toBe(originMain)
-    git(clonePath, 'worktree', 'add', join(dir, 'wt-main'), 'main')
+    const wtPath = join(dir, 'wt-main')
+    git(clonePath, 'worktree', 'add', wtPath, 'main')
     expect(git(clonePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/x')
 
     const result = await pullRepo({
@@ -174,15 +176,68 @@ describe('pullRepo (integração — repos git temporários)', () => {
       defaultBranch: 'main',
     })
 
-    // O remote-tracking ref avançou (é o que `worktree add ... origin/main` usa);
-    // o ref local de main ficou parado, e a worktree do usuário intocada.
+    // O ref local de main alcançou o origin E a working tree da worktree
+    // vinculada recebeu o conteúdo novo (o FF rodou lá dentro, não só no ref).
     expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
+    expect(readFileSync(join(wtPath, 'file.txt'), 'utf8')).toBe('v2')
+    // A worktree principal seguiu intocada, na feature branch.
+    expect(git(clonePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/x')
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('pulled')
+    expect(mainOutcome?.behind).toBe(0)
+    expect(result.status).not.toBe('error')
+  })
+
+  it('default em worktree vinculada SUJA: skip, working tree preservada', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const originMain = git(originPath, 'rev-parse', 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    const wtPath = join(dir, 'wt-main')
+    git(clonePath, 'worktree', 'add', wtPath, 'main')
+    writeFileSync(join(wtPath, 'file.txt'), 'dirty')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+    expect(readFileSync(join(wtPath, 'file.txt'), 'utf8')).toBe('dirty')
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('checked-out-elsewhere-dirty')
+    expect(mainOutcome?.behind).toBe(1)
+    expect(result.status).not.toBe('error')
+  })
+
+  it('default em worktree vinculada DIVERGIDA (commits locais): skip', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const wtPath = join(dir, 'wt-main')
+    git(clonePath, 'worktree', 'add', wtPath, 'main')
+    git(wtPath, 'commit', '--allow-empty', '-m', 'local work')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    // O commit local sobreviveu — nada foi mesclado nem descartado.
     expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
 
     const mainOutcome = result.branches?.find((b) => b.branch === 'main')
     expect(mainOutcome?.status).toBe('skipped')
-    expect(mainOutcome?.detail).toBe('checked-out-elsewhere')
-    expect(mainOutcome?.behind).toBe(1)
+    expect(mainOutcome?.detail).toBe('checked-out-elsewhere-diverged')
     expect(result.status).not.toBe('error')
   })
 

@@ -139,27 +139,34 @@ async function resolveDefaultBranch(git: SimpleGit, url: string): Promise<string
   return null
 }
 
-// Puro e testável: branches em checkout segundo `git worktree list --porcelain`
-// (a principal e todas as vinculadas). Cada bloco traz uma linha
-// `branch refs/heads/<x>`; blocos detached não têm essa linha e ficam de fora.
-export function parseCheckedOutBranches(porcelain: string): Set<string> {
-  const prefix = 'branch refs/heads/'
-  const out = new Set<string>()
+// Puro e testável: branch em checkout -> path da worktree que a tem, segundo
+// `git worktree list --porcelain` (a principal e todas as vinculadas). Cada
+// bloco abre com `worktree <path>` e traz uma linha `branch refs/heads/<x>`;
+// blocos detached não têm essa linha e ficam de fora. O path importa porque o
+// fast-forward da default precisa rodar DENTRO da worktree que a segura.
+export function parseCheckedOutBranches(porcelain: string): Map<string, string> {
+  const branchPrefix = 'branch refs/heads/'
+  const worktreePrefix = 'worktree '
+  const out = new Map<string, string>()
+  let path: string | null = null
   for (const line of porcelain.split('\n')) {
     const trimmed = line.trim()
-    if (trimmed.startsWith(prefix)) out.add(trimmed.slice(prefix.length))
+    if (trimmed.startsWith(worktreePrefix)) path = trimmed.slice(worktreePrefix.length)
+    else if (trimmed.startsWith(branchPrefix) && path) {
+      out.set(trimmed.slice(branchPrefix.length), path)
+    }
   }
   return out
 }
 
-// Set vazio no catch: metadata de worktree corrompida não pode derrubar o ciclo
+// Map vazio no catch: metadata de worktree corrompida não pode derrubar o ciclo
 // — no pior caso voltamos ao comportamento antigo (tentar o fetch e receber a
 // recusa do git).
-async function listCheckedOutBranches(git: SimpleGit): Promise<Set<string>> {
+async function listCheckedOutBranches(git: SimpleGit): Promise<Map<string, string>> {
   try {
     return parseCheckedOutBranches(await git.raw(['worktree', 'list', '--porcelain']))
   } catch {
-    return new Set()
+    return new Map()
   }
 }
 
@@ -204,6 +211,36 @@ async function pullDefaultBranch(git: SimpleGit, url: string, def: string): Prom
     await git.raw([...authArgs(url), 'fetch', 'origin', `${def}:${def}`])
     if (before === null) return { branch: def, status: 'pulled' }
     const after = (await git.revparse([def])).trim()
+    return { branch: def, status: before === after ? 'up-to-date' : 'pulled' }
+  } catch (err) {
+    return { branch: def, status: 'error', detail: (err as Error).message }
+  }
+}
+
+// Fast-forward da default DENTRO da worktree vinculada que a tem em checkout.
+// Um worktree é só outro checkout: vale a MESMA barra de elegibilidade do
+// diretório principal (limpo + sem commits locais adiante), via
+// classifyPullEligibility. O skip carrega `checked-out-elsewhere-<motivo>` pra
+// deixar claro que o impedimento está em OUTRO diretório. O merge é contra o
+// remote-tracking ref — o `fetch origin --prune` de pullRepo já rodou, então
+// aqui não há rede nem credencial em jogo.
+async function pullDefaultInWorktree(worktreePath: string, def: string): Promise<BranchPullOutcome> {
+  const wtGit = netGit(worktreePath)
+  let status: PullStatusInput
+  try {
+    status = await wtGit.status()
+  } catch {
+    // Worktree órfã/prunable (path sumiu do disco): comportamento antigo.
+    return { branch: def, status: 'skipped', detail: 'checked-out-elsewhere' }
+  }
+  const eligibility = classifyPullEligibility(status)
+  if (eligibility !== 'eligible') {
+    return { branch: def, status: 'skipped', detail: `checked-out-elsewhere-${eligibility}` }
+  }
+  try {
+    const before = (await wtGit.revparse(['HEAD'])).trim()
+    await wtGit.raw(['merge', '--ff-only', `refs/remotes/origin/${def}`])
+    const after = (await wtGit.revparse(['HEAD'])).trim()
     return { branch: def, status: before === after ? 'up-to-date' : 'pulled' }
   } catch (err) {
     return { branch: def, status: 'error', detail: (err as Error).message }
@@ -274,11 +311,12 @@ export async function pullRepo(target: PullTarget): Promise<PullRepoResult> {
     if (def && def !== current) {
       // A default pode estar em checkout numa worktree VINCULADA (status.current
       // só enxerga a principal). Nesse caso `fetch origin def:def` é recusado
-      // pelo git; avançar o ref exigiria mexer na working tree do usuário, então
-      // reportamos o skip e deixamos o atraso visível via `behind`.
-      const checkedOutElsewhere = (await listCheckedOutBranches(git)).has(def)
-      const outcome: BranchPullOutcome = checkedOutElsewhere
-        ? { branch: def, status: 'skipped', detail: 'checked-out-elsewhere' }
+      // pelo git, e o avanço tem que acontecer LÁ — com o mesmo critério de
+      // segurança do diretório principal. Suja/divergida continua pulada, com o
+      // atraso visível via `behind`.
+      const worktreePath = (await listCheckedOutBranches(git)).get(def)
+      const outcome: BranchPullOutcome = worktreePath
+        ? await pullDefaultInWorktree(worktreePath, def)
         : await pullDefaultBranch(git, url, def)
       branches.push(await withBehind(git, outcome))
     }

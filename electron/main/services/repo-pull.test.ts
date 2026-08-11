@@ -87,7 +87,12 @@ describe('parseCheckedOutBranches', () => {
       '',
     ].join('\n')
 
-    expect(parseCheckedOutBranches(porcelain)).toEqual(new Set(['feat/x', 'main']))
+    expect(parseCheckedOutBranches(porcelain)).toEqual(
+      new Map([
+        ['feat/x', '/home/u/repo'],
+        ['main', '/home/u/repo/.worktrees/main'],
+      ]),
+    )
   })
 
   it('ignora blocos detached (não têm linha branch)', () => {
@@ -102,10 +107,10 @@ describe('parseCheckedOutBranches', () => {
       '',
     ].join('\n')
 
-    expect(parseCheckedOutBranches(porcelain)).toEqual(new Set(['main']))
+    expect(parseCheckedOutBranches(porcelain)).toEqual(new Map([['main', '/home/u/repo']]))
   })
 
   it('set vazio quando não há nenhuma branch em checkout', () => {
-    expect(parseCheckedOutBranches('')).toEqual(new Set())
+    expect(parseCheckedOutBranches('')).toEqual(new Map())
   })
 })

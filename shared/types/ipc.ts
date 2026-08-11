@@ -79,7 +79,7 @@ export interface BranchPullOutcome {
 // quando FALHA (entrada 'origin'). `status`/`detail` no topo são o AGREGADO
 // (deriveOverallStatus em repo-pull.ts), preservado pra não quebrar a agregação
 // de toasts existente em git.ts. 'skipped' carrega o motivo em detail
-// ('dirty' | 'diverged' | 'checked-out-elsewhere' | 'sem .git'); 'pulled' = algo
+// ('dirty' | 'diverged' | 'checked-out-elsewhere[-dirty|-diverged]' | 'sem .git'); 'pulled' = algo
 // avançou; 'up-to-date' = tudo já em dia; 'error' = alguma unidade falhou.
 export interface PullRepoResult {
   repoId: string
@@ -94,7 +94,7 @@ export interface PullRepoResult {
 // "quanto este repo está atrás" sem reprocessar git. `behind` = o maior atraso
 // entre as branches do repo (a que mais dói é a que ficou mais pra trás);
 // ausente quando nenhuma branch reportou atraso (ex.: fetch falhou). `reason` =
-// o `detail` DESSA branch ('dirty' | 'diverged' | 'checked-out-elsewhere' | ...)
+// o `detail` DESSA branch ('dirty' | 'diverged' | 'checked-out-elsewhere*' | ...)
 // — é o que explica por que o atraso não zerou.
 export interface RepoPullStatus {
   repoId: string
