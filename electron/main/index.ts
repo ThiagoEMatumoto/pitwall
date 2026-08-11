@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, powerMonitor, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { getDb, closeDb } from './services/db'
 import { ptyManager } from './services/pty-manager'
 import { meetingSidecarManager } from './services/meeting-sidecar'
@@ -18,6 +19,9 @@ import { setGpuState } from './services/gpu-state'
 import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/repo-pull-scheduler'
 import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
+import { registerSecretsIpc } from './ipc/secrets'
+import { migrateSecretsAtRest } from './services/custom-env'
+import { scrubProfileSecrets, shouldScrubProfile } from './services/secret-scrub'
 import { registerGpuIpc } from './ipc/gpu'
 import { registerClaudeConfigsIpc } from './ipc/claude-configs'
 import { registerClaudePluginsIpc } from './ipc/claude-plugins'
@@ -169,6 +173,36 @@ app.whenReady().then(async () => {
   // colando via clipboard nativo do Chromium. Coerente com autoHideMenuBar.
   Menu.setApplicationMenu(null)
   getDb()
+  // Segredos em repouso. Roda aqui e não em getDb() porque safeStorage só
+  // responde de forma confiável depois do ready (no Linux ele precisa do
+  // keyring já resolvido).
+  //
+  // Perfil descartável (cópia do userData que o harness de e2e joga em /tmp):
+  // troca os valores por placeholder ANTES de qualquer coisa poder usá-los.
+  if (shouldScrubProfile(process.env, app.getPath('userData'), tmpdir())) {
+    try {
+      const count = scrubProfileSecrets()
+      console.warn(`[secrets] perfil descartável: ${count} valor(es) substituído(s) por placeholder`)
+    } catch (err) {
+      console.warn('[secrets] falha ao limpar perfil descartável:', String(err))
+    }
+  } else {
+    // Perfil real: cifra o que ainda estiver em claro (pref legada ou gravada
+    // com o cofre indisponível). Nunca derruba o boot.
+    try {
+      const result = migrateSecretsAtRest()
+      if (result.migrated > 0) {
+        console.log(`[secrets] ${result.migrated} valor(es) cifrado(s) em repouso`)
+      }
+      if (result.skipped === 'unavailable' && result.plaintext.length > 0) {
+        console.warn(
+          `[secrets] cofre do SO indisponível — ${result.plaintext.length} valor(es) seguem em claro no banco`,
+        )
+      }
+    } catch (err) {
+      console.warn('[secrets] migração adiada:', String(err))
+    }
+  }
   // Boot reconcile de reuniões presas em estados "vivos" após um crash/quit sujo:
   // num processo fresco nenhum sidecar pode estar vivo, então qualquer reunião
   // nesses estados é órfã → failed. Idempotente; ended_at preserva o existente.
@@ -197,6 +231,7 @@ app.whenReady().then(async () => {
   registerGitIpc()
   registerFsIpc()
   registerPrefsIpc()
+  registerSecretsIpc()
   registerGpuIpc()
   registerWorkspaceIpc()
   registerClaudeConfigsIpc()
