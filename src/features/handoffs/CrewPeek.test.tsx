@@ -125,6 +125,26 @@ describe('CrewPeek', () => {
     expect(screen.queryByText('trabalhando')).not.toBeInTheDocument()
   })
 
+  // O relato: a mãe respondeu por mensagem peer, a filha retomou, e o painel
+  // seguia alarmando. O registro da pergunta fica (auditoria); o alarme sai.
+  it('pergunta com progresso posterior: selo volta ao vivo e o registro fica em tom neutro', () => {
+    mount(
+      {
+        status: 'needs_input',
+        pendingQuestion: 'BLOQUEIO: escopo da Frente 2?',
+        questionAskedAt: 1000,
+        stepUpdatedAt: 2000,
+      },
+      'working',
+    )
+    expect(screen.getByText('trabalhando')).toBeInTheDocument()
+    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    const box = screen.getByTestId('peek-question')
+    expect(box).toHaveTextContent('BLOQUEIO: escopo da Frente 2?')
+    expect(box).toHaveTextContent(/já retomou/)
+    expect(box.style.borderColor).not.toContain('warning')
+  })
+
   it('sem bloqueio, o selo mostra o estado ao vivo da filha', () => {
     mount({}, 'working')
     expect(screen.getByText('trabalhando')).toBeInTheDocument()

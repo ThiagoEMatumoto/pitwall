@@ -15,6 +15,7 @@ const {
   hiddenCrewSessionIds,
   crewCcSessionIds,
   crewNeedsAttention,
+  crewResumedAfterQuestion,
   crewAttentionCount,
   orderCrew,
   resolveCrewFocus,
@@ -151,9 +152,71 @@ describe('crewCcSessionIds', () => {
   })
 })
 
+describe('crewResumedAfterQuestion', () => {
+  it('progresso posterior à pergunta = a filha já foi respondida fora do app', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+      ),
+    ).toBe(true)
+  })
+
+  it('progresso anterior à pergunta não conta (é o passo que precedeu o bloqueio)', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 2000, stepUpdatedAt: 1000 }),
+      ),
+    ).toBe(false)
+  })
+
+  it('empate não conta: só progresso ESTRITAMENTE posterior é evidência', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 1000 }),
+      ),
+    ).toBe(false)
+  })
+
+  it('sem um dos carimbos não há evidência (handoff legado, filha que nunca reportou)', () => {
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: null, stepUpdatedAt: 2000 })),
+    ).toBe(false)
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: null })),
+    ).toBe(false)
+  })
+
+  it('só faz sentido em needs_input', () => {
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'running', questionAskedAt: 1000, stepUpdatedAt: 2000 })),
+    ).toBe(false)
+  })
+})
+
 describe('crewNeedsAttention', () => {
   it('needs_input basta, mesmo com o PTY trabalhando', () => {
     expect(crewNeedsAttention(hf({ status: 'needs_input' }), live({ status: 'working' }))).toBe(true)
+  })
+
+  // O caso do relato: a mãe respondeu por mensagem peer (fora do app), a filha
+  // retomou e reportou passo, mas o needs_input segue no banco. Alarmar aqui é
+  // mentir sobre o estado — e o dado continua lá pra auditoria.
+  it('needs_input com progresso posterior à pergunta NÃO alarma', () => {
+    expect(
+      crewNeedsAttention(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+        live({ status: 'working' }),
+      ),
+    ).toBe(false)
+  })
+
+  it('mas o PTY parado num prompt vence a evidência de retomada', () => {
+    expect(
+      crewNeedsAttention(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+        live({ status: 'waiting' }),
+      ),
+    ).toBe(true)
   })
 
   it('PTY waiting basta, mesmo com o handoff running', () => {
@@ -189,6 +252,15 @@ describe('crewAttentionCount', () => {
 
   it('ninguém esperando → 0', () => {
     expect(crewAttentionCount([hf({ status: 'running', childSessionId: 's1' })], [])).toBe(0)
+  })
+
+  it('filha que já retomou sai da conta (o badge não conta pergunta velha)', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'needs_input', childSessionId: 's1', questionAskedAt: 1, stepUpdatedAt: 2 }),
+      hf({ id: 'b', status: 'needs_input', childSessionId: 's2', questionAskedAt: 2, stepUpdatedAt: 1 }),
+    ]
+    const sessions = [live({ id: 's1', status: 'working' }), live({ id: 's2', status: 'working' })]
+    expect(crewAttentionCount(handoffs, sessions)).toBe(1)
   })
 })
 

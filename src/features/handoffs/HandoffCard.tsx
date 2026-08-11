@@ -17,7 +17,7 @@ import { handoffsApi, prefsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
-import { splitAlias } from './crew'
+import { crewResumedAfterQuestion, splitAlias } from './crew'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -291,7 +291,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // Sinais vivos da filha. badge.attention (waiting/ended) ou needs_input pedem
   // realce âmbar. needs_input vence: a mãe pediu input explícito.
   const live = isLiveHandoff ? liveBadgeFor(childLive?.status) : null
-  const needsInput = handoff.status === 'needs_input'
+  // needs_input com progresso posterior à pergunta = ela já foi respondida fora
+  // do app e a filha retomou (ver crewResumedAfterQuestion). O registro segue no
+  // banco; o card é que para de anunciar um bloqueio que não existe mais.
+  const needsInput = handoff.status === 'needs_input' && !crewResumedAfterQuestion(handoff)
   const highlight = needsInput || (live?.attention ?? false)
   // UM selo por card. Com a filha viva, o estado DELA é o sinal que importa —
   // "aguardando você" diz tudo que "Em andamento" diria, e mais. needs_input

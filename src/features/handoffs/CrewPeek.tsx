@@ -6,7 +6,7 @@ import { handoffsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { StatusBadge, contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
-import { crewNeedsAttention, splitAlias } from './crew'
+import { crewNeedsAttention, crewResumedAfterQuestion, splitAlias } from './crew'
 import { useCrewDockStore } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -133,10 +133,14 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   // (abaixo) tem serventia. Mesma pergunta que o dock faz pra ordenar e acender
   // o âmbar: uma função só, senão as duas superfícies divergem.
   const answering = crewNeedsAttention(handoff, live ?? undefined)
+  // A pergunta ficou pendente no banco mas a filha já seguiu (respondida fora do
+  // app). O registro continua visível abaixo, em tom neutro — o que ele não pode
+  // mais fazer é comandar o selo.
+  const resumed = crewResumedAfterQuestion(handoff)
   // needs_input vence o status do PTY no selo (mesma regra do HandoffCard): quem
   // está travado esperando você não está "trabalhando". Sem isto o cabeçalho
   // contradiz o corpo — "trabalhando" a dois centímetros de "A filha perguntou".
-  const blocked = handoff.status === 'needs_input'
+  const blocked = handoff.status === 'needs_input' && !resumed
 
   function promoteToTerminal() {
     if (!live) return
@@ -311,17 +315,28 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
             </div>
           )}
 
+          {/* A pergunta continua aqui mesmo depois de respondida fora do app — o
+              registro é o histórico da conversa. O que muda é o TOM: âmbar
+              enquanto ela de fato bloqueia; neutro quando a filha já retomou. */}
           {handoff.status === 'needs_input' && handoff.pendingQuestion && (
             <div
+              data-testid="peek-question"
               className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-sm"
               style={{
-                borderColor: 'var(--color-warning)',
-                background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
-                color: 'var(--color-text)',
+                borderColor: resumed ? 'var(--color-border)' : 'var(--color-warning)',
+                background: resumed
+                  ? undefined
+                  : 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+                color: resumed ? 'var(--color-text-dim)' : 'var(--color-text)',
               }}
             >
-              <div className="mb-1 text-[11px] font-medium text-[var(--color-warning)]">
-                A filha perguntou:
+              <div
+                className="mb-1 text-[11px] font-medium"
+                style={{ color: resumed ? 'var(--color-text-dim)' : 'var(--color-warning)' }}
+              >
+                {resumed
+                  ? 'A filha perguntou (e já retomou — respondida fora do app):'
+                  : 'A filha perguntou:'}
               </div>
               {handoff.pendingQuestion}
             </div>
