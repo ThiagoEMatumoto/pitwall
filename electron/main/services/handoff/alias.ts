@@ -102,8 +102,8 @@ export function buildHandoffAlias(input: BuildAliasInput): string {
       .filter(Boolean),
   )
   const preferred = ROLE_NAMES[input.role] ?? ROLE_NAMES.investigator
-  // Preferência pelo pool do papel; esgotado, empresta dos outros. O roster tem 9
-  // nomes e o cap de handoffs ativos é 5, então na prática nunca chega ao número.
+  // Preferência pelo pool do papel; esgotado, empresta dos outros. Roster de 9
+  // nomes; esgotado ele também, cai no sufixo numérico abaixo.
   const roster = [...preferred, ...Object.values(ROLE_NAMES).flat()]
 
   for (const name of roster) {

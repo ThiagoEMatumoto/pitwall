@@ -91,7 +91,7 @@ describe('buildHandoffAlias', () => {
   })
 
   it('cai no sufixo numérico só quando o roster inteiro está ocupado', () => {
-    // 9 nomes = cap de handoffs ativos (5) com folga; na prática não se chega aqui.
+    // Roster de 9 nomes ocupado por completo: só aí entra o sufixo numérico.
     const taken = [
       'mauricio-a',
       'rafael-b',

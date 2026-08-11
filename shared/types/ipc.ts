@@ -168,12 +168,12 @@ export interface ConnectHubToAllInput {
 // SÓ a resposta da mãe encerra a pergunta. handoff_progress durante needs_input
 // grava o passo mas PRESERVA pergunta e status — antes ele zerava
 // pending_question, e 33% das perguntas morriam assim sem a mãe nunca ver.
-// needs_input conta como in-flight (teto/dedup/reconciliação) — NÃO é terminal.
+// needs_input conta como in-flight (dedup/reconciliação) — NÃO é terminal.
 //
 // 'interrupted' é um estado RECUPERÁVEL: a sessão-filha morreu (PTY exit no boot
 // ou na reconciliação periódica) SEM ter reportado erro real. Distinto de
 // 'failed' (a filha reportou um erro de tarefa). NÃO conta como ativo (libera o
-// teto/dedup) mas permanece visível/listável e pode ser RETOMADO (re-spawn da
+// dedup) mas permanece visível/listável e pode ser RETOMADO (re-spawn da
 // filha → markRunning de volta pra running). A reconciliação (failIfRunning,
 // reconcileStuck, boot sweep) passa a marcar 'interrupted' em vez de 'failed'.
 export type HandoffStatus =

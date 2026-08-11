@@ -716,8 +716,8 @@ describe('mcp tools — session_handoff sem gate', () => {
   beforeEach(() => {
     spawned = []
     // O DB persiste entre os casos deste arquivo: sem limpar, os handoffs ativos
-    // acumulam e estouram o teto (maxActive=5) em quem rodar por último. Handoffs
-    // antes de sessions (FK child_session_id).
+    // acumulam e o dedup por repo-alvo recusa o despacho de quem rodar por último.
+    // Handoffs antes de sessions (FK child_session_id).
     getDb().prepare('DELETE FROM handoffs').run()
     getDb().prepare('DELETE FROM sessions').run()
     // Fake do seam: registra o input e devolve uma sessão real no DB (markRunning
@@ -781,6 +781,20 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(items.find((i) => i.handoffId === res.handoffId)?.alias).toBe(
       'mauricio-refatorar-autenticacao-oauth',
     )
+  })
+
+  // Não há mais teto de handoffs ativos: o Crew Dock dá a visibilidade das filhas
+  // e o gate humano que o cap protegia deixou de existir.
+  it('despacha além de 5 filhas ativas simultâneas', () => {
+    for (let i = 0; i < 8; i++) {
+      seedRepo(`svc-${i}`, `/repos/svc-${i}`)
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: `svc-${i}`,
+        task: `Tarefa ${i}`,
+      })
+      expect(res.status).toBe('running')
+    }
+    expect(spawned).toHaveLength(8)
   })
 
   it('kill-switch handoffs.requireApproval=true volta a nascer pending, sem spawnar', () => {

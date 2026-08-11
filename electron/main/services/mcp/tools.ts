@@ -621,11 +621,6 @@ const handoffAskSchema = z.object({
   question: z.string().min(1).max(4096),
 })
 
-// Default do teto de handoffs ativos (pending/approved/running) simultâneos por
-// instância. Evita inundar o gate humano e estourar sessões-filhas concorrentes.
-// Override via pref 'handoffs.maxActive'.
-const DEFAULT_MAX_ACTIVE_HANDOFFS = 5
-
 function handoffTools(notify: McpNotify): ToolDef[] {
   return [
     {
@@ -658,46 +653,14 @@ function handoffTools(notify: McpNotify): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error (that child may belong to another mother session — you do not inherit it); pass force=true to dispatch a second one anyway. At most 5 handoffs may be active at once. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error (that child may belong to another mother session — you do not inherit it); pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
 
-        // Reconcilia órfãos ANTES de contar: filhas mortas/crashadas não devem
-        // inflar a contagem e travar o teto com falsos-ativos.
+        // Reconcilia órfãos ANTES do dedup: filha morta/crashada não pode barrar
+        // um despacho novo pro mesmo repo-alvo como falso-ativo.
         handoffStore.reconcileStuck()
-
-        // Cap de concorrência: não acumula handoffs ativos além do teto.
-        // needs_input conta como ativo (filha viva aguardando a mãe).
-        const maxActive = getPref('handoffs.maxActive', DEFAULT_MAX_ACTIVE_HANDOFFS)
-        const activeHandoffs = handoffStore.list({
-          status: ['pending', 'approved', 'running', 'needs_input'],
-        })
-        if (activeHandoffs.length >= maxActive) {
-          // Mensagem honesta: breakdown REAL por status. Sem pendentes a resolver,
-          // não mandar "resolver pendentes" — os bloqueadores estão em andamento.
-          const pending = activeHandoffs.filter(
-            (h) => h.status === 'pending' || h.status === 'approved',
-          )
-          // running + needs_input contam como "em andamento" no breakdown.
-          const running = activeHandoffs.filter(
-            (h) => h.status === 'running' || h.status === 'needs_input',
-          )
-          const fmt = (h: (typeof activeHandoffs)[number]): string =>
-            `${h.targetRepoLabel ?? h.targetRepoId} (${h.id})`
-          let error: string
-          if (pending.length === 0 && running.length > 0) {
-            error = `Limite de ${maxActive} handoffs ativos atingido — ${running.length} em andamento (targets: ${running.map(fmt).join(', ')}). Acompanhe/destrave no painel Handoffs ou aguarde concluírem antes de criar outro.`
-          } else {
-            const parts: string[] = []
-            if (pending.length > 0)
-              parts.push(`${pending.length} pendente(s) de aprovação (${pending.map(fmt).join(', ')})`)
-            if (running.length > 0)
-              parts.push(`${running.length} em andamento (${running.map(fmt).join(', ')})`)
-            error = `Limite de ${maxActive} handoffs ativos atingido — ${parts.join('; ')}. Aprove/rejeite os pendentes ou aguarde os em andamento concluírem no painel Handoffs antes de criar outro.`
-          }
-          return ok({ error })
-        }
 
         const target = resolveRepo(input.targetRepo)
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
