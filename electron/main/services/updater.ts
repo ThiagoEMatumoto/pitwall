@@ -21,10 +21,8 @@ const PKEXEC_PATH = '/usr/bin/pkexec'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 const FOCUS_THROTTLE_MS = 60 * 1000
-const RELEASE_API =
-  'https://api.github.com/repos/ThiagoEMatumoto/claude-manager/releases/latest'
-const RELEASE_PAGE =
-  'https://github.com/ThiagoEMatumoto/claude-manager/releases/latest'
+const RELEASE_API = 'https://api.github.com/repos/ThiagoEMatumoto/pitwall/releases/latest'
+const RELEASE_PAGE = 'https://github.com/ThiagoEMatumoto/pitwall/releases/latest'
 
 interface GithubRelease {
   tag_name: string
@@ -100,7 +98,7 @@ async function checkForUpdate(): Promise<void> {
     const res = await fetch(RELEASE_API, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'claude-manager',
+        'User-Agent': 'pitwall',
       },
     })
     if (!res.ok) return
@@ -126,7 +124,7 @@ async function checkForUpdate(): Promise<void> {
 // (consumir os dados em dois caminhos — o listener de progresso e o pipe — abria
 // margem pra corrupção). arrayBuffer entrega os bytes exatos da resposta.
 async function downloadAssetToFile(url: string, destPath: string): Promise<void> {
-  const res = await fetch(url, { headers: { 'User-Agent': 'claude-manager' } })
+  const res = await fetch(url, { headers: { 'User-Agent': 'pitwall' } })
   if (!res.ok) throw new Error(`download falhou: HTTP ${res.status}`)
   // Progresso indeterminado: o download é uma compra única em memória.
   broadcast({ state: 'downloading', percent: 0 })
@@ -150,7 +148,7 @@ async function fetchExpectedSha512(debName: string): Promise<string | null> {
   if (!manifest) return null
   try {
     const res = await fetch(manifest.browser_download_url, {
-      headers: { 'User-Agent': 'claude-manager' },
+      headers: { 'User-Agent': 'pitwall' },
     })
     if (!res.ok) return null
     const text = await res.text()
@@ -161,7 +159,7 @@ async function fetchExpectedSha512(debName: string): Promise<string | null> {
 }
 
 // Extrai o sha512 do arquivo cujo `url` bate com `debName`. O bloco no yml é:
-//   - url: claude-manager_0.6.4_amd64.deb
+//   - url: pitwall_0.6.4_amd64.deb
 //     sha512: <base64>
 //     size: 97957504
 export function parseSha512FromManifest(yml: string, debName: string): string | null {
