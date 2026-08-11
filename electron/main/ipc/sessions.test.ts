@@ -156,6 +156,28 @@ describe('buildSpawnInnerCmd', () => {
     expect(cmd).toContain('crossSessionInbound')
   })
 
+  // A filha nasce em acceptEdits, que só auto-aceita EDIÇÃO — sem esta política
+  // ela para a cada `rg`/`git`/`npm`. O allow/ask/deny viaja no MESMO --settings
+  // do crossSessionInbound: um argumento só, uma fonte só.
+  it('leva a política allow/ask/deny junto do crossSessionInbound no mesmo --settings', () => {
+    const cmd = buildSpawnInnerCmd({ ...base, settingsJson: HANDOFF_CHILD_SETTINGS_JSON })
+    const settingsArg = cmd.slice(cmd.indexOf("--settings '") + "--settings '".length)
+    const json = settingsArg.slice(0, settingsArg.indexOf("'"))
+    const parsed = JSON.parse(json) as {
+      crossSessionInbound: string
+      permissions: { allow: string[]; ask: string[]; deny: string[] }
+    }
+    expect(parsed.crossSessionInbound).toBe('accept')
+    expect(parsed.permissions.allow).toContain('Bash(rg:*)')
+    expect(parsed.permissions.allow).toContain('Bash(git status:*)')
+    expect(parsed.permissions.allow).toContain('mcp__claude-manager')
+    expect(parsed.permissions.ask).toContain('Bash(git merge:*)')
+    expect(parsed.permissions.deny).toContain('Bash(rm:*)')
+    // Nada de merge/delete escapando pelo allow.
+    expect(parsed.permissions.allow).not.toContain('Bash(git merge:*)')
+    expect(parsed.permissions.allow).not.toContain('Bash(rm:*)')
+  })
+
   it('NÃO inclui --settings quando ausente/null (sessão normal, nada global)', () => {
     expect(buildSpawnInnerCmd(base)).not.toContain('--settings')
     expect(buildSpawnInnerCmd({ ...base, settingsJson: null })).not.toContain('--settings')

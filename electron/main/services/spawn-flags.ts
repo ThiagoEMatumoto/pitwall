@@ -12,13 +12,6 @@ import { SPAWNABLE_MODEL_ALIASES } from '../../../shared/models'
 // híbrido nativo da CLI: Opus no plan mode, Sonnet na execução).
 export const SPAWN_MODEL_WHITELIST = new Set<string>(SPAWNABLE_MODEL_ALIASES)
 
-// Settings entregues via `--settings <json-inline>` a CADA sessão-filha de
-// handoff — NUNCA global. `crossSessionInbound: accept` deixa a filha RECEBER
-// SendMessage do orquestrador; sem isso a mensagem fica `held` silenciosamente e
-// o canal peer parece funcionar sem funcionar. Global afetaria todas as sessões
-// do usuário, inclusive as que ele não quer expostas.
-export const HANDOFF_CHILD_SETTINGS_JSON = '{"crossSessionInbound":"accept"}'
-
 // Modo do handoff → --permission-mode da filha. 'interactive' fica sem flag
 // (legado: o claude pergunta cada ação). Espelha permissionModeFor do renderer
 // (src/store/handoffsStore.ts) — o main é quem decide quando o spawn parte da MCP.
@@ -73,6 +66,227 @@ export const DESTRUCTIVE_DENYLIST = [
   'Bash(git push -f:*)',
   'Bash(git clean:*)',
 ]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Política de permissões da sessão-filha de handoff
+// ─────────────────────────────────────────────────────────────────────────────
+// Problema: a filha nasce em `acceptEdits`, que auto-aceita EDIÇÃO DE ARQUIVO
+// mas não comando de shell — então `git`, `npm`, `rg` param a filha pedindo
+// confirmação a cada chamada e o usuário vira o gargalo da própria delegação.
+//
+// Regra do dono do produto, literal:
+//   PODE sem perguntar: pesquisa/leitura, MCPs, e leitura em GCP/AWS.
+//   NÃO PODE: merge, escrita em banco de dados, delete.
+//   Resto: leitura/inspeção libera; escrita, publicação e destruição perguntam.
+//         Na dúvida, perguntar.
+//
+// Listas EXPLÍCITAS de propósito: isto é política de segurança e precisa ser
+// legível/auditável por humano — nada de derivar dinamicamente.
+//
+// Sintaxe verificada empiricamente contra claude 2.1.227 (`claude -p` headless,
+// comparando com/sem `--settings`):
+//   - `permissions.{allow,ask,deny}` inline via `--settings` SÃO honrados;
+//   - precedência: deny > ask > allow (`ask` bloqueia mesmo o que `allow` libera);
+//   - `Bash(cmd:*)` (prefixo) e `Bash(cmd * sufixo*)` (glob no meio) funcionam;
+//   - MCP só casa por servidor (`mcp__claude-manager`) ou `mcp__servidor__*`.
+//     `mcp__*` e `mcp__*__*` NÃO funcionam (testados: continuam pedindo). Por
+//     isso o allow cobre só o servidor que ESTE app injeta via --mcp-config;
+//     MCPs de terceiros continuam governados pela settings global do usuário.
+
+// Leitura/inspeção do filesystem — o núcleo do "pesquisa/leitura" da regra.
+const CHILD_ALLOW_READ_TOOLS = [
+  'Bash(rg:*)',
+  'Bash(grep:*)',
+  'Bash(fd:*)',
+  'Bash(find:*)',
+  'Bash(ls:*)',
+  'Bash(tree:*)',
+  'Bash(cat:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(sort:*)',
+  'Bash(uniq:*)',
+  'Bash(diff:*)',
+  'Bash(jq:*)',
+  'Bash(stat:*)',
+  'Bash(file:*)',
+  'Bash(du:*)',
+  'Bash(df:*)',
+  'Bash(which:*)',
+  'Bash(ps:*)',
+  'Bash(pwd)',
+  'Bash(echo:*)',
+  'Bash(realpath:*)',
+  'Bash(basename:*)',
+  'Bash(dirname:*)',
+  'Bash(printenv:*)',
+]
+
+// git de LEITURA. Nada que reescreva histórico ou publique — merge/rebase caem
+// no ask e push/reset --hard/clean no deny. `fetch` entra porque só atualiza
+// refs remotas (não mexe em working tree) e é pré-requisito de qualquer
+// diagnóstico honesto de "estou atrás da main?".
+const CHILD_ALLOW_GIT_READ = [
+  'Bash(git status:*)',
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git blame:*)',
+  'Bash(git branch:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git ls-remote:*)',
+  'Bash(git describe:*)',
+  'Bash(git shortlog:*)',
+  'Bash(git grep:*)',
+  'Bash(git remote -v)',
+  'Bash(git remote get-url:*)',
+  'Bash(git worktree list:*)',
+  'Bash(git stash list:*)',
+  'Bash(git fetch:*)',
+  'Bash(gh pr view:*)',
+  'Bash(gh pr list:*)',
+  'Bash(gh pr diff:*)',
+  'Bash(gh pr checks:*)',
+  'Bash(gh issue view:*)',
+  'Bash(gh issue list:*)',
+  'Bash(gh run view:*)',
+  'Bash(gh run list:*)',
+  'Bash(gh repo view:*)',
+  'Bash(gh search:*)',
+]
+
+// Inspeção de projeto: typecheck/lint/teste não escrevem nem publicam nada e
+// são justamente o que a filha precisa rodar pra provar que o trabalho está de
+// pé. `install`/`publish`/`deploy` ficam de fora (rede + escrita + publicação).
+const CHILD_ALLOW_PROJECT_INSPECTION = [
+  'Bash(npm run typecheck:*)',
+  'Bash(npm run lint:*)',
+  'Bash(npm run test:*)',
+  'Bash(npm test:*)',
+  'Bash(npm ls:*)',
+  'Bash(npm view:*)',
+  'Bash(pnpm typecheck:*)',
+  'Bash(pnpm lint:*)',
+  'Bash(pnpm test:*)',
+  'Bash(bun run typecheck:*)',
+  'Bash(bun run lint:*)',
+  'Bash(bun test:*)',
+  'Bash(npx tsc --noEmit:*)',
+  'Bash(pytest:*)',
+  'Bash(ruff check:*)',
+  'Bash(cargo check:*)',
+  'Bash(cargo test:*)',
+  'Bash(go test:*)',
+  'Bash(go vet:*)',
+]
+
+// Leitura em cloud (GCP/AWS/Terraform). Só verbos de inspeção — `describe`,
+// `list`, `get-*`, `logging read`, `plan`. Escrita/IAM/delete não aparecem aqui
+// e ainda levam deny explícito abaixo. `bq query` fica fora de propósito: DML
+// em BigQuery é escrita em banco, e "na dúvida, perguntar".
+const CHILD_ALLOW_CLOUD_READ = [
+  'Bash(gcloud * list*)',
+  'Bash(gcloud * describe*)',
+  'Bash(gcloud * get-*)',
+  'Bash(gcloud config get*)',
+  'Bash(gcloud config list*)',
+  'Bash(gcloud auth list*)',
+  'Bash(gcloud logging read*)',
+  'Bash(bq ls*)',
+  'Bash(bq show*)',
+  'Bash(bq head*)',
+  'Bash(aws * describe-*)',
+  'Bash(aws * list-*)',
+  'Bash(aws * get-*)',
+  'Bash(aws sts get-caller-identity*)',
+  'Bash(aws s3 ls*)',
+  'Bash(aws logs tail*)',
+  'Bash(terraform plan*)',
+  'Bash(terraform show*)',
+  'Bash(terraform validate*)',
+  'Bash(terraform output*)',
+  'Bash(terraform state list*)',
+  'Bash(terraform state show*)',
+]
+
+// MCP: "todas as tools MCP" na intenção da regra. Na prática o CLI não aceita
+// curinga entre servidores (ver bloco de sintaxe acima), então liberamos o
+// servidor que este app injeta — o mesmo que carrega progresso/report do
+// handoff, e o que mais interrompia a filha.
+const CHILD_ALLOW_MCP = ['mcp__claude-manager']
+
+export const HANDOFF_CHILD_ALLOW = [
+  ...CHILD_ALLOW_READ_TOOLS,
+  ...CHILD_ALLOW_GIT_READ,
+  ...CHILD_ALLOW_PROJECT_INSPECTION,
+  ...CHILD_ALLOW_CLOUD_READ,
+  ...CHILD_ALLOW_MCP,
+]
+
+// `ask` = continua pedindo confirmação (é o "NÃO PODE" reversível da regra: o
+// humano ainda pode autorizar na hora). Merge e escrita em banco entram aqui;
+// destruição irreversível vai pro deny. `ask` também é a rede de segurança
+// contra um allow largo demais — ele tem precedência sobre o allow.
+export const HANDOFF_CHILD_ASK = [
+  // merge / reescrita de histórico
+  'Bash(git merge:*)',
+  'Bash(git rebase:*)',
+  'Bash(git cherry-pick:*)',
+  'Bash(git revert:*)',
+  'Bash(gh pr merge:*)',
+  // escrita em banco de dados (cliente interativo = INSERT/UPDATE/DELETE/DDL)
+  'Bash(psql:*)',
+  'Bash(mysql:*)',
+  'Bash(sqlite3:*)',
+  'Bash(mongosh:*)',
+  'Bash(redis-cli:*)',
+  'Bash(bq query:*)',
+  // migrations
+  'Bash(npx prisma migrate:*)',
+  'Bash(npm run migrate:*)',
+  'Bash(alembic:*)',
+  'Bash(rails db:*)',
+  // publicação
+  'Bash(npm publish:*)',
+  'Bash(gh release create:*)',
+]
+
+// `deny` = bloqueado, nem pergunta. Mescla o DESTRUCTIVE_DENYLIST canônico —
+// SEGUNDA camada, não substituição: ele continua indo pro `--disallowedTools`
+// em modo autônomo (ver resolveDisallowedTools). Reusar a constante garante que
+// as duas camadas não drifem. Extras: o delete que a regra proíbe, o buraco do
+// `find` (que é allow mas sabe deletar/executar) e escalonamento de IAM.
+export const HANDOFF_CHILD_DENY = [
+  ...DESTRUCTIVE_DENYLIST,
+  'Bash(rmdir:*)',
+  'Bash(shred:*)',
+  'Bash(find * -delete*)',
+  'Bash(find * -exec*)',
+  'Bash(gcloud * delete*)',
+  'Bash(aws * delete-*)',
+  'Bash(bq rm*)',
+  'Bash(terraform destroy*)',
+  'Bash(gcloud * add-iam-policy-binding*)',
+  'Bash(gcloud * set-iam-policy*)',
+  'Bash(gcloud * --impersonate-service-account*)',
+]
+
+// Settings entregues via `--settings <json-inline>` a CADA sessão-filha de
+// handoff — NUNCA global. `crossSessionInbound: accept` deixa a filha RECEBER
+// SendMessage do orquestrador; sem isso a mensagem fica `held` silenciosamente e
+// o canal peer parece funcionar sem funcionar. Global afetaria todas as sessões
+// do usuário, inclusive as que ele não quer expostas — e o mesmo vale pra
+// política de permissões acima: ela vale pra filha, não pro usuário.
+export const HANDOFF_CHILD_SETTINGS_JSON = JSON.stringify({
+  crossSessionInbound: 'accept',
+  permissions: {
+    allow: HANDOFF_CHILD_ALLOW,
+    ask: HANDOFF_CHILD_ASK,
+    deny: HANDOFF_CHILD_DENY,
+  },
+})
 
 // Browser tools do Playwright global (plugin do usuário), liberadas SÓ para jobs
 // web-audit. Prefixo confirmado no spike Fase 0: mcp__plugin_playwright_playwright__.
