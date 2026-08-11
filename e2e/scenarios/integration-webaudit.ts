@@ -29,6 +29,11 @@ const PROMPT =
   'Audite o desempenho e a usabilidade da página inicial do legal-ui. Faça login se ' +
   'necessário e siga o playbook de auditoria web abaixo.'
 
+// Por padrão a cópia do userData tem os segredos substituídos por placeholder
+// (ver e2e/driver/launch.ts). Este é UM dos poucos cenários que precisam da
+// credencial REAL — opt-out explícito, ligado antes de lançar o app.
+process.env.CM_KEEP_SECRETS = '1'
+
 const { app, page, userDataCopy } = await launchApp()
 const { logFile, stop } = captureLogs(app, page)
 

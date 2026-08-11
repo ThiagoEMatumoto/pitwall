@@ -1993,6 +1993,27 @@ export type SyncBackupResult =
   | { state: 'exported'; path: string }
   | { state: 'imported'; path: string }
 
+/**
+ * Backend de cifragem em repouso (safeStorage). 'basic_text' é o fallback do
+ * Chromium no Linux sem keyring: chave fixa e pública — ofuscação, não proteção.
+ */
+export type SecretEncryptionBackend = 'unavailable' | 'basic_text' | 'os_keyring'
+
+export interface SecretsStatus {
+  backend: SecretEncryptionBackend
+  /** Chaves ainda gravadas em texto claro no banco. */
+  plaintextKeys: string[]
+  /** Chaves cujo ciphertext não decifra mais neste cofre (valor inacessível). */
+  unreadableKeys: string[]
+}
+
+export interface CustomEnvEntry {
+  key: string
+  hasValue: boolean
+  encrypted: boolean
+  unreadable: boolean
+}
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2068,8 +2089,20 @@ export interface Api {
     openDirectory(): Promise<string | null>
   }
   prefs: {
+    /** Rejeita chaves de segredo (custom_env_vars) — essas vão por `secrets`. */
     get<T>(key: string): Promise<T | null>
     set(key: string, value: unknown): Promise<void>
+  }
+  secrets: {
+    /** Estado da cifragem em repouso — alimenta o aviso da tela de configurações. */
+    status(): Promise<SecretsStatus>
+    /** Nomes das env vars + se têm valor. NUNCA devolve o valor. */
+    list(): Promise<CustomEnvEntry[]>
+    /** Valor decifrado de UMA chave, sob ação explícita do usuário. */
+    reveal(key: string): Promise<string | null>
+    set(key: string, value: string): Promise<SecretsStatus>
+    remove(key: string): Promise<SecretsStatus>
+    rename(from: string, to: string): Promise<SecretsStatus>
   }
   vault: {
     getRoot(): Promise<string>

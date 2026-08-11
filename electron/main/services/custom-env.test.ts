@@ -1,18 +1,47 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// safeStorage falso mas REVERSÍVEL: exercita o caminho real de cifragem
+// (electronCrypto) sem depender do cofre do SO. Todos os valores dos testes são
+// fictícios.
+vi.mock('electron', () => ({
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    encryptString: (plain: string) => Buffer.from(`v:${plain}`, 'utf8'),
+    decryptString: (buf: Buffer) => {
+      const raw = buf.toString('utf8')
+      if (!raw.startsWith('v:')) throw new Error('não é deste cofre')
+      return raw.slice(2)
+    },
+  },
+}))
+
 import {
   sanitizeCustomEnv,
   mergeCustomEnv,
   getEnvVar,
   withAutoCompactDisabled,
   sessionSpawnEnv,
+  spawnEnv,
+  readCustomEnv,
+  writeCustomEnv,
+  listCustomEnvEntries,
+  revealCustomEnvVar,
+  setCustomEnvVar,
+  deleteCustomEnvVar,
+  renameCustomEnvVar,
+  migrateSecretsAtRest,
+  customEnvStatus,
+  createSecretRedactor,
   DISABLE_AUTOCOMPACT_KEY,
   CUSTOM_ENV_VARS_KEY,
 } from './custom-env'
-import { getPref } from './prefs-store'
+import { getPref, setPref } from './prefs-store'
 
-vi.mock('./prefs-store', () => ({ getPref: vi.fn() }))
+vi.mock('./prefs-store', () => ({ getPref: vi.fn(), setPref: vi.fn() }))
 
 const getPrefMock = vi.mocked(getPref)
+const setPrefMock = vi.mocked(setPref)
 
 describe('sanitizeCustomEnv', () => {
   it('mapa válido passa intacto', () => {
@@ -155,5 +184,135 @@ describe('sessionSpawnEnv', () => {
     const env = sessionSpawnEnv(base)
     expect(env).not.toBe(base)
     expect(base).toEqual({ PATH: '/usr/bin' })
+  })
+})
+
+// Store de prefs em memória com o MESMO roundtrip de serialização do SQLite
+// (JSON.stringify/parse), para o envelope cifrado ser exercitado como é gravado.
+describe('segredos em repouso', () => {
+  const store = new Map<string, unknown>()
+
+  function storedRaw(): unknown {
+    return store.get(CUSTOM_ENV_VARS_KEY)
+  }
+
+  beforeEach(() => {
+    store.clear()
+    getPrefMock.mockReset()
+    setPrefMock.mockReset()
+    getPrefMock.mockImplementation((key: string, fallback: unknown) =>
+      store.has(key) ? store.get(key) : fallback,
+    )
+    setPrefMock.mockImplementation((key: string, value: unknown) => {
+      store.set(key, JSON.parse(JSON.stringify(value)))
+    })
+  })
+
+  it('o que vai pro banco é ciphertext — o texto claro não aparece', () => {
+    writeCustomEnv({ SOME_TOKEN: 'fake-secret-value' })
+    expect(JSON.stringify(storedRaw())).not.toContain('fake-secret-value')
+    expect(readCustomEnv()).toEqual({ SOME_TOKEN: 'fake-secret-value' })
+  })
+
+  it('o valor decifrado chega ao env do spawn', () => {
+    writeCustomEnv({ SOME_TOKEN: 'fake-secret-value' })
+    expect(spawnEnv({ PATH: '/usr/bin' }).SOME_TOKEN).toBe('fake-secret-value')
+  })
+
+  it('migra a pref legada em claro sem perder valor nenhum', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value', FLAG: '1' })
+
+    const result = migrateSecretsAtRest()
+
+    expect(result.migrated).toBe(2)
+    expect(result.skipped).toBeNull()
+    expect(JSON.stringify(storedRaw())).not.toContain('fake-secret-value')
+    expect(readCustomEnv()).toEqual({ SOME_TOKEN: 'fake-secret-value', FLAG: '1' })
+  })
+
+  it('migração é idempotente — a segunda passada não reescreve', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value' })
+    migrateSecretsAtRest()
+    setPrefMock.mockClear()
+
+    const second = migrateSecretsAtRest()
+
+    expect(second.skipped).toBe('not-needed')
+    expect(setPrefMock).not.toHaveBeenCalled()
+  })
+
+  it('pref ausente → nada a migrar', () => {
+    expect(migrateSecretsAtRest().skipped).toBe('not-needed')
+  })
+
+  it('a listagem para a UI não carrega valor nenhum', () => {
+    writeCustomEnv({ SOME_TOKEN: 'fake-secret-value' })
+    const entries = listCustomEnvEntries()
+    expect(entries).toEqual([
+      { key: 'SOME_TOKEN', hasValue: true, encrypted: true, unreadable: false },
+    ])
+    expect(JSON.stringify(entries)).not.toContain('fake-secret-value')
+  })
+
+  it('revelar devolve o valor de UMA chave; chave inexistente → null', () => {
+    writeCustomEnv({ SOME_TOKEN: 'fake-secret-value' })
+    expect(revealCustomEnvVar('SOME_TOKEN')).toBe('fake-secret-value')
+    expect(revealCustomEnvVar('NOPE')).toBeNull()
+  })
+
+  it('set preserva as outras chaves', () => {
+    writeCustomEnv({ A: 'fake-a', B: 'fake-b' })
+    setCustomEnvVar('B', 'fake-b2')
+    expect(readCustomEnv()).toEqual({ A: 'fake-a', B: 'fake-b2' })
+  })
+
+  it('delete remove só a chave pedida', () => {
+    writeCustomEnv({ A: 'fake-a', B: 'fake-b' })
+    deleteCustomEnvVar('A')
+    expect(readCustomEnv()).toEqual({ B: 'fake-b' })
+  })
+
+  it('renomear preserva o valor sem ele passar pela UI', () => {
+    writeCustomEnv({ OLD_NAME: 'fake-secret-value' })
+    renameCustomEnvVar('OLD_NAME', 'NEW_NAME')
+    expect(readCustomEnv()).toEqual({ NEW_NAME: 'fake-secret-value' })
+  })
+
+  it('renomear para chave inexistente/vazia é no-op', () => {
+    writeCustomEnv({ A: 'fake-a' })
+    renameCustomEnvVar('NOPE', 'B')
+    expect(readCustomEnv()).toEqual({ A: 'fake-a' })
+  })
+
+  it('status reporta o backend e nenhuma chave em claro quando tudo cifrou', () => {
+    writeCustomEnv({ SOME_TOKEN: 'fake-secret-value' })
+    expect(customEnvStatus()).toEqual({
+      backend: 'os_keyring',
+      plaintextKeys: [],
+      unreadableKeys: [],
+    })
+  })
+
+  it('status denuncia a pref legada ainda em claro', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value' })
+    expect(customEnvStatus().plaintextKeys).toEqual(['SOME_TOKEN'])
+  })
+})
+
+describe('createSecretRedactor', () => {
+  it('remove o valor do segredo da linha de log', () => {
+    const redact = createSecretRedactor({ SOME_TOKEN: 'fake-secret-value' })
+    const line = redact('Traceback: auth falhou com fake-secret-value no header')
+    expect(line).not.toContain('fake-secret-value')
+    expect(line).toContain('[REDACTED]')
+  })
+
+  it('valores curtos (flags) não são redigidos — não picota o log', () => {
+    const redact = createSecretRedactor({ DEBUG: '1', LEVEL: 'info' })
+    expect(redact('info 1 info')).toBe('info 1 info')
+  })
+
+  it('sem segredos, é identidade', () => {
+    expect(createSecretRedactor({})('linha qualquer')).toBe('linha qualquer')
   })
 })

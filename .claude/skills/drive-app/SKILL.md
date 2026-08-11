@@ -12,6 +12,7 @@ Ferramental pra você (Claude) abrir o app **claude-manager** real, navegar como
 - Lança o app **buildado** (`out/main/index.js`) via Playwright `_electron`.
 - Antes de lançar, copia o `userData` real (`~/.config/claude-manager`, detectado pelo `app.db`) pra um dir temporário e roda com `--user-data-dir=<cópia>`. O SQLite e todo `app.getPath('userData')` apontam pra cópia → **os dados reais não são tocados**.
 - Screenshots vão pra `.cm-drive/screenshots/` (gitignored); logs do renderer+main pra `.cm-drive/logs/`.
+- **Segredos não vão junto.** A cópia carrega o `app_prefs` inteiro, incluindo as env vars customizadas (chaves de API). Elas ficam cifradas em repouso, mas a cópia roda como o mesmo usuário do SO — o cofre decifraria normalmente. Então o `launchApp` sobe o app com `CM_SCRUB_SECRETS=1` e, no boot, os valores são trocados por um placeholder não-vazio (nomes das chaves preservados, gates de integração continuam ligados). Opt-out explícito com `CM_KEEP_SECRETS=1` só nos cenários que precisam da credencial real (ex.: `integration-webaudit`).
 
 ⚠️ **Limite de segurança:** a cópia protege o estado do app (DB), mas as linhas de `vault_path`/repos apontam pra pastas reais no disco. **Não execute ações destrutivas de filesystem** (mover vault, deletar repo) por enquanto — só navegação/leitura/validação visual. Cenários destrutivos seguros virão numa fase posterior (rewrite de paths).
 

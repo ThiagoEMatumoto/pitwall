@@ -160,6 +160,14 @@ const api: Api = {
     get: <T>(key: string) => invoke<T | null>('prefs:get', { key }),
     set: (key: string, value: unknown) => invoke('prefs:set', { key, value }),
   },
+  secrets: {
+    status: () => invoke('secrets:env:status'),
+    list: () => invoke('secrets:env:list'),
+    reveal: (key: string) => invoke('secrets:env:reveal', { key }),
+    set: (key: string, value: string) => invoke('secrets:env:set', { key, value }),
+    remove: (key: string) => invoke('secrets:env:delete', { key }),
+    rename: (from: string, to: string) => invoke('secrets:env:rename', { from, to }),
+  },
   vault: {
     getRoot: () => invoke('vault:get-root'),
     isConfigured: () => invoke('vault:is-configured'),

@@ -84,8 +84,21 @@ export async function launchApp(): Promise<LaunchResult> {
       },
     })
   }
+  // A cópia carrega o app_prefs inteiro, incluindo as chaves de API do usuário.
+  // Elas ficam cifradas em repouso, mas a cópia roda como o MESMO usuário do SO —
+  // o cofre decifraria normalmente. Por padrão o app troca os valores por um
+  // placeholder no boot (CM_SCRUB_SECRETS; só vale para userData dentro do
+  // tmpdir — ver services/secret-scrub.ts), então nenhum segredo utilizável vive
+  // na cópia. Os testes que só checam "a integração está configurada" continuam
+  // passando, porque o placeholder é não-vazio.
+  //
+  // CM_KEEP_SECRETS=1 é o opt-out EXPLÍCITO para o punhado de cenários que
+  // precisam da credencial real (ex.: integration-webaudit, que loga no legal-ui
+  // staging). Nunca ligar por padrão.
+  const keepSecrets = process.env.CM_KEEP_SECRETS === '1'
   const app = await electron.launch({
     args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`],
+    env: { ...process.env, CM_SCRUB_SECRETS: keepSecrets ? '0' : '1' } as Record<string, string>,
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')

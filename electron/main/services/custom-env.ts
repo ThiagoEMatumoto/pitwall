@@ -1,9 +1,22 @@
-import { getPref } from './prefs-store'
+import { getPref, setPref } from './prefs-store'
+import {
+  decodeSecrets,
+  encodeSecrets,
+  electronCrypto,
+  needsMigration,
+  type DecodedSecrets,
+  type EncryptionBackend,
+  type SecretCrypto,
+} from './secret-store'
 
 // Variáveis de ambiente customizadas do usuário (Configurações → Variáveis de
 // ambiente). Mescladas nos spawns que rodam processos externos (sidecar de
 // transcrição, claude -p) para que tokens/hosts/flags do usuário cheguem aos
 // subprocessos sem precisar exportá-los no shell que abriu o app GUI.
+//
+// Os VALORES são segredos (chaves de API) e ficam CIFRADOS no banco — ver
+// secret-store.ts. As CHAVES ficam em claro: são nomes de env var, não segredo, e
+// a UI precisa delas para listar sem decifrar nada.
 
 export const CUSTOM_ENV_VARS_KEY = 'custom_env_vars'
 
@@ -23,10 +36,173 @@ export function sanitizeCustomEnv(raw: unknown): CustomEnvVars {
   return out
 }
 
-// Lê + sanitiza a pref `custom_env_vars` no momento do spawn (a pref pode mudar
-// entre spawns; não cacheamos).
+// Lê + decifra a pref no momento do uso (a pref pode mudar entre spawns; não
+// cacheamos, e nada aqui persiste o texto claro).
+export function decodeCustomEnv(crypto: SecretCrypto = electronCrypto): DecodedSecrets {
+  return decodeSecrets(getPref<unknown>(CUSTOM_ENV_VARS_KEY, null), crypto)
+}
+
 export function readCustomEnv(): CustomEnvVars {
-  return sanitizeCustomEnv(getPref<unknown>(CUSTOM_ENV_VARS_KEY, null))
+  return sanitizeCustomEnv(decodeCustomEnv().values)
+}
+
+// Grava o mapa inteiro já cifrado. Retorna as chaves que acabaram em claro
+// (cifragem indisponível) para quem chamou poder avisar o usuário.
+export function writeCustomEnv(
+  values: CustomEnvVars,
+  crypto: SecretCrypto = electronCrypto,
+): { plaintext: string[] } {
+  const { stored, plaintext } = encodeSecrets(sanitizeCustomEnv(values), crypto)
+  setPref(CUSTOM_ENV_VARS_KEY, stored)
+  return { plaintext }
+}
+
+export interface SecretsStatus {
+  backend: EncryptionBackend
+  // Chaves ainda gravadas em claro no banco.
+  plaintextKeys: string[]
+  // Chaves cujo ciphertext não decifra mais neste cofre.
+  unreadableKeys: string[]
+}
+
+export function customEnvStatus(crypto: SecretCrypto = electronCrypto): SecretsStatus {
+  const decoded = decodeCustomEnv(crypto)
+  return {
+    backend: crypto.backend(),
+    plaintextKeys: decoded.plaintext,
+    unreadableKeys: decoded.unreadable,
+  }
+}
+
+export interface CustomEnvEntry {
+  key: string
+  hasValue: boolean
+  // false ⇒ o valor está em claro no banco (a UI marca a linha).
+  encrypted: boolean
+  // true ⇒ existe ciphertext mas ele não decifra neste cofre.
+  unreadable: boolean
+}
+
+// Lista para a UI: nomes das vars + se têm valor. NUNCA devolve o texto claro —
+// a tela de configurações pede o valor de UMA chave por vez, sob ação explícita
+// do usuário (revealCustomEnvVar).
+export function listCustomEnvEntries(crypto: SecretCrypto = electronCrypto): CustomEnvEntry[] {
+  const decoded = decodeCustomEnv(crypto)
+  const plaintext = new Set(decoded.plaintext)
+  const keys = [...Object.keys(decoded.values), ...decoded.unreadable].sort((a, b) =>
+    a.localeCompare(b),
+  )
+  return keys.map((key) => ({
+    key,
+    hasValue: decoded.unreadable.includes(key) || Boolean(decoded.values[key]),
+    encrypted: !plaintext.has(key),
+    unreadable: decoded.unreadable.includes(key),
+  }))
+}
+
+export function revealCustomEnvVar(
+  key: string,
+  crypto: SecretCrypto = electronCrypto,
+): string | null {
+  const value = decodeCustomEnv(crypto).values[key.trim()]
+  return typeof value === 'string' ? value : null
+}
+
+export function setCustomEnvVar(
+  key: string,
+  value: string,
+  crypto: SecretCrypto = electronCrypto,
+): { plaintext: string[] } {
+  const k = key.trim()
+  if (!k) return { plaintext: [] }
+  return writeCustomEnv({ ...decodeCustomEnv(crypto).values, [k]: value }, crypto)
+}
+
+export function deleteCustomEnvVar(
+  key: string,
+  crypto: SecretCrypto = electronCrypto,
+): { plaintext: string[] } {
+  const next = { ...decodeCustomEnv(crypto).values }
+  delete next[key.trim()]
+  return writeCustomEnv(next, crypto)
+}
+
+// Renomear preserva o valor sem que ele passe pelo renderer: o main lê, remove a
+// chave antiga e regrava sob a nova. Chave nova vazia ou já existente é no-op.
+export function renameCustomEnvVar(
+  from: string,
+  to: string,
+  crypto: SecretCrypto = electronCrypto,
+): { plaintext: string[] } {
+  const oldKey = from.trim()
+  const newKey = to.trim()
+  const current = decodeCustomEnv(crypto).values
+  if (!newKey || newKey === oldKey || !(oldKey in current)) return { plaintext: [] }
+  const next = { ...current, [newKey]: current[oldKey] }
+  delete next[oldKey]
+  return writeCustomEnv(next, crypto)
+}
+
+export interface MigrationResult {
+  migrated: number
+  skipped: 'not-needed' | 'unavailable' | null
+  // Chaves que continuaram em claro após a tentativa.
+  plaintext: string[]
+}
+
+// Cifra na primeira execução o que estiver em claro (pref legada v1 ou valores
+// gravados quando o cofre estava indisponível). Precisa rodar DEPOIS do app
+// ready: antes disso safeStorage.isEncryptionAvailable() não é confiável no Linux.
+//
+// Garantia de não-perda: a gravação é um único INSERT OR REPLACE e é conferida
+// por releitura — se o mapa relido não bater exatamente com o original, o valor
+// bruto anterior é restaurado e nada é perdido.
+export function migrateSecretsAtRest(crypto: SecretCrypto = electronCrypto): MigrationResult {
+  const rawBefore = getPref<unknown>(CUSTOM_ENV_VARS_KEY, null)
+  const decoded = decodeSecrets(rawBefore, crypto)
+  if (crypto.backend() === 'unavailable') {
+    return { migrated: 0, skipped: 'unavailable', plaintext: decoded.plaintext }
+  }
+  if (!needsMigration(decoded, crypto)) {
+    return { migrated: 0, skipped: 'not-needed', plaintext: decoded.plaintext }
+  }
+
+  const before = decoded.values
+  const { stored, plaintext } = encodeSecrets(before, crypto)
+  setPref(CUSTOM_ENV_VARS_KEY, stored)
+
+  const after = decodeSecrets(getPref<unknown>(CUSTOM_ENV_VARS_KEY, null), crypto).values
+  const keysBefore = Object.keys(before).sort()
+  const keysAfter = Object.keys(after).sort()
+  const intact =
+    keysBefore.length === keysAfter.length &&
+    keysBefore.every((k, i) => k === keysAfter[i] && before[k] === after[k])
+  if (!intact) {
+    setPref(CUSTOM_ENV_VARS_KEY, rawBefore)
+    throw new Error('secret migration roundtrip failed; original value restored')
+  }
+
+  const migrated = keysBefore.filter((k) => before[k] && !plaintext.includes(k)).length
+  return { migrated, skipped: null, plaintext }
+}
+
+// Redator para superfícies de log que ecoam saída de subprocesso (stderr do
+// sidecar). Recebe um snapshot dos valores no momento do spawn: assim o custo de
+// decifrar é pago uma vez, e não por linha de log.
+export function createSecretRedactor(values: CustomEnvVars = readCustomEnv()): (
+  text: string,
+) => string {
+  // Valores curtos ('1', 'true') são flags, não segredo — redigi-los picotaria
+  // qualquer log com ruído.
+  const secrets = Object.values(values)
+    .filter((v) => v.length >= 8)
+    .sort((a, b) => b.length - a.length)
+  if (secrets.length === 0) return (text) => text
+  return (text) => {
+    let out = text
+    for (const secret of secrets) out = out.split(secret).join('[REDACTED]')
+    return out
+  }
 }
 
 // Mescla as vars customizadas DEPOIS da base (process.env): o override do

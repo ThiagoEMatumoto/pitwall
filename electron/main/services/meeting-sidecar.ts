@@ -14,7 +14,7 @@ import {
   resolveSidecarPython,
 } from './meeting-sidecar-config'
 import { getPref } from './prefs-store'
-import { spawnEnv } from './custom-env'
+import { createSecretRedactor, spawnEnv } from './custom-env'
 import * as meetingStore from './meeting-store'
 import { broadcast } from './notify'
 
@@ -139,4 +139,6 @@ export const meetingSidecarManager = new MeetingSidecarManager({
   broadcast,
   resolveCommand: resolvePython3,
   resolveStart,
+  // O env do spawn carrega as chaves do usuário; o stderr do sidecar vai pro log.
+  makeLogRedactor: () => createSecretRedactor(),
 })
