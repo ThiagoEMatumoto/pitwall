@@ -28,6 +28,7 @@ import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenu, type TuiMenu } from './tui-menu-parser'
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
+import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { TERMINAL_FONT_FAMILY } from '@/lib/terminal-font'
@@ -250,10 +251,19 @@ export function Terminal({
   cwdRef.current = repoPath
 
   // Parse fresco do menu TUI direto do buffer (também exposto ao ChatView como
-  // guard de clique — re-parse imediatamente antes de digitar).
+  // guard de clique — re-parse imediatamente antes de digitar). A janela cresce
+  // só quando 40 linhas não bastam: menus altos (preview/wrap) ficavam cortados
+  // e o parser fail-closava, empurrando o usuário pro terminal.
+  function readTuiMenuFrom(t: Xterm): TuiMenu | null {
+    return parseWithGrowingWindow(
+      (n) => readTailText(t, n),
+      parseTuiMenu,
+      t.buffer.active.length,
+    )
+  }
   function readTuiMenu(): TuiMenu | null {
     const t = xtermRef.current
-    return t ? parseTuiMenu(readTailText(t)) : null
+    return t ? readTuiMenuFrom(t) : null
   }
 
   // Aplica um parse novo preservando a referência quando o menu não mudou
@@ -265,10 +275,19 @@ export function Terminal({
   }
 
   // Parse fresco do picker (/model, /theme, /config, Ctrl+R) direto do
-  // buffer — mesmo papel de readTuiMenu, exposto ao ChatView como guard.
+  // buffer — mesmo papel de readTuiMenu, exposto ao ChatView como guard. Mesma
+  // janela adaptativa: a lista do /config e o preview do /theme passam de 40
+  // linhas com facilidade.
+  function readTuiPickerFrom(t: Xterm): TuiPicker | null {
+    return parseWithGrowingWindow(
+      (n) => readTailText(t, n),
+      parseTuiPicker,
+      t.buffer.active.length,
+    )
+  }
   function readTuiPicker(): TuiPicker | null {
     const t = xtermRef.current
-    return t ? parseTuiPicker(readTailText(t)) : null
+    return t ? readTuiPickerFrom(t) : null
   }
 
   function applyTuiPicker(picker: TuiPicker | null) {
@@ -694,8 +713,8 @@ export function Terminal({
         // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
         // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
         // status limpam (null).
-        applyTuiMenu(gateMenuByStatus(parseTuiMenu(readTailText(t)), statusRef.current))
-        applyTuiPicker(parseTuiPicker(readTailText(t)))
+        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(t), statusRef.current))
+        applyTuiPicker(readTuiPickerFrom(t))
         if (statusRef.current === 'working' || statusRef.current === 'starting') return
         setCurrentMode(detectFooterMode(readFooterText(t)))
       }, 150)
@@ -718,8 +737,8 @@ export function Terminal({
       // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
       // prompt numa pane remontada) não gera data event novo — sem este seed o
       // card só apareceria no próximo byte do PTY.
-      applyTuiMenu(gateMenuByStatus(parseTuiMenu(readTailText(term)), statusRef.current))
-      applyTuiPicker(parseTuiPicker(readTailText(term)))
+      applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(term), statusRef.current))
+      applyTuiPicker(readTuiPickerFrom(term))
     })
 
     // Copy-on-select: copiar automaticamente o que for selecionado.
