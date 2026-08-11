@@ -13,6 +13,7 @@ import {
   decodeSecrets,
   encodeSecrets,
   needsMigration,
+  sameSecrets,
   SECRET_MAP_VERSION,
   type EncryptionBackend,
   type SecretCrypto,
@@ -45,7 +46,10 @@ describe('encodeSecrets', () => {
     const { stored, plaintext } = encodeSecrets({ SOME_TOKEN: 'fake-secret-value' }, crypto)
 
     expect(stored.version).toBe(SECRET_MAP_VERSION)
-    expect(stored.vars.SOME_TOKEN).toEqual({ enc: true, data: expect.any(String) })
+    expect(stored.vars.SOME_TOKEN).toEqual({
+      enc: true,
+      data: expect.any(String),
+    })
     expect(JSON.stringify(stored)).not.toContain('fake-secret-value')
     expect(plaintext).toEqual([])
   })
@@ -55,7 +59,10 @@ describe('encodeSecrets', () => {
       { SOME_TOKEN: 'fake-secret-value' },
       fakeCrypto('unavailable'),
     )
-    expect(stored.vars.SOME_TOKEN).toEqual({ enc: false, value: 'fake-secret-value' })
+    expect(stored.vars.SOME_TOKEN).toEqual({
+      enc: false,
+      value: 'fake-secret-value',
+    })
     expect(plaintext).toEqual(['SOME_TOKEN'])
   })
 
@@ -64,7 +71,10 @@ describe('encodeSecrets', () => {
       { SOME_TOKEN: 'fake-secret-value' },
       fakeCrypto('os_keyring', { encrypt: true }),
     )
-    expect(stored.vars.SOME_TOKEN).toEqual({ enc: false, value: 'fake-secret-value' })
+    expect(stored.vars.SOME_TOKEN).toEqual({
+      enc: false,
+      value: 'fake-secret-value',
+    })
     expect(plaintext).toEqual(['SOME_TOKEN'])
   })
 
@@ -107,6 +117,12 @@ describe('decodeSecrets', () => {
     expect(decoded.values).toEqual({})
   })
 
+  it('o envelope da chave ilegível é devolvido intacto para poder ser regravado', () => {
+    const { stored } = encodeSecrets({ A: 'fake-a' }, fakeCrypto())
+    const decoded = decodeSecrets(stored, fakeCrypto('os_keyring', { decrypt: true }))
+    expect(decoded.preserved).toEqual({ A: stored.vars.A })
+  })
+
   it('null / array / string → vazio', () => {
     const crypto = fakeCrypto()
     expect(decodeSecrets(null, crypto).values).toEqual({})
@@ -115,11 +131,96 @@ describe('decodeSecrets', () => {
   })
 
   it('entrada cifrada sem data é reportada como ilegível, não descartada em silêncio', () => {
-    const decoded = decodeSecrets(
-      { version: 2, vars: { A: { enc: true } } },
-      fakeCrypto(),
-    )
+    const decoded = decodeSecrets({ version: 2, vars: { A: { enc: true } } }, fakeCrypto())
     expect(decoded.unreadable).toEqual(['A'])
+  })
+})
+
+describe('encodeSecrets + envelopes ilegíveis', () => {
+  it('regravar o mapa não apaga a chave ilegível — o envelope volta intacto', () => {
+    const crypto = fakeCrypto()
+    const alienBlob = Buffer.from('outro-cofre:opaco', 'utf8').toString('base64')
+    const misto = {
+      version: SECRET_MAP_VERSION,
+      vars: {
+        LOST: { enc: true as const, data: alienBlob },
+        PLAIN: { enc: false as const, value: 'fake-plain' },
+      },
+    }
+    const decoded = decodeSecrets(misto, crypto)
+    expect(decoded.unreadable).toEqual(['LOST'])
+
+    const { stored } = encodeSecrets(decoded.values, crypto, decoded.preserved)
+
+    expect(Object.keys(stored.vars).sort()).toEqual(['LOST', 'PLAIN'])
+    expect(stored.vars.LOST).toEqual({ enc: true, data: alienBlob })
+  })
+
+  it('valor legível vence a colisão com um envelope preservado de mesmo nome', () => {
+    const crypto = fakeCrypto()
+    const { stored } = encodeSecrets({ A: 'fake-a' }, crypto, {
+      A: { enc: true, data: 'blob-antigo' },
+    })
+    expect(decodeSecrets(stored, crypto).values).toEqual({ A: 'fake-a' })
+  })
+
+  it('envelope cifrado malformado também volta verbatim (não é papel do encode consertar)', () => {
+    const crypto = fakeCrypto()
+    const decoded = decodeSecrets(
+      { version: SECRET_MAP_VERSION, vars: { A: { enc: true } } },
+      crypto,
+    )
+    const { stored } = encodeSecrets(decoded.values, crypto, decoded.preserved)
+    expect(stored.vars.A).toEqual({ enc: true })
+  })
+})
+
+describe('sameSecrets', () => {
+  const crypto = fakeCrypto()
+
+  it('mapa misto onde a chave ilegível sumiu é reprovado (o ponto cego do guard antigo)', () => {
+    const alienBlob = Buffer.from('outro-cofre:opaco', 'utf8').toString('base64')
+    const before = decodeSecrets(
+      {
+        version: SECRET_MAP_VERSION,
+        vars: {
+          LOST: { enc: true as const, data: alienBlob },
+          PLAIN: { enc: false as const, value: 'fake-plain' },
+        },
+      },
+      crypto,
+    )
+    const semLost = decodeSecrets(encodeSecrets(before.values, crypto).stored, crypto)
+
+    // Os valores legíveis batem dos dois lados — era exatamente isso que deixava
+    // a perda passar.
+    expect(semLost.values).toEqual(before.values)
+    expect(sameSecrets(before, semLost)).toBe(false)
+  })
+
+  it('mapa misto com o envelope preservado é aprovado', () => {
+    const alienBlob = Buffer.from('outro-cofre:opaco', 'utf8').toString('base64')
+    const before = decodeSecrets(
+      {
+        version: SECRET_MAP_VERSION,
+        vars: {
+          LOST: { enc: true as const, data: alienBlob },
+          PLAIN: { enc: false as const, value: 'fake-plain' },
+        },
+      },
+      crypto,
+    )
+    const after = decodeSecrets(
+      encodeSecrets(before.values, crypto, before.preserved).stored,
+      crypto,
+    )
+    expect(sameSecrets(before, after)).toBe(true)
+  })
+
+  it('valor alterado reprova', () => {
+    const before = decodeSecrets({ A: 'fake-a' }, crypto)
+    const after = decodeSecrets({ A: 'fake-outro' }, crypto)
+    expect(sameSecrets(before, after)).toBe(false)
   })
 })
 
@@ -142,7 +243,10 @@ describe('needsMigration', () => {
 
   it('valor em claro num envelope v2 → migra', () => {
     const crypto = fakeCrypto()
-    const stored = { version: 2, vars: { A: { enc: false as const, value: 'fake-a' } } }
+    const stored = {
+      version: 2,
+      vars: { A: { enc: false as const, value: 'fake-a' } },
+    }
     expect(needsMigration(decodeSecrets(stored, crypto), crypto)).toBe(true)
   })
 
