@@ -28,7 +28,11 @@ import {
 } from '../services/session-activity'
 import { setRendererFocusedSession } from '../services/notifications'
 import { getMcpRuntime } from '../services/mcp/server'
-import { mcpClientConfigPath } from '../services/mcp/config'
+import {
+  mcpClientConfigPath,
+  removeSessionMcpConfig,
+  writeSessionMcpClientConfig,
+} from '../services/mcp/config'
 import { chatTranscriptService } from '../services/chat-transcript-service'
 import {
   resolvePermissionMode,
@@ -136,12 +140,31 @@ function resolveScratchDir(): string {
   return dir
 }
 
-// B4: conecta a sessão ao MCP server do claude-manager via --mcp-config (config
-// gerado no boot em <userData>/mcp-client-config.json). Sem --strict-mcp-config:
-// os servers de user/projeto do claude continuam valendo. Se o server não subiu
-// (EADDRINUSE → getMcpRuntime() null), não injeta nada — sessão sobe normal.
-function mcpConfigArg(): string {
-  if (!getMcpRuntime()) return ''
+// B4: conecta a sessão ao MCP server do claude-manager via --mcp-config. Sem
+// --strict-mcp-config: os servers de user/projeto do claude continuam valendo.
+// Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
+// sessão sobe normal.
+//
+// Com `internalSessionId` (o sessions.id que ESTA sessão vai receber) escrevemos
+// uma config DEDICADA em <userData>/mcp-sessions/<id>.json, cujo endpoint carrega
+// a identidade da sessão. É esse carimbo — feito pelo APP, no spawn — que deixa
+// o servidor MCP compartilhado saber qual sessão-mãe chamou uma tool. null cai
+// no arquivo global (sem identidade), e falha de escrita degrada pro global em
+// vez de derrubar o spawn.
+function mcpConfigArg(internalSessionId: string | null): string {
+  const runtime = getMcpRuntime()
+  if (!runtime) return ''
+  if (internalSessionId) {
+    try {
+      const path = writeSessionMcpClientConfig(
+        { url: runtime.url, token: runtime.token, pid: process.pid },
+        internalSessionId,
+      )
+      return ` --mcp-config ${shquote(path)}`
+    } catch (err) {
+      console.error('[sessions] per-session mcp config failed, using the global one:', err)
+    }
+  }
   return ` --mcp-config ${shquote(mcpClientConfigPath())}`
 }
 
@@ -327,6 +350,10 @@ function injectInitialCommandOnFirstData(sessionId: string, command: string): vo
 // Cria o registro em `sessions`, dispara o PTY com o innerCmd dado e devolve o Session.
 // Spawn novo e resume diferem só no innerCmd (--session-id <novo> vs --resume <existente>).
 function startSession(opts: {
+  // Pré-gerado pelo chamador quando o innerCmd precisa conhecê-lo ANTES do
+  // spawn (é o caso do mcp-config por sessão: o arquivo tem o id no nome e no
+  // endpoint). Omitido → gera aqui, como antes.
+  id?: string
   ccSessionId: string
   repoId: string | null
   cwd: string
@@ -337,7 +364,7 @@ function startSession(opts: {
   rows?: number
 }): Session {
   const db = getDb()
-  const id = randomUUID()
+  const id = opts.id ?? randomUUID()
   const row: SessionRow = {
     id,
     repo_id: opts.repoId,
@@ -459,11 +486,15 @@ export function spawnSession(input: SpawnSessionInput): Session {
   const permissionMode = resolvePermissionMode(input.permissionMode)
   const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
 
+  // Id INTERNO (sessions.id) gerado aqui, antes do innerCmd: é ele que carimba
+  // a identidade da sessão no mcp-config, e o mesmo valor vai pro startSession.
+  const internalSessionId = randomUUID()
+
   const innerCmd = buildSpawnInnerCmd({
     claudeCmd,
     sessionId,
     name,
-    mcpConfigArg: mcpConfigArg(),
+    mcpConfigArg: mcpConfigArg(internalSessionId),
     model,
     effort,
     advisorModel,
@@ -477,6 +508,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
   })
 
   const session = startSession({
+    id: internalSessionId,
     ccSessionId: sessionId,
     repoId,
     cwd,
@@ -516,6 +548,11 @@ export function registerSessionIpc(): void {
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
       // as anexou na entrega; o path injetado não serve depois do exit.
       sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+
+      // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
+      // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
+      // sobrando depois que a PTY morre.
+      removeSessionMcpConfig(e.sessionId)
 
       // Para o watcher do transcript do Chat View desta sessão (evita leak de
       // chokidar/interval após a PTY morrer). No-op se ninguém estava observando.
@@ -617,9 +654,12 @@ export function registerSessionIpc(): void {
     const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
 
     const claudeCmd = resolveClaudeCommand()
-    const innerCmd = `${claudeCmd} --resume ${input.ccSessionId} -n ${shquote(name)}${mcpConfigArg()}`
+    // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
+    const internalSessionId = randomUUID()
+    const innerCmd = `${claudeCmd} --resume ${input.ccSessionId} -n ${shquote(name)}${mcpConfigArg(internalSessionId)}`
 
     return startSession({
+      id: internalSessionId,
       ccSessionId: input.ccSessionId,
       repoId,
       cwd,
@@ -699,13 +739,16 @@ export function registerSessionIpc(): void {
     const claudeCmd = resolveClaudeCommand()
     // --settings também no resume: a filha retomada precisa continuar aceitando
     // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
-    const innerCmd = `${claudeCmd} --resume ${ccSessionId} -n ${shquote(name)}${mcpConfigArg()} --settings ${shquote(HANDOFF_CHILD_SETTINGS_JSON)}`
+    // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
+    const internalSessionId = randomUUID()
+    const innerCmd = `${claudeCmd} --resume ${ccSessionId} -n ${shquote(name)}${mcpConfigArg(internalSessionId)} --settings ${shquote(HANDOFF_CHILD_SETTINGS_JSON)}`
 
     // Mesma instrução de kickoff do approve: re-injetada após o resume subir, pra
     // a filha retomar a tarefa e reportar via MCP ao terminar.
     const kickoff = `Retome a tarefa do handoff (handoffId="${id}") de onde parou. Ao terminar, chame a MCP tool handoff_report com handoffId="${id}".`
 
     const session = startSession({
+      id: internalSessionId,
       ccSessionId,
       repoId,
       cwd: repo.path,

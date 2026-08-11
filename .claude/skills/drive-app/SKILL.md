@@ -1,11 +1,11 @@
 ---
 name: drive-app
-description: Use when you need to SEE or operate the claude-manager Electron app like a user — to validate a UI change, reproduce/diagnose a bug, or take screenshots. Launches the built app against a safe COPY of real data via Playwright, captures screenshots + logs.
+description: Use when you need to SEE or operate the Pitwall Electron app like a user — to validate a UI change, reproduce/diagnose a bug, or take screenshots. Launches the built app against a safe COPY of real data via Playwright, captures screenshots + logs.
 ---
 
 # drive-app — dirigir o app como usuário
 
-Ferramental pra você (Claude) abrir o app **claude-manager** real, navegar como usuário, tirar screenshots e ler logs — sem tocar nos dados reais. A engine fica em `e2e/` (Playwright + Electron).
+Ferramental pra você (Claude) abrir o app **Pitwall** real, navegar como usuário, tirar screenshots e ler logs — sem tocar nos dados reais. A engine fica em `e2e/` (Playwright + Electron).
 
 ## Como funciona (não-destrutivo por design)
 

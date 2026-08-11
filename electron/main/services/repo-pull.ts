@@ -102,19 +102,65 @@ async function withBehind(git: SimpleGit, outcome: BranchPullOutcome): Promise<B
   return behind === undefined ? outcome : { ...outcome, behind }
 }
 
-// Branch default derivada do DISCO, não do DB. `origin/HEAD` pode não estar
-// resolvido localmente (clone antigo, repo adicionado à mão); nesse caso
-// `set-head -a` pergunta ao remote e escreve o ref — gated pela existência de
-// origin, e a rede já está quente do fetch acima.
+// Existe `refs/remotes/origin/<branch>` no disco? Confiável porque o
+// `fetch origin --prune` de pullRepo acabou de rodar: branch apagada no remote
+// já sumiu do namespace remote-tracking. A resposta vem do STDOUT (o sha), não
+// do throw: com `--quiet` o git sai 1 sem escrever nada em stderr, e o
+// simple-git não trata isso como erro.
+async function remoteBranchExists(git: SimpleGit, branch: string): Promise<boolean> {
+  try {
+    const sha = await git.raw(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`])
+    return sha.trim().length > 0
+  } catch {
+    return false
+  }
+}
+
+// Branch default derivada do DISCO, não do DB, e sempre validada contra o
+// namespace remote-tracking. `origin/HEAD` pode não estar resolvido localmente
+// (clone antigo, repo adicionado à mão) ou estar obsoleto (aponta pra branch que
+// o remote já apagou/renomeou); nos dois casos `set-head -a` pergunta ao remote
+// e (re)escreve o ref — gated pela existência de origin, e a rede já está quente
+// do fetch acima. Null quando nem depois do re-resolve a branch existe: melhor
+// não puxar nada do que errar toda run e gravar o valor morto no DB.
 async function resolveDefaultBranch(git: SimpleGit, url: string): Promise<string | null> {
   const def = await readDefaultBranch(git)
-  if (def || !url) return def
+  if (def && (await remoteBranchExists(git, def))) return def
+  if (!url) return null
   try {
     await git.raw([...authArgs(url), 'remote', 'set-head', 'origin', '-a'])
   } catch {
-    return null
+    // O simple-git trata stderr não-vazio como falha, e o set-head reporta a
+    // correção por stderr ("'origin/HEAD' has changed from 'x'..."). Quem decide
+    // é a releitura do ref abaixo, não o throw.
   }
-  return readDefaultBranch(git)
+  const healed = await readDefaultBranch(git)
+  if (healed && (await remoteBranchExists(git, healed))) return healed
+  return null
+}
+
+// Puro e testável: branches em checkout segundo `git worktree list --porcelain`
+// (a principal e todas as vinculadas). Cada bloco traz uma linha
+// `branch refs/heads/<x>`; blocos detached não têm essa linha e ficam de fora.
+export function parseCheckedOutBranches(porcelain: string): Set<string> {
+  const prefix = 'branch refs/heads/'
+  const out = new Set<string>()
+  for (const line of porcelain.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith(prefix)) out.add(trimmed.slice(prefix.length))
+  }
+  return out
+}
+
+// Set vazio no catch: metadata de worktree corrompida não pode derrubar o ciclo
+// — no pior caso voltamos ao comportamento antigo (tentar o fetch e receber a
+// recusa do git).
+async function listCheckedOutBranches(git: SimpleGit): Promise<Set<string>> {
+  try {
+    return parseCheckedOutBranches(await git.raw(['worktree', 'list', '--porcelain']))
+  } catch {
+    return new Set()
+  }
 }
 
 // Pull ff-only da branch em checkout (mantém o comportamento original: um
@@ -140,8 +186,9 @@ async function pullCurrentBranch(
 
 // Fast-forward do ref local da branch default SEM checkout: `fetch origin
 // def:def` escreve direto no ref, sem tocar a working tree. Só é chamada quando
-// `def !== current` (garantido pelo caller), então a default nunca está em
-// checkout — o git não recusa com "refusing to fetch into checked-out branch".
+// a default NÃO está em checkout em nenhuma worktree (garantido pelo caller, que
+// checa `current` e `listCheckedOutBranches`) — senão o git recusa com
+// "refusing to fetch into branch ... checked out at".
 // Se a default ainda não existe localmente, `before` falha (try/catch) e
 // contamos como `pulled`. Se o remote divergiu do ref local, o fetch recusa o
 // non-fast-forward e caímos no catch externo como `error` — seguro, nunca
@@ -216,13 +263,24 @@ export async function pullRepo(target: PullTarget): Promise<PullRepoResult> {
         .prepare('UPDATE repos SET default_branch = ? WHERE id = ?')
         .run(resolvedDef, target.repoId)
     }
-    const def = resolvedDef ?? target.defaultBranch
+    // O fallback do DB também passa pela validação: uma default morta gravada
+    // numa run antiga não pode voltar a ser usada.
+    const dbDef = target.defaultBranch
+    const def = resolvedDef ?? (dbDef && (await remoteBranchExists(git, dbDef)) ? dbDef : null)
 
     if (current) {
       branches.push(await withBehind(git, await pullCurrentBranch(git, current, status, url)))
     }
     if (def && def !== current) {
-      branches.push(await withBehind(git, await pullDefaultBranch(git, url, def)))
+      // A default pode estar em checkout numa worktree VINCULADA (status.current
+      // só enxerga a principal). Nesse caso `fetch origin def:def` é recusado
+      // pelo git; avançar o ref exigiria mexer na working tree do usuário, então
+      // reportamos o skip e deixamos o atraso visível via `behind`.
+      const checkedOutElsewhere = (await listCheckedOutBranches(git)).has(def)
+      const outcome: BranchPullOutcome = checkedOutElsewhere
+        ? { branch: def, status: 'skipped', detail: 'checked-out-elsewhere' }
+        : await pullDefaultBranch(git, url, def)
+      branches.push(await withBehind(git, outcome))
     }
 
     const { status: overall, detail } = deriveOverallStatus(branches)

@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
-import type { LastPullRun, PullRepoResult, RepoPullStatus } from '../../../shared/types/ipc'
+import type {
+  BranchPullOutcome,
+  LastPullRun,
+  PullRepoResult,
+  RepoPullStatus,
+} from '../../../shared/types/ipc'
 
 // Store de repo_pull_runs (migration 033) — histórico do auto-pull. Escopo
 // mínimo: só grava e lista, sem update (uma run é imutável, gravada de uma vez
@@ -101,23 +106,26 @@ export function listPullRuns(filter?: ListPullRunsFilter): RepoPullRun[] {
   return rows.map(rowToRun)
 }
 
-function worstBehind(result: PullRepoResult): number | undefined {
-  const values = (result.branches ?? [])
-    .map((b) => b.behind)
-    .filter((n): n is number => typeof n === 'number')
-  return values.length > 0 ? Math.max(...values) : undefined
+// Branch mais atrasada do repo — a que mais dói, e cujo `detail` explica por que
+// o atraso não zerou (dirty / diverged / checked-out-elsewhere).
+function worstBranch(result: PullRepoResult): BranchPullOutcome | undefined {
+  let worst: BranchPullOutcome | undefined
+  for (const b of result.branches ?? []) {
+    if (typeof b.behind !== 'number') continue
+    if (worst === undefined || b.behind > (worst.behind ?? 0)) worst = b
+  }
+  return worst
 }
 
 // Recorte da última run pra UI: só o que a sidebar precisa por repo (status +
-// pior atraso entre as branches). Reusa listPullRuns — a run já guarda o
-// snapshot completo, não há query nova.
+// pior atraso entre as branches + motivo). Reusa listPullRuns — a run já guarda
+// o snapshot completo, não há query nova.
 export function getLastPullRun(): LastPullRun | null {
   const [run] = listPullRuns({ limit: 1 })
   if (!run) return null
-  const repos: RepoPullStatus[] = run.results.map((r) => ({
-    repoId: r.repoId,
-    status: r.status,
-    behind: worstBehind(r),
-  }))
+  const repos: RepoPullStatus[] = run.results.map((r) => {
+    const worst = worstBranch(r)
+    return { repoId: r.repoId, status: r.status, behind: worst?.behind, reason: worst?.detail }
+  })
   return { finishedAt: run.finishedAt, trigger: run.trigger, repos }
 }

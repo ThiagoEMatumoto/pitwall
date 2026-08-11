@@ -154,4 +154,56 @@ describe('pullRepo (integração — repos git temporários)', () => {
     expect(mainOutcome?.detail).toBe('dirty')
     expect(mainOutcome?.behind).toBe(1)
   })
+
+  // Cenário do `applicant-portal` (119 commits atrás): a default está em checkout
+  // numa worktree VINCULADA. `status.current` só enxerga a principal (feat/x), e
+  // o `fetch origin main:main` era recusado pelo git — erro mudo em toda run.
+  it('default em checkout numa worktree vinculada: skip explícito, sem erro', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const originMain = git(originPath, 'rev-parse', 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    expect(mainBefore).not.toBe(originMain)
+    git(clonePath, 'worktree', 'add', join(dir, 'wt-main'), 'main')
+    expect(git(clonePath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/x')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    // O remote-tracking ref avançou (é o que `worktree add ... origin/main` usa);
+    // o ref local de main ficou parado, e a worktree do usuário intocada.
+    expect(git(clonePath, 'rev-parse', 'refs/remotes/origin/main')).toBe(originMain)
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('checked-out-elsewhere')
+    expect(mainOutcome?.behind).toBe(1)
+    expect(result.status).not.toBe('error')
+  })
+
+  // origin/HEAD obsoleto (aponta pra branch que o remote não tem mais): antes
+  // passava reto e toda run errava. Agora o valor é validado e re-resolvido.
+  it('origin/HEAD apontando pra branch morta é re-resolvido antes do pull', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const originMain = git(originPath, 'rev-parse', 'main')
+    git(clonePath, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/ghost')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(git(clonePath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')).toBe('origin/main')
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
+    expect(result.branches?.find((b) => b.branch === 'ghost')).toBeUndefined()
+    expect(result.status).not.toBe('error')
+  })
 })

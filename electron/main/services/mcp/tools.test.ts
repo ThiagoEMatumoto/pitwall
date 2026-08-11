@@ -859,4 +859,125 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(res.status).toBe('failed')
     expect(res.error).toMatch(/não existe no disco/)
   })
+
+  // A identidade da mãe vem do CTX (carimbado pelo app no spawn), nunca dos
+  // args da tool. Com ela o dedup ganha um segundo nível: "já é sua" ≠ "não é sua".
+  describe('identidade da sessão-mãe (ctx)', () => {
+    const MOTHER_A = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+    const MOTHER_B = '11111111-2222-3333-4444-555555555555'
+
+    // Cada mãe fala com o MESMO server por um conjunto próprio de ToolDefs — é
+    // o que o server faz por request (McpServer novo, registerTools com o ctx).
+    function callAs<T>(motherSessionId: string | null, name: string, args: unknown): T {
+      const def = buildTools(notify, { motherSessionId }).find((t) => t.name === name)
+      if (!def) throw new Error(`tool not registered: ${name}`)
+      return def.handler(args).structuredContent as T
+    }
+
+    const motherOf = (handoffId: string): string | null =>
+      (
+        getDb()
+          .prepare('SELECT mother_session_id FROM handoffs WHERE id = ?')
+          .get(handoffId) as { mother_session_id: string | null }
+      ).mother_session_id
+
+    it('grava o mother_session_id do ctx no handoff', () => {
+      seedRepo('ident', '/repos/ident')
+      const res = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'ident',
+        task: 'Trabalho da mãe A',
+      })
+      expect(res.status).toBe('running')
+      expect(motherOf(res.handoffId as string)).toBe(MOTHER_A)
+    })
+
+    it('ctx ausente mantém o legado: mother_session_id null', () => {
+      seedRepo('legado', '/repos/legado')
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'legado',
+        task: 'Sem carimbo',
+      })
+      expect(motherOf(res.handoffId as string)).toBeNull()
+    })
+
+    it('NÍVEL 1 — mesma mãe: recusa dizendo que a filha já é dela', () => {
+      seedRepo('mesma', '/repos/mesma')
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'mesma', task: 'Primeira' })
+      const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'mesma',
+        task: 'Segunda',
+      })
+      expect(dup.duplicate).toBe(true)
+      expect(dup.handoffId).toBeUndefined()
+      expect(dup.error).toMatch(/JÁ despachou/)
+      expect(dup.error).toMatch(/ela é sua/)
+      expect(dup.error).toMatch(/force: true/)
+      expect(spawned).toHaveLength(1)
+    })
+
+    it('NÍVEL 2 — outra mãe: recusa dizendo que a filha NÃO é dela', () => {
+      seedRepo('alheia', '/repos/alheia')
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'alheia', task: 'Da mãe A' })
+      const dup = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
+        targetRepo: 'alheia',
+        task: 'Da mãe B',
+      })
+      expect(dup.duplicate).toBe(true)
+      expect(dup.error).toMatch(/NÃO é sua/)
+      expect(dup.error).toMatch(/outra sessão-mãe/)
+      // Mensagem DISTINTA da do nível 1 — a mãe B não pode ler "você já despachou".
+      expect(dup.error).not.toMatch(/JÁ despachou/)
+      expect(spawned).toHaveLength(1)
+    })
+
+    it('NÍVEL 2 — identidade conhecida NÃO libera o repo ocupado por uma mãe legada (null)', () => {
+      seedRepo('misto', '/repos/misto')
+      call<HandoffResult>('session_handoff', { targetRepo: 'misto', task: 'Legada' })
+      const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'misto',
+        task: 'Com carimbo',
+      })
+      // Escopar SÓ pela mãe reabriria duas mães mutando o mesmo repo.
+      expect(dup.duplicate).toBe(true)
+      expect(spawned).toHaveLength(1)
+    })
+
+    it('NÍVEL 3 — sem identidade: cai no dedup por repo (mensagem legada)', () => {
+      seedRepo('anonimo', '/repos/anonimo')
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'anonimo', task: 'Da mãe A' })
+      const dup = call<HandoffResult>('session_handoff', {
+        targetRepo: 'anonimo',
+        task: 'Sem carimbo',
+      })
+      expect(dup.duplicate).toBe(true)
+      expect(dup.error).toMatch(/pode NÃO ser sua/)
+      expect(dup.error).toMatch(/sem identidade da sessão-mãe/)
+      expect(spawned).toHaveLength(1)
+    })
+
+    it('repos-alvo diferentes: a mesma mãe segue despachando', () => {
+      seedRepo('um', '/repos/um')
+      seedRepo('dois', '/repos/dois')
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'um', task: 'A' })
+      const second = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'dois',
+        task: 'B',
+      })
+      expect(second.status).toBe('running')
+      expect(spawned).toHaveLength(2)
+    })
+
+    it('force: true segue como válvula de escape em qualquer nível', () => {
+      seedRepo('forcado', '/repos/forcado')
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'forcado', task: 'A' })
+      const forced = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
+        targetRepo: 'forcado',
+        task: 'B',
+        force: true,
+      })
+      expect(forced.status).toBe('running')
+      expect(motherOf(forced.handoffId as string)).toBe(MOTHER_B)
+      expect(spawned).toHaveLength(2)
+    })
+  })
 })

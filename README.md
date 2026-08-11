@@ -6,8 +6,8 @@
 
 Chat *and* terminal views per session · multi-repo orchestration with cross-session handoffs · cross-machine sync · planning boards exposed over MCP · meeting transcription · usage metrics.
 
-[![Release](https://img.shields.io/github/v/release/ThiagoEMatumoto/claude-manager?sort=semver)](https://github.com/ThiagoEMatumoto/claude-manager/releases/latest)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue)](https://github.com/ThiagoEMatumoto/claude-manager/releases/latest)
+[![Release](https://img.shields.io/github/v/release/ThiagoEMatumoto/pitwall?sort=semver)](https://github.com/ThiagoEMatumoto/pitwall/releases/latest)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-blue)](https://github.com/ThiagoEMatumoto/pitwall/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![Built with Electron](https://img.shields.io/badge/built%20with-Electron%20%2B%20React-47848F)](https://www.electronjs.org/)
 
@@ -63,7 +63,7 @@ Claude Code is a terminal-first agent. **Claude Manager** wraps it in a desktop 
 
 ## Install
 
-**Download a prebuilt app** from the [latest release](https://github.com/ThiagoEMatumoto/claude-manager/releases/latest):
+**Download a prebuilt app** from the [latest release](https://github.com/ThiagoEMatumoto/pitwall/releases/latest):
 
 | Platform | Artifact |
 |----------|----------|

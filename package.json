@@ -1,12 +1,12 @@
 {
   "name": "claude-manager",
-  "version": "0.55.1",
+  "version": "0.56.0",
   "description": "Visual manager for multiple Claude Code sessions, projects, and configs",
   "main": "out/main/index.js",
   "type": "module",
   "author": "Thiago Matumoto",
   "license": "MIT",
-  "homepage": "https://github.com/ThiagoEMatumoto/claude-manager",
+  "homepage": "https://github.com/ThiagoEMatumoto/pitwall",
   "engines": {
     "node": ">=20.0.0"
   },

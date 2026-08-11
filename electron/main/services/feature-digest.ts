@@ -235,7 +235,7 @@ export function renderRecords(records: SessionRecord[]): string {
 // Stage 2: regenera o CORPO inteiro do doc sintetizando todos os registros.
 export function buildHolisticPrompt(currentMd: string, records: SessionRecord[]): string {
   return [
-    'Você é o curador da documentação viva de uma feature no claude-manager.',
+    'Você é o curador da documentação viva de uma feature no Pitwall.',
     'Abaixo estão o documento Markdown ATUAL (frontmatter YAML + corpo) e os REGISTROS de TODAS as',
     'sessões de trabalho dessa feature, em ordem cronológica.',
     '',

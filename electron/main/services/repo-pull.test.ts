@@ -8,7 +8,11 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }))
 
-import { classifyPullEligibility, deriveOverallStatus } from './repo-pull'
+import {
+  classifyPullEligibility,
+  deriveOverallStatus,
+  parseCheckedOutBranches,
+} from './repo-pull'
 
 describe('classifyPullEligibility', () => {
   it('dirty quando há arquivos na working tree', () => {
@@ -65,5 +69,43 @@ describe('deriveOverallStatus', () => {
     ])
     expect(result.status).toBe('error')
     expect(result.detail).toBe('main: pulled · feat/x: error(boom)')
+  })
+})
+
+describe('parseCheckedOutBranches', () => {
+  // Cenário do bug: a worktree PRINCIPAL está numa feature branch e a default
+  // (main) está em checkout numa VINCULADA — `git status` só enxerga a primeira.
+  it('pega a branch da worktree principal e das vinculadas', () => {
+    const porcelain = [
+      'worktree /home/u/repo',
+      'HEAD 1111111111111111111111111111111111111111',
+      'branch refs/heads/feat/x',
+      '',
+      'worktree /home/u/repo/.worktrees/main',
+      'HEAD 2222222222222222222222222222222222222222',
+      'branch refs/heads/main',
+      '',
+    ].join('\n')
+
+    expect(parseCheckedOutBranches(porcelain)).toEqual(new Set(['feat/x', 'main']))
+  })
+
+  it('ignora blocos detached (não têm linha branch)', () => {
+    const porcelain = [
+      'worktree /home/u/repo',
+      'HEAD 1111111111111111111111111111111111111111',
+      'branch refs/heads/main',
+      '',
+      'worktree /home/u/repo/.worktrees/wip',
+      'HEAD 3333333333333333333333333333333333333333',
+      'detached',
+      '',
+    ].join('\n')
+
+    expect(parseCheckedOutBranches(porcelain)).toEqual(new Set(['main']))
+  })
+
+  it('set vazio quando não há nenhuma branch em checkout', () => {
+    expect(parseCheckedOutBranches('')).toEqual(new Set())
   })
 })
