@@ -2,9 +2,18 @@
 // (gerado uma vez, persistido em <userData>/mcp.json com mode 0600).
 import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { getDb } from '../db'
+import { buildSessionEndpoint } from './session-identity'
 
 export const DEFAULT_MCP_PORT = 41956
 export const MCP_PORT_PREF_KEY = 'mcp_port'
@@ -94,21 +103,91 @@ export function mcpClientConfigPath(): string {
   return join(app.getPath('userData'), 'mcp-client-config.json')
 }
 
+// sessionId opcional: quando presente, o endpoint carrega a identidade da
+// sessão-mãe (ver session-identity.ts). O NOME do server ('claude-manager') e o
+// shape do arquivo NÃO mudam — allowlists de usuário e transcripts referenciam
+// `mcp__claude-manager__*`.
 export function writeMcpClientConfig(
   info: McpRuntimeInfo,
   path: string = mcpClientConfigPath(),
+  sessionId: string | null = null,
 ): void {
+  const endpoint = buildSessionEndpoint(info, sessionId)
   const config = {
     mcpServers: {
       'claude-manager': {
         type: 'http',
-        url: info.url,
-        headers: { Authorization: `Bearer ${info.token}` },
+        url: endpoint.url,
+        headers: endpoint.headers,
       },
     },
   }
   writeFileSync(path, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 })
   chmodSync(path, 0o600)
+}
+
+// --- Config POR SESSÃO (carimbo de identidade da mãe) ---
+// Um arquivo por sessions.id em <userData>/mcp-sessions/<id>.json. O arquivo
+// GLOBAL continua existindo e intocado (sessões vivas com a config antiga,
+// `claude mcp add`) — quem não tem carimbo cai no dedup legado, por repo.
+
+export function sessionMcpConfigDir(): string {
+  return join(app.getPath('userData'), 'mcp-sessions')
+}
+
+export function sessionMcpConfigPath(
+  sessionId: string,
+  dir: string = sessionMcpConfigDir(),
+): string {
+  return join(dir, `${sessionId}.json`)
+}
+
+// Escreve (e devolve) o path da config da sessão. Contém o token → arquivo 0600,
+// diretório 0700.
+export function writeSessionMcpClientConfig(
+  info: McpRuntimeInfo,
+  sessionId: string,
+  dir: string = sessionMcpConfigDir(),
+): string {
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const path = sessionMcpConfigPath(sessionId, dir)
+  writeMcpClientConfig(info, path, sessionId)
+  return path
+}
+
+// Best-effort: chamado no exit da PTY (o e.sessionId é o próprio nome do
+// arquivo). Arquivo já removido / diretório ausente nunca pode derrubar o exit.
+export function removeSessionMcpConfig(
+  sessionId: string,
+  dir: string = sessionMcpConfigDir(),
+): void {
+  try {
+    rmSync(sessionMcpConfigPath(sessionId, dir), { force: true })
+  } catch {
+    // ignora
+  }
+}
+
+// Varredura de boot: nenhuma PTY sobrevive ao quit, então todo arquivo que
+// sobrou no diretório é órfão. Devolve quantos removeu (log/teste).
+export function sweepSessionMcpConfigs(dir: string = sessionMcpConfigDir()): number {
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return 0 // diretório ainda não existe → nada a varrer
+  }
+  let removed = 0
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    try {
+      rmSync(join(dir, name), { force: true })
+      removed++
+    } catch {
+      // segue varrendo os demais
+    }
+  }
+  return removed
 }
 
 // --- Cleanup de configs stale (caminho do EADDRINUSE) ---
@@ -143,6 +222,7 @@ function pidIsAlive(pid: number): boolean {
 export function cleanupStaleMcpConfigs(
   configFilePath: string = mcpConfigPath(),
   clientConfigFilePath: string = mcpClientConfigPath(),
+  sessionConfigDir: string = sessionMcpConfigDir(),
 ): StaleConfigDecision {
   let existingPid: number | null = null
   if (existsSync(configFilePath)) {
@@ -157,6 +237,8 @@ export function cleanupStaleMcpConfigs(
   if (decision === 'delete') {
     rmSync(configFilePath, { force: true })
     rmSync(clientConfigFilePath, { force: true })
+    // As configs POR SESSÃO apontam pro mesmo server stale — vão junto.
+    rmSync(sessionConfigDir, { recursive: true, force: true })
   }
   return decision
 }
