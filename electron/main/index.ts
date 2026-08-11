@@ -15,7 +15,7 @@ import { registerGitIpc, cloneMissingWithToasts } from './ipc/git'
 import { backfillRepoRemotes } from './services/git-remote'
 import { listMissingRepos } from './services/repo-clone'
 import { getPref, setPref } from './services/prefs-store'
-import { setGpuState } from './services/gpu-state'
+import { setGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from './services/gpu-state'
 import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/repo-pull-scheduler'
 import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
@@ -69,17 +69,26 @@ const isDev = !app.isPackaged
 // Precisa rodar antes do ready; o getPref abre o DB cedo — as migrações são puro
 // SQLite (sem dependência pós-ready), mas o try/catch cobre qualquer falha de
 // I/O caindo no default (GPU ligada).
-function safeGetBoolPref(key: string): boolean {
+function safeGetBoolPref(key: string, fallback = false): boolean {
   try {
-    return getPref(key, false)
+    return getPref(key, fallback)
   } catch {
-    return false
+    return fallback
   }
 }
 const gpuOff = process.env.CM_DISABLE_GPU === '1' || safeGetBoolPref('gpu.disabled')
 if (gpuOff) app.disableHardwareAcceleration()
-// Opt-in experimental: renderização nativa no Wayland (sem XWayland). Linux apenas.
-const ozoneWayland = process.platform === 'linux' && safeGetBoolPref('gpu.ozoneWayland')
+// Wayland nativo por padrão no Linux. Sob XWayland o servidor X gera autorepeat
+// a partir do ESTADO da tecla: um teclado que perde o scancode de break (bug de
+// EC/firmware, ex. Predator PHN16-73) deixa a tecla afundada e o app recebe
+// digitação fantasma infinita. Cliente Wayland nativo só repete ao RECEBER
+// evento, então estado parado não gera nada. `auto` cai para X11 onde não há
+// compositor. Escape hatch pra driver que abra janela preta sem XWayland:
+// CM_DISABLE_WAYLAND=1 — a pref só serve se a janela subir pra abrir Settings.
+const ozoneWayland =
+  process.platform === 'linux' &&
+  process.env.CM_DISABLE_WAYLAND !== '1' &&
+  safeGetBoolPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT)
 if (ozoneWayland) app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
 setGpuState({ hwAccelDisabled: gpuOff, ozoneWayland })
 

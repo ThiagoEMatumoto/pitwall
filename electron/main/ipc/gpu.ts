@@ -1,7 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { z } from 'zod'
 import { getPref, setPref } from '../services/prefs-store'
-import { getGpuState } from '../services/gpu-state'
+import { getGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from '../services/gpu-state'
 import type { GpuStatus } from '../../../shared/types/ipc'
 
 const boolSchema = z.boolean()
@@ -15,7 +15,7 @@ export function registerGpuIpc(): void {
       hwAccelDisabled: state.hwAccelDisabled,
       ozoneWayland: state.ozoneWayland,
       prefDisabled: getPref('gpu.disabled', false),
-      prefOzone: getPref('gpu.ozoneWayland', false),
+      prefOzone: getPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT),
     }
   })
 
@@ -24,7 +24,7 @@ export function registerGpuIpc(): void {
   })
 
   ipcMain.handle('gpu:set-ozone', (_e, payload: unknown) => {
-    setPref('gpu.ozoneWayland', boolSchema.parse(payload))
+    setPref(OZONE_PREF_KEY, boolSchema.parse(payload))
   })
 
   // Reinicia o app pra aplicar mudanças de GPU (decididas antes do ready). O

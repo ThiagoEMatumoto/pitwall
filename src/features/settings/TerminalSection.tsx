@@ -99,14 +99,16 @@ export function TerminalSection({ open }: { open: boolean }) {
       {isLinux && (
         <label className="mt-3 flex items-start justify-between gap-3 border-t border-[var(--color-border)] pt-3">
           <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">Wayland nativo (experimental)</div>
+            <div className="text-sm text-[var(--color-text)]">Wayland nativo</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Renderização nativa no Wayland. Requer reiniciar.
+              Ligado por padrão. Sem ele o app roda sob XWayland, onde uma tecla que
+              trava no teclado vira digitação fantasma. Desligue só se a janela ficar
+              preta. Requer reiniciar.
             </div>
           </div>
           <input
             type="checkbox"
-            checked={gpu?.prefOzone ?? false}
+            checked={gpu?.prefOzone ?? true}
             disabled={gpu === null}
             onChange={(e) => updateOzone(e.target.checked)}
             className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
