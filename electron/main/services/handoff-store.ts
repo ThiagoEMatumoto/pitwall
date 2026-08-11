@@ -327,8 +327,8 @@ export function fail(id: string, error: string): Handoff {
 // 'interrupted' (estado RECUPERÁVEL, NÃO 'failed') se ainda estava VIVA (running
 // OU needs_input) — NÃO sobrescreve um done/rejected já gravado. Uma filha que
 // perguntou (needs_input) e cuja PTY morreu de fato também é interrompida (senão
-// trava o teto pra sempre). 'interrupted' não conta como ativo (libera o teto) e
-// pode ser RETOMADO pelo humano. 'failed' fica reservado a erro REAL reportado
+// trava o dedup do repo-alvo pra sempre). 'interrupted' não conta como ativo
+// (libera o dedup) e pode ser RETOMADO pelo humano. 'failed' fica reservado a erro REAL reportado
 // pela própria filha (handoff_report de falha / fail()).
 // Retorna o handoff atualizado, ou null se nada foi alterado (não estava vivo).
 export function failIfRunning(id: string, error: string): Handoff | null {
@@ -350,7 +350,7 @@ export function failIfRunning(id: string, error: string): Handoff | null {
 // morto enquanto a session-filha segue 'running'. Cobre tanto running quanto
 // needs_input (ambos in-flight). Marca 'interrupted' (RECUPERÁVEL, não 'failed'):
 // a filha morreu sem reportar erro real, então o handoff sai do ativo (libera o
-// teto) mas fica retomável. Como 'interrupted' não entra no predicado
+// dedup) mas fica retomável. Como 'interrupted' não entra no predicado
 // ('running','needs_input'), passadas seguintes NÃO o re-reconciliam.
 // Retorna o nº de handoffs reconciliados.
 export function reconcileStuck(): number {

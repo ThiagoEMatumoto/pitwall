@@ -100,7 +100,6 @@ export function SettingsDialog({ open, onClose }: Props) {
 }
 
 const SCRATCH_DIR_DEFAULT = '~/ClaudeManager/scratch'
-const HANDOFFS_MAX_ACTIVE_DEFAULT = 5
 const HANDOFFS_HEARTBEAT_TTL_DEFAULT = 2
 const AUTO_PULL_INTERVAL_DEFAULT = 30
 
@@ -115,7 +114,6 @@ function GeneralTab({ open }: { open: boolean }) {
   const [autoPullEnabled, setAutoPullEnabled] = useState(true)
   const [autoPullIntervalMinutes, setAutoPullIntervalMinutes] = useState(AUTO_PULL_INTERVAL_DEFAULT)
   const [requireApprovalHandoffs, setRequireApprovalHandoffs] = useState(false)
-  const [maxActiveHandoffs, setMaxActiveHandoffs] = useState(HANDOFFS_MAX_ACTIVE_DEFAULT)
   const [heartbeatTtlHours, setHeartbeatTtlHours] = useState(HANDOFFS_HEARTBEAT_TTL_DEFAULT)
   const [calendarIcsUrl, setCalendarIcsUrl] = useState('')
   const icsUrlDebounceRef = useRef<ReturnType<typeof setTimeout>>()
@@ -138,9 +136,6 @@ function GeneralTab({ open }: { open: boolean }) {
     void prefsApi
       .get<boolean>('handoffs.requireApproval')
       .then((v) => setRequireApprovalHandoffs(v ?? false))
-    void prefsApi
-      .get<number>('handoffs.maxActive')
-      .then((v) => setMaxActiveHandoffs(v ?? HANDOFFS_MAX_ACTIVE_DEFAULT))
     void prefsApi
       .get<number>('handoffs.heartbeatTtlHours')
       .then((v) => setHeartbeatTtlHours(v ?? HANDOFFS_HEARTBEAT_TTL_DEFAULT))
@@ -170,11 +165,6 @@ function GeneralTab({ open }: { open: boolean }) {
   function updateRequireApproval(v: boolean) {
     setRequireApprovalHandoffs(v)
     void prefsApi.set('handoffs.requireApproval', v)
-  }
-
-  function updateMaxActive(v: number) {
-    setMaxActiveHandoffs(v)
-    if (Number.isFinite(v) && v >= 1) void prefsApi.set('handoffs.maxActive', v)
   }
 
   function updateHeartbeatTtl(v: number) {
@@ -413,25 +403,6 @@ function GeneralTab({ open }: { open: boolean }) {
             className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
           />
         </label>
-
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
-          <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">Máximo de handoffs ativos</div>
-            <div className="text-xs text-[var(--color-text-dim)]">
-              Limite de delegações simultâneas (pending/approved/running) antes de novas serem
-              barradas. (1–50)
-            </div>
-          </div>
-          <input
-            type="number"
-            min={1}
-            max={50}
-            step={1}
-            value={maxActiveHandoffs}
-            onChange={(e) => updateMaxActive(Number(e.target.value))}
-            className="w-24 shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-2 py-1 text-right text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
-          />
-        </div>
 
         <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
           <div className="min-w-0">

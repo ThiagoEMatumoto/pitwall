@@ -29,11 +29,11 @@ export function getDb(): Database.Database {
   // Handoffs vivos (running OU needs_input) de um boot anterior também são órfãos:
   // a sessão-filha (PTY) não sobrevive ao restart, e a reconciliação via evento
   // PTY exit nunca dispara (o ptyManager morreu junto). Sem isto, órfãos travam
-  // MAX_ACTIVE_HANDOFFS para sempre. No boot TODO in-flight é órfão — nenhum
+  // o dedup do repo-alvo para sempre. No boot TODO in-flight é órfão — nenhum
   // PTY-filho sobrevive ao restart (inclui needs_input: a filha que perguntou
   // também morreu junto com o app). Marca 'interrupted' (RECUPERÁVEL, não
   // 'failed'): app-restart não é erro de tarefa; o handoff sai do ativo (libera
-  // o teto) mas fica retomável pelo humano. Mantém em sync com failIfRunning /
+  // o dedup) mas fica retomável pelo humano. Mantém em sync com failIfRunning /
   // reconcileStuck (mesma transição em → interrupted).
   db.prepare(
     "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",

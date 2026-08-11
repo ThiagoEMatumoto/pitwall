@@ -37,18 +37,18 @@ describe('prefs-store', () => {
   })
 
   it('getPref retorna o fallback quando a key não existe', () => {
-    expect(getPref('handoffs.maxActive', 5)).toBe(5)
+    expect(getPref('handoffs.heartbeatTtlHours', 5)).toBe(5)
   })
 
   it('setPref + getPref round-trip preserva o valor (number)', () => {
-    setPref('handoffs.maxActive', 8)
-    expect(getPref('handoffs.maxActive', 5)).toBe(8)
+    setPref('handoffs.heartbeatTtlHours', 8)
+    expect(getPref('handoffs.heartbeatTtlHours', 5)).toBe(8)
   })
 
   it('getPref retorna o fallback quando o JSON armazenado é inválido', () => {
     testDb
       .prepare('INSERT OR REPLACE INTO app_prefs (key, value) VALUES (?, ?)')
-      .run('handoffs.maxActive', 'not-json{')
-    expect(getPref('handoffs.maxActive', 5)).toBe(5)
+      .run('handoffs.heartbeatTtlHours', 'not-json{')
+    expect(getPref('handoffs.heartbeatTtlHours', 5)).toBe(5)
   })
 })
