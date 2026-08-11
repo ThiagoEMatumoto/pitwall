@@ -615,6 +615,49 @@ describe('handoff-store', () => {
     })
   })
 
+  describe('isActiveCrewChild (silencia a notificação nativa que o dock já dá)', () => {
+    function seedSession(id: string, ccSessionId: string): void {
+      testDb
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at)
+           VALUES (?, 'r1', ?, 'running', ?)`,
+        )
+        .run(id, ccSessionId, Date.now())
+    }
+
+    it('filha de handoff running → true', () => {
+      seedSession('s1', 'cc-1')
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's1')
+      expect(store.isActiveCrewChild('cc-1')).toBe(true)
+    })
+
+    it('needs_input também conta (é estado vivo dentro de running)', () => {
+      seedSession('s1', 'cc-1')
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's1')
+      store.ask(h.id, 'posso apagar?')
+      expect(store.isActiveCrewChild('cc-1')).toBe(true)
+    })
+
+    it('handoff terminal → false (a filha voltou a ser sessão comum)', () => {
+      seedSession('s1', 'cc-1')
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's1')
+      store.report(h.id, 'ok')
+      expect(store.isActiveCrewChild('cc-1')).toBe(false)
+    })
+
+    it('sessão que não veio de handoff → false', () => {
+      seedSession('s9', 'cc-avulsa')
+      expect(store.isActiveCrewChild('cc-avulsa')).toBe(false)
+      expect(store.isActiveCrewChild('cc-inexistente')).toBe(false)
+    })
+  })
+
   describe('findActiveByTarget (dedup por alvo)', () => {
     it('acha handoff ativo pro mesmo repo-alvo', () => {
       const h = newHandoff('r1')

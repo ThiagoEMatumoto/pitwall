@@ -183,8 +183,11 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     (handoff.status === 'failed' && !!handoff.error) ||
     (handoff.status === 'interrupted' && !!handoff.error)
 
-  // Aperto de largura: 'mid' perde a data, 'narrow' perde também os medidores e
-  // os labels dos botões. Nada de comportamento muda — só o que cabe.
+  // Aperto de largura. 'wide' (inbox) mantém a coluna lateral com data + ações.
+  // Abaixo disso — o dock, a 340px — a coluna lateral custaria ~210px dos ~300
+  // úteis e o texto sobraria em tiras de duas palavras: as ações descem pro
+  // rodapé do card e a largura inteira volta pro conteúdo. 'narrow' ainda
+  // degrada rótulo pra ícone. Nada de comportamento muda — só o que cabe.
   const compact = tier !== 'wide'
   const tight = tier === 'narrow'
 
@@ -299,12 +302,16 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   const activityLabel = liveActivityLabel(childLive?.lastActivityAt ?? null, Date.now())
   const ctxLabel = contextLabel(childLive?.tokens)
 
-  // Input de intervenção: só quando a filha está VIVA (childLive presente). Em
-  // needs_input/waiting o tom vira "Responder" com placeholder contextual.
-  const canSend = !!childLive
   // Rótulo do botão e placeholder saem da MESMA condição: o campo não pode
   // convidar a "enviar mensagem" enquanto o botão diz "Responder".
   const answering = needsInput || childLive?.status === 'waiting'
+  // Input de intervenção: só quando a filha está VIVA (childLive presente). Em
+  // needs_input/waiting o tom vira "Responder" com placeholder contextual.
+  // Numa superfície apertada (o dock) o campo só aparece quando ela ESPERA você:
+  // aí responder rápido é o caminho crítico e vale a altura. Enquanto ela só
+  // trabalha, o card é pra ler — falar com ela continua a um Espaço de distância
+  // (o peek tem o mesmo campo). Na largura do inbox, o campo fica sempre.
+  const canSend = !!childLive && (!compact || answering)
   const sendLabel = answering ? 'Responder' : 'Enviar'
   const sendPlaceholder = needsInput
     ? 'Responder à pergunta da filha…'
@@ -328,6 +335,191 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     }
   }
 
+  // O pedido aberto da filha. Quando existe, ele É a linha do "agora" — vem
+  // antes do briefing, que desce pra linha secundária.
+  const question = needsInput ? handoff.pendingQuestion : null
+
+  // Cluster de ações. Mora na coluna lateral no inbox e no rodapé do card no
+  // dock — mesmo JSX, dois lugares, pra não espremer o texto onde é estreito.
+  const hasActions = !!(childLive || canForceFail || canPeek || (isInterrupted && resumable))
+  const actions = hasActions ? (
+    <div className="flex items-center gap-1">
+      {canPeek && (
+        <button
+          type="button"
+          onClick={onPeek}
+          title="Espiar a conversa desta filha (Espaço)"
+          className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={Eye} size={12} />
+          {!tight && 'Espiar'}
+        </button>
+      )}
+      {childLive && (
+        <button
+          type="button"
+          onClick={() => void focusOrOpenSession(childLive)}
+          title="Anexar o terminal desta sessão-filha"
+          className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={TerminalSquare} size={12} />
+          {!tight && 'Abrir terminal'}
+        </button>
+      )}
+      {isInterrupted && resumable && (
+        <button
+          type="button"
+          onClick={() => void resume()}
+          disabled={resuming}
+          title="Re-spawnar a sessão-filha e retomar de onde parou"
+          className="flex items-center gap-1 rounded border border-[var(--color-accent)]/50 px-2 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/10 disabled:opacity-50"
+        >
+          <Icon as={Play} size={12} />
+          {!tight && (resuming ? 'Retomando…' : 'Retomar')}
+        </button>
+      )}
+      {/* Recovery manual mora no menu: é destrutivo e o card fica na periferia —
+          no mesmo peso de "Abrir terminal" seria convite a clique errado.
+          portal: a lista do dock rola (overflow), e o painel absolute seria
+          recortado por ela. */}
+      {canForceFail && (
+        <Menu
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          portal
+          items={[
+            {
+              label: failing ? 'Falhando…' : 'Forçar falha',
+              danger: true,
+              onClick: () => void forceFail(),
+            },
+          ]}
+        >
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            title="Mais ações"
+            aria-label="Mais ações"
+            className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+          >
+            <Icon as={MoreHorizontal} size={14} />
+          </button>
+        </Menu>
+      )}
+    </div>
+  ) : null
+
+  // Coluna de conteúdo, na ordem em que se lê: QUEM (nome + um selo) → O QUE
+  // ACONTECE AGORA (a pergunta, se ela espera; senão o passo corrente) → o que
+  // ela foi fazer (briefing, com teto de 2 linhas) → medidores curtos.
+  const content = (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="truncate text-sm font-medium text-[var(--color-text)]">
+          {alias ? alias.name : `→ ${repoLabel}`}
+        </span>
+        {liveBadgeWins && live ? (
+          tight ? (
+            <span
+              className="h-2 w-2 shrink-0 rounded-full"
+              style={{ background: live.color }}
+              title={`Estado ao vivo da sessão-filha: ${live.label}`}
+            />
+          ) : (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
+              style={{
+                color: live.color,
+                borderColor: `color-mix(in srgb, ${live.color} 45%, transparent)`,
+                background: `color-mix(in srgb, ${live.color} 12%, transparent)`,
+              }}
+              title="Estado ao vivo da sessão-filha"
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: live.color }} />
+              {live.label}
+            </span>
+          )
+        ) : (
+          <StatusBadge status={handoff.status} />
+        )}
+      </div>
+      {alias && (
+        <div
+          className="truncate text-[11px] text-[var(--color-text-dim)]"
+          title={`${childSession?.title ?? alias.name} → ${repoLabel}`}
+        >
+          {alias.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
+        </div>
+      )}
+
+      {question ? (
+        <div
+          data-testid="handoff-question"
+          className="mt-1.5 rounded-md border px-2 py-1.5 text-sm"
+          style={{
+            borderColor: 'var(--color-warning)',
+            background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+            color: 'var(--color-text)',
+          }}
+        >
+          <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-[var(--color-warning)]">
+            <Icon as={AlertTriangle} size={12} />A filha perguntou:
+          </div>
+          {/* Teto mais apertado que o do peek (max-h-32): aqui é resumo, lá é
+              leitura. O integral sai no title e, inteiro e rolável, no peek. */}
+          <div className="line-clamp-3 max-h-24 overflow-hidden whitespace-pre-wrap" title={question}>
+            {question}
+          </div>
+        </div>
+      ) : (
+        isLiveHandoff &&
+        handoff.currentStep && (
+          <div className="mt-1 truncate text-xs text-[var(--color-info)]" title={handoff.currentStep}>
+            {handoff.currentStep}
+          </div>
+        )
+      )}
+      {/* Com pergunta aberta, o último texto dela É a pergunta — repeti-la
+          gastaria uma linha pra dizer o mesmo. */}
+      {!question && lastText && (
+        <div
+          className="mt-1 truncate text-xs text-[var(--color-text-dim)]"
+          title={childLive?.lastText ?? undefined}
+        >
+          {lastText}
+        </div>
+      )}
+
+      {/* Briefing: a task é um prompt de agente, longa por natureza e sem teto na
+          origem (de propósito — ver a tool handoff). O teto é de RENDERIZAÇÃO:
+          duas linhas aqui, integral no title e no peek. */}
+      <div
+        data-testid="handoff-task"
+        className="mt-1 line-clamp-2 text-sm text-[var(--color-text-dim)]"
+        title={handoff.task}
+      >
+        {handoff.task}
+      </div>
+
+      {!tight && (activityLabel || ctxLabel) && (
+        <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
+          {activityLabel && <span title="Última atividade da filha">{activityLabel}</span>}
+          {activityLabel && ctxLabel && <span aria-hidden>·</span>}
+          {ctxLabel && <span title="Tokens de contexto em uso">{ctxLabel}</span>}
+        </div>
+      )}
+      {stale && (
+        <div
+          className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
+          title="A sessão-filha não reporta progresso há um tempo — pode ter travado."
+        >
+          <Icon as={AlertTriangle} size={12} />
+          {staleLabel(handoff, Date.now())}
+        </div>
+      )}
+    </div>
+  )
+
   // shrink-0 no card: numa coluna rolável (o dock), sem isto o flex comprime o
   // último card e corta o rodapé dele em vez de deixar a lista rolar.
   return (
@@ -341,165 +533,22 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
           : undefined,
       }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-sm font-medium text-[var(--color-text)]">
-              {alias ? alias.name : `→ ${repoLabel}`}
-            </span>
-            {liveBadgeWins && live ? (
-              tight ? (
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: live.color }}
-                  title={`Estado ao vivo da sessão-filha: ${live.label}`}
-                />
-              ) : (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
-                  style={{
-                    color: live.color,
-                    borderColor: `color-mix(in srgb, ${live.color} 45%, transparent)`,
-                    background: `color-mix(in srgb, ${live.color} 12%, transparent)`,
-                  }}
-                  title="Estado ao vivo da sessão-filha"
-                >
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: live.color }} />
-                  {live.label}
-                </span>
-              )
-            ) : (
-              <StatusBadge status={handoff.status} />
-            )}
-          </div>
-          {alias && (
-            <div
-              className="truncate text-[11px] text-[var(--color-text-dim)]"
-              title={`${childSession?.title ?? alias.name} → ${repoLabel}`}
-            >
-              {alias.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
-            </div>
-          )}
-          <div className="mt-1 text-sm text-[var(--color-text-dim)]">{handoff.task}</div>
-          {isLiveHandoff && handoff.currentStep && (
-            <div className="mt-1 truncate text-xs text-[var(--color-info)]" title={handoff.currentStep}>
-              {handoff.currentStep}
-            </div>
-          )}
-          {lastText && (
-            <div
-              className="mt-1 truncate text-xs text-[var(--color-text-dim)]"
-              title={childLive?.lastText ?? undefined}
-            >
-              {lastText}
-            </div>
-          )}
-          {!tight && (activityLabel || ctxLabel) && (
-            <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
-              {activityLabel && <span title="Última atividade da filha">{activityLabel}</span>}
-              {ctxLabel && <span title="Tokens de contexto em uso">{ctxLabel}</span>}
-            </div>
-          )}
-          {stale && (
-            <div
-              className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
-              title="A sessão-filha não reporta progresso há um tempo — pode ter travado."
-            >
-              <Icon as={AlertTriangle} size={12} />
-              {staleLabel(handoff, Date.now())}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {!compact && (
+      {compact ? (
+        content
+      ) : (
+        <div className="flex items-start justify-between gap-3">
+          {content}
+          <div className="flex shrink-0 flex-col items-end gap-1">
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
               {formatDate(handoff.createdAt)}
             </span>
-          )}
-          {(childLive || canForceFail || canPeek) && (
-            <div className="flex items-center gap-1">
-              {canPeek && (
-                <button
-                  type="button"
-                  onClick={onPeek}
-                  title="Espiar a conversa desta filha (Espaço)"
-                  className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-                >
-                  <Icon as={Eye} size={12} />
-                  {!tight && 'Espiar'}
-                </button>
-              )}
-              {childLive && (
-                <button
-                  type="button"
-                  onClick={() => void focusOrOpenSession(childLive)}
-                  title="Anexar o terminal desta sessão-filha"
-                  className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-                >
-                  <Icon as={TerminalSquare} size={12} />
-                  {!tight && 'Abrir terminal'}
-                </button>
-              )}
-              {/* Recovery manual mora no menu: é destrutivo e o dock abre
-                  sozinho — no mesmo peso de "Abrir terminal" seria convite a
-                  clique errado. portal: a lista do dock rola (overflow), e o
-                  painel absolute seria recortado por ela. */}
-              {canForceFail && (
-                <Menu
-                  open={menuOpen}
-                  onClose={() => setMenuOpen(false)}
-                  portal
-                  items={[
-                    {
-                      label: failing ? 'Falhando…' : 'Forçar falha',
-                      danger: true,
-                      onClick: () => void forceFail(),
-                    },
-                  ]}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setMenuOpen((v) => !v)}
-                    title="Mais ações"
-                    aria-label="Mais ações"
-                    className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-                  >
-                    <Icon as={MoreHorizontal} size={14} />
-                  </button>
-                </Menu>
-              )}
-            </div>
-          )}
-          {isInterrupted && resumable && (
-            <button
-              type="button"
-              onClick={() => void resume()}
-              disabled={resuming}
-              title="Re-spawnar a sessão-filha e retomar de onde parou"
-              className="flex items-center gap-1 rounded border border-[var(--color-accent)]/50 px-2 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/10 disabled:opacity-50"
-            >
-              <Icon as={Play} size={12} />
-              {!tight && (resuming ? 'Retomando…' : 'Retomar')}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {needsInput && handoff.pendingQuestion && (
-        <div
-          className="mt-2 rounded-md border px-3 py-2 text-sm"
-          style={{
-            borderColor: 'var(--color-warning)',
-            background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
-            color: 'var(--color-text)',
-          }}
-        >
-          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--color-warning)]">
-            <Icon as={AlertTriangle} size={12} />
-            A filha perguntou:
+            {actions}
           </div>
-          <div className="whitespace-pre-wrap">{handoff.pendingQuestion}</div>
         </div>
+      )}
+
+      {compact && actions && (
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-1">{actions}</div>
       )}
 
       {canSend && (

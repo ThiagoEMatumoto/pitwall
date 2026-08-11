@@ -15,14 +15,15 @@ import {
   splitAlias,
   stepCrewFocus,
 } from './crew'
-import { RAIL_WIDTH, clampWidth, dockExpanded, useCrewDockStore } from './crew-dock-store'
+import { RAIL_WIDTH, clampWidth, useCrewDockStore } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Crew Dock: as sessões-filhas de handoff, na periferia da janela. Fica colapsado
-// numa trilha de dots (presente, sem ocupar área) e ABRE SOZINHO quando alguma
-// filha passa a esperar você — recolhendo de volta quando a espera acaba. Peek
-// in-place: dá pra ler e responder daqui, sem abrir pane (o cap de contextos
-// WebGL é 8; "Abrir terminal" continua sendo ação explícita, dentro do card).
+// numa trilha de dots (presente, sem ocupar área) e SÓ ABRE quando você manda —
+// clique ou Ctrl+J. Quando alguma filha passa a esperar, quem avisa é a trilha:
+// O Ápice pulsa e o contador acende em âmbar, dentro dos 40px. Peek in-place: dá
+// pra ler e responder daqui, sem abrir pane (o cap de contextos WebGL é 8;
+// "Abrir terminal" continua sendo ação explícita, dentro do card).
 // Montado como IRMÃO de <main> no AppShell — vive fora do plano de abas do
 // dockview, então não mistura com as sessões-mãe nem some fora da área projetos.
 
@@ -32,11 +33,10 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 export function useCrewDockWidth(): number {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const collapsed = useCrewDockStore((s) => s.collapsed)
-  const autoRevealed = useCrewDockStore((s) => s.autoRevealed)
   const width = useCrewDockStore((s) => s.width)
   const hasCrew = useMemo(() => activeCrew(handoffs).length > 0, [handoffs])
   if (!hasCrew) return 0
-  return dockExpanded({ collapsed, autoRevealed }) ? width : RAIL_WIDTH
+  return collapsed ? RAIL_WIDTH : width
 }
 
 function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
@@ -52,25 +52,15 @@ function crewDotTitle(handoff: Handoff, live: LiveSessionInfo | undefined): stri
   return `${who}${scope} — ${state}`
 }
 
-// Gate sempre montado: observa a equipe e mantém o auto-reveal sincronizado
-// mesmo quando não há ninguém delegado (senão o dock reabriria sozinho no
-// próximo handoff, carregando um autoRevealed velho). O painel abaixo só monta
-// quando há equipe — o que também garante que o ResizeObserver do usePanelTier
-// pegue o elemento já existente.
+// Gate: o painel abaixo só monta quando há equipe — o que também garante que o
+// ResizeObserver do usePanelTier pegue o elemento já existente.
 export function CrewDock() {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const liveSessions = useAppStore((s) => s.liveSessions)
-  const syncAttention = useCrewDockStore((s) => s.syncAttention)
   const attention = useCrewWaitingCount()
 
   const crew = useMemo(() => orderCrew(handoffs, liveSessions), [handoffs, liveSessions])
   const liveById = useMemo(() => new Map(liveSessions.map((s) => [s.id, s])), [liveSessions])
-
-  // Auto-reveal: o dock reage ao "tem alguém esperando?", não a um clique. O
-  // store decide se abre (respeita o mute de quem acabou de recolher à mão).
-  useEffect(() => {
-    syncAttention(attention > 0)
-  }, [attention, syncAttention])
 
   // Nada delegado, nenhum pixel gasto.
   if (crew.length === 0) return null
@@ -86,7 +76,6 @@ interface PanelProps {
 
 function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const collapsed = useCrewDockStore((s) => s.collapsed)
-  const autoRevealed = useCrewDockStore((s) => s.autoRevealed)
   const width = useCrewDockStore((s) => s.width)
   const setWidth = useCrewDockStore((s) => s.setWidth)
   const expand = useCrewDockStore((s) => s.expand)
@@ -102,7 +91,7 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const [dragWidth, setDragWidth] = useState<number | null>(null)
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
-  const expanded = dockExpanded({ collapsed, autoRevealed })
+  const expanded = !collapsed
   const shownWidth = dragWidth ?? width
 
   // ── Teclado: Ctrl+J entra, ↑/↓ andam, Espaço/Enter espiam, Esc sai ─────────
@@ -280,20 +269,35 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
         </>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center gap-2 py-2">
+          {/* Aviso de espera cabe nos 40px: O Ápice pulsa na filha que espera
+              (abaixo) e o contador acende em âmbar aqui. Abrir 340px por cima da
+              leitura, sozinho, era interrupção maior que o aviso — agora é
+              clique ou Ctrl+J. */}
           <button
             type="button"
             onClick={expand}
-            title={`Equipe: ${crew.length} sessão(ões) delegada(s)`}
+            title={
+              attention > 0
+                ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
+                : `Equipe: ${crew.length} sessão(ões) delegada(s) — clique ou Ctrl+J para abrir`
+            }
             className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
           >
             <Icon as={Users} size={16} />
           </button>
-          <span
-            className="font-mono text-[10px] tabular-nums"
+          <button
+            type="button"
+            onClick={expand}
+            title={
+              attention > 0
+                ? `${attention} filha(s) esperando você`
+                : `${crew.length} sessão(ões) delegada(s)`
+            }
+            className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
             style={{ color: attention > 0 ? 'var(--color-warning)' : 'var(--color-text-dim)' }}
           >
             {attention > 0 ? `${attention}!` : crew.length}
-          </span>
+          </button>
           <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
             {crew.map((h) => {
               const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined

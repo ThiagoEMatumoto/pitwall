@@ -83,6 +83,7 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showBriefing, setShowBriefing] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // Quem estava focado quando o peek abriu (o card do dock, ou o botão clicado).
   // Padrão novo no repo: sem isto o "fecha rápido" larga o usuário no vazio, que
@@ -217,7 +218,23 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
             <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
               {activityLabel && <span title="Última atividade da filha">{activityLabel}</span>}
               {ctxLabel && <span title="Tokens de contexto em uso">{ctxLabel}</span>}
+              {/* O card do dock clampa o briefing em duas linhas; o integral vive
+                  AQUI. Truncar sem caminho pro completo seria trocar um problema
+                  por outro — fechado por padrão porque o peek é pra conversa. */}
+              <button
+                type="button"
+                onClick={() => setShowBriefing((v) => !v)}
+                aria-expanded={showBriefing}
+                className="font-sans text-[var(--color-accent)] hover:underline"
+              >
+                {showBriefing ? 'ocultar briefing' : 'ver briefing'}
+              </button>
             </div>
+            {showBriefing && (
+              <div className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-2 py-1.5 text-xs text-[var(--color-text)]">
+                {handoff.task}
+              </div>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center gap-1">

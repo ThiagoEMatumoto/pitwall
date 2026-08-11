@@ -416,6 +416,24 @@ export function setOutcome(id: string, outcome: HandoffOutcome): Handoff {
   return fresh(id)
 }
 
+// A sessão (endereçada pelo cc_session_id do Claude Code) é filha de um handoff
+// ativo — ou seja, está sob a alçada do Crew Dock? O dock mostra o estado dela o
+// tempo todo e ainda pulsa na trilha quando ela espera; a notificação nativa
+// seria o MESMO aviso duas vezes. Espelha o filtro que o toast já faz no
+// renderer (NotificationToast.isCrewChild), agora do lado do main.
+export function isActiveCrewChild(ccSessionId: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM handoffs h
+         JOIN sessions s ON s.id = h.child_session_id
+        WHERE s.cc_session_id = ?
+          AND h.status IN ('pending','approved','running','needs_input')
+        LIMIT 1`,
+    )
+    .get(ccSessionId)
+  return row !== undefined
+}
+
 // Dedup por alvo: handoff ativo (pending/approved/running/needs_input) pro mesmo
 // repo-alvo. Usado pra evitar dois agentes mutando o mesmo repo em paralelo.
 export function findActiveByTarget(targetRepoId: string): Handoff | null {

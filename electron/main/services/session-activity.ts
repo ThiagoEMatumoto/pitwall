@@ -19,6 +19,7 @@ import chokidar, { FSWatcher } from 'chokidar'
 import type { SessionActivity, GlobalActivityBatch } from '../../../shared/types/ipc'
 import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
+import { isActiveCrewChild } from './handoff-store'
 import { deriveSubagentActivity } from './subagent-activity'
 import { readSubagentMetas } from './subagent-turns'
 
@@ -531,6 +532,10 @@ class SessionActivityService extends EventEmitter {
   private notifySessionWaiting(ccSessionId: string, entry: IndexEntry): void {
     const prefs = getNotifPrefs()
     if (!prefs.enabled || !prefs.sessionWaiting) return
+    // Filha do Crew Dock não notifica: o dock já sinaliza a espera dela (dot
+    // pulsando na trilha + contador âmbar). Mesmo filtro que o toast do renderer
+    // aplica — sem isto, a MESMA espera chega por duas superfícies.
+    if (isActiveCrewChild(ccSessionId)) return
     // Suprime só quando o usuário já está olhando ESTA sessão (janela focada +
     // pane ativo nela). Janela focada em outra sessão continua notificando.
     if (getMainWindow()?.isFocused() && getRendererFocusedSession() === ccSessionId) return
