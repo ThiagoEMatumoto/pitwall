@@ -3,27 +3,93 @@
 //  - formatPtyInjection: bracketed-paste correto + \r final, multi-linha íntegra.
 //  - buildSpawnInnerCmd: montagem das flags (--append-system-prompt-file, --model,
 //    --session-id, mcpConfigArg) sem I/O.
-import { describe, expect, it, vi } from 'vitest'
+// E, com os seams de I/O falsificados, os TRÊS call sites de spawn: cada um
+// carimba a identidade da sessão no --mcp-config (arquivo por sessions.id).
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// sessions.ts importa electron + módulos de serviço no topo. O teste só exercita
-// as funções puras, então mockamos as dependências de I/O pra o import não tocar
-// db/pty/mcp reais.
+// sessions.ts importa electron + módulos de serviço no topo. Mockamos as
+// dependências de I/O pra o import não tocar db/pty/mcp reais; o estado
+// compartilhado com os fakes vive num objeto hoisted (vi.mock é içado).
+const seam = vi.hoisted(() => ({
+  // Handlers registrados por registerSessionIpc (ipcMain.handle).
+  handlers: new Map<string, (event: unknown, ...args: never[]) => unknown>(),
+  // PTYs disparadas: { sessionId, innerCmd }.
+  spawns: [] as Array<{ sessionId: string; innerCmd: string }>,
+  // Linhas gravadas em `sessions` (args do INSERT).
+  insertedSessionIds: [] as string[],
+  // Configs MCP por sessão escritas/removidas.
+  writtenSessionConfigs: [] as string[],
+  removedSessionConfigs: [] as string[],
+  // Runtime do MCP server (null = server não subiu).
+  runtime: null as { url: string; token: string } | null,
+  transcriptPath: null as string | null,
+  handoff: null as Record<string, unknown> | null,
+  childRow: null as { cc_session_id: string | null; title: string | null } | null,
+}))
+
+const SESSION_CONFIG_DIR = '/tmp/cm-test-userdata/mcp-sessions'
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
   BrowserWindow: { getAllWindows: () => [] },
-  ipcMain: { handle: () => {} },
+  ipcMain: {
+    handle: (channel: string, fn: (event: unknown, ...args: never[]) => unknown) => {
+      seam.handlers.set(channel, fn)
+    },
+  },
 }))
-vi.mock('../services/db', () => ({ getDb: () => ({}) }))
+vi.mock('../services/db', () => ({
+  getDb: () => ({
+    prepare: (sql: string) => ({
+      run: (...args: unknown[]) => {
+        if (sql.includes('INSERT INTO sessions')) seam.insertedSessionIds.push(args[0] as string)
+        return { changes: 1 }
+      },
+      get: (..._args: unknown[]) => {
+        if (sql.includes('FROM repos')) return { path: '/tmp', label: 'Repo X' }
+        if (sql.includes('FROM sessions')) return seam.childRow ?? undefined
+        return undefined
+      },
+      all: () => [],
+    }),
+  }),
+}))
 vi.mock('../services/pty-manager', () => ({
-  ptyManager: { on: () => {}, off: () => {}, write: () => {} },
+  ptyManager: {
+    on: () => {},
+    off: () => {},
+    write: () => {},
+    isRunning: () => true,
+    runningIds: () => [],
+    spawn: (opts: { sessionId: string; args: string[] }) => {
+      seam.spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
+    },
+  },
 }))
-vi.mock('../services/feature-store', () => ({ get: () => null }))
-vi.mock('../services/feature-memory', () => ({ featureMemory: {} }))
-vi.mock('../services/mcp/server', () => ({ getMcpRuntime: () => null }))
-vi.mock('../services/mcp/config', () => ({ mcpClientConfigPath: () => '/tmp/mcp.json' }))
+vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
+vi.mock('../services/feature-store', () => ({ get: () => null, linkedObjectiveTitles: () => [] }))
+vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
+vi.mock('../services/handoff-store', () => ({
+  get: () => seam.handoff,
+  markRunning: (id: string, childSessionId: string) => ({ id, childSessionId, status: 'running' }),
+  getByChildSession: () => null,
+  failIfRunning: () => null,
+}))
+vi.mock('../services/mcp/server', () => ({ getMcpRuntime: () => seam.runtime }))
+vi.mock('../services/mcp/config', () => ({
+  mcpClientConfigPath: () => '/tmp/mcp.json',
+  writeSessionMcpClientConfig: (_info: unknown, sessionId: string) => {
+    const path = `${SESSION_CONFIG_DIR}/${sessionId}.json`
+    seam.writtenSessionConfigs.push(path)
+    return path
+  },
+  removeSessionMcpConfig: (sessionId: string) => {
+    seam.removedSessionConfigs.push(sessionId)
+  },
+}))
 vi.mock('../services/session-activity', () => ({
   sessionActivityService: {},
-  findTranscriptPath: () => null,
+  findTranscriptPath: () => seam.transcriptPath,
   buildSessionsFileIndex: () => new Map(),
   readTranscriptTitle: () => null,
   readTail: () => null,
@@ -35,8 +101,10 @@ vi.mock('../services/session-activity', () => ({
 import {
   formatPtyInjection,
   buildSpawnInnerCmd,
+  registerSessionIpc,
   resolvePermissionMode,
   resolveDisallowedTools,
+  spawnSession,
 } from './sessions'
 import { HANDOFF_CHILD_SETTINGS_JSON } from '../services/spawn-flags'
 import { buildHandoffAlias } from '../services/handoff/alias'
@@ -305,5 +373,92 @@ describe('resolveDisallowedTools', () => {
     expect(resolveDisallowedTools('plan', ['Custom(x)'])).toEqual(['Custom(x)'])
     expect(resolveDisallowedTools(null, [])).toBeNull()
     expect(resolveDisallowedTools('default', ['', 123 as unknown as string])).toBeNull()
+  })
+})
+
+// O servidor MCP é compartilhado por todas as sessões: sem carimbo no spawn, uma
+// tool não sabe quem a chamou (era o mother_session_id null em 62/62 registros).
+// Aqui provamos o carimbo nos TRÊS call sites — e que o id do arquivo é o mesmo
+// sessions.id gravado no banco.
+describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
+  const CC_SESSION_ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+
+  beforeEach(() => {
+    seam.handlers.clear()
+    seam.spawns.length = 0
+    seam.insertedSessionIds.length = 0
+    seam.writtenSessionConfigs.length = 0
+    seam.removedSessionConfigs.length = 0
+    seam.runtime = { url: 'http://127.0.0.1:41956/mcp', token: 'tok' }
+    seam.transcriptPath = '/tmp/transcript.jsonl'
+    seam.childRow = { cc_session_id: CC_SESSION_ID, title: 'mauricio-tarefa' }
+    seam.handoff = {
+      id: 'h1',
+      status: 'interrupted',
+      childSessionId: 'child-1',
+      targetRepoId: 'r1',
+      featureId: null,
+    }
+    registerSessionIpc()
+  })
+
+  function handler(channel: string): (event: unknown, ...args: never[]) => unknown {
+    const fn = seam.handlers.get(channel)
+    if (!fn) throw new Error(`handler não registrado: ${channel}`)
+    return fn
+  }
+
+  // O contrato que interessa: o --mcp-config aponta pro arquivo DESTA sessão, e
+  // o nome do arquivo é exatamente o sessions.id persistido.
+  function expectStampedSpawn(): string {
+    expect(seam.spawns).toHaveLength(1)
+    const { sessionId, innerCmd } = seam.spawns[0]
+    expect(innerCmd).toContain(`--mcp-config '${SESSION_CONFIG_DIR}/${sessionId}.json'`)
+    expect(innerCmd).not.toContain('/tmp/mcp.json')
+    expect(seam.writtenSessionConfigs).toEqual([`${SESSION_CONFIG_DIR}/${sessionId}.json`])
+    expect(seam.insertedSessionIds).toEqual([sessionId])
+    return sessionId
+  }
+
+  it('spawn novo (spawnSession) carimba a sessão', () => {
+    const session = spawnSession({ repoId: 'r1', name: 'sessao nova' })
+    expect(expectStampedSpawn()).toBe(session.id)
+  })
+
+  it('sessions:resume carimba a sessão retomada (mãe em potencial)', () => {
+    const session = handler('sessions:resume')(null, {
+      repoId: 'r1',
+      ccSessionId: CC_SESSION_ID,
+    } as never) as { id: string }
+    expect(expectStampedSpawn()).toBe(session.id)
+    expect(seam.spawns[0].innerCmd).toContain(`--resume ${CC_SESSION_ID}`)
+  })
+
+  it('handoffs:resume carimba a filha retomada (que também vira mãe)', () => {
+    handler('handoffs:resume')(null, 'h1' as never)
+    const sessionId = expectStampedSpawn()
+    // O alias fixado no spawn sobrevive ao resume — o carimbo não o desloca.
+    expect(seam.spawns[0].innerCmd).toContain("-n 'mauricio-tarefa'")
+    expect(seam.spawns[0].innerCmd).toContain(`--mcp-config '${SESSION_CONFIG_DIR}/${sessionId}.json'`)
+  })
+
+  it('sem MCP server no ar não injeta --mcp-config nem escreve config por sessão', () => {
+    seam.runtime = null
+    spawnSession({ repoId: 'r1', name: 'sem mcp' })
+    expect(seam.spawns[0].innerCmd).not.toContain('--mcp-config')
+    expect(seam.writtenSessionConfigs).toEqual([])
+  })
+
+  it('falha ao escrever a config da sessão degrada pro arquivo global (não derruba o spawn)', async () => {
+    const config = await import('../services/mcp/config')
+    const spy = vi.spyOn(config, 'writeSessionMcpClientConfig').mockImplementation(() => {
+      throw new Error('EACCES')
+    })
+    try {
+      spawnSession({ repoId: 'r1', name: 'degradada' })
+      expect(seam.spawns[0].innerCmd).toContain("--mcp-config '/tmp/mcp.json'")
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
