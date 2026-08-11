@@ -664,7 +664,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             case 'user':
               return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
             case 'assistant':
-              return <MessageBubble key={i} role="assistant" text={m.text} />
+              return (
+                <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />
+              )
             case 'thinking':
               return <ThinkingCard key={i} text={m.text} />
             case 'system':
@@ -690,7 +692,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             case 'meta':
               return <MetaCard key={i} text={m.text} label={m.label} />
             case 'tool_use':
-              return <ToolUseCard key={i} name={m.name} input={m.input} />
+              return (
+                <ToolUseCard key={i} name={m.name} input={m.input} interrupted={m.interrupted} />
+              )
             case 'subagent':
               return (
                 <SubagentCard
@@ -709,7 +713,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
                 />
               )
             case 'tool_result':
-              return <ToolResultCard key={i} content={m.content} isError={m.isError} />
+              return (
+                <ToolResultCard
+                  key={i}
+                  content={m.content}
+                  isError={m.isError}
+                  interrupted={m.interrupted}
+                />
+              )
             // Cards de transcript são PÓS-resposta por natureza: a CLI só grava o
             // tool_use no JSONL junto com a resposta, então nunca estão pendentes.
             // O momento pendente (clicável) vem do menu TUI parseado do buffer.

@@ -1,3 +1,5 @@
+import { OctagonX } from 'lucide-react'
+import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 
 interface Props {
@@ -5,9 +7,11 @@ interface Props {
   text: string
   // Eco otimista ainda não reconciliado com o disco — renderiza esmaecido.
   pending?: boolean
+  // Turno cortado por Ctrl+C: o texto abaixo está pela metade. Só assistant.
+  interrupted?: boolean
 }
 
-export function MessageBubble({ role, text, pending }: Props) {
+export function MessageBubble({ role, text, pending, interrupted }: Props) {
   const isUser = role === 'user'
   if (isUser) {
     // Bolha do usuário: alinhada à direita, gradiente da marca translúcido,
@@ -35,10 +39,24 @@ export function MessageBubble({ role, text, pending }: Props) {
     )
   }
   // Bloco do agente: corpo em Schibsted, sem bolha, marcado por uma borda-esquerda
-  // accent (linguagem "em pista").
+  // accent (linguagem "em pista"). Interrompido troca a borda pro tom de aviso e
+  // fecha com um rodapé explícito — sem isso, uma resposta cortada no meio parece
+  // uma resposta que simplesmente terminou curta.
   return (
-    <div className="border-l-2 border-[var(--color-accent)] pl-3.5 text-[14px] leading-[1.55] text-[var(--color-text)]">
+    <div
+      className={`border-l-2 pl-3.5 text-[14px] leading-[1.55] text-[var(--color-text)] ${
+        interrupted
+          ? 'border-[var(--color-warning,var(--color-accent))]'
+          : 'border-[var(--color-accent)]'
+      }`}
+    >
       <MarkdownViewer content={text} />
+      {interrupted && (
+        <div className="mt-1 flex items-center gap-1 text-[11px] text-[var(--color-warning,var(--color-accent))]">
+          <Icon as={OctagonX} size={11} />
+          Interrompido — a resposta parou aqui.
+        </div>
+      )}
     </div>
   )
 }
