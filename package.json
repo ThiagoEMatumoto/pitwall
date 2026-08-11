@@ -1,6 +1,6 @@
 {
   "name": "claude-manager",
-  "version": "0.55.1",
+  "version": "0.56.0",
   "description": "Visual manager for multiple Claude Code sessions, projects, and configs",
   "main": "out/main/index.js",
   "type": "module",
