@@ -489,7 +489,8 @@ describe('parseChatMessages — fail-safe user classification', () => {
     )
     expect(m.map((x) => x.kind)).toEqual(['system', 'system'])
     expect(m[0]).toMatchObject({ kind: 'system', label: 'Tarefa em background', level: 'info' })
-    expect(m[1]).toMatchObject({ kind: 'system', label: 'Interrompido pelo usuário', level: 'info' })
+    // 'warning', não 'info': cancelar muda o que de fato aconteceu no turno.
+    expect(m[1]).toMatchObject({ kind: 'system', label: 'Interrompido pelo usuário', level: 'warning' })
   })
 
   it('classifies <system-reminder> text blocks alongside tool_results as meta, not user', () => {
@@ -846,5 +847,110 @@ describe('parseChatMessages — subagents', () => {
     const m = parseChatMessages(withResult, subMap())
     expect(m.map((x) => x.kind)).toEqual(['user', 'subagent', 'subagent_result'])
     expect(m[2]).toEqual({ kind: 'subagent_result', forId: 'toolu_sub', isError: true })
+  })
+})
+
+// Interrupção (Ctrl+C). Shapes copiados de transcripts reais: a CLI grava uma
+// linha type:'user' com o texto "[Request interrupted…]" + a chave top-level
+// `interruptedMessageId` apontando o message.id do turno cortado, e marca
+// `toolUseResult.interrupted` no tool_result de uma ferramenta abortada.
+describe('parseChatMessages — interrupção por Ctrl+C', () => {
+  it('marca o tool_use órfão do turno interrompido (nunca recebeu tool_result)', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          id: 'msg_int1',
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Vou rodar o comando.' },
+            { type: 'tool_use', id: 'tu_orfao', name: 'Bash', input: { command: 'sleep 120' } },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        interruptedMessageId: 'msg_int1',
+        message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] },
+      }),
+    ].join('\n')
+    const msgs = parseChatMessages(jsonl)
+    const toolUse = msgs.find((m) => m.kind === 'tool_use')
+    expect(toolUse).toMatchObject({ kind: 'tool_use', name: 'Bash', interrupted: true })
+    // O texto do mesmo turno também ficou pela metade.
+    expect(msgs.find((m) => m.kind === 'assistant')).toMatchObject({ interrupted: true })
+    // E o chip de sistema sobe pra 'warning' — não é um aviso cinza qualquer.
+    expect(msgs.find((m) => m.kind === 'system')).toMatchObject({
+      label: 'Interrompido pelo usuário',
+      level: 'warning',
+    })
+  })
+
+  it('NÃO marca o tool_use que chegou a responder antes da interrupção', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          id: 'msg_int2',
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu_ok', name: 'Read', input: { file_path: '/a' } }],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_ok', content: 'ok' }] },
+      }),
+      JSON.stringify({
+        type: 'user',
+        interruptedMessageId: 'msg_int2',
+        message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+      }),
+    ].join('\n')
+    const msgs = parseChatMessages(jsonl)
+    expect(msgs.find((m) => m.kind === 'tool_use')).not.toHaveProperty('interrupted')
+    expect(msgs.find((m) => m.kind === 'tool_result')).not.toHaveProperty('interrupted')
+  })
+
+  it('marca o tool_result parcial via toolUseResult.interrupted', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          id: 'msg_int3',
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu_parcial', name: 'Bash', input: { command: 'npm test' } }],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        toolUseResult: { stdout: 'rodando…', stderr: '', interrupted: true, isImage: false },
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tu_parcial', content: 'rodando…', is_error: false }],
+        },
+      }),
+    ].join('\n')
+    const msgs = parseChatMessages(jsonl)
+    expect(msgs.find((m) => m.kind === 'tool_result')).toMatchObject({
+      kind: 'tool_result',
+      isError: false,
+      interrupted: true,
+    })
+  })
+
+  it('interruptedMessageId sem correspondência não marca nada (fail-safe)', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'assistant',
+        message: { id: 'msg_a', role: 'assistant', content: [{ type: 'text', text: 'pronto' }] },
+      }),
+      JSON.stringify({
+        type: 'user',
+        interruptedMessageId: 'msg_que_nao_existe',
+        message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+      }),
+    ].join('\n')
+    const msgs = parseChatMessages(jsonl)
+    expect(msgs.find((m) => m.kind === 'assistant')).not.toHaveProperty('interrupted')
   })
 })

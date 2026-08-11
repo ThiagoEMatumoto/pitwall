@@ -49,8 +49,20 @@ interface RawLine {
   }
   // Campo IRMÃO de `message` (nível da linha, não do content). A CLI grava aqui o
   // resultado estruturado do tool_use que a linha responde: `answers` (mapa
-  // pergunta→opção) pro AskUserQuestion, `plan`/`filePath` pro ExitPlanMode.
+  // pergunta→opção) pro AskUserQuestion, `plan`/`filePath` pro ExitPlanMode, e
+  // `interrupted:true` quando a ferramenta foi abortada no meio (saída parcial).
   toolUseResult?: unknown
+  // message.id do turno de assistant que o Ctrl+C do usuário cortou. Gravado na
+  // MESMA linha que traz o texto "[Request interrupted by user…]" (validado
+  // contra transcripts reais: casa sempre com um message.id de assistant).
+  interruptedMessageId?: string
+}
+
+// A CLI marca `toolUseResult.interrupted` quando a ferramenta foi abortada no
+// meio — o content do tool_result é saída PARCIAL. Só o boolean exato conta.
+function isInterruptedResult(toolUseResult: unknown): boolean {
+  if (!toolUseResult || typeof toolUseResult !== 'object') return false
+  return (toolUseResult as { interrupted?: unknown }).interrupted === true
 }
 
 // AskUserQuestion: input.questions[] = { question, header, multiSelect, options:[{label,description}] }.
@@ -290,7 +302,9 @@ export function classifyUserString(obj: RawLine, text: string): ChatMessage {
     return { kind: 'system', label: 'Tarefa em background', detail: text, level: 'info' }
   }
   if (text.trimStart().startsWith('[Request interrupted')) {
-    return { kind: 'system', label: 'Interrompido pelo usuário', detail: '', level: 'info' }
+    // 'warning', não 'info': um cancelamento muda o que aconteceu de fato na
+    // sessão (o turno não terminou) — precisa ser visível, não um chip cinza.
+    return { kind: 'system', label: 'Interrompido pelo usuário', detail: '', level: 'warning' }
   }
   if (text.trimStart().startsWith('<system-reminder>')) {
     return { kind: 'meta', text, label: metaLabel(text) }
@@ -346,6 +360,20 @@ export function parseChatMessages(
   // Último modelo real (não-'<synthetic>') visto numa linha assistant. null até
   // a 1ª ocorrência — a 1ª nunca gera marcador, só define o baseline.
   let lastModel: string | null = null
+  // Rastreio da INTERRUPÇÃO (Ctrl+C). A linha que traz "[Request interrupted…]"
+  // carrega `interruptedMessageId` = o message.id do turno de assistant cortado;
+  // guardamos os ÍNDICES em `out` por message.id pra marcar, no fim do parse, o
+  // que ficou pela metade. Índices (não referências) porque o merge de texto
+  // adjacente substitui o objeto na mesma posição.
+  const assistantIdxByMsgId = new Map<string, number[]>()
+  const toolUseIdxByMsgId = new Map<string, { idx: number; id: string }[]>()
+  const resolvedToolIds = new Set<string>()
+  const interruptedMsgIds = new Set<string>()
+  const trackIdx = <T,>(map: Map<string, T[]>, key: string, value: T): void => {
+    const list = map.get(key)
+    if (list) list.push(value)
+    else map.set(key, [value])
+  }
   const push = (msg: ChatMessage): void => {
     lastAssistantMergeId = null
     out.push(msg)
@@ -356,6 +384,7 @@ export function parseChatMessages(
       out[out.length - 1] = { kind: 'assistant', text: last.text + '\n\n' + text }
     } else {
       out.push({ kind: 'assistant', text })
+      if (msgId !== null) trackIdx(assistantIdxByMsgId, msgId, out.length - 1)
     }
     lastAssistantMergeId = msgId
   }
@@ -375,6 +404,8 @@ export function parseChatMessages(
       continue // malformada / escrita parcial — pula a linha, nunca o arquivo.
     }
     if (obj.isSidechain === true) continue
+    if (typeof obj.interruptedMessageId === 'string' && obj.interruptedMessageId)
+      interruptedMsgIds.add(obj.interruptedMessageId)
     if (obj.type === 'system') {
       // Formato ANTIGO de slash command (type:'system'/local_command): emite os
       // MESMOS kinds command/command_output do formato atual — visual unificado.
@@ -425,8 +456,10 @@ export function parseChatMessages(
                 forId,
                 content: toText(item.content),
                 isError: item.is_error === true,
+                ...(isInterruptedResult(obj.toolUseResult) ? { interrupted: true } : {}),
               })
             }
+            if (forId) resolvedToolIds.add(forId)
           } else if (item?.type === 'text' && typeof item.text === 'string') {
             // Mesma classificação fail-safe: text blocks junto de tool_results
             // costumam ser system-reminders/contexto de hook, não o humano.
@@ -481,11 +514,27 @@ export function parseChatMessages(
             push({ kind: 'exit_plan_mode', id, ...parsePlan(item.input) })
           } else {
             push({ kind: 'tool_use', id, name: item.name, input: item.input })
+            if (msgId !== null && id) trackIdx(toolUseIdxByMsgId, msgId, { idx: out.length - 1, id })
           }
         }
       }
     } else if (typeof content === 'string' && content.trim()) {
       pushAssistantText(content, msgId)
+    }
+  }
+  // Passo final da interrupção: só aqui sabemos quais tool_use ficaram órfãos (o
+  // tool_result vem depois no arquivo) e quais turnos foram cortados. Marcar o
+  // texto do assistant importa tanto quanto o tool_use — no dado real a maioria
+  // dos Ctrl+C corta o assistant no meio da resposta, não uma ferramenta.
+  for (const msgId of interruptedMsgIds) {
+    for (const idx of assistantIdxByMsgId.get(msgId) ?? []) {
+      const msg = out[idx]
+      if (msg?.kind === 'assistant') out[idx] = { ...msg, interrupted: true }
+    }
+    for (const { idx, id } of toolUseIdxByMsgId.get(msgId) ?? []) {
+      if (resolvedToolIds.has(id)) continue
+      const msg = out[idx]
+      if (msg?.kind === 'tool_use') out[idx] = { ...msg, interrupted: true }
     }
   }
   return out

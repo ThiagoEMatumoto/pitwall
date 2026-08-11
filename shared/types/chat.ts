@@ -31,12 +31,20 @@ export interface ChatQuestion {
 // o estado de aprovação no mesmo card) e detecta pendência (tool_use sem result).
 export type ChatMessage =
   | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
+  // interrupted: a CLI gravou uma linha de interrupção apontando o message.id
+  // deste turno (interruptedMessageId) — o texto ficou pela metade. A UI marca
+  // isso; sem a marca, uma resposta cortada é indistinguível de uma completa.
+  | { kind: 'assistant'; text: string; interrupted?: boolean }
   // Bloco de raciocínio (extended thinking). text vazio é descartado no parser;
   // redacted_thinking (criptografado) vira um placeholder. Render colapsável.
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown }
-  | { kind: 'tool_result'; forId: string; content: string; isError: boolean }
+  // interrupted: o turno que emitiu este tool_use foi interrompido e ele nunca
+  // recebeu tool_result — a ferramenta não chegou a rodar (ou foi abortada antes
+  // de responder). Sem a marca, o card fica idêntico ao de uma tool que rodou.
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; interrupted?: boolean }
+  // interrupted: a CLI marcou `toolUseResult.interrupted` — a ferramenta rodou
+  // mas foi abortada no meio; o content é saída PARCIAL, não o resultado final.
+  | { kind: 'tool_result'; forId: string; content: string; isError: boolean; interrupted?: boolean }
   // Subagente disparado via Task/Agent. Substitui o tool_use genérico quando há
   // dados do subagente (lidos de <dir>/<sessionId>/subagents/agent-*). id = o
   // toolUseId da invocação; turns = resumos de cada turno (assistant) pra expandir.

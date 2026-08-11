@@ -1,6 +1,13 @@
+import { useEffect, useState } from 'react'
 import { Clock, Loader, OctagonX } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button } from '@/features/brand'
+import {
+  interruptEnabled,
+  interruptLabel,
+  interruptState,
+  interruptTitle,
+} from './interrupt-state'
 import type { PermissionMode, SessionActivity } from '../../../shared/types/ipc'
 import { ModelPill, type EffortLevel, type ModelAlias } from './ModelPill'
 import { EffortPill } from './EffortPill'
@@ -59,6 +66,23 @@ export function ComposerToolbar({
   onInterrupt,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
+  // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
+  // próximo ciclo) e o clique não deixava rastro nenhum. `sent` segura o
+  // feedback até a sessão sair de 'working' — ou por 3s, se ela já não estava
+  // trabalhando (cancelar um prompt aberto não muda o status).
+  const [sent, setSent] = useState(false)
+  const interrupt = interruptState({ status: activity?.status, sent })
+  useEffect(() => {
+    if (!sent) return
+    if (activity?.status !== 'working') {
+      const id = setTimeout(() => setSent(false), 3000)
+      return () => clearTimeout(id)
+    }
+  }, [sent, activity?.status])
+  function handleInterrupt() {
+    setSent(true)
+    onInterrupt?.()
+  }
   // Mede a própria largura (escopado ao rodapé, independente do tier do header) —
   // mesmo hook de ResizeObserver usado no SessionHeader.
   const { ref, tier } = usePanelTier<HTMLDivElement>()
@@ -90,14 +114,15 @@ export function ComposerToolbar({
       />
       {onInterrupt && (
         <Button
-          variant="danger"
+          variant={interrupt === 'armed' ? 'danger' : 'ghost'}
           size="sm"
-          onClick={onInterrupt}
-          title="Interromper o claude — envia Ctrl+C ao PTY (o mesmo que digitar Ctrl+C no terminal)."
+          disabled={!interruptEnabled(interrupt)}
+          onClick={handleInterrupt}
+          title={interruptTitle(interrupt)}
           className="gap-1 px-2 py-0.5 text-[10px]"
         >
-          <Icon as={OctagonX} size={11} />
-          <span className="whitespace-nowrap">Interromper</span>
+          <Icon as={interrupt === 'sent' ? Loader : OctagonX} size={11} className={interrupt === 'sent' ? 'animate-spin' : ''} />
+          <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>
         </Button>
       )}
       {hasPending &&

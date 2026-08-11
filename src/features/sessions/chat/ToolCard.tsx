@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, ChevronRight, CornerDownRight, Terminal, Wrench } from 'lucide-react'
+import { AlertTriangle, ChevronRight, CornerDownRight, OctagonX, Terminal, Wrench } from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { Icon } from '@/components/ui/Icon'
@@ -36,11 +36,38 @@ function pretty(value: unknown): string {
   }
 }
 
-export function ToolUseCard({ name, input }: { name: string; input: unknown }) {
+// Selo de "não rodou até o fim". Usado tanto no tool_use órfão (a ferramenta
+// nunca respondeu) quanto no tool_result parcial — o texto muda, o peso visual
+// não: warning, nunca o cinza de um card comum.
+function InterruptedBadge({ label }: { label: string }) {
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1 rounded border border-[var(--color-warning,var(--color-accent))]/50 px-1 text-[10px] text-[var(--color-warning,var(--color-accent))]"
+      title="Este turno foi interrompido (Ctrl+C) — a ferramenta não chegou ao fim."
+    >
+      <Icon as={OctagonX} size={10} />
+      {label}
+    </span>
+  )
+}
+
+export function ToolUseCard({
+  name,
+  input,
+  interrupted,
+}: {
+  name: string
+  input: unknown
+  interrupted?: boolean
+}) {
   const [open, setOpen] = useState(false)
   // Linha de telemetria: mono, wrench accent, path/args em dim com ellipsis.
   return (
-    <div className="rounded-lg font-mono text-[11px] transition-colors hover:bg-[var(--color-surface-2)]">
+    <div
+      className={`rounded-lg font-mono text-[11px] transition-colors hover:bg-[var(--color-surface-2)] ${
+        interrupted ? 'bg-[color-mix(in_srgb,var(--color-warning,var(--color-accent))_8%,transparent)]' : ''
+      }`}
+    >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -50,6 +77,7 @@ export function ToolUseCard({ name, input }: { name: string; input: unknown }) {
         <Icon as={toolIcon(name)} size={11} className="shrink-0 text-[var(--color-accent)]" />
         <span className="shrink-0 text-[var(--color-text)]">{name}</span>
         <span className="truncate text-[var(--color-text-dim)]">{summarize(input)}</span>
+        {interrupted && <InterruptedBadge label="não executou" />}
       </button>
       {open && (
         <div className="group relative border-t border-[var(--color-border)]">
@@ -67,13 +95,25 @@ export function ToolUseCard({ name, input }: { name: string; input: unknown }) {
   )
 }
 
-export function ToolResultCard({ content, isError }: { content: string; isError: boolean }) {
+export function ToolResultCard({
+  content,
+  isError,
+  interrupted,
+}: {
+  content: string
+  isError: boolean
+  interrupted?: boolean
+}) {
   const [open, setOpen] = useState(false)
   // Resultado como linha de telemetria: ✓ em accent2 (sucesso) / ✕ em coral (erro).
   return (
     <div
       className={`rounded-lg font-mono text-[11px] transition-colors hover:bg-[var(--color-surface-2)] ${
-        isError ? 'bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)]' : ''
+        isError
+          ? 'bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)]'
+          : interrupted
+            ? 'bg-[color-mix(in_srgb,var(--color-warning,var(--color-accent))_8%,transparent)]'
+            : ''
       }`}
     >
       <button
@@ -92,9 +132,10 @@ export function ToolResultCard({ content, isError }: { content: string; isError:
             isError ? 'text-[var(--color-danger)]' : 'text-[var(--color-accent2)]'
           }`}
         >
-          {isError ? '✕ erro' : '✓ resultado'}
+          {isError ? '✕ erro' : interrupted ? '◑ parcial' : '✓ resultado'}
         </span>
         {!open && <span className="truncate text-[var(--color-text-dim)]">{summarize(content)}</span>}
+        {interrupted && <InterruptedBadge label="interrompido" />}
       </button>
       {open && (
         <div className="group relative border-t border-[var(--color-border)]">
