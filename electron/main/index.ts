@@ -21,6 +21,12 @@ import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
 import { registerSecretsIpc } from './ipc/secrets'
 import { migrateSecretsAtRest } from './services/custom-env'
+import { electronCrypto } from './services/secret-store'
+import {
+  backupBeforeSecretsMigration,
+  reclaimFreeSpace,
+  removeSecretsBackups,
+} from './services/db-maintenance'
 import { scrubProfileSecrets, shouldScrubProfile } from './services/secret-scrub'
 import { registerGpuIpc } from './ipc/gpu'
 import { registerClaudeConfigsIpc } from './ipc/claude-configs'
@@ -182,7 +188,14 @@ app.whenReady().then(async () => {
   if (shouldScrubProfile(process.env, app.getPath('userData'), tmpdir())) {
     try {
       const count = scrubProfileSecrets()
-      console.warn(`[secrets] perfil descartável: ${count} valor(es) substituído(s) por placeholder`)
+      // Trocar o valor vivo não basta: o texto claro original segue nas páginas
+      // livres da cópia, e um backup pré-migração copiado junto conteria o
+      // segredo inteiro. Os dois somem aqui.
+      const removed = removeSecretsBackups(app.getPath('userData'))
+      const { ms } = reclaimFreeSpace(getDb())
+      console.warn(
+        `[secrets] perfil descartável: ${count} valor(es) substituído(s) por placeholder, ${removed} backup(s) removido(s), páginas livres recuperadas em ${ms}ms`,
+      )
     } catch (err) {
       console.warn('[secrets] falha ao limpar perfil descartável:', String(err))
     }
@@ -190,7 +203,30 @@ app.whenReady().then(async () => {
     // Perfil real: cifra o que ainda estiver em claro (pref legada ou gravada
     // com o cofre indisponível). Nunca derruba o boot.
     try {
-      const result = migrateSecretsAtRest()
+      const result = migrateSecretsAtRest(electronCrypto, {
+        // Rede de segurança: snapshot do banco antes de converter dado do
+        // usuário. Só é chamado quando a migração vai mesmo reescrever, e falhar
+        // aqui aborta a migração (sem backup, não reescreve — tenta no próximo
+        // boot).
+        beforeWrite: () => {
+          const path = backupBeforeSecretsMigration(getDb(), app.getPath('userData'))
+          console.log(`[secrets] backup pré-migração em ${path}`)
+        },
+        // O texto claro convertido continua nas páginas livres até o VACUUM.
+        // Falhar aqui (outra instância segurando o banco) NÃO desfaz a migração:
+        // o dado já está cifrado, só o resíduo continua — avisa e segue.
+        afterWrite: () => {
+          try {
+            const { ms, freelistBefore } = reclaimFreeSpace(getDb())
+            console.log(`[secrets] ${freelistBefore} página(s) livre(s) recuperada(s) em ${ms}ms`)
+          } catch (err) {
+            console.warn(
+              '[secrets] VACUUM adiado — texto claro segue em páginas livres:',
+              String(err),
+            )
+          }
+        },
+      })
       if (result.migrated > 0) {
         console.log(`[secrets] ${result.migrated} valor(es) cifrado(s) em repouso`)
       }

@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isSecretsBackup } from '../../electron/main/services/db-maintenance'
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(here, '../..')
@@ -80,7 +81,12 @@ export async function launchApp(): Promise<LaunchResult> {
       filter: (src) => {
         const rel = relative(real, src)
         if (!rel) return true
-        return !SKIP_TOPLEVEL.has(rel.split(sep)[0])
+        const top = rel.split(sep)[0]
+        // Backup pré-migração dos segredos: é um snapshot do banco ANTES da
+        // cifragem, ou seja, texto claro. O scrub do boot só mexe no app.db —
+        // então este nem entra na cópia.
+        if (isSecretsBackup(top)) return false
+        return !SKIP_TOPLEVEL.has(top)
       },
     })
   }

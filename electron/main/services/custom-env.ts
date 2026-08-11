@@ -4,9 +4,11 @@ import {
   encodeSecrets,
   electronCrypto,
   needsMigration,
+  sameSecrets,
   type DecodedSecrets,
   type EncryptionBackend,
   type SecretCrypto,
+  type StoredSecret,
 } from './secret-store'
 
 // Variáveis de ambiente customizadas do usuário (Configurações → Variáveis de
@@ -48,13 +50,29 @@ export function readCustomEnv(): CustomEnvVars {
 
 // Grava o mapa inteiro já cifrado. Retorna as chaves que acabaram em claro
 // (cifragem indisponível) para quem chamou poder avisar o usuário.
+//
+// `preserved` carrega os envelopes das chaves ilegíveis: como elas não aparecem
+// em `values` (não decifraram), toda reescrita que não os repassar APAGA essas
+// chaves. Quem quer de fato removê-las omite a chave daqui — é sempre explícito.
 export function writeCustomEnv(
   values: CustomEnvVars,
   crypto: SecretCrypto = electronCrypto,
+  preserved: Record<string, StoredSecret> = {},
 ): { plaintext: string[] } {
-  const { stored, plaintext } = encodeSecrets(sanitizeCustomEnv(values), crypto)
+  const { stored, plaintext } = encodeSecrets(sanitizeCustomEnv(values), crypto, preserved)
   setPref(CUSTOM_ENV_VARS_KEY, stored)
   return { plaintext }
+}
+
+// Envelopes ilegíveis menos as chaves que a operação está tocando (sobrescrever
+// ou apagar uma chave ilegível é intencional: o usuário mandou).
+function preservedWithout(
+  preserved: Record<string, StoredSecret>,
+  ...keys: string[]
+): Record<string, StoredSecret> {
+  const next = { ...preserved }
+  for (const key of keys) delete next[key]
+  return next
 }
 
 export interface SecretsStatus {
@@ -115,16 +133,23 @@ export function setCustomEnvVar(
 ): { plaintext: string[] } {
   const k = key.trim()
   if (!k) return { plaintext: [] }
-  return writeCustomEnv({ ...decodeCustomEnv(crypto).values, [k]: value }, crypto)
+  const decoded = decodeCustomEnv(crypto)
+  return writeCustomEnv(
+    { ...decoded.values, [k]: value },
+    crypto,
+    preservedWithout(decoded.preserved, k),
+  )
 }
 
 export function deleteCustomEnvVar(
   key: string,
   crypto: SecretCrypto = electronCrypto,
 ): { plaintext: string[] } {
-  const next = { ...decodeCustomEnv(crypto).values }
-  delete next[key.trim()]
-  return writeCustomEnv(next, crypto)
+  const k = key.trim()
+  const decoded = decodeCustomEnv(crypto)
+  const next = { ...decoded.values }
+  delete next[k]
+  return writeCustomEnv(next, crypto, preservedWithout(decoded.preserved, k))
 }
 
 // Renomear preserva o valor sem que ele passe pelo renderer: o main lê, remove a
@@ -136,11 +161,12 @@ export function renameCustomEnvVar(
 ): { plaintext: string[] } {
   const oldKey = from.trim()
   const newKey = to.trim()
-  const current = decodeCustomEnv(crypto).values
+  const decoded = decodeCustomEnv(crypto)
+  const current = decoded.values
   if (!newKey || newKey === oldKey || !(oldKey in current)) return { plaintext: [] }
   const next = { ...current, [newKey]: current[oldKey] }
   delete next[oldKey]
-  return writeCustomEnv(next, crypto)
+  return writeCustomEnv(next, crypto, preservedWithout(decoded.preserved, newKey))
 }
 
 export interface MigrationResult {
@@ -150,14 +176,27 @@ export interface MigrationResult {
   plaintext: string[]
 }
 
+// Ganchos de manutenção do arquivo do banco, injetados pelo main: `beforeWrite`
+// tira o backup e `afterWrite` recupera as páginas livres (o texto claro antigo
+// sobrevive nelas até o VACUUM). Ficam como callback para este módulo continuar
+// dependendo só de prefs — quem sabe de arquivo é db-maintenance.
+export interface MigrationHooks {
+  beforeWrite?: () => void
+  afterWrite?: () => void
+}
+
 // Cifra na primeira execução o que estiver em claro (pref legada v1 ou valores
 // gravados quando o cofre estava indisponível). Precisa rodar DEPOIS do app
 // ready: antes disso safeStorage.isEncryptionAvailable() não é confiável no Linux.
 //
 // Garantia de não-perda: a gravação é um único INSERT OR REPLACE e é conferida
-// por releitura — se o mapa relido não bater exatamente com o original, o valor
-// bruto anterior é restaurado e nada é perdido.
-export function migrateSecretsAtRest(crypto: SecretCrypto = electronCrypto): MigrationResult {
+// por releitura — se o mapa relido não bater exatamente com o original (valores
+// legíveis E envelopes ilegíveis), o valor bruto anterior é restaurado e nada é
+// perdido.
+export function migrateSecretsAtRest(
+  crypto: SecretCrypto = electronCrypto,
+  hooks: MigrationHooks = {},
+): MigrationResult {
   const rawBefore = getPref<unknown>(CUSTOM_ENV_VARS_KEY, null)
   const decoded = decodeSecrets(rawBefore, crypto)
   if (crypto.backend() === 'unavailable') {
@@ -167,22 +206,20 @@ export function migrateSecretsAtRest(crypto: SecretCrypto = electronCrypto): Mig
     return { migrated: 0, skipped: 'not-needed', plaintext: decoded.plaintext }
   }
 
+  hooks.beforeWrite?.()
+
   const before = decoded.values
-  const { stored, plaintext } = encodeSecrets(before, crypto)
+  const { stored, plaintext } = encodeSecrets(before, crypto, decoded.preserved)
   setPref(CUSTOM_ENV_VARS_KEY, stored)
 
-  const after = decodeSecrets(getPref<unknown>(CUSTOM_ENV_VARS_KEY, null), crypto).values
-  const keysBefore = Object.keys(before).sort()
-  const keysAfter = Object.keys(after).sort()
-  const intact =
-    keysBefore.length === keysAfter.length &&
-    keysBefore.every((k, i) => k === keysAfter[i] && before[k] === after[k])
-  if (!intact) {
+  const after = decodeSecrets(getPref<unknown>(CUSTOM_ENV_VARS_KEY, null), crypto)
+  if (!sameSecrets(decoded, after)) {
     setPref(CUSTOM_ENV_VARS_KEY, rawBefore)
     throw new Error('secret migration roundtrip failed; original value restored')
   }
 
-  const migrated = keysBefore.filter((k) => before[k] && !plaintext.includes(k)).length
+  const migrated = Object.keys(before).filter((k) => before[k] && !plaintext.includes(k)).length
+  hooks.afterWrite?.()
   return { migrated, skipped: null, plaintext }
 }
 
