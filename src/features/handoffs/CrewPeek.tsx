@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { CornerDownLeft, TerminalSquare, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ChatView } from '@/features/sessions/chat/ChatView'
 import { handoffsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
-import { splitAlias } from './crew'
+import { StatusBadge, contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
+import { crewNeedsAttention, splitAlias } from './crew'
 import { useCrewDockStore } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -21,6 +21,32 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 //
 // Custo de GPU: zero. O ChatView lê o transcript JSONL por IPC e não importa
 // xterm/WebGL, então o peek não consome nenhum dos 8 contextos do cap.
+
+// Focáveis do overlay, pro trap do Tab. Consultado NA HORA de cada Tab: o corpo
+// do peek é o ChatView, que ganha e perde botões a cada mensagem — uma lista
+// congelada na montagem apontaria pra nós que já saíram do DOM.
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+// Tab e Shift+Tab circulam DENTRO do overlay. Sem isto, um Tab a partir do peek
+// já sai dele e chega aos botões de janela do Electron — um "modal" que não
+// contém o teclado não é modal. Só as BORDAS são interceptadas (primeiro e
+// último focáveis); no meio, o Tab é o nativo do navegador. Não toca em Escape
+// nem no foco de desmontagem: fechar e devolver o foco ao card do dock continua
+// sendo dos handlers de sempre.
+function trapTab(e: React.KeyboardEvent<HTMLDivElement>): void {
+  if (e.key !== 'Tab') return
+  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE))
+  const first = items[0]
+  const last = items[items.length - 1]
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+}
 
 export function CrewPeek() {
   const peekId = useCrewDockStore((s) => s.peekId)
@@ -94,6 +120,7 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
+  const titleId = useId()
   const alias = splitAlias(live?.title)
   const repoLabel = handoff.targetRepoLabel ?? handoff.targetRepoId
   const badge = liveBadgeFor(live?.status)
@@ -102,8 +129,13 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
 
   // A filha está bloqueada esperando a mãe. É o único momento em que pode haver
   // um menu TUI aberto na tela dela — e o único em que o aviso de read-only
-  // (abaixo) tem serventia.
-  const answering = handoff.status === 'needs_input' || live?.status === 'waiting'
+  // (abaixo) tem serventia. Mesma pergunta que o dock faz pra ordenar e acender
+  // o âmbar: uma função só, senão as duas superfícies divergem.
+  const answering = crewNeedsAttention(handoff, live ?? undefined)
+  // needs_input vence o status do PTY no selo (mesma regra do HandoffCard): quem
+  // está travado esperando você não está "trabalhando". Sem isto o cabeçalho
+  // contradiz o corpo — "trabalhando" a dois centímetros de "A filha perguntou".
+  const blocked = handoff.status === 'needs_input'
 
   function promoteToTerminal() {
     if (!live) return
@@ -136,30 +168,48 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-6"
+      // z-[1000] é o mesmo do Dialog e pelo mesmo motivo: o dockview desenha
+      // .dv-sash em 99 e seus overlays em 999 (--dv-overlay-z-index). Qualquer
+      // valor abaixo disso põe o peek por baixo das divisórias assim que houver
+      // split — não reproduz com painel único, mas quebra na primeira divisão.
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-6"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="pw-rise flex h-[88vh] w-[56rem] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl">
+      {/* role/aria-modal no painel, não no backdrop (padrão do Dialog e do APG):
+          o backdrop é área de clique-pra-fechar, não conteúdo do diálogo. */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={trapTab}
+        className="pw-rise flex h-[88vh] w-[56rem] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+      >
         <header className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border)] px-4 py-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="truncate text-base font-medium text-[var(--color-text)]">
+              <span id={titleId} className="truncate text-base font-medium text-[var(--color-text)]">
                 {alias ? alias.name : `→ ${repoLabel}`}
               </span>
-              <span
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
-                style={{
-                  color: badge.color,
-                  borderColor: `color-mix(in srgb, ${badge.color} 45%, transparent)`,
-                  background: `color-mix(in srgb, ${badge.color} 12%, transparent)`,
-                }}
-                title="Estado ao vivo da sessão-filha"
-              >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: badge.color }} />
-                {badge.label}
-              </span>
+              {blocked ? (
+                <span className="shrink-0" title="A filha está bloqueada esperando sua resposta">
+                  <StatusBadge status={handoff.status} />
+                </span>
+              ) : (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
+                  style={{
+                    color: badge.color,
+                    borderColor: `color-mix(in srgb, ${badge.color} 45%, transparent)`,
+                    background: `color-mix(in srgb, ${badge.color} 12%, transparent)`,
+                  }}
+                  title="Estado ao vivo da sessão-filha"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: badge.color }} />
+                  {badge.label}
+                </span>
+              )}
             </div>
             <div className="truncate text-[11px] text-[var(--color-text-dim)]">
               {alias?.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
