@@ -58,9 +58,7 @@ describe('sanitizeCustomEnv', () => {
   })
 
   it('ignora chaves vazias e valores não-string', () => {
-    expect(
-      sanitizeCustomEnv({ '': 'x', '  ': 'y', NUM: 1, OBJ: {}, OK: 'v' }),
-    ).toEqual({ OK: 'v' })
+    expect(sanitizeCustomEnv({ '': 'x', '  ': 'y', NUM: 1, OBJ: {}, OK: 'v' })).toEqual({ OK: 'v' })
   })
 
   it('trim na chave', () => {
@@ -172,7 +170,10 @@ describe('sessionSpawnEnv', () => {
   })
 
   it('custom env do usuário sobrescreve a var', () => {
-    mockPrefs({ disableAutoCompact: true, custom: { DISABLE_AUTOCOMPACT: '0', FOO: 'bar' } })
+    mockPrefs({
+      disableAutoCompact: true,
+      custom: { DISABLE_AUTOCOMPACT: '0', FOO: 'bar' },
+    })
     const env = sessionSpawnEnv({ PATH: '/usr/bin' })
     expect(env.DISABLE_AUTOCOMPACT).toBe('0')
     expect(env.FOO).toBe('bar')
@@ -220,14 +221,20 @@ describe('segredos em repouso', () => {
   })
 
   it('migra a pref legada em claro sem perder valor nenhum', () => {
-    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value', FLAG: '1' })
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      SOME_TOKEN: 'fake-secret-value',
+      FLAG: '1',
+    })
 
     const result = migrateSecretsAtRest()
 
     expect(result.migrated).toBe(2)
     expect(result.skipped).toBeNull()
     expect(JSON.stringify(storedRaw())).not.toContain('fake-secret-value')
-    expect(readCustomEnv()).toEqual({ SOME_TOKEN: 'fake-secret-value', FLAG: '1' })
+    expect(readCustomEnv()).toEqual({
+      SOME_TOKEN: 'fake-secret-value',
+      FLAG: '1',
+    })
   })
 
   it('migração é idempotente — a segunda passada não reescreve', () => {
@@ -243,6 +250,129 @@ describe('segredos em repouso', () => {
 
   it('pref ausente → nada a migrar', () => {
     expect(migrateSecretsAtRest().skipped).toBe('not-needed')
+  })
+
+  // Regressão: no mapa misto (um ciphertext ILEGÍVEL ao lado de um valor em
+  // claro), a migração reescrevia só o que decifrava e a chave ilegível
+  // desaparecia do banco. O guard não pegava porque comparava só os valores
+  // legíveis — e o ilegível está fora dos dois lados.
+  it('mapa misto: a chave ilegível sobrevive à migração com o ciphertext intacto', () => {
+    const alienBlob = Buffer.from('outro-cofre:opaco', 'utf8').toString('base64')
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      version: 2,
+      vars: {
+        LOST: { enc: true, data: alienBlob },
+        PLAIN: { enc: false, value: 'fake-plain-value' },
+      },
+    })
+
+    const result = migrateSecretsAtRest()
+
+    expect(result.migrated).toBe(1)
+    const stored = storedRaw() as { vars: Record<string, unknown> }
+    expect(Object.keys(stored.vars).sort()).toEqual(['LOST', 'PLAIN'])
+    expect(stored.vars.LOST).toEqual({ enc: true, data: alienBlob })
+    expect(JSON.stringify(stored)).not.toContain('fake-plain-value')
+  })
+
+  it('mapa misto: a UI continua vendo a chave ilegível depois da migração', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      version: 2,
+      vars: {
+        LOST: {
+          enc: true,
+          data: Buffer.from('outro-cofre:opaco', 'utf8').toString('base64'),
+        },
+        PLAIN: { enc: false, value: 'fake-plain-value' },
+      },
+    })
+
+    migrateSecretsAtRest()
+
+    expect(listCustomEnvEntries()).toEqual([
+      { key: 'LOST', hasValue: true, encrypted: true, unreadable: true },
+      { key: 'PLAIN', hasValue: true, encrypted: true, unreadable: false },
+    ])
+  })
+
+  it('mexer numa chave não apaga a ilegível ao lado', () => {
+    const alienBlob = Buffer.from('outro-cofre:opaco', 'utf8').toString('base64')
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      version: 2,
+      vars: {
+        LOST: { enc: true, data: alienBlob },
+        KEEP: { enc: false, value: 'fake-keep' },
+      },
+    })
+
+    setCustomEnvVar('NOVA', 'fake-nova')
+    deleteCustomEnvVar('KEEP')
+    renameCustomEnvVar('NOVA', 'RENOMEADA')
+
+    const stored = storedRaw() as { vars: Record<string, unknown> }
+    expect(stored.vars.LOST).toEqual({ enc: true, data: alienBlob })
+    expect(readCustomEnv()).toEqual({ RENOMEADA: 'fake-nova' })
+  })
+
+  it('apagar a chave ilegível é explícito e funciona', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      version: 2,
+      vars: {
+        LOST: {
+          enc: true,
+          data: Buffer.from('outro-cofre:x', 'utf8').toString('base64'),
+        },
+      },
+    })
+
+    deleteCustomEnvVar('LOST')
+
+    expect(listCustomEnvEntries()).toEqual([])
+  })
+
+  it('sobrescrever a chave ilegível troca o envelope pelo valor novo', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, {
+      version: 2,
+      vars: {
+        LOST: {
+          enc: true,
+          data: Buffer.from('outro-cofre:x', 'utf8').toString('base64'),
+        },
+      },
+    })
+
+    setCustomEnvVar('LOST', 'fake-novo-valor')
+
+    expect(revealCustomEnvVar('LOST')).toBe('fake-novo-valor')
+    expect(customEnvStatus().unreadableKeys).toEqual([])
+  })
+
+  it('os ganchos de manutenção cercam a gravação, e só quando há migração', () => {
+    const calls: string[] = []
+    const hooks = {
+      beforeWrite: () => calls.push('backup'),
+      afterWrite: () => calls.push('vacuum'),
+    }
+    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value' })
+
+    migrateSecretsAtRest(undefined, hooks)
+    expect(calls).toEqual(['backup', 'vacuum'])
+
+    migrateSecretsAtRest(undefined, hooks)
+    expect(calls).toEqual(['backup', 'vacuum'])
+  })
+
+  it('falha no backup aborta a migração — o banco fica como estava', () => {
+    store.set(CUSTOM_ENV_VARS_KEY, { SOME_TOKEN: 'fake-secret-value' })
+
+    expect(() =>
+      migrateSecretsAtRest(undefined, {
+        beforeWrite: () => {
+          throw new Error('disco cheio')
+        },
+      }),
+    ).toThrow('disco cheio')
+    expect(storedRaw()).toEqual({ SOME_TOKEN: 'fake-secret-value' })
   })
 
   it('a listagem para a UI não carrega valor nenhum', () => {
