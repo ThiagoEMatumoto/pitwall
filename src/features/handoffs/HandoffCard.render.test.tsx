@@ -128,6 +128,26 @@ describe('HandoffCard no dock (tier mid)', () => {
     mountDock({ status: 'needs_input', pendingQuestion: 'posso apagar?' }, 'waiting')
     expect(screen.getByPlaceholderText('Responder à pergunta da filha…')).toBeTruthy()
   })
+
+  // Respondida por fora (mensagem peer): o needs_input segue no banco, mas a
+  // filha voltou a reportar passo. O card mostra o AGORA dela, sem âmbar.
+  it('pergunta já respondida fora do app: o card volta a mostrar o passo corrente', () => {
+    const { container } = mountDock(
+      {
+        status: 'needs_input',
+        pendingQuestion: 'posso apagar?',
+        questionAskedAt: 1000,
+        stepUpdatedAt: 2000,
+        currentStep: 'seguindo para a Frente 2',
+      },
+      'working',
+    )
+    expect(screen.queryByTestId('handoff-question')).toBeNull()
+    expect(screen.getByText('seguindo para a Frente 2')).toBeTruthy()
+    expect(screen.getByText('trabalhando')).toBeTruthy()
+    const card = container.querySelector<HTMLElement>('[data-testid="handoff-card"]')!
+    expect(card.style.borderColor).not.toContain('warning')
+  })
 })
 
 describe('HandoffCard no inbox (tier wide)', () => {

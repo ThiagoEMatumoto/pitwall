@@ -15,7 +15,9 @@ const {
   hiddenCrewSessionIds,
   crewCcSessionIds,
   crewNeedsAttention,
+  crewResumedAfterQuestion,
   crewAttentionCount,
+  crewTerminalTarget,
   orderCrew,
   resolveCrewFocus,
   stepCrewFocus,
@@ -151,9 +153,71 @@ describe('crewCcSessionIds', () => {
   })
 })
 
+describe('crewResumedAfterQuestion', () => {
+  it('progresso posterior à pergunta = a filha já foi respondida fora do app', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+      ),
+    ).toBe(true)
+  })
+
+  it('progresso anterior à pergunta não conta (é o passo que precedeu o bloqueio)', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 2000, stepUpdatedAt: 1000 }),
+      ),
+    ).toBe(false)
+  })
+
+  it('empate não conta: só progresso ESTRITAMENTE posterior é evidência', () => {
+    expect(
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 1000 }),
+      ),
+    ).toBe(false)
+  })
+
+  it('sem um dos carimbos não há evidência (handoff legado, filha que nunca reportou)', () => {
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: null, stepUpdatedAt: 2000 })),
+    ).toBe(false)
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: null })),
+    ).toBe(false)
+  })
+
+  it('só faz sentido em needs_input', () => {
+    expect(
+      crewResumedAfterQuestion(hf({ status: 'running', questionAskedAt: 1000, stepUpdatedAt: 2000 })),
+    ).toBe(false)
+  })
+})
+
 describe('crewNeedsAttention', () => {
   it('needs_input basta, mesmo com o PTY trabalhando', () => {
     expect(crewNeedsAttention(hf({ status: 'needs_input' }), live({ status: 'working' }))).toBe(true)
+  })
+
+  // O caso do relato: a mãe respondeu por mensagem peer (fora do app), a filha
+  // retomou e reportou passo, mas o needs_input segue no banco. Alarmar aqui é
+  // mentir sobre o estado — e o dado continua lá pra auditoria.
+  it('needs_input com progresso posterior à pergunta NÃO alarma', () => {
+    expect(
+      crewNeedsAttention(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+        live({ status: 'working' }),
+      ),
+    ).toBe(false)
+  })
+
+  it('mas o PTY parado num prompt vence a evidência de retomada', () => {
+    expect(
+      crewNeedsAttention(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
+        live({ status: 'waiting' }),
+      ),
+    ).toBe(true)
   })
 
   it('PTY waiting basta, mesmo com o handoff running', () => {
@@ -189,6 +253,15 @@ describe('crewAttentionCount', () => {
 
   it('ninguém esperando → 0', () => {
     expect(crewAttentionCount([hf({ status: 'running', childSessionId: 's1' })], [])).toBe(0)
+  })
+
+  it('filha que já retomou sai da conta (o badge não conta pergunta velha)', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'needs_input', childSessionId: 's1', questionAskedAt: 1, stepUpdatedAt: 2 }),
+      hf({ id: 'b', status: 'needs_input', childSessionId: 's2', questionAskedAt: 2, stepUpdatedAt: 1 }),
+    ]
+    const sessions = [live({ id: 's1', status: 'working' }), live({ id: 's2', status: 'working' })]
+    expect(crewAttentionCount(handoffs, sessions)).toBe(1)
   })
 })
 
@@ -226,6 +299,30 @@ describe('orderCrew', () => {
     ]
     const sessions = [live({ id: 's2', status: 'working' })]
     expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b'])
+  })
+})
+
+describe('crewTerminalTarget', () => {
+  const pane = (ccSessionId: string | null) => ({ session: { ccSessionId } })
+
+  it('sem pane aberta o terminal abre no overlay (nenhuma aba nasce)', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [])).toBe('overlay')
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc9')])).toBe('overlay')
+  })
+
+  // Dois xterms na mesma PTY disputam o resize — com aba aberta, o terminal
+  // dela mora lá e o dock leva o usuário até ela.
+  it('com pane já aberta pra esta filha, o alvo é a pane', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc1')])).toBe('pane')
+  })
+
+  it('sem sessão viva não há PTY a que anexar', () => {
+    expect(crewTerminalTarget(null, [])).toBe('none')
+    expect(crewTerminalTarget(undefined, [pane('cc1')])).toBe('none')
+  })
+
+  it('pane sem ccSessionId nunca casa', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane(null)])).toBe('overlay')
   })
 })
 

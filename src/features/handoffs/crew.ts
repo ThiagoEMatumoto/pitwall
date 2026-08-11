@@ -75,11 +75,36 @@ export function crewCcSessionIds(
   return cc
 }
 
+// A filha JÁ retomou depois de perguntar? O needs_input só é limpo por
+// handoff_message (a caixa do app) — resposta entregue fora do app (mensagem
+// peer/SendMessage do MCP) o main não observa, e a pergunta fica pendente no
+// banco pra sempre. O sinal honesto é o relógio: um handoff_progress POSTERIOR à
+// pergunta só existe porque a filha voltou a trabalhar. É o mesmo critério que a
+// description do handoff_result já documenta ("a needs_input whose currentStep
+// keeps advancing means the child already got your answer off-band").
+//
+// A pergunta NÃO é apagada — nem daqui, nem do banco (handoff_progress parou de
+// apagá-la de propósito: a filha limpava o próprio pedido antes da mãe ver e 4 de
+// 12 perguntas se perdiam). O que muda é só o ALARME, que passa a respeitar a
+// evidência de retomada.
+export function crewResumedAfterQuestion(handoff: Handoff): boolean {
+  if (handoff.status !== 'needs_input') return false
+  const asked = handoff.questionAskedAt
+  const stepped = handoff.stepUpdatedAt
+  if (asked == null || stepped == null) return false
+  return stepped > asked
+}
+
 // A filha está esperando a mãe? Duas fontes: o status vivo do PTY ('waiting') e o
-// needs_input do handoff (pergunta aberta via handoff_ask). Qualquer uma basta.
+// needs_input do handoff (pergunta aberta via handoff_ask).
+//
+// O PTY vem primeiro porque é testemunha de primeira mão: parado num prompt, ela
+// espera — mesmo com progresso registrado depois. O needs_input é registro, e
+// registro vence só enquanto não há evidência de retomada.
 export function crewNeedsAttention(handoff: Handoff, live: LiveSessionInfo | undefined): boolean {
-  if (handoff.status === 'needs_input') return true
-  return live?.status === 'waiting'
+  if (live?.status === 'waiting') return true
+  if (handoff.status === 'needs_input') return !crewResumedAfterQuestion(handoff)
+  return false
 }
 
 // Quantas filhas estão esperando você. É o gatilho do auto-reveal do dock e o
@@ -92,6 +117,28 @@ export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessio
     if (crewNeedsAttention(h, live)) count++
   }
   return count
+}
+
+// Referência mínima de pane aberta (estrutural, pra não importar o appStore aqui).
+export interface OpenPaneRef {
+  session: { ccSessionId: string | null }
+}
+
+// Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
+//
+// 'overlay' é o default: o terminal abre DENTRO do quick look, em janela, sem
+// promover a filha a pane — assim "só vou dar uma olhada" não põe o botão de
+// encerrar a sessão a um clique de distância.
+// 'pane' quando ela já tem uma aba aberta: dois xterms na MESMA PTY disputariam
+// o sessionsApi.resize (o último a medir manda) e a TUI refluiria na cara de
+// quem já estava trabalhando nela. Com aba aberta, o terminal dela mora lá.
+// 'none' sem sessão viva — não há PTY a que anexar.
+export function crewTerminalTarget(
+  live: LiveSessionInfo | null | undefined,
+  openPanes: OpenPaneRef[],
+): 'pane' | 'overlay' | 'none' {
+  if (!live) return 'none'
+  return openPanes.some((p) => p.session.ccSessionId === live.ccSessionId) ? 'pane' : 'overlay'
 }
 
 // Card sob foco de teclado depois de a lista mudar (filha entrou, saiu, ou a

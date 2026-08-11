@@ -66,6 +66,12 @@ interface Props {
   // renderizado do transcript com o xterm/PTY vivo por baixo. Default 'terminal'.
   mode?: PaneMode
   onToggleMode?: () => void
+  // Moldura em volta do terminal. 'full' (default) traz o SessionHeader completo
+  // — identidade, rename, minimizar, ENCERRAR. 'bare' omite o header inteiro: é
+  // o modo de quem já tem uma moldura própria por fora (o quick look da equipe),
+  // e onde encerrar a sessão NÃO deve estar a um clique de distância num fluxo
+  // de "só vou dar uma olhada".
+  chrome?: 'full' | 'bare'
   onClose: () => void
   onTitleChange?: (title: string) => void
   onReopen?: () => void
@@ -126,6 +132,7 @@ export function Terminal({
   projectColor,
   mode = 'terminal',
   onToggleMode,
+  chrome = 'full',
   onClose,
   onTitleChange,
   onReopen,
@@ -963,28 +970,30 @@ export function Terminal({
 
   return (
     <div className="flex h-full flex-col">
-      <SessionHeader
-        projectName={projectName}
-        projectIcon={projectIcon}
-        projectColor={projectColor}
-        repoLabel={repoLabel}
-        repoPath={repoPath}
-        displayTitle={displayTitle}
-        nameValue={manualTitle ?? activity?.name ?? title ?? ''}
-        isNamed={isNamed}
-        canRename={canRename}
-        onCommitRename={commitRename}
-        exited={exited}
-        activity={activity}
-        now={now}
-        claudeNotFound={claudeNotFound}
-        exitCode={exitCode}
-        error={error}
-        mode={mode}
-        onToggleMode={onToggleMode}
-        onMinimize={onClose}
-        onEndSession={() => endSession(session.id)}
-      />
+      {chrome === 'full' && (
+        <SessionHeader
+          projectName={projectName}
+          projectIcon={projectIcon}
+          projectColor={projectColor}
+          repoLabel={repoLabel}
+          repoPath={repoPath}
+          displayTitle={displayTitle}
+          nameValue={manualTitle ?? activity?.name ?? title ?? ''}
+          isNamed={isNamed}
+          canRename={canRename}
+          onCommitRename={commitRename}
+          exited={exited}
+          activity={activity}
+          now={now}
+          claudeNotFound={claudeNotFound}
+          exitCode={exitCode}
+          error={error}
+          mode={mode}
+          onToggleMode={onToggleMode}
+          onMinimize={onClose}
+          onEndSession={() => endSession(session.id)}
+        />
+      )}
 
       {/* Banner só pro caso "claude não encontrado" (precisa do CTA de config);
           exit normal fecha a pane sozinho com toast (effect acima). */}

@@ -7,6 +7,19 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 vi.mock('@/features/sessions/chat/ChatView', () => ({
   ChatView: () => <div data-testid="chat-view" />,
 }))
+// O Terminal real monta xterm/WebGL (canvas, que o jsdom não tem). O que estes
+// testes travam é o CONTRATO do overlay com ele: que modo/chrome ele recebe.
+const { terminalProps } = vi.hoisted(() => ({ terminalProps: [] as Record<string, unknown>[] }))
+vi.mock('@/features/sessions/Terminal', () => ({
+  Terminal: (props: Record<string, unknown>) => {
+    terminalProps.push(props)
+    return (
+      <div data-testid="peek-terminal">
+        <textarea data-testid="fake-xterm" />
+      </div>
+    )
+  },
+}))
 vi.mock('@/lib/ipc', () => ({
   handoffsApi: { sendMessage: vi.fn().mockResolvedValue(undefined) },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
@@ -65,7 +78,9 @@ function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status
 
 describe('CrewPeek', () => {
   beforeEach(() => {
-    useCrewDockStore.setState({ peekId: null })
+    useCrewDockStore.setState({ peekId: null, peekMode: 'chat' })
+    useAppStore.setState({ panes: [] })
+    terminalProps.length = 0
   })
 
   it('o overlay fica acima das camadas do dockview (mesma faixa do Dialog)', () => {
@@ -125,9 +140,112 @@ describe('CrewPeek', () => {
     expect(screen.queryByText('trabalhando')).not.toBeInTheDocument()
   })
 
+  // O relato: a mãe respondeu por mensagem peer, a filha retomou, e o painel
+  // seguia alarmando. O registro da pergunta fica (auditoria); o alarme sai.
+  it('pergunta com progresso posterior: selo volta ao vivo e o registro fica em tom neutro', () => {
+    mount(
+      {
+        status: 'needs_input',
+        pendingQuestion: 'BLOQUEIO: escopo da Frente 2?',
+        questionAskedAt: 1000,
+        stepUpdatedAt: 2000,
+      },
+      'working',
+    )
+    expect(screen.getByText('trabalhando')).toBeInTheDocument()
+    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    const box = screen.getByTestId('peek-question')
+    expect(box).toHaveTextContent('BLOQUEIO: escopo da Frente 2?')
+    expect(box).toHaveTextContent(/já retomou/)
+    expect(box.style.borderColor).not.toContain('warning')
+  })
+
   it('sem bloqueio, o selo mostra o estado ao vivo da filha', () => {
     mount({}, 'working')
     expect(screen.getByText('trabalhando')).toBeInTheDocument()
     expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+  })
+})
+
+describe('CrewPeek em modo terminal', () => {
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekId: null, peekMode: 'chat' })
+    useAppStore.setState({ panes: [] })
+    terminalProps.length = 0
+  })
+
+  function mountTerminal() {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({ liveSessions: [live] })
+    useCrewDockStore.setState({ peekId: 'h1', peekMode: 'terminal' })
+    return render(<CrewPeek />)
+  }
+
+  it('o botão Terminal troca o modo DENTRO da janela, sem criar pane', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({ focusOrOpenSession })
+    mount()
+    fireEvent.click(screen.getByText('Terminal'))
+    expect(useCrewDockStore.getState().peekMode).toBe('terminal')
+    expect(useCrewDockStore.getState().peekId).toBe('h1')
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(useAppStore.getState().panes).toEqual([])
+  })
+
+  // A razão de existir desta tela: "só vou dar uma olhada" não pode ter um botão
+  // de desligar a um clique. O terminal entra sem o header de sessão.
+  it('o terminal entra sem a moldura de sessão (nada de encerrar aqui)', () => {
+    mountTerminal()
+    expect(screen.getByTestId('peek-terminal')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-view')).not.toBeInTheDocument()
+    expect(terminalProps.at(-1)).toMatchObject({ chrome: 'bare', mode: 'terminal' })
+    expect(screen.queryByLabelText('Encerrar')).toBeNull()
+  })
+
+  it('Esc com o foco no terminal pertence à filha; shift+esc fecha a janela', () => {
+    mountTerminal()
+    screen.getByTestId('fake-xterm').focus()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(useCrewDockStore.getState().peekId).toBe('h1')
+    fireEvent.keyDown(window, { key: 'Escape', shiftKey: true })
+    expect(useCrewDockStore.getState().peekId).toBeNull()
+  })
+
+  it('Esc fora do corpo (foco na moldura) continua fechando', () => {
+    mountTerminal()
+    screen.getByLabelText('Fechar').focus()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(useCrewDockStore.getState().peekId).toBeNull()
+  })
+
+  it('Tab não é sequestrado em modo terminal — é tecla da TUI', () => {
+    mountTerminal()
+    const dialog = screen.getByRole('dialog')
+    const first = dialog.querySelector<HTMLElement>('button')!
+    first.focus()
+    expect(fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })).toBe(true)
+    expect(document.activeElement).toBe(first)
+  })
+
+  // Dois xterms na mesma PTY brigariam pelo sessionsApi.resize.
+  it('com aba já aberta pra esta filha, o Terminal leva pra aba em vez de duplicar', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({
+      focusOrOpenSession,
+      panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
+    })
+    mount()
+    fireEvent.click(screen.getByText('Terminal'))
+    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
+    expect(useCrewDockStore.getState().peekId).toBeNull()
+  })
+
+  it('promover a aba é ação explícita do rodapé', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({ focusOrOpenSession })
+    mount()
+    fireEvent.click(screen.getByText('abrir como aba'))
+    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
+    expect(useCrewDockStore.getState().peekId).toBeNull()
   })
 })

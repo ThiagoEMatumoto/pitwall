@@ -17,7 +17,7 @@ import { handoffsApi, prefsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
-import { splitAlias } from './crew'
+import { crewResumedAfterQuestion, splitAlias } from './crew'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -163,9 +163,12 @@ interface Props {
   // Abre o quick look (CrewPeek) desta filha. Só o dock passa — no inbox, que já
   // é uma área inteira, o overlay não acrescentaria nada.
   onPeek?: () => void
+  // Abre o TERMINAL da filha do jeito que o dono do card decidir (o dock manda
+  // pro overlay em janela; sem isto, o botão promove a filha a aba como antes).
+  onOpenTerminal?: () => void
 }
 
-export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props) {
+export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTerminal }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
@@ -291,7 +294,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // Sinais vivos da filha. badge.attention (waiting/ended) ou needs_input pedem
   // realce âmbar. needs_input vence: a mãe pediu input explícito.
   const live = isLiveHandoff ? liveBadgeFor(childLive?.status) : null
-  const needsInput = handoff.status === 'needs_input'
+  // needs_input com progresso posterior à pergunta = ela já foi respondida fora
+  // do app e a filha retomou (ver crewResumedAfterQuestion). O registro segue no
+  // banco; o card é que para de anunciar um bloqueio que não existe mais.
+  const needsInput = handoff.status === 'needs_input' && !crewResumedAfterQuestion(handoff)
   const highlight = needsInput || (live?.attention ?? false)
   // UM selo por card. Com a filha viva, o estado DELA é o sinal que importa —
   // "aguardando você" diz tudo que "Em andamento" diria, e mais. needs_input
@@ -358,7 +364,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
       {childLive && (
         <button
           type="button"
-          onClick={() => void focusOrOpenSession(childLive)}
+          onClick={() => (onOpenTerminal ? onOpenTerminal() : void focusOrOpenSession(childLive))}
           title="Anexar o terminal desta sessão-filha"
           className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
         >

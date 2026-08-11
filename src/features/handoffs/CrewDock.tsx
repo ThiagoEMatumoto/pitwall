@@ -10,6 +10,7 @@ import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './Hand
 import {
   activeCrew,
   crewNeedsAttention,
+  crewTerminalTarget,
   orderCrew,
   resolveCrewFocus,
   splitAlias,
@@ -116,6 +117,19 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
 
   function focusCard(id: string) {
     listRef.current?.querySelector<HTMLElement>(`[data-crew-card="${CSS.escape(id)}"]`)?.focus()
+  }
+
+  // "Abrir terminal" no card: abre o peek JÁ em modo terminal — em janela, sem
+  // promover a filha a pane e sem o header de sessão (leia-se: sem o botão de
+  // encerrar ao alcance de quem só foi dar uma olhada). Se ela já tem aba, o
+  // terminal dela mora lá; duplicar o xterm na mesma PTY faria os dois brigarem
+  // pelo resize. Ver crewTerminalTarget.
+  function openTerminal(handoff: Handoff) {
+    const live = handoff.childSessionId ? liveById.get(handoff.childSessionId) : undefined
+    const target = crewTerminalTarget(live, useAppStore.getState().panes)
+    if (target === 'none') return
+    if (target === 'pane') void useAppStore.getState().focusOrOpenSession(live!)
+    else openPeek(handoff.id, 'terminal')
   }
 
   // Pedido de foco do AppShell (Ctrl+J). Nonce, não booleano: pedir duas vezes
@@ -261,6 +275,10 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
                     // as setas prontas assim que o overlay fecha.
                     focusCard(h.id)
                     openPeek(h.id)
+                  }}
+                  onOpenTerminal={() => {
+                    focusCard(h.id)
+                    openTerminal(h)
                   }}
                 />
               </div>
