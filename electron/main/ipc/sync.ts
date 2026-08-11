@@ -338,7 +338,7 @@ export function registerSyncIpc(): void {
   // open-dialog (DESTRUTIVO replace-all, a UI confirma antes de chamar).
 
   ipcMain.handle('sync:backup-export', async (): Promise<SyncBackupResult> => {
-    const defaultName = `claude-manager-backup-${backupDateStamp()}.zip`
+    const defaultName = `pitwall-backup-${backupDateStamp()}.zip`
     const res = await dialog.showSaveDialog({
       title: 'Salvar backup',
       defaultPath: defaultName,

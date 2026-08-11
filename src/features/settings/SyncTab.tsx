@@ -294,7 +294,7 @@ export function SyncTab({ open }: Props) {
                 label="URL do repositório Git privado"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
-                placeholder="https://github.com/usuario/claude-manager-data.git"
+                placeholder="https://github.com/usuario/pitwall-data.git"
               />
               <Button onClick={configure} loading={busy === 'configure'}>
                 Conectar
@@ -571,7 +571,7 @@ function FirstRunWizard({
           label="URL do repositório Git privado"
           value={repoUrl}
           onChange={(e) => setRepoUrl(e.target.value)}
-          placeholder="https://github.com/usuario/claude-manager-data.git"
+          placeholder="https://github.com/usuario/pitwall-data.git"
         />
       </div>
 

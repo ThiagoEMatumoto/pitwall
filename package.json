@@ -6,7 +6,7 @@
   "type": "module",
   "author": "Thiago Matumoto",
   "license": "MIT",
-  "homepage": "https://github.com/ThiagoEMatumoto/claude-manager",
+  "homepage": "https://github.com/ThiagoEMatumoto/pitwall",
   "engines": {
     "node": ">=20.0.0"
   },

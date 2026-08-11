@@ -162,9 +162,9 @@ async function seedInitialCommit(workdir: string, repoUrl: string): Promise<void
   await git.add(['-A'])
   await git.raw([
     '-c',
-    'user.email=sync@claude-manager',
+    'user.email=sync@pitwall',
     '-c',
-    'user.name=claude-manager',
+    'user.name=pitwall',
     'commit',
     '-m',
     'chore(sync): initial empty bundle',
@@ -259,9 +259,9 @@ export async function pushBundle(
   if (status.staged.length > 0 || status.files.length > 0) {
     await git.raw([
       '-c',
-      'user.email=sync@claude-manager',
+      'user.email=sync@pitwall',
       '-c',
-      'user.name=claude-manager',
+      'user.name=pitwall',
       'commit',
       '-m',
       message,
