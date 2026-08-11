@@ -1,8 +1,10 @@
 import { create } from 'zustand'
 
 // Estado do Crew Dock. Persistência leve só de `collapsed` e `width` (mesmo
-// padrão do files-store: localStorage no renderer, sem IPC/DB). O auto-reveal é
-// volátil de propósito — ele reflete o AGORA das filhas, não uma preferência.
+// padrão do files-store: localStorage no renderer, sem IPC/DB). Abrir é decisão
+// do usuário — clique ou Ctrl+J. O dock NÃO se abre sozinho: 340px de painel
+// aparecendo por cima da leitura é interrupção grande demais pro aviso que ele
+// carrega, e a trilha de 40px já pulsa com quem espera (ver CrewDock).
 const PERSIST_KEY = 'cm:crew-dock'
 const DEFAULT_WIDTH = 340
 const MIN_WIDTH = 240
@@ -48,11 +50,6 @@ interface CrewDockState {
   // Preferência manual persistida.
   collapsed: boolean
   width: number
-  // Volátil: alguma filha está esperando e o dock se abriu sozinho.
-  autoRevealed: boolean
-  // Volátil: o usuário recolheu DURANTE um auto-reveal — não reabrir até a fila
-  // de espera esvaziar (senão o dock briga com quem acabou de fechá-lo).
-  muted: boolean
 
   // Card sob o cursor de teclado (id do handoff). Vive aqui, e não no painel,
   // porque o Ctrl+J chega pelo AppShell — fora da árvore do dock.
@@ -68,8 +65,6 @@ interface CrewDockState {
   collapse: () => void
   toggle: () => void
   setWidth: (width: number) => void
-  // Chamado a cada mudança do número de filhas aguardando.
-  syncAttention: (hasAttention: boolean) => void
 
   setFocusedId: (id: string | null) => void
   // Ctrl+J: abre o dock (se preciso) e pede o foco pro card corrente.
@@ -80,35 +75,26 @@ interface CrewDockState {
 
 const persisted = readPersisted()
 
-// Derivado: aberto se o usuário deixou aberto OU se o auto-reveal disparou.
-export function dockExpanded(s: { collapsed: boolean; autoRevealed: boolean }): boolean {
-  return !s.collapsed || s.autoRevealed
-}
-
 export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   collapsed: persisted.collapsed,
   width: persisted.width,
-  autoRevealed: false,
-  muted: false,
   focusedId: null,
   peekId: null,
   focusNonce: 0,
 
   expand: () => {
     writePersisted({ collapsed: false, width: get().width })
-    set({ collapsed: false, muted: false })
+    set({ collapsed: false })
   },
 
   collapse: () => {
-    // Recolher com filha esperando = silenciar até a espera acabar.
-    const muted = get().autoRevealed
     writePersisted({ collapsed: true, width: get().width })
-    set({ collapsed: true, autoRevealed: false, muted })
+    set({ collapsed: true })
   },
 
   toggle: () => {
-    if (dockExpanded(get())) get().collapse()
-    else get().expand()
+    if (get().collapsed) get().expand()
+    else get().collapse()
   },
 
   setWidth: (width) => {
@@ -117,23 +103,14 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
     set({ width: next })
   },
 
-  syncAttention: (hasAttention) => {
-    const { autoRevealed, muted } = get()
-    if (hasAttention) {
-      if (!autoRevealed && !muted) set({ autoRevealed: true })
-      return
-    }
-    // Ninguém mais esperando: recolhe o que o auto-reveal abriu e rearma o gatilho.
-    if (autoRevealed || muted) set({ autoRevealed: false, muted: false })
-  },
-
   setFocusedId: (focusedId) => {
     if (get().focusedId !== focusedId) set({ focusedId })
   },
 
   requestFocus: () => {
     // Colapsado não tem card no DOM pra receber foco — expande antes de pedir.
-    if (!dockExpanded(get())) get().expand()
+    // É por aqui que o Ctrl+J continua entrando no dock com uma tecla só.
+    if (get().collapsed) get().expand()
     set({ focusNonce: get().focusNonce + 1 })
   },
 
