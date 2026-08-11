@@ -60,6 +60,14 @@ interface Props {
   project: Project
 }
 
+// Motivo do atraso reportado pelo último pull (BranchPullOutcome.detail), em
+// texto pro tooltip do badge. Fora do mapa (ex. mensagem de erro do git) vai cru.
+const PULL_REASON_LABEL: Record<string, string> = {
+  dirty: 'working tree suja',
+  diverged: 'commits locais adiante',
+  'checked-out-elsewhere': 'branch em checkout em outra worktree',
+}
+
 const LINK_BADGE: Record<LinkKind, { icon: ComponentType<LucideProps>; title: string }> = {
   inside: { icon: FolderInput, title: 'Dentro do vault' },
   symlink: { icon: Link2, title: 'Symlink para fora do vault' },
@@ -171,6 +179,7 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
   // Atraso medido no último pull (auto ou manual). > 0 = o ff-only não deu conta
   // (branch suja/divergente) e o repo segue para trás do origin.
   const behind = useRepoPullStore((s) => s.statusByRepo[repo.id]?.behind ?? 0)
+  const behindReason = useRepoPullStore((s) => s.statusByRepo[repo.id]?.reason)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: repo.id,
   })
@@ -208,7 +217,9 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
         {behind > 0 && (
           <span
             className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-text-dim)]"
-            title={`${behind} commit${behind === 1 ? '' : 's'} atrás do origin no último pull`}
+            title={`${behind} commit${behind === 1 ? '' : 's'} atrás do origin no último pull${
+              behindReason ? ` — ${PULL_REASON_LABEL[behindReason] ?? behindReason}` : ''
+            }`}
           >
             {behind} atrás
           </span>
