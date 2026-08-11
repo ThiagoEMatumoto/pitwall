@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Circle, Loader, Zap } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { relativeTime } from '@/lib/time'
+import { useVisibleLiveSessions } from '@/features/session-switcher/useGlobalSessions'
 import { useAppStore } from '@/store/appStore'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
@@ -11,10 +12,11 @@ type Row = { item: LiveSessionInfo; kind: 'waiting' | 'working' | 'idle' }
 
 // Card "Sessões agora" (design Pitwall): lista plana ordenada aguardando →
 // trabalhando → ociosas. Aguardando ("sua vez") ganha destaque accent; as
-// demais seguem a voz da casa (em pista / na garagem). liveSessions vêm do
-// appStore (watcher global do AppShell); clique foca/re-attacha a pane.
+// demais seguem a voz da casa (em pista / na garagem). São as sessões DELE —
+// filhas de handoff vivem no Crew Dock (ver useVisibleLiveSessions); clique
+// foca/re-attacha a pane.
 export function SessionsCard() {
-  const liveSessions = useAppStore((s) => s.liveSessions)
+  const liveSessions = useVisibleLiveSessions()
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
 
   const rows = useMemo<Row[]>(() => {

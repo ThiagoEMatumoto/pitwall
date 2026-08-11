@@ -148,6 +148,66 @@ describe('handoff_message (mãe → filha)', () => {
   })
 })
 
+describe('handoff_progress durante needs_input (regressão: filha apagava a própria pergunta)', () => {
+  it('preserva pergunta + status, grava o passo e devolve o bloqueio ainda aberto', () => {
+    const id = seedRunningHandoff()
+    call('handoff_ask', { handoffId: id, question: 'posso trocar o schema?' })
+    const res = call<{
+      status: string
+      currentStep: string | null
+      pendingQuestion?: string | null
+      note?: string
+    }>('handoff_progress', { handoffId: id, step: 'seguindo pelo caminho A' })
+
+    expect(res.status).toBe('needs_input')
+    expect(res.currentStep).toBe('seguindo pelo caminho A')
+    expect(res.pendingQuestion).toBe('posso trocar o schema?')
+    expect(res.note).toMatch(/ABERTA/)
+
+    // E a mãe, ao polar, continua vendo a pergunta.
+    const polled = call<{ status: string; pendingQuestion: string | null }>('handoff_result', {
+      handoffId: id,
+    })
+    expect(polled.status).toBe('needs_input')
+    expect(polled.pendingQuestion).toBe('posso trocar o schema?')
+  })
+
+  it('handoff_message (resposta da mãe) é o que encerra: needs_input → running', () => {
+    const id = seedRunningHandoff()
+    call('handoff_ask', { handoffId: id, question: 'posso trocar o schema?' })
+    call('handoff_progress', { handoffId: id, step: 'ainda esperando' })
+    call('handoff_message', { handoffId: id, text: 'pode sim' })
+
+    const polled = call<{ status: string; pendingQuestion: string | null; currentStep: string }>(
+      'handoff_result',
+      { handoffId: id },
+    )
+    expect(polled.status).toBe('running')
+    expect(polled.pendingQuestion).toBeNull()
+    expect(polled.currentStep).toBe('ainda esperando')
+  })
+})
+
+describe('handoff_report duplicado', () => {
+  it('avisa e preserva o resultado original em vez de sumir em silêncio', () => {
+    const id = seedRunningHandoff()
+    const first = call<{ status: string; duplicate?: boolean }>('handoff_report', {
+      handoffId: id,
+      summary: 'resultado original',
+    })
+    expect(first.duplicate).toBeUndefined()
+
+    const second = call<{ status: string; duplicate?: boolean; warning?: string }>(
+      'handoff_report',
+      { handoffId: id, summary: 'resultado repetido' },
+    )
+    expect(second.status).toBe('done')
+    expect(second.duplicate).toBe(true)
+    expect(second.warning).toMatch(/já havia sido reportado/)
+    expect(handoffStore.get(id)?.summary).toBe('resultado original')
+  })
+})
+
 describe('handoff_result (enriquecido com atividade ao vivo)', () => {
   it('inclui liveStatus/lastText/tokens e pendingQuestion', () => {
     const id = seedRunningHandoff()

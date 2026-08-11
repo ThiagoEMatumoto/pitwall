@@ -36,7 +36,9 @@ import {
   resolveModel,
   resolveEffort,
   resolveAdvisor,
+  HANDOFF_CHILD_SETTINGS_JSON,
 } from '../services/spawn-flags'
+import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
 import {
   buildImageFilename,
   isImageTempFile,
@@ -245,6 +247,9 @@ export function buildSpawnInnerCmd(parts: {
   systemPromptFilePath: string | null
   permissionMode?: string | null
   disallowedTools?: string[] | null
+  // JSON inline pro `--settings` (a CLI aceita file OU json). Usado só pela filha
+  // de handoff (crossSessionInbound=accept) — por sessão, nunca global.
+  settingsJson?: string | null
   initialPrompt?: string | null
 }): string {
   let innerCmd = `${parts.claudeCmd} --session-id ${parts.sessionId} -n ${shquote(parts.name)}${parts.mcpConfigArg}`
@@ -262,6 +267,9 @@ export function buildSpawnInnerCmd(parts: {
   }
   if (parts.disallowedTools && parts.disallowedTools.length > 0) {
     innerCmd += ` --disallowedTools ${parts.disallowedTools.map(shquote).join(' ')}`
+  }
+  if (parts.settingsJson) {
+    innerCmd += ` --settings ${shquote(parts.settingsJson)}`
   }
   if (parts.systemPromptFilePath) {
     innerCmd += ` --append-system-prompt-file ${shquote(parts.systemPromptFilePath)}`
@@ -462,10 +470,13 @@ export function spawnSession(input: SpawnSessionInput): Session {
     systemPromptFilePath,
     permissionMode,
     disallowedTools,
+    // Só a filha de handoff recebe --settings; o valor é a constante canônica do
+    // main (o renderer não escolhe settings — só sinaliza que é filha).
+    settingsJson: input.handoffChild ? HANDOFF_CHILD_SETTINGS_JSON : null,
     initialPrompt: input.initialPrompt,
   })
 
-  return startSession({
+  const session = startSession({
     ccSessionId: sessionId,
     repoId,
     cwd,
@@ -475,6 +486,19 @@ export function spawnSession(input: SpawnSessionInput): Session {
     cols: input.cols,
     rows: input.rows,
   })
+
+  // O alias da filha é o ENDEREÇO do peer (SendMessage.to == o `-n <name>`).
+  // Espelha em sessions.title como 'manual' pra o rename automático do Claude
+  // Code não trocar o endereço debaixo do orquestrador (migration 030).
+  if (input.handoffChild) {
+    db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(
+      name,
+      session.id,
+    )
+    return { ...session, title: name, titleSource: 'manual' }
+  }
+
+  return session
 }
 
 let listenersAttached = false
@@ -550,6 +574,21 @@ export function registerSessionIpc(): void {
 
   // Corpo extraído para o módulo (spawnSession) — chamável sem renderer.
   ipcMain.handle('sessions:spawn', (_e, input: SpawnSessionInput) => spawnSession(input))
+
+  // Registra a impl do seam usado pelo MCP (session_handoff spawna a filha DIRETO
+  // no main, sem passar pelo renderer). O seam existe só pra quebrar o ciclo
+  // mcp/tools → ipc/sessions → mcp/server → mcp/tools.
+  setSpawnHandoffChild((input) =>
+    spawnSession({
+      repoId: input.repoId,
+      name: input.name,
+      featureId: input.featureId ?? undefined,
+      initialPrompt: input.initialPrompt,
+      systemPromptText: input.systemPromptText,
+      permissionMode: (input.permissionMode ?? undefined) as SpawnSessionInput['permissionMode'],
+      handoffChild: true,
+    }),
+  )
 
   ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput) => {
     const db = getDb()
@@ -628,10 +667,13 @@ export function registerSessionIpc(): void {
     }
 
     // childSessionId é o sessions.id interno; o --resume precisa do cc_session_id
-    // (o session-id do Claude, gravado no spawn original).
+    // (o session-id do Claude, gravado no spawn original). O title é o alias
+    // fixado no spawn — é o endereço do peer e tem que sobreviver ao resume.
     const childRow = db
-      .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-      .get(handoff.childSessionId) as { cc_session_id: string | null } | undefined
+      .prepare('SELECT cc_session_id, title FROM sessions WHERE id = ?')
+      .get(handoff.childSessionId) as
+      | { cc_session_id: string | null; title: string | null }
+      | undefined
     const ccSessionId = childRow?.cc_session_id
     if (!ccSessionId || !UUID_RE.test(ccSessionId)) {
       throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
@@ -651,9 +693,13 @@ export function registerSessionIpc(): void {
       .get(repoId) as RepoPathRow | undefined
     if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
 
-    const name = readTranscriptTitle(transcript) || `handoff: ${repo.label}`
+    // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
+    // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
+    const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
     const claudeCmd = resolveClaudeCommand()
-    const innerCmd = `${claudeCmd} --resume ${ccSessionId} -n ${shquote(name)}${mcpConfigArg()}`
+    // --settings também no resume: a filha retomada precisa continuar aceitando
+    // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
+    const innerCmd = `${claudeCmd} --resume ${ccSessionId} -n ${shquote(name)}${mcpConfigArg()} --settings ${shquote(HANDOFF_CHILD_SETTINGS_JSON)}`
 
     // Mesma instrução de kickoff do approve: re-injetada após o resume subir, pra
     // a filha retomar a tarefa e reportar via MCP ao terminar.

@@ -38,6 +38,8 @@ import {
   resolvePermissionMode,
   resolveDisallowedTools,
 } from './sessions'
+import { HANDOFF_CHILD_SETTINGS_JSON } from '../services/spawn-flags'
+import { buildHandoffAlias } from '../services/handoff/alias'
 
 describe('formatPtyInjection', () => {
   const START = '\x1b[200~'
@@ -148,6 +150,33 @@ describe('buildSpawnInnerCmd', () => {
     expect(buildSpawnInnerCmd(base)).not.toContain('--disallowedTools')
   })
 
+  it('anexa --settings com o JSON inline quotado (filha de handoff)', () => {
+    const cmd = buildSpawnInnerCmd({ ...base, settingsJson: HANDOFF_CHILD_SETTINGS_JSON })
+    expect(cmd).toContain(`--settings '${HANDOFF_CHILD_SETTINGS_JSON}'`)
+    expect(cmd).toContain('crossSessionInbound')
+  })
+
+  it('NÃO inclui --settings quando ausente/null (sessão normal, nada global)', () => {
+    expect(buildSpawnInnerCmd(base)).not.toContain('--settings')
+    expect(buildSpawnInnerCmd({ ...base, settingsJson: null })).not.toContain('--settings')
+  })
+
+  it('monta -n <alias> + --settings juntos, e o posicional segue por último', () => {
+    const alias = buildHandoffAlias({ role: 'implementer', task: 'Auth refactor (v2)' })
+    const cmd = buildSpawnInnerCmd({
+      ...base,
+      name: alias,
+      settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
+      systemPromptFilePath: '/tmp/cm/handoff-1.md',
+      initialPrompt: 'Comece a tarefa do handoff',
+    })
+    expect(cmd).toContain("-n 'mauricio-auth-refactor-v2'")
+    expect(cmd).toContain(`--settings '${HANDOFF_CHILD_SETTINGS_JSON}'`)
+    // --settings precede o system-prompt-file e o posicional fecha o comando.
+    expect(cmd.indexOf('--settings')).toBeLessThan(cmd.indexOf('--append-system-prompt-file'))
+    expect(cmd.endsWith("'Comece a tarefa do handoff'")).toBe(true)
+  })
+
   it('anexa o initialPrompt como posicional quotado no FIM (auto-submit do 1º turno)', () => {
     const cmd = buildSpawnInnerCmd({
       ...base,
@@ -169,6 +198,44 @@ describe('buildSpawnInnerCmd', () => {
     expect(buildSpawnInnerCmd({ ...base, initialPrompt: '   ' }).endsWith('/tmp/mcp.json')).toBe(
       true,
     )
+  })
+})
+
+// O alias é o `-n <name>` da filha e, por tabela, o endereço do SendMessage.
+// Aqui olhamos o par alias→innerCmd; as regras do slug em si vivem em
+// services/handoff/alias.test.ts.
+describe('alias da filha de handoff no innerCmd', () => {
+  const base = {
+    claudeCmd: 'claude',
+    sessionId: '11111111-1111-1111-1111-111111111111',
+    name: '',
+    mcpConfigArg: '',
+    model: null as string | null,
+    systemPromptFilePath: null as string | null,
+  }
+
+  it('entrada com acento/espaço/parêntese vira kebab estrito no -n', () => {
+    const alias = buildHandoffAlias({
+      role: 'investigator',
+      task: 'Investigar migração de sessões (peer)',
+    })
+    expect(alias).toBe('otavio-investigar-migracao-sessoes')
+    expect(alias).toMatch(/^[a-z0-9-]+$/)
+    // Sem espaço no alias, o -n sai quotado mas sem escape interno.
+    expect(buildSpawnInnerCmd({ ...base, name: alias })).toContain(
+      "-n 'otavio-investigar-migracao-sessoes'",
+    )
+  })
+
+  it('é único contra as sessões vivas (não repete o -n de quem já está no ar)', () => {
+    const live = ['mauricio-auth-refactor']
+    const alias = buildHandoffAlias({
+      role: 'implementer',
+      task: 'Auth refactor',
+      taken: live,
+    })
+    expect(live).not.toContain(alias)
+    expect(buildSpawnInnerCmd({ ...base, name: alias })).toContain("-n 'rafael-auth-refactor'")
   })
 })
 

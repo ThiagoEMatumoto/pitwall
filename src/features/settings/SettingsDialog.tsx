@@ -114,7 +114,7 @@ function GeneralTab({ open }: { open: boolean }) {
   const [autoCloneMissing, setAutoCloneMissing] = useState(true)
   const [autoPullEnabled, setAutoPullEnabled] = useState(true)
   const [autoPullIntervalMinutes, setAutoPullIntervalMinutes] = useState(AUTO_PULL_INTERVAL_DEFAULT)
-  const [autoApproveHandoffs, setAutoApproveHandoffs] = useState(false)
+  const [requireApprovalHandoffs, setRequireApprovalHandoffs] = useState(false)
   const [maxActiveHandoffs, setMaxActiveHandoffs] = useState(HANDOFFS_MAX_ACTIVE_DEFAULT)
   const [heartbeatTtlHours, setHeartbeatTtlHours] = useState(HANDOFFS_HEARTBEAT_TTL_DEFAULT)
   const [calendarIcsUrl, setCalendarIcsUrl] = useState('')
@@ -136,8 +136,8 @@ function GeneralTab({ open }: { open: boolean }) {
       .get<number>('autoPullIntervalMinutes')
       .then((v) => setAutoPullIntervalMinutes(v ?? AUTO_PULL_INTERVAL_DEFAULT))
     void prefsApi
-      .get<boolean>('handoffs.autoApprove')
-      .then((v) => setAutoApproveHandoffs(v ?? false))
+      .get<boolean>('handoffs.requireApproval')
+      .then((v) => setRequireApprovalHandoffs(v ?? false))
     void prefsApi
       .get<number>('handoffs.maxActive')
       .then((v) => setMaxActiveHandoffs(v ?? HANDOFFS_MAX_ACTIVE_DEFAULT))
@@ -167,9 +167,9 @@ function GeneralTab({ open }: { open: boolean }) {
     if (Number.isFinite(v) && v >= 1) void prefsApi.set('autoPullIntervalMinutes', v)
   }
 
-  function updateAutoApprove(v: boolean) {
-    setAutoApproveHandoffs(v)
-    void prefsApi.set('handoffs.autoApprove', v)
+  function updateRequireApproval(v: boolean) {
+    setRequireApprovalHandoffs(v)
+    void prefsApi.set('handoffs.requireApproval', v)
   }
 
   function updateMaxActive(v: number) {
@@ -398,18 +398,18 @@ function GeneralTab({ open }: { open: boolean }) {
         <label className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm text-[var(--color-text)]">
-              Auto-aprovar handoffs (avançado)
+              Exigir aprovação humana em handoffs
             </div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Quando ligado, sessões-filha delegadas por outra sessão são abertas
-              automaticamente, sem gate humano. Deixe desligado para revisar e editar o
-              prompt antes de abrir.
+              Desligado (padrão): a sessão-filha delegada nasce direto, e você é avisado por
+              toast. Ligue para voltar ao gate — cada delegação abre um modal com o prompt
+              editável antes de a filha subir.
             </div>
           </div>
           <input
             type="checkbox"
-            checked={autoApproveHandoffs}
-            onChange={(e) => updateAutoApprove(e.target.checked)}
+            checked={requireApprovalHandoffs}
+            onChange={(e) => updateRequireApproval(e.target.checked)}
             className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
           />
         </label>

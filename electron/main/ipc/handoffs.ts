@@ -5,6 +5,7 @@ import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
 import { injectIntoChild } from '../services/handoff/inject'
+import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import type { HandoffSpawnContext, LinkKind, Handoff, HandoffStatus, Repo } from '../../../shared/types/ipc'
 
 interface RepoJoinRow {
@@ -125,9 +126,11 @@ export function registerHandoffsIpc(): void {
   // Intervenção do humano pelo inbox: entrega uma mensagem (texto livre OU resposta
   // a um handoff_ask) à sessão-filha. Resolve o childSessionId pelo handoffId,
   // exige PTY viva (isRunning) e injeta via injectIntoChild — bracketed-paste com
-  // submit, NÃO sessions:write cru (que não submeteria). Não muda o status do
-  // handoff: a transição needs_input→running é responsabilidade da filha (que
-  // chamará handoff_progress/report ao retomar).
+  // submit, NÃO sessions:write cru (que não submeteria). Entregue o texto, a
+  // pergunta pendente se encerra AQUI (needs_input → running): este é o caminho da
+  // mãe respondendo, e é o único que fecha o bloqueio — handoff_progress preserva
+  // needs_input de propósito. Idempotente fora de needs_input (mensagem avulsa
+  // para uma filha running não muda nada).
   ipcMain.handle('handoffs:send-message', (_e, raw: unknown): void => {
     const { id, text } = sendMessageSchema.parse(raw)
     const handoff = store.get(id)
@@ -139,6 +142,7 @@ export function registerHandoffsIpc(): void {
       throw new Error('A sessão-filha não está mais viva — não há para onde enviar.')
     }
     injectIntoChild(handoff.childSessionId, text)
+    broadcast('handoff:updated', store.resume(id))
   })
 
   // Feedback humano (👍/👎/parcial) sobre a utilidade de um handoff concluído.
@@ -162,11 +166,20 @@ export function registerHandoffsIpc(): void {
       )
       .get(handoff.targetRepoId) as RepoJoinRow | undefined
     if (!row) throw new Error(`Repo-alvo do handoff não encontrado: ${handoff.targetRepoId}`)
+    // Alias resolvido AQUI (e não no create) porque a unicidade é contra as
+    // sessões vivas AGORA. Determinístico para o mesmo (papel, task, ocupados) —
+    // o mesmo alias que o briefing já anunciou à filha, salvo colisão nova.
+    const alias = buildHandoffAlias({
+      role: roleForHandoffMode(handoff.mode),
+      task: handoff.task,
+      taken: store.activeSessionNames(),
+    })
     return {
       repo: toRepo(row),
       projectName: row.project_name,
       projectIcon: row.project_icon ?? null,
       projectColor: row.project_color ?? null,
+      alias,
     }
   })
 }

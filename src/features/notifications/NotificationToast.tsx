@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Bell, X } from 'lucide-react'
 import { notificationsApi } from '@/lib/ipc'
 import { Icon } from '@/components/ui/Icon'
+import { crewCcSessionIds } from '@/features/handoffs/crew'
 import { useAppStore } from '@/store/appStore'
+import { useHandoffsStore } from '@/store/handoffsStore'
 import { useToastStore, type LocalToast } from './toast-store'
 import type { NotificationEvent } from '../../../shared/types/ipc'
 
@@ -37,6 +39,17 @@ function enqueueEvent(prev: QueuedEvent[], queued: QueuedEvent): QueuedEvent[] {
   return next
 }
 
+// Filhas do Crew Dock não geram toast: o dock já mostra o estado delas o tempo
+// todo (dot âmbar, card "aguardando você") e ainda abre sozinho quando alguma
+// espera — o toast seria o MESMO aviso duas vezes, por cima do painel que ele
+// duplica. getState() porque isto roda no handler do evento, não no render.
+function isCrewChild(ccSessionId: string | undefined): boolean {
+  if (!ccSessionId) return false
+  const { liveSessions } = useAppStore.getState()
+  const { handoffs } = useHandoffsStore.getState()
+  return crewCcSessionIds(handoffs, liveSessions).has(ccSessionId)
+}
+
 // Abre/foca a sessão do evento via snapshot de sessões vivas. getState() em vez
 // de hook: chamado de handlers, e a busca é pontual (não precisa re-render).
 function openSessionByCc(ccSessionId: string) {
@@ -54,6 +67,7 @@ export function NotificationToast() {
     // Fila: eventos empilham com coalescing por sessão e teto de cards
     // (ver enqueueEvent); cada card tem auto-dismiss próprio.
     return notificationsApi.onEvent((e) => {
+      if (isCrewChild(e.ccSessionId)) return
       nextId.current += 1
       const queued: QueuedEvent = { ...e, queueId: nextId.current }
       setEvents((prev) => enqueueEvent(prev, queued))

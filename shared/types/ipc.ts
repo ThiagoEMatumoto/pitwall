@@ -158,12 +158,16 @@ export interface ConnectHubToAllInput {
 // ---- Handoffs cross-repo (multi-repo orchestration) ----
 //
 // Uma sessão-mãe (Claude) pede pra abrir uma sessão-filha noutro repo com um
-// prompt estruturado; passa por gate humano; a filha reporta um resumo de volta.
+// prompt estruturado; a filha é despachada direto (sem gate humano, salvo a pref
+// handoffs.requireApproval) e reporta um resumo de volta.
 // status app-level: pending → approved → running → done | rejected | failed.
 // needs_input é um estado VIVO (não-terminal) DENTRO de running: a filha
 // levantou uma pergunta (handoff_ask) e aguarda a mãe responder (handoff_message,
 // que a faz voltar pra running). Transições extras:
-//   running ⇄ needs_input  (handoff_ask / handoff_message ou handoff_progress).
+//   running ⇄ needs_input  (handoff_ask / handoff_message).
+// SÓ a resposta da mãe encerra a pergunta. handoff_progress durante needs_input
+// grava o passo mas PRESERVA pergunta e status — antes ele zerava
+// pending_question, e 33% das perguntas morriam assim sem a mãe nunca ver.
 // needs_input conta como in-flight (teto/dedup/reconciliação) — NÃO é terminal.
 //
 // 'interrupted' é um estado RECUPERÁVEL: a sessão-filha morreu (PTY exit no boot
@@ -239,6 +243,11 @@ export interface HandoffSpawnContext {
   projectName: string
   projectIcon: string | null
   projectColor: string | null
+  // Alias da filha (`<nome>-<escopo>`, ex.: 'mauricio-auth-refactor'), resolvido
+  // no MAIN contra as sessões vivas. Vira o `-n <name>` do spawn e, por tabela, o
+  // endereço do SendMessage. Só usado no caminho com gate humano ligado — no
+  // caminho normal o main gera e spawna sozinho.
+  alias: string
 }
 
 export interface CreateHandoffInput {
@@ -574,6 +583,13 @@ export interface SpawnSessionInput {
   // Ferramentas a NEGAR via `--disallowedTools <specs...>` (ex.: 'Bash(rm:*)').
   // Denylist destrutivo do handoff auto-edits. Cada spec é validado/escapado.
   disallowedTools?: string[]
+  // Marca o spawn como sessão-filha de handoff. Efeitos (decididos no MAIN, não
+  // aqui — o renderer não consegue injetar settings arbitrários):
+  //  1. `--settings '{"crossSessionInbound":"accept"}'` POR filha, pra ela receber
+  //     SendMessage do orquestrador (sem isso a mensagem fica `held` em silêncio);
+  //  2. `name` espelhado em sessions.title com title_source='manual' — o alias é o
+  //     ENDEREÇO do peer e o rename automático do Claude Code não pode sobrescrevê-lo.
+  handoffChild?: boolean
   cols?: number
   rows?: number
 }

@@ -150,6 +150,26 @@ export function get(id: string): Handoff | null {
   return row ? toEntity(row) : null
 }
 
+// Nomes já ocupados por sessões VIVAS — base de unicidade do alias da filha (o
+// alias vira o `-n <name>` e é espelhado em sessions.title). Colisão de nome faz
+// a CLI desambiguar com hex ilegível no ListAgents, então é o que evitamos aqui.
+export function activeSessionNames(): string[] {
+  const rows = getDb()
+    .prepare("SELECT title FROM sessions WHERE status = 'running' AND title IS NOT NULL")
+    .all() as { title: string }[]
+  return rows.map((r) => r.title)
+}
+
+// Alias da filha de um handoff (null se ainda não spawnou ou se a sessão sumiu).
+// Fonte da verdade = sessions.title, fixado como 'manual' no spawn.
+export function childAlias(childSessionId: string | null): string | null {
+  if (!childSessionId) return null
+  const row = getDb()
+    .prepare('SELECT title FROM sessions WHERE id = ?')
+    .get(childSessionId) as { title: string | null } | undefined
+  return row?.title ?? null
+}
+
 export function list(opts?: { status?: HandoffStatus | HandoffStatus[] }): Handoff[] {
   const db = getDb()
   let rows: HandoffRow[]
@@ -207,6 +227,14 @@ export function markRunning(id: string, childSessionId: string): Handoff {
 
 export function report(id: string, summary: string): Handoff {
   const from = currentStatus(id)
+  // Report duplicado: o handoff já está done. NÃO sobrescreve o summary original
+  // (o primeiro resultado é o autoritativo, e é o que a mãe pode já ter consumido)
+  // e registra um evento próprio — antes o segundo report passava como sucesso e
+  // apagava o primeiro summary sem deixar rastro distinguível.
+  if (from === 'done') {
+    logEvent(id, 'reportDuplicate', 'done', 'done', summary)
+    return fresh(id)
+  }
   getDb()
     .prepare('UPDATE handoffs SET status = ?, summary = ?, updated_at = ? WHERE id = ?')
     .run('done', summary, Date.now(), id)
@@ -215,40 +243,58 @@ export function report(id: string, summary: string): Handoff {
 }
 
 // Progresso NÃO-terminal: a filha reporta o passo atual sem virar done. Grava se
-// estiver em estado VIVO (running OU needs_input) — reportar progresso após uma
-// pergunta significa que a filha retomou o trabalho, então needs_input volta a
-// running e a pergunta pendente é limpa (o ato de progredir = "retomei"). done
-// segue exclusivo de report.
+// estiver em estado VIVO (running OU needs_input) e PRESERVA o status — progresso
+// NÃO é resposta a pergunta. Uma filha que perguntou e seguiu trabalhando continua
+// needs_input com a pergunta intacta (a UI precisa continuar mostrando o bloqueio);
+// só a resposta da mãe (resume, via handoff_message ou pelo inbox) encerra a
+// pergunta. done segue exclusivo de report.
 export function progress(id: string, step: string): Handoff {
   const now = Date.now()
   const from = currentStatus(id)
   const res = getDb()
     .prepare(
       `UPDATE handoffs
-         SET current_step = ?, step_updated_at = ?, updated_at = ?,
-             status = 'running', pending_question = NULL, question_asked_at = NULL
+         SET current_step = ?, step_updated_at = ?, updated_at = ?
        WHERE id = ? AND status IN ('running','needs_input')`,
     )
     .run(step, now, now, id)
-  // Só loga se a transição valeu (estava vivo). detail = o passo reportado.
-  if (res.changes > 0) logEvent(id, 'progress', 'running', from, step)
+  // Só loga se a transição valeu (estava vivo). to_status = from porque progress
+  // não muda status. detail = o passo reportado.
+  if (res.changes > 0 && from) logEvent(id, 'progress', from, from, step)
   return fresh(id)
 }
 
 // A filha levanta uma pergunta (handoff_ask) e passa pra needs_input, gravando a
-// pergunta + timestamp. Só transiciona se estava running — não pergunta de novo
-// por cima de uma needs_input já aberta nem fora do estado vivo (pending/done/...).
+// pergunta + timestamp. Aceita running E needs_input: uma segunda pergunta antes
+// da resposta é EMPILHADA no mesmo campo (separada por linha em branco) em vez de
+// virar no-op invisível — a mãe precisa ver todos os bloqueios abertos, e
+// question_asked_at guarda o instante do PRIMEIRO (é o "bloqueada desde"). Empilha
+// só a partir de needs_input: em running a pergunta pendente pode ser resíduo de
+// um ciclo anterior (ex.: handoff interrompido e retomado). Fora do estado vivo
+// (pending/done/...) segue no-op.
 export function ask(id: string, question: string): Handoff {
   const now = Date.now()
-  const from = currentStatus(id)
-  const res = getDb()
+  const row = getDb()
+    .prepare('SELECT status, pending_question, question_asked_at FROM handoffs WHERE id = ?')
+    .get(id) as
+    | { status: string; pending_question: string | null; question_asked_at: number | null }
+    | undefined
+  if (!row || (row.status !== 'running' && row.status !== 'needs_input')) return fresh(id)
+
+  const stacked = row.status === 'needs_input' && !!row.pending_question
+  getDb()
     .prepare(
       `UPDATE handoffs
          SET status = 'needs_input', pending_question = ?, question_asked_at = ?, updated_at = ?
-       WHERE id = ? AND status = 'running'`,
+       WHERE id = ?`,
     )
-    .run(question, now, now, id)
-  if (res.changes > 0) logEvent(id, 'ask', 'needs_input', from, question)
+    .run(
+      stacked ? `${row.pending_question}\n\n${question}` : question,
+      stacked ? row.question_asked_at : now,
+      now,
+      id,
+    )
+  logEvent(id, 'ask', 'needs_input', row.status, question)
   return fresh(id)
 }
 
