@@ -17,7 +17,7 @@ function okrLine(linkedObjectiveTitles: string[]): string {
 // Conteúdo do arquivo injetado via --append-system-prompt-file no spawn de
 // sessões com feature. Função pura (Feature → string) extraída de sessions.ts
 // pra ser testável sem Electron/PTY. O doc é mantido automaticamente pelo
-// claude-manager → instruímos a sessão a NÃO editar o doc manualmente.
+// Pitwall → instruímos a sessão a NÃO editar o doc manualmente.
 export function buildFeatureContextContent(
   feature: Feature,
   linkedObjectiveTitles: string[] = [],
@@ -25,7 +25,7 @@ export function buildFeatureContextContent(
   const sections = extractKeySections(feature.body ?? '')
   const header = [
     `Esta sessão trabalha na feature «${feature.title}».`,
-    'O claude-manager mantém este documento automaticamente — NÃO edite o doc manualmente; apenas trabalhe.',
+    'O Pitwall mantém este documento automaticamente — NÃO edite o doc manualmente; apenas trabalhe.',
     '',
     `Status atual: ${feature.status}`,
     feature.objective ? `Objetivo: ${feature.objective}` : '',
