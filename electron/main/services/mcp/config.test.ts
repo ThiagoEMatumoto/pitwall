@@ -2,7 +2,7 @@
 // Unit dos pedaços puros do config MCP: resolvedor de porta (env > pref >
 // default, '0' = efêmera) e decisão/execução do cleanup de configs stale no
 // caminho de EADDRINUSE — tudo sem subir server nem electron real.
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -23,7 +23,12 @@ import {
   cleanupStaleMcpConfigs,
   decideStaleConfigCleanup,
   parseMcpPortEnv,
+  removeSessionMcpConfig,
   resolveMcpPort,
+  sessionMcpConfigPath,
+  sweepSessionMcpConfigs,
+  writeMcpClientConfig,
+  writeSessionMcpClientConfig,
 } from './config'
 
 const tmpDirs: string[] = []
@@ -155,5 +160,101 @@ describe('cleanupStaleMcpConfigs', () => {
     expect(cleanupStaleMcpConfigs(join(dir, 'mcp.json'), join(dir, 'mcp-client-config.json'))).toBe(
       'delete',
     )
+  })
+})
+
+describe('mcp-config por sessão (carimbo de identidade da mãe)', () => {
+  const INFO = { url: 'http://127.0.0.1:41956/mcp', token: 'x'.repeat(64), pid: 4242 }
+  const SESSION_ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+
+  interface ClientConfig {
+    mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>
+  }
+
+  const readConfig = (path: string): ClientConfig =>
+    JSON.parse(readFileSync(path, 'utf8')) as ClientConfig
+
+  it('sem sessionId escreve a config GLOBAL inalterada (url sem query)', () => {
+    const path = join(makeTmpDir(), 'mcp-client-config.json')
+    writeMcpClientConfig(INFO, path)
+    const server = readConfig(path).mcpServers['claude-manager']
+    expect(server.url).toBe(INFO.url)
+    expect(server.type).toBe('http')
+    expect(server.headers.Authorization).toBe(`Bearer ${INFO.token}`)
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+  })
+
+  it('com sessionId a url ganha ?s=<id> — e o NOME do server não muda', () => {
+    const path = join(makeTmpDir(), 'sessao.json')
+    writeMcpClientConfig(INFO, path, SESSION_ID)
+    const config = readConfig(path)
+    // Allowlists de usuário e transcripts referenciam mcp__claude-manager__*.
+    expect(Object.keys(config.mcpServers)).toEqual(['claude-manager'])
+    const server = config.mcpServers['claude-manager']
+    expect(new URL(server.url).searchParams.get('s')).toBe(SESSION_ID)
+    expect(server.headers.Authorization).toBe(`Bearer ${INFO.token}`)
+  })
+
+  it('writeSessionMcpClientConfig cria <dir>/<id>.json com mode 0600', () => {
+    const dir = join(makeTmpDir(), 'mcp-sessions')
+    const path = writeSessionMcpClientConfig(INFO, SESSION_ID, dir)
+    expect(path).toBe(sessionMcpConfigPath(SESSION_ID, dir))
+    expect(path.endsWith(`${SESSION_ID}.json`)).toBe(true)
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    const server = readConfig(path).mcpServers['claude-manager']
+    expect(new URL(server.url).searchParams.get('s')).toBe(SESSION_ID)
+  })
+
+  it('removeSessionMcpConfig apaga só a config da sessão dada (e é no-op se já sumiu)', () => {
+    const dir = join(makeTmpDir(), 'mcp-sessions')
+    const other = '11111111-2222-3333-4444-555555555555'
+    const path = writeSessionMcpClientConfig(INFO, SESSION_ID, dir)
+    const otherPath = writeSessionMcpClientConfig(INFO, other, dir)
+
+    removeSessionMcpConfig(SESSION_ID, dir)
+    expect(existsSync(path)).toBe(false)
+    expect(existsSync(otherPath)).toBe(true)
+    expect(() => removeSessionMcpConfig(SESSION_ID, dir)).not.toThrow()
+  })
+
+  it('sweepSessionMcpConfigs limpa os órfãos do boot (nenhuma PTY sobrevive ao quit)', () => {
+    const dir = join(makeTmpDir(), 'mcp-sessions')
+    writeSessionMcpClientConfig(INFO, SESSION_ID, dir)
+    writeSessionMcpClientConfig(INFO, '11111111-2222-3333-4444-555555555555', dir)
+
+    expect(sweepSessionMcpConfigs(dir)).toBe(2)
+    expect(existsSync(sessionMcpConfigPath(SESSION_ID, dir))).toBe(false)
+    // Diretório ausente é no-op seguro (primeiro boot).
+    expect(sweepSessionMcpConfigs(join(makeTmpDir(), 'nao-existe'))).toBe(0)
+  })
+
+  it('cleanupStaleMcpConfigs remove TAMBÉM o diretório de configs por sessão', () => {
+    const dir = makeTmpDir()
+    const configPath = join(dir, 'mcp.json')
+    const clientConfigPath = join(dir, 'mcp-client-config.json')
+    const sessionDir = join(dir, 'mcp-sessions')
+    writeFileSync(
+      configPath,
+      JSON.stringify({ url: INFO.url, token: INFO.token, pid: 2 ** 30 }),
+    )
+    writeFileSync(clientConfigPath, JSON.stringify({ mcpServers: {} }))
+    writeSessionMcpClientConfig(INFO, SESSION_ID, sessionDir)
+
+    expect(cleanupStaleMcpConfigs(configPath, clientConfigPath, sessionDir)).toBe('delete')
+    expect(existsSync(sessionDir)).toBe(false)
+  })
+
+  it('mantendo as configs (outra instância viva), o diretório por sessão sobrevive', () => {
+    const dir = makeTmpDir()
+    const configPath = join(dir, 'mcp.json')
+    const clientConfigPath = join(dir, 'mcp-client-config.json')
+    const sessionDir = join(dir, 'mcp-sessions')
+    // PID 1 (init/systemd) está sempre vivo e nunca é o processo de teste.
+    writeFileSync(configPath, JSON.stringify({ url: INFO.url, token: INFO.token, pid: 1 }))
+    writeFileSync(clientConfigPath, JSON.stringify({ mcpServers: {} }))
+    const path = writeSessionMcpClientConfig(INFO, SESSION_ID, sessionDir)
+
+    expect(cleanupStaleMcpConfigs(configPath, clientConfigPath, sessionDir)).toBe('keep')
+    expect(existsSync(path)).toBe(true)
   })
 })

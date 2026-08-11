@@ -436,11 +436,29 @@ export function isActiveCrewChild(ccSessionId: string): boolean {
 
 // Dedup por alvo: handoff ativo (pending/approved/running/needs_input) pro mesmo
 // repo-alvo. Usado pra evitar dois agentes mutando o mesmo repo em paralelo.
-export function findActiveByTarget(targetRepoId: string): Handoff | null {
-  const row = getDb()
-    .prepare(
-      `${SELECT_HANDOFF} WHERE h.target_repo_id = ? AND h.status IN ('pending','approved','running','needs_input') ORDER BY h.created_at DESC LIMIT 1`,
-    )
-    .get(targetRepoId) as HandoffRow | undefined
+//
+// motherSessionId opcional ESTREITA a busca à mãe dada ("eu já despachei uma
+// filha aqui?"). Omitido/null mantém o escopo GLOBAL por repo — que é o
+// comportamento legado e o mais ESTRITO, usado quando a identidade da mãe é
+// desconhecida (config global antiga, sem carimbo).
+export function findActiveByTarget(
+  targetRepoId: string,
+  motherSessionId?: string | null,
+): Handoff | null {
+  const active = "h.status IN ('pending','approved','running','needs_input')"
+  const db = getDb()
+  const row = (
+    motherSessionId
+      ? db
+          .prepare(
+            `${SELECT_HANDOFF} WHERE h.target_repo_id = ? AND h.mother_session_id = ? AND ${active} ORDER BY h.created_at DESC LIMIT 1`,
+          )
+          .get(targetRepoId, motherSessionId)
+      : db
+          .prepare(
+            `${SELECT_HANDOFF} WHERE h.target_repo_id = ? AND ${active} ORDER BY h.created_at DESC LIMIT 1`,
+          )
+          .get(targetRepoId)
+  ) as HandoffRow | undefined
   return row ? toEntity(row) : null
 }
