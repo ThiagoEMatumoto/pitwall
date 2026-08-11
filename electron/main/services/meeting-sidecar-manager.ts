@@ -165,6 +165,11 @@ export interface SidecarManagerDeps {
   resolveStart?: (
     meetingId: string,
   ) => Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }>
+  // O stderr do sidecar vai pro log do main, e o env do spawn carrega as chaves
+  // de API do usuário: um traceback do sidecar que ecoe o ambiente escreveria o
+  // segredo no log. Este redator é construído por spawn (snapshot dos valores) e
+  // aplicado a toda linha logada. Ausente ⇒ identidade (testes).
+  makeLogRedactor?: () => (text: string) => string
 }
 
 export class MeetingSidecarManager extends TypedEmitter {
@@ -217,9 +222,10 @@ export class MeetingSidecarManager extends TypedEmitter {
 
     rl.on('line', (line) => this.handleLine(meetingId, line))
 
+    const redact = this.deps.makeLogRedactor?.() ?? ((text: string) => text)
     child.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8').trimEnd()
-      if (text) console.error(`[sidecar ${meetingId}] ${text}`)
+      if (text) console.error(`[sidecar ${meetingId}] ${redact(text)}`)
     })
 
     child.on('error', (err) => {
