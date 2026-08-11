@@ -12,20 +12,32 @@ import {
   runAutoPullNow,
 } from '../services/repo-pull-scheduler'
 import { CUSTOM_ENV_VARS_KEY } from '../services/custom-env'
-import { resetDossierPipeline } from '../services/dossier-pipeline-singleton'
 
 const getSchema = z.object({ key: z.string().min(1) })
 const setSchema = z.object({ key: z.string().min(1), value: z.unknown() })
 
+// Prefs que guardam segredo não passam pelo canal genérico: um `prefs:get`
+// devolveria o envelope cifrado (inútil) e um `prefs:set` regravaria em claro,
+// desfazendo a cifragem em repouso. O renderer usa `secrets:env:*`.
+const SECRET_KEYS = new Set<string>([CUSTOM_ENV_VARS_KEY])
+
+export function assertNotSecretKey(key: string): void {
+  if (SECRET_KEYS.has(key)) {
+    throw new Error(`pref "${key}" guarda segredo — use o canal secrets:env:*`)
+  }
+}
+
 export function registerPrefsIpc(): void {
   ipcMain.handle('prefs:get', (_e, payload: unknown) => {
     const { key } = getSchema.parse(payload)
+    assertNotSecretKey(key)
     // Contrato IPC inalterado: ausência/JSON inválido → null.
     return getPref<unknown>(key, null)
   })
 
   ipcMain.handle('prefs:set', (_e, payload: unknown) => {
     const { key, value } = setSchema.parse(payload)
+    assertNotSecretKey(key)
     setPref(key, value)
     // Mudar a URL secreta do calendário liga/desliga/reaponta o watcher na hora,
     // sem exigir restart do app (restart limpa o dedupe da URL anterior).
@@ -36,8 +48,5 @@ export function registerPrefsIpc(): void {
       rescheduleAutoPull()
       if (key === AUTO_PULL_ENABLED_KEY && value === true) void runAutoPullNow()
     }
-    // Credenciais das integrações vivem em `custom_env_vars`: invalidar o
-    // pipeline faz a próxima run reler a chave sem restart.
-    if (key === CUSTOM_ENV_VARS_KEY) resetDossierPipeline()
   })
 }
