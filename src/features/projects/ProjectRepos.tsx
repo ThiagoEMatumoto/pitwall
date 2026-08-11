@@ -68,6 +68,9 @@ const PULL_REASON_LABEL: Record<string, string> = {
   'checked-out-elsewhere': 'branch em checkout em outra worktree',
   'checked-out-elsewhere-dirty': 'outra worktree com working tree suja',
   'checked-out-elsewhere-diverged': 'outra worktree com commits locais adiante',
+  'untracked-collision': 'arquivo não rastreado seria sobrescrito pelo remote',
+  'checked-out-elsewhere-untracked-collision':
+    'outra worktree com arquivo não rastreado que seria sobrescrito',
 }
 
 const LINK_BADGE: Record<LinkKind, { icon: ComponentType<LucideProps>; title: string }> = {

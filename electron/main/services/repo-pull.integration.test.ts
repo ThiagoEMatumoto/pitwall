@@ -22,7 +22,7 @@ function git(cwd: string, ...args: string[]): string {
 // origin/main com um 2º commit e dá checkout numa feature branch no clone
 // ANTES de puxar o avanço — reproduz o cenário do bug (usuário parado numa
 // feature branch enquanto a default do remote segue adiante).
-function setupRepos(dir: string): { originPath: string; clonePath: string } {
+function setupRepos(dir: string): { originPath: string; clonePath: string; seedPath: string } {
   const originPath = join(dir, 'origin.git')
   const clonePath = join(dir, 'clone')
   const seedPath = join(dir, 'seed')
@@ -53,7 +53,16 @@ function setupRepos(dir: string): { originPath: string; clonePath: string } {
   git(clonePath, 'checkout', '-b', 'feat/x')
   git(clonePath, 'push', '-u', 'origin', 'feat/x')
 
-  return { originPath, clonePath }
+  return { originPath, clonePath, seedPath }
+}
+
+// Adiciona um ARQUIVO NOVO na main do remote. É o que abre a possibilidade de
+// colisão com um untracked de mesmo nome no clone.
+function pushNewFileToOrigin(seedPath: string, name: string, content: string): void {
+  writeFileSync(join(seedPath, name), content)
+  git(seedPath, 'add', name)
+  git(seedPath, 'commit', '-m', `add ${name}`)
+  git(seedPath, 'push', 'origin', 'main')
 }
 
 describe('pullRepo (integração — repos git temporários)', () => {
@@ -259,6 +268,134 @@ describe('pullRepo (integração — repos git temporários)', () => {
     expect(git(clonePath, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')).toBe('origin/main')
     expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
     expect(result.branches?.find((b) => b.branch === 'ghost')).toBeUndefined()
+    expect(result.status).not.toBe('error')
+  })
+
+  // Cenário medido nos repos reais (legal-ui 62 commits atrás, leia 19): o
+  // único "sujo" são artefatos untracked (.playwright-mcp/, PNGs, scratch).
+  // `status.files` os inclui, então o repo era pulado como dirty pra sempre.
+  it('só untracked na branch em checkout: o pull acontece e o untracked sobrevive', async () => {
+    const { originPath, clonePath, seedPath } = setupRepos(dir)
+    void seedPath
+    const originMain = git(originPath, 'rev-parse', 'main')
+    git(clonePath, 'checkout', 'main')
+    expect(git(clonePath, 'rev-parse', 'main')).not.toBe(originMain)
+    writeFileSync(join(clonePath, 'scratch.png'), 'lixo de screenshot')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
+    expect(readFileSync(join(clonePath, 'file.txt'), 'utf8')).toBe('v2')
+    // O untracked continua lá, intocado.
+    expect(readFileSync(join(clonePath, 'scratch.png'), 'utf8')).toBe('lixo de screenshot')
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('pulled')
+    expect(mainOutcome?.behind).toBe(0)
+  })
+
+  it('untracked + arquivo tracked modificado: continua skipped(dirty)', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    git(clonePath, 'checkout', 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    writeFileSync(join(clonePath, 'scratch.png'), 'lixo')
+    writeFileSync(join(clonePath, 'file.txt'), 'trabalho local')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+    expect(readFileSync(join(clonePath, 'file.txt'), 'utf8')).toBe('trabalho local')
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('dirty')
+  })
+
+  // O preço de deixar untracked passar: o git pode recusar o FF porque um
+  // untracked local seria sobrescrito. Isso não é erro — é um skip legível.
+  it('untracked colidindo com arquivo novo do remote: skipped(untracked-collision), nada perdido', async () => {
+    const { originPath, clonePath, seedPath } = setupRepos(dir)
+    pushNewFileToOrigin(seedPath, 'novo.txt', 'conteudo do remote')
+    git(clonePath, 'checkout', 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    writeFileSync(join(clonePath, 'novo.txt'), 'trabalho local nao commitado')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    // O arquivo untracked NÃO foi sobrescrito e o ref local não avançou.
+    expect(readFileSync(join(clonePath, 'novo.txt'), 'utf8')).toBe('trabalho local nao commitado')
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('untracked-collision')
+    expect(result.status).not.toBe('error')
+  })
+
+  it('worktree vinculada com só untracked: o fast-forward acontece lá dentro', async () => {
+    const { originPath, clonePath } = setupRepos(dir)
+    const originMain = git(originPath, 'rev-parse', 'main')
+    const wtPath = join(dir, 'wt-main')
+    git(clonePath, 'worktree', 'add', wtPath, 'main')
+    writeFileSync(join(wtPath, 'scratch.png'), 'lixo')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(originMain)
+    expect(readFileSync(join(wtPath, 'file.txt'), 'utf8')).toBe('v2')
+    expect(readFileSync(join(wtPath, 'scratch.png'), 'utf8')).toBe('lixo')
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('pulled')
+    expect(mainOutcome?.behind).toBe(0)
+  })
+
+  it('worktree vinculada com untracked colidindo: skip prefixado, working tree preservada', async () => {
+    const { originPath, clonePath, seedPath } = setupRepos(dir)
+    pushNewFileToOrigin(seedPath, 'novo.txt', 'conteudo do remote')
+    const wtPath = join(dir, 'wt-main')
+    git(clonePath, 'worktree', 'add', wtPath, 'main')
+    const mainBefore = git(clonePath, 'rev-parse', 'main')
+    writeFileSync(join(wtPath, 'novo.txt'), 'trabalho local nao commitado')
+
+    const result = await pullRepo({
+      repoId: 'r1',
+      label: 'clone',
+      path: clonePath,
+      remoteUrl: originPath,
+      defaultBranch: 'main',
+    })
+
+    expect(readFileSync(join(wtPath, 'novo.txt'), 'utf8')).toBe('trabalho local nao commitado')
+    expect(git(clonePath, 'rev-parse', 'main')).toBe(mainBefore)
+
+    const mainOutcome = result.branches?.find((b) => b.branch === 'main')
+    expect(mainOutcome?.status).toBe('skipped')
+    expect(mainOutcome?.detail).toBe('checked-out-elsewhere-untracked-collision')
     expect(result.status).not.toBe('error')
   })
 })

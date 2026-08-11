@@ -11,16 +11,27 @@ vi.mock('electron', () => ({
 import {
   classifyPullEligibility,
   deriveOverallStatus,
+  isUntrackedCollision,
   parseCheckedOutBranches,
 } from './repo-pull'
 
+// Como o simple-git representa cada arquivo em `status.files`: os dois dígitos
+// do short format do git. Untracked é '??' — e o parser do simple-git empurra
+// TODA linha que não seja '##'/'!!' pra `files`, então untracked aparece lá
+// junto com not_added.
+const untracked = () => ({ index: '?', working_dir: '?' })
+const modified = () => ({ index: ' ', working_dir: 'M' })
+const stagedAdd = () => ({ index: 'A', working_dir: ' ' })
+
 describe('classifyPullEligibility', () => {
-  it('dirty quando há arquivos na working tree', () => {
-    expect(classifyPullEligibility({ ahead: 0, files: [{}] })).toBe('dirty')
+  it('dirty quando há arquivos tracked modificados', () => {
+    expect(classifyPullEligibility({ ahead: 0, files: [modified()] })).toBe('dirty')
   })
 
   it('dirty tem prioridade sobre diverged', () => {
-    expect(classifyPullEligibility({ ahead: 3, files: [{}, {}] })).toBe('dirty')
+    expect(
+      classifyPullEligibility({ ahead: 3, files: [modified(), modified()] }),
+    ).toBe('dirty')
   })
 
   it('diverged quando há commits locais adiante e a tree está limpa', () => {
@@ -29,6 +40,59 @@ describe('classifyPullEligibility', () => {
 
   it('eligible quando limpo e sem commits adiante', () => {
     expect(classifyPullEligibility({ ahead: 0, files: [] })).toBe('eligible')
+  })
+
+  // O bug: untracked entram em `status.files`, então lixo de scratch
+  // (.playwright-mcp/, PNGs) marcava o repo como sujo pra sempre e ele nunca
+  // era atualizado.
+  it('eligible quando o único "sujo" são arquivos untracked', () => {
+    expect(
+      classifyPullEligibility({
+        ahead: 0,
+        // ex.: .playwright-mcp/, PNG de scratch
+        files: [untracked(), untracked()],
+      }),
+    ).toBe('eligible')
+  })
+
+  it('dirty quando há untracked E um arquivo tracked modificado', () => {
+    expect(
+      classifyPullEligibility({ ahead: 0, files: [untracked(), modified()] }),
+    ).toBe('dirty')
+  })
+
+  it('diverged (não eligible) quando só há untracked mas há commits locais adiante', () => {
+    expect(classifyPullEligibility({ ahead: 1, files: [untracked()] })).toBe('diverged')
+  })
+
+  it('dirty quando o arquivo novo já foi staged (deixou de ser untracked)', () => {
+    expect(
+      classifyPullEligibility({ ahead: 0, files: [stagedAdd()] }),
+    ).toBe('dirty')
+  })
+})
+
+describe('isUntrackedCollision', () => {
+  it('reconhece a recusa do merge por untracked que seria sobrescrito', () => {
+    const msg = [
+      'error: The following untracked working tree files would be overwritten by merge:',
+      '\tnovo.txt',
+      'Please move or remove them before you merge.',
+      'Aborting',
+    ].join('\n')
+    expect(isUntrackedCollision(msg)).toBe(true)
+  })
+
+  it('reconhece a variante de checkout', () => {
+    expect(
+      isUntrackedCollision(
+        'error: The following untracked working tree files would be overwritten by checkout:',
+      ),
+    ).toBe(true)
+  })
+
+  it('não confunde com um non-fast-forward comum', () => {
+    expect(isUntrackedCollision('fatal: Not possible to fast-forward, aborting.')).toBe(false)
   })
 })
 

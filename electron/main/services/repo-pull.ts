@@ -27,22 +27,51 @@ interface PullTarget {
 }
 
 // Campos do `simple-git .status()` de que a classificação precisa. Mantido
-// mínimo pra o teste stubar sem montar um StatusResult inteiro.
+// mínimo pra o teste stubar sem montar um StatusResult inteiro. `index` e
+// `working_dir` são os dois dígitos do short format do git (compatível com
+// FileStatusResult, onde eles são obrigatórios).
+export interface PullStatusFile {
+  index?: string
+  working_dir?: string
+}
+
 export interface PullStatusInput {
   ahead: number
-  files: unknown[]
+  files: PullStatusFile[]
 }
 
 export type PullEligibility = 'dirty' | 'diverged' | 'eligible'
 
+// `status.files` do simple-git NÃO é só o que está tracked: o parser empurra
+// pra lá toda linha do `status --porcelain` que não seja '##'/'!!', inclusive
+// os '??' (que também vão pra `not_added`). Untracked não impede um
+// fast-forward — o git só recusa se um deles fosse ser SOBRESCRITO, caso
+// tratado no catch do merge (isUntrackedCollision).
+function isUntracked(file: PullStatusFile): boolean {
+  return file.index === '?' && file.working_dir === '?'
+}
+
 // Puro e testável: dado o status do repo, decide se é seguro dar um pull
-// fast-forward. `dirty` (working tree com mudanças que impediriam o FF) tem
+// fast-forward. `dirty` (mudanças em arquivos TRACKED, que impediriam o FF) tem
 // prioridade sobre `diverged` (commits locais ainda não empurrados). Só
-// `eligible` (limpo e sem commits locais adiante) é puxado.
+// `eligible` (sem mudança tracked e sem commits locais adiante) é puxado —
+// artefato untracked (.playwright-mcp/, PNG de scratch) não conta como sujo,
+// senão o repo nunca voltaria a ser atualizado.
 export function classifyPullEligibility(status: PullStatusInput): PullEligibility {
-  if (status.files.length > 0) return 'dirty'
+  if (status.files.some((file) => !isUntracked(file))) return 'dirty'
   if (status.ahead > 0) return 'diverged'
   return 'eligible'
+}
+
+// O preço de deixar untracked passar pela elegibilidade: o git aborta o
+// merge/checkout quando um arquivo untracked LOCAL seria sobrescrito por um
+// arquivo vindo do remote. É recusa preventiva (nada foi tocado), não falha —
+// vira `skipped` legível em vez de `error` genérico. A frase abaixo vem do
+// próprio git (unpack-trees.c, "The following untracked working tree files
+// would be overwritten by %s") e é estável há anos; o verbo final varia
+// (merge/checkout), por isso não entra no match.
+export function isUntrackedCollision(message: string): boolean {
+  return /untracked working tree files would be overwritten/i.test(message)
 }
 
 function listPullTargets(): PullTarget[] {
@@ -187,7 +216,11 @@ async function pullCurrentBranch(
     const after = (await git.revparse(['HEAD'])).trim()
     return { branch: current, status: before === after ? 'up-to-date' : 'pulled' }
   } catch (err) {
-    return { branch: current, status: 'error', detail: (err as Error).message }
+    const message = (err as Error).message
+    if (isUntrackedCollision(message)) {
+      return { branch: current, status: 'skipped', detail: 'untracked-collision' }
+    }
+    return { branch: current, status: 'error', detail: message }
   }
 }
 
@@ -243,7 +276,11 @@ async function pullDefaultInWorktree(worktreePath: string, def: string): Promise
     const after = (await wtGit.revparse(['HEAD'])).trim()
     return { branch: def, status: before === after ? 'up-to-date' : 'pulled' }
   } catch (err) {
-    return { branch: def, status: 'error', detail: (err as Error).message }
+    const message = (err as Error).message
+    if (isUntrackedCollision(message)) {
+      return { branch: def, status: 'skipped', detail: 'checked-out-elsewhere-untracked-collision' }
+    }
+    return { branch: def, status: 'error', detail: message }
   }
 }
 
