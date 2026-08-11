@@ -17,6 +17,7 @@ const {
   crewNeedsAttention,
   crewResumedAfterQuestion,
   crewAttentionCount,
+  crewTerminalTarget,
   orderCrew,
   resolveCrewFocus,
   stepCrewFocus,
@@ -298,6 +299,30 @@ describe('orderCrew', () => {
     ]
     const sessions = [live({ id: 's2', status: 'working' })]
     expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b'])
+  })
+})
+
+describe('crewTerminalTarget', () => {
+  const pane = (ccSessionId: string | null) => ({ session: { ccSessionId } })
+
+  it('sem pane aberta o terminal abre no overlay (nenhuma aba nasce)', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [])).toBe('overlay')
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc9')])).toBe('overlay')
+  })
+
+  // Dois xterms na mesma PTY disputam o resize — com aba aberta, o terminal
+  // dela mora lá e o dock leva o usuário até ela.
+  it('com pane já aberta pra esta filha, o alvo é a pane', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc1')])).toBe('pane')
+  })
+
+  it('sem sessão viva não há PTY a que anexar', () => {
+    expect(crewTerminalTarget(null, [])).toBe('none')
+    expect(crewTerminalTarget(undefined, [pane('cc1')])).toBe('none')
+  })
+
+  it('pane sem ccSessionId nunca casa', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane(null)])).toBe('overlay')
   })
 })
 

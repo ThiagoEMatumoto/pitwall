@@ -216,20 +216,28 @@ async function restoreFromSnapshots(
 // item vem de runningIds() (PTY viva no main), abrir = RE-ATTACH: criamos a pane
 // apontando pro session.id existente e o Terminal replica o backlog. NÃO fazemos
 // spawn/resume — isso criaria um segundo processo claude pra mesma conversa.
+
+// A Session que o <Terminal/> pede, derivada de uma sessão LIVE. Exportada
+// porque nem todo terminal nasce de uma pane: o quick look da equipe monta um
+// <Terminal/> em janela, anexado à MESMA PTY, sem criar pane nenhuma.
+export function sessionFromLiveSession(item: LiveSessionInfo, paneId: string | null): Session {
+  return {
+    id: item.id,
+    repoId: item.repo?.id ?? null,
+    ccSessionId: item.ccSessionId,
+    title: item.title ?? item.name,
+    titleSource: item.titleSource ?? null,
+    paneId,
+    status: 'running',
+    startedAt: item.lastActivityAt ?? Date.now(),
+    endedAt: null,
+  }
+}
+
 function paneFromLiveSession(item: LiveSessionInfo, paneId: string): ActivePane {
   return {
     paneId,
-    session: {
-      id: item.id,
-      repoId: item.repo?.id ?? null,
-      ccSessionId: item.ccSessionId,
-      title: item.title ?? item.name,
-      titleSource: item.titleSource ?? null,
-      paneId,
-      status: 'running',
-      startedAt: item.lastActivityAt ?? Date.now(),
-      endedAt: null,
-    },
+    session: sessionFromLiveSession(item, paneId),
     repo: item.repo,
     projectName: item.projectName,
     projectIcon: item.projectIcon,

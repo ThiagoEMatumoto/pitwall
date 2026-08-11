@@ -1,26 +1,40 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { CornerDownLeft, TerminalSquare, X } from 'lucide-react'
+import { CornerDownLeft, MessageSquare, SquareTerminal, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ChatView } from '@/features/sessions/chat/ChatView'
+import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
-import { useAppStore } from '@/store/appStore'
+import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { StatusBadge, contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
-import { crewNeedsAttention, crewResumedAfterQuestion, splitAlias } from './crew'
-import { useCrewDockStore } from './crew-dock-store'
+import {
+  crewNeedsAttention,
+  crewResumedAfterQuestion,
+  crewTerminalTarget,
+  splitAlias,
+} from './crew'
+import { useCrewDockStore, type CrewPeekMode } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
-// Quick look de uma sessão-filha: abre por cima de tudo, mostra a conversa dela
-// renderizada, deixa responder, e some. O degrau do meio entre "ver o dot piscar"
-// e "abrir a aba" — olhar e desbloquear em segundos SEM mexer no layout de
-// trabalho (nenhuma pane nasce, o dockview segue montado por trás).
+// Quick look de uma sessão-filha: abre por cima de tudo, mostra a filha —
+// conversa renderizada ou terminal cru —, deixa responder, e some. O degrau do
+// meio entre "ver o dot piscar" e "abrir a aba" — olhar e desbloquear em
+// segundos SEM mexer no layout de trabalho (nenhuma pane nasce, o dockview segue
+// montado por trás).
 //
 // Montado como irmão de <main> no AppShell, no mesmo padrão do SessionSwitcher
 // (fixed + backdrop + `if (!open) return null`), e não pelo Dialog.tsx — que
 // trava max-h-[85vh] sem parametrização e o peek quer a altura toda.
 //
-// Custo de GPU: zero. O ChatView lê o transcript JSONL por IPC e não importa
-// xterm/WebGL, então o peek não consome nenhum dos 8 contextos do cap.
+// Custo de GPU: zero em chat (o ChatView lê o transcript JSONL por IPC e não
+// importa xterm/WebGL). Em terminal, UM contexto dos 8 do cap enquanto a janela
+// está aberta — o Terminal solta no unmount (detachWebgl no cleanup do mount
+// effect), e fechar o overlay desmonta.
+//
+// Encerrar a sessão NÃO existe aqui, de propósito: o terminal entra com
+// chrome="bare" (sem SessionHeader). Num fluxo de "só vou dar uma olhada", um
+// botão de desligar ao alcance do clique é acidente esperando acontecer — quem
+// quer de fato trabalhar na filha usa "abrir como aba", no rodapé.
 
 // Focáveis do overlay, pro trap do Tab. Consultado NA HORA de cada Tab: o corpo
 // do peek é o ChatView, que ganha e perde botões a cada mensagem — uma lista
@@ -36,6 +50,10 @@ const FOCUSABLE =
 // sendo dos handlers de sempre.
 function trapTab(e: React.KeyboardEvent<HTMLDivElement>): void {
   if (e.key !== 'Tab') return
+  // Em modo terminal o teclado é da filha: Tab e Shift+Tab são teclas da TUI
+  // (Shift+Tab cicla o modo de permissão). Mover o foco por baixo dela quebraria
+  // justamente o que se veio fazer aqui.
+  if (e.currentTarget.dataset.peekMode === 'terminal') return
   const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE))
   const first = items[0]
   const last = items[items.length - 1]
@@ -50,6 +68,7 @@ function trapTab(e: React.KeyboardEvent<HTMLDivElement>): void {
 
 export function CrewPeek() {
   const peekId = useCrewDockStore((s) => s.peekId)
+  const peekMode = useCrewDockStore((s) => s.peekMode)
   const closePeek = useCrewDockStore((s) => s.closePeek)
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const liveSessions = useAppStore((s) => s.liveSessions)
@@ -68,17 +87,28 @@ export function CrewPeek() {
   if (!handoff) return null
   // key: trocar de filha remonta o painel (e o ChatView), zerando o transcript
   // assinado e o texto meio digitado da anterior.
-  return <CrewPeekPanel key={handoff.id} handoff={handoff} live={live} onClose={closePeek} />
+  return (
+    <CrewPeekPanel
+      key={handoff.id}
+      handoff={handoff}
+      live={live}
+      mode={peekMode}
+      onClose={closePeek}
+    />
+  )
 }
 
 interface PanelProps {
   handoff: Handoff
   live: LiveSessionInfo | null
+  mode: CrewPeekMode
   onClose: () => void
 }
 
-function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
+function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
+  const panes = useAppStore((s) => s.panes)
+  const setPeekMode = useCrewDockStore((s) => s.setPeekMode)
   const load = useHandoffsStore((s) => s.load)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
@@ -92,11 +122,16 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   // Fechar promovendo a aba é a exceção: lá o foco pertence ao terminal recém
   // aberto, e devolvê-lo ao card do dock roubaria a sessão de quem pediu ela.
   const skipRestoreRef = useRef(false)
+  // Corpo do overlay (chat ou terminal). Delimita de quem é o Escape: dentro do
+  // terminal ele pertence à filha — ver o handler abaixo.
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const active = document.activeElement
     originRef.current = active instanceof HTMLElement ? active : null
-    // rAF: mesmo padrão do refocus do Composer — foca depois do paint.
+    // rAF: mesmo padrão do refocus do Composer — foca depois do paint. Em modo
+    // terminal quem toma o foco é o xterm (effect do próprio Terminal): digitar
+    // na TUI é o motivo de se estar ali.
     requestAnimationFrame(() => inputRef.current?.focus())
     return () => {
       if (skipRestoreRef.current) return
@@ -110,16 +145,23 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   // Esc fecha de qualquer lugar do overlay (inclusive de dentro do textarea).
   // Listener de janela em capture porque o peek é a camada de cima: nenhum outro
   // handler de Esc deve ver esta tecla antes.
+  //
+  // EXCEÇÃO em modo terminal: com o foco no corpo, o Esc é da filha (cancelar na
+  // TUI, sair de menu). Roubá-lo faria do terminal do overlay um terminal pela
+  // metade. A saída pelo teclado vira Shift+Esc — anunciada no rodapé.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (mode === 'terminal' && !e.shiftKey && bodyRef.current?.contains(document.activeElement)) {
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, mode])
 
   const titleId = useId()
   const alias = splitAlias(live?.title)
@@ -142,7 +184,24 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
   // contradiz o corpo — "trabalhando" a dois centímetros de "A filha perguntou".
   const blocked = handoff.status === 'needs_input' && !resumed
 
-  function promoteToTerminal() {
+  // Onde o terminal desta filha mora agora: aqui na janela, ou na aba que já
+  // existe (dois xterms na mesma PTY brigariam pelo resize — crewTerminalTarget).
+  const terminalTarget = crewTerminalTarget(live, panes)
+
+  // "Ver o terminal": alterna o overlay pra modo terminal. Se a filha já tem aba
+  // aberta, o overlay sai da frente e leva o usuário até ela.
+  function showTerminal() {
+    if (terminalTarget === 'none') return
+    if (terminalTarget === 'pane') {
+      promoteToTab()
+      return
+    }
+    setPeekMode('terminal')
+  }
+
+  // Promover a filha a aba de verdade: ação explícita, no rodapé. É a única
+  // porta pro header completo de sessão (com encerrar) — de propósito.
+  function promoteToTab() {
     if (!live) return
     skipRestoreRef.current = true
     void focusOrOpenSession(live)
@@ -188,6 +247,7 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        data-peek-mode={mode}
         onKeyDown={trapTab}
         className="pw-rise flex h-[88vh] w-[56rem] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
       >
@@ -242,16 +302,34 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
+            {/* Chat ⇄ Terminal, os dois DENTRO da janela. Segmentado (e não um
+                ícone que alterna) porque aqui os dois modos são destinos de
+                mesmo peso: ler a conversa e mexer na TUI. */}
             {live && (
-              <button
-                type="button"
-                onClick={promoteToTerminal}
-                title="Abrir a sessão-filha numa aba de terminal (re-attacha a PTY viva)"
-                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+              <div
+                role="group"
+                aria-label="Modo de exibição da filha"
+                className="flex items-center gap-0.5 rounded border border-[var(--color-border)] p-0.5 text-[11px]"
               >
-                <Icon as={TerminalSquare} size={13} />
-                Abrir no terminal
-              </button>
+                <PeekModeButton
+                  active={mode === 'chat'}
+                  icon={MessageSquare}
+                  label="Chat"
+                  title="Conversa renderizada do transcript (a PTY segue viva)"
+                  onClick={() => setPeekMode('chat')}
+                />
+                <PeekModeButton
+                  active={mode === 'terminal'}
+                  icon={SquareTerminal}
+                  label="Terminal"
+                  title={
+                    terminalTarget === 'pane'
+                      ? 'Esta filha já tem uma aba aberta — o terminal dela está lá'
+                      : 'Terminal cru da filha, aqui na janela (menus TUI clicáveis)'
+                  }
+                  onClick={showTerminal}
+                />
+              </div>
             )}
             <button
               type="button"
@@ -265,17 +343,34 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
           </div>
         </header>
 
-        {/* relative + min-h-0: o ChatView se posiciona com absolute inset-0. */}
-        <div className="relative min-h-0 flex-1">
-          {handoff.childSessionId ? (
+        {/* relative + min-h-0: ChatView e Terminal se posicionam com absolute inset-0. */}
+        <div ref={bodyRef} className="relative min-h-0 flex-1">
+          {mode === 'terminal' && live ? (
+            <div className="absolute inset-0">
+              {/* chrome="bare": o header de sessão (com ENCERRAR) fica de fora —
+                  a moldura é a desta janela. Anexa à MESMA PTY viva, sem pane e
+                  sem segundo processo claude; o backlog é replicado no mount. */}
+              <Terminal
+                session={sessionFromLiveSession(live, null)}
+                repoLabel={live.repo?.label ?? 'Avulsa'}
+                repoPath={live.repo?.path ?? ''}
+                projectName={live.projectName ?? ''}
+                projectIcon={live.projectIcon}
+                projectColor={live.projectColor}
+                mode="terminal"
+                chrome="bare"
+                onClose={onClose}
+              />
+            </div>
+          ) : handoff.childSessionId ? (
             <ChatView
               sessionId={handoff.childSessionId}
               status={live?.status}
               // Sem onRespond: os cards interativos ficam read-only aqui (o
-              // clique deles digita no xterm, que o peek não monta). O botão do
-              // banner de espera do ChatView vira "abrir no terminal" — o único
-              // lugar onde um menu TUI é de fato clicável.
-              onToggleMode={live ? promoteToTerminal : undefined}
+              // clique deles digita no xterm, que o modo chat não monta). O botão
+              // do banner de espera do ChatView troca pro modo terminal — mesma
+              // janela, onde o menu TUI é de fato clicável.
+              onToggleMode={live ? showTerminal : undefined}
             />
           ) : (
             <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--color-text-dim)]">
@@ -284,6 +379,16 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
           )}
         </div>
 
+        {/* Em modo terminal o rodapé encolhe: o input é o composer do próprio
+            Terminal, e a pergunta pendente está desenhada na TUI ali em cima.
+            Dois campos de texto empilhados seriam duas verdades competindo. */}
+        {mode === 'terminal' ? (
+          <div className="flex shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 py-1.5 text-[10px] text-[var(--color-text-dim)]">
+            <span>esc vai pra filha</span>
+            <span>shift+esc fecha</span>
+            <PromoteToTabLink live={live} onClick={promoteToTab} />
+          </div>
+        ) : (
         <div className="shrink-0 border-t border-[var(--color-border)] p-3">
           {/* Limitação assumida: menu TUI (escolher opção numerada) é desenhado
               no xterm e parseado do buffer dele — sem xterm, o card é só leitura.
@@ -305,11 +410,11 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
               {live && (
                 <button
                   type="button"
-                  onClick={promoteToTerminal}
+                  onClick={showTerminal}
                   className="flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 font-medium transition hover:border-[var(--color-warning)]"
                 >
-                  <Icon as={TerminalSquare} size={13} />
-                  Abrir no terminal
+                  <Icon as={SquareTerminal} size={13} />
+                  Ver o terminal
                 </button>
               )}
             </div>
@@ -391,9 +496,61 @@ function CrewPeekPanel({ handoff, live, onClose }: PanelProps) {
             <span>↵ enviar</span>
             <span>shift+↵ nova linha</span>
             <span>esc fechar</span>
+            <PromoteToTabLink live={live} onClick={promoteToTab} />
           </div>
         </div>
+        )}
       </div>
     </div>
+  )
+}
+
+// Segmento do alternador Chat/Terminal. Ativo = fundo de superfície + texto
+// pleno; inativo = só texto apagado, sem borda — a borda é do grupo.
+function PeekModeButton({
+  active,
+  icon,
+  label,
+  title,
+  onClick,
+}: {
+  active: boolean
+  icon: typeof MessageSquare
+  label: string
+  title: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+        active
+          ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
+          : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+      }`}
+    >
+      <Icon as={icon} size={12} />
+      {label}
+    </button>
+  )
+}
+
+// Promover a filha a aba de verdade. Fica no rodapé, em texto, e não junto do
+// alternador: quem só está espiando não deve esbarrar nela — é ela que abre o
+// header completo de sessão, com encerrar.
+function PromoteToTabLink({ live, onClick }: { live: LiveSessionInfo | null; onClick: () => void }) {
+  if (!live) return null
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Promover a filha a aba de trabalho (re-attacha a PTY viva; só lá aparece o header completo da sessão)"
+      className="ml-auto text-[var(--color-accent)] hover:underline"
+    >
+      abrir como aba
+    </button>
   )
 }

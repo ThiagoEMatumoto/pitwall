@@ -163,9 +163,12 @@ interface Props {
   // Abre o quick look (CrewPeek) desta filha. Só o dock passa — no inbox, que já
   // é uma área inteira, o overlay não acrescentaria nada.
   onPeek?: () => void
+  // Abre o TERMINAL da filha do jeito que o dono do card decidir (o dock manda
+  // pro overlay em janela; sem isto, o botão promove a filha a aba como antes).
+  onOpenTerminal?: () => void
 }
 
-export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props) {
+export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTerminal }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
@@ -361,7 +364,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
       {childLive && (
         <button
           type="button"
-          onClick={() => void focusOrOpenSession(childLive)}
+          onClick={() => (onOpenTerminal ? onOpenTerminal() : void focusOrOpenSession(childLive))}
           title="Anexar o terminal desta sessão-filha"
           className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
         >

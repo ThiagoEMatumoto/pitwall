@@ -119,6 +119,28 @@ export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessio
   return count
 }
 
+// Referência mínima de pane aberta (estrutural, pra não importar o appStore aqui).
+export interface OpenPaneRef {
+  session: { ccSessionId: string | null }
+}
+
+// Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
+//
+// 'overlay' é o default: o terminal abre DENTRO do quick look, em janela, sem
+// promover a filha a pane — assim "só vou dar uma olhada" não põe o botão de
+// encerrar a sessão a um clique de distância.
+// 'pane' quando ela já tem uma aba aberta: dois xterms na MESMA PTY disputariam
+// o sessionsApi.resize (o último a medir manda) e a TUI refluiria na cara de
+// quem já estava trabalhando nela. Com aba aberta, o terminal dela mora lá.
+// 'none' sem sessão viva — não há PTY a que anexar.
+export function crewTerminalTarget(
+  live: LiveSessionInfo | null | undefined,
+  openPanes: OpenPaneRef[],
+): 'pane' | 'overlay' | 'none' {
+  if (!live) return 'none'
+  return openPanes.some((p) => p.session.ccSessionId === live.ccSessionId) ? 'pane' : 'overlay'
+}
+
 // Card sob foco de teclado depois de a lista mudar (filha entrou, saiu, ou a
 // atenção reordenou): segura o card atual se ele sobreviveu, senão cai no
 // primeiro. Null só com a lista vazia — aí o dock nem monta.

@@ -46,6 +46,12 @@ function writePersisted(p: Persisted): void {
   }
 }
 
+// O que o quick look mostra: a conversa renderizada (default) ou o terminal cru
+// da filha. Os dois modos vivem NA JANELA — abrir o terminal não promove a filha
+// a aba (ver crewTerminalTarget). Não é persistido: cada abertura declara o modo
+// que pediu, senão um "espiar" herdaria o terminal de meia hora atrás.
+export type CrewPeekMode = 'chat' | 'terminal'
+
 interface CrewDockState {
   // Preferência manual persistida.
   collapsed: boolean
@@ -56,6 +62,7 @@ interface CrewDockState {
   focusedId: string | null
   // Handoff aberto no quick look (CrewPeek). null = nenhum overlay.
   peekId: string | null
+  peekMode: CrewPeekMode
   // Nonce do pedido de foco: o AppShell incrementa, o dock (já expandido e
   // renderizado) reage focando o card. Um id não serviria — pedir foco duas
   // vezes pro mesmo card não mudaria o valor e o efeito não rodaria.
@@ -69,7 +76,8 @@ interface CrewDockState {
   setFocusedId: (id: string | null) => void
   // Ctrl+J: abre o dock (se preciso) e pede o foco pro card corrente.
   requestFocus: () => void
-  openPeek: (id: string) => void
+  openPeek: (id: string, mode?: CrewPeekMode) => void
+  setPeekMode: (mode: CrewPeekMode) => void
   closePeek: () => void
 }
 
@@ -80,6 +88,7 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   width: persisted.width,
   focusedId: null,
   peekId: null,
+  peekMode: 'chat',
   focusNonce: 0,
 
   expand: () => {
@@ -114,7 +123,9 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
     set({ focusNonce: get().focusNonce + 1 })
   },
 
-  openPeek: (peekId) => set({ peekId, focusedId: peekId }),
+  openPeek: (peekId, peekMode = 'chat') => set({ peekId, peekMode, focusedId: peekId }),
 
-  closePeek: () => set({ peekId: null }),
+  setPeekMode: (peekMode) => set({ peekMode }),
+
+  closePeek: () => set({ peekId: null, peekMode: 'chat' }),
 }))
