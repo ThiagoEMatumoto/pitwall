@@ -27,6 +27,8 @@ import { composeJobKickoff } from '../job-kickoff'
 import { setSpawnHandoffChild, type SpawnHandoffChildInput } from '../handoff/spawn-child'
 import { setPref } from '../prefs-store'
 import type {
+  ContentContract,
+  ContentGateRun,
   Feature,
   JobRun,
   KeyResult,
@@ -979,5 +981,160 @@ describe('mcp tools — session_handoff sem gate', () => {
       expect(motherOf(forced.handoffId as string)).toBe(MOTHER_B)
       expect(spawned).toHaveLength(2)
     })
+  })
+})
+// Content contract: o valor da feature é o gate REPROVAR sem quebrar a sessão —
+// quem decide o que fazer com um material não-entregável é quem chamou, não a
+// tool. E é o schema, não o banco, que recusa emenda sem linha de changelog.
+describe('mcp tools — content contracts', () => {
+  const CONTRATO_BASE = {
+    title: 'Orientação a requerentes',
+    outputLabel: 'roteiro',
+    status: 'active' as const,
+    summary: 'contrato inicial',
+    reason: 'briefing dos vídeos do INSS',
+    forbiddenFacts: [
+      {
+        id: 'bpc-vitalicio',
+        claim: 'o BPC é vitalício',
+        forms: ['BPC é vitalício'],
+        neutralForm: 'o BPC é revisto periodicamente',
+      },
+    ],
+  }
+
+  function novoContrato(slug: string): ContentContract {
+    const { contract } = call<{ contract: ContentContract }>('content_contract_upsert', {
+      ...CONTRATO_BASE,
+      slug,
+    })
+    return contract
+  }
+
+  it('content_contract_get por slug devolve o contrato inteiro e o changelog', () => {
+    const criado = novoContrato('inss-get')
+    const { contract, versions } = call<{
+      contract: ContentContract
+      versions: Array<{ version: number; summary: string }>
+    }>('content_contract_get', { slug: 'inss-get' })
+
+    expect(contract.id).toBe(criado.id)
+    expect(contract.outputLabel).toBe('roteiro')
+    expect(contract.forbiddenFacts[0].neutralForm).toBe('o BPC é revisto periodicamente')
+    expect(versions.map((v) => v.version)).toEqual([1])
+  })
+
+  it('content_contract_upsert sem a linha de changelog falha no parse (zod), sem tocar no banco', () => {
+    expect(() =>
+      tool('content_contract_upsert').handler({
+        slug: 'sem-changelog',
+        title: 'X',
+        outputLabel: 'roteiro',
+      }),
+    ).toThrow()
+    expect(() =>
+      tool('content_contract_upsert').handler({
+        slug: 'sem-changelog',
+        title: 'X',
+        outputLabel: 'roteiro',
+        summary: 'só o summary',
+      }),
+    ).toThrow()
+
+    expect(notify.calls).toEqual([])
+    const row = getDb()
+      .prepare('SELECT COUNT(*) AS n FROM content_contracts WHERE slug = ?')
+      .get('sem-changelog') as { n: number }
+    expect(row.n).toBe(0)
+  })
+
+  it('content_contract_upsert emenda o contrato existente: bumpa versão e broadcasta', () => {
+    const criado = novoContrato('inss-bump')
+    const { contract, created, bumped } = call<{
+      contract: ContentContract
+      created: boolean
+      bumped: boolean
+    }>('content_contract_upsert', {
+      slug: 'inss-bump',
+      status: 'draft',
+      summary: 'volta pra rascunho',
+      reason: 'revisão jurídica pendente',
+    })
+
+    expect(created).toBe(false)
+    expect(bumped).toBe(true)
+    expect(contract.version).toBe(criado.version + 1)
+    expect(notify.calls.at(-1)).toEqual(['contentContract:updated', contract])
+  })
+
+  it('content_gate_run com gate bloqueante retorna blocking:true e NÃO lança', () => {
+    novoContrato('inss-bloqueante')
+    const res = call<{ run: ContentGateRun; passed: boolean; blocking: boolean; evidence: string }>(
+      'content_gate_run',
+      {
+        slug: 'inss-bloqueante',
+        gate: 'forbidden-facts',
+        material: 'Muita gente acha que o BPC é vitalício.\n',
+      },
+    )
+
+    expect(res.passed).toBe(false)
+    expect(res.blocking).toBe(true)
+    expect(res.run.status).toBe('failed')
+    expect(res.evidence).toMatch(/fato proibido/)
+    // A forma neutra viaja na evidência: reprovar sem dizer o que escrever no
+    // lugar devolveria o problema pro modelo sem a saída.
+    expect(res.evidence).toMatch(/o BPC é revisto periodicamente/)
+  })
+
+  it('content_gate_run grava a linha em content_gate_runs e dispara o broadcast', () => {
+    const contrato = novoContrato('inss-evidencia')
+    const antes = notify.calls.length
+    const { run } = call<{ run: ContentGateRun }>('content_gate_run', {
+      slug: 'inss-evidencia',
+      gate: 'forbidden-facts',
+      material: 'O BPC é vitalício, sim.\n',
+    })
+
+    const row = getDb()
+      .prepare('SELECT contract_id, contract_version, gate, status, blocking_count FROM content_gate_runs WHERE id = ?')
+      .get(run.id) as {
+      contract_id: string
+      contract_version: number
+      gate: string
+      status: string
+      blocking_count: number
+    }
+    expect(row.contract_id).toBe(contrato.id)
+    expect(row.contract_version).toBe(contrato.version)
+    expect(row.gate).toBe('forbidden-facts')
+    expect(row.status).toBe('failed')
+    expect(row.blocking_count).toBe(1)
+    expect(notify.calls.slice(antes)).toEqual([['contentGateRun:updated', run]])
+  })
+
+  it('content_gate_run_list filtra por contrato e gate, mais recente primeiro', () => {
+    const contrato = novoContrato('inss-historico')
+    call('content_gate_run', {
+      slug: 'inss-historico',
+      gate: 'forbidden-facts',
+      material: 'Texto limpo.\n',
+    })
+    call('content_gate_run', {
+      slug: 'inss-historico',
+      gate: 'scope',
+      material: 'Texto limpo.\n',
+    })
+
+    const { items } = call<{ items: ContentGateRun[] }>('content_gate_run_list', {
+      contractId: contrato.id,
+    })
+    expect(items.map((r) => r.gate)).toEqual(['scope', 'forbidden-facts'])
+
+    const so = call<{ items: ContentGateRun[] }>('content_gate_run_list', {
+      contractId: contrato.id,
+      gate: 'scope',
+    })
+    expect(so.items).toHaveLength(1)
   })
 })
