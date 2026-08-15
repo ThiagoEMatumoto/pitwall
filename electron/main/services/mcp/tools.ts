@@ -12,9 +12,11 @@ import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
 import * as jobStore from '../scheduled-job-store'
 import * as repoPullStore from '../repo-pull-store'
+import * as contentStore from '../content-contract-store'
 // Seam leaf (sem electron): dispara o run imediato sem importar a cadeia
 // job-scheduler → job-runner → ipc/sessions (que criaria ciclo com mcp/server).
 import { runJobNow } from '../job-run-now'
+import { runAndRecordGate } from '../content-gate-run'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 // Seam de injeção mãe→filha (importa SÓ de inject.ts, não de ipc/sessions.ts —
 // evita arrastar electron/ipcMain pros handlers e permite mockar nos testes).
@@ -30,8 +32,16 @@ import { getPref } from '../prefs-store'
 import { OBSERVE_ONLY_PERMISSION_MODES, permissionModeForHandoffMode } from '../spawn-flags'
 import { randomUUID } from 'node:crypto'
 import type {
+  AllowedFact,
+  ContentAudience,
+  DeliveryLimit,
+  EthicalRule,
   FeatureObjectiveLink,
+  ForbiddenFact,
+  OutOfScopeItem,
+  ProductionInvariant,
   RepoDependency,
+  SourcePrecedenceEntry,
   TaskLink,
 } from '../../../../shared/types/ipc'
 
@@ -1156,6 +1166,313 @@ function repoPullTools(): ToolDef[] {
   ]
 }
 
+// ---- content contracts ----
+//
+// O contrato de conteúdo é editável SÓ por aqui (a UI é read-only): quem escreve
+// pra humano lê o contrato antes de produzir e roda os gates antes de entregar.
+// Por isso `summary`/`reason` são obrigatórios no upsert — emenda sem linha de
+// changelog é mutação silenciosa, exatamente o que a feature existe pra impedir.
+
+const contentContractStatus = z.enum(['draft', 'active', 'archived'])
+const contentGateKind = z.enum([
+  'tone-lint',
+  'forbidden-facts',
+  'scope',
+  'scope-checklist',
+  'delivery-limit',
+  'positive-evidence',
+])
+const contentGateStatus = z.enum(['passed', 'failed', 'skipped', 'error'])
+// 'confirmado-falso' (e não 'confirmado') porque o modelo recebe este enum sem
+// mais contexto: o status significa "a checagem derrubou a afirmação", e continua
+// bloqueando no gate — o oposto do que "confirmado" sugere num briefing.
+const forbiddenFactStatus = z.enum(['proibido', 'liberado', 'confirmado-falso'])
+const allowedFactScope = z.enum(['afirmavel', 'condicional', 'somente-com-fonte'])
+const toneSeverity = z.enum(['bloqueante', 'aviso'])
+
+// Cada sub-schema fecha com um `.transform` pro tipo da entidade: o modelo pode
+// omitir campo opcional, mas o que chega no store é sempre a forma completa
+// (null explícito, lista vazia) — senão o diff de versão acusaria mudança onde
+// só houve ausência de campo.
+const contentAudienceSchema = z
+  .object({
+    who: z.string().min(1),
+    notWho: z.array(z.string()).optional(),
+    situation: z.string().nullish(),
+    assumptions: z.array(z.string()).optional(),
+  })
+  .transform(
+    (a): ContentAudience => ({
+      who: a.who,
+      notWho: a.notWho ?? [],
+      situation: a.situation ?? null,
+      assumptions: a.assumptions ?? [],
+    }),
+  )
+
+const ethicalRuleSchema = z
+  .object({ id: z.string().min(1), rule: z.string().min(1), rationale: z.string().nullish() })
+  .transform((r): EthicalRule => ({ id: r.id, rule: r.rule, rationale: r.rationale ?? null }))
+
+const allowedFactSchema = z
+  .object({
+    id: z.string().min(1),
+    statement: z.string().min(1),
+    scope: allowedFactScope,
+    source: z.string().nullish(),
+    appliesTo: z.array(z.string()).nullish(),
+  })
+  .transform(
+    (f): AllowedFact => ({
+      id: f.id,
+      statement: f.statement,
+      scope: f.scope,
+      source: f.source ?? null,
+      appliesTo: f.appliesTo ?? null,
+    }),
+  )
+
+const forbiddenFactSchema = z
+  .object({
+    id: z.string().min(1),
+    claim: z.string().min(1),
+    forms: z.array(z.string()).optional(),
+    neutralForm: z.string(),
+    reason: z.string().nullish(),
+    status: forbiddenFactStatus.optional(),
+    statusChangedAt: z.number().nullish(),
+    appliesTo: z.array(z.string()).nullish(),
+  })
+  .transform(
+    (f): ForbiddenFact => ({
+      id: f.id,
+      claim: f.claim,
+      forms: f.forms ?? [],
+      neutralForm: f.neutralForm,
+      reason: f.reason ?? null,
+      status: f.status ?? 'proibido',
+      statusChangedAt: f.statusChangedAt ?? null,
+      appliesTo: f.appliesTo ?? null,
+    }),
+  )
+
+const outOfScopeItemSchema = z
+  .object({
+    id: z.string().min(1),
+    item: z.string().min(1),
+    owner: z.string().nullish(),
+    forms: z.array(z.string()).optional(),
+    question: z.string().nullish(),
+  })
+  .transform(
+    (i): OutOfScopeItem => ({
+      id: i.id,
+      item: i.item,
+      owner: i.owner ?? null,
+      forms: i.forms ?? [],
+      question: i.question ?? null,
+    }),
+  )
+
+// snake_case porque é a grafia do YAML de tom do atelier, que é o que a coluna
+// JSON guarda e o linter lê — traduzir aqui criaria duas verdades.
+const toneHardRuleSchema = z.object({
+  id: z.string().min(1),
+  regra: z.string().optional(),
+  check: z.string().optional(),
+  porque: z.string().optional(),
+  severidade: toneSeverity.optional(),
+  threshold: z.number().optional(),
+  threshold_min: z.number().optional(),
+  threshold_max: z.number().optional(),
+  threshold_palavras_por_ocorrencia: z.number().optional(),
+  n_minimo_frases: z.number().int().positive().optional(),
+})
+
+const toneSpecSchema = z.object({
+  id: z.string().optional(),
+  tone_words: z.array(z.string()).optional(),
+  anti_tone_words: z.array(z.string()).optional(),
+  densidade_tone_words_min_por_100_palavras: z.number().optional(),
+  hard_rules: z.array(toneHardRuleSchema).optional(),
+  paragrafo_canonico: z.string().optional(),
+})
+
+const deliveryLimitSchema = z
+  .object({
+    channel: z.string().min(1),
+    maxBytes: z.number().int().positive().nullish(),
+    maxDurationSec: z.number().positive().nullish(),
+    notes: z.string().nullish(),
+  })
+  .transform(
+    (l): DeliveryLimit => ({
+      channel: l.channel,
+      maxBytes: l.maxBytes ?? null,
+      maxDurationSec: l.maxDurationSec ?? null,
+      notes: l.notes ?? null,
+    }),
+  )
+
+const sourcePrecedenceSchema = z
+  .object({ rank: z.number().int(), source: z.string().min(1), note: z.string().nullish() })
+  .transform(
+    (s): SourcePrecedenceEntry => ({ rank: s.rank, source: s.source, note: s.note ?? null }),
+  )
+
+const productionInvariantSchema = z
+  .object({ id: z.string().min(1), invariant: z.string().min(1), rationale: z.string().nullish() })
+  .transform(
+    (p): ProductionInvariant => ({ id: p.id, invariant: p.invariant, rationale: p.rationale ?? null }),
+  )
+
+// id OU slug: o modelo conhece o slug (é o que ele lê no briefing), a UI conhece
+// o id. Exigir os dois seria fingir que o modelo tem o id.
+const contentContractGetSchema = z
+  .object({ id: z.string().min(1).optional(), slug: z.string().min(1).optional() })
+  .refine((v) => Boolean(v.id ?? v.slug), { message: 'informe id ou slug' })
+
+const contentContractUpsertSchema = z.object({
+  slug: z.string().min(1),
+  title: z.string().min(1).optional(),
+  outputLabel: z.string().min(1).optional(),
+  status: contentContractStatus.optional(),
+  audience: contentAudienceSchema.optional(),
+  ethicalLine: z.array(ethicalRuleSchema).optional(),
+  allowedFacts: z.array(allowedFactSchema).optional(),
+  forbiddenFacts: z.array(forbiddenFactSchema).optional(),
+  outOfScope: z.array(outOfScopeItemSchema).optional(),
+  tone: toneSpecSchema.optional(),
+  deliveryLimits: z.array(deliveryLimitSchema).optional(),
+  sourcePrecedence: z.array(sourcePrecedenceSchema).optional(),
+  productionInvariants: z.array(productionInvariantSchema).optional(),
+  // A linha de changelog. Obrigatória no schema, e não só no store, pra que a
+  // recusa chegue ao modelo como erro de input e não como exceção de banco.
+  summary: z.string().min(1),
+  reason: z.string().min(1),
+})
+
+const contentGateAttestationSchema = z.object({
+  answers: z.record(z.string(), z.string()).optional(),
+  command: z.string().optional(),
+  output: z.string().optional(),
+})
+
+const contentGateRunSchema = z
+  .object({
+    contractId: z.string().min(1).optional(),
+    slug: z.string().min(1).optional(),
+    gate: contentGateKind,
+    material: z.string(),
+    materialRef: z.string().nullish(),
+    channel: z.string().nullish(),
+    track: z.string().nullish(),
+    attestation: contentGateAttestationSchema.nullish(),
+  })
+  .refine((v) => Boolean(v.contractId ?? v.slug), { message: 'informe contractId ou slug' })
+
+const contentGateRunListSchema = z.object({
+  contractId: z.string().optional(),
+  contractVersion: z.number().int().positive().optional(),
+  gate: contentGateKind.optional(),
+  status: contentGateStatus.optional(),
+  limit: z.number().int().positive().optional(),
+})
+
+function contentContractTools(notify: McpNotify): ToolDef[] {
+  return [
+    {
+      name: 'content_contract_get',
+      title: 'Get content contract',
+      description:
+        'Read a content contract by slug or id BEFORE writing anything for humans. Returns the whole contract: audience (who and notWho), ethicalLine, allowedFacts (the only claims you may make), forbiddenFacts (with the neutral wording that replaces each), outOfScope (someone else work), tone spec, deliveryLimits, sourcePrecedence, productionInvariants and the current version. Treat it as binding; do not paraphrase it from memory.',
+      inputSchema: contentContractGetSchema,
+      handler: (args) => {
+        const { id, slug } = contentContractGetSchema.parse(args)
+        const contract = id ? contentStore.get(id) : contentStore.getBySlug(slug as string)
+        if (!contract) throw new Error(`content contract não encontrado: ${id ?? slug}`)
+        // O changelog vai junto: quem lê o contrato precisa saber por que ele
+        // está assim, e é a versão que a evidência de gate carimba.
+        return ok({ contract, versions: contentStore.listVersions(contract.id) })
+      },
+    },
+    {
+      name: 'content_contract_upsert',
+      title: 'Create or amend a content contract',
+      description:
+        'Create a content contract (first call for a slug, which then requires title and outputLabel) or amend an existing one. Every call needs summary and reason: they are the changelog line for the new version. Amending bumps the version and snapshots the whole contract; sending the same content twice changes nothing and records no version. Use this when the contract contradicts a verified primary source — amend it, never ignore it silently.',
+      inputSchema: contentContractUpsertSchema,
+      handler: (args) => {
+        const input = contentContractUpsertSchema.parse(args)
+        const existing = contentStore.getBySlug(input.slug)
+
+        if (!existing) {
+          if (!input.title || !input.outputLabel) {
+            throw new Error(
+              `contrato novo (slug "${input.slug}") exige title e outputLabel — o rótulo de saída é invariante do contrato`,
+            )
+          }
+          const contract = contentStore.create({ ...input, title: input.title, outputLabel: input.outputLabel })
+          notify.broadcast('contentContract:updated', contract)
+          return ok({ contract, created: true })
+        }
+
+        const contract = contentStore.update({ ...input, id: existing.id })
+        notify.broadcast('contentContract:updated', contract)
+        // `bumped: false` = nada mudou de fato (no-op idempotente), não erro.
+        return ok({ contract, created: false, bumped: contract.version > existing.version })
+      },
+    },
+    {
+      name: 'content_gate_run',
+      title: 'Run a content gate',
+      description:
+        'Run one gate of the contract against the material and record the evidence against the current contract version. Analytic gates (tone-lint, forbidden-facts, scope, delivery-limit) read the material on their own; attestation gates (scope-checklist, positive-evidence) need the attestation payload and fail without it. For delivery-limit, material is the ABSOLUTE path of the file to measure and channel selects the limit. blocking true means NOT deliverable: fix the material, do not report success over it. Failing a gate is a result, not an error.',
+      inputSchema: contentGateRunSchema,
+      handler: (args) => {
+        const input = contentGateRunSchema.parse(args)
+        const contract = input.contractId
+          ? contentStore.get(input.contractId)
+          : contentStore.getBySlug(input.slug as string)
+        if (!contract) {
+          throw new Error(`content contract não encontrado: ${input.contractId ?? input.slug}`)
+        }
+
+        const { run, outcome } = runAndRecordGate({
+          contractId: contract.id,
+          gate: input.gate,
+          material: input.material,
+          materialRef: input.materialRef ?? null,
+          channel: input.channel ?? null,
+          track: input.track ?? null,
+          attestation: input.attestation ?? null,
+        })
+        notify.broadcast('contentGateRun:updated', run)
+        // passed/blocking viajam fora da row porque `blocking` não é derivável
+        // dela: gate que não conseguiu medir tem zero findings e mesmo assim
+        // barra a entrega.
+        return ok({
+          run,
+          passed: outcome.passed,
+          blocking: outcome.blocking,
+          evidence: outcome.evidence,
+        })
+      },
+    },
+    {
+      name: 'content_gate_run_list',
+      title: 'List content gate runs',
+      description:
+        'List the gate run history (gate, status, evidence, findings, blocking/warning counts, contract version), most recent first. Optional filters: contractId, contractVersion, gate, status, limit.',
+      inputSchema: contentGateRunListSchema,
+      handler: (args) => {
+        const filter = contentGateRunListSchema.parse(args)
+        return ok({ items: contentStore.listGateRuns(filter) })
+      },
+    },
+  ]
+}
+
 export function buildTools(
   notify: McpNotify,
   ctx: McpRequestContext = ANONYMOUS_CONTEXT,
@@ -1168,6 +1485,7 @@ export function buildTools(
     ...handoffTools(notify, ctx),
     ...scheduledJobTools(notify),
     ...repoPullTools(),
+    ...contentContractTools(notify),
   ]
 }
 

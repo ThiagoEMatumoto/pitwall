@@ -22,6 +22,7 @@ import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
 import { OverviewArea } from '@/features/overview/OverviewArea'
 import { TasksArea } from '@/features/tasks/TasksArea'
 import { JobsArea } from '@/features/jobs/JobsArea'
+import { ContentArea } from '@/features/content/ContentArea'
 import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
@@ -695,6 +696,8 @@ export function AppShell() {
       {area === 'handoffs' && <HandoffsPanel />}
 
       {area === 'dossiers' && <DossiersPanel />}
+
+      {area === 'content' && <ContentArea />}
 
       {area === 'tasks' && <TasksArea />}
 

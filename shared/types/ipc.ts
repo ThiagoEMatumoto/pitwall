@@ -1128,6 +1128,319 @@ export interface JobRunListFilter {
   limit?: number
 }
 
+// ---- Content Contract ----
+
+// draft = em redação; active = vinculante (é o que a sessão lê antes de
+// produzir); archived = histórico, não governa mais nada.
+export type ContentContractStatus = 'draft' | 'active' | 'archived'
+
+// Seis gates, não cinco: `scope` (analítico, procura o assunto proibido no
+// material) e `scope-checklist` (atestação, exige resposta item a item) são
+// naturezas diferentes — um registry bimodal ficaria ambíguo.
+export type ContentGateKind =
+  | 'tone-lint'
+  | 'forbidden-facts'
+  | 'scope'
+  | 'scope-checklist'
+  | 'delivery-limit'
+  | 'positive-evidence'
+
+// skipped = gate não aplicável (ex: contrato sem limite pro canal); error = o
+// gate não conseguiu rodar. Nenhum dos dois é 'passed' — falha de execução nunca
+// pode ser lida como aprovação.
+export type ContentGateStatus = 'passed' | 'failed' | 'skipped' | 'error'
+
+// Vocabulário do lint de tom (bloqueante = não entregável).
+export type ContentGateSeverity = 'bloqueante' | 'aviso'
+
+// O tone spec é o equivalente JSON do YAML de tom do atelier, e por isso vive em
+// snake_case: é a grafia que sai do YAML, entra na coluna JSON e o linter lê.
+// Manter uma segunda grafia camelCase criaria duas verdades e um adaptador pra
+// conciliá-las a cada leitura.
+//
+// A definição mora AQUI, e não no port (`content-gates/tone-lint.ts`), porque
+// `shared/` também compila no renderer (tsconfig.web.json) e importar de
+// `electron/main/**` inverteria a única direção que a fronteira permite. O port
+// importa daqui e re-exporta pra quem já o consumia.
+export type ToneSeverity = ContentGateSeverity
+
+// Quase tudo é opcional porque o spec chega de JSON do banco, editável por uma
+// sessão via MCP: campo ausente é caso previsto (o linter reporta a regra como
+// não aplicada), não erro.
+export interface ToneHardRule {
+  id: string
+  regra?: string
+  check?: string
+  porque?: string
+  severidade?: ToneSeverity
+  /** teto de `frase-curta`; piso de `variacao-de-frase` */
+  threshold?: number
+  threshold_min?: number
+  threshold_max?: number
+  threshold_palavras_por_ocorrencia?: number
+  /** amostra mínima de `variacao-de-frase`; ausente = regra não roda */
+  n_minimo_frases?: number
+}
+
+export interface ToneSpec {
+  id?: string
+  tone_words?: string[]
+  anti_tone_words?: string[]
+  densidade_tone_words_min_por_100_palavras?: number
+  hard_rules?: ToneHardRule[]
+  paragrafo_canonico?: string
+}
+
+// Ciclo de vida de um fato proibido: nasce 'proibido'; vira 'liberado' quando
+// alguém confere contra fonte primária e a afirmação se sustenta; vira
+// 'confirmado-falso' quando a checagem confirma que a afirmação é falsa mesmo.
+// O sufixo '-falso' é obrigatório no nome: no vocabulário de quem escreve o
+// briefing, "CONFIRMADO" costuma significar o oposto (conferido e verdadeiro,
+// pode dizer), e transcrever isso para um status que libera inverteria o gate
+// que esta feature existe para segurar.
+// O que cada status faz no gate `forbidden-facts`:
+//   'proibido'         — BLOQUEIA: ninguém checou ainda.
+//   'liberado'         — NÃO bloqueia: checado contra fonte primária e se sustenta.
+//   'confirmado-falso' — BLOQUEIA: a checagem confirmou que a afirmação é falsa.
+// Os três estados ficam no contrato porque é o histórico da checagem que impede
+// refazer a discussão.
+export type ForbiddenFactStatus = 'proibido' | 'liberado' | 'confirmado-falso'
+
+// Como o fato permitido pode ser dito: 'afirmavel' direto; 'condicional' só com
+// a condição declarada na mesma frase; 'somente-com-fonte' exige citar a fonte.
+export type AllowedFactScope = 'afirmavel' | 'condicional' | 'somente-com-fonte'
+
+// `notWho` existe porque as falhas mais caras foram orientar o destinatário
+// sobre trabalho que era de outra pessoa — declarar quem NÃO é o público é o que
+// dá ao gate de escopo algo verificável.
+export interface ContentAudience {
+  who: string
+  notWho: string[]
+  situation: string | null
+  assumptions: string[]
+}
+
+export interface EthicalRule {
+  id: string
+  rule: string
+  rationale: string | null
+}
+
+// `appliesTo` vazio/null = vale pra todas as trilhas. O campo existe porque o
+// briefing real tem regra permitida numa trilha e proibida em outra.
+export interface AllowedFact {
+  id: string
+  statement: string
+  scope: AllowedFactScope
+  source: string | null
+  appliesTo?: string[] | null
+}
+
+// `forms` são as formas literais que o gate procura no material; `neutralForm` é
+// o texto que as substitui — a evidência traz o trecho E a forma neutra, senão o
+// gate reprova sem dizer o que escrever no lugar.
+export interface ForbiddenFact {
+  id: string
+  claim: string
+  forms: string[]
+  neutralForm: string
+  reason: string | null
+  status: ForbiddenFactStatus
+  statusChangedAt: number | null
+  appliesTo?: string[] | null
+}
+
+// `question` é o que o scope-checklist cobra na atestação; `forms` é o que o
+// gate `scope` procura sozinho no material.
+export interface OutOfScopeItem {
+  id: string
+  item: string
+  owner: string | null
+  forms: string[]
+  question: string | null
+}
+
+export interface DeliveryLimit {
+  channel: string
+  maxBytes: number | null
+  maxDurationSec: number | null
+  notes: string | null
+}
+
+export interface SourcePrecedenceEntry {
+  rank: number
+  source: string
+  note: string | null
+}
+
+export interface ProductionInvariant {
+  id: string
+  invariant: string
+  rationale: string | null
+}
+
+export interface ContentGateFinding {
+  rule: string
+  severity: ContentGateSeverity
+  message: string
+  line: number | null
+  column: number | null
+  excerpt: string | null
+  // Forma neutra declarada no contrato, quando o gate tem uma a oferecer.
+  replacement?: string | null
+}
+
+export interface ContentContract {
+  id: string
+  slug: string
+  title: string
+  status: ContentContractStatus
+  version: number
+  outputLabel: string
+  audience: ContentAudience
+  ethicalLine: EthicalRule[]
+  allowedFacts: AllowedFact[]
+  forbiddenFacts: ForbiddenFact[]
+  outOfScope: OutOfScopeItem[]
+  tone: ToneSpec
+  deliveryLimits: DeliveryLimit[]
+  sourcePrecedence: SourcePrecedenceEntry[]
+  productionInvariants: ProductionInvariant[]
+  createdAt: number
+  updatedAt: number
+}
+
+// Snapshot append-only. `snapshot` é o contrato ÍNTEGRO como valia nesta versão
+// — não um diff — porque a evidência de um gate precisa do texto inteiro que
+// estava vigente, não da reconstrução por replay.
+export interface ContentContractVersion {
+  id: string
+  contractId: string
+  version: number
+  summary: string
+  reason: string
+  changedFields: string[]
+  // null quando o snapshot está ilegível (corrupção): a linha de changelog
+  // continua legível mesmo assim.
+  snapshot: ContentContract | null
+  createdAt: number
+}
+
+export interface ContentGateRun {
+  id: string
+  contractId: string
+  contractVersion: number
+  gate: ContentGateKind
+  status: ContentGateStatus
+  materialRef: string | null
+  materialHash: string | null
+  findings: ContentGateFinding[]
+  // true quando findings passou de 64 KB e a cauda foi cortada na gravação.
+  findingsTruncated: boolean
+  evidence: string | null
+  blockingCount: number
+  warningCount: number
+  createdAt: number
+}
+
+export interface CreateContentContractInput {
+  slug: string
+  title: string
+  outputLabel: string
+  status?: ContentContractStatus
+  audience?: ContentAudience
+  ethicalLine?: EthicalRule[]
+  allowedFacts?: AllowedFact[]
+  forbiddenFacts?: ForbiddenFact[]
+  outOfScope?: OutOfScopeItem[]
+  tone?: ToneSpec
+  deliveryLimits?: DeliveryLimit[]
+  sourcePrecedence?: SourcePrecedenceEntry[]
+  productionInvariants?: ProductionInvariant[]
+  // Linha de changelog da versão 1 (o store aplica default quando omitida).
+  summary?: string
+  reason?: string
+}
+
+// `summary` e `reason` são obrigatórios: update com diff é sempre bump, e bump
+// sem changelog é mutação silenciosa. Campo omitido = mantém o atual.
+export interface UpdateContentContractInput {
+  id: string
+  summary: string
+  reason: string
+  slug?: string
+  title?: string
+  status?: ContentContractStatus
+  outputLabel?: string
+  audience?: ContentAudience
+  ethicalLine?: EthicalRule[]
+  allowedFacts?: AllowedFact[]
+  forbiddenFacts?: ForbiddenFact[]
+  outOfScope?: OutOfScopeItem[]
+  tone?: ToneSpec
+  deliveryLimits?: DeliveryLimit[]
+  sourcePrecedence?: SourcePrecedenceEntry[]
+  productionInvariants?: ProductionInvariant[]
+}
+
+// Upsert por slug (o MCP conhece o slug, não o id interno): sem contrato com
+// aquele slug é create — e aí `title`/`outputLabel` passam a ser obrigatórios,
+// validado por quem chama.
+export interface UpsertContentContractInput extends Omit<
+  UpdateContentContractInput,
+  'id' | 'slug'
+> {
+  slug: string
+}
+
+export interface ContentContractListFilter {
+  status?: ContentContractStatus
+  search?: string
+}
+
+export interface ContentGateRunListFilter {
+  contractId?: string
+  contractVersion?: number
+  gate?: ContentGateKind
+  status?: ContentGateStatus
+  limit?: number
+}
+
+export interface CreateContentGateRunInput {
+  contractId: string
+  contractVersion: number
+  gate: ContentGateKind
+  status: ContentGateStatus
+  materialRef?: string | null
+  materialHash?: string | null
+  findings?: ContentGateFinding[]
+  evidence?: string | null
+  blockingCount?: number
+  warningCount?: number
+}
+
+// Respostas dos gates que não conseguem se verificar sozinhos: `answers` é item
+// de out-of-scope → resposta; `command`/`output` sustentam o positive-evidence
+// (o output precisa ter medida literal, não "funcionou").
+export interface ContentGateAttestation {
+  answers?: Record<string, string>
+  command?: string
+  output?: string
+}
+
+export interface RunContentGateInput {
+  contractId: string
+  gate: ContentGateKind
+  // Texto do material, ou caminho quando o gate mede o arquivo (delivery-limit).
+  material: string
+  materialRef?: string | null
+  channel?: string | null
+  // Trilha do material (eixo de `appliesTo` dos fatos). Sem ela todo fato vale —
+  // errar pro lado de reprovar é o barato.
+  track?: string | null
+  attestation?: ContentGateAttestation | null
+}
+
 // ---- Reuniões (Meeting Intelligence) ----
 
 export type MeetingStatus =
@@ -2308,6 +2621,24 @@ export interface Api {
     onUpdated(handler: (payload: unknown) => void): () => void
     // Payload = JobRun atualizado — sinal de recarga do histórico de runs.
     onRunUpdated(handler: (payload: unknown) => void): () => void
+  }
+  contentContracts: {
+    list(filter?: ContentContractListFilter): Promise<ContentContract[]>
+    get(id: string): Promise<ContentContract | null>
+    // Cria (v1) ou bumpa por slug. Sem diff real é no-op idempotente: devolve a
+    // cabeça intocada, sem gravar linha de changelog.
+    upsert(input: UpsertContentContractInput): Promise<ContentContract>
+    // Changelog: uma linha por versão (summary/reason/changedFields), da mais
+    // recente pra mais antiga. Contrato recém-criado tem exatamente a v1.
+    listVersions(contractId: string): Promise<ContentContractVersion[]>
+    listGateRuns(filter?: ContentGateRunListFilter): Promise<ContentGateRun[]>
+    // Roda o gate e persiste a evidência contra a versão vigente do contrato.
+    // Reprovar não lança: o run gravado com status 'failed' É o resultado.
+    runGate(input: RunContentGateInput): Promise<ContentGateRun>
+    // Payload = ContentContract completo ou marcador {id, deleted}.
+    onUpdated(handler: (payload: unknown) => void): () => void
+    // Payload = ContentGateRun gravado — sinal de recarga do histórico.
+    onGateRunUpdated(handler: (payload: unknown) => void): () => void
   }
   meetings: {
     list(filter?: MeetingListFilter): Promise<Meeting[]>

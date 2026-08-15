@@ -48,6 +48,10 @@ import type {
   UpdateScheduledJobInput,
   JobRunListFilter,
   JobSchedule,
+  ContentContractListFilter,
+  ContentGateRunListFilter,
+  RunContentGateInput,
+  UpsertContentContractInput,
   MeetingListFilter,
   MeetingSegment,
   MeetingSpeaker,
@@ -351,6 +355,17 @@ const api: Api = {
       invoke('scheduledJobs:preview-runs', schedule, count),
     onUpdated: (handler) => subscribe<unknown>('scheduledJob:updated', handler),
     onRunUpdated: (handler) => subscribe<unknown>('jobRun:updated', handler),
+  },
+  contentContracts: {
+    list: (filter?: ContentContractListFilter) => invoke('contentContracts:list', filter),
+    get: (id: string) => invoke('contentContracts:get', id),
+    upsert: (input: UpsertContentContractInput) => invoke('contentContracts:upsert', input),
+    listVersions: (contractId: string) => invoke('contentContracts:list-versions', contractId),
+    listGateRuns: (filter?: ContentGateRunListFilter) =>
+      invoke('contentContracts:list-gate-runs', filter),
+    runGate: (input: RunContentGateInput) => invoke('contentContracts:run-gate', input),
+    onUpdated: (handler) => subscribe<unknown>('contentContract:updated', handler),
+    onGateRunUpdated: (handler) => subscribe<unknown>('contentGateRun:updated', handler),
   },
   meetings: {
     list: (filter?: MeetingListFilter) => invoke('meetings:list', filter),
