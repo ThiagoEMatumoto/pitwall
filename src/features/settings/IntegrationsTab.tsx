@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { FileSearch, Loader2 } from 'lucide-react'
 import { secretsApi } from '@/lib/ipc'
 import { SERVICE_REGISTRY, type ServiceDef } from '@shared/service-registry'
-import type { ApplyImportResult, ImportCandidate } from '@shared/types/ipc'
+import type {
+  ApplyImportResult,
+  ImportCandidate,
+  ServiceHealth,
+  ServiceStatusEntry,
+} from '@shared/types/ipc'
 
 // Aba "Integrações": estado dos serviços que o env hub conhece (registry) +
 // importador de credenciais dos .env espalhados em ~/projetos.
@@ -45,6 +50,19 @@ function serviceTitle(id: string | undefined): string | null {
   return def ? def.title : null
 }
 
+const HEALTH_LABEL: Record<ServiceHealth['status'], string> = {
+  ok: 'health ok',
+  error: 'health falhou',
+  unconfigured: 'health sem credencial',
+  unsupported: 'health —',
+}
+
+function healthColor(status: ServiceHealth['status']): string {
+  if (status === 'ok') return 'var(--color-success, #22c55e)'
+  if (status === 'error') return 'var(--color-danger, #ef4444)'
+  return 'var(--color-text-dim)'
+}
+
 export function IntegrationsTab({ open }: { open: boolean }) {
   const [vaultKeys, setVaultKeys] = useState<Set<string>>(new Set())
   const [candidates, setCandidates] = useState<ImportCandidate[] | null>(null)
@@ -53,22 +71,29 @@ export function IntegrationsTab({ open }: { open: boolean }) {
   const [scanning, setScanning] = useState(false)
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<ApplyImportResult | null>(null)
+  const [statuses, setStatuses] = useState<Record<string, ServiceStatusEntry> | null>(null)
 
   const reloadVault = useCallback(async () => {
     const entries = await secretsApi.list()
     setVaultKeys(new Set(entries.filter((e) => e.hasValue).map((e) => e.key)))
   }, [])
 
+  const reloadStatuses = useCallback(async () => {
+    const list = await secretsApi.servicesStatus()
+    setStatuses(Object.fromEntries(list.map((entry) => [entry.id, entry])))
+  }, [])
+
   useEffect(() => {
     if (!open) return
     void reloadVault()
+    void reloadStatuses()
     return () => {
       setCandidates(null)
       setChecked(new Set())
       setSourceByKey({})
       setResult(null)
     }
-  }, [open, reloadVault])
+  }, [open, reloadVault, reloadStatuses])
 
   async function scan() {
     setScanning(true)
@@ -78,9 +103,7 @@ export function IntegrationsTab({ open }: { open: boolean }) {
       setCandidates(found)
       // Pré-seleção conservadora: só chaves novas; conflito exige escolha ativa.
       setChecked(new Set(found.filter((c) => c.status === 'new').map((c) => c.key)))
-      setSourceByKey(
-        Object.fromEntries(found.map((c) => [c.key, c.sources[0]?.path ?? ''])),
-      )
+      setSourceByKey(Object.fromEntries(found.map((c) => [c.key, c.sources[0]?.path ?? ''])))
     } finally {
       setScanning(false)
     }
@@ -106,6 +129,7 @@ export function IntegrationsTab({ open }: { open: boolean }) {
       const applied = await secretsApi.importApply(selections)
       setResult(applied)
       await reloadVault()
+      await reloadStatuses()
       const found = await secretsApi.importScan()
       setCandidates(found)
       setChecked(new Set())
@@ -125,12 +149,15 @@ export function IntegrationsTab({ open }: { open: boolean }) {
           Serviços
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-dim)]">
-          Serviços que o app sabe acessar com as credenciais do cofre. Os valores ficam cifrados
-          e são editáveis na aba "Variáveis de ambiente".
+          Serviços que o app sabe acessar com as credenciais do cofre. Os valores ficam cifrados e
+          são editáveis na aba "Variáveis de ambiente".
         </p>
         <div className="grid grid-cols-2 gap-2">
           {SERVICE_REGISTRY.map((def) => {
-            const configured = isConfigured(def, vaultKeys)
+            const status = statuses?.[def.id]
+            const configured = status?.configured ?? isConfigured(def, vaultKeys)
+            const health = status?.health
+            const lastCall = status?.lastCall ?? null
             return (
               <div
                 key={def.id}
@@ -156,9 +183,27 @@ export function IntegrationsTab({ open }: { open: boolean }) {
                   <span>
                     {presentCount(def, vaultKeys)}/{def.vars.length} variáveis no cofre
                   </span>
-                  {/* Placeholder: o health-check por serviço chega com secrets:services:status. */}
-                  <span title="Verificação de conectividade em breve">health —</span>
+                  {health ? (
+                    <span
+                      style={{ color: healthColor(health.status) }}
+                      title={health.error ?? undefined}
+                    >
+                      {HEALTH_LABEL[health.status]}
+                    </span>
+                  ) : (
+                    <span>health …</span>
+                  )}
                 </div>
+                {lastCall && (
+                  <div
+                    className="mt-1 truncate text-[11px] text-[var(--color-text-dim)]"
+                    title={lastCall.error ?? undefined}
+                  >
+                    última chamada: {lastCall.operation} ·{' '}
+                    {lastCall.status === 'ok' ? 'ok' : 'erro'} · {lastCall.durationMs}ms ·{' '}
+                    {new Date(lastCall.ts).toLocaleString('pt-BR')}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -170,9 +215,9 @@ export function IntegrationsTab({ open }: { open: boolean }) {
           Importar de .env
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-dim)]">
-          Procura arquivos .env em ~/projetos e traz as credenciais para o cofre. Os valores
-          nunca aparecem aqui — só uma impressão digital (últimos 4 caracteres + tamanho) para
-          você distinguir fontes em conflito.
+          Procura arquivos .env em ~/projetos e traz as credenciais para o cofre. Os valores nunca
+          aparecem aqui — só uma impressão digital (últimos 4 caracteres + tamanho) para você
+          distinguir fontes em conflito.
         </p>
 
         <div className="flex items-center gap-2">
@@ -255,7 +300,10 @@ export function IntegrationsTab({ open }: { open: boolean }) {
                     )}
                     <span
                       className="shrink-0 rounded-full border px-1.5 py-0.5 text-[10px]"
-                      style={{ color: statusColor(c.status), borderColor: statusColor(c.status) }}
+                      style={{
+                        color: statusColor(c.status),
+                        borderColor: statusColor(c.status),
+                      }}
                     >
                       {STATUS_LABEL[c.status]}
                     </span>
@@ -270,7 +318,10 @@ export function IntegrationsTab({ open }: { open: boolean }) {
                             checked={sourceByKey[c.key] === src.path}
                             disabled={disabled}
                             onChange={() =>
-                              setSourceByKey((prev) => ({ ...prev, [c.key]: src.path }))
+                              setSourceByKey((prev) => ({
+                                ...prev,
+                                [c.key]: src.path,
+                              }))
                             }
                             className="size-3 shrink-0 accent-[var(--color-accent)]"
                           />

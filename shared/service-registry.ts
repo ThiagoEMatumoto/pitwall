@@ -27,6 +27,14 @@ export interface HealthDef {
   authHeader: HealthAuth
 }
 
+// Como o serviço autentica QUALQUER chamada (proxy e health): esquema + qual
+// var do próprio serviço carrega a credencial. null = serviço sem chamada
+// autenticável pelo proxy (só status de configuração).
+export interface ServiceAuthDef {
+  scheme: HealthAuth
+  varCanonical: string
+}
+
 export interface OperationDef {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   pathTemplate: string
@@ -40,6 +48,7 @@ export interface ServiceDef {
   title: string
   vars: readonly ServiceVarDef[]
   baseUrls: { staging?: string; prod?: string }
+  auth: ServiceAuthDef | null
   health: HealthDef | null
   operations: Record<string, OperationDef>
 }
@@ -61,8 +70,27 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       staging: 'https://litellm-service-stg-2kzxgvaw5q-ue.a.run.app',
       prod: undefined,
     },
+    auth: { scheme: 'bearer', varCanonical: 'LITE_LLM_API_KEY' },
     health: { method: 'GET', path: '/v1/models', authHeader: 'bearer' },
-    operations: {},
+    operations: {
+      chat_completions: {
+        method: 'POST',
+        pathTemplate: '/v1/chat/completions',
+        env: 'staging',
+        paramsSchema: z.strictObject({
+          model: z.string().min(1),
+          messages: z
+            .array(
+              z.strictObject({
+                role: z.enum(['system', 'user', 'assistant']),
+                content: z.string(),
+              }),
+            )
+            .min(1),
+          max_tokens: z.number().int().positive().optional(),
+        }),
+      },
+    },
   },
   {
     id: 'gemini',
@@ -79,8 +107,30 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       staging: undefined,
       prod: 'https://generativelanguage.googleapis.com',
     },
+    auth: { scheme: 'query-key', varCanonical: 'GEMINI_API_KEY' },
     health: { method: 'GET', path: '/v1beta/models', authHeader: 'query-key' },
-    operations: {},
+    operations: {
+      generate_content: {
+        method: 'POST',
+        // {model} sai de params (validado + URL-encoded pelo proxy).
+        pathTemplate: '/v1beta/models/{model}:generateContent',
+        env: 'prod',
+        paramsSchema: z.strictObject({
+          model: z
+            .string()
+            .min(1)
+            .regex(/^[a-zA-Z0-9._-]+$/),
+          contents: z
+            .array(
+              z.strictObject({
+                role: z.enum(['user', 'model']).optional(),
+                parts: z.array(z.strictObject({ text: z.string() })).min(1),
+              }),
+            )
+            .min(1),
+        }),
+      },
+    },
   },
   {
     id: 'legal_core',
@@ -141,6 +191,7 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       staging: 'https://core.legalstaging.lexter.ai',
       prod: undefined,
     },
+    auth: null,
     health: null,
     operations: {},
   },
@@ -166,6 +217,7 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       staging: 'https://copilot-api-gateway-staging-79hbqyts.ue.gateway.dev',
       prod: undefined,
     },
+    auth: null,
     health: null,
     operations: {},
   },
@@ -181,6 +233,7 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       },
     ],
     baseUrls: { staging: undefined, prod: 'https://api.elevenlabs.io' },
+    auth: { scheme: 'xi-api-key', varCanonical: 'ELEVENLABS_API_KEY' },
     health: { method: 'GET', path: '/v1/user', authHeader: 'xi-api-key' },
     operations: {},
   },
@@ -196,6 +249,7 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
       },
     ],
     baseUrls: { staging: undefined, prod: 'https://api.tavily.com' },
+    auth: { scheme: 'bearer', varCanonical: 'TAVILY_API_KEY' },
     health: null,
     operations: {},
   },

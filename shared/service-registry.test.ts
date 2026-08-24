@@ -19,8 +19,61 @@ describe('SERVICE_REGISTRY shape', () => {
     ])
   })
 
-  it('operations começam vazias em todos (S4/S5 preenchem)', () => {
-    for (const s of SERVICE_REGISTRY) expect(s.operations).toEqual({})
+  it('operations: litellm e gemini têm as reais; o resto segue vazio', () => {
+    const litellm = getService('litellm').operations.chat_completions
+    expect(litellm).toMatchObject({
+      method: 'POST',
+      pathTemplate: '/v1/chat/completions',
+      env: 'staging',
+    })
+    expect(
+      litellm.paramsSchema.safeParse({
+        model: 'gpt-5',
+        messages: [{ role: 'user', content: 'oi' }],
+        max_tokens: 32,
+      }).success,
+    ).toBe(true)
+    expect(litellm.paramsSchema.safeParse({ model: 'gpt-5', messages: [] }).success).toBe(false)
+    expect(
+      litellm.paramsSchema.safeParse({
+        model: 'gpt-5',
+        messages: [{ role: 'user', content: 'oi' }],
+        extra: 'x',
+      }).success,
+    ).toBe(false)
+
+    const gemini = getService('gemini').operations.generate_content
+    expect(gemini).toMatchObject({
+      method: 'POST',
+      pathTemplate: '/v1beta/models/{model}:generateContent',
+      env: 'prod',
+    })
+    expect(
+      gemini.paramsSchema.safeParse({
+        model: 'gemini-2.0-flash',
+        contents: [{ role: 'user', parts: [{ text: 'oi' }] }],
+      }).success,
+    ).toBe(true)
+    // model vai pro path: caracteres fora do allowlist são recusados na borda.
+    expect(
+      gemini.paramsSchema.safeParse({
+        model: '../etc',
+        contents: [{ parts: [{ text: 'oi' }] }],
+      }).success,
+    ).toBe(false)
+
+    for (const s of SERVICE_REGISTRY) {
+      if (s.id === 'litellm' || s.id === 'gemini') continue
+      expect(s.operations).toEqual({})
+    }
+  })
+
+  it('todo serviço com health ou operations declara auth com var do próprio serviço', () => {
+    for (const s of SERVICE_REGISTRY) {
+      if (!s.health && Object.keys(s.operations).length === 0) continue
+      expect(s.auth).not.toBeNull()
+      expect(s.vars.some((v) => v.canonical === s.auth?.varCanonical)).toBe(true)
+    }
   })
 
   it('health: litellm/gemini/elevenlabs têm, tavily/legal_core/laas não', () => {
