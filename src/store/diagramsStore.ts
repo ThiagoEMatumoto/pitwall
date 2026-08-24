@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { diagramsApi } from "@/lib/ipc";
+import { navigateToDiagram } from "@/lib/nav";
+import { showToast } from "@/features/notifications/toast-store";
 import type {
   Diagram,
   DiagramLibraryItem,
@@ -40,6 +42,27 @@ let libraryNonce = 0;
 // Token da seleção em voo: cada select() bumpa; um get() que resolve depois
 // de outro select() (ou de um select(null)) descarta o resultado obsoleto.
 let selectSeq = 0;
+
+// Anti-spam do toast "Claude atualizou": patches em sequência no mesmo
+// diagrama viram no máximo 1 toast por janela.
+const REMOTE_TOAST_THROTTLE_MS = 5000;
+const lastRemoteToastAt = new Map<string, number>();
+
+function maybeToastRemoteUpdate(diagram: Diagram): void {
+  const now = Date.now();
+  if (
+    now - (lastRemoteToastAt.get(diagram.id) ?? 0) <
+    REMOTE_TOAST_THROTTLE_MS
+  ) {
+    return;
+  }
+  lastRemoteToastAt.set(diagram.id, now);
+  showToast({
+    title: `Claude atualizou "${diagram.title}"`,
+    actionLabel: "Abrir",
+    onAction: () => navigateToDiagram(diagram.id),
+  });
+}
 
 function toMeta(d: Diagram): DiagramMeta {
   const { scene: _scene, links: _links, ...meta } = d;
@@ -192,6 +215,18 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
     offUpdated = diagramsApi.onUpdated((payload) => {
       const diagram = payload as Diagram;
       if (!diagram?.id) return;
+      // Toast só pra diagrama NÃO aberto e com bump de version (mudança de
+      // conteúdo real — rename/archive não versionam). O aberto já tem o
+      // fluxo remoteScene/banner; o eco do próprio save cai no filtro de id.
+      const cur = get();
+      const prev = cur.diagrams.find((m) => m.id === diagram.id);
+      if (
+        cur.selected?.id !== diagram.id &&
+        prev !== undefined &&
+        diagram.version > prev.version
+      ) {
+        maybeToastRemoteUpdate(diagram);
+      }
       set((s) => {
         const inFilter = s.showArchived || diagram.status === "active";
         const diagrams = inFilter

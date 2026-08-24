@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Save } from "lucide-react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
   Diagram,
@@ -62,12 +62,28 @@ function LinkChip({ link }: { link: DiagramLink }) {
   );
 }
 
+// "Atualizado pelo Claude" fica no chip por esta janela após um applyRemote.
+const RECENT_REMOTE_MS = 8000;
+
+export interface DiagramSyncState {
+  status: "saved" | "saving" | "dirty";
+  lastRemoteAt: number | null;
+  version: number;
+}
+
 interface Props {
   diagram: Diagram;
   excalidrawAPI: ExcalidrawImperativeAPI | null;
+  syncState: DiagramSyncState;
+  onSaveNow: () => void;
 }
 
-export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
+export function DiagramToolbar({
+  diagram,
+  excalidrawAPI,
+  syncState,
+  onSaveNow,
+}: Props) {
   const rename = useDiagramsStore((s) => s.rename);
   const archive = useDiagramsStore((s) => s.archive);
   const unarchive = useDiagramsStore((s) => s.unarchive);
@@ -225,6 +241,33 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
 
   const archived = diagram.status === "archived";
 
+  // Re-render quando a janela de "Atualizado pelo Claude" expira — sem isso o
+  // chip ficaria em accent até o próximo render por outro motivo.
+  const remoteRecent =
+    syncState.lastRemoteAt !== null &&
+    Date.now() - syncState.lastRemoteAt < RECENT_REMOTE_MS;
+  const [, setRemoteTick] = useState(0);
+  useEffect(() => {
+    if (!remoteRecent || syncState.lastRemoteAt === null) return;
+    const t = setTimeout(
+      () => setRemoteTick((n) => n + 1),
+      RECENT_REMOTE_MS - (Date.now() - syncState.lastRemoteAt),
+    );
+    return () => clearTimeout(t);
+  }, [remoteRecent, syncState.lastRemoteAt]);
+
+  const syncChip =
+    syncState.status === "saving"
+      ? { label: "Salvando…", accent: false }
+      : syncState.status === "dirty"
+        ? { label: "Não salvo", accent: false }
+        : remoteRecent
+          ? {
+              label: `Atualizado pelo Claude · v${syncState.version}`,
+              accent: true,
+            }
+          : { label: `Salvo · v${syncState.version}`, accent: false };
+
   return (
     <header className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2">
       <input
@@ -255,6 +298,29 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
           ))}
         </div>
       )}
+
+      <span
+        className={`shrink-0 whitespace-nowrap text-[11px] ${
+          syncChip.accent
+            ? "text-[var(--color-accent)]"
+            : "text-[var(--color-text-dim)]"
+        }`}
+      >
+        {syncChip.label}
+      </span>
+
+      <button
+        type="button"
+        onClick={onSaveNow}
+        disabled={syncState.status === "saved"}
+        title="Salvar (Ctrl+S)"
+        className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-dim)] transition enabled:hover:bg-[var(--color-surface-2)] enabled:hover:text-[var(--color-text)] disabled:opacity-40"
+      >
+        <Icon as={Save} />
+        {syncState.status === "dirty" && (
+          <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
+        )}
+      </button>
 
       <Menu
         open={menuOpen}

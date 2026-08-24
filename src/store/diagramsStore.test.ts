@@ -37,9 +37,25 @@ const mockApi = {
       linksHandler = null;
     };
   }),
+  library: {
+    get: vi.fn().mockResolvedValue([]),
+    replace: vi.fn().mockResolvedValue([]),
+    remove: vi.fn().mockResolvedValue([]),
+    installUrl: vi.fn(),
+    onUpdated: vi.fn(() => () => {}),
+  },
 };
 
 vi.mock("@/lib/ipc", () => ({ diagramsApi: mockApi }));
+
+const { showToastMock, navigateToDiagramMock } = vi.hoisted(() => ({
+  showToastMock: vi.fn(),
+  navigateToDiagramMock: vi.fn(),
+}));
+vi.mock("@/features/notifications/toast-store", () => ({
+  showToast: showToastMock,
+}));
+vi.mock("@/lib/nav", () => ({ navigateToDiagram: navigateToDiagramMock }));
 
 const { useDiagramsStore } = await import("./diagramsStore");
 
@@ -250,6 +266,80 @@ describe("watch", () => {
       links: [{ diagramId: "d1", parentType: "feature", parentId: "f1" }],
     });
     expect(useDiagramsStore.getState().selected?.links).toHaveLength(1);
+  });
+});
+
+describe("toast de atualização remota (diagrama não aberto)", () => {
+  // O throttle é módulo-level e sobrevive entre testes — cada teste usa um id
+  // próprio pra não colidir com a janela de 5s de outro teste.
+
+  it("dispara toast com ação Abrir quando version cresce e id ≠ selecionado", () => {
+    useDiagramsStore.setState({
+      selected: makeDiagram(),
+      diagrams: [makeMeta(), makeMeta({ id: "t1", version: 1 })],
+    });
+    useDiagramsStore.getState().startWatch();
+    updatedHandler!(makeDiagram({ id: "t1", title: "Arch", version: 2 }));
+
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    const toast = showToastMock.mock.calls[0][0] as {
+      title: string;
+      actionLabel: string;
+      onAction: () => void;
+    };
+    expect(toast.title).toBe('Claude atualizou "Arch"');
+    expect(toast.actionLabel).toBe("Abrir");
+    toast.onAction();
+    expect(navigateToDiagramMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("não dispara pro diagrama selecionado (fluxo remoteScene cobre)", () => {
+    useDiagramsStore.setState({
+      selected: makeDiagram(),
+      diagrams: [makeMeta()],
+    });
+    useDiagramsStore.getState().startWatch();
+    updatedHandler!(makeDiagram({ version: 2 }));
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+
+  it("não dispara quando a version não cresce (rename/archive)", () => {
+    useDiagramsStore.setState({
+      selected: makeDiagram(),
+      diagrams: [makeMeta(), makeMeta({ id: "t2", version: 3 })],
+    });
+    useDiagramsStore.getState().startWatch();
+    updatedHandler!(makeDiagram({ id: "t2", title: "Renomeado", version: 3 }));
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+
+  it("não dispara pra diagrama desconhecido na lista (sem version anterior)", () => {
+    useDiagramsStore.setState({ selected: makeDiagram(), diagrams: [] });
+    useDiagramsStore.getState().startWatch();
+    updatedHandler!(makeDiagram({ id: "t3", version: 5 }));
+    expect(showToastMock).not.toHaveBeenCalled();
+  });
+
+  it("anti-spam: no máximo 1 toast por diagrama a cada 5s", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      useDiagramsStore.setState({
+        selected: makeDiagram(),
+        diagrams: [makeMeta({ id: "t4", version: 1 })],
+      });
+      useDiagramsStore.getState().startWatch();
+
+      updatedHandler!(makeDiagram({ id: "t4", version: 2 }));
+      updatedHandler!(makeDiagram({ id: "t4", version: 3 }));
+      expect(showToastMock).toHaveBeenCalledTimes(1);
+
+      // Passada a janela de 5s, o próximo bump volta a avisar.
+      nowSpy.mockReturnValue(105_100);
+      updatedHandler!(makeDiagram({ id: "t4", version: 4 }));
+      expect(showToastMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 

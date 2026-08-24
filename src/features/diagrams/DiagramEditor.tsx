@@ -115,6 +115,12 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
   const [excalidrawAPI, setExcalidrawAPI] =
     useState<ExcalidrawImperativeAPI | null>(null);
   const [conflict, setConflict] = useState<RemoteScene | null>(null);
+  // Estado de sync exibido no toolbar. Espelha os refs de dirty/save (que
+  // continuam donos da lógica) porque refs não re-renderizam o chip.
+  const [syncStatus, setSyncStatus] = useState<"saved" | "saving" | "dirty">(
+    "saved",
+  );
+  const [lastRemoteAt, setLastRemoteAt] = useState<number | null>(null);
 
   // Fingerprint do que está persistido (head). Começa na cena carregada.
   const savedFpRef = useRef(fingerprint(diagram.scene.elements));
@@ -182,20 +188,28 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       savedFpRef.current = fp;
       if (snapshot) dirtySinceSnapshotRef.current = false;
       pendingElementsRef.current = null;
+      setSyncStatus("saving");
       void saveScene({
         id: diagramId,
         scene: { elements: elements as unknown[] },
         snapshot,
         ...(snapshot ? { summary: "Edição no canvas" } : {}),
-      }).catch((err) => {
-        // Falha de save: reabre a janela de retry no próximo onChange.
-        savedFpRef.current = "";
-        dirtySinceSnapshotRef.current = true;
-        showToast({
-          title: "Falha ao salvar diagrama",
-          body: err instanceof Error ? err.message : String(err),
+      })
+        .then(() => {
+          // Edição nova durante o save em voo reagendou o debounce → o
+          // conteúdo do canvas ainda não está persistido.
+          setSyncStatus(timerRef.current ? "dirty" : "saved");
+        })
+        .catch((err) => {
+          // Falha de save: reabre a janela de retry no próximo onChange.
+          savedFpRef.current = "";
+          dirtySinceSnapshotRef.current = true;
+          setSyncStatus("dirty");
+          showToast({
+            title: "Falha ao salvar diagrama",
+            body: err instanceof Error ? err.message : String(err),
+          });
         });
-      });
     },
     [diagramId, saveScene],
   );
@@ -212,6 +226,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     const fp = fingerprint(elements);
     if (fp === savedFpRef.current) return;
     dirtySinceSnapshotRef.current = true;
+    setSyncStatus("dirty");
     pendingElementsRef.current = elements;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(
@@ -285,6 +300,10 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     };
   }, []);
 
+  // Um remoto foi aplicado desde o último focus? Janela em background tem o
+  // repaint throttlado pelo Electron — ao focar, força um refresh extra.
+  const remoteSinceFocusRef = useRef(false);
+
   const applyRemote = useCallback(async (remote: RemoteScene) => {
     const api = apiRef.current;
     if (!api) return false;
@@ -301,6 +320,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     const currentFp = fingerprint(api.getSceneElements());
     if (restoredFp === currentFp) {
       savedFpRef.current = restoredFp;
+      setSyncStatus("saved");
       return false;
     }
     // Marca como "persistido" ANTES do updateScene: o onChange disparado pela
@@ -320,8 +340,30 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     // Claude adicionando um nó) — re-enquadra sem animação brusca. Nunca
     // além de 100%: fitToViewport em cena pequena daria zoom gigante.
     frameContent(api, restored);
+    // Repaint imediato: com a janela em background o Electron throttla o
+    // repaint e o canvas mostraria a cena antiga até o próximo focus.
+    api.refresh();
+    remoteSinceFocusRef.current = true;
+    setSyncStatus("saved");
+    setLastRemoteAt(Date.now());
     return true;
   }, []);
+
+  // Ao focar a janela, repinta de novo se um remoto chegou em background —
+  // cinto e suspensório contra o throttling de repaint do Electron.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!remoteSinceFocusRef.current) return;
+      remoteSinceFocusRef.current = false;
+      apiRef.current?.refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  // Salvar manual (botão do toolbar e Ctrl+S): flush imediato com snapshot,
+  // cancelando o debounce pendente.
+  const saveNow = useCallback(() => flushRef.current(true), []);
 
   // Broadcast de cena nova (remoteScene do store).
   const lastRemoteNonceRef = useRef(0);
@@ -348,8 +390,25 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
   }, [remoteScene, applyRemote]);
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-hidden">
-      <DiagramToolbar diagram={diagram} excalidrawAPI={excalidrawAPI} />
+    <div
+      className="flex h-full flex-1 flex-col overflow-hidden"
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+          e.preventDefault();
+          saveNow();
+        }
+      }}
+    >
+      <DiagramToolbar
+        diagram={diagram}
+        excalidrawAPI={excalidrawAPI}
+        syncState={{
+          status: syncStatus,
+          lastRemoteAt,
+          version: diagram.version,
+        }}
+        onSaveNow={saveNow}
+      />
 
       {conflict && (
         <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-warning,#e0a458)_14%,transparent)] px-4 py-2 text-xs text-[var(--color-text)]">
