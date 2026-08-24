@@ -30,4 +30,6 @@ To edit, ALWAYS prefer diagram_patch (incremental add/update/delete ops by eleme
 
 **Shape libraries (canvas):** The canvas also has ONE global Excalidraw shape library shared by all diagrams. diagram_library_list shows what is installed (id, name, elementCount); diagram_library_install adds a .excalidrawlib — pass url (the public catalog at https://libraries.excalidraw.com hosts ready-made libraries; use the direct .excalidrawlib file URL) or library_json (the file content inline); diagram_library_remove deletes one item by id. Installs merge by item id, so re-installing updates instead of duplicating.
 
-Keep updates minimal and factual; never invent progress.`
+**External services (env hub):** service_list shows the external services the app's env hub knows — configured state, cached health and the operations you may execute, each with a JSON Schema of its params. service_call({service, operation, params}) runs one of those operations: the app resolves the credential and builds the URL from its own registry, so arbitrary URLs are impossible and you never need (and will never see) a credential value — lists, responses and errors are redacted before reaching you. Do not ask the user to paste credentials into the chat; point them to the app's Integrations settings instead. Every call is audited (service, operation, status, duration) under your session.
+
+Keep updates minimal and factual; never invent progress.`;
