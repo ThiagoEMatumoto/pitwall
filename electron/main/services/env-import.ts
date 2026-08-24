@@ -43,7 +43,9 @@ export interface EnvImportDeps {
 
 function withDefaults(over: Partial<EnvImportDeps>): EnvImportDeps {
   return {
-    home: homedir(),
+    // CM_ENV_IMPORT_ROOT: raiz alternativa pro e2e apontar uma árvore fixture.
+    // Sem a env var (produção) o scan parte do home real.
+    home: process.env.CM_ENV_IMPORT_ROOT || homedir(),
     listDir: (p) => readdirSync(p),
     lstat: (p) => lstatSync(p, { throwIfNoEntry: false }) ?? null,
     readFile: (p) => readFileSync(p, 'utf8'),
