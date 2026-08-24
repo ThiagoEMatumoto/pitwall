@@ -2,6 +2,10 @@
 // Sem lógica de negócio própria; os broadcasts espelham 1:1 o que a camada IPC
 // emite (mesmos canais/payloads), então a UI atualiza ao vivo pra writes MCP.
 // Sem deletes destrutivos: archive (reversível) é o máximo de remoção exposto.
+// Exceção única: diagram_delete — destrutivo, mas two-step por construção
+// (exige o diagrama já arquivado via diagram_archive + confirm: true; o store
+// recusa delete de diagrama ativo porque agente não recebe diálogo de
+// confirmação).
 import * as z from 'zod/v4'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
@@ -13,6 +17,12 @@ import * as handoffStore from '../handoff-store'
 import * as jobStore from '../scheduled-job-store'
 import * as repoPullStore from '../repo-pull-store'
 import * as contentStore from '../content-contract-store'
+import * as diagramStore from '../diagram-store'
+import {
+  applyPatch,
+  elementsToSkeleton,
+  skeletonToElements,
+} from '../../../../shared/diagram-skeleton'
 // Seam leaf (sem electron): dispara o run imediato sem importar a cadeia
 // job-scheduler → job-runner → ipc/sessions (que criaria ciclo com mcp/server).
 import { runJobNow } from '../job-run-now'
@@ -35,6 +45,8 @@ import type {
   AllowedFact,
   ContentAudience,
   DeliveryLimit,
+  Diagram,
+  DiagramScene,
   EthicalRule,
   FeatureObjectiveLink,
   ForbiddenFact,
@@ -1505,6 +1517,333 @@ function contentContractTools(notify: McpNotify): ToolDef[] {
   ]
 }
 
+// ---- diagrams ----
+//
+// O caminho de escrita PREFERIDO do agente é o skeleton (shared/diagram-skeleton):
+// nós/setas semânticos sem x/y, auto-layout no conversor. diagram_patch opera em
+// cima da cena vigente (preserva o refino manual do humano); diagram_update
+// substitui a cena inteira e só deve ser usado quando o redesenho é intencional.
+// Delete é a exceção documentada no topo: two-step archive → delete + confirm.
+
+const diagramKind = z.enum(['architecture', 'flow', 'sequence', 'er', 'mindmap', 'other'])
+
+// Espelha DiagramParentType (shared/types/ipc.ts).
+const diagramParentType = z.enum([
+  'project',
+  'repo',
+  'feature',
+  'task',
+  'objective',
+  'key_result',
+  'dossier',
+  'meeting',
+  'content_contract',
+  'session',
+  'handoff',
+])
+
+// Espelha DiagramSkeletonElement (shared/diagram-skeleton.ts).
+const skeletonElementType = z.enum(['rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line'])
+
+const skeletonElementSchema = z.object({
+  id: z.string().min(1),
+  type: skeletonElementType,
+  x: z.number().optional(),
+  y: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  label: z.object({ text: z.string() }).optional(),
+  text: z.string().optional(),
+  start: z.object({ id: z.string().min(1) }).optional(),
+  end: z.object({ id: z.string().min(1) }).optional(),
+  strokeColor: z.string().optional(),
+  backgroundColor: z.string().optional(),
+})
+
+// Cena Excalidraw crua (shape do Excalidraw, não nosso — elementos ficam unknown).
+const diagramSceneSchema = z.object({
+  elements: z.array(z.unknown()),
+  appState: z.record(z.string(), z.unknown()).optional(),
+})
+
+const diagramLinkInputSchema = z.object({
+  parentType: diagramParentType,
+  parentId: z.string().min(1),
+})
+
+// Exatamente UM de elements|scene: skeleton e cena crua são caminhos exclusivos.
+const exactlyOneSceneInput = (v: { elements?: unknown; scene?: unknown }) =>
+  (v.elements !== undefined) !== (v.scene !== undefined)
+const EXACTLY_ONE_MSG = 'provide exactly one of elements (skeleton) or scene (raw Excalidraw scene)'
+
+const diagramCreateSchema = z
+  .object({
+    title: z.string().trim().min(1),
+    kind: diagramKind.optional(),
+    summary: z.string().min(1),
+    elements: z.array(skeletonElementSchema).optional(),
+    scene: diagramSceneSchema.optional(),
+    links: z.array(diagramLinkInputSchema).optional(),
+  })
+  .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
+
+const diagramGetSchema = z.object({
+  id: z.string().min(1),
+  format: z.enum(['skeleton', 'full']).default('skeleton'),
+})
+
+const diagramListSchema = z.object({
+  status: z.enum(['active', 'archived', 'all']).default('active'),
+  kind: diagramKind.optional(),
+  parentType: diagramParentType.optional(),
+  parentId: z.string().optional(),
+  search: z.string().optional(),
+})
+
+// Espelha DiagramPatchOp: update = id + campos parciais do skeleton.
+const diagramPatchOpSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('add'), element: skeletonElementSchema }),
+  z.object({
+    op: z.literal('update'),
+    id: z.string().min(1),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    label: z.object({ text: z.string() }).optional(),
+    text: z.string().optional(),
+    start: z.object({ id: z.string().min(1) }).optional(),
+    end: z.object({ id: z.string().min(1) }).optional(),
+    strokeColor: z.string().optional(),
+    backgroundColor: z.string().optional(),
+  }),
+  z.object({ op: z.literal('delete'), id: z.string().min(1) }),
+])
+
+const diagramPatchSchema = z.object({
+  id: z.string().min(1),
+  summary: z.string().min(1),
+  ops: z.array(diagramPatchOpSchema).min(1),
+})
+
+const diagramUpdateSchema = z
+  .object({
+    id: z.string().min(1),
+    summary: z.string().min(1),
+    elements: z.array(skeletonElementSchema).optional(),
+    scene: diagramSceneSchema.optional(),
+  })
+  .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
+
+const diagramDeleteSchema = z.object({
+  id: z.string().min(1),
+  confirm: z.literal(true),
+})
+
+const diagramLinkSchema = z.object({
+  id: z.string().min(1),
+  parentType: diagramParentType,
+  parentId: z.string().min(1),
+})
+
+// Meta + links, sem a cena: o retorno padrão das tools de diagrama (a cena crua
+// tem centenas de KB; o agente trabalha no skeleton).
+function diagramToMeta(diagram: Diagram): Record<string, unknown> {
+  const { scene: _scene, ...meta } = diagram
+  return meta
+}
+
+function diagramTools(notify: McpNotify): ToolDef[] {
+  return [
+    {
+      name: 'diagram_create',
+      title: 'Create diagram',
+      description:
+        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows; omit x/y for auto-layout; arrows reference node ids via start/end and support label). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene.',
+      inputSchema: diagramCreateSchema,
+      handler: (args) => {
+        const input = diagramCreateSchema.parse(args)
+        const fromSkeleton = input.elements !== undefined
+        const scene: DiagramScene = fromSkeleton
+          ? { elements: skeletonToElements(input.elements!) }
+          : (input.scene as DiagramScene)
+        const diagram = diagramStore.create({
+          title: input.title,
+          kind: input.kind,
+          scene,
+          sourceFormat: fromSkeleton ? 'skeleton' : 'scene',
+          source: fromSkeleton ? JSON.stringify(input.elements) : null,
+          author: 'claude',
+          summary: input.summary,
+          links: input.links,
+        })
+        notify.broadcast('diagram:updated', diagram)
+        return ok({
+          diagram: diagramToMeta(diagram),
+          skeleton: elementsToSkeleton(diagram.scene.elements),
+        })
+      },
+    },
+    {
+      name: 'diagram_get',
+      title: 'Get diagram',
+      description:
+        'Get one diagram by id. format "skeleton" (default) returns the meta, the semantic skeleton derived from the current scene, and the version history (metas); format "full" returns the raw Excalidraw scene. Returns { diagram: null } when not found.',
+      inputSchema: diagramGetSchema,
+      handler: (args) => {
+        const { id, format } = diagramGetSchema.parse(args)
+        const diagram = diagramStore.get(id)
+        if (!diagram) return ok({ diagram: null })
+        if (format === 'full') return ok({ diagram })
+        return ok({
+          diagram: diagramToMeta(diagram),
+          skeleton: elementsToSkeleton(diagram.scene.elements),
+          versions: diagramStore.listVersions(id),
+        })
+      },
+    },
+    {
+      name: 'diagram_list',
+      title: 'List diagrams',
+      description:
+        'List diagrams (metas only, no scene). Optional filters: status (active default | archived | all), kind, parent (parentType + parentId), free-text search on title.',
+      inputSchema: diagramListSchema,
+      handler: (args) => {
+        const filter = diagramListSchema.parse(args)
+        // Sem thumbnail: é um data-url de imagem, payload inútil pro agente.
+        const items = diagramStore.list(filter).map(({ thumbnail: _thumb, ...meta }) => meta)
+        return ok({ items })
+      },
+    },
+    {
+      name: 'diagram_patch',
+      title: 'Patch diagram (preferred edit)',
+      description:
+        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene, so human refinements to layout/styling survive. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
+      inputSchema: diagramPatchSchema,
+      handler: (args) => {
+        const { id, summary, ops } = diagramPatchSchema.parse(args)
+        const existing = diagramStore.get(id)
+        if (!existing) throw new Error(`diagram não encontrado: ${id}`)
+        const elements = applyPatch(existing.scene.elements, ops)
+        const diagram = diagramStore.updateScene({
+          id,
+          scene: { ...existing.scene, elements },
+          snapshot: true,
+          summary,
+          author: 'claude',
+        })
+        notify.broadcast('diagram:updated', diagram)
+        return ok({
+          diagram: diagramToMeta(diagram),
+          skeleton: elementsToSkeleton(diagram.scene.elements),
+        })
+      },
+    },
+    {
+      name: 'diagram_update',
+      title: 'Replace diagram scene',
+      description:
+        'FULL replacement of the scene (exactly one of elements = skeleton | scene = raw Excalidraw). This DISCARDS any human layout/styling refinement of the current scene — prefer diagram_patch for edits; use this only when redrawing from scratch is intentional. Records a version snapshot (summary is the changelog line).',
+      inputSchema: diagramUpdateSchema,
+      handler: (args) => {
+        const input = diagramUpdateSchema.parse(args)
+        const fromSkeleton = input.elements !== undefined
+        const scene: DiagramScene = fromSkeleton
+          ? { elements: skeletonToElements(input.elements!) }
+          : (input.scene as DiagramScene)
+        const diagram = diagramStore.updateScene({
+          id: input.id,
+          scene,
+          snapshot: true,
+          summary: input.summary,
+          author: 'claude',
+        })
+        notify.broadcast('diagram:updated', diagram)
+        return ok({
+          diagram: diagramToMeta(diagram),
+          skeleton: elementsToSkeleton(diagram.scene.elements),
+        })
+      },
+    },
+    {
+      name: 'diagram_archive',
+      title: 'Archive diagram',
+      description:
+        'Archive a diagram (reversible; it leaves active listings). Also the mandatory first step before diagram_delete.',
+      inputSchema: idSchema,
+      handler: (args) => {
+        const { id } = idSchema.parse(args)
+        const diagram = diagramStore.archive(id)
+        notify.broadcast('diagram:updated', diagram)
+        return ok({ id, status: diagram.status })
+      },
+    },
+    {
+      name: 'diagram_unarchive',
+      title: 'Unarchive diagram',
+      description: 'Restore an archived diagram to active.',
+      inputSchema: idSchema,
+      handler: (args) => {
+        const { id } = idSchema.parse(args)
+        const diagram = diagramStore.unarchive(id)
+        notify.broadcast('diagram:updated', diagram)
+        return ok({ id, status: diagram.status })
+      },
+    },
+    {
+      name: 'diagram_delete',
+      title: 'Delete diagram (two-step)',
+      description:
+        'PERMANENTLY delete a diagram, its version history and links. Two-step guard: only an ARCHIVED diagram can be deleted, and confirm must be true. If the diagram is still active the call fails — archive first (diagram_archive), then delete.',
+      inputSchema: diagramDeleteSchema,
+      handler: (args) => {
+        const { id } = diagramDeleteSchema.parse(args)
+        try {
+          // Sem force: o store recusa delete de diagrama não-arquivado.
+          diagramStore.remove(id)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('not archived')) {
+            throw new Error(
+              `diagram ${id} is still active — deletion is two-step: archive first (diagram_archive), then delete.`,
+            )
+          }
+          throw err
+        }
+        notify.broadcast('diagram:deleted', { id })
+        return ok({ id, deleted: true })
+      },
+    },
+    {
+      name: 'diagram_link',
+      title: 'Link diagram to a parent',
+      description:
+        'Attach a diagram to a parent entity (project | repo | feature | task | objective | key_result | dossier | meeting | content_contract | session | handoff) so it shows up in that context. Idempotent. Returns the full link set.',
+      inputSchema: diagramLinkSchema,
+      handler: (args) => {
+        const { id, parentType, parentId } = diagramLinkSchema.parse(args)
+        const links = diagramStore.link({ diagramId: id, parentType, parentId })
+        notify.broadcast('diagramLinks:updated', { diagramId: id, links })
+        return ok({ links })
+      },
+    },
+    {
+      name: 'diagram_unlink',
+      title: 'Unlink diagram from a parent',
+      description:
+        'Remove one parent link from a diagram (the diagram itself is untouched). Returns the remaining link set.',
+      inputSchema: diagramLinkSchema,
+      handler: (args) => {
+        const { id, parentType, parentId } = diagramLinkSchema.parse(args)
+        const links = diagramStore.unlink({ diagramId: id, parentType, parentId })
+        notify.broadcast('diagramLinks:updated', { diagramId: id, links })
+        return ok({ links })
+      },
+    },
+  ]
+}
+
 export function buildTools(
   notify: McpNotify,
   ctx: McpRequestContext = ANONYMOUS_CONTEXT,
@@ -1518,6 +1857,7 @@ export function buildTools(
     ...scheduledJobTools(notify),
     ...repoPullTools(),
     ...contentContractTools(notify),
+    ...diagramTools(notify),
   ]
 }
 

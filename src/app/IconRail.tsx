@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   Target,
+  Workflow,
 } from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 import type { ComponentType } from 'react'
@@ -40,6 +41,7 @@ const AREAS: AreaDef[] = [
   { id: 'overview', icon: Home, label: 'Home' },
   { id: 'projects', icon: Folder, label: 'Projetos' },
   { id: 'architecture', icon: Network, label: 'Arquitetura' },
+  { id: 'diagrams', icon: Workflow, label: 'Diagramas' },
   { id: 'handoffs', icon: Inbox, label: 'Handoffs' },
   { id: 'dossiers', icon: ScrollText, label: 'Dossiês' },
   { id: 'content', icon: FileText, label: 'Conteúdo' },

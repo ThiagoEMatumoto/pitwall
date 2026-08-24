@@ -163,9 +163,10 @@ describe('mcp tools — objectives/KRs', () => {
     expect(notify.calls.at(-1)).toEqual(['objective:updated', { id: objective.id, archived: true }])
   })
 
-  it('não expõe tools de delete destrutivo', () => {
+  it('não expõe tools de delete destrutivo (exceção: diagram_delete, two-step)', () => {
     const names = tools.map((t) => t.name)
-    expect(names.some((n) => n.includes('delete'))).toBe(false)
+    // diagram_delete é a exceção documentada: exige archive prévio + confirm.
+    expect(names.filter((n) => n.includes('delete'))).toEqual(['diagram_delete'])
   })
 
   it('key_result_update altera o KR e broadcasta o marcador', () => {
@@ -1136,5 +1137,305 @@ describe('mcp tools — content contracts', () => {
       gate: 'scope',
     })
     expect(so.items).toHaveLength(1)
+  })
+})
+
+describe('mcp tools — diagrams', () => {
+  interface DiagramMetaOut {
+    id: string
+    title: string
+    kind: string
+    status: string
+    version: number
+    sourceFormat: string | null
+    links: Array<{ diagramId: string; parentType: string; parentId: string }>
+  }
+  interface SkeletonOut {
+    id: string
+    type: string
+    label?: { text: string }
+    start?: { id: string }
+    end?: { id: string }
+  }
+
+  function novoDiagrama(title = 'Fluxo de auth'): DiagramMetaOut {
+    const { diagram } = call<{ diagram: DiagramMetaOut }>('diagram_create', {
+      title,
+      kind: 'flow',
+      summary: 'esboço inicial',
+      elements: [
+        { id: 'ui', type: 'rectangle', label: { text: 'Web UI' } },
+        { id: 'api', type: 'rectangle', label: { text: 'Auth API' } },
+        { id: 'e1', type: 'arrow', start: { id: 'ui' }, end: { id: 'api' }, label: { text: 'POST /login' } },
+      ],
+    })
+    return diagram
+  }
+
+  it('diagram_create converte skeleton, persiste, broadcasta e devolve skeleton derivado', () => {
+    const antes = notify.calls.length
+    const { diagram, skeleton } = tool('diagram_create').handler({
+      title: 'Fluxo de auth',
+      kind: 'flow',
+      summary: 'esboço inicial',
+      elements: [
+        { id: 'ui', type: 'rectangle', label: { text: 'Web UI' } },
+        { id: 'api', type: 'rectangle', label: { text: 'Auth API' } },
+        { id: 'e1', type: 'arrow', start: { id: 'ui' }, end: { id: 'api' }, label: { text: 'POST /login' } },
+      ],
+      links: [{ parentType: 'feature', parentId: 'feat-1' }],
+    }).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+
+    expect(diagram.id).toBeTruthy()
+    expect(diagram.sourceFormat).toBe('skeleton')
+    expect(diagram.version).toBe(1)
+    expect(diagram.links).toEqual([
+      { diagramId: diagram.id, parentType: 'feature', parentId: 'feat-1' },
+    ])
+    // Meta sem a cena crua.
+    expect(diagram).not.toHaveProperty('scene')
+
+    // Skeleton derivado da cena persistida (roundtrip semântico).
+    expect(skeleton.map((s) => s.id).sort()).toEqual(['api', 'e1', 'ui'])
+    const arrow = skeleton.find((s) => s.id === 'e1')!
+    expect(arrow.start).toEqual({ id: 'ui' })
+    expect(arrow.end).toEqual({ id: 'api' })
+    expect(arrow.label).toEqual({ text: 'POST /login' })
+
+    const row = getDb()
+      .prepare('SELECT source_format, source, version FROM diagrams WHERE id = ?')
+      .get(diagram.id) as { source_format: string; source: string; version: number }
+    expect(row.source_format).toBe('skeleton')
+    expect(JSON.parse(row.source)).toHaveLength(3)
+
+    const broadcast = notify.calls.slice(antes)
+    expect(broadcast).toHaveLength(1)
+    expect(broadcast[0][0]).toBe('diagram:updated')
+    expect((broadcast[0][1] as { id: string }).id).toBe(diagram.id)
+  })
+
+  it('diagram_create exige exatamente um de elements|scene (zod refine)', () => {
+    expect(() =>
+      tool('diagram_create').handler({ title: 'X', summary: 's' }),
+    ).toThrow()
+    expect(() =>
+      tool('diagram_create').handler({
+        title: 'X',
+        summary: 's',
+        elements: [{ id: 'a', type: 'rectangle' }],
+        scene: { elements: [] },
+      }),
+    ).toThrow()
+  })
+
+  it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', () => {
+    expect(() =>
+      tool('diagram_create').handler({
+        title: '   ',
+        summary: 's',
+        elements: [{ id: 'a', type: 'rectangle' }],
+      }),
+    ).toThrow(/too small/i)
+  })
+
+  it('diagram_patch aplica ops sobre a cena vigente e grava snapshot', () => {
+    const diagram = novoDiagrama()
+    const antes = notify.calls.length
+
+    const { diagram: depois, skeleton } = tool('diagram_patch').handler({
+      id: diagram.id,
+      summary: 'adiciona o banco',
+      ops: [
+        { op: 'add', element: { id: 'db', type: 'ellipse', label: { text: 'Sessions DB' } } },
+        { op: 'update', id: 'ui', label: { text: 'Frontend' } },
+        { op: 'delete', id: 'e1' },
+      ],
+    }).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+
+    expect(depois.version).toBe(2)
+    const ids = skeleton.map((s) => s.id)
+    expect(ids).toContain('db')
+    expect(ids).not.toContain('e1')
+    expect(skeleton.find((s) => s.id === 'ui')?.label).toEqual({ text: 'Frontend' })
+
+    // Snapshot com autor claude e o summary do patch.
+    const version = getDb()
+      .prepare('SELECT author, summary FROM diagram_versions WHERE diagram_id = ? AND version = 2')
+      .get(diagram.id) as { author: string; summary: string }
+    expect(version).toEqual({ author: 'claude', summary: 'adiciona o banco' })
+
+    const broadcast = notify.calls.slice(antes)
+    expect(broadcast).toHaveLength(1)
+    expect(broadcast[0][0]).toBe('diagram:updated')
+  })
+
+  it('diagram_delete recusa diagrama ativo (two-step) e apaga após archive', () => {
+    const diagram = novoDiagrama('Pra apagar')
+
+    expect(() =>
+      tool('diagram_delete').handler({ id: diagram.id, confirm: true }),
+    ).toThrow(/archive first \(diagram_archive\), then delete/)
+    // Guard também na validação: confirm literal true é obrigatório.
+    expect(() => tool('diagram_delete').handler({ id: diagram.id })).toThrow()
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 1 })
+
+    call('diagram_archive', { id: diagram.id })
+    const antes = notify.calls.length
+    const out = call<{ id: string; deleted: boolean }>('diagram_delete', {
+      id: diagram.id,
+      confirm: true,
+    })
+    expect(out).toEqual({ id: diagram.id, deleted: true })
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 0 })
+    expect(notify.calls.slice(antes)).toEqual([['diagram:deleted', { id: diagram.id }]])
+  })
+
+  it('diagram_link/unlink devolvem o conjunto de links e broadcastam', () => {
+    const diagram = novoDiagrama('Com vínculos')
+    const antes = notify.calls.length
+
+    const linked = call<{ links: unknown[] }>('diagram_link', {
+      id: diagram.id,
+      parentType: 'task',
+      parentId: 'task-9',
+    })
+    expect(linked.links).toEqual([
+      { diagramId: diagram.id, parentType: 'task', parentId: 'task-9' },
+    ])
+    expect(notify.calls.slice(antes)).toEqual([
+      ['diagramLinks:updated', { diagramId: diagram.id, links: linked.links }],
+    ])
+
+    const unlinked = call<{ links: unknown[] }>('diagram_unlink', {
+      id: diagram.id,
+      parentType: 'task',
+      parentId: 'task-9',
+    })
+    expect(unlinked.links).toEqual([])
+  })
+
+  it('integração: create (4 nós/3 setas) → get → patch (move + rename) → archive → delete', () => {
+    interface SkeletonFull extends SkeletonOut {
+      x?: number
+      y?: number
+      text?: string
+    }
+    interface VersionMetaOut {
+      id: string
+      diagramId: string
+      version: number
+      author: string
+      summary: string
+      createdAt: number
+    }
+
+    const { diagram } = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>(
+      'diagram_create',
+      {
+        title: 'Pipeline de ingestão',
+        kind: 'architecture',
+        summary: 'primeira versão',
+        elements: [
+          { id: 'src', type: 'rectangle', label: { text: 'Fonte' } },
+          { id: 'etl', type: 'rectangle', label: { text: 'ETL' } },
+          { id: 'db', type: 'ellipse', label: { text: 'Warehouse' } },
+          { id: 'bi', type: 'diamond', label: { text: 'BI' } },
+          { id: 'a1', type: 'arrow', start: { id: 'src' }, end: { id: 'etl' } },
+          { id: 'a2', type: 'arrow', start: { id: 'etl' }, end: { id: 'db' }, label: { text: 'upsert' } },
+          { id: 'a3', type: 'arrow', start: { id: 'db' }, end: { id: 'bi' } },
+        ],
+      },
+    )
+
+    // get (skeleton): meta + skeleton derivado + histórico de versões.
+    const got = call<{
+      diagram: DiagramMetaOut
+      skeleton: SkeletonFull[]
+      versions: VersionMetaOut[]
+    }>('diagram_get', { id: diagram.id })
+    expect(got.diagram.id).toBe(diagram.id)
+    expect(got.diagram.version).toBe(1)
+    expect(got.skeleton.map((s) => s.id).sort()).toEqual(['a1', 'a2', 'a3', 'bi', 'db', 'etl', 'src'])
+    expect(got.skeleton.find((s) => s.id === 'a2')).toMatchObject({
+      start: { id: 'etl' },
+      end: { id: 'db' },
+      label: { text: 'upsert' },
+    })
+    expect(got.versions).toHaveLength(1)
+    expect(got.versions[0]).toMatchObject({
+      diagramId: diagram.id,
+      version: 1,
+      author: 'claude',
+      summary: 'primeira versão',
+    })
+
+    // patch: move o nó etl + renomeia o label da fonte.
+    const patched = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>('diagram_patch', {
+      id: diagram.id,
+      summary: 'move etl e renomeia fonte',
+      ops: [
+        { op: 'update', id: 'etl', x: 520, y: 340 },
+        { op: 'update', id: 'src', label: { text: 'Fonte externa' } },
+      ],
+    })
+    expect(patched.diagram.version).toBe(2)
+    expect(patched.skeleton.find((s) => s.id === 'etl')).toMatchObject({ x: 520, y: 340 })
+    expect(patched.skeleton.find((s) => s.id === 'src')?.label).toEqual({ text: 'Fonte externa' })
+    // Setas continuam vinculadas após o move.
+    expect(patched.skeleton.find((s) => s.id === 'a1')).toMatchObject({
+      start: { id: 'src' },
+      end: { id: 'etl' },
+    })
+
+    // get (full): a cena persistida tem os campos que o restoreElements espera.
+    const full = call<{ diagram: DiagramMetaOut & { scene: { elements: unknown[] } } }>(
+      'diagram_get',
+      { id: diagram.id, format: 'full' },
+    )
+    const elements = full.diagram.scene.elements as Array<Record<string, unknown>>
+    expect(elements.length).toBeGreaterThanOrEqual(7)
+    const BASE_FIELDS = [
+      'id', 'type', 'x', 'y', 'width', 'height', 'angle', 'strokeColor', 'backgroundColor',
+      'fillStyle', 'strokeWidth', 'strokeStyle', 'roughness', 'opacity', 'groupIds', 'frameId',
+      'roundness', 'seed', 'version', 'versionNonce', 'index', 'isDeleted', 'boundElements',
+      'updated', 'link', 'locked',
+    ]
+    for (const el of elements) {
+      for (const field of BASE_FIELDS) expect(el).toHaveProperty(field)
+      if (el.type === 'text') {
+        for (const field of [
+          'fontSize', 'fontFamily', 'text', 'textAlign', 'verticalAlign',
+          'containerId', 'originalText', 'autoResize', 'lineHeight',
+        ]) expect(el).toHaveProperty(field)
+      }
+      if (el.type === 'arrow') {
+        for (const field of [
+          'points', 'lastCommittedPoint', 'startBinding', 'endBinding',
+          'startArrowhead', 'endArrowhead', 'elbowed',
+        ]) expect(el).toHaveProperty(field)
+      }
+    }
+    const etl = elements.find((el) => el.id === 'etl')!
+    expect(etl).toMatchObject({ x: 520, y: 340 })
+    // Label bound acompanha o container movido.
+    const etlLabel = elements.find((el) => el.id === 'etl__label') as Record<string, unknown>
+    expect(etlLabel.containerId).toBe('etl')
+
+    // archive → delete (two-step) apaga diagrama, versões e links.
+    const archived = call<{ id: string; status: string }>('diagram_archive', { id: diagram.id })
+    expect(archived.status).toBe('archived')
+    const deleted = call<{ id: string; deleted: boolean }>('diagram_delete', {
+      id: diagram.id,
+      confirm: true,
+    })
+    expect(deleted).toEqual({ id: diagram.id, deleted: true })
+    const db = getDb()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 0 })
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM diagram_versions WHERE diagram_id = ?').get(diagram.id),
+    ).toEqual({ n: 0 })
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM diagram_links WHERE diagram_id = ?').get(diagram.id),
+    ).toEqual({ n: 0 })
   })
 })

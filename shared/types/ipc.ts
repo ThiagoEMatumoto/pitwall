@@ -2425,6 +2425,112 @@ export interface CustomEnvEntry {
   unreadable: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Diagrams (canvas Excalidraw)
+// ---------------------------------------------------------------------------
+
+export type DiagramKind = 'architecture' | 'flow' | 'sequence' | 'er' | 'mindmap' | 'other'
+
+export type DiagramStatus = 'active' | 'archived'
+
+export type DiagramAuthor = 'claude' | 'human'
+
+// Parents linkáveis: um diagrama pode ilustrar qualquer entidade do app.
+export type DiagramParentType =
+  | 'project'
+  | 'repo'
+  | 'feature'
+  | 'task'
+  | 'objective'
+  | 'key_result'
+  | 'dossier'
+  | 'meeting'
+  | 'content_contract'
+  | 'session'
+  | 'handoff'
+
+// Origem da cena: skeleton (gerado pelo Claude via shared/diagram-skeleton),
+// mermaid (convertido), scene (desenhado direto no canvas). null = desconhecida.
+export type DiagramSourceFormat = 'skeleton' | 'mermaid' | 'scene'
+
+// Cena Excalidraw. `elements` fica unknown[] de propósito: o shape é do
+// Excalidraw, não nosso — o main não valida elemento a elemento.
+export interface DiagramScene {
+  elements: unknown[]
+  appState?: Record<string, unknown>
+}
+
+export interface DiagramLink {
+  diagramId: string
+  parentType: DiagramParentType
+  parentId: string
+}
+
+// Cabeçalho sem a cena: é o que o list() devolve (a cena pode ter megabytes;
+// a lista não deve carregá-la). `thumbnail` viaja aqui porque é o preview.
+export interface DiagramMeta {
+  id: string
+  title: string
+  kind: DiagramKind
+  status: DiagramStatus
+  version: number
+  sourceFormat: DiagramSourceFormat | null
+  thumbnail: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export type Diagram = DiagramMeta & {
+  scene: DiagramScene
+  links: DiagramLink[]
+}
+
+// Linha do histórico sem a cena — o que listVersions() devolve.
+export interface DiagramVersionMeta {
+  id: string
+  diagramId: string
+  version: number
+  author: DiagramAuthor
+  summary: string
+  createdAt: number
+}
+
+export interface DiagramVersion extends DiagramVersionMeta {
+  scene: DiagramScene
+}
+
+export interface DiagramListFilter {
+  // Default 'active' no store: arquivado só aparece quando pedido.
+  status?: DiagramStatus | 'all'
+  kind?: DiagramKind
+  parentType?: DiagramParentType
+  parentId?: string
+  search?: string
+}
+
+export interface CreateDiagramInput {
+  title: string
+  kind?: DiagramKind
+  scene: DiagramScene
+  sourceFormat?: DiagramSourceFormat | null
+  source?: string | null
+  author: DiagramAuthor
+  // Linha de changelog da versão 1 (o store aplica default quando omitida).
+  summary?: string
+  links?: Array<{ parentType: DiagramParentType; parentId: string }>
+}
+
+// snapshot=false: salva rascunho (só a cabeça). snapshot=true: bump de versão
+// + linha no histórico — e aí `summary` é obrigatório (o store lança sem ele).
+export interface UpdateDiagramSceneInput {
+  id: string
+  scene: DiagramScene
+  // Default 'human' na camada IPC (a UI é sempre humana); o MCP passa 'claude'.
+  author?: DiagramAuthor
+  summary?: string
+  snapshot: boolean
+}
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2755,6 +2861,36 @@ export interface Api {
     onUpdated(handler: (payload: unknown) => void): () => void
     // Payload = ContentGateRun gravado — sinal de recarga do histórico.
     onGateRunUpdated(handler: (payload: unknown) => void): () => void
+  }
+  diagrams: {
+    // Sem a cena: lista leve. status default 'active'; 'all' inclui arquivados.
+    list(filter?: DiagramListFilter): Promise<DiagramMeta[]>
+    get(id: string): Promise<Diagram | null>
+    // Cria a cabeça + versão 1 numa transação.
+    create(input: CreateDiagramInput): Promise<Diagram>
+    // Sempre atualiza a cabeça; snapshot=true bumpa versão e grava histórico
+    // (cap de 30 snapshots por diagrama).
+    updateScene(input: UpdateDiagramSceneInput): Promise<Diagram>
+    rename(id: string, title: string): Promise<Diagram>
+    archive(id: string): Promise<Diagram>
+    unarchive(id: string): Promise<Diagram>
+    // Delete direto (a UI confirma; o two-step archive→delete é regra do MCP).
+    delete(id: string): Promise<void>
+    link(input: DiagramLink): Promise<DiagramLink[]>
+    unlink(input: DiagramLink): Promise<DiagramLink[]>
+    listVersions(diagramId: string): Promise<DiagramVersionMeta[]>
+    getVersion(diagramId: string, version: number): Promise<DiagramVersion | null>
+    // Git-revert: copia o snapshot pra cabeça e grava versão NOVA — o
+    // histórico nunca é reescrito.
+    restoreVersion(diagramId: string, version: number, author?: DiagramAuthor): Promise<Diagram>
+    // Só o preview: não versiona nem bumpa updated_at.
+    setThumbnail(id: string, dataUrl: string): Promise<void>
+    // Payload = Diagram completo.
+    onUpdated(handler: (payload: unknown) => void): () => void
+    // Payload = { id }.
+    onDeleted(handler: (payload: unknown) => void): () => void
+    // Payload = { diagramId, links }.
+    onLinksUpdated(handler: (payload: unknown) => void): () => void
   }
   meetings: {
     list(filter?: MeetingListFilter): Promise<Meeting[]>
