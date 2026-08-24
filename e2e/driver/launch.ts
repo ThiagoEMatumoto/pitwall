@@ -114,6 +114,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
     env: {
       ...process.env,
       CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
+      CM_MCP_EPHEMERAL_PORT: '1',
       ...(options.env ?? {}),
     } as Record<string, string>,
   })

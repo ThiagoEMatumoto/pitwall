@@ -143,6 +143,17 @@ export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpSer
     server.once('error', (err) => {
       // EADDRINUSE (outra instância/processo na porta) ou afins: o app segue
       // funcionando sem MCP — nunca crashar o boot por causa disso.
+      // Exceção opt-in (drive-app/E2E roda contra CÓPIA do userData com o app
+      // real aberto): CM_MCP_EPHEMERAL_PORT=1 religa numa porta efêmera — o
+      // mcp.json da cópia passa a apontar pro server da cópia, nunca pro real.
+      if (
+        (err as NodeJS.ErrnoException).code === 'EADDRINUSE' &&
+        process.env.CM_MCP_EPHEMERAL_PORT === '1'
+      ) {
+        console.warn(`[mcp] port ${port} busy — retrying on an ephemeral port (CM_MCP_EPHEMERAL_PORT)`)
+        server.listen(0, '127.0.0.1')
+        return
+      }
       console.error(`[mcp] failed to listen on 127.0.0.1:${port} — continuing without MCP:`, err)
       if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
         // Sem server próprio, configs no NOSSO userData apontariam pra um
