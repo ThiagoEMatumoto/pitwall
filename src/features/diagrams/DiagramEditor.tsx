@@ -129,10 +129,14 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
         scene: { elements: elements as unknown[] },
         snapshot,
         ...(snapshot ? { summary: "Edição no canvas" } : {}),
-      }).catch(() => {
+      }).catch((err) => {
         // Falha de save: reabre a janela de retry no próximo onChange.
         savedFpRef.current = "";
         dirtySinceSnapshotRef.current = true;
+        showToast({
+          title: "Falha ao salvar diagrama",
+          body: err instanceof Error ? err.message : String(err),
+        });
       });
     },
     [diagramId, saveScene],

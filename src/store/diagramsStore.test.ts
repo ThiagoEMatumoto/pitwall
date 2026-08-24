@@ -118,6 +118,44 @@ describe("select", () => {
     );
   });
 
+  it("descarta resultado obsoleto quando outro select chega antes (corrida)", async () => {
+    let resolveD1!: (d: Diagram) => void;
+    const d2 = makeDiagram({ id: "d2", title: "Outro" });
+    mockApi.get.mockImplementation((id: string) =>
+      id === "d1"
+        ? new Promise<Diagram>((r) => {
+            resolveD1 = r;
+          })
+        : Promise.resolve(d2),
+    );
+
+    const p1 = useDiagramsStore.getState().select("d1");
+    await useDiagramsStore.getState().select("d2");
+    expect(useDiagramsStore.getState().selected?.id).toBe("d2");
+
+    // O get("d1") resolve DEPOIS do select("d2"): resultado obsoleto, descarta.
+    resolveD1(makeDiagram({ id: "d1" }));
+    await p1;
+    expect(useDiagramsStore.getState().selected?.id).toBe("d2");
+  });
+
+  it("select(null) durante get em voo invalida o resultado pendente", async () => {
+    let resolveD1!: (d: Diagram) => void;
+    mockApi.get.mockImplementation(
+      () =>
+        new Promise<Diagram>((r) => {
+          resolveD1 = r;
+        }),
+    );
+
+    const p1 = useDiagramsStore.getState().select("d1");
+    await useDiagramsStore.getState().select(null);
+
+    resolveD1(makeDiagram({ id: "d1" }));
+    await p1;
+    expect(useDiagramsStore.getState().selected).toBeNull();
+  });
+
   it("select(null) limpa seleção e remoteScene", async () => {
     useDiagramsStore.setState({
       selected: makeDiagram(),

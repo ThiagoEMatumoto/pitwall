@@ -13,6 +13,10 @@ import type {
   UpdateDiagramSceneInput,
 } from '../../../shared/types/ipc'
 
+// Thumbnail é preview de card, não imagem full-res: dataUrl maior que isso
+// indica bug no gerador do renderer.
+const MAX_THUMBNAIL_DATAURL_BYTES = 512 * 1024
+
 // IPC de diagramas. Molde de ipc/content-contracts: handlers finos (a regra
 // mora no store) e broadcast em cada mutação pro renderer recarregar.
 //
@@ -99,7 +103,14 @@ export function registerDiagramsIpc(): void {
 
   // Thumbnail muda o card da lista → broadcast com o Diagram completo, mesmo
   // canal das demais mutações (o renderer trata como sinal de recarga).
+  // O gerador do thumbnail no renderer é v2 — a superfície (id + dataUrl)
+  // deste canal é mantida deliberadamente; o cap protege o banco enquanto isso.
   ipcMain.handle('diagrams:set-thumbnail', (_e, id: string, dataUrl: string): void => {
+    if (dataUrl.length > MAX_THUMBNAIL_DATAURL_BYTES) {
+      throw new Error(
+        `thumbnail dataUrl excede o limite de 512 KB (recebido ${dataUrl.length} bytes)`,
+      )
+    }
     diagramStore.setThumbnail(id, dataUrl)
     const diagram = diagramStore.get(id)
     if (diagram) broadcast('diagram:updated', diagram)

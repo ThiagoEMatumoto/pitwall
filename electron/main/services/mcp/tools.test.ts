@@ -1228,6 +1228,16 @@ describe('mcp tools — diagrams', () => {
     ).toThrow()
   })
 
+  it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', () => {
+    expect(() =>
+      tool('diagram_create').handler({
+        title: '   ',
+        summary: 's',
+        elements: [{ id: 'a', type: 'rectangle' }],
+      }),
+    ).toThrow(/too small/i)
+  })
+
   it('diagram_patch aplica ops sobre a cena vigente e grava snapshot', () => {
     const diagram = novoDiagrama()
     const antes = notify.calls.length

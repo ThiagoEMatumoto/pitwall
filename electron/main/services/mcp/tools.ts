@@ -1578,7 +1578,7 @@ const EXACTLY_ONE_MSG = 'provide exactly one of elements (skeleton) or scene (ra
 
 const diagramCreateSchema = z
   .object({
-    title: z.string().min(1),
+    title: z.string().trim().min(1),
     kind: diagramKind.optional(),
     summary: z.string().min(1),
     elements: z.array(skeletonElementSchema).optional(),

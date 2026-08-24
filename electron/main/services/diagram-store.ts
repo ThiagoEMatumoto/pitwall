@@ -399,6 +399,12 @@ export function restoreVersion(diagramId: string, version: number, author: Diagr
       scene: snapshot.scene,
       created_at: now,
     })
+    // Mesmo prune de updateScene: restore também grava snapshot novo e não
+    // pode furar o cap de retenção.
+    db.prepare('DELETE FROM diagram_versions WHERE diagram_id = ? AND version <= ?').run(
+      diagramId,
+      nextVersion - MAX_SNAPSHOTS,
+    )
   })
   tx()
   return get(diagramId)!

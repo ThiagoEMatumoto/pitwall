@@ -152,6 +152,28 @@ describe('diagram-store', () => {
     expect(store.getVersion(d.id, 2)!.scene).toEqual(scene('v2'))
   })
 
+  it('restoreVersion aplica o mesmo prune de MAX_SNAPSHOTS de updateScene', () => {
+    const d = novoDiagrama()
+    for (let i = 0; i < 34; i++) {
+      store.updateScene({
+        id: d.id,
+        scene: scene(`v${i + 2}`),
+        author: 'claude',
+        summary: `edição ${i + 2}`,
+        snapshot: true,
+      })
+    }
+    // Head v35; retidas 6..35 (cap de 30).
+    expect(store.listVersions(d.id)).toHaveLength(30)
+
+    store.restoreVersion(d.id, 10, 'human') // vira v36; prune derruba a 6
+    store.restoreVersion(d.id, 12, 'human') // vira v37; prune derruba a 7
+    const versions = store.listVersions(d.id)
+    expect(versions).toHaveLength(30)
+    expect(versions[0].version).toBe(37)
+    expect(versions[versions.length - 1].version).toBe(8)
+  })
+
   it('links CRUD: link idempotente, unlink remove, listLinks reflete', () => {
     const d = novoDiagrama()
     let links = store.link({ diagramId: d.id, parentType: 'repo', parentId: 'r1' })

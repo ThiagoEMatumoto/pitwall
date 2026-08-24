@@ -25,6 +25,10 @@ export interface RemoteScene {
 
 let remoteNonce = 0;
 
+// Token da seleção em voo: cada select() bumpa; um get() que resolve depois
+// de outro select() (ou de um select(null)) descarta o resultado obsoleto.
+let selectSeq = 0;
+
 function toMeta(d: Diagram): DiagramMeta {
   const { scene: _scene, links: _links, ...meta } = d;
   return meta;
@@ -82,14 +86,18 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
   },
 
   select: async (id) => {
+    const token = ++selectSeq;
     if (!id) {
       set({ selected: null, remoteScene: null });
       return;
     }
     const diagram = await diagramsApi.get(id);
     // Ignora resultado obsoleto se o usuário já trocou de seleção nesse meio
-    // tempo (só acontece com cliques rápidos; get é barato mas assíncrono).
-    if (diagram) set({ selected: diagram, remoteScene: null });
+    // tempo (só acontece com cliques rápidos; get é barato mas assíncrono):
+    // apenas a chamada mais recente (token corrente) aplica o resultado.
+    if (diagram && token === selectSeq) {
+      set({ selected: diagram, remoteScene: null });
+    }
   },
 
   setShowArchived: async (show) => {
