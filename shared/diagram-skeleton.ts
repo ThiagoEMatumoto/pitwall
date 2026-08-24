@@ -91,7 +91,7 @@ interface ExLinear extends ExBase {
 
 type ExElement = ExBase | ExText | ExLinear;
 
-const DEFAULT_STROKE = "#e2e2e2";
+const DEFAULT_STROKE = "#1e1e1e";
 const DEFAULT_BACKGROUND = "transparent";
 const DEFAULT_SHAPE_WIDTH = 180;
 const DEFAULT_SHAPE_HEIGHT = 70;

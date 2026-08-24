@@ -64,7 +64,7 @@ describe("skeletonToElements", () => {
     expect(rect.roundness).toEqual({ type: 3 });
     expect(rect.width).toBe(180);
     expect(rect.height).toBe(70);
-    expect(rect.strokeColor).toBe("#e2e2e2");
+    expect(rect.strokeColor).toBe("#1e1e1e");
     expect(rect.backgroundColor).toBe("transparent");
 
     const ellipse = elements.find((e) => e.id === "start")!;

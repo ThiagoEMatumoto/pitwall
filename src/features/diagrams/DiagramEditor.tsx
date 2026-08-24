@@ -70,10 +70,10 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
         diagram.scene.elements as Parameters<typeof utils.restoreElements>[0],
         null,
       ),
-      appState: {
-        viewBackgroundColor: cssVar("--color-bg", "#12121a"),
-        currentItemStrokeColor: cssVar("--color-text", "#e8e8f0"),
-      },
+      // Sem viewBackgroundColor custom: o theme="dark" do Excalidraw INVERTE
+      // as cores do canvas — um bg escuro aqui viraria claro na tela. Os
+      // defaults da lib (bg branco, stroke #1e1e1e) renderizam certo no dark.
+      appState: {},
     };
     // Remontado por key={diagram.id}; a cena inicial não muda durante a vida
     // do componente.

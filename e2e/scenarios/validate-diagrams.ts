@@ -172,7 +172,7 @@ try {
   await screenshot(page, "dg-04-live-update");
 
   // 5. Arquivar pelo menu ⋯ e ver o item sair da lista (filtro default).
-  await page.getByTitle("Mais ações", { exact: true }).click();
+  await page.getByRole("main").getByTitle("Mais ações", { exact: true }).click();
   await page.getByRole("button", { name: "Arquivar", exact: true }).click();
   await page.waitForTimeout(1200);
   await screenshot(page, "dg-05-archived");
