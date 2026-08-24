@@ -2563,12 +2563,17 @@ export type VoiceTtsResult =
   | { ok: true; bytes: Uint8Array; mime: string }
   | { ok: false; error: string }
 
-// Resumo de fim de turno (modo voz): emitido pelo main em voice:summary quando
-// um turno termina em texto de assistant e a pref voice.mode está ligada.
+// Resumo de fim de turno: emitido pelo main em voice:summary quando um turno
+// termina em texto de assistant e o resumo automático da sessão está ligado —
+// ou quando o usuário pede um resumo sob demanda (voice:summarize-now).
 export interface VoiceSummaryEvent {
   ccSessionId: string
   summary: string
 }
+
+// Resultado do resumo sob demanda. ok=true → o resumo (se houver) chega pelo
+// broadcast voice:summary; erros já vêm em PT, prontos pra tela.
+export type VoiceSummarizeNowResult = { ok: true } | { ok: false; error: string }
 
 export interface Api {
   projects: {
@@ -2658,7 +2663,13 @@ export interface Api {
     configStatus(): Promise<VoiceConfigStatus>
     /** Sintetiza fala (mp3) do texto via ElevenLabs — bytes prontos pra tocar. */
     tts(text: string): Promise<VoiceTtsResult>
-    /** Resumo automático do turno que acabou (2-3 frases, PT) — modo voz. */
+    /** Liga/desliga o resumo automático de fim de turno DESTA sessão. */
+    autoSummarySet(ccSessionId: string, enabled: boolean): Promise<void>
+    /** Estado atual do resumo automático da sessão (fonte da verdade: main). */
+    autoSummaryGet(ccSessionId: string): Promise<boolean>
+    /** Resume o último turno agora (bypass do gate automático; lock mantido). */
+    summarizeNow(ccSessionId: string): Promise<VoiceSummarizeNowResult>
+    /** Resumo do turno que acabou (2-3 frases, PT) — automático ou sob demanda. */
     onSummary(handler: (event: VoiceSummaryEvent) => void): () => void
   }
   secrets: {

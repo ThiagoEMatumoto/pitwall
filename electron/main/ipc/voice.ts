@@ -6,6 +6,7 @@ import { getVoiceConfig, vozEnvPath } from '../services/voice-config'
 import { condense } from '../services/voice-condense'
 import { transcribe } from '../services/voice-stt'
 import { speak } from '../services/voice-tts'
+import { isAutoSummaryEnabled, setAutoSummary, summarizeNow } from '../services/voice-summary'
 
 // bytes chega do renderer como Uint8Array intacto (structured clone do invoke).
 const transcribeSchema = z.object({
@@ -16,6 +17,13 @@ const transcribeSchema = z.object({
 const condenseSchema = z.object({ text: z.string().min(1) })
 
 const ttsSchema = z.object({ text: z.string().min(1) })
+
+const sessionSchema = z.object({ ccSessionId: z.string().min(1) })
+
+const autoSummarySchema = z.object({
+  ccSessionId: z.string().min(1),
+  enabled: z.boolean(),
+})
 
 // Gate de teste (e2e sem microfone): com CM_VOICE_FIXTURE setada, o áudio
 // gravado é trocado pelo conteúdo do arquivo fixture — config, credencial,
@@ -47,6 +55,21 @@ export function registerVoiceIpc(): void {
   ipcMain.handle('voice:tts', (_e, payload: unknown) => {
     const { text } = ttsSchema.parse(payload)
     return speak(text)
+  })
+
+  ipcMain.handle('voice:auto-summary:set', (_e, payload: unknown) => {
+    const { ccSessionId, enabled } = autoSummarySchema.parse(payload)
+    setAutoSummary(ccSessionId, enabled)
+  })
+
+  ipcMain.handle('voice:auto-summary:get', (_e, payload: unknown) => {
+    const { ccSessionId } = sessionSchema.parse(payload)
+    return isAutoSummaryEnabled(ccSessionId)
+  })
+
+  ipcMain.handle('voice:summarize-now', (_e, payload: unknown) => {
+    const { ccSessionId } = sessionSchema.parse(payload)
+    return summarizeNow(ccSessionId)
   })
 
   // Status pra tela de configurações — nunca inclui credencial, só o que é
