@@ -28,4 +28,6 @@ diagram_create({ title: "Auth flow", kind: "flow", summary: "initial sketch", el
 ] })
 To edit, ALWAYS prefer diagram_patch (incremental add/update/delete ops by element id): it edits on top of the current scene, so a human's manual layout refinements survive. diagram_update replaces the whole scene and throws that refinement away — use it only for an intentional redraw. Deletion is two-step by design: diagram_archive first, then diagram_delete with confirm: true (an active diagram cannot be deleted).
 
+**Shape libraries (canvas):** The canvas also has ONE global Excalidraw shape library shared by all diagrams. diagram_library_list shows what is installed (id, name, elementCount); diagram_library_install adds a .excalidrawlib — pass url (the public catalog at https://libraries.excalidraw.com hosts ready-made libraries; use the direct .excalidrawlib file URL) or library_json (the file content inline); diagram_library_remove deletes one item by id. Installs merge by item id, so re-installing updates instead of duplicating.
+
 Keep updates minimal and factual; never invent progress.`

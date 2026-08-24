@@ -18,6 +18,8 @@ import * as jobStore from '../scheduled-job-store'
 import * as repoPullStore from '../repo-pull-store'
 import * as contentStore from '../content-contract-store'
 import * as diagramStore from '../diagram-store'
+import * as diagramLibraryStore from '../diagram-library-store'
+import { installLibraryFromUrl, installLibraryJson } from '../diagram-library-install'
 import {
   applyPatch,
   elementsToSkeleton,
@@ -46,6 +48,7 @@ import type {
   ContentAudience,
   DeliveryLimit,
   Diagram,
+  DiagramLibraryItem,
   DiagramScene,
   EthicalRule,
   FeatureObjectiveLink,
@@ -85,7 +88,9 @@ export interface ToolDef {
   title: string
   description: string
   inputSchema: z.ZodType
-  handler: (args: unknown) => ToolResult
+  // Promise SÓ pra tools com IO real (hoje: o fetch de diagram_library_install)
+  // — o registerTool do SDK aceita CallToolResult | Promise<CallToolResult>.
+  handler: (args: unknown) => ToolResult | Promise<ToolResult>
 }
 
 // structuredContent precisa ser objeto JSON (spec); listas vão como { items }.
@@ -1844,6 +1849,70 @@ function diagramTools(notify: McpNotify): ToolDef[] {
   ]
 }
 
+// ---- diagram library (.excalidrawlib) ----
+//
+// Biblioteca de shapes GLOBAL (compartilhada por todos os diagramas). Install
+// aceita URL (fetch no main, mesmo caminho do IPC) ou o JSON já parseado;
+// merge por id — reinstalar atualiza, nunca duplica. Retornos sem `elements`:
+// payload de shape não serve pro agente.
+
+const diagramLibraryInstallSchema = z
+  .object({
+    url: z.url().optional(),
+    library_json: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((v) => (v.url !== undefined) !== (v.library_json !== undefined), {
+    message: 'provide exactly one of url or library_json',
+  })
+
+function libraryItemMeta(item: DiagramLibraryItem): Record<string, unknown> {
+  return { id: item.id, name: item.name, status: item.status, elementCount: item.elements.length }
+}
+
+function diagramLibraryTools(notify: McpNotify): ToolDef[] {
+  return [
+    {
+      name: 'diagram_library_list',
+      title: 'List shape library items',
+      description:
+        'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out.',
+      inputSchema: z.object({}),
+      handler: () => {
+        return ok({ items: diagramLibraryStore.getItems().map(libraryItemMeta) })
+      },
+    },
+    {
+      name: 'diagram_library_install',
+      title: 'Install shape library',
+      description:
+        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL), or library_json = the .excalidrawlib content as a JSON object. Items merge by id: re-installing the same library updates items instead of duplicating them. Returns how many items the file brought (added) plus the full library.',
+      inputSchema: diagramLibraryInstallSchema,
+      handler: async (args) => {
+        const input = diagramLibraryInstallSchema.parse(args)
+        const result =
+          input.url !== undefined
+            ? await installLibraryFromUrl(input.url)
+            : installLibraryJson(input.library_json)
+        notify.broadcast('diagramLibrary:updated', { items: result.items })
+        return ok({ added: result.added, items: result.items.map(libraryItemMeta) })
+      },
+    },
+    {
+      name: 'diagram_library_remove',
+      title: 'Remove shape library item',
+      description:
+        'Remove one item from the global shape library by id (see diagram_library_list). Returns the remaining item metas.',
+      inputSchema: idSchema,
+      handler: (args) => {
+        const { id } = idSchema.parse(args)
+        const items = diagramLibraryStore.removeItem(id)
+        notify.broadcast('diagramLibrary:updated', { items })
+        return ok({ id, removed: true, items: items.map(libraryItemMeta) })
+      },
+    },
+  ]
+}
+
 export function buildTools(
   notify: McpNotify,
   ctx: McpRequestContext = ANONYMOUS_CONTEXT,
@@ -1858,6 +1927,7 @@ export function buildTools(
     ...repoPullTools(),
     ...contentContractTools(notify),
     ...diagramTools(notify),
+    ...diagramLibraryTools(notify),
   ]
 }
 
