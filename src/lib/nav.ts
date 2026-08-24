@@ -1,7 +1,7 @@
-import { useAppStore } from '@/store/appStore'
-import { useFeaturesStore } from '@/store/featuresStore'
-import { useObjectivesStore } from '@/store/objectivesStore'
-import { useTasksStore } from '@/store/tasksStore'
+import { useAppStore } from "@/store/appStore";
+import { useFeaturesStore } from "@/store/featuresStore";
+import { useObjectivesStore } from "@/store/objectivesStore";
+import { useTasksStore } from "@/store/tasksStore";
 
 // Navegação clicável entre objetivos/features/tasks (Onda 2 — fecha o "todo
 // vínculo é texto morto" da curadoria). Cada função seleciona a entidade no
@@ -9,19 +9,24 @@ import { useTasksStore } from '@/store/tasksStore'
 // TreeNode.tsx, que era o único lugar que navegava (só a Home).
 
 export function navigateToObjective(id: string): void {
-  void useObjectivesStore.getState().select(id)
-  useAppStore.getState().setArea('objectives')
+  void useObjectivesStore.getState().select(id);
+  useAppStore.getState().setArea("objectives");
 }
 
 export function navigateToFeature(id: string): void {
-  void useFeaturesStore.getState().select(id)
-  useAppStore.getState().setArea('features')
+  void useFeaturesStore.getState().select(id);
+  useAppStore.getState().setArea("features");
 }
 
 // Tasks não têm uma view de detalhe própria (lista/board/pendências filtram
 // em memória, sem rota por id) — foca a tarefa via tasksStore; TasksArea abre
 // o dialog de edição dela assim que a tarefa aparecer na lista carregada.
 export function navigateToTask(id: string): void {
-  useTasksStore.getState().focusTask(id)
-  useAppStore.getState().setArea('tasks')
+  useTasksStore.getState().focusTask(id);
+  useAppStore.getState().setArea("tasks");
+}
+
+export function navigateToProject(id: string): void {
+  useAppStore.getState().setActiveProject(id);
+  useAppStore.getState().setArea("projects");
 }
