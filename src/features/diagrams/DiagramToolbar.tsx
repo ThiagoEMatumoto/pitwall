@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
@@ -17,8 +17,13 @@ import { showToast } from "@/features/notifications/toast-store";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Icon } from "@/components/ui/Icon";
+import { Input } from "@/components/ui/Input";
 import { Menu } from "@/components/ui/Menu";
 import { loadExcalidrawUtils } from "./excalidraw-lazy";
+import {
+  fromExcalidrawLibraryItems,
+  toExcalidrawLibraryItems,
+} from "./library-convert";
 import { KIND_LABEL, PARENT_TYPE_LABEL } from "./diagram-labels";
 
 function formatWhen(ts: number): string {
@@ -75,6 +80,10 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
   const [versions, setVersions] = useState<DiagramVersionMeta[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [restoring, setRestoring] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [libraryUrlOpen, setLibraryUrlOpen] = useState(false);
+  const [libraryUrl, setLibraryUrl] = useState("");
+  const [installingLibrary, setInstallingLibrary] = useState(false);
 
   // Rename externo (ex.: via MCP) atualiza o campo se o usuário não editou.
   useEffect(() => {
@@ -128,6 +137,62 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
         title: "Falha ao copiar SVG",
         body: err instanceof Error ? err.message : String(err),
       });
+    }
+  };
+
+  // Importa um .excalidrawlib local: merge (da lib) com a biblioteca vigente,
+  // persiste o resultado e aplica no editor com o painel aberto. O broadcast
+  // do replace sincroniza outras janelas; o editor local ignora o eco por hash.
+  const importLibraryFile = async (file: File) => {
+    try {
+      const utils = await loadExcalidrawUtils();
+      const imported = await utils.loadLibraryFromBlob(file);
+      const current = toExcalidrawLibraryItems(await diagramsApi.library.get());
+      const merged = utils.mergeLibraryItems(current, imported);
+      await diagramsApi.library.replace(fromExcalidrawLibraryItems(merged));
+      if (excalidrawAPI) {
+        await excalidrawAPI.updateLibrary({
+          libraryItems: merged,
+          merge: false,
+          openLibraryMenu: true,
+        });
+      }
+      showToast({
+        title: `${imported.length} shapes adicionados`,
+        durationMs: 2500,
+      });
+    } catch (err) {
+      showToast({
+        title: "Falha ao importar biblioteca",
+        body: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const installLibraryByUrl = async () => {
+    const url = libraryUrl.trim();
+    if (!url || installingLibrary) return;
+    setInstallingLibrary(true);
+    try {
+      // Fetch acontece no main (CSP + timeout/cap); o retorno já vem mergeado.
+      const { added, items } = await diagramsApi.library.installUrl(url);
+      if (excalidrawAPI) {
+        await excalidrawAPI.updateLibrary({
+          libraryItems: toExcalidrawLibraryItems(items),
+          merge: false,
+          openLibraryMenu: true,
+        });
+      }
+      setLibraryUrlOpen(false);
+      setLibraryUrl("");
+      showToast({ title: `${added} shapes adicionados`, durationMs: 2500 });
+    } catch (err) {
+      showToast({
+        title: "Falha ao instalar biblioteca",
+        body: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setInstallingLibrary(false);
     }
   };
 
@@ -208,6 +273,19 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
             title: excalidrawAPI ? undefined : "Editor ainda carregando",
           },
           { label: "Histórico…", onClick: openHistory },
+          {
+            label: "Importar biblioteca…",
+            onClick: () => fileInputRef.current?.click(),
+          },
+          {
+            label: "Instalar por URL…",
+            onClick: () => setLibraryUrlOpen(true),
+          },
+          {
+            label: "Explorar catálogo",
+            // O main abre https em browser externo (setWindowOpenHandler).
+            onClick: () => window.open("https://libraries.excalidraw.com"),
+          },
           archived
             ? {
                 label: "Desarquivar",
@@ -230,6 +308,55 @@ export function DiagramToolbar({ diagram, excalidrawAPI }: Props) {
           <Icon as={MoreHorizontal} />
         </button>
       </Menu>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".excalidrawlib,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          // Reset: escolher o mesmo arquivo de novo deve disparar onChange.
+          e.target.value = "";
+          if (file) void importLibraryFile(file);
+        }}
+      />
+
+      <Dialog
+        open={libraryUrlOpen}
+        onClose={() => setLibraryUrlOpen(false)}
+        title="Instalar biblioteca por URL"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setLibraryUrlOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={installingLibrary || !libraryUrl.trim()}
+              onClick={() => void installLibraryByUrl()}
+            >
+              {installingLibrary ? "Instalando…" : "Instalar"}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          <Input
+            label="URL do arquivo .excalidrawlib"
+            value={libraryUrl}
+            onChange={(e) => setLibraryUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void installLibraryByUrl();
+            }}
+            placeholder="https://…/biblioteca.excalidrawlib"
+            autoFocus
+          />
+          <p className="text-[11px] text-[var(--color-text-dim)]">
+            Bibliotecas prontas em libraries.excalidraw.com (menu “Explorar
+            catálogo”).
+          </p>
+        </div>
+      </Dialog>
 
       <Dialog
         open={historyOpen}

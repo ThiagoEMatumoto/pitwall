@@ -26,6 +26,13 @@ vi.mock("@/lib/ipc", () => ({
     onUpdated: vi.fn(() => () => {}),
     onDeleted: vi.fn(() => () => {}),
     onLinksUpdated: vi.fn(() => () => {}),
+    library: {
+      get: vi.fn().mockResolvedValue([]),
+      replace: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      installUrl: vi.fn(),
+      onUpdated: vi.fn(() => () => {}),
+    },
   },
 }));
 
