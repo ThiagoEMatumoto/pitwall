@@ -12,6 +12,10 @@ interface Props {
 
 type State = { status: 'idle' } | { status: 'running' } | { status: 'error'; message: string }
 
+// Erro some sozinho: a mensagem é transiente (lock em voo, turno sem texto) e
+// não pode ficar pra sempre ocupando o rodapé.
+const ERROR_AUTOCLEAR_MS = 5_000
+
 // Botão "Resumir": resume o último turno AGORA, sem depender do toggle de
 // resumo automático (voice:summarize-now bypassa o gate; o resultado chega
 // pelo mesmo broadcast e aparece no SummaryChip). Visível mesmo sem resumo
@@ -25,6 +29,12 @@ export function SummarizeButton({ ccSessionId, compact }: Props) {
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    if (state.status !== 'error') return
+    const timer = setTimeout(() => setState({ status: 'idle' }), ERROR_AUTOCLEAR_MS)
+    return () => clearTimeout(timer)
+  }, [state])
 
   async function run() {
     if (state.status === 'running') return
@@ -55,16 +65,26 @@ export function SummarizeButton({ ccSessionId, compact }: Props) {
 
   if (state.status === 'error') {
     return (
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => void run()}
-        title={`${state.message} Clique pra tentar de novo.`}
-        className={`gap-1 ${pad} py-0.5 text-[10px] text-[var(--color-danger)]`}
-      >
-        <Icon as={ScrollText} size={11} />
-        {label('Resumir')}
-      </Button>
+      <span className="flex min-w-0 items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void run()}
+          title={`${state.message} Clique pra tentar de novo.`}
+          className={`gap-1 ${pad} py-0.5 text-[10px] text-[var(--color-danger)]`}
+        >
+          <Icon as={ScrollText} size={11} />
+          {label('Resumir')}
+        </Button>
+        {/* Texto visível mesmo no tier compact: erro só em title/cor é invisível. */}
+        <span
+          role="status"
+          title={state.message}
+          className="max-w-[180px] truncate text-[10px] text-[var(--color-danger)]"
+        >
+          {state.message}
+        </span>
+      </span>
     )
   }
 

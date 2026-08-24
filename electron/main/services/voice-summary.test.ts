@@ -365,6 +365,41 @@ describe('summarizeNow (resumo sob demanda)', () => {
     expect(runClaude).not.toHaveBeenCalled()
   })
 
+  it('claude que REJEITA (timeout/spawn) → erro do resumidor, não de transcript, e solta o lock', async () => {
+    const id = freshId()
+    mockTranscript([user('faz X'), assistant('feito')])
+    vi.mocked(runClaude).mockRejectedValueOnce(new Error('spawn ETIMEDOUT'))
+
+    const res = await summarizeNow(id)
+
+    expect(res).toEqual({
+      ok: false,
+      error: 'Falha ao executar o resumidor (claude).',
+    })
+    expect(broadcast).not.toHaveBeenCalled()
+
+    // Lock solto: um novo pedido roda claude de novo (agora com sucesso).
+    vi.mocked(runClaude).mockResolvedValue({
+      code: 0,
+      stdout: 'Resumo.',
+      stderr: '',
+    })
+    const retry = await summarizeNow(id)
+    expect(retry).toEqual({ ok: true })
+  })
+
+  it('falha na LEITURA do transcript → erro específico de transcript, sem claude', async () => {
+    vi.mocked(chatTranscriptService.read).mockRejectedValueOnce(new Error('ENOENT'))
+
+    const res = await summarizeNow(freshId())
+
+    expect(res).toEqual({
+      ok: false,
+      error: 'Falha ao ler o transcript da sessão.',
+    })
+    expect(runClaude).not.toHaveBeenCalled()
+  })
+
   it('sob demanda também alimenta o dedupe automático: a borda seguinte do mesmo turno não paga claude', async () => {
     const id = enabledId()
     mockTranscript([user('faz X'), assistant('feito')])

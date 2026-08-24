@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AudioLines, Play, Square, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { voiceApi } from '@/lib/ipc'
-import { speakSummary, useVoiceSpeaker } from './useVoiceSpeaker'
+import { speakSummary, stopSpeaking, useVoiceSpeaker } from './useVoiceSpeaker'
 
 interface Props {
   ccSessionId: string | null
@@ -16,13 +16,24 @@ interface Props {
 export function SummaryChip({ ccSessionId }: Props) {
   const [summary, setSummary] = useState<string | null>(null)
   const { speaking, stop } = useVoiceSpeaker()
+  const prevIdRef = useRef(ccSessionId)
 
   useEffect(() => {
     // Trocar de sessão limpa o chip — sem isso ele mostraria o resumo da outra.
+    // E para o áudio: com o chip limpo, a reprodução ficaria órfã (sem ⏹ visível).
+    // O ref distingue troca real de mount (mount de um pane novo não pode calar
+    // o áudio de outro).
+    if (prevIdRef.current !== ccSessionId) {
+      prevIdRef.current = ccSessionId
+      stopSpeaking()
+    }
     setSummary(null)
     if (!ccSessionId) return
     return voiceApi.onSummary((event) => {
       if (event.ccSessionId !== ccSessionId) return
+      // Resumo novo com áudio antigo tocando: para — o ▶/⏹ do chip precisa
+      // sempre corresponder ao texto exibido, e nada toca sem o usuário pedir.
+      stopSpeaking()
       setSummary(event.summary)
     })
   }, [ccSessionId])
@@ -63,7 +74,11 @@ export function SummaryChip({ ccSessionId }: Props) {
       )}
       <button
         type="button"
-        onClick={() => setSummary(null)}
+        onClick={() => {
+          // Dispensar o chip some com o único controle visível do áudio — para junto.
+          stop()
+          setSummary(null)
+        }}
         title="Dispensar o resumo"
         className="shrink-0 rounded p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
       >

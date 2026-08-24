@@ -21,6 +21,7 @@ import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
 import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
 import { AgentHud } from './AgentHud'
 import { SummaryChip } from './voice/SummaryChip'
+import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
 import { playKeys } from './chat/respond-keys'
 import { buildPromptBytes } from './chat/prompt-bytes'
@@ -173,7 +174,11 @@ export function Terminal({
   // Origem do título: 'manual' (rename do usuário) nunca é sobrescrito pelo
   // name automático do CC. Local pra refletir o rename na hora, sem refetch.
   const [titleSource, setTitleSource] = useState<Session['titleSource']>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
+  const [menu, setMenu] = useState<{
+    x: number
+    y: number
+    hasSelection: boolean
+  } | null>(null)
   const [activity, setActivity] = useState<SessionActivity | null>(null)
   // Modo de permissão ativo (lido do rodapé do xterm via detectFooterMode).
   const [currentMode, setCurrentMode] = useState<PermissionMode | null>(null)
@@ -275,11 +280,7 @@ export function Terminal({
   // só quando 40 linhas não bastam: menus altos (preview/wrap) ficavam cortados
   // e o parser fail-closava, empurrando o usuário pro terminal.
   function readTuiMenuFrom(t: Xterm): TuiMenu | null {
-    return parseWithGrowingWindow(
-      (n) => readTailText(t, n),
-      parseTuiMenu,
-      t.buffer.active.length,
-    )
+    return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiMenu, t.buffer.active.length)
   }
   function readTuiMenu(): TuiMenu | null {
     const t = xtermRef.current
@@ -299,11 +300,7 @@ export function Terminal({
   // janela adaptativa: a lista do /config e o preview do /theme passam de 40
   // linhas com facilidade.
   function readTuiPickerFrom(t: Xterm): TuiPicker | null {
-    return parseWithGrowingWindow(
-      (n) => readTailText(t, n),
-      parseTuiPicker,
-      t.buffer.active.length,
-    )
+    return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiPicker, t.buffer.active.length)
   }
   function readTuiPicker(): TuiPicker | null {
     const t = xtermRef.current
@@ -523,7 +520,9 @@ export function Terminal({
   // fato (ex.: usuário cicla via Shift+Tab, ou a CLI muda de modo sozinha).
   useEffect(() => {
     if (currentMode != null && shouldNotifyModeChange(prevModeForToastRef.current, currentMode)) {
-      showToast({ title: `Modo alterado para ${permissionModeLabel(currentMode)}` })
+      showToast({
+        title: `Modo alterado para ${permissionModeLabel(currentMode)}`,
+      })
     }
     prevModeForToastRef.current = currentMode
   }, [currentMode])
@@ -537,6 +536,12 @@ export function Terminal({
     exitCode !== 0 &&
     !gotDataRef.current &&
     (exitAtRef.current ?? Date.now()) - session.startedAt < 3000
+
+  // Sessão saindo esconde o SummaryChip (render condicional em !exited) — o
+  // áudio em curso perderia o único ⏹ visível; para junto.
+  useEffect(() => {
+    if (exited) stopSpeaking()
+  }, [exited])
 
   // Sessão encerrada não fica como pane morta: toast dismissível + auto-close
   // (o histórico vive no filtro "Encerradas" do seletor de sessões). Exceção:
@@ -658,7 +663,10 @@ export function Terminal({
           const resolved = resolvePath(matched, cwd)
           if (!resolved) continue // relativo sem cwd disponível — não linka
           links.push({
-            range: { start: { x: startX, y: lineNumber }, end: { x: endX, y: lineNumber } },
+            range: {
+              start: { x: startX, y: lineNumber },
+              end: { x: endX, y: lineNumber },
+            },
             text: matched,
             decorations: { underline: true, pointerCursor: true },
             activate() {
@@ -777,7 +785,10 @@ export function Terminal({
       if (e.type !== 'keydown') return true
 
       // Copiar: Ctrl+Shift+C (todas plataformas), ou Cmd+C no mac só se houver seleção.
-      if ((e.ctrlKey && e.shiftKey && e.key === 'C') || (e.shiftKey && e.key === 'C' && e.metaKey)) {
+      if (
+        (e.ctrlKey && e.shiftKey && e.key === 'C') ||
+        (e.shiftKey && e.key === 'C' && e.metaKey)
+      ) {
         const sel = term.getSelection()
         if (sel) void navigator.clipboard.writeText(sel)
         return false
@@ -815,7 +826,11 @@ export function Terminal({
 
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault()
-      setMenu({ x: e.clientX, y: e.clientY, hasSelection: term.hasSelection() })
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        hasSelection: term.hasSelection(),
+      })
     }
     host.addEventListener('contextmenu', onContextMenu)
 
@@ -1063,8 +1078,8 @@ export function Terminal({
           style={{ color: 'var(--color-text-dim)' }}
         >
           <span className="text-[var(--color-text)]">
-            <span className="text-[var(--color-danger)]">claude não encontrado</span> — verifique a instalação
-            ou configure o comando em Configurações.
+            <span className="text-[var(--color-danger)]">claude não encontrado</span> — verifique a
+            instalação ou configure o comando em Configurações.
           </span>
           <div className="flex shrink-0 items-center gap-2">
             {onOpenSettings && (
@@ -1099,7 +1114,6 @@ export function Terminal({
           ref={hostRef}
           className={`h-full bg-[var(--color-bg)] p-2 ${mode === 'chat' ? 'invisible' : ''}`}
         />
-
 
         {mode === 'chat' && (
           <ChatView

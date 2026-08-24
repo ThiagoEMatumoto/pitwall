@@ -112,4 +112,44 @@ describe('SummaryChip', () => {
     fireEvent.click(await screen.findByTitle('Dispensar o resumo'))
     expect(screen.queryByText('Resumo dispensável.')).not.toBeInTheDocument()
   })
+
+  // Áudio órfão: qualquer caminho que esconda o chip (ou troque o texto) para a
+  // reprodução — áudio nunca continua sem um ⏹ visível que corresponda a ele.
+  it('dispensar (X) com áudio tocando também PARA o áudio', async () => {
+    render(<SummaryChip ccSessionId="s1" />)
+    act(() => emitSummary({ ccSessionId: 's1', summary: 'Resumo falante.' }))
+    fireEvent.click(screen.getByTitle('Ouvir o resumo'))
+    await waitFor(() => expect(FakeAudio.instances).toHaveLength(1))
+
+    fireEvent.click(screen.getByTitle('Dispensar o resumo'))
+
+    expect(FakeAudio.instances[0].pause).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Resumo falante.')).not.toBeInTheDocument()
+  })
+
+  it('resumo NOVO chegando com áudio antigo tocando para o áudio antigo', async () => {
+    render(<SummaryChip ccSessionId="s1" />)
+    act(() => emitSummary({ ccSessionId: 's1', summary: 'Resumo antigo.' }))
+    fireEvent.click(screen.getByTitle('Ouvir o resumo'))
+    await waitFor(() => expect(FakeAudio.instances).toHaveLength(1))
+
+    act(() => emitSummary({ ccSessionId: 's1', summary: 'Resumo novo.' }))
+
+    expect(FakeAudio.instances[0].pause).toHaveBeenCalledTimes(1)
+    // O texto novo aparece parado (▶) — nada toca sem o usuário pedir de novo.
+    expect(await screen.findByText('Resumo novo.')).toBeInTheDocument()
+    expect(screen.getByTitle('Ouvir o resumo')).toBeInTheDocument()
+  })
+
+  it('trocar de sessão (ccSessionId) limpa o chip E para o áudio', async () => {
+    const { rerender } = render(<SummaryChip ccSessionId="s1" />)
+    act(() => emitSummary({ ccSessionId: 's1', summary: 'Resumo da s1.' }))
+    fireEvent.click(screen.getByTitle('Ouvir o resumo'))
+    await waitFor(() => expect(FakeAudio.instances).toHaveLength(1))
+
+    rerender(<SummaryChip ccSessionId="s2" />)
+
+    expect(FakeAudio.instances[0].pause).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Resumo da s1.')).not.toBeInTheDocument()
+  })
 })

@@ -131,7 +131,14 @@ async function runSummary(
 ): Promise<VoiceSummarizeNowResult> {
   inFlight.add(ccSessionId)
   try {
-    const read = await chatTranscriptService.read(ccSessionId)
+    // Catches por fase: o erro que chega ao botão diz ONDE quebrou (transcript,
+    // claude ou entrega à UI) — um rótulo único mandava o usuário caçar no lugar errado.
+    let read: Awaited<ReturnType<typeof chatTranscriptService.read>>
+    try {
+      read = await chatTranscriptService.read(ccSessionId)
+    } catch {
+      return { ok: false, error: 'Falha ao ler o transcript da sessão.' }
+    }
     const turnText = lastAssistantTurnText(read.messages)
     if (!turnText)
       return {
@@ -146,29 +153,36 @@ async function runSummary(
 
     // O texto do transcript entra no prompt: guard-rail de tools obrigatório —
     // o resumidor NUNCA pode executar ação a partir do conteúdo da sessão.
-    const result = await runClaude(
-      [
-        '-p',
-        SUMMARY_INSTRUCTION + turnText,
-        '--output-format',
-        'text',
-        '--model',
-        SUMMARY_MODEL,
-        ...TEXT_ONLY_CLAUDE_ARGS,
-      ],
-      { timeoutMs: SUMMARY_TIMEOUT_MS },
-    )
+    let result: Awaited<ReturnType<typeof runClaude>>
+    try {
+      result = await runClaude(
+        [
+          '-p',
+          SUMMARY_INSTRUCTION + turnText,
+          '--output-format',
+          'text',
+          '--model',
+          SUMMARY_MODEL,
+          ...TEXT_ONLY_CLAUDE_ARGS,
+        ],
+        { timeoutMs: SUMMARY_TIMEOUT_MS },
+      )
+    } catch {
+      return { ok: false, error: 'Falha ao executar o resumidor (claude).' }
+    }
     if (result.code !== 0) return { ok: false, error: 'O resumidor (claude) falhou.' }
     const summary = stripCodeFence(result.stdout).trim()
     if (!summary) return { ok: false, error: 'O resumidor devolveu um resumo vazio.' }
 
-    broadcast('voice:summary', {
-      ccSessionId,
-      summary,
-    } satisfies VoiceSummaryEvent)
+    try {
+      broadcast('voice:summary', {
+        ccSessionId,
+        summary,
+      } satisfies VoiceSummaryEvent)
+    } catch {
+      return { ok: false, error: 'Falha ao entregar o resumo à interface.' }
+    }
     return { ok: true }
-  } catch {
-    return { ok: false, error: 'Falha ao ler o transcript da sessão.' }
   } finally {
     inFlight.delete(ccSessionId)
     if (pendingRerun.delete(ccSessionId)) void maybeSummarizeTurn(ccSessionId)
