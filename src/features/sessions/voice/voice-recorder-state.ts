@@ -16,12 +16,14 @@ export function shouldCondense(text: string, thresholdWords: number): boolean {
 
 export type RecorderState =
   | { status: 'idle' }
+  | { status: 'requesting' }
   | { status: 'recording'; startedAt: number }
   | { status: 'transcribing' }
   | { status: 'condensing' }
   | { status: 'error'; message: string }
 
 export type RecorderEvent =
+  | { type: 'request' }
   | { type: 'start'; at: number }
   | { type: 'stop'; at: number }
   | { type: 'transcribed' }
@@ -32,14 +34,16 @@ export type RecorderEvent =
 
 export function reduceRecorder(state: RecorderState, event: RecorderEvent): RecorderState {
   switch (event.type) {
+    case 'request':
+      // getUserMedia em voo é a guarda contra o duplo clique: um segundo pedido
+      // enquanto o primeiro espera o mic criaria dois streams e vazaria o
+      // primeiro (mic aceso pra sempre). Gravando/transcrevendo idem.
+      if (state.status !== 'idle' && state.status !== 'error') return state
+      return { status: 'requesting' }
     case 'start':
-      // Transcrevendo/condensando não é interrompível — o áudio já foi enviado.
-      if (
-        state.status === 'transcribing' ||
-        state.status === 'condensing' ||
-        state.status === 'recording'
-      )
-        return state
+      // Só o fluxo que pediu o mic (requesting) pode começar a gravar; o hook
+      // descarta o stream quando o estado mudou durante o await.
+      if (state.status !== 'requesting') return state
       return { status: 'recording', startedAt: event.at }
     case 'stop': {
       if (state.status !== 'recording') return state

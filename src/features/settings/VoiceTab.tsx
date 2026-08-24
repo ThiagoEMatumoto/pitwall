@@ -13,7 +13,9 @@ import { stopSpeaking } from '@/features/sessions/voice/useVoiceSpeaker'
 // voz.env — esta tela nunca as exibe nem edita.
 export function VoiceTab({ open }: { open: boolean }) {
   const [status, setStatus] = useState<VoiceConfigStatus | null>(null)
-  const [threshold, setThreshold] = useState(DEFAULT_CONDENSE_THRESHOLD_WORDS)
+  // '' = campo esvaziado no meio da edição — nunca persiste (persistir viraria
+  // threshold 0 e TODO ditado passaria a condensar).
+  const [threshold, setThreshold] = useState<number | ''>(DEFAULT_CONDENSE_THRESHOLD_WORDS)
   const voiceMode = useVoiceModeStore((s) => s.enabled)
   const setVoiceMode = useVoiceModeStore((s) => s.setEnabled)
 
@@ -27,9 +29,22 @@ export function VoiceTab({ open }: { open: boolean }) {
     void useVoiceModeStore.getState().load()
   }, [open])
 
-  function updateThreshold(v: number) {
+  function updateThreshold(raw: string) {
+    if (raw === '') {
+      setThreshold('')
+      return
+    }
+    const v = Number(raw)
     setThreshold(v)
     if (Number.isFinite(v) && v >= 0) void prefsApi.set(CONDENSE_THRESHOLD_KEY, v)
+  }
+
+  function settleThreshold() {
+    if (threshold !== '') return
+    // Sair do campo vazio volta ao padrão (e persiste, pra tela e resumidor
+    // concordarem sobre o valor em vigor).
+    setThreshold(DEFAULT_CONDENSE_THRESHOLD_WORDS)
+    void prefsApi.set(CONDENSE_THRESHOLD_KEY, DEFAULT_CONDENSE_THRESHOLD_WORDS)
   }
 
   function updateVoiceMode(v: boolean) {
@@ -78,8 +93,8 @@ export function VoiceTab({ open }: { open: boolean }) {
               Condensar ditados a partir de (palavras)
             </div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Ditados com pelo menos este número de palavras passam por uma condensação (LLM)
-              antes de entrar no composer. Mais curtos entram direto.
+              Ditados com pelo menos este número de palavras passam por uma condensação (LLM) antes
+              de entrar no composer. Mais curtos entram direto.
             </div>
           </div>
           <input
@@ -87,7 +102,8 @@ export function VoiceTab({ open }: { open: boolean }) {
             min={0}
             step={1}
             value={threshold}
-            onChange={(e) => updateThreshold(Number(e.target.value))}
+            onChange={(e) => updateThreshold(e.target.value)}
+            onBlur={settleThreshold}
             className="w-24 shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-2 py-1 text-right text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
           />
         </label>
@@ -101,8 +117,8 @@ export function VoiceTab({ open }: { open: boolean }) {
           <div className="min-w-0">
             <div className="text-sm text-[var(--color-text)]">Modo voz</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Ao fim de cada turno, gera um resumo curto da resposta e fala em voz alta na
-              sessão ativa. É o mesmo toggle da barra do composer.
+              Ao fim de cada turno, gera um resumo curto da resposta e fala em voz alta na sessão
+              ativa. É o mesmo toggle da barra do composer.
             </div>
           </div>
           <input

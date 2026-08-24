@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { voiceApi } from '@/lib/ipc'
-import { enqueueSpeech, finishSpeech, idleQueue, stopSpeech, type SpeakerQueue } from './voice-speaker-queue'
+import {
+  enqueueSpeech,
+  finishSpeech,
+  idleQueue,
+  stopSpeech,
+  type SpeakerQueue,
+} from './voice-speaker-queue'
 
 // Reprodutor das falas do modo voz. Singleton de módulo, de propósito: uma
 // única saída de áudio pro app inteiro — dois panes da mesma sessão (pane +
@@ -10,6 +16,11 @@ import { enqueueSpeech, finishSpeech, idleQueue, stopSpeech, type SpeakerQueue }
 let state: SpeakerQueue = idleQueue
 let audio: HTMLAudioElement | null = null
 let objectUrl: string | null = null
+// Token da reprodução em curso: cada play() pega um novo; stop() e advance()
+// invalidam os antigos. Sem ele, um stop + re-enqueue do MESMO texto durante a
+// síntese deixava dois play() em voo passando na checagem por texto — dois
+// Audio tocando e só o último rastreado (órfão que o Stop não para).
+let playToken = 0
 // ttsSpeed da config, cacheado na primeira fala (voz.env não muda no meio).
 let cachedRate: number | null = null
 const listeners = new Set<() => void>()
@@ -32,6 +43,7 @@ function releaseAudio(): void {
 }
 
 function advance(): void {
+  playToken++
   releaseAudio()
   const r = finishSpeech(state)
   state = r.state
@@ -40,16 +52,18 @@ function advance(): void {
 }
 
 async function play(text: string): Promise<void> {
+  const token = ++playToken
   const res = await voiceApi.tts(text)
-  // stop() pode ter chegado enquanto o mp3 era sintetizado — não toca fantasma.
-  if (state.current !== text) return
+  // stop()/advance() podem ter chegado enquanto o mp3 era sintetizado — o token
+  // garante que só a reprodução mais recente cria um Audio (nunca fantasma).
+  if (token !== playToken || state.current !== text) return
   if (!res.ok) {
     console.error('[voice] TTS falhou:', res.error)
     advance()
     return
   }
   const rate = await playbackRate()
-  if (state.current !== text) return
+  if (token !== playToken || state.current !== text) return
   // Cópia p/ Uint8Array<ArrayBuffer>: BlobPart não aceita ArrayBufferLike.
   const blob = new Blob([new Uint8Array(res.bytes)], { type: res.mime })
   objectUrl = URL.createObjectURL(blob)
@@ -70,6 +84,7 @@ export function speakSummary(text: string): void {
 }
 
 export function stopSpeaking(): void {
+  playToken++
   if (audio) audio.pause()
   releaseAudio()
   state = stopSpeech()

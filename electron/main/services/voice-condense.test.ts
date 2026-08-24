@@ -3,7 +3,10 @@
 // de verdade. Mesma técnica de baton/distill.test.ts.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('./claude-cli', () => ({ runClaude: vi.fn() }))
+vi.mock('./claude-cli', () => ({
+  runClaude: vi.fn(),
+  TEXT_ONLY_CLAUDE_ARGS: ['--tools', '', '--strict-mcp-config'],
+}))
 
 import { runClaude } from './claude-cli'
 import { condense, CONDENSE_INSTRUCTION } from './voice-condense'
@@ -34,7 +37,17 @@ describe('condense', () => {
     const [args, opts] = vi.mocked(runClaude).mock.calls[0]
     expect(args[0]).toBe('-p')
     expect(args[1]).toBe(CONDENSE_INSTRUCTION + DITADO)
-    expect(args.slice(2)).toEqual(['--output-format', 'text', '--model', 'haiku'])
+    // Guard-rail: o ditado entra no prompt — o condensador roda sem NENHUMA
+    // tool (built-in ou MCP) e nunca executa ação a partir do que foi falado.
+    expect(args.slice(2)).toEqual([
+      '--output-format',
+      'text',
+      '--model',
+      'haiku',
+      '--tools',
+      '',
+      '--strict-mcp-config',
+    ])
     expect(opts?.timeoutMs).toBe(60_000)
   })
 

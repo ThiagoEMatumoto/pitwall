@@ -1,5 +1,5 @@
 import type { VoiceTranscribeResult } from '../../../shared/types/ipc'
-import { getVoiceConfig, resolveSecret, type VoiceDeps } from './voice-config'
+import { clearVoiceSecrets, getVoiceConfig, resolveSecret, type VoiceDeps } from './voice-config'
 
 // Cliente de transcrição — porte de vozapp/stt.py, trocando o curl subprocess
 // por fetch nativo. O contrato do proxy é o da OpenAI (/v1/audio/transcriptions,
@@ -74,6 +74,27 @@ export async function transcribe(
   const key = await resolveSecret('VOZ_STT_KEY', deps)
   if (!key.ok) return { ok: false, error: key.error }
 
+  const first = await request(cfg, key.value, bytes, mime)
+  // 401/403 pode ser só o cache de secret velho (token do cofre expirou depois
+  // de cacheado): invalida e refaz UMA vez com secret fresco. Sem isso a
+  // recusa fica permanente até reiniciar o app.
+  if (first.status === 401 || first.status === 403) {
+    clearVoiceSecrets()
+    const fresh = await resolveSecret('VOZ_STT_KEY', deps)
+    if (fresh.ok && fresh.value !== key.value) {
+      return toResult(await request(cfg, fresh.value, bytes, mime))
+    }
+  }
+  return toResult(first)
+}
+
+// Uma tentativa de POST: status HTTP + corpo parseado. status 0 = rede/timeout.
+async function request(
+  cfg: { sttUrl: string; sttModel: string; sttLanguage: string; sttPrompt: string },
+  key: string,
+  bytes: Uint8Array,
+  mime: string,
+): Promise<{ status: number; data: Record<string, unknown>; raw: string }> {
   const form = new FormData()
   // Cópia p/ Uint8Array<ArrayBuffer>: BlobPart não aceita ArrayBufferLike.
   form.append('file', new Blob([new Uint8Array(bytes)], { type: mime }), fileName(mime))
@@ -88,12 +109,12 @@ export async function transcribe(
   try {
     res = await fetch(cfg.sttUrl, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key.value}` },
+      headers: { Authorization: `Bearer ${key}` },
       body: form,
       signal: AbortSignal.timeout(120_000),
     })
   } catch {
-    return { ok: false, error: errorMessage(0, {}, '') }
+    return { status: 0, data: {}, raw: '' }
   }
 
   const raw = await res.text().catch(() => '')
@@ -104,8 +125,15 @@ export async function transcribe(
   } catch {
     data = {}
   }
+  return { status: res.status, data, raw }
+}
 
-  const text = typeof data.text === 'string' ? data.text.trim() : ''
-  if (text && res.status === 200) return { ok: true, text }
-  return { ok: false, error: errorMessage(res.status, data, raw) }
+function toResult(r: {
+  status: number
+  data: Record<string, unknown>
+  raw: string
+}): VoiceTranscribeResult {
+  const text = typeof r.data.text === 'string' ? r.data.text.trim() : ''
+  if (text && r.status === 200) return { ok: true, text }
+  return { ok: false, error: errorMessage(r.status, r.data, r.raw) }
 }

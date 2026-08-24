@@ -75,8 +75,8 @@ describe('transcribe — requisição', () => {
   })
 
   it('omite o prompt quando o vocabulário não está configurado', async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => response(200, { text: 'oi' }),
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      response(200, { text: 'oi' }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -87,8 +87,8 @@ describe('transcribe — requisição', () => {
   })
 
   it('nomeia o arquivo conforme o mime (fallback WAV)', async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => response(200, { text: 'oi' }),
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      response(200, { text: 'oi' }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -117,8 +117,53 @@ describe('transcribe — erros', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('401 com secret cacheado: invalida o cache, refaz UMA vez com secret fresco e transcreve', async () => {
+    // Credencial via _CMD: o cofre devolve um token novo a cada resolução.
+    let issued = 0
+    const d: Partial<VoiceDeps> = {
+      env: { VOZ_STT_URL: 'https://proxy.test/v1/audio/transcriptions', VOZ_STT_KEY_CMD: 'cofre' },
+      home: '/home/teste',
+      exists: () => false,
+      readFile: () => '',
+      exec: async () => ({ stdout: `sk-fresh-${++issued}\n`, stderr: '' }),
+    }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>).Authorization
+      return auth === 'Bearer sk-fresh-2' ? response(200, { text: 'agora foi' }) : response(401, {})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await transcribe(audio, 'audio/webm', d)
+
+    expect(result).toEqual({ ok: true, text: 'agora foi' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(issued).toBe(2) // o cache foi invalidado entre as tentativas.
+  })
+
+  it('401 de novo mesmo com secret fresco: erro (refaz só UMA vez)', async () => {
+    let issued = 0
+    const d: Partial<VoiceDeps> = {
+      env: { VOZ_STT_URL: 'https://proxy.test/v1/audio/transcriptions', VOZ_STT_KEY_CMD: 'cofre' },
+      home: '/home/teste',
+      exists: () => false,
+      readFile: () => '',
+      exec: async () => ({ stdout: `sk-fresh-${++issued}\n`, stderr: '' }),
+    }
+    const fetchMock = vi.fn(async () => response(401, {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await transcribe(audio, 'audio/webm', d)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('credencial de transcrição foi recusada')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('401: credencial recusada', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(401, {})))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(401, {})),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     expect(result).toEqual({
       ok: false,
@@ -129,7 +174,10 @@ describe('transcribe — erros', () => {
   })
 
   it('404: aponta pra VOZ_STT_URL', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(404, {})))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(404, {})),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     if (result.ok) throw new Error('esperava erro')
     expect(result.error).toContain('VOZ_STT_URL')
@@ -137,21 +185,30 @@ describe('transcribe — erros', () => {
   })
 
   it('429: excesso de chamadas', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(429, {})))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(429, {})),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     if (result.ok) throw new Error('esperava erro')
     expect(result.error).toContain('excesso de chamadas')
   })
 
   it('"RateLimit" no corpo vale como 429 mesmo com outro status', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(400, { error: 'RateLimitError: slow down' })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(400, { error: 'RateLimitError: slow down' })),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     if (result.ok) throw new Error('esperava erro')
     expect(result.error).toContain('excesso de chamadas')
   })
 
   it('500: inclui o detalhe do corpo', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(500, { error: { message: 'backend indisponível' } })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(500, { error: { message: 'backend indisponível' } })),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     expect(result).toEqual({
       ok: false,
@@ -160,20 +217,29 @@ describe('transcribe — erros', () => {
   })
 
   it('502 com corpo não-JSON: mensagem de falha sem detalhe', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(502, 'Bad Gateway')))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(502, 'Bad Gateway')),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     expect(result).toEqual({ ok: false, error: 'o serviço de transcrição falhou (HTTP 502)' })
   })
 
   it('200 sem texto: não havia fala na gravação', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(200, { text: '  ' })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(200, { text: '  ' })),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     if (result.ok) throw new Error('esperava erro')
     expect(result.error).toContain('não ouvi fala nenhuma')
   })
 
   it('4xx com detail: repassa o detalhe', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response(422, { detail: 'arquivo inválido' })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(422, { detail: 'arquivo inválido' })),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     expect(result).toEqual({
       ok: false,
@@ -182,7 +248,10 @@ describe('transcribe — erros', () => {
   })
 
   it('rede fora: rede ou tempo esgotado', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('ECONNREFUSED'))))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new Error('ECONNREFUSED'))),
+    )
     const result = await transcribe(audio, 'audio/webm', makeDeps())
     expect(result).toEqual({
       ok: false,

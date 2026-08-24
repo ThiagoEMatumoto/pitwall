@@ -6,7 +6,11 @@ import { getDb, closeDb } from './services/db'
 import { ptyManager } from './services/pty-manager'
 import { meetingSidecarManager } from './services/meeting-sidecar'
 import * as handoffStore from './services/handoff-store'
-import { sessionActivityService, setTurnEndedHook } from './services/session-activity'
+import {
+  sessionActivityService,
+  setSessionGoneHook,
+  setTurnEndedHook,
+} from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
 import { registerBatonIpc } from './ipc/baton'
@@ -46,7 +50,11 @@ import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerMeetingsIpc } from './ipc/meetings'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
-import { scheduleTurnSummary } from './services/voice-summary'
+import {
+  forgetSessionSummaries,
+  scheduleTurnSummary,
+  setVoiceSessionFilter,
+} from './services/voice-summary'
 import { registerSyncIpc, syncOnBoot, syncCoordinator, notifySyncMutation } from './ipc/sync'
 import { setSyncMutationHook, broadcast } from './services/notify'
 import { startFeatureWatcher, stopFeatureWatcher } from './services/feature-store'
@@ -306,6 +314,11 @@ app.whenReady().then(async () => {
   // Fim de turno (working → waiting/idle) → resumo falado do modo voz. Hook
   // injetado aqui pra evitar ciclo session-activity ↔ chat-transcript-service.
   setTurnEndedHook(scheduleTurnSummary)
+  // O índice cobre toda sessão CC da máquina; o resumo só paga transcript +
+  // claude pra sessões que o app exibe (pane aberto = watch de atividade).
+  setVoiceSessionFilter((id) => sessionActivityService.isWatched(id))
+  // Sessão que sumiu do índice limpa o estado de dedupe do resumo.
+  setSessionGoneHook(forgetSessionSummaries)
   registerWindowIpc()
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta

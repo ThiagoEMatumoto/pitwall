@@ -20,6 +20,12 @@ export interface RunOpts {
 
 const CLAUDE_COMMAND_KEY = 'claude_command'
 
+// Guard-rail para `claude -p` que processa texto de terceiros (transcript,
+// ditado): nenhuma tool built-in (`--tools ""`) e nenhum servidor MCP
+// (`--strict-mcp-config` sem --mcp-config). O modelo só pode responder texto —
+// conteúdo injetado no prompt nunca vira execução de ação.
+export const TEXT_ONLY_CLAUDE_ARGS = ['--tools', '', '--strict-mcp-config'] as const
+
 // O claude vive tipicamente em ~/.local/bin e o env do Electron GUI não herda o
 // PATH do rc do usuário. Resolvemos o caminho ABSOLUTO uma única vez via login
 // shell e cacheamos. Os comandos depois rodam por execFile(absPath, ...) — NÃO

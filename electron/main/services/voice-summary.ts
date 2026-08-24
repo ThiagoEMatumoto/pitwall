@@ -3,10 +3,11 @@
 // de assistant (permission prompts também disparam a borda — esses NÃO resumem),
 // o texto vira 2-3 frases via claude -p e sai por broadcast('voice:summary').
 // Gate de custo: só roda com a pref voice.mode ligada.
+import { createHash } from 'node:crypto'
 import type { ChatMessage } from '../../../shared/types/chat'
 import type { VoiceSummaryEvent } from '../../../shared/types/ipc'
 import { chatTranscriptService } from './chat-transcript-service'
-import { runClaude } from './claude-cli'
+import { runClaude, TEXT_ONLY_CLAUDE_ARGS } from './claude-cli'
 import { stripCodeFence } from './feature-digest'
 import { broadcast } from './notify'
 import { getPref } from './prefs-store'
@@ -52,26 +53,72 @@ export function lastAssistantTurnText(messages: ChatMessage[]): string | null {
 
 // Lock por sessão: um resumo em voo por vez.
 const inFlight = new Set<string>()
-// Último turno já resumido por sessão (o texto é a identidade do turno) — o
-// mesmo turno nunca gasta claude duas vezes, mesmo que a borda repique.
+// Borda que chegou COM resumo em voo: o turno novo não pode se perder — ao
+// terminar o voo atual, roda de novo pro estado mais recente do transcript.
+const pendingRerun = new Set<string>()
+// Último turno já resumido por sessão (hash sha1 do texto — a identidade do
+// turno sem reter o texto integral em memória pra sempre) — o mesmo turno
+// nunca gasta claude duas vezes, mesmo que a borda repique.
 const lastSummarized = new Map<string, string>()
 const settleTimers = new Map<string, NodeJS.Timeout>()
 
+// O índice do session-activity cobre TODA sessão CC da máquina (terminais fora
+// do app, filhas de crew). Só sessões que o Pitwall exibe (pane com watch de
+// atividade) pagam leitura de transcript + claude. Injetável pra evitar ciclo
+// de import com session-activity; default permissivo até o boot registrar.
+let sessionDisplayed: (ccSessionId: string) => boolean = () => true
+
+export function setVoiceSessionFilter(fn: (ccSessionId: string) => boolean): void {
+  sessionDisplayed = fn
+}
+
+export function turnKey(turnText: string): string {
+  return createHash('sha1').update(turnText).digest('hex')
+}
+
+// Limpeza quando a sessão sai do índice (PID morreu / arquivo sumiu) — sem
+// isso o lastSummarized reteria uma entrada por sessão pra sempre.
+export function forgetSessionSummaries(ccSessionId: string): void {
+  lastSummarized.delete(ccSessionId)
+  pendingRerun.delete(ccSessionId)
+  const timer = settleTimers.get(ccSessionId)
+  if (timer) {
+    clearTimeout(timer)
+    settleTimers.delete(ccSessionId)
+  }
+}
+
 export async function maybeSummarizeTurn(ccSessionId: string): Promise<void> {
   if (!getPref(VOICE_MODE_PREF_KEY, false)) return
-  if (inFlight.has(ccSessionId)) return
+  if (!sessionDisplayed(ccSessionId)) return
+  if (inFlight.has(ccSessionId)) {
+    // Turno novo com resumo em voo: não pode ser dropado — coalesce num rerun.
+    pendingRerun.add(ccSessionId)
+    return
+  }
   inFlight.add(ccSessionId)
   try {
     const read = await chatTranscriptService.read(ccSessionId)
     const turnText = lastAssistantTurnText(read.messages)
     if (!turnText) return
-    if (lastSummarized.get(ccSessionId) === turnText) return
+    const key = turnKey(turnText)
+    if (lastSummarized.get(ccSessionId) === key) return
     // Marca ANTES do claude: falha de resumo não re-tenta o mesmo turno (a
     // borda já passou; retry só duplicaria custo num turno possivelmente ruim).
-    lastSummarized.set(ccSessionId, turnText)
+    lastSummarized.set(ccSessionId, key)
 
+    // O texto do transcript entra no prompt: guard-rail de tools obrigatório —
+    // o resumidor NUNCA pode executar ação a partir do conteúdo da sessão.
     const result = await runClaude(
-      ['-p', SUMMARY_INSTRUCTION + turnText, '--output-format', 'text', '--model', SUMMARY_MODEL],
+      [
+        '-p',
+        SUMMARY_INSTRUCTION + turnText,
+        '--output-format',
+        'text',
+        '--model',
+        SUMMARY_MODEL,
+        ...TEXT_ONLY_CLAUDE_ARGS,
+      ],
       { timeoutMs: SUMMARY_TIMEOUT_MS },
     )
     if (result.code !== 0) return
@@ -81,6 +128,7 @@ export async function maybeSummarizeTurn(ccSessionId: string): Promise<void> {
     broadcast('voice:summary', { ccSessionId, summary } satisfies VoiceSummaryEvent)
   } finally {
     inFlight.delete(ccSessionId)
+    if (pendingRerun.delete(ccSessionId)) void maybeSummarizeTurn(ccSessionId)
   }
 }
 

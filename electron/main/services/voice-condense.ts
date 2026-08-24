@@ -3,7 +3,7 @@
 // mesmas travas do vozapp/correcao.py: falha é fail-open (o ditado NUNCA se
 // perde — volta o original) e volta que inchou demais é reescrita/invenção,
 // não condensação — descarta-se.
-import { runClaude } from './claude-cli'
+import { runClaude, TEXT_ONLY_CLAUDE_ARGS } from './claude-cli'
 import { stripCodeFence } from './feature-digest'
 
 const CONDENSE_TIMEOUT_MS = 60_000
@@ -39,8 +39,18 @@ export async function condense(text: string): Promise<CondenseResult> {
   const original = text.trim()
   if (!original) return { text: original, condensed: false }
 
+  // O ditado entra no prompt: guard-rail de tools obrigatório — o condensador
+  // NUNCA pode executar ação a partir do que foi falado.
   const result = await runClaude(
-    ['-p', CONDENSE_INSTRUCTION + original, '--output-format', 'text', '--model', CONDENSE_MODEL],
+    [
+      '-p',
+      CONDENSE_INSTRUCTION + original,
+      '--output-format',
+      'text',
+      '--model',
+      CONDENSE_MODEL,
+      ...TEXT_ONLY_CLAUDE_ARGS,
+    ],
     { timeoutMs: CONDENSE_TIMEOUT_MS },
   )
   // runClaude nunca rejeita: erro de exec, exit != 0 e timeout chegam como

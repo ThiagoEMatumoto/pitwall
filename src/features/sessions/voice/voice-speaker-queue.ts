@@ -13,12 +13,14 @@ export const idleQueue: SpeakerQueue = { current: null, queue: [] }
 
 // Enfileira uma fala; se nada toca, ela começa agora (`start`). Dedupe de
 // repique: o broadcast de resumo pode chegar duplicado (mais de um pane da
-// mesma sessão) — a mesma fala já tocando ou no fim da fila não re-entra.
+// mesma sessão) — a mesma fala já tocando ou em QUALQUER posição da fila não
+// re-entra (só o fim deixava passar o repique atrasado que chega depois de
+// outra fala entrar no meio).
 export function enqueueSpeech(
   q: SpeakerQueue,
   text: string,
 ): { state: SpeakerQueue; start: string | null } {
-  if (q.current === text || q.queue[q.queue.length - 1] === text) return { state: q, start: null }
+  if (q.current === text || q.queue.includes(text)) return { state: q, start: null }
   if (q.current === null) return { state: { current: text, queue: [] }, start: text }
   return { state: { current: q.current, queue: [...q.queue, text] }, start: null }
 }

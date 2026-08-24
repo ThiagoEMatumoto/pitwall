@@ -24,6 +24,8 @@ export function SummaryChip({ ccSessionId }: Props) {
   }, [loadVoiceMode])
 
   useEffect(() => {
+    // Trocar de sessão limpa o chip — sem isso ele mostraria o resumo da outra.
+    setSummary(null)
     if (!ccSessionId) return
     return voiceApi.onSummary((event) => {
       if (event.ccSessionId !== ccSessionId) return

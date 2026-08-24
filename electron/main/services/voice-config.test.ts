@@ -263,6 +263,71 @@ describe('resolveSecret', () => {
     expect(r).toEqual({ ok: true, value: 'el-alias-key-000' })
   })
 
+  it('gcloud com login vencido: fallback ADC re-roda o comando com o token', async () => {
+    const calls: Array<{ cmd: string; env: NodeJS.ProcessEnv }> = []
+    const exec = vi.fn(async (cmd: string, env: NodeJS.ProcessEnv) => {
+      calls.push({ cmd, env })
+      // 1ª: o comando do cofre sai vazio (login interativo vencido).
+      if (cmd.includes('secrets') && !env.CLOUDSDK_AUTH_ACCESS_TOKEN)
+        return { stdout: '', stderr: 'Reauthentication required\n' }
+      // 2ª: token da credencial de aplicativo.
+      if (cmd.includes('application-default')) return { stdout: 'adc-token-1\n', stderr: '' }
+      // 3ª: o mesmo comando, agora com o token no env, resolve.
+      return { stdout: 'sk-via-adc\n', stderr: '' }
+    })
+    const r = await resolveSecret(
+      'VOZ_STT_KEY',
+      deps({
+        files: { [CONF]: 'VOZ_STT_KEY_CMD=gcloud secrets versions access latest --secret=stt\n' },
+        exec,
+      }),
+    )
+    expect(r).toEqual({ ok: true, value: 'sk-via-adc' })
+    expect(calls[1].cmd).toBe('gcloud auth application-default print-access-token')
+    expect(calls[2].cmd).toContain('gcloud secrets')
+    expect(calls[2].env.CLOUDSDK_AUTH_ACCESS_TOKEN).toBe('adc-token-1')
+  })
+
+  it('gcloud que estourou exceção também tenta o fallback ADC', async () => {
+    const exec = vi.fn(async (cmd: string, env: NodeJS.ProcessEnv) => {
+      if (cmd.includes('application-default')) return { stdout: 'adc-token-2\n', stderr: '' }
+      if (env.CLOUDSDK_AUTH_ACCESS_TOKEN) return { stdout: 'sk-recuperado\n', stderr: '' }
+      throw Object.assign(new Error('exit 1'), { stderr: 'invalid_grant\n' })
+    })
+    const r = await resolveSecret(
+      'VOZ_STT_KEY',
+      deps({ files: { [CONF]: 'VOZ_STT_KEY_CMD=gcloud kms decrypt ...\n' }, exec }),
+    )
+    expect(r).toEqual({ ok: true, value: 'sk-recuperado' })
+  })
+
+  it('fallback ADC também falhou: mensagem orienta gcloud auth login', async () => {
+    const exec = vi.fn(async (cmd: string) => {
+      if (cmd.includes('application-default')) return { stdout: '', stderr: 'no ADC\n' }
+      return { stdout: '', stderr: 'Reauthentication required\n' }
+    })
+    const r = await resolveSecret(
+      'VOZ_STT_KEY',
+      deps({ files: { [CONF]: 'VOZ_STT_KEY_CMD=gcloud secrets versions access 1\n' }, exec }),
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toContain('Reauthentication required')
+      expect(r.error).toContain('gcloud auth login')
+    }
+  })
+
+  it('comando sem gcloud que falha NÃO tenta ADC', async () => {
+    const exec = vi.fn(async () => ({ stdout: '', stderr: 'cofre fora\n' }))
+    const r = await resolveSecret(
+      'VOZ_STT_KEY',
+      deps({ files: { [CONF]: 'VOZ_STT_KEY_CMD=op read op://cofre/stt\n' }, exec }),
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).not.toContain('gcloud auth login')
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
   it('PATH ganha os diretórios do gcloud que existem no disco', async () => {
     let seenEnv: NodeJS.ProcessEnv = {}
     const exec = vi.fn(async (_cmd: string, env: NodeJS.ProcessEnv) => {

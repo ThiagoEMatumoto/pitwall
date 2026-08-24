@@ -30,6 +30,15 @@ describe('enqueueSpeech', () => {
     r = enqueueSpeech(r.state, 'b')
     expect(r.state).toEqual({ current: 'a', queue: ['b'] })
   })
+
+  it('dedupe: a mesma fala em QUALQUER posição da fila não re-entra (repique atrasado)', () => {
+    let r = enqueueSpeech(idleQueue, 'a')
+    r = enqueueSpeech(r.state, 'b')
+    r = enqueueSpeech(r.state, 'c')
+    const again = enqueueSpeech(r.state, 'b') // repique de 'b' chega depois de 'c'
+    expect(again.start).toBeNull()
+    expect(again.state).toEqual({ current: 'a', queue: ['b', 'c'] })
+  })
 })
 
 describe('finishSpeech', () => {

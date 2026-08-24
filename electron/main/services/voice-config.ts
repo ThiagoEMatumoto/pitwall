@@ -225,19 +225,60 @@ export async function resolveSecret(
     const value = stdout.trim()
     if (!value) {
       const motivo = stderr.trim() || 'o comando da credencial saiu vazio'
-      return {
-        ok: false,
-        error: `Falha ao obter a credencial ${name}: ${motivo}`,
-      }
+      return cmdFailed(name, cmd, motivo, d)
     }
     return remember(name, value)
   } catch (err) {
     const stderr = (err as { stderr?: string }).stderr?.trim()
     const motivo = stderr || (err instanceof Error ? err.message : String(err))
-    return {
-      ok: false,
-      error: `Falha ao obter a credencial ${name}: ${motivo}`,
+    return cmdFailed(name, cmd, motivo, d)
+  }
+}
+
+// Comando da credencial falhou/saiu vazio. Porte de config.py:segredo (~217-226):
+// se o comando usa gcloud, o login interativo pode ter vencido — tenta de novo
+// com o token da credencial de aplicativo (ADC), que costuma continuar válida
+// (medido no Voz: o cofre respondeu 0 com ela e 1 com o login vencido).
+async function cmdFailed(
+  name: string,
+  cmd: string,
+  motivo: string,
+  d: VoiceDeps,
+): Promise<SecretResult> {
+  if (!cmd.includes('gcloud')) {
+    return { ok: false, error: `Falha ao obter a credencial ${name}: ${motivo}` }
+  }
+  const token = await adcToken(d)
+  if (token) {
+    try {
+      const { stdout } = await d.exec(cmd, {
+        ...envWithGcloudPath(d),
+        CLOUDSDK_AUTH_ACCESS_TOKEN: token,
+      })
+      const value = stdout.trim()
+      if (value) return remember(name, value)
+    } catch {
+      // cai na mensagem de login abaixo
     }
+  }
+  return {
+    ok: false,
+    error:
+      `Falha ao obter a credencial ${name}: ${motivo} — a sessão do gcloud ` +
+      'provavelmente venceu; rode `gcloud auth login` e tente de novo.',
+  }
+}
+
+// Porte de config.py:_token_adc — token da credencial de aplicativo do gcloud.
+async function adcToken(d: VoiceDeps): Promise<string> {
+  try {
+    const { stdout } = await d.exec(
+      'gcloud auth application-default print-access-token',
+      envWithGcloudPath(d),
+    )
+    return stdout.trim()
+  } catch {
+    return ''
   }
 }
 

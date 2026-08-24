@@ -118,11 +118,26 @@ export function useVoiceRecorder(onText: (text: string) => void) {
   }
 
   async function start() {
+    // Guarda de chamada em voo ANTES do getUserMedia: um segundo clique durante
+    // o await criaria um segundo recorder e o primeiro stream nunca seria
+    // parado (mic aceso pra sempre). Só idle/error podem pedir o mic.
+    const status = stateRef.current.status
+    if (status !== 'idle' && status !== 'error') return
+    dispatch({ type: 'request' })
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch (err) {
       dispatch({ type: 'failed', message: micErrorMessage(err) })
+      return
+    }
+    // Estado mudou durante o await (unmount, reset): o stream recém-aberto é
+    // descartado aqui mesmo — ninguém mais tem referência a ele. (Cast: o
+    // narrowing do guard acima não vale após o await — o dispatch mutou o ref
+    // por baixo do controle de fluxo do TS.)
+    const current = (stateRef as { current: RecorderState }).current
+    if (!mountedRef.current || current.status !== 'requesting') {
+      for (const track of stream.getTracks()) track.stop()
       return
     }
     const recorder = new MediaRecorder(stream, { mimeType: pickMimeType() })
@@ -144,7 +159,7 @@ export function useVoiceRecorder(onText: (text: string) => void) {
       recorderRef.current?.stop()
       return
     }
-    if (status === 'transcribing' || status === 'condensing') return
+    if (status === 'requesting' || status === 'transcribing' || status === 'condensing') return
     void start()
   }
 

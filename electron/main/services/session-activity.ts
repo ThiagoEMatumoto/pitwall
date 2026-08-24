@@ -41,6 +41,16 @@ let turnEndedHook: TurnEndedHook = () => {}
 export function setTurnEndedHook(fn: TurnEndedHook): void {
   turnEndedHook = fn
 }
+
+// Sessão que sumiu do índice (PID morreu / arquivo removido) — sinal de
+// limpeza pra quem guarda estado por ccSessionId (ex.: dedupe do resumo por
+// voz). Mesmo padrão injetável do turnEndedHook.
+type SessionGoneHook = (ccSessionId: string) => void
+let sessionGoneHook: SessionGoneHook = () => {}
+
+export function setSessionGoneHook(fn: SessionGoneHook): void {
+  sessionGoneHook = fn
+}
 const TAIL_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
 export const MAX_TEXT = 200
@@ -118,7 +128,6 @@ export function mapStatus(cc: CcSessionFile['status']): SessionActivity['status'
       return 'starting'
   }
 }
-
 
 // Lê só os últimos TAIL_BYTES do arquivo: durante uma sessão longa o JSONL chega a
 // milhares de linhas e reparsear tudo a cada mudança seria custoso. A primeira linha
@@ -361,6 +370,12 @@ class SessionActivityService extends EventEmitter {
     void this.emitFor(ccSessionId)
   }
 
+  // Sessão com pane aberto no app (o renderer faz watch ao abrir e unwatch ao
+  // fechar) — é o registro mais direto do que o Pitwall exibe/gerencia.
+  isWatched(ccSessionId: string): boolean {
+    return this.watched.has(ccSessionId)
+  }
+
   unwatch(ccSessionId: string): void {
     const entry = this.watched.get(ccSessionId)
     if (entry) {
@@ -528,6 +543,7 @@ class SessionActivityService extends EventEmitter {
       if (this.index.has(sessionId)) continue
       if (prev === 'working') consumed = true
       this.lastEffectiveStatus.delete(sessionId)
+      sessionGoneHook(sessionId)
     }
     if (consumed) notifyUsageConsumption()
   }

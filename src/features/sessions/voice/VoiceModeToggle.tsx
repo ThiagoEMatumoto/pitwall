@@ -7,7 +7,7 @@ import { stopSpeaking } from './useVoiceSpeaker'
 
 // Toggle do modo voz na barra do composer (pref global voice.mode — a mesma que
 // gateia o resumidor no main). Mesma linguagem visual dos botões vizinhos.
-export function VoiceModeToggle() {
+export function VoiceModeToggle({ compact }: { compact?: boolean }) {
   const enabled = useVoiceModeStore((s) => s.enabled)
   const load = useVoiceModeStore((s) => s.load)
   const setEnabled = useVoiceModeStore((s) => s.setEnabled)
@@ -34,10 +34,10 @@ export function VoiceModeToggle() {
           ? 'Modo voz ligado — o fim de cada turno vira resumo falado na sessão ativa. Clique pra desligar.'
           : 'Modo voz desligado — ligue pra ouvir um resumo falado ao fim de cada turno.'
       }
-      className={`gap-1 px-2 py-0.5 text-[10px] ${enabled ? 'text-[var(--color-accent)]' : ''}`}
+      className={`gap-1 ${compact ? 'px-1.5' : 'px-2'} py-0.5 text-[10px] ${enabled ? 'text-[var(--color-accent)]' : ''}`}
     >
       <Icon as={enabled ? Volume2 : VolumeX} size={11} />
-      <span className="whitespace-nowrap">Modo voz</span>
+      {!compact && <span className="whitespace-nowrap">Modo voz</span>}
     </Button>
   )
 }

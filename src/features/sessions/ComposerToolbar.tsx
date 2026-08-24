@@ -2,12 +2,7 @@ import { useEffect, useState } from 'react'
 import { Clock, Loader, OctagonX } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button } from '@/features/brand'
-import {
-  interruptEnabled,
-  interruptLabel,
-  interruptState,
-  interruptTitle,
-} from './interrupt-state'
+import { interruptEnabled, interruptLabel, interruptState, interruptTitle } from './interrupt-state'
 import type { PermissionMode, SessionActivity } from '../../../shared/types/ipc'
 import { ModelPill, type EffortLevel, type ModelAlias } from './ModelPill'
 import { EffortPill } from './EffortPill'
@@ -126,12 +121,16 @@ export function ComposerToolbar({
           title={interruptTitle(interrupt)}
           className="gap-1 px-2 py-0.5 text-[10px]"
         >
-          <Icon as={interrupt === 'sent' ? Loader : OctagonX} size={11} className={interrupt === 'sent' ? 'animate-spin' : ''} />
+          <Icon
+            as={interrupt === 'sent' ? Loader : OctagonX}
+            size={11}
+            className={interrupt === 'sent' ? 'animate-spin' : ''}
+          />
           <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>
         </Button>
       )}
-      {onVoiceText && <MicButton onText={onVoiceText} />}
-      {onVoiceText && <VoiceModeToggle />}
+      {onVoiceText && <MicButton onText={onVoiceText} compact={compact} />}
+      {onVoiceText && <VoiceModeToggle compact={compact} />}
       {hasPending &&
         (canSwitch ? (
           // Sessão ficou ociosa com troca pendente: a injeção dispara agora —

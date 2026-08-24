@@ -4,7 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage } from '../../../shared/types/chat'
 
-vi.mock('./claude-cli', () => ({ runClaude: vi.fn() }))
+vi.mock('./claude-cli', () => ({
+  runClaude: vi.fn(),
+  TEXT_ONLY_CLAUDE_ARGS: ['--tools', '', '--strict-mcp-config'],
+}))
 vi.mock('./chat-transcript-service', () => ({ chatTranscriptService: { read: vi.fn() } }))
 vi.mock('./prefs-store', () => ({ getPref: vi.fn() }))
 vi.mock('./notify', () => ({ broadcast: vi.fn() }))
@@ -14,11 +17,14 @@ import { chatTranscriptService } from './chat-transcript-service'
 import { getPref } from './prefs-store'
 import { broadcast } from './notify'
 import {
+  forgetSessionSummaries,
   lastAssistantTurnText,
   maybeSummarizeTurn,
   scheduleTurnSummary,
   SETTLE_MS,
+  setVoiceSessionFilter,
   SUMMARY_INSTRUCTION,
+  turnKey,
   VOICE_MODE_PREF_KEY,
 } from './voice-summary'
 
@@ -46,6 +52,7 @@ beforeEach(() => {
   vi.mocked(broadcast).mockReset()
   vi.mocked(getPref).mockReset()
   vi.mocked(getPref).mockReturnValue(true) // modo voz ligado por default nos testes.
+  setVoiceSessionFilter(() => true) // por default toda sessão conta como exibida.
 })
 
 afterEach(() => {
@@ -84,7 +91,17 @@ describe('maybeSummarizeTurn', () => {
     const [args, opts] = vi.mocked(runClaude).mock.calls[0]
     expect(args[0]).toBe('-p')
     expect(args[1]).toBe(SUMMARY_INSTRUCTION + 'feito: X aplicado')
-    expect(args.slice(2)).toEqual(['--output-format', 'text', '--model', 'haiku'])
+    // Guard-rail: o texto do transcript entra no prompt — o resumidor roda sem
+    // NENHUMA tool (built-in ou MCP) e nunca executa ação a partir do conteúdo.
+    expect(args.slice(2)).toEqual([
+      '--output-format',
+      'text',
+      '--model',
+      'haiku',
+      '--tools',
+      '',
+      '--strict-mcp-config',
+    ])
     expect(opts?.timeoutMs).toBe(60_000)
     expect(broadcast).toHaveBeenCalledWith('voice:summary', {
       ccSessionId: id,
@@ -111,6 +128,44 @@ describe('maybeSummarizeTurn', () => {
     expect(runClaude).not.toHaveBeenCalled()
   })
 
+  it('sessão que o Pitwall não exibe (terminal externo, filha de crew) nem lê o transcript', async () => {
+    setVoiceSessionFilter(() => false)
+    mockTranscript([user('faz X'), assistant('feito')])
+
+    await maybeSummarizeTurn(freshId())
+
+    expect(chatTranscriptService.read).not.toHaveBeenCalled()
+    expect(runClaude).not.toHaveBeenCalled()
+  })
+
+  it('turno novo chegando com resumo em voo não é dropado: re-roda ao terminar', async () => {
+    const id = freshId()
+    let release!: (v: Awaited<ReturnType<typeof chatTranscriptService.read>>) => void
+    vi.mocked(chatTranscriptService.read).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    vi.mocked(runClaude).mockResolvedValue({ code: 0, stdout: 'Resumo.', stderr: '' })
+
+    const first = maybeSummarizeTurn(id) // turno A em voo (transcript pendente)
+    await maybeSummarizeTurn(id) // borda do turno B chega com A em voo
+    // O turno B pousa no transcript; o rerun coalescido deve lê-lo ao fim de A.
+    mockTranscript([user('faz A'), assistant('feito A'), user('faz B'), assistant('feito B')])
+    release({
+      ccSessionId: id,
+      path: '/tmp/x.jsonl',
+      mtimeMs: 1,
+      messages: [user('faz A'), assistant('feito A')],
+      lastPlanFilePath: null,
+    })
+    await first
+    await vi.waitFor(() => expect(runClaude).toHaveBeenCalledTimes(2))
+
+    expect(vi.mocked(runClaude).mock.calls[1][0][1]).toBe(SUMMARY_INSTRUCTION + 'feito B')
+    expect(broadcast).toHaveBeenCalledTimes(2)
+  })
+
   it('lock por sessão: disparo concorrente do mesmo turno resume UMA vez', async () => {
     const id = freshId()
     let release!: (v: Awaited<ReturnType<typeof chatTranscriptService.read>>) => void
@@ -133,7 +188,9 @@ describe('maybeSummarizeTurn', () => {
     })
     await first
 
-    expect(chatTranscriptService.read).toHaveBeenCalledTimes(1)
+    // O disparo que bateu no lock vira rerun coalescido: re-lê o transcript ao
+    // fim do voo (2ª leitura), mas o dedupe por hash impede um 2º claude.
+    await vi.waitFor(() => expect(chatTranscriptService.read).toHaveBeenCalledTimes(2))
     expect(runClaude).toHaveBeenCalledTimes(1)
     expect(broadcast).toHaveBeenCalledTimes(1)
   })
@@ -179,6 +236,27 @@ describe('maybeSummarizeTurn', () => {
     expect(SUMMARY_INSTRUCTION).toContain('português')
     expect(SUMMARY_INSTRUCTION).toContain('NÃO invente')
     expect(SUMMARY_INSTRUCTION).toContain('precisa de algo do usuário')
+  })
+})
+
+describe('turnKey / forgetSessionSummaries', () => {
+  it('a identidade do turno é um sha1 do texto, não o texto integral', () => {
+    const key = turnKey('um turno bem longo que não deve ficar retido em memória')
+    expect(key).toMatch(/^[0-9a-f]{40}$/)
+    expect(turnKey('a')).not.toBe(turnKey('b'))
+    expect(turnKey('a')).toBe(turnKey('a'))
+  })
+
+  it('sessão esquecida (saiu do índice) volta a resumir o mesmo turno se reaparecer', async () => {
+    const id = freshId()
+    mockTranscript([user('faz X'), assistant('feito')])
+    vi.mocked(runClaude).mockResolvedValue({ code: 0, stdout: 'Resumo.', stderr: '' })
+
+    await maybeSummarizeTurn(id)
+    forgetSessionSummaries(id)
+    await maybeSummarizeTurn(id)
+
+    expect(runClaude).toHaveBeenCalledTimes(2)
   })
 })
 
