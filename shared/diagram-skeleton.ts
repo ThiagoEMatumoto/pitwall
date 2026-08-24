@@ -871,6 +871,65 @@ export function applyPatch(
         result[idx] = { ...result[idx], boundElements: list };
         result = result.concat(label);
       }
+
+      // Rewire: start/end no update refazem os bindings da arrow contra o
+      // array real (mesma geometria borda-a-borda do add). Sem isto os campos
+      // start/end anunciados no schema do diagram_patch seriam no-op
+      // silencioso.
+      if (
+        el.type === "arrow" &&
+        (op.start !== undefined || op.end !== undefined)
+      ) {
+        const lin = result[idx] as ExLinear;
+        const startId = op.start?.id ?? lin.startBinding?.elementId;
+        const endId = op.end?.id ?? lin.endBinding?.elementId;
+        const startIdx = startId !== undefined ? findIndex(startId) : -1;
+        const endIdx = endId !== undefined ? findIndex(endId) : -1;
+        const startEl = startIdx >= 0 ? result[startIdx] : undefined;
+        const endEl = endIdx >= 0 ? result[endIdx] : undefined;
+        if (startEl && endEl) {
+          const sc = centerOf(startEl);
+          const ec = centerOf(endEl);
+          const p1 = borderPoint(startEl, ec.cx, ec.cy);
+          const p2 = borderPoint(endEl, sc.cx, sc.cy);
+          const prevIds = [
+            lin.startBinding?.elementId,
+            lin.endBinding?.elementId,
+          ];
+          result[idx] = bump(lin, {
+            x: p1[0],
+            y: p1[1],
+            width: Math.abs(p2[0] - p1[0]),
+            height: Math.abs(p2[1] - p1[1]),
+            points: [
+              [0, 0],
+              [p2[0] - p1[0], p2[1] - p1[1]],
+            ] as Array<[number, number]>,
+            startBinding: { elementId: startEl.id, focus: 0, gap: 4 },
+            endBinding: { elementId: endEl.id, focus: 0, gap: 4 },
+          });
+          // Backlink: sai dos shapes desligados, entra nos religados.
+          for (const oldId of prevIds) {
+            if (!oldId || oldId === startEl.id || oldId === endEl.id) continue;
+            const oldIdx = findIndex(oldId);
+            if (oldIdx < 0) continue;
+            const target = result[oldIdx];
+            result[oldIdx] = bump(target, {
+              boundElements: (target.boundElements ?? []).filter(
+                (b) => b.id !== lin.id,
+              ),
+            });
+          }
+          for (const bIdx of new Set([startIdx, endIdx])) {
+            const target = result[bIdx];
+            const list = (target.boundElements ?? []).slice();
+            if (!list.some((b) => b.id === lin.id)) {
+              list.push({ id: lin.id, type: "arrow" });
+              result[bIdx] = bump(target, { boundElements: list });
+            }
+          }
+        }
+      }
       continue;
     }
 

@@ -315,6 +315,37 @@ describe("applyPatch", () => {
     }
   });
 
+  it("update de end religa a arrow: bindings, geometria e backlinks", () => {
+    const elements = skeletonToElements(flowSkeleton);
+    // a1 era start→work; religa pra start→done.
+    const result = applyPatch(elements, [
+      { op: "update", id: "a1", end: { id: "done" } },
+    ]) as AnyEl[];
+
+    const a1 = result.find((e) => e.id === "a1")!;
+    expect(a1.startBinding).toEqual({ elementId: "start", focus: 0, gap: 4 });
+    expect(a1.endBinding).toEqual({ elementId: "done", focus: 0, gap: 4 });
+
+    // Geometria refeita borda-a-borda: o ponto final cai dentro do bbox
+    // expandido do novo alvo, não do antigo.
+    const done = result.find((e) => e.id === "done")!;
+    const endX = a1.x + a1.points[1][0];
+    const endY = a1.y + a1.points[1][1];
+    expect(endX).toBeGreaterThanOrEqual(done.x - 1);
+    expect(endX).toBeLessThanOrEqual(done.x + done.width + 1);
+    expect(endY).toBeGreaterThanOrEqual(done.y - 1);
+    expect(endY).toBeLessThanOrEqual(done.y + done.height + 1);
+
+    // Backlinks: work perde a referência à a1, done ganha.
+    const work = result.find((e) => e.id === "work")!;
+    expect(work.boundElements.some((b: AnyEl) => b.id === "a1")).toBe(false);
+    expect(done.boundElements.some((b: AnyEl) => b.id === "a1")).toBe(true);
+
+    // Input intocado (imutabilidade preservada pelo rewire).
+    const origA1 = (elements as AnyEl[]).find((e) => e.id === "a1")!;
+    expect(origA1.endBinding).toEqual({ elementId: "work", focus: 0, gap: 4 });
+  });
+
   it("update de label.text reescreve o bound text e originalText", () => {
     const elements = skeletonToElements(flowSkeleton);
     const result = applyPatch(elements, [
