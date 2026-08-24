@@ -2531,6 +2531,24 @@ export interface UpdateDiagramSceneInput {
   snapshot: boolean
 }
 
+// Resultado da transcrição de um ditado. Erros já vêm em PT, prontos pra tela
+// (porte das mensagens de vozapp/stt.py).
+export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
+
+// Status da config de voz (~/.config/voz/voz.env) — alimenta a seção "Voz" das
+// configurações. Nunca carrega credencial, só campos seguros de mostrar.
+export type VoiceConfigStatus =
+  | {
+      ok: true
+      path: string
+      sttUrl: string
+      sttModel: string
+      sttLanguage: string
+      ttsVoice: string
+      ttsModel: string
+    }
+  | { ok: false; path: string; error: string }
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2609,6 +2627,12 @@ export interface Api {
     /** Rejeita chaves de segredo (custom_env_vars) — essas vão por `secrets`. */
     get<T>(key: string): Promise<T | null>
     set(key: string, value: unknown): Promise<void>
+  }
+  voice: {
+    /** Transcreve áudio gravado no renderer (webm/opus ou wav) via proxy STT. */
+    transcribe(bytes: Uint8Array, mime: string): Promise<VoiceTranscribeResult>
+    /** Status da config voz.env — nunca inclui credenciais. */
+    configStatus(): Promise<VoiceConfigStatus>
   }
   secrets: {
     /** Estado da cifragem em repouso — alimenta o aviso da tela de configurações. */

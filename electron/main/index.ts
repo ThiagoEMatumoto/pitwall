@@ -45,6 +45,7 @@ import { registerContentContractsIpc } from './ipc/content-contracts'
 import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerMeetingsIpc } from './ipc/meetings'
 import { registerMcpIpc } from './ipc/mcp'
+import { registerVoiceIpc } from './ipc/voice'
 import { registerSyncIpc, syncOnBoot, syncCoordinator, notifySyncMutation } from './ipc/sync'
 import { setSyncMutationHook, broadcast } from './services/notify'
 import { startFeatureWatcher, stopFeatureWatcher } from './services/feature-store'
@@ -295,6 +296,7 @@ app.whenReady().then(async () => {
   registerDiagramsIpc()
   registerMeetingsIpc()
   registerMcpIpc()
+  registerVoiceIpc()
   registerSyncIpc()
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via

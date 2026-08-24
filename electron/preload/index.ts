@@ -173,6 +173,10 @@ const api: Api = {
     get: <T>(key: string) => invoke<T | null>('prefs:get', { key }),
     set: (key: string, value: unknown) => invoke('prefs:set', { key, value }),
   },
+  voice: {
+    transcribe: (bytes: Uint8Array, mime: string) => invoke('voice:transcribe', { bytes, mime }),
+    configStatus: () => invoke('voice:config-status'),
+  },
   secrets: {
     status: () => invoke('secrets:env:status'),
     list: () => invoke('secrets:env:list'),
