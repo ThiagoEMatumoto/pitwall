@@ -23,6 +23,44 @@ const SAVE_DEBOUNCE_MS = 800;
 // Fingerprint BARATO por versão de elemento: detecta "algo mudou" no
 // onChange sem serializar a cena. NÃO é estável entre canvas e banco
 // (restoreElements reseta version) — nunca usar pra comparar os dois lados.
+// Enquadra o conteúdo com zoom no máximo em 100% (fitToViewport nativo
+// aplica num frame posterior e estoura 100% em cenas pequenas).
+function frameContent(
+  api: ExcalidrawImperativeAPI,
+  elements: readonly unknown[],
+): void {
+  if (elements.length === 0) return;
+  const st = api.getAppState();
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const e of elements as Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    isDeleted?: boolean;
+  }>) {
+    if (e.isDeleted) continue;
+    minX = Math.min(minX, e.x);
+    minY = Math.min(minY, e.y);
+    maxX = Math.max(maxX, e.x + e.width);
+    maxY = Math.max(maxY, e.y + e.height);
+  }
+  if (!Number.isFinite(minX)) return;
+  const bw = Math.max(1, maxX - minX);
+  const bh = Math.max(1, maxY - minY);
+  const zoom = Math.min(1, 0.85 * Math.min(st.width / bw, st.height / bh));
+  api.updateScene({
+    appState: {
+      scrollX: st.width / (2 * zoom) - (minX + bw / 2),
+      scrollY: st.height / (2 * zoom) - (minY + bh / 2),
+      zoom: { value: zoom as unknown as never },
+    },
+  });
+}
+
 function versionFingerprint(elements: readonly unknown[]): string {
   return elements
     .map((e) => {
@@ -162,6 +200,17 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     );
   }, []);
 
+  // Enquadra o conteúdo na abertura: initialData.scrollToContent centraliza
+  // mas mantém zoom 100% — diagrama largo abre estourando a viewport.
+  useEffect(() => {
+    if (!excalidrawAPI) return;
+    const t = setTimeout(
+      () => frameContent(excalidrawAPI, excalidrawAPI.getSceneElements()),
+      50,
+    );
+    return () => clearTimeout(t);
+  }, [excalidrawAPI]);
+
   // Flush com snapshot no blur da janela e no unmount (troca de diagrama).
   useEffect(() => {
     const onBlur = () => flushRef.current(true);
@@ -206,36 +255,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     // Elementos novos podem ter entrado fora do viewport (ex.: patch do
     // Claude adicionando um nó) — re-enquadra sem animação brusca. Nunca
     // além de 100%: fitToViewport em cena pequena daria zoom gigante.
-    if (restored.length > 0) {
-      // Enquadramento manual síncrono (scrollToContent+fitToViewport aplica
-      // num frame posterior e pode passar de 100% em cenas pequenas).
-      const st = api.getAppState();
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const e of restored as Array<{
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-      }>) {
-        minX = Math.min(minX, e.x);
-        minY = Math.min(minY, e.y);
-        maxX = Math.max(maxX, e.x + e.width);
-        maxY = Math.max(maxY, e.y + e.height);
-      }
-      const bw = Math.max(1, maxX - minX);
-      const bh = Math.max(1, maxY - minY);
-      const zoom = Math.min(1, 0.85 * Math.min(st.width / bw, st.height / bh));
-      api.updateScene({
-        appState: {
-          scrollX: st.width / (2 * zoom) - (minX + bw / 2),
-          scrollY: st.height / (2 * zoom) - (minY + bh / 2),
-          zoom: { value: zoom as unknown as never },
-        },
-      });
-    }
+    frameContent(api, restored);
     return true;
   }, []);
 
