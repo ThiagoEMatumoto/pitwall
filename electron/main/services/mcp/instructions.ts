@@ -18,4 +18,14 @@ export const SERVER_INSTRUCTIONS = `claude-manager tracks the user's objectives,
 
 **Gates before delivery:** Before handing anything over, run the relevant gates with content_gate_run (analytic gates read the material; scope-checklist and positive-evidence need your attestation). blocking: true means NOT deliverable — fix the material and run again. Never report success over a blocking failure, and never claim a gate passed without calling it. If the contract itself is wrong against a verified primary source, amend it with content_contract_upsert plus a changelog line (summary + reason) instead of silently ignoring it.
 
+**Diagrams (canvas):** When a picture communicates better than prose — architecture of a feature, a flow between repos/services, the shape of a bug — create a diagram with diagram_create and keep it linked to what it illustrates via diagram_link (parentType feature | task | objective | repo | dossier | meeting | ...). Write SKELETON elements (semantic nodes + arrows), not raw scenes: omit x/y and the canvas auto-layouts. Example — 3 nodes, 2 labeled arrows:
+diagram_create({ title: "Auth flow", kind: "flow", summary: "initial sketch", elements: [
+  { "id": "ui", "type": "rectangle", "label": { "text": "Web UI" } },
+  { "id": "api", "type": "rectangle", "label": { "text": "Auth API" } },
+  { "id": "db", "type": "ellipse", "label": { "text": "Sessions DB" } },
+  { "id": "e1", "type": "arrow", "start": { "id": "ui" }, "end": { "id": "api" }, "label": { "text": "POST /login" } },
+  { "id": "e2", "type": "arrow", "start": { "id": "api" }, "end": { "id": "db" }, "label": { "text": "create session" } }
+] })
+To edit, ALWAYS prefer diagram_patch (incremental add/update/delete ops by element id): it edits on top of the current scene, so a human's manual layout refinements survive. diagram_update replaces the whole scene and throws that refinement away — use it only for an intentional redraw. Deletion is two-step by design: diagram_archive first, then diagram_delete with confirm: true (an active diagram cannot be deleted).
+
 Keep updates minimal and factual; never invent progress.`
