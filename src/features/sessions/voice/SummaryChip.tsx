@@ -1,27 +1,21 @@
 import { useEffect, useState } from 'react'
-import { AudioLines, Square, X } from 'lucide-react'
+import { AudioLines, Play, Square, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { voiceApi } from '@/lib/ipc'
-import { isActiveVoiceSession } from './active-session'
-import { useVoiceModeStore } from './use-voice-mode'
 import { speakSummary, useVoiceSpeaker } from './useVoiceSpeaker'
 
 interface Props {
   ccSessionId: string | null
 }
 
-// Faixa discreta ACIMA do composer com o último resumo de turno (voice:summary).
-// O transcript JSONL é read-only — o resumo NÃO entra no fluxo de mensagens do
-// chat; vive só aqui. O chip aparece em qualquer sessão que tenha resumo; o
-// ÁUDIO só toca se a sessão é a ativa E o modo voz está ligado.
+// Faixa discreta ACIMA do composer com o último resumo de turno (voice:summary,
+// automático ou sob demanda). O transcript JSONL é read-only — o resumo NÃO
+// entra no fluxo de mensagens do chat; vive só aqui. O áudio NUNCA toca
+// sozinho: qualquer resumo exibido é tocável sob demanda pelo ▶, em qualquer
+// sessão; o ⏹ para a reprodução em curso.
 export function SummaryChip({ ccSessionId }: Props) {
   const [summary, setSummary] = useState<string | null>(null)
   const { speaking, stop } = useVoiceSpeaker()
-  const loadVoiceMode = useVoiceModeStore((s) => s.load)
-
-  useEffect(() => {
-    void loadVoiceMode()
-  }, [loadVoiceMode])
 
   useEffect(() => {
     // Trocar de sessão limpa o chip — sem isso ele mostraria o resumo da outra.
@@ -30,11 +24,6 @@ export function SummaryChip({ ccSessionId }: Props) {
     return voiceApi.onSummary((event) => {
       if (event.ccSessionId !== ccSessionId) return
       setSummary(event.summary)
-      // O main já gateia na pref, mas ela pode ter sido desligada entre o
-      // resumo nascer e chegar — o renderer re-checa antes de falar.
-      if (useVoiceModeStore.getState().enabled && isActiveVoiceSession(ccSessionId)) {
-        speakSummary(event.summary)
-      }
     })
   }, [ccSessionId])
 
@@ -49,11 +38,11 @@ export function SummaryChip({ ccSessionId }: Props) {
       />
       <p
         className="min-w-0 flex-1 text-[11px] leading-snug text-[var(--color-text-dim)]"
-        title="Resumo do último turno (modo voz)"
+        title="Resumo do último turno"
       >
         {summary}
       </p>
-      {speaking && (
+      {speaking ? (
         <button
           type="button"
           onClick={stop}
@@ -61,6 +50,15 @@ export function SummaryChip({ ccSessionId }: Props) {
           className="shrink-0 rounded p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-danger)]"
         >
           <Icon as={Square} size={11} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => speakSummary(summary)}
+          title="Ouvir o resumo"
+          className="shrink-0 rounded p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-accent)]"
+        >
+          <Icon as={Play} size={11} />
         </button>
       )}
       <button

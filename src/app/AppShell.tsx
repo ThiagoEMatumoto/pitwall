@@ -49,7 +49,6 @@ import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
-import { setActiveVoiceSession } from '@/features/sessions/voice/active-session'
 
 interface PaneParams {
   pane: ActivePane
@@ -510,7 +509,6 @@ export function AppShell() {
     const pane =
       area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
     sessionsApi.setRendererFocus(pane?.session.ccSessionId ?? null)
-    setActiveVoiceSession(pane?.session.ccSessionId ?? null)
   }, [area, panes, activePanelId])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot

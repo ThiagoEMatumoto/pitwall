@@ -74,8 +74,8 @@ async function play(text: string): Promise<void> {
   audio.play().catch(advance)
 }
 
-// Enfileira uma fala (FIFO). Quem decide SE deve falar (modo voz ligado +
-// sessão ativa) é o chamador — aqui só toca.
+// Enfileira uma fala (FIFO). Quem decide SE deve falar é o chamador — e a
+// decisão hoje é sempre humana (▶ do SummaryChip): nada toca automaticamente.
 export function speakSummary(text: string): void {
   const r = enqueueSpeech(state, text)
   state = r.state

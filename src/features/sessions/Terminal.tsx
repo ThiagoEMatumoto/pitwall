@@ -1221,6 +1221,8 @@ export function Terminal({
               // visível/editável nos dois modos (escrever no PTY sumiria o texto
               // em modo chat, onde o xterm fica invisible). Envio pelo submit normal.
               onVoiceText={(text) => composerRef.current?.appendText(text)}
+              // Controles de resumo por sessão (Resumir agora + Resumo auto).
+              ccSessionId={ccSessionId}
             />
           }
         />
