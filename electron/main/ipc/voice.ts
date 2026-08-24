@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import type { VoiceConfigStatus } from '../../../shared/types/ipc'
@@ -16,9 +17,25 @@ const condenseSchema = z.object({ text: z.string().min(1) })
 
 const ttsSchema = z.object({ text: z.string().min(1) })
 
+// Gate de teste (e2e sem microfone): com CM_VOICE_FIXTURE setada, o áudio
+// gravado é trocado pelo conteúdo do arquivo fixture — config, credencial,
+// POST e parsing continuam os de produção. O app nunca seta essa env; só o
+// harness e2e define, então em produção o ramo é morto.
+function fixtureAudio(path: string): { bytes: Uint8Array; mime: string } {
+  return {
+    bytes: new Uint8Array(readFileSync(path)),
+    mime: path.endsWith('.wav') ? 'audio/wav' : 'audio/webm',
+  }
+}
+
 export function registerVoiceIpc(): void {
   ipcMain.handle('voice:transcribe', (_e, payload: unknown) => {
     const { bytes, mime } = transcribeSchema.parse(payload)
+    const fixture = process.env.CM_VOICE_FIXTURE
+    if (fixture) {
+      const swapped = fixtureAudio(fixture)
+      return transcribe(swapped.bytes, swapped.mime)
+    }
     return transcribe(bytes, mime)
   })
 
