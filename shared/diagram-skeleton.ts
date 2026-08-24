@@ -99,8 +99,20 @@ const FONT_SIZE = 16;
 // FONT_FAMILY.Excalifont === 5 é o DEFAULT_FONT_FAMILY na versão instalada.
 const FONT_FAMILY_CODE = 5;
 const LINE_HEIGHT = 1.25;
-const COL_GAP = 260;
-const ROW_GAP = 130;
+// Gaps livres (borda a borda) do auto-layout. Colunas ligadas por seta COM
+// label ganham gap maior pro label não colidir com os nós.
+const COL_GAP_PLAIN = 260;
+const COL_GAP_LABELED = 320;
+const ROW_GAP = 80;
+const GRID_GAP = 80;
+// Folga do shape em volta do label auto-dimensionado.
+const LABEL_H_PADDING = 48;
+const LABEL_V_PADDING = 32;
+// Texto inscrito em diamond/ellipse precisa de folga geométrica extra.
+const INSCRIBED_TEXT_FACTOR = 1.45;
+// Distância base pra posicionar nós novos de patch e margem anti-colisão.
+const PATCH_ADD_GAP = 120;
+const COLLISION_MARGIN = 40;
 
 const randInt = () => Math.floor(Math.random() * 2 ** 31);
 
@@ -121,6 +133,48 @@ function textMetrics(text: string): { width: number; height: number } {
   return {
     width: Math.max(1, Math.round(0.6 * FONT_SIZE * longest)),
     height: Math.round(LINE_HEIGHT * FONT_SIZE * lines.length),
+  };
+}
+
+/**
+ * Tamanho efetivo de um elemento do skeleton. Shapes sem width/height
+ * explícitos crescem pra caber o label (diamond/ellipse com folga geométrica,
+ * já que o texto fica inscrito).
+ */
+function sizeFor(skel: DiagramSkeletonElement): {
+  width: number;
+  height: number;
+} {
+  if (skel.type === "text") {
+    return textMetrics(skel.text ?? skel.label?.text ?? "");
+  }
+  if (skel.type === "arrow" || skel.type === "line") {
+    return { width: skel.width ?? 100, height: skel.height ?? 0 };
+  }
+  let width = skel.width;
+  let height = skel.height;
+  const labelText = skel.label?.text;
+  if (
+    labelText !== undefined &&
+    (width === undefined || height === undefined)
+  ) {
+    const m = textMetrics(labelText);
+    const factor =
+      skel.type === "diamond" || skel.type === "ellipse"
+        ? INSCRIBED_TEXT_FACTOR
+        : 1;
+    width ??= Math.max(
+      DEFAULT_SHAPE_WIDTH,
+      Math.round(m.width * factor) + LABEL_H_PADDING,
+    );
+    height ??= Math.max(
+      DEFAULT_SHAPE_HEIGHT,
+      Math.round(m.height * factor) + LABEL_V_PADDING,
+    );
+  }
+  return {
+    width: width ?? DEFAULT_SHAPE_WIDTH,
+    height: height ?? DEFAULT_SHAPE_HEIGHT,
   };
 }
 
@@ -229,14 +283,15 @@ function borderPoint(
 
 function autoLayout(
   skeleton: DiagramSkeletonElement[],
+  sizes: Map<string, { width: number; height: number }>,
 ): Map<string, { x: number; y: number }> {
   const nodes = skeleton.filter((s) => s.type !== "arrow" && s.type !== "line");
   const nodeIds = new Set(nodes.map((n) => n.id));
-  const edges: Array<[string, string]> = [];
+  const edges: Array<[string, string, boolean]> = [];
   for (const s of skeleton) {
     if (s.type === "arrow" && s.start && s.end) {
       if (nodeIds.has(s.start.id) && nodeIds.has(s.end.id)) {
-        edges.push([s.start.id, s.end.id]);
+        edges.push([s.start.id, s.end.id, Boolean(s.label?.text)]);
       }
     }
   }
@@ -263,28 +318,72 @@ function autoLayout(
     if (!changed) break;
   }
 
-  const positions = new Map<string, { x: number; y: number }>();
-  const rowsPerColumn = new Map<number, number>();
-  let maxLayeredY = -ROW_GAP;
+  const sizeOf = (id: string) =>
+    sizes.get(id) ?? {
+      width: DEFAULT_SHAPE_WIDTH,
+      height: DEFAULT_SHAPE_HEIGHT,
+    };
+
+  // Agrupa nós conectados por coluna (ordem de entrada preservada).
+  const colNodes = new Map<number, string[]>();
   for (const node of nodes) {
     if (!connected.has(node.id)) continue;
     const col = depth.get(node.id) ?? 0;
-    const row = rowsPerColumn.get(col) ?? 0;
-    rowsPerColumn.set(col, row + 1);
-    const y = row * ROW_GAP;
-    positions.set(node.id, { x: col * COL_GAP, y });
-    if (y > maxLayeredY) maxLayeredY = y;
+    const list = colNodes.get(col) ?? [];
+    list.push(node.id);
+    colNodes.set(col, list);
   }
 
-  // Nós sem arestas: grade abaixo das camadas, 4 por linha.
+  // Fronteiras entre colunas atravessadas por seta com label ganham gap maior.
+  const labeledBoundaries = new Set<number>();
+  for (const [from, to, labeled] of edges) {
+    if (!labeled) continue;
+    const c1 = depth.get(from) ?? 0;
+    const c2 = depth.get(to) ?? 0;
+    if (c1 !== c2) labeledBoundaries.add(Math.min(c1, c2));
+  }
+
+  // X de cada coluna = acumulado das larguras REAIS (max width dos nós dela)
+  // + gap; nó largo empurra a coluna seguinte em vez de encostar nela.
+  const maxCol = Math.max(-1, ...Array.from(colNodes.keys()));
+  const colX: number[] = [];
+  let cursorX = 0;
+  for (let col = 0; col <= maxCol; col++) {
+    colX[col] = cursorX;
+    const ids = colNodes.get(col) ?? [];
+    const colWidth = ids.reduce((m, id) => Math.max(m, sizeOf(id).width), 0);
+    const gap = labeledBoundaries.has(col) ? COL_GAP_LABELED : COL_GAP_PLAIN;
+    cursorX += colWidth + gap;
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  const colCursorY = new Map<number, number>();
+  let maxLayeredBottom = 0;
+  for (const node of nodes) {
+    if (!connected.has(node.id)) continue;
+    const col = depth.get(node.id) ?? 0;
+    const y = colCursorY.get(col) ?? 0;
+    positions.set(node.id, { x: colX[col], y });
+    const bottom = y + sizeOf(node.id).height;
+    colCursorY.set(col, bottom + ROW_GAP);
+    if (bottom > maxLayeredBottom) maxLayeredBottom = bottom;
+  }
+
+  // Nós sem arestas: grade abaixo das camadas, 4 por linha, largura real.
   const isolated = nodes.filter((n) => !connected.has(n.id));
-  const baseY = maxLayeredY + ROW_GAP;
-  isolated.forEach((node, i) => {
-    positions.set(node.id, {
-      x: (i % 4) * COL_GAP,
-      y: baseY + Math.floor(i / 4) * ROW_GAP,
-    });
-  });
+  let gridY = positions.size > 0 ? maxLayeredBottom + ROW_GAP : 0;
+  for (let i = 0; i < isolated.length; i += 4) {
+    const rowNodes = isolated.slice(i, i + 4);
+    let gridX = 0;
+    let rowHeight = 0;
+    for (const node of rowNodes) {
+      const { width, height } = sizeOf(node.id);
+      positions.set(node.id, { x: gridX, y: gridY });
+      gridX += width + GRID_GAP;
+      rowHeight = Math.max(rowHeight, height);
+    }
+    gridY += rowHeight + ROW_GAP;
+  }
   return positions;
 }
 
@@ -295,7 +394,12 @@ function autoLayout(
 export function skeletonToElements(
   skeleton: DiagramSkeletonElement[],
 ): unknown[] {
-  const layout = autoLayout(skeleton);
+  const sizes = new Map(
+    skeleton
+      .filter((s) => s.type !== "arrow" && s.type !== "line")
+      .map((s) => [s.id, sizeFor(s)] as const),
+  );
+  const layout = autoLayout(skeleton, sizes);
   const elements: ExElement[] = [];
   const byId = new Map<string, ExElement>();
 
@@ -319,8 +423,7 @@ export function skeletonToElements(
       continue;
     }
 
-    const width = skel.width ?? DEFAULT_SHAPE_WIDTH;
-    const height = skel.height ?? DEFAULT_SHAPE_HEIGHT;
+    const { width, height } = sizes.get(skel.id) ?? sizeFor(skel);
     const el = baseElement(skel, x, y, width, height);
     push(el);
 
@@ -498,32 +601,133 @@ function bump<T extends ExElement>(el: T, changes: Partial<T>): T {
   };
 }
 
+const isSolid = (el: ExElement) =>
+  !el.isDeleted && el.type !== "arrow" && el.type !== "line";
+
+function collides(box: Box, solids: ExElement[]): boolean {
+  return solids.some(
+    (o) =>
+      box.x < o.x + o.width + COLLISION_MARGIN &&
+      o.x < box.x + box.width + COLLISION_MARGIN &&
+      box.y < o.y + o.height + COLLISION_MARGIN &&
+      o.y < box.y + box.height + COLLISION_MARGIN,
+  );
+}
+
+/** Nó existente ligado ao novo nó por uma seta adicionada no mesmo patch. */
+function findLinkAnchor(
+  nodeId: string,
+  ops: DiagramPatchOp[],
+  solids: ExElement[],
+): ExElement | undefined {
+  for (const op of ops) {
+    if (op.op !== "add" || op.element.type !== "arrow") continue;
+    const { start, end } = op.element;
+    const otherId =
+      start?.id === nodeId
+        ? end?.id
+        : end?.id === nodeId
+          ? start?.id
+          : undefined;
+    if (!otherId) continue;
+    const anchor = solids.find((el) => el.id === otherId);
+    if (anchor) return anchor;
+  }
+  return undefined;
+}
+
+/**
+ * Posição pra um nó de patch sem x/y: perto do nó ancorado por seta
+ * (baixo > direita > cima, deslocando até achar espaço livre) ou, sem âncora,
+ * abaixo do bounding box existente, empilhando adds do mesmo patch lado a lado.
+ */
+function placeAddedNode(
+  skel: DiagramSkeletonElement,
+  size: { width: number; height: number },
+  result: ExElement[],
+  ops: DiagramPatchOp[],
+  stack: { x: number | null; y: number },
+): { x: number; y: number } {
+  const solids = result.filter(isSolid);
+  const anchor = findLinkAnchor(skel.id, ops, solids);
+  if (anchor) {
+    const directions: Array<[number, number]> = [
+      [0, 1],
+      [1, 0],
+      [0, -1],
+    ];
+    for (const [dx, dy] of directions) {
+      for (let k = 1; k <= 3; k++) {
+        const off = PATCH_ADD_GAP * k;
+        const box: Box = {
+          x: dx === 0 ? anchor.x : anchor.x + anchor.width + off,
+          y:
+            dy === 0
+              ? anchor.y
+              : dy > 0
+                ? anchor.y + anchor.height + off
+                : anchor.y - off - size.height,
+          width: size.width,
+          height: size.height,
+        };
+        if (!collides(box, solids)) return { x: box.x, y: box.y };
+      }
+    }
+  }
+  // Sem âncora (ou sem espaço perto dela): linha nova abaixo de tudo.
+  if (stack.x === null) {
+    const alive = result.filter((el) => !el.isDeleted);
+    if (alive.length === 0) {
+      stack.x = 0;
+      stack.y = 0;
+    } else {
+      stack.x = Math.min(...alive.map((el) => el.x));
+      stack.y =
+        Math.max(...alive.map((el) => el.y + el.height)) + PATCH_ADD_GAP;
+    }
+  }
+  const pos = { x: stack.x, y: stack.y };
+  stack.x += size.width + GRID_GAP;
+  return pos;
+}
+
 export function applyPatch(
   elements: unknown[],
   ops: DiagramPatchOp[],
 ): unknown[] {
   let result = (elements as ExElement[]).slice();
+  // Estado da linha de empilhamento pros adds sem posição deste patch.
+  const stack: { x: number | null; y: number } = { x: null, y: 0 };
 
   const findIndex = (id: string) => result.findIndex((el) => el.id === id);
 
   for (const op of ops) {
     if (op.op === "add") {
       const skel = { ...op.element };
+      const isNode = skel.type !== "arrow" && skel.type !== "line";
       if (skel.x === undefined || skel.y === undefined) {
-        // Perto do centro de massa dos elementos existentes não-deletados.
-        const alive = result.filter((el) => !el.isDeleted);
-        let cx = 0;
-        let cy = 0;
-        if (alive.length > 0) {
-          for (const el of alive) {
-            cx += el.x + el.width / 2;
-            cy += el.y + el.height / 2;
+        if (isNode) {
+          // Nó novo: nunca em cima de conteúdo existente.
+          const pos = placeAddedNode(skel, sizeFor(skel), result, ops, stack);
+          skel.x ??= Math.round(pos.x);
+          skel.y ??= Math.round(pos.y);
+        } else {
+          // Arrow/line solta: perto do centro de massa (setas com bindings
+          // são reposicionadas borda-a-borda logo abaixo).
+          const alive = result.filter((el) => !el.isDeleted);
+          let cx = 0;
+          let cy = 0;
+          if (alive.length > 0) {
+            for (const el of alive) {
+              cx += el.x + el.width / 2;
+              cy += el.y + el.height / 2;
+            }
+            cx /= alive.length;
+            cy /= alive.length;
           }
-          cx /= alive.length;
-          cy /= alive.length;
+          skel.x ??= Math.round(cx + 40);
+          skel.y ??= Math.round(cy + 40);
         }
-        skel.x ??= Math.round(cx + 40);
-        skel.y ??= Math.round(cy + 40);
       }
       // Reusa o conversor completo passando os shapes existentes como contexto
       // de binding: monta um mini-cenário só com o novo elemento.
@@ -590,6 +794,25 @@ export function applyPatch(
       }
       if (op.width !== undefined) changes.width = op.width;
       if (op.height !== undefined) changes.height = op.height;
+      const isShape =
+        el.type === "rectangle" ||
+        el.type === "ellipse" ||
+        el.type === "diamond";
+      if (op.label?.text !== undefined && isShape) {
+        // Label novo pode não caber: cresce o shape quando o patch não fixa
+        // tamanho (grow-only pra não encolher shape já dimensionado).
+        const fitted = sizeFor({
+          id: el.id,
+          type: el.type as DiagramSkeletonElementType,
+          label: { text: op.label.text },
+        });
+        if (op.width === undefined && fitted.width > el.width) {
+          changes.width = fitted.width;
+        }
+        if (op.height === undefined && fitted.height > el.height) {
+          changes.height = fitted.height;
+        }
+      }
       if (op.strokeColor !== undefined) changes.strokeColor = op.strokeColor;
       if (op.backgroundColor !== undefined) {
         changes.backgroundColor = op.backgroundColor;
@@ -613,8 +836,16 @@ export function applyPatch(
             const metrics = textMetrics(op.label.text);
             labelChanges.width = metrics.width;
             labelChanges.height = metrics.height;
-          }
-          if (dx !== 0 || dy !== 0) {
+            if (isShape) {
+              // Recentraliza no shape já atualizado (move + resize inclusos).
+              const shape = result[idx];
+              labelChanges.x = shape.x + (shape.width - metrics.width) / 2;
+              labelChanges.y = shape.y + (shape.height - metrics.height) / 2;
+            } else if (dx !== 0 || dy !== 0) {
+              labelChanges.x = label.x + dx;
+              labelChanges.y = label.y + dy;
+            }
+          } else if (dx !== 0 || dy !== 0) {
             labelChanges.x = label.x + dx;
             labelChanges.y = label.y + dy;
           }
@@ -623,13 +854,15 @@ export function applyPatch(
           }
         }
       } else if (op.label?.text !== undefined && el.type !== "text") {
-        // Shape sem label ainda: cria um bound text novo.
+        // Shape sem label ainda: cria um bound text novo, centrado no shape
+        // já atualizado (que pode ter crescido pro label caber).
+        const shape = result[idx];
         const metrics = textMetrics(op.label.text);
         const label = makeTextElement(
           labelIdFor(el.id),
           op.label.text,
-          el.x + (el.width - metrics.width) / 2,
-          el.y + (el.height - metrics.height) / 2,
+          shape.x + (shape.width - metrics.width) / 2,
+          shape.y + (shape.height - metrics.height) / 2,
           el.id,
         );
         label.index = fractionalIndexAt(result.length);

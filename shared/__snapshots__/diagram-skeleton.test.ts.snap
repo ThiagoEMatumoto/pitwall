@@ -107,7 +107,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "type": "rectangle",
     "version": 1,
     "width": 180,
-    "x": 260,
+    "x": 500,
     "y": 0,
   },
   {
@@ -141,7 +141,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "version": 1,
     "verticalAlign": "middle",
     "width": 67,
-    "x": 316.5,
+    "x": 556.5,
     "y": 25,
   },
   {
@@ -175,7 +175,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "type": "diamond",
     "version": 1,
     "width": 180,
-    "x": 520,
+    "x": 1000,
     "y": 0,
   },
   {
@@ -209,7 +209,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "version": 1,
     "verticalAlign": "middle",
     "width": 48,
-    "x": 586,
+    "x": 1066,
     "y": 25,
   },
   {
@@ -245,7 +245,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
         0,
       ],
       [
-        80,
+        320,
         0,
       ],
     ],
@@ -264,7 +264,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "strokeWidth": 2,
     "type": "arrow",
     "version": 1,
-    "width": 80,
+    "width": 320,
     "x": 180,
     "y": 35,
   },
@@ -299,7 +299,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "version": 1,
     "verticalAlign": "middle",
     "width": 19,
-    "x": 210.5,
+    "x": 330.5,
     "y": 25,
   },
   {
@@ -335,7 +335,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
         0,
       ],
       [
-        80,
+        320,
         0,
       ],
     ],
@@ -354,8 +354,8 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "strokeWidth": 2,
     "type": "arrow",
     "version": 1,
-    "width": 80,
-    "x": 440,
+    "width": 320,
+    "x": 680,
     "y": 35,
   },
   {
@@ -389,7 +389,7 @@ exports[`skeletonToElements > golden: 3 nós + 2 setas com labels (snapshot estr
     "version": 1,
     "verticalAlign": "middle",
     "width": 48,
-    "x": 456,
+    "x": 816,
     "y": 25,
   },
 ]

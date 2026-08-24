@@ -16,6 +16,16 @@ function normalize(elements: unknown[]): AnyEl[] {
   });
 }
 
+/** AABB estritamente disjuntos (sem sobreposição). */
+function disjoint(a: AnyEl, b: AnyEl): boolean {
+  return (
+    a.x + a.width <= b.x ||
+    b.x + b.width <= a.x ||
+    a.y + a.height <= b.y ||
+    b.y + b.height <= a.y
+  );
+}
+
 const flowSkeleton: DiagramSkeletonElement[] = [
   { id: "start", type: "ellipse", label: { text: "Start" } },
   { id: "work", type: "rectangle", label: { text: "Do work" } },
@@ -131,9 +141,71 @@ describe("skeletonToElements", () => {
     const start = first.find((e) => e.id === "start")!;
     const work = first.find((e) => e.id === "work")!;
     const done = first.find((e) => e.id === "done")!;
+    // Setas com label → gap de 320 entre colunas de nós com 180 de largura.
     expect(start.x).toBe(0);
-    expect(work.x).toBe(260);
-    expect(done.x).toBe(520);
+    expect(work.x).toBe(500);
+    expect(done.x).toBe(1000);
+  });
+
+  it("shape cresce pro label longo; diamond cresce mais que rectangle", () => {
+    const text = "Gate humano (aprovação)";
+    const elements = skeletonToElements([
+      { id: "r", type: "rectangle", label: { text } },
+      { id: "d", type: "diamond", label: { text } },
+    ]) as AnyEl[];
+    const rect = elements.find((e) => e.id === "r")!;
+    const diamond = elements.find((e) => e.id === "d")!;
+    const label = elements.find((e) => e.id === "r__label")!;
+
+    expect(rect.width).toBeGreaterThan(180);
+    expect(rect.width).toBeGreaterThanOrEqual(label.width + 48);
+    // Texto inscrito no diamond precisa de folga geométrica extra.
+    expect(diamond.width).toBeGreaterThan(rect.width);
+    expect(rect.height).toBe(70);
+  });
+
+  it("width/height explícitos do autor são respeitados mesmo com label longo", () => {
+    const elements = skeletonToElements([
+      {
+        id: "r",
+        type: "rectangle",
+        width: 120,
+        height: 50,
+        label: { text: "Gate humano (aprovação)" },
+      },
+    ]) as AnyEl[];
+    expect(elements[0].width).toBe(120);
+    expect(elements[0].height).toBe(50);
+  });
+
+  it("colunas usam a largura real: nó largo não encosta no vizinho", () => {
+    const wideLabel = "a very very very long label";
+    const base: DiagramSkeletonElement[] = [
+      { id: "wide", type: "rectangle", label: { text: wideLabel } },
+      { id: "next", type: "rectangle", label: { text: "ok" } },
+    ];
+    const plain = skeletonToElements([
+      ...base,
+      { id: "e", type: "arrow", start: { id: "wide" }, end: { id: "next" } },
+    ]) as AnyEl[];
+    const wide = plain.find((e) => e.id === "wide")!;
+    const next = plain.find((e) => e.id === "next")!;
+    expect(wide.width).toBeGreaterThan(180);
+    expect(next.x).toBe(wide.x + wide.width + 260);
+
+    // Seta com label entre as colunas → gap maior pro label caber.
+    const labeled = skeletonToElements([
+      ...base,
+      {
+        id: "e",
+        type: "arrow",
+        start: { id: "wide" },
+        end: { id: "next" },
+        label: { text: "pede tarefa" },
+      },
+    ]) as AnyEl[];
+    const nextLabeled = labeled.find((e) => e.id === "next")!;
+    expect(nextLabeled.x).toBe(wide.x + wide.width + 320);
   });
 
   it("text solto usa align left/top e containerId null", () => {
@@ -281,22 +353,79 @@ describe("applyPatch", () => {
     expect(done).toBe((elements as AnyEl[]).find((e) => e.id === "done"));
   });
 
-  it("add sem x/y posiciona perto do centro de massa existente", () => {
+  it("add sem x/y não colide: vai abaixo do bounding box existente", () => {
     const elements = skeletonToElements([
       { id: "a", type: "rectangle", x: 0, y: 0 },
-      { id: "b", type: "rectangle", x: 200, y: 200 },
+      { id: "b", type: "rectangle", x: 300, y: 0 },
+      { id: "c2", type: "rectangle", x: 0, y: 200 },
     ]);
     const result = applyPatch(elements, [
       {
         op: "add",
-        element: { id: "c", type: "rectangle", label: { text: "C" } },
+        element: { id: "n", type: "rectangle", label: { text: "Novo" } },
       },
     ]) as AnyEl[];
-    const added = result.find((e) => e.id === "c")!;
-    // Centro de massa: (190, 135) → perto disso.
-    expect(Math.abs(added.x - 190)).toBeLessThan(100);
-    expect(Math.abs(added.y - 135)).toBeLessThan(100);
-    expect(result.find((e) => e.id === "c__label")).toBeDefined();
+    const added = result.find((e) => e.id === "n")!;
+    // Abaixo do maxY (270) + 120.
+    expect(added.y).toBe(390);
+    // AABB disjoint de todos os nós pré-existentes.
+    for (const el of result) {
+      if (el.id === "n" || el.id === "n__label") continue;
+      if (el.type === "arrow" || el.type === "line") continue;
+      expect(disjoint(added, el)).toBe(true);
+    }
+    expect(result.find((e) => e.id === "n__label")).toBeDefined();
+  });
+
+  it("múltiplos adds no mesmo patch empilham lado a lado sem colidir", () => {
+    const elements = skeletonToElements([
+      { id: "a", type: "rectangle", x: 0, y: 0 },
+    ]);
+    const result = applyPatch(elements, [
+      { op: "add", element: { id: "n1", type: "rectangle" } },
+      { op: "add", element: { id: "n2", type: "rectangle" } },
+    ]) as AnyEl[];
+    const n1 = result.find((e) => e.id === "n1")!;
+    const n2 = result.find((e) => e.id === "n2")!;
+    expect(n1.y).toBe(190);
+    expect(n2.y).toBe(n1.y);
+    expect(n2.x).toBe(n1.x + n1.width + 80);
+    expect(disjoint(n1, n2)).toBe(true);
+    const a = result.find((e) => e.id === "a")!;
+    expect(disjoint(n1, a)).toBe(true);
+    expect(disjoint(n2, a)).toBe(true);
+  });
+
+  it("add ligado por seta fica perto do nó existente e sem sobreposição", () => {
+    const elements = skeletonToElements([
+      { id: "a", type: "rectangle", x: 0, y: 0 },
+    ]);
+    const result = applyPatch(elements, [
+      {
+        op: "add",
+        element: { id: "c", type: "rectangle", label: { text: "Filho" } },
+      },
+      {
+        op: "add",
+        element: {
+          id: "e1",
+          type: "arrow",
+          start: { id: "a" },
+          end: { id: "c" },
+        },
+      },
+    ]) as AnyEl[];
+    const a = result.find((e) => e.id === "a")!;
+    const c = result.find((e) => e.id === "c")!;
+    expect(disjoint(a, c)).toBe(true);
+    const dist = Math.hypot(
+      c.x + c.width / 2 - (a.x + a.width / 2),
+      c.y + c.height / 2 - (a.y + a.height / 2),
+    );
+    expect(dist).toBeLessThan(500);
+    const arrow = result.find((e) => e.id === "e1")!;
+    expect(arrow.startBinding).toEqual({ elementId: "a", focus: 0, gap: 4 });
+    expect(arrow.endBinding).toEqual({ elementId: "c", focus: 0, gap: 4 });
   });
 
   it("add de arrow liga shapes existentes com bindings simétricos", () => {
