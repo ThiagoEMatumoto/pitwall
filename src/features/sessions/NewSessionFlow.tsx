@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalSquare } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
-import { projectsApi } from '@/lib/ipc'
+import { handoffsApi, projectsApi } from '@/lib/ipc'
+import { dispatchHandoffChild, handoffModeForPermission } from '@/features/handoffs/spawn-child'
+import { showToast } from '@/features/notifications/toast-store'
 import { useAppStore } from '@/store/appStore'
 import { SpawnSessionDialog } from './SpawnSessionDialog'
 import type { Project, Repo } from '../../../shared/types/ipc'
@@ -87,6 +89,37 @@ export function NewSessionFlow({ open, onClose }: Props) {
         open
         onClose={onClose}
         repo={chosen.repo}
+        onConfirmChild={({ task, motherSessionId, featureId, permission }) => {
+          const repoId = chosen.repo.id
+          // O main compõe o briefing (o MESMO que a filha despachada por MCP
+          // recebe) e resolve o apelido; o spawn sai daqui, pelo dispatch
+          // compartilhado com o gate de aprovação — inclusive o carimbo de failed
+          // se ele quebrar. A filha não vira aba: nasce no painel lateral.
+          void (async () => {
+            try {
+              const { handoff, alias } = await handoffsApi.createManual({
+                repoId,
+                motherSessionId,
+                task,
+                featureId,
+                mode: handoffModeForPermission(permission),
+              })
+              await dispatchHandoffChild(handoff.id, () => ({
+                repoId,
+                alias,
+                systemPromptText: handoff.composedPrompt,
+                featureId,
+                permissionMode: permission,
+              }))
+            } catch (err) {
+              showToast({
+                title: 'Não foi possível abrir a sessão filha',
+                body: err instanceof Error ? err.message : String(err),
+              })
+            }
+          })()
+          onClose()
+        }}
         onConfirm={(name, featureId, model, effort, permission, advisorModel, initialCommand) => {
           void openSession(
             chosen.repo,

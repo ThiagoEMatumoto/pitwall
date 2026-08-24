@@ -8,9 +8,9 @@ import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
 import {
-  activeCrew,
   crewNeedsAttention,
   crewTerminalTarget,
+  dockCrew,
   orderCrew,
   resolveCrewFocus,
   splitAlias,
@@ -35,13 +35,18 @@ export function useCrewDockWidth(): number {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const collapsed = useCrewDockStore((s) => s.collapsed)
   const width = useCrewDockStore((s) => s.width)
-  const hasCrew = useMemo(() => activeCrew(handoffs).length > 0, [handoffs])
+  const hasCrew = useMemo(() => dockCrew(handoffs).length > 0, [handoffs])
   if (!hasCrew) return 0
   return collapsed ? RAIL_WIDTH : width
 }
 
+// A trilha colapsada é o resumo de 40px do dock: cor = estado. A filha PAUSADA
+// (interrompida mas retomável) fica apagada em vez do âmbar de 'interrupted' —
+// ela não está pedindo nada, só esperando você mandar continuar; âmbar ali seria
+// o mesmo alarme de quem realmente espera resposta.
 function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
   if (live) return liveBadgeFor(live.status).color
+  if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
   return STATUS_COLOR[handoff.status]
 }
 
@@ -49,7 +54,11 @@ function crewDotTitle(handoff: Handoff, live: LiveSessionInfo | undefined): stri
   const alias = splitAlias(live?.title)
   const who = alias?.name ?? handoff.targetRepoLabel ?? handoff.targetRepoId
   const scope = alias?.scope ? ` (${alias.scope})` : ''
-  const state = live ? liveBadgeFor(live.status).label : 'despachando'
+  const state = live
+    ? liveBadgeFor(live.status).label
+    : handoff.status === 'interrupted' && handoff.resumable
+      ? 'pausada, dá pra retomar'
+      : 'despachando'
   return `${who}${scope} — ${state}`
 }
 

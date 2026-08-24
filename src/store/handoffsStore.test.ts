@@ -74,6 +74,18 @@ describe('childSessionIds', () => {
     expect(ids.size).toBe(0)
   })
 
+  // A INVARIANTE de visibilidade: esconder a filha da strip/switcher só se paga
+  // porque o Crew Dock a mostra — e o dispensado não está no dock. Sem esta
+  // cláusula, um card dispensado com filha viva não teria superfície nenhuma.
+  it('ignora handoff DISPENSADO, mesmo vivo (o dock não o mostra; a strip precisa mostrar)', () => {
+    const ids = childSessionIds([
+      makeHandoff({ id: 'a', status: 'running', childSessionId: 's1', dismissedAt: 123 }),
+      makeHandoff({ id: 'b', status: 'needs_input', childSessionId: 's2', dismissedAt: 123 }),
+      makeHandoff({ id: 'c', status: 'running', childSessionId: 's3' }),
+    ])
+    expect([...ids]).toEqual(['s3'])
+  })
+
   it('coleta múltiplas filhas ativas', () => {
     const ids = childSessionIds([
       makeHandoff({ id: 'a', status: 'running', childSessionId: 's1' }),

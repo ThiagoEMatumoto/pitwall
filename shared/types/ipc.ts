@@ -239,6 +239,15 @@ export interface Handoff {
   consumedAt: number | null
   fromRepoId: string | null
   outcome: HandoffOutcome | null
+  // Dispensa manual no Crew Dock: quando o humano tirou o card de vista. NÃO é
+  // desfecho — `status` segue intocado (a filha pode até continuar viva). NULL =
+  // nunca dispensado.
+  dismissedAt: number | null
+  // DERIVADO (não é coluna): este handoff interrompido pode ser retomado via
+  // `claude --resume`? Só é true com status 'interrupted', filha atrelada e o
+  // transcript dela ainda no disco — o mesmo gate do handoffs:is-resumable, agora
+  // servido junto da lista pra o dock decidir quem fica sem um IPC por card.
+  resumable: boolean
 }
 
 // Resolve o repo-alvo de um handoff + metadados do projeto, pra UI poder spawnar
@@ -271,6 +280,90 @@ export interface CreateHandoffInput {
   composedPrompt: string
   // Modo de permissão da filha; omitido = 'interactive'.
   mode?: HandoffMode
+}
+
+// ---- Passagem de bastão (baton) ----
+
+//
+// Quando o contexto de uma sessão enche, o trabalho continua numa sessão LIMPA
+// que recebe o briefing destilado da antecessora. A antecessora NÃO é encerrada —
+// quem a encerra é o humano, quando quiser.
+
+export interface DistillBatonInput {
+  // cc_session_id da sessão a destilar.
+  ccSessionId: string
+  // Contexto que o humano acrescenta antes de destilar; prevalece sobre o inferido
+  // do transcript.
+  note?: string
+}
+
+export interface PassBatonInput {
+  // cc_session_id da ANTECESSORA.
+  ccSessionId: string
+  // Briefing já destilado E editado/aprovado pelo humano — o main não destila de
+  // novo (isso descartaria a edição dele).
+  briefing: string
+  // Instrução extra do humano para o primeiro turno da sucessora.
+  task?: string
+  cols?: number
+  rows?: number
+}
+
+export interface PassBatonResult {
+  session: Session
+  // Handoff cujo papel a sucessora herdou; null = a antecessora não era filha de
+  // handoff e a sucessora nasce solta.
+  handoff: Handoff | null
+  // Apelido (endereço de peer) com que a sucessora subiu; null quando não há herança.
+  alias: string | null
+  // true = o apelido da antecessora seguia ocupado (ela continua viva) e a sucessora
+  // subiu com OUTRO endereço.
+  aliasChanged: boolean
+}
+
+// Criação MANUAL de sessão-filha pelo diálogo de nova sessão — o caminho sem
+// sessão-mãe pedindo por MCP. O renderer manda o mínimo; o main compõe o briefing
+// e resolve o apelido.
+export interface CreateManualHandoffInput {
+  repoId: string
+  // Mãe escolhida explicitamente no picker (sessions.id interno).
+  motherSessionId: string
+  task: string
+  featureId?: string
+  mode?: HandoffMode
+}
+
+// Handoff recém-criado + apelido já resolvido. O alias NÃO vive no registro do
+// handoff: ele só se fixa (em sessions.title) quando a filha sobe — e quem sobe a
+// filha, neste caminho, é o renderer.
+export interface ManualHandoffCreated {
+  handoff: Handoff
+  alias: string
+}
+
+// ---- Adoção de sessão já aberta ----
+//
+// "Esta sessão é filha de X": a sessão que já está numa aba passa a viver no
+// painel da equipe. Ser filha endereçável depende de flags fixadas no EXEC do
+// processo (o `-n <alias>` e o accept-inbound do cross-session), então adotar
+// RELANÇA a sessão por --resume — o histórico volta, o turno em andamento não.
+export interface AdoptSessionInput {
+  // Sessão a adotar (sessions.id interno).
+  sessionId: string
+  // Mãe escolhida explicitamente no picker (sessions.id interno).
+  motherSessionId: string
+  // Escopo combinado — é dele que sai o apelido, o endereço do peer.
+  task: string
+  featureId?: string
+  mode?: HandoffMode
+}
+
+export interface AdoptedSession {
+  handoff: Handoff
+  alias: string
+  // sessions.id da sessão RELANÇADA: o --resume cria um registro novo, e é ele
+  // que o handoff passa a apontar.
+  childSessionId: string
 }
 
 // ---- Research Dossier (pesquisa profunda com proveniência) ----
@@ -2533,6 +2626,13 @@ export interface Api {
     list(opts?: { status?: HandoffStatus | HandoffStatus[] }): Promise<Handoff[]>
     get(id: string): Promise<Handoff | null>
     approve(input: { id: string; composedPrompt?: string }): Promise<Handoff>
+    // Cria um handoff na mão (diálogo de nova sessão): persiste o registro com o
+    // briefing composto e devolve o apelido resolvido. NÃO spawna — o spawn é do
+    // renderer, pelo mesmo dispatch do gate de aprovação.
+    createManual(input: CreateManualHandoffInput): Promise<ManualHandoffCreated>
+    // Adota uma sessão já aberta como filha: cria o handoff e RELANÇA a sessão
+    // (mata a PTY e sobe de novo com --resume + apelido + accept-inbound).
+    adoptSession(input: AdoptSessionInput): Promise<AdoptedSession>
     reject(id: string): Promise<Handoff>
     markRunning(input: { id: string; childSessionId: string }): Promise<Handoff>
     fail(input: { id: string; error: string }): Promise<Handoff>
@@ -2543,6 +2643,14 @@ export interface Api {
     spawnContext(id: string): Promise<HandoffSpawnContext>
     // Feedback humano sobre a utilidade de um handoff concluído (instrumentação).
     setOutcome(input: { id: string; outcome: HandoffOutcome }): Promise<Handoff>
+    // Tira o handoff de vista no Crew Dock (carimba dismissedAt). Não altera o
+    // status nem encerra a sessão-filha.
+    dismiss(id: string): Promise<Handoff>
+    // Solta a filha do painel: além de carimbar dismissedAt, ZERA o childSessionId
+    // — o vínculo mãe→filha deixa de existir e a sessão volta a ser uma sessão
+    // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz
+    // as permissões restritas com que a filha foi lançada.
+    release(id: string): Promise<Handoff>
     // Retoma um handoff INTERROMPIDO: re-spawna a filha via `claude --resume`,
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não
     // for 'interrupted' ou se o transcript da filha não existir mais.
@@ -2551,6 +2659,14 @@ export interface Api {
     // transcript da filha ainda existe (mesma checagem do resume).
     isResumable(id: string): Promise<boolean>
     onUpdated(handler: (payload: unknown) => void): () => void
+  }
+  baton: {
+    // Destila o transcript da sessão no briefing que o humano vai editar. Síncrono
+    // e caro (claude -p, até 90s): quem chama mostra progresso.
+    distill(input: DistillBatonInput): Promise<string>
+    // Sobe a sucessora com o briefing APROVADO, no mesmo repo/feature. Herda o papel
+    // de filha de handoff quando houver. NÃO encerra a antecessora.
+    pass(input: PassBatonInput): Promise<PassBatonResult>
   }
   dossiers: {
     create(input: CreateDossierApiInput): Promise<Dossier>

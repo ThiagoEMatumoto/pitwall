@@ -49,6 +49,8 @@ const handoff: Handoff = {
   consumedAt: null,
   fromRepoId: null,
   outcome: null,
+  dismissedAt: null,
+  resumable: false,
 }
 
 const live: LiveSessionInfo = {

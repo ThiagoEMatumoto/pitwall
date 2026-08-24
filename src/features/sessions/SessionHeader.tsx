@@ -2,11 +2,13 @@ import { useState } from 'react'
 import {
   AlertCircle,
   Circle,
+  Flag,
   MessageSquare,
   Minus,
   Pencil,
   Power,
   SquareTerminal,
+  Users,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
@@ -41,6 +43,18 @@ interface Props {
   onToggleMode?: () => void
   onMinimize: () => void
   onEndSession: () => void
+  // Passar o bastão: sobe uma sessão LIMPA com o briefing destilado desta. Fica
+  // sempre à mão (não só com o contexto no fim) porque trocar de sessão também é
+  // decisão deliberada — ex.: virar de assunto sem arrastar a conversa antiga.
+  // Ausente = o caller não sabe passar o bastão e a ação some.
+  onPassBaton?: () => void
+  // Tornar sessão filha: declara esta sessão filha de outra e a manda pro painel
+  // da equipe. Ausente = o caller não sabe adotar e a ação some.
+  onAdopt?: () => void
+  // Motivo de a adoção estar indisponível (ex.: sem transcript no disco). Com
+  // motivo, o botão aparece DESABILITADO e explica no tooltip — some sem dizer
+  // por quê é o que faz o usuário achar que o app está quebrado.
+  adoptDisabledReason?: string | null
 }
 
 // Header de cada sessão em UMA linha calma:
@@ -72,6 +86,9 @@ export function SessionHeader({
   onToggleMode,
   onMinimize,
   onEndSession,
+  onPassBaton,
+  onAdopt,
+  adoptDisabledReason = null,
 }: Props) {
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -93,6 +110,11 @@ export function SessionHeader({
   // Reusa o cálculo puro de contexto (mesma fonte do ContextUsageIndicator):
   // tokens.context / limite do modelo → pct. A cor sai do limiar do MeasureBlocks.
   const ctxUsage = contextUsage({ tokens: activity?.tokens, model: activity?.model ?? null })
+  // Mesmo limiar do /compact (>=85%): daqui pra cima a janela está no fim e as
+  // duas saídas passam a ser decisão do minuto, não da semana. É AQUI que o
+  // usuário olha (o header é a única superfície de contexto que chega à tela),
+  // então é aqui que o bastão sai do discreto e ganha realce ao lado do ctx.
+  const ctxCritical = (ctxUsage?.pct ?? 0) >= 85
 
   return (
     <div
@@ -212,6 +234,60 @@ export function SessionHeader({
           >
             <MeasureBlocks label="ctx" percent={ctxUsage.pct} value={`${ctxUsage.pct}%`} />
           </div>
+        )}
+        {/* Bastão: some no narrow junto com o toggle (mesma regra de degradação)
+            e com a sessão encerrada — sem PTY viva não há transcript a destilar.
+            Fica colado no ctx de propósito: acima de 85% os dois formam um par
+            ("acabando" + "o que fazer a respeito"). O tooltip é o lugar onde a
+            distinção pro /compact é lida, então ele muda com o estado. */}
+        {!exited && tier !== 'narrow' && onPassBaton && (
+          <button
+            type="button"
+            onClick={onPassBaton}
+            data-testid="header-pass-baton"
+            data-critical={ctxCritical ? 'true' : 'false'}
+            title={
+              ctxCritical
+                ? 'Contexto quase cheio — passar o bastão sobe uma sessão NOVA, de contexto limpo, com um briefing desta. Diferente de /compact, que condensa o histórico desta mesma conversa. Esta sessão continua viva.'
+                : 'Passar o bastão — sobe uma sessão nova, de contexto limpo, com um briefing desta. Esta continua viva (diferente de /compact, que condensa esta mesma conversa).'
+            }
+            aria-label={ctxCritical ? 'Passar o bastão — contexto quase cheio' : 'Passar o bastão'}
+            className={
+              ctxCritical
+                ? 'flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium'
+                : 'rounded p-1 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)]'
+            }
+            style={
+              ctxCritical
+                ? {
+                    borderColor: 'var(--color-warning)',
+                    color: 'var(--color-warning)',
+                    background: 'color-mix(in srgb, var(--color-warning) 14%, transparent)',
+                  }
+                : undefined
+            }
+          >
+            <Icon as={Flag} size={13} />
+            {ctxCritical && <span>bastão</span>}
+          </button>
+        )}
+        {/* Adotar: a sessão vira filha de outra e passa a viver no painel da
+            equipe. Reinicia o processo (o apelido e o accept-inbound só se fixam
+            no exec) — o diálogo avisa antes de confirmar. */}
+        {!exited && tier !== 'narrow' && onAdopt && (
+          <button
+            type="button"
+            onClick={onAdopt}
+            disabled={!!adoptDisabledReason}
+            title={
+              adoptDisabledReason ??
+              'Tornar sessão filha — adota esta sessão sob uma mãe e a manda pro painel da equipe (reinicia a sessão; o histórico volta)'
+            }
+            aria-label="Tornar sessão filha"
+            className="rounded p-1 hover:bg-[var(--color-surface-2)] enabled:hover:text-[var(--color-accent)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Icon as={Users} size={13} />
+          </button>
         )}
         {/* Toggle Terminal⇄Chat em 1 ícone: mostra o modo DESTINO. */}
         {onToggleMode && tier !== 'narrow' && (

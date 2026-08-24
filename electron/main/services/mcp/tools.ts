@@ -640,6 +640,35 @@ const handoffAskSchema = z.object({
   question: z.string().min(1).max(4096),
 })
 
+// GUARD DE POSSE das tools de filha (report/progress/ask). O carimbo de sessão do
+// MCP identifica QUEM chamou — para a filha, é o mesmo `sessions.id` que mora em
+// handoffs.child_session_id.
+//
+// Por que existe: depois da passagem de bastão a ANTECESSORA continua viva
+// (decisão de produto) e ainda tem o handoffId no contexto dela. Sem esta
+// checagem, o handoff_report dela ao fim do próprio turno marcaria como `done` um
+// trabalho que agora é da sucessora — o card fecharia no painel com a sucessora
+// ainda trabalhando.
+//
+// RETROCOMPATIBILIDADE (o que NÃO pode quebrar): handoff sem filha atrelada, ou
+// chamador sem carimbo (config MCP global/legada, sessão que subiu antes do
+// carimbo por sessão), passa direto — não dá pra distinguir "legado" de
+// "passou o bastão" quando não há identidade, e recusar aí quebraria handoffs em
+// curso. O guard só morde quando as DUAS identidades existem e divergem.
+function assertCurrentChild(
+  handoff: { id: string; childSessionId: string | null },
+  ctx: McpRequestContext,
+  action: string,
+): void {
+  const caller = ctx.motherSessionId
+  if (!caller || !handoff.childSessionId) return
+  if (handoff.childSessionId === caller) return
+  const nowAlias = handoffStore.childAlias(handoff.childSessionId)
+  throw new Error(
+    `${action} recusado: este handoff (${handoff.id}) já não é seu. Você passou o bastão — quem responde por ele agora é ${nowAlias ? `a sessão "${nowAlias}"` : 'a sessão sucessora'}, e fechar/atualizar o card daqui apagaria o trabalho dela. Se tem algo a dizer sobre esse trabalho, mande por SendMessage; encerre o SEU turno sem tocar no handoff.`,
+  )
+}
+
 function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
   return [
     {
@@ -899,6 +928,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         const { handoffId, question } = handoffAskSchema.parse(args)
         const existing = handoffStore.get(handoffId)
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
+        assertCurrentChild(existing, ctx, 'handoff_ask')
         const updated = handoffStore.ask(handoffId, question)
         notify.broadcast('handoff:updated', updated)
         return ok({ status: updated.status, pendingQuestion: updated.pendingQuestion })
@@ -934,6 +964,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         const { handoffId, step } = handoffProgressSchema.parse(args)
         const existing = handoffStore.get(handoffId)
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
+        assertCurrentChild(existing, ctx, 'handoff_progress')
         const updated = handoffStore.progress(handoffId, step)
         notify.broadcast('handoff:updated', updated)
         // Progresso não responde pergunta aberta: se a filha segue bloqueada,
@@ -960,6 +991,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         const { handoffId, summary } = handoffReportSchema.parse(args)
         const existing = handoffStore.get(handoffId)
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
+        assertCurrentChild(existing, ctx, 'handoff_report')
         const updated = handoffStore.report(handoffId, summary)
         notify.broadcast('handoff:updated', updated)
         // Segundo report no mesmo handoff: o store preserva o summary original e

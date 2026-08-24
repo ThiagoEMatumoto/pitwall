@@ -28,7 +28,11 @@ import type {
   UpdateRepoDependencyInput,
   SetRepoHubInput,
   ConnectHubToAllInput,
+  AdoptSessionInput,
+  CreateManualHandoffInput,
   HandoffOutcome,
+  DistillBatonInput,
+  PassBatonInput,
   HandoffStatus,
   CreateDossierApiInput,
   DossierPlanInput,
@@ -288,6 +292,8 @@ const api: Api = {
     get: (id: string) => invoke('handoffs:get', id),
     approve: (input: { id: string; composedPrompt?: string }) =>
       invoke('handoffs:approve', input),
+    createManual: (input: CreateManualHandoffInput) => invoke('handoffs:create-manual', input),
+    adoptSession: (input: AdoptSessionInput) => invoke('handoffs:adopt-session', input),
     reject: (id: string) => invoke('handoffs:reject', id),
     markRunning: (input: { id: string; childSessionId: string }) =>
       invoke('handoffs:mark-running', input),
@@ -295,10 +301,16 @@ const api: Api = {
     sendMessage: (input: { id: string; text: string }) => invoke('handoffs:send-message', input),
     setOutcome: (input: { id: string; outcome: HandoffOutcome }) =>
       invoke('handoffs:set-outcome', input),
+    dismiss: (id: string) => invoke('handoffs:dismiss', id),
+    release: (id: string) => invoke('handoffs:release', id),
     resume: (id: string) => invoke('handoffs:resume', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),
     onUpdated: (handler) => subscribe<unknown>('handoff:updated', handler),
+  },
+  baton: {
+    distill: (input: DistillBatonInput) => invoke('baton:distill', input),
+    pass: (input: PassBatonInput) => invoke('baton:pass', input),
   },
   dossiers: {
     create: (input: CreateDossierApiInput) => invoke('dossiers:create', input),

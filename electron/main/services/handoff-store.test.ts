@@ -9,6 +9,14 @@ vi.mock('./db', () => ({
   getDb: () => testDb,
 }))
 
+// O `resumable` derivado no toEntity bate no disco (findTranscriptPath varre
+// ~/.claude/projects). Aqui o transcript é uma variável — é o único eixo que o
+// teste quer controlar.
+let transcriptPath: string | null = null
+vi.mock('./transcript-path', () => ({
+  findTranscriptPath: () => transcriptPath,
+}))
+
 import * as store from './handoff-store'
 
 function applyAllMigrations(db: Database.Database): void {
@@ -656,6 +664,18 @@ describe('handoff-store', () => {
       expect(store.isActiveCrewChild('cc-avulsa')).toBe(false)
       expect(store.isActiveCrewChild('cc-inexistente')).toBe(false)
     })
+
+    // O silêncio aqui só se paga porque o dock avisa — e o dispensado NÃO está no
+    // dock. Sem esta cláusula, dispensar viraria mordaça: a filha pediria atenção
+    // e nada apareceria em superfície nenhuma.
+    it('handoff DISPENSADO → false (sem card no dock, a notificação nativa volta)', () => {
+      seedSession('s1', 'cc-1')
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's1')
+      store.dismiss(h.id)
+      expect(store.isActiveCrewChild('cc-1')).toBe(false)
+    })
   })
 
   describe('findActiveByTarget (dedup por alvo)', () => {
@@ -671,6 +691,24 @@ describe('handoff-store', () => {
       store.markRunning(h.id, 's')
       store.report(h.id, 'ok')
       expect(store.findActiveByTarget('r1')).toBeNull()
+    })
+
+    // O dedup é a porta de entrada da MCP tool session_handoff. Recusar em nome de
+    // um card DISPENSADO devolveria "já existe handoff ativo neste repo" apontando
+    // pra algo que o usuário não vê, não abre e não encerra.
+    it('ignora handoff DISPENSADO (card invisível não recusa nova delegação)', () => {
+      const global = newHandoff('r1')
+      store.dismiss(global.id)
+      expect(store.findActiveByTarget('r1')).toBeNull()
+
+      const daMae = store.create({
+        targetRepoId: 'r2',
+        motherSessionId: 'mother-a',
+        task: 't',
+        composedPrompt: 'p',
+      })
+      store.dismiss(daMae.id)
+      expect(store.findActiveByTarget('r2', 'mother-a')).toBeNull()
     })
 
     it('ignora interrupted (recuperável NÃO conta como ativo → libera o teto/dedup)', () => {
@@ -722,6 +760,211 @@ describe('handoff-store', () => {
         handoffOf(MOTHER_A, 'r1')
         expect(store.findActiveByTarget('r2', MOTHER_A)).toBeNull()
       })
+    })
+  })
+
+  // A INVARIANTE de visibilidade: um handoff com filha viva nunca pode estar
+  // invisível em todas as superfícies ao mesmo tempo.
+  describe('markRunning (adquirir filha viva devolve a visibilidade)', () => {
+    it('zera dismissed_at: o card dispensado volta ao dock ao ganhar filha', () => {
+      const h = newHandoff('r1')
+      // Dispensa PERMITIDA: ainda pending, sem filha viva pra deixar órfã.
+      expect(store.dismiss(h.id).dismissedAt).not.toBeNull()
+
+      store.approve(h.id, {})
+      const running = store.markRunning(h.id, 's-nasce-depois')
+      expect(running.status).toBe('running')
+      // Sem isto: fora do dock (dockCrew), fora da strip/switcher
+      // (childSessionIds) e sem notificação (isActiveCrewChild) — uma PTY viva
+      // queimando token sem nenhum lugar onde ser encontrada.
+      expect(running.dismissedAt).toBeNull()
+    })
+
+    it('a filha readquirida volta a ser filha ativa pro main (notificação silenciada de novo)', () => {
+      testDb
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at)
+           VALUES ('s-readq', 'r1', 'cc-readq', 'running', ?)`,
+        )
+        .run(Date.now())
+      const h = newHandoff('r1')
+      store.dismiss(h.id)
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-readq')
+      expect(store.isActiveCrewChild('cc-readq')).toBe(true)
+      expect(store.findActiveByTarget('r1')?.id).toBe(h.id)
+    })
+  })
+
+  // Soltar do painel: a operação INVERSA da adoção. O que dismiss NÃO faz — cortar
+  // o vínculo — é exatamente o que se testa aqui.
+  describe('release (solta a filha do painel)', () => {
+    it('zera child_session_id, carimba dismissed_at e preserva o id antigo no evento', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-solta', 'running')
+
+      const after = store.release(h.id)
+      expect(after.childSessionId).toBeNull()
+      expect(after.dismissedAt).not.toBeNull()
+      // A coluna era a única referência à filha: sem o carimbo no evento, a
+      // rastreabilidade dela morreria junto com o vínculo.
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'release',
+        from_status: 'running',
+        detail: 's-solta',
+      })
+    })
+
+    it('handoff liberado NÃO é tocado pelo reconcileStuck', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-solta2', 'running')
+      store.release(h.id)
+
+      const before = store.get(h.id)!
+      // O predicado do reconcileStuck inclui child_session_id IS NULL — se o
+      // release deixasse o registro 'running', ele seria varrido e receberia o erro
+      // genérico de "filha encerrada sem reportar". O release encerra antes, com o
+      // motivo real, e o liberado sai do alcance da varredura.
+      expect(store.reconcileStuck()).toBe(0)
+      const after = store.get(h.id)!
+      expect(after.status).toBe(before.status)
+      expect(after.error).toBe(before.error)
+      expect(after.status).toBe('interrupted')
+      expect(after.error).toContain('Solta do painel')
+    })
+
+    it('NÃO reescreve o desfecho de um handoff já terminal (done permanece done)', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-done-solta', 'exited')
+      store.report(h.id, 'concluído')
+
+      const after = store.release(h.id)
+      expect(after.status).toBe('done')
+      expect(after.summary).toBe('concluído')
+      expect(after.childSessionId).toBeNull()
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'release',
+        from_status: 'done',
+        to_status: 'done',
+        detail: 's-done-solta',
+      })
+    })
+
+    it('soltar de novo é no-op (não empilha eventos)', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-solta3', 'running')
+      store.release(h.id)
+      const n = events(h.id).length
+
+      store.release(h.id)
+      expect(events(h.id)).toHaveLength(n)
+    })
+
+    it('preserva o instante da dispensa quando o card já tinha sido dispensado', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-solta4', 'running')
+      const dismissed = store.dismiss(h.id).dismissedAt
+
+      expect(store.release(h.id).dismissedAt).toBe(dismissed)
+    })
+
+    it('a sessão liberada deixa de ser achada por getByChildSession', () => {
+      const h = newHandoff('r1')
+      store.approve(h.id, {})
+      spawnChild(h.id, 's-solta5', 'running')
+      expect(store.getByChildSession('s-solta5')?.id).toBe(h.id)
+
+      store.release(h.id)
+      expect(store.getByChildSession('s-solta5')).toBeNull()
+    })
+  })
+
+  // O campo que decide quem CONTINUA no Crew Dock: interrompida com transcript no
+  // disco é pausada, não desfecho.
+  describe('resumable (derivado)', () => {
+    // Cada filha entra com cc_session_id PRÓPRIO (como na vida real). Importa aqui:
+    // o memo de transcript do store é por cc_session_id e vive pelo processo — dois
+    // casos compartilhando o mesmo uuid veriam o resultado um do outro.
+    let seq = 0
+
+    function interrupted(opts: { ccSessionId?: string | null; child?: boolean } = {}) {
+      const h = newHandoff()
+      if (opts.child !== false) {
+        seq++
+        const sessionId = `s${seq}`
+        const cc =
+          opts.ccSessionId === undefined
+            ? `11111111-2222-4333-8444-${String(seq).padStart(12, '0')}`
+            : opts.ccSessionId
+        testDb
+          .prepare(
+            `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at)
+             VALUES (?, 'r1', ?, 'exited', ?)`,
+          )
+          .run(sessionId, cc, Date.now())
+        store.markRunning(h.id, sessionId)
+      }
+      store.failIfRunning(h.id, 'morreu')
+      return store.get(h.id)!
+    }
+
+    it('interrompido + transcript no disco → true', () => {
+      transcriptPath = '/tmp/t.jsonl'
+      expect(interrupted().resumable).toBe(true)
+    })
+
+    it('interrompido sem transcript → false', () => {
+      transcriptPath = null
+      expect(interrupted().resumable).toBe(false)
+    })
+
+    it('cc_session_id ausente ou fora do formato UUID → false (nada a resumir)', () => {
+      transcriptPath = '/tmp/t.jsonl'
+      expect(interrupted({ ccSessionId: null }).resumable).toBe(false)
+      expect(interrupted({ ccSessionId: 'nao-e-uuid' }).resumable).toBe(false)
+    })
+
+    // O short-circuit que segura o custo: só linha interrompida COM filha atrelada
+    // chega a tocar o disco.
+    it('status vivo/terminal sai false sem consultar o transcript', () => {
+      transcriptPath = '/tmp/t.jsonl'
+      const running = newHandoff()
+      expect(store.get(running.id)!.resumable).toBe(false)
+      const done = store.report(newHandoff().id, 'ok')
+      expect(done.resumable).toBe(false)
+    })
+
+    it('interrompido sem filha atrelada → false', () => {
+      transcriptPath = '/tmp/t.jsonl'
+      expect(interrupted({ child: false }).resumable).toBe(false)
+    })
+
+    // O memo de transcript não é eterno: o .jsonl é arquivo de terceiro (o Claude
+    // Code escreve, limpeza manual apaga) e o app fica dias aberto. Memo eterno =
+    // card oferecendo "Retomar" pra uma conversa que já não existe até reiniciar.
+    it('o carimbo do memo expira: transcript apagado deixa de ser retomável sem reiniciar o app', () => {
+      vi.useFakeTimers()
+      try {
+        transcriptPath = '/tmp/t.jsonl'
+        const h = interrupted()
+        expect(h.resumable).toBe(true)
+
+        // Apagado do disco por fora, com o app aberto.
+        transcriptPath = null
+        // Dentro da janela o memo ainda vale — é ele que segura o custo das
+        // rajadas de recarga da lista.
+        expect(store.get(h.id)!.resumable).toBe(true)
+
+        vi.advanceTimersByTime(31_000)
+        expect(store.get(h.id)!.resumable).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

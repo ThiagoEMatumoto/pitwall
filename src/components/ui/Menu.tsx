@@ -8,6 +8,10 @@ export interface MenuItem {
   danger?: boolean
   /** Item atualmente selecionado (mostra um ✓ e destaca o texto). */
   active?: boolean
+  /** Item visível porém inerte — mantém a ação descoberta e diz por que não dá. */
+  disabled?: boolean
+  /** Tooltip nativo; é onde o motivo de um item desabilitado fica legível. */
+  title?: string
 }
 
 export interface MenuSection {
@@ -44,16 +48,18 @@ function MenuButton({ item, onClose }: { item: MenuItem; onClose: () => void }) 
   return (
     <button
       type="button"
+      disabled={item.disabled}
+      title={item.title}
       onClick={() => {
         onClose()
         item.onClick()
       }}
-      className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-[var(--color-surface-2)] ${
+      className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${
         item.danger
-          ? 'text-[var(--color-danger)] hover:text-[var(--color-danger)]'
+          ? 'text-[var(--color-danger)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)]'
           : item.active
-            ? 'text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+            ? 'text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
+            : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
       }`}
     >
       <span>{item.label}</span>

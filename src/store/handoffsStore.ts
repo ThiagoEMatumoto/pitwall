@@ -1,24 +1,13 @@
 import { create } from 'zustand'
 import { handoffsApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
+import { dispatchHandoffChild, permissionModeFor } from '@/features/handoffs/spawn-child'
 import { useAppStore } from './appStore'
-import type { Handoff, HandoffMode, PermissionMode } from '../../shared/types/ipc'
+import type { Handoff } from '../../shared/types/ipc'
 
-// Mapeia o modo do handoff → permissionMode do spawn (o main valida contra
-// whitelist e, em acceptEdits, mescla o denylist destrutivo canônico sozinho —
-// o renderer NÃO monta disallowedTools). 'interactive' = sem permissionMode
-// (comportamento legado: o claude pergunta cada ação). Pura → testável.
-export function permissionModeFor(mode: HandoffMode): PermissionMode | undefined {
-  switch (mode) {
-    case 'plan':
-      return 'plan'
-    case 'auto-edits':
-      return 'acceptEdits'
-    case 'interactive':
-    default:
-      return undefined
-  }
-}
+// permissionModeFor mudou de casa (spawn-child.ts, junto do resto do nascimento
+// da filha) e continua exportado daqui — é o import que o resto do renderer já usa.
+export { permissionModeFor }
 
 // O payload de handoff:updated é o Handoff atualizado; tipamos defensivamente
 // (a assinatura IPC é `unknown`) e validamos o shape mínimo antes de usar.
@@ -73,10 +62,13 @@ interface HandoffsState {
 
   load: () => Promise<void>
   reject: (id: string) => Promise<void>
-  // Aprova o handoff (com o prompt possivelmente editado), resolve o repo-alvo,
-  // spawna a sessão-filha via openSession do appStore e marca mark-running com o
-  // id da sessão criada. Erro de spawn vira `error` visível (não deixa o handoff
-  // preso silenciosamente).
+  // Tira o handoff de vista no dock (carimba dismissedAt no banco). NÃO encerra a
+  // filha nem muda o status — é decisão de exibição, não desfecho.
+  dismiss: (id: string) => Promise<void>
+  // Aprova o handoff (com o prompt possivelmente editado), resolve o repo-alvo e
+  // entrega o nascimento da filha ao dispatch compartilhado (spawn em background
+  // + mark-running). Erro no caminho vira `error` visível e handoff failed — não
+  // deixa o handoff preso silenciosamente.
   approve: (id: string, editedPrompt: string) => Promise<void>
 
   startUpdatedWatch: () => void
@@ -107,42 +99,38 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
     }
   },
 
+  dismiss: async (id) => {
+    try {
+      await handoffsApi.dismiss(id)
+      await get().load()
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
   approve: async (id, editedPrompt) => {
     const handoff = get().handoffs.find((h) => h.id === id)
     set({ error: null })
     try {
-      await handoffsApi.approve({ id, composedPrompt: editedPrompt })
-      const ctx = await handoffsApi.spawnContext(id)
-      // O prompt completo (editado) vai por arquivo de system-prompt (íntegro,
-      // multi-linha); o kickoff abaixo vira o 1º turno REAL da filha, entregue como
-      // prompt posicional no comando de spawn (`claude "<kickoff>"` auto-submete) —
-      // não colado no PTY, que em background é descartado sem resize do TUI.
-      const kickoff = `Comece a tarefa do handoff descrita no seu contexto de sistema. Ao terminar, chame a MCP tool handoff_report com handoffId="${id}".`
-      // Background spawn: a filha sobe SEM abrir pane/xterm. Vira só um chip no
-      // rollup (abrível sob demanda). O modo do handoff vira permissionMode.
-      const childSessionId = await useAppStore.getState().spawnSessionBackground({
-        repoId: ctx.repo.id,
-        // Alias `<nome>-<escopo>` resolvido no main (único contra as sessões
-        // vivas). É o `-n <name>` do spawn e, por tabela, o endereço do
-        // SendMessage — nada de `handoff: <repo>`, que colide e vira hex.
-        name: ctx.alias,
-        featureId: handoff?.featureId ?? undefined,
-        initialPrompt: kickoff,
-        systemPromptText: editedPrompt,
-        permissionMode: permissionModeFor(handoff?.mode ?? 'interactive'),
-        handoffChild: true,
+      // Aprovação e resolução do repo-alvo vão DENTRO do resolvePlan porque o
+      // dispatch carimba failed pra qualquer erro dali pra frente — um handoff
+      // aprovado sem filha é exatamente o estado preso que queremos evitar.
+      await dispatchHandoffChild(id, async () => {
+        await handoffsApi.approve({ id, composedPrompt: editedPrompt })
+        const ctx = await handoffsApi.spawnContext(id)
+        return {
+          repoId: ctx.repo.id,
+          alias: ctx.alias,
+          // O prompt completo (editado pelo humano no gate) é o briefing da filha.
+          systemPromptText: editedPrompt,
+          featureId: handoff?.featureId ?? undefined,
+          permissionMode: permissionModeFor(handoff?.mode ?? 'interactive'),
+        }
       })
-      await handoffsApi.markRunning({ id, childSessionId })
       await get().load()
     } catch (err) {
-      // Spawn/approve falhou: marca o handoff como failed (erro visível no inbox)
-      // em vez de deixá-lo preso em approved sem filha. Mostra o erro e recarrega.
+      // O carimbo de failed já saiu no dispatch; aqui só expõe o erro e recarrega.
       const msg = err instanceof Error ? err.message : String(err)
-      try {
-        await handoffsApi.fail({ id, error: msg })
-      } catch {
-        // fail() também falhou (IPC indisponível): só exibe o erro no store.
-      }
       set({ error: msg })
       await get().load()
       throw err
@@ -202,9 +190,17 @@ export const ACTIVE_HANDOFF_STATUSES: ReadonlySet<Handoff['status']> = new Set([
 
 // Conjunto de Session.id que são filhas de handoffs ativos. Pura → testável e
 // reusável pelo strip/switcher (esconder) e pelo rollup (exibir compacto).
+//
+// Handoff DISPENSADO não entra, mesmo vivo. Esconder a sessão daqui só se paga
+// porque ela aparece no Crew Dock — e o dispensado não aparece (ver dockCrew).
+// INVARIANTE: um handoff com filha viva nunca pode estar invisível em todas as
+// superfícies ao mesmo tempo; sem esta cláusula, um card dispensado que depois
+// ganhasse filha (ou a ganhasse por outro caminho que não o markRunning, que já
+// limpa o carimbo) deixaria uma PTY rodando sem dock, sem barra e sem switcher.
 export function childSessionIds(handoffs: Handoff[]): Set<string> {
   const ids = new Set<string>()
   for (const h of handoffs) {
+    if (h.dismissedAt != null) continue
     if (h.childSessionId && ACTIVE_HANDOFF_STATUSES.has(h.status)) {
       ids.add(h.childSessionId)
     }

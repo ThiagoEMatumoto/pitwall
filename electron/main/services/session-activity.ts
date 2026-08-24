@@ -21,9 +21,14 @@ import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
 import { isActiveCrewChild } from './handoff-store'
 import { deriveSubagentActivity } from './subagent-activity'
+import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
 
-export const PROJECTS_ROOT = join(homedir(), '.claude', 'projects')
+// Re-export: findTranscriptPath/PROJECTS_ROOT moraram aqui e são importados daqui
+// por meio mundo (metrics-service, feature-memory, chat-transcript-service, ipc).
+// A implementação saiu pra transcript-path.ts (ver o porquê lá); o endereço fica.
+export { PROJECTS_ROOT, findTranscriptPath }
+
 const SESSIONS_ROOT = join(homedir(), '.claude', 'sessions')
 const TAIL_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
@@ -103,25 +108,6 @@ export function mapStatus(cc: CcSessionFile['status']): SessionActivity['status'
   }
 }
 
-// O JSONL nasce em ~/.claude/projects/<cwd-encoded>/<ccSessionId>.jsonl. Em vez de
-// reproduzir o encoding do cwd, varremos os subdirs procurando o arquivo pelo id.
-export function findTranscriptPath(ccSessionId: string): string | null {
-  if (!existsSync(PROJECTS_ROOT)) return null
-  const target = `${ccSessionId}.jsonl`
-  let dirs: string[]
-  try {
-    dirs = readdirSync(PROJECTS_ROOT, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-  } catch {
-    return null
-  }
-  for (const dir of dirs) {
-    const candidate = join(PROJECTS_ROOT, dir, target)
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
 
 // Lê só os últimos TAIL_BYTES do arquivo: durante uma sessão longa o JSONL chega a
 // milhares de linhas e reparsear tudo a cada mudança seria custoso. A primeira linha
