@@ -251,9 +251,8 @@ try {
   // --- 3. TTS REAL via API do preload ---------------------------------------
   // A prova de "áudio de verdade" é decodeAudioData: duration > 0 exige um mp3
   // decodificável, não só bytes. O caminho Audio+blob (o que useVoiceSpeaker
-  // usa em produção) é medido junto e reportado sem derrubar o cenário: a CSP
-  // do renderer (default-src 'self', sem media-src) hoje rejeita blob: pra
-  // mídia — bug conhecido, o erro exato sai no log.
+  // usa em produção) é ASSERIDO junto: a CSP do renderer precisa de
+  // media-src blob: pro elemento carregar (loadedmetadata com duration > 0).
   const tts = (await page.evaluate(async () => {
     const w = window as unknown as {
       api: {
@@ -332,6 +331,11 @@ try {
     throw new Error(`FALHA TTS: mp3 não decodifica: ${tts.decodeError}`);
   if (!(tts.duration > 0))
     throw new Error(`FALHA TTS: duration ${tts.duration} (esperado > 0)`);
+  const elementLoaded = tts.element.match(/^ok duration=([\d.]+)/);
+  if (!elementLoaded || !(Number(elementLoaded[1]) > 0))
+    throw new Error(
+      `FALHA TTS: Audio(blob) não carregou no renderer (CSP media-src?): ${tts.element}`,
+    );
 
   // --- 4. toggle modo voz ---------------------------------------------------
   const toggle = pane.getByRole("button", { name: "Modo voz" }).first();
