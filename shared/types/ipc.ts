@@ -2556,6 +2556,13 @@ export type VoiceConfigStatus =
     }
   | { ok: false; path: string; error: string }
 
+// Resumo de fim de turno (modo voz): emitido pelo main em voice:summary quando
+// um turno termina em texto de assistant e a pref voice.mode está ligada.
+export interface VoiceSummaryEvent {
+  ccSessionId: string
+  summary: string
+}
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2642,6 +2649,8 @@ export interface Api {
     condense(text: string): Promise<VoiceCondenseResult>
     /** Status da config voz.env — nunca inclui credenciais. */
     configStatus(): Promise<VoiceConfigStatus>
+    /** Resumo automático do turno que acabou (2-3 frases, PT) — modo voz. */
+    onSummary(handler: (event: VoiceSummaryEvent) => void): () => void
   }
   secrets: {
     /** Estado da cifragem em repouso — alimenta o aviso da tela de configurações. */

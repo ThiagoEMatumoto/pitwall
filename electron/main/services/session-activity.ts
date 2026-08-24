@@ -30,6 +30,17 @@ import { readSubagentMetas } from './subagent-turns'
 export { PROJECTS_ROOT, findTranscriptPath }
 
 const SESSIONS_ROOT = join(homedir(), '.claude', 'sessions')
+
+// Borda working → waiting/idle de uma sessão viva (fim de turno). Hook injetável
+// (padrão setSyncMutationHook do notify.ts) pra não importar voice-summary daqui —
+// evitaria ciclo via chat-transcript-service, que importa este módulo. Default
+// no-op até o boot registrar o consumidor real.
+type TurnEndedHook = (ccSessionId: string) => void
+let turnEndedHook: TurnEndedHook = () => {}
+
+export function setTurnEndedHook(fn: TurnEndedHook): void {
+  turnEndedHook = fn
+}
 const TAIL_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
 export const MAX_TEXT = 200
@@ -498,6 +509,12 @@ class SessionActivityService extends EventEmitter {
       const current = this.effectiveStatus(entry)
       const prev = this.lastEffectiveStatus.get(sessionId)
       if (prev === 'working' && current !== 'working') consumed = true
+      // Fim de turno com a sessão ainda viva (working → waiting/idle): borda que
+      // o resumo por voz consome. 'ended' fica de fora — sessão encerrada não
+      // tem quem ouça o resumo.
+      if (prev === 'working' && (current === 'waiting' || current === 'idle')) {
+        turnEndedHook(sessionId)
+      }
       // "Sessão aguardando" é a borda working→waiting especificamente (não
       // qualquer não-busy). Só notifica com o app fora de foco, pra não spammar
       // quem está olhando o terminal.

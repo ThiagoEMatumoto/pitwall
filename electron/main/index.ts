@@ -6,7 +6,7 @@ import { getDb, closeDb } from './services/db'
 import { ptyManager } from './services/pty-manager'
 import { meetingSidecarManager } from './services/meeting-sidecar'
 import * as handoffStore from './services/handoff-store'
-import { sessionActivityService } from './services/session-activity'
+import { sessionActivityService, setTurnEndedHook } from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
 import { registerBatonIpc } from './ipc/baton'
@@ -46,6 +46,7 @@ import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerMeetingsIpc } from './ipc/meetings'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
+import { scheduleTurnSummary } from './services/voice-summary'
 import { registerSyncIpc, syncOnBoot, syncCoordinator, notifySyncMutation } from './ipc/sync'
 import { setSyncMutationHook, broadcast } from './services/notify'
 import { startFeatureWatcher, stopFeatureWatcher } from './services/feature-store'
@@ -302,6 +303,9 @@ app.whenReady().then(async () => {
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via
   // pingSyncMutation), tanto pela camada IPC quanto pelo MCP server.
   setSyncMutationHook(notifySyncMutation)
+  // Fim de turno (working → waiting/idle) → resumo falado do modo voz. Hook
+  // injetado aqui pra evitar ciclo session-activity ↔ chat-transcript-service.
+  setTurnEndedHook(scheduleTurnSummary)
   registerWindowIpc()
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta
