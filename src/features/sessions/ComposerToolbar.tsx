@@ -14,6 +14,7 @@ import { EffortPill } from './EffortPill'
 import { PermissionPill } from './PermissionPill'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
+import { MicButton } from './voice/MicButton'
 
 interface Props {
   activity: SessionActivity | null
@@ -37,6 +38,8 @@ interface Props {
   onSelectPermission?: (mode: PermissionMode) => void
   /** Interrompe o claude (envia Ctrl+C ao PTY). Ausente = sem o botão. */
   onInterrupt?: () => void
+  /** Recebe o texto ditado/transcrito (MicButton). Ausente = sem o botão de voz. */
+  onVoiceText?: (text: string) => void
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -64,6 +67,7 @@ export function ComposerToolbar({
   onCyclePermission,
   onSelectPermission,
   onInterrupt,
+  onVoiceText,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -125,6 +129,7 @@ export function ComposerToolbar({
           <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>
         </Button>
       )}
+      {onVoiceText && <MicButton onText={onVoiceText} />}
       {hasPending &&
         (canSwitch ? (
           // Sessão ficou ociosa com troca pendente: a injeção dispara agora —
