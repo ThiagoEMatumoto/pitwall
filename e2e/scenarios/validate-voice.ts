@@ -108,6 +108,19 @@ page.on("console", (m) => {
 
 try {
   await waitReady(page);
+
+  // O toggle Terminal⇄Chat (e outros controles do SessionHeader) só existe com
+  // o pane fora do tier 'narrow' (largura real do painel — SessionHeader.tsx).
+  // Com a base podada há um único pane, então largura de janela ≈ largura do
+  // pane: garantir a janela em 1400x900 evita que um ambiente de tela pequena
+  // derrube a etapa 4b por layout, não por bug.
+  const [winW, winH] = await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && win.getBounds().width < 1400) win.setSize(1400, 900);
+    return win ? win.getSize() : [0, 0];
+  });
+  console.log(`[janela] ${winW}x${winH}`);
+
   await goToArea(page, "projects");
   await page.waitForTimeout(500);
 
@@ -285,7 +298,9 @@ try {
     )
     .first();
   if (!(await modeToggle.count()))
-    throw new Error("FALHA: toggle Terminal⇄Chat não encontrado");
+    throw new Error(
+      "FALHA: toggle Terminal⇄Chat não encontrado (o pane está em tier narrow? a janela foi garantida em >=1400px no boot)",
+    );
   const fromLabel = await modeToggle.getAttribute("aria-label");
   await modeToggle.click();
   await page.waitForTimeout(800);

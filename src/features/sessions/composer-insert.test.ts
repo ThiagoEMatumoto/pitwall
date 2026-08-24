@@ -32,4 +32,17 @@ describe('insertDictation', () => {
     expect(res.value).toBe('troque aquilo aqui')
     expect(res.cursor).toBe('troque aquilo'.length)
   })
+
+  it('separates on the right when the cursor sits at the start of a word', () => {
+    const res = insertDictation('antes depois', 'ditado', 6, 6)
+    expect(res.value).toBe('antes ditado depois')
+    // Cursor logo após o ditado, antes do espaço adicionado à direita.
+    expect(res.cursor).toBe('antes ditado'.length)
+  })
+
+  it('separates on the right when the selection swallowed the following space', () => {
+    const res = insertDictation('troque ISTO aqui', 'aquilo', 7, 12)
+    expect(res.value).toBe('troque aquilo aqui')
+    expect(res.cursor).toBe('troque aquilo'.length)
+  })
 })
