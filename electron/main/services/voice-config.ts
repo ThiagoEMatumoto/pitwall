@@ -3,17 +3,15 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { parseDotenv } from '../../../shared/dotenv-parse'
 import { createSecretRedactor } from './custom-env'
 
 // Configuração do modo voz, lida de ~/.config/voz/voz.env (mesmo arquivo do app
-// Voz da Lexter). O arquivo é LIDO, nunca sourceado — um .env executado por
-// shell é vetor de execução de código. O parser é porte fiel de
-// vozapp/config.py, incluindo os três defeitos medidos lá:
-//
-// 1. Comentário na mesma linha (`CHAVE=220  # explicação`) é cortado.
-// 2. Valor entre aspas é preservado inteiro, inclusive `#`.
-// 3. Nomes antigos continuam aceitos (ALIASES) — o STT_PROMPT já se perdeu numa
-//    renomeação e "Claude Code" virou "Cloud Code" por dias.
+// Voz da Lexter). O parser (porte de vozapp/config.py, com os defeitos de
+// comentário/aspas preservados) vive em shared/dotenv-parse.ts — reusado pelo
+// importador do env hub. Terceiro defeito mantido aqui: nomes antigos continuam
+// aceitos (ALIASES) — o STT_PROMPT já se perdeu numa renomeação e "Claude Code"
+// virou "Cloud Code" por dias.
 
 export interface VoiceConfig {
   sttUrl: string
@@ -78,27 +76,8 @@ const DEFAULTS: Record<string, string> = {
   VOZ_TTS_MODEL: 'eleven_flash_v2_5',
 }
 
-// Porte de config.py:_parse — só `CHAVE=valor` e comentários.
-export function parseVozEnv(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const raw of text.split('\n')) {
-    let line = raw.trim()
-    if (!line || line.startsWith('#') || !line.includes('=')) continue
-    if (line.startsWith('export ')) line = line.slice('export '.length).trimStart()
-    const eq = line.indexOf('=')
-    const key = line.slice(0, eq).trim()
-    if (!key || !/^[A-Za-z_]/.test(key)) continue
-    const value = line.slice(eq + 1).trim()
-    const quote = value.slice(0, 1)
-    if (quote === "'" || quote === '"') {
-      const close = value.indexOf(quote, 1)
-      out[key] = close > 0 ? value.slice(1, close) : value.slice(1)
-    } else {
-      out[key] = value.split('#')[0].trim()
-    }
-  }
-  return out
-}
+// Reexport de compatibilidade: o parser mudou para shared/dotenv-parse.ts.
+export { parseDotenv as parseVozEnv }
 
 // Precedência (porte de config.py:conf): ambiente > arquivo > alias no
 // ambiente > alias no arquivo > padrão. O ambiente vem primeiro para que teste
@@ -131,7 +110,7 @@ export function vozEnvPath(deps: Partial<VoiceDeps> = {}): string {
 function readVozVars(path: string, d: VoiceDeps): Record<string, string> | null {
   if (!d.exists(path)) return null
   try {
-    return parseVozEnv(d.readFile(path))
+    return parseDotenv(d.readFile(path))
   } catch {
     return {}
   }
@@ -246,7 +225,10 @@ async function cmdFailed(
   d: VoiceDeps,
 ): Promise<SecretResult> {
   if (!cmd.includes('gcloud')) {
-    return { ok: false, error: `Falha ao obter a credencial ${name}: ${motivo}` }
+    return {
+      ok: false,
+      error: `Falha ao obter a credencial ${name}: ${motivo}`,
+    }
   }
   const token = await adcToken(d)
   if (token) {
