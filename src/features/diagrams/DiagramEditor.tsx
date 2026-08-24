@@ -74,6 +74,9 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       // as cores do canvas — um bg escuro aqui viraria claro na tela. Os
       // defaults da lib (bg branco, stroke #1e1e1e) renderizam certo no dark.
       appState: {},
+      // Centraliza a câmera no conteúdo — sem isso, cena criada via MCP em
+      // (0,0) abre escondida atrás da toolbar.
+      scrollToContent: true,
     };
     // Remontado por key={diagram.id}; a cena inicial não muda durante a vida
     // do componente.
@@ -157,6 +160,9 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       elements: restored,
       captureUpdate: utils.CaptureUpdateAction.NEVER,
     });
+    // Elementos novos podem ter entrado fora do viewport (ex.: patch do
+    // Claude adicionando um nó) — re-enquadra sem animação brusca.
+    api.scrollToContent(undefined, { fitToViewport: true });
   }, []);
 
   // Broadcast de cena nova (remoteScene do store).
