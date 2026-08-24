@@ -1303,4 +1303,129 @@ describe('mcp tools — diagrams', () => {
     })
     expect(unlinked.links).toEqual([])
   })
+
+  it('integração: create (4 nós/3 setas) → get → patch (move + rename) → archive → delete', () => {
+    interface SkeletonFull extends SkeletonOut {
+      x?: number
+      y?: number
+      text?: string
+    }
+    interface VersionMetaOut {
+      id: string
+      diagramId: string
+      version: number
+      author: string
+      summary: string
+      createdAt: number
+    }
+
+    const { diagram } = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>(
+      'diagram_create',
+      {
+        title: 'Pipeline de ingestão',
+        kind: 'architecture',
+        summary: 'primeira versão',
+        elements: [
+          { id: 'src', type: 'rectangle', label: { text: 'Fonte' } },
+          { id: 'etl', type: 'rectangle', label: { text: 'ETL' } },
+          { id: 'db', type: 'ellipse', label: { text: 'Warehouse' } },
+          { id: 'bi', type: 'diamond', label: { text: 'BI' } },
+          { id: 'a1', type: 'arrow', start: { id: 'src' }, end: { id: 'etl' } },
+          { id: 'a2', type: 'arrow', start: { id: 'etl' }, end: { id: 'db' }, label: { text: 'upsert' } },
+          { id: 'a3', type: 'arrow', start: { id: 'db' }, end: { id: 'bi' } },
+        ],
+      },
+    )
+
+    // get (skeleton): meta + skeleton derivado + histórico de versões.
+    const got = call<{
+      diagram: DiagramMetaOut
+      skeleton: SkeletonFull[]
+      versions: VersionMetaOut[]
+    }>('diagram_get', { id: diagram.id })
+    expect(got.diagram.id).toBe(diagram.id)
+    expect(got.diagram.version).toBe(1)
+    expect(got.skeleton.map((s) => s.id).sort()).toEqual(['a1', 'a2', 'a3', 'bi', 'db', 'etl', 'src'])
+    expect(got.skeleton.find((s) => s.id === 'a2')).toMatchObject({
+      start: { id: 'etl' },
+      end: { id: 'db' },
+      label: { text: 'upsert' },
+    })
+    expect(got.versions).toHaveLength(1)
+    expect(got.versions[0]).toMatchObject({
+      diagramId: diagram.id,
+      version: 1,
+      author: 'claude',
+      summary: 'primeira versão',
+    })
+
+    // patch: move o nó etl + renomeia o label da fonte.
+    const patched = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>('diagram_patch', {
+      id: diagram.id,
+      summary: 'move etl e renomeia fonte',
+      ops: [
+        { op: 'update', id: 'etl', x: 520, y: 340 },
+        { op: 'update', id: 'src', label: { text: 'Fonte externa' } },
+      ],
+    })
+    expect(patched.diagram.version).toBe(2)
+    expect(patched.skeleton.find((s) => s.id === 'etl')).toMatchObject({ x: 520, y: 340 })
+    expect(patched.skeleton.find((s) => s.id === 'src')?.label).toEqual({ text: 'Fonte externa' })
+    // Setas continuam vinculadas após o move.
+    expect(patched.skeleton.find((s) => s.id === 'a1')).toMatchObject({
+      start: { id: 'src' },
+      end: { id: 'etl' },
+    })
+
+    // get (full): a cena persistida tem os campos que o restoreElements espera.
+    const full = call<{ diagram: DiagramMetaOut & { scene: { elements: unknown[] } } }>(
+      'diagram_get',
+      { id: diagram.id, format: 'full' },
+    )
+    const elements = full.diagram.scene.elements as Array<Record<string, unknown>>
+    expect(elements.length).toBeGreaterThanOrEqual(7)
+    const BASE_FIELDS = [
+      'id', 'type', 'x', 'y', 'width', 'height', 'angle', 'strokeColor', 'backgroundColor',
+      'fillStyle', 'strokeWidth', 'strokeStyle', 'roughness', 'opacity', 'groupIds', 'frameId',
+      'roundness', 'seed', 'version', 'versionNonce', 'index', 'isDeleted', 'boundElements',
+      'updated', 'link', 'locked',
+    ]
+    for (const el of elements) {
+      for (const field of BASE_FIELDS) expect(el).toHaveProperty(field)
+      if (el.type === 'text') {
+        for (const field of [
+          'fontSize', 'fontFamily', 'text', 'textAlign', 'verticalAlign',
+          'containerId', 'originalText', 'autoResize', 'lineHeight',
+        ]) expect(el).toHaveProperty(field)
+      }
+      if (el.type === 'arrow') {
+        for (const field of [
+          'points', 'lastCommittedPoint', 'startBinding', 'endBinding',
+          'startArrowhead', 'endArrowhead', 'elbowed',
+        ]) expect(el).toHaveProperty(field)
+      }
+    }
+    const etl = elements.find((el) => el.id === 'etl')!
+    expect(etl).toMatchObject({ x: 520, y: 340 })
+    // Label bound acompanha o container movido.
+    const etlLabel = elements.find((el) => el.id === 'etl__label') as Record<string, unknown>
+    expect(etlLabel.containerId).toBe('etl')
+
+    // archive → delete (two-step) apaga diagrama, versões e links.
+    const archived = call<{ id: string; status: string }>('diagram_archive', { id: diagram.id })
+    expect(archived.status).toBe('archived')
+    const deleted = call<{ id: string; deleted: boolean }>('diagram_delete', {
+      id: diagram.id,
+      confirm: true,
+    })
+    expect(deleted).toEqual({ id: diagram.id, deleted: true })
+    const db = getDb()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 0 })
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM diagram_versions WHERE diagram_id = ?').get(diagram.id),
+    ).toEqual({ n: 0 })
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM diagram_links WHERE diagram_id = ?').get(diagram.id),
+    ).toEqual({ n: 0 })
+  })
 })
