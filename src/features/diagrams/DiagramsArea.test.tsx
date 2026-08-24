@@ -42,6 +42,7 @@ vi.mock("@/lib/nav", () => ({
   navigateToFeature: vi.fn(),
   navigateToTask: vi.fn(),
   navigateToProject: vi.fn(),
+  navigateToDiagram: vi.fn(),
 }));
 
 const { DiagramsArea } = await import("./DiagramsArea");

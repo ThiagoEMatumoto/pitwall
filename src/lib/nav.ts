@@ -1,4 +1,5 @@
 import { useAppStore } from "@/store/appStore";
+import { useDiagramsStore } from "@/store/diagramsStore";
 import { useFeaturesStore } from "@/store/featuresStore";
 import { useObjectivesStore } from "@/store/objectivesStore";
 import { useTasksStore } from "@/store/tasksStore";
@@ -29,4 +30,11 @@ export function navigateToTask(id: string): void {
 export function navigateToProject(id: string): void {
   useAppStore.getState().setActiveProject(id);
   useAppStore.getState().setArea("projects");
+}
+
+// Import circular com diagramsStore (o toast "Claude atualizou" navega pra
+// cá): inofensivo — ambos os lados só usam o outro dentro de função.
+export function navigateToDiagram(id: string): void {
+  void useDiagramsStore.getState().select(id);
+  useAppStore.getState().setArea("diagrams");
 }
