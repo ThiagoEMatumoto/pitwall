@@ -20,7 +20,10 @@ const SAVE_DEBOUNCE_MS = 800;
 // Identidade barata da cena: id+version de cada elemento. É o que decide se um
 // onChange é edição real (Excalidraw bumpa version a cada mutação) e se um
 // broadcast é eco do nosso próprio save.
-function fingerprint(elements: readonly unknown[]): string {
+// Fingerprint BARATO por versão de elemento: detecta "algo mudou" no
+// onChange sem serializar a cena. NÃO é estável entre canvas e banco
+// (restoreElements reseta version) — nunca usar pra comparar os dois lados.
+function versionFingerprint(elements: readonly unknown[]): string {
   return elements
     .map((e) => {
       const el = e as { id?: string; version?: number };
@@ -29,11 +32,29 @@ function fingerprint(elements: readonly unknown[]): string {
     .join("|");
 }
 
-function cssVar(name: string, fallback: string): string {
-  const v = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  return v || fallback;
+// Campos voláteis que restoreElements/interações regeneram sem mudança real.
+const VOLATILE_FIELDS = new Set([
+  "version",
+  "versionNonce",
+  "updated",
+  "seed",
+  "index",
+]);
+
+// Fingerprint de CONTEÚDO: estável entre a cena do canvas e a cena crua do
+// banco (pós-restore). É o que decide "precisa salvar?" e "o broadcast traz
+// algo novo?".
+function fingerprint(elements: readonly unknown[]): string {
+  return elements
+    .filter((e) => !(e as { isDeleted?: boolean }).isDeleted)
+    .map((e) => {
+      const el = e as Record<string, unknown>;
+      const keys = Object.keys(el)
+        .filter((k) => !VOLATILE_FIELDS.has(k))
+        .sort();
+      return JSON.stringify(keys.map((k) => [k, el[k]]));
+    })
+    .join("|");
 }
 
 interface Props {
@@ -56,6 +77,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
   const dirtySinceSnapshotRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingElementsRef = useRef<readonly unknown[] | null>(null);
+  const lastElementsRef = useRef<readonly unknown[] | null>(null);
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   apiRef.current = excalidrawAPI;
 
@@ -89,10 +111,11 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
+      // NUNCA usar getSceneElements() aqui: no flush do unmount o Excalidraw
+      // já desmontou e retorna [] — persistir isso apagaria a cena inteira.
+      // lastElementsRef guarda o último onChange e sobrevive ao teardown.
       const elements =
-        pendingElementsRef.current ??
-        apiRef.current?.getSceneElements() ??
-        null;
+        pendingElementsRef.current ?? lastElementsRef.current ?? null;
       if (!elements) return;
       const fp = fingerprint(elements);
       const headStale = fp !== savedFpRef.current;
@@ -117,7 +140,13 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
   const flushRef = useRef(flush);
   flushRef.current = flush;
 
+  const lastVersionFpRef = useRef("");
   const handleChange = useCallback((elements: readonly unknown[]) => {
+    lastElementsRef.current = elements;
+    // Pré-filtro barato: seleção/zoom não bumpam version de elemento.
+    const vfp = versionFingerprint(elements);
+    if (vfp === lastVersionFpRef.current) return;
+    lastVersionFpRef.current = vfp;
     const fp = fingerprint(elements);
     if (fp === savedFpRef.current) return;
     dirtySinceSnapshotRef.current = true;
@@ -141,15 +170,25 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
 
   const applyRemote = useCallback(async (remote: RemoteScene) => {
     const api = apiRef.current;
-    if (!api) return;
+    if (!api) return false;
     const utils = await loadExcalidrawUtils();
     const restored = utils.restoreElements(
       remote.scene.elements as Parameters<typeof utils.restoreElements>[0],
       null,
     );
+    // Compara APÓS o restore: o fingerprint dos elementos crus do banco
+    // difere dos restaurados (restoreElements normaliza campos), então um
+    // echo de rename/thumbnail chegaria aqui como "mudança" e causaria
+    // updateScene + zoom desnecessários.
+    const restoredFp = fingerprint(restored);
+    const currentFp = fingerprint(api.getSceneElements());
+    if (restoredFp === currentFp) {
+      savedFpRef.current = restoredFp;
+      return false;
+    }
     // Marca como "persistido" ANTES do updateScene: o onChange disparado pela
     // aplicação não deve reagendar save (seria eco local do estado remoto).
-    savedFpRef.current = fingerprint(restored);
+    savedFpRef.current = restoredFp;
     dirtySinceSnapshotRef.current = false;
     pendingElementsRef.current = null;
     if (timerRef.current) {
@@ -161,8 +200,39 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       captureUpdate: utils.CaptureUpdateAction.NEVER,
     });
     // Elementos novos podem ter entrado fora do viewport (ex.: patch do
-    // Claude adicionando um nó) — re-enquadra sem animação brusca.
-    api.scrollToContent(undefined, { fitToViewport: true });
+    // Claude adicionando um nó) — re-enquadra sem animação brusca. Nunca
+    // além de 100%: fitToViewport em cena pequena daria zoom gigante.
+    if (restored.length > 0) {
+      // Enquadramento manual síncrono (scrollToContent+fitToViewport aplica
+      // num frame posterior e pode passar de 100% em cenas pequenas).
+      const st = api.getAppState();
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const e of restored as Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }>) {
+        minX = Math.min(minX, e.x);
+        minY = Math.min(minY, e.y);
+        maxX = Math.max(maxX, e.x + e.width);
+        maxY = Math.max(maxY, e.y + e.height);
+      }
+      const bw = Math.max(1, maxX - minX);
+      const bh = Math.max(1, maxY - minY);
+      const zoom = Math.min(1, 0.85 * Math.min(st.width / bw, st.height / bh));
+      api.updateScene({
+        appState: {
+          scrollX: st.width / (2 * zoom) - (minX + bw / 2),
+          scrollY: st.height / (2 * zoom) - (minY + bh / 2),
+          zoom: { value: zoom as unknown as never },
+        },
+      });
+    }
+    return true;
   }, []);
 
   // Broadcast de cena nova (remoteScene do store).
@@ -183,8 +253,8 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       setConflict(remoteScene);
       return;
     }
-    void applyRemote(remoteScene).then(() => {
-      showToast({ title: "Atualizado pelo Claude", durationMs: 3500 });
+    void applyRemote(remoteScene).then((applied) => {
+      if (applied) showToast({ title: "Atualizado pelo Claude", durationMs: 3500 });
     });
   }, [remoteScene, applyRemote]);
 
