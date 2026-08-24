@@ -2,6 +2,12 @@ import { lstatSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseDotenv } from '../../../shared/dotenv-parse'
+import type {
+  ApplyImportResult,
+  EnvSourceRef,
+  ImportCandidate,
+  ImportSelection,
+} from '../../../shared/types/ipc'
 import { SERVICE_REGISTRY, type ServiceId } from '../../../shared/service-registry'
 import { readCustomEnv, setCustomEnvVar, type CustomEnvVars } from './custom-env'
 import { SECRET_MASK } from './secret-store'
@@ -11,6 +17,8 @@ import { SECRET_MASK } from './secret-store'
 // (custom-env). O VALOR nunca sai deste módulo em direção ao renderer: o scan
 // devolve só um fingerprint (máscara + últimos 4 chars + tamanho) e o apply
 // RELÊ o arquivo escolhido na hora de gravar via setCustomEnvVar.
+
+export type { ApplyImportResult, EnvSourceRef, ImportCandidate, ImportSelection }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.worktrees', '.claude'])
 const MAX_DEPTH = 5
@@ -80,21 +88,6 @@ export function secretFingerprint(value: string): string {
   return `${SECRET_MASK}${value.slice(-4)} (${value.length})`
 }
 
-export interface EnvSourceRef {
-  path: string
-  fingerprint: string
-}
-
-export interface ImportCandidate {
-  key: string
-  canonical?: string
-  serviceId?: ServiceId
-  sources: EnvSourceRef[]
-  // 'same' = cofre já tem exatamente este valor; 'conflict' = fontes divergem
-  // entre si ou do cofre.
-  status: 'new' | 'same' | 'conflict'
-}
-
 function registryMatch(key: string): { serviceId: ServiceId; canonical: string } | undefined {
   for (const service of SERVICE_REGISTRY) {
     for (const varDef of service.vars) {
@@ -156,19 +149,6 @@ export function scanEnvSources(deps: Partial<EnvImportDeps> = {}): ImportCandida
         ),
       }
     })
-}
-
-export interface ImportSelection {
-  key: string
-  sourcePath: string
-}
-
-export interface ApplyImportResult {
-  applied: string[]
-  // Chaves que não existiam (mais) no arquivo escolhido no momento do apply.
-  missing: string[]
-  // Chaves gravadas em claro (cofre indisponível) — a UI avisa.
-  plaintext: string[]
 }
 
 export function applyImport(

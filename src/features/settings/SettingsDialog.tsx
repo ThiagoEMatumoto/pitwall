@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings, Palette, Keyboard, Bell, Info, RefreshCw, Variable, MessageSquare, Mic } from 'lucide-react'
+import { Settings, Palette, Keyboard, Bell, Info, RefreshCw, Variable, MessageSquare, Mic, Plug } from 'lucide-react'
 import { AboutTab } from './AboutTab'
 import { SyncTab } from './SyncTab'
 import { EnvVarsTab } from './EnvVarsTab'
+import { IntegrationsTab } from './IntegrationsTab'
 import { VoiceTab } from './VoiceTab'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
@@ -37,6 +38,7 @@ type TabId =
   | 'appearance'
   | 'shortcuts'
   | 'notifications'
+  | 'integrations'
   | 'env'
   | 'sync'
   | 'about'
@@ -48,6 +50,7 @@ const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: 'appearance', label: 'Aparência', icon: Palette },
   { id: 'shortcuts', label: 'Atalhos', icon: Keyboard },
   { id: 'notifications', label: 'Notificações', icon: Bell },
+  { id: 'integrations', label: 'Integrações', icon: Plug },
   { id: 'env', label: 'Variáveis de ambiente', icon: Variable },
   { id: 'sync', label: 'Sincronização', icon: RefreshCw },
   { id: 'about', label: 'Sobre', icon: Info },
@@ -94,6 +97,7 @@ export function SettingsDialog({ open, onClose }: Props) {
           {tab === 'appearance' && <AppearanceTab open={open} />}
           {tab === 'shortcuts' && <ShortcutsTab />}
           {tab === 'notifications' && <NotificationsTab open={open} />}
+          {tab === 'integrations' && <IntegrationsTab open={open} />}
           {tab === 'env' && <EnvVarsTab open={open} />}
           {tab === 'sync' && <SyncTab open={open} />}
           {tab === 'about' && <AboutTab open={open} />}

@@ -5,6 +5,7 @@
 // consumidores sigam importando tudo de '@shared/types/ipc'.
 export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
+import type { ServiceId } from '../service-registry'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -2425,6 +2426,37 @@ export interface CustomEnvEntry {
   unreadable: boolean
 }
 
+// Importador de .env: o renderer só vê fingerprint (máscara + últimos 4 chars +
+// tamanho) e o path de origem — o valor fica no main e é relido do arquivo no
+// momento do apply.
+
+export interface EnvSourceRef {
+  path: string
+  fingerprint: string
+}
+
+export interface ImportCandidate {
+  key: string
+  canonical?: string
+  serviceId?: ServiceId
+  sources: EnvSourceRef[]
+  /** 'same' = cofre já tem este valor; 'conflict' = fontes divergem entre si ou do cofre. */
+  status: 'new' | 'same' | 'conflict'
+}
+
+export interface ImportSelection {
+  key: string
+  sourcePath: string
+}
+
+export interface ApplyImportResult {
+  applied: string[]
+  /** Chaves que não existiam (mais) no arquivo escolhido no momento do apply. */
+  missing: string[]
+  /** Chaves gravadas em claro (cofre indisponível) — a UI avisa. */
+  plaintext: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Diagrams (canvas Excalidraw)
 // ---------------------------------------------------------------------------
@@ -2696,6 +2728,10 @@ export interface Api {
     set(key: string, value: string): Promise<SecretsStatus>
     remove(key: string): Promise<SecretsStatus>
     rename(from: string, to: string): Promise<SecretsStatus>
+    /** Varre .env de ~/projetos e compara com o cofre. Só fingerprints, nunca valores. */
+    importScan(): Promise<ImportCandidate[]>
+    /** Grava as seleções; o main relê o valor do arquivo escolhido (segredo não trafega). */
+    importApply(selections: ImportSelection[]): Promise<ApplyImportResult>
   }
   vault: {
     getRoot(): Promise<string>

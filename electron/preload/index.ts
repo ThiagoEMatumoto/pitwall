@@ -81,6 +81,7 @@ import type {
   McpAddInput,
   McpRemoveInput,
   VoiceSummaryEvent,
+  ImportSelection,
 } from '../../shared/types/ipc'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -189,6 +190,9 @@ const api: Api = {
     set: (key: string, value: string) => invoke('secrets:env:set', { key, value }),
     remove: (key: string) => invoke('secrets:env:delete', { key }),
     rename: (from: string, to: string) => invoke('secrets:env:rename', { from, to }),
+    importScan: () => invoke('secrets:import:scan'),
+    importApply: (selections: ImportSelection[]) =>
+      invoke('secrets:import:apply', { selections }),
   },
   vault: {
     getRoot: () => invoke('vault:get-root'),
