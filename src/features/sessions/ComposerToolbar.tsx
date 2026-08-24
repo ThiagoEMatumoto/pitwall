@@ -2,18 +2,15 @@ import { useEffect, useState } from 'react'
 import { Clock, Loader, OctagonX } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button } from '@/features/brand'
-import {
-  interruptEnabled,
-  interruptLabel,
-  interruptState,
-  interruptTitle,
-} from './interrupt-state'
+import { interruptEnabled, interruptLabel, interruptState, interruptTitle } from './interrupt-state'
 import type { PermissionMode, SessionActivity } from '../../../shared/types/ipc'
 import { ModelPill, type EffortLevel, type ModelAlias } from './ModelPill'
 import { EffortPill } from './EffortPill'
 import { PermissionPill } from './PermissionPill'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
+import { MicButton } from './voice/MicButton'
+import { VoiceModeToggle } from './voice/VoiceModeToggle'
 
 interface Props {
   activity: SessionActivity | null
@@ -37,6 +34,8 @@ interface Props {
   onSelectPermission?: (mode: PermissionMode) => void
   /** Interrompe o claude (envia Ctrl+C ao PTY). Ausente = sem o botão. */
   onInterrupt?: () => void
+  /** Recebe o texto ditado/transcrito (MicButton). Ausente = sem o botão de voz. */
+  onVoiceText?: (text: string) => void
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -64,6 +63,7 @@ export function ComposerToolbar({
   onCyclePermission,
   onSelectPermission,
   onInterrupt,
+  onVoiceText,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -121,10 +121,16 @@ export function ComposerToolbar({
           title={interruptTitle(interrupt)}
           className="gap-1 px-2 py-0.5 text-[10px]"
         >
-          <Icon as={interrupt === 'sent' ? Loader : OctagonX} size={11} className={interrupt === 'sent' ? 'animate-spin' : ''} />
+          <Icon
+            as={interrupt === 'sent' ? Loader : OctagonX}
+            size={11}
+            className={interrupt === 'sent' ? 'animate-spin' : ''}
+          />
           <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>
         </Button>
       )}
+      {onVoiceText && <MicButton onText={onVoiceText} compact={compact} />}
+      {onVoiceText && <VoiceModeToggle compact={compact} />}
       {hasPending &&
         (canSwitch ? (
           // Sessão ficou ociosa com troca pendente: a injeção dispara agora —

@@ -50,10 +50,17 @@ export interface LaunchResult {
   userDataCopy: string
 }
 
+export interface LaunchOptions {
+  // Switches extras do Chromium (ex.: --use-fake-device-for-media-stream).
+  extraArgs?: string[]
+  // Variáveis a mais no ambiente do main (sobrepõem o process.env herdado).
+  env?: Record<string, string>
+}
+
 // Lança o app BUILDADO (out/main/index.js) contra uma CÓPIA do userData real.
 // --user-data-dir redireciona o SQLite e todo o app.getPath('userData') pra cópia,
 // então nada que eu fizer toca os dados reais.
-export async function launchApp(): Promise<LaunchResult> {
+export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResult> {
   if (!existsSync(MAIN_ENTRY)) {
     throw new Error(
       `Build não encontrado em ${MAIN_ENTRY}.\nRode antes: npm run rebuild:native && npm run build`,
@@ -103,8 +110,12 @@ export async function launchApp(): Promise<LaunchResult> {
   // staging). Nunca ligar por padrão.
   const keepSecrets = process.env.CM_KEEP_SECRETS === '1'
   const app = await electron.launch({
-    args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`],
-    env: { ...process.env, CM_SCRUB_SECRETS: keepSecrets ? '0' : '1' } as Record<string, string>,
+    args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
+    env: {
+      ...process.env,
+      CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
+      ...(options.env ?? {}),
+    } as Record<string, string>,
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')

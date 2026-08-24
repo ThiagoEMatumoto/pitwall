@@ -79,6 +79,7 @@ import type {
   ChatTranscriptUpdate,
   McpAddInput,
   McpRemoveInput,
+  VoiceSummaryEvent,
 } from '../../shared/types/ipc'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -172,6 +173,13 @@ const api: Api = {
   prefs: {
     get: <T>(key: string) => invoke<T | null>('prefs:get', { key }),
     set: (key: string, value: unknown) => invoke('prefs:set', { key, value }),
+  },
+  voice: {
+    transcribe: (bytes: Uint8Array, mime: string) => invoke('voice:transcribe', { bytes, mime }),
+    condense: (text: string) => invoke('voice:condense', { text }),
+    configStatus: () => invoke('voice:config-status'),
+    tts: (text: string) => invoke('voice:tts', { text }),
+    onSummary: (handler) => subscribe<VoiceSummaryEvent>('voice:summary', handler),
   },
   secrets: {
     status: () => invoke('secrets:env:status'),

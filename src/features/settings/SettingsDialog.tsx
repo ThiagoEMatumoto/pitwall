@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings, Palette, Keyboard, Bell, Info, RefreshCw, Variable, MessageSquare } from 'lucide-react'
+import { Settings, Palette, Keyboard, Bell, Info, RefreshCw, Variable, MessageSquare, Mic } from 'lucide-react'
 import { AboutTab } from './AboutTab'
 import { SyncTab } from './SyncTab'
 import { EnvVarsTab } from './EnvVarsTab'
+import { VoiceTab } from './VoiceTab'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { ColorSelect } from '@/components/ui/ColorSelect'
@@ -32,6 +33,7 @@ interface Props {
 type TabId =
   | 'general'
   | 'session'
+  | 'voice'
   | 'appearance'
   | 'shortcuts'
   | 'notifications'
@@ -42,6 +44,7 @@ type TabId =
 const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: 'general', label: 'Geral', icon: Settings },
   { id: 'session', label: 'Sessão/Chat', icon: MessageSquare },
+  { id: 'voice', label: 'Voz', icon: Mic },
   { id: 'appearance', label: 'Aparência', icon: Palette },
   { id: 'shortcuts', label: 'Atalhos', icon: Keyboard },
   { id: 'notifications', label: 'Notificações', icon: Bell },
@@ -87,6 +90,7 @@ export function SettingsDialog({ open, onClose }: Props) {
         <div className="min-w-0 flex-1">
           {tab === 'general' && <GeneralTab open={open} />}
           {tab === 'session' && <SessionTab open={open} />}
+          {tab === 'voice' && <VoiceTab open={open} />}
           {tab === 'appearance' && <AppearanceTab open={open} />}
           {tab === 'shortcuts' && <ShortcutsTab />}
           {tab === 'notifications' && <NotificationsTab open={open} />}

@@ -30,6 +30,27 @@ import { readSubagentMetas } from './subagent-turns'
 export { PROJECTS_ROOT, findTranscriptPath }
 
 const SESSIONS_ROOT = join(homedir(), '.claude', 'sessions')
+
+// Borda working → waiting/idle de uma sessão viva (fim de turno). Hook injetável
+// (padrão setSyncMutationHook do notify.ts) pra não importar voice-summary daqui —
+// evitaria ciclo via chat-transcript-service, que importa este módulo. Default
+// no-op até o boot registrar o consumidor real.
+type TurnEndedHook = (ccSessionId: string) => void
+let turnEndedHook: TurnEndedHook = () => {}
+
+export function setTurnEndedHook(fn: TurnEndedHook): void {
+  turnEndedHook = fn
+}
+
+// Sessão que sumiu do índice (PID morreu / arquivo removido) — sinal de
+// limpeza pra quem guarda estado por ccSessionId (ex.: dedupe do resumo por
+// voz). Mesmo padrão injetável do turnEndedHook.
+type SessionGoneHook = (ccSessionId: string) => void
+let sessionGoneHook: SessionGoneHook = () => {}
+
+export function setSessionGoneHook(fn: SessionGoneHook): void {
+  sessionGoneHook = fn
+}
 const TAIL_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
 export const MAX_TEXT = 200
@@ -107,7 +128,6 @@ export function mapStatus(cc: CcSessionFile['status']): SessionActivity['status'
       return 'starting'
   }
 }
-
 
 // Lê só os últimos TAIL_BYTES do arquivo: durante uma sessão longa o JSONL chega a
 // milhares de linhas e reparsear tudo a cada mudança seria custoso. A primeira linha
@@ -350,6 +370,12 @@ class SessionActivityService extends EventEmitter {
     void this.emitFor(ccSessionId)
   }
 
+  // Sessão com pane aberto no app (o renderer faz watch ao abrir e unwatch ao
+  // fechar) — é o registro mais direto do que o Pitwall exibe/gerencia.
+  isWatched(ccSessionId: string): boolean {
+    return this.watched.has(ccSessionId)
+  }
+
   unwatch(ccSessionId: string): void {
     const entry = this.watched.get(ccSessionId)
     if (entry) {
@@ -498,6 +524,12 @@ class SessionActivityService extends EventEmitter {
       const current = this.effectiveStatus(entry)
       const prev = this.lastEffectiveStatus.get(sessionId)
       if (prev === 'working' && current !== 'working') consumed = true
+      // Fim de turno com a sessão ainda viva (working → waiting/idle): borda que
+      // o resumo por voz consome. 'ended' fica de fora — sessão encerrada não
+      // tem quem ouça o resumo.
+      if (prev === 'working' && (current === 'waiting' || current === 'idle')) {
+        turnEndedHook(sessionId)
+      }
       // "Sessão aguardando" é a borda working→waiting especificamente (não
       // qualquer não-busy). Só notifica com o app fora de foco, pra não spammar
       // quem está olhando o terminal.
@@ -511,6 +543,7 @@ class SessionActivityService extends EventEmitter {
       if (this.index.has(sessionId)) continue
       if (prev === 'working') consumed = true
       this.lastEffectiveStatus.delete(sessionId)
+      sessionGoneHook(sessionId)
     }
     if (consumed) notifyUsageConsumption()
   }

@@ -2531,6 +2531,45 @@ export interface UpdateDiagramSceneInput {
   snapshot: boolean
 }
 
+// Resultado da transcrição de um ditado. Erros já vêm em PT, prontos pra tela
+// (porte das mensagens de vozapp/stt.py).
+export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
+
+// Resultado da condensação de um ditado longo. Falha é fail-open: o texto volta
+// intacto com condensed=false — o ditado nunca se perde.
+export interface VoiceCondenseResult {
+  text: string
+  condensed: boolean
+}
+
+// Status da config de voz (~/.config/voz/voz.env) — alimenta a seção "Voz" das
+// configurações. Nunca carrega credencial, só campos seguros de mostrar.
+export type VoiceConfigStatus =
+  | {
+      ok: true
+      path: string
+      sttUrl: string
+      sttModel: string
+      sttLanguage: string
+      ttsVoice: string
+      ttsModel: string
+      ttsSpeed: number
+    }
+  | { ok: false; path: string; error: string }
+
+// Resultado da síntese de fala (ElevenLabs). bytes é o mp3 inteiro — o renderer
+// toca via Blob/objectURL. Erros já vêm em PT (porte de vozapp/tts.py).
+export type VoiceTtsResult =
+  | { ok: true; bytes: Uint8Array; mime: string }
+  | { ok: false; error: string }
+
+// Resumo de fim de turno (modo voz): emitido pelo main em voice:summary quando
+// um turno termina em texto de assistant e a pref voice.mode está ligada.
+export interface VoiceSummaryEvent {
+  ccSessionId: string
+  summary: string
+}
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2609,6 +2648,18 @@ export interface Api {
     /** Rejeita chaves de segredo (custom_env_vars) — essas vão por `secrets`. */
     get<T>(key: string): Promise<T | null>
     set(key: string, value: unknown): Promise<void>
+  }
+  voice: {
+    /** Transcreve áudio gravado no renderer (webm/opus ou wav) via proxy STT. */
+    transcribe(bytes: Uint8Array, mime: string): Promise<VoiceTranscribeResult>
+    /** Condensa ditado longo num prompt limpo via claude -p (fail-open). */
+    condense(text: string): Promise<VoiceCondenseResult>
+    /** Status da config voz.env — nunca inclui credenciais. */
+    configStatus(): Promise<VoiceConfigStatus>
+    /** Sintetiza fala (mp3) do texto via ElevenLabs — bytes prontos pra tocar. */
+    tts(text: string): Promise<VoiceTtsResult>
+    /** Resumo automático do turno que acabou (2-3 frases, PT) — modo voz. */
+    onSummary(handler: (event: VoiceSummaryEvent) => void): () => void
   }
   secrets: {
     /** Estado da cifragem em repouso — alimenta o aviso da tela de configurações. */

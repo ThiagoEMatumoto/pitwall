@@ -20,6 +20,7 @@ import { BatonDialog } from './BatonDialog'
 import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
 import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
 import { AgentHud } from './AgentHud'
+import { SummaryChip } from './voice/SummaryChip'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
 import { playKeys } from './chat/respond-keys'
 import { buildPromptBytes } from './chat/prompt-bytes'
@@ -1182,6 +1183,10 @@ export function Terminal({
           terminal e o composer — visível nos dois modos (terminal e chat). */}
       {!exited && <AgentHud activity={activity} now={now} />}
 
+      {/* Resumo falado do último turno (modo voz) — faixa acima do composer,
+          fora do fluxo de mensagens do chat (transcript é read-only). */}
+      {!exited && <SummaryChip ccSessionId={ccSessionId} />}
+
       {!exited && (
         <Composer
           sessionId={session.id}
@@ -1212,6 +1217,9 @@ export function Terminal({
               onSelectPermission={selectPermission}
               // Ctrl+C interrompe o claude (descoberta da ação que antes era só teclado).
               onInterrupt={() => write('\x03')}
+              // Ditado por voz: o texto transcrito entra no prompt via onInsert
+              // existente — o usuário revisa e envia (nunca envio direto).
+              onVoiceText={insertPrompt}
             />
           }
         />
