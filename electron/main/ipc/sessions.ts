@@ -40,6 +40,7 @@ import {
   resolveModel,
   resolveEffort,
   resolveAdvisor,
+  permissionModeForHandoffMode,
   HANDOFF_CHILD_SETTINGS_JSON,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
@@ -56,6 +57,8 @@ import type {
   SessionSummary,
   LiveSessionInfo,
   ChatTranscript,
+  Handoff,
+  HandoffStatus,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -262,6 +265,11 @@ function buildFeatureContextOrNull(featureId: string): string | null {
 export function buildSpawnInnerCmd(parts: {
   claudeCmd: string
   sessionId: string
+  // true = o sessionId acima é o cc_session_id de uma sessão EXISTENTE e o
+  // comando abre com `--resume <id>` em vez de `--session-id <id>`. Existe para
+  // o relance da filha reusar esta montagem — sem isto o resume montaria as
+  // flags à mão e voltaria a esquecer permission-mode/denylist.
+  resume?: boolean
   name: string
   mcpConfigArg: string
   model: string | null
@@ -275,7 +283,8 @@ export function buildSpawnInnerCmd(parts: {
   settingsJson?: string | null
   initialPrompt?: string | null
 }): string {
-  let innerCmd = `${parts.claudeCmd} --session-id ${parts.sessionId} -n ${shquote(parts.name)}${parts.mcpConfigArg}`
+  const idFlag = parts.resume ? '--resume' : '--session-id'
+  let innerCmd = `${parts.claudeCmd} ${idFlag} ${parts.sessionId} -n ${shquote(parts.name)}${parts.mcpConfigArg}`
   if (parts.model) {
     innerCmd += ` --model ${shquote(parts.model)}`
   }
@@ -533,6 +542,182 @@ export function spawnSession(input: SpawnSessionInput): Session {
   return session
 }
 
+// Status TERMINAIS do handoff: o trabalho acabou (bem ou mal) e não há filha a
+// retomar. Todo o resto ('pending' | 'approved' | 'running' | 'needs_input' |
+// 'interrupted') é recuperável — em especial running/needs_input ÓRFÃOS, que
+// continuam com esse status até o reconcileStuck passar. Por isso o guard do
+// resume é "não-terminal", não "== interrupted".
+export const TERMINAL_HANDOFF_STATUSES: ReadonlySet<HandoffStatus> = new Set<HandoffStatus>([
+  'done',
+  'rejected',
+  'failed',
+])
+
+export interface ResumeHandoffChildResult {
+  handoff: Handoff
+  session: Session
+  // true = a PTY da filha JÁ estava viva; nada foi spawnado e `session` é a
+  // sessão existente — ao chamador cabe só focá-la.
+  alreadyRunning: boolean
+}
+
+// Retoma a sessão-filha de um handoff: re-spawna via `claude --resume` (recupera
+// o histórico do transcript), preservando o ALIAS (-n, que é o endereço do peer)
+// e o --settings da filha (sem ele as mensagens da mãe voltam a ficar `held` em
+// silêncio), re-injeta o kickoff e re-aponta handoffs.child_session_id pro novo
+// sessions.id via markRunning.
+//
+// Vive aqui (não em services/) porque reusa os helpers de spawn deste módulo —
+// resolveClaudeCommand, mcpConfigArg, startSession, findTranscriptPath,
+// injectInitialCommandOnFirstData. Mover o helper pra fora arrastaria todos eles
+// (e o ciclo com mcp/server) sem ganho nenhum.
+export function resumeHandoffChild(
+  id: string,
+  // kickoff: 1º turno da filha retomada, injetado SÓ quando o chamador o fornece.
+  // Nada de default implícito: o relink do `sessions:resume` (usuário retomando
+  // pelo switcher uma sessão que um dia foi filha) não pode fazer a sessão começar
+  // a trabalhar sozinha. Quem pede trabalho passa o texto — o painel manda o
+  // defaultResumeKickoff, e a adoção manda o dela (quem foi adotada nunca viu
+  // briefing nenhum, e este é o único turno onde ela descobre o próprio apelido).
+  opts: { cols?: number; rows?: number; kickoff?: string } = {},
+): ResumeHandoffChildResult {
+  const db = getDb()
+  const handoff = handoffStore.get(id)
+  if (!handoff) throw new Error(`Handoff não encontrado: ${id}`)
+  if (TERMINAL_HANDOFF_STATUSES.has(handoff.status)) {
+    throw new Error(
+      `Só dá pra retomar um handoff não-terminal (status atual: ${handoff.status}).`,
+    )
+  }
+  if (!handoff.childSessionId) {
+    throw new Error('Handoff não tem sessão-filha registrada para retomar.')
+  }
+
+  // childSessionId é o sessions.id interno; o --resume precisa do cc_session_id
+  // (o session-id do Claude, gravado no spawn original). O title é o alias
+  // fixado no spawn — é o endereço do peer e tem que sobreviver ao resume.
+  const childRow = db
+    .prepare(
+      `SELECT id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at
+         FROM sessions WHERE id = ?`,
+    )
+    .get(handoff.childSessionId) as SessionRow | undefined
+
+  // Guard de filha VIVA: spawnar de novo criaria um 2º PTY sobre o MESMO
+  // transcript, e dois xterms atrelados à mesma PTY brigam pelo resize (o TUI
+  // fica ilegível pra ambos). Se a PTY já está no ar, não spawna — devolve a
+  // sessão existente pro chamador focar o pane que já existe.
+  if (childRow && ptyManager.isRunning(handoff.childSessionId)) {
+    return { handoff, session: toSession(childRow), alreadyRunning: true }
+  }
+
+  const ccSessionId = childRow?.cc_session_id
+  if (!ccSessionId || !UUID_RE.test(ccSessionId)) {
+    throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
+  }
+
+  // Gate de resumibilidade: o transcript JSONL precisa existir no disco.
+  const transcript = findTranscriptPath(ccSessionId)
+  if (!transcript) {
+    throw new Error('O transcript da sessão-filha não foi encontrado — não é possível retomá-la.')
+  }
+
+  const repoId = handoff.targetRepoId
+  const repo = db
+    .prepare('SELECT path, label FROM repos WHERE id = ?')
+    .get(repoId) as RepoPathRow | undefined
+  if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
+
+  // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
+  // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
+  const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
+  const claudeCmd = resolveClaudeCommand()
+  // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
+  const internalSessionId = randomUUID()
+
+  // Permissão NÃO pode se perder no relance: sem `--permission-mode`, uma filha
+  // que estava em `plan` (read-only) voltaria podendo editar, e uma autônoma
+  // voltaria sem o denylist destrutivo. Resolvido pelas MESMAS funções do
+  // spawnSession (whitelist + merge do DESTRUCTIVE_DENYLIST em modo autônomo).
+  const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
+  const disallowedTools = resolveDisallowedTools(permissionMode, null)
+
+  // --settings também no resume: a filha retomada precisa continuar aceitando
+  // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
+  const innerCmd = buildSpawnInnerCmd({
+    claudeCmd,
+    sessionId: ccSessionId,
+    resume: true,
+    name,
+    mcpConfigArg: mcpConfigArg(internalSessionId),
+    model: null,
+    systemPromptFilePath: null,
+    permissionMode,
+    disallowedTools,
+    settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
+  })
+
+  const session = startSession({
+    id: internalSessionId,
+    ccSessionId,
+    repoId,
+    cwd: repo.path,
+    innerCmd,
+    featureId: handoff.featureId,
+    initialCommand: opts.kickoff,
+    cols: opts.cols,
+    rows: opts.rows,
+  })
+
+  // O apelido é o ENDEREÇO do peer, e o relance cria uma LINHA NOVA em `sessions`
+  // (novo sessions.id). Sem re-carimbá-lo aqui a linha nasceria com title null e:
+  //   - o PRÓXIMO resume não acharia o apelido e cairia no título do transcript,
+  //     trocando o endereço da filha sozinho;
+  //   - activeSessionNames() (só olha `title` de sessões running) não veria o nome
+  //     como ocupado e o próximo handoff poderia dar o MESMO apelido a outra filha;
+  //   - o card do painel perderia o apelido.
+  // 'manual' é o mesmo carimbo do spawn: impede o rename automático do Claude Code
+  // de sobrescrever o endereço.
+  db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(
+    name,
+    session.id,
+  )
+  const namedSession: Session = { ...session, title: name, titleSource: 'manual' }
+
+  // Volta a running com a NOVA sessão-filha (startSession criou um novo
+  // sessions.id). markRunning loga a transição via logEvent — e é ele que
+  // RELINKA o handoff, sem o que a filha sumiria do painel.
+  const updated = handoffStore.markRunning(id, namedSession.id)
+  broadcast('handoff:updated', updated)
+  return { handoff: updated, session: namedSession, alreadyRunning: false }
+}
+
+// Kickoff do resume pelo PAINEL (Crew Dock): retomar a tarefa e reportar via MCP.
+// Explícito no chamador — ver o comentário de opts.kickoff em resumeHandoffChild.
+export function defaultResumeKickoff(id: string): string {
+  return `Retome a tarefa do handoff (handoffId="${id}") de onde parou. Ao terminar, chame a MCP tool handoff_report com handoffId="${id}".`
+}
+
+// O vínculo mãe→filha mora SÓ em handoffs.child_session_id. Dado o cc_session_id
+// que o usuário pediu pra retomar, descobre se ele é a filha de um handoff ainda
+// vinculado (não dispensado no Crew Dock) e recuperável. Consulta local (com
+// getDb) pra não alargar a superfície do handoff-store.
+function findRelinkableHandoff(ccSessionId: string): { id: string; status: HandoffStatus } | null {
+  const row = getDb()
+    .prepare(
+      `SELECT h.id AS id, h.status AS status
+         FROM handoffs h
+         JOIN sessions s ON s.id = h.child_session_id
+        WHERE s.cc_session_id = ? AND h.dismissed_at IS NULL
+        ORDER BY h.updated_at DESC
+        LIMIT 1`,
+    )
+    .get(ccSessionId) as { id: string; status: string } | undefined
+  if (!row) return null
+  if (TERMINAL_HANDOFF_STATUSES.has(row.status as HandoffStatus)) return null
+  return { id: row.id, status: row.status as HandoffStatus }
+}
+
 let listenersAttached = false
 
 export function registerSessionIpc(): void {
@@ -649,6 +834,23 @@ export function registerSessionIpc(): void {
       throw new Error(`invalid cc session id: ${input.ccSessionId}`)
     }
 
+    // RELINK: se este cc_session_id é a filha de um handoff ainda vinculado, o
+    // caminho genérico abaixo geraria um sessions.id novo que o handoff nunca
+    // conheceria — child_session_id apontaria pra um id morto, a filha sumiria
+    // do painel e voltaria SEM apelido e SEM --settings (parando de aceitar
+    // mensagem da mãe, em silêncio), embora seguisse reportando pra ela.
+    // Delegar ao resumeHandoffChild devolve alias + settings + permissões e faz o
+    // markRunning re-apontar o vínculo. Sem match, segue o caminho normal.
+    //
+    // SEM kickoff de propósito: aqui quem retomou foi o USUÁRIO, pelo switcher.
+    // Injetar o "retome a tarefa" faria a sessão começar a trabalhar sozinha sem
+    // ninguém pedir. O relink de IDENTIDADE (apelido, --settings, markRunning)
+    // acontece igual — o que não acontece é o disparo automático de trabalho.
+    const linked = findRelinkableHandoff(input.ccSessionId)
+    if (linked) {
+      return resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows }).session
+    }
+
     // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.
     const transcript = findTranscriptPath(input.ccSessionId)
     const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
@@ -687,82 +889,13 @@ export function registerSessionIpc(): void {
     return findTranscriptPath(ccSessionId) !== null
   })
 
-  // Retomar um handoff INTERROMPIDO: re-spawna a sessão-filha via `claude --resume`
-  // (recupera o histórico do transcript), re-injeta o kickoff e devolve o handoff
-  // a 'running'. Vive aqui (não em ipc/handoffs.ts) porque reusa os helpers de
-  // spawn deste módulo (resolveClaudeCommand, mcpConfigArg, startSession,
-  // findTranscriptPath, injectInitialCommandOnFirstData) — mesmo caminho do
-  // sessions:resume + kickoff do approve. Só age sobre status 'interrupted'.
-  ipcMain.handle('handoffs:resume', (_e, id: string) => {
-    const db = getDb()
-    const handoff = handoffStore.get(id)
-    if (!handoff) throw new Error(`Handoff não encontrado: ${id}`)
-    if (handoff.status !== 'interrupted') {
-      throw new Error(
-        `Só dá pra retomar um handoff interrompido (status atual: ${handoff.status}).`,
-      )
-    }
-    if (!handoff.childSessionId) {
-      throw new Error('Handoff interrompido não tem sessão-filha registrada para retomar.')
-    }
-
-    // childSessionId é o sessions.id interno; o --resume precisa do cc_session_id
-    // (o session-id do Claude, gravado no spawn original). O title é o alias
-    // fixado no spawn — é o endereço do peer e tem que sobreviver ao resume.
-    const childRow = db
-      .prepare('SELECT cc_session_id, title FROM sessions WHERE id = ?')
-      .get(handoff.childSessionId) as
-      | { cc_session_id: string | null; title: string | null }
-      | undefined
-    const ccSessionId = childRow?.cc_session_id
-    if (!ccSessionId || !UUID_RE.test(ccSessionId)) {
-      throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
-    }
-
-    // Gate de resumibilidade: o transcript JSONL precisa existir no disco.
-    const transcript = findTranscriptPath(ccSessionId)
-    if (!transcript) {
-      throw new Error(
-        'O transcript da sessão-filha não foi encontrado — não é possível retomá-la.',
-      )
-    }
-
-    const repoId = handoff.targetRepoId
-    const repo = db
-      .prepare('SELECT path, label FROM repos WHERE id = ?')
-      .get(repoId) as RepoPathRow | undefined
-    if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
-
-    // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
-    // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
-    const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
-    const claudeCmd = resolveClaudeCommand()
-    // --settings também no resume: a filha retomada precisa continuar aceitando
-    // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
-    // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
-    const internalSessionId = randomUUID()
-    const innerCmd = `${claudeCmd} --resume ${ccSessionId} -n ${shquote(name)}${mcpConfigArg(internalSessionId)} --settings ${shquote(HANDOFF_CHILD_SETTINGS_JSON)}`
-
-    // Mesma instrução de kickoff do approve: re-injetada após o resume subir, pra
-    // a filha retomar a tarefa e reportar via MCP ao terminar.
-    const kickoff = `Retome a tarefa do handoff (handoffId="${id}") de onde parou. Ao terminar, chame a MCP tool handoff_report com handoffId="${id}".`
-
-    const session = startSession({
-      id: internalSessionId,
-      ccSessionId,
-      repoId,
-      cwd: repo.path,
-      innerCmd,
-      featureId: handoff.featureId,
-      initialCommand: kickoff,
-    })
-
-    // Volta a running com a NOVA sessão-filha (startSession criou um novo
-    // sessions.id). markRunning loga a transição via logEvent.
-    const updated = handoffStore.markRunning(id, session.id)
-    broadcast('handoff:updated', updated)
-    return updated
-  })
+  // Retomar a sessão-filha de um handoff: wrapper fino sobre resumeHandoffChild
+  // (mesma função usada pelo relink do sessions:resume). Devolve o handoff
+  // atualizado, como antes.
+  ipcMain.handle(
+    'handoffs:resume',
+    (_e, id: string) => resumeHandoffChild(id, { kickoff: defaultResumeKickoff(id) }).handoff,
+  )
 
   ipcMain.handle('sessions:list-by-repo', (_e, repoId: string): SessionSummary[] => {
     const db = getDb()

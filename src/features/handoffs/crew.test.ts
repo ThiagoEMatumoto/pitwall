@@ -11,7 +11,7 @@ vi.stubGlobal('window', {
 
 const {
   splitAlias,
-  activeCrew,
+  dockCrew,
   hiddenCrewSessionIds,
   crewCcSessionIds,
   crewNeedsAttention,
@@ -90,22 +90,90 @@ describe('splitAlias', () => {
   })
 })
 
-describe('activeCrew', () => {
-  it('mantém pending/approved/running/needs_input e descarta os terminais', () => {
+describe('dockCrew', () => {
+  it('ativo normal entra', () => {
     const handoffs = [
       hf({ id: 'a', status: 'pending' }),
       hf({ id: 'b', status: 'approved' }),
       hf({ id: 'c', status: 'running' }),
       hf({ id: 'd', status: 'needs_input' }),
-      hf({ id: 'e', status: 'done' }),
-      hf({ id: 'f', status: 'failed' }),
-      hf({ id: 'g', status: 'rejected' }),
     ]
-    expect(activeCrew(handoffs).map((h) => h.id)).toEqual(['a', 'b', 'c', 'd'])
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['a', 'b', 'c', 'd'])
   })
 
-  it('lista vazia → vazia', () => {
-    expect(activeCrew([])).toEqual([])
+  // O caso que motivou o dockCrew: fechar a aba (ou reiniciar o app) faz o
+  // reconcileStuck carimbar 'interrupted', e a filha sumia do dock ainda dando
+  // pra retomar — o único lugar de onde ela voltaria.
+  it('interrompido + retomável CONTINUA no dock', () => {
+    const handoffs = [hf({ id: 'a', status: 'interrupted', resumable: true })]
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['a'])
+  })
+
+  it('interrompido sem transcript (não-retomável) sai — não há o que fazer com ele', () => {
+    const handoffs = [hf({ id: 'a', status: 'interrupted', resumable: false })]
+    expect(dockCrew(handoffs)).toEqual([])
+  })
+
+  it('dispensado sai, mesmo ativo (o carimbo manda sobre o status)', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'running', dismissedAt: 123 }),
+      hf({ id: 'b', status: 'needs_input', dismissedAt: 123 }),
+      hf({ id: 'c', status: 'interrupted', resumable: true, dismissedAt: 123 }),
+      hf({ id: 'd', status: 'running', dismissedAt: null }),
+    ]
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['d'])
+  })
+
+  it('terminais de verdade continuam fora', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'done' }),
+      hf({ id: 'b', status: 'failed' }),
+      hf({ id: 'c', status: 'rejected' }),
+    ]
+    expect(dockCrew(handoffs)).toEqual([])
+  })
+
+  // Soltar do painel (handoff-store.release) devolve a sessão à condição de sessão
+  // normal: dismissedAt carimbado + childSessionId zerado + status encerrado. O
+  // dock não a mostra — e, diferente da dispensada, ela também não fica escondida
+  // das superfícies normais (é o ponto da operação).
+  it('liberado (solto do painel) sai do dock e a sessão volta às superfícies normais', () => {
+    const handoffs = [
+      hf({ id: 'solta', status: 'interrupted', resumable: false, childSessionId: null, dismissedAt: 123 }),
+      hf({ id: 'viva', status: 'running', childSessionId: 's2' }),
+    ]
+    const sessions = [live({ id: 's1', ccSessionId: 'cc1' }), live({ id: 's2', ccSessionId: 'cc2' })]
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['viva'])
+    // s1 (a sessão que foi solta) reaparece na strip/switcher: sem vínculo, ela
+    // não é mais filha de ninguém.
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set(['s2']))
+  })
+
+  // A INVARIANTE: sair do dock (dismissedAt) OBRIGA a sessão a voltar pras
+  // superfícies normais — um handoff com filha viva não pode estar invisível em
+  // todas ao mesmo tempo. A pausada é o caso simétrico: continua no dock e nem
+  // tem PTY pra esconder de lugar nenhum.
+  it('a dispensada viva sai do dock E volta pra strip/switcher (nunca invisível nas duas)', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'running', childSessionId: 's1' }),
+      hf({ id: 'b', status: 'running', childSessionId: 's2', dismissedAt: 123 }),
+      hf({ id: 'c', status: 'interrupted', resumable: true, childSessionId: 's3' }),
+    ]
+    const sessions = [
+      live({ id: 's1', ccSessionId: 'cc1' }),
+      live({ id: 's2', ccSessionId: 'cc2' }),
+      live({ id: 's3', ccSessionId: 'cc3' }),
+    ]
+    // b some do escondido justamente porque some do dock; c nunca entrou
+    // (interrupted não é status ativo).
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set(['s1']))
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['a', 'c'])
+    // Nenhuma filha viva ficou fora das DUAS superfícies.
+    for (const h of handoffs) {
+      const noDock = !dockCrew(handoffs).some((d) => d.id === h.id)
+      const naStrip = !hiddenCrewSessionIds(handoffs, sessions, new Set()).has(h.childSessionId!)
+      expect(noDock && !naStrip).toBe(false)
+    }
   })
 })
 
@@ -255,6 +323,26 @@ describe('crewAttentionCount', () => {
     expect(crewAttentionCount([hf({ status: 'running', childSessionId: 's1' })], [])).toBe(0)
   })
 
+  // O badge tem que contar EXATAMENTE quem o dock lista: um handoff pedindo
+  // atenção fora do painel vira um "1!" que o usuário não consegue zerar clicando
+  // em nada — não existe card onde responder.
+  it('handoff dispensado não conta (badge e lista do dock concordam)', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'needs_input', childSessionId: 's1', dismissedAt: 123 }),
+      hf({ id: 'b', status: 'running', childSessionId: 's2', dismissedAt: 123 }),
+    ]
+    const sessions = [live({ id: 's1', status: 'working' }), live({ id: 's2', status: 'waiting' })]
+    expect(dockCrew(handoffs)).toEqual([])
+    expect(crewAttentionCount(handoffs, sessions)).toBe(0)
+  })
+
+  it('interrompida retomável entra na conta se pedir atenção (é o que o dock lista)', () => {
+    const handoffs = [hf({ id: 'a', status: 'interrupted', resumable: true, childSessionId: 's1' })]
+    // Sem PTY viva e sem needs_input, a pausada não pede nada — só confirma que
+    // iterar dockCrew não inventa atenção pra quem está parado.
+    expect(crewAttentionCount(handoffs, [])).toBe(0)
+  })
+
   it('filha que já retomou sai da conta (o badge não conta pergunta velha)', () => {
     const handoffs = [
       hf({ id: 'a', status: 'needs_input', childSessionId: 's1', questionAskedAt: 1, stepUpdatedAt: 2 }),
@@ -292,13 +380,25 @@ describe('orderCrew', () => {
     expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['a', 'b'])
   })
 
-  it('descarta handoffs terminais junto com o activeCrew', () => {
+  it('descarta handoffs terminais junto com o dockCrew', () => {
     const handoffs = [
       hf({ id: 'a', status: 'done', childSessionId: 's1' }),
       hf({ id: 'b', status: 'running', childSessionId: 's2' }),
     ]
     const sessions = [live({ id: 's2', status: 'working' })]
     expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b'])
+  })
+
+  // A pausada não espera nada (sem PTY, sem needs_input), então cai no grupo de
+  // baixo — quem pede atenção continua no topo.
+  it('a filha pausada entra na lista, depois de quem espera você', () => {
+    const handoffs = [
+      hf({ id: 'a', status: 'interrupted', resumable: true, childSessionId: 's1' }),
+      hf({ id: 'b', status: 'running', childSessionId: 's2' }),
+      hf({ id: 'c', status: 'needs_input', childSessionId: 's3' }),
+    ]
+    const sessions = [live({ id: 's2', status: 'working' }), live({ id: 's3', status: 'working' })]
+    expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['c', 'a', 'b'])
   })
 })
 

@@ -23,6 +23,8 @@ const seam = vi.hoisted(() => ({
   // Runtime do MCP server (null = server não subiu).
   runtime: null as { url: string; token: string } | null,
   transcriptPath: null as string | null,
+  // sessions.id com PTY viva (guard de filha viva do resumeHandoffChild).
+  liveSessionIds: [] as string[],
   handoff: null as Record<string, unknown> | null,
   childRow: null as { cc_session_id: string | null; title: string | null } | null,
 }))
@@ -59,7 +61,7 @@ vi.mock('../services/pty-manager', () => ({
     on: () => {},
     off: () => {},
     write: () => {},
-    isRunning: () => true,
+    isRunning: (sessionId: string) => seam.liveSessionIds.includes(sessionId),
     runningIds: () => [],
     spawn: (opts: { sessionId: string; args: string[] }) => {
       seam.spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
@@ -391,6 +393,7 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
     seam.removedSessionConfigs.length = 0
     seam.runtime = { url: 'http://127.0.0.1:41956/mcp', token: 'tok' }
     seam.transcriptPath = '/tmp/transcript.jsonl'
+    seam.liveSessionIds.length = 0
     seam.childRow = { cc_session_id: CC_SESSION_ID, title: 'mauricio-tarefa' }
     seam.handoff = {
       id: 'h1',

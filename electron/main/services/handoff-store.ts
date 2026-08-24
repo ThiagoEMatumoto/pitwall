@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
+import { findTranscriptPath } from './transcript-path'
 import type {
   CreateHandoffInput,
   Handoff,
@@ -32,6 +33,8 @@ interface HandoffRow {
   consumed_at: number | null
   from_repo_id: string | null
   outcome: string | null
+  // Dispensa manual no Crew Dock (migration 036). Vem no h.* do SELECT_HANDOFF.
+  dismissed_at: number | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
 }
@@ -40,6 +43,58 @@ interface HandoffRow {
 // remoção do repo (label vira null), mas continua listável.
 const SELECT_HANDOFF =
   'SELECT h.*, r.label AS target_repo_label FROM handoffs h LEFT JOIN repos r ON r.id = h.target_repo_id'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Memo de existência de transcript por cc_session_id, com VALIDADE.
+// findTranscriptPath varre ~/.claude/projects/*/ com existsSync — I/O SÍNCRONO —,
+// e toEntity roda por LINHA no list(): sem memo, um dock com 10 filhas
+// interrompidas custaria 10 varreduras de diretório a cada recarga da lista. O
+// list() é recarregado a cada handoff:updated, então o ganho está justamente nas
+// RAJADAS de recarga — não em lembrar do arquivo pra sempre.
+//
+// Só memoizamos o `true`: a ausência é sempre rebuscada, senão uma filha que
+// ainda não escreveu o .jsonl ficaria marcada como não-retomável pra sempre.
+//
+// O `true`, porém, também apodrece: o Pitwall fica dias aberto e o transcript é
+// um arquivo de TERCEIRO (o Claude Code escreve em ~/.claude/projects, e limpeza
+// manual ou do próprio CLI apaga). Memo eterno = card anunciando "Retomar" pra
+// uma conversa que já não existe, até reiniciar o app. Por isso o carimbo expira:
+// dentro da janela o dock recarrega de graça; fora dela, uma varredura reconfere.
+const TRANSCRIPT_MEMO_TTL_MS = 30_000
+const transcriptSeen = new Map<string, number>()
+
+function hasTranscript(ccSessionId: string): boolean {
+  const now = Date.now()
+  const seenAt = transcriptSeen.get(ccSessionId)
+  if (seenAt !== undefined && now - seenAt < TRANSCRIPT_MEMO_TTL_MS) return true
+  if (findTranscriptPath(ccSessionId) === null) {
+    // Sumiu do disco: esquece o carimbo velho, senão ele voltaria a valer na
+    // próxima chamada dentro da janela.
+    transcriptSeen.delete(ccSessionId)
+    return false
+  }
+  transcriptSeen.set(ccSessionId, now)
+  return true
+}
+
+// Retomável = interrompido, com filha atrelada e transcript dela ainda no disco
+// (é de onde o `claude --resume` reconstrói o histórico). Mesmo gate do
+// handoffs:is-resumable, só que servido junto da lista — o Crew Dock precisa
+// disto pra decidir quem CONTINUA visível, e um IPC por card não escala.
+//
+// Custo: o disco só é tocado por linha 'interrupted' COM child_session_id. Todo
+// o resto (a esmagadora maioria: running, done, pending) sai false sem nenhum
+// syscall — o short-circuit vem antes da query de cc_session_id.
+function isResumable(row: HandoffRow): boolean {
+  if (row.status !== 'interrupted' || !row.child_session_id) return false
+  const child = getDb()
+    .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
+    .get(row.child_session_id) as { cc_session_id: string | null } | undefined
+  const ccSessionId = child?.cc_session_id
+  if (!ccSessionId || !UUID_RE.test(ccSessionId)) return false
+  return hasTranscript(ccSessionId)
+}
 
 function toEntity(row: HandoffRow): Handoff {
   return {
@@ -65,6 +120,8 @@ function toEntity(row: HandoffRow): Handoff {
     consumedAt: row.consumed_at,
     fromRepoId: row.from_repo_id,
     outcome: (row.outcome as HandoffOutcome | null) ?? null,
+    dismissedAt: row.dismissed_at,
+    resumable: isResumable(row),
   }
 }
 
@@ -216,10 +273,22 @@ export function reject(id: string): Handoff {
   return fresh(id)
 }
 
+// Adquire a filha e passa a running. Zera dismissed_at DE PROPÓSITO.
+//
+// INVARIANTE DE VISIBILIDADE: um handoff com filha VIVA nunca pode estar
+// invisível em todas as superfícies ao mesmo tempo. Dispensar um card é
+// permitido justamente quando não há filha (ex.: ainda pending, esperando o
+// gate) — mas se depois o gate aprova e a filha nasce, o carimbo antigo tiraria
+// esse card do dock (dockCrew), tiraria a sessão da strip/switcher/Home
+// (childSessionIds) e ainda calaria a notificação nativa (isActiveCrewChild):
+// uma PTY rodando e queimando token sem NENHUM lugar onde ser encontrada.
+// Adquirir filha viva é, portanto, voltar a ser visível.
 export function markRunning(id: string, childSessionId: string): Handoff {
   const from = currentStatus(id)
   getDb()
-    .prepare('UPDATE handoffs SET status = ?, child_session_id = ?, updated_at = ? WHERE id = ?')
+    .prepare(
+      'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, updated_at = ? WHERE id = ?',
+    )
     .run('running', childSessionId, Date.now(), id)
   logEvent(id, 'markRunning', 'running', from)
   return fresh(id)
@@ -403,6 +472,86 @@ export function markConsumed(id: string): Handoff {
   return fresh(id)
 }
 
+// Motivo gravado quando soltar encerra um handoff que ainda estava vivo. Texto
+// PRÓPRIO (e não o do reconcileStuck) porque a filha não morreu: ela foi solta.
+const RELEASE_ERROR = 'Solta do painel: a sessão deixou de ser filha deste handoff'
+
+// Dispensa manual: o humano tira o card do Crew Dock. NÃO mexe em `status` de
+// propósito — a filha pode estar viva, e forjar um 'rejected'/'failed' só pra
+// esconder o card corromperia a trilha de eventos e a instrumentação. O que muda
+// é só a EXIBIÇÃO (quem filtra por dismissed_at é a camada de cima).
+// Idempotente: o WHERE dismissed_at IS NULL garante um único carimbo e um único
+// evento 'dismiss' (to_status = from_status, porque não houve transição).
+export function dismiss(id: string): Handoff {
+  const status = currentStatus(id)
+  if (status === null) throw new Error(`handoff not found: ${id}`)
+  const res = getDb()
+    .prepare(
+      'UPDATE handoffs SET dismissed_at = ?, updated_at = ? WHERE id = ? AND dismissed_at IS NULL',
+    )
+    .run(Date.now(), Date.now(), id)
+  if (res.changes > 0) logEvent(id, 'dismiss', status, status)
+  return fresh(id)
+}
+
+// Soltar do painel: o humano CORTA o vínculo mãe→filha, de propósito, devolvendo
+// a sessão à condição de sessão normal. É onde difere de `dismiss`, que só tira o
+// card de vista MANTENDO handoffs.child_session_id apontando pra sessão: aqui o
+// ponteiro é ZERADO, e é isso que muda o mundo — a sessão sai do childSessionIds
+// (reaparece na strip/switcher), some do isActiveCrewChild (volta a notificar como
+// qualquer outra), deixa de ser achada por getByChildSession no PTY exit e não é
+// mais relinkada pelo sessions:resume (que já ignora handoff com dismissed_at).
+//
+// O child_session_id ANTIGO vai no detail do evento antes do UPDATE: a coluna era
+// a única referência à filha, e sem esse carimbo a rastreabilidade dela se perderia
+// pra sempre.
+//
+// Sobre o status: um handoff VIVO (running/needs_input) sem filha atrelada é uma
+// mentira no banco, e é exatamente o que o reconcileStuck varre (o predicado inclui
+// child_session_id IS NULL). Deixar por conta dele carimbaria 'interrupted' com o
+// erro genérico "encerrada sem reportar conclusão" — que não foi o que aconteceu.
+// Então o próprio release encerra o registro, com o motivo REAL, e o liberado passa
+// a ser IMUNE ao reconcileStuck (interrupted não está no predicado). Fora do estado
+// vivo o status é preservado: soltar a filha de um handoff já done/failed não
+// reescreve o desfecho dele.
+//
+// A sessão solta continua rodando com as flags de exec da filha (o
+// HANDOFF_CHILD_SETTINGS_JSON, com a denylist restritiva) — isso é do PROCESSO, não
+// do banco, e só sai num relançamento. Quem chama avisa o humano (ver HandoffCard).
+export function release(id: string): Handoff {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT status, child_session_id, dismissed_at FROM handoffs WHERE id = ?')
+    .get(id) as
+    | { status: string; child_session_id: string | null; dismissed_at: number | null }
+    | undefined
+  if (!row) throw new Error(`handoff not found: ${id}`)
+  // Já solto (sem vínculo E fora do painel): no-op, pra não empilhar eventos
+  // idênticos a cada clique repetido.
+  if (row.child_session_id === null && row.dismissed_at !== null) return fresh(id)
+
+  const live = row.status === 'running' || row.status === 'needs_input'
+  const now = Date.now()
+  // COALESCE: se já tinha sido dispensado antes, preserva o instante original da
+  // saída do painel — soltar não é uma segunda dispensa.
+  if (live) {
+    db.prepare(
+      `UPDATE handoffs
+         SET child_session_id = NULL, dismissed_at = COALESCE(dismissed_at, ?),
+             status = 'interrupted', error = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(now, RELEASE_ERROR, now, id)
+  } else {
+    db.prepare(
+      `UPDATE handoffs
+         SET child_session_id = NULL, dismissed_at = COALESCE(dismissed_at, ?), updated_at = ?
+       WHERE id = ?`,
+    ).run(now, now, id)
+  }
+  logEvent(id, 'release', live ? 'interrupted' : row.status, row.status, row.child_session_id)
+  return fresh(id)
+}
+
 // Feedback humano sobre a utilidade do handoff: useful | wrong | partial. Persiste
 // o outcome e loga um evento 'feedback' (to_status = status corrente, detail =
 // outcome). Permite revisão (sobrescreve outcome anterior).
@@ -421,12 +570,18 @@ export function setOutcome(id: string, outcome: HandoffOutcome): Handoff {
 // tempo todo e ainda pulsa na trilha quando ela espera; a notificação nativa
 // seria o MESMO aviso duas vezes. Espelha o filtro que o toast já faz no
 // renderer (NotificationToast.isCrewChild), agora do lado do main.
+//
+// dismissed_at IS NULL faz parte do gate pela mesma invariante do markRunning: o
+// silêncio aqui só se justifica porque o dock avisa — e um card dispensado NÃO
+// está no dock (ver dockCrew). Sem esta cláusula, dispensar viraria mordaça: a
+// filha pediria atenção e nada apareceria em lugar nenhum.
 export function isActiveCrewChild(ccSessionId: string): boolean {
   const row = getDb()
     .prepare(
       `SELECT 1 FROM handoffs h
          JOIN sessions s ON s.id = h.child_session_id
         WHERE s.cc_session_id = ?
+          AND h.dismissed_at IS NULL
           AND h.status IN ('pending','approved','running','needs_input')
         LIMIT 1`,
     )
@@ -441,11 +596,19 @@ export function isActiveCrewChild(ccSessionId: string): boolean {
 // filha aqui?"). Omitido/null mantém o escopo GLOBAL por repo — que é o
 // comportamento legado e o mais ESTRITO, usado quando a identidade da mãe é
 // desconhecida (config global antiga, sem carimbo).
+//
+// Dispensado NÃO bloqueia: o dedup existe pra evitar dois agentes mutando o mesmo
+// repo, e quem foi dispensado saiu do dock — recusar a delegação em nome de um
+// card que o usuário não vê deixa a MCP tool respondendo "já existe um handoff
+// ativo aqui" sobre algo que ele não tem como achar, abrir nem encerrar. Dispensar
+// só é permitido sem filha viva (e markRunning limpa o carimbo ao adquirir uma),
+// então nenhum handoff com PTY viva escapa por esta cláusula.
 export function findActiveByTarget(
   targetRepoId: string,
   motherSessionId?: string | null,
 ): Handoff | null {
-  const active = "h.status IN ('pending','approved','running','needs_input')"
+  const active =
+    "h.dismissed_at IS NULL AND h.status IN ('pending','approved','running','needs_input')"
   const db = getDb()
   const row = (
     motherSessionId

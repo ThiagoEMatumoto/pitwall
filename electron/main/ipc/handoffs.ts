@@ -6,7 +6,17 @@ import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
 import { injectIntoChild } from '../services/handoff/inject'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
-import type { HandoffSpawnContext, LinkKind, Handoff, HandoffStatus, Repo } from '../../../shared/types/ipc'
+import { prepareHandoff } from '../services/handoff/prepare'
+import { adoptSession } from '../services/handoff/adopt'
+import type {
+  AdoptedSession,
+  HandoffSpawnContext,
+  LinkKind,
+  Handoff,
+  HandoffStatus,
+  ManualHandoffCreated,
+  Repo,
+} from '../../../shared/types/ipc'
 
 interface RepoJoinRow {
   id: string
@@ -78,6 +88,26 @@ const failSchema = z.object({
 const sendMessageSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
+})
+
+const createManualSchema = z.object({
+  repoId: z.string().min(1),
+  // Mãe EXPLÍCITA: quem cria a filha na mão escolhe a sessão no picker — nada de
+  // inferir do foco, que é o tipo de palpite que só se descobre errado depois.
+  motherSessionId: z.string().min(1),
+  task: z.string().min(1),
+  featureId: z.string().min(1).optional(),
+  mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
+})
+
+// Adoção: a sessão-alvo e a tarefa que dá escopo ao apelido. A mãe é explícita
+// pelo mesmo motivo do create-manual — inferir do foco é palpite.
+const adoptSessionSchema = z.object({
+  sessionId: z.string().min(1),
+  motherSessionId: z.string().min(1),
+  task: z.string().min(1),
+  featureId: z.string().min(1).optional(),
+  mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
 })
 
 const setOutcomeSchema = z.object({
@@ -152,6 +182,52 @@ export function registerHandoffsIpc(): void {
     const handoff = store.setOutcome(id, outcome)
     broadcast('handoff:updated', handoff)
     return handoff
+  })
+
+  // Dispensa manual pelo Crew Dock: carimba dismissed_at e nada mais. NÃO encerra
+  // a sessão-filha (quem quer matar usa handoffs:fail) e NÃO mexe no status — a
+  // dispensa é sobre o que o humano quer VER, não sobre o desfecho do trabalho.
+  ipcMain.handle('handoffs:dismiss', (_e, id: string): Handoff => {
+    const handoff = store.dismiss(id)
+    broadcast('handoff:updated', handoff)
+    return handoff
+  })
+
+  // Soltar do painel: corta o vínculo (child_session_id → NULL) e tira o card de
+  // vista. Diferente do dismiss, que mantém o vínculo — aqui a sessão VOLTA a ser
+  // uma sessão normal (reaparece na strip/switcher, volta a notificar sozinha) e o
+  // handoff vira histórico. NÃO encerra a PTY e NÃO desfaz as flags de exec da
+  // filha (a denylist do HANDOFF_CHILD_SETTINGS_JSON vale até um relançamento).
+  ipcMain.handle('handoffs:release', (_e, id: string): Handoff => {
+    const handoff = store.release(id)
+    broadcast('handoff:updated', handoff)
+    return handoff
+  })
+
+  // Criação MANUAL de filha (diálogo de nova sessão), sem sessão-mãe pedindo por
+  // MCP. Faz o que a tool session_handoff faz do lado dos dados — compõe o mesmo
+  // briefing, resolve o mesmo tipo de apelido e persiste o handoff —, mas não
+  // spawna: quem spawna é o renderer (dispatchHandoffChild), pelo mesmo caminho
+  // do gate de aprovação.
+  ipcMain.handle('handoffs:create-manual', (_e, raw: unknown): ManualHandoffCreated => {
+    const input = createManualSchema.parse(raw)
+    // Composição (repo-alvo, origem, arestas, apelido, briefing) e persistência
+    // vivem em services/handoff/prepare — o MESMO caminho da adoção de sessão
+    // aberta, pra os dois briefings não divergirem em silêncio.
+    return prepareHandoff({
+      targetRepoId: input.repoId,
+      motherSessionId: input.motherSessionId,
+      task: input.task,
+      featureId: input.featureId ?? null,
+      mode: input.mode,
+    })
+  })
+
+  // Adoção de uma sessão JÁ aberta: "esta sessão é filha de X". Assíncrono porque
+  // relança a sessão — mata a PTY, espera o exit e sobe de novo com --resume
+  // (é a única forma de fixar o apelido e o accept-inbound, que são flags de exec).
+  ipcMain.handle('handoffs:adopt-session', (_e, raw: unknown): Promise<AdoptedSession> => {
+    return adoptSession(adoptSessionSchema.parse(raw))
   })
 
   // Resolve o repo-alvo + metadados do projeto pra UI conseguir chamar openSession.

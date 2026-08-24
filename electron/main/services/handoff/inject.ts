@@ -17,5 +17,13 @@ export function formatPtyInjection(cmd: string): string {
 // se a PTY não está viva (ptyManager.write joga "session not running") — o caller
 // (handoff_message) checa isRunning antes e converte num erro legível pra mãe.
 export function injectIntoChild(childSessionId: string, text: string): void {
-  ptyManager.write(childSessionId, formatPtyInjection(text))
+  injectIntoSession(childSessionId, text)
+}
+
+// Mesmo seam, sem o rótulo de "filha": a passagem de bastão escreve na MÃE (pra
+// avisar que o endereço da filha mudou). O papel muda, o mecanismo é o mesmo — e
+// duas funções nomeadas evitam ler `injectIntoChild(motherId, ...)`, que é
+// exatamente o tipo de linha que engana quem revisa.
+export function injectIntoSession(sessionId: string, text: string): void {
+  ptyManager.write(sessionId, formatPtyInjection(text))
 }

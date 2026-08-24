@@ -5,6 +5,7 @@ import {
   CornerDownLeft,
   Eye,
   MoreHorizontal,
+  Pause,
   Play,
   Send,
   TerminalSquare,
@@ -125,8 +126,19 @@ export const STATUS_COLOR: Record<HandoffStatus, string> = {
   interrupted: 'var(--color-warning)',
 }
 
-export function StatusBadge({ status }: { status: HandoffStatus }) {
-  const color = STATUS_COLOR[status]
+// `paused` é o 'interrupted' que AINDA dá pra retomar (transcript no disco). Ele
+// não é desfecho e não pede socorro: em âmbar e rotulado "Interrompido" ele lia
+// como falha e convidava a dispensar o card — que é exatamente a filha que a gente
+// quer manter à mão. Em tom apagado ele diz o que é: parada, esperando você
+// mandar continuar (o botão "Retomar", em accent, é quem carrega a ação).
+export function StatusBadge({
+  status,
+  paused = false,
+}: {
+  status: HandoffStatus
+  paused?: boolean
+}) {
+  const color = paused ? 'var(--color-text-dim)' : STATUS_COLOR[status]
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium"
@@ -137,7 +149,7 @@ export function StatusBadge({ status }: { status: HandoffStatus }) {
       }}
     >
       <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-      {STATUS_LABEL[status]}
+      {paused ? 'Pausada' : STATUS_LABEL[status]}
     </span>
   )
 }
@@ -172,14 +184,16 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
+  const [releasing, setReleasing] = useState(false)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [rating, setRating] = useState(false)
-  const [resumable, setResumable] = useState(false)
   const [resuming, setResuming] = useState(false)
   const liveSessions = useAppStore((s) => s.liveSessions)
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
   const load = useHandoffsStore((s) => s.load)
+  const dismissHandoff = useHandoffsStore((s) => s.dismiss)
   const repoLabel = handoff.targetRepoLabel ?? handoff.targetRepoId
   const hasDetail =
     (handoff.status === 'done' && !!handoff.summary) ||
@@ -208,33 +222,32 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   // matar uma filha viva em trabalho longo por engano.
   const canForceFail = handoff.status === 'running' || handoff.status === 'approved'
 
+  // Dispensar: tira o card de vista sem tocar no status. Só some o que ainda não
+  // foi dispensado — repetir não faria nada visível.
+  const canDismiss = handoff.dismissedAt == null
+
+  // Soltar: a operação INVERSA da adoção — corta o vínculo mãe→filha e devolve a
+  // sessão à condição de sessão normal. Só faz sentido com filha atrelada; sem
+  // childSessionId não há vínculo pra cortar. Ao contrário de "Dispensar", NÃO é
+  // bloqueado com a filha viva: soltar não cria órfão invisível, é justamente o
+  // contrário — a sessão volta a aparecer na barra e no switcher.
+  const canRelease = handoff.childSessionId != null
+
   // Feedback de utilidade: só faz sentido pra handoffs concluídos. Persiste via
   // IPC e recarrega pra refletir o outcome marcado. Idempotente no backend.
   const canRate = handoff.status === 'done'
 
-  // Retomar: só pra handoffs interrompidos (filha morreu sem erro real). O botão
-  // só aparece se o backend confirma que o transcript da filha ainda existe
-  // (is-resumable) — senão não há de onde retomar via `claude --resume`.
+  // Retomar: só pra handoffs interrompidos (filha morreu sem erro real) cujo
+  // transcript ainda existe no disco — senão não há de onde retomar via
+  // `claude --resume`. O gate vem PRONTO no handoff (handoff-store.toEntity), no
+  // lugar do handoffs:is-resumable que este card disparava por conta própria: é o
+  // MESMO critério que decide quem continua no dock, e ler os dois de fontes
+  // diferentes deixava o card e a lista discordando por um tick.
   const isInterrupted = handoff.status === 'interrupted'
-
-  useEffect(() => {
-    if (!isInterrupted) {
-      setResumable(false)
-      return
-    }
-    let cancelled = false
-    void handoffsApi
-      .isResumable(handoff.id)
-      .then((ok) => {
-        if (!cancelled) setResumable(ok)
-      })
-      .catch(() => {
-        if (!cancelled) setResumable(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isInterrupted, handoff.id])
+  const resumable = handoff.resumable
+  // Interrompida mas retomável = PAUSADA. O estado terminal de verdade (sem
+  // transcript, nada a retomar) segue se lendo como "Interrompido".
+  const paused = isInterrupted && resumable
 
   async function resume() {
     if (resuming) return
@@ -274,6 +287,39 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
       await load()
     } catch {
       setFailing(false)
+    }
+  }
+
+  async function dismiss() {
+    if (dismissing) return
+    setDismissing(true)
+    try {
+      await dismissHandoff(handoff.id)
+      await load()
+    } catch {
+      setDismissing(false)
+    }
+  }
+
+  // A ressalva das PERMISSÕES vive no confirm, não só no tooltip: uma filha por
+  // adoção foi RELANÇADA com HANDOFF_CHILD_SETTINGS_JSON (denylist restritiva, ver
+  // electron/main/services/spawn-flags.ts). Isso é flag de exec — soltar mexe no
+  // banco, não no processo, então a sessão solta continua com as permissões de
+  // filha até ser relançada. O caminho de limpar é o normal: fechar a sessão e
+  // retomá-la pela barra; o sessions:resume NÃO re-vincula depois do release
+  // (o relink exige dismissed_at IS NULL), então ela volta como sessão comum.
+  async function release() {
+    if (releasing) return
+    const ok = window.confirm(
+      `Soltar esta sessão do painel? O vínculo com "${repoLabel}" é desfeito: ela volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, feche-a e retome pela barra.`,
+    )
+    if (!ok) return
+    setReleasing(true)
+    try {
+      await handoffsApi.release(handoff.id)
+      await load()
+    } catch {
+      setReleasing(false)
     }
   }
 
@@ -347,7 +393,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
 
   // Cluster de ações. Mora na coluna lateral no inbox e no rodapé do card no
   // dock — mesmo JSX, dois lugares, pra não espremer o texto onde é estreito.
-  const hasActions = !!(childLive || canForceFail || canPeek || (isInterrupted && resumable))
+  const hasActions = !!(childLive || canForceFail || canDismiss || canRelease || canPeek || paused)
   const actions = hasActions ? (
     <div className="flex items-center gap-1">
       {canPeek && (
@@ -372,7 +418,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           {!tight && 'Abrir terminal'}
         </button>
       )}
-      {isInterrupted && resumable && (
+      {paused && (
         <button
           type="button"
           onClick={() => void resume()}
@@ -388,17 +434,64 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           no mesmo peso de "Abrir terminal" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
-      {canForceFail && (
+      {(canForceFail || canDismiss || canRelease) && (
         <Menu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
           portal
           items={[
-            {
-              label: failing ? 'Falhando…' : 'Forçar falha',
-              danger: true,
-              onClick: () => void forceFail(),
-            },
+            ...(canForceFail
+              ? [
+                  {
+                    label: failing ? 'Falhando…' : 'Forçar falha',
+                    danger: true,
+                    onClick: () => void forceFail(),
+                  },
+                ]
+              : []),
+            ...(canDismiss
+              ? [
+                  {
+                    // Rótulo com o efeito no próprio nome: "Dispensar" sozinho
+                    // e "Soltar" sozinho leem como sinônimos no mesmo menu. O que
+                    // os separa é o efeito — e é isso que cada rótulo diz.
+                    //
+                    // Dizia "mantém o vínculo", e era MENTIRA na parte que o
+                    // usuário sente: o vínculo sobrevive só como REGISTRO (o
+                    // child_session_id fica gravado, e com ele a trilha do
+                    // handoff), mas a sessão dispensada volta a ser tratada como
+                    // sessão comum em todas as superfícies vivas — e, ao ser
+                    // retomada, sobe sem apelido de peer e sem as settings de
+                    // filha (o relink do sessions:resume exige dismissed_at
+                    // IS NULL). Prometer vínculo e entregar sessão comum é a
+                    // pior das duas opções: o rótulo agora diz o que acontece.
+                    label: dismissing ? 'Dispensando…' : 'Dispensar (arquiva o card)',
+                    // DESABILITADO com a filha viva, em vez de rotulado: o card é
+                    // a ÚNICA superfície que mostra o passo atual e a pergunta
+                    // aberta dela; arquivá-lo no meio do trabalho joga fora o
+                    // acompanhamento inteiro (a sessão volta pra barra, mas como
+                    // uma aba qualquer). Quem quer mesmo encerrar tem "Forçar
+                    // falha" logo acima, e quem só quer desatrelar tem "Soltar".
+                    // Some o bloqueio quando a PTY morre.
+                    disabled: !!childLive || dismissing,
+                    title: childLive
+                      ? 'A sessão-filha ainda está viva — arquivar o card agora tira o único lugar que mostra o progresso e as perguntas dela. Use "Soltar do painel", "Forçar falha" ou espere ela terminar.'
+                      : 'Arquiva este handoff: o card sai do dock e o registro fica no histórico. A sessão volta a ser uma sessão comum (barra, switcher, notificações próprias) e, se for retomada, sobe sem o apelido nem as permissões de filha.',
+                    onClick: () => void dismiss(),
+                  },
+                ]
+              : []),
+            ...(canRelease
+              ? [
+                  {
+                    label: releasing ? 'Soltando…' : 'Soltar do painel (desfaz o vínculo)',
+                    disabled: releasing,
+                    title:
+                      'Desfaz o vínculo mãe→filha: a sessão sai do painel e VOLTA a ser uma sessão normal (barra, switcher, notificações próprias). Não encerra a sessão — mas ela segue com as permissões restritas de filha até ser fechada e retomada.',
+                    onClick: () => void release(),
+                  },
+                ]
+              : []),
           ]}
         >
           <button
@@ -414,6 +507,43 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
       )}
     </div>
   ) : null
+
+  // Disclosure do detalhe (resumo / erro / motivo). Extraído do rodapé porque o
+  // card pausado ancora o gatilho no bloco de estado — o motivo explica o
+  // ESTADO, não é uma ação sobre a sessão — e ali ele não briga com o menu de
+  // overflow, que abre por portal logo abaixo do "⋯".
+  const detailLabel = expanded
+    ? 'Ocultar'
+    : handoff.status === 'done'
+      ? 'Ver resumo'
+      : handoff.status === 'interrupted'
+        ? 'Ver motivo'
+        : 'Ver erro'
+  const detailToggle = hasDetail ? (
+    <button
+      type="button"
+      onClick={() => setExpanded((v) => !v)}
+      className="text-xs text-[var(--color-accent)] hover:underline"
+    >
+      {detailLabel}
+    </button>
+  ) : null
+  const detailBody =
+    hasDetail && expanded ? (
+      <pre
+        className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-3 py-2 font-mono text-xs"
+        style={{
+          color:
+            handoff.status === 'failed'
+              ? 'var(--color-danger)'
+              : handoff.status === 'interrupted'
+                ? 'var(--color-warning)'
+                : 'var(--color-text)',
+        }}
+      >
+        {handoff.status === 'done' ? handoff.summary : handoff.error}
+      </pre>
+    ) : null
 
   // Coluna de conteúdo, na ordem em que se lê: QUEM (nome + um selo) → O QUE
   // ACONTECE AGORA (a pergunta, se ela espera; senão o passo corrente) → o que
@@ -446,7 +576,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
             </span>
           )
         ) : (
-          <StatusBadge status={handoff.status} />
+          <StatusBadge status={handoff.status} paused={paused} />
         )}
       </div>
       {alias && (
@@ -455,6 +585,35 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           title={`${childSession?.title ?? alias.name} → ${repoLabel}`}
         >
           {alias.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
+        </div>
+      )}
+
+      {paused && (
+        <div className="mt-1">
+          {/* "Ver motivo" mora AQUI, na mesma linha do estado, e não no rodapé:
+              é o porquê da pausa, então pertence ao bloco que a anuncia. Solto
+              embaixo ele lia como link órfão e ainda ficava debaixo do menu de
+              overflow. O "·" é o mesmo separador dos medidores. */}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--color-text-dim)]">
+            <span
+              className="flex items-center gap-1"
+              title="A sessão-filha encerrou, mas o histórico dela está salvo no disco — retomar re-spawna a filha com o contexto inteiro."
+            >
+              {/* Pause preenchido: as duas barras têm 5 de 24 unidades: a 12px o
+                  contorno de 1.75 come quase todo o miolo e o glifo vira duas
+                  tiras borradas. Sólido é o desenho canônico do pause e é o que
+                  fica nítido nesse tamanho. */}
+              <Icon as={Pause} size={12} strokeWidth={0} fill="currentColor" />
+              dá pra retomar de onde parou
+            </span>
+            {detailToggle && (
+              <>
+                <span aria-hidden>·</span>
+                {detailToggle}
+              </>
+            )}
+          </div>
+          {detailBody}
         </div>
       )}
 
@@ -596,36 +755,12 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         </form>
       )}
 
-      {hasDetail && (
+      {/* Pausada já mostrou o gatilho junto do estado; aqui ficam os terminais
+          (done / failed), onde o detalhe é sobre o handoff inteiro. */}
+      {hasDetail && !paused && (
         <div className="mt-2">
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-xs text-[var(--color-accent)] hover:underline"
-          >
-            {expanded
-              ? 'Ocultar'
-              : handoff.status === 'done'
-                ? 'Ver resumo'
-                : handoff.status === 'interrupted'
-                  ? 'Ver motivo'
-                  : 'Ver erro'}
-          </button>
-          {expanded && (
-            <pre
-              className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-3 py-2 font-mono text-xs"
-              style={{
-                color:
-                  handoff.status === 'failed'
-                    ? 'var(--color-danger)'
-                    : handoff.status === 'interrupted'
-                      ? 'var(--color-warning)'
-                      : 'var(--color-text)',
-              }}
-            >
-              {handoff.status === 'done' ? handoff.summary : handoff.error}
-            </pre>
-          )}
+          {detailToggle}
+          {detailBody}
         </div>
       )}
 

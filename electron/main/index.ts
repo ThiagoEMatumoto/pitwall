@@ -9,6 +9,7 @@ import * as handoffStore from './services/handoff-store'
 import { sessionActivityService } from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
+import { registerBatonIpc } from './ipc/baton'
 import { registerShellIpc } from './ipc/shell'
 import { registerDialogIpc } from './ipc/dialog'
 import { registerGitIpc, cloneMissingWithToasts } from './ipc/git'
@@ -269,6 +270,7 @@ app.whenReady().then(async () => {
   registerHandoffsIpc()
   registerDossiersIpc()
   registerSessionIpc()
+  registerBatonIpc()
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
   // composer) deixados por sessões de execuções anteriores.
   sweepOrphanImageTemps()

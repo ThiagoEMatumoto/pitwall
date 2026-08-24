@@ -3,6 +3,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { featuresApi } from '@/lib/ipc'
+import { MotherSessionPicker } from '@/features/handoffs/MotherSessionPicker'
 import { suggestFeatures } from '@/features/features/fuzzy'
 import { STATUS_META } from '@/features/features/status'
 import {
@@ -45,9 +46,19 @@ interface Props {
     advisorModel: AdvisorModel | undefined,
     initialCommand: string | undefined,
   ) => void
+  // Saída ALTERNATIVA: abrir como sessão-filha de handoff em vez de aba. A
+  // presença do callback é o que habilita a opção no diálogo — caller que não
+  // sabe criar filha simplesmente não a oferece (evita um 8º parâmetro posicional
+  // no onConfirm, que já está no limite).
+  onConfirmChild?: (input: {
+    task: string
+    motherSessionId: string
+    featureId: string | undefined
+    permission: PermissionMode
+  }) => void
 }
 
-export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
+export function SpawnSessionDialog({ open, onClose, repo, onConfirm, onConfirmChild }: Props) {
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
   const [features, setFeatures] = useState<Feature[]>([])
@@ -67,6 +78,12 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
   const [initialCommand, setInitialCommand] = useState('')
   // Só pra destacar o botão do preset escolhido; ajustes manuais depois não o desmarcam.
   const [selectedPreset, setSelectedPreset] = useState<string>('default')
+  // Nasce como filha de handoff (painel lateral) em vez de aba. A tarefa é
+  // obrigatória: é dela que sai o escopo do apelido — e o apelido é o endereço do
+  // peer, então "sessão filha sem tarefa" não tem como se chamar.
+  const [asChild, setAsChild] = useState(false)
+  const [childTask, setChildTask] = useState('')
+  const [motherSessionId, setMotherSessionId] = useState<string | null>(null)
   // bypassPermissions é destrutivo (pula TODAS as permissões): exige um 2º clique.
   const [confirmingBypass, setConfirmingBypass] = useState(false)
   // Defaults efetivos no open: override do repo (se houver) sobre os globais.
@@ -124,6 +141,9 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
     setInitialCommand('')
     setSelectedPreset('default')
     setSaveAsRepoDefault(false)
+    setAsChild(false)
+    setChildTask('')
+    setMotherSessionId(null)
     // Pré-preenche modelo + effort + permissão + advisor: override do repo
     // (app_prefs session.defaults.<repoId>) > defaults globais (Settings).
     void Promise.all([
@@ -188,6 +208,16 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
       setConfirmingBypass(true)
       return
     }
+    // Filha de handoff: não vira aba (nasce em background, no painel lateral), o
+    // nome vem do apelido resolvido no main e modelo/esforço não chegam ao spawn
+    // de background — por isso o caminho curto aqui, sem setNextPaneMode.
+    if (asChild && onConfirmChild) {
+      const task = childTask.trim()
+      if (!task || !motherSessionId) return
+      onConfirmChild({ task, motherSessionId, featureId, permission })
+      onClose()
+      return
+    }
     if (saveAsRepoDefault) {
       void saveRepoSessionDefaults(repo.id, {
         model: model as RepoSessionDefaults['model'],
@@ -222,7 +252,9 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={confirm}>{confirmingBypass ? 'Confirmar bypass' : 'Abrir'}</Button>
+          <Button onClick={confirm} disabled={asChild && !childTask.trim()}>
+            {confirmingBypass ? 'Confirmar bypass' : asChild ? 'Abrir como filha' : 'Abrir'}
+          </Button>
         </>
       }
     >
@@ -260,6 +292,43 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm }: Props) {
             if (e.key === 'Enter') confirm()
           }}
         />
+
+        {onConfirmChild && (
+          <div className="flex flex-col gap-3 rounded-md border border-[var(--color-border)] p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text-dim)]">
+              <input
+                type="checkbox"
+                data-testid="as-child-toggle"
+                checked={asChild}
+                onChange={(e) => setAsChild(e.target.checked)}
+                className="size-3.5 accent-[var(--color-accent)]"
+              />
+              Abrir como sessão filha
+            </label>
+            {asChild && (
+              <>
+                <div className="w-full">
+                  <label className="mb-1 block text-xs text-[var(--color-text-dim)]">
+                    Tarefa da filha
+                  </label>
+                  <textarea
+                    data-testid="child-task"
+                    value={childTask}
+                    onChange={(e) => setChildTask(e.target.value)}
+                    placeholder="O que ela vai fazer — vira o escopo do apelido"
+                    rows={2}
+                    className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+                  />
+                </div>
+                <MotherSessionPicker value={motherSessionId} onChange={setMotherSessionId} />
+                <div className="text-[10px] text-[var(--color-text-dim)]">
+                  A filha não abre aba: nasce no painel lateral, com apelido gerado a partir da
+                  tarefa. O nome acima é ignorado.
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-4">
           <div>

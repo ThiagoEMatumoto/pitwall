@@ -43,7 +43,7 @@ vi.mock('../session-activity', () => ({
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
-import { buildTools, type McpNotify, type ToolDef } from './tools'
+import { buildTools, type McpNotify, type McpRequestContext, type ToolDef } from './tools'
 
 function makeNotify(): McpNotify {
   return {
@@ -63,6 +63,15 @@ function tool(name: string): ToolDef {
 
 function call<T>(name: string, args: unknown): T {
   return tool(name).handler(args).structuredContent as T
+}
+
+// Mesma bateria de tools, mas com o carimbo de identidade que o app põe no spawn
+// (?s=<sessions.id>) — é ele que diz QUEM está chamando.
+function callAs<T>(callerSessionId: string | null, name: string, args: unknown): T {
+  const ctx: McpRequestContext = { motherSessionId: callerSessionId }
+  const def = buildTools(makeNotify(), ctx).find((t) => t.name === name)
+  if (!def) throw new Error(`tool not registered: ${name}`)
+  return def.handler(args).structuredContent as T
 }
 
 // Cria um handoff running com filha atrelada (sessions.id + cc_session_id).
@@ -224,5 +233,70 @@ describe('handoff_result (enriquecido com atividade ao vivo)', () => {
     expect(res.liveStatus).toBe('working')
     expect(res.lastText).toBe('editando arquivo')
     expect(res.tokens).toEqual({ output: 10, context: 200 })
+  })
+})
+
+// Regressão: depois da passagem de bastão a ANTECESSORA continua viva com o
+// handoffId antigo no contexto dela. Quando ela fecha o próprio turno chamando
+// handoff_report, fecharia o card de um trabalho que agora é da SUCESSORA.
+describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () => {
+  it('handoff_report da antecessora é RECUSADO e o handoff continua vivo', () => {
+    const id = seedRunningHandoff('s-sucessora')
+    expect(() =>
+      callAs('s-antecessora', 'handoff_report', { handoffId: id, summary: 'terminei' }),
+    ).toThrow(/já não é seu/)
+    expect(handoffStore.get(id)!.status).toBe('running')
+    expect(handoffStore.get(id)!.summary).toBeNull()
+  })
+
+  it('a recusa explica o que houve (passou o bastão) e para onde falar', () => {
+    const id = seedRunningHandoff('s-sucessora')
+    expect(() =>
+      callAs('s-antecessora', 'handoff_report', { handoffId: id, summary: 'terminei' }),
+    ).toThrow(/bastão[\s\S]*SendMessage/)
+  })
+
+  it('handoff_progress e handoff_ask da antecessora também são recusados', () => {
+    const id = seedRunningHandoff('s-sucessora')
+    expect(() => callAs('s-antecessora', 'handoff_progress', { handoffId: id, step: 'x' })).toThrow(
+      /já não é seu/,
+    )
+    expect(() => callAs('s-antecessora', 'handoff_ask', { handoffId: id, question: 'q' })).toThrow(
+      /já não é seu/,
+    )
+    const h = handoffStore.get(id)!
+    expect(h.status).toBe('running')
+    expect(h.currentStep).toBeNull()
+    expect(h.pendingQuestion).toBeNull()
+  })
+
+  it('a filha ATUAL reporta normalmente', () => {
+    const id = seedRunningHandoff('s-sucessora')
+    const res = callAs<{ status: string }>('s-sucessora', 'handoff_report', {
+      handoffId: id,
+      summary: 'feito',
+    })
+    expect(res.status).toBe('done')
+  })
+
+  // Retrocompat: sem uma das duas identidades não há como distinguir "sessão
+  // legada" de "passou o bastão" — e recusar aí quebraria handoffs em curso.
+  it('chamador SEM carimbo (config MCP global/legada) segue funcionando', () => {
+    const id = seedRunningHandoff('s-sucessora')
+    const res = callAs<{ status: string }>(null, 'handoff_report', {
+      handoffId: id,
+      summary: 'feito por sessão legada',
+    })
+    expect(res.status).toBe('done')
+  })
+
+  it('handoff SEM filha atrelada aceita de qualquer sessão carimbada', () => {
+    const h = handoffStore.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p' })
+    handoffStore.approve(h.id, {})
+    const res = callAs<{ status: string }>('s-qualquer', 'handoff_report', {
+      handoffId: h.id,
+      summary: 'feito',
+    })
+    expect(res.status).toBe('done')
   })
 })

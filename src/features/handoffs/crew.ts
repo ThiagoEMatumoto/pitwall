@@ -36,10 +36,32 @@ export function splitAlias(alias: string | null | undefined): AliasParts | null 
   }
 }
 
-// Handoffs cuja filha está sob a alçada do dock (mesmo conjunto que a strip
-// esconde). Sem eles o dock não existe — nada delegado, nenhum pixel gasto.
-export function activeCrew(handoffs: Handoff[]): Handoff[] {
-  return handoffs.filter((h) => ACTIVE_HANDOFF_STATUSES.has(h.status))
+// Quem o Crew Dock EXIBE. A pergunta aqui não é "está viva?" (quem responde isso
+// é ACTIVE_HANDOFF_STATUSES, que governa quem some da strip), e sim "ainda dá pra
+// fazer alguma coisa com ela?". Uma filha interrompida (aba fechada, app
+// reiniciado, reconcileStuck) cujo transcript sobreviveu é RETOMÁVEL a um clique —
+// sumir do dock nesse instante é justamente perder o único lugar de onde ela
+// voltaria. Ela sai por conclusão/falha ou por dispensa manual.
+//
+// dismissedAt manda sobre tudo, inclusive sobre filha ativa: dispensar é um pedido
+// explícito de "tira isso da minha frente", e ele vale enquanto o carimbo existir.
+//
+// É por isso que dismissedAt também é lido do OUTRO lado (childSessionIds, no
+// handoffsStore, e isActiveCrewChild, no main): esta é a ÚNICA lista onde um card
+// dispensado deixa de aparecer, e a INVARIANTE é que um handoff com filha viva
+// nunca esteja invisível em todas as superfícies ao mesmo tempo. Sumir daqui
+// obriga a sessão a voltar pra strip/switcher — dispensar é arquivar o card, não
+// sumir com a filha.
+//
+// O que dockCrew NÃO faz é mexer no gate de status: uma filha interrompida
+// continua no dock (dá pra retomar) sem por isso ser escondida da strip — ela nem
+// tem PTY pra esconder de lugar nenhum.
+export function dockCrew(handoffs: Handoff[]): Handoff[] {
+  return handoffs.filter((h) => {
+    if (h.dismissedAt != null) return false
+    if (ACTIVE_HANDOFF_STATUSES.has(h.status)) return true
+    return h.status === 'interrupted' && h.resumable
+  })
 }
 
 // Filhas que ficam FORA das superfícies de sessão do usuário (barra, switcher,
@@ -109,10 +131,15 @@ export function crewNeedsAttention(handoff: Handoff, live: LiveSessionInfo | und
 
 // Quantas filhas estão esperando você. É o gatilho do auto-reveal do dock e o
 // número do badge — filhas ficam fora do useWaitingCount (que serve strip/rail).
+//
+// Itera dockCrew, a MESMA lista que o painel renderiza (e não o conjunto dos
+// vivos): um badge que conta quem o dock não mostra vira um "1!" que o usuário
+// não consegue zerar clicando em nada — não há card onde responder. Badge e lista
+// têm que concordar sempre, então a fonte é uma só.
 export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): number {
   const byId = new Map(liveSessions.map((s) => [s.id, s]))
   let count = 0
-  for (const h of activeCrew(handoffs)) {
+  for (const h of dockCrew(handoffs)) {
     const live = h.childSessionId ? byId.get(h.childSessionId) : undefined
     if (crewNeedsAttention(h, live)) count++
   }
@@ -168,7 +195,7 @@ export function stepCrewFocus(
 // (created_at DESC). Sem reordenar por status vivo — só a atenção promove.
 export function orderCrew(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): Handoff[] {
   const byId = new Map(liveSessions.map((s) => [s.id, s]))
-  const crew = activeCrew(handoffs)
+  const crew = dockCrew(handoffs)
   const attention: Handoff[] = []
   const rest: Handoff[] = []
   for (const h of crew) {

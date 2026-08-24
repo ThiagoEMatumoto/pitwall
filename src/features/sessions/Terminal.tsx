@@ -16,6 +16,9 @@ import { useSession } from './useSession'
 import { Composer, type ComposerHandle } from './Composer'
 import { ComposerToolbar } from './ComposerToolbar'
 import { SessionHeader } from './SessionHeader'
+import { BatonDialog } from './BatonDialog'
+import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
+import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
 import { AgentHud } from './AgentHud'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
 import { playKeys } from './chat/respond-keys'
@@ -188,6 +191,15 @@ export function Terminal({
   const [now, setNow] = useState(() => Date.now())
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [batonOpen, setBatonOpen] = useState(false)
+  const [adoptOpen, setAdoptOpen] = useState(false)
+  // Adotável = tem transcript no disco (mesmo gate do main). Sem ele, relançar
+  // por --resume jogaria a conversa fora — então a ação aparece desabilitada
+  // com o motivo, em vez de sumir sem explicar.
+  const [hasTranscript, setHasTranscript] = useState(false)
+  // Já é filha de um handoff ativo? Adotar de novo criaria um 2º card pro mesmo
+  // processo. Boolean derivado (não Set) pra não re-renderizar à toa.
+  const isCrewChild = useHandoffsStore((s) => childSessionIds(s.handoffs).has(session.id))
   const composerRef = useRef<ComposerHandle>(null)
   const chatViewRef = useRef<ChatViewHandle>(null)
   // WebGL addon vivo deste mount (null = DOM renderer). Ref (não var local do
@@ -968,6 +980,28 @@ export function Terminal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Gate de adotabilidade consultado no main (findTranscriptPath). Roda quando o
+  // ccSessionId aparece — sessão recém-nascida ainda não tem transcript.
+  useEffect(() => {
+    let alive = true
+    if (!session.ccSessionId) {
+      setHasTranscript(false)
+      return
+    }
+    void sessionsApi.isResumable(session.ccSessionId).then((ok) => {
+      if (alive) setHasTranscript(ok)
+    })
+    return () => {
+      alive = false
+    }
+  }, [session.ccSessionId])
+
+  const adoptDisabledReason = isCrewChild
+    ? 'Esta sessão já é filha de um handoff — ela já vive no painel da equipe'
+    : !session.ccSessionId || !hasTranscript
+      ? 'Sem transcript no disco ainda — relançar como filha perderia o histórico'
+      : null
+
   return (
     <div className="flex h-full flex-col">
       {chrome === 'full' && (
@@ -992,8 +1026,33 @@ export function Terminal({
           onToggleMode={onToggleMode}
           onMinimize={onClose}
           onEndSession={() => endSession(session.id)}
+          // Sem ccSessionId não há transcript pra destilar (sessão sem 1ª
+          // resposta ainda) — a ação some em vez de abrir um diálogo que já
+          // nasceria em erro.
+          onPassBaton={session.ccSessionId ? () => setBatonOpen(true) : undefined}
+          onAdopt={() => setAdoptOpen(true)}
+          adoptDisabledReason={adoptDisabledReason}
         />
       )}
+
+      {/* Adotada: a sessão passa a viver no painel da equipe, então a pane sai
+          da vista (detach, não kill — o processo relançado segue vivo). O
+          caminho de volta é o promoteToTab do quick look. */}
+      <AdoptSessionDialog
+        open={adoptOpen}
+        onClose={() => setAdoptOpen(false)}
+        sessionId={session.id}
+        displayTitle={displayTitle}
+        onAdopted={() => onClose()}
+      />
+
+      <BatonDialog
+        open={batonOpen}
+        onClose={() => setBatonOpen(false)}
+        sessionId={session.id}
+        ccSessionId={session.ccSessionId}
+        repoLabel={repoLabel}
+      />
 
       {/* Banner só pro caso "claude não encontrado" (precisa do CTA de config);
           exit normal fecha a pane sozinho com toast (effect acima). */}

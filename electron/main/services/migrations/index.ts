@@ -34,6 +34,8 @@ import * as featureAppDev from './032_feature_app_dev'
 import * as repoPullRuns from './033_repo_pull_runs'
 import * as resetRepoDefaultBranch from './034_reset_repo_default_branch'
 import * as contentContracts from './035_content_contracts'
+import * as handoffDismissed from './036_handoff_dismissed'
+import * as handoffPredecessor from './037_handoff_predecessor'
 
 interface Migration {
   version: number
@@ -83,6 +85,8 @@ export const migrations: Migration[] = [
   repoPullRuns,
   resetRepoDefaultBranch,
   contentContracts,
+  handoffDismissed,
+  handoffPredecessor,
 ]
 
 export function runMigrations(db: Database.Database): void {
