@@ -105,6 +105,11 @@ const COL_GAP_PLAIN = 260;
 const COL_GAP_LABELED = 320;
 const ROW_GAP = 80;
 const GRID_GAP = 80;
+// Serpentina: acima de BAND_COLS colunas topológicas, o layout quebra em
+// bandas horizontais empilhadas verticalmente — cadeia longa deixaria o
+// bounding box com aspect ratio ~15:1 e o zoom inicial ilegível.
+const BAND_COLS = 6;
+const BAND_GAP = 200;
 // Folga do shape em volta do label auto-dimensionado.
 const LABEL_H_PADDING = 48;
 const LABEL_V_PADDING = 32;
@@ -345,15 +350,39 @@ function autoLayout(
 
   // X de cada coluna = acumulado das larguras REAIS (max width dos nós dela)
   // + gap; nó largo empurra a coluna seguinte em vez de encostar nela.
+  // Serpentina: cada grupo de BAND_COLS colunas vira uma banda; o x recomeça
+  // do zero a cada banda e as bandas empilham verticalmente.
   const maxCol = Math.max(-1, ...Array.from(colNodes.keys()));
+  const bandOf = (col: number) => Math.floor(col / BAND_COLS);
   const colX: number[] = [];
   let cursorX = 0;
   for (let col = 0; col <= maxCol; col++) {
+    if (col % BAND_COLS === 0) cursorX = 0;
     colX[col] = cursorX;
     const ids = colNodes.get(col) ?? [];
     const colWidth = ids.reduce((m, id) => Math.max(m, sizeOf(id).width), 0);
     const gap = labeledBoundaries.has(col) ? COL_GAP_LABELED : COL_GAP_PLAIN;
     cursorX += colWidth + gap;
+  }
+
+  // Y de cada banda = acumulado da altura da banda anterior (coluna mais alta
+  // dela, com nós empilhados) + BAND_GAP.
+  const colHeight = (col: number) => {
+    const ids = colNodes.get(col) ?? [];
+    const total = ids.reduce((sum, id) => sum + sizeOf(id).height, 0);
+    return total + ROW_GAP * Math.max(0, ids.length - 1);
+  };
+  const maxBand = maxCol < 0 ? -1 : bandOf(maxCol);
+  const bandY: number[] = [];
+  let cursorY = 0;
+  for (let band = 0; band <= maxBand; band++) {
+    bandY[band] = cursorY;
+    let bandHeight = 0;
+    const lastCol = Math.min(maxCol, band * BAND_COLS + BAND_COLS - 1);
+    for (let col = band * BAND_COLS; col <= lastCol; col++) {
+      bandHeight = Math.max(bandHeight, colHeight(col));
+    }
+    cursorY += bandHeight + BAND_GAP;
   }
 
   const positions = new Map<string, { x: number; y: number }>();
@@ -362,11 +391,12 @@ function autoLayout(
   for (const node of nodes) {
     if (!connected.has(node.id)) continue;
     const col = depth.get(node.id) ?? 0;
-    const y = colCursorY.get(col) ?? 0;
+    const rel = colCursorY.get(col) ?? 0;
+    const y = bandY[bandOf(col)] + rel;
     positions.set(node.id, { x: colX[col], y });
-    const bottom = y + sizeOf(node.id).height;
-    colCursorY.set(col, bottom + ROW_GAP);
-    if (bottom > maxLayeredBottom) maxLayeredBottom = bottom;
+    const { height } = sizeOf(node.id);
+    colCursorY.set(col, rel + height + ROW_GAP);
+    if (y + height > maxLayeredBottom) maxLayeredBottom = y + height;
   }
 
   // Nós sem arestas: grade abaixo das camadas, 4 por linha, largura real.

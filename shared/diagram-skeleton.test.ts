@@ -26,6 +26,27 @@ function disjoint(a: AnyEl, b: AnyEl): boolean {
   );
 }
 
+/** Cadeia linear n0→n1→…→n{n-1}, com label opcional nas setas. */
+function chain(
+  n: number,
+  arrowLabel?: (i: number) => string,
+): DiagramSkeletonElement[] {
+  const skeleton: DiagramSkeletonElement[] = [];
+  for (let i = 0; i < n; i++) {
+    skeleton.push({ id: `n${i}`, type: "rectangle", label: { text: `N${i}` } });
+  }
+  for (let i = 0; i < n - 1; i++) {
+    skeleton.push({
+      id: `e${i}`,
+      type: "arrow",
+      start: { id: `n${i}` },
+      end: { id: `n${i + 1}` },
+      ...(arrowLabel ? { label: { text: arrowLabel(i) } } : {}),
+    });
+  }
+  return skeleton;
+}
+
 const flowSkeleton: DiagramSkeletonElement[] = [
   { id: "start", type: "ellipse", label: { text: "Start" } },
   { id: "work", type: "rectangle", label: { text: "Do work" } },
@@ -206,6 +227,58 @@ describe("skeletonToElements", () => {
     ]) as AnyEl[];
     const nextLabeled = labeled.find((e) => e.id === "next")!;
     expect(nextLabeled.x).toBe(wide.x + wide.width + 320);
+  });
+
+  it("auditoria: gap real entre colunas adjacentes fica em 260-320px (±40)", () => {
+    // Cadeia de 8 nós com labels nas setas: mede a distância borda direita do
+    // nó N → borda esquerda do nó N+1 pra pegar inflação de gap (soma de
+    // larguras em vez de max, ou gap somado por aresta).
+    const elements = skeletonToElements(
+      chain(8, (i) => `passo ${i}`),
+    ) as AnyEl[];
+    const node = (i: number) => elements.find((e) => e.id === `n${i}`)!;
+    let measured = 0;
+    for (let i = 0; i < 7; i++) {
+      const a = node(i);
+      const b = node(i + 1);
+      // Par que atravessa fronteira de banda (serpentina) não é lado a lado.
+      if (b.y !== a.y) continue;
+      const gap = b.x - (a.x + a.width);
+      expect(gap).toBeGreaterThanOrEqual(220);
+      expect(gap).toBeLessThanOrEqual(360);
+      measured++;
+    }
+    expect(measured).toBeGreaterThanOrEqual(5);
+  });
+
+  it("serpentina: cadeia de 12 nós quebra em 2 bandas e reduz a largura", () => {
+    const twelve = chain(12);
+    const first = skeletonToElements(twelve) as AnyEl[];
+    const second = skeletonToElements(twelve) as AnyEl[];
+    const posOf = (els: AnyEl[]) =>
+      els
+        .filter((e) => e.type === "rectangle")
+        .map((e) => ({ id: e.id, x: e.x, y: e.y }));
+    expect(posOf(first)).toEqual(posOf(second));
+
+    const rects = first.filter((e) => e.type === "rectangle");
+    const width =
+      Math.max(...rects.map((e) => e.x + e.width)) -
+      Math.min(...rects.map((e) => e.x));
+    const height =
+      Math.max(...rects.map((e) => e.y + e.height)) -
+      Math.min(...rects.map((e) => e.y));
+
+    // 2 bandas: colunas 0-5 na banda de cima, 6-11 na de baixo (gap 200).
+    expect(new Set(rects.map((e) => e.y)).size).toBe(2);
+    expect(height).toBeGreaterThanOrEqual(2 * 70 + 200);
+    const n6 = first.find((e) => e.id === "n6")!;
+    expect(n6.x).toBe(0);
+    expect(n6.y).toBe(70 + 200);
+
+    // Sem serpentina seriam 12 colunas em linha: 12×180 + 11 gaps de 260.
+    const flatWidth = 12 * 180 + 11 * 260;
+    expect(width).toBeLessThanOrEqual(flatWidth / 2);
   });
 
   it("text solto usa align left/top e containerId null", () => {
