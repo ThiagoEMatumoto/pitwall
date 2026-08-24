@@ -12,10 +12,14 @@ import { Button, GradientBorder } from '@/features/brand'
 import { sessionsApi } from '@/lib/ipc'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
+import { insertDictation } from './composer-insert'
 import { insertPathToken, pickImageFiles, pickImageItems } from './image-paste'
 
 export interface ComposerHandle {
   focus: () => void
+  // Insere texto (ditado por voz) no DRAFT: na posição do cursor se o textarea
+  // tem foco, senão no fim. Nunca envia — o usuário revisa e usa o submit normal.
+  appendText: (text: string) => void
 }
 
 // Imagem anexada ao draft atual: `path` é o caminho temp injetado no prompt;
@@ -118,7 +122,36 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Recolhido só vale no modo terminal (collapsible); em chat o dock é sempre completo.
   const collapsed = collapsible && composerCollapsed
 
-  useImperativeHandle(ref, () => ({ focus: () => innerRef.current?.focus() }), [])
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: () => innerRef.current?.focus(),
+      // Ditado por voz → draft. Cursor: posição atual se o textarea tem foco,
+      // fim caso contrário (ditar sem foco não pode sobrescrever o meio do texto).
+      appendText: (dictated: string) => {
+        // Dock recolhido esconderia o draft ditado — expande antes de inserir.
+        setComposerCollapsed(false)
+        const node = innerRef.current
+        const focused = node != null && document.activeElement === node
+        setText((cur) => {
+          const start = focused ? (node.selectionStart ?? cur.length) : cur.length
+          const end = focused ? (node.selectionEnd ?? cur.length) : cur.length
+          const { value, cursor } = insertDictation(cur, dictated, start, end)
+          requestAnimationFrame(() => {
+            const el = innerRef.current
+            if (el) {
+              el.focus()
+              el.setSelectionRange(cursor, cursor)
+            }
+          })
+          return value
+        })
+        // Ditar sobre um prompt recuperado do histórico vira um novo rascunho.
+        setHistIndex(null)
+      },
+    }),
+    [],
+  )
 
   useEffect(() => {
     void loadPrefs()
