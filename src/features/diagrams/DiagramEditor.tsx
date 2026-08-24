@@ -6,13 +6,21 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type {
+  ExcalidrawImperativeAPI,
+  LibraryItems,
+} from "@excalidraw/excalidraw/types";
 import type { Diagram } from "../../../shared/types/ipc";
 import type { RemoteScene } from "@/store/diagramsStore";
 import { useDiagramsStore } from "@/store/diagramsStore";
+import { diagramsApi } from "@/lib/ipc";
 import { showToast } from "@/features/notifications/toast-store";
 import { Button } from "@/components/ui/Button";
 import { LazyExcalidraw, loadExcalidrawUtils } from "./excalidraw-lazy";
+import {
+  fromExcalidrawLibraryItems,
+  toExcalidrawLibraryItems,
+} from "./library-convert";
 import { DiagramToolbar } from "./DiagramToolbar";
 
 const SAVE_DEBOUNCE_MS = 800;
@@ -121,15 +129,27 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
 
   const diagramId = diagram.id;
 
+  // Hash da biblioteca persistida/aplicada (getLibraryItemsHash). É o que
+  // decide se um onLibraryChange é edição real ou eco (boot, updateLibrary,
+  // broadcast do nosso próprio replace).
+  const libraryHashRef = useRef<number | null>(null);
+
   // initialData como Promise (suportado pelo Excalidraw): restoreElements vem
   // do mesmo chunk lazy, então não dá pra tê-lo sincronamente no 1º render.
   const initialDataPromise = useMemo(async () => {
     const utils = await loadExcalidrawUtils();
+    // Biblioteca global entra junto da cena; o hash inicial marca o estado
+    // persistido pra reconhecer o eco do onLibraryChange de boot.
+    const libraryItems = toExcalidrawLibraryItems(
+      await diagramsApi.library.get(),
+    );
+    libraryHashRef.current = utils.getLibraryItemsHash(libraryItems);
     return {
       elements: utils.restoreElements(
         diagram.scene.elements as Parameters<typeof utils.restoreElements>[0],
         null,
       ),
+      libraryItems,
       // Sem viewBackgroundColor custom: o theme="dark" do Excalidraw INVERTE
       // as cores do canvas — um bg escuro aqui viraria claro na tela. Os
       // defaults da lib (bg branco, stroke #1e1e1e) renderizam certo no dark.
@@ -199,6 +219,50 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       SAVE_DEBOUNCE_MS,
     );
   }, []);
+
+  // Persistência da biblioteca: o Excalidraw manda o conjunto INTEIRO a cada
+  // mudança (adicionar/remover/reordenar no painel). replace regrava tudo.
+  const handleLibraryChange = useCallback((items: LibraryItems) => {
+    void (async () => {
+      const utils = await loadExcalidrawUtils();
+      const hash = utils.getLibraryItemsHash(items);
+      // Eco (boot, updateLibrary aplicado por nós, broadcast do nosso save).
+      if (hash === libraryHashRef.current) return;
+      libraryHashRef.current = hash;
+      try {
+        await diagramsApi.library.replace(fromExcalidrawLibraryItems(items));
+      } catch (err) {
+        // Falha de save: reabre a janela de retry no próximo onLibraryChange.
+        libraryHashRef.current = null;
+        showToast({
+          title: "Falha ao salvar biblioteca de shapes",
+          body: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }, []);
+
+  // Broadcast de biblioteca nova (install via URL/MCP, replace de outra
+  // janela) → aplica no editor aberto, a menos que seja eco do nosso replace.
+  const remoteLibrary = useDiagramsStore((s) => s.remoteLibrary);
+  const lastLibraryNonceRef = useRef(0);
+  useEffect(() => {
+    if (!remoteLibrary || remoteLibrary.nonce === lastLibraryNonceRef.current)
+      return;
+    lastLibraryNonceRef.current = remoteLibrary.nonce;
+    void (async () => {
+      const api = apiRef.current;
+      if (!api) return;
+      const utils = await loadExcalidrawUtils();
+      const libraryItems = toExcalidrawLibraryItems(remoteLibrary.items);
+      const hash = utils.getLibraryItemsHash(libraryItems);
+      if (hash === libraryHashRef.current) return;
+      // Marca ANTES do updateLibrary: o onLibraryChange disparado pela
+      // aplicação não deve regravar (seria eco local do estado remoto).
+      libraryHashRef.current = hash;
+      await api.updateLibrary({ libraryItems, merge: false });
+    })();
+  }, [remoteLibrary]);
 
   // Enquadra o conteúdo na abertura: initialData.scrollToContent centraliza
   // mas mantém zoom 100% — diagrama largo abre estourando a viewport.
@@ -278,7 +342,8 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       return;
     }
     void applyRemote(remoteScene).then((applied) => {
-      if (applied) showToast({ title: "Atualizado pelo Claude", durationMs: 3500 });
+      if (applied)
+        showToast({ title: "Atualizado pelo Claude", durationMs: 3500 });
     });
   }, [remoteScene, applyRemote]);
 
@@ -322,6 +387,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
             theme="dark"
             initialData={initialDataPromise}
             onChange={handleChange}
+            onLibraryChange={handleLibraryChange}
           />
         </Suspense>
       </div>

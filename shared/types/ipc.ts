@@ -2531,6 +2531,31 @@ export interface UpdateDiagramSceneInput {
   snapshot: boolean
 }
 
+// ---------------------------------------------------------------------------
+// Diagram shape library (.excalidrawlib)
+// ---------------------------------------------------------------------------
+
+export type DiagramLibraryStatus = 'published' | 'unpublished'
+
+// Item da biblioteca de shapes do Excalidraw — GLOBAL (uma por app, não por
+// diagrama), como no Excalidraw web. `elements` fica unknown[] pela mesma
+// regra da cena: o shape é do Excalidraw, não nosso. `name` null ⇄ name?
+// opcional do LibraryItem (SQL não tem undefined).
+export interface DiagramLibraryItem {
+  id: string
+  name: string | null
+  status: DiagramLibraryStatus
+  elements: unknown[]
+  created: number
+}
+
+// Resultado de instalar uma biblioteca: o conjunto completo pós-merge + quantos
+// itens o arquivo instalado trouxe (pro toast "N shapes adicionados").
+export interface InstallDiagramLibraryResult {
+  items: DiagramLibraryItem[]
+  added: number
+}
+
 // Resultado da transcrição de um ditado. Erros já vêm em PT, prontos pra tela
 // (porte das mensagens de vozapp/stt.py).
 export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
@@ -2942,6 +2967,17 @@ export interface Api {
     onDeleted(handler: (payload: unknown) => void): () => void
     // Payload = { diagramId, links }.
     onLinksUpdated(handler: (payload: unknown) => void): () => void
+    // Biblioteca de shapes (.excalidrawlib) — GLOBAL, compartilhada entre
+    // diagramas. replace é o caminho do onLibraryChange do editor (array
+    // completo, na ordem do painel); installUrl baixa no main (15s/5MB).
+    library: {
+      get(): Promise<DiagramLibraryItem[]>
+      replace(items: DiagramLibraryItem[]): Promise<DiagramLibraryItem[]>
+      remove(id: string): Promise<DiagramLibraryItem[]>
+      installUrl(url: string): Promise<InstallDiagramLibraryResult>
+      // Payload = { items: DiagramLibraryItem[] }.
+      onUpdated(handler: (payload: unknown) => void): () => void
+    }
   }
   meetings: {
     list(filter?: MeetingListFilter): Promise<Meeting[]>

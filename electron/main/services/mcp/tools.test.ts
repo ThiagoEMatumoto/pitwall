@@ -20,7 +20,7 @@ vi.mock('electron', async () => {
 import { existsSync } from 'node:fs'
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
-import { buildTools, type McpNotify, type ToolDef } from './tools'
+import { buildTools, type McpNotify, type ToolDef, type ToolResult } from './tools'
 // Módulos leves (sem electron): store lê só o DB mockado; composeJobKickoff é puro.
 import * as jobStore from '../scheduled-job-store'
 import { composeJobKickoff } from '../job-kickoff'
@@ -66,7 +66,8 @@ function tool(name: string): ToolDef {
 }
 
 function call<T>(name: string, args: unknown): T {
-  return tool(name).handler(args).structuredContent as T
+  // Cast: as tools deste arquivo são síncronas (a exceção async é testada com await).
+  return (tool(name).handler(args) as ToolResult).structuredContent as T
 }
 
 beforeEach(() => {
@@ -874,7 +875,7 @@ describe('mcp tools — session_handoff sem gate', () => {
     function callAs<T>(motherSessionId: string | null, name: string, args: unknown): T {
       const def = buildTools(notify, { motherSessionId }).find((t) => t.name === name)
       if (!def) throw new Error(`tool not registered: ${name}`)
-      return def.handler(args).structuredContent as T
+      return (def.handler(args) as ToolResult).structuredContent as T
     }
 
     const motherOf = (handoffId: string): string | null =>
@@ -1174,7 +1175,7 @@ describe('mcp tools — diagrams', () => {
 
   it('diagram_create converte skeleton, persiste, broadcasta e devolve skeleton derivado', () => {
     const antes = notify.calls.length
-    const { diagram, skeleton } = tool('diagram_create').handler({
+    const { diagram, skeleton } = (tool('diagram_create').handler({
       title: 'Fluxo de auth',
       kind: 'flow',
       summary: 'esboço inicial',
@@ -1184,7 +1185,7 @@ describe('mcp tools — diagrams', () => {
         { id: 'e1', type: 'arrow', start: { id: 'ui' }, end: { id: 'api' }, label: { text: 'POST /login' } },
       ],
       links: [{ parentType: 'feature', parentId: 'feat-1' }],
-    }).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+    }) as ToolResult).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(diagram.id).toBeTruthy()
     expect(diagram.sourceFormat).toBe('skeleton')
@@ -1242,7 +1243,7 @@ describe('mcp tools — diagrams', () => {
     const diagram = novoDiagrama()
     const antes = notify.calls.length
 
-    const { diagram: depois, skeleton } = tool('diagram_patch').handler({
+    const { diagram: depois, skeleton } = (tool('diagram_patch').handler({
       id: diagram.id,
       summary: 'adiciona o banco',
       ops: [
@@ -1250,7 +1251,7 @@ describe('mcp tools — diagrams', () => {
         { op: 'update', id: 'ui', label: { text: 'Frontend' } },
         { op: 'delete', id: 'e1' },
       ],
-    }).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+    }) as ToolResult).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(depois.version).toBe(2)
     const ids = skeleton.map((s) => s.id)
@@ -1437,5 +1438,112 @@ describe('mcp tools — diagrams', () => {
     expect(
       db.prepare('SELECT COUNT(*) AS n FROM diagram_links WHERE diagram_id = ?').get(diagram.id),
     ).toEqual({ n: 0 })
+  })
+})
+
+describe('mcp tools — diagram library', () => {
+  interface LibraryItemMetaOut {
+    id: string
+    name: string | null
+    status: string
+    elementCount: number
+  }
+
+  const LIB_V2 = {
+    type: 'excalidrawlib',
+    version: 2,
+    libraryItems: [
+      {
+        id: 'li-1',
+        status: 'unpublished',
+        name: 'Card',
+        created: 1_700_000_000_000,
+        elements: [{ type: 'rectangle', id: 'e1' }],
+      },
+      {
+        id: 'li-2',
+        status: 'published',
+        created: 1_700_000_000_001,
+        elements: [
+          { type: 'ellipse', id: 'e2' },
+          { type: 'arrow', id: 'e3' },
+        ],
+      },
+    ],
+  }
+
+  it('diagram_library_install via library_json persiste, broadcasta e devolve metas', async () => {
+    const out = ((await tool('diagram_library_install').handler({ library_json: LIB_V2 }))
+      .structuredContent) as { added: number; items: LibraryItemMetaOut[] }
+
+    expect(out.added).toBe(2)
+    expect(out.items.map((i) => i.id)).toEqual(['li-1', 'li-2'])
+    expect(out.items[1].elementCount).toBe(2)
+    // Metas não carregam o payload dos shapes.
+    expect(out.items[0]).not.toHaveProperty('elements')
+
+    const rows = getDb()
+      .prepare('SELECT id, status FROM diagram_library_items ORDER BY position ASC')
+      .all() as Array<{ id: string; status: string }>
+    expect(rows).toEqual([
+      { id: 'li-1', status: 'unpublished' },
+      { id: 'li-2', status: 'published' },
+    ])
+    expect(notify.calls.at(-1)?.[0]).toBe('diagramLibrary:updated')
+  })
+
+  it('reinstalar a mesma biblioteca faz merge por id (não duplica)', async () => {
+    const renamed = {
+      ...LIB_V2,
+      libraryItems: [{ ...LIB_V2.libraryItems[0], name: 'Card v2' }],
+    }
+    const out = ((await tool('diagram_library_install').handler({ library_json: renamed }))
+      .structuredContent) as { added: number; items: LibraryItemMetaOut[] }
+
+    expect(out.added).toBe(1)
+    const li1 = out.items.find((i) => i.id === 'li-1')
+    expect(li1?.name).toBe('Card v2')
+    expect(out.items.filter((i) => i.id === 'li-1')).toHaveLength(1)
+  })
+
+  it('diagram_library_install exige exatamente um de url|library_json', async () => {
+    await expect(tool('diagram_library_install').handler({})).rejects.toThrow(
+      /exactly one of url or library_json/,
+    )
+    await expect(
+      tool('diagram_library_install').handler({
+        url: 'https://example.com/lib.excalidrawlib',
+        library_json: LIB_V2,
+      }),
+    ).rejects.toThrow(/exactly one of url or library_json/)
+    // JSON que não é .excalidrawlib falha no parser, não grava nada.
+    await expect(
+      tool('diagram_library_install').handler({ library_json: { type: 'nope' } }),
+    ).rejects.toThrow(/excalidrawlib/)
+  })
+
+  it('diagram_library_list devolve as metas na ordem do painel', () => {
+    const { items } = call<{ items: LibraryItemMetaOut[] }>('diagram_library_list', {})
+    expect(items.map((i) => i.id)).toEqual(['li-1', 'li-2'])
+    expect(items[0]).toEqual({
+      id: 'li-1',
+      name: 'Card v2',
+      status: 'unpublished',
+      elementCount: 1,
+    })
+  })
+
+  it('diagram_library_remove apaga o item, broadcasta e devolve o restante', () => {
+    const out = call<{ id: string; removed: boolean; items: LibraryItemMetaOut[] }>(
+      'diagram_library_remove',
+      { id: 'li-1' },
+    )
+    expect(out.removed).toBe(true)
+    expect(out.items.map((i) => i.id)).toEqual(['li-2'])
+    expect(notify.calls.at(-1)?.[0]).toBe('diagramLibrary:updated')
+    const { n } = getDb()
+      .prepare(`SELECT COUNT(*) AS n FROM diagram_library_items WHERE id = 'li-1'`)
+      .get() as { n: number }
+    expect(n).toBe(0)
   })
 })

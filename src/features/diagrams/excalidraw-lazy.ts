@@ -40,6 +40,9 @@ export interface ExcalidrawUtils {
   exportToSvg: (typeof import("@excalidraw/excalidraw"))["exportToSvg"];
   restoreElements: typeof restoreElements;
   CaptureUpdateAction: typeof CaptureUpdateAction;
+  mergeLibraryItems: (typeof import("@excalidraw/excalidraw"))["mergeLibraryItems"];
+  loadLibraryFromBlob: (typeof import("@excalidraw/excalidraw"))["loadLibraryFromBlob"];
+  getLibraryItemsHash: (typeof import("@excalidraw/excalidraw"))["getLibraryItemsHash"];
 }
 
 export async function loadExcalidrawUtils(): Promise<ExcalidrawUtils> {
@@ -49,5 +52,8 @@ export async function loadExcalidrawUtils(): Promise<ExcalidrawUtils> {
     exportToSvg: m.exportToSvg,
     restoreElements: m.restoreElements,
     CaptureUpdateAction: m.CaptureUpdateAction,
+    mergeLibraryItems: m.mergeLibraryItems,
+    loadLibraryFromBlob: m.loadLibraryFromBlob,
+    getLibraryItemsHash: m.getLibraryItemsHash,
   };
 }

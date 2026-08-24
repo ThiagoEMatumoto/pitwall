@@ -1,15 +1,19 @@
 import { ipcMain } from 'electron'
 import * as diagramStore from '../services/diagram-store'
+import * as libraryStore from '../services/diagram-library-store'
+import { installLibraryFromUrl } from '../services/diagram-library-install'
 import { broadcast } from '../services/notify'
 import type {
   CreateDiagramInput,
   Diagram,
   DiagramAuthor,
+  DiagramLibraryItem,
   DiagramLink,
   DiagramListFilter,
   DiagramMeta,
   DiagramVersion,
   DiagramVersionMeta,
+  InstallDiagramLibraryResult,
   UpdateDiagramSceneInput,
 } from '../../../shared/types/ipc'
 
@@ -115,4 +119,40 @@ export function registerDiagramsIpc(): void {
     const diagram = diagramStore.get(id)
     if (diagram) broadcast('diagram:updated', diagram)
   })
+
+  // ---- biblioteca de shapes (.excalidrawlib) ----
+  // Global (uma por app); todo write broadcasta o conjunto completo — o
+  // renderer aplica via updateLibrary no editor aberto.
+
+  ipcMain.handle('diagrams:library-get', (): DiagramLibraryItem[] => {
+    return libraryStore.getItems()
+  })
+
+  // Caminho do onLibraryChange do editor: o Excalidraw manda a biblioteca
+  // inteira, já na ordem do painel.
+  ipcMain.handle(
+    'diagrams:library-replace',
+    (_e, items: DiagramLibraryItem[]): DiagramLibraryItem[] => {
+      const saved = libraryStore.replaceAll(items)
+      broadcast('diagramLibrary:updated', { items: saved })
+      return saved
+    },
+  )
+
+  ipcMain.handle('diagrams:library-remove', (_e, id: string): DiagramLibraryItem[] => {
+    const items = libraryStore.removeItem(id)
+    broadcast('diagramLibrary:updated', { items })
+    return items
+  })
+
+  // Fetch no MAIN (CSP do renderer não alcança domínio arbitrário); timeout
+  // 15s + cap 5MB moram no serviço de instalação.
+  ipcMain.handle(
+    'diagrams:library-install-url',
+    async (_e, url: string): Promise<InstallDiagramLibraryResult> => {
+      const result = await installLibraryFromUrl(url)
+      broadcast('diagramLibrary:updated', { items: result.items })
+      return result
+    },
+  )
 }

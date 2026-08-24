@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { diagramsApi } from "@/lib/ipc";
 import type {
   Diagram,
+  DiagramLibraryItem,
   DiagramLink,
   DiagramMeta,
   DiagramScene,
@@ -13,6 +14,7 @@ import type {
 let offUpdated: (() => void) | null = null;
 let offDeleted: (() => void) | null = null;
 let offLinksUpdated: (() => void) | null = null;
+let offLibraryUpdated: (() => void) | null = null;
 let watchStarted = false;
 
 // Cena vinda de broadcast (ex.: Claude editou via MCP) endereçada ao editor
@@ -24,6 +26,16 @@ export interface RemoteScene {
 }
 
 let remoteNonce = 0;
+
+// Biblioteca de shapes vinda de broadcast (install via MCP/URL, replace de
+// outra janela). Mesmo padrão do RemoteScene: o nonce bumpa a cada broadcast e
+// é o que o effect do editor observa.
+export interface RemoteLibrary {
+  items: DiagramLibraryItem[];
+  nonce: number;
+}
+
+let libraryNonce = 0;
 
 // Token da seleção em voo: cada select() bumpa; um get() que resolve depois
 // de outro select() (ou de um select(null)) descarta o resultado obsoleto.
@@ -47,6 +59,7 @@ interface DiagramsState {
   loading: boolean;
   error: string | null;
   remoteScene: RemoteScene | null;
+  remoteLibrary: RemoteLibrary | null;
 
   load: () => Promise<void>;
   select: (id: string | null) => Promise<void>;
@@ -69,6 +82,7 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
   loading: false,
   error: null,
   remoteScene: null,
+  remoteLibrary: null,
 
   load: async () => {
     set({ loading: true, error: null });
@@ -217,6 +231,14 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
           : s,
       );
     });
+
+    offLibraryUpdated = diagramsApi.library.onUpdated((payload) => {
+      const { items } = (payload ?? {}) as { items?: DiagramLibraryItem[] };
+      if (!items) return;
+      // O editor decide se aplica: compara o hash com o último salvo/aplicado
+      // (eco do próprio replace é ignorado lá).
+      set({ remoteLibrary: { items, nonce: ++libraryNonce } });
+    });
   },
 
   stopWatch: () => {
@@ -231,6 +253,10 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
     if (offLinksUpdated) {
       offLinksUpdated();
       offLinksUpdated = null;
+    }
+    if (offLibraryUpdated) {
+      offLibraryUpdated();
+      offLibraryUpdated = null;
     }
     watchStarted = false;
   },

@@ -37,6 +37,7 @@ import * as contentContracts from './035_content_contracts'
 import * as handoffDismissed from './036_handoff_dismissed'
 import * as handoffPredecessor from './037_handoff_predecessor'
 import * as diagrams from './038_diagrams'
+import * as diagramLibrary from './039_diagram_library'
 
 interface Migration {
   version: number
@@ -89,6 +90,7 @@ export const migrations: Migration[] = [
   handoffDismissed,
   handoffPredecessor,
   diagrams,
+  diagramLibrary,
 ]
 
 export function runMigrations(db: Database.Database): void {

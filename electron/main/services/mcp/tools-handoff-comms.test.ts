@@ -43,7 +43,13 @@ vi.mock('../session-activity', () => ({
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
-import { buildTools, type McpNotify, type McpRequestContext, type ToolDef } from './tools'
+import {
+  buildTools,
+  type McpNotify,
+  type McpRequestContext,
+  type ToolDef,
+  type ToolResult,
+} from './tools'
 
 function makeNotify(): McpNotify {
   return {
@@ -62,7 +68,7 @@ function tool(name: string): ToolDef {
 }
 
 function call<T>(name: string, args: unknown): T {
-  return tool(name).handler(args).structuredContent as T
+  return (tool(name).handler(args) as ToolResult).structuredContent as T
 }
 
 // Mesma bateria de tools, mas com o carimbo de identidade que o app põe no spawn
@@ -71,7 +77,7 @@ function callAs<T>(callerSessionId: string | null, name: string, args: unknown):
   const ctx: McpRequestContext = { motherSessionId: callerSessionId }
   const def = buildTools(makeNotify(), ctx).find((t) => t.name === name)
   if (!def) throw new Error(`tool not registered: ${name}`)
-  return def.handler(args).structuredContent as T
+  return (def.handler(args) as ToolResult).structuredContent as T
 }
 
 // Cria um handoff running com filha atrelada (sessions.id + cc_session_id).
