@@ -36,6 +36,7 @@ import * as resetRepoDefaultBranch from './034_reset_repo_default_branch'
 import * as contentContracts from './035_content_contracts'
 import * as handoffDismissed from './036_handoff_dismissed'
 import * as handoffPredecessor from './037_handoff_predecessor'
+import * as diagrams from './038_diagrams'
 
 interface Migration {
   version: number
@@ -87,6 +88,7 @@ export const migrations: Migration[] = [
   contentContracts,
   handoffDismissed,
   handoffPredecessor,
+  diagrams,
 ]
 
 export function runMigrations(db: Database.Database): void {

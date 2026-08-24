@@ -42,6 +42,7 @@ import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerScheduledJobsIpc } from './ipc/scheduled-jobs'
 import { registerContentContractsIpc } from './ipc/content-contracts'
+import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerMeetingsIpc } from './ipc/meetings'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerSyncIpc, syncOnBoot, syncCoordinator, notifySyncMutation } from './ipc/sync'
@@ -291,6 +292,7 @@ app.whenReady().then(async () => {
   registerTasksIpc()
   registerScheduledJobsIpc()
   registerContentContractsIpc()
+  registerDiagramsIpc()
   registerMeetingsIpc()
   registerMcpIpc()
   registerSyncIpc()
