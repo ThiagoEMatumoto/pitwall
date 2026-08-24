@@ -178,6 +178,7 @@ const api: Api = {
     transcribe: (bytes: Uint8Array, mime: string) => invoke('voice:transcribe', { bytes, mime }),
     condense: (text: string) => invoke('voice:condense', { text }),
     configStatus: () => invoke('voice:config-status'),
+    tts: (text: string) => invoke('voice:tts', { text }),
     onSummary: (handler) => subscribe<VoiceSummaryEvent>('voice:summary', handler),
   },
   secrets: {

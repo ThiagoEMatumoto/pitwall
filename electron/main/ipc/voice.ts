@@ -4,6 +4,7 @@ import type { VoiceConfigStatus } from '../../../shared/types/ipc'
 import { getVoiceConfig, vozEnvPath } from '../services/voice-config'
 import { condense } from '../services/voice-condense'
 import { transcribe } from '../services/voice-stt'
+import { speak } from '../services/voice-tts'
 
 // bytes chega do renderer como Uint8Array intacto (structured clone do invoke).
 const transcribeSchema = z.object({
@@ -12,6 +13,8 @@ const transcribeSchema = z.object({
 })
 
 const condenseSchema = z.object({ text: z.string().min(1) })
+
+const ttsSchema = z.object({ text: z.string().min(1) })
 
 export function registerVoiceIpc(): void {
   ipcMain.handle('voice:transcribe', (_e, payload: unknown) => {
@@ -24,13 +27,18 @@ export function registerVoiceIpc(): void {
     return condense(text)
   })
 
+  ipcMain.handle('voice:tts', (_e, payload: unknown) => {
+    const { text } = ttsSchema.parse(payload)
+    return speak(text)
+  })
+
   // Status pra tela de configurações — nunca inclui credencial, só o que é
   // seguro mostrar (URL, modelos, voz).
   ipcMain.handle('voice:config-status', (): VoiceConfigStatus => {
     const path = vozEnvPath()
     const result = getVoiceConfig()
     if (!result.ok) return { ok: false, path, error: result.error }
-    const { sttUrl, sttModel, sttLanguage, ttsVoice, ttsModel } = result.cfg
-    return { ok: true, path, sttUrl, sttModel, sttLanguage, ttsVoice, ttsModel }
+    const { sttUrl, sttModel, sttLanguage, ttsVoice, ttsModel, ttsSpeed } = result.cfg
+    return { ok: true, path, sttUrl, sttModel, sttLanguage, ttsVoice, ttsModel, ttsSpeed }
   })
 }

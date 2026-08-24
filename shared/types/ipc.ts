@@ -2553,8 +2553,15 @@ export type VoiceConfigStatus =
       sttLanguage: string
       ttsVoice: string
       ttsModel: string
+      ttsSpeed: number
     }
   | { ok: false; path: string; error: string }
+
+// Resultado da síntese de fala (ElevenLabs). bytes é o mp3 inteiro — o renderer
+// toca via Blob/objectURL. Erros já vêm em PT (porte de vozapp/tts.py).
+export type VoiceTtsResult =
+  | { ok: true; bytes: Uint8Array; mime: string }
+  | { ok: false; error: string }
 
 // Resumo de fim de turno (modo voz): emitido pelo main em voice:summary quando
 // um turno termina em texto de assistant e a pref voice.mode está ligada.
@@ -2649,6 +2656,8 @@ export interface Api {
     condense(text: string): Promise<VoiceCondenseResult>
     /** Status da config voz.env — nunca inclui credenciais. */
     configStatus(): Promise<VoiceConfigStatus>
+    /** Sintetiza fala (mp3) do texto via ElevenLabs — bytes prontos pra tocar. */
+    tts(text: string): Promise<VoiceTtsResult>
     /** Resumo automático do turno que acabou (2-3 frases, PT) — modo voz. */
     onSummary(handler: (event: VoiceSummaryEvent) => void): () => void
   }

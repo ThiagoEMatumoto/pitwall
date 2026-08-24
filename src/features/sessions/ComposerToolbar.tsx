@@ -15,6 +15,7 @@ import { PermissionPill } from './PermissionPill'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
 import { MicButton } from './voice/MicButton'
+import { VoiceModeToggle } from './voice/VoiceModeToggle'
 
 interface Props {
   activity: SessionActivity | null
@@ -130,6 +131,7 @@ export function ComposerToolbar({
         </Button>
       )}
       {onVoiceText && <MicButton onText={onVoiceText} />}
+      {onVoiceText && <VoiceModeToggle />}
       {hasPending &&
         (canSwitch ? (
           // Sessão ficou ociosa com troca pendente: a injeção dispara agora —
