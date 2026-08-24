@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { MIN_RECORDING_MS, reduceRecorder, type RecorderState } from './voice-recorder-state'
+import {
+  MIN_RECORDING_MS,
+  reduceRecorder,
+  shouldCondense,
+  type RecorderState,
+} from './voice-recorder-state'
 
 const idle: RecorderState = { status: 'idle' }
 
@@ -57,5 +62,45 @@ describe('reduceRecorder', () => {
     expect(reduceRecorder(idle, { type: 'transcribed' })).toBe(idle)
     const recording: RecorderState = { status: 'recording', startedAt: 1 }
     expect(reduceRecorder(recording, { type: 'transcribed' })).toBe(recording)
+  })
+
+  it('moves to condensing while a long dictation is being cleaned up', () => {
+    const next = reduceRecorder({ status: 'transcribing' }, { type: 'condensing' })
+    expect(next).toEqual({ status: 'condensing' })
+  })
+
+  it('returns to idle once condensation finishes', () => {
+    const next = reduceRecorder({ status: 'condensing' }, { type: 'condensed' })
+    expect(next).toEqual({ status: 'idle' })
+  })
+
+  it('ignores start while condensing (text is on its way to the composer)', () => {
+    const state: RecorderState = { status: 'condensing' }
+    expect(reduceRecorder(state, { type: 'start', at: 4000 })).toBe(state)
+  })
+
+  it('ignores condensing/condensed outside of their source states', () => {
+    expect(reduceRecorder(idle, { type: 'condensing' })).toBe(idle)
+    expect(reduceRecorder(idle, { type: 'condensed' })).toBe(idle)
+    const recording: RecorderState = { status: 'recording', startedAt: 1 }
+    expect(reduceRecorder(recording, { type: 'condensing' })).toBe(recording)
+  })
+
+  it('lands on error from condensing on failure', () => {
+    const next = reduceRecorder({ status: 'condensing' }, { type: 'failed', message: 'x' })
+    expect(next).toEqual({ status: 'error', message: 'x' })
+  })
+})
+
+describe('shouldCondense', () => {
+  it('condenses only at or above the word threshold', () => {
+    expect(shouldCondense('one two three', 4)).toBe(false)
+    expect(shouldCondense('one two three four', 4)).toBe(true)
+    expect(shouldCondense('one two three four five', 4)).toBe(true)
+  })
+
+  it('counts words across any whitespace, ignoring blanks', () => {
+    expect(shouldCondense('  one\n two\tthree  ', 3)).toBe(true)
+    expect(shouldCondense('   ', 1)).toBe(false)
   })
 })

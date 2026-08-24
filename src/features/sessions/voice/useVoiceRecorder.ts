@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { voiceApi } from '@/lib/ipc'
-import { reduceRecorder, type RecorderEvent, type RecorderState } from './voice-recorder-state'
+import { prefsApi, voiceApi } from '@/lib/ipc'
+import {
+  CONDENSE_THRESHOLD_KEY,
+  DEFAULT_CONDENSE_THRESHOLD_WORDS,
+  reduceRecorder,
+  shouldCondense,
+  type RecorderEvent,
+  type RecorderState,
+} from './voice-recorder-state'
 
 const PREFERRED_MIME = 'audio/webm;codecs=opus'
 
@@ -8,6 +15,25 @@ function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return PREFERRED_MIME
   if (MediaRecorder.isTypeSupported(PREFERRED_MIME)) return PREFERRED_MIME
   return 'audio/webm'
+}
+
+async function condenseThresholdWords(): Promise<number> {
+  try {
+    const v = await prefsApi.get<number>(CONDENSE_THRESHOLD_KEY)
+    return typeof v === 'number' && v >= 0 ? v : DEFAULT_CONDENSE_THRESHOLD_WORDS
+  } catch {
+    return DEFAULT_CONDENSE_THRESHOLD_WORDS
+  }
+}
+
+// A condensação nunca perde o ditado: qualquer falha devolve o texto cru.
+async function condensed(text: string): Promise<string> {
+  try {
+    const res = await voiceApi.condense(text)
+    return res.text.trim() || text
+  } catch {
+    return text
+  }
 }
 
 function micErrorMessage(err: unknown): string {
@@ -72,8 +98,20 @@ export function useVoiceRecorder(onText: (text: string) => void) {
         return
       }
       const text = res.text.trim()
-      if (text) onTextRef.current(text)
-      dispatch({ type: 'transcribed' })
+      if (!text) {
+        dispatch({ type: 'transcribed' })
+        return
+      }
+      // Ditado longo passa pelo condensador antes de entrar no composer; o
+      // resultado continua editável — nada é enviado sem revisão.
+      if (!shouldCondense(text, await condenseThresholdWords())) {
+        onTextRef.current(text)
+        dispatch({ type: 'transcribed' })
+        return
+      }
+      dispatch({ type: 'condensing' })
+      onTextRef.current(await condensed(text))
+      dispatch({ type: 'condensed' })
     } catch {
       dispatch({ type: 'failed', message: 'Falha ao transcrever o áudio.' })
     }
@@ -106,7 +144,7 @@ export function useVoiceRecorder(onText: (text: string) => void) {
       recorderRef.current?.stop()
       return
     }
-    if (status === 'transcribing') return
+    if (status === 'transcribing' || status === 'condensing') return
     void start()
   }
 

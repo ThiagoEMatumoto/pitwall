@@ -2535,6 +2535,13 @@ export interface UpdateDiagramSceneInput {
 // (porte das mensagens de vozapp/stt.py).
 export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
 
+// Resultado da condensação de um ditado longo. Falha é fail-open: o texto volta
+// intacto com condensed=false — o ditado nunca se perde.
+export interface VoiceCondenseResult {
+  text: string
+  condensed: boolean
+}
+
 // Status da config de voz (~/.config/voz/voz.env) — alimenta a seção "Voz" das
 // configurações. Nunca carrega credencial, só campos seguros de mostrar.
 export type VoiceConfigStatus =
@@ -2631,6 +2638,8 @@ export interface Api {
   voice: {
     /** Transcreve áudio gravado no renderer (webm/opus ou wav) via proxy STT. */
     transcribe(bytes: Uint8Array, mime: string): Promise<VoiceTranscribeResult>
+    /** Condensa ditado longo num prompt limpo via claude -p (fail-open). */
+    condense(text: string): Promise<VoiceCondenseResult>
     /** Status da config voz.env — nunca inclui credenciais. */
     configStatus(): Promise<VoiceConfigStatus>
   }

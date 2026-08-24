@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import type { VoiceConfigStatus } from '../../../shared/types/ipc'
 import { getVoiceConfig, vozEnvPath } from '../services/voice-config'
+import { condense } from '../services/voice-condense'
 import { transcribe } from '../services/voice-stt'
 
 // bytes chega do renderer como Uint8Array intacto (structured clone do invoke).
@@ -10,10 +11,17 @@ const transcribeSchema = z.object({
   mime: z.string().min(1),
 })
 
+const condenseSchema = z.object({ text: z.string().min(1) })
+
 export function registerVoiceIpc(): void {
   ipcMain.handle('voice:transcribe', (_e, payload: unknown) => {
     const { bytes, mime } = transcribeSchema.parse(payload)
     return transcribe(bytes, mime)
+  })
+
+  ipcMain.handle('voice:condense', (_e, payload: unknown) => {
+    const { text } = condenseSchema.parse(payload)
+    return condense(text)
   })
 
   // Status pra tela de configurações — nunca inclui credencial, só o que é

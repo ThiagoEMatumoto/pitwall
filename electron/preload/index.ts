@@ -175,6 +175,7 @@ const api: Api = {
   },
   voice: {
     transcribe: (bytes: Uint8Array, mime: string) => invoke('voice:transcribe', { bytes, mime }),
+    condense: (text: string) => invoke('voice:condense', { text }),
     configStatus: () => invoke('voice:config-status'),
   },
   secrets: {

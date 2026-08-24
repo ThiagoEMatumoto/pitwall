@@ -44,6 +44,21 @@ export function MicButton({ onText }: Props) {
     )
   }
 
+  if (state.status === 'condensing') {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        title="Condensando o ditado num prompt limpo…"
+        className="gap-1 px-2 py-0.5 text-[10px]"
+      >
+        <Icon as={Loader} size={11} className="animate-spin" />
+        <span className="whitespace-nowrap">Condensando…</span>
+      </Button>
+    )
+  }
+
   if (state.status === 'error') {
     return (
       <Button
