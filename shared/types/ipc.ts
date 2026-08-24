@@ -2967,6 +2967,17 @@ export interface Api {
     onDeleted(handler: (payload: unknown) => void): () => void
     // Payload = { diagramId, links }.
     onLinksUpdated(handler: (payload: unknown) => void): () => void
+    // Biblioteca de shapes (.excalidrawlib) — GLOBAL, compartilhada entre
+    // diagramas. replace é o caminho do onLibraryChange do editor (array
+    // completo, na ordem do painel); installUrl baixa no main (15s/5MB).
+    library: {
+      get(): Promise<DiagramLibraryItem[]>
+      replace(items: DiagramLibraryItem[]): Promise<DiagramLibraryItem[]>
+      remove(id: string): Promise<DiagramLibraryItem[]>
+      installUrl(url: string): Promise<InstallDiagramLibraryResult>
+      // Payload = { items: DiagramLibraryItem[] }.
+      onUpdated(handler: (payload: unknown) => void): () => void
+    }
   }
   meetings: {
     list(filter?: MeetingListFilter): Promise<Meeting[]>

@@ -56,6 +56,7 @@ import type {
   ContentGateRunListFilter,
   RunContentGateInput,
   UpsertContentContractInput,
+  DiagramLibraryItem,
   DiagramListFilter,
   DiagramLink,
   DiagramAuthor,
@@ -412,6 +413,13 @@ const api: Api = {
     onUpdated: (handler) => subscribe<unknown>('diagram:updated', handler),
     onDeleted: (handler) => subscribe<unknown>('diagram:deleted', handler),
     onLinksUpdated: (handler) => subscribe<unknown>('diagramLinks:updated', handler),
+    library: {
+      get: () => invoke('diagrams:library-get'),
+      replace: (items: DiagramLibraryItem[]) => invoke('diagrams:library-replace', items),
+      remove: (id: string) => invoke('diagrams:library-remove', id),
+      installUrl: (url: string) => invoke('diagrams:library-install-url', url),
+      onUpdated: (handler) => subscribe<unknown>('diagramLibrary:updated', handler),
+    },
   },
   meetings: {
     list: (filter?: MeetingListFilter) => invoke('meetings:list', filter),

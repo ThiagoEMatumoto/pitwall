@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations } from './migrations/index'
-import type { DiagramLibraryItem } from '../../shared/types/ipc'
+import type { DiagramLibraryItem } from '../../../shared/types/ipc'
 
 // Mesmo padrão de diagram-store.test: o store importa getDb de './db' (que
 // depende de electron.app); mockamos pra um SQLite in-memory migrado.
