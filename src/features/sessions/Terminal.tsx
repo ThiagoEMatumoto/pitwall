@@ -1217,9 +1217,10 @@ export function Terminal({
               onSelectPermission={selectPermission}
               // Ctrl+C interrompe o claude (descoberta da ação que antes era só teclado).
               onInterrupt={() => write('\x03')}
-              // Ditado por voz: o texto transcrito entra no prompt via onInsert
-              // existente — o usuário revisa e envia (nunca envio direto).
-              onVoiceText={insertPrompt}
+              // Ditado por voz: o texto transcrito entra no DRAFT do composer —
+              // visível/editável nos dois modos (escrever no PTY sumiria o texto
+              // em modo chat, onde o xterm fica invisible). Envio pelo submit normal.
+              onVoiceText={(text) => composerRef.current?.appendText(text)}
             />
           }
         />

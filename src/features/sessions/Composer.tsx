@@ -1,21 +1,18 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, CornerDownLeft, Image as ImageIcon, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
 import { sessionsApi } from '@/lib/ipc'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
+import { insertDictation } from './composer-insert'
 import { insertPathToken, pickImageFiles, pickImageItems } from './image-paste'
 
 export interface ComposerHandle {
   focus: () => void
+  // Insere texto (ditado por voz) no DRAFT: na posição do cursor se o textarea
+  // tem foco, senão no fim. Nunca envia — o usuário revisa e usa o submit normal.
+  appendText: (text: string) => void
 }
 
 // Imagem anexada ao draft atual: `path` é o caminho temp injetado no prompt;
@@ -98,7 +95,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Imagens anexadas ao draft atual (thumbnail + nome). Restaura da persistência
   // por sessão — sem object URL (chip com ícone até o usuário reanexar).
   const [attached, setAttached] = useState<Attachment[]>(() =>
-    (attachmentsBySession.get(sessionId) ?? []).map((a) => ({ ...a, previewUrl: '' })),
+    (attachmentsBySession.get(sessionId) ?? []).map((a) => ({
+      ...a,
+      previewUrl: '',
+    })),
   )
   // Espelha `attached` pra revogar os object URLs no unmount sem recriar o efeito.
   const attachedRef = useRef<Attachment[]>([])
@@ -118,7 +118,57 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Recolhido só vale no modo terminal (collapsible); em chat o dock é sempre completo.
   const collapsed = collapsible && composerCollapsed
 
-  useImperativeHandle(ref, () => ({ focus: () => innerRef.current?.focus() }), [])
+  // Composição de IME ativa no textarea: inserir texto no meio de uma composição
+  // muda o controlled value sob o compositor e quebra o buffer do IME. O ditado
+  // que chegar nesse estado fica na fila e é aplicado no compositionend.
+  const composingRef = useRef(false)
+  const pendingDictationRef = useRef<string[]>([])
+
+  // Ditado por voz → draft. Cursor: posição atual se o textarea tem foco,
+  // fim caso contrário (ditar sem foco não pode sobrescrever o meio do texto).
+  function applyDictation(dictated: string) {
+    const node = innerRef.current
+    const focused = node != null && document.activeElement === node
+    // A transcrição chega segundos depois do clique no mic — o usuário pode já
+    // estar digitando em outro input. Só puxa o foco pro textarea se ele ainda
+    // está nele (reposiciona o cursor) ou se nada útil tem foco (body).
+    const active = document.activeElement
+    const canFocus = focused || active === document.body || active == null
+    setText((cur) => {
+      const start = focused ? (node.selectionStart ?? cur.length) : cur.length
+      const end = focused ? (node.selectionEnd ?? cur.length) : cur.length
+      const { value, cursor } = insertDictation(cur, dictated, start, end)
+      if (canFocus) {
+        requestAnimationFrame(() => {
+          const el = innerRef.current
+          if (el) {
+            el.focus()
+            el.setSelectionRange(cursor, cursor)
+          }
+        })
+      }
+      return value
+    })
+    // Ditar sobre um prompt recuperado do histórico vira um novo rascunho.
+    setHistIndex(null)
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: () => innerRef.current?.focus(),
+      appendText: (dictated: string) => {
+        // Dock recolhido esconderia o draft ditado — expande antes de inserir.
+        setComposerCollapsed(false)
+        if (composingRef.current) {
+          pendingDictationRef.current.push(dictated)
+          return
+        }
+        applyDictation(dictated)
+      },
+    }),
+    [],
+  )
 
   useEffect(() => {
     void loadPrefs()
@@ -310,7 +360,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
           <button
             type="button"
             onClick={() => setComposerCollapsed(!composerCollapsed)}
-            title={collapsed ? 'Expandir o compositor' : 'Recolher o compositor (mantém a barra de controles)'}
+            title={
+              collapsed
+                ? 'Expandir o compositor'
+                : 'Recolher o compositor (mantém a barra de controles)'
+            }
             aria-label={collapsed ? 'Expandir o compositor' : 'Recolher o compositor'}
             className="flex shrink-0 items-center rounded p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-accent)]"
           >
@@ -357,103 +411,118 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       )}
       {!collapsed && (
         <>
-      <GradientBorder
-        radius={12}
-        innerBg="var(--color-bg)"
-        className="w-full"
-        style={{ display: 'block', width: '100%' }}
-        innerClassName="flex items-end gap-2 px-2.5 py-2"
-      >
-        <div className="relative min-w-0 flex-1">
-          {/* Placeholder da marca: texto + cursor piscante (pw-cursor). Overlay
+          <GradientBorder
+            radius={12}
+            innerBg="var(--color-bg)"
+            className="w-full"
+            style={{ display: 'block', width: '100%' }}
+            innerClassName="flex items-end gap-2 px-2.5 py-2"
+          >
+            <div className="relative min-w-0 flex-1">
+              {/* Placeholder da marca: texto + cursor piscante (pw-cursor). Overlay
               decorativo (pointer-events-none) mostrado só com o input vazio — não
               interfere no textarea real por baixo. */}
-          {text.length === 0 && (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute left-0 top-0 flex items-center font-mono text-sm leading-[1.5] text-[var(--color-text-dim)]"
-            >
-              Escreva um prompt…
-              <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+              {text.length === 0 && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute left-0 top-0 flex items-center font-mono text-sm leading-[1.5] text-[var(--color-text-dim)]"
+                >
+                  Escreva um prompt…
+                  <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+                </div>
+              )}
+              <textarea
+                ref={innerRef}
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  // Editar manualmente sai do modo histórico (vira um novo rascunho).
+                  if (histIndex !== null) setHistIndex(null)
+                }}
+                onPaste={handlePaste}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onCompositionStart={() => {
+                  composingRef.current = true
+                }}
+                onCompositionEnd={() => {
+                  composingRef.current = false
+                  // Aplica os ditados adiados durante a composição, na ordem de chegada.
+                  const pending = pendingDictationRef.current
+                  pendingDictationRef.current = []
+                  for (const d of pending) applyDictation(d)
+                }}
+                rows={2}
+                placeholder=""
+                aria-label="Escreva um prompt — vai pro mesmo claude. Vazio: setas/Esc/Ctrl+C dirigem a TUI."
+                className="max-h-48 min-h-[2.5rem] w-full resize-none overflow-auto border-0 bg-transparent p-0 font-mono text-sm text-[var(--color-text)] outline-none"
+                onKeyDown={(e) => {
+                  // Não deixa atalhos globais/terminal interceptarem enquanto compõe.
+                  e.stopPropagation()
+                  // Histórico de prompts: Ctrl+↑/↓ recupera prompts despachados na sessão.
+                  // Vem ANTES do forward pro PTY pra não conflitar com o ↑/↓ puro (que
+                  // dirige a TUI do claude quando o composer está vazio).
+                  if (
+                    (e.ctrlKey || e.altKey) &&
+                    !e.metaKey &&
+                    (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+                  ) {
+                    e.preventDefault()
+                    recallHistory(e.key === 'ArrowUp' ? 'prev' : 'next')
+                    return
+                  }
+                  // Modelo Warp: teclas de controle/navegação são encaminhadas pro PTY pra
+                  // dirigir a TUI do claude (menus, y/n, Shift+Tab, interrupção). O textarea
+                  // vazio é "modo de controle"; com texto, as teclas editam o draft.
+                  if (onForwardKey) {
+                    const fwd = resolveForwardKey(
+                      {
+                        key: e.key,
+                        ctrl: e.ctrlKey,
+                        meta: e.metaKey,
+                        shift: e.shiftKey,
+                        alt: e.altKey,
+                      },
+                      text.trim().length === 0,
+                    )
+                    if ('seq' in fwd) {
+                      e.preventDefault()
+                      onForwardKey(fwd.seq)
+                      return
+                    }
+                  }
+                  const action = resolveComposerKey(
+                    {
+                      key: e.key,
+                      shift: e.shiftKey,
+                      meta: e.metaKey,
+                      ctrl: e.ctrlKey,
+                    },
+                    keyboardMode,
+                  )
+                  if (action === 'send') {
+                    e.preventDefault()
+                    submit()
+                  }
+                  // 'newline' e 'noop': comportamento nativo do textarea (quebra/edição).
+                }}
+              />
             </div>
-          )}
-        <textarea
-          ref={innerRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value)
-            // Editar manualmente sai do modo histórico (vira um novo rascunho).
-            if (histIndex !== null) setHistIndex(null)
-          }}
-          onPaste={handlePaste}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          rows={2}
-          placeholder=""
-          aria-label="Escreva um prompt — vai pro mesmo claude. Vazio: setas/Esc/Ctrl+C dirigem a TUI."
-          className="max-h-48 min-h-[2.5rem] w-full resize-none overflow-auto border-0 bg-transparent p-0 font-mono text-sm text-[var(--color-text)] outline-none"
-          onKeyDown={(e) => {
-            // Não deixa atalhos globais/terminal interceptarem enquanto compõe.
-            e.stopPropagation()
-            // Histórico de prompts: Ctrl+↑/↓ recupera prompts despachados na sessão.
-            // Vem ANTES do forward pro PTY pra não conflitar com o ↑/↓ puro (que
-            // dirige a TUI do claude quando o composer está vazio).
-            if (
-              (e.ctrlKey || e.altKey) &&
-              !e.metaKey &&
-              (e.key === 'ArrowUp' || e.key === 'ArrowDown')
-            ) {
-              e.preventDefault()
-              recallHistory(e.key === 'ArrowUp' ? 'prev' : 'next')
-              return
-            }
-            // Modelo Warp: teclas de controle/navegação são encaminhadas pro PTY pra
-            // dirigir a TUI do claude (menus, y/n, Shift+Tab, interrupção). O textarea
-            // vazio é "modo de controle"; com texto, as teclas editam o draft.
-            if (onForwardKey) {
-              const fwd = resolveForwardKey(
-                {
-                  key: e.key,
-                  ctrl: e.ctrlKey,
-                  meta: e.metaKey,
-                  shift: e.shiftKey,
-                  alt: e.altKey,
-                },
-                text.trim().length === 0,
-              )
-              if ('seq' in fwd) {
-                e.preventDefault()
-                onForwardKey(fwd.seq)
-                return
-              }
-            }
-            const action = resolveComposerKey(
-              { key: e.key, shift: e.shiftKey, meta: e.metaKey, ctrl: e.ctrlKey },
-              keyboardMode,
-            )
-            if (action === 'send') {
-              e.preventDefault()
-              submit()
-            }
-            // 'newline' e 'noop': comportamento nativo do textarea (quebra/edição).
-          }}
-        />
-        </div>
-        <div className="flex shrink-0 flex-col gap-1">
-          <Button variant="primary" size="sm" onClick={submit} title={hint}>
-            <Icon as={CornerDownLeft} size={13} />
-            Enviar
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={insertOnly}
-            title="Insere o texto no prompt do claude sem enviar — você revisa e aperta Enter"
-          >
-            Inserir
-          </Button>
-        </div>
-      </GradientBorder>
+            <div className="flex shrink-0 flex-col gap-1">
+              <Button variant="primary" size="sm" onClick={submit} title={hint}>
+                <Icon as={CornerDownLeft} size={13} />
+                Enviar
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={insertOnly}
+                title="Insere o texto no prompt do claude sem enviar — você revisa e aperta Enter"
+              >
+                Inserir
+              </Button>
+            </div>
+          </GradientBorder>
         </>
       )}
     </div>

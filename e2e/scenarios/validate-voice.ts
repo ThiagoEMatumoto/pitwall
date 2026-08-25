@@ -108,6 +108,19 @@ page.on("console", (m) => {
 
 try {
   await waitReady(page);
+
+  // O toggle Terminal⇄Chat (e outros controles do SessionHeader) só existe com
+  // o pane fora do tier 'narrow' (largura real do painel — SessionHeader.tsx).
+  // Com a base podada há um único pane, então largura de janela ≈ largura do
+  // pane: garantir a janela em 1400x900 evita que um ambiente de tela pequena
+  // derrube a etapa 4b por layout, não por bug.
+  const [winW, winH] = await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && win.getBounds().width < 1400) win.setSize(1400, 900);
+    return win ? win.getSize() : [0, 0];
+  });
+  console.log(`[janela] ${winW}x${winH}`);
+
   await goToArea(page, "projects");
   await page.waitForTimeout(500);
 
@@ -240,10 +253,10 @@ try {
   if (sawTranscribing) await screenshot(page, "voice-03-transcribing");
   console.log("[mic] estado transcrevendo visível:", sawTranscribing);
 
-  // --- 4. texto no prompt ---------------------------------------------------
-  // onVoiceText = insertPrompt: o texto entra na LINHA DE PROMPT da TUI via
-  // bracketed paste (nunca enviado). O xterm renderiza em canvas/WebGL, então a
-  // prova programática é o eco no backlog do PTY; o screenshot é a prova visual.
+  // --- 4. texto no composer (draft) -----------------------------------------
+  // onVoiceText → composerRef.appendText: o ditado entra no DRAFT do composer,
+  // um textarea real no DOM — prova mais forte que o eco em canvas do PTY, e
+  // visível/editável nos dois modos. O envio segue pelo submit normal.
   const sessions = (await page.evaluate(() => {
     const w = window as unknown as {
       api: {
@@ -255,30 +268,54 @@ try {
     return w.api.sessions.list();
   })) as Array<{ id?: string; ccSessionId?: string }>;
   const newest = sessions[0] ?? {};
-  const sessionId = newest.id ?? null;
   const ccSessionId = newest.ccSessionId ?? newest.id ?? null;
-  console.log("[sessão] id:", sessionId, "ccSessionId:", ccSessionId);
+  console.log("[sessão] ccSessionId:", ccSessionId);
 
-  let echoed = false;
-  for (let i = 0; i < 30 && sessionId; i++) {
-    const backlog = (await page.evaluate((id) => {
-      const w = window as unknown as {
-        api: { sessions: { getBacklog: (id: string) => Promise<string> } };
-      };
-      return w.api.sessions.getBacklog(id);
-    }, sessionId)) as string;
-    // Fragmento curto: a TUI quebra linhas longas, a frase inteira não
-    // sobrevive intacta no eco.
-    if (backlog.includes("fixture")) {
-      echoed = true;
+  const composerBox = pane
+    .locator('textarea[aria-label^="Escreva um prompt"]')
+    .first();
+  let inComposer = false;
+  for (let i = 0; i < 30; i++) {
+    const value = await composerBox.inputValue().catch(() => "");
+    if (value.includes("fixture")) {
+      inComposer = true;
       break;
     }
     await page.waitForTimeout(500);
   }
-  console.log("[prompt] transcrição ecoada no PTY:", echoed);
+  console.log("[composer] ditado no draft:", inComposer);
   console.log("[fake-stt] requisições:", JSON.stringify(sttRequests));
-  await screenshot(page, "voice-04-text-in-prompt");
-  if (!echoed) throw new Error("FALHA: a transcrição não chegou ao prompt");
+  await screenshot(page, "voice-04-text-in-composer");
+  if (!inComposer)
+    throw new Error("FALHA: a transcrição não chegou ao composer");
+
+  // --- 4b. draft visível também no OUTRO modo (Terminal⇄Chat) ---------------
+  // O draft vive no Composer (montado nos dois modos); alternar o modo do pane
+  // não pode sumir com o texto ditado.
+  const modeToggle = pane
+    .locator(
+      '[aria-label="Mudar para Chat"], [aria-label="Mudar para Terminal"]',
+    )
+    .first();
+  if (!(await modeToggle.count()))
+    throw new Error(
+      "FALHA: toggle Terminal⇄Chat não encontrado (o pane está em tier narrow? a janela foi garantida em >=1400px no boot)",
+    );
+  const fromLabel = await modeToggle.getAttribute("aria-label");
+  await modeToggle.click();
+  await page.waitForTimeout(800);
+  const afterToggle = await composerBox.inputValue().catch(() => "");
+  const stillThere = afterToggle.includes("fixture");
+  console.log(
+    `[modo] alternado via "${fromLabel}" — draft segue no composer:`,
+    stillThere,
+  );
+  await screenshot(page, "voice-04b-text-after-mode-toggle");
+  if (!stillThere)
+    throw new Error("FALHA: o draft sumiu ao alternar o modo do pane");
+  // Volta pro modo original antes das próximas etapas.
+  await modeToggle.click();
+  await page.waitForTimeout(600);
 
   // --- 5. toggle modo voz ---------------------------------------------------
   const toggle = pane.getByRole("button", { name: "Modo voz" }).first();
