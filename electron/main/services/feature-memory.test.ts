@@ -134,9 +134,9 @@ describe('maybeSuggestObjectiveLink', () => {
 // ---- Auto-tag app-dev (Onda 3 — separação app-dev) ----
 
 describe('isSelfRepoPath', () => {
-  it('true quando o package.json do repo tem name claude-manager', () => {
+  it('true quando o package.json do repo tem name pitwall', () => {
     const dir = mkdtempSync(join(tmpdir(), 'self-repo-'))
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'claude-manager' }))
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'pitwall' }))
     expect(isSelfRepoPath(dir)).toBe(true)
   })
 
@@ -185,9 +185,9 @@ function seedRepo(id: string, path: string): void {
 }
 
 describe('resolveFeature — auto-tag app-dev', () => {
-  it('estampa isAppDev quando o repo da sessão é o próprio claude-manager', () => {
+  it('estampa isAppDev quando o repo da sessão é o próprio Pitwall', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'self-app-repo-'))
-    writeFileSync(join(repoDir, 'package.json'), JSON.stringify({ name: 'claude-manager' }))
+    writeFileSync(join(repoDir, 'package.json'), JSON.stringify({ name: 'pitwall' }))
     seedRepo('repo-self', repoDir)
 
     const transcriptDir = mkdtempSync(join(tmpdir(), 'self-app-transcript-'))

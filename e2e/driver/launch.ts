@@ -16,7 +16,7 @@ export function resolveRealUserData(): string {
   const override = process.env.CM_REAL_USERDATA
   if (override) return override
   const configDir = join(homedir(), '.config')
-  const preferred = join(configDir, 'claude-manager')
+  const preferred = join(configDir, 'pitwall')
   if (existsSync(join(preferred, 'app.db'))) return preferred
   if (existsSync(configDir)) {
     for (const name of readdirSync(configDir)) {

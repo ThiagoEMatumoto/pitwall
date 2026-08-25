@@ -10,10 +10,10 @@ describe('resolveSidecarDir', () => {
   it('packaged: resolve a partir de resourcesPath (fora do asar)', () => {
     const dir = resolveSidecarDir({
       isPackaged: true,
-      resourcesPath: '/opt/Claude Manager/resources',
-      moduleDir: '/opt/Claude Manager/resources/app.asar/out/main',
+      resourcesPath: '/opt/Pitwall/resources',
+      moduleDir: '/opt/Pitwall/resources/app.asar/out/main',
     })
-    expect(dir).toBe('/opt/Claude Manager/resources/sidecar')
+    expect(dir).toBe('/opt/Pitwall/resources/sidecar')
   })
 
   it('build/e2e: <repoRoot>/out/main → <repoRoot>/sidecar', () => {
@@ -62,10 +62,10 @@ describe('resolveSetupScript', () => {
   it('packaged: resourcesPath/scripts/setup-meeting-sidecar.sh', () => {
     const script = resolveSetupScript({
       isPackaged: true,
-      resourcesPath: '/opt/Claude Manager/resources',
-      moduleDir: '/opt/Claude Manager/resources/app.asar/out/main',
+      resourcesPath: '/opt/Pitwall/resources',
+      moduleDir: '/opt/Pitwall/resources/app.asar/out/main',
     })
-    expect(script).toBe('/opt/Claude Manager/resources/scripts/setup-meeting-sidecar.sh')
+    expect(script).toBe('/opt/Pitwall/resources/scripts/setup-meeting-sidecar.sh')
   })
 
   it('resolveScriptsDir packaged vs dev', () => {
