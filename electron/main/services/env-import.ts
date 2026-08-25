@@ -227,14 +227,17 @@ export function applyImport(
       rejected.push(key)
       continue
     }
-    let vars = parsedByPath.get(sourcePath)
+    // Ler o caminho normalizado — o mesmo que passou pelo lstat anti-symlink —
+    // e não o raw, para não reabrir a janela TOCTOU entre a checagem e a leitura.
+    const safePath = normalize(sourcePath)
+    let vars = parsedByPath.get(safePath)
     if (!vars) {
       try {
-        vars = parseDotenv(d.readFile(sourcePath))
+        vars = parseDotenv(d.readFile(safePath))
       } catch {
         vars = {}
       }
-      parsedByPath.set(sourcePath, vars)
+      parsedByPath.set(safePath, vars)
     }
     const value = vars[key]
     if (value === undefined) {
