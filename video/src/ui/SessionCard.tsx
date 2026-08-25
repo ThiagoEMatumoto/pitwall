@@ -28,6 +28,10 @@ export interface SessionCardProps {
   /** Escopo entre parênteses, ex.: "legal-core". */
   scope?: string;
   mode: CrewMode;
+  /** Rótulo do modo já no idioma da cena. Sem ele, a própria chave. */
+  modeLabel?: string;
+  /** 0..1 — traço accent crescendo sob o apelido, quando ele é o assunto. */
+  aliasUnderline?: number;
   state?: CrewState;
   /** 0..1 — quanto do trabalho dela já andou. */
   progress?: number;
@@ -42,6 +46,8 @@ export const SessionCard: React.FC<SessionCardProps> = ({
   alias,
   scope,
   mode,
+  modeLabel,
+  aliasUnderline = 0,
   state = "working",
   progress = 0,
   note,
@@ -49,6 +55,7 @@ export const SessionCard: React.FC<SessionCardProps> = ({
 }) => {
   const p = Math.max(0, Math.min(1, progress));
   const r = Math.max(0, Math.min(1, rise));
+  const u = Math.max(0, Math.min(1, aliasUnderline));
   const modeColor = MODE_COLOR[mode];
   const stateColor = STATE_COLOR[state];
 
@@ -74,17 +81,32 @@ export const SessionCard: React.FC<SessionCardProps> = ({
             flexShrink: 0,
           }}
         />
-        <span
-          style={{
-            fontFamily: MONO,
-            fontSize: 15,
-            color: C.text,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {alias}
+        <span style={{ position: "relative", minWidth: 0 }}>
+          <span
+            style={{
+              fontFamily: MONO,
+              fontSize: 15,
+              color: C.text,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {alias}
+          </span>
+          {u > 0.01 && (
+            <span
+              style={{
+                position: "absolute",
+                left: 0,
+                bottom: -4,
+                height: 2,
+                width: `${(u * 100).toFixed(1)}%`,
+                borderRadius: 1,
+                background: C.accent,
+              }}
+            />
+          )}
         </span>
         <div style={{ flex: 1 }} />
         <span
@@ -101,7 +123,7 @@ export const SessionCard: React.FC<SessionCardProps> = ({
             whiteSpace: "nowrap",
           }}
         >
-          {mode}
+          {modeLabel ?? mode}
         </span>
       </div>
 
@@ -118,7 +140,9 @@ export const SessionCard: React.FC<SessionCardProps> = ({
         {/* O escopo vai aqui, não colado no apelido: o apelido é endereço e
             não pode ser truncado por causa do nome do repo. */}
         {scope && (
-          <span style={{ fontFamily: MONO, color: C.textDim }}>{`${scope} · `}</span>
+          <span
+            style={{ fontFamily: MONO, color: C.textDim }}
+          >{`${scope} · `}</span>
         )}
         {note ?? STATE_LABEL[state]}
       </div>
