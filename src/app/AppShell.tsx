@@ -24,6 +24,7 @@ import { TasksArea } from '@/features/tasks/TasksArea'
 import { JobsArea } from '@/features/jobs/JobsArea'
 import { ContentArea } from '@/features/content/ContentArea'
 import { DiagramsArea } from '@/features/diagrams/DiagramsArea'
+import { VideosArea } from '@/features/videos/VideosArea'
 import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
@@ -701,6 +702,7 @@ export function AppShell() {
       {area === 'content' && <ContentArea />}
 
       {area === 'diagrams' && <DiagramsArea />}
+      {area === 'videos' && <VideosArea />}
 
       {area === 'tasks' && <TasksArea />}
 

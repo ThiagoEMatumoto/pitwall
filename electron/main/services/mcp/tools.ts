@@ -8,6 +8,7 @@
 // confirmação).
 import * as z from 'zod/v4'
 import { serviceTools } from './service-tools'
+import { videoTools } from './video-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -1988,6 +1989,7 @@ export function buildTools(
     ...contentContractTools(notify),
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
+    ...videoTools(notify),
     ...serviceTools(ctx),
   ]
 }

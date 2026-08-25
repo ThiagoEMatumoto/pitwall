@@ -39,6 +39,7 @@ import * as handoffPredecessor from './037_handoff_predecessor'
 import * as diagrams from './038_diagrams'
 import * as diagramLibrary from './039_diagram_library'
 import * as serviceProxyCalls from './040_service_proxy_calls'
+import * as videoLab from './041_video_lab'
 
 interface Migration {
   version: number
@@ -93,6 +94,7 @@ export const migrations: Migration[] = [
   diagrams,
   diagramLibrary,
   serviceProxyCalls,
+  videoLab,
 ]
 
 export function runMigrations(db: Database.Database): void {

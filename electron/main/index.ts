@@ -54,6 +54,8 @@ import { registerScheduledJobsIpc } from './ipc/scheduled-jobs'
 import { registerContentContractsIpc } from './ipc/content-contracts'
 import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerMeetingsIpc } from './ipc/meetings'
+import { registerVideoIpc } from './ipc/video'
+import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
 import {
@@ -311,6 +313,7 @@ app.whenReady().then(async () => {
   registerContentContractsIpc()
   registerDiagramsIpc()
   registerMeetingsIpc()
+  registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
   registerSyncIpc()
@@ -444,6 +447,8 @@ function runFinalShutdown(): void {
   featureMemory.close()
   ptyManager.killAll()
   meetingSidecarManager.killAllSidecars()
+  // Render do Remotion é processo filho e não morre sozinho com o app.
+  killAllVideoRenders()
   sessionActivityService.closeAll()
   getDb()
     .prepare("UPDATE sessions SET status = 'exited', ended_at = ? WHERE status = 'running'")
