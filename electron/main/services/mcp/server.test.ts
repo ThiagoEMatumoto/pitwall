@@ -82,7 +82,7 @@ describe('mcp server — contrato', () => {
     const parsed = JSON.parse(readFileSync(clientConfigPath, 'utf8')) as {
       mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>
     }
-    const server = parsed.mcpServers['claude-manager']
+    const server = parsed.mcpServers['pitwall']
     expect(server.type).toBe('http')
     expect(server.url).toBe(handle.url)
     expect(server.headers.Authorization).toBe(`Bearer ${TOKEN}`)

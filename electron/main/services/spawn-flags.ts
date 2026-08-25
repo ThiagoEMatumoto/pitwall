@@ -88,7 +88,7 @@ export const DESTRUCTIVE_DENYLIST = [
 //   - `permissions.{allow,ask,deny}` inline via `--settings` SÃO honrados;
 //   - precedência: deny > ask > allow (`ask` bloqueia mesmo o que `allow` libera);
 //   - `Bash(cmd:*)` (prefixo) e `Bash(cmd * sufixo*)` (glob no meio) funcionam;
-//   - MCP só casa por servidor (`mcp__claude-manager`) ou `mcp__servidor__*`.
+//   - MCP só casa por servidor (`mcp__pitwall`) ou `mcp__servidor__*`.
 //     `mcp__*` e `mcp__*__*` NÃO funcionam (testados: continuam pedindo). Por
 //     isso o allow cobre só o servidor que ESTE app injeta via --mcp-config;
 //     MCPs de terceiros continuam governados pela settings global do usuário.
@@ -215,7 +215,7 @@ const CHILD_ALLOW_CLOUD_READ = [
 // curinga entre servidores (ver bloco de sintaxe acima), então liberamos o
 // servidor que este app injeta — o mesmo que carrega progresso/report do
 // handoff, e o que mais interrompia a filha.
-const CHILD_ALLOW_MCP = ['mcp__claude-manager']
+const CHILD_ALLOW_MCP = ['mcp__pitwall']
 
 export const HANDOFF_CHILD_ALLOW = [
   ...CHILD_ALLOW_READ_TOOLS,
@@ -291,7 +291,7 @@ export const HANDOFF_CHILD_SETTINGS_JSON = JSON.stringify({
 // Browser tools do Playwright global (plugin do usuário), liberadas SÓ para jobs
 // web-audit. Prefixo confirmado no spike Fase 0: mcp__plugin_playwright_playwright__.
 // O `claude -p` headless herda o Playwright global SEM --mcp-config (o MCP do
-// claude-manager NÃO é herdado → self-elevation fechada por construção). As 10 tools
+// Pitwall NÃO é herdado → self-elevation fechada por construção). As 10 tools
 // são as usadas pela skill browser-validate (nav/snapshot/screenshot/console/network/
 // evaluate/type/click/fill_form/wait_for).
 const PLAYWRIGHT_PREFIX = 'mcp__plugin_playwright_playwright__'

@@ -52,13 +52,13 @@ const SYNTH_MODEL_KEY = 'synth_model'
 const SYNTH_MODE_KEY = 'synth_mode'
 const MAX_AUTO_OBJECTIVE_CHARS = 600
 
-// Identidade do próprio claude-manager, pro auto-tag app-dev (Onda 3 —
+// Identidade do próprio Pitwall, pro auto-tag app-dev (Onda 3 —
 // separação app-dev). O nome do package.json do repo é o sinal escolhido:
 // estável em qualquer worktree do repo (todas carregam o mesmo package.json),
 // e independente de onde o Electron está rodando (dev vs packaged) — ao
 // contrário de comparar paths, que quebraria em qualquer clone/worktree fora
 // do path exato de quem escreveu este código.
-const SELF_PACKAGE_NAME = 'claude-manager'
+const SELF_PACKAGE_NAME = 'pitwall'
 
 // Modo de síntese global (app_prefs); 'threshold' como default seguro.
 function globalSynthMode(): FeatureSynthMode {
@@ -97,7 +97,7 @@ function resolveModel(feature: Feature): string | null {
   }
 }
 
-// Detecta se `repoPath` é o repo do próprio claude-manager (Onda 3 —
+// Detecta se `repoPath` é o repo do próprio Pitwall (Onda 3 —
 // separação app-dev): lê o package.json do repo e compara `name`. Função de
 // módulo (não método), testável direto com fixtures de filesystem sem
 // precisar montar uma sessão inteira.

@@ -104,9 +104,9 @@ export function mcpClientConfigPath(): string {
 }
 
 // sessionId opcional: quando presente, o endpoint carrega a identidade da
-// sessão-mãe (ver session-identity.ts). O NOME do server ('claude-manager') e o
+// sessão-mãe (ver session-identity.ts). O NOME do server ('pitwall') e o
 // shape do arquivo NÃO mudam — allowlists de usuário e transcripts referenciam
-// `mcp__claude-manager__*`.
+// `mcp__pitwall__*`.
 export function writeMcpClientConfig(
   info: McpRuntimeInfo,
   path: string = mcpClientConfigPath(),
@@ -115,7 +115,7 @@ export function writeMcpClientConfig(
   const endpoint = buildSessionEndpoint(info, sessionId)
   const config = {
     mcpServers: {
-      'claude-manager': {
+      'pitwall': {
         type: 'http',
         url: endpoint.url,
         headers: endpoint.headers,

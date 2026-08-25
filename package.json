@@ -1,5 +1,5 @@
 {
-  "name": "claude-manager",
+  "name": "pitwall",
   "version": "0.62.0",
   "description": "Visual manager for multiple Claude Code sessions, projects, and configs",
   "main": "out/main/index.js",

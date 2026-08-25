@@ -54,6 +54,7 @@ const REPO_LABEL: Record<string, string> = {
   'legal-hub': 'platform-hub',
   'squad-portfolio-plugin': 'insights-plugin',
   'claude-manager': 'northwind-web',
+  Pitwall: 'northwind-web',
   'kaizen-workflow': 'design-system',
   arara: 'billing-service',
   Kakei: 'mobile-app',

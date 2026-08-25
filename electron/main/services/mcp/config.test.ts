@@ -177,7 +177,7 @@ describe('mcp-config por sessão (carimbo de identidade da mãe)', () => {
   it('sem sessionId escreve a config GLOBAL inalterada (url sem query)', () => {
     const path = join(makeTmpDir(), 'mcp-client-config.json')
     writeMcpClientConfig(INFO, path)
-    const server = readConfig(path).mcpServers['claude-manager']
+    const server = readConfig(path).mcpServers['pitwall']
     expect(server.url).toBe(INFO.url)
     expect(server.type).toBe('http')
     expect(server.headers.Authorization).toBe(`Bearer ${INFO.token}`)
@@ -188,9 +188,9 @@ describe('mcp-config por sessão (carimbo de identidade da mãe)', () => {
     const path = join(makeTmpDir(), 'sessao.json')
     writeMcpClientConfig(INFO, path, SESSION_ID)
     const config = readConfig(path)
-    // Allowlists de usuário e transcripts referenciam mcp__claude-manager__*.
-    expect(Object.keys(config.mcpServers)).toEqual(['claude-manager'])
-    const server = config.mcpServers['claude-manager']
+    // Allowlists de usuário e transcripts referenciam mcp__pitwall__*.
+    expect(Object.keys(config.mcpServers)).toEqual(['pitwall'])
+    const server = config.mcpServers['pitwall']
     expect(new URL(server.url).searchParams.get('s')).toBe(SESSION_ID)
     expect(server.headers.Authorization).toBe(`Bearer ${INFO.token}`)
   })
@@ -201,7 +201,7 @@ describe('mcp-config por sessão (carimbo de identidade da mãe)', () => {
     expect(path).toBe(sessionMcpConfigPath(SESSION_ID, dir))
     expect(path.endsWith(`${SESSION_ID}.json`)).toBe(true)
     expect(statSync(path).mode & 0o777).toBe(0o600)
-    const server = readConfig(path).mcpServers['claude-manager']
+    const server = readConfig(path).mcpServers['pitwall']
     expect(new URL(server.url).searchParams.get('s')).toBe(SESSION_ID)
   })
 

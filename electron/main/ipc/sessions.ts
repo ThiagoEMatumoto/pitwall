@@ -143,7 +143,7 @@ function resolveScratchDir(): string {
   return dir
 }
 
-// B4: conecta a sessão ao MCP server do claude-manager via --mcp-config. Sem
+// B4: conecta a sessão ao MCP server do Pitwall via --mcp-config. Sem
 // --strict-mcp-config: os servers de user/projeto do claude continuam valendo.
 // Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
 // sessão sobe normal.

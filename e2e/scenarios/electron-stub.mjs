@@ -2,7 +2,7 @@
 // (tsx). Só o que o grafo de import da extração toca precisa existir aqui.
 export const app = {
   getPath: () => '/tmp/cm-smoke',
-  getName: () => 'claude-manager',
+  getName: () => 'pitwall',
   isPackaged: false,
 }
 export const BrowserWindow = { getAllWindows: () => [] }

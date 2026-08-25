@@ -240,7 +240,7 @@ describe('buildSpawnInnerCmd', () => {
     expect(parsed.crossSessionInbound).toBe('accept')
     expect(parsed.permissions.allow).toContain('Bash(rg:*)')
     expect(parsed.permissions.allow).toContain('Bash(git status:*)')
-    expect(parsed.permissions.allow).toContain('mcp__claude-manager')
+    expect(parsed.permissions.allow).toContain('mcp__pitwall')
     expect(parsed.permissions.ask).toContain('Bash(git merge:*)')
     expect(parsed.permissions.deny).toContain('Bash(rm:*)')
     // Nada de merge/delete escapando pelo allow.

@@ -117,7 +117,7 @@ export async function startMcpServer(opts: StartMcpOptions = {}): Promise<McpSer
       // Stateless: instâncias novas por request, descartadas no fim da resposta.
       // instructions: injetadas pelo client no contexto da sessão (auto-tracking).
       const mcp = new McpServer(
-        { name: 'claude-manager', version: app.getVersion() },
+        { name: 'pitwall', version: app.getVersion() },
         { instructions: SERVER_INSTRUCTIONS },
       )
       registerTools(mcp, notify, { motherSessionId })

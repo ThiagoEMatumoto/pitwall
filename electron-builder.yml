@@ -1,4 +1,4 @@
-appId: com.thiagomatumoto.claude-manager
+appId: com.thiagomatumoto.pitwall
 productName: Pitwall
 directories:
   output: dist

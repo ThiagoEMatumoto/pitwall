@@ -106,7 +106,7 @@ describe('HANDOFF_CHILD permissions', () => {
     expect(HANDOFF_CHILD_ALLOW).toContain('Bash(aws * list-*)')
     // O CLI não aceita curinga entre servidores MCP (mcp__* não casa) — só o
     // nome do servidor. Este é o que o app injeta via --mcp-config.
-    expect(HANDOFF_CHILD_ALLOW).toContain('mcp__claude-manager')
+    expect(HANDOFF_CHILD_ALLOW).toContain('mcp__pitwall')
   })
 
   it('NÃO libera merge, escrita em banco nem delete', () => {

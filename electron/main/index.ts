@@ -1,3 +1,8 @@
+// PRIMEIRO import de propósito: o efeito no import migra ~/.config/claude-manager
+// para ~/.config/pitwall, e ESM avalia imports na ordem de declaração — se ele
+// vier depois de qualquer módulo que puxe ./services/db, o banco já foi aberto
+// (vazio) no perfil novo e a migração viraria no-op.
+import './services/userdata-migrate'
 import { app, BrowserWindow, Menu, powerMonitor, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
