@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "fps": 30,
+  "voiceSettings": {
+    "stability": 0.4,
+    "similarity_boost": 0.75,
+    "style": 0.55,
+    "use_speaker_boost": true
+  },
+  "locales": {
+    "pt-BR": {
+      "scenes": [
+        {
+          "id": "cold-open",
+          "textHash": "af7e3b5c5d8c037ee5c398f0f7a95c3a9e2bdb276da3c0b404ee066c4b07f8e4",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/cold-open.mp3",
+          "durationSec": 5.042,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "logo",
+          "textHash": "1ac6c2432af75fef0877cc4b8748b211baa6a4e91d76422ace31028a8560be38",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/logo.mp3",
+          "durationSec": 3.291,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "cockpit",
+          "textHash": "4086475c66bd2e39514dfe80280621ef282f558e4491291e3864711b46776200",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/cockpit.mp3",
+          "durationSec": 7.001,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "voice",
+          "textHash": "f7c2fd099fe9d76ad0f9093e52862fe736f41f0507bdb17260e08daafededc16",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/voice.mp3",
+          "durationSec": 13.505,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "diagrams",
+          "textHash": "e82ed4647db4570269988154369d81df7ea52708d299254f5b0603ffac011868",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/diagrams.mp3",
+          "durationSec": 15.647,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "handoff",
+          "textHash": "49a6026644b91b978ab1e78ff00e457af7dd9d046331c18d6934b3ba7faeaff4",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/handoff.mp3",
+          "durationSec": 16.248,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "crew-dock",
+          "textHash": "0b312c277d97b81c8bf2f9726d1a06de998a4d97fd199536ba0f9a457c105d2f",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/crew-dock.mp3",
+          "durationSec": 7.053,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "outro",
+          "textHash": "8b7e62919e02b0db7eba289431f933148a0aeed9ca477e2f8fdd8fc745eb2fa6",
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/pt-BR/outro.mp3",
+          "durationSec": 4.441,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        }
+      ]
+    },
+    "en": {
+      "scenes": [
+        {
+          "id": "cold-open",
+          "textHash": "c4aec85e67801450321b37343b9ff0882b5ea22e1cce22f4ddfbe2d02e8e432a",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/cold-open.mp3",
+          "durationSec": 5.616,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "logo",
+          "textHash": "6051f55e90d2e32da48fff5e585596ffd4221fc43068e212d52cea25228520ca",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/logo.mp3",
+          "durationSec": 2.926,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "cockpit",
+          "textHash": "c5e77836db609132e037af413688922824f38197e84c2fe5b2483e1aa7a6b928",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/cockpit.mp3",
+          "durationSec": 6.296,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "voice",
+          "textHash": "36c288f4467a9c84a611fe6065e61da01f46c6b80d3239c0e913529caa480a24",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/voice.mp3",
+          "durationSec": 13.976,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "diagrams",
+          "textHash": "9c1abd81b8a25fa8555340cb8e825a8ca18e763c1428dccaabb76176e442bfdb",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/diagrams.mp3",
+          "durationSec": 11.52,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "handoff",
+          "textHash": "1117765968354ce6c414f7c80d812170b136061d0c0ae87c7aea1bfc8e879d14",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/handoff.mp3",
+          "durationSec": 17.58,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "crew-dock",
+          "textHash": "17ce3ac864ab263bb67a8a4baf4fec8a4eb3a8e5377a37fc2124b097934f6d4b",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/crew-dock.mp3",
+          "durationSec": 6.583,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "outro",
+          "textHash": "3ac0e33db4dad0ac049362255e5f93f37b990c6d1e50c8ac6c3ef1f5dd5922f0",
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": "audio/en/outro.mp3",
+          "durationSec": 2.926,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        }
+      ]
+    }
+  }
+}

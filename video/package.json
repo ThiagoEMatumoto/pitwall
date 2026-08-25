@@ -1,0 +1,27 @@
+{
+  "name": "pitwall-video",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render:pt": "remotion render src/index.ts Promo-pt-BR out/pitwall-promo-pt-BR.mp4",
+    "render:en": "remotion render src/index.ts Promo-en out/pitwall-promo-en.mp4",
+    "still": "remotion still src/index.ts Promo-pt-BR out/still.png --frame=0",
+    "typecheck": "tsc --noEmit",
+    "check:theme": "node src/theme.check.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.509",
+    "@remotion/media": "4.0.509",
+    "@remotion/renderer": "4.0.509",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "remotion": "4.0.509"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "typescript": "^5.9.3"
+  }
+}
