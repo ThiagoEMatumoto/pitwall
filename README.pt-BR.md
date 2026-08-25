@@ -13,9 +13,9 @@
 
 <br/>
 
-<video src="docs/assets/promo-en.mp4" controls muted width="900"></video>
+<video src="docs/assets/promo-pt-BR.mp4" controls muted width="900"></video>
 
-<sub><a href="docs/assets/promo-en.mp4">Assistir ao vídeo de apresentação</a></sub>
+<sub><a href="docs/assets/promo-pt-BR.mp4">Assistir ao vídeo de apresentação</a></sub>
 
 </div>
 
