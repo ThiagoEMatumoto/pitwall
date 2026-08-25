@@ -73,20 +73,46 @@ const CHILDREN: { mode: CrewMode }[] = [
 ];
 
 /**
- * Marcas da cena em fração da duração. Vieram da medida das frases nos dois
- * locales (pt-BR 17,9s / en 19,0s) — as proporções batem dentro de 2%, então
- * uma tabela só serve os dois.
+ * Marcas da cena em fração da duração. Medidas por alinhamento forçado contra
+ * os mp3 do manifesto (pt-BR 16,2s / en 17,6s): estas quatro batem dentro de
+ * 1% nos dois idiomas, então uma tabela só serve os dois.
  */
 const BEAT = {
   mother: 0.012,
   slot: [0.035, 0.065, 0.095],
   /** frase 2 traz a primeira; frases do modo (4) trazem a segunda e a terceira */
   dispatch: [0.175, 0.525, 0.595],
-  address: [0.29, 0.365, 0.44, 0.49],
-  mode: [0.5, 0.565, 0.635],
   /** reporta / pergunta / conclui */
   ret: [0.7, 0.785, 0.875],
 } as const;
+
+/**
+ * As duas marcas que a voz expressiva desencontrou. Na narração neutra antiga
+ * o miolo da frase 3 caía no mesmo lugar nos dois idiomas; agora não cai: o
+ * pt-BR diz "investigar, editar, ou operar" entre 47% e 60% da cena, e o en
+ * diz o equivalente entre 52% e 71%. Com uma tabela só, a palavra do modo
+ * acendia DEPOIS de ter sido dita em pt-BR — "editar" chegava a acender já
+ * durante "ou operar".
+ *
+ * `address` acompanha porque o sublinhado accent tem de estar apagado quando a
+ * primeira palavra do modo acende: dois destaques no mesmo frame é proibido.
+ */
+const BY_LOCALE: Record<
+  Locale,
+  { address: readonly number[]; mode: readonly number[] }
+> = {
+  "pt-BR": {
+    // "que é o endereço dela" vive em 0.351–0.433; acende cheio em 0.365 e some
+    // antes de 0.458, que é onde "investigar" começa.
+    address: [0.29, 0.365, 0.425, 0.455],
+    // início de "investigar," / "editar," / "operar" menos o frame de rampa.
+    mode: [0.458, 0.505, 0.548],
+  },
+  en: {
+    address: [0.29, 0.365, 0.44, 0.49],
+    mode: [0.5, 0.565, 0.635],
+  },
+};
 
 export const Handoff: React.FC<{
   durationInFrames: number;
@@ -100,6 +126,8 @@ export const Handoff: React.FC<{
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   } as const;
+
+  const beat = BY_LOCALE[locale];
 
   const onScreen = script.scenes.find((s) => s.id === "handoff")!.onScreen[
     locale
@@ -120,10 +148,10 @@ export const Handoff: React.FC<{
   const address = interpolate(
     frame,
     [
-      at(BEAT.address[0]),
-      at(BEAT.address[1]),
-      at(BEAT.address[2]),
-      at(BEAT.address[3]),
+      at(beat.address[0]),
+      at(beat.address[1]),
+      at(beat.address[2]),
+      at(beat.address[3]),
     ],
     [0, 1, 1, 0],
     clamp,
@@ -355,7 +383,7 @@ export const Handoff: React.FC<{
         }}
       >
         {modes.map((token, i) => {
-          const start = at(BEAT.mode[i]);
+          const start = at(beat.mode[i]);
           const present = interpolate(
             frame,
             [start, start + Math.round(D * 0.02)],

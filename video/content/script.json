@@ -188,6 +188,13 @@
   ],
   "tts": {
     "modelId": "eleven_multilingual_v2",
+    "voiceSettingsNote": "Enviado como voice_settings no corpo da requisicao. Entra no hash de idempotencia — mudar qualquer valor aqui forca a regeracao dos mp3.",
+    "voiceSettings": {
+      "stability": 0.4,
+      "similarity_boost": 0.75,
+      "style": 0.55,
+      "use_speaker_boost": true
+    },
     "note": "multilingual_v2 (qualidade > latencia). Duas vozes distintas por locale: uma voz so vazaria sotaque de origem no outro idioma.",
     "voices": {
       "pt-BR": {

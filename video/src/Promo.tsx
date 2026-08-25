@@ -25,6 +25,13 @@ import { tokens } from "./theme";
 // com Record<string, unknown>, que interfaces nao satisfazem (sem index signature).
 export type PromoProps = {
   locale: Locale;
+  /**
+   * Desliga a cama de trilha. O mix final e feito no pos com sidechain (o
+   * Remotion nao faz ducking), e o compressor precisa da narracao+SFX limpos
+   * como um stem separado da musica. Este e o unico jeito de tirar esse stem
+   * do proprio filme em vez de reconstruir os cues na mao.
+   */
+  music?: boolean;
 };
 
 type SceneComponent = React.FC<{ durationInFrames: number; locale: Locale }>;
@@ -137,6 +144,25 @@ const SceneStage: React.FC<{
   );
 };
 
+/**
+ * Cama, nao trilha. O ducking real e sidechain, que o Remotion nao faz: no pos
+ * a musica leva -8,8dB e um sidechaincompress com a narracao na cadeia lateral
+ * (threshold 0.03, ratio 6, attack 20ms, release 350ms), o que deixa a cama 9dB
+ * mais baixa sob a voz do que nos intervalos. Este volume aqui e o meio-termo
+ * que faz o preview do Studio soar como o filme; as pontas sao de montagem.
+ */
+const MUSIC_VOLUME = 0.2;
+const MUSIC_FADE_IN = 30;
+const MUSIC_FADE_OUT = 45;
+
+const musicVolume = (total: number) => (frame: number) =>
+  interpolate(
+    frame,
+    [0, MUSIC_FADE_IN, total - MUSIC_FADE_OUT, total - 1],
+    [0, MUSIC_VOLUME, MUSIC_VOLUME, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
 type Sfx = {
   key: string;
   file: "whoosh" | "tick" | "sub-hit" | "riser";
@@ -238,7 +264,7 @@ const Finish: React.FC<{ starts: Record<string, number>; total: number }> = ({
   );
 };
 
-export const Promo: React.FC<PromoProps> = ({ locale }) => {
+export const Promo: React.FC<PromoProps> = ({ locale, music = true }) => {
   const scenes = getSceneTimings(locale);
   const starts = absoluteStarts(scenes);
   const total = promoDurationInFrames(locale);
@@ -289,6 +315,14 @@ export const Promo: React.FC<PromoProps> = ({ locale }) => {
           );
         })}
       </Series>
+
+      {music ? (
+        <Audio
+          src={staticFile(`audio/music/${locale}.mp3`)}
+          volume={musicVolume(total)}
+          name="music"
+        />
+      ) : null}
 
       {buildSfx(starts, total).map((sfx) => (
         <Sequence
