@@ -23,3 +23,10 @@ __pycache__/
 # README media generation (anonymized userData copy — never commit)
 .readme-media-anon/
 .playwright-mcp/
+
+# Remotion video workspace (video/ tem package.json proprio, isolado do app)
+video/node_modules
+video/out
+video/.remotion
+video/public/audio
+video/public/generated

@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "fps": 30,
+  "locales": {
+    "pt-BR": {
+      "scenes": [
+        {
+          "id": "cold-open",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 7,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "logo",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 6,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "cockpit",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 9,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "voice",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 12,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "diagrams",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 14,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "handoff",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 14,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "crew-dock",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 9,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "outro",
+          "textHash": null,
+          "voiceId": "x6uRgOliu4lpcrqMH3s1",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 7,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        }
+      ]
+    },
+    "en": {
+      "scenes": [
+        {
+          "id": "cold-open",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 7,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "logo",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 6,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "cockpit",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 9,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "voice",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 12,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "diagrams",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 14,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "handoff",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 14,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "crew-dock",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 9,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        },
+        {
+          "id": "outro",
+          "textHash": null,
+          "voiceId": "nPczCjzI2devNBz1zQrb",
+          "modelId": "eleven_multilingual_v2",
+          "file": null,
+          "durationSec": 7,
+          "padStartSec": 0.25,
+          "padEndSec": 0.6
+        }
+      ]
+    }
+  }
+}

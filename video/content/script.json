@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "fps": 30,
+  "kind": "promo",
+  "locales": [
+    "pt-BR",
+    "en"
+  ],
+  "brand": {
+    "theme": "slate",
+    "themeLabel": "Vácuo",
+    "display": "Schibsted Grotesk",
+    "mono": "JetBrains Mono"
+  },
+  "scenes": [
+    {
+      "id": "cold-open",
+      "role": "tensão",
+      "targetSec": 7,
+      "visual": "Escuro absoluto. Um cursor mono pisca no centro. Vira dois, quatro, oito — sessões se multiplicando em grade, cada uma com seu próprio ritmo. O ruído cresce até saturar; corte seco.",
+      "narration": {
+        "pt-BR": "Você não roda mais um agente. Você roda uma equipe. E equipe sem cockpit vira ruído.",
+        "en": "You don't run an agent anymore. You run a team. And a team without a pit wall is just noise."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "um agente",
+          "dois",
+          "oito",
+          "ruído"
+        ],
+        "en": [
+          "one agent",
+          "two",
+          "eight",
+          "noise"
+        ]
+      }
+    },
+    {
+      "id": "logo",
+      "role": "marca",
+      "targetSec": 6,
+      "visual": "Silêncio. As duas barras do Ápice entram por cima e por baixo, o círculo com gradiente accent2→accent se desenha entre elas. Wordmark PITWALL em Schibsted ExtraBold, letter-spacing fechando.",
+      "narration": {
+        "pt-BR": "Pitwall. O cockpit de quem constrói com agentes.",
+        "en": "Pitwall. The cockpit for building with agents."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "PITWALL"
+        ],
+        "en": [
+          "PITWALL"
+        ]
+      }
+    },
+    {
+      "id": "cockpit",
+      "role": "produto",
+      "targetSec": 9,
+      "visual": "O shell do app se monta por camadas com parallax: IconRail desliza da esquerda, panes de sessão sobem com stagger, a trilha do Crew Dock aparece à direita. Tudo em tokens do tema Vácuo.",
+      "narration": {
+        "pt-BR": "Todos os seus repositórios, sessões e planos num lugar só — com o Claude Code rodando de verdade por baixo.",
+        "en": "Every repository, session and plan in one place — with Claude Code actually running underneath."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "repositórios",
+          "sessões",
+          "planos"
+        ],
+        "en": [
+          "repositories",
+          "sessions",
+          "plans"
+        ]
+      }
+    },
+    {
+      "id": "voice",
+      "role": "feature",
+      "targetSec": 12,
+      "visual": "Mic pulsa com anéis (pw-ring). Equalizer (pw-eq) reage à voz. A waveform colapsa em texto que cai no composer com um selo 'revisar'. Depois, um chip de resumo sobe acima do composer com duas frases.",
+      "narration": {
+        "pt-BR": "Fale o que você quer. O ditado é limpo e condensado antes de virar prompt — e cai no composer pra você revisar, nunca é enviado sozinho. Quando o turno termina, o Pitwall te conta em duas frases o que aconteceu.",
+        "en": "Just say what you want. Your dictation is cleaned up and condensed before it becomes a prompt — and it lands in the composer for you to review. It's never sent on its own. When the turn ends, Pitwall tells you what happened in two sentences."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "Voz",
+          "ditado → prompt",
+          "você revisa antes"
+        ],
+        "en": [
+          "Voice",
+          "dictation → prompt",
+          "you review first"
+        ]
+      }
+    },
+    {
+      "id": "diagrams",
+      "role": "feature",
+      "targetSec": 14,
+      "visual": "Canvas claro-escuro. Nós se desenham com stroke-dashoffset no traço à mão do Excalidraw; setas encontram os nós por auto-layout. Um cursor humano arrasta um nó para fora do lugar — e o patch seguinte do agente contorna, sem desfazer o ajuste.",
+      "narration": {
+        "pt-BR": "O agente desenha a arquitetura enquanto explica. Nós, setas e layout automático num canvas Excalidraw de verdade. E quando você ajusta algo à mão, o próximo patch do agente respeita o seu traço.",
+        "en": "Your agent draws the architecture while it explains it. Nodes, arrows and automatic layout on a real Excalidraw canvas. And when you move something by hand, the agent's next patch respects your edit."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "diagram_create",
+          "auto-layout",
+          "diagram_patch preserva o seu ajuste"
+        ],
+        "en": [
+          "diagram_create",
+          "auto-layout",
+          "diagram_patch keeps your edit"
+        ]
+      }
+    },
+    {
+      "id": "handoff",
+      "role": "feature",
+      "targetSec": 14,
+      "visual": "Nó-mãe pulsa e emite três feixes. Cada filha materializa como card com apelido (otavio-auth, mauricio-etl, renata-deploy) e badge de modo. Setas de retorno pulsam nos três estados: progresso, pergunta, conclusão.",
+      "narration": {
+        "pt-BR": "Precisa de trabalho em outro repositório? A sessão despacha uma filha. Ela nasce com um apelido — que é o endereço dela — e um modo: investigar, editar, ou operar junto com você. Ela reporta o progresso, pergunta quando trava, e avisa quando termina.",
+        "en": "Need work done in another repository? Your session dispatches a child. It's born with a nickname — which is its address — and a mode: investigate, edit, or work alongside you. It reports progress, asks when it's stuck, and tells you when it's done."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "otavio-auth",
+          "mauricio-etl",
+          "renata-deploy",
+          "investigar · editar · operar"
+        ],
+        "en": [
+          "otavio-auth",
+          "mauricio-etl",
+          "renata-deploy",
+          "investigate · edit · operate"
+        ]
+      }
+    },
+    {
+      "id": "crew-dock",
+      "role": "feature",
+      "targetSec": 9,
+      "visual": "Zoom out para a trilha de 40px: dots mudando de cor por estado. Ctrl+J abre o peek sobre o conteúdo, uma resposta é digitada in-place. Flash rápido dos quatro temas: Vácuo, Sinal, Gelo, Papaia.",
+      "narration": {
+        "pt-BR": "Tudo isso vive numa trilha de quarenta pixels. Um atalho, e você lê e responde sem sair do que estava fazendo.",
+        "en": "All of it lives in a forty-pixel rail. One shortcut, and you read and reply without leaving what you were doing."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "Crew Dock",
+          "Ctrl+J"
+        ],
+        "en": [
+          "Crew Dock",
+          "Ctrl+J"
+        ]
+      }
+    },
+    {
+      "id": "outro",
+      "role": "fecho",
+      "targetSec": 7,
+      "visual": "Tudo recolhe para o Ápice no centro. Wordmark, tagline e a URL entram com blur-in. Grão e vignette assentam.",
+      "narration": {
+        "pt-BR": "Pitwall. Você no muro dos boxes. Os agentes na pista.",
+        "en": "Pitwall. You on the wall. Your agents on track."
+      },
+      "onScreen": {
+        "pt-BR": [
+          "PITWALL",
+          "github.com/ThiagoEMatumoto/pitwall"
+        ],
+        "en": [
+          "PITWALL",
+          "github.com/ThiagoEMatumoto/pitwall"
+        ]
+      }
+    }
+  ],
+  "tts": {
+    "modelId": "eleven_multilingual_v2",
+    "note": "multilingual_v2 (qualidade > latencia). Duas vozes distintas por locale: uma voz so vazaria sotaque de origem no outro idioma.",
+    "voices": {
+      "pt-BR": {
+        "voiceId": "x6uRgOliu4lpcrqMH3s1",
+        "name": "Flavio Francisco - Narrative",
+        "why": "unico pt-BR masculino confident + narrative_story"
+      },
+      "en": {
+        "voiceId": "nPczCjzI2devNBz1zQrb",
+        "name": "Brian",
+        "why": "grave, ressonante, ritmo controlado sem virar locutor de comercial"
+      }
+    }
+  }
+}
