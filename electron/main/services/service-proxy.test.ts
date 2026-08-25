@@ -74,6 +74,8 @@ describe('callService', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${LITELLM_KEY}`)
     expect(JSON.parse(String(init.body))).toEqual(validChatParams)
     expect(init.signal).toBeInstanceOf(AbortSignal)
+    // Redirect seguiria com o header de auth pro host de destino.
+    expect(init.redirect).toBe('error')
     expect(result).toEqual({
       ok: true,
       status: 200,
@@ -177,14 +179,81 @@ describe('callService', () => {
     const result = await callService('litellm', 'chat_completions', validChatParams, { deps: d })
 
     expect(result).toMatchObject({ ok: false, status: 0 })
-    if (!result.ok) expect(result.error).toContain('tempo esgotado')
+    if (!result.ok) expect(result.error).toContain('timeout')
     expect(d.recordCall).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'error',
-        error: expect.stringContaining('tempo'),
+        error: expect.stringContaining('timeout'),
       }),
     )
     expect(CALL_TIMEOUT_MS).toBe(30_000)
+  })
+
+  it('3xx com redirect:error vira falha sem re-request', async () => {
+    // undici com redirect:'error' rejeita o fetch ao ver o 3xx — não há segunda
+    // chamada carregando o header de auth pro Location.
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.redirect === 'error') throw new TypeError('unexpected redirect')
+      return okResponse('{}')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await callService('litellm', 'chat_completions', validChatParams, {
+      deps: deps({ LITE_LLM_API_KEY: LITELLM_KEY }),
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.status).toBe(0)
+  })
+
+  it('redige o corpo INTEGRAL antes de truncar: segredo na fronteira não vaza prefixo', async () => {
+    // Segredo atravessando exatamente o corte de maxResponseBytes: truncar
+    // primeiro deixaria um prefixo do segredo que o redator não reconhece.
+    const body = 'x'.repeat(DEFAULT_MAX_RESPONSE_BYTES - 10) + LITELLM_KEY + 'tail'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => okResponse(body)),
+    )
+
+    const result = await callService('litellm', 'chat_completions', validChatParams, {
+      deps: deps({ LITE_LLM_API_KEY: LITELLM_KEY }),
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.truncated).toBe(true)
+      expect(result.body).not.toContain(LITELLM_KEY.slice(0, 10))
+      expect(result.body).toContain('[REDACTED]')
+    }
+  })
+
+  it('corta o download no cap (stream) em vez de bufferizar o corpo inteiro', async () => {
+    const chunk = new Uint8Array(Buffer.alloc(64 * 1024, 0x61))
+    let delivered = 0
+    // Stream "infinita": só o cancel do leitor a interrompe.
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        delivered += chunk.byteLength
+        controller.enqueue(chunk)
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(stream, { status: 200 })),
+    )
+
+    const result = await callService('litellm', 'chat_completions', validChatParams, {
+      deps: deps({ LITE_LLM_API_KEY: LITELLM_KEY }),
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.truncated).toBe(true)
+      expect(Buffer.byteLength(result.body, 'utf8')).toBe(DEFAULT_MAX_RESPONSE_BYTES)
+    }
+    // hardCap = max + 64KB de margem; com pull de 64KB o download para logo ali.
+    expect(delivered).toBeLessThanOrEqual(DEFAULT_MAX_RESPONSE_BYTES + 4 * 64 * 1024)
   })
 
   it('trunca resposta maior que maxResponseBytes (default 256KB)', async () => {
@@ -300,6 +369,21 @@ describe('healthCheck', () => {
     expect(health.status).toBe('error')
     expect(health.httpStatus).toBe(403)
     expect(health.error).not.toContain(LITELLM_KEY)
+    expect(health.error).toContain('[REDACTED]')
+  })
+
+  it('passa redirect:error e redige antes do corte de 200 chars', async () => {
+    const body = 'y'.repeat(190) + LITELLM_KEY
+    const fetchMock = vi.fn(async () => new Response(body, { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const health = await healthCheck('litellm', deps({ LITE_LLM_API_KEY: LITELLM_KEY }))
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit]
+    expect(init.redirect).toBe('error')
+    expect(health.status).toBe('error')
+    // Segredo na fronteira do slice: redigir DEPOIS do corte vazaria o prefixo.
+    expect(health.error).not.toContain(LITELLM_KEY.slice(0, 8))
     expect(health.error).toContain('[REDACTED]')
   })
 })

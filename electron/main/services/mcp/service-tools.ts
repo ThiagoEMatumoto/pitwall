@@ -15,6 +15,25 @@ const serviceCallSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
 })
 
+// Teto proporcional sem infra nova: janela deslizante em memória, por sessão.
+// Segura loop descontrolado de agente e abuso de custo; não é quota de billing.
+export const RATE_LIMIT_CALLS = 20
+export const RATE_LIMIT_WINDOW_MS = 60_000
+const recentCallsBySession = new Map<string, number[]>()
+
+export function serviceCallAllowed(sessionKey: string, now: number = Date.now()): boolean {
+  const fresh = (recentCallsBySession.get(sessionKey) ?? []).filter(
+    (t) => now - t < RATE_LIMIT_WINDOW_MS,
+  )
+  const allowed = fresh.length < RATE_LIMIT_CALLS
+  recentCallsBySession.set(sessionKey, allowed ? [...fresh, now] : fresh)
+  return allowed
+}
+
+export function resetServiceCallThrottle(): void {
+  recentCallsBySession.clear()
+}
+
 export function serviceTools(
   ctx: McpRequestContext,
   proxyDeps: Partial<ServiceProxyDeps> = {},
@@ -49,6 +68,18 @@ export function serviceTools(
       inputSchema: serviceCallSchema,
       handler: async (args) => {
         const { service, operation, params } = serviceCallSchema.parse(args)
+        // ctx.motherSessionId vem do ?s= que o CLIENTE escolheu ao conectar:
+        // é rótulo DECLARADO, não identidade verificada. Serve de atribuição
+        // na auditoria e de chave do throttle — nunca de autorização.
+        const sessionKey = ctx.motherSessionId ?? 'anonymous'
+        if (!serviceCallAllowed(sessionKey)) {
+          return ok({
+            ok: false,
+            status: 429,
+            durationMs: 0,
+            error: `rate limit: máximo de ${RATE_LIMIT_CALLS} chamadas por minuto por sessão`,
+          })
+        }
         const result = await callService(service, operation, params ?? {}, {
           sessionId: ctx.motherSessionId,
           deps: proxyDeps,

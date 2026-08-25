@@ -37,11 +37,14 @@ const STATUS_LABEL: Record<ImportCandidate['status'], string> = {
   new: 'nova',
   same: 'já no cofre',
   conflict: 'conflito',
+  // Alias cuja canônica já está no cofre: importar gravaria var que a resolução
+  // (canônica primeiro) ignora.
+  shadowed: 'sombreada pela canônica',
 }
 
 function statusColor(status: ImportCandidate['status']): string {
   if (status === 'new') return 'var(--color-success, #22c55e)'
-  if (status === 'conflict') return 'var(--color-warning, #f59e0b)'
+  if (status === 'conflict' || status === 'shadowed') return 'var(--color-warning, #f59e0b)'
   return 'var(--color-text-dim)'
 }
 
@@ -253,6 +256,12 @@ export function IntegrationsTab({ open }: { open: boolean }) {
             {result.missing.length > 0 && (
               <div className="text-[var(--color-warning,#f59e0b)]">
                 Não encontradas no arquivo na hora de gravar: {result.missing.join(', ')}
+              </div>
+            )}
+            {result.rejected.length > 0 && (
+              <div className="text-[var(--color-danger,#ef4444)]">
+                Fonte recusada na revalidação (fora da raiz, symlink ou nome inválido):{' '}
+                {result.rejected.join(', ')}
               </div>
             )}
             {result.plaintext.length > 0 && (

@@ -87,7 +87,8 @@ export const SERVICE_REGISTRY: readonly ServiceDef[] = [
               }),
             )
             .min(1),
-          max_tokens: z.number().int().positive().optional(),
+          // Cap defensivo de custo: chamada via proxy é utilitária, não geração longa.
+          max_tokens: z.number().int().positive().max(4096).optional(),
         }),
       },
     },

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { migrations } from './migrations/index'
+import { migrations, runMigrations } from './migrations/index'
 
 // Mesmo padrão de repo-pull-store.test: getDb mockado pra SQLite in-memory.
 let testDb: Database.Database
@@ -118,5 +118,26 @@ describe('service-audit-store', () => {
 
     expect(lastServiceCall('litellm')).toEqual(last)
     expect(lastServiceCall('tavily')).toBeNull()
+  })
+
+  it('runMigrations num banco novo aplica diagram_library (39) E service_proxy_calls (40)', () => {
+    // Regressão da colisão de version 39 entre as duas features após o rebase.
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const versions = (
+      db.prepare('SELECT version FROM _migrations ORDER BY version').all() as Array<{
+        version: number
+      }>
+    ).map((r) => r.version)
+    expect(versions).toContain(39)
+    expect(versions).toContain(40)
+    expect(new Set(versions).size).toBe(versions.length)
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE name IN ('diagram_library_items', 'service_proxy_calls') ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>
+    expect(tables.map((t) => t.name)).toEqual(['diagram_library_items', 'service_proxy_calls'])
+    db.close()
   })
 })

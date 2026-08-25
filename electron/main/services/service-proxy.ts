@@ -106,6 +106,39 @@ function truncateBody(raw: string, maxBytes: number): { text: string; truncated:
   return { text: buf.subarray(0, maxBytes).toString('utf8'), truncated: true }
 }
 
+// Lê o body como stream e ABORTA o download logo além do cap — res.text()
+// bufferizaria uma resposta arbitrariamente grande antes de qualquer corte.
+// A margem existe pra que um segredo cortado exatamente em maxBytes ainda
+// apareça inteiro pro redator; o truncateBody final (pós-redação) descarta o
+// excedente.
+const CAP_MARGIN_BYTES = 64 * 1024
+
+async function readBodyCapped(
+  res: Response,
+  maxBytes: number,
+): Promise<{ raw: string; capped: boolean }> {
+  const reader = res.body?.getReader()
+  if (!reader) return { raw: await res.text().catch(() => ''), capped: false }
+  const hardCap = maxBytes + CAP_MARGIN_BYTES
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    while (total < hardCap) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(Buffer.from(value))
+      total += value.byteLength
+    }
+  } catch {
+    // Rede caiu no meio: segue com o que chegou (já redigido adiante).
+  }
+  if (total >= hardCap) await reader.cancel().catch(() => {})
+  return {
+    raw: Buffer.concat(chunks).toString('utf8'),
+    capped: total >= hardCap,
+  }
+}
+
 function zodIssues(error: { issues: Array<{ path: PropertyKey[]; message: string }> }): string {
   return error.issues
     .slice(0, 5)
@@ -183,15 +216,22 @@ export async function callService(
       method: op.method,
       headers,
       body,
+      // Redirect vaza header de auth pro host de destino; nenhuma operação do
+      // registry precisa seguir 3xx.
+      redirect: 'error',
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     })
   } catch {
-    return fail(0, d.now() - started, 'sem resposta do serviço (rede ou tempo esgotado em 30s)')
+    return fail(0, d.now() - started, 'sem resposta do serviço (rede, redirect ou timeout em 30s)')
   }
 
-  const raw = await res.text().catch(() => '')
+  const maxBytes = op.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+  const { raw, capped } = await readBodyCapped(res, maxBytes)
   const durationMs = d.now() - started
-  const { text, truncated } = truncateBody(raw, op.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
+  // Redige o texto INTEGRAL antes de qualquer corte: truncar/slice primeiro
+  // bissectaria um segredo na fronteira e vazaria o prefixo que o redator não vê.
+  const redacted = redact(raw)
+  const { text, truncated } = truncateBody(redacted, maxBytes)
 
   if (!res.ok) return fail(res.status, durationMs, `HTTP ${res.status}: ${text.slice(0, 2000)}`)
 
@@ -206,8 +246,8 @@ export async function callService(
     ok: true,
     status: res.status,
     durationMs,
-    body: redact(text),
-    truncated,
+    body: text,
+    truncated: truncated || capped,
   }
 }
 
@@ -253,15 +293,17 @@ async function runHealthCheck(def: ServiceDef, d: ServiceProxyDeps): Promise<Ser
     const res = await fetch(url, {
       method: def.health.method,
       headers: authHeaders(def, key),
+      redirect: 'error',
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
     })
     if (res.ok) return { status: 'ok', checkedAt, httpStatus: res.status }
     const raw = await res.text().catch(() => '')
+    // Redige o texto INTEGRAL e só então corta (slice antes bissectaria segredo).
     return {
       status: 'error',
       checkedAt,
       httpStatus: res.status,
-      error: redact(`HTTP ${res.status}: ${raw.slice(0, 200)}`),
+      error: `HTTP ${res.status}: ${redact(raw).slice(0, 200)}`,
     }
   } catch {
     return {

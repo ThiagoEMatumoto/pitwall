@@ -20,7 +20,13 @@ vi.mock('electron', async () => {
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import { clearServiceHealthCache } from '../service-proxy'
-import { serviceTools } from './service-tools'
+import {
+  RATE_LIMIT_CALLS,
+  RATE_LIMIT_WINDOW_MS,
+  resetServiceCallThrottle,
+  serviceCallAllowed,
+  serviceTools,
+} from './service-tools'
 import { buildTools, type McpNotify, type ToolDef } from './tools'
 
 const LITELLM_KEY = 'sk-litellm-teste-secreta-123'
@@ -74,6 +80,7 @@ interface ListOut {
 
 beforeEach(() => {
   clearServiceHealthCache()
+  resetServiceCallThrottle()
 })
 
 afterEach(() => {
@@ -200,6 +207,40 @@ describe('service_call', () => {
       )
       .get() as { error: string }
     expect(row.error).not.toContain(LITELLM_KEY)
+  })
+})
+
+describe('rate limit do service_call', () => {
+  const chatArgs = {
+    service: 'litellm',
+    operation: 'chat_completions',
+    params: validChatParams,
+  }
+
+  it('recusa a chamada além do teto na mesma janela, sem tocar a rede', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const list = tools({ LITE_LLM_API_KEY: LITELLM_KEY })
+
+    for (let i = 0; i < RATE_LIMIT_CALLS; i++) {
+      const out = await call<CallOut>(list, 'service_call', chatArgs)
+      expect(out.ok).toBe(true)
+    }
+    const blocked = await call<CallOut>(list, 'service_call', chatArgs)
+
+    expect(blocked.ok).toBe(false)
+    expect(blocked.status).toBe(429)
+    expect(blocked.error).toContain('rate limit')
+    expect(fetchMock).toHaveBeenCalledTimes(RATE_LIMIT_CALLS)
+  })
+
+  it('janela desliza por sessão: outra sessão passa, e a mesma volta após a janela', () => {
+    for (let i = 0; i < RATE_LIMIT_CALLS; i++) {
+      expect(serviceCallAllowed('s-a', 1000)).toBe(true)
+    }
+    expect(serviceCallAllowed('s-a', 1000)).toBe(false)
+    expect(serviceCallAllowed('s-b', 1000)).toBe(true)
+    expect(serviceCallAllowed('s-a', 1000 + RATE_LIMIT_WINDOW_MS)).toBe(true)
   })
 })
 

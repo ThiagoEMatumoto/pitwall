@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KNOWN_ENV_VARS } from './known-env-vars'
+import { KNOWN_ENV_KEYS, KNOWN_INTEGRATIONS } from './known-env-vars'
 import { SERVICE_REGISTRY, getService, resolveServiceVar } from './service-registry'
 
 const stubEnv =
@@ -151,20 +151,32 @@ describe('resolveServiceVar', () => {
   })
 })
 
-describe('known-env-vars compat', () => {
-  it('deriva uma entrada por var do registry, com shape da UI', () => {
-    const total = SERVICE_REGISTRY.reduce((n, s) => n + s.vars.length, 0)
-    expect(KNOWN_ENV_VARS).toHaveLength(total)
-    for (const entry of KNOWN_ENV_VARS) {
-      expect(entry.envKey).toBeTruthy()
-      expect(entry.label).toBeTruthy()
-      expect(entry.unlocks).toBeTruthy()
-      expect(entry.docsUrl).toMatch(/^https:\/\//)
+describe('known-env-vars (derivação pra UI)', () => {
+  it('deriva UM card por serviço, com todas as vars canônicas dentro', () => {
+    expect(KNOWN_INTEGRATIONS).toHaveLength(SERVICE_REGISTRY.length)
+    for (const integration of KNOWN_INTEGRATIONS) {
+      expect(integration.label).toBeTruthy()
+      expect(integration.unlocks).toBeTruthy()
+      expect(integration.docsUrl).toMatch(/^https:\/\//)
+      const def = getService(integration.serviceId)
+      expect(integration.vars.map((v) => v.envKey)).toEqual(def.vars.map((v) => v.canonical))
     }
   })
 
+  it('preserva o flag secret por var (username/URL não viram password na UI)', () => {
+    const legalCore = KNOWN_INTEGRATIONS.find((i) => i.serviceId === 'legal_core')
+    expect(legalCore?.vars.find((v) => v.envKey === 'CORE_USERNAME')?.secret).toBe(false)
+    expect(legalCore?.vars.find((v) => v.envKey === 'CORE_PASSWORD')?.secret).toBe(true)
+  })
+
+  it('KNOWN_ENV_KEYS cobre todas as canônicas', () => {
+    const total = SERVICE_REGISTRY.reduce((n, s) => n + s.vars.length, 0)
+    expect(KNOWN_ENV_KEYS.size).toBe(total)
+    expect(KNOWN_ENV_KEYS.has('TAVILY_API_KEY')).toBe(true)
+  })
+
   it('mantém a entrada da Tavily que a EnvVarsTab já usava', () => {
-    const tavily = KNOWN_ENV_VARS.find((v) => v.envKey === 'TAVILY_API_KEY')
+    const tavily = KNOWN_INTEGRATIONS.find((i) => i.serviceId === 'tavily')
     expect(tavily).toMatchObject({
       label: 'Tavily',
       unlocks: 'Busca web dos Dossiês',

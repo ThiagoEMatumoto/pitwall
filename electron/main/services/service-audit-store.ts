@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
 import type { ServiceAuditEntry } from '../../../shared/types/ipc'
 
-// Store de service_proxy_calls (migration 039) — auditoria do proxy de
+// Store de service_proxy_calls (migration 040) — auditoria do proxy de
 // serviços. Uma linha por chamada, imutável. Quem grava é o engine
 // (service-proxy) já com o erro REDIGIDO; este módulo não vê credencial nem
-// corpo de resposta, só metadados.
+// corpo de resposta, só metadados. session_id é DECLARADO pelo cliente MCP
+// (?s= na conexão), não verificado: rótulo de atribuição, não identidade.
 
 export interface RecordServiceCallInput {
   sessionId: string | null

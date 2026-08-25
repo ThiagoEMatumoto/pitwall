@@ -2415,8 +2415,12 @@ export interface ImportCandidate {
   canonical?: string
   serviceId?: ServiceId
   sources: EnvSourceRef[]
-  /** 'same' = cofre já tem este valor; 'conflict' = fontes divergem entre si ou do cofre. */
-  status: 'new' | 'same' | 'conflict'
+  /**
+   * 'same' = cofre já tem este valor; 'conflict' = fontes divergem entre si ou
+   * do cofre; 'shadowed' = a chave é alias de serviço e a canônica já existe no
+   * cofre — importar gravaria uma var que a resolução (canônica primeiro) ignora.
+   */
+  status: 'new' | 'same' | 'conflict' | 'shadowed'
 }
 
 export interface ImportSelection {
@@ -2428,6 +2432,8 @@ export interface ApplyImportResult {
   applied: string[]
   /** Chaves que não existiam (mais) no arquivo escolhido no momento do apply. */
   missing: string[]
+  /** Chaves cujo sourcePath falhou a revalidação do apply (fora da raiz, symlink, nome inválido) — nada foi lido. */
+  rejected: string[]
   /** Chaves gravadas em claro (cofre indisponível) — a UI avisa. */
   plaintext: string[]
 }
