@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings, Palette, Keyboard, Bell, Info, RefreshCw, Variable, MessageSquare, Mic } from 'lucide-react'
+import {
+  Settings,
+  Palette,
+  Keyboard,
+  Bell,
+  Info,
+  RefreshCw,
+  Variable,
+  MessageSquare,
+  Mic,
+  Plug,
+} from 'lucide-react'
 import { AboutTab } from './AboutTab'
 import { SyncTab } from './SyncTab'
 import { EnvVarsTab } from './EnvVarsTab'
+import { IntegrationsTab } from './IntegrationsTab'
 import { VoiceTab } from './VoiceTab'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
@@ -37,6 +49,7 @@ type TabId =
   | 'appearance'
   | 'shortcuts'
   | 'notifications'
+  | 'integrations'
   | 'env'
   | 'sync'
   | 'about'
@@ -48,6 +61,7 @@ const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: 'appearance', label: 'Aparência', icon: Palette },
   { id: 'shortcuts', label: 'Atalhos', icon: Keyboard },
   { id: 'notifications', label: 'Notificações', icon: Bell },
+  { id: 'integrations', label: 'Integrações', icon: Plug },
   { id: 'env', label: 'Variáveis de ambiente', icon: Variable },
   { id: 'sync', label: 'Sincronização', icon: RefreshCw },
   { id: 'about', label: 'Sobre', icon: Info },
@@ -94,6 +108,7 @@ export function SettingsDialog({ open, onClose }: Props) {
           {tab === 'appearance' && <AppearanceTab open={open} />}
           {tab === 'shortcuts' && <ShortcutsTab />}
           {tab === 'notifications' && <NotificationsTab open={open} />}
+          {tab === 'integrations' && <IntegrationsTab open={open} />}
           {tab === 'env' && <EnvVarsTab open={open} />}
           {tab === 'sync' && <SyncTab open={open} />}
           {tab === 'about' && <AboutTab open={open} />}
@@ -143,9 +158,7 @@ function GeneralTab({ open }: { open: boolean }) {
     void prefsApi
       .get<number>('handoffs.heartbeatTtlHours')
       .then((v) => setHeartbeatTtlHours(v ?? HANDOFFS_HEARTBEAT_TTL_DEFAULT))
-    void prefsApi
-      .get<string>('meeting_calendar_ics_url')
-      .then((v) => setCalendarIcsUrl(v ?? ''))
+    void prefsApi.get<string>('meeting_calendar_ics_url').then((v) => setCalendarIcsUrl(v ?? ''))
     void mcpApi.status().then(setMcpStatus)
     setMcpCopied(false)
     void useProjectsPrefsStore.getState().load()
@@ -312,13 +325,11 @@ function GeneralTab({ open }: { open: boolean }) {
         </div>
         <label className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">
-              Mostrar delegações nos projetos
-            </div>
+            <div className="text-sm text-[var(--color-text)]">Mostrar delegações nos projetos</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Exibe uma seção "Delegações" dentro de cada projeto na barra lateral, com os
-              handoffs cujo repo-alvo pertence ao projeto. Desligado por padrão — os handoffs
-              continuam na área dedicada.
+              Exibe uma seção "Delegações" dentro de cada projeto na barra lateral, com os handoffs
+              cujo repo-alvo pertence ao projeto. Desligado por padrão — os handoffs continuam na
+              área dedicada.
             </div>
           </div>
           <input
@@ -335,8 +346,8 @@ function GeneralTab({ open }: { open: boolean }) {
               Clonar repos faltantes automaticamente
             </div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              No boot, clona os repositórios registrados (sincronizados de outra máquina) que
-              ainda não existem no disco desta, usando a origin do git. Ligado por padrão.
+              No boot, clona os repositórios registrados (sincronizados de outra máquina) que ainda
+              não existem no disco desta, usando a origin do git. Ligado por padrão.
             </div>
           </div>
           <input
@@ -349,9 +360,7 @@ function GeneralTab({ open }: { open: boolean }) {
 
         <label className="mt-3 flex items-start justify-between gap-3 border-t border-[var(--color-border)] pt-3">
           <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">
-              Atualizar repos automaticamente
-            </div>
+            <div className="text-sm text-[var(--color-text)]">Atualizar repos automaticamente</div>
             <div className="text-xs text-[var(--color-text-dim)]">
               Periodicamente busca o estado do remote (`git fetch`) de todos os repos locais e dá
               `git pull --ff-only` nos que estão limpos, pulando os que têm alterações
@@ -395,9 +404,9 @@ function GeneralTab({ open }: { open: boolean }) {
               Exigir aprovação humana em handoffs
             </div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Desligado (padrão): a sessão-filha delegada nasce direto, e você é avisado por
-              toast. Ligue para voltar ao gate — cada delegação abre um modal com o prompt
-              editável antes de a filha subir.
+              Desligado (padrão): a sessão-filha delegada nasce direto, e você é avisado por toast.
+              Ligue para voltar ao gate — cada delegação abre um modal com o prompt editável antes
+              de a filha subir.
             </div>
           </div>
           <input
@@ -410,12 +419,10 @@ function GeneralTab({ open }: { open: boolean }) {
 
         <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
           <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">
-              TTL de heartbeat (horas)
-            </div>
+            <div className="text-sm text-[var(--color-text)]">TTL de heartbeat (horas)</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Sem progresso por mais que isto, a sessão-filha é marcada como sem heartbeat no
-              inbox. (1–48)
+              Sem progresso por mais que isto, a sessão-filha é marcada como sem heartbeat no inbox.
+              (1–48)
             </div>
           </div>
           <input
@@ -561,8 +568,7 @@ function SessionTab({ open }: { open: boolean }) {
           <div className="min-w-0">
             <div className="text-sm text-[var(--color-text)]">Advisor padrão</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Segunda opinião (--advisor) pré-selecionada. Experimental — só Anthropic API
-              direta.
+              Segunda opinião (--advisor) pré-selecionada. Experimental — só Anthropic API direta.
             </div>
           </div>
           <Segmented
@@ -576,8 +582,7 @@ function SessionTab({ open }: { open: boolean }) {
           <div className="min-w-0">
             <div className="text-sm text-[var(--color-text)]">Modo padrão do painel</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Como cada sessão abre. Sessões que você já alternou manualmente mantêm a
-              escolha.
+              Como cada sessão abre. Sessões que você já alternou manualmente mantêm a escolha.
             </div>
           </div>
           <Segmented
@@ -596,8 +601,8 @@ function SessionTab({ open }: { open: boolean }) {
           <div className="min-w-0">
             <div className="text-sm text-[var(--color-text)]">Desabilitar auto-compact</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Impede o Claude Code de compactar o contexto sozinho quando ele enche. Vale só
-              para sessões abertas a partir de agora; use `/compact` quando quiser compactar.
+              Impede o Claude Code de compactar o contexto sozinho quando ele enche. Vale só para
+              sessões abertas a partir de agora; use `/compact` quando quiser compactar.
             </div>
           </div>
           <input
@@ -774,9 +779,7 @@ function ShortcutsTab() {
       const newKey = comboKey(combo)
       const clashing = COMMANDS.find(
         (c) =>
-          c.editable &&
-          c.id !== capturingId &&
-          comboKey(resolveCombo(c.id, overrides)) === newKey,
+          c.editable && c.id !== capturingId && comboKey(resolveCombo(c.id, overrides)) === newKey,
       )
       if (clashing) {
         setConflict({ id: capturingId, message: `Conflito com "${clashing.label}"` })

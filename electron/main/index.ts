@@ -25,6 +25,7 @@ import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/rep
 import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
 import { registerSecretsIpc } from './ipc/secrets'
+import { registerEnvImportIpc } from './ipc/env-import'
 import { migrateSecretsAtRest } from './services/custom-env'
 import { electronCrypto } from './services/secret-store'
 import {
@@ -291,6 +292,7 @@ app.whenReady().then(async () => {
   registerFsIpc()
   registerPrefsIpc()
   registerSecretsIpc()
+  registerEnvImportIpc()
   registerGpuIpc()
   registerWorkspaceIpc()
   registerClaudeConfigsIpc()

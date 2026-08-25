@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, Trash2, Eye, EyeOff, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { secretsApi } from '@/lib/ipc'
-import { KNOWN_ENV_VARS } from '@shared/known-env-vars'
+import { KNOWN_ENV_KEYS, KNOWN_INTEGRATIONS } from '@shared/known-env-vars'
 import type { CustomEnvEntry, SecretsStatus } from '@shared/types/ipc'
 
 // Aba "Variáveis de ambiente": editor key=value das vars customizadas do usuário,
@@ -57,7 +57,7 @@ function emptyRow(key: string): Row {
   }
 }
 
-const KNOWN_KEYS = new Set(KNOWN_ENV_VARS.map((v) => v.envKey))
+const KNOWN_KEYS = KNOWN_ENV_KEYS
 
 function EncryptionNotice({ status }: { status: SecretsStatus }) {
   const unreadable = status.unreadableKeys.length
@@ -66,8 +66,8 @@ function EncryptionNotice({ status }: { status: SecretsStatus }) {
       <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-2.5 text-xs text-[var(--color-text-dim)]">
         <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-success,#22c55e)]" />
         <span>
-          Valores cifrados em repouso pelo cofre de credenciais do sistema. Cópias do banco
-          (backup, harness de testes) não levam a chave utilizável.
+          Valores cifrados em repouso pelo cofre de credenciais do sistema. Cópias do banco (backup,
+          harness de testes) não levam a chave utilizável.
         </span>
       </div>
     )
@@ -85,8 +85,8 @@ function EncryptionNotice({ status }: { status: SecretsStatus }) {
           <p>
             <strong>Cofre do sistema indisponível.</strong> Os valores abaixo estão gravados em
             TEXTO CLARO no banco local — qualquer cópia do perfil leva o segredo junto. No Linux,
-            configure um keyring (gnome-keyring ou KWallet) e reinicie o app para que sejam
-            cifrados automaticamente.
+            configure um keyring (gnome-keyring ou KWallet) e reinicie o app para que sejam cifrados
+            automaticamente.
           </p>
         )}
         {status.backend === 'basic_text' && (
@@ -148,7 +148,11 @@ export function EnvVarsTab({ open }: { open: boolean }) {
     if (!key || row.draft === null) return
     const next = await secretsApi.set(key, row.draft)
     setStatus(next)
-    patch(row.id, { savedKey: key, hasValue: row.draft.length > 0, unreadable: false })
+    patch(row.id, {
+      savedKey: key,
+      hasValue: row.draft.length > 0,
+      unreadable: false,
+    })
   }
 
   // Persiste o NOME. Renomear acontece no main: o valor não passa pelo renderer.
@@ -189,12 +193,15 @@ export function EnvVarsTab({ open }: { open: boolean }) {
 
   // Função de renderização, NÃO um componente: um componente declarado dentro do
   // corpo do pai é remontado a cada render e o input perderia o foco a cada tecla.
-  function renderValue(row: Row) {
+  // `secret: false` (username, URL) nunca vira input type=password — password
+  // sinaliza segredo pro browser/gerenciador de senhas e esconde o que não
+  // precisa ser escondido.
+  function renderValue(row: Row, secret = true) {
     const masked = row.draft === null
     return (
       <>
         <input
-          type={row.visible ? 'text' : 'password'}
+          type={!secret || row.visible ? 'text' : 'password'}
           value={row.draft ?? MASK}
           readOnly={masked}
           onChange={(e) => patch(row.id, { draft: e.target.value })}
@@ -226,17 +233,23 @@ export function EnvVarsTab({ open }: { open: boolean }) {
           Integrações
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-dim)]">
-          Credenciais que o app sabe usar. Sem elas, a funcionalidade correspondente fica
-          desligada.
+          Credenciais que o app sabe usar. Sem elas, a funcionalidade correspondente fica desligada.
         </p>
 
-        <div className="space-y-3">
-          {KNOWN_ENV_VARS.map((integration) => {
-            const row = rows.find((r) => r.key === integration.envKey)
-            if (!row) return null
-            const configured = row.hasValue || (row.draft ?? '').length > 0
+        <div className="space-y-4">
+          {KNOWN_INTEGRATIONS.map((integration) => {
+            // UM card por serviço; dentro, uma linha por var canônica.
+            const hasValue = (envKey: string) => {
+              const r = rows.find((row) => row.key === envKey)
+              return r ? r.hasValue || (r.draft ?? '').length > 0 : false
+            }
+            const required = integration.vars.filter((v) => v.required)
+            const configured =
+              required.length > 0
+                ? required.every((v) => hasValue(v.envKey))
+                : integration.vars.some((v) => hasValue(v.envKey))
             return (
-              <div key={integration.envKey} className="space-y-1">
+              <div key={integration.serviceId} className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-[var(--color-text)]">
                     {integration.label}
@@ -244,9 +257,7 @@ export function EnvVarsTab({ open }: { open: boolean }) {
                   <span
                     className="rounded-full border px-1.5 py-0.5 text-[10px]"
                     style={{
-                      color: configured
-                        ? 'var(--color-success, #22c55e)'
-                        : 'var(--color-text-dim)',
+                      color: configured ? 'var(--color-success, #22c55e)' : 'var(--color-text-dim)',
                       borderColor: configured
                         ? 'var(--color-success, #22c55e)'
                         : 'var(--color-border)',
@@ -266,12 +277,18 @@ export function EnvVarsTab({ open }: { open: boolean }) {
                     Obter chave
                   </a>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-40 shrink-0 truncate font-mono text-xs text-[var(--color-text-dim)]">
-                    {integration.envKey}
-                  </span>
-                  {renderValue(row)}
-                </div>
+                {integration.vars.map((v) => {
+                  const row = rows.find((r) => r.key === v.envKey)
+                  if (!row) return null
+                  return (
+                    <div key={v.envKey} className="flex items-center gap-2">
+                      <span className="w-56 shrink-0 truncate font-mono text-xs text-[var(--color-text-dim)]">
+                        {v.envKey}
+                      </span>
+                      {renderValue(row, v.secret)}
+                    </div>
+                  )
+                })}
               </div>
             )
           })}
@@ -283,9 +300,9 @@ export function EnvVarsTab({ open }: { open: boolean }) {
           Variáveis de ambiente
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-dim)]">
-          Injetadas nos processos abertos pelo app (sidecar de transcrição, extração via
-          claude). Têm precedência sobre as variáveis herdadas do sistema. Os valores ficam
-          cifrados e mascarados até você revelar.
+          Injetadas nos processos abertos pelo app (sidecar de transcrição, extração via claude).
+          Têm precedência sobre as variáveis herdadas do sistema. Os valores ficam cifrados e
+          mascarados até você revelar.
         </p>
 
         {customRows.length === 0 ? (

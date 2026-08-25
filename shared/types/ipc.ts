@@ -5,6 +5,7 @@
 // consumidores sigam importando tudo de '@shared/types/ipc'.
 export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
+import type { ServiceId } from '../service-registry'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -390,12 +391,7 @@ export type TrustTier = 'high' | 'medium' | 'low' | 'biased'
 // Estado de verificação de um claim. unverified ≠ refuted (a falha instrutiva da
 // skill deep-research foi colapsar não-checado em refutado).
 export type EvidenceState =
-  | 'primary_accepted'
-  | 'corroborated'
-  | 'single_source'
-  | 'contested'
-  | 'unverified'
-  | 'refuted'
+  'primary_accepted' | 'corroborated' | 'single_source' | 'contested' | 'unverified' | 'refuted'
 
 // Ciclo de vida do dossiê: active (vivo, re-rodável) → archived.
 export type DossierStatus = 'active' | 'archived'
@@ -635,12 +631,7 @@ export type AdvisorModel = 'opus' | 'sonnet' | 'fable'
 // sem perguntar), auto, bypassPermissions (pula tudo), dontAsk. Validado contra
 // whitelist no main; os modos autônomos recebem o denylist destrutivo no spawn.
 export type PermissionMode =
-  | 'default'
-  | 'plan'
-  | 'acceptEdits'
-  | 'auto'
-  | 'bypassPermissions'
-  | 'dontAsk'
+  'default' | 'plan' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'dontAsk'
 
 export interface SpawnSessionInput {
   // Ausente/null = sessão avulsa: cwd vira o scratch dir (pref scratch_dir).
@@ -898,7 +889,12 @@ export interface ObjectiveWithProgress extends Objective {
 // Detalhe: objetivo + KRs (cada um com seu progresso calculado) + features
 // vinculadas (Fase 3) — no nível do objetivo e por KR.
 export interface ObjectiveDetail extends ObjectiveWithProgress {
-  keyResults: Array<KeyResult & { progress: number | null; linkedFeatures: LinkedFeatureSummary[] }>
+  keyResults: Array<
+    KeyResult & {
+      progress: number | null
+      linkedFeatures: LinkedFeatureSummary[]
+    }
+  >
   linkedFeatures: LinkedFeatureSummary[]
 }
 
@@ -1063,13 +1059,7 @@ export interface TaskListFilter {
 // Ciclo de vida de uma execução: scheduled (row criada pelo claim, aguardando
 // spawn) → running (sessão viva) → success | failed | interrupted. `missed` =
 // vencido com o app fechado (skip-with-marker, sem spawn).
-export type JobRunStatus =
-  | 'scheduled'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'interrupted'
-  | 'missed'
+export type JobRunStatus = 'scheduled' | 'running' | 'success' | 'failed' | 'interrupted' | 'missed'
 
 // Qualidade da captura do relatório pull (transcript): full (texto íntegro),
 // partial (truncado em MAX_TEXT) ou none (transcript ausente). Evita falha
@@ -1546,12 +1536,7 @@ export type MeetingStatus =
   | 'extracted'
   | 'failed'
 
-export type ExtractionKind =
-  | 'action_item'
-  | 'decision'
-  | 'feedback'
-  | 'risk'
-  | 'question'
+export type ExtractionKind = 'action_item' | 'decision' | 'feedback' | 'risk' | 'question'
 
 // Cabeçalho da reunião + proveniência (stt/diar/extractor) + notas livres.
 // Persistência SQLite-only (molde de Task): segments/speakers/extractions vivem
@@ -2345,14 +2330,7 @@ export interface SyncGitStatus {
 //  - schema-mismatch — bundle remoto exige app mais novo (bloqueado).
 //  - stale           — offline/erro não-fatal; opera com dados locais.
 export type SyncState =
-  | 'idle'
-  | 'in-sync'
-  | 'ahead'
-  | 'behind'
-  | 'syncing'
-  | 'conflict'
-  | 'schema-mismatch'
-  | 'stale'
+  'idle' | 'in-sync' | 'ahead' | 'behind' | 'syncing' | 'conflict' | 'schema-mismatch' | 'stale'
 
 // Snapshot agregado para a aba Sync: config machine-local + git + schema +
 // estado persistente derivado do boot/coordinator/ações.
@@ -2400,9 +2378,7 @@ export type SyncNowResult =
 // Resultado de um backup manual em .zip (independente do git). 'canceled' =
 // o usuário fechou o dialog. 'exported'/'imported' carregam o path do .zip.
 export type SyncBackupResult =
-  | { state: 'canceled' }
-  | { state: 'exported'; path: string }
-  | { state: 'imported'; path: string }
+  { state: 'canceled' } | { state: 'exported'; path: string } | { state: 'imported'; path: string }
 
 /**
  * Backend de cifragem em repouso (safeStorage). 'basic_text' é o fallback do
@@ -2423,6 +2399,75 @@ export interface CustomEnvEntry {
   hasValue: boolean
   encrypted: boolean
   unreadable: boolean
+}
+
+// Importador de .env: o renderer só vê fingerprint (máscara + últimos 4 chars +
+// tamanho) e o path de origem — o valor fica no main e é relido do arquivo no
+// momento do apply.
+
+export interface EnvSourceRef {
+  path: string
+  fingerprint: string
+}
+
+export interface ImportCandidate {
+  key: string
+  canonical?: string
+  serviceId?: ServiceId
+  sources: EnvSourceRef[]
+  /**
+   * 'same' = cofre já tem este valor; 'conflict' = fontes divergem entre si ou
+   * do cofre; 'shadowed' = a chave é alias de serviço e a canônica já existe no
+   * cofre — importar gravaria uma var que a resolução (canônica primeiro) ignora.
+   */
+  status: 'new' | 'same' | 'conflict' | 'shadowed'
+}
+
+export interface ImportSelection {
+  key: string
+  sourcePath: string
+}
+
+export interface ApplyImportResult {
+  applied: string[]
+  /** Chaves que não existiam (mais) no arquivo escolhido no momento do apply. */
+  missing: string[]
+  /** Chaves cujo sourcePath falhou a revalidação do apply (fora da raiz, symlink, nome inválido) — nada foi lido. */
+  rejected: string[]
+  /** Chaves gravadas em claro (cofre indisponível) — a UI avisa. */
+  plaintext: string[]
+}
+
+// Status dos serviços do env hub (cards da aba Integrações). Health roda no
+// main com cache TTL; a auditoria vem de service_proxy_calls (erros já
+// redigidos antes de persistir — nenhum valor de credencial chega aqui).
+
+export type ServiceHealthStatus = 'ok' | 'error' | 'unconfigured' | 'unsupported'
+
+export interface ServiceHealth {
+  status: ServiceHealthStatus
+  checkedAt: number
+  httpStatus?: number
+  error?: string
+}
+
+export interface ServiceAuditEntry {
+  id: string
+  ts: number
+  sessionId: string | null
+  service: string
+  operation: string
+  status: 'ok' | 'error'
+  durationMs: number
+  error: string | null
+}
+
+export interface ServiceStatusEntry {
+  id: ServiceId
+  title: string
+  configured: boolean
+  health: ServiceHealth
+  lastCall: ServiceAuditEntry | null
 }
 
 // ---------------------------------------------------------------------------
@@ -2585,8 +2630,7 @@ export type VoiceConfigStatus =
 // Resultado da síntese de fala (ElevenLabs). bytes é o mp3 inteiro — o renderer
 // toca via Blob/objectURL. Erros já vêm em PT (porte de vozapp/tts.py).
 export type VoiceTtsResult =
-  | { ok: true; bytes: Uint8Array; mime: string }
-  | { ok: false; error: string }
+  { ok: true; bytes: Uint8Array; mime: string } | { ok: false; error: string }
 
 // Resumo de fim de turno: emitido pelo main em voice:summary quando um turno
 // termina em texto de assistant e o resumo automático da sessão está ligado —
@@ -2707,6 +2751,12 @@ export interface Api {
     set(key: string, value: string): Promise<SecretsStatus>
     remove(key: string): Promise<SecretsStatus>
     rename(from: string, to: string): Promise<SecretsStatus>
+    /** Varre .env de ~/projetos e compara com o cofre. Só fingerprints, nunca valores. */
+    importScan(): Promise<ImportCandidate[]>
+    /** Grava as seleções; o main relê o valor do arquivo escolhido (segredo não trafega). */
+    importApply(selections: ImportSelection[]): Promise<ApplyImportResult>
+    /** Cards da aba Integrações: configurado + health (cache TTL) + última chamada auditada. */
+    servicesStatus(): Promise<ServiceStatusEntry[]>
   }
   vault: {
     getRoot(): Promise<string>

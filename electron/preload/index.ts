@@ -81,15 +81,13 @@ import type {
   McpAddInput,
   McpRemoveInput,
   VoiceSummaryEvent,
+  ImportSelection,
 } from '../../shared/types/ipc'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
 
-function subscribe<T>(
-  channel: string,
-  handler: (event: T) => void,
-): () => void {
+function subscribe<T>(channel: string, handler: (event: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T) => handler(payload)
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
@@ -116,8 +114,7 @@ const api: Api = {
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
     getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
     write: (sessionId, data) => invoke('sessions:write', sessionId, data),
-    saveImage: (sessionId, bytes, mime) =>
-      invoke('sessions:save-image', sessionId, bytes, mime),
+    saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
     resize: (sessionId, cols, rows) => invoke('sessions:resize', sessionId, cols, rows),
     kill: (sessionId) => invoke('sessions:kill', sessionId),
     rename: (sessionId, title) => invoke('sessions:rename', sessionId, title),
@@ -193,6 +190,9 @@ const api: Api = {
     set: (key: string, value: string) => invoke('secrets:env:set', { key, value }),
     remove: (key: string) => invoke('secrets:env:delete', { key }),
     rename: (from: string, to: string) => invoke('secrets:env:rename', { from, to }),
+    importScan: () => invoke('secrets:import:scan'),
+    importApply: (selections: ImportSelection[]) => invoke('secrets:import:apply', { selections }),
+    servicesStatus: () => invoke('secrets:services:status'),
   },
   vault: {
     getRoot: () => invoke('vault:get-root'),
@@ -214,15 +214,13 @@ const api: Api = {
     symlinkIntoVault: (source: string, vaultPath: string, label: string) =>
       invoke('repo:symlink-into-vault', { source, vaultPath, label }),
     removeSymlink: (target: string) => invoke('repo:remove-symlink', { target }),
-    cloneUrl: (url: string, vaultPath: string) =>
-      invoke('repo:clone-url', { url, vaultPath }),
+    cloneUrl: (url: string, vaultPath: string) => invoke('repo:clone-url', { url, vaultPath }),
     createBlank: (vaultPath: string, name: string, gitInit: boolean) =>
       invoke('repo:create-blank', { vaultPath, name, gitInit }),
     listMissing: () => invoke('repos:list-missing'),
     cloneMissing: () => invoke('repos:clone-missing'),
     pullAll: () => invoke('repos:pull-all'),
-    pullOne: (selector: { repoId?: string; path?: string }) =>
-      invoke('repos:pull-one', selector),
+    pullOne: (selector: { repoId?: string; path?: string }) => invoke('repos:pull-one', selector),
     lastPullRun: () => invoke('repos:last-run'),
   },
   workspace: {
@@ -301,15 +299,13 @@ const api: Api = {
     setRepoPosition: (input: { repoId: string; x: number; y: number; projectId: string }) =>
       invoke('repos:set-position', input),
     setRepoHub: (input: SetRepoHubInput) => invoke('repos:set-hub', input),
-    connectHubToAll: (input: ConnectHubToAllInput) =>
-      invoke('repo-deps:connect-hub-to-all', input),
+    connectHubToAll: (input: ConnectHubToAllInput) => invoke('repo-deps:connect-hub-to-all', input),
     onUpdated: (handler) => subscribe<{ projectId: string | null }>('repo-deps:updated', handler),
   },
   handoffs: {
     list: (opts?: { status?: HandoffStatus | HandoffStatus[] }) => invoke('handoffs:list', opts),
     get: (id: string) => invoke('handoffs:get', id),
-    approve: (input: { id: string; composedPrompt?: string }) =>
-      invoke('handoffs:approve', input),
+    approve: (input: { id: string; composedPrompt?: string }) => invoke('handoffs:approve', input),
     createManual: (input: CreateManualHandoffInput) => invoke('handoffs:create-manual', input),
     adoptSession: (input: AdoptSessionInput) => invoke('handoffs:adopt-session', input),
     reject: (id: string) => invoke('handoffs:reject', id),
@@ -449,8 +445,7 @@ const api: Api = {
       subscribe<MeetingPartialEvent>('meeting:transcript:partial', handler),
     onStatus: (handler) => subscribe<MeetingStatusEvent>('meeting:status', handler),
     onInstallLog: (handler) => subscribe<MeetingInstallLogEvent>('meeting:install:log', handler),
-    onInstallDone: (handler) =>
-      subscribe<MeetingInstallDoneEvent>('meeting:install:done', handler),
+    onInstallDone: (handler) => subscribe<MeetingInstallDoneEvent>('meeting:install:done', handler),
     onSpeaker: (handler) => subscribe<MeetingSpeaker>('meeting:speaker', handler),
     onCalendarActivate: (handler) =>
       subscribe<MeetingActivationDraft>('meeting:calendar:activate', handler),

@@ -9,6 +9,7 @@ import {
   setCustomEnvVar,
 } from '../services/custom-env'
 import { resetDossierPipeline } from '../services/dossier-pipeline-singleton'
+import { clearServiceHealthCache, serviceStatuses } from '../services/service-proxy'
 
 // Canal dedicado às env vars customizadas do usuário, separado de `prefs:*`
 // justamente para que o texto claro NÃO trafegue por um get genérico. A UI
@@ -17,16 +18,23 @@ import { resetDossierPipeline } from '../services/dossier-pipeline-singleton'
 
 const keySchema = z.object({ key: z.string().min(1) })
 const setSchema = z.object({ key: z.string().min(1), value: z.string() })
-const renameSchema = z.object({ from: z.string().min(1), to: z.string().min(1) })
+const renameSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+})
 
 // Mudança em credencial invalida o pipeline de dossiês (ele cacheia o provedor
-// com a chave lida no momento da construção).
+// com a chave lida no momento da construção) e o cache de health dos serviços
+// (um "sem credencial" cacheado sobreviveria 5min à chave recém-gravada).
 function afterMutation(): void {
   resetDossierPipeline()
+  clearServiceHealthCache()
 }
 
 export function registerSecretsIpc(): void {
   ipcMain.handle('secrets:env:status', () => customEnvStatus())
+
+  ipcMain.handle('secrets:services:status', () => serviceStatuses())
 
   ipcMain.handle('secrets:env:list', () => listCustomEnvEntries())
 

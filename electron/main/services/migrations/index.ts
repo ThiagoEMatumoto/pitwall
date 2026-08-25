@@ -38,6 +38,7 @@ import * as handoffDismissed from './036_handoff_dismissed'
 import * as handoffPredecessor from './037_handoff_predecessor'
 import * as diagrams from './038_diagrams'
 import * as diagramLibrary from './039_diagram_library'
+import * as serviceProxyCalls from './040_service_proxy_calls'
 
 interface Migration {
   version: number
@@ -91,6 +92,7 @@ export const migrations: Migration[] = [
   handoffPredecessor,
   diagrams,
   diagramLibrary,
+  serviceProxyCalls,
 ]
 
 export function runMigrations(db: Database.Database): void {
@@ -113,9 +115,7 @@ export function runMigrations(db: Database.Database): void {
 
   if (pending.length === 0) return
 
-  const insert = db.prepare(
-    'INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)',
-  )
+  const insert = db.prepare('INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)')
 
   for (const m of pending) {
     const tx = db.transaction(() => {

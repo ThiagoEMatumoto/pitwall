@@ -120,7 +120,9 @@ describe('mcp tools — objectives/KRs', () => {
       { id: objective.id, keyResultId: keyResult.id },
     ])
 
-    const { items } = call<{ items: Objective[] }>('objective_list', { kind: 'project' })
+    const { items } = call<{ items: Objective[] }>('objective_list', {
+      kind: 'project',
+    })
     expect(items.some((o) => o.id === objective.id)).toBe(true)
     expect(items.every((o) => o.kind === 'project')).toBe(true)
 
@@ -131,7 +133,9 @@ describe('mcp tools — objectives/KRs', () => {
   })
 
   it('objective_get retorna null quando não existe', () => {
-    const { objective } = call<{ objective: null }>('objective_get', { id: 'nao-existe' })
+    const { objective } = call<{ objective: null }>('objective_get', {
+      id: 'nao-existe',
+    })
     expect(objective).toBeNull()
   })
 
@@ -155,7 +159,9 @@ describe('mcp tools — objectives/KRs', () => {
       title: 'Arquivável',
       kind: 'custom',
     })
-    const out = call<{ id: string; archived: boolean }>('objective_archive', { id: objective.id })
+    const out = call<{ id: string; archived: boolean }>('objective_archive', {
+      id: objective.id,
+    })
     expect(out).toEqual({ id: objective.id, archived: true })
     const row = getDb()
       .prepare('SELECT archived_at FROM objectives WHERE id = ?')
@@ -217,14 +223,19 @@ describe('mcp tools — tasks', () => {
   })
 
   it('task_list filtra por status e por parent', () => {
-    const { task } = call<{ task: Task }>('task_create', { title: 'Só todo', status: 'todo' })
+    const { task } = call<{ task: Task }>('task_create', {
+      title: 'Só todo',
+      status: 'todo',
+    })
     const { items } = call<{ items: Task[] }>('task_list', { status: 'todo' })
     expect(items.some((t) => t.id === task.id)).toBe(true)
     expect(items.every((t) => t.status === 'todo')).toBe(true)
   })
 
   it('task_update muda campos e re-broadcasta', () => {
-    const { task } = call<{ task: Task }>('task_create', { title: 'Pra atualizar' })
+    const { task } = call<{ task: Task }>('task_create', {
+      title: 'Pra atualizar',
+    })
     const { task: updated } = call<{ task: Task }>('task_update', {
       id: task.id,
       status: 'done',
@@ -237,7 +248,9 @@ describe('mcp tools — tasks', () => {
     // Cenário das SERVER_INSTRUCTIONS: a sessão cria uma task de follow-up com
     // tag "auto" e link parentType "feature" pro featureId do spawn prompt.
     getDb()
-      .prepare(`INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`)
+      .prepare(
+        `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+      )
       .run('proj-auto', 'Projeto auto-tracking', Date.now(), Date.now())
     const { feature } = call<{ feature: Feature }>('feature_create', {
       projectId: 'proj-auto',
@@ -290,7 +303,9 @@ describe('mcp tools — tasks', () => {
   })
 
   it('task_create via MCP sempre grava origin "auto" (Onda 0)', () => {
-    const { task } = call<{ task: Task }>('task_create', { title: 'Criada pela sessão' })
+    const { task } = call<{ task: Task }>('task_create', {
+      title: 'Criada pela sessão',
+    })
     expect(task.origin).toBe('auto')
   })
 
@@ -302,7 +317,9 @@ describe('mcp tools — tasks', () => {
       }),
     ).toThrow(/target not found/)
     // Nada foi persistido: a transação de create+links foi revertida.
-    const { items } = call<{ items: Task[] }>('task_list', { search: 'Link fantasma' })
+    const { items } = call<{ items: Task[] }>('task_list', {
+      search: 'Link fantasma',
+    })
     expect(items).toHaveLength(0)
   })
 })
@@ -341,10 +358,14 @@ describe('mcp tools — features', () => {
       title: 'Com corpo',
       overview: 'Texto da visão geral',
     })
-    const { feature: fetched } = call<{ feature: Feature }>('feature_get', { id: feature.id })
+    const { feature: fetched } = call<{ feature: Feature }>('feature_get', {
+      id: feature.id,
+    })
     expect(fetched.body).toContain('Texto da visão geral')
 
-    const { items } = call<{ items: Feature[] }>('feature_list', { projectId: 'proj-mcp' })
+    const { items } = call<{ items: Feature[] }>('feature_list', {
+      projectId: 'proj-mcp',
+    })
     expect(items.some((f) => f.id === feature.id)).toBe(true)
     expect(items.every((f) => f.projectId === 'proj-mcp')).toBe(true)
   })
@@ -361,10 +382,14 @@ describe('mcp tools — features', () => {
     })
     expect(updated.status).toBe('in-progress')
 
-    const out = call<{ id: string; archived: boolean }>('feature_archive', { id: feature.id })
+    const out = call<{ id: string; archived: boolean }>('feature_archive', {
+      id: feature.id,
+    })
     expect(out).toEqual({ id: feature.id, archived: true })
     expect(notify.calls.at(-1)).toEqual(['feature:updated', { id: feature.id, archived: true }])
-    const { items } = call<{ items: Feature[] }>('feature_list', { projectId: 'proj-mcp' })
+    const { items } = call<{ items: Feature[] }>('feature_list', {
+      projectId: 'proj-mcp',
+    })
     expect(items.some((f) => f.id === feature.id)).toBe(false)
   })
 
@@ -422,14 +447,18 @@ describe('mcp tools — features', () => {
       projectId: 'proj-mcp',
       title: 'Sem OKR ainda',
     })
-    const { items } = call<{ items: Feature[] }>('feature_list', { projectId: 'proj-mcp' })
+    const { items } = call<{ items: Feature[] }>('feature_list', {
+      projectId: 'proj-mcp',
+    })
     expect(items.find((f) => f.id === feature.id)?.objectiveLinkCount).toBe(0)
 
     call('feature_set_objective_links', {
       featureId: feature.id,
       links: [{ targetType: 'objective', targetId: objective.id }],
     })
-    const { feature: linked } = call<{ feature: Feature }>('feature_get', { id: feature.id })
+    const { feature: linked } = call<{ feature: Feature }>('feature_get', {
+      id: feature.id,
+    })
     expect(linked.objectiveLinkCount).toBe(1)
   })
 
@@ -454,7 +483,10 @@ describe('mcp tools — features', () => {
       id: objective.id,
     })
     expect(detail.linkedFeatures).toHaveLength(1)
-    expect(detail.linkedFeatures[0]).toMatchObject({ id: feature.id, archived: true })
+    expect(detail.linkedFeatures[0]).toMatchObject({
+      id: feature.id,
+      archived: true,
+    })
     // Arquivada sai do rollup (sem outro filho elegível) — progresso fica indeterminado,
     // não 0: a feature não conta contra o objetivo, só sai da conta.
     expect(detail.progress).toBeNull()
@@ -510,12 +542,16 @@ describe('mcp tools — scheduled jobs', () => {
   })
 
   it('scheduled_job_create/update rejeitam permissionMode autônomo (gate observe-only)', () => {
-    const base = { name: 'gated', prompt: 'roda', schedule: { type: 'interval', hours: 24 } }
+    const base = {
+      name: 'gated',
+      prompt: 'roda',
+      schedule: { type: 'interval', hours: 24 },
+    }
     // Modos autônomos barrados na fronteira MCP (fecha a self-elevation por injection).
     for (const permissionMode of ['bypassPermissions', 'dontAsk', 'acceptEdits', 'auto']) {
-      expect(() =>
-        tool('scheduled_job_create').handler({ ...base, permissionMode }),
-      ).toThrow(/autônomo indisponível via MCP/)
+      expect(() => tool('scheduled_job_create').handler({ ...base, permissionMode })).toThrow(
+        /autônomo indisponível via MCP/,
+      )
     }
     // Observe-only passa: plan e default são aceitos.
     const { job } = call<{ job: ScheduledJob }>('scheduled_job_create', {
@@ -526,7 +562,10 @@ describe('mcp tools — scheduled jobs', () => {
 
     // O gate sobrevive ao .partial() do update schema.
     expect(() =>
-      tool('scheduled_job_update').handler({ id: job.id, permissionMode: 'bypassPermissions' }),
+      tool('scheduled_job_update').handler({
+        id: job.id,
+        permissionMode: 'bypassPermissions',
+      }),
     ).toThrow(/autônomo indisponível via MCP/)
     const { job: updated } = call<{ job: ScheduledJob }>('scheduled_job_update', {
       id: job.id,
@@ -546,9 +585,9 @@ describe('mcp tools — scheduled jobs', () => {
       enabled: false,
     })
     expect(paused.enabled).toBe(false)
-    const row = getDb()
-      .prepare('SELECT enabled FROM scheduled_jobs WHERE id = ?')
-      .get(job.id) as { enabled: number }
+    const row = getDb().prepare('SELECT enabled FROM scheduled_jobs WHERE id = ?').get(job.id) as {
+      enabled: number
+    }
     expect(row.enabled).toBe(0)
     expect(notify.calls.at(-1)).toEqual(['scheduledJob:updated', paused])
   })
@@ -563,7 +602,9 @@ describe('mcp tools — scheduled jobs', () => {
     const r1 = jobStore.createRun({ jobId: job.id, status: 'success' })
     jobStore.createRun({ jobId: job.id, status: 'failed' })
 
-    const { items } = call<{ items: JobRun[] }>('job_run_list', { jobId: job.id })
+    const { items } = call<{ items: JobRun[] }>('job_run_list', {
+      jobId: job.id,
+    })
     expect(items.length).toBe(2)
     expect(items.every((r) => r.jobId === job.id)).toBe(true)
 
@@ -676,7 +717,11 @@ describe('composeJobKickoff (web-audit playbook)', () => {
   })
 
   it('ambíguo/sem URL cai em STAGING (fail toward non-prod)', () => {
-    const kickoff = composeJobKickoff({ prompt: 'x', kind: 'web-audit', targetUrl: null })
+    const kickoff = composeJobKickoff({
+      prompt: 'x',
+      kind: 'web-audit',
+      targetUrl: null,
+    })
     expect(kickoff).toContain('LEGAL_UI_STAGING_USERNAME')
     expect(kickoff).not.toContain('LEGAL_UI_PROD_USERNAME')
   })
@@ -778,10 +823,9 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect((last?.[1] as { status: string }).status).toBe('running')
 
     // E o alias volta pelo handoff_list (fonte da verdade do roster).
-    const { items } = call<{ items: Array<{ handoffId: string; alias: string | null }> }>(
-      'handoff_list',
-      {},
-    )
+    const { items } = call<{
+      items: Array<{ handoffId: string; alias: string | null }>
+    }>('handoff_list', {})
     expect(items.find((i) => i.handoffId === res.handoffId)?.alias).toBe(
       'mauricio-refatorar-autenticacao-oauth',
     )
@@ -840,7 +884,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
   it('force: true despacha a segunda filha mesmo com o repo-alvo ocupado', () => {
     seedRepo('payments', '/repos/payments')
-    call<HandoffResult>('session_handoff', { targetRepo: 'payments', task: 'Primeira tarefa' })
+    call<HandoffResult>('session_handoff', {
+      targetRepo: 'payments',
+      task: 'Primeira tarefa',
+    })
     const second = call<HandoffResult>('session_handoff', {
       targetRepo: 'payments',
       task: 'Segunda tarefa',
@@ -880,9 +927,9 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     const motherOf = (handoffId: string): string | null =>
       (
-        getDb()
-          .prepare('SELECT mother_session_id FROM handoffs WHERE id = ?')
-          .get(handoffId) as { mother_session_id: string | null }
+        getDb().prepare('SELECT mother_session_id FROM handoffs WHERE id = ?').get(handoffId) as {
+          mother_session_id: string | null
+        }
       ).mother_session_id
 
     it('grava o mother_session_id do ctx no handoff', () => {
@@ -906,7 +953,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     it('NÍVEL 1 — mesma mãe: recusa dizendo que a filha já é dela', () => {
       seedRepo('mesma', '/repos/mesma')
-      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'mesma', task: 'Primeira' })
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'mesma',
+        task: 'Primeira',
+      })
       const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'mesma',
         task: 'Segunda',
@@ -921,7 +971,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     it('NÍVEL 2 — outra mãe: recusa dizendo que a filha NÃO é dela', () => {
       seedRepo('alheia', '/repos/alheia')
-      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'alheia', task: 'Da mãe A' })
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'alheia',
+        task: 'Da mãe A',
+      })
       const dup = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
         targetRepo: 'alheia',
         task: 'Da mãe B',
@@ -936,7 +989,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     it('NÍVEL 2 — identidade conhecida NÃO libera o repo ocupado por uma mãe legada (null)', () => {
       seedRepo('misto', '/repos/misto')
-      call<HandoffResult>('session_handoff', { targetRepo: 'misto', task: 'Legada' })
+      call<HandoffResult>('session_handoff', {
+        targetRepo: 'misto',
+        task: 'Legada',
+      })
       const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'misto',
         task: 'Com carimbo',
@@ -948,7 +1004,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     it('NÍVEL 3 — sem identidade: cai no dedup por repo (mensagem legada)', () => {
       seedRepo('anonimo', '/repos/anonimo')
-      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'anonimo', task: 'Da mãe A' })
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'anonimo',
+        task: 'Da mãe A',
+      })
       const dup = call<HandoffResult>('session_handoff', {
         targetRepo: 'anonimo',
         task: 'Sem carimbo',
@@ -962,7 +1021,10 @@ describe('mcp tools — session_handoff sem gate', () => {
     it('repos-alvo diferentes: a mesma mãe segue despachando', () => {
       seedRepo('um', '/repos/um')
       seedRepo('dois', '/repos/dois')
-      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'um', task: 'A' })
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'um',
+        task: 'A',
+      })
       const second = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'dois',
         task: 'B',
@@ -973,7 +1035,10 @@ describe('mcp tools — session_handoff sem gate', () => {
 
     it('force: true segue como válvula de escape em qualquer nível', () => {
       seedRepo('forcado', '/repos/forcado')
-      callAs<HandoffResult>(MOTHER_A, 'session_handoff', { targetRepo: 'forcado', task: 'A' })
+      callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
+        targetRepo: 'forcado',
+        task: 'A',
+      })
       const forced = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
         targetRepo: 'forcado',
         task: 'B',
@@ -1071,14 +1136,16 @@ describe('mcp tools — content contracts', () => {
 
   it('content_gate_run com gate bloqueante retorna blocking:true e NÃO lança', () => {
     novoContrato('inss-bloqueante')
-    const res = call<{ run: ContentGateRun; passed: boolean; blocking: boolean; evidence: string }>(
-      'content_gate_run',
-      {
-        slug: 'inss-bloqueante',
-        gate: 'forbidden-facts',
-        material: 'Muita gente acha que o BPC é vitalício.\n',
-      },
-    )
+    const res = call<{
+      run: ContentGateRun
+      passed: boolean
+      blocking: boolean
+      evidence: string
+    }>('content_gate_run', {
+      slug: 'inss-bloqueante',
+      gate: 'forbidden-facts',
+      material: 'Muita gente acha que o BPC é vitalício.\n',
+    })
 
     expect(res.passed).toBe(false)
     expect(res.blocking).toBe(true)
@@ -1099,7 +1166,9 @@ describe('mcp tools — content contracts', () => {
     })
 
     const row = getDb()
-      .prepare('SELECT contract_id, contract_version, gate, status, blocking_count FROM content_gate_runs WHERE id = ?')
+      .prepare(
+        'SELECT contract_id, contract_version, gate, status, blocking_count FROM content_gate_runs WHERE id = ?',
+      )
       .get(run.id) as {
       contract_id: string
       contract_version: number
@@ -1167,7 +1236,13 @@ describe('mcp tools — diagrams', () => {
       elements: [
         { id: 'ui', type: 'rectangle', label: { text: 'Web UI' } },
         { id: 'api', type: 'rectangle', label: { text: 'Auth API' } },
-        { id: 'e1', type: 'arrow', start: { id: 'ui' }, end: { id: 'api' }, label: { text: 'POST /login' } },
+        {
+          id: 'e1',
+          type: 'arrow',
+          start: { id: 'ui' },
+          end: { id: 'api' },
+          label: { text: 'POST /login' },
+        },
       ],
     })
     return diagram
@@ -1175,17 +1250,25 @@ describe('mcp tools — diagrams', () => {
 
   it('diagram_create converte skeleton, persiste, broadcasta e devolve skeleton derivado', () => {
     const antes = notify.calls.length
-    const { diagram, skeleton } = (tool('diagram_create').handler({
-      title: 'Fluxo de auth',
-      kind: 'flow',
-      summary: 'esboço inicial',
-      elements: [
-        { id: 'ui', type: 'rectangle', label: { text: 'Web UI' } },
-        { id: 'api', type: 'rectangle', label: { text: 'Auth API' } },
-        { id: 'e1', type: 'arrow', start: { id: 'ui' }, end: { id: 'api' }, label: { text: 'POST /login' } },
-      ],
-      links: [{ parentType: 'feature', parentId: 'feat-1' }],
-    }) as ToolResult).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+    const { diagram, skeleton } = (
+      tool('diagram_create').handler({
+        title: 'Fluxo de auth',
+        kind: 'flow',
+        summary: 'esboço inicial',
+        elements: [
+          { id: 'ui', type: 'rectangle', label: { text: 'Web UI' } },
+          { id: 'api', type: 'rectangle', label: { text: 'Auth API' } },
+          {
+            id: 'e1',
+            type: 'arrow',
+            start: { id: 'ui' },
+            end: { id: 'api' },
+            label: { text: 'POST /login' },
+          },
+        ],
+        links: [{ parentType: 'feature', parentId: 'feat-1' }],
+      }) as ToolResult
+    ).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(diagram.id).toBeTruthy()
     expect(diagram.sourceFormat).toBe('skeleton')
@@ -1205,7 +1288,11 @@ describe('mcp tools — diagrams', () => {
 
     const row = getDb()
       .prepare('SELECT source_format, source, version FROM diagrams WHERE id = ?')
-      .get(diagram.id) as { source_format: string; source: string; version: number }
+      .get(diagram.id) as {
+      source_format: string
+      source: string
+      version: number
+    }
     expect(row.source_format).toBe('skeleton')
     expect(JSON.parse(row.source)).toHaveLength(3)
 
@@ -1216,9 +1303,7 @@ describe('mcp tools — diagrams', () => {
   })
 
   it('diagram_create exige exatamente um de elements|scene (zod refine)', () => {
-    expect(() =>
-      tool('diagram_create').handler({ title: 'X', summary: 's' }),
-    ).toThrow()
+    expect(() => tool('diagram_create').handler({ title: 'X', summary: 's' })).toThrow()
     expect(() =>
       tool('diagram_create').handler({
         title: 'X',
@@ -1243,21 +1328,32 @@ describe('mcp tools — diagrams', () => {
     const diagram = novoDiagrama()
     const antes = notify.calls.length
 
-    const { diagram: depois, skeleton } = (tool('diagram_patch').handler({
-      id: diagram.id,
-      summary: 'adiciona o banco',
-      ops: [
-        { op: 'add', element: { id: 'db', type: 'ellipse', label: { text: 'Sessions DB' } } },
-        { op: 'update', id: 'ui', label: { text: 'Frontend' } },
-        { op: 'delete', id: 'e1' },
-      ],
-    }) as ToolResult).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
+    const { diagram: depois, skeleton } = (
+      tool('diagram_patch').handler({
+        id: diagram.id,
+        summary: 'adiciona o banco',
+        ops: [
+          {
+            op: 'add',
+            element: {
+              id: 'db',
+              type: 'ellipse',
+              label: { text: 'Sessions DB' },
+            },
+          },
+          { op: 'update', id: 'ui', label: { text: 'Frontend' } },
+          { op: 'delete', id: 'e1' },
+        ],
+      }) as ToolResult
+    ).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(depois.version).toBe(2)
     const ids = skeleton.map((s) => s.id)
     expect(ids).toContain('db')
     expect(ids).not.toContain('e1')
-    expect(skeleton.find((s) => s.id === 'ui')?.label).toEqual({ text: 'Frontend' })
+    expect(skeleton.find((s) => s.id === 'ui')?.label).toEqual({
+      text: 'Frontend',
+    })
 
     // Snapshot com autor claude e o summary do patch.
     const version = getDb()
@@ -1273,12 +1369,14 @@ describe('mcp tools — diagrams', () => {
   it('diagram_delete recusa diagrama ativo (two-step) e apaga após archive', () => {
     const diagram = novoDiagrama('Pra apagar')
 
-    expect(() =>
-      tool('diagram_delete').handler({ id: diagram.id, confirm: true }),
-    ).toThrow(/archive first \(diagram_archive\), then delete/)
+    expect(() => tool('diagram_delete').handler({ id: diagram.id, confirm: true })).toThrow(
+      /archive first \(diagram_archive\), then delete/,
+    )
     // Guard também na validação: confirm literal true é obrigatório.
     expect(() => tool('diagram_delete').handler({ id: diagram.id })).toThrow()
-    expect(getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 1 })
+    expect(
+      getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id),
+    ).toEqual({ n: 1 })
 
     call('diagram_archive', { id: diagram.id })
     const antes = notify.calls.length
@@ -1287,7 +1385,9 @@ describe('mcp tools — diagrams', () => {
       confirm: true,
     })
     expect(out).toEqual({ id: diagram.id, deleted: true })
-    expect(getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 0 })
+    expect(
+      getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id),
+    ).toEqual({ n: 0 })
     expect(notify.calls.slice(antes)).toEqual([['diagram:deleted', { id: diagram.id }]])
   })
 
@@ -1330,23 +1430,29 @@ describe('mcp tools — diagrams', () => {
       createdAt: number
     }
 
-    const { diagram } = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>(
-      'diagram_create',
-      {
-        title: 'Pipeline de ingestão',
-        kind: 'architecture',
-        summary: 'primeira versão',
-        elements: [
-          { id: 'src', type: 'rectangle', label: { text: 'Fonte' } },
-          { id: 'etl', type: 'rectangle', label: { text: 'ETL' } },
-          { id: 'db', type: 'ellipse', label: { text: 'Warehouse' } },
-          { id: 'bi', type: 'diamond', label: { text: 'BI' } },
-          { id: 'a1', type: 'arrow', start: { id: 'src' }, end: { id: 'etl' } },
-          { id: 'a2', type: 'arrow', start: { id: 'etl' }, end: { id: 'db' }, label: { text: 'upsert' } },
-          { id: 'a3', type: 'arrow', start: { id: 'db' }, end: { id: 'bi' } },
-        ],
-      },
-    )
+    const { diagram } = call<{
+      diagram: DiagramMetaOut
+      skeleton: SkeletonFull[]
+    }>('diagram_create', {
+      title: 'Pipeline de ingestão',
+      kind: 'architecture',
+      summary: 'primeira versão',
+      elements: [
+        { id: 'src', type: 'rectangle', label: { text: 'Fonte' } },
+        { id: 'etl', type: 'rectangle', label: { text: 'ETL' } },
+        { id: 'db', type: 'ellipse', label: { text: 'Warehouse' } },
+        { id: 'bi', type: 'diamond', label: { text: 'BI' } },
+        { id: 'a1', type: 'arrow', start: { id: 'src' }, end: { id: 'etl' } },
+        {
+          id: 'a2',
+          type: 'arrow',
+          start: { id: 'etl' },
+          end: { id: 'db' },
+          label: { text: 'upsert' },
+        },
+        { id: 'a3', type: 'arrow', start: { id: 'db' }, end: { id: 'bi' } },
+      ],
+    })
 
     // get (skeleton): meta + skeleton derivado + histórico de versões.
     const got = call<{
@@ -1356,7 +1462,15 @@ describe('mcp tools — diagrams', () => {
     }>('diagram_get', { id: diagram.id })
     expect(got.diagram.id).toBe(diagram.id)
     expect(got.diagram.version).toBe(1)
-    expect(got.skeleton.map((s) => s.id).sort()).toEqual(['a1', 'a2', 'a3', 'bi', 'db', 'etl', 'src'])
+    expect(got.skeleton.map((s) => s.id).sort()).toEqual([
+      'a1',
+      'a2',
+      'a3',
+      'bi',
+      'db',
+      'etl',
+      'src',
+    ])
     expect(got.skeleton.find((s) => s.id === 'a2')).toMatchObject({
       start: { id: 'etl' },
       end: { id: 'db' },
@@ -1380,8 +1494,13 @@ describe('mcp tools — diagrams', () => {
       ],
     })
     expect(patched.diagram.version).toBe(2)
-    expect(patched.skeleton.find((s) => s.id === 'etl')).toMatchObject({ x: 520, y: 340 })
-    expect(patched.skeleton.find((s) => s.id === 'src')?.label).toEqual({ text: 'Fonte externa' })
+    expect(patched.skeleton.find((s) => s.id === 'etl')).toMatchObject({
+      x: 520,
+      y: 340,
+    })
+    expect(patched.skeleton.find((s) => s.id === 'src')?.label).toEqual({
+      text: 'Fonte externa',
+    })
     // Setas continuam vinculadas após o move.
     expect(patched.skeleton.find((s) => s.id === 'a1')).toMatchObject({
       start: { id: 'src' },
@@ -1389,31 +1508,66 @@ describe('mcp tools — diagrams', () => {
     })
 
     // get (full): a cena persistida tem os campos que o restoreElements espera.
-    const full = call<{ diagram: DiagramMetaOut & { scene: { elements: unknown[] } } }>(
-      'diagram_get',
-      { id: diagram.id, format: 'full' },
-    )
+    const full = call<{
+      diagram: DiagramMetaOut & { scene: { elements: unknown[] } }
+    }>('diagram_get', { id: diagram.id, format: 'full' })
     const elements = full.diagram.scene.elements as Array<Record<string, unknown>>
     expect(elements.length).toBeGreaterThanOrEqual(7)
     const BASE_FIELDS = [
-      'id', 'type', 'x', 'y', 'width', 'height', 'angle', 'strokeColor', 'backgroundColor',
-      'fillStyle', 'strokeWidth', 'strokeStyle', 'roughness', 'opacity', 'groupIds', 'frameId',
-      'roundness', 'seed', 'version', 'versionNonce', 'index', 'isDeleted', 'boundElements',
-      'updated', 'link', 'locked',
+      'id',
+      'type',
+      'x',
+      'y',
+      'width',
+      'height',
+      'angle',
+      'strokeColor',
+      'backgroundColor',
+      'fillStyle',
+      'strokeWidth',
+      'strokeStyle',
+      'roughness',
+      'opacity',
+      'groupIds',
+      'frameId',
+      'roundness',
+      'seed',
+      'version',
+      'versionNonce',
+      'index',
+      'isDeleted',
+      'boundElements',
+      'updated',
+      'link',
+      'locked',
     ]
     for (const el of elements) {
       for (const field of BASE_FIELDS) expect(el).toHaveProperty(field)
       if (el.type === 'text') {
         for (const field of [
-          'fontSize', 'fontFamily', 'text', 'textAlign', 'verticalAlign',
-          'containerId', 'originalText', 'autoResize', 'lineHeight',
-        ]) expect(el).toHaveProperty(field)
+          'fontSize',
+          'fontFamily',
+          'text',
+          'textAlign',
+          'verticalAlign',
+          'containerId',
+          'originalText',
+          'autoResize',
+          'lineHeight',
+        ])
+          expect(el).toHaveProperty(field)
       }
       if (el.type === 'arrow') {
         for (const field of [
-          'points', 'lastCommittedPoint', 'startBinding', 'endBinding',
-          'startArrowhead', 'endArrowhead', 'elbowed',
-        ]) expect(el).toHaveProperty(field)
+          'points',
+          'lastCommittedPoint',
+          'startBinding',
+          'endBinding',
+          'startArrowhead',
+          'endArrowhead',
+          'elbowed',
+        ])
+          expect(el).toHaveProperty(field)
       }
     }
     const etl = elements.find((el) => el.id === 'etl')!
@@ -1423,7 +1577,9 @@ describe('mcp tools — diagrams', () => {
     expect(etlLabel.containerId).toBe('etl')
 
     // archive → delete (two-step) apaga diagrama, versões e links.
-    const archived = call<{ id: string; status: string }>('diagram_archive', { id: diagram.id })
+    const archived = call<{ id: string; status: string }>('diagram_archive', {
+      id: diagram.id,
+    })
     expect(archived.status).toBe('archived')
     const deleted = call<{ id: string; deleted: boolean }>('diagram_delete', {
       id: diagram.id,
@@ -1431,7 +1587,9 @@ describe('mcp tools — diagrams', () => {
     })
     expect(deleted).toEqual({ id: diagram.id, deleted: true })
     const db = getDb()
-    expect(db.prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({ n: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id)).toEqual({
+      n: 0,
+    })
     expect(
       db.prepare('SELECT COUNT(*) AS n FROM diagram_versions WHERE diagram_id = ?').get(diagram.id),
     ).toEqual({ n: 0 })
@@ -1473,8 +1631,8 @@ describe('mcp tools — diagram library', () => {
   }
 
   it('diagram_library_install via library_json persiste, broadcasta e devolve metas', async () => {
-    const out = ((await tool('diagram_library_install').handler({ library_json: LIB_V2 }))
-      .structuredContent) as { added: number; items: LibraryItemMetaOut[] }
+    const out = (await tool('diagram_library_install').handler({ library_json: LIB_V2 }))
+      .structuredContent as { added: number; items: LibraryItemMetaOut[] }
 
     expect(out.added).toBe(2)
     expect(out.items.map((i) => i.id)).toEqual(['li-1', 'li-2'])
@@ -1497,8 +1655,8 @@ describe('mcp tools — diagram library', () => {
       ...LIB_V2,
       libraryItems: [{ ...LIB_V2.libraryItems[0], name: 'Card v2' }],
     }
-    const out = ((await tool('diagram_library_install').handler({ library_json: renamed }))
-      .structuredContent) as { added: number; items: LibraryItemMetaOut[] }
+    const out = (await tool('diagram_library_install').handler({ library_json: renamed }))
+      .structuredContent as { added: number; items: LibraryItemMetaOut[] }
 
     expect(out.added).toBe(1)
     const li1 = out.items.find((i) => i.id === 'li-1')
@@ -1518,7 +1676,9 @@ describe('mcp tools — diagram library', () => {
     ).rejects.toThrow(/exactly one of url or library_json/)
     // JSON que não é .excalidrawlib falha no parser, não grava nada.
     await expect(
-      tool('diagram_library_install').handler({ library_json: { type: 'nope' } }),
+      tool('diagram_library_install').handler({
+        library_json: { type: 'nope' },
+      }),
     ).rejects.toThrow(/excalidrawlib/)
   })
 
@@ -1534,10 +1694,11 @@ describe('mcp tools — diagram library', () => {
   })
 
   it('diagram_library_remove apaga o item, broadcasta e devolve o restante', () => {
-    const out = call<{ id: string; removed: boolean; items: LibraryItemMetaOut[] }>(
-      'diagram_library_remove',
-      { id: 'li-1' },
-    )
+    const out = call<{
+      id: string
+      removed: boolean
+      items: LibraryItemMetaOut[]
+    }>('diagram_library_remove', { id: 'li-1' })
     expect(out.removed).toBe(true)
     expect(out.items.map((i) => i.id)).toEqual(['li-2'])
     expect(notify.calls.at(-1)?.[0]).toBe('diagramLibrary:updated')

@@ -7,6 +7,7 @@
 // recusa delete de diagrama ativo porque agente não recebe diálogo de
 // confirmação).
 import * as z from 'zod/v4'
+import { serviceTools } from './service-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -88,13 +89,14 @@ export interface ToolDef {
   title: string
   description: string
   inputSchema: z.ZodType
-  // Promise SÓ pra tools com IO real (hoje: o fetch de diagram_library_install)
-  // — o registerTool do SDK aceita CallToolResult | Promise<CallToolResult>.
+  // Promise SÓ pra tools com IO real (hoje: o fetch de diagram_library_install
+  // e o proxy de service_call) — o registerTool do SDK aceita
+  // CallToolResult | Promise<CallToolResult>.
   handler: (args: unknown) => ToolResult | Promise<ToolResult>
 }
 
 // structuredContent precisa ser objeto JSON (spec); listas vão como { items }.
-function ok(structured: Record<string, unknown>): ToolResult {
+export function ok(structured: Record<string, unknown>): ToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(structured) }],
     structuredContent: structured,
@@ -149,9 +151,7 @@ const objectiveCreateSchema = z.object({
 })
 
 // Espelha UpdateObjectiveInput (id obrigatório, resto parcial).
-const objectiveUpdateSchema = objectiveCreateSchema
-  .partial()
-  .extend({ id: z.string().min(1) })
+const objectiveUpdateSchema = objectiveCreateSchema.partial().extend({ id: z.string().min(1) })
 
 // Espelha CreateKeyResultInput.
 const keyResultCreateSchema = z.object({
@@ -588,10 +588,13 @@ function childActivity(childSessionId: string | null): ReturnType<typeof getActi
 }
 
 // Resolve label+role de um repo por id (pra descrever a ponta oposta de uma aresta).
-function repoBrief(id: string): { id: string; label: string; role: string | null } {
-  const row = getDb()
-    .prepare('SELECT id, label, role FROM repos WHERE id = ?')
-    .get(id) as { id: string; label: string; role: string | null } | undefined
+function repoBrief(id: string): {
+  id: string
+  label: string
+  role: string | null
+} {
+  const row = getDb().prepare('SELECT id, label, role FROM repos WHERE id = ?').get(id) as
+    { id: string; label: string; role: string | null } | undefined
   if (!row) return { id, label: id, role: null }
   return row
 }
@@ -709,7 +712,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           }
         })
         return ok({
-          repo: { id: r.id, label: r.label, path: r.path, role: r.role, project: r.projectName },
+          repo: {
+            id: r.id,
+            label: r.label,
+            path: r.path,
+            role: r.role,
+            project: r.projectName,
+          },
           connections,
         })
       },
@@ -776,18 +785,15 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         }
         const edges: HandoffEdge[] = from
           ? allEdges
-              .filter(
-                (e) => e.fromRepoId === from.id || e.toRepoId === from.id,
-              )
+              .filter((e) => e.fromRepoId === from.id || e.toRepoId === from.id)
               .map(toCompose)
           : allEdges.map(toCompose)
 
         const featureTitle = input.featureId
-          ? (
-              getDb()
-                .prepare('SELECT title FROM features WHERE id = ?')
-                .get(input.featureId) as { title: string } | undefined
-            )?.title ?? null
+          ? ((
+              getDb().prepare('SELECT title FROM features WHERE id = ?').get(input.featureId) as
+                { title: string } | undefined
+            )?.title ?? null)
           : null
 
         const handoffId = randomUUID()
@@ -867,7 +873,12 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           const msg = err instanceof Error ? err.message : String(err)
           const failed = handoffStore.fail(handoffId, msg)
           notify.broadcast('handoff:updated', failed)
-          return ok({ handoffId, alias: null, status: failed.status, error: msg })
+          return ok({
+            handoffId,
+            alias: null,
+            status: failed.status,
+            error: msg,
+          })
         }
       },
     },
@@ -948,7 +959,10 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_ask')
         const updated = handoffStore.ask(handoffId, question)
         notify.broadcast('handoff:updated', updated)
-        return ok({ status: updated.status, pendingQuestion: updated.pendingQuestion })
+        return ok({
+          status: updated.status,
+          pendingQuestion: updated.pendingQuestion,
+        })
       },
     },
     {
@@ -1081,7 +1095,9 @@ const scheduledJobCreateSchema = z.object({
 })
 
 // Espelha UpdateScheduledJobInput (id obrigatório, resto parcial).
-const scheduledJobUpdateSchema = scheduledJobCreateSchema.partial().extend({ id: z.string().min(1) })
+const scheduledJobUpdateSchema = scheduledJobCreateSchema
+  .partial()
+  .extend({ id: z.string().min(1) })
 
 // Espelha ScheduledJobListFilter.
 const scheduledJobListSchema = z.object({
@@ -1250,18 +1266,24 @@ const contentAudienceSchema = z
     situation: z.string().nullish(),
     assumptions: z.array(z.string()).optional(),
   })
-  .transform(
-    (a): ContentAudience => ({
-      who: a.who,
-      notWho: a.notWho ?? [],
-      situation: a.situation ?? null,
-      assumptions: a.assumptions ?? [],
-    }),
-  )
+  .transform((a): ContentAudience => ({
+    who: a.who,
+    notWho: a.notWho ?? [],
+    situation: a.situation ?? null,
+    assumptions: a.assumptions ?? [],
+  }))
 
 const ethicalRuleSchema = z
-  .object({ id: z.string().min(1), rule: z.string().min(1), rationale: z.string().nullish() })
-  .transform((r): EthicalRule => ({ id: r.id, rule: r.rule, rationale: r.rationale ?? null }))
+  .object({
+    id: z.string().min(1),
+    rule: z.string().min(1),
+    rationale: z.string().nullish(),
+  })
+  .transform((r): EthicalRule => ({
+    id: r.id,
+    rule: r.rule,
+    rationale: r.rationale ?? null,
+  }))
 
 const allowedFactSchema = z
   .object({
@@ -1271,15 +1293,13 @@ const allowedFactSchema = z
     source: z.string().nullish(),
     appliesTo: z.array(z.string()).nullish(),
   })
-  .transform(
-    (f): AllowedFact => ({
-      id: f.id,
-      statement: f.statement,
-      scope: f.scope,
-      source: f.source ?? null,
-      appliesTo: f.appliesTo ?? null,
-    }),
-  )
+  .transform((f): AllowedFact => ({
+    id: f.id,
+    statement: f.statement,
+    scope: f.scope,
+    source: f.source ?? null,
+    appliesTo: f.appliesTo ?? null,
+  }))
 
 const forbiddenFactSchema = z
   .object({
@@ -1292,18 +1312,16 @@ const forbiddenFactSchema = z
     statusChangedAt: z.number().nullish(),
     appliesTo: z.array(z.string()).nullish(),
   })
-  .transform(
-    (f): ForbiddenFact => ({
-      id: f.id,
-      claim: f.claim,
-      forms: f.forms ?? [],
-      neutralForm: f.neutralForm,
-      reason: f.reason ?? null,
-      status: f.status ?? 'proibido',
-      statusChangedAt: f.statusChangedAt ?? null,
-      appliesTo: f.appliesTo ?? null,
-    }),
-  )
+  .transform((f): ForbiddenFact => ({
+    id: f.id,
+    claim: f.claim,
+    forms: f.forms ?? [],
+    neutralForm: f.neutralForm,
+    reason: f.reason ?? null,
+    status: f.status ?? 'proibido',
+    statusChangedAt: f.statusChangedAt ?? null,
+    appliesTo: f.appliesTo ?? null,
+  }))
 
 const outOfScopeItemSchema = z
   .object({
@@ -1313,15 +1331,13 @@ const outOfScopeItemSchema = z
     forms: z.array(z.string()).optional(),
     question: z.string().nullish(),
   })
-  .transform(
-    (i): OutOfScopeItem => ({
-      id: i.id,
-      item: i.item,
-      owner: i.owner ?? null,
-      forms: i.forms ?? [],
-      question: i.question ?? null,
-    }),
-  )
+  .transform((i): OutOfScopeItem => ({
+    id: i.id,
+    item: i.item,
+    owner: i.owner ?? null,
+    forms: i.forms ?? [],
+    question: i.question ?? null,
+  }))
 
 // snake_case porque é a grafia do YAML de tom do atelier, que é o que a coluna
 // JSON guarda e o linter lê — traduzir aqui criaria duas verdades.
@@ -1354,31 +1370,44 @@ const deliveryLimitSchema = z
     maxDurationSec: z.number().positive().nullish(),
     notes: z.string().nullish(),
   })
-  .transform(
-    (l): DeliveryLimit => ({
-      channel: l.channel,
-      maxBytes: l.maxBytes ?? null,
-      maxDurationSec: l.maxDurationSec ?? null,
-      notes: l.notes ?? null,
-    }),
-  )
+  .transform((l): DeliveryLimit => ({
+    channel: l.channel,
+    maxBytes: l.maxBytes ?? null,
+    maxDurationSec: l.maxDurationSec ?? null,
+    notes: l.notes ?? null,
+  }))
 
 const sourcePrecedenceSchema = z
-  .object({ rank: z.number().int(), source: z.string().min(1), note: z.string().nullish() })
-  .transform(
-    (s): SourcePrecedenceEntry => ({ rank: s.rank, source: s.source, note: s.note ?? null }),
-  )
+  .object({
+    rank: z.number().int(),
+    source: z.string().min(1),
+    note: z.string().nullish(),
+  })
+  .transform((s): SourcePrecedenceEntry => ({
+    rank: s.rank,
+    source: s.source,
+    note: s.note ?? null,
+  }))
 
 const productionInvariantSchema = z
-  .object({ id: z.string().min(1), invariant: z.string().min(1), rationale: z.string().nullish() })
-  .transform(
-    (p): ProductionInvariant => ({ id: p.id, invariant: p.invariant, rationale: p.rationale ?? null }),
-  )
+  .object({
+    id: z.string().min(1),
+    invariant: z.string().min(1),
+    rationale: z.string().nullish(),
+  })
+  .transform((p): ProductionInvariant => ({
+    id: p.id,
+    invariant: p.invariant,
+    rationale: p.rationale ?? null,
+  }))
 
 // id OU slug: o modelo conhece o slug (é o que ele lê no briefing), a UI conhece
 // o id. Exigir os dois seria fingir que o modelo tem o id.
 const contentContractGetSchema = z
-  .object({ id: z.string().min(1).optional(), slug: z.string().min(1).optional() })
+  .object({
+    id: z.string().min(1).optional(),
+    slug: z.string().min(1).optional(),
+  })
   .refine((v) => Boolean(v.id ?? v.slug), { message: 'informe id ou slug' })
 
 const contentContractUpsertSchema = z.object({
@@ -1418,7 +1447,9 @@ const contentGateRunSchema = z
     track: z.string().nullish(),
     attestation: contentGateAttestationSchema.nullish(),
   })
-  .refine((v) => Boolean(v.contractId ?? v.slug), { message: 'informe contractId ou slug' })
+  .refine((v) => Boolean(v.contractId ?? v.slug), {
+    message: 'informe contractId ou slug',
+  })
 
 const contentGateRunListSchema = z.object({
   contractId: z.string().optional(),
@@ -1442,7 +1473,10 @@ function contentContractTools(notify: McpNotify): ToolDef[] {
         if (!contract) throw new Error(`content contract não encontrado: ${id ?? slug}`)
         // O changelog vai junto: quem lê o contrato precisa saber por que ele
         // está assim, e é a versão que a evidência de gate carimba.
-        return ok({ contract, versions: contentStore.listVersions(contract.id) })
+        return ok({
+          contract,
+          versions: contentStore.listVersions(contract.id),
+        })
       },
     },
     {
@@ -1461,7 +1495,11 @@ function contentContractTools(notify: McpNotify): ToolDef[] {
               `contrato novo (slug "${input.slug}") exige title e outputLabel — o rótulo de saída é invariante do contrato`,
             )
           }
-          const contract = contentStore.create({ ...input, title: input.title, outputLabel: input.outputLabel })
+          const contract = contentStore.create({
+            ...input,
+            title: input.title,
+            outputLabel: input.outputLabel,
+          })
           notify.broadcast('contentContract:updated', contract)
           return ok({ contract, created: true })
         }
@@ -1469,7 +1507,11 @@ function contentContractTools(notify: McpNotify): ToolDef[] {
         const contract = contentStore.update({ ...input, id: existing.id })
         notify.broadcast('contentContract:updated', contract)
         // `bumped: false` = nada mudou de fato (no-op idempotente), não erro.
-        return ok({ contract, created: false, bumped: contract.version > existing.version })
+        return ok({
+          contract,
+          created: false,
+          bumped: contract.version > existing.version,
+        })
       },
     },
     {
@@ -1828,7 +1870,11 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       inputSchema: diagramLinkSchema,
       handler: (args) => {
         const { id, parentType, parentId } = diagramLinkSchema.parse(args)
-        const links = diagramStore.link({ diagramId: id, parentType, parentId })
+        const links = diagramStore.link({
+          diagramId: id,
+          parentType,
+          parentId,
+        })
         notify.broadcast('diagramLinks:updated', { diagramId: id, links })
         return ok({ links })
       },
@@ -1841,7 +1887,11 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       inputSchema: diagramLinkSchema,
       handler: (args) => {
         const { id, parentType, parentId } = diagramLinkSchema.parse(args)
-        const links = diagramStore.unlink({ diagramId: id, parentType, parentId })
+        const links = diagramStore.unlink({
+          diagramId: id,
+          parentType,
+          parentId,
+        })
         notify.broadcast('diagramLinks:updated', { diagramId: id, links })
         return ok({ links })
       },
@@ -1866,7 +1916,12 @@ const diagramLibraryInstallSchema = z
   })
 
 function libraryItemMeta(item: DiagramLibraryItem): Record<string, unknown> {
-  return { id: item.id, name: item.name, status: item.status, elementCount: item.elements.length }
+  return {
+    id: item.id,
+    name: item.name,
+    status: item.status,
+    elementCount: item.elements.length,
+  }
 }
 
 function diagramLibraryTools(notify: McpNotify): ToolDef[] {
@@ -1878,7 +1933,9 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
         'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out.',
       inputSchema: z.object({}),
       handler: () => {
-        return ok({ items: diagramLibraryStore.getItems().map(libraryItemMeta) })
+        return ok({
+          items: diagramLibraryStore.getItems().map(libraryItemMeta),
+        })
       },
     },
     {
@@ -1894,7 +1951,10 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
             ? await installLibraryFromUrl(input.url)
             : installLibraryJson(input.library_json)
         notify.broadcast('diagramLibrary:updated', { items: result.items })
-        return ok({ added: result.added, items: result.items.map(libraryItemMeta) })
+        return ok({
+          added: result.added,
+          items: result.items.map(libraryItemMeta),
+        })
       },
     },
     {
@@ -1928,6 +1988,7 @@ export function buildTools(
     ...contentContractTools(notify),
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
+    ...serviceTools(ctx),
   ]
 }
 
@@ -1939,7 +2000,11 @@ export function registerTools(
   for (const tool of buildTools(notify, ctx)) {
     server.registerTool(
       tool.name,
-      { title: tool.title, description: tool.description, inputSchema: tool.inputSchema },
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      },
       (args: unknown) => tool.handler(args),
     )
   }

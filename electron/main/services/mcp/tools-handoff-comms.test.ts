@@ -83,17 +83,20 @@ function callAs<T>(callerSessionId: string | null, name: string, args: unknown):
 // Cria um handoff running com filha atrelada (sessions.id + cc_session_id).
 function seedRunningHandoff(childSessionId = 's-child'): string {
   const db = getDb()
-  db.prepare(`INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',?,?)`).run(
-    Date.now(),
-    Date.now(),
-  )
+  db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',?,?)`,
+  ).run(Date.now(), Date.now())
   db.prepare(
     `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at) VALUES ('r1','p1','R1','/tmp/r1',0,?)`,
   ).run(Date.now())
   db.prepare(
     `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, 'r1', ?, 'running', ?)`,
   ).run(childSessionId, `cc-${childSessionId}`, Date.now())
-  const h = handoffStore.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p' })
+  const h = handoffStore.create({
+    targetRepoId: 'r1',
+    task: 't',
+    composedPrompt: 'p',
+  })
   handoffStore.approve(h.id, {})
   handoffStore.markRunning(h.id, childSessionId)
   return h.id
@@ -127,7 +130,9 @@ describe('handoff_ask (filha → mãe)', () => {
   })
 
   it('404 quando o handoff não existe', () => {
-    expect(() => call('handoff_ask', { handoffId: 'nope', question: 'x' })).toThrow(/não encontrado/)
+    expect(() => call('handoff_ask', { handoffId: 'nope', question: 'x' })).toThrow(
+      /não encontrado/,
+    )
   })
 })
 
@@ -145,20 +150,26 @@ describe('handoff_message (mãe → filha)', () => {
   })
 
   it('404 quando o handoff não existe', () => {
-    expect(() => call('handoff_message', { handoffId: 'nope', text: 'x' })).toThrow(/não encontrado/)
+    expect(() => call('handoff_message', { handoffId: 'nope', text: 'x' })).toThrow(
+      /não encontrado/,
+    )
   })
 
   it('rejeita quando o status não é in-flight (ex.: done)', () => {
     const id = seedRunningHandoff()
     handoffStore.report(id, 'concluído')
-    expect(() => call('handoff_message', { handoffId: id, text: 'x' })).toThrow(/não está em andamento/)
+    expect(() => call('handoff_message', { handoffId: id, text: 'x' })).toThrow(
+      /não está em andamento/,
+    )
     expect(injectIntoChild).not.toHaveBeenCalled()
   })
 
   it('rejeita quando a PTY da filha está morta', () => {
     const id = seedRunningHandoff()
     isRunning.mockReturnValue(false)
-    expect(() => call('handoff_message', { handoffId: id, text: 'x' })).toThrow(/não está mais viva/)
+    expect(() => call('handoff_message', { handoffId: id, text: 'x' })).toThrow(
+      /não está mais viva/,
+    )
     expect(injectIntoChild).not.toHaveBeenCalled()
   })
 })
@@ -193,10 +204,11 @@ describe('handoff_progress durante needs_input (regressão: filha apagava a pró
     call('handoff_progress', { handoffId: id, step: 'ainda esperando' })
     call('handoff_message', { handoffId: id, text: 'pode sim' })
 
-    const polled = call<{ status: string; pendingQuestion: string | null; currentStep: string }>(
-      'handoff_result',
-      { handoffId: id },
-    )
+    const polled = call<{
+      status: string
+      pendingQuestion: string | null
+      currentStep: string
+    }>('handoff_result', { handoffId: id })
     expect(polled.status).toBe('running')
     expect(polled.pendingQuestion).toBeNull()
     expect(polled.currentStep).toBe('ainda esperando')
@@ -212,10 +224,11 @@ describe('handoff_report duplicado', () => {
     })
     expect(first.duplicate).toBeUndefined()
 
-    const second = call<{ status: string; duplicate?: boolean; warning?: string }>(
-      'handoff_report',
-      { handoffId: id, summary: 'resultado repetido' },
-    )
+    const second = call<{
+      status: string
+      duplicate?: boolean
+      warning?: string
+    }>('handoff_report', { handoffId: id, summary: 'resultado repetido' })
     expect(second.status).toBe('done')
     expect(second.duplicate).toBe(true)
     expect(second.warning).toMatch(/já havia sido reportado/)
@@ -249,7 +262,10 @@ describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () 
   it('handoff_report da antecessora é RECUSADO e o handoff continua vivo', () => {
     const id = seedRunningHandoff('s-sucessora')
     expect(() =>
-      callAs('s-antecessora', 'handoff_report', { handoffId: id, summary: 'terminei' }),
+      callAs('s-antecessora', 'handoff_report', {
+        handoffId: id,
+        summary: 'terminei',
+      }),
     ).toThrow(/já não é seu/)
     expect(handoffStore.get(id)!.status).toBe('running')
     expect(handoffStore.get(id)!.summary).toBeNull()
@@ -258,7 +274,10 @@ describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () 
   it('a recusa explica o que houve (passou o bastão) e para onde falar', () => {
     const id = seedRunningHandoff('s-sucessora')
     expect(() =>
-      callAs('s-antecessora', 'handoff_report', { handoffId: id, summary: 'terminei' }),
+      callAs('s-antecessora', 'handoff_report', {
+        handoffId: id,
+        summary: 'terminei',
+      }),
     ).toThrow(/bastão[\s\S]*SendMessage/)
   })
 
@@ -297,7 +316,11 @@ describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () 
   })
 
   it('handoff SEM filha atrelada aceita de qualquer sessão carimbada', () => {
-    const h = handoffStore.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p' })
+    const h = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 't',
+      composedPrompt: 'p',
+    })
     handoffStore.approve(h.id, {})
     const res = callAs<{ status: string }>('s-qualquer', 'handoff_report', {
       handoffId: h.id,
