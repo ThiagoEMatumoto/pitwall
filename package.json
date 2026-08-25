@@ -1,6 +1,6 @@
 {
   "name": "pitwall",
-  "version": "0.62.0",
+  "version": "0.63.0",
   "description": "Visual manager for multiple Claude Code sessions, projects, and configs",
   "main": "out/main/index.js",
   "type": "module",
