@@ -34,7 +34,7 @@ export function registerMcpIpc(): void {
       running: true,
       port: runtime.port,
       url: runtime.url,
-      addCommand: `claude mcp add --transport http claude-manager ${runtime.url} --header "Authorization: Bearer ${runtime.token}"`,
+      addCommand: `claude mcp add --transport http pitwall ${runtime.url} --header "Authorization: Bearer ${runtime.token}"`,
     }
   })
 

@@ -34,7 +34,7 @@ try {
 
   // Guard: a porta no config DA CÓPIA tem que ser a isolada antes de qualquer claude -p.
   const clientConfig = JSON.parse(readFileSync(configPath, 'utf8'))
-  const configUrl: string = clientConfig?.mcpServers?.['claude-manager']?.url ?? ''
+  const configUrl: string = clientConfig?.mcpServers?.['pitwall']?.url ?? ''
   console.log(`[scenario] client config url: ${configUrl}`)
   if (!configUrl.includes(`:${ISOLATED_PORT}/`) && !configUrl.endsWith(`:${ISOLATED_PORT}`)) {
     throw new Error(`config da cópia não aponta pra porta ${ISOLATED_PORT}: ${configUrl}`)
@@ -42,12 +42,12 @@ try {
 
   // Sessão claude REAL, de fora do app, com o app ABERTO.
   const prompt =
-    "First, summarize in ONE line what the claude-manager MCP server instructions tell you to do. " +
+    "First, summarize in ONE line what the pitwall MCP server instructions tell you to do. " +
     "Then, following those instructions, create a task titled 'Smoke auto-tracking E2E v2' with priority high."
   try {
     const out = execSync(
       `claude -p ${JSON.stringify(prompt)} --mcp-config ${JSON.stringify(configPath)} ` +
-        `--allowedTools "mcp__claude-manager__*" --output-format text`,
+        `--allowedTools "mcp__pitwall__*" --output-format text`,
       { timeout: 120_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     )
     for (const line of out.trim().split('\n')) console.log(`[claude] ${line}`)

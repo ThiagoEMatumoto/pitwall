@@ -42,7 +42,7 @@ describe('shouldScrubProfile', () => {
 
   it('flag sem userData descartável NÃO limpa (protege o perfil real)', () => {
     expect(
-      shouldScrubProfile({ CM_SCRUB_SECRETS: '1' }, '/home/dev/.config/claude-manager', '/tmp'),
+      shouldScrubProfile({ CM_SCRUB_SECRETS: '1' }, '/home/dev/.config/pitwall', '/tmp'),
     ).toBe(false)
   })
 
