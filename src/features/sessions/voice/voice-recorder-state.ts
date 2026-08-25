@@ -6,6 +6,9 @@
 export const MIN_RECORDING_MS = 400
 
 export const CONDENSE_THRESHOLD_KEY = 'voiceCondenseThreshold'
+// Liga/desliga a condensação do ditado. Default LIGADO — null (pref nunca
+// tocada) conta como ligado; só um false explícito desliga.
+export const CONDENSE_ENABLED_KEY = 'voice.condense.enabled'
 // Ditado com menos palavras que isto entra direto no composer: raramente tem
 // divagação que valha a latência de uma passada de LLM.
 export const DEFAULT_CONDENSE_THRESHOLD_WORDS = 50

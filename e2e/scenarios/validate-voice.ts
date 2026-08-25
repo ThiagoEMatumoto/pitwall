@@ -317,19 +317,34 @@ try {
   await modeToggle.click();
   await page.waitForTimeout(600);
 
-  // --- 5. toggle modo voz ---------------------------------------------------
-  const toggle = pane.getByRole("button", { name: "Modo voz" }).first();
+  // --- 5. controles de resumo por sessão ------------------------------------
+  // Botão "Resumir" (sob demanda) visível mesmo sem resumo nenhum ainda.
+  const summarizeBtn = pane
+    .getByTitle("Resumir o último turno agora", { exact: false })
+    .first();
+  const summarizeVisible = await summarizeBtn
+    .waitFor({ state: "visible", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  console.log("[resumir] botão visível sem resumo prévio:", summarizeVisible);
+  if (!summarizeVisible)
+    throw new Error('FALHA: botão "Resumir" ausente da barra do composer');
+
+  // Toggle "Resumo auto" POR SESSÃO (o antigo modo voz global morreu). O clique
+  // precisa refletir no aria-pressed — era a suspeita de bug do e2e antigo.
+  const toggle = pane.getByRole("button", { name: "Resumo auto" }).first();
   await toggle.click();
   await page.waitForTimeout(600);
-  console.log(
-    "[modo voz] aria-pressed:",
-    await toggle.getAttribute("aria-pressed"),
-  );
-  await screenshot(page, "voice-05-voice-mode-on");
-  // Desliga antes do chip: com o modo ligado o chip tentaria TTS real (sem
-  // credencial aqui) e sujaria o log com o erro esperado.
-  await toggle.click();
-  await page.waitForTimeout(400);
+  const pressed = await toggle.getAttribute("aria-pressed");
+  console.log("[resumo auto] aria-pressed após ligar:", pressed);
+  await screenshot(page, "voice-05-auto-summary-on");
+  if (pressed !== "true")
+    throw new Error(
+      `FALHA: toggle "Resumo auto" clicado mas aria-pressed=${pressed}`,
+    );
+  // Fica LIGADO daqui em diante: no modelo novo o áudio nunca toca sozinho,
+  // então o chip chegar com o toggle ligado NÃO pode disparar TTS — a ausência
+  // do erro '[voice] TTS falhou' no console é a asserção negativa de auto-play.
 
   // --- 6. chip de resumo (broadcast simulado pelo main) ---------------------
   if (ccSessionId) {
@@ -342,16 +357,32 @@ try {
       {
         ccSessionId,
         summary:
-          "Resumo simulado: o turno terminou e este chip é o modo voz renderizando.",
+          "Resumo simulado: o turno terminou e este chip é o resumo renderizando.",
       },
     );
-    const chip = pane.getByTitle("Resumo do último turno (modo voz)").first();
+    const chip = pane.getByTitle("Resumo do último turno").first();
     const chipVisible = await chip
       .waitFor({ state: "visible", timeout: 5_000 })
       .then(() => true)
       .catch(() => false);
     console.log("[chip] visível:", chipVisible);
+    // ▶ presente = resumo tocável sob demanda; se o áudio tivesse tocado
+    // sozinho, o botão seria o ⏹ (e o console teria o erro de TTS sem
+    // credencial neste ambiente).
+    const playVisible = await pane
+      .getByTitle("Ouvir o resumo")
+      .first()
+      .isVisible()
+      .catch(() => false);
+    console.log("[chip] botão ▶ (tocar sob demanda) visível:", playVisible);
     await screenshot(page, "voice-06-summary-chip");
+    if (!chipVisible || !playVisible)
+      throw new Error("FALHA: chip de resumo sem o play sob demanda");
+    const ttsErrors = errors.filter((e) => e.includes("TTS"));
+    if (ttsErrors.length > 0)
+      throw new Error(
+        `FALHA: TTS disparou sem clique no ▶ (auto-play?): ${ttsErrors.join("; ")}`,
+      );
   } else {
     console.log("[chip] sem ccSessionId — simulação pulada");
   }

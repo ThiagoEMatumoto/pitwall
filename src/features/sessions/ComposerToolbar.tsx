@@ -9,8 +9,9 @@ import { EffortPill } from './EffortPill'
 import { PermissionPill } from './PermissionPill'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
+import { AutoSummaryToggle } from './voice/AutoSummaryToggle'
 import { MicButton } from './voice/MicButton'
-import { VoiceModeToggle } from './voice/VoiceModeToggle'
+import { SummarizeButton } from './voice/SummarizeButton'
 
 interface Props {
   activity: SessionActivity | null
@@ -36,6 +37,8 @@ interface Props {
   onInterrupt?: () => void
   /** Recebe o texto ditado/transcrito (MicButton). Ausente = sem o botão de voz. */
   onVoiceText?: (text: string) => void
+  /** Sessão CC dos controles de resumo (Resumir + Resumo auto). null = sem eles. */
+  ccSessionId?: string | null
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -64,6 +67,7 @@ export function ComposerToolbar({
   onSelectPermission,
   onInterrupt,
   onVoiceText,
+  ccSessionId,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -130,7 +134,8 @@ export function ComposerToolbar({
         </Button>
       )}
       {onVoiceText && <MicButton onText={onVoiceText} compact={compact} />}
-      {onVoiceText && <VoiceModeToggle compact={compact} />}
+      {ccSessionId && <SummarizeButton ccSessionId={ccSessionId} compact={compact} />}
+      {ccSessionId && <AutoSummaryToggle ccSessionId={ccSessionId} compact={compact} />}
       {hasPending &&
         (canSwitch ? (
           // Sessão ficou ociosa com troca pendente: a injeção dispara agora —

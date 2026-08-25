@@ -337,15 +337,16 @@ try {
       `FALHA TTS: Audio(blob) não carregou no renderer (CSP media-src?): ${tts.element}`,
     );
 
-  // --- 4. toggle modo voz ---------------------------------------------------
-  const toggle = pane.getByRole("button", { name: "Modo voz" }).first();
+  // --- 4. toggle "Resumo auto" por sessão -----------------------------------
+  // (o antigo toggle global "Modo voz" morreu no rework sob demanda)
+  const toggle = pane.getByRole("button", { name: "Resumo auto" }).first();
   await toggle.click();
   await page.waitForTimeout(600);
   console.log(
-    "[modo voz] aria-pressed:",
+    "[resumo auto] aria-pressed:",
     await toggle.getAttribute("aria-pressed"),
   );
-  await screenshot(page, "voice-real-03-voice-mode-on");
+  await screenshot(page, "voice-real-03-auto-summary-on");
   await toggle.click();
   await page.waitForTimeout(400);
 

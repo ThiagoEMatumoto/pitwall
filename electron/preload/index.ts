@@ -180,6 +180,10 @@ const api: Api = {
     condense: (text: string) => invoke('voice:condense', { text }),
     configStatus: () => invoke('voice:config-status'),
     tts: (text: string) => invoke('voice:tts', { text }),
+    autoSummarySet: (ccSessionId: string, enabled: boolean) =>
+      invoke('voice:auto-summary:set', { ccSessionId, enabled }),
+    autoSummaryGet: (ccSessionId: string) => invoke('voice:auto-summary:get', { ccSessionId }),
+    summarizeNow: (ccSessionId: string) => invoke('voice:summarize-now', { ccSessionId }),
     onSummary: (handler) => subscribe<VoiceSummaryEvent>('voice:summary', handler),
   },
   secrets: {

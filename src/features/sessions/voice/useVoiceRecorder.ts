@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { prefsApi, voiceApi } from '@/lib/ipc'
 import {
+  CONDENSE_ENABLED_KEY,
   CONDENSE_THRESHOLD_KEY,
   DEFAULT_CONDENSE_THRESHOLD_WORDS,
   reduceRecorder,
@@ -23,6 +24,16 @@ async function condenseThresholdWords(): Promise<number> {
     return typeof v === 'number' && v >= 0 ? v : DEFAULT_CONDENSE_THRESHOLD_WORDS
   } catch {
     return DEFAULT_CONDENSE_THRESHOLD_WORDS
+  }
+}
+
+// Default LIGADO (o toggle vive na VoiceTab): só um false explícito desliga;
+// pref ilegível cai no default — nunca surpreende com ditado cru.
+async function condenseEnabled(): Promise<boolean> {
+  try {
+    return (await prefsApi.get<boolean>(CONDENSE_ENABLED_KEY)) !== false
+  } catch {
+    return true
   }
 }
 
@@ -103,8 +114,9 @@ export function useVoiceRecorder(onText: (text: string) => void) {
         return
       }
       // Ditado longo passa pelo condensador antes de entrar no composer; o
-      // resultado continua editável — nada é enviado sem revisão.
-      if (!shouldCondense(text, await condenseThresholdWords())) {
+      // resultado continua editável — nada é enviado sem revisão. Com a
+      // condensação desligada nas configurações, toda transcrição entra crua.
+      if (!(await condenseEnabled()) || !shouldCondense(text, await condenseThresholdWords())) {
         onTextRef.current(text)
         dispatch({ type: 'transcribed' })
         return
