@@ -339,6 +339,7 @@ const api: Api = {
     setOutcome: (input: { id: string; outcome: HandoffOutcome }) =>
       invoke('handoffs:set-outcome', input),
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
+    undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
     resume: (id: string) => invoke('handoffs:resume', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),

@@ -3471,6 +3471,9 @@ export interface Api {
     // Tira o handoff de vista no Crew Dock (carimba dismissedAt). Não altera o
     // status nem encerra a sessão-filha.
     dismiss(id: string): Promise<Handoff>
+    // Inverso do dismiss: apaga o carimbo e o card volta ao Crew Dock. É o que o
+    // "Desfazer" do toast de dispensa chama.
+    undismiss(id: string): Promise<Handoff>
     // Solta a filha do painel: além de carimbar dismissedAt, ZERA o childSessionId
     // — o vínculo mãe→filha deixa de existir e a sessão volta a ser uma sessão
     // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz

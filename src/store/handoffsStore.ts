@@ -50,6 +50,9 @@ async function notifyDispatched(h: Handoff): Promise<void> {
   })
 }
 
+// Janela em que o "Desfazer" da dispensa fica à vista (mesmo tempo do Encerrar).
+const DISMISS_UNDO_MS = 5000
+
 // Dono único da assinatura de onUpdated — assinada uma vez (StrictMode-safe),
 // mesmo padrão do objectivesStore.
 let offUpdated: (() => void) | null = null
@@ -63,8 +66,11 @@ interface HandoffsState {
   load: () => Promise<void>
   reject: (id: string) => Promise<void>
   // Tira o handoff de vista no dock (carimba dismissedAt no banco). NÃO encerra a
-  // filha nem muda o status — é decisão de exibição, não desfecho.
+  // filha nem muda o status — é decisão de exibição, não desfecho. Mostra um
+  // toast com "Desfazer" (undismiss) — dispensar é reversível.
   dismiss: (id: string) => Promise<void>
+  // Devolve o card ao dock (apaga o carimbo). É o que o "Desfazer" chama.
+  undismiss: (id: string) => Promise<void>
   // Aprova o handoff (com o prompt possivelmente editado), resolve o repo-alvo e
   // entrega o nascimento da filha ao dispatch compartilhado (spawn em background
   // + mark-running). Erro no caminho vira `error` visível e handoff failed — não
@@ -100,8 +106,33 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
   },
 
   dismiss: async (id) => {
+    const handoff = get().handoffs.find((h) => h.id === id)
     try {
       await handoffsApi.dismiss(id)
+      await get().load()
+      // Undo SEM a janela de graça do endSession (appStore): lá o toast corre
+      // contra um kill agendado, aqui não há efeito destrutivo esperando timer —
+      // dispensar só carimba dismissed_at, e o undismiss desfaz isso a qualquer
+      // momento. O toast é prazo de ATENÇÃO, não prazo de reversibilidade.
+      const child = useAppStore
+        .getState()
+        .liveSessions.find((s) => s.id === handoff?.childSessionId)
+      const who = child?.title?.trim() || handoff?.targetRepoLabel || 'A sessão-filha'
+      showToast({
+        title: 'Card dispensado',
+        body: child ? `${who} continua rodando — só o card saiu do painel.` : who,
+        actionLabel: 'Desfazer',
+        onAction: () => void get().undismiss(id),
+        durationMs: DISMISS_UNDO_MS,
+      })
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  undismiss: async (id) => {
+    try {
+      await handoffsApi.undismiss(id)
       await get().load()
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })

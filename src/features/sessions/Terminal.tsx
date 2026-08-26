@@ -38,6 +38,7 @@ import { gateMenuByStatus, menuFingerprint, parseTuiMenu, type TuiMenu } from '.
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
 import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
+import { clearSharedAtlas, registerTerminal } from './terminal-atlas'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { TERMINAL_FONT_FAMILY } from '@/lib/terminal-font'
 import { useFilesStore } from '@/lib/files-store'
@@ -707,6 +708,9 @@ export function Terminal({
 
     xtermRef.current = term
     fitRef.current = fit
+    // O atlas de glifos do WebGL é compartilhado entre panes: quem limpa precisa
+    // repintar todas as vivas (ver terminal-atlas.ts).
+    const unregisterAtlas = registerTerminal(term)
 
     // Gate do open: espera a JetBrains Mono (bounded) pra medição de célula e o
     // atlas de glifos nascerem com a fonte certa — sem isso o grid mede a
@@ -739,7 +743,7 @@ export function Terminal({
       // atlas e medidas quando todas as fonts do documento assentarem.
       void document.fonts.ready.then(() => {
         if (cancelled) return
-        term.clearTextureAtlas()
+        clearSharedAtlas()
         fit.fit()
         resize(term.cols, term.rows)
         term.scrollToBottom()
@@ -913,6 +917,7 @@ export function Terminal({
       linkProvider.dispose()
       setDataHandler(null)
       detachWebgl()
+      unregisterAtlas()
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
@@ -971,7 +976,7 @@ export function Terminal({
         const term = xtermRef.current
         const fit = fitRef.current
         if (term && fit) {
-          term.clearTextureAtlas()
+          clearSharedAtlas()
           fit.fit()
           resize(term.cols, term.rows)
           term.scrollToBottom()
@@ -1000,8 +1005,10 @@ export function Terminal({
       lastHealAt = now
       const term = xtermRef.current
       if (!term) return
-      if (webglRef.current) term.clearTextureAtlas()
-      term.refresh(0, term.rows - 1)
+      // clearSharedAtlas já repinta este term (e os vizinhos que dividem o
+      // atlas); sem WebGL não há atlas a limpar, só o repaint local.
+      if (webglRef.current) clearSharedAtlas()
+      else term.refresh(0, term.rows - 1)
     }
     const offResumed = gpuApi.onResumed(heal)
     window.addEventListener('focus', heal)

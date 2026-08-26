@@ -191,6 +191,18 @@ export function stepCrewFocus(
   return ids[Math.min(ids.length - 1, Math.max(0, i + delta))]
 }
 
+// Pra onde o cursor do teclado pousa depois de dispensar o card `id`. Calculado
+// ANTES da dispensa, sobre a lista que ainda contém ele: descer é o padrão (a
+// leitura continua de cima pra baixo), mas no ÚLTIMO card descer clamparia
+// justamente no que está saindo — aí sobe pro anterior. Null quando ele era o
+// único: a lista fica vazia, o dock desmonta e não há onde pousar.
+export function crewFocusAfterDismiss(ids: string[], id: string): string | null {
+  const next = stepCrewFocus(ids, id, 1)
+  if (next && next !== id) return next
+  const prev = stepCrewFocus(ids, id, -1)
+  return prev && prev !== id ? prev : null
+}
+
 // Ordem do dock: quem espera você primeiro; o resto mantém a ordem do store
 // (created_at DESC). Sem reordenar por status vivo — só a atenção promove.
 export function orderCrew(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): Handoff[] {

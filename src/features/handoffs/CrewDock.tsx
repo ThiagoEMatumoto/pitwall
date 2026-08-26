@@ -8,6 +8,7 @@ import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
 import {
+  crewFocusAfterDismiss,
   crewNeedsAttention,
   crewTerminalTarget,
   dockCrew,
@@ -94,6 +95,7 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const focusedId = useCrewDockStore((s) => s.focusedId)
   const setFocusedId = useCrewDockStore((s) => s.setFocusedId)
   const focusNonce = useCrewDockStore((s) => s.focusNonce)
+  const dismissHandoff = useHandoffsStore((s) => s.dismiss)
   const ttlHours = useHeartbeatTtl()
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -173,6 +175,17 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
     } else if (e.key === ' ' || e.key === 'Enter') {
       e.preventDefault()
       openPeek(id)
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Dispensa rápida sem tirar a mão do teclado — o par do "×" no card. O
+      // destino do cursor sai ANTES da dispensa: depois dela o card sob o dedo
+      // já não existe, e o resolveCrewFocus jogaria o foco de volta no topo.
+      e.preventDefault()
+      const next = crewFocusAfterDismiss(idsRef.current, id)
+      void dismissHandoff(id).then(() => {
+        // rAF: a lista precisa re-renderizar sem o card dispensado antes de
+        // procurarmos o próximo no DOM.
+        if (next) requestAnimationFrame(() => focusCard(next))
+      })
     } else if (e.key === 'Escape') {
       e.preventDefault()
       leaveDock(e.currentTarget)

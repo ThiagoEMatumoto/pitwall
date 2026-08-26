@@ -21,6 +21,7 @@ const {
   orderCrew,
   resolveCrewFocus,
   stepCrewFocus,
+  crewFocusAfterDismiss,
 } = await import('./crew')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -472,5 +473,32 @@ describe('stepCrewFocus', () => {
   it('foco em card que já saiu da lista entra pela ponta da direção', () => {
     expect(stepCrewFocus(['a', 'b'], 'z', 1)).toBe('a')
     expect(stepCrewFocus(['a', 'b'], 'z', -1)).toBe('b')
+  })
+})
+
+// Dispensar pelo teclado (Delete/Backspace no dock) some com o card sob o
+// cursor — e o cursor tem que pousar em algum lugar previsível, senão a
+// dispensa em sequência vira uma caça ao foco.
+describe('crewFocusAfterDismiss', () => {
+  it('desce pro próximo card', () => {
+    expect(crewFocusAfterDismiss(['a', 'b', 'c'], 'a')).toBe('b')
+    expect(crewFocusAfterDismiss(['a', 'b', 'c'], 'b')).toBe('c')
+  })
+
+  it('no ÚLTIMO card sobe pro anterior (descer clamparia no que está saindo)', () => {
+    expect(crewFocusAfterDismiss(['a', 'b', 'c'], 'c')).toBe('b')
+    expect(crewFocusAfterDismiss(['a', 'b'], 'b')).toBe('a')
+  })
+
+  it('card único → null (a lista esvazia e o dock desmonta)', () => {
+    expect(crewFocusAfterDismiss(['a'], 'a')).toBeNull()
+  })
+
+  it('lista vazia → null', () => {
+    expect(crewFocusAfterDismiss([], 'a')).toBeNull()
+  })
+
+  it('id fora da lista cai no primeiro (o cursor não fica órfão)', () => {
+    expect(crewFocusAfterDismiss(['a', 'b'], 'z')).toBe('a')
   })
 })

@@ -11,6 +11,7 @@ import {
   TerminalSquare,
   ThumbsDown,
   ThumbsUp,
+  X,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
@@ -466,17 +467,17 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
                     // IS NULL). Prometer vínculo e entregar sessão comum é a
                     // pior das duas opções: o rótulo agora diz o que acontece.
                     label: dismissing ? 'Dispensando…' : 'Dispensar (arquiva o card)',
-                    // DESABILITADO com a filha viva, em vez de rotulado: o card é
-                    // a ÚNICA superfície que mostra o passo atual e a pergunta
-                    // aberta dela; arquivá-lo no meio do trabalho joga fora o
-                    // acompanhamento inteiro (a sessão volta pra barra, mas como
-                    // uma aba qualquer). Quem quer mesmo encerrar tem "Forçar
-                    // falha" logo acima, e quem só quer desatrelar tem "Soltar".
-                    // Some o bloqueio quando a PTY morre.
-                    disabled: !!childLive || dismissing,
-                    title: childLive
-                      ? 'A sessão-filha ainda está viva — arquivar o card agora tira o único lugar que mostra o progresso e as perguntas dela. Use "Soltar do painel", "Forçar falha" ou espere ela terminar.'
-                      : 'Arquiva este handoff: o card sai do dock e o registro fica no histórico. A sessão volta a ser uma sessão comum (barra, switcher, notificações próprias) e, se for retomada, sobe sem o apelido nem as permissões de filha.',
+                    // Já foi DESABILITADO com a filha viva, pra proteger o
+                    // acompanhamento — e o efeito foi o oposto: em needs_input
+                    // com filha viva "Forçar falha" nem é renderizado, então o
+                    // menu abria com um item só ("Soltar do painel"), e não havia
+                    // como tirar o card da frente. O bloqueio também não se
+                    // justificava: dispensar só carimba dismissed_at, não encosta
+                    // na PTY. Agora dispensa sempre, o rótulo diz o que acontece
+                    // e o toast oferece "Desfazer".
+                    disabled: dismissing,
+                    title:
+                      'Arquiva este handoff: o card sai do dock e o registro fica no histórico. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher, notificações próprias) e, se for retomada, sobe sem o apelido nem as permissões de filha. Dá pra desfazer pelo toast.',
                     onClick: () => void dismiss(),
                   },
                 ]
@@ -504,6 +505,26 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
             <Icon as={MoreHorizontal} size={14} />
           </button>
         </Menu>
+      )}
+      {/* Dispensa rápida. O "×" é o caminho de UM clique pro que antes só existia
+          enterrado no menu — e que, em needs_input com filha viva, o menu nem
+          chegava a oferecer. Fica por último, à direita, onde se procura fechar. */}
+      {canDismiss && (
+        <button
+          type="button"
+          onClick={(e) => {
+            // O card é alvo de clique (peek/foco) nas superfícies que o embrulham:
+            // sem isto, fechar abriria o quick look da filha que acabou de sair.
+            e.stopPropagation()
+            void dismiss()
+          }}
+          disabled={dismissing}
+          aria-label="Dispensar"
+          title="Tira este card do painel. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher). Dá pra desfazer pelo toast."
+          className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
+        >
+          <Icon as={X} size={14} />
+        </button>
       )}
     </div>
   ) : null
