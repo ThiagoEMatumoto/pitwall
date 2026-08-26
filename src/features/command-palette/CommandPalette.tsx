@@ -1,10 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Blocks, Folder, Rocket, Settings, SlashSquare, Sparkles, TerminalSquare, X } from 'lucide-react'
+import {
+  Blocks,
+  Folder,
+  MessageSquareText,
+  Mic,
+  Rocket,
+  ScrollText,
+  Settings,
+  SlashSquare,
+  Sparkles,
+  TerminalSquare,
+  X,
+} from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { Icon } from '@/components/ui/Icon'
 import { GradientBorder } from '@/features/brand'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
-import { projectsApi } from '@/lib/ipc'
+import { projectsApi, voiceApi } from '@/lib/ipc'
 import { matchesQuery } from '@/lib/text-match'
 import { sessionSearchText, sortByUrgency } from '../session-switcher/session-search'
 import { statusView } from '../session-switcher/status-view'
@@ -24,7 +36,13 @@ interface Props {
   open: boolean
   onClose: () => void
   onOpenSettings: () => void
+  /** Sessão CC da pane focada. null/undefined esconde o grupo "Sessão ativa". */
+  activeCcSessionId?: string | null
 }
+
+// Grupo dos comandos que agem sobre a pane focada — o caminho de acesso aos
+// controles do rodapé que não depende da largura do pane (nem do menu "⋯").
+const ACTIVE_SESSION_GROUP = 'Sessão ativa'
 
 interface Command {
   id: string
@@ -70,7 +88,7 @@ function sessionLabel(s: LiveSessionInfo): string {
   return s.title ?? s.name ?? s.repo?.label ?? 'Avulsa'
 }
 
-export function CommandPalette({ open, onClose, onOpenSettings }: Props) {
+export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionId }: Props) {
   const setArea = useAppStore((s) => s.setArea)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const openSession = useAppStore((s) => s.openSession)
@@ -203,6 +221,41 @@ export function CommandPalette({ open, onClose, onOpenSettings }: Props) {
       },
     ]
 
+    // Controles da sessão focada. Resumir/Resumo auto são IPC por ccSessionId, então
+    // vão direto no voiceApi. O ditado NÃO: o MediaRecorder vive no renderer da pane,
+    // então a palette só avisa — o Terminal daquela sessão liga o mic.
+    if (activeCcSessionId) {
+      const cc = activeCcSessionId
+      list.push(
+        {
+          id: 'session-summarize-now',
+          label: 'Resumir o último turno',
+          icon: <Icon as={ScrollText} />,
+          group: ACTIVE_SESSION_GROUP,
+          run: () => void voiceApi.summarizeNow(cc),
+        },
+        {
+          id: 'session-toggle-auto-summary',
+          label: 'Alternar resumo automático',
+          icon: <Icon as={MessageSquareText} />,
+          group: ACTIVE_SESSION_GROUP,
+          // Sem espelho local do estado aqui: lê o valor atual no main e inverte.
+          run: () =>
+            void voiceApi.autoSummaryGet(cc).then((on) => voiceApi.autoSummarySet(cc, !on)),
+        },
+        {
+          id: 'session-dictate',
+          label: 'Ditar por voz',
+          icon: <Icon as={Mic} />,
+          group: ACTIVE_SESSION_GROUP,
+          run: () =>
+            window.dispatchEvent(
+              new CustomEvent('cm:voice-dictate', { detail: { ccSessionId: cc } }),
+            ),
+        },
+      )
+    }
+
     // Sessões vivas — mesmo fluxo do SessionSwitcher: foca a pane se já exibida,
     // senão abre. Ordenadas por urgência pro corte do cap manter as acionáveis.
     for (const s of sortByUrgency(liveSessions)) {
@@ -280,6 +333,7 @@ export function CommandPalette({ open, onClose, onOpenSettings }: Props) {
     reposByProject,
     liveSessions,
     endedSessions,
+    activeCcSessionId,
     setArea,
     setActiveProject,
     openSession,

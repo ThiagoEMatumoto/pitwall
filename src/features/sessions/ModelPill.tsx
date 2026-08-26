@@ -4,6 +4,8 @@ import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuSection } from '@/components/ui/Menu'
 import type { SessionActivity } from '../../../shared/types/ipc'
 import type { PendingSelection } from './model-queue'
+import { pillDensity } from './pill-density'
+import type { PanelTier } from './use-panel-tier'
 import {
   MODEL_ALIASES,
   MODEL_LABELS,
@@ -31,12 +33,21 @@ interface Props {
   /** Troca escolhida enquanto a sessão estava ocupada, aguardando o próximo idle. */
   pending: PendingSelection
   onSelectModel: (alias: ModelAlias) => void
-  /** Painel estreito: aperta padding/gap e esconde o chevron — o valor (ícone +
-   * texto curto) continua sempre visível, nunca escondido atrás de um menu. */
-  compact?: boolean
+  /** Densidade do rodapé (pillDensity): wide = rótulo + caret; mid = rótulo sem
+   *  caret; narrow = só o ícone — e aí o valor migra pro title/aria-label. */
+  tier: PanelTier
+  /** Frase da troca enfileirada/em aplicação. Presente → ponto no canto + title. */
+  pendingHint?: string
 }
 
-export function ModelPill({ activity, canSwitch, pending, onSelectModel, compact }: Props) {
+export function ModelPill({
+  activity,
+  canSwitch,
+  pending,
+  onSelectModel,
+  tier,
+  pendingHint,
+}: Props) {
   const [open, setOpen] = useState(false)
   // Alvo da troca otimista de modelo; null = sem troca em voo.
   const [switching, setSwitching] = useState<ModelAlias | null>(null)
@@ -106,18 +117,24 @@ export function ModelPill({ activity, canSwitch, pending, onSelectModel, compact
     dim = true
   }
 
+  const { pad, showCaret, showLabel } = pillDensity(tier)
+  // No narrow o rótulo some da tela — o valor tem de migrar pro nome acessível,
+  // senão o controle fica mudo pra quem usa leitor de tela. Com o rótulo
+  // visível, NÃO setar aria-label (o nome acessível tem de conter o texto visto).
+  const hiddenValue = showLabel ? null : `Modelo: ${label}`
+  const baseTitle = canSwitch
+    ? 'Trocar modelo ou esforço desta sessão'
+    : 'Sessão ocupada — a troca será aplicada quando ela ficar ociosa'
+
   return (
     <Menu open={open} onClose={() => setOpen(false)} sections={sections} portal align="left">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title={
-          canSwitch
-            ? 'Trocar modelo ou esforço desta sessão'
-            : 'Sessão ocupada — a troca será aplicada quando ela ficar ociosa'
-        }
-        className={`flex items-center gap-1 rounded-full border py-0.5 text-[10px] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] ${
-          compact ? 'px-1.5' : 'px-2'
+        title={[hiddenValue, pendingHint ?? baseTitle].filter(Boolean).join(' — ')}
+        aria-label={hiddenValue ?? undefined}
+        className={`flex items-center gap-1 rounded-full border py-0.5 text-[10px] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] ${pad} ${
+          pendingHint ? 'relative' : ''
         } ${hasPending ? 'border-[var(--color-accent)]/50' : 'border-[var(--color-border)]'} ${
           dim ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text)]'
         }`}
@@ -127,8 +144,18 @@ export function ModelPill({ activity, canSwitch, pending, onSelectModel, compact
           size={11}
           className={switching ? 'animate-spin' : 'text-[var(--color-accent)]'}
         />
-        <span className="whitespace-nowrap">{label}</span>
-        {!compact && <Icon as={ChevronDown} size={10} className="text-[var(--color-text-dim)]" />}
+        {showLabel && <span className="whitespace-nowrap">{label}</span>}
+        {showCaret && <Icon as={ChevronDown} size={10} className="text-[var(--color-text-dim)]" />}
+        {pendingHint && (
+          // A frase da pendência era o item mais largo da barra: virou um ponto.
+          // Pulsa só quando a troca está sendo aplicada AGORA (sessão ociosa).
+          <span
+            aria-hidden
+            className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] ${
+              canSwitch ? 'animate-pulse' : ''
+            }`}
+          />
+        )}
       </button>
     </Menu>
   )

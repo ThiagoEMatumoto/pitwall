@@ -21,6 +21,9 @@ import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
 import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
 import { AgentHud } from './AgentHud'
 import { SummaryChip } from './voice/SummaryChip'
+import { useAutoSummary } from './voice/useAutoSummary'
+import { useSummarizeNow } from './voice/useSummarizeNow'
+import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
 import { playKeys } from './chat/respond-keys'
@@ -336,6 +339,30 @@ export function Terminal({
 
   // O ccSessionId é o próprio session.id (ver sessions:spawn no main).
   const ccSessionId = session.ccSessionId ?? null
+
+  // Os três controles de voz moram AQUI, acima do rodapé, porque agora têm dois
+  // acionadores: o botão da barra e o atalho de teclado (handler no root da pane).
+  // Ancorar o estado no dono da pane é o que faz os dois compartilharem o MESMO
+  // "Gravando…"/"Resumindo…" — e o que mantém uma gravação/resumo em voo quando a
+  // barra desmonta (dock recolhido, controle migrando pro "⋯").
+  const dictation = useVoiceRecorder((text) => composerRef.current?.appendText(text))
+  const summarize = useSummarizeNow(ccSessionId)
+  const autoSummary = useAutoSummary(ccSessionId)
+
+  // A palette não pode ligar o mic: o MediaRecorder vive no renderer desta pane.
+  // Ela dispara o evento e cada Terminal filtra pelo próprio ccSessionId. O ref
+  // evita re-assinar a cada render (toggle é recriado toda vez).
+  const dictateRef = useRef(dictation.toggle)
+  dictateRef.current = dictation.toggle
+  useEffect(() => {
+    if (!ccSessionId) return
+    const onDictate = (e: Event) => {
+      const detail = (e as CustomEvent<{ ccSessionId?: string }>).detail
+      if (detail?.ccSessionId === ccSessionId) dictateRef.current()
+    }
+    window.addEventListener('cm:voice-dictate', onDictate)
+    return () => window.removeEventListener('cm:voice-dictate', onDictate)
+  }, [ccSessionId])
 
   useEffect(() => {
     if (!ccSessionId || exited) return
@@ -1018,8 +1045,27 @@ export function Terminal({
       ? 'Sem transcript no disco ainda — relançar como filha perderia o histórico'
       : null
 
+  // Atalhos de sessão no root da pane: por bubbling pegam tanto o textarea do
+  // composer quanto o xterm, e ficam naturalmente escopados ao pane focado.
+  function onSessionKeyDown(e: React.KeyboardEvent) {
+    const kb = useKeybindingsStore.getState().overrides
+    const native = e.nativeEvent
+    if (matchCombo(native, resolveCombo('session.dictate', kb))) {
+      e.preventDefault()
+      dictation.toggle()
+    } else if (matchCombo(native, resolveCombo('session.summarizeNow', kb))) {
+      // Sem preventDefault, o default Ctrl+Shift+R recarrega a janela inteira
+      // (hard reload do Chromium) em vez de resumir o turno.
+      e.preventDefault()
+      summarize.run()
+    } else if (matchCombo(native, resolveCombo('session.toggleAutoSummary', kb))) {
+      e.preventDefault()
+      autoSummary.toggle()
+    }
+  }
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" onKeyDown={onSessionKeyDown}>
       {chrome === 'full' && (
         <SessionHeader
           projectName={projectName}
@@ -1234,9 +1280,11 @@ export function Terminal({
               // Ditado por voz: o texto transcrito entra no DRAFT do composer —
               // visível/editável nos dois modos (escrever no PTY sumiria o texto
               // em modo chat, onde o xterm fica invisible). Envio pelo submit normal.
-              onVoiceText={(text) => composerRef.current?.appendText(text)}
-              // Controles de resumo por sessão (Resumir agora + Resumo auto).
-              ccSessionId={ccSessionId}
+              voice={dictation}
+              // Controles de resumo por sessão: sem ccSessionId não há a quem
+              // pedir resumo, e a ausência da prop é o que tira o controle da barra.
+              summarize={ccSessionId ? summarize : undefined}
+              autoSummary={ccSessionId ? autoSummary : undefined}
             />
           }
         />
