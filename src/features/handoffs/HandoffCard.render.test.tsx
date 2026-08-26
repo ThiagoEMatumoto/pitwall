@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -149,6 +149,34 @@ describe('HandoffCard no dock (tier mid)', () => {
     expect(screen.getByText('trabalhando')).toBeTruthy()
     const card = container.querySelector<HTMLElement>('[data-testid="handoff-card"]')!
     expect(card.style.borderColor).not.toContain('warning')
+  })
+})
+
+// O caso reportado: filha viva com pergunta aberta. Aqui "Forçar falha" nem é
+// renderizado (o gate é running/approved), então o menu abria com UM item —
+// "Soltar do painel", que é outra coisa — e o card não tinha como sair da frente.
+describe('HandoffCard: dispensar com a filha viva', () => {
+  beforeEach(() => {
+    useAppStore.setState({ liveSessions: [] })
+  })
+
+  it('needs_input + filha viva: o "×" fecha o card sem passar pelo menu', () => {
+    mountDock({ status: 'needs_input', pendingQuestion: 'posso apagar?' }, 'waiting')
+    const close = screen.getByLabelText('Dispensar')
+    // O aviso é a metade que faltava: fechar o card não encosta na sessão.
+    expect(close.getAttribute('title')).toContain('CONTINUA RODANDO')
+  })
+
+  it('o item do menu deixa de vir desabilitado só por a filha estar viva', () => {
+    mountDock({ status: 'needs_input', pendingQuestion: 'posso apagar?' }, 'waiting')
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    const item = screen.getByText('Dispensar (arquiva o card)').closest('button')!
+    expect(item.disabled).toBe(false)
+  })
+
+  it('já dispensado: nada de fechar de novo (o "×" some com as demais ações)', () => {
+    mountDock({ dismissedAt: Date.now() })
+    expect(screen.queryByLabelText('Dispensar')).toBeNull()
   })
 })
 

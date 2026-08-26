@@ -494,6 +494,25 @@ export function dismiss(id: string): Handoff {
   return fresh(id)
 }
 
+// Desfaz a dispensa: apaga o carimbo e o card volta ao dock. Operação SIMÉTRICA
+// de `dismiss` — mesmo alcance (só exibição, `status` intocado) e mesma trilha.
+// Existe porque dispensar virou reversível na UI (toast "Desfazer"): antes disso
+// o único caminho que zerava dismissed_at era o markRunning, e desfazer um clique
+// errado exigia esperar a filha renascer.
+// Idempotente pelo mesmo motivo do dismiss: o WHERE dismissed_at IS NOT NULL
+// garante um único evento 'undismiss' por dispensa desfeita.
+export function undismiss(id: string): Handoff {
+  const status = currentStatus(id)
+  if (status === null) throw new Error(`handoff not found: ${id}`)
+  const res = getDb()
+    .prepare(
+      'UPDATE handoffs SET dismissed_at = NULL, updated_at = ? WHERE id = ? AND dismissed_at IS NOT NULL',
+    )
+    .run(Date.now(), id)
+  if (res.changes > 0) logEvent(id, 'undismiss', status, status)
+  return fresh(id)
+}
+
 // Soltar do painel: o humano CORTA o vínculo mãe→filha, de propósito, devolvendo
 // a sessão à condição de sessão normal. É onde difere de `dismiss`, que só tira o
 // card de vista MANTENDO handoffs.child_session_id apontando pra sessão: aqui o

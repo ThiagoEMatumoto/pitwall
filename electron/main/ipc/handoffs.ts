@@ -193,6 +193,14 @@ export function registerHandoffsIpc(): void {
     return handoff
   })
 
+  // Desfazer a dispensa (o "Desfazer" do toast): apaga o carimbo e o card volta
+  // ao dock. Nada além da exibição muda — é o inverso exato do handoffs:dismiss.
+  ipcMain.handle('handoffs:undismiss', (_e, id: string): Handoff => {
+    const handoff = store.undismiss(id)
+    broadcast('handoff:updated', handoff)
+    return handoff
+  })
+
   // Soltar do painel: corta o vínculo (child_session_id → NULL) e tira o card de
   // vista. Diferente do dismiss, que mantém o vínculo — aqui a sessão VOLTA a ser
   // uma sessão normal (reaparece na strip/switcher, volta a notificar sozinha) e o
