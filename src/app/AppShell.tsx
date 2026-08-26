@@ -502,15 +502,16 @@ export function AppShell() {
     return () => window.removeEventListener('cm:open-settings', onOpen)
   }, [])
 
-  // Informa o main qual sessão está visível/focada no renderer. A supressão da
-  // notificação "aguardando" vale só pra ela (ver notifySessionWaiting) — janela
-  // focada em OUTRA sessão continua notificando. Fora da área de projetos nenhuma
-  // sessão está visível (null).
+  // Sessão visível/focada no renderer. Fora da área de projetos nenhuma sessão
+  // está visível (null). Serve a dois consumidores: o main (supressão da
+  // notificação "aguardando" — ver notifySessionWaiting) e os comandos de sessão
+  // da palette.
+  const activePane = area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
+  const activeCcSessionId = activePane?.session.ccSessionId ?? null
+
   useEffect(() => {
-    const pane =
-      area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
-    sessionsApi.setRendererFocus(pane?.session.ccSessionId ?? null)
-  }, [area, panes, activePanelId])
+    sessionsApi.setRendererFocus(activeCcSessionId)
+  }, [activeCcSessionId])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot
   // + stream global no mount; cleanup no unmount (StrictMode-safe no store).
@@ -733,7 +734,9 @@ export function AppShell() {
           <ProjectsSidebar />
         ))}
 
-      <main className={`flex flex-1 flex-col overflow-hidden ${area === 'projects' ? '' : 'hidden'}`}>
+      <main
+        className={`flex flex-1 flex-col overflow-hidden ${area === 'projects' ? '' : 'hidden'}`}
+      >
         {restoreBlocked && (
           <div
             className="flex items-center justify-between gap-3 border-b px-4 py-2 text-sm"
@@ -799,6 +802,7 @@ export function AppShell() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onOpenSettings={() => setSettingsOpen(true)}
+        activeCcSessionId={activeCcSessionId}
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
@@ -821,15 +825,12 @@ function EmptyMain() {
         <div className="mb-2 text-lg font-medium text-[var(--color-text)]">
           Nenhuma sessão aberta
         </div>
-        <div className="text-sm">
-          Clique num repo na barra lateral pra abrir uma sessão.
-        </div>
+        <div className="text-sm">Clique num repo na barra lateral pra abrir uma sessão.</div>
         <div className="mt-3 text-xs">
           ou pressione{' '}
           <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
             Ctrl
-          </kbd>
-          {' '}
+          </kbd>{' '}
           <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
             K
           </kbd>{' '}

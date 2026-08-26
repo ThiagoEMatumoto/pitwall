@@ -188,6 +188,31 @@ export const COMMANDS: Command[] = [
     editable: true,
   },
 
+  // Sessão — controles de voz do rodapé do composer. Existem como atalho porque
+  // o acesso pelo botão depende da largura do pane: no narrow (ou no overflow
+  // "⋯") eles saem da barra, e o teclado é o caminho que não encolhe.
+  {
+    id: 'session.dictate',
+    label: 'Ditar por voz',
+    context: 'Terminal',
+    defaultCombo: { mod: true, shift: true, key: 'm' },
+    editable: true,
+  },
+  {
+    id: 'session.summarizeNow',
+    label: 'Resumir o último turno',
+    context: 'Terminal',
+    defaultCombo: { mod: true, shift: true, key: 'r' },
+    editable: true,
+  },
+  {
+    id: 'session.toggleAutoSummary',
+    label: 'Alternar resumo automático',
+    context: 'Terminal',
+    defaultCombo: { mod: true, shift: true, key: 's' },
+    editable: true,
+  },
+
   // Terminal (fixo, display)
   {
     id: 'terminal.copy',

@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react'
-import { Clock, Loader, OctagonX } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Loader, MoreHorizontal, OctagonX } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { Menu, type MenuItem, type MenuSection } from '@/components/ui/Menu'
 import { Button } from '@/features/brand'
 import { interruptEnabled, interruptLabel, interruptState, interruptTitle } from './interrupt-state'
 import type { PermissionMode, SessionActivity } from '../../../shared/types/ipc'
 import { ModelPill, type EffortLevel, type ModelAlias } from './ModelPill'
-import { EffortPill } from './EffortPill'
-import { PermissionPill } from './PermissionPill'
+import { EffortPill, effortSections } from './EffortPill'
+import { PermissionPill, permissionSection } from './PermissionPill'
+import { composerToolbarLayout, type ToolbarControl } from './composer-layout'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
+import { pillDensity } from './pill-density'
 import { AutoSummaryToggle } from './voice/AutoSummaryToggle'
 import { MicButton } from './voice/MicButton'
 import { SummarizeButton } from './voice/SummarizeButton'
+import type { SummarizeState } from './voice/useSummarizeNow'
+import type { RecorderState } from './voice/voice-recorder-state'
 
 interface Props {
   activity: SessionActivity | null
@@ -35,10 +40,12 @@ interface Props {
   onSelectPermission?: (mode: PermissionMode) => void
   /** Interrompe o claude (envia Ctrl+C ao PTY). Ausente = sem o botão. */
   onInterrupt?: () => void
-  /** Recebe o texto ditado/transcrito (MicButton). Ausente = sem o botão de voz. */
-  onVoiceText?: (text: string) => void
-  /** Sessão CC dos controles de resumo (Resumir + Resumo auto). null = sem eles. */
-  ccSessionId?: string | null
+  /** Ditado por voz — o estado mora no Terminal. Ausente = sem o botão de voz. */
+  voice?: { state: RecorderState; toggle: () => void }
+  /** Resumo sob demanda — o estado mora no Terminal. Ausente = sem o controle. */
+  summarize?: { state: SummarizeState; run: () => void }
+  /** Resumo automático — o estado mora no Terminal. Ausente = sem o controle. */
+  autoSummary?: { enabled: boolean | null; toggle: () => void }
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -52,7 +59,8 @@ function pendingLabel(pending: PendingSelection): string {
 // Barra de controles do composer: dois controles distintos (Modelo · Esforço,
 // estilo Claude Desktop) + affordance de fila. Os switchers ficam disponíveis
 // mesmo com a sessão ocupada — a troca é enfileirada e aplicada no próximo idle
-// (sem desabilitar o controle). Slot para o botão de anexar imagem virá à direita.
+// (sem desabilitar o controle). Com o painel estreito os controles que não cabem
+// migram pro menu "⋯" em vez de serem CORTADOS pela borda do pane.
 export function ComposerToolbar({
   activity,
   canSwitch,
@@ -66,8 +74,9 @@ export function ComposerToolbar({
   onCyclePermission,
   onSelectPermission,
   onInterrupt,
-  onVoiceText,
-  ccSessionId,
+  voice,
+  summarize,
+  autoSummary,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -90,72 +99,177 @@ export function ComposerToolbar({
   // Mede a própria largura (escopado ao rodapé, independente do tier do header) —
   // mesmo hook de ResizeObserver usado no SessionHeader.
   const { ref, tier } = usePanelTier<HTMLDivElement>()
-  const compact = tier !== 'wide'
+  const { pad, showLabel } = pillDensity(tier)
+  const [moreOpen, setMoreOpen] = useState(false)
 
-  return (
-    <div ref={ref} className="flex items-center gap-2 px-1 pb-1">
+  // A pendência virou um ponto no canto do pill: a frase inteira era o item mais
+  // largo da barra e empurrava tudo pra fora do pane. Ela sobrevive no title do
+  // pill e num status sr-only — some da tela, não do leitor.
+  const pendingHint = hasPending
+    ? canSwitch
+      ? `Aplicando ${pendingLabel(pending)}…`
+      : `${pendingLabel(pending)} será aplicado quando a sessão ficar ociosa`
+    : undefined
+
+  // Disponibilidade é filtrada DEPOIS de separar inline/overflow: o layout fala
+  // só de largura, e um controle ausente não pode abrir vaga inline pra outro.
+  const available: Record<ToolbarControl, boolean> = {
+    model: true,
+    effort: true,
+    permission: true,
+    interrupt: Boolean(onInterrupt),
+    mic: Boolean(voice),
+    summarize: Boolean(summarize),
+    autoSummary: Boolean(autoSummary),
+  }
+  const layout = composerToolbarLayout(tier)
+  const inline = layout.inline.filter((c) => available[c])
+  const overflow = layout.overflow.filter((c) => available[c])
+
+  const nodes: Record<ToolbarControl, ReactNode> = {
+    model: (
       <ModelPill
+        key="model"
         activity={activity}
         canSwitch={canSwitch}
         pending={pending}
         onSelectModel={onSelectModel}
-        compact={compact}
+        tier={tier}
+        pendingHint={pending.model !== undefined ? pendingHint : undefined}
       />
+    ),
+    effort: (
       <EffortPill
+        key="effort"
         effort={activeEffort}
         pending={pending.effort}
         xhighCapable={xhighCapable}
         ultracodeActive={ultracodeActive}
         onSelect={onSelectEffort}
         canSwitch={canSwitch}
-        compact={compact}
+        tier={tier}
+        pendingHint={pending.effort !== undefined || pending.ultracode ? pendingHint : undefined}
       />
+    ),
+    permission: (
       <PermissionPill
+        key="permission"
         currentMode={currentMode}
         onCycle={onCyclePermission}
         onSelect={onSelectPermission}
-        compact={compact}
+        tier={tier}
       />
-      {onInterrupt && (
-        <Button
-          variant={interrupt === 'armed' ? 'danger' : 'ghost'}
-          size="sm"
-          disabled={!interruptEnabled(interrupt)}
-          onClick={handleInterrupt}
-          title={interruptTitle(interrupt)}
-          className="gap-1 px-2 py-0.5 text-[10px]"
+    ),
+    interrupt: (
+      <Button
+        key="interrupt"
+        variant={interrupt === 'armed' ? 'danger' : 'ghost'}
+        size="sm"
+        disabled={!interruptEnabled(interrupt)}
+        onClick={handleInterrupt}
+        title={interruptTitle(interrupt)}
+        // Sem rótulo visível, o estado ('Interrompendo…') tem de ir pro nome acessível.
+        aria-label={showLabel ? undefined : interruptLabel(interrupt)}
+        className={`gap-1 ${pad} py-0.5 text-[10px]`}
+      >
+        <Icon
+          as={interrupt === 'sent' ? Loader : OctagonX}
+          size={11}
+          className={interrupt === 'sent' ? 'animate-spin' : ''}
+        />
+        {showLabel && <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>}
+      </Button>
+    ),
+    mic: voice ? (
+      <MicButton key="mic" state={voice.state} onToggle={voice.toggle} tier={tier} />
+    ) : null,
+    summarize: summarize ? (
+      <SummarizeButton key="summarize" state={summarize.state} onRun={summarize.run} tier={tier} />
+    ) : null,
+    autoSummary: autoSummary ? (
+      <AutoSummaryToggle
+        key="autoSummary"
+        enabled={autoSummary.enabled}
+        onToggle={autoSummary.toggle}
+        tier={tier}
+      />
+    ) : null,
+  }
+
+  const summaryItems: MenuItem[] = []
+  if (summarize && overflow.includes('summarize')) {
+    summaryItems.push({
+      label: summarize.state.status === 'running' ? 'Resumindo…' : 'Resumir',
+      disabled: summarize.state.status === 'running',
+      title:
+        summarize.state.status === 'error'
+          ? summarize.state.message
+          : 'Resumir o último turno agora — o resumo aparece no chip acima do composer',
+      onClick: summarize.run,
+    })
+  }
+  if (autoSummary && overflow.includes('autoSummary')) {
+    summaryItems.push({
+      label: 'Resumo auto',
+      active: autoSummary.enabled === true,
+      disabled: autoSummary.enabled === null,
+      title:
+        autoSummary.enabled === null
+          ? 'Consultando o estado do resumo automático…'
+          : 'Resumo automático do fim de cada turno desta sessão, no chip acima do composer.',
+      onClick: autoSummary.toggle,
+    })
+  }
+
+  const sections: MenuSection[] = [
+    ...(overflow.includes('effort')
+      ? effortSections({
+          effort: activeEffort,
+          pending: pending.effort,
+          xhighCapable,
+          ultracodeActive,
+          onSelect: onSelectEffort,
+        })
+      : []),
+    ...(overflow.includes('permission')
+      ? [
+          permissionSection({
+            currentMode,
+            onSelect: onSelectPermission,
+            onCycle: onCyclePermission,
+          }),
+        ]
+      : []),
+    ...(summaryItems.length > 0 ? [{ title: 'Resumo', items: summaryItems }] : []),
+  ]
+
+  return (
+    <div ref={ref} className="flex items-center gap-2 px-1 pb-1">
+      {inline.map((control) => nodes[control])}
+      {sections.length > 0 && (
+        <Menu
+          open={moreOpen}
+          onClose={() => setMoreOpen(false)}
+          sections={sections}
+          portal
+          align="left"
         >
-          <Icon
-            as={interrupt === 'sent' ? Loader : OctagonX}
-            size={11}
-            className={interrupt === 'sent' ? 'animate-spin' : ''}
-          />
-          <span className="whitespace-nowrap">{interruptLabel(interrupt)}</span>
-        </Button>
+          <button
+            type="button"
+            onClick={() => setMoreOpen((v) => !v)}
+            title="Mais controles"
+            aria-label="Mais controles"
+            className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+          >
+            <Icon as={MoreHorizontal} size={14} />
+          </button>
+        </Menu>
       )}
-      {onVoiceText && <MicButton onText={onVoiceText} compact={compact} />}
-      {ccSessionId && <SummarizeButton ccSessionId={ccSessionId} compact={compact} />}
-      {ccSessionId && <AutoSummaryToggle ccSessionId={ccSessionId} compact={compact} />}
-      {hasPending &&
-        (canSwitch ? (
-          // Sessão ficou ociosa com troca pendente: a injeção dispara agora —
-          // feedback de "aplicando" em vez de a transição ser tácita.
-          <span
-            className="flex items-center gap-1 text-[10px] text-[var(--color-accent)]"
-            title="A sessão ficou ociosa — aplicando a troca agora"
-          >
-            <Icon as={Loader} size={11} className="animate-spin" />
-            aplicando {pendingLabel(pending)}…
-          </span>
-        ) : (
-          <span
-            className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)]"
-            title="A sessão está ocupada — a troca será injetada assim que ela ficar ociosa"
-          >
-            <Icon as={Clock} size={11} className="text-[var(--color-accent)]" />
-            {pendingLabel(pending)} será aplicado quando ociosa
-          </span>
-        ))}
+      {pendingHint && (
+        <span role="status" className="sr-only">
+          {pendingHint}
+        </span>
+      )}
     </div>
   )
 }
