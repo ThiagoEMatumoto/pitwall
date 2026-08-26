@@ -8,7 +8,7 @@ import type { PermissionMode, SessionActivity } from '../../../shared/types/ipc'
 import { ModelPill, type EffortLevel, type ModelAlias } from './ModelPill'
 import { EffortPill, effortSections } from './EffortPill'
 import { PermissionPill, permissionSection } from './PermissionPill'
-import { composerToolbarLayout, type ToolbarControl } from './composer-layout'
+import { COMPOSER_TIERS, composerToolbarLayout, type ToolbarControl } from './composer-layout'
 import { isPendingEmpty, type PendingSelection } from './model-queue'
 import { usePanelTier } from './use-panel-tier'
 import { pillDensity } from './pill-density'
@@ -98,7 +98,7 @@ export function ComposerToolbar({
   }
   // Mede a própria largura (escopado ao rodapé, independente do tier do header) —
   // mesmo hook de ResizeObserver usado no SessionHeader.
-  const { ref, tier } = usePanelTier<HTMLDivElement>()
+  const { ref, tier, width } = usePanelTier<HTMLDivElement>(COMPOSER_TIERS)
   const { pad, showLabel } = pillDensity(tier)
   const [moreOpen, setMoreOpen] = useState(false)
 
@@ -122,7 +122,7 @@ export function ComposerToolbar({
     summarize: Boolean(summarize),
     autoSummary: Boolean(autoSummary),
   }
-  const layout = composerToolbarLayout(tier)
+  const layout = composerToolbarLayout(tier, width)
   const inline = layout.inline.filter((c) => available[c])
   const overflow = layout.overflow.filter((c) => available[c])
 
