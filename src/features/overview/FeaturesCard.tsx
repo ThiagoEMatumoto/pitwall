@@ -1,10 +1,18 @@
 import { useState } from 'react'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
+import { useFeaturesStore } from '@/store/featuresStore'
+import { LivenessChip } from '@/features/features/LivenessChip'
 import { STATUS_META as FEATURE_STATUS_META } from '@/features/features/status'
+import { useLoopSnapshots } from '@/features/features/useLoopSnapshots'
 import { isStalledFeature, selectFeaturesWithoutObjective } from '../../../shared/home-selectors'
-import type { OverviewFeatureActivity } from '../../../shared/types/ipc'
+import type {
+  Feature,
+  FeatureLoopSnapshot,
+  OverviewFeatureActivity,
+} from '../../../shared/types/ipc'
 import { CardDot, CardEmpty, HomeCard } from './HomeGrid'
+import { usePinnedFeatures } from './usePinnedFeatures'
 
 // Card "Features em andamento": atividade real de sessões por feature
 // (data.features do agregado), com destaque "parada >3d" via isStalledFeature
@@ -14,11 +22,16 @@ export function FeaturesCard({ features }: { features: OverviewFeatureActivity[]
   const setArea = useAppStore((s) => s.setArea)
   const [now] = useState(() => Date.now())
   const withoutObjective = selectFeaturesWithoutObjective(features)
+  // Em foco manda no card: se o usuário fixou alguma coisa, é ela que a Home
+  // mostra (com pulso e vitalidade). Sem pin nenhum, o card segue como era —
+  // atividade das features de trabalho.
+  const pinned = usePinnedFeatures()
+  const snapshots = useLoopSnapshots(pinned.map((f) => f.id))
 
   return (
     <HomeCard
-      title="Features em andamento"
-      count={features.length}
+      title={pinned.length > 0 ? 'Features em foco' : 'Features em andamento'}
+      count={pinned.length > 0 ? pinned.length : features.length}
       dot={<CardDot color="var(--color-accent2)" />}
       action={
         <button
@@ -41,7 +54,13 @@ export function FeaturesCard({ features }: { features: OverviewFeatureActivity[]
           feature{withoutObjective.length === 1 ? '' : 's'} de trabalho sem OKR
         </button>
       )}
-      {features.length === 0 ? (
+      {pinned.length > 0 ? (
+        <ul className="flex flex-col gap-1.5" data-testid="home-pinned-features">
+          {pinned.map((f) => (
+            <PinnedRow key={f.id} feature={f} snapshot={snapshots.get(f.id) ?? null} />
+          ))}
+        </ul>
+      ) : features.length === 0 ? (
         <CardEmpty>Nenhuma feature em andamento.</CardEmpty>
       ) : (
         <ul className="flex flex-col gap-1.5">
@@ -80,6 +99,49 @@ function FeatureRow({ feature, now }: { feature: OverviewFeatureActivity; now: n
           {relativeTime(feature.lastSessionAt)}
         </span>
       )}
+    </li>
+  )
+}
+
+// Linha da feature em foco: pulso truncado numa linha (é uma frase, e o card
+// tem altura fixa) e o chip de vitalidade que o dossiê já usa.
+function PinnedRow({
+  feature,
+  snapshot,
+}: {
+  feature: Feature
+  // Vem pronto do card: buscar de novo aqui duplicaria o IPC por linha.
+  snapshot: FeatureLoopSnapshot | null
+}) {
+  const meta = FEATURE_STATUS_META[feature.status]
+  const setArea = useAppStore((s) => s.setArea)
+  return (
+    <li>
+      <button
+        type="button"
+        data-testid="home-pinned-feature"
+        data-feature-id={feature.id}
+        onClick={() => {
+          void useFeaturesStore.getState().select(feature.id)
+          setArea('features')
+        }}
+        className="flex w-full items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-1.5 text-left transition hover:bg-[var(--color-surface-2)]/60"
+      >
+        <CardDot color={meta.color} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-[var(--color-text)]">{feature.title}</span>
+          <span className="block truncate text-[11px] text-[var(--color-text-dim)]">
+            {snapshot?.pulse?.body ?? 'sem pulso'}
+          </span>
+        </span>
+        {snapshot && (
+          <LivenessChip
+            liveness={snapshot.liveness}
+            lastActivityAt={snapshot.lastActivityAt}
+            issues={snapshot.issues}
+          />
+        )}
+      </button>
     </li>
   )
 }
