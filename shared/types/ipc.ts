@@ -3546,6 +3546,18 @@ export interface Api {
     onUpdated(handler: (feature: Feature) => void): () => void
     onSynthError(handler: (event: FeatureSynthError) => void): () => void
   }
+  // Loop da feature (pulso/ledger/métricas). Namespace próprio: o loop tem
+  // ciclo de vida e canal de broadcast ('loop:updated') separados de features.
+  loop: {
+    snapshot(featureId: string): Promise<FeatureLoopSnapshot>
+    setPulse(input: SetPulseInput): Promise<FeaturePulse>
+    pulseHistory(featureId: string, limit?: number): Promise<FeaturePulse[]>
+    appendLedger(input: AppendLedgerInput): Promise<FeatureLedgerEntry>
+    listLedger(featureId: string, opts?: ListLedgerOpts): Promise<FeatureLedgerEntry[]>
+    declareMetric(input: DeclareMetricInput): Promise<FeatureMetricColumn>
+    recordMetricPoint(input: RecordMetricPointInput): Promise<FeatureMetricPoint>
+    onUpdated(handler: (payload: { featureId: string }) => void): () => void
+  }
   repoDeps: {
     list(projectId: string): Promise<RepoDependency[]>
     // Todas as arestas de todos os projetos (vista de arquitetura global).
