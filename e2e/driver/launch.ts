@@ -93,6 +93,17 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
         // cifragem, ou seja, texto claro. O scrub do boot só mexe no app.db —
         // então este nem entra na cópia.
         if (isSecretsBackup(top)) return false
+        // `sync/` é o CLONE do repo de backup real do usuário, e
+        // `isConfigured()` (ipc/sync.ts) é literalmente `existsSync(sync/.git)`.
+        // Copiado, a cópia nasce sincronizada: o boot puxa o bundle remoto e o
+        // coordinator dá `git push` a cada mutação — dois runs seguidos do drive
+        // geraram 3 commits em claude-manager-backup, e o 2º run nasceu com o
+        // estado de teste que o 1º havia empurrado. A cópia protege o banco
+        // local, não o remoto. `sync-config.json` CONTINUA na cópia: ele carrega
+        // o projectsRoot que o auto-pull de repos usa (sem ele o app tenta
+        // clonar os 32 repos do zero). CM_KEEP_SYNC=1 é o opt-in de quem testa
+        // sync de propósito.
+        if (top === 'sync' && process.env.CM_KEEP_SYNC !== '1') return false
         return !SKIP_TOPLEVEL.has(top)
       },
     })
