@@ -100,6 +100,8 @@ export function FeaturesArea() {
   }, [projects])
 
   const reposById = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos])
+  // O dossiê precisa do projeto (nome/ícone/cor) pra abrir a sessão no repo certo.
+  const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
 
   // Stats por feature (recordCount/lastRecordAt) — alimenta badges e ordenação.
   const statsById = useMemo(
@@ -242,7 +244,12 @@ export function FeaturesArea() {
         )}
         <div className="flex flex-1 overflow-hidden">
         {selectedId ? (
-          <FeatureDoc feature={selectedDoc} loading={docLoading} reposById={reposById} />
+          <FeatureDoc
+            feature={selectedDoc}
+            loading={docLoading}
+            reposById={reposById}
+            projectsById={projectsById}
+          />
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
             <div className="flex items-center justify-end gap-1 border-b border-[var(--color-border)] px-4 py-2">

@@ -1,12 +1,18 @@
-import { useMemo } from 'react'
-import { ExternalLink, GitBranch } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ExternalLink, GitBranch, Play } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { Menu } from '@/components/ui/Menu'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 import { shellApi } from '@/lib/ipc'
-import type { Feature, Repo } from '../../../shared/types/ipc'
+import { matchCombo, resolveCombo } from '@/lib/keybindings'
+import { useKeybindingsStore } from '@/lib/keybindings-store'
+import { useAppStore } from '@/store/appStore'
+import { SpawnSessionDialog } from '@/features/sessions/SpawnSessionDialog'
+import type { Feature, Project, Repo } from '../../../shared/types/ipc'
 import { StatusBadge } from './FeatureList'
 import { FeatureObjectiveLinksSection } from './FeatureObjectiveLinksSection'
 import { FeaturePulse } from './FeaturePulse'
+import { FeatureSessions } from './FeatureSessions'
 import { FeatureTasksSection } from './FeatureTasksSection'
 import { LivenessChip } from './LivenessChip'
 import { useLoopSnapshot } from './useLoopSnapshot'
@@ -16,6 +22,7 @@ interface Props {
   feature: Feature | null
   loading: boolean
   reposById: Map<string, Repo>
+  projectsById: Map<string, Project>
 }
 
 function fmtDate(ts: number | null): string | null {
@@ -55,7 +62,7 @@ function historyEntries(history: string): string[] {
     .filter(Boolean)
 }
 
-export function FeatureDoc({ feature, loading, reposById }: Props) {
+export function FeatureDoc({ feature, loading, reposById, projectsById }: Props) {
   const split = useMemo(
     () => (feature?.body ? splitHistory(feature.body) : { main: '', history: null }),
     [feature?.body],
@@ -64,6 +71,51 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
   const { objectives, krTitles, krObjectiveId } = useObjectiveLookups()
   // Antes do early return abaixo: hook não pode ficar atrás de condicional.
   const loop = useLoopSnapshot(feature?.id ?? null)
+
+  const openSession = useAppStore((s) => s.openSession)
+  const setArea = useAppStore((s) => s.setArea)
+  const overrides = useKeybindingsStore((s) => s.overrides)
+  // Repo escolhido pra sessão (null = diálogo fechado).
+  const [workRepo, setWorkRepo] = useState<Repo | null>(null)
+  const [pickingRepo, setPickingRepo] = useState(false)
+  // Feature sem repo vinculado: o botão não pode ficar mudo, então explica.
+  const [noRepoNote, setNoRepoNote] = useState(false)
+
+  // Repos da feature já resolvidos pra objeto Repo (o spawn precisa do repo
+  // inteiro, não só do id do vínculo).
+  const linkedRepos = useMemo(() => {
+    if (!feature) return []
+    return feature.repos
+      .map((l) => reposById.get(l.repoId))
+      .filter((r): r is Repo => r !== undefined)
+  }, [feature, reposById])
+
+  function startWork() {
+    setNoRepoNote(false)
+    if (linkedRepos.length === 0) {
+      setNoRepoNote(true)
+      return
+    }
+    // Um repo: não pergunta. Vários: o usuário escolhe onde a sessão nasce.
+    if (linkedRepos.length === 1) {
+      setWorkRepo(linkedRepos[0])
+      return
+    }
+    setPickingRepo(true)
+  }
+
+  // Atalho "trabalhar na feature em foco": o dossiê montado É o foco, então o
+  // listener vive aqui em vez de virar mais um evento global no AppShell.
+  useEffect(() => {
+    if (!feature) return
+    function onKey(e: KeyboardEvent) {
+      if (!matchCombo(e, resolveCombo('feature.work', overrides))) return
+      e.preventDefault()
+      startWork()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  })
 
   if (!feature) {
     return (
@@ -82,16 +134,52 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
       <header className="border-b border-[var(--color-border)] px-6 py-4">
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-lg font-semibold text-[var(--color-text)]">{feature.title}</h1>
-          <button
-            type="button"
-            onClick={() => void shellApi.openPath(feature.docPath)}
-            className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
-            title={feature.docPath}
-          >
-            <Icon as={ExternalLink} size={13} />
-            Abrir no editor
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Menu
+              open={pickingRepo}
+              onClose={() => setPickingRepo(false)}
+              items={linkedRepos.map((r) => ({
+                label: r.label,
+                onClick: () => setWorkRepo(r),
+              }))}
+            >
+              <button
+                type="button"
+                onClick={startWork}
+                data-testid="feature-work-button"
+                className="flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--color-accent) 45%, transparent)',
+                  color: 'var(--color-accent)',
+                  background: 'color-mix(in srgb, var(--color-accent) 12%, transparent)',
+                }}
+                title="Abrir uma sessão do Claude Code já vinculada a esta feature"
+              >
+                <Icon as={Play} size={13} />
+                Trabalhar nesta feature
+              </button>
+            </Menu>
+            <button
+              type="button"
+              onClick={() => void shellApi.openPath(feature.docPath)}
+              className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
+              title={feature.docPath}
+            >
+              <Icon as={ExternalLink} size={13} />
+              Abrir no editor
+            </button>
+          </div>
         </div>
+
+        {noRepoNote && (
+          <p
+            data-testid="feature-work-no-repo"
+            className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs text-[var(--color-text-dim)]"
+          >
+            Esta feature não tem repo vinculado — a sessão precisa de um repo pra saber onde rodar.
+            Vincule um repo à feature (na aba do projeto) e tente de novo.
+          </p>
+        )}
 
         {/* O pulso vem logo abaixo do título: é a frase que responde "como a
             frente vai agora" antes de qualquer metadado. */}
@@ -184,7 +272,43 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
         )}
 
         <FeatureTasksSection featureId={feature.id} objectives={objectives} krTitles={krTitles} />
+
+        <FeatureSessions
+          featureId={feature.id}
+          reposById={reposById}
+          projectsById={projectsById}
+        />
       </div>
+
+      {workRepo && (
+        <SpawnSessionDialog
+          open
+          onClose={() => setWorkRepo(null)}
+          repo={workRepo}
+          initialFeatureId={feature.id}
+          onConfirm={(name, featureId, model, effort, permission, advisorModel, initialCommand) => {
+            const project = projectsById.get(workRepo.projectId)
+            void openSession(
+              workRepo,
+              project?.name ?? null,
+              project?.icon ?? null,
+              project?.color ?? null,
+              undefined,
+              featureId,
+              name,
+              initialCommand,
+              model,
+              effort,
+              undefined,
+              permission,
+              advisorModel,
+            )
+            setWorkRepo(null)
+            // Features e terminais são áreas exclusivas: trabalhar troca de tela.
+            setArea('projects')
+          }}
+        />
+      )}
     </div>
   )
 }

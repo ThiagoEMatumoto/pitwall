@@ -76,6 +76,15 @@ export const COMMANDS: Command[] = [
     defaultCombo: { mod: true, key: 'j' },
     editable: true,
   },
+  // Trabalhar na feature em foco: o dossiê aberto na área de Features é o
+  // "foco". Fica em Global porque não é gesto de pane/terminal.
+  {
+    id: 'feature.work',
+    label: 'Trabalhar na feature em foco',
+    context: 'Global',
+    defaultCombo: { mod: true, shift: true, key: 'f' },
+    editable: true,
+  },
   {
     id: 'files.togglePanel',
     label: 'Alternar painel de arquivos',
