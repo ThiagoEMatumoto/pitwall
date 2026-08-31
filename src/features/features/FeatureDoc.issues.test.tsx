@@ -68,6 +68,9 @@ function makeSnapshot(over: Partial<FeatureLoopSnapshot> = {}): FeatureLoopSnaps
     ledger: [],
     metrics: [],
     lastActivityAt: NOW,
+    pinned: false,
+    focusRank: null,
+    duplicateSuspect: null,
     ...over,
   }
 }
@@ -124,14 +127,14 @@ describe('FeatureDoc — faixa de issues', () => {
   })
 
   it('a duplicata do snapshot abre o candidato pelo store', async () => {
-    snapshotMock.mockResolvedValue({
-      ...makeSnapshot({
+    snapshotMock.mockResolvedValue(
+      makeSnapshot({
         issues: [
           { level: 'warn', code: 'duplicate_suspect', message: 'Possível duplicata de «TRF4».' },
         ],
+        duplicateSuspect: { candidateId: 'f9', title: 'Extração TRF4 (antiga)', score: 0.82 },
       }),
-      duplicateSuspect: { candidateId: 'f9', title: 'Extração TRF4 (antiga)', score: 0.82 },
-    })
+    )
     renderDoc()
 
     fireEvent.click(await screen.findByTestId('feature-issue-open-candidate'))

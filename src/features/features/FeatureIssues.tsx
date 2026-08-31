@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AlertTriangle, Archive, ArrowRight, Info, OctagonAlert } from 'lucide-react'
+import { AlertTriangle, Archive, ArrowRight, Info, OctagonAlert, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import type { IssueLevel } from '../../../shared/feature-loop'
@@ -27,6 +27,7 @@ interface Props {
   onLinkOkr: () => void
   onOpenCandidate: (id: string) => void
   onArchive: () => void
+  onDismissDuplicate: () => void
 }
 
 // Faixa de higiene do dossiê: o que está errado nesta feature, do mais grave
@@ -40,6 +41,7 @@ export function FeatureIssues({
   onLinkOkr,
   onOpenCandidate,
   onArchive,
+  onDismissDuplicate,
 }: Props) {
   if (issues.length === 0) return null
   const ordered = sortIssues(issues)
@@ -59,6 +61,7 @@ export function FeatureIssues({
           onLinkOkr={onLinkOkr}
           onOpenCandidate={onOpenCandidate}
           onArchive={onArchive}
+          onDismissDuplicate={onDismissDuplicate}
         />
       ))}
     </section>
@@ -73,6 +76,7 @@ function IssueRow({
   onLinkOkr,
   onOpenCandidate,
   onArchive,
+  onDismissDuplicate,
 }: { issue: FeatureIssue } & Omit<Props, 'issues'>) {
   const meta = ISSUE_LEVEL_META[issue.level]
   const action = issueAction(issue.code)
@@ -101,8 +105,8 @@ function IssueRow({
           >
             abrir “{candidate.title}”
           </IssueButton>
-          {/* Mesclar é backend de outra fase: aqui o veredito possível é
-              arquivar esta, que não perde nada (archive é reversível). */}
+          {/* Mesclar é outra fase; os dois vereditos baratos são arquivar
+              esta (reversível) ou dizer que o palpite errou. */}
           <IssueButton
             testId="feature-issue-archive"
             color={meta.color}
@@ -110,6 +114,14 @@ function IssueRow({
             onClick={onArchive}
           >
             arquivar esta
+          </IssueButton>
+          <IssueButton
+            testId="feature-issue-dismiss"
+            color={meta.color}
+            icon={X}
+            onClick={onDismissDuplicate}
+          >
+            não é duplicata
           </IssueButton>
         </>
       )}

@@ -1,41 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const featuresApi: Record<string, unknown> = {}
+const setFocus = vi.fn()
+const dismiss = vi.fn()
 vi.mock('@/lib/ipc', () => ({
-  get featuresApi() {
-    return featuresApi
+  featuresApi: {
+    setFocus: (input: unknown) => setFocus(input),
+    dismissDuplicate: (id: string) => dismiss(id),
   },
 }))
 
-const { setFeaturePinned } = await import('./feature-pin-api')
+const { dismissDuplicate, setFeaturePinned } = await import('./feature-pin-api')
 
 describe('feature-pin-api', () => {
-  it('sem canal de foco no preload o toggle vira no-op declarado (false)', async () => {
-    delete featuresApi.pin
-    delete featuresApi.setFocus
-    await expect(setFeaturePinned('f1', true)).resolves.toBe(false)
-  })
-
-  it('com pin/unpin presentes chama o par conforme o alvo', async () => {
-    const pin = vi.fn().mockResolvedValue(undefined)
-    const unpin = vi.fn().mockResolvedValue(undefined)
-    featuresApi.pin = pin
-    featuresApi.unpin = unpin
-
-    await expect(setFeaturePinned('f1', true)).resolves.toBe(true)
-    expect(pin).toHaveBeenCalledWith('f1')
-    await expect(setFeaturePinned('f1', false)).resolves.toBe(true)
-    expect(unpin).toHaveBeenCalledWith('f1')
-
-    delete featuresApi.pin
-    delete featuresApi.unpin
-  })
-
-  it('sem o par, cai no setFocus com patch parcial', async () => {
-    const setFocus = vi.fn().mockResolvedValue(undefined)
-    featuresApi.setFocus = setFocus
+  it('fixa e desafixa por patch parcial (o botão não conhece o rank)', async () => {
+    setFocus.mockResolvedValue(undefined)
     await expect(setFeaturePinned('f1', true)).resolves.toBe(true)
     expect(setFocus).toHaveBeenCalledWith({ featureId: 'f1', pinned: true })
-    delete featuresApi.setFocus
+    await expect(setFeaturePinned('f1', false)).resolves.toBe(true)
+    expect(setFocus).toHaveBeenCalledWith({ featureId: 'f1', pinned: false })
+  })
+
+  it('falha do IPC vira false — quem chama avisa em vez de deixar o botão mudo', async () => {
+    setFocus.mockRejectedValue(new Error('feature not found: f1'))
+    await expect(setFeaturePinned('f1', true)).resolves.toBe(false)
+    dismiss.mockRejectedValue(new Error('nope'))
+    await expect(dismissDuplicate('f1')).resolves.toBe(false)
+  })
+
+  it('dispensar a suspeita chama o canal dedicado', async () => {
+    dismiss.mockResolvedValue(undefined)
+    await expect(dismissDuplicate('f1')).resolves.toBe(true)
+    expect(dismiss).toHaveBeenCalledWith('f1')
   })
 })

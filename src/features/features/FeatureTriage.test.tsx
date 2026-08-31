@@ -42,6 +42,7 @@ describe('FeatureTriage', () => {
         suspectIds={new Set(['b'])}
         onSelect={vi.fn()}
         onArchive={vi.fn()}
+        onDismissDuplicate={vi.fn()}
       />,
     )
     const rows = screen.getAllByTestId('feature-triage-row')
@@ -62,6 +63,7 @@ describe('FeatureTriage', () => {
         suspectIds={new Set()}
         onSelect={onSelect}
         onArchive={onArchive}
+        onDismissDuplicate={vi.fn()}
       />,
     )
     fireEvent.click(screen.getByTestId('feature-triage-open'))
@@ -77,6 +79,7 @@ describe('FeatureTriage', () => {
         suspectIds={new Set()}
         onSelect={vi.fn()}
         onArchive={vi.fn()}
+        onDismissDuplicate={vi.fn()}
       />,
     )
     expect(screen.getByText(/Fila vazia/)).toBeInTheDocument()

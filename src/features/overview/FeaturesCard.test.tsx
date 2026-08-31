@@ -84,6 +84,9 @@ describe('FeaturesCard — features em foco', () => {
       ledger: [],
       metrics: [],
       lastActivityAt: NOW,
+      pinned: true,
+      focusRank: 1,
+      duplicateSuspect: null,
     })
     render(<FeaturesCard features={[activity]} />)
 

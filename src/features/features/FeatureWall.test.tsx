@@ -47,6 +47,9 @@ function makeSnapshot(over: Partial<FeatureLoopSnapshot> = {}): FeatureLoopSnaps
     ledger: [],
     metrics: [],
     lastActivityAt: NOW,
+    pinned: true,
+    focusRank: null,
+    duplicateSuspect: null,
     ...over,
   }
 }

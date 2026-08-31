@@ -1,22 +1,16 @@
 import type { IssueLevel, LoopIssue } from '../../../shared/feature-loop'
+import type { FeatureDuplicateSuspect, FeatureLoopSnapshot } from '../../../shared/types/ipc'
 
-// A issue de duplicata precisa carregar o candidato pra UI conseguir dizer
-// "possível duplicata de «X»" e LEVAR até ele — a mensagem sozinha nomeia o
-// candidato mas não dá o id. `LoopIssue` (shared) é o shape mínimo; a extensão
-// mora aqui porque shared/ não é editável nesta frente.
+// A issue de duplicata só carrega TEXTO (`Possível duplicata de «X».`); o id
+// do candidato vem no snapshot, em `duplicateSuspect`. O alias com campos
+// opcionais existe porque a issue pode um dia trazer o par junto — a UI lê os
+// dois caminhos e não depende de qual chegou.
 export interface FeatureIssue extends LoopIssue {
   candidateId?: string
   candidateTitle?: string
 }
 
-// A suspeita como o backend a expõe (features.duplicate_of resolvido:
-// `{ candidateId, title, score }`). Dois nomes de id porque o serviço do main
-// usa `candidateId` e o LoopInput usa `featureId` pro mesmo ponteiro.
-export interface DuplicateSuspectLike {
-  candidateId?: string
-  featureId?: string
-  title?: string | null
-}
+export type DuplicateSuspectLike = Partial<FeatureDuplicateSuspect> & { featureId?: string }
 
 export const DUPLICATE_SUSPECT = 'duplicate_suspect'
 
@@ -57,13 +51,11 @@ export function duplicateCandidate(
   return { id, title: title || 'outra feature' }
 }
 
-// A suspeita anexada ao snapshot do loop (campo que o backend da Fase 4
-// acrescenta ao FeatureLoopSnapshot). Lida por cast pelo mesmo motivo do
-// feature-pin: a UI programa contra a assinatura antes de ela existir.
-export function readDuplicateSuspect(snapshot: unknown): DuplicateSuspectLike | null {
-  const suspect = (snapshot as { duplicateSuspect?: DuplicateSuspectLike | null } | null)
-    ?.duplicateSuspect
-  return suspect ?? null
+/** A suspeita anexada ao snapshot do loop (null quando não há). */
+export function readDuplicateSuspect(
+  snapshot: FeatureLoopSnapshot | null,
+): FeatureDuplicateSuspect | null {
+  return snapshot?.duplicateSuspect ?? null
 }
 
 export function issueAction(code: string): IssueAction {
@@ -94,10 +86,10 @@ export function withOkrIssue(
 }
 
 // Ponteiro de duplicata já persistido na projeção da feature
-// (features.duplicate_of). Quando ele chega junto da lista, a fila de triagem
+// (features.duplicate_of). Como ele chega junto da lista, a fila de triagem
 // não precisa sondar o loop feature a feature.
-export function duplicateOfFeature(feature: unknown): string | null {
-  const value = (feature as { duplicateOf?: string | null } | null)?.duplicateOf
+export function duplicateOfFeature(feature: { duplicateOf?: string | null }): string | null {
+  const value = feature.duplicateOf
   return typeof value === 'string' && value !== '' ? value : null
 }
 

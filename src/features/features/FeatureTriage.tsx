@@ -8,13 +8,20 @@ interface Props {
   suspectIds: ReadonlySet<string>
   onSelect: (id: string) => void
   onArchive: (id: string) => void
+  onDismissDuplicate: (id: string) => void
 }
 
 // Fila de triagem: a resposta ao "algumas registradas, outras duplicadas ou
 // esquecidas". Cada linha diz POR QUE está aqui e oferece os dois vereditos
 // baratos — abrir (pra decidir com o dossiê na frente) ou arquivar. Linhas
 // densas de propósito: o valor está em resolver várias de uma sentada.
-export function FeatureTriage({ features, suspectIds, onSelect, onArchive }: Props) {
+export function FeatureTriage({
+  features,
+  suspectIds,
+  onSelect,
+  onArchive,
+  onDismissDuplicate,
+}: Props) {
   return (
     <section data-testid="feature-triage">
       <header className="mb-3">
@@ -48,7 +55,17 @@ export function FeatureTriage({ features, suspectIds, onSelect, onArchive }: Pro
               </span>
 
               {suspectIds.has(f.id) && (
-                <ReasonChip icon={Copy} color="var(--color-warning)" label="possível duplicata" />
+                <>
+                  <ReasonChip icon={Copy} color="var(--color-warning)" label="possível duplicata" />
+                  <button
+                    type="button"
+                    data-testid="feature-triage-dismiss"
+                    onClick={() => onDismissDuplicate(f.id)}
+                    className="shrink-0 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  >
+                    não é duplicata
+                  </button>
+                </>
               )}
               {f.origin === 'auto' && (
                 <ReasonChip icon={Bot} color="var(--color-info)" label="criada por agente" />

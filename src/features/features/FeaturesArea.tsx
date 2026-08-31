@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutList, Columns3, LayoutGrid } from 'lucide-react'
-import { Icon } from '@/components/ui/Icon'
 import { objectivesApi, projectsApi, featuresApi } from '@/lib/ipc'
 import { useFeaturesStore } from '@/store/featuresStore'
 import { isDraftFeature } from '../../../shared/feature-visibility'
@@ -18,19 +16,16 @@ import { FeatureDoc } from './FeatureDoc'
 import { FeatureList } from './FeatureList'
 import { FeaturesSidebar, type StatusFilter } from './FeaturesSidebar'
 import { FeatureTriage } from './FeatureTriage'
+import { ViewToggle, type ViewMode } from './FeaturesViewToggle'
 import { FeatureWall } from './FeatureWall'
-import { selectTriage } from './feature-issues'
+import { duplicateOfFeature, selectTriage } from './feature-issues'
 import { selectPinned } from './feature-pin'
-import { setFeaturePinned } from './feature-pin-api'
+import { dismissDuplicate, setFeaturePinned } from './feature-pin-api'
 import { NewFeatureDialog } from './NewFeatureDialog'
-import { useDuplicateSuspects } from './useDuplicateSuspects'
 import { useFeatureLiveSessions } from './useFeatureLiveSessions'
 import { useFeatures } from './useFeatures'
 import { useLoopSnapshots } from './useLoopSnapshots'
 
-// 'wall' é o default: a queixa que abriu a Fase 4 é feature esquecida, e uma
-// lista plana não tem primeiro plano. Lista e board continuam a um clique.
-type ViewMode = 'wall' | 'list' | 'board'
 
 export function FeaturesArea() {
   useFeatures()
@@ -121,11 +116,13 @@ export function FeaturesArea() {
     [withStats],
   )
 
-  // Candidatas à triagem: tudo que não está arquivado. A sondagem de duplicata
-  // só roda com o filtro aberto (useDuplicateSuspects), então a lista completa
-  // aqui não custa nada enquanto o usuário não pede a fila.
+  // Candidatas à triagem: tudo que não está arquivado. A suspeita vem na
+  // própria projeção (features.duplicate_of), então a fila não custa IPC nenhum.
   const triageCandidates = useMemo(() => withStats.filter((f) => !f.archivedAt), [withStats])
-  const suspectIds = useDuplicateSuspects(triageCandidates, filter === 'drafts')
+  const suspectIds = useMemo(
+    () => new Set(triageCandidates.filter((f) => duplicateOfFeature(f) !== null).map((f) => f.id)),
+    [triageCandidates],
+  )
 
   // Fila de triagem (antigo filtro "Rascunhos"): auto-criadas + suspeitas de
   // duplicata. O recorte antigo (auto-criada COM zero registros) escondia
@@ -237,7 +234,17 @@ export function FeaturesArea() {
   async function handleTogglePin(id: string, next: boolean) {
     const ok = await setFeaturePinned(id, next)
     if (!ok) {
-      setNotice('Fixar features ainda não está disponível nesta build (canal de foco ausente).')
+      setNotice(next ? 'Não foi possível fixar a feature.' : 'Não foi possível tirar do foco.')
+      return
+    }
+    await refresh()
+  }
+
+  // "Não é duplicata": some com o aviso e tira a feature da fila de triagem.
+  async function handleDismissDuplicate(id: string) {
+    const ok = await dismissDuplicate(id)
+    if (!ok) {
+      setNotice('Não foi possível dispensar a suspeita de duplicata.')
       return
     }
     await refresh()
@@ -317,6 +324,7 @@ export function FeaturesArea() {
                   suspectIds={suspectIds}
                   onSelect={(id) => void select(id)}
                   onArchive={(id) => void handleArchive(id)}
+                  onDismissDuplicate={(id) => void handleDismissDuplicate(id)}
                 />
               </div>
             ) : view === 'board' ? (
@@ -371,52 +379,5 @@ export function FeaturesArea() {
         onCreate={handleCreate}
       />
     </>
-  )
-}
-
-function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMode) => void }) {
-  return (
-    <div className="inline-flex rounded-md border border-[var(--color-border)] p-0.5">
-      <button
-        type="button"
-        onClick={() => onChange('wall')}
-        title="Parede"
-        data-testid="features-view-wall"
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
-          value === 'wall'
-            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        <Icon as={LayoutGrid} size={13} />
-        Parede
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('list')}
-        title="Lista"
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
-          value === 'list'
-            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        <Icon as={LayoutList} size={13} />
-        Lista
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('board')}
-        title="Board"
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
-          value === 'board'
-            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        <Icon as={Columns3} size={13} />
-        Board
-      </button>
-    </div>
   )
 }

@@ -11,6 +11,7 @@ import { useFeaturesStore } from '@/store/featuresStore'
 import { SpawnSessionDialog } from '@/features/sessions/SpawnSessionDialog'
 import type { Feature, Project, Repo } from '../../../shared/types/ipc'
 import { readDuplicateSuspect, withOkrIssue } from './feature-issues'
+import { dismissDuplicate } from './feature-pin-api'
 import { FeatureIssues } from './FeatureIssues'
 import { StatusBadge } from './FeatureList'
 import { FeatureObjectiveField } from './FeatureObjectiveField'
@@ -148,6 +149,14 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
     await useFeaturesStore.getState().refresh()
   }
 
+  // "Não é duplicata": o aviso some e o dossiê continua aberto (o veredito é
+  // sobre o palpite, não sobre a feature).
+  async function dismissDuplicateHere() {
+    await dismissDuplicate(featureId)
+    await loop.reload()
+    await useFeaturesStore.getState().refresh()
+  }
+
   const created = fmtDate(feature.createdAt)
   const updated = fmtDate(feature.updatedAt)
   const completed = fmtDate(feature.completedAt)
@@ -214,6 +223,7 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
           onLinkOkr={() => setLinkSignal((n) => n + 1)}
           onOpenCandidate={(id) => void useFeaturesStore.getState().select(id)}
           onArchive={() => void archiveThis()}
+          onDismissDuplicate={() => void dismissDuplicateHere()}
         />
 
         {/* O pulso vem logo abaixo do título: é a frase que responde "como a

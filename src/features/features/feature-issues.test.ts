@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { FeatureLoopSnapshot } from '../../../shared/types/ipc'
 import {
   duplicateCandidate,
   issueAction,
@@ -9,6 +10,23 @@ import {
   withOkrIssue,
   type FeatureIssue,
 } from './feature-issues'
+
+function makeSnapshot(
+  duplicateSuspect: FeatureLoopSnapshot['duplicateSuspect'] = null,
+): FeatureLoopSnapshot {
+  return {
+    featureId: 'f1',
+    pulse: null,
+    liveness: 'alive',
+    issues: [],
+    ledger: [],
+    metrics: [],
+    lastActivityAt: 0,
+    pinned: false,
+    focusRank: null,
+    duplicateSuspect,
+  }
+}
 
 const issue = (over: Partial<FeatureIssue>): FeatureIssue => ({
   level: 'warn',
@@ -85,11 +103,10 @@ describe('feature-issues — candidato vindo do snapshot', () => {
     expect(duplicateCandidate(issue, null)).toBeNull()
   })
 
-  it('lê a suspeita do snapshot sem quebrar quando o campo não existe', () => {
+  it('lê a suspeita do snapshot (null quando não há)', () => {
     expect(readDuplicateSuspect(null)).toBeNull()
-    expect(readDuplicateSuspect({ featureId: 'f1' })).toBeNull()
-    expect(readDuplicateSuspect({ duplicateSuspect: { candidateId: 'f9' } })).toEqual({
-      candidateId: 'f9',
-    })
+    expect(readDuplicateSuspect(makeSnapshot())).toBeNull()
+    const suspect = { candidateId: 'f9', title: 'Extração TRF4', score: 0.82 }
+    expect(readDuplicateSuspect(makeSnapshot(suspect))).toEqual(suspect)
   })
 })

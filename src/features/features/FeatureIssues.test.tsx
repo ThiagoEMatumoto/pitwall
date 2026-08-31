@@ -12,6 +12,7 @@ function renderBand(issues: FeatureIssue[], suspect?: { candidateId: string; tit
     onLinkOkr: vi.fn(),
     onOpenCandidate: vi.fn(),
     onArchive: vi.fn(),
+    onDismissDuplicate: vi.fn(),
   }
   const { container } = render(<FeatureIssues {...props} />)
   return { ...props, container }
@@ -50,9 +51,11 @@ describe('FeatureIssues', () => {
     fireEvent.click(open)
     expect(props.onOpenCandidate).toHaveBeenCalledWith('f9')
 
-    // Mesclar é de outra fase; o que dá pra fazer aqui é arquivar esta.
+    // Mesclar é de outra fase; os vereditos daqui são arquivar ou dispensar.
     fireEvent.click(screen.getByTestId('feature-issue-archive'))
     expect(props.onArchive).toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('feature-issue-dismiss'))
+    expect(props.onDismissDuplicate).toHaveBeenCalled()
   })
 
   it('sem candidato resolvido a duplicata vira aviso sem link morto', () => {

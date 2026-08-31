@@ -1,30 +1,25 @@
 import { featuresApi } from '@/lib/ipc'
 
-// Escrita do foco. Fica FORA de feature-pin.ts (que é puro e entra na lista,
-// no card e na parede) porque tocar '@/lib/ipc' obriga todo consumidor a mockar
-// window.api — mesma separação de feature-sessions-api.ts.
+// Escrita do foco. Separada de feature-pin.ts (puro) porque importar
+// '@/lib/ipc' obriga todo consumidor do módulo a mockar window.api.
 //
-// Dois nomes possíveis porque o backend da Fase 4 ainda está escolhendo entre
-// o par pin/unpin e um `setFocus` com patch parcial (o serviço já existe como
-// setFocus). A UI aceita os dois e some com o extra quando o canal firmar.
-interface PinChannel {
-  pin?: (id: string) => Promise<unknown>
-  unpin?: (id: string) => Promise<unknown>
-  setFocus?: (input: { featureId: string; pinned: boolean }) => Promise<unknown>
+// `false` = a chamada falhou; quem chama avisa o usuário em vez de deixar o
+// botão mudo (silêncio é o pior resultado possível num gesto de estado).
+export async function setFeaturePinned(id: string, pinned: boolean): Promise<boolean> {
+  try {
+    await featuresApi.setFocus({ featureId: id, pinned })
+    return true
+  } catch {
+    return false
+  }
 }
 
-// `false` = o canal ainda não existe nesta build. Quem chama avisa o usuário em
-// vez de deixar o botão mudo (silêncio é o pior resultado possível aqui).
-export async function setFeaturePinned(id: string, pinned: boolean): Promise<boolean> {
-  const channel = featuresApi as unknown as PinChannel
-  const toggle = pinned ? channel.pin : channel.unpin
-  if (typeof toggle === 'function') {
-    await toggle.call(channel, id)
+/** "Não é duplicata": some com o aviso sem tocar em mais nada. */
+export async function dismissDuplicate(id: string): Promise<boolean> {
+  try {
+    await featuresApi.dismissDuplicate(id)
     return true
+  } catch {
+    return false
   }
-  if (typeof channel.setFocus === 'function') {
-    await channel.setFocus.call(channel, { featureId: id, pinned })
-    return true
-  }
-  return false
 }
