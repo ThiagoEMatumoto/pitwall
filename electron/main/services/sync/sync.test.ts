@@ -710,3 +710,142 @@ describe('#10: drift schema vs listas de sync', () => {
     db.close()
   })
 })
+
+// ---- Compatibilidade entre versões: tabela AUSENTE no bundle ----
+//
+// O exporter escreve SEMPRE um arquivo por tabela que conhece (inclusive vazio),
+// então arquivo ausente significa "a versão que exportou não conhece esta
+// tabela". Aqui simulamos a máquina antiga exportando um bundle completo e
+// removendo os .ndjson das tabelas do loop — as que a versão anterior não tem.
+const LOOP_TABLES = [
+  'feature_pulses',
+  'feature_ledger',
+  'feature_metrics',
+  'feature_metric_points',
+]
+
+function seedLoop(db: Database.Database, featureId: string, suffix: string): void {
+  const t = 1_700_000_000_000
+  db.prepare(
+    `INSERT INTO feature_pulses (id, feature_id, body, source, created_at) VALUES (?,?,?,?,?)`,
+  ).run(`pulse-${suffix}`, featureId, `pulso ${suffix}`, 'human', t)
+  db.prepare(
+    `INSERT INTO feature_ledger (feature_id, entry_id, title, body, created_at, updated_at)
+     VALUES (?,?,?,?,?,?)`,
+  ).run(featureId, `entry-${suffix}`, 'Entrada', 'corpo', t, t)
+  db.prepare(`INSERT INTO feature_metrics (feature_id, column_key, label) VALUES (?,?,?)`).run(
+    featureId,
+    `metric-${suffix}`,
+    'Métrica',
+  )
+  db.prepare(
+    `INSERT INTO feature_metric_points (id, feature_id, column_key, at, value) VALUES (?,?,?,?,?)`,
+  ).run(`point-${suffix}`, featureId, `metric-${suffix}`, t, 1)
+}
+
+// Remove do bundle os .ndjson das tabelas do loop = bundle exportado por uma
+// versão que não as conhece.
+function stripLoopTables(bundleDir: string): void {
+  for (const t of LOOP_TABLES) rmSync(join(bundleDir, 'tables', `${t}.ndjson`))
+}
+
+function count(db: Database.Database, table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c
+}
+
+describe('sync import: bundle de versão anterior (tabela ausente)', () => {
+  it('tabela SEM arquivo no bundle é preservada; as presentes são substituídas', () => {
+    const dbA = newDb()
+    seed(dbA)
+    dbA.prepare(`UPDATE projects SET name='Vindo do bundle' WHERE id='proj-1'`).run()
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    stripLoopTables(bundleDir)
+
+    const dbB = newDb()
+    seed(dbB)
+    seedLoop(dbB, 'feat-1', 'b')
+    dbB.prepare(`UPDATE projects SET name='Local' WHERE id='proj-1'`).run()
+
+    importBundle(dbB, bundleDir, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher })
+
+    // Preservadas: o bundle nada dizia sobre elas.
+    for (const t of LOOP_TABLES) expect(count(dbB, t), `tabela ${t}`).toBe(1)
+    expect(
+      (
+        dbB.prepare(`SELECT body FROM feature_pulses WHERE id='pulse-b'`).get() as {
+          body: string
+        }
+      ).body,
+    ).toBe('pulso b')
+
+    // Substituídas: replace-all normal nas tabelas presentes no bundle.
+    expect(
+      (dbB.prepare(`SELECT name FROM projects WHERE id='proj-1'`).get() as { name: string }).name,
+    ).toBe('Vindo do bundle')
+    expect(dbB.pragma('foreign_key_check')).toEqual([])
+
+    dbA.close()
+    dbB.close()
+  })
+
+  it('arquivo PRESENTE e vazio continua limpando a tabela (a distinção é o ponto)', () => {
+    const dbA = newDb()
+    seed(dbA) // sem linhas de loop => .ndjson presente e vazio
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    for (const t of LOOP_TABLES) {
+      expect(readFileSync(join(bundleDir, 'tables', `${t}.ndjson`), 'utf8').trim()).toBe('')
+    }
+
+    const dbB = newDb()
+    seed(dbB)
+    seedLoop(dbB, 'feat-1', 'b')
+
+    importBundle(dbB, bundleDir, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher })
+
+    for (const t of LOOP_TABLES) expect(count(dbB, t), `tabela ${t}`).toBe(0)
+    dbA.close()
+    dbB.close()
+  })
+
+  it('preservada com pai que sumiu no replace-all: só as órfãs caem, import não falha', () => {
+    const dbA = newDb()
+    seed(dbA) // bundle só conhece feat-1
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    stripLoopTables(bundleDir)
+
+    const dbB = newDb()
+    seed(dbB)
+    // Feature que só existe NESTA máquina: some no replace-all, e o loop dela vai junto.
+    dbB.prepare(
+      `INSERT INTO features (id, project_id, slug, title, status, doc_path, synth_mode, created_at, updated_at, origin)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      'feat-local',
+      'proj-1',
+      'so-daqui',
+      'Só daqui',
+      'pending',
+      '/x/proj-1/so-daqui.md',
+      'manual',
+      1,
+      1,
+      'manual',
+    )
+    seedLoop(dbB, 'feat-1', 'keep')
+    seedLoop(dbB, 'feat-local', 'drop')
+
+    importBundle(dbB, bundleDir, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher })
+
+    expect(dbB.prepare(`SELECT id FROM feature_pulses ORDER BY id`).all()).toEqual([
+      { id: 'pulse-keep' },
+    ])
+    expect(count(dbB, 'feature_metric_points')).toBe(1) // órfã em 2 saltos também caiu
+    expect(dbB.pragma('foreign_key_check')).toEqual([])
+
+    dbA.close()
+    dbB.close()
+  })
+})

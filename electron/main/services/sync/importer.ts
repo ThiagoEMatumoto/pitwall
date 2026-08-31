@@ -71,12 +71,43 @@ function tableColumns(db: Database.Database, table: string): string[] {
 
 // Lê um .ndjson em array de objetos. Linhas vazias são ignoradas (tabela vazia
 // => arquivo vazio ou só com \n).
-function readTable(bundleDir: string, table: SyncedTable): Array<Record<string, unknown>> {
+//
+// Devolve `null` quando o ARQUIVO NÃO EXISTE — e essa distinção é o ponto: o
+// exporter escreve SEMPRE um arquivo por tabela que conhece (inclusive vazio),
+// então arquivo ausente significa inequivocamente "a versão que exportou este
+// bundle não conhece esta tabela", e não "a tabela está vazia lá". Ver
+// importBundle para o que fazemos com cada caso.
+function readTable(bundleDir: string, table: SyncedTable): Array<Record<string, unknown>> | null {
   const path = tableFilePath(bundleDir, table)
-  if (!existsSync(path)) return []
+  if (!existsSync(path)) return null
   const raw = readFileSync(path, 'utf8')
   const lines = raw.split('\n').filter((l) => l.trim().length > 0)
   return lines.map((l) => JSON.parse(l) as Record<string, unknown>)
+}
+
+interface FkViolation {
+  table: string
+  rowid: number | null
+  parent: string
+  fkid: number
+}
+
+// Apaga, SÓ das tabelas em `tables`, as linhas que o foreign_key_check acusa
+// como órfãs. Usado nas tabelas preservadas (ausentes do bundle): o pai delas
+// pode ter sumido no replace-all — ex.: uma feature que só existia aqui é
+// substituída pelo conjunto do bundle — e a linha filha segue o pai, exatamente
+// como o ON DELETE CASCADE do schema faria. Repete porque apagar uma linha pode
+// orfanar outra (feature_metrics → feature_metric_points); o teto evita laço
+// infinito caso algo não convirja.
+function dropOrphansIn(db: Database.Database, tables: ReadonlySet<string>): void {
+  for (let pass = 0; pass <= tables.size; pass++) {
+    const violations = db.pragma('foreign_key_check') as FkViolation[]
+    const orphans = violations.filter((v) => tables.has(v.table) && v.rowid !== null)
+    if (orphans.length === 0) return
+    for (const v of orphans) {
+      db.prepare(`DELETE FROM "${v.table}" WHERE rowid = ?`).run(v.rowid)
+    }
+  }
 }
 
 // Reconcilia os `.md`: sobrescreve cada arquivo do bundle no destino local
@@ -136,6 +167,7 @@ function reconcileFeatures(
 //   2. pausa watcher
 //   3. foreign_keys = OFF
 //   4. transação: DELETE em ordem REVERSA de FK; INSERT em ordem de FK;
+//      tabelas AUSENTES do bundle ficam de fora dos dois loops (preservadas);
 //      foreign_key_check DENTRO da tx (viola → throw → ROLLBACK automático,
 //      dados locais preservados)
 //   5. reconcilia .md (sobrescreve via markSelfWrite, remove órfãos) — SÓ após
@@ -165,10 +197,22 @@ export function importBundle(
 
   // Pré-lê todas as tabelas ANTES de mexer no DB (falha de parse aborta sem
   // deixar o DB num estado parcial).
-  const tableData = new Map<SyncedTable, Array<Record<string, unknown>>>()
+  const tableData = new Map<SyncedTable, Array<Record<string, unknown>> | null>()
   for (const table of SYNCED_TABLES) {
     tableData.set(table, readTable(bundleDir, table))
   }
+
+  // Tabela SEM arquivo no bundle é PRESERVADA (nem DELETE nem INSERT): quem
+  // exportou roda uma versão anterior, que sequer conhece a tabela, então o
+  // replace-all não tem o que dizer sobre ela. Sem esta distinção, importar um
+  // bundle de uma máquina desatualizada apagava os dados locais dessas tabelas
+  // — o DELETE rodava e o INSERT não tinha linha nenhuma para repor (perda
+  // silenciosa). Arquivo PRESENTE e vazio é o caso oposto: a tabela está mesmo
+  // vazia na origem e deve ser limpa aqui, como sempre.
+  const inBundle: ReadonlySet<SyncedTable> = new Set(
+    SYNCED_TABLES.filter((t) => tableData.get(t) !== null),
+  )
+  const preserved: ReadonlySet<string> = new Set(SYNCED_TABLES.filter((t) => !inBundle.has(t)))
 
   let unresolvedPaths = 0
 
@@ -177,12 +221,13 @@ export function importBundle(
     const tx = db.transaction(() => {
       // DELETE em ordem reversa de FK (filhos antes de pais).
       for (const table of [...SYNCED_TABLES].reverse()) {
+        if (!inBundle.has(table)) continue
         db.prepare(`DELETE FROM "${table}"`).run()
       }
       // INSERT em ordem de FK (pais antes de filhos).
       for (const table of SYNCED_TABLES) {
-        const rows = tableData.get(table) ?? []
-        if (rows.length === 0) continue
+        const rows = tableData.get(table)
+        if (!rows || rows.length === 0) continue
         const cols = tableColumns(db, table)
         const pathCols = new Set(PATH_COLUMNS[table] ?? [])
         const placeholders = cols.map((c) => `@${c}`).join(', ')
@@ -217,6 +262,11 @@ export function importBundle(
           ins.run(params)
         }
       }
+      // Linha preservada cujo pai sumiu no replace-all vira órfã: apagamos antes
+      // do check (mesmo efeito do CASCADE). Violação em tabela VINDA do bundle
+      // continua sendo erro — bundle corrompido não deve virar delete silencioso.
+      if (preserved.size > 0) dropOrphansIn(db, preserved)
+
       // FK check DENTRO da tx: violação → throw → ROLLBACK automático (o DELETE
       // não é commitado, dados locais ficam intactos). Funciona com o pragma OFF.
       const violations = db.pragma('foreign_key_check') as unknown[]
