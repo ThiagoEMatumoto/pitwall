@@ -82,6 +82,7 @@ function renderDoc(repoIds: string[], repos: Repo[] = [repoA, repoB]) {
       loading={false}
       reposById={new Map(repos.map((r) => [r.id, r]))}
       projectsById={new Map([[project.id, project]])}
+      onBack={() => {}}
     />,
   )
 }

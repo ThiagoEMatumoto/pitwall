@@ -82,6 +82,7 @@ function renderDoc(feature = makeFeature()) {
       loading={false}
       reposById={new Map()}
       projectsById={new Map()}
+      onBack={() => {}}
     />,
   )
 }

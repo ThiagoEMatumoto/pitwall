@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ExternalLink, GitBranch, Play } from 'lucide-react'
+import { ArrowLeft, ExternalLink, GitBranch, Play } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
@@ -28,6 +28,8 @@ interface Props {
   loading: boolean
   reposById: Map<string, Repo>
   projectsById: Map<string, Project>
+  /** Fecha o dossiê e devolve o usuário à view de onde ele veio. */
+  onBack: () => void
 }
 
 function fmtDate(ts: number | null): string | null {
@@ -67,7 +69,7 @@ function historyEntries(history: string): string[] {
     .filter(Boolean)
 }
 
-export function FeatureDoc({ feature, loading, reposById, projectsById }: Props) {
+export function FeatureDoc({ feature, loading, reposById, projectsById, onBack }: Props) {
   const split = useMemo(
     () => (feature?.body ? splitHistory(feature.body) : { main: '', history: null }),
     [feature?.body],
@@ -128,9 +130,20 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
   })
 
   if (!feature) {
+    // Sem botão aqui o usuário fica preso: um get que falha zera o selectedDoc
+    // mas mantém o selectedId, e a área continua mostrando o dossiê vazio.
     return (
-      <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-dim)]">
-        {loading ? 'Carregando…' : 'Selecione uma feature para ver os detalhes.'}
+      <div className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-sm text-[var(--color-text-dim)]">
+        <p>{loading ? 'Carregando…' : 'Selecione uma feature para ver os detalhes.'}</p>
+        <button
+          type="button"
+          onClick={onBack}
+          data-testid="feature-back-button"
+          className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
+        >
+          <Icon as={ArrowLeft} size={13} />
+          Voltar
+        </button>
       </div>
     )
   }
@@ -165,7 +178,18 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
     <div className="flex h-full flex-col overflow-hidden">
       <header className="border-b border-[var(--color-border)] px-6 py-4">
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-lg font-semibold text-[var(--color-text)]">{feature.title}</h1>
+          <div className="flex min-w-0 items-start gap-2">
+            <button
+              type="button"
+              onClick={onBack}
+              title="Voltar para a lista"
+              data-testid="feature-back-button"
+              className="mt-0.5 shrink-0 rounded-md p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+            >
+              <Icon as={ArrowLeft} size={15} />
+            </button>
+            <h1 className="text-lg font-semibold text-[var(--color-text)]">{feature.title}</h1>
+          </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <Menu
               open={pickingRepo}

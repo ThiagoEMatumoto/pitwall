@@ -307,6 +307,9 @@ export function FeaturesArea() {
             loading={docLoading}
             reposById={reposById}
             projectsById={projectsById}
+            // A view (parede/lista/board) é estado desta área e sobrevive ao
+            // dossiê, então voltar devolve o usuário exatamente onde ele estava.
+            onBack={() => void select(null)}
           />
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
