@@ -1,8 +1,19 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { SessionHeader } from './SessionHeader'
 import type { SessionActivity } from '../../../shared/types/ipc'
+
+// O chip da feature navega por @/lib/nav, que puxa a cadeia de stores (e o
+// window.api, inexistente em jsdom). O alvo aqui é o bastão, não a navegação.
+vi.mock('@/lib/nav', () => ({
+  navigateToFeature: vi.fn(),
+  navigateToObjective: vi.fn(),
+  navigateToTask: vi.fn(),
+  navigateToProject: vi.fn(),
+  navigateToDiagram: vi.fn(),
+}))
+
+const { SessionHeader } = await import('./SessionHeader')
 
 // usePanelTier observa a largura REAL do painel; jsdom não implementa
 // ResizeObserver, e sem o stub o header explode no mount. Sem callback = tier
