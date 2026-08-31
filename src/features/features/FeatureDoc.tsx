@@ -3,13 +3,17 @@ import { ExternalLink, GitBranch, Play } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
-import { shellApi } from '@/lib/ipc'
+import { featuresApi, shellApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useAppStore } from '@/store/appStore'
+import { useFeaturesStore } from '@/store/featuresStore'
 import { SpawnSessionDialog } from '@/features/sessions/SpawnSessionDialog'
 import type { Feature, Project, Repo } from '../../../shared/types/ipc'
+import { readDuplicateSuspect, withOkrIssue } from './feature-issues'
+import { FeatureIssues } from './FeatureIssues'
 import { StatusBadge } from './FeatureList'
+import { FeatureObjectiveField } from './FeatureObjectiveField'
 import { FeatureObjectiveLinksSection } from './FeatureObjectiveLinksSection'
 import { FeaturePulse } from './FeaturePulse'
 import { FeatureSessions } from './FeatureSessions'
@@ -80,6 +84,11 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
   const [pickingRepo, setPickingRepo] = useState(false)
   // Feature sem repo vinculado: o botão não pode ficar mudo, então explica.
   const [noRepoNote, setNoRepoNote] = useState(false)
+  // Sinais que a faixa de issues dispara pra abrir o editor certo. Contador em
+  // vez de boolean: dois cliques seguidos no mesmo botão precisam reabrir.
+  const [pulseSignal, setPulseSignal] = useState(0)
+  const [objectiveSignal, setObjectiveSignal] = useState(0)
+  const [linkSignal, setLinkSignal] = useState(0)
 
   // Repos da feature já resolvidos pra objeto Repo (o spawn precisa do repo
   // inteiro, não só do id do vínculo).
@@ -123,6 +132,20 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
         {loading ? 'Carregando…' : 'Selecione uma feature para ver os detalhes.'}
       </div>
     )
+  }
+
+  // A faixa só existe com snapshot: sem ele não dá pra saber o que está
+  // errado, e sintetizar "sem OKR" sozinho daria um veredito pela metade.
+  const issues = loop.snapshot
+    ? withOkrIssue(loop.snapshot.issues, feature.objectiveLinkCount)
+    : []
+  const suspect = readDuplicateSuspect(loop.snapshot)
+
+  const featureId = feature.id
+  async function archiveThis() {
+    await featuresApi.archive(featureId)
+    void useFeaturesStore.getState().select(null)
+    await useFeaturesStore.getState().refresh()
   }
 
   const created = fmtDate(feature.createdAt)
@@ -181,23 +204,36 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
           </p>
         )}
 
+        {/* Higiene primeiro: o que está errado nesta feature, com o gesto que
+            resolve. Some por completo quando não há issue. */}
+        <FeatureIssues
+          issues={issues}
+          suspect={suspect}
+          onEditPulse={() => setPulseSignal((n) => n + 1)}
+          onEditObjective={() => setObjectiveSignal((n) => n + 1)}
+          onLinkOkr={() => setLinkSignal((n) => n + 1)}
+          onOpenCandidate={(id) => void useFeaturesStore.getState().select(id)}
+          onArchive={() => void archiveThis()}
+        />
+
         {/* O pulso vem logo abaixo do título: é a frase que responde "como a
             frente vai agora" antes de qualquer metadado. */}
         <FeaturePulse
           featureId={feature.id}
           pulse={loop.snapshot?.pulse ?? null}
           loading={loop.loading}
+          focusSignal={pulseSignal}
           onSaved={() => void loop.reload()}
         />
 
         {/* "Resumo" = texto livre opcional (feature.objective no banco) — nome
             trocado só na UI pra não colidir com o vínculo real de OKR abaixo. */}
-        {feature.objective && (
-          <p className="mt-2 text-sm text-[var(--color-text-dim)]">
-            <span className="font-medium text-[var(--color-text)]">Resumo: </span>
-            {feature.objective}
-          </p>
-        )}
+        <FeatureObjectiveField
+          featureId={feature.id}
+          objective={feature.objective}
+          editSignal={objectiveSignal}
+          onSaved={() => void useFeaturesStore.getState().select(feature.id)}
+        />
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {/* Liveness primeiro (derivado do que aconteceu de fato); o status
@@ -240,6 +276,7 @@ export function FeatureDoc({ feature, loading, reposById, projectsById }: Props)
           objectives={objectives}
           krTitles={krTitles}
           krToObjectiveId={krObjectiveId}
+          openSignal={linkSignal}
         />
       </header>
 

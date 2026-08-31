@@ -49,11 +49,13 @@ interface Props {
   featureId: string
   pulse: Pulse | null
   loading?: boolean
+  /** Muda de valor => abre a edição (a faixa de issues aponta pra cá). */
+  focusSignal?: number
   /** Chamado após gravar — o dono do snapshot recarrega. */
   onSaved?: () => void
 }
 
-export function FeaturePulse({ featureId, pulse, loading = false, onSaved }: Props) {
+export function FeaturePulse({ featureId, pulse, loading = false, focusSignal, onSaved }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
@@ -61,6 +63,7 @@ export function FeaturePulse({ featureId, pulse, loading = false, onSaved }: Pro
   const [historyOpen, setHistoryOpen] = useState(false)
   const [history, setHistory] = useState<Pulse[]>([])
   const textarea = useRef<HTMLTextAreaElement>(null)
+  const firstSignal = useRef(focusSignal)
 
   // Trocar de feature no meio da edição deixaria o rascunho da anterior no ar.
   useEffect(() => {
@@ -97,6 +100,12 @@ export function FeaturePulse({ featureId, pulse, loading = false, onSaved }: Pro
   useEffect(() => {
     if (editing) textarea.current?.focus()
   }, [editing])
+
+  // Ignora o valor inicial: só o INCREMENTO (um clique na faixa) abre o editor.
+  useEffect(() => {
+    if (focusSignal === undefined || focusSignal === firstSignal.current) return
+    startEdit()
+  }, [focusSignal, startEdit])
 
   const over = draft.length > PULSE_MAX_LENGTH
   const empty = draft.trim() === ''
