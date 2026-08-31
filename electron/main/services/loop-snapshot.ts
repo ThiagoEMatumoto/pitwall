@@ -6,6 +6,7 @@ import {
   metricTone,
   type LoopInput,
 } from '../../../shared/feature-loop'
+import { duplicateSuspectOf, readFocus } from './feature-focus'
 import {
   currentPulse,
   listLedger,
@@ -53,6 +54,11 @@ interface FeatureLoopRow {
   cadence_days: number | null
 }
 
+// Suspeita de duplicata: PERSISTIDA (features.duplicate_of, migration 043) e
+// lida aqui pra virar dado de entrada do módulo puro. O snapshot devolve o
+// candidato inteiro além da issue porque a issue só tem texto — quem vai
+// oferecer "mesclar" precisa do id.
+
 /**
  * Tudo que a UI do loop precisa numa leitura só.
  *
@@ -69,6 +75,8 @@ export function loopSnapshot(featureId: string, now: number = Date.now()): Featu
     .get(featureId) as FeatureLoopRow | undefined
   if (!feature) throw new Error(`feature not found: ${featureId}`)
 
+  const suspect = duplicateSuspectOf(featureId)
+  const focus = readFocus(featureId)
   const pulse = currentPulse(featureId)
   const ledger = listLedger(featureId)
   const columns = listMetrics(featureId)
@@ -104,6 +112,9 @@ export function loopSnapshot(featureId: string, now: number = Date.now()): Featu
     metrics: columns,
     metricPoints: points,
     repos: repos.map((r) => ({ repoId: r.repo_id })),
+    duplicateSuspect: suspect
+      ? { featureId: suspect.candidateId, title: suspect.title, score: suspect.score }
+      : null,
   }
 
   return {
@@ -114,5 +125,8 @@ export function loopSnapshot(featureId: string, now: number = Date.now()): Featu
     ledger,
     metrics: toSeries(columns, points),
     lastActivityAt: lastActivityAt(input),
+    pinned: focus.pinned,
+    focusRank: focus.focusRank,
+    duplicateSuspect: suspect,
   }
 }

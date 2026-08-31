@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
+import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import type {
   AdvisorModel,
   EffortLevel,
@@ -489,6 +490,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       ],
     }))
     if (chosenMode) writePaneMode(session.ccSessionId ?? null, chosenMode)
+    // Vínculo recém-criado: o índice reverso (chip do header) sabe na hora, sem
+    // esperar o hydrate — que só conhece sessões já persistidas.
+    if (featureId) useSessionFeatureStore.getState().note(session.id, featureId)
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
     return session.id

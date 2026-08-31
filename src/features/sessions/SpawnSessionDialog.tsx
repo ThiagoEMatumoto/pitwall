@@ -56,9 +56,19 @@ interface Props {
     featureId: string | undefined
     permission: PermissionMode
   }) => void
+  // Feature já decidida pelo caller (ex.: "Trabalhar nesta feature" no dossiê).
+  // Sem ela o diálogo abre em "sem vínculo", como sempre.
+  initialFeatureId?: string
 }
 
-export function SpawnSessionDialog({ open, onClose, repo, onConfirm, onConfirmChild }: Props) {
+export function SpawnSessionDialog({
+  open,
+  onClose,
+  repo,
+  onConfirm,
+  onConfirmChild,
+  initialFeatureId,
+}: Props) {
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
   const [features, setFeatures] = useState<Feature[]>([])
@@ -136,7 +146,7 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm, onConfirmCh
     if (!open) return
     setName('')
     setObjective('')
-    setSelectedFeature('')
+    setSelectedFeature(initialFeatureId ?? '')
     setConfirmingBypass(false)
     setInitialCommand('')
     setSelectedPreset('default')
@@ -168,7 +178,7 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm, onConfirmCh
       setFeatures(all.filter((f) => f.repos.some((l) => l.repoId === repo.id)))
     })
     setTimeout(() => nameRef.current?.focus(), 0)
-  }, [open, repo.id])
+  }, [open, repo.id, initialFeatureId])
 
   function clearRepoDefaults() {
     void clearRepoSessionDefaults(repo.id).then(() => {
@@ -470,6 +480,7 @@ export function SpawnSessionDialog({ open, onClose, repo, onConfirm, onConfirmCh
             Feature (opcional)
           </label>
           <select
+            data-testid="spawn-feature-select"
             value={selectedFeature}
             onChange={(e) => setSelectedFeature(e.target.value)}
             className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"

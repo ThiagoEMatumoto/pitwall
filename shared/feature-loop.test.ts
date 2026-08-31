@@ -164,6 +164,11 @@ describe('issuesOf', () => {
     ['objective null', { objective: null }, 'objective_missing'],
     ['objective blank', { objective: '  ' }, 'objective_missing'],
     ['objective over 400 chars', { objective: 'o'.repeat(401) }, 'objective_too_long'],
+    [
+      'duplicate suspect registered',
+      { duplicateSuspect: { featureId: 'F2', title: 'Login', score: 0.62 } },
+      'duplicate_suspect',
+    ],
     ['no repo linked', { repos: [] }, 'no_repo_linked'],
     ['repos absent', { repos: undefined }, 'no_repo_linked'],
   ]
@@ -219,6 +224,30 @@ describe('issuesOf', () => {
     expect(
       codes({ metrics: [{ columnKey: 'cost' }], metricPoints: [{ columnKey: 'cost', at: NOW }] }),
     ).not.toContain('metric_point_orphan')
+  })
+
+  it('duplicate_suspect names the candidate and its affinity', () => {
+    const issue = issuesOf(
+      input({ duplicateSuspect: { featureId: 'F2', title: 'Login social', score: 0.62 } }),
+    ).find((i) => i.code === 'duplicate_suspect')
+    expect(issue?.level).toBe('warn')
+    expect(issue?.message).toContain('«Login social»')
+    expect(issue?.message).toContain('62%')
+  })
+
+  it('duplicate_suspect degrades to the id and omits the affinity when absent', () => {
+    const issue = issuesOf(input({ duplicateSuspect: { featureId: 'F2', title: '  ' } })).find(
+      (i) => i.code === 'duplicate_suspect',
+    )
+    expect(issue?.message).toBe('Possível duplicata de «F2».')
+  })
+
+  it('no suspect, no issue — and a suspect never makes the feature broken', () => {
+    expect(codes({ duplicateSuspect: null })).not.toContain('duplicate_suspect')
+    expect(codes({})).not.toContain('duplicate_suspect')
+    expect(
+      livenessOf(input({ duplicateSuspect: { featureId: 'F2' }, updatedAt: NOW }), NOW),
+    ).toBe('alive')
   })
 
   it('orders issues error → warn → info', () => {

@@ -16,6 +16,7 @@ import { useSession } from './useSession'
 import { Composer, type ComposerHandle } from './Composer'
 import { ComposerToolbar } from './ComposerToolbar'
 import { SessionHeader } from './SessionHeader'
+import { useSessionFeature } from './useSessionFeature'
 import { BatonDialog } from './BatonDialog'
 import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
 import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
@@ -203,6 +204,8 @@ export function Terminal({
   const [searchQuery, setSearchQuery] = useState('')
   const [batonOpen, setBatonOpen] = useState(false)
   const [adoptOpen, setAdoptOpen] = useState(false)
+  // Feature desta sessão (chip de volta pro dossiê); null quando não há vínculo.
+  const sessionFeature = useSessionFeature(session.id)
   // Adotável = tem transcript no disco (mesmo gate do main). Sem ele, relançar
   // por --resume jogaria a conversa fora — então a ação aparece desabilitada
   // com o motivo, em vez de sumir sem explicar.
@@ -1101,6 +1104,7 @@ export function Terminal({
           onPassBaton={session.ccSessionId ? () => setBatonOpen(true) : undefined}
           onAdopt={() => setAdoptOpen(true)}
           adoptDisabledReason={adoptDisabledReason}
+          feature={sessionFeature}
         />
       )}
 

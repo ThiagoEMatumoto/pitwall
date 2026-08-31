@@ -92,6 +92,19 @@ export interface LoopActivityInput {
   docMtime?: number | null
 }
 
+/**
+ * Candidato a duplicata desta feature, registrado no auto-registro quando a
+ * semelhança ficou na faixa do meio (ver feature-heuristics.decideRegistration).
+ * `title` e `score` são opcionais porque quem monta o input pode ter só o
+ * ponteiro — a mensagem degrada pro id em vez de sumir.
+ */
+export interface LoopDuplicateSuspect {
+  featureId: string
+  title?: string | null
+  /** Afinidade 0..1 que gerou a suspeita. */
+  score?: number | null
+}
+
 export interface LoopInput extends LoopActivityInput {
   status: FeatureStatus
   completedAt?: number | null
@@ -113,6 +126,11 @@ export interface LoopInput extends LoopActivityInput {
   metricPoints?: readonly LoopMetricPoint[]
   /** Repos vinculados — shape mínimo, `FeatureRepoLink[]` satisfaz. */
   repos?: readonly { repoId: string }[]
+  /**
+   * Suspeita de duplicata PERSISTIDA (features.duplicate_of). Entra como dado,
+   * igual ao resto: o que se guarda é o candidato, a issue segue derivada aqui.
+   */
+  duplicateSuspect?: LoopDuplicateSuspect | null
 }
 
 // ---- Atividade ----
@@ -220,6 +238,20 @@ export function issuesOf(input: LoopInput): LoopIssue[] {
       level: 'warn',
       code: 'objective_too_long',
       message: `Objetivo com ${(objective as string).length} caracteres (máximo ${OBJECTIVE_MAX_LENGTH}).`,
+    })
+  }
+
+  // A suspeita não é erro: o rascunho foi criado de propósito (não se perde
+  // trabalho por palpite) e o veredito é humano — mesclar ou dispensar.
+  const suspect = input.duplicateSuspect
+  if (suspect) {
+    const label = (suspect.title ?? '').trim() || suspect.featureId
+    const affinity =
+      typeof suspect.score === 'number' ? ` (afinidade ${Math.round(suspect.score * 100)}%)` : ''
+    issues.push({
+      level: 'warn',
+      code: 'duplicate_suspect',
+      message: `Possível duplicata de «${label}»${affinity}.`,
     })
   }
 

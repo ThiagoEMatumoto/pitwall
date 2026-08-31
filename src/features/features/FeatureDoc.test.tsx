@@ -13,6 +13,10 @@ vi.mock('./useObjectiveLookups', () => ({
 const snapshotMock = vi.fn()
 vi.mock('@/lib/ipc', () => ({
   shellApi: { openPath: vi.fn() },
+  // O dossiê agora lista as sessões da feature e sabe abrir uma nova.
+  sessionsApi: { listByFeature: vi.fn().mockResolvedValue([]) },
+  featuresApi: { list: vi.fn().mockResolvedValue([]), get: vi.fn() },
+  prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
   loopApi: {
     snapshot: (id: string) => snapshotMock(id),
     setPulse: vi.fn(),
@@ -72,7 +76,15 @@ function makeSnapshot(over: Partial<FeatureLoopSnapshot> = {}): FeatureLoopSnaps
 describe('FeatureDoc (costura do loop)', () => {
   it('header mostra o pulso vigente e o chip de liveness junto do status', async () => {
     snapshotMock.mockResolvedValue(makeSnapshot())
-    render(<FeatureDoc feature={makeFeature()} loading={false} reposById={new Map()} />)
+    render(
+      <FeatureDoc
+        feature={makeFeature()}
+        loading={false}
+        reposById={new Map()}
+        projectsById={new Map()}
+        onBack={() => {}}
+      />,
+    )
 
     expect(await screen.findByText('Parser em staging, falta calibrar.')).toBeInTheDocument()
     const chip = screen.getByTestId('liveness-chip')
@@ -84,7 +96,15 @@ describe('FeatureDoc (costura do loop)', () => {
 
   it('snapshot que falha não derruba o doc: cai no estado sem pulso', async () => {
     snapshotMock.mockRejectedValue(new Error('feature not found: f1'))
-    render(<FeatureDoc feature={makeFeature()} loading={false} reposById={new Map()} />)
+    render(
+      <FeatureDoc
+        feature={makeFeature()}
+        loading={false}
+        reposById={new Map()}
+        projectsById={new Map()}
+        onBack={() => {}}
+      />,
+    )
 
     expect(await screen.findByText('sem pulso')).toBeInTheDocument()
     expect(screen.queryByTestId('liveness-chip')).not.toBeInTheDocument()

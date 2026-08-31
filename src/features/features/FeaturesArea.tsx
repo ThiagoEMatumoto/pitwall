@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutList, Columns3 } from 'lucide-react'
-import { Icon } from '@/components/ui/Icon'
 import { objectivesApi, projectsApi, featuresApi } from '@/lib/ipc'
 import { useFeaturesStore } from '@/store/featuresStore'
 import { isDraftFeature } from '../../../shared/feature-visibility'
@@ -17,10 +15,17 @@ import { FeatureBoard } from './FeatureBoard'
 import { FeatureDoc } from './FeatureDoc'
 import { FeatureList } from './FeatureList'
 import { FeaturesSidebar, type StatusFilter } from './FeaturesSidebar'
+import { FeatureTriage } from './FeatureTriage'
+import { ViewToggle, type ViewMode } from './FeaturesViewToggle'
+import { FeatureWall } from './FeatureWall'
+import { duplicateOfFeature, selectTriage } from './feature-issues'
+import { selectPinned } from './feature-pin'
+import { dismissDuplicate, setFeaturePinned } from './feature-pin-api'
 import { NewFeatureDialog } from './NewFeatureDialog'
+import { useFeatureLiveSessions } from './useFeatureLiveSessions'
 import { useFeatures } from './useFeatures'
+import { useLoopSnapshots } from './useLoopSnapshots'
 
-type ViewMode = 'list' | 'board'
 
 export function FeaturesArea() {
   useFeatures()
@@ -41,8 +46,10 @@ export function FeaturesArea() {
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [creating, setCreating] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
-  const [backfillMsg, setBackfillMsg] = useState<string | null>(null)
-  const [view, setView] = useState<ViewMode>('list')
+  // Faixa de aviso do topo: backfill, e também o pin quando o canal do main
+  // ainda não existe (botão mudo seria pior que a mensagem).
+  const [notice, setNotice] = useState<string | null>(null)
+  const [view, setView] = useState<ViewMode>('wall')
   // Filtro por objetivo (Onda 2 — fecha a sub-linkagem): '' = todos, 'none' =
   // sem objetivo (objectiveLinkCount === 0, Onda 0), senão um objectiveId.
   const [objectives, setObjectives] = useState<ObjectiveWithProgress[]>([])
@@ -100,6 +107,8 @@ export function FeaturesArea() {
   }, [projects])
 
   const reposById = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos])
+  // O dossiê precisa do projeto (nome/ícone/cor) pra abrir a sessão no repo certo.
+  const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
 
   // Stats por feature (recordCount/lastRecordAt) — alimenta badges e ordenação.
   const statsById = useMemo(
@@ -107,11 +116,21 @@ export function FeaturesArea() {
     [withStats],
   )
 
-  // Rascunhos ocultos (auto-criados, 0 registros, não arquivados): só aparecem
-  // no filtro "Rascunhos" — withStats vem com includeDrafts:true do store.
+  // Candidatas à triagem: tudo que não está arquivado. A suspeita vem na
+  // própria projeção (features.duplicate_of), então a fila não custa IPC nenhum.
+  const triageCandidates = useMemo(() => withStats.filter((f) => !f.archivedAt), [withStats])
+  const suspectIds = useMemo(
+    () => new Set(triageCandidates.filter((f) => duplicateOfFeature(f) !== null).map((f) => f.id)),
+    [triageCandidates],
+  )
+
+  // Fila de triagem (antigo filtro "Rascunhos"): auto-criadas + suspeitas de
+  // duplicata. O recorte antigo (auto-criada COM zero registros) escondia
+  // justamente a duplicata de uma feature ativa — o caso da queixa. Rascunho
+  // clássico continua dentro: isDraftFeature é subconjunto de origin 'auto'.
   const drafts = useMemo(
-    () => withStats.filter((f) => !f.archivedAt && isDraftFeature(f.origin, f.recordCount)),
-    [withStats],
+    () => selectTriage(triageCandidates, suspectIds),
+    [triageCandidates, suspectIds],
   )
 
   // App-dev (Onda 3 — separação app-dev): dev do próprio claude-manager, fora
@@ -169,6 +188,28 @@ export function FeaturesArea() {
     return filtered
   }, [filter, byProject, drafts, appDevFeatures, objectiveFilter, matchesObjectiveFilter])
 
+  // Pinadas (parede): saem de withStats pra o card ter atividade real, e
+  // respeitam busca/filtro de objetivo — foco fora do recorte atual é ruído.
+  const pinned = useMemo(() => {
+    const activity = (f: FeatureWithStats) => f.lastRecordAt ?? f.updatedAt
+    const visible = withStats.filter((f) => {
+      if (f.isAppDev && filter !== 'app-dev') return false
+      if (q && !f.title.toLowerCase().includes(q)) return false
+      return matchesObjectiveFilter(f)
+    })
+    return selectPinned(visible, activity)
+  }, [withStats, filter, q, matchesObjectiveFilter])
+
+  const pinnedIds = useMemo(() => pinned.map((f) => f.id), [pinned])
+  const pinnedSnapshots = useLoopSnapshots(pinnedIds)
+  const liveByFeature = useFeatureLiveSessions()
+
+  // A parede não repete embaixo o que já está em foco em cima.
+  const wallRest = useMemo(() => {
+    const ids = new Set(pinnedIds)
+    return listed.filter((f) => !ids.has(f.id))
+  }, [listed, pinnedIds])
+
   // Board: usa a lista com stats (inclui arquivadas, mas NUNCA rascunhos nem
   // app-dev — mesmo default-oculto das outras views).
   const boardFeatures = useMemo(() => {
@@ -190,17 +231,36 @@ export function FeaturesArea() {
     await refresh()
   }
 
+  async function handleTogglePin(id: string, next: boolean) {
+    const ok = await setFeaturePinned(id, next)
+    if (!ok) {
+      setNotice(next ? 'Não foi possível fixar a feature.' : 'Não foi possível tirar do foco.')
+      return
+    }
+    await refresh()
+  }
+
+  // "Não é duplicata": some com o aviso e tira a feature da fila de triagem.
+  async function handleDismissDuplicate(id: string) {
+    const ok = await dismissDuplicate(id)
+    if (!ok) {
+      setNotice('Não foi possível dispensar a suspeita de duplicata.')
+      return
+    }
+    await refresh()
+  }
+
   async function handleBackfill() {
     setBackfilling(true)
-    setBackfillMsg(null)
+    setNotice(null)
     try {
       const res = await featuresApi.backfill()
       await refresh()
-      setBackfillMsg(
+      setNotice(
         `Backfill: ${res.created} criada(s), ${res.linked} vinculada(s), ${res.skipped} ignorada(s).`,
       )
     } catch {
-      setBackfillMsg('Falha ao importar features de sessões anteriores.')
+      setNotice('Falha ao importar features de sessões anteriores.')
     } finally {
       setBackfilling(false)
     }
@@ -228,12 +288,12 @@ export function FeaturesArea() {
       />
 
       <main className="flex flex-1 flex-col overflow-hidden">
-        {backfillMsg && (
+        {notice && (
           <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 text-xs text-[var(--color-text)]">
-            <span>{backfillMsg}</span>
+            <span>{notice}</span>
             <button
               type="button"
-              onClick={() => setBackfillMsg(null)}
+              onClick={() => setNotice(null)}
               className="rounded px-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
             >
               ✕
@@ -242,13 +302,35 @@ export function FeaturesArea() {
         )}
         <div className="flex flex-1 overflow-hidden">
         {selectedId ? (
-          <FeatureDoc feature={selectedDoc} loading={docLoading} reposById={reposById} />
+          <FeatureDoc
+            feature={selectedDoc}
+            loading={docLoading}
+            reposById={reposById}
+            projectsById={projectsById}
+            // A view (parede/lista/board) é estado desta área e sobrevive ao
+            // dossiê, então voltar devolve o usuário exatamente onde ele estava.
+            onBack={() => void select(null)}
+          />
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-end gap-1 border-b border-[var(--color-border)] px-4 py-2">
-              <ViewToggle value={view} onChange={setView} />
-            </div>
-            {view === 'board' ? (
+            {/* A fila de triagem é uma view própria (linhas densas + veredito),
+                então o seletor de parede/lista/board some enquanto ela está aberta. */}
+            {filter !== 'drafts' && (
+              <div className="flex items-center justify-end gap-1 border-b border-[var(--color-border)] px-4 py-2">
+                <ViewToggle value={view} onChange={setView} />
+              </div>
+            )}
+            {filter === 'drafts' ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <FeatureTriage
+                  features={drafts}
+                  suspectIds={suspectIds}
+                  onSelect={(id) => void select(id)}
+                  onArchive={(id) => void handleArchive(id)}
+                  onDismissDuplicate={(id) => void handleDismissDuplicate(id)}
+                />
+              </div>
+            ) : view === 'board' ? (
               <div className="flex-1 overflow-hidden p-5">
                 <FeatureBoard
                   features={boardFeatures}
@@ -256,6 +338,22 @@ export function FeaturesArea() {
                   sessionCounts={sessionCounts}
                   selectedId={selectedId}
                   onSelect={(id) => void select(id)}
+                />
+              </div>
+            ) : view === 'wall' ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <FeatureWall
+                  pinned={pinned}
+                  features={wallRest}
+                  snapshots={pinnedSnapshots}
+                  liveByFeature={liveByFeature}
+                  reposById={reposById}
+                  sessionCounts={sessionCounts}
+                  statsById={statsById}
+                  selectedId={selectedId}
+                  onSelect={(id) => void select(id)}
+                  onArchive={(id) => void handleArchive(id)}
+                  onTogglePin={(id, next) => void handleTogglePin(id, next)}
                 />
               </div>
             ) : (
@@ -268,6 +366,7 @@ export function FeaturesArea() {
                   selectedId={selectedId}
                   onSelect={(id) => void select(id)}
                   onArchive={(id) => void handleArchive(id)}
+                  onTogglePin={(id, next) => void handleTogglePin(id, next)}
                 />
               </div>
             )}
@@ -283,38 +382,5 @@ export function FeaturesArea() {
         onCreate={handleCreate}
       />
     </>
-  )
-}
-
-function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMode) => void }) {
-  return (
-    <div className="inline-flex rounded-md border border-[var(--color-border)] p-0.5">
-      <button
-        type="button"
-        onClick={() => onChange('list')}
-        title="Lista"
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
-          value === 'list'
-            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        <Icon as={LayoutList} size={13} />
-        Lista
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('board')}
-        title="Board"
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
-          value === 'board'
-            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        <Icon as={Columns3} size={13} />
-        Board
-      </button>
-    </div>
   )
 }

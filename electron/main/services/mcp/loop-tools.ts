@@ -1,5 +1,6 @@
 import * as z from 'zod/v4'
 import * as loopStore from '../loop-store'
+import { duplicateSuspectOf, setFocus } from '../feature-focus'
 import { loopSnapshot } from '../loop-snapshot'
 import { exportLoopDoc } from '../loop-export'
 import { ok, type McpNotify, type ToolDef } from './tools'
@@ -100,6 +101,18 @@ const metricRecordSchema = z.object({
   note: z.string().nullish().describe('Where the number came from — the command, the dashboard, the query.'),
 })
 
+const featurePinSchema = z.object({
+  featureId: z.string().min(1),
+  pinned: z
+    .boolean()
+    .optional()
+    .describe('true (default) puts the feature in focus, false takes it out.'),
+  focusRank: z
+    .number()
+    .nullish()
+    .describe('Manual position on the wall. Omit it unless you are reordering; null clears it.'),
+})
+
 const loopExportSchema = z.object({
   featureId: z.string().min(1),
   dryRun: z.boolean().optional().describe('Resolve the target paths without touching disk.'),
@@ -122,6 +135,10 @@ export function loopTools(notify: McpNotify): ToolDef[] {
           lastActivityAt: snapshot.lastActivityAt,
           issues: snapshot.issues,
           pulse: snapshot.pulse,
+          pinned: snapshot.pinned,
+          // O candidato por trás da issue `duplicate_suspect`: a issue só tem
+          // texto, e quem for propor a mescla precisa do id.
+          duplicateSuspect: snapshot.duplicateSuspect,
           // Só as headline: a leitura é pra situar, não pra despejar toda a série.
           metrics: snapshot.metrics
             .filter((series) => series.column.isHeadline)
@@ -217,6 +234,30 @@ export function loopTools(notify: McpNotify): ToolDef[] {
         )
         notify.broadcast('loop:updated', { featureId: input.featureId })
         return ok({ point })
+      },
+    },
+    {
+      name: 'feature_pin',
+      title: 'Pin the feature on the wall',
+      description:
+        'Put this feature IN FOCUS on the wall — call it when you start working on it, so the human sees what is being worked on right now without asking. Pinning is a marker of attention, not activity: it does not touch the feature timestamps, so a pinned-but-untouched frontier still goes quiet on schedule. Pass pinned:false when the work moved elsewhere.',
+      inputSchema: featurePinSchema,
+      handler: (args) => {
+        const input = featurePinSchema.parse(args)
+        const focus = setFocus(input.featureId, {
+          pinned: input.pinned ?? true,
+          // nullish no schema: `undefined` mantém o rank, `null` limpa.
+          focusRank: input.focusRank,
+        })
+        // 'feature:updated' (e não 'loop:updated'): pinned/focus_rank são
+        // colunas de `features`, tabela sincronizada — é o prefixo que faz o
+        // notify pingar o coordinator de sync.
+        notify.broadcast('feature:updated', {
+          id: focus.featureId,
+          pinned: focus.pinned,
+          focusRank: focus.focusRank,
+        })
+        return ok({ focus, duplicateSuspect: duplicateSuspectOf(input.featureId) })
       },
     },
     {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link2, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
@@ -34,6 +34,8 @@ interface Props {
   // de um key_result, que não tem view própria. Nome distinto do state local
   // `krObjectiveId` do dialog (objetivo escolhido no picker de KR) abaixo.
   krToObjectiveId: Map<string, string>
+  /** Muda de valor => abre o dialog de vínculo (vem da faixa de issues). */
+  openSignal?: number
 }
 
 function LinkChip({
@@ -104,6 +106,7 @@ export function FeatureObjectiveLinksSection({
   objectives,
   krTitles,
   krToObjectiveId,
+  openSignal,
 }: Props) {
   const [links, setLinks] = useState<FeatureObjectiveLink[]>([])
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -113,6 +116,7 @@ export function FeatureObjectiveLinksSection({
   const [krObjectiveId, setKrObjectiveId] = useState('')
   const [krOptions, setKrOptions] = useState<KrOption[]>([])
   const [saving, setSaving] = useState(false)
+  const firstSignal = useRef(openSignal)
 
   const load = useCallback(async () => {
     setLinks(await featuresApi.listObjectiveLinks(featureId))
@@ -148,11 +152,17 @@ export function FeatureObjectiveLinksSection({
     [objectives, krTitles],
   )
 
-  function openDialog() {
+  const openDialog = useCallback(() => {
     setDraft(links)
     setKrObjectiveId('')
     setDialogOpen(true)
-  }
+  }, [links])
+
+  // Ignora o valor inicial: só o INCREMENTO (um clique na faixa) abre.
+  useEffect(() => {
+    if (openSignal === undefined || openSignal === firstSignal.current) return
+    openDialog()
+  }, [openSignal, openDialog])
 
   function addDraft(link: FeatureObjectiveLink) {
     setDraft((prev) => (prev.some((l) => linkKey(l) === linkKey(link)) ? prev : [...prev, link]))
