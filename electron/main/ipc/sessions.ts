@@ -14,7 +14,8 @@ import * as handoffStore from '../services/handoff-store'
 // de './sessions' (ex.: sessions.test.ts).
 import { formatPtyInjection } from '../services/handoff/inject'
 import { featureMemory } from '../services/feature-memory'
-import { buildFeatureContextContent } from './feature-context'
+import { buildFeatureContextContent, type FeatureLoopContext } from './feature-context'
+import { loopSnapshot } from '../services/loop-snapshot'
 import { buildRepoArchitectureOrNull } from './repo-architecture-context'
 import {
   sessionActivityService,
@@ -244,12 +245,22 @@ export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }
 
-// Conteúdo do contexto da feature (header + bloco tracking + seções-chave) vem
-// do builder puro em feature-context.ts. Retorna null se a feature não existe.
+// Conteúdo do contexto da feature (header + loop + bloco tracking) vem do
+// builder puro em feature-context.ts; aqui só se resolve o I/O. Retorna null se
+// a feature não existe.
 function buildFeatureContextOrNull(featureId: string): string | null {
   const feature = getFeature(featureId)
   if (!feature) return null
-  return buildFeatureContextContent(feature, linkedObjectiveTitles(featureId))
+  // O loop é enfeite do bloco, não pré-requisito: se a projeção falhar, a
+  // sessão nasce com o contexto básico em vez de não nascer.
+  let loop: FeatureLoopContext | null = null
+  try {
+    const snapshot = loopSnapshot(featureId)
+    loop = { liveness: snapshot.liveness, pulse: snapshot.pulse, ledger: snapshot.ledger }
+  } catch (err) {
+    console.error('[sessions] loopSnapshot falhou:', err)
+  }
+  return buildFeatureContextContent(feature, linkedObjectiveTitles(featureId), loop)
 }
 
 // Monta a string do innerCmd do spawn novo. PURA: sem I/O — recebe os pedaços já
