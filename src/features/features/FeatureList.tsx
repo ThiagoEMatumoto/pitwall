@@ -164,9 +164,21 @@ export function FeatureCard({
           {sessions > 0 && (
             <>
               <span aria-hidden>·</span>
-              <span>
+              {/* A contagem era texto morto: agora leva ao dossiê, que é onde a
+                  lista de sessões (com focar/retomar) vive. O card não ganha a
+                  lista inteira de propósito — ele precisa continuar escaneável. */}
+              <button
+                type="button"
+                data-testid="feature-card-sessions"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelect()
+                }}
+                title={`Ver as ${sessions} sessões desta feature`}
+                className="underline decoration-dotted underline-offset-2 hover:text-[var(--color-text)]"
+              >
                 {sessions} {sessions === 1 ? 'sessão' : 'sessões'}
-              </span>
+              </button>
             </>
           )}
         </div>

@@ -9,6 +9,7 @@ import {
   Settings,
   SlashSquare,
   Sparkles,
+  Target,
   TerminalSquare,
   X,
 } from 'lucide-react'
@@ -204,6 +205,13 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
         icon: <Icon as={Folder} />,
         group: 'Navegação',
         run: () => setArea('projects'),
+      },
+      {
+        id: 'area-features',
+        label: 'Ir para Features',
+        icon: <Icon as={Target} />,
+        group: 'Navegação',
+        run: () => setArea('features'),
       },
       {
         id: 'area-cc',

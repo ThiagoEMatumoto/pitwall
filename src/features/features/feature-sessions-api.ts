@@ -24,6 +24,11 @@ export function sessionMoment(s: FeatureSessionInfo): number {
   return s.lastActivityAt ?? s.endedAt ?? s.startedAt
 }
 
+// Probe barato: evita gastar um listWithStats inteiro quando o IPC nem existe.
+export function listByFeatureAvailable(): boolean {
+  return typeof (sessionsApi as unknown as SessionsWithListByFeature).listByFeature === 'function'
+}
+
 // `null` = o IPC ainda não existe neste build. Distinto de `[]` (feature sem
 // sessão) de propósito: a UI não pode dizer "nenhuma sessão" quando na verdade
 // não conseguiu perguntar.
