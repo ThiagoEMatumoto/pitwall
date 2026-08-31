@@ -6,7 +6,10 @@ import { shellApi } from '@/lib/ipc'
 import type { Feature, Repo } from '../../../shared/types/ipc'
 import { StatusBadge } from './FeatureList'
 import { FeatureObjectiveLinksSection } from './FeatureObjectiveLinksSection'
+import { FeaturePulse } from './FeaturePulse'
 import { FeatureTasksSection } from './FeatureTasksSection'
+import { LivenessChip } from './LivenessChip'
+import { useLoopSnapshot } from './useLoopSnapshot'
 import { useObjectiveLookups } from './useObjectiveLookups'
 
 interface Props {
@@ -59,6 +62,8 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
   )
   // Lookup compartilhado pelas seções de Tarefas e Objetivos (uma busca só).
   const { objectives, krTitles, krObjectiveId } = useObjectiveLookups()
+  // Antes do early return abaixo: hook não pode ficar atrás de condicional.
+  const loop = useLoopSnapshot(feature?.id ?? null)
 
   if (!feature) {
     return (
@@ -88,6 +93,15 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
           </button>
         </div>
 
+        {/* O pulso vem logo abaixo do título: é a frase que responde "como a
+            frente vai agora" antes de qualquer metadado. */}
+        <FeaturePulse
+          featureId={feature.id}
+          pulse={loop.snapshot?.pulse ?? null}
+          loading={loop.loading}
+          onSaved={() => void loop.reload()}
+        />
+
         {/* "Resumo" = texto livre opcional (feature.objective no banco) — nome
             trocado só na UI pra não colidir com o vínculo real de OKR abaixo. */}
         {feature.objective && (
@@ -98,7 +112,18 @@ export function FeatureDoc({ feature, loading, reposById }: Props) {
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <StatusBadge status={feature.status} />
+          {/* Liveness primeiro (derivado do que aconteceu de fato); o status
+              manual fica em peso menor — é intenção declarada, não evidência. */}
+          {loop.snapshot && (
+            <LivenessChip
+              liveness={loop.snapshot.liveness}
+              lastActivityAt={loop.snapshot.lastActivityAt}
+              issues={loop.snapshot.issues}
+            />
+          )}
+          <span className="opacity-70">
+            <StatusBadge status={feature.status} />
+          </span>
           {feature.repos.map((link) => (
             <span
               key={link.repoId}
