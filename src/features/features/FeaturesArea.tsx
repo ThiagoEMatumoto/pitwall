@@ -17,6 +17,7 @@ import { FeatureBoard } from './FeatureBoard'
 import { FeatureDoc } from './FeatureDoc'
 import { FeatureList } from './FeatureList'
 import { FeaturesSidebar, type StatusFilter } from './FeaturesSidebar'
+import { FeatureTriage } from './FeatureTriage'
 import { FeatureWall } from './FeatureWall'
 import { selectTriage } from './feature-issues'
 import { selectPinned } from './feature-pin'
@@ -302,10 +303,23 @@ export function FeaturesArea() {
           />
         ) : (
           <div className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-end gap-1 border-b border-[var(--color-border)] px-4 py-2">
-              <ViewToggle value={view} onChange={setView} />
-            </div>
-            {view === 'board' ? (
+            {/* A fila de triagem é uma view própria (linhas densas + veredito),
+                então o seletor de parede/lista/board some enquanto ela está aberta. */}
+            {filter !== 'drafts' && (
+              <div className="flex items-center justify-end gap-1 border-b border-[var(--color-border)] px-4 py-2">
+                <ViewToggle value={view} onChange={setView} />
+              </div>
+            )}
+            {filter === 'drafts' ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <FeatureTriage
+                  features={drafts}
+                  suspectIds={suspectIds}
+                  onSelect={(id) => void select(id)}
+                  onArchive={(id) => void handleArchive(id)}
+                />
+              </div>
+            ) : view === 'board' ? (
               <div className="flex-1 overflow-hidden p-5">
                 <FeatureBoard
                   features={boardFeatures}

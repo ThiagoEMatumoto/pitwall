@@ -89,7 +89,8 @@ describe('FeaturesCard — features em foco', () => {
 
     const row = await screen.findByTestId('home-pinned-feature')
     expect(row).toHaveAttribute('data-feature-id', 'a')
-    expect(row).toHaveTextContent('Parser em staging, falta calibrar.')
+    // A linha aparece com a lista; o pulso chega no snapshot, um tick depois.
+    expect(await screen.findByText('Parser em staging, falta calibrar.')).toBeInTheDocument()
     expect(await screen.findByTestId('liveness-chip')).toHaveAttribute('data-liveness', 'alive')
     // O foco toma o lugar da lista de atividade — o card tem altura fixa.
     expect(screen.queryByText('Frente por atividade')).not.toBeInTheDocument()
