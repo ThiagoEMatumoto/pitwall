@@ -7,7 +7,6 @@ import { join, sep } from 'node:path'
 import { getDb } from '../services/db'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
-import { get as getFeature, linkedObjectiveTitles } from '../services/feature-store'
 import * as handoffStore from '../services/handoff-store'
 // formatPtyInjection vive em services/handoff/inject.ts (fonte canônica, sem
 // dependência de electron). Reexportado abaixo para não quebrar quem importa
@@ -15,9 +14,7 @@ import * as handoffStore from '../services/handoff-store'
 import { formatPtyInjection } from '../services/handoff/inject'
 import { featureMemory } from '../services/feature-memory'
 import { exportLoopDoc } from '../services/loop-export'
-import { buildFeatureContextContent, type FeatureLoopContext } from './feature-context'
-import { loopSnapshot } from '../services/loop-snapshot'
-import { buildRepoArchitectureOrNull } from './repo-architecture-context'
+import { buildSessionSystemPrompt } from './session-system-prompt'
 import {
   sessionActivityService,
   findTranscriptPath,
@@ -246,22 +243,41 @@ export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }
 
-// Conteúdo do contexto da feature (header + loop + bloco tracking) vem do
-// builder puro em feature-context.ts; aqui só se resolve o I/O. Retorna null se
-// a feature não existe.
-function buildFeatureContextOrNull(featureId: string): string | null {
-  const feature = getFeature(featureId)
-  if (!feature) return null
-  // O loop é enfeite do bloco, não pré-requisito: se a projeção falhar, a
-  // sessão nasce com o contexto básico em vez de não nascer.
-  let loop: FeatureLoopContext | null = null
+// System-prompt anexado via --append-system-prompt-file: monta os segmentos
+// (arquitetura do repo + contexto da feature + texto livre) e grava o arquivo
+// temporário. ÚNICO caminho — spawn e resume passam por aqui, pra nunca mais
+// divergirem. NUNCA bloqueia o spawn: qualquer falha vira sessão sem o bloco.
+function writeSessionSystemPromptFile(opts: {
+  repoId?: string | null
+  featureId?: string | null
+  systemPromptText?: string | null
+}): string | null {
   try {
-    const snapshot = loopSnapshot(featureId)
-    loop = { liveness: snapshot.liveness, pulse: snapshot.pulse, ledger: snapshot.ledger }
+    const content = buildSessionSystemPrompt(opts)
+    if (!content) return null
+    return writeTempPromptFile(opts.featureId ? `feat-${opts.featureId}` : 'handoff', content)
   } catch (err) {
-    console.error('[sessions] loopSnapshot falhou:', err)
+    console.error('[sessions] system-prompt injection failed:', err)
+    return null
   }
-  return buildFeatureContextContent(feature, linkedObjectiveTitles(featureId), loop)
+}
+
+// Worktree registrado em feature_repos para o par (feature, repo). Quando existe
+// no disco, é ele o cwd da sessão — não a raiz do repo. Nada de checkout/troca
+// de branch aqui: só respeitamos o worktree que o usuário já registrou. Worktree
+// removido do disco cai pro repo (o usuário apaga worktree o tempo todo).
+function resolveFeatureWorktree(featureId: string | null, repoId: string | null): string | null {
+  if (!featureId || !repoId) return null
+  try {
+    const row = getDb()
+      .prepare('SELECT worktree_path FROM feature_repos WHERE feature_id = ? AND repo_id = ?')
+      .get(featureId, repoId) as { worktree_path: string | null } | undefined
+    const path = row?.worktree_path?.trim()
+    if (!path) return null
+    return statSync(path).isDirectory() ? path : null
+  } catch {
+    return null
+  }
 }
 
 // Monta a string do innerCmd do spawn novo. PURA: sem I/O — recebe os pedaços já
@@ -457,7 +473,9 @@ export function spawnSession(input: SpawnSessionInput): Session {
       .get(repoId) as RepoPathRow | undefined
     if (!repo) throw new Error(`repo not found: ${repoId}`)
     assertRepoDirExists(repo.path)
-    cwd = repo.path
+    // Feature com worktree registrado pra ESTE repo manda no cwd; sem worktree
+    // (ou com o diretório já removido) a sessão nasce na raiz do repo.
+    cwd = resolveFeatureWorktree(input.featureId ?? null, repoId) ?? repo.path
     defaultName = repo.label
   } else {
     cwd = resolveScratchDir()
@@ -475,32 +493,11 @@ export function spawnSession(input: SpawnSessionInput): Session {
   const effort = resolveEffort(input.effort)
   const advisorModel = resolveAdvisor(input.advisorModel)
 
-  // System-prompt anexado via --append-system-prompt-file vem de até três fontes
-  // (arquitetura do repo, contexto da feature, systemPromptText) concatenadas num
-  // único arquivo. NÃO bloqueia o spawn se algo falhar.
-  let systemPromptFilePath: string | null = null
-  try {
-    const segments: string[] = []
-    if (repoId) {
-      const archContent = buildRepoArchitectureOrNull(repoId)
-      if (archContent) segments.push(archContent)
-    }
-    if (input.featureId) {
-      const featureContent = buildFeatureContextOrNull(input.featureId)
-      if (featureContent) segments.push(featureContent)
-    }
-    if (input.systemPromptText?.trim()) {
-      segments.push(input.systemPromptText)
-    }
-    if (segments.length > 0) {
-      systemPromptFilePath = writeTempPromptFile(
-        input.featureId ? `feat-${input.featureId}` : 'handoff',
-        segments.join('\n\n---\n\n'),
-      )
-    }
-  } catch (err) {
-    console.error('[sessions] system-prompt injection failed:', err)
-  }
+  const systemPromptFilePath = writeSessionSystemPromptFile({
+    repoId,
+    featureId: input.featureId,
+    systemPromptText: input.systemPromptText,
+  })
 
   // Permission mode validado contra a whitelist; em modo autônomo aplica SEMPRE o
   // denylist destrutivo canônico (o renderer não consegue enfraquecê-lo).
@@ -850,6 +847,20 @@ export function registerSessionIpc(): void {
     const db = getDb()
     const repoId = input.repoId ?? null
 
+    // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
+    // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
+    // de contexto — e como retomar é o gesto mais comum, o loop nunca chegava.
+    // Pega a linha mais recente com vínculo: retomas anteriores deixam linhas
+    // antigas com o mesmo cc_session_id.
+    const featureRow = db
+      .prepare(
+        `SELECT feature_id FROM sessions
+          WHERE cc_session_id = ? AND feature_id IS NOT NULL
+          ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(input.ccSessionId) as { feature_id: string | null } | undefined
+    const featureId = featureRow?.feature_id ?? null
+
     let cwd: string
     let defaultName: string
     if (repoId) {
@@ -858,7 +869,7 @@ export function registerSessionIpc(): void {
         .get(repoId) as RepoPathRow | undefined
       if (!repo) throw new Error(`repo not found: ${repoId}`)
       assertRepoDirExists(repo.path)
-      cwd = repo.path
+      cwd = resolveFeatureWorktree(featureId, repoId) ?? repo.path
       defaultName = repo.label
     } else {
       cwd = resolveScratchDir()
@@ -892,7 +903,17 @@ export function registerSessionIpc(): void {
     const claudeCmd = resolveClaudeCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
-    const innerCmd = `${claudeCmd} --resume ${input.ccSessionId} -n ${shquote(name)}${mcpConfigArg(internalSessionId)}`
+    const innerCmd = buildSpawnInnerCmd({
+      claudeCmd,
+      sessionId: input.ccSessionId,
+      resume: true,
+      name,
+      mcpConfigArg: mcpConfigArg(internalSessionId),
+      model: null,
+      // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
+      // compartilhada — é isso que impede spawn e resume de divergirem de novo.
+      systemPromptFilePath: writeSessionSystemPromptFile({ repoId, featureId }),
+    })
 
     return startSession({
       id: internalSessionId,
@@ -900,6 +921,7 @@ export function registerSessionIpc(): void {
       repoId,
       cwd,
       innerCmd,
+      featureId,
       cols: input.cols,
       rows: input.rows,
     })
