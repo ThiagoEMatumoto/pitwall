@@ -14,6 +14,7 @@ import * as handoffStore from '../services/handoff-store'
 // de './sessions' (ex.: sessions.test.ts).
 import { formatPtyInjection } from '../services/handoff/inject'
 import { featureMemory } from '../services/feature-memory'
+import { exportLoopDoc } from '../services/loop-export'
 import { buildFeatureContextContent, type FeatureLoopContext } from './feature-context'
 import { loopSnapshot } from '../services/loop-snapshot'
 import { buildRepoArchitectureOrNull } from './repo-architecture-context'
@@ -800,6 +801,28 @@ export function registerSessionIpc(): void {
         }
       } catch (err) {
         console.error('[sessions] feature synth trigger failed:', err)
+      }
+
+      // Fim do loop: reexporta o `.pitwall/loop-<slug>.md` da feature tocada, pra
+      // o estado ficar legível a partir do repo (sem o app aberto).
+      //
+      // O feature_id é RELIDO do banco em vez de reaproveitar o `link` acima:
+      // onSessionExit acabou de resolver a feature (vínculo por branch, fuzzy ou
+      // auto-criação) e persistiu sessions.feature_id — uma sessão que entrou sem
+      // vínculo só tem o id AGORA. A síntese (Stage 1/2) roda depois, assíncrona;
+      // o que interessa ao doc é o loop (pulso/ledger/métricas) que a sessão já
+      // escreveu enquanto rodava.
+      try {
+        const linked = db.prepare('SELECT feature_id FROM sessions WHERE id = ?').get(e.sessionId) as
+          | { feature_id: string | null }
+          | undefined
+        if (linked?.feature_id) {
+          void exportLoopDoc(linked.feature_id).catch((err) => {
+            console.error('[sessions] loop export failed:', err)
+          })
+        }
+      } catch (err) {
+        console.error('[sessions] loop export trigger failed:', err)
       }
     })
     listenersAttached = true
