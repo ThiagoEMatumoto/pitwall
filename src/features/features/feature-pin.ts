@@ -1,4 +1,3 @@
-import { featuresApi } from '@/lib/ipc'
 import type { Feature } from '../../../shared/types/ipc'
 
 // Foco (pin) da feature. As colunas `pinned`/`focusRank` e o IPC de pin/unpin
@@ -40,19 +39,4 @@ export function compareFocus<T extends Feature>(activity: (f: T) => number) {
 /** Pinadas não-arquivadas, na ordem da parede. */
 export function selectPinned<T extends Feature>(features: T[], activity: (f: T) => number): T[] {
   return features.filter((f) => f.archivedAt === null && isPinned(f)).sort(compareFocus(activity))
-}
-
-interface PinChannel {
-  pin?: (id: string) => Promise<unknown>
-  unpin?: (id: string) => Promise<unknown>
-}
-
-// `false` = o canal ainda não existe nesta build. Quem chama avisa o usuário em
-// vez de deixar o botão mudo (silêncio é o pior resultado possível aqui).
-export async function setFeaturePinned(id: string, pinned: boolean): Promise<boolean> {
-  const channel = featuresApi as unknown as PinChannel
-  const call = pinned ? channel.pin : channel.unpin
-  if (typeof call !== 'function') return false
-  await call.call(channel, id)
-  return true
 }

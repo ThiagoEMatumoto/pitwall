@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/Input'
 import type { Feature, FeatureStatus, ObjectiveWithProgress, Project } from '../../../shared/types/ipc'
 import { STATUS_META, STATUS_ORDER } from './status'
 
-// 'drafts' = rascunhos ocultos (auto-criados sem registros); 'app-dev' = dev
+// 'drafts' = fila de TRIAGEM (auto-criadas + suspeitas de duplicata; o id
+// continua 'drafts' porque é o mesmo assento na barra); 'app-dev' = dev
 // do próprio claude-manager (Onda 3 — oculta por default de todos os outros
 // filtros). Os dois conjuntos vêm prontos da FeaturesArea via byProject — aqui
 // só pulamos o filtro de status pra eles.
@@ -36,7 +37,7 @@ interface Props {
 const FILTERS: { id: StatusFilter; label: string }[] = [
   { id: 'all', label: 'Todas' },
   ...STATUS_ORDER.map((s) => ({ id: s as StatusFilter, label: STATUS_META[s].label })),
-  { id: 'drafts', label: 'Rascunhos' },
+  { id: 'drafts', label: 'Triagem' },
   { id: 'app-dev', label: 'App dev' },
 ]
 

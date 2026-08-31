@@ -3,6 +3,7 @@ import {
   duplicateCandidate,
   issueAction,
   OKR_MISSING,
+  readDuplicateSuspect,
   selectTriage,
   sortIssues,
   withOkrIssue,
@@ -63,5 +64,32 @@ describe('feature-issues', () => {
       { id: 'c', origin: 'manual' },
     ]
     expect(selectTriage(feats, new Set(['c'])).map((f) => f.id)).toEqual(['a', 'c'])
+  })
+})
+
+describe('feature-issues — candidato vindo do snapshot', () => {
+  it('a suspeita do snapshot supre o id que a issue não carrega', () => {
+    const issue: FeatureIssue = {
+      level: 'warn',
+      code: 'duplicate_suspect',
+      message: 'Possível duplicata de «Extração TRF4» (afinidade 82%).',
+    }
+    expect(duplicateCandidate(issue, { candidateId: 'f9', title: 'Extração TRF4' })).toEqual({
+      id: 'f9',
+      title: 'Extração TRF4',
+    })
+    expect(duplicateCandidate(issue, { featureId: 'f9', title: null })).toEqual({
+      id: 'f9',
+      title: 'outra feature',
+    })
+    expect(duplicateCandidate(issue, null)).toBeNull()
+  })
+
+  it('lê a suspeita do snapshot sem quebrar quando o campo não existe', () => {
+    expect(readDuplicateSuspect(null)).toBeNull()
+    expect(readDuplicateSuspect({ featureId: 'f1' })).toBeNull()
+    expect(readDuplicateSuspect({ duplicateSuspect: { candidateId: 'f9' } })).toEqual({
+      candidateId: 'f9',
+    })
   })
 })

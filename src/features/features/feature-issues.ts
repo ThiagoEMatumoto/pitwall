@@ -1,12 +1,21 @@
 import type { IssueLevel, LoopIssue } from '../../../shared/feature-loop'
 
 // A issue de duplicata precisa carregar o candidato pra UI conseguir dizer
-// "possível duplicata de «X»" e levar até ele. `LoopIssue` (shared) é o shape
-// mínimo; o backend da Fase 4 acrescenta esses dois campos no code
-// 'duplicate_suspect'. Extensão local porque shared/ não é editável aqui.
+// "possível duplicata de «X»" e LEVAR até ele — a mensagem sozinha nomeia o
+// candidato mas não dá o id. `LoopIssue` (shared) é o shape mínimo; a extensão
+// mora aqui porque shared/ não é editável nesta frente.
 export interface FeatureIssue extends LoopIssue {
   candidateId?: string
   candidateTitle?: string
+}
+
+// A suspeita como o backend a expõe (features.duplicate_of resolvido:
+// `{ candidateId, title, score }`). Dois nomes de id porque o serviço do main
+// usa `candidateId` e o LoopInput usa `featureId` pro mesmo ponteiro.
+export interface DuplicateSuspectLike {
+  candidateId?: string
+  featureId?: string
+  title?: string | null
 }
 
 export const DUPLICATE_SUSPECT = 'duplicate_suspect'
@@ -34,10 +43,27 @@ export function sortIssues(issues: readonly FeatureIssue[]): FeatureIssue[] {
   return [...issues].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level])
 }
 
-export function duplicateCandidate(issue: FeatureIssue): { id: string; title: string } | null {
+// Candidato da issue de duplicata: primeiro os campos da própria issue,
+// depois a suspeita que veio junto do snapshot. Sem id não há ação — a faixa
+// mostra a mensagem e cala em vez de oferecer um link que não navega.
+export function duplicateCandidate(
+  issue: FeatureIssue,
+  suspect?: DuplicateSuspectLike | null,
+): { id: string; title: string } | null {
   if (issue.code !== DUPLICATE_SUSPECT) return null
-  if (typeof issue.candidateId !== 'string' || issue.candidateId === '') return null
-  return { id: issue.candidateId, title: issue.candidateTitle?.trim() || 'outra feature' }
+  const id = issue.candidateId ?? suspect?.candidateId ?? suspect?.featureId ?? ''
+  if (id === '') return null
+  const title = (issue.candidateTitle ?? suspect?.title ?? '')?.trim()
+  return { id, title: title || 'outra feature' }
+}
+
+// A suspeita anexada ao snapshot do loop (campo que o backend da Fase 4
+// acrescenta ao FeatureLoopSnapshot). Lida por cast pelo mesmo motivo do
+// feature-pin: a UI programa contra a assinatura antes de ela existir.
+export function readDuplicateSuspect(snapshot: unknown): DuplicateSuspectLike | null {
+  const suspect = (snapshot as { duplicateSuspect?: DuplicateSuspectLike | null } | null)
+    ?.duplicateSuspect
+  return suspect ?? null
 }
 
 export function issueAction(code: string): IssueAction {
@@ -65,6 +91,14 @@ export function withOkrIssue(
       message: 'Sem vínculo com objetivo/KR: a feature fica fora do rollup dos OKRs.',
     },
   ]
+}
+
+// Ponteiro de duplicata já persistido na projeção da feature
+// (features.duplicate_of). Quando ele chega junto da lista, a fila de triagem
+// não precisa sondar o loop feature a feature.
+export function duplicateOfFeature(feature: unknown): string | null {
+  const value = (feature as { duplicateOf?: string | null } | null)?.duplicateOf
+  return typeof value === 'string' && value !== '' ? value : null
 }
 
 // ---- Fila de triagem (filtro "Rascunhos") ----

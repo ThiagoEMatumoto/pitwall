@@ -1,16 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { Feature } from '../../../shared/types/ipc'
-
-const featuresApi: Record<string, unknown> = {}
-vi.mock('@/lib/ipc', () => ({
-  get featuresApi() {
-    return featuresApi
-  },
-}))
-
-const { compareFocus, focusRankOf, isPinned, selectPinned, setFeaturePinned } = await import(
-  './feature-pin'
-)
+import { compareFocus, focusRankOf, isPinned, selectPinned } from './feature-pin'
 
 function makeFeature(over: Partial<Feature> & Record<string, unknown> = {}): Feature {
   return {
@@ -67,23 +57,4 @@ describe('feature-pin', () => {
     ])
   })
 
-  it('sem o canal de pin no preload o toggle vira no-op declarado (false)', async () => {
-    delete featuresApi.pin
-    await expect(setFeaturePinned('f1', true)).resolves.toBe(false)
-  })
-
-  it('com o canal presente chama pin/unpin conforme o alvo', async () => {
-    const pin = vi.fn().mockResolvedValue(undefined)
-    const unpin = vi.fn().mockResolvedValue(undefined)
-    featuresApi.pin = pin
-    featuresApi.unpin = unpin
-
-    await expect(setFeaturePinned('f1', true)).resolves.toBe(true)
-    expect(pin).toHaveBeenCalledWith('f1')
-    await expect(setFeaturePinned('f1', false)).resolves.toBe(true)
-    expect(unpin).toHaveBeenCalledWith('f1')
-
-    delete featuresApi.pin
-    delete featuresApi.unpin
-  })
 })

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutList, Columns3 } from 'lucide-react'
+import { LayoutList, Columns3, LayoutGrid } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { objectivesApi, projectsApi, featuresApi } from '@/lib/ipc'
 import { useFeaturesStore } from '@/store/featuresStore'
@@ -17,10 +17,19 @@ import { FeatureBoard } from './FeatureBoard'
 import { FeatureDoc } from './FeatureDoc'
 import { FeatureList } from './FeatureList'
 import { FeaturesSidebar, type StatusFilter } from './FeaturesSidebar'
+import { FeatureWall } from './FeatureWall'
+import { selectTriage } from './feature-issues'
+import { selectPinned } from './feature-pin'
+import { setFeaturePinned } from './feature-pin-api'
 import { NewFeatureDialog } from './NewFeatureDialog'
+import { useDuplicateSuspects } from './useDuplicateSuspects'
+import { useFeatureLiveSessions } from './useFeatureLiveSessions'
 import { useFeatures } from './useFeatures'
+import { useLoopSnapshots } from './useLoopSnapshots'
 
-type ViewMode = 'list' | 'board'
+// 'wall' é o default: a queixa que abriu a Fase 4 é feature esquecida, e uma
+// lista plana não tem primeiro plano. Lista e board continuam a um clique.
+type ViewMode = 'wall' | 'list' | 'board'
 
 export function FeaturesArea() {
   useFeatures()
@@ -41,8 +50,10 @@ export function FeaturesArea() {
   const [filter, setFilter] = useState<StatusFilter>('all')
   const [creating, setCreating] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
-  const [backfillMsg, setBackfillMsg] = useState<string | null>(null)
-  const [view, setView] = useState<ViewMode>('list')
+  // Faixa de aviso do topo: backfill, e também o pin quando o canal do main
+  // ainda não existe (botão mudo seria pior que a mensagem).
+  const [notice, setNotice] = useState<string | null>(null)
+  const [view, setView] = useState<ViewMode>('wall')
   // Filtro por objetivo (Onda 2 — fecha a sub-linkagem): '' = todos, 'none' =
   // sem objetivo (objectiveLinkCount === 0, Onda 0), senão um objectiveId.
   const [objectives, setObjectives] = useState<ObjectiveWithProgress[]>([])
@@ -109,11 +120,19 @@ export function FeaturesArea() {
     [withStats],
   )
 
-  // Rascunhos ocultos (auto-criados, 0 registros, não arquivados): só aparecem
-  // no filtro "Rascunhos" — withStats vem com includeDrafts:true do store.
+  // Candidatas à triagem: tudo que não está arquivado. A sondagem de duplicata
+  // só roda com o filtro aberto (useDuplicateSuspects), então a lista completa
+  // aqui não custa nada enquanto o usuário não pede a fila.
+  const triageCandidates = useMemo(() => withStats.filter((f) => !f.archivedAt), [withStats])
+  const suspectIds = useDuplicateSuspects(triageCandidates, filter === 'drafts')
+
+  // Fila de triagem (antigo filtro "Rascunhos"): auto-criadas + suspeitas de
+  // duplicata. O recorte antigo (auto-criada COM zero registros) escondia
+  // justamente a duplicata de uma feature ativa — o caso da queixa. Rascunho
+  // clássico continua dentro: isDraftFeature é subconjunto de origin 'auto'.
   const drafts = useMemo(
-    () => withStats.filter((f) => !f.archivedAt && isDraftFeature(f.origin, f.recordCount)),
-    [withStats],
+    () => selectTriage(triageCandidates, suspectIds),
+    [triageCandidates, suspectIds],
   )
 
   // App-dev (Onda 3 — separação app-dev): dev do próprio claude-manager, fora
@@ -171,6 +190,28 @@ export function FeaturesArea() {
     return filtered
   }, [filter, byProject, drafts, appDevFeatures, objectiveFilter, matchesObjectiveFilter])
 
+  // Pinadas (parede): saem de withStats pra o card ter atividade real, e
+  // respeitam busca/filtro de objetivo — foco fora do recorte atual é ruído.
+  const pinned = useMemo(() => {
+    const activity = (f: FeatureWithStats) => f.lastRecordAt ?? f.updatedAt
+    const visible = withStats.filter((f) => {
+      if (f.isAppDev && filter !== 'app-dev') return false
+      if (q && !f.title.toLowerCase().includes(q)) return false
+      return matchesObjectiveFilter(f)
+    })
+    return selectPinned(visible, activity)
+  }, [withStats, filter, q, matchesObjectiveFilter])
+
+  const pinnedIds = useMemo(() => pinned.map((f) => f.id), [pinned])
+  const pinnedSnapshots = useLoopSnapshots(pinnedIds)
+  const liveByFeature = useFeatureLiveSessions()
+
+  // A parede não repete embaixo o que já está em foco em cima.
+  const wallRest = useMemo(() => {
+    const ids = new Set(pinnedIds)
+    return listed.filter((f) => !ids.has(f.id))
+  }, [listed, pinnedIds])
+
   // Board: usa a lista com stats (inclui arquivadas, mas NUNCA rascunhos nem
   // app-dev — mesmo default-oculto das outras views).
   const boardFeatures = useMemo(() => {
@@ -192,17 +233,26 @@ export function FeaturesArea() {
     await refresh()
   }
 
+  async function handleTogglePin(id: string, next: boolean) {
+    const ok = await setFeaturePinned(id, next)
+    if (!ok) {
+      setNotice('Fixar features ainda não está disponível nesta build (canal de foco ausente).')
+      return
+    }
+    await refresh()
+  }
+
   async function handleBackfill() {
     setBackfilling(true)
-    setBackfillMsg(null)
+    setNotice(null)
     try {
       const res = await featuresApi.backfill()
       await refresh()
-      setBackfillMsg(
+      setNotice(
         `Backfill: ${res.created} criada(s), ${res.linked} vinculada(s), ${res.skipped} ignorada(s).`,
       )
     } catch {
-      setBackfillMsg('Falha ao importar features de sessões anteriores.')
+      setNotice('Falha ao importar features de sessões anteriores.')
     } finally {
       setBackfilling(false)
     }
@@ -230,12 +280,12 @@ export function FeaturesArea() {
       />
 
       <main className="flex flex-1 flex-col overflow-hidden">
-        {backfillMsg && (
+        {notice && (
           <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 text-xs text-[var(--color-text)]">
-            <span>{backfillMsg}</span>
+            <span>{notice}</span>
             <button
               type="button"
-              onClick={() => setBackfillMsg(null)}
+              onClick={() => setNotice(null)}
               className="rounded px-1 text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
             >
               ✕
@@ -265,6 +315,22 @@ export function FeaturesArea() {
                   onSelect={(id) => void select(id)}
                 />
               </div>
+            ) : view === 'wall' ? (
+              <div className="flex-1 overflow-y-auto p-5">
+                <FeatureWall
+                  pinned={pinned}
+                  features={wallRest}
+                  snapshots={pinnedSnapshots}
+                  liveByFeature={liveByFeature}
+                  reposById={reposById}
+                  sessionCounts={sessionCounts}
+                  statsById={statsById}
+                  selectedId={selectedId}
+                  onSelect={(id) => void select(id)}
+                  onArchive={(id) => void handleArchive(id)}
+                  onTogglePin={(id, next) => void handleTogglePin(id, next)}
+                />
+              </div>
             ) : (
               <div className="flex-1 overflow-y-auto p-5">
                 <FeatureList
@@ -275,6 +341,7 @@ export function FeaturesArea() {
                   selectedId={selectedId}
                   onSelect={(id) => void select(id)}
                   onArchive={(id) => void handleArchive(id)}
+                  onTogglePin={(id, next) => void handleTogglePin(id, next)}
                 />
               </div>
             )}
@@ -296,6 +363,20 @@ export function FeaturesArea() {
 function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMode) => void }) {
   return (
     <div className="inline-flex rounded-md border border-[var(--color-border)] p-0.5">
+      <button
+        type="button"
+        onClick={() => onChange('wall')}
+        title="Parede"
+        data-testid="features-view-wall"
+        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
+          value === 'wall'
+            ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
+            : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+        }`}
+      >
+        <Icon as={LayoutGrid} size={13} />
+        Parede
+      </button>
       <button
         type="button"
         onClick={() => onChange('list')}

@@ -1,9 +1,10 @@
-import { Archive, GitBranch } from 'lucide-react'
+import { Archive, GitBranch, Pin, PinOff } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { activeMarker } from '@/features/brand'
 import { relativeTime } from '@/lib/time'
 import { stalledDays } from '../../../shared/feature-visibility'
 import type { Feature, FeatureWithStats, Repo } from '../../../shared/types/ipc'
+import { isPinned } from './feature-pin'
 import { STATUS_META } from './status'
 
 interface Props {
@@ -15,6 +16,8 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   onArchive: (id: string) => void
+  // Ausente onde a parede não existe (board/dossiê reaproveitam o card).
+  onTogglePin?: (id: string, pinned: boolean) => void
 }
 
 export function FeatureList({
@@ -25,6 +28,7 @@ export function FeatureList({
   selectedId,
   onSelect,
   onArchive,
+  onTogglePin,
 }: Props) {
   if (features.length === 0) {
     return (
@@ -46,6 +50,7 @@ export function FeatureList({
           active={f.id === selectedId}
           onSelect={() => onSelect(f.id)}
           onArchive={() => onArchive(f.id)}
+          onTogglePin={onTogglePin ? () => onTogglePin(f.id, !isPinned(f)) : undefined}
         />
       ))}
     </ul>
@@ -60,6 +65,7 @@ export function FeatureCard({
   active,
   onSelect,
   onArchive,
+  onTogglePin,
 }: {
   feature: Feature
   reposById: Map<string, Repo>
@@ -68,8 +74,10 @@ export function FeatureCard({
   active: boolean
   onSelect: () => void
   onArchive?: () => void
+  onTogglePin?: () => void
 }) {
   const meta = STATUS_META[feature.status]
+  const pinned = isPinned(feature)
   const recordCount = stats?.recordCount ?? 0
   // Atividade real: último registro de sessão quando existe, senão updated_at.
   const lastActivity = stats?.lastRecordAt ?? feature.updatedAt
@@ -106,6 +114,26 @@ export function FeatureCard({
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <StatusBadge status={feature.status} />
+            {onTogglePin && (
+              /* Pinada: o botão fica sempre visível — é estado, não só ação. */
+              <button
+                type="button"
+                data-testid="feature-card-pin"
+                data-pinned={pinned}
+                title={pinned ? 'Tirar do foco' : 'Fixar no foco (topo da parede)'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTogglePin()
+                }}
+                className={`rounded p-1 transition hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] ${
+                  pinned
+                    ? 'text-[var(--color-accent)] opacity-100'
+                    : 'text-[var(--color-text-dim)] opacity-0 group-hover:opacity-100'
+                }`}
+              >
+                <Icon as={pinned ? PinOff : Pin} size={13} />
+              </button>
+            )}
             {onArchive && (
               <button
                 type="button"
