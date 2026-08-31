@@ -26,6 +26,7 @@ import {
   setAppDev,
 } from './feature-store'
 import { setPulse } from './loop-store'
+import { markDuplicateSuspect } from './feature-focus'
 import { list as listObjectives, loadKeyResults } from './objective-store'
 import { create as createTask } from './task-store'
 import { findTranscriptPath } from './session-activity'
@@ -504,8 +505,11 @@ class FeatureMemoryService {
       return { featureId: decision.featureId, kind: 'auto-linked' }
     }
 
-    // create: título já decidido (pela branch ou pelo objetivo). Nasce como
-    // rascunho oculto (origin 'auto') — só aparece quando ganhar o 1º registro.
+    // create/suspect: título já decidido (pela branch ou pelo objetivo). Nasce
+    // como rascunho oculto (origin 'auto') — só aparece quando ganhar o 1º
+    // registro. Em 'suspect' o rascunho nasce IGUAL: o trabalho da sessão nunca
+    // se perde por um palpite de semelhança; o que muda é a marca de suspeita
+    // gravada logo depois, pra a UI oferecer o merge.
     const repoPath = getRepoPath(info.repoId)
     const created = createFeature({
       projectId,
@@ -518,6 +522,9 @@ class FeatureMemoryService {
     })
     this.persistLink(info.sessionId, created.id)
     maybeSuggestObjectiveLink(created.id, firstPrompt)
+    if (decision.action === 'suspect') {
+      markDuplicateSuspect(created.id, decision.candidateId, decision.score)
+    }
     return { featureId: created.id, kind: 'auto-created' }
   }
 

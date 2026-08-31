@@ -719,6 +719,16 @@ export interface Feature {
   // Estampada quando o repo da sessão é o próprio claude-manager (Onda 3 —
   // separação app-dev). Vive só no SQLite, mesmo padrão de origin.
   isAppDev: boolean
+  // Foco da parede (migration 043). OPCIONAIS no tipo porque projeções antigas
+  // (overview-store) e mocks não os preenchem — o store SEMPRE preenche, então
+  // a UI pode ler `pinned === true` / `focusRank ?? null` sem defensiva.
+  pinned?: boolean
+  /** Posição manual na parede; null/ausente = ordena por atividade, como antes. */
+  focusRank?: number | null
+  /** Candidato a duplicata (features.duplicate_of); null = sem suspeita. */
+  duplicateOf?: string | null
+  /** Afinidade 0..1 que gerou a suspeita. */
+  duplicateScore?: number | null
   createdAt: number
   updatedAt: number
   completedAt: number | null
@@ -736,6 +746,37 @@ export interface FeatureWithStats extends Feature {
   // session_at do registro mais recente; null sem registros. A listagem ordena
   // por COALESCE(lastRecordAt, updatedAt) DESC (atividade real > metadado).
   lastRecordAt: number | null
+}
+
+// ---- Foco da parede de features (Fase 4) ----
+
+export interface FeatureFocus {
+  featureId: string
+  pinned: boolean
+  focusRank: number | null
+}
+
+// Patch parcial: campo ausente fica como está (o botão de pin não conhece o
+// rank; o arrasto não mexe no pin).
+export interface SetFeatureFocusInput {
+  featureId: string
+  pinned?: boolean
+  focusRank?: number | null
+}
+
+// Suspeita de duplicata JÁ RESOLVIDA pro consumo da UI: o título do candidato
+// vem junto porque a issue só carrega texto, e a ação ("mesclar") precisa do id.
+export interface FeatureDuplicateSuspect {
+  candidateId: string
+  title: string | null
+  score: number | null
+}
+
+export interface MergeFeatureDuplicateInput {
+  /** O rascunho suspeito — é ARQUIVADO, nunca apagado. */
+  sourceId: string
+  /** A feature que absorve sessões, registros e repos. */
+  targetId: string
 }
 
 export interface FeatureListStatsOpts {
@@ -908,6 +949,15 @@ export interface FeatureLoopSnapshot {
   ledger: FeatureLedgerEntry[]
   metrics: FeatureMetricSeries[]
   lastActivityAt: number
+  // Foco (Fase 4): vem no snapshot pra a tela da feature não precisar de uma
+  // segunda chamada só pra saber se o card está fixado.
+  pinned: boolean
+  focusRank: number | null
+  /**
+   * O candidato por trás da issue `duplicate_suspect` (null quando não há).
+   * A issue só carrega mensagem; a AÇÃO de mesclar precisa do id — é aqui.
+   */
+  duplicateSuspect: FeatureDuplicateSuspect | null
 }
 
 // ---- Vínculos Feature → Objetivo/KR (Fase 3) ----
@@ -3566,6 +3616,15 @@ export interface Api {
     setObjectiveLinks(input: SetFeatureObjectiveLinksInput): Promise<Feature>
     listObjectiveLinks(featureId: string): Promise<FeatureObjectiveLink[]>
     backfill(): Promise<FeatureBackfillResult>
+    // Foco da parede (Fase 4): vive no namespace `features` (e não em `loop`)
+    // porque pinned/focus_rank são colunas de `features`, sincronizadas com a
+    // tabela — o broadcast tem que ser 'feature:updated', que é o que pinga o
+    // coordinator de sync.
+    setFocus(input: SetFeatureFocusInput): Promise<Feature>
+    /** "Não é duplicata": some com o aviso sem mexer em mais nada. */
+    dismissDuplicate(featureId: string): Promise<Feature>
+    /** Absorve o rascunho no destino e ARQUIVA a origem (nunca apaga). */
+    mergeDuplicate(input: MergeFeatureDuplicateInput): Promise<Feature>
     onUpdated(handler: (feature: Feature) => void): () => void
     onSynthError(handler: (event: FeatureSynthError) => void): () => void
   }

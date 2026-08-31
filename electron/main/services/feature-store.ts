@@ -160,6 +160,12 @@ function fromFrontmatter(fm: Partial<Frontmatter>, docPath: string, body: string
     origin: 'manual', // idem: origin vive só no SQLite (reindex preserva o valor da row)
     objectiveLinkCount: 0, // idem: vem de feature_links, reindexFromFile sobrescreve com o valor real
     isAppDev: false, // idem: is_app_dev vive só no SQLite, reindexFromFile preserva o valor real
+    // idem pin/suspeita: o upsert do índice não cita essas colunas, então o
+    // reindex do watcher NÃO derruba o que o usuário fixou.
+    pinned: false,
+    focusRank: null,
+    duplicateOf: null,
+    duplicateScore: null,
     body,
   }
 }
@@ -204,6 +210,10 @@ interface FeatureRow {
   archived_at: number | null
   origin: string
   is_app_dev: number
+  pinned: number
+  focus_rank: number | null
+  duplicate_of: string | null
+  duplicate_score: number | null
 }
 
 function rowToFeature(
@@ -226,6 +236,12 @@ function rowToFeature(
     origin: row.origin as FeatureOrigin,
     objectiveLinkCount,
     isAppDev: !!row.is_app_dev,
+    // Foco e suspeita vivem só no SQLite (como origin/archived_at): quem
+    // ESCREVE é services/feature-focus.ts; aqui a row só é projetada.
+    pinned: !!row.pinned,
+    focusRank: row.focus_rank,
+    duplicateOf: row.duplicate_of,
+    duplicateScore: row.duplicate_score,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
@@ -343,6 +359,10 @@ export function create(input: CreateFeatureInput): Feature {
     repos: input.repos ?? [],
     origin: input.origin ?? 'manual',
     objectiveLinkCount: 0, // feature nova: links são gravados depois via setObjectiveLinks
+    pinned: false, // nasce solta na parede; o pin é gesto humano (feature-focus)
+    focusRank: null,
+    duplicateOf: null,
+    duplicateScore: null,
     isAppDev: input.isAppDev ?? false,
     createdAt: now,
     updatedAt: now,

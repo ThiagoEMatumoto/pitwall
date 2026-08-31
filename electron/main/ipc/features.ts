@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import * as featureStore from '../services/feature-store'
+import * as featureFocus from '../services/feature-focus'
 import { getDb } from '../services/db'
 import {
   broadcast,
@@ -16,6 +17,8 @@ import type {
   SetFeatureReposInput,
   SetFeatureObjectiveLinksInput,
   FeatureBackfillResult,
+  MergeFeatureDuplicateInput,
+  SetFeatureFocusInput,
 } from '../../../shared/types/ipc'
 
 export function registerFeaturesIpc(): void {
@@ -77,6 +80,39 @@ export function registerFeaturesIpc(): void {
       return featureStore.listObjectiveLinks(featureId)
     },
   )
+
+  // Foco da parede + suspeita de duplicata (Fase 4). Vivem AQUI e não em
+  // ipc/loop.ts porque pinned/focus_rank/duplicate_of são colunas de `features`:
+  // o broadcast correto é 'feature:updated' (que a lista já escuta e que pinga o
+  // coordinator de sync, já que a tabela é sincronizada). Em 'loop:updated' o
+  // dado mudaria sem o push de sync acontecer.
+  const updated = (id: string): Feature => {
+    const feature = featureStore.get(id)
+    if (!feature) throw new Error(`feature not found: ${id}`)
+    broadcast('feature:updated', feature)
+    return feature
+  }
+
+  ipcMain.handle('features:set-focus', (_e, input: SetFeatureFocusInput): Feature => {
+    featureFocus.setFocus(input.featureId, {
+      pinned: input.pinned,
+      focusRank: input.focusRank,
+    })
+    return updated(input.featureId)
+  })
+
+  ipcMain.handle('features:dismiss-duplicate', (_e, featureId: string): Feature => {
+    featureFocus.clearDuplicateSuspect(featureId)
+    return updated(featureId)
+  })
+
+  // Mesclar ARQUIVA a origem e devolve o destino (que absorveu o trabalho); o
+  // broadcast sai pelos dois porque as duas rows mudaram na lista.
+  ipcMain.handle('features:merge-duplicate', (_e, input: MergeFeatureDuplicateInput): Feature => {
+    featureFocus.mergeDuplicate(input.sourceId, input.targetId)
+    broadcast('feature:updated', { id: input.sourceId, archived: true })
+    return updated(input.targetId)
+  })
 
   // Backfill retroativo: reprocessa sessões já encerradas e ainda não vinculadas,
   // criando/linkando as features perdidas. A LINKAGEM é síncrona e rápida (sem LLM);
