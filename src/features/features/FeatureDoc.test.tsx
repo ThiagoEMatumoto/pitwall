@@ -13,6 +13,10 @@ vi.mock('./useObjectiveLookups', () => ({
 const snapshotMock = vi.fn()
 vi.mock('@/lib/ipc', () => ({
   shellApi: { openPath: vi.fn() },
+  // O dossiê agora lista as sessões da feature e sabe abrir uma nova.
+  sessionsApi: { listByFeature: vi.fn().mockResolvedValue([]) },
+  featuresApi: { list: vi.fn().mockResolvedValue([]), get: vi.fn() },
+  prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
   loopApi: {
     snapshot: (id: string) => snapshotMock(id),
     setPulse: vi.fn(),

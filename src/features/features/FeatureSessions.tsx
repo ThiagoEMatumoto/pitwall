@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react'
 import { RotateCcw, SquareTerminal } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { sessionsApi } from '@/lib/ipc'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
-import {
-  listSessionsByFeature,
-  sessionMoment,
-  type FeatureSessionInfo,
-} from './feature-sessions-api'
-import type { Project, Repo } from '../../../shared/types/ipc'
+import { sessionMoment } from './feature-sessions-api'
+import type { FeatureSessionSummary, Project, Repo } from '../../../shared/types/ipc'
 
 interface Props {
   featureId: string
@@ -21,10 +18,10 @@ interface Props {
 // re-perguntar nada). É o outro lado do "Trabalhar nesta feature": o dossiê
 // deixa de ser um beco sem saída.
 export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
-  const [sessions, setSessions] = useState<FeatureSessionInfo[]>([])
-  // `null` do IPC = este build não sabe listar. Dizer "nenhuma sessão" aqui
-  // seria mentira, então o estado é separado do vazio de verdade.
-  const [unavailable, setUnavailable] = useState(false)
+  const [sessions, setSessions] = useState<FeatureSessionSummary[]>([])
+  // Falha do IPC é estado próprio: dizer "nenhuma sessão" quando não deu pra
+  // perguntar seria mentira.
+  const [failed, setFailed] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const liveSessions = useAppStore((s) => s.liveSessions)
@@ -35,16 +32,17 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
   useEffect(() => {
     let alive = true
     setLoading(true)
-    void listSessionsByFeature(featureId)
+    void sessionsApi
+      .listByFeature(featureId)
       .then((list) => {
         if (!alive) return
-        setUnavailable(list === null)
-        setSessions([...(list ?? [])].sort((a, b) => sessionMoment(b) - sessionMoment(a)))
+        setFailed(false)
+        setSessions([...list].sort((a, b) => sessionMoment(b) - sessionMoment(a)))
         setLoading(false)
       })
       .catch(() => {
         if (!alive) return
-        setUnavailable(true)
+        setFailed(true)
         setSessions([])
         setLoading(false)
       })
@@ -53,7 +51,7 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
     }
   }, [featureId])
 
-  function go(s: FeatureSessionInfo) {
+  function go(s: FeatureSessionSummary) {
     // Viva: a entrada do snapshot global carrega repo/projeto resolvidos, e o
     // focusOrOpenSession já re-attacha à PTY (sem subir um segundo claude).
     const live = s.ccSessionId
@@ -82,9 +80,9 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
   return (
     <section className="mt-8" data-testid="feature-sessions">
       <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Sessões</h2>
-      {unavailable ? (
+      {failed ? (
         <p className="text-xs text-[var(--color-text-dim)]">
-          Não foi possível listar as sessões desta feature neste build.
+          Não foi possível listar as sessões desta feature.
         </p>
       ) : sessions.length === 0 ? (
         <p className="text-xs text-[var(--color-text-dim)]">
@@ -102,8 +100,8 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
   )
 }
 
-function SessionRow({ session, onGo }: { session: FeatureSessionInfo; onGo: () => void }) {
-  const alive = session.isAlive
+function SessionRow({ session, onGo }: { session: FeatureSessionSummary; onGo: () => void }) {
+  const alive = session.isLive
   // Sem cc_session_id não há transcript no disco: retomar é impossível e o botão
   // diz por quê em vez de sumir (ou pior, não fazer nada).
   const blocked = !alive && !session.ccSessionId

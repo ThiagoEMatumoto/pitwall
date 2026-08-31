@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import type { LiveSessionInfo, Project, Repo } from '../../../shared/types/ipc'
-import type { FeatureSessionInfo } from './feature-sessions-api'
+import type {
+  FeatureSessionSummary,
+  LiveSessionInfo,
+  Project,
+  Repo,
+} from '../../../shared/types/ipc'
 
 const listByFeature = vi.fn()
 vi.mock('@/lib/ipc', () => ({
@@ -32,16 +36,17 @@ const project = { id: 'p1', name: 'pitwall', icon: 'rocket', color: '#fff' } as 
 const reposById = new Map([[repo.id, repo]])
 const projectsById = new Map([[project.id, project]])
 
-function makeSession(over: Partial<FeatureSessionInfo> = {}): FeatureSessionInfo {
+function makeSession(over: Partial<FeatureSessionSummary> = {}): FeatureSessionSummary {
   return {
     id: 's1',
     ccSessionId: 'cc-1',
     title: 'ajustar parser',
+    titleSource: 'auto',
     repoId: 'r1',
+    status: 'exited',
     startedAt: 1000,
-    endedAt: null,
-    lastActivityAt: 2000,
-    isAlive: false,
+    endedAt: 2000,
+    isLive: false,
     ...over,
   }
 }
@@ -65,7 +70,7 @@ describe('FeatureSessions', () => {
   it('sessão viva vira "focar" e leva pra pane existente', async () => {
     const live = { id: 's1', ccSessionId: 'cc-1' } as LiveSessionInfo
     useAppStore.setState({ liveSessions: [live] })
-    listByFeature.mockResolvedValue([makeSession({ isAlive: true })])
+    listByFeature.mockResolvedValue([makeSession({ isLive: true, status: 'running', endedAt: null })])
     renderList()
 
     const action = await screen.findByTestId('feature-session-action')
@@ -77,7 +82,7 @@ describe('FeatureSessions', () => {
   })
 
   it('sessão morta vira "retomar" em um clique, sem perguntar nada', async () => {
-    listByFeature.mockResolvedValue([makeSession({ isAlive: false })])
+    listByFeature.mockResolvedValue([makeSession({ isLive: false })])
     renderList()
 
     const action = await screen.findByTestId('feature-session-action')
@@ -98,8 +103,8 @@ describe('FeatureSessions', () => {
 
   it('ordena da mais recente pra mais antiga', async () => {
     listByFeature.mockResolvedValue([
-      makeSession({ id: 'velha', title: 'velha', lastActivityAt: 1000 }),
-      makeSession({ id: 'nova', title: 'nova', lastActivityAt: 9000 }),
+      makeSession({ id: 'velha', title: 'velha', endedAt: 1000 }),
+      makeSession({ id: 'nova', title: 'nova', endedAt: 9000 }),
     ])
     renderList()
 
@@ -116,12 +121,9 @@ describe('FeatureSessions', () => {
     expect(await screen.findByText(/Nenhuma sessão trabalhou nesta feature/)).toBeInTheDocument()
   })
 
-  it('não mente "nenhuma sessão" quando o IPC não existe neste build', async () => {
-    const { sessionsApi } = await import('@/lib/ipc')
-    const original = (sessionsApi as Record<string, unknown>).listByFeature
-    ;(sessionsApi as Record<string, unknown>).listByFeature = undefined
+  it('não mente "nenhuma sessão" quando o IPC falha', async () => {
+    listByFeature.mockRejectedValue(new Error('ipc down'))
     renderList()
     expect(await screen.findByText(/Não foi possível listar as sessões/)).toBeInTheDocument()
-    ;(sessionsApi as Record<string, unknown>).listByFeature = original
   })
 })
