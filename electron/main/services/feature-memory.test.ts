@@ -32,7 +32,13 @@ import {
 } from './feature-store'
 import { create as createObjective, createKeyResult } from './objective-store'
 import { list as listTasks } from './task-store'
-import { maybeSuggestObjectiveLink, isSelfRepoPath, featureMemory } from './feature-memory'
+import {
+  maybeSuggestObjectiveLink,
+  isSelfRepoPath,
+  featureMemory,
+  pulseCandidateFromSummary,
+} from './feature-memory'
+import { currentPulse, pulseHistory, setPulse } from './loop-store'
 import { findTranscriptPath } from './session-activity'
 import { runClaude } from './claude-cli'
 
@@ -307,5 +313,129 @@ describe('generateSessionRecord — feature fantasma', () => {
     // Dá tempo pro drain assíncrono rodar; sem 2º registro, a contagem some presa em 1.
     await new Promise((r) => setTimeout(r, 50))
     expect(sessionRecordCount(feature.id)).toBe(1)
+  })
+})
+
+// ---- Pulso automático: rede de segurança do loop (Fase 2) ----
+
+describe('pulseCandidateFromSummary', () => {
+  it('prefere a seção de resultado/estado — o pulso é o AGORA, não o objetivo da sessão', () => {
+    const summary = [
+      '## Objetivo da sessão',
+      'Investigar o parser de transcript.',
+      '',
+      '## Resultado / estado ao fim da sessão',
+      'O parser volta a ler JSONL truncado; falta cobrir o caso de linha partida.',
+    ].join('\n')
+    expect(pulseCandidateFromSummary(summary)).toBe(
+      'O parser volta a ler JSONL truncado; falta cobrir o caso de linha partida.',
+    )
+  })
+
+  it('entende a forma inline com ênfase (**Estado:** ...)', () => {
+    const summary = '- Mexeu no store.\n- **Estado:** migration aplicada, UI ainda desligada. Segue amanhã.'
+    expect(pulseCandidateFromSummary(summary)).toBe('migration aplicada, UI ainda desligada.')
+  })
+
+  it('sem seção de resultado cai na primeira frase de prosa, sem decoração Markdown', () => {
+    const summary = '## Registro\n\n**Sessão** de refactor do `loop-store`. Depois veio outra coisa.'
+    expect(pulseCandidateFromSummary(summary)).toBe('Sessão de refactor do loop-store.')
+  })
+
+  it('corta no limite do pulso (200 caracteres)', () => {
+    const long = `${'a'.repeat(400)}.`
+    const pulse = pulseCandidateFromSummary(long)
+    expect(pulse).not.toBeNull()
+    expect(pulse!.length).toBe(200)
+    expect(pulse!.endsWith('…')).toBe(true)
+  })
+
+  it('devolve null quando não sobra texto nenhum', () => {
+    expect(pulseCandidateFromSummary('')).toBeNull()
+    expect(pulseCandidateFromSummary('##\n\n   \n')).toBeNull()
+  })
+})
+
+describe('generateSessionRecord — pulso automático', () => {
+  function arrangeSession(id: string, branch: string): void {
+    seedSession(id)
+    const dir = mkdtempSync(join(tmpdir(), `${id}-`))
+    vi.mocked(findTranscriptPath).mockReturnValue(makeSelfSessionTranscript(dir, branch))
+  }
+
+  it('sessão que NÃO gravou pulso ganha um derivado do registro, com source session', async () => {
+    const feature = createFeature({ projectId: 'proj-1', title: 'Feature sem pulso' })
+    arrangeSession('sess-pulse-auto', 'feat/pulse-auto')
+    vi.mocked(runClaude).mockResolvedValue({
+      code: 0,
+      stdout: '## Resultado\nExport do loop funciona; falta ligar no menu.',
+      stderr: '',
+    })
+
+    featureMemory.onSessionExit({
+      sessionId: 'sess-pulse-auto',
+      ccSessionId: 'cc-pulse-auto',
+      repoId: 'repo-none',
+      featureId: feature.id,
+    })
+
+    await vi.waitFor(() => expect(sessionRecordCount(feature.id)).toBe(1))
+    const pulse = currentPulse(feature.id)
+    expect(pulse?.body).toBe('Export do loop funciona; falta ligar no menu.')
+    expect(pulse?.source).toBe('session')
+    expect(pulse?.sessionId).toBe('sess-pulse-auto')
+    // Evita o timer da síntese holística disparar depois do teardown do DB.
+    featureMemory.close()
+  })
+
+  it('sessão que JÁ fechou o loop via MCP não ganha pulso automático por cima', async () => {
+    const feature = createFeature({ projectId: 'proj-1', title: 'Feature com pulso da sessão' })
+    arrangeSession('sess-pulse-mcp', 'feat/pulse-mcp')
+    setPulse(feature.id, 'Pulso escrito pela própria sessão via MCP.', 'mcp', 'sess-pulse-mcp')
+    vi.mocked(runClaude).mockResolvedValue({
+      code: 0,
+      stdout: '## Resultado\nOutra coisa qualquer que NÃO deve virar pulso.',
+      stderr: '',
+    })
+
+    featureMemory.onSessionExit({
+      sessionId: 'sess-pulse-mcp',
+      ccSessionId: 'cc-pulse-mcp',
+      repoId: 'repo-none',
+      featureId: feature.id,
+    })
+
+    await vi.waitFor(() => expect(sessionRecordCount(feature.id)).toBe(1))
+    expect(pulseHistory(feature.id)).toHaveLength(1)
+    expect(currentPulse(feature.id)?.body).toBe('Pulso escrito pela própria sessão via MCP.')
+    featureMemory.close()
+  })
+
+  it('pulso de uma sessão ANTIGA não bloqueia o automático desta', async () => {
+    const feature = createFeature({ projectId: 'proj-1', title: 'Feature com pulso velho' })
+    arrangeSession('sess-pulse-old', 'feat/pulse-old')
+    getDb()
+      .prepare(
+        `INSERT INTO feature_pulses (id, feature_id, body, source, session_id, created_at)
+         VALUES ('p-old', ?, 'Pulso de semanas atrás.', 'session', 'sess-antiga', ?)`,
+      )
+      .run(feature.id, Date.now() - 14 * 24 * 60 * 60 * 1000)
+    vi.mocked(runClaude).mockResolvedValue({
+      code: 0,
+      stdout: '## Resultado\nRede de segurança do pulso está de pé.',
+      stderr: '',
+    })
+
+    featureMemory.onSessionExit({
+      sessionId: 'sess-pulse-old',
+      ccSessionId: 'cc-pulse-old',
+      repoId: 'repo-none',
+      featureId: feature.id,
+    })
+
+    await vi.waitFor(() => expect(sessionRecordCount(feature.id)).toBe(1))
+    expect(pulseHistory(feature.id)).toHaveLength(2)
+    expect(currentPulse(feature.id)?.body).toBe('Rede de segurança do pulso está de pé.')
+    featureMemory.close()
   })
 })
