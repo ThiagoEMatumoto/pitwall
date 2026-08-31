@@ -25,10 +25,12 @@ import {
   setObjectiveLinks,
   setAppDev,
 } from './feature-store'
+import { setPulse } from './loop-store'
 import { list as listObjectives, loadKeyResults } from './objective-store'
 import { create as createTask } from './task-store'
 import { findTranscriptPath } from './session-activity'
 import { runClaude } from './claude-cli'
+import { PULSE_MAX_LENGTH } from '../../../shared/feature-loop'
 import {
   isProtectedBranch,
   normalizeBranch,
@@ -160,6 +162,88 @@ export function maybeSuggestObjectiveLink(featureId: string, prompt: string | nu
       links: [{ parentType: 'feature', parentId: featureId }],
     })
   }
+}
+
+// ---- Pulso automático (rede de segurança do loop) ----
+
+// Quem DEVE fechar o loop é a sessão, via MCP (feature_pulse_set). Isto aqui é
+// a rede pra quando ela não fecha: o registro que a síntese acabou de produzir
+// vira um pulso candidato por derivação DETERMINÍSTICA do texto — sem uma
+// segunda chamada de LLM, sem custo novo e sem depender de o modelo colaborar.
+
+// Trecho do registro que fala do estado final. É o que o pulso quer dizer
+// ("como a frente está AGORA"), e não o objetivo com que a sessão abriu.
+const PULSE_SECTION = /^(resultado|estado)\b[^:]*:?\s*(.*)$/i
+
+// Tira a decoração Markdown de UMA linha (heading, bullet, ênfase, crase) — o
+// pulso é uma frase de texto puro.
+function plainLine(line: string): string {
+  return line
+    .replace(/^\s*#{1,6}\s*/, '')
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^\s*\d+[.)]\s+/, '')
+    .replace(/[*_`]/g, '')
+    .trim()
+}
+
+function isHeading(line: string): boolean {
+  return /^\s*#{1,6}\s/.test(line)
+}
+
+function firstSentence(text: string): string {
+  const match = /^(.*?[.!?])(?:\s|$)/.exec(text)
+  return (match ? match[1] : text).trim()
+}
+
+function clampPulse(text: string): string {
+  return text.length <= PULSE_MAX_LENGTH ? text : `${text.slice(0, PULSE_MAX_LENGTH - 1)}…`
+}
+
+/**
+ * Deriva um pulso candidato do registro de sessão. Prefere a seção
+ * "Resultado"/"Estado" do registro; sem ela, a primeira frase de prosa. Devolve
+ * null quando não sobra texto nenhum (registro só de headings, por exemplo).
+ */
+export function pulseCandidateFromSummary(summary: string): string | null {
+  const lines = summary.split('\n')
+  const texts = lines.map(plainLine)
+
+  for (let i = 0; i < texts.length; i++) {
+    const match = PULSE_SECTION.exec(texts[i])
+    if (!match) continue
+    // Forma inline ("**Resultado:** ficou pela metade") vs. heading seguido do
+    // parágrafo — nos dois casos o que interessa é o texto, não o rótulo.
+    const inline = match[2].trim()
+    if (inline) return clampPulse(firstSentence(inline))
+    const next = texts.slice(i + 1).find((t) => t !== '')
+    if (next) return clampPulse(firstSentence(next))
+  }
+
+  // Fallback: primeira linha de PROSA. Heading é rótulo ("## Registro"), não
+  // estado — usá-lo produziria um pulso que não diz nada.
+  const firstProse = texts.find((text, i) => text !== '' && !isHeading(lines[i]))
+  return firstProse ? clampPulse(firstSentence(firstProse)) : null
+}
+
+// A sessão já deixou pulso nesta janela? Duas checagens: `session_id` igual (é
+// o que o caminho MCP carimba) e, como rede, qualquer pulso criado depois do
+// started_at da sessão — um pulso escrito à mão no app enquanto a sessão rodava
+// também é intenção mais fresca que o nosso palpite derivado.
+function sessionAlreadyPulsed(featureId: string, sessionId: string): boolean {
+  const db = getDb()
+  const session = db.prepare('SELECT started_at FROM sessions WHERE id = ?').get(sessionId) as
+    | { started_at: number }
+    | undefined
+  const row = session
+    ? db
+        .prepare(
+          'SELECT 1 FROM feature_pulses WHERE feature_id = ? AND (session_id = ? OR created_at >= ?) LIMIT 1',
+        )
+        .get(featureId, sessionId, session.started_at)
+    : db
+        .prepare('SELECT 1 FROM feature_pulses WHERE feature_id = ? AND session_id = ? LIMIT 1')
+        .get(featureId, sessionId)
+  return row !== undefined
 }
 
 // ---- Serviço ----
@@ -299,11 +383,26 @@ class FeatureMemoryService {
       summary,
       model,
     })
+    this.recordAutoPulse(info, featureId, summary)
     // O 1º registro torna um rascunho visível — broadcasta pra feature "aparecer
     // sozinha" na UI (pra features já visíveis é um update inofensivo).
     const updated = getFeature(featureId)
     if (updated && isVisibleFeature(updated)) broadcast('feature:updated', updated)
     return true
+  }
+
+  // Grava o pulso derivado do registro — a menos que a sessão já tenha fechado
+  // o loop por conta própria. Nunca derruba a geração do registro: o pulso é
+  // rede de segurança, não parte do contrato do Stage 1.
+  private recordAutoPulse(info: SessionExitInfo, featureId: string, summary: string): void {
+    try {
+      if (sessionAlreadyPulsed(featureId, info.sessionId)) return
+      const body = pulseCandidateFromSummary(summary)
+      if (!body) return
+      setPulse(featureId, body, 'session', info.sessionId)
+    } catch (err) {
+      console.error('[feature-memory] pulso automático falhou:', err)
+    }
   }
 
   // Feature fantasma (Onda 3): quando a síntese LLM falha (timeout/erro/output
