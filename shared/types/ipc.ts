@@ -6,6 +6,9 @@
 export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ServiceId } from '../service-registry'
+import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
+// Re-export: os consumidores continuam importando tudo de '@shared/types/ipc'.
+export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -792,6 +795,119 @@ export interface FeatureBackfillResult {
   created: number
   linked: number
   skipped: number
+}
+
+// ---- Loop da feature: pulso, ledger e métricas (migration 042) ----
+//
+// Camada de persistência do módulo puro `shared/feature-loop.ts`: aqui ficam as
+// entidades como saem do SQLite (camelCase mapeando as colunas snake_case);
+// lá ficam as DERIVAÇÕES (liveness, issues, tom). Nada de `liveness` é gravado.
+
+export interface FeaturePulse {
+  id: string
+  featureId: string
+  body: string
+  source: PulseSource
+  sessionId: string | null
+  createdAt: number
+}
+
+export interface SetPulseInput {
+  featureId: string
+  body: string
+  source?: PulseSource
+  sessionId?: string | null
+}
+
+export interface FeatureLedgerEntry {
+  featureId: string
+  entryId: string
+  kind: string | null
+  title: string
+  body: string | null
+  createdAt: number
+  updatedAt: number
+  archivedAt: number | null
+}
+
+// Upsert "as-of": é o estado COMPLETO da entrada agora, não um patch. Campo
+// omitido não é "mantém o anterior" — em particular, `body` ausente/vazio
+// arquiva a entrada (o "corpo vazio apaga" do modelo).
+export interface AppendLedgerInput {
+  featureId: string
+  entryId: string
+  title?: string
+  kind?: string | null
+  body?: string | null
+}
+
+export interface ListLedgerOpts {
+  includeArchived?: boolean
+  limit?: number
+}
+
+export interface FeatureMetricColumn {
+  featureId: string
+  columnKey: string
+  label: string | null
+  unit: string | null
+  target: number | null
+  floor: number | null
+  baseline: number | null
+  direction: ProgressDirection | null
+  isHeadline: boolean
+  alarm: boolean
+}
+
+export interface DeclareMetricInput {
+  featureId: string
+  columnKey: string
+  label?: string | null
+  unit?: string | null
+  target?: number | null
+  floor?: number | null
+  baseline?: number | null
+  direction?: ProgressDirection | null
+  isHeadline?: boolean
+  alarm?: boolean
+}
+
+export interface FeatureMetricPoint {
+  id: string
+  featureId: string
+  columnKey: string
+  at: number
+  value: number | null
+  note: string | null
+}
+
+export interface RecordMetricPointInput {
+  featureId: string
+  columnKey: string
+  at: number
+  value: number | null
+  note?: string | null
+}
+
+// Coluna + série, com o tom do ponto mais recente já resolvido por
+// `metricTone` (a UI não recalcula regra de negócio).
+export interface FeatureMetricSeries {
+  column: FeatureMetricColumn
+  points: FeatureMetricPoint[]
+  latest: FeatureMetricPoint | null
+  tone: MetricTone
+}
+
+// Tudo que a UI do loop precisa numa leitura só. `liveness`/`issues` são
+// derivados na hora (nunca lidos de coluna).
+export interface FeatureLoopSnapshot {
+  featureId: string
+  pulse: FeaturePulse | null
+  liveness: Liveness
+  issues: LoopIssue[]
+  ledger: FeatureLedgerEntry[]
+  metrics: FeatureMetricSeries[]
+  lastActivityAt: number
 }
 
 // ---- Vínculos Feature → Objetivo/KR (Fase 3) ----
@@ -3429,6 +3545,18 @@ export interface Api {
     backfill(): Promise<FeatureBackfillResult>
     onUpdated(handler: (feature: Feature) => void): () => void
     onSynthError(handler: (event: FeatureSynthError) => void): () => void
+  }
+  // Loop da feature (pulso/ledger/métricas). Namespace próprio: o loop tem
+  // ciclo de vida e canal de broadcast ('loop:updated') separados de features.
+  loop: {
+    snapshot(featureId: string): Promise<FeatureLoopSnapshot>
+    setPulse(input: SetPulseInput): Promise<FeaturePulse>
+    pulseHistory(featureId: string, limit?: number): Promise<FeaturePulse[]>
+    appendLedger(input: AppendLedgerInput): Promise<FeatureLedgerEntry>
+    listLedger(featureId: string, opts?: ListLedgerOpts): Promise<FeatureLedgerEntry[]>
+    declareMetric(input: DeclareMetricInput): Promise<FeatureMetricColumn>
+    recordMetricPoint(input: RecordMetricPointInput): Promise<FeatureMetricPoint>
+    onUpdated(handler: (payload: { featureId: string }) => void): () => void
   }
   repoDeps: {
     list(projectId: string): Promise<RepoDependency[]>

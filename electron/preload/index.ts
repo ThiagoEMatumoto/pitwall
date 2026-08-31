@@ -24,6 +24,11 @@ import type {
   SetFeatureReposInput,
   SetFeatureObjectiveLinksInput,
   FeatureSynthError,
+  SetPulseInput,
+  AppendLedgerInput,
+  ListLedgerOpts,
+  DeclareMetricInput,
+  RecordMetricPointInput,
   CreateRepoDependencyInput,
   UpdateRepoDependencyInput,
   SetRepoHubInput,
@@ -312,6 +317,18 @@ const api: Api = {
     backfill: () => invoke('features:backfill'),
     onUpdated: (handler) => subscribe<Feature>('feature:updated', handler),
     onSynthError: (handler) => subscribe<FeatureSynthError>('feature:synth-error', handler),
+  },
+  loop: {
+    snapshot: (featureId: string) => invoke('loop:snapshot', featureId),
+    setPulse: (input: SetPulseInput) => invoke('loop:pulse-set', input),
+    pulseHistory: (featureId: string, limit?: number) =>
+      invoke('loop:pulse-history', featureId, limit),
+    appendLedger: (input: AppendLedgerInput) => invoke('loop:ledger-append', input),
+    listLedger: (featureId: string, opts?: ListLedgerOpts) =>
+      invoke('loop:ledger-list', featureId, opts),
+    declareMetric: (input: DeclareMetricInput) => invoke('loop:metric-declare', input),
+    recordMetricPoint: (input: RecordMetricPointInput) => invoke('loop:metric-record', input),
+    onUpdated: (handler) => subscribe<{ featureId: string }>('loop:updated', handler),
   },
   repoDeps: {
     list: (projectId: string) => invoke('repo-deps:list', projectId),

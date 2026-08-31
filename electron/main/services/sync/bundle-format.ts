@@ -40,6 +40,10 @@ export function featuresDir(bundleDir: string): string {
 //   tasks               (sem FK)
 //   task_links          → tasks  (parent_id polimórfico, sem FK)
 //   feature_links       → features  (target_id polimórfico, sem FK)
+//   feature_pulses         → features  (migration 042)
+//   feature_ledger         → features  (PK composta feature_id,entry_id)
+//   feature_metrics        → features  (PK composta feature_id,column_key)
+//   feature_metric_points  → feature_metrics  (FK COMPOSTA feature_id,column_key)
 //
 // As tabelas EXCLUÍDAS (machine-local/derivado) NÃO entram aqui:
 //   _migrations, metrics_session_cache, sessions, feature_session_records,
@@ -60,6 +64,12 @@ export const SYNCED_TABLES = [
   'tasks',
   'task_links',
   'feature_links',
+  // feature_metric_points depende de feature_metrics por FK COMPOSTA, então vem
+  // depois dela: o importer insere nesta ordem e deleta na inversa.
+  'feature_pulses',
+  'feature_ledger',
+  'feature_metrics',
+  'feature_metric_points',
 ] as const
 
 export type SyncedTable = (typeof SYNCED_TABLES)[number]
@@ -77,6 +87,10 @@ export const TABLE_PRIMARY_KEYS: Record<SyncedTable, readonly string[]> = {
   tasks: ['id'],
   task_links: ['task_id', 'parent_type', 'parent_id'],
   feature_links: ['feature_id', 'target_type', 'target_id'],
+  feature_pulses: ['id'],
+  feature_ledger: ['feature_id', 'entry_id'],
+  feature_metrics: ['feature_id', 'column_key'],
+  feature_metric_points: ['id'],
 }
 
 // Conjunto para checagem rápida "essa tabela é sincronizada?".

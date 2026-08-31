@@ -45,6 +45,7 @@ import { registerClaudePluginsIpc } from './ipc/claude-plugins'
 import { registerClaudeSettingsIpc } from './ipc/claude-settings'
 import { registerMetricsIpc } from './ipc/metrics'
 import { registerFeaturesIpc } from './ipc/features'
+import { registerLoopIpc } from './ipc/loop'
 import { registerRepoDependenciesIpc } from './ipc/repo-dependencies'
 import { registerHandoffsIpc } from './ipc/handoffs'
 import { registerDossiersIpc } from './ipc/dossiers'
@@ -307,6 +308,7 @@ app.whenReady().then(async () => {
   registerClaudeSettingsIpc()
   registerMetricsIpc()
   registerFeaturesIpc()
+  registerLoopIpc()
   registerObjectivesIpc()
   registerTasksIpc()
   registerScheduledJobsIpc()

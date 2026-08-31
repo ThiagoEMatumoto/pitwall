@@ -40,6 +40,7 @@ import * as diagrams from './038_diagrams'
 import * as diagramLibrary from './039_diagram_library'
 import * as serviceProxyCalls from './040_service_proxy_calls'
 import * as videoLab from './041_video_lab'
+import * as featureLoop from './042_feature_loop'
 
 interface Migration {
   version: number
@@ -95,6 +96,7 @@ export const migrations: Migration[] = [
   diagramLibrary,
   serviceProxyCalls,
   videoLab,
+  featureLoop,
 ]
 
 export function runMigrations(db: Database.Database): void {

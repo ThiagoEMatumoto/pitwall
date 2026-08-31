@@ -26,6 +26,7 @@ export const updatesApi = api.updates
 export const usageApi = api.usage
 export const metricsApi = api.metrics
 export const featuresApi = api.features
+export const loopApi = api.loop
 export const objectivesApi = api.objectives
 export const handoffsApi = api.handoffs
 export const batonApi = api.baton
