@@ -4,7 +4,19 @@ import type { FeatureSynthMode } from '../../../shared/types/ipc'
 
 const PROTECTED_BRANCHES = new Set(['main', 'master', 'staging', 'develop'])
 const BRANCH_PREFIX_RE = /^(?:feat|fix|chore|refactor|feature)\//i
+// Piso do sinal aproveitável de semelhança: abaixo disso o par não tem nada a
+// ver. Entre este piso e FUZZY_LINK_THRESHOLD a semelhança é SUSPEITA (cria e
+// marca); daqui pra cima, antes, linkava direto — era o que fabricava vínculo
+// errado e feature duplicada.
 export const FUZZY_THRESHOLD = 0.5
+
+// Confiança suficiente pra vincular a sessão a uma feature existente SEM
+// perguntar. 0.75 no fuzzyScore (tokens do título casados / total de tokens do
+// título) significa: no máximo um token faltando num título de 4 palavras, e
+// título de 2 palavras só casa inteiro. O 0.5 antigo aceitava "metade do
+// título" — em título de 2 tokens, UM token casado bastava pra colar a sessão
+// na feature errada.
+export const FUZZY_LINK_THRESHOLD = 0.75
 
 export function isProtectedBranch(branch: string): boolean {
   return PROTECTED_BRANCHES.has(branch.trim().toLowerCase())
@@ -87,6 +99,11 @@ export type RegistrationDecision =
   | { action: 'skip' }
   | { action: 'link'; featureId: string }
   | { action: 'create'; title: string }
+  // Semelhança na faixa do meio: CRIA o rascunho (o trabalho da sessão nunca se
+  // perde por causa de um palpite) e ainda entrega o candidato, pra quem
+  // persiste marcar a suspeita e a UI oferecer "mesclar". `title` vem junto
+  // porque o caminho é o mesmo de 'create' — quem consome não recalcula.
+  | { action: 'suspect'; title: string; candidateId: string; score: number }
 
 // Decide o que fazer com uma sessão encerrada. Núcleo do auto-registro — antes
 // embutido em resolveFeature, extraído para ser testável. O bug original: nunca
@@ -101,11 +118,24 @@ export function decideRegistration(inp: RegistrationInputs): RegistrationDecisio
     return { action: 'link', featureId: inp.byBranchFeatureId }
   }
   // Link por objetivo (fuzzy) — agrupa sessões parecidas, inclusive na main.
-  if (inp.fuzzyMatch && inp.fuzzyMatch.score >= FUZZY_THRESHOLD) {
+  // Só com confiança ALTA: o threshold baixo colava sessões em features alheias.
+  if (inp.fuzzyMatch && inp.fuzzyMatch.score >= FUZZY_LINK_THRESHOLD) {
     return { action: 'link', featureId: inp.fuzzyMatch.featureId }
   }
   // Criar: título pela branch de trabalho, ou pelo objetivo (trabalho na main).
   const title = inp.workBranch ? humanizeBranch(inp.workBranch) : deriveTitle(inp.firstPrompt)
+  // Faixa do meio: parece, mas não o bastante pra decidir sozinho.
+  if (inp.fuzzyMatch && inp.fuzzyMatch.score >= FUZZY_THRESHOLD) {
+    // Sem título não há rascunho a criar; o candidato é a melhor casa disponível
+    // e vale mais que descartar a sessão.
+    if (!title) return { action: 'link', featureId: inp.fuzzyMatch.featureId }
+    return {
+      action: 'suspect',
+      title,
+      candidateId: inp.fuzzyMatch.featureId,
+      score: inp.fuzzyMatch.score,
+    }
+  }
   if (!title) return { action: 'skip' }
   return { action: 'create', title }
 }

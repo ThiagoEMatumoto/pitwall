@@ -4,6 +4,8 @@ import {
   decideRegistration,
   deriveTitle,
   fuzzyScore,
+  FUZZY_LINK_THRESHOLD,
+  FUZZY_THRESHOLD,
   humanizeBranch,
   isProtectedBranch,
   normalizeBranch,
@@ -115,6 +117,58 @@ describe('decideRegistration', () => {
       fuzzyMatch: { featureId: 'F2', score: 0.8 },
     })
     expect(d).toEqual({ action: 'link', featureId: 'F2' })
+  })
+
+  it('SUSPEITA na faixa do meio: cria o rascunho E devolve o candidato', () => {
+    const d = decideRegistration({
+      ...base,
+      firstPrompt: 'arruma o login',
+      fuzzyMatch: { featureId: 'F2', score: 0.6 },
+    })
+    // O trabalho da sessão nunca se perde por causa de um palpite: nasce a
+    // feature, e a suspeita vai junto pra UI oferecer o merge.
+    expect(d).toEqual({
+      action: 'suspect',
+      title: 'Arruma o login',
+      candidateId: 'F2',
+      score: 0.6,
+    })
+  })
+
+  it('as três faixas do mesmo candidato: create < 0.5 <= suspect < 0.75 <= link', () => {
+    const at = (score: number) =>
+      decideRegistration({
+        ...base,
+        firstPrompt: 'arruma o login',
+        fuzzyMatch: { featureId: 'F2', score },
+      })
+    expect(at(FUZZY_THRESHOLD - 0.01).action).toBe('create')
+    // Bordas INCLUSIVAS nos dois limiares.
+    expect(at(FUZZY_THRESHOLD).action).toBe('suspect')
+    expect(at(FUZZY_LINK_THRESHOLD - 0.01).action).toBe('suspect')
+    expect(at(FUZZY_LINK_THRESHOLD).action).toBe('link')
+    expect(at(1).action).toBe('link')
+  })
+
+  it('na faixa do meio SEM título a linkar, cai pro candidato em vez de descartar', () => {
+    const d = decideRegistration({
+      ...base,
+      synthMode: 'auto',
+      firstPrompt: null,
+      fuzzyMatch: { featureId: 'F2', score: 0.6 },
+    })
+    expect(d).toEqual({ action: 'link', featureId: 'F2' })
+  })
+
+  it('branch de trabalho já registrada vence a suspeita (evidência exata > fuzzy)', () => {
+    const d = decideRegistration({
+      ...base,
+      workBranch: 'feat/x',
+      byBranchFeatureId: 'F1',
+      firstPrompt: 'arruma o login',
+      fuzzyMatch: { featureId: 'F2', score: 0.6 },
+    })
+    expect(d).toEqual({ action: 'link', featureId: 'F1' })
   })
 
   it('PULA sessão trivial em modo threshold (<2 turns ou 0 edits)', () => {
