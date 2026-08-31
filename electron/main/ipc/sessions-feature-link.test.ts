@@ -2,6 +2,7 @@
 // O vínculo sessão↔feature nos DOIS caminhos de spawn:
 //  - `sessions:resume` herda o feature_id e recebe o MESMO bloco de contexto do
 //    spawn (pulso/vitalidade/ponteiro do loop) — antes o resume nascia mudo;
+//  - `sessions:list-by-feature` devolve o histórico de sessões da feature;
 //  - o cwd respeita o worktree registrado em feature_repos (com fallback pro repo).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -25,6 +26,8 @@ const seam = vi.hoisted(() => ({
   resumeFeatureId: null as string | null,
   // worktree_path registrado em feature_repos (null = nenhum).
   worktreePath: null as string | null,
+  featureSessionRows: [] as Record<string, unknown>[],
+  lastFeatureSessionsSql: '',
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
 }))
@@ -75,7 +78,13 @@ vi.mock('../services/db', () => ({
         }
         return undefined
       },
-      all: () => [],
+      all: (..._args: unknown[]) => {
+        if (sql.includes('FROM sessions WHERE feature_id = ?')) {
+          seam.lastFeatureSessionsSql = sql
+          return seam.featureSessionRows
+        }
+        return []
+      },
     }),
   }),
 }))
@@ -131,6 +140,7 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
+import type { FeatureSessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
   id: 'feat-1',
@@ -179,6 +189,8 @@ beforeEach(() => {
   seam.existingDirs = new Set([REPO_PATH])
   seam.resumeFeatureId = null
   seam.worktreePath = null
+  seam.featureSessionRows = []
+  seam.lastFeatureSessionsSql = ''
   seam.runningIds = []
   seam.feature = FEATURE
   registerSessionIpc()
@@ -245,5 +257,69 @@ describe('cwd respeita o worktree registrado da feature', () => {
     seam.existingDirs.add(WORKTREE_PATH)
     resume()
     expect(seam.spawns[0].cwd).toBe(WORKTREE_PATH)
+  })
+})
+
+describe('sessions:list-by-feature', () => {
+  it('projeta as sessões da feature e marca as que têm PTY viva', () => {
+    seam.featureSessionRows = [
+      {
+        id: 's2',
+        repo_id: 'r1',
+        cc_session_id: CC_SESSION_ID,
+        title: 'Fechar o loop',
+        title_source: 'manual',
+        status: 'running',
+        started_at: 200,
+        ended_at: null,
+      },
+      {
+        id: 's1',
+        repo_id: 'r1',
+        cc_session_id: null,
+        title: null,
+        title_source: null,
+        status: 'exited',
+        started_at: 100,
+        ended_at: 150,
+      },
+    ]
+    seam.runningIds = ['s2']
+
+    const out = handler('sessions:list-by-feature')(null, 'feat-1' as never) as FeatureSessionSummary[]
+
+    expect(out).toEqual([
+      {
+        id: 's2',
+        ccSessionId: CC_SESSION_ID,
+        repoId: 'r1',
+        title: 'Fechar o loop',
+        titleSource: 'manual',
+        status: 'running',
+        startedAt: 200,
+        endedAt: null,
+        isLive: true,
+      },
+      {
+        id: 's1',
+        ccSessionId: null,
+        repoId: 'r1',
+        title: null,
+        titleSource: null,
+        status: 'exited',
+        startedAt: 100,
+        endedAt: 150,
+        isLive: false,
+      },
+    ])
+  })
+
+  it('pede ao banco a ordem decrescente por início', () => {
+    handler('sessions:list-by-feature')(null, 'feat-1' as never)
+    expect(seam.lastFeatureSessionsSql).toContain('ORDER BY started_at DESC')
+  })
+
+  it('feature sem sessão devolve lista vazia', () => {
+    expect(handler('sessions:list-by-feature')(null, 'feat-vazia' as never)).toEqual([])
   })
 })

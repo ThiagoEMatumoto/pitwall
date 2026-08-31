@@ -1939,6 +1939,27 @@ export interface SessionSummary {
   isLive: boolean
 }
 
+/**
+ * Sessão vinculada a uma feature — histórico de trabalho do painel da feature.
+ * Distinto de SessionSummary (que é por repo e deriva tudo do transcript): aqui
+ * o eixo é a linha do banco, porque é ela que carrega o vínculo com a feature.
+ */
+export interface FeatureSessionSummary {
+  /** sessions.id interno (o id que o PTY manager conhece). */
+  id: string
+  /** session-id do Claude — é este valor que o `sessions.resume` consome. */
+  ccSessionId: string | null
+  repoId: string | null
+  /** Título persistido (rename manual/auto) com fallback no título do transcript. */
+  title: string | null
+  titleSource: 'manual' | 'auto' | null
+  status: 'running' | 'exited' | 'crashed' | 'closed_by_user'
+  startedAt: number
+  endedAt: number | null
+  /** true = a PTY desta sessão está viva NESTE app agora. */
+  isLive: boolean
+}
+
 export interface PaneSnapshot {
   ccSessionId: string
   // null = sessão avulsa (sem repo/projeto).
@@ -3362,6 +3383,8 @@ export interface Api {
     resume(input: ResumeSessionInput): Promise<Session>
     isResumable(ccSessionId: string): Promise<boolean>
     listByRepo(repoId: string): Promise<SessionSummary[]>
+    /** Sessões de uma feature, da mais recente pra mais antiga. */
+    listByFeature(featureId: string): Promise<FeatureSessionSummary[]>
     getBacklog(sessionId: string): Promise<string>
     write(sessionId: string, data: string): Promise<void>
     /** Grava uma imagem (paste/drag) como binário em <userData>/tmp e devolve o path absoluto. */

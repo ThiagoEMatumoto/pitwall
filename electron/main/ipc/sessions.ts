@@ -54,6 +54,7 @@ import type {
   SpawnSessionInput,
   ResumeSessionInput,
   SessionSummary,
+  FeatureSessionSummary,
   LiveSessionInfo,
   ChatTranscript,
   Handoff,
@@ -196,6 +197,18 @@ function writeTempPromptFile(prefix: string, content: string): string {
   const tmpPath = join(tmpDir, `${prefix}-${Date.now()}.md`)
   writeFileSync(tmpPath, content, 'utf8')
   return tmpPath
+}
+
+// Título gravado no JSONL da sessão (custom/ai-title). Best-effort: transcript
+// ausente ou ilegível vira null — nunca derruba uma listagem.
+function transcriptTitleOrNull(ccSessionId: string | null): string | null {
+  if (!ccSessionId) return null
+  try {
+    const transcript = findTranscriptPath(ccSessionId)
+    return transcript ? readTranscriptTitle(transcript) : null
+  } catch {
+    return null
+  }
 }
 
 function tempDir(): string {
@@ -997,6 +1010,37 @@ export function registerSessionIpc(): void {
     summaries.sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
     return summaries
   })
+
+  // Sessões de uma feature, da mais recente pra mais antiga. Dá ao painel da
+  // feature o histórico de trabalho e o cc_session_id que o `sessions:resume`
+  // consome. `isLive` vem do ptyManager (PTY viva NESTE app), não do banco:
+  // status='running' sobrevive a um crash do app e mentiria.
+  ipcMain.handle(
+    'sessions:list-by-feature',
+    (_e, featureId: string): FeatureSessionSummary[] => {
+      const rows = getDb()
+        .prepare(
+          `SELECT id, repo_id, cc_session_id, title, title_source, status, started_at, ended_at
+             FROM sessions WHERE feature_id = ? ORDER BY started_at DESC`,
+        )
+        .all(featureId) as Omit<SessionRow, 'pane_id'>[]
+
+      const live = new Set(ptyManager.runningIds())
+      return rows.map((row) => ({
+        id: row.id,
+        ccSessionId: row.cc_session_id,
+        repoId: row.repo_id,
+        // O DB só tem título quando houve rename; senão o nome real está no
+        // transcript. Sem o fallback a lista fica cheia de linhas sem rótulo.
+        title: row.title ?? transcriptTitleOrNull(row.cc_session_id),
+        titleSource: row.title_source,
+        status: row.status,
+        startedAt: row.started_at,
+        endedAt: row.ended_at,
+        isLive: live.has(row.id),
+      }))
+    },
+  )
 
   ipcMain.handle('sessions:list-live-global', async (): Promise<LiveSessionInfo[]> => {
     const db = getDb()

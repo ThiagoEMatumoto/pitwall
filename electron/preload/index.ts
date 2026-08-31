@@ -140,6 +140,7 @@ const api: Api = {
     resume: (input: ResumeSessionInput) => invoke('sessions:resume', input),
     isResumable: (ccSessionId) => invoke('sessions:is-resumable', ccSessionId),
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
+    listByFeature: (featureId) => invoke('sessions:list-by-feature', featureId),
     getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
     write: (sessionId, data) => invoke('sessions:write', sessionId, data),
     saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
