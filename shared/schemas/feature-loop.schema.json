@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall.app/schemas/feature-loop.schema.json",
+  "title": "Feature Loop",
+  "description": "Modelo do loop de uma feature no Pitwall: pulso (o que está vivo agora), ledger (o que já mudou) e métricas (o que a mudança moveu), mais a cadência esperada de toque. Os nomes de campo aqui são os do armazenamento (snake_case, tabelas da migration 042_feature_loop e do bundle de sync); o módulo puro shared/feature-loop.ts expõe os mesmos dados em camelCase. Nada de vitalidade é persistido: `liveness` e os `issues` são DERIVADOS a cada leitura.",
+  "type": "object",
+  "required": ["feature_id"],
+  "additionalProperties": false,
+  "properties": {
+    "feature_id": {
+      "type": "string",
+      "description": "Id da feature dona deste loop (features.id). Todas as coleções abaixo pertencem a ela e somem junto (ON DELETE CASCADE)."
+    },
+    "cadence_days": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "default": null,
+      "description": "Cadência esperada de toque, em dias: acima dela a feature é derivada como `quiet`. NULL de propósito = 'usa o default' (14 dias, STALLED_THRESHOLD_DAYS), resolvido em código — materializar o número congelaria nas features antigas um valor que ninguém escolheu."
+    },
+    "loop_export": {
+      "type": "boolean",
+      "default": true,
+      "description": "Se o loop desta feature entra nos bundles de sync/exportação. Falso mantém o loop local."
+    },
+    "paused_at": {
+      "type": ["integer", "null"],
+      "description": "Epoch ms em que a feature foi pausada; null = não pausada. Pausa vence toda a derivação de vitalidade — silêncio durante uma pausa é esperado, não sintoma. `features.status = 'paused'` tem o mesmo efeito."
+    },
+    "pulse": {
+      "type": "array",
+      "description": "Histórico APPEND-ONLY de pulsos (feature_pulses). O pulso VIGENTE é derivado por MAX(created_at) — não existe flag `is_current`, porque uma flag exigiria duas escritas por pulso novo e qualquer escritor que falhasse no meio deixaria zero ou dois vigentes.",
+      "items": {
+        "type": "object",
+        "required": ["id", "body", "source", "created_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Id do pulso (PK)." },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Uma frase respondendo 'o que está vivo agora?'. Máximo 200 caracteres: pulso é sinal, não relatório — passar disso gera a issue de erro `pulse_too_long` e derruba a feature para `broken`."
+          },
+          "source": {
+            "type": "string",
+            "enum": ["human", "session", "mcp", "seed"],
+            "description": "Quem escreveu: 'human' (a pessoa, na UI), 'session' (uma sessão de Claude Code em andamento), 'mcp' (agente via ferramenta MCP), 'seed' (semeado na criação/importação)."
+          },
+          "session_id": {
+            "type": ["string", "null"],
+            "description": "Sessão que escreveu o pulso, quando houve uma. Sem FK de propósito: sessões são efêmeras e somem, mas o pulso que uma delas deixou continua valendo como registro histórico."
+          },
+          "created_at": {
+            "type": "integer",
+            "description": "Epoch ms da escrita. É o critério do pulso vigente e conta como atividade real na derivação de `liveness`."
+          }
+        }
+      }
+    },
+    "ledger": {
+      "type": "array",
+      "description": "Registro do que já mudou na feature (feature_ledger): decisões, entregas, reversões. PK composta (feature_id, entry_id) — o índice e o corpo vivem na mesma linha.",
+      "items": {
+        "type": "object",
+        "required": ["entry_id", "title", "created_at", "updated_at"],
+        "additionalProperties": false,
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$",
+            "maxLength": 80,
+            "description": "Id textual ESTÁVEL escolhido por quem escreve (ex.: 'adr-01', 'ship.v2'): começa com letra ou dígito, aceita ponto, hífen e underscore, até 80 caracteres. É a chave de reescrita idempotente — por isso não pode ser gerado a cada escrita. O CHECK do SQLite só limita comprimento (regex exigiria a extensão REGEXP); o formato é validado em shared/feature-loop.ts, e a violação gera a issue de erro `ledger_id_invalid`."
+          },
+          "kind": {
+            "type": ["string", "null"],
+            "description": "Rótulo livre de categoria da entrada (ex.: 'decision', 'ship', 'revert'). Sem enum: a taxonomia ainda está se formando e um enum prematuro rejeitaria entradas legítimas."
+          },
+          "title": { "type": "string", "description": "Uma linha dizendo o que mudou." },
+          "body": {
+            "type": ["string", "null"],
+            "maxLength": 81920,
+            "description": "Detalhe em Markdown. Teto de 80 KiB para uma entrada não virar um documento inteiro dentro da linha."
+          },
+          "created_at": { "type": "integer", "description": "Epoch ms da criação da entrada." },
+          "updated_at": {
+            "type": "integer",
+            "description": "Epoch ms da última reescrita. Conta como atividade real na derivação de `liveness`."
+          },
+          "archived_at": {
+            "type": ["integer", "null"],
+            "description": "Epoch ms do arquivamento; null = entrada ativa. Arquivar esconde da listagem sem apagar histórico."
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "description": "Colunas de métrica DECLARADAS da feature (feature_metrics) — o que esta frente se propõe a mover. Só uma coluna declarada pode receber pontos.",
+      "items": {
+        "type": "object",
+        "required": ["column_key"],
+        "additionalProperties": false,
+        "properties": {
+          "column_key": {
+            "type": "string",
+            "description": "Chave estável da coluna (ex.: 'p95_latency_ms'), única dentro da feature. É por ela que os pontos se ligam à coluna (FK composta feature_id + column_key)."
+          },
+          "label": { "type": ["string", "null"], "description": "Nome legível exibido na UI. Ausente = a UI mostra a própria column_key." },
+          "unit": { "type": ["string", "null"], "description": "Unidade exibida junto do valor (ex.: 'ms', 'R$', '%')." },
+          "target": {
+            "type": ["number", "null"],
+            "description": "Valor que a feature quer atingir. Governa o tom do valor medido: dentro de 15% do target é 'ok'. Com target 0 a faixa colapsa (só o valor exatamente 0 é 'ok') — a tolerância é calculada por multiplicação, nunca por divisão. Ausente = sem tom de alvo."
+          },
+          "floor": {
+            "type": ["number", "null"],
+            "description": "Piso inaceitável: valor ABAIXO dele é 'fail', antes de qualquer outra regra. Ausente = sem piso."
+          },
+          "baseline": {
+            "type": ["number", "null"],
+            "description": "Ponto de partida, para exibir a variação desde o início. Não participa do tom."
+          },
+          "direction": {
+            "type": ["string", "null"],
+            "enum": ["increase", "decrease", "maintain", null],
+            "description": "Sentido do bom: subir, descer ou manter. Usado na apresentação (setas, sinal da variação); a mesma enum de ProgressDirection nos objetivos/KRs."
+          },
+          "is_headline": {
+            "type": "boolean",
+            "default": false,
+            "description": "Coluna que representa a feature no card/board. Espera-se no máximo uma por feature."
+          },
+          "alarm": {
+            "type": "boolean",
+            "default": false,
+            "description": "Coluna em que PASSAR do target é ruim (custo, latência, taxa de erro): acima do target o valor é 'fail'. Sem alarm, ficar acima do target é bom e nunca é 'fail'."
+          }
+        }
+      }
+    },
+    "metric_points": {
+      "type": "array",
+      "description": "Série temporal medida (feature_metric_points). Cada ponto DEVE apontar para uma column_key declarada em `metrics` — o banco garante por FK composta, e um ponto órfão gera a issue de erro `metric_point_orphan`. Único por (feature_id, column_key, at).",
+      "items": {
+        "type": "object",
+        "required": ["id", "column_key", "at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Id do ponto (PK)." },
+          "column_key": { "type": "string", "description": "Coluna declarada a que este ponto pertence." },
+          "at": { "type": "integer", "description": "Epoch ms da medição. Conta como atividade real na derivação de `liveness`." },
+          "value": { "type": ["number", "null"], "description": "Valor medido; null = medição tentada sem resultado (mantém o buraco visível na série)." },
+          "note": { "type": ["string", "null"], "description": "Nota curta explicando o ponto (ex.: 'após o rollout do cache')." }
+        }
+      }
+    },
+    "liveness": {
+      "type": "string",
+      "enum": ["alive", "quiet", "broken", "paused", "done"],
+      "readOnly": true,
+      "description": "DERIVADO, NUNCA PERSISTIDO. Não existe coluna `liveness` em lugar nenhum: o valor é recalculado a cada leitura por livenessOf() em shared/feature-loop.ts. É a inversão central do modelo — uma frente está em silêncio porque ninguém a tocou há N dias, não porque alguém digitou isso. Precedência exata (a primeira que casar vence): 'paused' (paused_at preenchido ou status 'paused' — silêncio esperado), 'broken' (há ao menos uma issue de nível error; vem antes de 'done' para uma feature concluída com dado inconsistente não se esconder atrás da conclusão), 'done' (status 'done' ou completed_at preenchido), 'quiet' (agora − última atividade >= cadence_days; última atividade = o MAIOR entre updated_at, último session record, último pulso, último ledger, último ponto de métrica e o mtime do .md), 'alive' (o resto).",
+      "$comment": "Presente no schema para documentar o contrato de leitura da UI/bundle; escritores devem ignorá-lo."
+    },
+    "issues": {
+      "type": "array",
+      "readOnly": true,
+      "description": "DERIVADOS, NUNCA PERSISTIDOS: recalculados por issuesOf(). Cada `code` aparece no máximo uma vez (violações repetidas são agregadas numa issue só, porque a UI indexa a lista pelo code). Qualquer issue de nível 'error' torna a feature 'broken'.",
+      "items": {
+        "type": "object",
+        "required": ["level", "code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": ["error", "warn", "info"],
+            "description": "'error' quebra o loop (vira 'broken'); 'warn' é higiene que degrada o sinal; 'info' é empurrão."
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "pulse_too_long",
+              "ledger_id_invalid",
+              "metric_point_orphan",
+              "pulse_missing",
+              "objective_missing",
+              "objective_too_long",
+              "no_repo_linked"
+            ],
+            "description": "Chave estável usada pela UI: 'pulse_too_long' (error — pulso vigente acima de 200 caracteres), 'ledger_id_invalid' (error — algum entry_id fora de ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$), 'metric_point_orphan' (error — ponto cuja column_key não está declarada), 'pulse_missing' (warn — nenhum pulso, então não se sabe o que está vivo agora), 'objective_missing' (warn — objetivo vazio), 'objective_too_long' (warn — objetivo acima de 400 caracteres; o detalhe pertence ao ledger), 'no_repo_linked' (info — feature sem repo vinculado)."
+          },
+          "message": { "type": "string", "description": "Texto legível já resolvido, em pt-BR, com os números do caso concreto." }
+        }
+      }
+    }
+  }
+}
