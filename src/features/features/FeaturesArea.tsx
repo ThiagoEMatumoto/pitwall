@@ -18,6 +18,7 @@ import { FeaturesSidebar, type StatusFilter } from './FeaturesSidebar'
 import { FeatureTriage } from './FeatureTriage'
 import { ViewToggle, type ViewMode } from './FeaturesViewToggle'
 import { FeatureWall } from './FeatureWall'
+import { featureActivity } from './feature-activity'
 import { duplicateOfFeature, selectTriage } from './feature-issues'
 import { selectPinned } from './feature-pin'
 import { dismissDuplicate, setFeaturePinned } from './feature-pin-api'
@@ -154,9 +155,9 @@ export function FeaturesArea() {
       if (!matchesObjectiveFilter(f)) return false
       return true
     })
-    // Ordena por atividade REAL: último session record quando existe, senão
-    // o updated_at do índice (mexer em metadado não "sobe" a feature).
-    const activity = (f: Feature) => statsById.get(f.id)?.lastRecordAt ?? f.updatedAt
+    // Ordena por atividade REAL (featureActivity): último session record quando
+    // existe, senão o updated_at do índice — o mesmo critério do picker.
+    const activity = (f: Feature) => featureActivity(statsById.get(f.id) ?? f)
     return [...filtered].sort((a, b) => activity(b) - activity(a))
   }, [features, drafts, appDevFeatures, statsById, filter, q, matchesObjectiveFilter])
 
@@ -191,7 +192,7 @@ export function FeaturesArea() {
   // Pinadas (parede): saem de withStats pra o card ter atividade real, e
   // respeitam busca/filtro de objetivo — foco fora do recorte atual é ruído.
   const pinned = useMemo(() => {
-    const activity = (f: FeatureWithStats) => f.lastRecordAt ?? f.updatedAt
+    const activity = featureActivity
     const visible = withStats.filter((f) => {
       if (f.isAppDev && filter !== 'app-dev') return false
       if (q && !f.title.toLowerCase().includes(q)) return false

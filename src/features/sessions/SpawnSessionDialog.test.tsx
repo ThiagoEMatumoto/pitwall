@@ -5,7 +5,7 @@ import type { LiveSessionInfo, Repo } from '../../../shared/types/ipc'
 // O diálogo puxa features por IPC e prefs persistidas; aqui só interessa a
 // SAÍDA nova: "abrir como sessão filha" e o payload que ela entrega ao caller.
 vi.mock('@/lib/ipc', () => ({
-  featuresApi: { list: vi.fn().mockResolvedValue([]) },
+  featuresApi: { listWithStats: vi.fn().mockResolvedValue([]) },
 }))
 vi.mock('@/lib/session-prefs-store', () => ({
   loadRepoSessionDefaults: vi.fn().mockResolvedValue(null),

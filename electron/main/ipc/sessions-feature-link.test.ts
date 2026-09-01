@@ -3,6 +3,8 @@
 //  - `sessions:resume` herda o feature_id e recebe o MESMO bloco de contexto do
 //    spawn (pulso/vitalidade/ponteiro do loop) — antes o resume nascia mudo;
 //  - `sessions:list-by-feature` devolve o histórico de sessões da feature;
+//  - `sessions:list-by-repo` carrega id interno + feature_id (a marca da frente
+//    nas listas por repo), colapsando as várias linhas de uma mesma cc_session_id;
 //  - o cwd respeita o worktree registrado em feature_repos (com fallback pro repo).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,6 +20,10 @@ const seam = vi.hoisted(() => ({
   spawns: [] as Array<{ sessionId: string; innerCmd: string; cwd: string }>,
   // Args do INSERT INTO sessions, na ordem do statement.
   inserted: [] as unknown[][],
+  // Args do UPDATE sessions SET feature_id (vínculo de sessão em curso).
+  featureUpdates: [] as unknown[][],
+  // (canal, payload) de cada broadcast pro renderer.
+  broadcasts: [] as Array<{ channel: string; payload: unknown }>,
   // path → conteúdo escrito (system-prompt temporário).
   writtenFiles: new Map<string, string>(),
   // Diretórios que "existem" no disco pro statSync falso.
@@ -27,6 +33,7 @@ const seam = vi.hoisted(() => ({
   // worktree_path registrado em feature_repos (null = nenhum).
   worktreePath: null as string | null,
   featureSessionRows: [] as Record<string, unknown>[],
+  repoSessionRows: [] as Record<string, unknown>[],
   lastFeatureSessionsSql: '',
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
@@ -34,7 +41,16 @@ const seam = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [
+      {
+        webContents: {
+          send: (channel: string, payload: unknown) =>
+            seam.broadcasts.push({ channel, payload }),
+        },
+      },
+    ],
+  },
   ipcMain: {
     handle: (channel: string, fn: (event: unknown, ...args: never[]) => unknown) => {
       seam.handlers.set(channel, fn)
@@ -64,6 +80,7 @@ vi.mock('../services/db', () => ({
     prepare: (sql: string) => ({
       run: (...args: unknown[]) => {
         if (sql.includes('INSERT INTO sessions')) seam.inserted.push(args)
+        if (sql.includes('UPDATE sessions SET feature_id')) seam.featureUpdates.push(args)
         return { changes: 1 }
       },
       get: (..._args: unknown[]) => {
@@ -83,6 +100,7 @@ vi.mock('../services/db', () => ({
           seam.lastFeatureSessionsSql = sql
           return seam.featureSessionRows
         }
+        if (sql.includes('WHERE repo_id = ?')) return seam.repoSessionRows
         return []
       },
     }),
@@ -140,7 +158,7 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
-import type { FeatureSessionSummary } from '../../../shared/types/ipc'
+import type { FeatureSessionSummary, SessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
   id: 'feat-1',
@@ -185,11 +203,14 @@ beforeEach(() => {
   seam.handlers.clear()
   seam.spawns.length = 0
   seam.inserted.length = 0
+  seam.featureUpdates.length = 0
+  seam.broadcasts.length = 0
   seam.writtenFiles.clear()
   seam.existingDirs = new Set([REPO_PATH])
   seam.resumeFeatureId = null
   seam.worktreePath = null
   seam.featureSessionRows = []
+  seam.repoSessionRows = []
   seam.lastFeatureSessionsSql = ''
   seam.runningIds = []
   seam.feature = FEATURE
@@ -321,5 +342,58 @@ describe('sessions:list-by-feature', () => {
 
   it('feature sem sessão devolve lista vazia', () => {
     expect(handler('sessions:list-by-feature')(null, 'feat-vazia' as never)).toEqual([])
+  })
+})
+
+describe('sessions:list-by-repo', () => {
+  it('devolve o id interno e o feature_id de cada sessão', () => {
+    seam.repoSessionRows = [
+      { id: 's2', cc_session_id: CC_SESSION_ID, title: 'Fechar o loop', feature_id: 'feat-1' },
+    ]
+
+    const out = handler('sessions:list-by-repo')(null, 'r1' as never) as SessionSummary[]
+
+    expect(out).toEqual([
+      {
+        id: 's2',
+        ccSessionId: CC_SESSION_ID,
+        featureId: 'feat-1',
+        name: 'Fechar o loop',
+        title: 'Fechar o loop',
+        status: 'ended',
+        lastActivityAt: null,
+        isLive: false,
+      },
+    ])
+  })
+
+  it('colapsa as linhas da mesma cc_session_id herdando vínculo e título das antigas', () => {
+    // Cada resume abre outra linha; a mais nova nasce sem título nem feature.
+    seam.repoSessionRows = [
+      { id: 's3', cc_session_id: CC_SESSION_ID, title: null, feature_id: null },
+      { id: 's2', cc_session_id: CC_SESSION_ID, title: 'Fechar o loop', feature_id: 'feat-1' },
+    ]
+
+    const out = handler('sessions:list-by-repo')(null, 'r1' as never) as SessionSummary[]
+
+    expect(out).toHaveLength(1)
+    expect(out[0].id).toBe('s3')
+    expect(out[0].featureId).toBe('feat-1')
+    expect(out[0].title).toBe('Fechar o loop')
+  })
+})
+
+describe('sessions:set-feature — vincular sessão em curso', () => {
+  it('grava sessions.feature_id e avisa o renderer', () => {
+    handler('sessions:set-feature')(null, 'sess-1' as never, 'feat-1' as never)
+    expect(seam.featureUpdates).toEqual([['feat-1', 'sess-1']])
+    expect(seam.broadcasts).toEqual([
+      { channel: 'session:feature-changed', payload: { sessionId: 'sess-1', featureId: 'feat-1' } },
+    ])
+  })
+
+  it('featureId null desfaz o vínculo', () => {
+    handler('sessions:set-feature')(null, 'sess-1' as never, null as never)
+    expect(seam.featureUpdates).toEqual([[null, 'sess-1']])
   })
 })

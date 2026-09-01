@@ -149,6 +149,7 @@ const api: Api = {
     resize: (sessionId, cols, rows) => invoke('sessions:resize', sessionId, cols, rows),
     kill: (sessionId) => invoke('sessions:kill', sessionId),
     rename: (sessionId, title) => invoke('sessions:rename', sessionId, title),
+    setFeature: (sessionId, featureId) => invoke('sessions:set-feature', sessionId, featureId),
     list: () => invoke('sessions:list'),
     onData: (handler) => subscribe<PtyDataEvent>('pty:data', handler),
     onExit: (handler) => subscribe<PtyExitEvent>('pty:exit', handler),

@@ -17,6 +17,7 @@ import { useAppStore } from '@/store/appStore'
 import { Icon } from '@/components/ui/Icon'
 import { GradientBorder } from '@/features/brand'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
+import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { projectsApi, voiceApi } from '@/lib/ipc'
 import { matchesQuery } from '@/lib/text-match'
 import { sessionSearchText, sortByUrgency } from '../session-switcher/session-search'
@@ -76,6 +77,7 @@ function sessionHint(s: LiveSessionInfo): ReactNode {
   const view = statusView(s.status)
   return (
     <span className="flex items-center gap-2">
+      <SessionFeatureChip sessionId={s.id} density="chip" />
       {s.projectName && <span className="max-w-28 truncate">{s.projectName}</span>}
       <span className={`flex items-center gap-1 ${view.className}`}>
         <Icon as={view.icon} size={11} className={view.spin ? 'animate-spin' : undefined} />

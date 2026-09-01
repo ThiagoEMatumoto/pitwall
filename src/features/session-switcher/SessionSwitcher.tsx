@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { MonitorCheck } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
+import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import { matchesSession } from './session-search'
@@ -410,6 +411,7 @@ function SessionRow({
           </span>
           <span className="shrink-0">{relativeTime(item.lastActivityAt)}</span>
           {item.tokens && <span className="shrink-0">{item.tokens.output} tok</span>}
+          <SessionFeatureChip sessionId={item.id} density="chip" />
         </div>
 
         {preview && (

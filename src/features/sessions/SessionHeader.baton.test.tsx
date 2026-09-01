@@ -5,6 +5,13 @@ import type { SessionActivity } from '../../../shared/types/ipc'
 
 // O chip da feature navega por @/lib/nav, que puxa a cadeia de stores (e o
 // window.api, inexistente em jsdom). O alvo aqui é o bastão, não a navegação.
+// O bloco de identidade da frente fala com o main (listWithStats/setFeature) no
+// clique; nada disso é o alvo aqui, mas o import de @/lib/ipc toca window.api.
+vi.mock('@/lib/ipc', () => ({
+  featuresApi: { listWithStats: vi.fn().mockResolvedValue([]), get: vi.fn() },
+  sessionsApi: { setFeature: vi.fn().mockResolvedValue(undefined), listByFeature: vi.fn() },
+  loopApi: { onUpdated: vi.fn(() => () => {}) },
+}))
 vi.mock('@/lib/nav', () => ({
   navigateToFeature: vi.fn(),
   navigateToObjective: vi.fn(),

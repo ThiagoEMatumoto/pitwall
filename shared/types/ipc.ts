@@ -1979,7 +1979,11 @@ export interface ResumeSessionInput {
 }
 
 export interface SessionSummary {
+  /** `sessions.id` interno — chave do índice sessão → feature no renderer. */
+  id: string
   ccSessionId: string
+  /** Feature vinculada, quando há (vem da mesma linha, sem consulta extra). */
+  featureId: string | null
   name: string | null
   // Título persistido no DB (rename manual/auto), distinto do name derivado do
   // transcript — fallback de exibição/busca quando o name é nulo.
@@ -3442,6 +3446,8 @@ export interface Api {
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
+    /** Vincula (ou desvincula, com null) a sessão a uma feature. */
+    setFeature(sessionId: string, featureId: string | null): Promise<void>
     list(): Promise<Session[]>
     onData(handler: (event: PtyDataEvent) => void): () => void
     onExit(handler: (event: PtyExitEvent) => void): () => void

@@ -1105,6 +1105,8 @@ export function Terminal({
           onAdopt={() => setAdoptOpen(true)}
           adoptDisabledReason={adoptDisabledReason}
           feature={sessionFeature}
+          sessionId={session.id}
+          repoId={session.repoId}
         />
       )}
 
