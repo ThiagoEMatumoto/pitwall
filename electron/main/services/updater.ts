@@ -255,8 +255,9 @@ async function applyAssistedUpdate(ext: string): Promise<void> {
 // - `-o DPkg::Lock::Timeout=120`: aguarda até 120s pelo lock do dpkg em vez de
 //   falhar na hora (contenção comum com unattended-upgrades).
 // Tratamento de saída:
-// - exit 126/127 = pkexec (prompt cancelado / não autorizado) → NÃO é erro de
-//   instalação: volta pro estado disponível, sem abrir a Central.
+// - exit 126/127 = pkexec (prompt cancelado / não autorizado / binário ausente)
+//   → NÃO é erro de instalação: estado 'cancelled', que mantém o botão de
+//   tentar de novo no toast, sem abrir a Central.
 // - outro exit≠0 = erro do apt-get → estado de erro com as últimas linhas do
 //   stderr (mensagem amigável se for lock). Nunca abre a Central (inútil aqui).
 async function installDebWithPkexec(destPath: string, version: string): Promise<void> {
@@ -289,7 +290,7 @@ async function installDebWithPkexec(destPath: string, version: string): Promise<
     // pkexec: 126 = não autorizado / dismissed, 127 = autenticação cancelada.
     if (code === 126 || code === 127) {
       updaterLog('install:cancelled', `code=${code}`)
-      broadcast({ state: 'available', version, format: currentFormat })
+      broadcast({ state: 'cancelled', version, format: currentFormat })
       return
     }
 
