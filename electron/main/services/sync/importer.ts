@@ -14,6 +14,8 @@ import {
   type SyncedTable,
   PATH_COLUMNS,
   SYNCED_TABLES,
+  TABLE_PRIMARY_KEYS,
+  ensureAbsolutePath,
   featuresDir,
   localizePath,
   manifestPath,
@@ -48,6 +50,22 @@ function resolveFeaturesRoot(opts?: ImportOpts): string {
   if (typeof r === 'function') return r()
   if (typeof r === 'string') return r
   return join(app.getPath('userData'), 'features')
+}
+
+// Raiz local do vault (app_prefs.vault_root, machine-local, fora do sync).
+// Fallback do importer quando o bundle traz path portável e não há projectsRoot
+// configurado: absolutizar contra o vault é melhor que gravar path relativo.
+// Só a pref EXPLÍCITA conta — nada do default ~/ClaudeManager aqui (chutar a
+// raiz fabricaria paths inexistentes; preservar o row local é mais seguro).
+function localVaultRoot(db: Database.Database): string | null {
+  try {
+    const row = db.prepare('SELECT value FROM app_prefs WHERE key = ?').get('vault_root') as
+      | { value?: string }
+      | undefined
+    return row?.value?.trim() || null
+  } catch {
+    return null
+  }
 }
 
 function localSchemaVersion(db: Database.Database): number {
@@ -182,6 +200,9 @@ export function importBundle(
   const start = opts?.startWatcher ?? startFeatureWatcher
   const mark = opts?.markSelfWrite ?? markSelfWrite
   const projectsRoot = opts?.projectsRoot ?? null
+  // Raiz de fallback p/ absolutizar paths que localizePath não resolveu:
+  // projectsRoot (sync-config) > vault_root local (app_prefs).
+  const fallbackRoot = projectsRoot ?? localVaultRoot(db)
   const localFeaturesRoot = resolveFeaturesRoot(opts)
 
   const { schemaVersion } = readManifest(bundleDir)
@@ -214,6 +235,27 @@ export function importBundle(
   )
   const preserved: ReadonlySet<string> = new Set(SYNCED_TABLES.filter((t) => !inBundle.has(t)))
 
+  // Snapshot dos paths locais ATUAIS (por PK) das tabelas com colunas de path
+  // que o replace-all vai substituir: se o bundle trouxer um path que não dá
+  // pra absolutizar (sem raiz local), preservamos o valor do row local em vez
+  // de sobrescrevê-lo com um relativo quebrado.
+  const existingPaths = new Map<SyncedTable, Map<string, Record<string, unknown>>>()
+  for (const table of SYNCED_TABLES) {
+    if (!inBundle.has(table)) continue
+    const cols = PATH_COLUMNS[table]
+    if (!cols || cols.length === 0) continue
+    const pks = TABLE_PRIMARY_KEYS[table]
+    const select = [...pks, ...cols].map((c) => `"${c}"`).join(', ')
+    const byKey = new Map<string, Record<string, unknown>>()
+    const rows = db.prepare(`SELECT ${select} FROM "${table}"`).all() as Array<
+      Record<string, unknown>
+    >
+    for (const r of rows) {
+      byKey.set(pks.map((k) => String(r[k])).join('\u0000'), r)
+    }
+    existingPaths.set(table, byKey)
+  }
+
   let unresolvedPaths = 0
 
   db.pragma('foreign_keys = OFF')
@@ -233,15 +275,22 @@ export function importBundle(
         const placeholders = cols.map((c) => `@${c}`).join(', ')
         const colList = cols.map((c) => `"${c}"`).join(', ')
         const ins = db.prepare(`INSERT INTO "${table}" (${colList}) VALUES (${placeholders})`)
+        const pks = TABLE_PRIMARY_KEYS[table]
         for (const row of rows) {
+          const rowKey = pks.map((k) => String(row[k])).join('\u0000')
           const params: Record<string, unknown> = {}
           for (const c of cols) {
             const v = row[c] ?? null
             if (pathCols.has(c)) {
               // <CM_ROOT>/... → resolve contra a raiz LOCAL; absoluto legado passa
-              // intacto; NULL intacto. Conta os não-resolvidos (sem raiz local o
-              // path fica relativo/quebrado, mas o import não falha).
-              const r = localizePath(v, projectsRoot)
+              // intacto; NULL intacto. ensureAbsolutePath garante que NUNCA
+              // persistimos path relativo: sem projectsRoot, absolutiza contra o
+              // vault_root local; sem raiz nenhuma, preserva o valor do row local
+              // pré-import (se absoluto). Preservado/irrecuperável conta em
+              // unresolvedPaths (a UI segue pedindo a configuração da raiz).
+              const localized = localizePath(v, projectsRoot)
+              const existing = existingPaths.get(table)?.get(rowKey)?.[c]
+              const r = ensureAbsolutePath(localized.value, fallbackRoot, existing)
               if (r.unresolved) unresolvedPaths++
               params[c] = r.value
             } else {

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { getDb } from './db'
+import { resolveRepoPath } from './repo-path'
 import { authArgs, netGit } from './git-auth'
 import { pingSyncMutation } from './notify'
 import type { CloneMissingResult, MissingRepo } from '../../../shared/types/ipc'
@@ -36,7 +37,11 @@ export function listMissingRepos(): MissingRepo[] {
   const rows = getDb()
     .prepare('SELECT id, label, path, remote_url FROM repos WHERE remote_url IS NOT NULL')
     .all() as RepoRow[]
-  return selectMissingRepos(rows, existsSync)
+  // Rows legados podem ter path RELATIVO (bug do importer do sync): resolve
+  // contra o vault root ANTES do existsSync — senão todo repo legado aparece
+  // como "missing" e o clone iria pra um path relativo ao cwd do processo.
+  const resolved = rows.map((r) => ({ ...r, path: resolveRepoPath(r.path) }))
+  return selectMissingRepos(resolved, existsSync)
 }
 
 // Progresso emitido antes de cada clone (índice 1-based / total + label).

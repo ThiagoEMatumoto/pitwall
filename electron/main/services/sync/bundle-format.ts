@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 // ---- Bundle layout ----
 //
@@ -170,6 +170,32 @@ export function localizePath(
     return { value: rest.startsWith('/') ? rest.slice(1) : rest, unresolved: true }
   }
   return { value: stripTrailingSlash(root) + rest, unresolved: false }
+}
+
+// Última linha de defesa do import: NUNCA persistir path não-absoluto. Um path
+// relativo no DB quebra existsSync/statSync/cwd de spawn (todos resolvem contra
+// o cwd do processo, nunca o certo) — foi exatamente o bug do localizePath sem
+// raiz gravar `projetos/x` em repos.path. Ordem de resolução:
+//  1. já absoluto (ou NULL/não-string) → intacto.
+//  2. `fallbackRoot` disponível → absolutiza contra ele (resolvido).
+//  3. `existing` (valor do row local pré-import) absoluto → preserva o local em
+//     vez de sobrescrever com lixo. Ainda conta como `unresolved`: a raiz local
+//     segue não-configurada e a UI deve pedir a configuração.
+//  4. sem saída → devolve o relativo mesmo (comportamento antigo), `unresolved`.
+export function ensureAbsolutePath(
+  value: unknown,
+  fallbackRoot: string | null | undefined,
+  existing?: unknown,
+): { value: unknown; unresolved: boolean } {
+  if (typeof value !== 'string' || value.length === 0) return { value, unresolved: false }
+  if (isAbsolute(value)) return { value, unresolved: false }
+  if (fallbackRoot) {
+    return { value: stripTrailingSlash(fallbackRoot) + '/' + value, unresolved: false }
+  }
+  if (typeof existing === 'string' && isAbsolute(existing)) {
+    return { value: existing, unresolved: true }
+  }
+  return { value, unresolved: true }
 }
 
 // ---- Serialização determinística ----

@@ -5,6 +5,7 @@ import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { getDb } from '../services/db'
+import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
@@ -287,7 +288,10 @@ function resolveFeatureWorktree(featureId: string | null, repoId: string | null)
       .get(featureId, repoId) as { worktree_path: string | null } | undefined
     const path = row?.worktree_path?.trim()
     if (!path) return null
-    return statSync(path).isDirectory() ? path : null
+    // worktree_path legado pode ser RELATIVO (bug do importer do sync antigo):
+    // resolve contra o vault root antes de olhar o disco.
+    const abs = resolveRepoPath(path)
+    return statSync(abs).isDirectory() ? abs : null
   } catch {
     return null
   }
@@ -485,10 +489,13 @@ export function spawnSession(input: SpawnSessionInput): Session {
       .prepare('SELECT path, label FROM repos WHERE id = ?')
       .get(repoId) as RepoPathRow | undefined
     if (!repo) throw new Error(`repo not found: ${repoId}`)
-    assertRepoDirExists(repo.path)
+    // repos.path legado pode ser RELATIVO (bug do importer do sync antigo):
+    // resolve contra o vault root antes do guard e do cwd do spawn.
+    const repoPath = resolveRepoPath(repo.path)
+    assertRepoDirExists(repoPath)
     // Feature com worktree registrado pra ESTE repo manda no cwd; sem worktree
     // (ou com o diretório já removido) a sessão nasce na raiz do repo.
-    cwd = resolveFeatureWorktree(input.featureId ?? null, repoId) ?? repo.path
+    cwd = resolveFeatureWorktree(input.featureId ?? null, repoId) ?? repoPath
     defaultName = repo.label
   } else {
     cwd = resolveScratchDir()
@@ -649,6 +656,8 @@ export function resumeHandoffChild(
     .prepare('SELECT path, label FROM repos WHERE id = ?')
     .get(repoId) as RepoPathRow | undefined
   if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
+  // repos.path legado pode ser RELATIVO (bug do importer do sync antigo).
+  const repoPath = resolveRepoPath(repo.path)
 
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
@@ -683,7 +692,7 @@ export function resumeHandoffChild(
     id: internalSessionId,
     ccSessionId,
     repoId,
-    cwd: repo.path,
+    cwd: repoPath,
     innerCmd,
     featureId: handoff.featureId,
     initialCommand: opts.kickoff,
@@ -881,8 +890,10 @@ export function registerSessionIpc(): void {
         .prepare('SELECT path, label FROM repos WHERE id = ?')
         .get(repoId) as RepoPathRow | undefined
       if (!repo) throw new Error(`repo not found: ${repoId}`)
-      assertRepoDirExists(repo.path)
-      cwd = resolveFeatureWorktree(featureId, repoId) ?? repo.path
+      // Mesmo guard do spawn: repos.path legado relativo resolve contra o vault.
+      const repoPath = resolveRepoPath(repo.path)
+      assertRepoDirExists(repoPath)
+      cwd = resolveFeatureWorktree(featureId, repoId) ?? repoPath
       defaultName = repo.label
     } else {
       cwd = resolveScratchDir()
