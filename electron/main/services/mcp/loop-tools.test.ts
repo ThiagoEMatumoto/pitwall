@@ -94,9 +94,10 @@ afterAll(() => {
 })
 
 describe('mcp loop tools', () => {
-  it('registra as oito tools do loop', () => {
+  it('registra as tools do loop', () => {
     const names = tools.map((t) => t.name)
     for (const name of [
+      'feature_merge_duplicate',
       'feature_pulse_set',
       'feature_pulse_history',
       'feature_ledger_append',
@@ -227,6 +228,74 @@ describe('mcp loop tools', () => {
     call('feature_pulse_set', { featureId, body: 'Segundo.' })
     const history = call<{ items: FeaturePulse[] }>('feature_pulse_history', { featureId })
     expect(history.items.map((p) => p.body)).toEqual(['Segundo.', 'Primeiro.'])
+  })
+
+  // A mescla já existia no backend (feature-focus.mergeDuplicate) e só era
+  // alcançável pelo IPC; a tool a expõe pra sessão que detectou a duplicata.
+  it('feature_merge_duplicate move sessões/registros, adota o repo e ARQUIVA a origem', () => {
+    const db = getDb()
+    const now = Date.now()
+    const targetId = `${featureId}-alvo`
+    db.prepare(
+      `INSERT INTO features
+         (id, project_id, slug, title, status, doc_path, synth_mode, origin, created_at, updated_at)
+       VALUES (?, 'proj-loop', ?, 'Feature alvo', 'in-progress', ?, 'threshold', 'manual', ?, ?)`,
+    ).run(targetId, `slug-${targetId}`, `/tmp/${targetId}.md`, now, now)
+    const repoId = (
+      db.prepare('SELECT repo_id FROM feature_repos WHERE feature_id = ?').get(featureId) as {
+        repo_id: string
+      }
+    ).repo_id
+    const sessionId = `sess-${targetId}`
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, status, started_at, feature_id)
+       VALUES (?, ?, 'exited', ?, ?)`,
+    ).run(sessionId, repoId, now, featureId)
+    db.prepare(
+      `INSERT INTO feature_session_records
+         (session_id, feature_id, cc_session_id, summary, session_at, created_at)
+       VALUES (?, ?, 'cc-1', 'resumo', ?, ?)`,
+    ).run(sessionId, featureId, now, now)
+    notify.calls.length = 0
+
+    const result = call<{ archivedSourceId: string; target: { id: string } }>(
+      'feature_merge_duplicate',
+      { sourceId: featureId, targetId },
+    )
+
+    expect(result.archivedSourceId).toBe(featureId)
+    expect(result.target.id).toBe(targetId)
+    expect(
+      (db.prepare('SELECT feature_id FROM sessions WHERE id = ?').get(sessionId) as {
+        feature_id: string
+      }).feature_id,
+    ).toBe(targetId)
+    expect(
+      (db
+        .prepare('SELECT feature_id FROM feature_session_records WHERE session_id = ?')
+        .get(sessionId) as { feature_id: string }).feature_id,
+    ).toBe(targetId)
+    expect(
+      db
+        .prepare('SELECT feature_id FROM feature_repos WHERE repo_id = ? ORDER BY feature_id')
+        .all(repoId)
+        .map((r) => (r as { feature_id: string }).feature_id),
+    ).toContain(targetId)
+    // Arquivada, NÃO deletada: a row da origem continua lá com archived_at.
+    const source = db
+      .prepare('SELECT archived_at FROM features WHERE id = ?')
+      .get(featureId) as { archived_at: number | null }
+    expect(source.archived_at).not.toBeNull()
+    expect(notify.calls.map(([channel]) => channel)).toEqual([
+      'feature:updated',
+      'feature:updated',
+    ])
+  })
+
+  it('feature_merge_duplicate recusa mesclar uma feature nela mesma', () => {
+    expect(() =>
+      call('feature_merge_duplicate', { sourceId: featureId, targetId: featureId }),
+    ).toThrow(/itself/)
   })
 
   it('feature_loop_export escreve o doc no repo vinculado e o dryRun não toca no disco', async () => {

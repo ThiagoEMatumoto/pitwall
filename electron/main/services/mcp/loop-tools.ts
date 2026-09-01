@@ -1,6 +1,7 @@
 import * as z from 'zod/v4'
 import * as loopStore from '../loop-store'
-import { duplicateSuspectOf, setFocus } from '../feature-focus'
+import { duplicateSuspectOf, mergeDuplicate, setFocus } from '../feature-focus'
+import { get as getFeature } from '../feature-store'
 import { loopSnapshot } from '../loop-snapshot'
 import { exportLoopDoc } from '../loop-export'
 import { ok, type McpNotify, type ToolDef } from './tools'
@@ -111,6 +112,14 @@ const featurePinSchema = z.object({
     .number()
     .nullish()
     .describe('Manual position on the wall. Omit it unless you are reordering; null clears it.'),
+})
+
+const mergeDuplicateSchema = z.object({
+  sourceId: z
+    .string()
+    .min(1)
+    .describe('Feature that gets absorbed and ARCHIVED. Its sessions and records move to the target.'),
+  targetId: z.string().min(1).describe('Feature that survives and absorbs the work.'),
 })
 
 const loopExportSchema = z.object({
@@ -258,6 +267,23 @@ export function loopTools(notify: McpNotify): ToolDef[] {
           focusRank: focus.focusRank,
         })
         return ok({ focus, duplicateSuspect: duplicateSuspectOf(input.featureId) })
+      },
+    },
+    {
+      name: 'feature_merge_duplicate',
+      title: 'Merge a duplicate feature into another',
+      description:
+        'Fold a duplicated frontier into the one that should survive: sessions, session records and repo links move from source to target, and the SOURCE IS ARCHIVED — never deleted, so nothing written about it is lost and the merge stays auditable. Call it when feature_health_get reports a duplicate_suspect and you confirmed the two are the same work; pick as target the feature the human has been reading. Merging a feature into itself is refused.',
+      inputSchema: mergeDuplicateSchema,
+      handler: (args) => {
+        const { sourceId, targetId } = mergeDuplicateSchema.parse(args)
+        mergeDuplicate(sourceId, targetId)
+        const target = getFeature(targetId)
+        // Mesmo par de broadcasts do IPC 'features:merge-duplicate': as duas
+        // rows mudaram na lista, e é 'feature:updated' que pinga o sync.
+        notify.broadcast('feature:updated', { id: sourceId, archived: true })
+        if (target) notify.broadcast('feature:updated', target)
+        return ok({ archivedSourceId: sourceId, target })
       },
     },
     {
