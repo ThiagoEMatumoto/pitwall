@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/Input'
 import { sessionsApi } from '@/lib/ipc'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
+import { SessionFeatureChip } from './SessionFeatureChip'
 import { SpawnSessionDialog } from './SpawnSessionDialog'
 import type { Repo, SessionSummary } from '../../../shared/types/ipc'
 
@@ -163,7 +164,7 @@ export function SessionsModal({
         <ul className="flex flex-col gap-px">
           {filtered?.map((s) => (
             <li
-              key={s.ccSessionId}
+              key={s.id}
               className="flex items-center justify-between gap-3 rounded-md px-2 py-2.5 transition hover:bg-[var(--color-surface-2)]/60"
             >
               <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -177,9 +178,12 @@ export function SessionsModal({
                   <div className="truncate text-sm text-[var(--color-text)]">
                     {s.name || s.title || '(sem nome)'}
                   </div>
-                  <div className="text-[10px] text-[var(--color-text-dim)]">
-                    {s.isLive ? STATUS_LABEL[s.status] : 'encerrada'} ·{' '}
-                    {s.isLive ? 'ao vivo' : relativeTime(s.lastActivityAt)}
+                  <div className="flex min-w-0 items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
+                    <span className="shrink-0">
+                      {s.isLive ? STATUS_LABEL[s.status] : 'encerrada'} ·{' '}
+                      {s.isLive ? 'ao vivo' : relativeTime(s.lastActivityAt)}
+                    </span>
+                    <SessionFeatureChip sessionId={s.id} featureId={s.featureId} density="chip" />
                   </div>
                 </div>
               </div>

@@ -1979,7 +1979,11 @@ export interface ResumeSessionInput {
 }
 
 export interface SessionSummary {
+  /** `sessions.id` interno — chave do índice sessão → feature no renderer. */
+  id: string
   ccSessionId: string
+  /** Feature vinculada, quando há (vem da mesma linha, sem consulta extra). */
+  featureId: string | null
   name: string | null
   // Título persistido no DB (rename manual/auto), distinto do name derivado do
   // transcript — fallback de exibição/busca quando o name é nulo.

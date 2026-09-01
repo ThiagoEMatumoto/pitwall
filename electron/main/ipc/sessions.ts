@@ -968,16 +968,38 @@ export function registerSessionIpc(): void {
 
   ipcMain.handle('sessions:list-by-repo', (_e, repoId: string): SessionSummary[] => {
     const db = getDb()
+    // Uma mesma cc_session_id pode ter VÁRIAS linhas (cada resume abre outra), e
+    // o DISTINCT de antes escondia id/feature_id. Pegamos a linha mais recente
+    // como representante — e o vínculo com a feature da primeira linha que o
+    // tiver, pra retomada de sessão antiga não perder a marca da frente.
     const rows = db
       .prepare(
-        'SELECT DISTINCT cc_session_id, title FROM sessions WHERE repo_id = ? AND cc_session_id IS NOT NULL',
+        `SELECT id, cc_session_id, title, feature_id FROM sessions
+          WHERE repo_id = ? AND cc_session_id IS NOT NULL ORDER BY started_at DESC`,
       )
-      .all(repoId) as { cc_session_id: string; title: string | null }[]
+      .all(repoId) as {
+      id: string
+      cc_session_id: string
+      title: string | null
+      feature_id: string | null
+    }[]
+
+    const byCcId = new Map<string, (typeof rows)[number]>()
+    for (const row of rows) {
+      const seen = byCcId.get(row.cc_session_id)
+      if (!seen) {
+        byCcId.set(row.cc_session_id, row)
+        continue
+      }
+      // Linha mais nova pode ter nascido sem título/vínculo: herda das antigas.
+      if (!seen.feature_id && row.feature_id) seen.feature_id = row.feature_id
+      if (!seen.title && row.title) seen.title = row.title
+    }
 
     const liveIndex = buildSessionsFileIndex()
     const summaries: SessionSummary[] = []
 
-    for (const row of rows) {
+    for (const row of byCcId.values()) {
       const ccSessionId = row.cc_session_id
       const transcript = findTranscriptPath(ccSessionId)
       if (!transcript) continue // sem transcript real — spawn vazio, descarta.
@@ -1004,7 +1026,16 @@ export function registerSessionIpc(): void {
         status = 'ended'
       }
 
-      summaries.push({ ccSessionId, name, title: row.title, status, lastActivityAt, isLive })
+      summaries.push({
+        id: row.id,
+        ccSessionId,
+        featureId: row.feature_id,
+        name,
+        title: row.title,
+        status,
+        lastActivityAt,
+        isLive,
+      })
     }
 
     summaries.sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))

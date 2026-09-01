@@ -3,6 +3,8 @@
 //  - `sessions:resume` herda o feature_id e recebe o MESMO bloco de contexto do
 //    spawn (pulso/vitalidade/ponteiro do loop) — antes o resume nascia mudo;
 //  - `sessions:list-by-feature` devolve o histórico de sessões da feature;
+//  - `sessions:list-by-repo` carrega id interno + feature_id (a marca da frente
+//    nas listas por repo), colapsando as várias linhas de uma mesma cc_session_id;
 //  - o cwd respeita o worktree registrado em feature_repos (com fallback pro repo).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -27,6 +29,7 @@ const seam = vi.hoisted(() => ({
   // worktree_path registrado em feature_repos (null = nenhum).
   worktreePath: null as string | null,
   featureSessionRows: [] as Record<string, unknown>[],
+  repoSessionRows: [] as Record<string, unknown>[],
   lastFeatureSessionsSql: '',
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
@@ -83,6 +86,7 @@ vi.mock('../services/db', () => ({
           seam.lastFeatureSessionsSql = sql
           return seam.featureSessionRows
         }
+        if (sql.includes('WHERE repo_id = ?')) return seam.repoSessionRows
         return []
       },
     }),
@@ -140,7 +144,7 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
-import type { FeatureSessionSummary } from '../../../shared/types/ipc'
+import type { FeatureSessionSummary, SessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
   id: 'feat-1',
@@ -190,6 +194,7 @@ beforeEach(() => {
   seam.resumeFeatureId = null
   seam.worktreePath = null
   seam.featureSessionRows = []
+  seam.repoSessionRows = []
   seam.lastFeatureSessionsSql = ''
   seam.runningIds = []
   seam.feature = FEATURE
@@ -321,5 +326,43 @@ describe('sessions:list-by-feature', () => {
 
   it('feature sem sessão devolve lista vazia', () => {
     expect(handler('sessions:list-by-feature')(null, 'feat-vazia' as never)).toEqual([])
+  })
+})
+
+describe('sessions:list-by-repo', () => {
+  it('devolve o id interno e o feature_id de cada sessão', () => {
+    seam.repoSessionRows = [
+      { id: 's2', cc_session_id: CC_SESSION_ID, title: 'Fechar o loop', feature_id: 'feat-1' },
+    ]
+
+    const out = handler('sessions:list-by-repo')(null, 'r1' as never) as SessionSummary[]
+
+    expect(out).toEqual([
+      {
+        id: 's2',
+        ccSessionId: CC_SESSION_ID,
+        featureId: 'feat-1',
+        name: 'Fechar o loop',
+        title: 'Fechar o loop',
+        status: 'ended',
+        lastActivityAt: null,
+        isLive: false,
+      },
+    ])
+  })
+
+  it('colapsa as linhas da mesma cc_session_id herdando vínculo e título das antigas', () => {
+    // Cada resume abre outra linha; a mais nova nasce sem título nem feature.
+    seam.repoSessionRows = [
+      { id: 's3', cc_session_id: CC_SESSION_ID, title: null, feature_id: null },
+      { id: 's2', cc_session_id: CC_SESSION_ID, title: 'Fechar o loop', feature_id: 'feat-1' },
+    ]
+
+    const out = handler('sessions:list-by-repo')(null, 'r1' as never) as SessionSummary[]
+
+    expect(out).toHaveLength(1)
+    expect(out[0].id).toBe('s3')
+    expect(out[0].featureId).toBe('feat-1')
+    expect(out[0].title).toBe('Fechar o loop')
   })
 })
