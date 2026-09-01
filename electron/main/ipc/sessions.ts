@@ -1264,6 +1264,16 @@ export function registerSessionIpc(): void {
       .run(trimmed.length > 0 ? trimmed : null, trimmed.length > 0 ? 'manual' : null, sessionId)
   })
 
+  // Vincular/trocar a frente de uma sessão JÁ EM CURSO — o momento em que a
+  // pessoa percebe a qual frente o trabalho pertence é no meio dele, não antes
+  // (diálogo de spawn) nem depois (heurística de fim de sessão). `null` desfaz.
+  ipcMain.handle('sessions:set-feature', (_e, sessionId: string, featureId: string | null) => {
+    getDb()
+      .prepare('UPDATE sessions SET feature_id = ? WHERE id = ?')
+      .run(featureId, sessionId)
+    broadcast('session:feature-changed', { sessionId, featureId })
+  })
+
   ipcMain.handle('sessions:list', () => {
     const rows = getDb()
       .prepare('SELECT * FROM sessions ORDER BY started_at DESC')

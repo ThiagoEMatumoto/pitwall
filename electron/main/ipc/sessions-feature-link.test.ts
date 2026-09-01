@@ -20,6 +20,10 @@ const seam = vi.hoisted(() => ({
   spawns: [] as Array<{ sessionId: string; innerCmd: string; cwd: string }>,
   // Args do INSERT INTO sessions, na ordem do statement.
   inserted: [] as unknown[][],
+  // Args do UPDATE sessions SET feature_id (vínculo de sessão em curso).
+  featureUpdates: [] as unknown[][],
+  // (canal, payload) de cada broadcast pro renderer.
+  broadcasts: [] as Array<{ channel: string; payload: unknown }>,
   // path → conteúdo escrito (system-prompt temporário).
   writtenFiles: new Map<string, string>(),
   // Diretórios que "existem" no disco pro statSync falso.
@@ -37,7 +41,16 @@ const seam = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [
+      {
+        webContents: {
+          send: (channel: string, payload: unknown) =>
+            seam.broadcasts.push({ channel, payload }),
+        },
+      },
+    ],
+  },
   ipcMain: {
     handle: (channel: string, fn: (event: unknown, ...args: never[]) => unknown) => {
       seam.handlers.set(channel, fn)
@@ -67,6 +80,7 @@ vi.mock('../services/db', () => ({
     prepare: (sql: string) => ({
       run: (...args: unknown[]) => {
         if (sql.includes('INSERT INTO sessions')) seam.inserted.push(args)
+        if (sql.includes('UPDATE sessions SET feature_id')) seam.featureUpdates.push(args)
         return { changes: 1 }
       },
       get: (..._args: unknown[]) => {
@@ -189,6 +203,8 @@ beforeEach(() => {
   seam.handlers.clear()
   seam.spawns.length = 0
   seam.inserted.length = 0
+  seam.featureUpdates.length = 0
+  seam.broadcasts.length = 0
   seam.writtenFiles.clear()
   seam.existingDirs = new Set([REPO_PATH])
   seam.resumeFeatureId = null
@@ -364,5 +380,20 @@ describe('sessions:list-by-repo', () => {
     expect(out[0].id).toBe('s3')
     expect(out[0].featureId).toBe('feat-1')
     expect(out[0].title).toBe('Fechar o loop')
+  })
+})
+
+describe('sessions:set-feature — vincular sessão em curso', () => {
+  it('grava sessions.feature_id e avisa o renderer', () => {
+    handler('sessions:set-feature')(null, 'sess-1' as never, 'feat-1' as never)
+    expect(seam.featureUpdates).toEqual([['feat-1', 'sess-1']])
+    expect(seam.broadcasts).toEqual([
+      { channel: 'session:feature-changed', payload: { sessionId: 'sess-1', featureId: 'feat-1' } },
+    ])
+  })
+
+  it('featureId null desfaz o vínculo', () => {
+    handler('sessions:set-feature')(null, 'sess-1' as never, null as never)
+    expect(seam.featureUpdates).toEqual([[null, 'sess-1']])
   })
 })

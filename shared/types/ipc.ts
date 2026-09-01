@@ -3446,6 +3446,8 @@ export interface Api {
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
+    /** Vincula (ou desvincula, com null) a sessão a uma feature. */
+    setFeature(sessionId: string, featureId: string | null): Promise<void>
     list(): Promise<Session[]>
     onData(handler: (event: PtyDataEvent) => void): () => void
     onExit(handler: (event: PtyExitEvent) => void): () => void
