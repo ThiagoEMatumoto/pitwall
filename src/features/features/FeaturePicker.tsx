@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Pin, Search } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { computeMenuPlacement, type MenuPlacement } from '@/components/ui/menu-placement'
 import { selectPickableFeatures, type FeatureWithActivity } from './feature-activity'
 import { isPinned } from './feature-pin'
 import { STATUS_META } from './status'
@@ -23,9 +25,18 @@ interface Props {
   testId?: string
 }
 
+/** Teto de altura do painel (equivale ao antigo `max-h-72`). */
+const MAX_PANEL_H = 288
+
 // Painel de escolha de feature: busca por título, em foco primeiro, o resto por
 // atividade recente, arquivadas fora. Só o PAINEL — quem abre (campo do diálogo,
 // chip do header) fica com o consumidor, que também controla o `open`.
+//
+// O painel vai pra document.body via portal com position:fixed, reusando o
+// `computeMenuPlacement` do Menu: dentro do Dialog o corpo tem `overflow-y-auto`
+// e um painel `absolute` era recortado a uma opção e meia. A âncora continua
+// sendo o wrapper `relative` do consumidor, então o contrato (top-full, left/right)
+// não muda pra quem já usa.
 export function FeaturePicker({
   features,
   value,
@@ -37,11 +48,33 @@ export function FeaturePicker({
   testId = 'feature-picker',
 }: Props) {
   const [query, setQuery] = useState('')
+  const anchorRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState<MenuPlacement | null>(null)
+
+  // Mede o wrapper do consumidor e o conteúdo natural do painel para decidir
+  // abrir pra baixo ou pra cima, com um max-height que cabe na viewport. Layout
+  // effect (após o DOM, antes do paint) → sem flash na posição provisória.
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current?.parentElement
+    if (!anchor || !panelRef.current) return
+    const rect = anchor.getBoundingClientRect()
+    setPlacement(
+      computeMenuPlacement({
+        rect,
+        menuH: panelRef.current.scrollHeight,
+        menuW: panelRef.current.offsetWidth,
+        viewportW: window.innerWidth,
+        viewportH: window.innerHeight,
+        align,
+      }),
+    )
+  }, [align])
 
   // Clique fora / Esc fecham. `mousedown` (e não `click`) porque o clique no
   // trigger do consumidor só chega depois — fechar aqui e reabrir lá viraria
-  // um toggle invisível.
+  // um toggle invisível. O Esc para em capture com stopPropagation para não
+  // vazar pro Dialog por baixo, que também fecha no Esc.
   useEffect(() => {
     function onDown(e: MouseEvent) {
       if (!panelRef.current?.contains(e.target as Node)) onClose()
@@ -65,16 +98,27 @@ export function FeaturePicker({
     [features, repoId, query],
   )
 
-  return (
+  const panel = (
     <div
       ref={panelRef}
       data-testid={testId}
       role="listbox"
-      className={`absolute top-full z-50 mt-1 max-h-72 w-72 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg ${
-        align === 'right' ? 'right-0' : 'left-0'
-      }`}
+      // z-[1001] fica acima do Dialog (z-[1000]) — o picker é o consumidor mais
+      // aninhado, nunca o contrário.
+      className="fixed z-[1001] flex w-72 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+      // Antes da medida: posição provisória e invisível. `opacity` em vez de
+      // `visibility` porque o autoFocus da busca não pega em elemento oculto.
+      style={
+        placement
+          ? {
+              left: placement.left,
+              ...(placement.top != null ? { top: placement.top } : { bottom: placement.bottom }),
+              maxHeight: Math.min(placement.maxHeight, MAX_PANEL_H),
+            }
+          : { left: 0, top: 0, opacity: 0, pointerEvents: 'none' }
+      }
     >
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-1.5">
+      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-1.5">
         <Icon as={Search} size={12} className="shrink-0 text-[var(--color-text-dim)]" />
         <input
           autoFocus
@@ -86,7 +130,7 @@ export function FeaturePicker({
           className="w-full bg-transparent text-xs outline-none placeholder:text-[var(--color-text-dim)]"
         />
       </div>
-      <div className="max-h-60 overflow-y-auto py-1">
+      <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {allowNone && (
           <button
             type="button"
@@ -138,5 +182,13 @@ export function FeaturePicker({
         })}
       </div>
     </div>
+  )
+
+  return (
+    <>
+      {/* Marcador inerte: existe só para achar o wrapper `relative` que ancora o painel. */}
+      <span ref={anchorRef} hidden aria-hidden="true" />
+      {createPortal(panel, document.body)}
+    </>
   )
 }
