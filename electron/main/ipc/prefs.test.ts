@@ -24,10 +24,6 @@ vi.mock('../services/prefs-store', () => ({
   getPref: (key: string, fallback: unknown) => getPref(key, fallback),
   setPref: (key: string, value: unknown) => setPref(key, value),
 }))
-vi.mock('../services/calendar/calendar-watcher', () => ({
-  calendarWatcher: { restart: vi.fn() },
-  MEETING_CALENDAR_ICS_URL_KEY: 'meeting_calendar_ics_url',
-}))
 vi.mock('../services/repo-pull-scheduler', () => ({
   AUTO_PULL_ENABLED_KEY: 'repos.autoPull.enabled',
   AUTO_PULL_INTERVAL_MINUTES_KEY: 'repos.autoPull.intervalMinutes',

@@ -113,6 +113,9 @@ describe('migration 038_diagrams', () => {
     ).toThrow()
   })
 
+  // 'dossier', 'meeting' e 'content_contract' são LEGADO: as features saíram na
+  // 044, mas o CHECK da 038 é histórico e segue aceitando os 11 — o teste espelha
+  // o schema desta migration, não o enum vivo do TypeScript.
   it('aceita os 11 parent_type e rejeita fora do enum', () => {
     insertDiagram(db)
     const parents = [

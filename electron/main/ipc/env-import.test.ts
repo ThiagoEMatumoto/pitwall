@@ -19,9 +19,9 @@ vi.mock('../services/env-import', () => ({
   applyImport: (...args: unknown[]) => applyImport(...args),
 }))
 
-const resetDossierPipeline = vi.fn()
-vi.mock('../services/dossier-pipeline-singleton', () => ({
-  resetDossierPipeline: () => resetDossierPipeline(),
+const clearServiceHealthCache = vi.fn()
+vi.mock('../services/service-proxy', () => ({
+  clearServiceHealthCache: () => clearServiceHealthCache(),
 }))
 
 import { registerEnvImportIpc } from './env-import'
@@ -31,7 +31,7 @@ describe('env-import IPC', () => {
     handlers.clear()
     scanEnvSources.mockReset()
     applyImport.mockReset()
-    resetDossierPipeline.mockReset()
+    clearServiceHealthCache.mockReset()
     registerEnvImportIpc()
   })
 
@@ -53,20 +53,20 @@ describe('env-import IPC', () => {
     expect(applyImport).toHaveBeenCalledWith([{ key: 'A', sourcePath: '/x/.env' }])
   })
 
-  it('apply com credencial gravada invalida o dossier pipeline', () => {
+  it('apply com credencial gravada invalida o cache de health dos serviços', () => {
     applyImport.mockReturnValue({ applied: ['A'], missing: [], plaintext: [] })
     handlers.get('secrets:import:apply')!(null, {
       selections: [{ key: 'A', sourcePath: '/x/.env' }],
     })
-    expect(resetDossierPipeline).toHaveBeenCalledTimes(1)
+    expect(clearServiceHealthCache).toHaveBeenCalledTimes(1)
   })
 
-  it('apply sem nada gravado não invalida o pipeline', () => {
+  it('apply sem nada gravado não invalida o cache', () => {
     applyImport.mockReturnValue({ applied: [], missing: ['A'], plaintext: [] })
     handlers.get('secrets:import:apply')!(null, {
       selections: [{ key: 'A', sourcePath: '/x/.env' }],
     })
-    expect(resetDossierPipeline).not.toHaveBeenCalled()
+    expect(clearServiceHealthCache).not.toHaveBeenCalled()
   })
 
   it('apply rejeita payload malformado (zod) sem tocar no service', () => {

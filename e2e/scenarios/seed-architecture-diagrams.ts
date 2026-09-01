@@ -106,7 +106,7 @@ const d3 = {
     { id: 'dl', type: 'rectangle', label: { text: 'diagram_links\n(parent_type, parent_id)\nPK composta' } },
     { id: 'feat', type: 'rectangle', label: { text: 'features' } },
     { id: 'task', type: 'rectangle', label: { text: 'tasks' } },
-    { id: 'proj', type: 'rectangle', label: { text: 'projects · repos\ndossiers · meetings …' } },
+    { id: 'proj', type: 'rectangle', label: { text: 'projects · repos\nfeatures · tasks …' } },
     { id: 'e1', type: 'arrow', start: { id: 'dv' }, end: { id: 'dg' }, label: { text: 'FK CASCADE' } },
     { id: 'e2', type: 'arrow', start: { id: 'dl' }, end: { id: 'dg' }, label: { text: 'FK CASCADE' } },
     { id: 'e3', type: 'arrow', start: { id: 'dl' }, end: { id: 'feat' }, label: { text: 'polimórfico' } },

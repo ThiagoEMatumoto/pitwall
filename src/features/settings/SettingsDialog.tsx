@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Settings,
   Palette,
@@ -134,14 +134,6 @@ function GeneralTab({ open }: { open: boolean }) {
   const [autoPullIntervalMinutes, setAutoPullIntervalMinutes] = useState(AUTO_PULL_INTERVAL_DEFAULT)
   const [requireApprovalHandoffs, setRequireApprovalHandoffs] = useState(false)
   const [heartbeatTtlHours, setHeartbeatTtlHours] = useState(HANDOFFS_HEARTBEAT_TTL_DEFAULT)
-  const [calendarIcsUrl, setCalendarIcsUrl] = useState('')
-  const icsUrlDebounceRef = useRef<ReturnType<typeof setTimeout>>()
-
-  useEffect(() => {
-    return () => {
-      if (icsUrlDebounceRef.current) clearTimeout(icsUrlDebounceRef.current)
-    }
-  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -158,7 +150,6 @@ function GeneralTab({ open }: { open: boolean }) {
     void prefsApi
       .get<number>('handoffs.heartbeatTtlHours')
       .then((v) => setHeartbeatTtlHours(v ?? HANDOFFS_HEARTBEAT_TTL_DEFAULT))
-    void prefsApi.get<string>('meeting_calendar_ics_url').then((v) => setCalendarIcsUrl(v ?? ''))
     void mcpApi.status().then(setMcpStatus)
     setMcpCopied(false)
     void useProjectsPrefsStore.getState().load()
@@ -210,16 +201,6 @@ function GeneralTab({ open }: { open: boolean }) {
     if (!picked) return
     await prefsApi.set('scratch_dir', picked)
     setScratchDir(picked)
-  }
-
-  function updateCalendarIcsUrl(v: string) {
-    setCalendarIcsUrl(v)
-    // O main reinicia o watcher ao receber o set desta pref (liga/desliga/reaponta
-    // na hora). Debounce evita reiniciar o watcher a cada tecla digitada.
-    if (icsUrlDebounceRef.current) clearTimeout(icsUrlDebounceRef.current)
-    icsUrlDebounceRef.current = setTimeout(() => {
-      void prefsApi.set('meeting_calendar_ics_url', v.trim())
-    }, 500)
   }
 
   return (
@@ -297,24 +278,6 @@ function GeneralTab({ open }: { open: boolean }) {
             </div>
           </div>
         )}
-      </div>
-
-      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">
-        <div className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--color-text-dim)]">
-          Reuniões — ativação por Google Calendar
-        </div>
-        <div className="mb-1 text-xs text-[var(--color-text-dim)]">
-          Cole o <strong>endereço secreto em formato iCal</strong> do seu Google Calendar
-          (Configurações do calendário → Integrar calendário). O app avisa quando uma reunião do
-          Google Meet está começando. Vazio = desativado.
-        </div>
-        <input
-          type="url"
-          value={calendarIcsUrl}
-          onChange={(e) => updateCalendarIcsUrl(e.target.value)}
-          placeholder="https://calendar.google.com/calendar/ical/.../basic.ics"
-          className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-2 py-1 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
-        />
       </div>
 
       <TerminalSection open={open} />

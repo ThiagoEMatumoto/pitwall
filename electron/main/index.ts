@@ -9,7 +9,6 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { getDb, closeDb } from './services/db'
 import { ptyManager } from './services/pty-manager'
-import { meetingSidecarManager } from './services/meeting-sidecar'
 import * as handoffStore from './services/handoff-store'
 import {
   sessionActivityService,
@@ -48,13 +47,9 @@ import { registerFeaturesIpc } from './ipc/features'
 import { registerLoopIpc } from './ipc/loop'
 import { registerRepoDependenciesIpc } from './ipc/repo-dependencies'
 import { registerHandoffsIpc } from './ipc/handoffs'
-import { registerDossiersIpc } from './ipc/dossiers'
 import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
-import { registerScheduledJobsIpc } from './ipc/scheduled-jobs'
-import { registerContentContractsIpc } from './ipc/content-contracts'
 import { registerDiagramsIpc } from './ipc/diagrams'
-import { registerMeetingsIpc } from './ipc/meetings'
 import { registerVideoIpc } from './ipc/video'
 import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
@@ -76,8 +71,6 @@ import {
 import { startMcpServer, stopMcpServer } from './services/mcp/server'
 import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
-import { calendarWatcher } from './services/calendar/calendar-watcher'
-import { jobScheduler } from './services/job-scheduler'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
 import { setMainWindow, emitToast } from './services/notifications'
 
@@ -270,15 +263,6 @@ app.whenReady().then(async () => {
       console.warn('[secrets] migração adiada:', String(err))
     }
   }
-  // Boot reconcile de reuniões presas em estados "vivos" após um crash/quit sujo:
-  // num processo fresco nenhum sidecar pode estar vivo, então qualquer reunião
-  // nesses estados é órfã → failed. Idempotente; ended_at preserva o existente.
-  getDb()
-    .prepare(
-      `UPDATE meetings SET status = 'failed', ended_at = COALESCE(ended_at, ?)
-       WHERE status IN ('capturing', 'recording', 'transcribing', 'diarizing')`,
-    )
-    .run(Date.now())
   // MCP server local (writes externos via Claude Code). Async e fire-and-forget:
   // EADDRINUSE etc. são logados dentro do start — nunca derrubam o boot.
   void startMcpServer()
@@ -288,7 +272,6 @@ app.whenReady().then(async () => {
   registerProjectIpc()
   registerRepoDependenciesIpc()
   registerHandoffsIpc()
-  registerDossiersIpc()
   registerSessionIpc()
   registerBatonIpc()
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
@@ -311,10 +294,7 @@ app.whenReady().then(async () => {
   registerLoopIpc()
   registerObjectivesIpc()
   registerTasksIpc()
-  registerScheduledJobsIpc()
-  registerContentContractsIpc()
   registerDiagramsIpc()
-  registerMeetingsIpc()
   registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
@@ -340,17 +320,6 @@ app.whenReady().then(async () => {
   initUpdater()
   startUsageMonitor()
   startFeatureWatcher()
-  // Ativação assistida por Google Calendar: poll da URL secreta iCal (pref
-  // meeting_calendar_ics_url). Inativo se a pref estiver vazia — sem erro nem
-  // rede. Inicia DEPOIS da janela porque o clique da notificação a foca.
-  calendarWatcher.start()
-
-  // Scheduled Jobs (Fase 2): poll único ~30s. No boot reconcilia runs órfãs do
-  // processo anterior, faz catch-up dos vencidos (skip-with-marker ou spawn se
-  // catch_up opt-in) e agenda o poll. Inicia DEPOIS da janela pois o spawn dos
-  // jobs reusa o pipeline de sessão.
-  jobScheduler.start()
-
   // Self-heal periódico de handoffs presos em 'running' cuja filha já morreu em
   // runtime (PTY exit pode não ter disparado a reconciliação). Não bloqueia o
   // boot e é idempotente — a query só toca handoffs órfãos.
@@ -434,8 +403,6 @@ function runFinalShutdown(): void {
   void stopMcpServer()
   stopUsageMonitor()
   stopFeatureWatcher()
-  calendarWatcher.stop()
-  jobScheduler.stop()
   if (handoffReconcileTimer) {
     clearInterval(handoffReconcileTimer)
     handoffReconcileTimer = null
@@ -448,7 +415,6 @@ function runFinalShutdown(): void {
   syncCoordinator.stop()
   featureMemory.close()
   ptyManager.killAll()
-  meetingSidecarManager.killAllSidecars()
   // Render do Remotion é processo filho e não morre sozinho com o app.
   killAllVideoRenders()
   sessionActivityService.closeAll()

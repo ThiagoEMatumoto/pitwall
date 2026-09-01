@@ -16,9 +16,6 @@ export const PARENT_TYPE_LABEL: Record<DiagramParentType, string> = {
   task: "Tarefa",
   objective: "Objetivo",
   key_result: "KR",
-  dossier: "Dossiê",
-  meeting: "Reunião",
-  content_contract: "Contrato",
   session: "Sessão",
   handoff: "Handoff",
 };

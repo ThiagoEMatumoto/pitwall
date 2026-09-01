@@ -11,7 +11,7 @@ import type {
   UpdateDiagramSceneInput,
 } from "../../shared/types/ipc";
 
-// Donos únicos das assinaturas (StrictMode-safe, molde do contentContractsStore):
+// Donos únicos das assinaturas (StrictMode-safe):
 // `watchStarted` guarda contra o duplo-mount do effect — a 2ª chamada é no-op.
 let offUpdated: (() => void) | null = null;
 let offDeleted: (() => void) | null = null;

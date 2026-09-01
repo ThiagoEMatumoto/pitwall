@@ -299,16 +299,6 @@ for (const h of all<{ id: string }>('SELECT id FROM handoffs')) {
 // handoff_events detail -> null (may embed prompts)
 run('UPDATE handoff_events SET detail=NULL')
 
-// meetings — writes fire an FTS5 sync trigger that sql.js can't load; skip if so.
-// (The single meeting row is only a timestamp title + null bodies — nothing sensitive.)
-try {
-  for (const m of all<{ id: string }>('SELECT id FROM meetings')) {
-    run("UPDATE meetings SET title='Weekly sync', summary=NULL, raw_notes=NULL, augmented_notes=NULL, audio_path=NULL WHERE id=?", [m.id])
-  }
-} catch (e) {
-  console.log('skip meetings (fts5):', (e as Error).message)
-}
-
 // metrics_session_cache.cwd — scrub distinct real paths
 for (const row of all<{ cwd: string }>("SELECT DISTINCT cwd FROM metrics_session_cache WHERE cwd IS NOT NULL AND cwd<>''")) {
   const scrubbed = scrub(row.cwd)

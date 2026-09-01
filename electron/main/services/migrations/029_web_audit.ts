@@ -3,6 +3,10 @@ import type Database from 'better-sqlite3'
 export const version = 29
 export const name = '029_web_audit'
 
+// LEGADO — a feature de jobs agendados foi removida (ver 044_drop_removed_features).
+// Esta migration é mantida por ser histórica: o schema descrito abaixo já não existe
+// e os símbolos citados (resolveJobAllowedTools, runner) foram deletados do código.
+//
 // Web-audit jobs (Fase 1). Um 2º kind de job além de 'critique': em vez de criticar
 // código/texto, dirige um browser (Playwright) contra uma URL e mede desempenho +
 // usabilidade. Retrocompatível: rows existentes viram 'critique' (o default).
