@@ -10,8 +10,10 @@ import {
   SYNCED_TABLES,
   TABLE_PRIMARY_KEYS,
   UNPACKAGED_SUFFIX,
+  ensureAbsolutePath,
   featuresDir,
-  findBadPath,
+  isBundlePath,
+  isPathColumnName,
   manifestPath,
   portablizePath,
   stableStringify,
@@ -61,14 +63,40 @@ function tableColumns(db: Database.Database, table: string): string[] {
   return rows.map((r) => r.name)
 }
 
+// O DB do usuário JÁ tem rows contaminadas (o bug gravou path relativo), então
+// recusar o export inteiro pararia o sync dele. Reparamos: absolutiza contra a
+// raiz local e re-portabiliza (colunas de PATH_COLUMNS voltam a <CM_ROOT>/...).
+// Sem raiz utilizável não há reparo honesto — aí sim lança, porque publicar o
+// relativo contamina todas as máquinas que puxarem o bundle.
+function repairPath(
+  table: SyncedTable,
+  column: string,
+  value: unknown,
+  projectsRoot: string | null,
+  portable: boolean,
+): unknown {
+  const abs = ensureAbsolutePath(value, projectsRoot)
+  if (abs.unresolved) {
+    throw new Error(
+      `[sync] recusa exportar path não-absoluto: ${table}.${column}=${String(value)}`,
+    )
+  }
+  const fixed = portable ? portablizePath(abs.value, projectsRoot) : abs.value
+  console.warn(
+    `[sync] path relativo reparado no export: ${table}.${column}: ` +
+      `${String(value)} → ${String(fixed)}`,
+  )
+  return fixed
+}
+
 // Serializa uma tabela como .ndjson determinístico: SELECT * ORDER BY <pk>, cada
 // row é um objeto {coluna: valor} serializado com stableStringify (chaves
 // ordenadas), uma por linha, com \n final.
 //
-// Lança se alguma coluna de path sair NÃO-absoluta e NÃO-portável: um DB
-// contaminado (o bug do path relativo) não pode virar bundle publicado. Falhar
-// alto aqui é preferível a envenenar o remoto — quem importa não tem como saber
-// que o relativo é lixo, e o estrago se espalha pra todas as máquinas.
+// Nenhuma coluna de path sai NÃO-absoluta e NÃO-portável: um DB contaminado (o
+// bug do path relativo) não pode virar bundle publicado — quem importa não tem
+// como saber que o relativo é lixo, e o estrago se espalha pra todas as
+// máquinas. Ver repairPath para o que acontece com o valor contaminado.
 function buildTable(
   db: Database.Database,
   table: SyncedTable,
@@ -91,13 +119,10 @@ function buildTable(
       const v = row[c] ?? null
       // Paths sob a raiz desta máquina viram <CM_ROOT>/... → portáveis entre
       // máquinas (some do diff). NULL passa intacto (portablizePath é no-op).
-      obj[c] = pathCols.has(c) ? portablizePath(v, projectsRoot) : v
-    }
-    const bad = findBadPath(obj)
-    if (bad) {
-      throw new Error(
-        `[sync] recusa exportar path não-absoluto: ${table}.${bad.column}=${String(bad.value)}`,
-      )
+      const out = pathCols.has(c) ? portablizePath(v, projectsRoot) : v
+      obj[c] = isPathColumnName(c) && !isBundlePath(out)
+        ? repairPath(table, c, out, projectsRoot, pathCols.has(c))
+        : out
     }
     return stableStringify(obj)
   })

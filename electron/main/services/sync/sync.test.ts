@@ -21,6 +21,7 @@ import {
   SYNCED_TABLES,
   TABLE_PRIMARY_KEYS,
   ensureAbsolutePath,
+  findBadPath,
   stableStringify,
 } from './bundle-format'
 import { exportBundle } from './exporter'
@@ -1001,14 +1002,45 @@ describe('import nunca persiste path relativo', () => {
   })
 })
 
-// ---- Regressão: export NUNCA emite path relativo (fail-closed no escritor) ----
+// ---- Regressão: export NUNCA emite path relativo (guarda no escritor) ----
 //
 // O leitor já se defende (ensureAbsolutePath), mas o escritor não: um DB já
 // contaminado pelo bug antigo exportava `repos.path = 'projetos/x'` verbatim e
-// publicava a contaminação pra todas as máquinas. O exporter agora recusa —
-// melhor um sync que falha alto do que um bundle envenenado no remoto.
+// publicava a contaminação pra todas as máquinas. O exporter agora repara o
+// valor contra a raiz local — e só lança quando não há raiz pra reparar.
 describe('export nunca emite path relativo', () => {
-  it('repos.path relativo → exportBundle lança e não grava o relativo no ndjson', () => {
+  const root = '/home/x'
+
+  // A garantia central, independente do caminho tomado: nenhuma coluna de path
+  // sai do exporter com valor relativo, em nenhuma tabela.
+  function assertBundleLimpo(bundleDir: string): void {
+    for (const table of SYNCED_TABLES) {
+      for (const row of ndjson(bundleDir, table)) {
+        expect(findBadPath(row)).toBe(null)
+      }
+    }
+  }
+
+  it('COM projectsRoot: repos.path relativo é absolutizado e re-portablizado', () => {
+    const db = newDb()
+    seed(db)
+    db.prepare(`UPDATE repos SET path = ? WHERE id = 'repo-1'`).run('projetos/x')
+    const bundleDir = tmp('sync-bundle-')
+
+    exportBundle(db, bundleDir, {
+      featuresRoot: tmp('sync-feat-'),
+      exportedAt: 1,
+      projectsRoot: root,
+    })
+
+    expect(ndjson(bundleDir, 'repos').find((r) => r.id === 'repo-1')!.path).toBe(
+      '<CM_ROOT>/projetos/x',
+    )
+    assertBundleLimpo(bundleDir)
+    db.close()
+  })
+
+  it('SEM projectsRoot: sem raiz pra reparar → lança e não grava o relativo', () => {
     const db = newDb()
     seed(db)
     db.prepare(`UPDATE repos SET path = ? WHERE id = 'repo-1'`).run('projetos/x')
@@ -1016,7 +1048,7 @@ describe('export nunca emite path relativo', () => {
 
     expect(() =>
       exportBundle(db, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 }),
-    ).toThrow(/repos\.path/)
+    ).toThrow(/recusa exportar path não-absoluto: repos\.path=projetos\/x/)
 
     const reposFile = join(bundleDir, 'tables', 'repos.ndjson')
     const content = existsSync(reposFile) ? readFileSync(reposFile, 'utf8') : ''
@@ -1024,34 +1056,52 @@ describe('export nunca emite path relativo', () => {
     db.close()
   })
 
-  it('coluna *_path FORA de PATH_COLUMNS também é checada (features.doc_path)', () => {
-    const db = newDb()
-    seed(db)
-    db.prepare(`UPDATE features SET doc_path = ? WHERE id = 'feat-1'`).run('rel/f.md')
+  it('coluna *_path FORA de PATH_COLUMNS também é coberta (features.doc_path)', () => {
+    const comRaiz = newDb()
+    seed(comRaiz)
+    comRaiz.prepare(`UPDATE features SET doc_path = ? WHERE id = 'feat-1'`).run('rel/f.md')
     const bundleDir = tmp('sync-bundle-')
+    exportBundle(comRaiz, bundleDir, {
+      featuresRoot: tmp('sync-feat-'),
+      exportedAt: 1,
+      projectsRoot: root,
+    })
+    // doc_path não é portablizado (vive sob <userData>, fora da <CM_ROOT>) →
+    // o reparo o deixa ABSOLUTO, sem sentinela.
+    expect(ndjson(bundleDir, 'features').find((f) => f.id === 'feat-1')!.doc_path).toBe(
+      '/home/x/rel/f.md',
+    )
+    assertBundleLimpo(bundleDir)
+    comRaiz.close()
 
+    const semRaiz = newDb()
+    seed(semRaiz)
+    semRaiz.prepare(`UPDATE features SET doc_path = ? WHERE id = 'feat-1'`).run('rel/f.md')
     expect(() =>
-      exportBundle(db, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 }),
+      exportBundle(semRaiz, tmp('sync-bundle-'), {
+        featuresRoot: tmp('sync-feat-'),
+        exportedAt: 1,
+      }),
     ).toThrow(/features\.doc_path/)
-    db.close()
+    semRaiz.close()
   })
 
-  it('path portável (<CM_ROOT>/...) e NULL passam — a checagem é só contra relativo', () => {
+  it('path portável (<CM_ROOT>/...) e NULL passam intactos — nada a reparar', () => {
     const db = newDb()
     seedPortable(db, '/home/x/ClaudeManager')
     const bundleDir = tmp('sync-bundle-')
 
-    expect(() =>
-      exportBundle(db, bundleDir, {
-        featuresRoot: tmp('sync-feat-'),
-        exportedAt: 1,
-        projectsRoot: '/home/x/ClaudeManager',
-      }),
-    ).not.toThrow()
+    exportBundle(db, bundleDir, {
+      featuresRoot: tmp('sync-feat-'),
+      exportedAt: 1,
+      projectsRoot: '/home/x/ClaudeManager',
+    })
 
     expect(ndjson(bundleDir, 'repos').find((r) => r.id === 'repo-1')!.path).toBe(
       '<CM_ROOT>/projetos/p1/core',
     )
+    expect(ndjson(bundleDir, 'projects').find((p) => p.id === 'proj-3')!.vault_path).toBe(null)
+    assertBundleLimpo(bundleDir)
     db.close()
   })
 })
