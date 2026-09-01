@@ -7,15 +7,16 @@ import type { UpdateFormat, UpdateStatus } from '../../../shared/types/ipc'
 export function UpdateToast() {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   const [dismissed, setDismissed] = useState(false)
-  // Só o estado 'available' carrega o format; guardamos pra exibir a nota de
-  // Gatekeeper (mac) também no estado 'awaiting-install', que não tem format.
+  // Só os estados 'available' e 'cancelled' carregam o format; guardamos pra
+  // exibir a nota de Gatekeeper (mac) também no estado 'awaiting-install', que
+  // não tem format.
   const [format, setFormat] = useState<UpdateFormat | undefined>()
 
   useEffect(() => {
     return updatesApi.onStatus((s) => {
       setDismissed(false)
       setStatus(s)
-      if (s.state === 'available') setFormat(s.format)
+      if (s.state === 'available' || s.state === 'cancelled') setFormat(s.format)
     })
   }, [])
 
@@ -51,7 +52,7 @@ export function UpdateToast() {
           </span>
         )}
       </div>
-      {status.state === 'available' && (
+      {(status.state === 'available' || status.state === 'cancelled') && (
         <button
           onClick={() => void updatesApi.apply()}
           className="shrink-0 rounded px-2 py-1 text-xs font-medium"
@@ -122,6 +123,12 @@ function renderBody(status: UpdateStatus) {
       return <span>atualização v{status.version} instalada — reinicie pra concluir.</span>
     case 'awaiting-install':
       return <span>instalador aberto — conclua a instalação e reabra o app.</span>
+    case 'cancelled':
+      return (
+        <span style={{ color: 'var(--color-text-dim)' }}>
+          instalação da v{status.version} não concluída — autentique para instalar.
+        </span>
+      )
     case 'error':
       return (
         <span style={{ color: 'var(--color-text-dim)' }}>

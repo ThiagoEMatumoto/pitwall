@@ -2120,6 +2120,10 @@ export type UpdateStatus =
   // deb: instalado in-place; só falta relaunch.
   | { state: 'installed'; version: string }
   | { state: 'awaiting-install'; version: string }
+  // deb: o pkexec saiu 126/127 (prompt fechado, sem autorização, ou binário
+  // ausente). Não é erro de instalação — a atualização segue disponível e o
+  // usuário pode tentar de novo.
+  | { state: 'cancelled'; version: string; format?: UpdateFormat }
   | { state: 'error'; message: string }
 
 export interface UsageWindow {
