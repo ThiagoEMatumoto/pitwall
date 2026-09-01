@@ -8,13 +8,11 @@ import {
   Pencil,
   Power,
   SquareTerminal,
-  Target,
   Users,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
-import { LivenessChip } from '@/features/features/LivenessChip'
-import { navigateToFeature } from '@/lib/nav'
+import { SessionFeatureLink } from './SessionFeatureLink'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
@@ -62,6 +60,11 @@ interface Props {
   // Feature desta sessão. Presente = o header ganha o chip de volta pro dossiê
   // (Features e terminais são áreas exclusivas; sem isto a ida é só de ida).
   feature?: SessionFeature | null
+  // Id da sessão no banco. Presente = o header também sabe GRAVAR o vínculo
+  // (vincular uma sessão em curso / trocar a frente); ausente deixa só leitura.
+  sessionId?: string
+  // Repo da sessão — recorta as frentes oferecidas. null = sessão avulsa.
+  repoId?: string | null
 }
 
 // Header de cada sessão em UMA linha calma:
@@ -97,6 +100,8 @@ export function SessionHeader({
   onAdopt,
   adoptDisabledReason = null,
   feature = null,
+  sessionId,
+  repoId = null,
 }: Props) {
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -153,25 +158,8 @@ export function SessionHeader({
             {renderProjectIcon(projectIcon)}
           </span>
         )}
-        {tier !== 'narrow' && feature && (
-          <button
-            type="button"
-            data-testid="header-feature-chip"
-            onClick={() => navigateToFeature(feature.id)}
-            title={`Voltar para a feature: ${feature.title}`}
-            aria-label={`Voltar para a feature ${feature.title}`}
-            className="flex min-w-0 shrink items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[10px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text)]"
-          >
-            <Icon as={Target} size={10} />
-            <span className="max-w-32 truncate">{feature.title}</span>
-            {feature.liveness && (
-              <LivenessChip
-                liveness={feature.liveness}
-                lastActivityAt={feature.lastActivityAt}
-                issues={feature.issues}
-              />
-            )}
-          </button>
+        {tier !== 'narrow' && (feature || sessionId) && (
+          <SessionFeatureLink feature={feature} sessionId={sessionId} repoId={repoId} />
         )}
         {tier !== 'narrow' &&
           (editing ? (
