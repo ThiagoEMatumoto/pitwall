@@ -16,7 +16,13 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }))
 
-import { PATH_COLUMNS, SYNCED_TABLES, TABLE_PRIMARY_KEYS, stableStringify } from './bundle-format'
+import {
+  PATH_COLUMNS,
+  SYNCED_TABLES,
+  TABLE_PRIMARY_KEYS,
+  ensureAbsolutePath,
+  stableStringify,
+} from './bundle-format'
 import { exportBundle } from './exporter'
 import { importBundle } from './importer'
 import { migrations } from '../migrations/index'
@@ -845,6 +851,151 @@ describe('sync import: bundle de versão anterior (tabela ausente)', () => {
     expect(count(dbB, 'feature_metric_points')).toBe(1) // órfã em 2 saltos também caiu
     expect(dbB.pragma('foreign_key_check')).toEqual([])
 
+    dbA.close()
+    dbB.close()
+  })
+})
+
+// ---- Regressão: import NUNCA persiste path relativo (bug repos.path relativo) ----
+//
+// O importer antigo gravava o retorno de localizePath mesmo quando unresolved
+// (sem projectsRoot local), deixando `repos.path = 'projetos/x'` no DB — o que
+// quebrava existsSync/statSync/cwd de spawn. Estes testes cravam as 3 saídas:
+// absolutizar contra a raiz local, preservar o row local, e (último caso) o
+// comportamento antigo contado em unresolvedPaths.
+describe('import nunca persiste path relativo', () => {
+  const rootA = '/home/x/ClaudeManager'
+
+  it('ensureAbsolutePath: absoluto intacto; relativo resolve contra a raiz; sem raiz preserva o existente', () => {
+    // Absoluto → intacto, resolvido.
+    expect(ensureAbsolutePath('/abs/x', '/root')).toEqual({ value: '/abs/x', unresolved: false })
+    expect(ensureAbsolutePath('/abs/x', null)).toEqual({ value: '/abs/x', unresolved: false })
+    // NULL/vazio → intacto (campos opcionais).
+    expect(ensureAbsolutePath(null, '/root')).toEqual({ value: null, unresolved: false })
+    expect(ensureAbsolutePath('', '/root')).toEqual({ value: '', unresolved: false })
+    // Relativo + raiz (com e sem barra final) → absoluto.
+    expect(ensureAbsolutePath('rel/x', '/root')).toEqual({ value: '/root/rel/x', unresolved: false })
+    expect(ensureAbsolutePath('rel/x', '/root/')).toEqual({
+      value: '/root/rel/x',
+      unresolved: false,
+    })
+    // Relativo sem raiz + existente absoluto → preserva o existente (unresolved).
+    expect(ensureAbsolutePath('rel/x', null, '/local/old')).toEqual({
+      value: '/local/old',
+      unresolved: true,
+    })
+    // Relativo sem raiz e sem existente utilizável → mantém (unresolved).
+    expect(ensureAbsolutePath('rel/x', null)).toEqual({ value: 'rel/x', unresolved: true })
+    expect(ensureAbsolutePath('rel/x', null, 'tambem/relativo')).toEqual({
+      value: 'rel/x',
+      unresolved: true,
+    })
+  })
+
+  it('import portável SEM projectsRoot mas COM vault_root local → paths absolutos sob o vault, 0 unresolved', () => {
+    const dbA = newDb()
+    seedPortable(dbA, rootA)
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, {
+      featuresRoot: tmp('sync-feat-'),
+      exportedAt: 1,
+      projectsRoot: rootA,
+    })
+
+    const vaultB = '/Users/y/Vault'
+    const dbB = newDb()
+    dbB.prepare(`INSERT INTO app_prefs (key, value) VALUES ('vault_root', ?)`).run(vaultB)
+    const res = importBundle(dbB, bundleDir, {
+      featuresRoot: tmp('sync-feat-b-'),
+      ...noopWatcher,
+      projectsRoot: null,
+    })
+
+    expect(res.unresolvedPaths).toBe(0)
+    const repo = dbB.prepare(`SELECT path FROM repos WHERE id='repo-1'`).get() as { path: string }
+    expect(repo.path).toBe(join(vaultB, 'projetos', 'p1', 'core'))
+    const proj = dbB.prepare(`SELECT vault_path FROM projects WHERE id='proj-1'`).get() as {
+      vault_path: string
+    }
+    expect(proj.vault_path).toBe(join(vaultB, 'projetos', 'p1'))
+    const wt = dbB
+      .prepare(`SELECT worktree_path FROM feature_repos WHERE repo_id='repo-1'`)
+      .get() as { worktree_path: string }
+    expect(wt.worktree_path).toBe(join(vaultB, 'projetos', 'p1', 'core', '.worktrees', 'x'))
+    // Fora da raiz na origem: absoluto legado passa intacto.
+    const ext = dbB.prepare(`SELECT path FROM repos WHERE id='repo-2'`).get() as { path: string }
+    expect(ext.path).toBe('/opt/elsewhere/p2/ext')
+    dbA.close()
+    dbB.close()
+  })
+
+  it('import portável SEM raiz nenhuma → preserva o path do row local (não sobrescreve com relativo)', () => {
+    const dbA = newDb()
+    seedPortable(dbA, rootA)
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, {
+      featuresRoot: tmp('sync-feat-'),
+      exportedAt: 1,
+      projectsRoot: rootA,
+    })
+
+    // Máquina B: MESMOS rows já existem localmente com paths absolutos próprios.
+    const rootB = '/Users/y/ClaudeManager'
+    const dbB = newDb()
+    seedPortable(dbB, rootB)
+    const res = importBundle(dbB, bundleDir, {
+      featuresRoot: tmp('sync-feat-b-'),
+      ...noopWatcher,
+      projectsRoot: null,
+    })
+
+    // Não dava pra resolver (sem raiz) → sinaliza pra UI pedir a configuração…
+    expect(res.unresolvedPaths).toBeGreaterThan(0)
+    // …mas o valor local absoluto foi PRESERVADO em vez de virar lixo relativo.
+    const repo = dbB.prepare(`SELECT path FROM repos WHERE id='repo-1'`).get() as { path: string }
+    expect(repo.path).toBe(join(rootB, 'projetos', 'p1', 'core'))
+    const proj = dbB.prepare(`SELECT vault_path FROM projects WHERE id='proj-1'`).get() as {
+      vault_path: string
+    }
+    expect(proj.vault_path).toBe(join(rootB, 'projetos', 'p1'))
+    const wt = dbB
+      .prepare(`SELECT worktree_path FROM feature_repos WHERE repo_id='repo-1'`)
+      .get() as { worktree_path: string }
+    expect(wt.worktree_path).toBe(join(rootB, 'projetos', 'p1', 'core', '.worktrees', 'x'))
+    dbA.close()
+    dbB.close()
+  })
+
+  it('bundle envenenado com path RELATIVO direto (sem sentinela) → absolutizado contra o vault_root', () => {
+    const dbA = newDb()
+    seedPortable(dbA, rootA)
+    const bundleDir = tmp('sync-bundle-')
+    // Export SEM raiz → paths absolutos; envenenamos o ndjson com um relativo,
+    // como um bundle exportado de um DB já contaminado pelo bug antigo.
+    exportBundle(dbA, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    const reposFile = join(bundleDir, 'tables', 'repos.ndjson')
+    const lines = readFileSync(reposFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => {
+        const o = JSON.parse(l) as Record<string, unknown>
+        if (o.id === 'repo-1') o.path = 'projetos/p1/core'
+        return stableStringify(o)
+      })
+    writeFileSync(reposFile, lines.join('\n') + '\n')
+
+    const vaultB = '/Users/y/Vault'
+    const dbB = newDb()
+    dbB.prepare(`INSERT INTO app_prefs (key, value) VALUES ('vault_root', ?)`).run(vaultB)
+    const res = importBundle(dbB, bundleDir, {
+      featuresRoot: tmp('sync-feat-b-'),
+      ...noopWatcher,
+      projectsRoot: null,
+    })
+
+    expect(res.unresolvedPaths).toBe(0)
+    const repo = dbB.prepare(`SELECT path FROM repos WHERE id='repo-1'`).get() as { path: string }
+    expect(repo.path).toBe(join(vaultB, 'projetos', 'p1', 'core'))
     dbA.close()
     dbB.close()
   })
