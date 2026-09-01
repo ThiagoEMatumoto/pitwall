@@ -3,7 +3,6 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isSecretsBackup } from '../../electron/main/services/db-maintenance'
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(here, '../..')
@@ -28,6 +27,18 @@ export function resolveRealUserData(): string {
     }
   }
   return preferred
+}
+
+// Snapshot do banco: qualquer `app.db.<algo>` no topo do userData. Hoje são os
+// `app.db.pre-secrets-*` (pré-cifragem) e os `app.db.pre-import-*` (pré-import
+// destrutivo do sync), mas o padrão é deliberadamente aberto — a lista que só
+// cobre o prefixo conhecido é exatamente o modo de falha que deixou um vetor
+// descoberto na cópia. O próximo prefixo que alguém inventar já nasce ignorado.
+//
+// Os arquivos vivos do SQLite NÃO casam: `app.db`, `app.db-wal` e `app.db-shm`
+// não têm o ponto depois de `db`. É o ponto que separa snapshot de banco vivo.
+function isDbSnapshot(name: string): boolean {
+  return name.startsWith('app.db.')
 }
 
 // Caches do Chromium são regenerados no launch — copiá-los só custa I/O e RAM
@@ -89,10 +100,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
         const rel = relative(real, src)
         if (!rel) return true
         const top = rel.split(sep)[0]
-        // Backup pré-migração dos segredos: é um snapshot do banco ANTES da
-        // cifragem, ou seja, texto claro. O scrub do boot só mexe no app.db —
-        // então este nem entra na cópia.
-        if (isSecretsBackup(top)) return false
+        // Snapshots do banco (app.db.*). Dois motivos, e cada um bastaria:
+        // o backup pré-cifragem é o banco em TEXTO CLARO e o scrub do boot só
+        // mexe no app.db vivo — copiá-lo levaria os segredos junto; e os
+        // snapshots pré-import se acumulam, então copiar N cópias do banco
+        // inteiro a cada run é só I/O e disco desperdiçados.
+        if (isDbSnapshot(top)) return false
         // `sync/` é o CLONE do repo de backup real do usuário, e
         // `isConfigured()` (ipc/sync.ts) é literalmente `existsSync(sync/.git)`.
         // Copiado, a cópia nasce sincronizada: o boot puxa o bundle remoto e o
