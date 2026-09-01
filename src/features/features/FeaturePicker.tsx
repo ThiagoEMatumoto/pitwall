@@ -27,6 +27,12 @@ interface Props {
 
 /** Teto de altura do painel (equivale ao antigo `max-h-72`). */
 const MAX_PANEL_H = 288
+/** Piso de largura (a largura fixa antiga, `w-72`): no header a âncora é um
+ *  botão de ícone — casar a largura sem piso deixaria o painel ilegível. */
+const MIN_PANEL_W = 288
+/** Teto de largura: em tela larga um campo esticado não deve virar um painel
+ *  gigante de itens curtos. */
+const MAX_PANEL_W = 480
 
 // Painel de escolha de feature: busca por título, em foco primeiro, o resto por
 // atividade recente, arquivadas fora. Só o PAINEL — quem abre (campo do diálogo,
@@ -51,6 +57,7 @@ export function FeaturePicker({
   const anchorRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [placement, setPlacement] = useState<MenuPlacement | null>(null)
+  const [width, setWidth] = useState(MIN_PANEL_W)
 
   // Mede o wrapper do consumidor e o conteúdo natural do painel para decidir
   // abrir pra baixo ou pra cima, com um max-height que cabe na viewport. Layout
@@ -59,11 +66,16 @@ export function FeaturePicker({
     const anchor = anchorRef.current?.parentElement
     if (!anchor || !panelRef.current) return
     const rect = anchor.getBoundingClientRect()
+    // Largura sai da mesma medição da âncora: o painel casa com o campo que o
+    // abriu (senão parece um popup solto no meio do formulário). Entra também
+    // no cálculo do placement — com `align: 'right'` o left depende dela.
+    const w = Math.min(Math.max(rect.width, MIN_PANEL_W), MAX_PANEL_W)
+    setWidth(w)
     setPlacement(
       computeMenuPlacement({
         rect,
         menuH: panelRef.current.scrollHeight,
-        menuW: panelRef.current.offsetWidth,
+        menuW: w,
         viewportW: window.innerWidth,
         viewportH: window.innerHeight,
         align,
@@ -105,7 +117,7 @@ export function FeaturePicker({
       role="listbox"
       // z-[1001] fica acima do Dialog (z-[1000]) — o picker é o consumidor mais
       // aninhado, nunca o contrário.
-      className="fixed z-[1001] flex w-72 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+      className="fixed z-[1001] flex flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
       // Antes da medida: posição provisória e invisível. `opacity` em vez de
       // `visibility` porque o autoFocus da busca não pega em elemento oculto.
       style={
@@ -113,9 +125,10 @@ export function FeaturePicker({
           ? {
               left: placement.left,
               ...(placement.top != null ? { top: placement.top } : { bottom: placement.bottom }),
+              width,
               maxHeight: Math.min(placement.maxHeight, MAX_PANEL_H),
             }
-          : { left: 0, top: 0, opacity: 0, pointerEvents: 'none' }
+          : { left: 0, top: 0, width, opacity: 0, pointerEvents: 'none' }
       }
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-1.5">
