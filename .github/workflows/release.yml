@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   prepare:
-    needs: verify
+    needs: [verify, smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +45,58 @@ jobs:
       - run: npm run typecheck
 
       - run: npm run test:unit
+
+  # Gate de BOOT: o typecheck/vitest do `verify` roda em Node e não carrega o
+  # bundle do Electron — já houve regressão que só aparece no app buildado
+  # (path/bundling, ABI nativa). Aqui o app buildado sobe de verdade sob xvfb.
+  #
+  # Job próprio (e não step do `verify`) porque o smoke precisa de
+  # `rebuild:native`, que compila better-sqlite3/node-pty pro ABI do Electron —
+  # o oposto do que o vitest do `verify` precisa. Os dois no mesmo job se
+  # atropelariam.
+  #
+  # Sem `needs: verify`: os dois gates são independentes e rodam em paralelo,
+  # então o gate custa ~1x o tempo do mais lento, não a soma.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Mesmo pin do job build: o smoke tem que exercitar o ABI que a gente publica.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Rebuild native modules against Electron ABI
+        run: npm run rebuild:native
+
+      - run: npm run build
+
+      # Reusa e2e/specs/smoke.spec.ts (asserções ESTRUTURAIS: IconRail + áreas),
+      # que não dependem de dados. Um erro no boot do main derruba o teste antes
+      # das asserções: `electron.launch()`/`firstWindow()` nunca resolvem.
+      #
+      # Hermético: CM_REAL_USERDATA aponta pra um path INEXISTENTE, então
+      # launchApp() pula a cópia do userData e o app sobe com perfil vazio (sem
+      # ~/.config/pitwall, sem ~/.claude, sem repos do usuário). Com perfil vazio
+      # o updater no-opa (app.isPackaged false), o syncOnBoot não tem sync/.git,
+      # o auto-pull é opt-in por pref e o auto-clone não tem repo — nada de rede
+      # autenticada.
+      #
+      # NÃO cobre "repositório registrado abre sessão": exigiria seed + CLI
+      # `claude` autenticado no runner. Fora de escopo de propósito.
+      - name: Boot smoke (xvfb)
+        run: xvfb-run --auto-servernum npx playwright test e2e/specs/smoke.spec.ts
+        env:
+          CM_REAL_USERDATA: ${{ runner.temp }}/pitwall-empty-userdata
+          # Determinismo no runner headless: sem GPU e sem tentativa de Wayland,
+          # o boot não depende de driver nem de compositor.
+          CM_DISABLE_GPU: '1'
+          CM_DISABLE_WAYLAND: '1'
 
   build:
     needs: prepare
