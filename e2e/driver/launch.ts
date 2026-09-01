@@ -3,7 +3,6 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isSecretsBackup } from '../../electron/main/services/db-maintenance'
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(here, '../..')
@@ -28,6 +27,18 @@ export function resolveRealUserData(): string {
     }
   }
   return preferred
+}
+
+// Snapshot do banco: qualquer `app.db.<algo>` no topo do userData. Hoje são os
+// `app.db.pre-secrets-*` (pré-cifragem) e os `app.db.pre-import-*` (pré-import
+// destrutivo do sync), mas o padrão é deliberadamente aberto — a lista que só
+// cobre o prefixo conhecido é exatamente o modo de falha que deixou um vetor
+// descoberto na cópia. O próximo prefixo que alguém inventar já nasce ignorado.
+//
+// Os arquivos vivos do SQLite NÃO casam: `app.db`, `app.db-wal` e `app.db-shm`
+// não têm o ponto depois de `db`. É o ponto que separa snapshot de banco vivo.
+function isDbSnapshot(name: string): boolean {
+  return name.startsWith('app.db.')
 }
 
 // Caches do Chromium são regenerados no launch — copiá-los só custa I/O e RAM
@@ -89,10 +100,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
         const rel = relative(real, src)
         if (!rel) return true
         const top = rel.split(sep)[0]
-        // Backup pré-migração dos segredos: é um snapshot do banco ANTES da
-        // cifragem, ou seja, texto claro. O scrub do boot só mexe no app.db —
-        // então este nem entra na cópia.
-        if (isSecretsBackup(top)) return false
+        // Snapshots do banco (app.db.*). Dois motivos, e cada um bastaria:
+        // o backup pré-cifragem é o banco em TEXTO CLARO e o scrub do boot só
+        // mexe no app.db vivo — copiá-lo levaria os segredos junto; e os
+        // snapshots pré-import se acumulam, então copiar N cópias do banco
+        // inteiro a cada run é só I/O e disco desperdiçados.
+        if (isDbSnapshot(top)) return false
         // `sync/` é o CLONE do repo de backup real do usuário, e
         // `isConfigured()` (ipc/sync.ts) é literalmente `existsSync(sync/.git)`.
         // Copiado, a cópia nasce sincronizada: o boot puxa o bundle remoto e o
@@ -127,6 +140,20 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
       CM_MCP_EPHEMERAL_PORT: '1',
       ...(options.env ?? {}),
+      // Kill-switch fail-closed do app sob harness: desliga de uma vez TODOS os
+      // side-effects externos (sync, auto-pull, auto-clone, scheduled jobs,
+      // usage monitor, calendar, feature watcher). Ver
+      // electron/main/services/e2e-mode.ts. A exclusão de `sync/` na cópia
+      // acima continua como defesa em profundidade, mas a proteção principal é
+      // esta: nega por padrão em vez de excluir caso a caso.
+      //
+      // DEPOIS do spread de propósito: um cenário NÃO pode desligar isto por
+      // acidente. A trava anterior era opcional e sobrescrevível — foi
+      // exatamente essa classe de falha que deixou um `git push` de teste
+      // chegar no repo de backup real. Se um dia alguém precisar exercitar o
+      // sync no harness, isso vira um mecanismo explícito e revisado, não um
+      // spread que vence por ordem de chave.
+      CM_E2E: '1',
     } as Record<string, string>,
   })
   const page = await app.firstWindow()

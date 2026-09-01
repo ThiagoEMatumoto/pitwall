@@ -1,5 +1,6 @@
 import { getPref } from './prefs-store'
 import { pullAllWithToasts } from '../ipc/git'
+import { isE2E } from './e2e-mode'
 
 // Cron de auto-pull dos repos de projeto, LIGADO por padrão (opt-out). Extraído
 // de index.ts pra poder ser chamado também pelo handler prefs:set — sem isso,
@@ -15,6 +16,9 @@ let autoPullTimer: ReturnType<typeof setInterval> | null = null
 // autoPullEnabled (default TRUE: sem a pref gravada, roda). Best-effort:
 // qualquer falha é logada e o boot/tick segue.
 export async function runAutoPullNow(): Promise<void> {
+  // `git pull` nos repos REAIS do usuário — num run anterior do harness isto
+  // rodou nos 31. O boot já não agenda sob e2e; aqui fecha o disparo por IPC.
+  if (isE2E()) return
   if (!getPref(AUTO_PULL_ENABLED_KEY, true)) return
   try {
     await pullAllWithToasts('auto')

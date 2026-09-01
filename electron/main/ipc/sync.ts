@@ -15,6 +15,7 @@ import {
 import { importBundle } from '../services/sync/importer'
 import { withSyncLock } from '../services/sync/sync-lock'
 import { readSyncConfig, updateSyncConfig } from '../services/sync/sync-config'
+import { isE2E } from '../services/e2e-mode'
 import { SyncCoordinator, type SyncCoordinatorState } from '../services/sync/coordinator'
 import type {
   SyncBackupResult,
@@ -39,6 +40,11 @@ function workdir(): string {
 }
 
 function isConfigured(): boolean {
+  // Cinto de segurança do modo e2e: "não configurado" é o único estado que
+  // fecha push, force-push, pull e import de uma vez só — todo caminho de sync
+  // (incl. o coordinator e o flush do before-quit) passa por aqui. Guardar só o
+  // boot não bastaria: um cenário pode disparar a ação por IPC.
+  if (isE2E()) return false
   return existsSync(join(workdir(), '.git'))
 }
 
