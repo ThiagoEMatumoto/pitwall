@@ -3,6 +3,7 @@ import * as jobStore from './scheduled-job-store'
 import { runJob, type JobRunParams } from './job-runner'
 import { setRunJobNow } from './job-run-now'
 import { broadcast } from './notify'
+import { isE2E } from './e2e-mode'
 import type { JobRun, ScheduledJob } from '../../../shared/types/ipc'
 
 // Scheduler de Scheduled Jobs (Fase 2). Molde de calendar-watcher: um único timer
@@ -75,6 +76,9 @@ export class JobScheduler {
   }
 
   start(): void {
+    // Sob o harness o scheduler não sobe: o catch-up dos vencidos spawna
+    // sessões Claude reais a partir dos jobs do perfil copiado.
+    if (isE2E()) return
     if (this.timer) return
     // ORDEM crítica: reconcile PRIMEIRO (senão o catch-up abaixo cria runs
     // 'running' que o reconcile marcaria 'interrupted' na sequência).

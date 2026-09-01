@@ -124,6 +124,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
     args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
     env: {
       ...process.env,
+      // Kill-switch fail-closed do app sob harness: desliga de uma vez TODOS os
+      // side-effects externos (sync, auto-pull, auto-clone, scheduled jobs,
+      // usage monitor, calendar, feature watcher). Ver
+      // electron/main/services/e2e-mode.ts. A exclusão de `sync/` na cópia
+      // acima continua como defesa em profundidade, mas a proteção principal é
+      // esta: nega por padrão em vez de excluir caso a caso.
+      CM_E2E: '1',
       CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
       CM_MCP_EPHEMERAL_PORT: '1',
       ...(options.env ?? {}),

@@ -76,6 +76,7 @@ import {
 import { startMcpServer, stopMcpServer } from './services/mcp/server'
 import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
+import { e2eBootLogLine, isE2E } from './services/e2e-mode'
 import { calendarWatcher } from './services/calendar/calendar-watcher'
 import { jobScheduler } from './services/job-scheduler'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
@@ -167,6 +168,8 @@ function createMainWindow(): BrowserWindow {
 // registrados que não estão no disco. Best-effort: qualquer falha é logada e o
 // boot segue.
 async function autoCloneMissingOnBoot(): Promise<void> {
+  // `git clone` no disco REAL do usuário — nunca sob o harness de e2e.
+  if (isE2E()) return
   try {
     await backfillRepoRemotes()
     if (getPref('autoCloneMissing', true) && listMissingRepos().length > 0) {
@@ -203,6 +206,11 @@ function logGpuInfo(): void {
 }
 
 app.whenReady().then(async () => {
+  // Kill-switch do harness de e2e, avaliado UMA vez por boot: tudo que sai da
+  // caixa (git remoto, disco, rede, ~/.claude) fica desligado. A linha de log
+  // é a prova auditável de que o modo estava ativo durante o run.
+  const e2e = isE2E()
+  if (e2e) console.warn(e2eBootLogLine())
   logGpuInfo()
   // Sem menu de aplicação: o menu default do Electron traz um item Edit→Paste com
   // acelerador Ctrl+V que dispara webContents.paste() ALÉM do paste nativo do
@@ -322,7 +330,10 @@ app.whenReady().then(async () => {
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via
   // pingSyncMutation), tanto pela camada IPC quanto pelo MCP server.
-  setSyncMutationHook(notifySyncMutation)
+  //
+  // Sob o harness NÃO é instalado: é o vetor exato do incidente de 31/08 — cada
+  // mutação de um cenário virava `git push` no repo de backup real.
+  if (!e2e) setSyncMutationHook(notifySyncMutation)
   // Fim de turno (working → waiting/idle) → resumo falado do modo voz. Hook
   // injetado aqui pra evitar ciclo session-activity ↔ chat-transcript-service.
   setTurnEndedHook(scheduleTurnSummary)
@@ -337,18 +348,25 @@ app.whenReady().then(async () => {
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o
   // watcher via watcherHooks internamente quando importa.
   createMainWindow()
+  // initUpdater() já é inerte fora do app empacotado — não precisa de guarda.
   initUpdater()
-  startUsageMonitor()
-  startFeatureWatcher()
-  // Ativação assistida por Google Calendar: poll da URL secreta iCal (pref
-  // meeting_calendar_ics_url). Inativo se a pref estiver vazia — sem erro nem
-  // rede. Inicia DEPOIS da janela porque o clique da notificação a foca.
-  calendarWatcher.start()
+  if (!e2e) {
+    // Lê ~/.claude/.credentials.json e vai à rede.
+    startUsageMonitor()
+    // Observa e escreve no vault de features REAL.
+    startFeatureWatcher()
+    // Ativação assistida por Google Calendar: poll da URL secreta iCal (pref
+    // meeting_calendar_ics_url). Inativo se a pref estiver vazia — sem erro nem
+    // rede. Inicia DEPOIS da janela porque o clique da notificação a foca.
+    calendarWatcher.start()
+  }
 
   // Scheduled Jobs (Fase 2): poll único ~30s. No boot reconcilia runs órfãs do
   // processo anterior, faz catch-up dos vencidos (skip-with-marker ou spawn se
   // catch_up opt-in) e agenda o poll. Inicia DEPOIS da janela pois o spawn dos
-  // jobs reusa o pipeline de sessão.
+  // jobs reusa o pipeline de sessão. Sob o harness o start() é no-op (ver
+  // job-scheduler.ts): o catch-up dos vencidos spawnaria sessões Claude reais a
+  // partir dos jobs do perfil copiado.
   jobScheduler.start()
 
   // Self-heal periódico de handoffs presos em 'running' cuja filha já morreu em
@@ -361,8 +379,13 @@ app.whenReady().then(async () => {
 
   // Cron opt-in de auto-pull (pref autoPullEnabled/autoPullIntervalMinutes) +
   // um tick único poucos segundos após o boot, quando ligado. Best-effort.
-  rescheduleAutoPull()
-  autoPullBootTimer = setTimeout(() => void runAutoPullNow(), AUTO_PULL_BOOT_DELAY_MS)
+  //
+  // Sob o harness nem agenda: numa validação anterior este tick rodou
+  // `git pull` nos 31 repos reais do usuário.
+  if (!e2e) {
+    rescheduleAutoPull()
+    autoPullBootTimer = setTimeout(() => void runAutoPullNow(), AUTO_PULL_BOOT_DELAY_MS)
+  }
 
   // Pull-no-boot CONSERVADOR em BACKGROUND: importa só fast-forward limpo (sem
   // trabalho local não-empurrado), bounded por timeout e NÃO-fatal (offline/erro
@@ -370,16 +393,23 @@ app.whenReady().then(async () => {
   // coordinator). Se IMPORTOU (mudou dados), faz broadcast dos canais das
   // entidades sincronizadas para o renderer recarregar ao vivo — as stores de
   // features/objectives/tasks tratam um payload-sinal como "refresh()".
-  void syncOnBoot()
-    .then((imported) => {
-      if (!imported) return
-      broadcast('feature:updated', { backfill: true })
-      broadcast('objective:updated', { reload: true })
-      broadcast('task:updated', { reload: true })
-    })
-    // Auto-clone dos repos faltantes DEPOIS do import do boot (o sync pode ter
-    // trazido registros novos de outra máquina). Best-effort e não-bloqueante.
-    .finally(() => void autoCloneMissingOnBoot())
+  //
+  // Sob o harness NÃO roda: o pull importaria o bundle do repo de backup real
+  // dentro do perfil de teste — inclusive um bundle envenenado por um run
+  // anterior. O auto-clone encadeado no .finally cai junto.
+  if (!e2e) {
+    void syncOnBoot()
+      .then((imported) => {
+        if (!imported) return
+        broadcast('feature:updated', { backfill: true })
+        broadcast('objective:updated', { reload: true })
+        broadcast('task:updated', { reload: true })
+      })
+      // Auto-clone dos repos faltantes DEPOIS do import do boot (o sync pode
+      // ter trazido registros novos de outra máquina). Best-effort e
+      // não-bloqueante.
+      .finally(() => void autoCloneMissingOnBoot())
+  }
 
   // Pós-suspend o contexto WebGL pode morrer SEM disparar onContextLoss no
   // renderer — avisamos as janelas pra cada terminal se curar (clearTextureAtlas
