@@ -28,7 +28,6 @@ import {
 import { setPulse } from './loop-store'
 import { markDuplicateSuspect } from './feature-focus'
 import { list as listObjectives, loadKeyResults } from './objective-store'
-import { create as createTask } from './task-store'
 import { findTranscriptPath } from './session-activity'
 import { runClaude } from './claude-cli'
 import { PULSE_MAX_LENGTH } from '../../../shared/feature-loop'
@@ -146,23 +145,16 @@ export function maybeSuggestObjectiveLink(featureId: string, prompt: string | nu
   }
   if (!best) return
 
-  const decision = decideObjectiveLink(best.score)
-  if (decision === 'link') {
-    setObjectiveLinks(featureId, [{ targetType: best.targetType, targetId: best.targetId }])
-    const updated = getFeature(featureId)
-    if (updated && isVisibleFeature(updated)) broadcast('feature:updated', updated)
-  } else if (decision === 'needs-review') {
-    // Sinal "precisa revisão" reusa o mecanismo já existente de auto-task
-    // tagueada (mesmo padrão do task_create via MCP) em vez de inventar uma
-    // coluna nova — aparece na aba Pendências, linkada à feature.
-    const targetLabel = best.targetType === 'objective' ? 'objetivo' : 'key result'
-    createTask({
-      title: `Revisar vínculo sugerido: "${feature.title}" → ${targetLabel} "${best.title}"`,
-      tags: ['needs-review', 'auto'],
-      origin: 'auto',
-      links: [{ parentType: 'feature', parentId: featureId }],
-    })
-  }
+  // Só o auto-link de confiança alta escreve; 'needs-review' virou no-op.
+  // Ele criava uma task de revisão que ninguém consumia (26% do backlog aberto
+  // no banco real, nenhuma jamais tocada). A feature sem OKR já se anuncia
+  // sozinha: `withOkrIssue` (src/features/features/feature-issues.ts) deriva a
+  // issue `okr_missing` de objectiveLinkCount === 0 e a faixa de issues leva
+  // direto pra FeatureObjectiveLinksSection — a task era ruído redundante.
+  if (decideObjectiveLink(best.score) !== 'link') return
+  setObjectiveLinks(featureId, [{ targetType: best.targetType, targetId: best.targetId }])
+  const updated = getFeature(featureId)
+  if (updated && isVisibleFeature(updated)) broadcast('feature:updated', updated)
 }
 
 // ---- Pulso automático (rede de segurança do loop) ----

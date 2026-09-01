@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 // Integração do auto-sugerir de vínculo a objetivo (Onda 2): score alto grava
-// o feature_link direto; score médio grava um sinal "needs-review" (task
-// tagueada) em vez de link silencioso; score baixo não faz nada. Mesma
+// o feature_link direto; score médio e baixo não escrevem NADA — nem link, nem
+// task de revisão (a task era ruído que ninguém consumia). Mesma
 // estratégia de setup de mcp/tools.test.ts — DB real (tmp dir), electron mockado.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -78,17 +78,17 @@ describe('maybeSuggestObjectiveLink', () => {
     expect(listTasks().filter((t) => t.tags.includes('needs-review'))).toHaveLength(0)
   })
 
-  it('score médio: NÃO grava link, cria task needs-review linkada à feature', () => {
+  // Guarda contra reintroduzir a task de revisão: ela nascia aqui, no score
+  // médio, e morria intocada no backlog. Quem cobra o OKR faltante é a issue
+  // `okr_missing` da UI, não uma pendência criada por robô.
+  it('score médio: NÃO grava link e NÃO cria task nenhuma', () => {
     const feature = makeFeature()
     createObjective({ title: TITLE_MEDIUM, kind: 'okr' })
 
     maybeSuggestObjectiveLink(feature.id, PROMPT)
 
     expect(listObjectiveLinks(feature.id)).toEqual([])
-    const reviewTasks = listTasks().filter((t) => t.tags.includes('needs-review'))
-    expect(reviewTasks).toHaveLength(1)
-    expect(reviewTasks[0].origin).toBe('auto')
-    expect(reviewTasks[0].links).toEqual([{ parentType: 'feature', parentId: feature.id }])
+    expect(listTasks()).toHaveLength(0)
   })
 
   it('score baixo: não grava link nem cria task (nunca silencioso, nunca ruído)', () => {
