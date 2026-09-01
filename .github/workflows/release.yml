@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   prepare:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +25,26 @@ jobs:
             --title "$TAG" \
             --notes "Automated draft for $TAG. Review the Linux, macOS and Windows artifacts before publishing." \
             || true
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Same pin as the build job so the gate runs on the ABI/toolchain we ship with.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # No rebuild:native here on purpose: it compiles better-sqlite3/node-pty for the
+      # Electron ABI, while vitest runs on Node. Keeping verify in its own job with a
+      # plain `npm ci` keeps both ABIs from clobbering each other.
+      - run: npm run typecheck
+
+      - run: npm run test:unit
 
   build:
     needs: prepare
