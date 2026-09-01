@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { Feature, Repo } from '../../../shared/types/ipc'
+import type { FeatureWithStats, Repo } from '../../../shared/types/ipc'
 
 // Só o vínculo com a feature está sob teste: o picker de mãe e o store de
 // defaults têm IPC próprio e não interessam aqui.
@@ -23,7 +23,7 @@ vi.mock('@/lib/session-prefs-store', () => ({
 
 const listMock = vi.fn()
 vi.mock('@/lib/ipc', () => ({
-  featuresApi: { list: () => listMock() },
+  featuresApi: { listWithStats: () => listMock() },
   sessionsApi: {},
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
 }))
@@ -45,7 +45,7 @@ const repo: Repo = {
   isHub: false,
 }
 
-function makeFeature(id: string, title: string): Feature {
+function makeFeature(id: string, title: string, over: Partial<FeatureWithStats> = {}) {
   return {
     id,
     projectId: 'p1',
@@ -56,18 +56,24 @@ function makeFeature(id: string, title: string): Feature {
     docPath: `/tmp/${id}.md`,
     synthMode: 'auto',
     model: null,
-    repos: [{ featureId: id, repoId: 'r1', branch: null }],
+    repos: [{ repoId: 'r1', branch: null, worktreePath: null }],
     origin: 'manual',
     objectiveLinkCount: 0,
     isAppDev: false,
+    pinned: false,
+    focusRank: null,
     createdAt: 0,
     updatedAt: 0,
     completedAt: null,
     archivedAt: null,
-  }
+    sessionCount: 0,
+    recordCount: 0,
+    lastRecordAt: null,
+    ...over,
+  } as FeatureWithStats
 }
 
-describe('SpawnSessionDialog — initialFeatureId', () => {
+describe('SpawnSessionDialog — vínculo com a feature', () => {
   it('abre com a feature já selecionada quando o caller a informa', async () => {
     listMock.mockResolvedValue([makeFeature('f1', 'Loop'), makeFeature('f2', 'Extração TRF4')])
     render(
@@ -80,17 +86,38 @@ describe('SpawnSessionDialog — initialFeatureId', () => {
       />,
     )
 
-    const select = await screen.findByTestId('spawn-feature-select')
-    expect(await screen.findByRole('option', { name: /Extração TRF4/ })).toBeInTheDocument()
-    expect(select).toHaveValue('f2')
+    const trigger = await screen.findByTestId('spawn-feature-select')
+    expect(trigger).toHaveAttribute('data-feature-id', 'f2')
+    expect(trigger).toHaveTextContent('Extração TRF4')
   })
 
   it('sem initialFeatureId segue abrindo sem vínculo', async () => {
     listMock.mockResolvedValue([makeFeature('f1', 'Loop')])
     render(<SpawnSessionDialog open onClose={() => {}} repo={repo} onConfirm={() => {}} />)
 
-    const select = await screen.findByTestId('spawn-feature-select')
-    expect(await screen.findByRole('option', { name: /Loop/ })).toBeInTheDocument()
-    expect(select).toHaveValue('')
+    const trigger = await screen.findByTestId('spawn-feature-select')
+    expect(trigger).toHaveAttribute('data-feature-id', '')
+    expect(trigger).toHaveTextContent('sem vínculo')
+  })
+
+  it('o seletor põe em foco no topo, exclui arquivadas e busca por título', async () => {
+    listMock.mockResolvedValue([
+      makeFeature('f1', 'Loop das features', { updatedAt: 30 }),
+      makeFeature('f2', 'Voz sob demanda', { updatedAt: 10, pinned: true }),
+      makeFeature('f3', 'Rebrand antigo', { updatedAt: 99, archivedAt: 5 }),
+    ])
+    render(<SpawnSessionDialog open onClose={() => {}} repo={repo} onConfirm={() => {}} />)
+
+    fireEvent.click(await screen.findByTestId('spawn-feature-select'))
+    const options = await screen.findAllByRole('option')
+    expect(
+      options.filter((o) => o.hasAttribute('data-feature-id')).map((o) => o.getAttribute('data-feature-id')),
+    ).toEqual(['f2', 'f1'])
+
+    fireEvent.change(screen.getByTestId('spawn-feature-picker-search'), {
+      target: { value: 'loop' },
+    })
+    fireEvent.click(screen.getByRole('option', { name: /Loop das features/ }))
+    expect(screen.getByTestId('spawn-feature-select')).toHaveAttribute('data-feature-id', 'f1')
   })
 })

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { Dialog } from '@/components/ui/Dialog'
+import { Icon } from '@/components/ui/Icon'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { featuresApi } from '@/lib/ipc'
 import { MotherSessionPicker } from '@/features/handoffs/MotherSessionPicker'
+import { FeaturePicker } from '@/features/features/FeaturePicker'
 import { suggestFeatures } from '@/features/features/fuzzy'
 import { STATUS_META } from '@/features/features/status'
 import {
@@ -20,7 +23,7 @@ import { WORK_MODE_PRESETS } from './work-mode-presets'
 import type {
   AdvisorModel,
   EffortLevel,
-  Feature,
+  FeatureWithStats,
   PermissionMode,
   Repo,
 } from '../../../shared/types/ipc'
@@ -71,7 +74,8 @@ export function SpawnSessionDialog({
 }: Props) {
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
-  const [features, setFeatures] = useState<Feature[]>([])
+  const [features, setFeatures] = useState<FeatureWithStats[]>([])
+  const [featurePickerOpen, setFeaturePickerOpen] = useState(false)
   // Vínculo explícito (a): selecionado no dropdown. '' = nenhum.
   const [selectedFeature, setSelectedFeature] = useState<string>('')
   // Modelo inicial. '' = default do claude (não passa --model).
@@ -173,10 +177,12 @@ export function SpawnSessionDialog({
       setHasRepoDefaults(repoDefaults !== null)
       applyDefaults(effective)
     })
-    // Features ligadas a este repo (linkagem (a) filtrada por repo).
-    void featuresApi.list().then((all) => {
+    // Features ligadas a este repo (linkagem (a) filtrada por repo). Vem com
+    // stats porque o picker ordena por atividade REAL (último session record).
+    void featuresApi.listWithStats().then((all) => {
       setFeatures(all.filter((f) => f.repos.some((l) => l.repoId === repo.id)))
     })
+    setFeaturePickerOpen(false)
     setTimeout(() => nameRef.current?.focus(), 0)
   }, [open, repo.id, initialFeatureId])
 
@@ -206,6 +212,7 @@ export function SpawnSessionDialog({
   // Vínculo efetivo: o explícito vence; senão a melhor sugestão se o usuário
   // aceitou (clicar numa sugestão seta selectedFeature).
   const featureId = selectedFeature || undefined
+  const selectedFeatureItem = features.find((f) => f.id === selectedFeature) ?? null
 
   function pickPermission(v: PermissionMode) {
     setPermission(v)
@@ -479,19 +486,36 @@ export function SpawnSessionDialog({
           <label className="mb-1 block text-xs text-[var(--color-text-dim)]">
             Feature (opcional)
           </label>
-          <select
-            data-testid="spawn-feature-select"
-            value={selectedFeature}
-            onChange={(e) => setSelectedFeature(e.target.value)}
-            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
-          >
-            <option value="">— sem vínculo —</option>
-            {features.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.title} ({STATUS_META[f.status].label})
-              </option>
-            ))}
-          </select>
+          <div className="relative w-full">
+            <button
+              type="button"
+              data-testid="spawn-feature-select"
+              data-feature-id={selectedFeature}
+              onClick={() => setFeaturePickerOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-left text-sm outline-none focus:border-[var(--color-accent)]"
+            >
+              <span className={selectedFeatureItem ? '' : 'text-[var(--color-text-dim)]'}>
+                {selectedFeatureItem
+                  ? `${selectedFeatureItem.title} (${STATUS_META[selectedFeatureItem.status].label})`
+                  : '— sem vínculo —'}
+              </span>
+              <Icon as={ChevronDown} size={14} className="shrink-0 text-[var(--color-text-dim)]" />
+            </button>
+            {featurePickerOpen && (
+              <FeaturePicker
+                features={features}
+                value={selectedFeature || null}
+                onPick={(id) => {
+                  setSelectedFeature(id ?? '')
+                  setFeaturePickerOpen(false)
+                }}
+                onClose={() => setFeaturePickerOpen(false)}
+                repoId={repo.id}
+                allowNone
+                testId="spawn-feature-picker"
+              />
+            )}
+          </div>
         </div>
 
         <div className="w-full">
