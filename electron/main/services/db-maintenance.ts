@@ -16,6 +16,12 @@ export const SECRETS_BACKUP_PREFIX = 'app.db.pre-secrets-'
 // mais de um é possível — guardar alguns dá janela pro usuário perceber.
 export const SECRETS_BACKUP_KEEP = 3
 
+// Backup pré-import de sync/backup .zip. O import é replace-all DESTRUTIVO: um
+// bundle ruim (o caso real: paths relativos vindos de um run de teste) troca o
+// estado sincronizável inteiro sem volta. Mesmo mecanismo do pré-segredos.
+export const IMPORT_BACKUP_PREFIX = 'app.db.pre-import-'
+export const IMPORT_BACKUP_KEEP = 3
+
 export function isSecretsBackup(name: string): boolean {
   return name.startsWith(SECRETS_BACKUP_PREFIX)
 }
@@ -27,7 +33,36 @@ export function secretsBackupName(now: number = Date.now()): string {
 }
 
 export function secretsBackupsToPrune(names: string[], keep = SECRETS_BACKUP_KEEP): string[] {
-  return names.filter(isSecretsBackup).sort().reverse().slice(keep)
+  return backupsToPrune(names, SECRETS_BACKUP_PREFIX, keep)
+}
+
+function backupsToPrune(names: string[], prefix: string, keep: number): string[] {
+  return names
+    .filter((n) => n.startsWith(prefix))
+    .sort()
+    .reverse()
+    .slice(keep)
+}
+
+function pruneBackups(dir: string, prefix: string, keep: number): number {
+  const stale = backupsToPrune(readdirSync(dir), prefix, keep)
+  for (const name of stale) unlinkSync(join(dir, name))
+  return stale.length
+}
+
+// Snapshot com `VACUUM INTO` (nunca cp do arquivo: o banco está em WAL, copiar
+// só o .db produziria um backup silenciosamente desatualizado).
+function snapshotDb(
+  db: Database.Database,
+  dir: string,
+  prefix: string,
+  now: number,
+  keep: number,
+): string {
+  const path = join(dir, `${prefix}${now}`)
+  db.prepare('VACUUM INTO ?').run(path)
+  pruneBackups(dir, prefix, keep)
+  return path
 }
 
 // Snapshot consistente do banco ANTES da migração reescrever os segredos.
@@ -42,16 +77,21 @@ export function backupBeforeSecretsMigration(
   dir: string,
   now: number = Date.now(),
 ): string {
-  const path = join(dir, secretsBackupName(now))
-  db.prepare('VACUUM INTO ?').run(path)
-  pruneSecretsBackups(dir)
-  return path
+  return snapshotDb(db, dir, SECRETS_BACKUP_PREFIX, now, SECRETS_BACKUP_KEEP)
+}
+
+// Snapshot ANTES de um import destrutivo (sync ou backup .zip). Falhar aqui
+// deve abortar o import: sem rede, não se sobrescreve o banco do usuário.
+export function backupBeforeImport(
+  db: Database.Database,
+  dir: string,
+  now: number = Date.now(),
+): string {
+  return snapshotDb(db, dir, IMPORT_BACKUP_PREFIX, now, IMPORT_BACKUP_KEEP)
 }
 
 export function pruneSecretsBackups(dir: string, keep = SECRETS_BACKUP_KEEP): number {
-  const stale = secretsBackupsToPrune(readdirSync(dir), keep)
-  for (const name of stale) unlinkSync(join(dir, name))
-  return stale.length
+  return pruneBackups(dir, SECRETS_BACKUP_PREFIX, keep)
 }
 
 export function removeSecretsBackups(dir: string): number {

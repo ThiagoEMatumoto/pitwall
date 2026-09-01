@@ -84,23 +84,21 @@ function readManifest(bundleDir: string): { schemaVersion: number } {
   if (typeof parsed.schemaVersion !== 'number') {
     throw new Error('[sync] manifest inválido: schemaVersion ausente')
   }
-  for (const field of ['appVersion', 'machineId'] as const) {
-    const v = parsed[field]
-    if (typeof v !== 'string' || v.trim().length === 0) {
-      throw new Error(`[sync] manifest inválido: ${field} ausente ou vazio`)
-    }
+  const appVersion = parsed.appVersion
+  if (typeof appVersion !== 'string' || appVersion.trim().length === 0) {
+    throw new Error('[sync] manifest inválido: appVersion ausente ou vazio')
+  }
+  if (typeof parsed.machineId !== 'string' || parsed.machineId.trim().length === 0) {
+    throw new Error('[sync] manifest inválido: machineId ausente ou vazio')
   }
   // Duas assinaturas do MESMO caso (export feito fora do app empacotado):
   //  - appVersion == versão do Electron: `app.getVersion()` sem pacote devolve
   //    a versão do Electron (foi o "32.3.3" do bundle envenenado).
   //  - sufixo -unpackaged: a marca que o exporter passou a gravar.
   const electronVersion = process.versions.electron
-  if (
-    parsed.appVersion.endsWith(UNPACKAGED_SUFFIX) ||
-    (electronVersion && parsed.appVersion === electronVersion)
-  ) {
+  if (appVersion.endsWith(UNPACKAGED_SUFFIX) || (electronVersion && appVersion === electronVersion)) {
     throw new Error(
-      `[sync] bundle recusado: appVersion "${parsed.appVersion}" indica export fora ` +
+      `[sync] bundle recusado: appVersion "${appVersion}" indica export fora ` +
         'do app empacotado (dev/teste) — não é estado de usuário',
     )
   }
