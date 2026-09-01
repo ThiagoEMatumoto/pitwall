@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   prepare:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +47,7 @@ jobs:
       - run: npm run test:unit
 
   build:
-    needs: [prepare, verify]
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
