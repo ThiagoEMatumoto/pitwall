@@ -12,8 +12,8 @@ import {
 } from './secret-store'
 
 // Variáveis de ambiente customizadas do usuário (Configurações → Variáveis de
-// ambiente). Mescladas nos spawns que rodam processos externos (sidecar de
-// transcrição, claude -p) para que tokens/hosts/flags do usuário cheguem aos
+// ambiente). Mescladas nos spawns que rodam processos externos (claude -p,
+// render de vídeo) para que tokens/hosts/flags do usuário cheguem aos
 // subprocessos sem precisar exportá-los no shell que abriu o app GUI.
 //
 // Os VALORES são segredos (chaves de API) e ficam CIFRADOS no banco — ver
@@ -223,8 +223,8 @@ export function migrateSecretsAtRest(
   return { migrated, skipped: null, plaintext }
 }
 
-// Redator para superfícies de log que ecoam saída de subprocesso (stderr do
-// sidecar). Recebe um snapshot dos valores no momento do spawn: assim o custo de
+// Redator para superfícies de log que ecoam saída de subprocesso (stderr de
+// processo filho). Recebe um snapshot dos valores no momento do spawn: assim o custo de
 // decifrar é pago uma vez, e não por linha de log.
 export function createSecretRedactor(values: CustomEnvVars = readCustomEnv()): (
   text: string,

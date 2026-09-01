@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { applyImport, scanEnvSources } from '../services/env-import'
-import { resetDossierPipeline } from '../services/dossier-pipeline-singleton'
 import { clearServiceHealthCache } from '../services/service-proxy'
 
 // Importador de .env (aba Integrações). O scan devolve só fingerprints + paths;
@@ -18,10 +17,9 @@ export function registerEnvImportIpc(): void {
   ipcMain.handle('secrets:import:apply', (_e, payload: unknown) => {
     const { selections } = applySchema.parse(payload)
     const result = applyImport(selections)
-    // Credencial mudou → dossier pipeline invalida o provedor cacheado (mesmo
+    // Credencial mudou → invalida o cache de health dos serviços (mesmo
     // racional do afterMutation de ipc/secrets.ts).
     if (result.applied.length > 0) {
-      resetDossierPipeline()
       clearServiceHealthCache()
     }
     return result

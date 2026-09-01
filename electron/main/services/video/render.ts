@@ -17,10 +17,9 @@ import type {
 //
 // TRANSPORTE: `child_process.spawn` + readline, NÃO node-pty — o PTY funde
 // stdout e stderr e injeta FORCE_COLOR, e é justamente do stdout que sai a
-// linha de progresso que precisamos ler (meeting-sidecar-manager.ts:6-11).
+// linha de progresso que precisamos ler.
 //
-// INVARIANTE (copiada do job-runner, services/job-runner.ts:186-189): esta
-// função NUNCA lança pro chamador depois de enfileirar. Todo caminho — spawn
+// INVARIANTE: esta função NUNCA lança pro chamador depois de enfileirar. Todo caminho — spawn
 // que falha, exit ≠ 0, app fechado no meio — cai num update para 'failed', pra
 // a row jamais ficar presa em 'running'. Quem quer saber se deu certo lê o
 // status da row; a row É o resultado.

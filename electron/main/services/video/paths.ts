@@ -6,7 +6,7 @@ import { join } from "node:path";
 //
 // O workspace Remotion (`video/`) tem package.json e node_modules PRÓPRIOS,
 // isolados do ABI Electron do app — por isso é um diretório, não um módulo
-// importado. A resolução copia sidecar-path.ts: `moduleDir` é estável em dev,
+// importado. A resolução se apoia em `moduleDir`, que é estável em dev,
 // build e e2e (o main compilado vive em `<repoRoot>/out/main`), ao contrário de
 // app.getAppPath(), que em e2e devolve `out/main` e não a raiz do repo.
 

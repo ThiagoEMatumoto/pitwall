@@ -8,7 +8,6 @@ import {
   revealCustomEnvVar,
   setCustomEnvVar,
 } from '../services/custom-env'
-import { resetDossierPipeline } from '../services/dossier-pipeline-singleton'
 import { clearServiceHealthCache, serviceStatuses } from '../services/service-proxy'
 
 // Canal dedicado às env vars customizadas do usuário, separado de `prefs:*`
@@ -23,11 +22,9 @@ const renameSchema = z.object({
   to: z.string().min(1),
 })
 
-// Mudança em credencial invalida o pipeline de dossiês (ele cacheia o provedor
-// com a chave lida no momento da construção) e o cache de health dos serviços
-// (um "sem credencial" cacheado sobreviveria 5min à chave recém-gravada).
+// Mudança em credencial invalida o cache de health dos serviços (um "sem
+// credencial" cacheado sobreviveria 5min à chave recém-gravada).
 function afterMutation(): void {
-  resetDossierPipeline()
   clearServiceHealthCache()
 }
 

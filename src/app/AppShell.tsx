@@ -21,11 +21,8 @@ import { ObjectivesArea } from '@/features/objectives/ObjectivesArea'
 import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
 import { OverviewArea } from '@/features/overview/OverviewArea'
 import { TasksArea } from '@/features/tasks/TasksArea'
-import { JobsArea } from '@/features/jobs/JobsArea'
-import { ContentArea } from '@/features/content/ContentArea'
 import { DiagramsArea } from '@/features/diagrams/DiagramsArea'
 import { VideosArea } from '@/features/videos/VideosArea'
-import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
@@ -37,8 +34,7 @@ import { UpdateToast } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
-import { meetingsApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
-import { useMeetingsStore } from '@/store/meetingsStore'
+import { projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
@@ -50,7 +46,6 @@ import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
-import { DossiersPanel } from '@/features/dossiers/DossiersPanel'
 
 interface PaneParams {
   pane: ActivePane
@@ -135,7 +130,6 @@ const tabComponents = { terminal: TerminalTab }
 
 export function AppShell() {
   const area = useAppStore((s) => s.area)
-  const setArea = useAppStore((s) => s.setArea)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const panes = useAppStore((s) => s.panes)
@@ -527,17 +521,6 @@ export function AppShell() {
     return () => stopLiveWatch()
   }, [startLiveWatch, stopLiveWatch])
 
-  // Ativação assistida por Google Calendar: o clique na notificação nativa (main)
-  // emite o draft. Vamos pra área Reuniões e guardamos o draft no store — a
-  // MeetingsArea o consome (cria a reunião pré-preenchida) ao montar/atualizar.
-  // Assinado no nível do shell pra funcionar mesmo com a área Reuniões fechada.
-  useEffect(() => {
-    return meetingsApi.onCalendarActivate((draft) => {
-      useMeetingsStore.getState().setActivationDraft(draft)
-      setArea('meetings')
-    })
-  }, [setArea])
-
   // Popula as raízes do painel de arquivos a partir do projeto ativo: um repo por
   // vez (o usuário escolhe no seletor). O vaultPath entra só como fallback quando o
   // projeto não tem repos registrados. Re-busca quando o projeto ativo muda.
@@ -705,18 +688,10 @@ export function AppShell() {
 
       {area === 'handoffs' && <HandoffsPanel />}
 
-      {area === 'dossiers' && <DossiersPanel />}
-
-      {area === 'content' && <ContentArea />}
-
       {area === 'diagrams' && <DiagramsArea />}
       {area === 'videos' && <VideosArea />}
 
       {area === 'tasks' && <TasksArea />}
-
-      {area === 'jobs' && <JobsArea />}
-
-      {area === 'meetings' && <MeetingsArea />}
 
       {area === 'cc-configs' && <CcConfigsArea />}
 

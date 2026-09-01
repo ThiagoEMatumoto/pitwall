@@ -5,7 +5,7 @@ import { KNOWN_ENV_KEYS, KNOWN_INTEGRATIONS } from '@shared/known-env-vars'
 import type { CustomEnvEntry, SecretsStatus } from '@shared/types/ipc'
 
 // Aba "Variáveis de ambiente": editor key=value das vars customizadas do usuário,
-// injetadas nos spawns de processos externos (sidecar de transcrição, claude -p).
+// injetadas nos spawns de processos externos (claude -p, render de vídeo).
 //
 // Os VALORES são segredos e ficam cifrados no banco (safeStorage do Electron).
 // Esta tela nunca recebe o mapa inteiro em claro: lista só os NOMES + se há
@@ -300,7 +300,7 @@ export function EnvVarsTab({ open }: { open: boolean }) {
           Variáveis de ambiente
         </div>
         <p className="mb-3 text-xs text-[var(--color-text-dim)]">
-          Injetadas nos processos abertos pelo app (sidecar de transcrição, extração via claude).
+          Injetadas nos processos abertos pelo app (claude -p, render de vídeo).
           Têm precedência sobre as variáveis herdadas do sistema. Os valores ficam cifrados e
           mascarados até você revelar.
         </p>

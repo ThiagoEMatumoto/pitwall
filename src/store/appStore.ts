@@ -20,12 +20,8 @@ export type Area =
   | 'overview'
   | 'objectives'
   | 'tasks'
-  | 'jobs'
-  | 'meetings'
   | 'architecture'
   | 'handoffs'
-  | 'dossiers'
-  | 'content'
   | 'diagrams'
   | 'videos'
 

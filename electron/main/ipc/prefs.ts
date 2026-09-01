@@ -2,10 +2,6 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { getPref, setPref } from '../services/prefs-store'
 import {
-  calendarWatcher,
-  MEETING_CALENDAR_ICS_URL_KEY,
-} from '../services/calendar/calendar-watcher'
-import {
   AUTO_PULL_ENABLED_KEY,
   AUTO_PULL_INTERVAL_MINUTES_KEY,
   rescheduleAutoPull,
@@ -39,9 +35,6 @@ export function registerPrefsIpc(): void {
     const { key, value } = setSchema.parse(payload)
     assertNotSecretKey(key)
     setPref(key, value)
-    // Mudar a URL secreta do calendário liga/desliga/reaponta o watcher na hora,
-    // sem exigir restart do app (restart limpa o dedupe da URL anterior).
-    if (key === MEETING_CALENDAR_ICS_URL_KEY) calendarWatcher.restart()
     // Ligar/desligar o toggle de auto-pull ou mudar o intervalo reagenda o cron na
     // hora. Ligar o toggle reflete a intenção na hora: puxa já (best-effort, gated).
     if (key === AUTO_PULL_ENABLED_KEY || key === AUTO_PULL_INTERVAL_MINUTES_KEY) {
