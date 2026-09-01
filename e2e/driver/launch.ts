@@ -124,16 +124,23 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
     args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
     env: {
       ...process.env,
+      CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
+      CM_MCP_EPHEMERAL_PORT: '1',
+      ...(options.env ?? {}),
       // Kill-switch fail-closed do app sob harness: desliga de uma vez TODOS os
       // side-effects externos (sync, auto-pull, auto-clone, scheduled jobs,
       // usage monitor, calendar, feature watcher). Ver
       // electron/main/services/e2e-mode.ts. A exclusão de `sync/` na cópia
       // acima continua como defesa em profundidade, mas a proteção principal é
       // esta: nega por padrão em vez de excluir caso a caso.
+      //
+      // DEPOIS do spread de propósito: um cenário NÃO pode desligar isto por
+      // acidente. A trava anterior era opcional e sobrescrevível — foi
+      // exatamente essa classe de falha que deixou um `git push` de teste
+      // chegar no repo de backup real. Se um dia alguém precisar exercitar o
+      // sync no harness, isso vira um mecanismo explícito e revisado, não um
+      // spread que vence por ordem de chave.
       CM_E2E: '1',
-      CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
-      CM_MCP_EPHEMERAL_PORT: '1',
-      ...(options.env ?? {}),
     } as Record<string, string>,
   })
   const page = await app.firstWindow()
