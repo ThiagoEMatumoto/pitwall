@@ -1055,3 +1055,56 @@ describe('export nunca emite path relativo', () => {
     db.close()
   })
 })
+
+// ---- Procedência do bundle: manifest de run fora do pacote é recusado ----
+//
+// O bundle envenenado que caiu no repo de sync real trazia appVersion "32.3.3"
+// — a versão do ELECTRON, que é o que `app.getVersion()` devolve quando o app
+// não está empacotado. É a assinatura de um run de dev/harness de e2e.
+describe('manifest: procedência e campos obrigatórios', () => {
+  function rewriteManifest(bundleDir: string, patch: Record<string, unknown>): void {
+    const file = join(bundleDir, 'manifest.json')
+    const m = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    writeFileSync(file, stableStringify({ ...m, ...patch }) + '\n')
+  }
+
+  function bundleOf(db: Database.Database): string {
+    const dir = tmp('sync-bundle-')
+    exportBundle(db, dir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    return dir
+  }
+
+  it('appVersion marcado como -unpackaged → recusa', () => {
+    const dbA = newDb()
+    seed(dbA)
+    const bundleDir = bundleOf(dbA)
+    rewriteManifest(bundleDir, { appVersion: '32.3.3-unpackaged' })
+
+    const dbB = newDb()
+    expect(() =>
+      importBundle(dbB, bundleDir, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher }),
+    ).toThrow(/fora do app empacotado/)
+    dbA.close()
+    dbB.close()
+  })
+
+  it('machineId/appVersion ausente ou vazio → recusa', () => {
+    const dbA = newDb()
+    seed(dbA)
+    const dbB = newDb()
+
+    const semMachine = bundleOf(dbA)
+    rewriteManifest(semMachine, { machineId: '' })
+    expect(() =>
+      importBundle(dbB, semMachine, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher }),
+    ).toThrow(/machineId ausente/)
+
+    const semVersao = bundleOf(dbA)
+    rewriteManifest(semVersao, { appVersion: null })
+    expect(() =>
+      importBundle(dbB, semVersao, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher }),
+    ).toThrow(/appVersion ausente/)
+    dbA.close()
+    dbB.close()
+  })
+})

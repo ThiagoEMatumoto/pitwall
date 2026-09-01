@@ -11,8 +11,10 @@ import {
 import { join } from 'node:path'
 import { markSelfWrite, startFeatureWatcher, stopFeatureWatcher } from '../feature-store'
 import {
+  type BundleManifest,
   type SyncedTable,
   PATH_COLUMNS,
+  UNPACKAGED_SUFFIX,
   SYNCED_TABLES,
   TABLE_PRIMARY_KEYS,
   ensureAbsolutePath,
@@ -73,11 +75,34 @@ function localSchemaVersion(db: Database.Database): number {
   return row.v ?? 0
 }
 
+// Valida o manifest ANTES de qualquer escrita. Além do schemaVersion, checa a
+// PROCEDÊNCIA do bundle: um run fora do pacote (dev/harness de e2e) já publicou
+// um bundle no repo de sync real e contaminou o banco de todas as máquinas.
 function readManifest(bundleDir: string): { schemaVersion: number } {
   const raw = readFileSync(manifestPath(bundleDir), 'utf8')
-  const parsed = JSON.parse(raw) as { schemaVersion?: number }
+  const parsed = JSON.parse(raw) as Partial<BundleManifest>
   if (typeof parsed.schemaVersion !== 'number') {
     throw new Error('[sync] manifest inválido: schemaVersion ausente')
+  }
+  for (const field of ['appVersion', 'machineId'] as const) {
+    const v = parsed[field]
+    if (typeof v !== 'string' || v.trim().length === 0) {
+      throw new Error(`[sync] manifest inválido: ${field} ausente ou vazio`)
+    }
+  }
+  // Duas assinaturas do MESMO caso (export feito fora do app empacotado):
+  //  - appVersion == versão do Electron: `app.getVersion()` sem pacote devolve
+  //    a versão do Electron (foi o "32.3.3" do bundle envenenado).
+  //  - sufixo -unpackaged: a marca que o exporter passou a gravar.
+  const electronVersion = process.versions.electron
+  if (
+    parsed.appVersion.endsWith(UNPACKAGED_SUFFIX) ||
+    (electronVersion && parsed.appVersion === electronVersion)
+  ) {
+    throw new Error(
+      `[sync] bundle recusado: appVersion "${parsed.appVersion}" indica export fora ` +
+        'do app empacotado (dev/teste) — não é estado de usuário',
+    )
   }
   return { schemaVersion: parsed.schemaVersion }
 }
