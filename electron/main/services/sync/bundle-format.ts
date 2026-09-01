@@ -198,6 +198,36 @@ export function ensureAbsolutePath(
   return { value, unresolved: true }
 }
 
+// ---- Guarda de path no bundle (fail-closed) ----
+//
+// O bundle é o canal de contaminação: um DB já envenenado (paths relativos)
+// exportava verbatim e publicava o estrago em todas as máquinas que puxassem.
+// A guarda casa pelo NOME da coluna (`path` ou sufixo `_path`) em vez de
+// PATH_COLUMNS, para que coluna/tabela sincronizada nova entre coberta sem
+// ninguém lembrar de editar a lista.
+
+export function isPathColumnName(name: string): boolean {
+  return name === 'path' || name.endsWith('_path')
+}
+
+// Valor que pode viajar no bundle: NULL/vazio (campo opcional), portável
+// (<CM_ROOT>/...) ou absoluto. Relativo é exatamente o estado do bug.
+export function isBundlePath(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return true
+  return value.startsWith(ROOT_SENTINEL) || isAbsolute(value)
+}
+
+// Primeira coluna de path da row com valor inaceitável, ou null se está limpa.
+export function findBadPath(
+  row: Record<string, unknown>,
+): { column: string; value: unknown } | null {
+  for (const [column, value] of Object.entries(row)) {
+    if (!isPathColumnName(column)) continue
+    if (!isBundlePath(value)) return { column, value }
+  }
+  return null
+}
+
 // ---- Serialização determinística ----
 
 // JSON com chaves ordenadas alfabeticamente (em qualquer profundidade), sem
@@ -225,6 +255,11 @@ function sortedReplacer(_root: unknown): (key: string, value: unknown) => unknow
 }
 
 // ---- Manifest ----
+
+// Sufixo do appVersion quando o export veio de um run FORA do pacote (dev,
+// harness de e2e). Sem ele o manifest diz só "32.3.3" — a versão do Electron —
+// e ninguém consegue distinguir um bundle de app real de um de teste.
+export const UNPACKAGED_SUFFIX = '-unpackaged'
 
 export interface BundleManifest {
   schemaVersion: number

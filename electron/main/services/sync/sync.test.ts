@@ -1000,3 +1000,58 @@ describe('import nunca persiste path relativo', () => {
     dbB.close()
   })
 })
+
+// ---- Regressão: export NUNCA emite path relativo (fail-closed no escritor) ----
+//
+// O leitor já se defende (ensureAbsolutePath), mas o escritor não: um DB já
+// contaminado pelo bug antigo exportava `repos.path = 'projetos/x'` verbatim e
+// publicava a contaminação pra todas as máquinas. O exporter agora recusa —
+// melhor um sync que falha alto do que um bundle envenenado no remoto.
+describe('export nunca emite path relativo', () => {
+  it('repos.path relativo → exportBundle lança e não grava o relativo no ndjson', () => {
+    const db = newDb()
+    seed(db)
+    db.prepare(`UPDATE repos SET path = ? WHERE id = 'repo-1'`).run('projetos/x')
+    const bundleDir = tmp('sync-bundle-')
+
+    expect(() =>
+      exportBundle(db, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 }),
+    ).toThrow(/repos\.path/)
+
+    const reposFile = join(bundleDir, 'tables', 'repos.ndjson')
+    const content = existsSync(reposFile) ? readFileSync(reposFile, 'utf8') : ''
+    expect(content).not.toContain('projetos/x')
+    db.close()
+  })
+
+  it('coluna *_path FORA de PATH_COLUMNS também é checada (features.doc_path)', () => {
+    const db = newDb()
+    seed(db)
+    db.prepare(`UPDATE features SET doc_path = ? WHERE id = 'feat-1'`).run('rel/f.md')
+    const bundleDir = tmp('sync-bundle-')
+
+    expect(() =>
+      exportBundle(db, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 }),
+    ).toThrow(/features\.doc_path/)
+    db.close()
+  })
+
+  it('path portável (<CM_ROOT>/...) e NULL passam — a checagem é só contra relativo', () => {
+    const db = newDb()
+    seedPortable(db, '/home/x/ClaudeManager')
+    const bundleDir = tmp('sync-bundle-')
+
+    expect(() =>
+      exportBundle(db, bundleDir, {
+        featuresRoot: tmp('sync-feat-'),
+        exportedAt: 1,
+        projectsRoot: '/home/x/ClaudeManager',
+      }),
+    ).not.toThrow()
+
+    expect(ndjson(bundleDir, 'repos').find((r) => r.id === 'repo-1')!.path).toBe(
+      '<CM_ROOT>/projetos/p1/core',
+    )
+    db.close()
+  })
+})

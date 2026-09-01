@@ -9,7 +9,9 @@ import {
   PATH_COLUMNS,
   SYNCED_TABLES,
   TABLE_PRIMARY_KEYS,
+  UNPACKAGED_SUFFIX,
   featuresDir,
+  findBadPath,
   manifestPath,
   portablizePath,
   stableStringify,
@@ -42,7 +44,11 @@ function resolveFeaturesRoot(opts?: ExportOpts): string {
 function resolveAppVersion(opts?: ExportOpts): string {
   if (opts?.appVersion) return opts.appVersion
   try {
-    return app.getVersion()
+    const v = app.getVersion()
+    // Fora do pacote (dev, harness de e2e) `app.getVersion()` devolve a versão
+    // do ELECTRON, não a do app — foi o "32.3.3" do bundle envenenado que caiu
+    // no repo de sync real. Marcar deixa a origem explícita no manifest.
+    return app.isPackaged === false ? `${v}${UNPACKAGED_SUFFIX}` : v
   } catch {
     return 'unknown'
   }
@@ -55,15 +61,19 @@ function tableColumns(db: Database.Database, table: string): string[] {
   return rows.map((r) => r.name)
 }
 
-// Escreve uma tabela como .ndjson determinístico: SELECT * ORDER BY <pk>, cada
+// Serializa uma tabela como .ndjson determinístico: SELECT * ORDER BY <pk>, cada
 // row é um objeto {coluna: valor} serializado com stableStringify (chaves
 // ordenadas), uma por linha, com \n final.
-function writeTable(
+//
+// Lança se alguma coluna de path sair NÃO-absoluta e NÃO-portável: um DB
+// contaminado (o bug do path relativo) não pode virar bundle publicado. Falhar
+// alto aqui é preferível a envenenar o remoto — quem importa não tem como saber
+// que o relativo é lixo, e o estrago se espalha pra todas as máquinas.
+function buildTable(
   db: Database.Database,
-  bundleDir: string,
   table: SyncedTable,
   projectsRoot: string | null,
-): void {
+): string {
   const cols = tableColumns(db, table)
   const pk = TABLE_PRIMARY_KEYS[table]
   const orderBy = pk.map((c) => `"${c}" ASC`).join(', ')
@@ -83,11 +93,16 @@ function writeTable(
       // máquinas (some do diff). NULL passa intacto (portablizePath é no-op).
       obj[c] = pathCols.has(c) ? portablizePath(v, projectsRoot) : v
     }
+    const bad = findBadPath(obj)
+    if (bad) {
+      throw new Error(
+        `[sync] recusa exportar path não-absoluto: ${table}.${bad.column}=${String(bad.value)}`,
+      )
+    }
     return stableStringify(obj)
   })
 
-  const content = lines.length ? lines.join('\n') + '\n' : ''
-  writeFileSync(tableFilePath(bundleDir, table), content, 'utf8')
+  return lines.length ? lines.join('\n') + '\n' : ''
 }
 
 // Copia os `.md` de <featuresRoot>/<projectId>/<slug>.md para o bundle,
@@ -148,8 +163,14 @@ export function exportBundle(
   mkdirSync(tablesDir(bundleDir), { recursive: true })
 
   const projectsRoot = opts?.projectsRoot ?? null
-  for (const table of SYNCED_TABLES) {
-    writeTable(db, bundleDir, table, projectsRoot)
+  // Serializa TODAS as tabelas antes de gravar qualquer uma: se a guarda de
+  // path lançar na 5ª tabela, o bundle não fica meio-atualizado no disco (o
+  // working tree do git-sync é reusado entre exports).
+  const contents = SYNCED_TABLES.map(
+    (table) => [table, buildTable(db, table, projectsRoot)] as const,
+  )
+  for (const [table, content] of contents) {
+    writeFileSync(tableFilePath(bundleDir, table), content, 'utf8')
   }
 
   copyFeatures(bundleDir, resolveFeaturesRoot(opts))
