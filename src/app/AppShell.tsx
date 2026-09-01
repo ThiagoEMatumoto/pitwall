@@ -27,6 +27,7 @@ import { DiagramsArea } from '@/features/diagrams/DiagramsArea'
 import { VideosArea } from '@/features/videos/VideosArea'
 import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
+import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
 import { SessionStrip } from '@/features/session-switcher/SessionStrip'
@@ -103,7 +104,12 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
 // Aba do dockview com um dot na cor do projeto antes do título/close padrão.
 // Reusa DockviewDefaultTab pra herdar o título dinâmico (api.title via setTitle) e o X.
 function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
-  const color = props.params.pane?.projectColor ?? null
+  // Mesma regra do TerminalPanel: a pane vem do STORE pelo id do painel
+  // (= paneId). Os params serializados podem estar stale depois do fromJSON — e
+  // ali a sessão é OUTRA (recriada pelo resume), então o id de params levaria a
+  // marca da feature errada (ou a nenhuma).
+  const pane = useAppStore((s) => s.panes.find((p) => p.paneId === props.api.id))
+  const color = (pane ?? props.params.pane)?.projectColor ?? null
   return (
     <div className="flex items-center">
       <span
@@ -111,6 +117,7 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         style={{ background: color ?? 'var(--color-border)' }}
       />
       <DockviewDefaultTab {...props} />
+      <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
   )
 }

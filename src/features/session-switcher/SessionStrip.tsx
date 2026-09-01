@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
+import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { relativeTime } from '@/lib/time'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useVisibleLiveSessions } from './useGlobalSessions'
@@ -274,6 +275,7 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
         )}
         <span className="max-w-40 truncate">{title}</span>
       </button>
+      <SessionFeatureChip sessionId={item.id} density="dot" />
       {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
       <button
         type="button"
