@@ -58,7 +58,10 @@ export function SessionFeatureChip({ sessionId, density, featureId: known, class
       el.removeEventListener('mousedown', stop)
       el.removeEventListener('click', activate)
     }
-  }, [featureId])
+    // `title` entra nas deps porque o span só existe depois que ele chega: onde
+    // o featureId vem pronto por prop (SessionsModal), sem isto o efeito rodava
+    // uma vez só, com ref.current ainda null, e o chip nunca ganhava o listener.
+  }, [featureId, title])
 
   // Sessão sem feature é o caso comum: não vira ruído visual nenhum.
   if (!featureId || !title) return null

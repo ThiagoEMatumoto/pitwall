@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const navigateToFeature = vi.fn()
@@ -110,5 +110,20 @@ describe('SessionFeatureChip', () => {
   it('dispara hydrate ao montar', () => {
     render(<SessionFeatureChip sessionId="s-1" density="chip" />)
     expect(hydrate).toHaveBeenCalled()
+  })
+
+  // Regressao: com o featureId vindo pronto por prop (SessionsModal), o span so
+  // nasce quando o TITULO chega. Se o efeito dos listeners nao depender de
+  // `title`, ele roda uma vez so - com ref.current ainda null - e o chip fica
+  // inerte ao clique (o teclado seguia funcionando, mascarando a falha).
+  it('liga o clique quando o titulo chega depois do featureId', async () => {
+    useSessionFeatureStore.setState({ bySessionId: {}, featureTitles: {} })
+    render(<SessionFeatureChip sessionId="s-9" featureId="f-42" density="chip" />)
+    expect(screen.queryByTestId('session-feature-chip')).toBeNull()
+    await act(async () => {
+      useSessionFeatureStore.setState({ featureTitles: { 'f-42': 'Extração TRF4' } })
+    })
+    fireEvent.click(screen.getByTestId('session-feature-chip'))
+    expect(navigateToFeature).toHaveBeenCalledWith('f-42')
   })
 })
