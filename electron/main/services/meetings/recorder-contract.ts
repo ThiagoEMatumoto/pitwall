@@ -41,3 +41,10 @@ export const resummarizeRegistry = {
 export const actionItemRegistry = {
   current: null as ((input: MeetingActionItemDecision) => Promise<MeetingActionItem>) | null,
 }
+
+// Pós-processamento após stop() (resumo + extração de tarefas, W2). Quem
+// registra é dono de levar a reunião de 'processing' a 'done'/'error'; sem
+// registro, o gravador marca 'done' direto.
+export const postProcessRegistry = {
+  current: null as ((meetingId: string) => Promise<void>) | null,
+}
