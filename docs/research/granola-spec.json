@@ -1,0 +1,2963 @@
+{
+  "meta": {
+    "schema_version": "1.0.0",
+    "generated_at": "2026-09-02",
+    "branch": "docs/granola-research",
+    "purpose": "Varredura do Granola + gap analysis + roadmap de réplica no Pitwall; a v1 removida é histórico, não base.",
+    "language": {
+      "keys": "en",
+      "values": "pt-BR"
+    },
+    "id_prefixes": {
+      "S-": "source",
+      "D-": "dimension claim",
+      "F-": "feature",
+      "P-": "platform",
+      "C-": "complaint",
+      "RS-": "pitwall residue",
+      "I-": "pitwall infra",
+      "TO-": "tech option",
+      "OQ-": "open question",
+      "IMP-": "improvement",
+      "PH-": "roadmap phase",
+      "DC-": "done criterion",
+      "OOR-": "out of roadmap"
+    },
+    "status_enum": [
+      "granola_has",
+      "pitwall_has",
+      "missing",
+      "pitwall_better",
+      "out_of_scope"
+    ],
+    "confidence_enum": [
+      "official",
+      "reported",
+      "inferred"
+    ],
+    "evidence_conventions": {
+      "sources": "IDs S-xx; mapeamento claim → URL segue o agrupamento dos insumos do plano.",
+      "evidence": "path[:lines] no HEAD ou commit; fed814d^:<path> aponta para a v1 removida.",
+      "unknown": "O valor literal \"unknown\" marca informação não disponível nas fontes; nunca inferir números.",
+      "one_sentence": "statement, behavior, notes e check têm no máximo 1 frase; detalhe extra vira item com ID."
+    },
+    "read_first": "indexes"
+  },
+  "sources": [
+    {
+      "id": "S-01",
+      "url": "https://docs.granola.ai/help-center/taking-notes/transcription",
+      "title": "Help Center — Transcription",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-02",
+      "url": "https://docs.granola.ai/help-center/taking-notes/speaker-attribution",
+      "title": "Help Center — Speaker attribution",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-03",
+      "url": "https://docs.granola.ai/help-center/taking-notes/ai-enhanced-notes",
+      "title": "Help Center — AI enhanced notes",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-04",
+      "url": "https://docs.granola.ai/help-center/feature-requests",
+      "title": "Help Center — Feature requests",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-05",
+      "url": "https://docs.granola.ai/help-center/sharing/integrations/integrations-with-granola",
+      "title": "Help Center — Integrations with Granola",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-06",
+      "url": "https://docs.granola.ai/help-center/sharing/integrations/mcp",
+      "title": "Help Center — MCP",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-07",
+      "url": "https://docs.granola.ai/help-center/sharing/exporting-notes",
+      "title": "Help Center — Exporting notes",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-08",
+      "url": "https://docs.granola.ai/help-center/consent-security-privacy/security-privacy-data-faqs",
+      "title": "Help Center — Security, privacy & data FAQs",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-09",
+      "url": "https://docs.granola.ai/help-center/policies/security-reports/post-mortem-assembly-ai-api-key-exposure",
+      "title": "Post-mortem — AssemblyAI API key exposure",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-10",
+      "url": "https://docs.granola.ai/introduction",
+      "title": "Developer docs — Introduction",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-11",
+      "url": "https://docs.granola.ai/webhooks",
+      "title": "Developer docs — Webhooks",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-12",
+      "url": "https://docs.granola.ai/api-reference/openapi.json",
+      "title": "Developer docs — OpenAPI spec",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-13",
+      "url": "https://docs.granola.ai/llms.txt",
+      "title": "Developer docs — llms.txt",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-14",
+      "url": "https://granola.ai/security",
+      "title": "Granola — Security",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-15",
+      "url": "https://granola.ai/pricing",
+      "title": "Granola — Pricing",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-16",
+      "url": "https://granola.ai/updates",
+      "title": "Granola — Product updates",
+      "kind": "official",
+      "reliability": "high"
+    },
+    {
+      "id": "S-17",
+      "url": "https://tldv.io/blog/granola-review",
+      "title": "tl;dv — Granola review",
+      "kind": "third_party",
+      "reliability": "medium"
+    },
+    {
+      "id": "S-18",
+      "url": "https://meetingnotes.com/blog/granola-ai-teardown",
+      "title": "meetingnotes.com — Granola AI teardown",
+      "kind": "third_party",
+      "reliability": "medium"
+    },
+    {
+      "id": "S-19",
+      "url": "https://saas.com.ai/granola-for-windows",
+      "title": "saas.com.ai — Granola for Windows",
+      "kind": "third_party",
+      "reliability": "medium"
+    },
+    {
+      "id": "S-20",
+      "url": "https://get-alfred.ai/blog/granola-pricing",
+      "title": "get-alfred.ai — Granola pricing",
+      "kind": "third_party",
+      "reliability": "medium"
+    },
+    {
+      "id": "S-21",
+      "url": "https://techbuzz.ai/articles/granola-s-private-ai-notes-are-public-by-default",
+      "title": "techbuzz.ai — notes public by default",
+      "kind": "third_party",
+      "reliability": "medium"
+    },
+    {
+      "id": "S-22",
+      "url": "repo:pitwall@HEAD",
+      "title": "Pitwall — árvore no HEAD da branch docs/granola-research (base origin/main)",
+      "kind": "repo",
+      "reliability": "high"
+    },
+    {
+      "id": "S-23",
+      "url": "repo:pitwall@fed814d",
+      "title": "Pitwall — commit fed814d (remoção da v1 de reuniões, 2026-09-01)",
+      "kind": "repo",
+      "reliability": "high"
+    }
+  ],
+  "granola": {
+    "dimensions": {
+      "D-tech": {
+        "id": "D-tech",
+        "name": "Técnica (captura, STT, LLM, arquitetura, API)",
+        "claims": [
+          {
+            "id": "D-tech-01",
+            "statement": "Captura local de áudio do sistema e do microfone no desktop, sem bot entrando na reunião.",
+            "sources": [
+              "S-01",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-02",
+            "statement": "STT roda em nuvem (Deepgram/AssemblyAI), não on-device.",
+            "sources": [
+              "S-08",
+              "S-09"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-03",
+            "statement": "Enhanced notes usam um blend de LLMs OpenAI e Anthropic.",
+            "sources": [
+              "S-08",
+              "S-03"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-04",
+            "statement": "Cliente local-first; notas armazenadas em AWS VPC nos EUA com criptografia em repouso e em trânsito.",
+            "sources": [
+              "S-14",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-05",
+            "statement": "API REST pública com webhooks e spec OpenAPI.",
+            "sources": [
+              "S-10",
+              "S-11",
+              "S-12"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-06",
+            "statement": "Servidor MCP com OAuth2 e transporte Streamable HTTP expondo 6 tools.",
+            "sources": [
+              "S-06"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-07",
+            "statement": "Áudio não é armazenado: cache temporário, transcreve e deleta.",
+            "sources": [
+              "S-08",
+              "S-01"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-08",
+            "statement": "Nomes de speakers vêm de uma extensão de browser que lê o display name (Meet no macOS+Win; Zoom só no macOS).",
+            "sources": [
+              "S-02"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-tech-09",
+            "statement": "Permissões exigidas: mic + system audio no macOS, mic no Windows, Accessibility para speaker tags.",
+            "sources": [
+              "S-01",
+              "S-02"
+            ],
+            "confidence": "official"
+          }
+        ]
+      },
+      "D-nontech": {
+        "id": "D-nontech",
+        "name": "Não-técnica (preço, compliance, privacidade, retenção, plataformas)",
+        "claims": [
+          {
+            "id": "D-nontech-01",
+            "statement": "Planos: Free, Business a USD 14 e Enterprise a USD 35 por usuário/mês.",
+            "sources": [
+              "S-15"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-02",
+            "statement": "Free tem histórico limitado; o teto de ~25 notas é reportado por terceiros, não oficial.",
+            "sources": [
+              "S-15",
+              "S-20"
+            ],
+            "confidence": "reported"
+          },
+          {
+            "id": "D-nontech-03",
+            "statement": "SOC2 Type 2 e GDPR/DPA; não HIPAA (meta declarada para fim de 2026).",
+            "sources": [
+              "S-14",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-04",
+            "statement": "Sem on-prem e sem residência regional de dados.",
+            "sources": [
+              "S-14",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-05",
+            "statement": "Retenção de dados indefinida, salvo configuração no Enterprise.",
+            "sources": [
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-06",
+            "statement": "Plataformas: macOS, Windows, iOS e Android; a web não captura áudio.",
+            "sources": [
+              "S-01",
+              "S-10"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-07",
+            "statement": "Post-mortem público de exposição de API key do AssemblyAI.",
+            "sources": [
+              "S-09"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-nontech-08",
+            "statement": "No MCP, o plano Basic é limitado a 30 dias de histórico e sem transcript.",
+            "sources": [
+              "S-06"
+            ],
+            "confidence": "official"
+          }
+        ]
+      },
+      "D-structure": {
+        "id": "D-structure",
+        "name": "Estrutura do produto (entidades, fluxos, integrações)",
+        "claims": [
+          {
+            "id": "D-structure-01",
+            "statement": "A nota nasce do evento do calendário (Google Calendar/Outlook; Apple Calendar não suportado).",
+            "sources": [
+              "S-05",
+              "S-04"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-02",
+            "statement": "Nota = raw notes do usuário + enhanced notes geradas de transcrição, raw notes e metadados do evento, com o raw destacado.",
+            "sources": [
+              "S-03"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-03",
+            "statement": "Templates built-in e custom; não é possível trocar o template durante a reunião.",
+            "sources": [
+              "S-03"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-04",
+            "statement": "Reuniões organizadas em pastas dentro de um workspace (tool list_meeting_folders).",
+            "sources": [
+              "S-06"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-05",
+            "statement": "Camada agêntica: chat multi-reunião, Recipes, pre-meeting briefs e follow-up emails.",
+            "sources": [
+              "S-03",
+              "S-16"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-06",
+            "statement": "Export é manual por nota, com CSV enviado por email.",
+            "sources": [
+              "S-07"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-07",
+            "statement": "Integrações nativas com Slack, Notion, HubSpot, Attio, Affinity e Zapier; Linear só via Zapier.",
+            "sources": [
+              "S-05"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-structure-08",
+            "statement": "Pré-notas antes da reunião fazem parte do fluxo da nota.",
+            "sources": [
+              "S-03"
+            ],
+            "confidence": "official"
+          }
+        ]
+      },
+      "D-perf": {
+        "id": "D-perf",
+        "name": "Performance e limites operacionais",
+        "claims": [
+          {
+            "id": "D-perf-01",
+            "statement": "Transcrição em tempo real no desktop; no mobile a transcrição é pós-reunião.",
+            "sources": [
+              "S-01",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-perf-02",
+            "statement": "Auto-stop após 15 minutos de silêncio.",
+            "sources": [
+              "S-01"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-perf-03",
+            "statement": "Rate limit do MCP em torno de 100 requisições por minuto.",
+            "sources": [
+              "S-06"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-perf-04",
+            "statement": "Lag de UI é reportado em reviews de terceiros.",
+            "sources": [
+              "S-17",
+              "S-18"
+            ],
+            "confidence": "reported"
+          },
+          {
+            "id": "D-perf-05",
+            "statement": "Latência numérica dos partials de transcrição: unknown (não publicada).",
+            "sources": [
+              "S-01"
+            ],
+            "confidence": "inferred"
+          },
+          {
+            "id": "D-perf-06",
+            "statement": "Offline permite ler e editar notas; captura com STT em nuvem depende de rede.",
+            "sources": [
+              "S-08"
+            ],
+            "confidence": "inferred"
+          }
+        ]
+      },
+      "D-traits": {
+        "id": "D-traits",
+        "name": "Traços de UX e comportamento",
+        "claims": [
+          {
+            "id": "D-traits-01",
+            "statement": "Invisível para os demais participantes: nenhum bot entra na chamada.",
+            "sources": [
+              "S-01",
+              "S-08"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-02",
+            "statement": "Indicador flutuante persistente durante a gravação (descrito por fonte terceira).",
+            "sources": [
+              "S-17",
+              "S-18"
+            ],
+            "confidence": "reported"
+          },
+          {
+            "id": "D-traits-03",
+            "statement": "Sem auto-start de gravação; o recurso consta como \"em consideração\".",
+            "sources": [
+              "S-04"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-04",
+            "statement": "Transcrição ao vivo em bolhas: cinza = áudio do sistema à esquerda, verde = mic à direita.",
+            "sources": [
+              "S-01"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-05",
+            "statement": "Atribuição de speaker default é \"Me vs Them\".",
+            "sources": [
+              "S-02"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-06",
+            "statement": "Transcript não é editável (só deletar segmento) e não há replay de áudio.",
+            "sources": [
+              "S-01",
+              "S-04"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-07",
+            "statement": "Detecção de fim de reunião no macOS exige privilégio de admin.",
+            "sources": [
+              "S-01"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-traits-08",
+            "statement": "Atalhos de teclado e integração com notch: unknown (não encontrado nas fontes).",
+            "sources": [
+              "S-13"
+            ],
+            "confidence": "inferred"
+          }
+        ]
+      },
+      "D-features": {
+        "id": "D-features",
+        "name": "Famílias de features (índice do catálogo F-xx)",
+        "claims": [
+          {
+            "id": "D-features-01",
+            "statement": "Captura e transcrição ao vivo com me/them (F-01 a F-04).",
+            "sources": [
+              "S-01",
+              "S-02"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-features-02",
+            "statement": "Notas: raw, enhanced, templates e regeneração (F-06 a F-09).",
+            "sources": [
+              "S-03"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-features-03",
+            "statement": "Camada agêntica: chat, briefs, recipes e follow-ups (F-10, F-11, F-23).",
+            "sources": [
+              "S-03",
+              "S-16"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-features-04",
+            "statement": "Integrações, export, API e MCP (F-18, F-19).",
+            "sources": [
+              "S-05",
+              "S-06",
+              "S-07",
+              "S-10"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-features-05",
+            "statement": "Speaker por nome via extensão de browser (F-05).",
+            "sources": [
+              "S-02"
+            ],
+            "confidence": "official"
+          },
+          {
+            "id": "D-features-06",
+            "statement": "Apps mobile iOS/Android com transcrição pós-reunião (F-24).",
+            "sources": [
+              "S-01",
+              "S-10"
+            ],
+            "confidence": "official"
+          }
+        ]
+      }
+    },
+    "features": [
+      {
+        "id": "F-01",
+        "name": "Captura local sistema+mic sem bot",
+        "dimension": "D-tech",
+        "granola": {
+          "behavior": "Captura áudio do sistema e do mic localmente no desktop, sem bot na chamada.",
+          "limits": [
+            "Web não captura",
+            "macOS exige permissão de system audio",
+            "Áudio não fica armazenado"
+          ],
+          "sources": [
+            "S-01",
+            "S-08"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "src/features/sessions/voice/useVoiceRecorder.ts",
+            "src/index.html:5"
+          ],
+          "notes": "HEAD só captura mic via MediaRecorder para o ditado; captura de áudio do sistema no Linux é nova."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [],
+        "tech_option_impact": {
+          "TO-A": "Captura via Electron/PipeWire alimenta STT local no mesmo host.",
+          "TO-B": "Captura idêntica; o stream sobe por WebSocket ao provedor."
+        },
+        "priority": "P0"
+      },
+      {
+        "id": "F-02",
+        "name": "Transcrição em tempo real (partials)",
+        "dimension": "D-perf",
+        "granola": {
+          "behavior": "Transcreve ao vivo no desktop com STT em nuvem; no mobile só pós-reunião.",
+          "limits": [
+            "STT não on-device",
+            "Latência de partial não publicada"
+          ],
+          "sources": [
+            "S-01",
+            "S-08"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/voice-stt.ts",
+            "electron/main/services/pty-manager.ts"
+          ],
+          "notes": "HEAD tem STT HTTP batch (OpenAI-compatible) para ditado; não há streaming nem partials."
+        },
+        "improvement_over_granola": {
+          "target": "Partials em tempo real com latência medida em PH-00.",
+          "requested_by_user": true,
+          "target_status": "granola_has"
+        },
+        "depends_on": [
+          "F-01"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Processo local whisper-class em streaming; latência a medir em PH-00.",
+          "TO-B": "Streaming do provedor com partials sub-segundo."
+        },
+        "priority": "P0"
+      },
+      {
+        "id": "F-03",
+        "name": "Painel de transcrição ao vivo (me/them lado a lado)",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Mostra a transcrição em bolhas: cinza = sistema à esquerda, verde = mic à direita.",
+          "limits": [
+            "Lag de UI reportado por terceiros"
+          ],
+          "sources": [
+            "S-01",
+            "S-17"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "src/app/IconRail.tsx:38-48",
+            "src/components/ui/"
+          ],
+          "notes": "Nova área no IconRail seguindo src/features/<dominio>/ e os primitivos de UI."
+        },
+        "improvement_over_granola": {
+          "target": "Painel ao vivo com partials e speakers nomeados quando disponíveis.",
+          "requested_by_user": true,
+          "target_status": "granola_has"
+        },
+        "depends_on": [
+          "F-02"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P0"
+      },
+      {
+        "id": "F-04",
+        "name": "Speaker attribution me/them",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Atribui fala a \"Me\" (mic) ou \"Them\" (sistema) por origem da trilha de áudio.",
+          "limits": [
+            "Fala sobreposta",
+            "Dispositivo compartilhado",
+            "Fontes externas",
+            "Não retroage"
+          ],
+          "sources": [
+            "S-02"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-01",
+          "F-02"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Duas trilhas separadas dão me/them de graça; diarização local separa vozes dentro de \"them\".",
+          "TO-B": "Diarização nativa do provedor separa vozes por canal."
+        },
+        "priority": "P0"
+      },
+      {
+        "id": "F-05",
+        "name": "Speaker identification por nome",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Nomes reais só via extensão de browser lendo o display name (Meet no macOS+Win; Zoom só no macOS).",
+          "limits": [
+            "Depende de extensão",
+            "Zoom só no macOS",
+            "Não retroage",
+            "Fala sobreposta"
+          ],
+          "sources": [
+            "S-02"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": "Nomes por diarização + rotulagem persistente por voz, sem depender de extensão.",
+          "requested_by_user": true,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-02",
+          "F-04"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Diarização local com embeddings de voz; qualidade com 3 vozes é OQ-02.",
+          "TO-B": "Diarização nativa do provedor; nomes exigem rotulagem posterior pelo usuário."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-06",
+        "name": "Raw notes do usuário durante a reunião",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Usuário escreve notas livres durante a reunião; elas entram destacadas nas enhanced notes.",
+          "limits": [
+            "Pré-notas e raw notes vivem na mesma nota"
+          ],
+          "sources": [
+            "S-03"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/preload/index.ts:93-100",
+            "shared/types/ipc.ts:2563"
+          ],
+          "notes": "Persistência via IPC dominio:acao + migration 045."
+        },
+        "improvement_over_granola": {
+          "target": "Notas do usuário com autosave e âncora temporal no transcript.",
+          "requested_by_user": true,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-01"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-07",
+        "name": "Enhanced notes / resumo automático",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Gera enhanced notes a partir de transcrição, raw notes e metadados do evento, com blend OpenAI+Anthropic.",
+          "limits": [
+            "Depende de LLM em nuvem",
+            "Regeneração substitui a versão anterior"
+          ],
+          "sources": [
+            "S-03",
+            "S-08"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": "Resumo automático ao fim da reunião com grounding por citação do transcript.",
+          "requested_by_user": true,
+          "target_status": "granola_has"
+        },
+        "depends_on": [
+          "F-02",
+          "F-06"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Pode usar claude -p ou modelo local; transcript nunca sai da máquina.",
+          "TO-B": "Transcript já está na nuvem do STT; LLM pode ser qualquer provedor."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-08",
+        "name": "Templates de resumo",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Templates built-in e custom moldam as enhanced notes.",
+          "limits": [
+            "Não troca template durante a reunião"
+          ],
+          "sources": [
+            "S-03"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-09",
+        "name": "Regenerar / editar notas",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Enhanced notes podem ser regeneradas e editadas após a reunião.",
+          "limits": [
+            "Transcript em si não é editável"
+          ],
+          "sources": [
+            "S-03",
+            "S-01"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-10",
+        "name": "Chat sobre notas (single/multi-reunião)",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Chat agêntico responde perguntas sobre uma ou várias reuniões.",
+          "limits": [
+            "Depende de LLM em nuvem"
+          ],
+          "sources": [
+            "S-03",
+            "S-16"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-07",
+          "F-17"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P3"
+      },
+      {
+        "id": "F-11",
+        "name": "Calendário: nota a partir do evento + pre-meeting brief",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "A nota nasce do evento do Google Calendar/Outlook e pode receber um brief pré-reunião.",
+          "limits": [
+            "Sem Apple Calendar",
+            "Brief depende de histórico de notas"
+          ],
+          "sources": [
+            "S-05",
+            "S-04",
+            "S-16"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-01",
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-12",
+        "name": "Indicador de gravação persistente (overlay/tray/badge)",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Indicador flutuante persistente enquanto grava (descrito por fonte terceira).",
+          "limits": [
+            "Detalhes oficiais do indicador: unknown"
+          ],
+          "sources": [
+            "S-17",
+            "S-18"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/index.ts:110-157",
+            "electron/main/services/notifications.ts:77-89"
+          ],
+          "notes": "HEAD não tem Tray nem alwaysOnTop; só janela única frameless e notificação nativa."
+        },
+        "improvement_over_granola": {
+          "target": "Indicador sempre visível (tray + badge na janela + overlay) com estado de captura e latência.",
+          "requested_by_user": true,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-01"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-13",
+        "name": "Janela flutuante de anotações ao vivo (2ª BrowserWindow always-on-top)",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Granola mostra transcrição e notas na janela principal; janela flutuante dedicada: unknown.",
+          "limits": [
+            "Não documentada oficialmente"
+          ],
+          "sources": [
+            "S-01",
+            "S-17"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/index.ts:110-157",
+            "src/lib/themes.ts",
+            "src/components/ui/"
+          ],
+          "notes": "Exige segunda BrowserWindow always-on-top, inexistente no HEAD; temas e primitivos são reutilizáveis."
+        },
+        "improvement_over_granola": {
+          "target": "Segunda janela always-on-top com transcript ao vivo + raw notes, sobrevivendo à troca de workspace.",
+          "requested_by_user": true,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-03",
+          "F-06"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-14",
+        "name": "Auto-stop por silêncio / fim de reunião",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Para a gravação após 15 min de silêncio; detecção de fim no macOS exige admin.",
+          "limits": [
+            "Admin no macOS"
+          ],
+          "sources": [
+            "S-01"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-01"
+        ],
+        "tech_option_impact": {
+          "TO-A": "VAD local no mesmo processo de STT.",
+          "TO-B": "VAD local antes do envio, para não pagar silêncio."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-15",
+        "name": "Auto-start ao detectar reunião",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Não existe; consta como \"em consideração\" nos feature requests.",
+          "limits": [
+            "Não disponível"
+          ],
+          "sources": [
+            "S-04"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": "Iniciar captura automaticamente por evento do calendário ou app de reunião em foco.",
+          "requested_by_user": false,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-01",
+          "F-11"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-16",
+        "name": "Action items → tasks automáticas no Pitwall",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Action items ficam nas notas; viram tarefas em ferramentas externas só via Zapier.",
+          "limits": [
+            "Linear só via Zapier",
+            "Sem grounding por citação documentado"
+          ],
+          "sources": [
+            "S-05",
+            "S-03"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/task-store.ts",
+            "electron/main/services/mcp/tools.ts:321"
+          ],
+          "notes": "task_store e task_create (origin auto) existem; falta o extrator e o link polimórfico meeting → task."
+        },
+        "improvement_over_granola": {
+          "target": "Tasks criadas com origin auto, quote de grounding e task_links para feature/objective.",
+          "requested_by_user": true,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P1"
+      },
+      {
+        "id": "F-17",
+        "name": "Busca full-text de reuniões",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Busca e consulta de reuniões via app e via MCP (query_granola_meetings).",
+          "limits": [
+            "Basic: 30 dias sem transcript no MCP"
+          ],
+          "sources": [
+            "S-06"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/db.ts"
+          ],
+          "notes": "FTS5 já foi usada na v1 (024_meetings_fts, dropada); redesenhar na 045+."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-02",
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-18",
+        "name": "Integrações / export",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Integrações nativas (Slack, Notion, HubSpot, Attio, Affinity, Zapier) e export manual por nota/CSV por email.",
+          "limits": [
+            "Export com fricção",
+            "Linear só via Zapier"
+          ],
+          "sources": [
+            "S-05",
+            "S-07"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/mcp/tools.ts:75-84"
+          ],
+          "notes": "No Pitwall a saída natural é handoff/MCP, não conectores por SaaS."
+        },
+        "improvement_over_granola": {
+          "target": "Export por handoff e MCP local em vez de conectores SaaS.",
+          "requested_by_user": false,
+          "target_status": "granola_has"
+        },
+        "depends_on": [
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P3"
+      },
+      {
+        "id": "F-19",
+        "name": "API/MCP de reuniões (paridade com as 6 tools)",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "MCP com query_granola_meetings, list_meetings, get_meetings, get_meeting_transcript, list_meeting_folders e get_account_info; OAuth2, Streamable HTTP, ~100 req/min.",
+          "limits": [
+            "OAuth2 obrigatório",
+            "~100 req/min",
+            "Basic sem transcript"
+          ],
+          "sources": [
+            "S-06",
+            "S-10"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/mcp/tools.ts:75-84",
+            "electron/main/services/mcp/loop-tools.ts"
+          ],
+          "notes": "ToolDef e as famílias de tools existentes definem o padrão para uma família meeting-tools."
+        },
+        "improvement_over_granola": {
+          "target": "Mesmas 6 tools, locais, sem OAuth e sem rate limit artificial.",
+          "requested_by_user": false,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-02",
+          "F-07",
+          "F-17"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P2"
+      },
+      {
+        "id": "F-20",
+        "name": "Privacidade: áudio não persistido / modo privado",
+        "dimension": "D-nontech",
+        "granola": {
+          "behavior": "Áudio é cache temporário e deletado após transcrever; notas ficam em AWS US com criptografia.",
+          "limits": [
+            "Sem on-prem",
+            "Sem residência regional",
+            "STT em nuvem"
+          ],
+          "sources": [
+            "S-08",
+            "S-14"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "electron/main/services/db.ts"
+          ],
+          "notes": "Banco local SQLite já é o padrão; a política de áudio é decisão nova."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-01"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Nada sai da máquina; modo privado é o default natural.",
+          "TO-B": "Áudio sai da máquina para o provedor; modo privado exige fallback local ou desligar captura."
+        },
+        "priority": "P0"
+      },
+      {
+        "id": "F-21",
+        "name": "Replay de áudio",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Não existe: o áudio é descartado após a transcrição.",
+          "limits": [
+            "Não disponível"
+          ],
+          "sources": [
+            "S-08",
+            "S-01"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts",
+            "src/index.html:5"
+          ],
+          "notes": "CSP já permite media-src blob:; conflita com o default de F-20 e deve ser opt-in."
+        },
+        "improvement_over_granola": {
+          "target": "Replay opcional por segmento quando o usuário optar por persistir áudio.",
+          "requested_by_user": false,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-01",
+          "F-20"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P3"
+      },
+      {
+        "id": "F-22",
+        "name": "Transcript editável",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Transcript não é editável; só é possível deletar um segmento.",
+          "limits": [
+            "Não disponível"
+          ],
+          "sources": [
+            "S-01"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": "Editar texto e speaker de qualquer segmento, com histórico.",
+          "requested_by_user": false,
+          "target_status": "pitwall_better"
+        },
+        "depends_on": [
+          "F-02"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P3"
+      },
+      {
+        "id": "F-23",
+        "name": "Follow-up email / Recipes",
+        "dimension": "D-features",
+        "granola": {
+          "behavior": "Recipes e follow-up emails gerados a partir das notas.",
+          "limits": [
+            "Sem fase no roadmap atual"
+          ],
+          "sources": [
+            "S-03",
+            "S-16"
+          ]
+        },
+        "status": "missing",
+        "pitwall": {
+          "evidence": [
+            "fed814d",
+            "electron/main/services/migrations/044_drop_removed_features.ts"
+          ],
+          "notes": "Removida em fed814d e schema dropado na migration 044; nada no HEAD."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [
+          "F-07"
+        ],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P3"
+      },
+      {
+        "id": "F-24",
+        "name": "Mobile / multi-plataforma",
+        "dimension": "D-nontech",
+        "granola": {
+          "behavior": "Apps macOS, Windows, iOS e Android; web só leitura/edição.",
+          "limits": [
+            "Mobile transcreve pós-reunião"
+          ],
+          "sources": [
+            "S-01",
+            "S-10"
+          ]
+        },
+        "status": "out_of_scope",
+        "pitwall": {
+          "evidence": [
+            "electron-builder.yml"
+          ],
+          "notes": "Pitwall é desktop Linux (Electron); mobile fora de escopo."
+        },
+        "improvement_over_granola": {
+          "target": null,
+          "requested_by_user": false,
+          "target_status": null
+        },
+        "depends_on": [],
+        "tech_option_impact": {
+          "TO-A": "Indiferente à opção técnica.",
+          "TO-B": "Indiferente à opção técnica."
+        },
+        "priority": "P4"
+      }
+    ],
+    "platforms": [
+      {
+        "id": "P-01",
+        "name": "macOS",
+        "sources": [
+          "S-01",
+          "S-02"
+        ],
+        "capabilities": {
+          "F-01": "yes",
+          "F-02": "realtime",
+          "F-05": "Meet e Zoom via extensão",
+          "F-14": "yes (fim de reunião exige admin)"
+        }
+      },
+      {
+        "id": "P-02",
+        "name": "Windows",
+        "sources": [
+          "S-01",
+          "S-02",
+          "S-19"
+        ],
+        "capabilities": {
+          "F-01": "yes (permissão só de mic)",
+          "F-02": "realtime",
+          "F-05": "só Meet via extensão",
+          "F-14": "unknown"
+        }
+      },
+      {
+        "id": "P-03",
+        "name": "iOS",
+        "sources": [
+          "S-01",
+          "S-10"
+        ],
+        "capabilities": {
+          "F-01": "yes",
+          "F-02": "pós-reunião",
+          "F-05": "no",
+          "F-14": "unknown"
+        }
+      },
+      {
+        "id": "P-04",
+        "name": "Android",
+        "sources": [
+          "S-01",
+          "S-10"
+        ],
+        "capabilities": {
+          "F-01": "yes",
+          "F-02": "pós-reunião",
+          "F-05": "no",
+          "F-14": "unknown"
+        }
+      },
+      {
+        "id": "P-05",
+        "name": "Web",
+        "sources": [
+          "S-01"
+        ],
+        "capabilities": {
+          "F-01": "no",
+          "F-02": "no",
+          "F-09": "yes",
+          "F-10": "unknown"
+        }
+      }
+    ],
+    "complaints": [
+      {
+        "id": "C-01",
+        "text": "Transcript sem atribuição individual em chamadas com 3+ pessoas (tudo vira \"Them\").",
+        "verified": true,
+        "sources": [
+          "S-02",
+          "S-17"
+        ],
+        "affects": [
+          "F-04",
+          "F-05"
+        ]
+      },
+      {
+        "id": "C-02",
+        "text": "Sem replay de áudio.",
+        "verified": true,
+        "sources": [
+          "S-08",
+          "S-18"
+        ],
+        "affects": [
+          "F-21"
+        ]
+      },
+      {
+        "id": "C-03",
+        "text": "Export com fricção (manual por nota, CSV por email).",
+        "verified": true,
+        "sources": [
+          "S-07",
+          "S-17"
+        ],
+        "affects": [
+          "F-18"
+        ]
+      },
+      {
+        "id": "C-04",
+        "text": "Sem auto-start de gravação.",
+        "verified": true,
+        "sources": [
+          "S-04",
+          "S-17"
+        ],
+        "affects": [
+          "F-15"
+        ]
+      },
+      {
+        "id": "C-05",
+        "text": "Sem suporte a Apple Calendar.",
+        "verified": true,
+        "sources": [
+          "S-05",
+          "S-04"
+        ],
+        "affects": [
+          "F-11"
+        ]
+      },
+      {
+        "id": "C-06",
+        "text": "Transcript não editável.",
+        "verified": true,
+        "sources": [
+          "S-01",
+          "S-18"
+        ],
+        "affects": [
+          "F-22"
+        ]
+      },
+      {
+        "id": "C-07",
+        "text": "Lag de UI.",
+        "verified": false,
+        "sources": [
+          "S-17",
+          "S-18"
+        ],
+        "affects": [
+          "F-03"
+        ]
+      },
+      {
+        "id": "C-08",
+        "text": "Notas públicas por padrão dentro do workspace.",
+        "verified": false,
+        "sources": [
+          "S-21"
+        ],
+        "affects": [
+          "F-20"
+        ]
+      }
+    ],
+    "pricing": {
+      "currency": "USD",
+      "billing": "por usuário/mês",
+      "tiers": [
+        {
+          "name": "Free",
+          "price": 0,
+          "limits": [
+            "Histórico limitado (oficial)",
+            "~25 notas (fonte terceira, não oficial)",
+            "MCP: 30 dias sem transcript"
+          ],
+          "sources": [
+            "S-15",
+            "S-20",
+            "S-06"
+          ]
+        },
+        {
+          "name": "Business",
+          "price": 14,
+          "limits": [
+            "Retenção indefinida"
+          ],
+          "sources": [
+            "S-15",
+            "S-08"
+          ]
+        },
+        {
+          "name": "Enterprise",
+          "price": 35,
+          "limits": [
+            "Retenção configurável",
+            "Sem on-prem"
+          ],
+          "sources": [
+            "S-15",
+            "S-08",
+            "S-14"
+          ]
+        }
+      ]
+    }
+  },
+  "pitwall": {
+    "history": {
+      "v1_meeting_intelligence": {
+        "commit": "fed814d",
+        "removed_at": "2026-09-01",
+        "do_not_reuse": true,
+        "why": "erro ao registrar a reunião + experiência ruim em uso real; decisão de recomeçar do zero",
+        "sources": [
+          "S-23"
+        ],
+        "artifacts": [
+          {
+            "path": "sidecar/sidecar.py",
+            "evidence": "fed814d^:sidecar/sidecar.py"
+          },
+          {
+            "path": "electron/main/services/meeting-sidecar-manager.ts",
+            "evidence": "fed814d^:electron/main/services/meeting-sidecar-manager.ts"
+          },
+          {
+            "path": "electron/main/services/meeting-store.ts",
+            "evidence": "fed814d^:electron/main/services/meeting-store.ts"
+          },
+          {
+            "path": "electron/main/services/meeting-extraction.ts",
+            "evidence": "fed814d^:electron/main/services/meeting-extraction.ts"
+          },
+          {
+            "path": "electron/main/services/calendar/",
+            "evidence": "fed814d^:electron/main/services/calendar/"
+          },
+          {
+            "path": "electron/main/ipc/meetings.ts",
+            "evidence": "fed814d^:electron/main/ipc/meetings.ts"
+          },
+          {
+            "path": "src/features/meetings/",
+            "evidence": "fed814d^:src/features/meetings/"
+          },
+          {
+            "path": "electron/main/services/migrations/022_meetings.ts",
+            "evidence": "fed814d^:electron/main/services/migrations/022_meetings.ts"
+          },
+          {
+            "path": "electron/main/services/migrations/023_meetings_capture_status.ts",
+            "evidence": "fed814d^:electron/main/services/migrations/023_meetings_capture_status.ts"
+          },
+          {
+            "path": "electron/main/services/migrations/024_meetings_fts.ts",
+            "evidence": "fed814d^:electron/main/services/migrations/024_meetings_fts.ts"
+          },
+          {
+            "path": "e2e/scenarios/validate-meetings.ts",
+            "evidence": "fed814d^:e2e/scenarios/validate-meetings.ts"
+          },
+          {
+            "path": "e2e/scenarios/validate-meetings-live.ts",
+            "evidence": "fed814d^:e2e/scenarios/validate-meetings-live.ts"
+          }
+        ],
+        "stack_summary": "PipeWire pw-record em 2 trilhas + faster-whisper + sherpa-onnx, NDJSON no stdout; sem tools MCP.",
+        "schema_dropped_in": "electron/main/services/migrations/044_drop_removed_features.ts"
+      }
+    },
+    "residue": [
+      {
+        "id": "RS-01",
+        "path": "electron-builder.yml",
+        "lines": "19-26",
+        "evidence": [
+          "electron-builder.yml:19-26"
+        ],
+        "notes": "extraResources copia sidecar/ que não existe mais; bug latente de packaging.",
+        "action": "Remover o bloco extraResources do sidecar."
+      },
+      {
+        "id": "RS-02",
+        "path": "README.md; README.pt-BR.md",
+        "lines": "86,142,150,154",
+        "evidence": [
+          "README.md:86",
+          "README.pt-BR.md:86"
+        ],
+        "notes": "Documentam a feature Meetings e o diretório sidecar/ na árvore.",
+        "action": "Remover o parágrafo Meetings/Reuniões e as entradas de árvore."
+      },
+      {
+        "id": "RS-03",
+        "path": "README.md",
+        "lines": "44",
+        "evidence": [
+          "README.md:44"
+        ],
+        "notes": "Lista meeting como parent válido de diagram_link.",
+        "action": "Remover meeting (e dossier) da lista de parents."
+      },
+      {
+        "id": "RS-04",
+        "path": "app_prefs (banco do usuário)",
+        "lines": "unknown",
+        "evidence": [
+          "electron/main/services/migrations/044_drop_removed_features.ts"
+        ],
+        "notes": "Chaves meeting_* podem sobreviver em bancos existentes; a 044 não toca app_prefs.",
+        "action": "Migration de limpeza DELETE FROM app_prefs WHERE key LIKE meeting_%."
+      },
+      {
+        "id": "RS-05",
+        "path": "electron/main/services/migrations/038_diagrams.ts",
+        "lines": "64",
+        "evidence": [
+          "electron/main/services/migrations/038_diagrams.ts:64",
+          "electron/main/services/migrations/044_drop_removed_features.ts:44"
+        ],
+        "notes": "CHECK de diagram_links ainda aceita meeting como parent_type.",
+        "action": "Manter como legado documentado ou recriar a tabela sem o valor em migration futura."
+      }
+    ],
+    "infra": [
+      {
+        "id": "I-01",
+        "path": "electron/main/index.ts:110-157",
+        "capability": "Janela única frameless (createMainWindow); sem Tray, alwaysOnTop ou segunda BrowserWindow.",
+        "reusable_for": [
+          "F-12",
+          "F-13"
+        ]
+      },
+      {
+        "id": "I-02",
+        "path": "electron/main/services/notifications.ts:77-89",
+        "capability": "Notificação nativa com clique que foca a janela principal.",
+        "reusable_for": [
+          "F-12",
+          "F-14",
+          "F-15"
+        ]
+      },
+      {
+        "id": "I-03",
+        "path": "electron/main/services/notify.ts:40-45",
+        "capability": "Broadcast main → renderer por canal.",
+        "reusable_for": [
+          "F-02",
+          "F-03",
+          "F-12"
+        ]
+      },
+      {
+        "id": "I-04",
+        "path": "electron/preload/index.ts:93-100",
+        "capability": "invoke/subscribe expostos ao renderer.",
+        "reusable_for": [
+          "F-02",
+          "F-03",
+          "F-06"
+        ]
+      },
+      {
+        "id": "I-05",
+        "path": "shared/types/ipc.ts:2563",
+        "capability": "Contrato tipado interface Api.",
+        "reusable_for": [
+          "F-01",
+          "F-02",
+          "F-06",
+          "F-09"
+        ]
+      },
+      {
+        "id": "I-06",
+        "path": "electron/main/ipc/",
+        "capability": "Handlers IPC com zod e canais dominio:acao.",
+        "reusable_for": [
+          "F-01",
+          "F-06",
+          "F-09",
+          "F-22"
+        ]
+      },
+      {
+        "id": "I-07",
+        "path": "src/lib/ipc.ts",
+        "capability": "Wrapper de IPC no renderer.",
+        "reusable_for": [
+          "F-03",
+          "F-06"
+        ]
+      },
+      {
+        "id": "I-08",
+        "path": "electron/main/services/db.ts",
+        "capability": "SQLite com WAL e FK on.",
+        "reusable_for": [
+          "F-01",
+          "F-17",
+          "F-20"
+        ]
+      },
+      {
+        "id": "I-09",
+        "path": "electron/main/services/migrations/",
+        "capability": "Migrations NNN_nome.ts; próxima é 045.",
+        "reusable_for": [
+          "F-01",
+          "F-06",
+          "F-17"
+        ]
+      },
+      {
+        "id": "I-10",
+        "path": "electron/main/services/task-store.ts",
+        "capability": "tasks, task_links polimórfico, origin e source_session_id.",
+        "reusable_for": [
+          "F-16"
+        ]
+      },
+      {
+        "id": "I-11",
+        "path": "electron/main/services/mcp/tools.ts:75-84",
+        "capability": "ToolDef {name,title,description,inputSchema,handler}.",
+        "reusable_for": [
+          "F-19",
+          "F-18"
+        ]
+      },
+      {
+        "id": "I-12",
+        "path": "electron/main/services/mcp/tools.ts:321",
+        "capability": "task_create força origin auto.",
+        "reusable_for": [
+          "F-16"
+        ]
+      },
+      {
+        "id": "I-13",
+        "path": "electron/main/services/mcp/loop-tools.ts",
+        "capability": "Família de tools como padrão para meeting-tools (também video-tools.ts, service-tools.ts).",
+        "reusable_for": [
+          "F-19"
+        ]
+      },
+      {
+        "id": "I-14",
+        "path": "src/app/IconRail.tsx:38-48",
+        "capability": "Áreas do renderer sem router; nova área = novo item.",
+        "reusable_for": [
+          "F-03"
+        ]
+      },
+      {
+        "id": "I-15",
+        "path": "src/components/ui/",
+        "capability": "Primitivos de UI.",
+        "reusable_for": [
+          "F-03",
+          "F-06",
+          "F-13"
+        ]
+      },
+      {
+        "id": "I-16",
+        "path": "src/lib/themes.ts",
+        "capability": "4 temas; a janela flutuante deve herdá-los.",
+        "reusable_for": [
+          "F-12",
+          "F-13"
+        ]
+      },
+      {
+        "id": "I-17",
+        "path": "src/index.html:5",
+        "capability": "CSP já com media-src self blob:.",
+        "reusable_for": [
+          "F-01",
+          "F-21"
+        ]
+      },
+      {
+        "id": "I-18",
+        "path": "electron/main/services/voice-stt.ts",
+        "capability": "STT HTTP OpenAI-compatible (/v1/audio/transcriptions), batch.",
+        "reusable_for": [
+          "F-02"
+        ]
+      },
+      {
+        "id": "I-19",
+        "path": "src/features/sessions/voice/useVoiceRecorder.ts",
+        "capability": "MediaRecorder webm/opus do mic.",
+        "reusable_for": [
+          "F-01"
+        ]
+      },
+      {
+        "id": "I-20",
+        "path": "electron/main/services/pty-manager.ts",
+        "capability": "Processos longos via node-pty.",
+        "reusable_for": [
+          "F-02"
+        ]
+      },
+      {
+        "id": "I-21",
+        "path": "electron/main/services/video/render.ts",
+        "capability": "spawn + readline para processos com saída em linhas.",
+        "reusable_for": [
+          "F-02"
+        ]
+      }
+    ],
+    "gates": {
+      "typecheck": "npm run typecheck (3 tsconfigs)",
+      "unit": "npm run test:unit (vitest)",
+      "e2e": "e2e/scenarios/*.ts + skill drive-app",
+      "lint": "none",
+      "evidence": [
+        "package.json:29-30",
+        "e2e/scenarios/"
+      ]
+    }
+  },
+  "gap_analysis": {
+    "feature_matrix": {
+      "F-01": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-05",
+          "I-06",
+          "I-08",
+          "I-09",
+          "I-17",
+          "I-19"
+        ],
+        "blocked_by": []
+      },
+      "F-02": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-03",
+          "I-04",
+          "I-05",
+          "I-18",
+          "I-20",
+          "I-21"
+        ],
+        "blocked_by": [
+          "F-01"
+        ]
+      },
+      "F-03": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-03",
+          "I-04",
+          "I-07",
+          "I-14",
+          "I-15"
+        ],
+        "blocked_by": [
+          "F-02"
+        ]
+      },
+      "F-04": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-01",
+          "F-02"
+        ]
+      },
+      "F-05": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-02",
+          "F-04"
+        ]
+      },
+      "F-06": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-04",
+          "I-05",
+          "I-06",
+          "I-07",
+          "I-09",
+          "I-15"
+        ],
+        "blocked_by": [
+          "F-01"
+        ]
+      },
+      "F-07": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-02",
+          "F-06"
+        ]
+      },
+      "F-08": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-07"
+        ]
+      },
+      "F-09": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-05",
+          "I-06"
+        ],
+        "blocked_by": [
+          "F-07"
+        ]
+      },
+      "F-10": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-07",
+          "F-17"
+        ]
+      },
+      "F-11": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-01",
+          "F-07"
+        ]
+      },
+      "F-12": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-01",
+          "I-02",
+          "I-03",
+          "I-16"
+        ],
+        "blocked_by": [
+          "F-01"
+        ]
+      },
+      "F-13": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-01",
+          "I-15",
+          "I-16"
+        ],
+        "blocked_by": [
+          "F-03",
+          "F-06"
+        ]
+      },
+      "F-14": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-02"
+        ],
+        "blocked_by": [
+          "F-01"
+        ]
+      },
+      "F-15": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-02"
+        ],
+        "blocked_by": [
+          "F-01",
+          "F-11"
+        ]
+      },
+      "F-16": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-10",
+          "I-12"
+        ],
+        "blocked_by": [
+          "F-07"
+        ]
+      },
+      "F-17": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-08",
+          "I-09"
+        ],
+        "blocked_by": [
+          "F-02",
+          "F-07"
+        ]
+      },
+      "F-18": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-11"
+        ],
+        "blocked_by": [
+          "F-07"
+        ]
+      },
+      "F-19": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-11",
+          "I-13"
+        ],
+        "blocked_by": [
+          "F-02",
+          "F-07",
+          "F-17"
+        ]
+      },
+      "F-20": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-08"
+        ],
+        "blocked_by": [
+          "F-01"
+        ]
+      },
+      "F-21": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-17"
+        ],
+        "blocked_by": [
+          "F-01",
+          "F-20"
+        ]
+      },
+      "F-22": {
+        "status": "missing",
+        "pitwall_ref": [
+          "I-06"
+        ],
+        "blocked_by": [
+          "F-02"
+        ]
+      },
+      "F-23": {
+        "status": "missing",
+        "pitwall_ref": [],
+        "blocked_by": [
+          "F-07"
+        ]
+      },
+      "F-24": {
+        "status": "out_of_scope",
+        "pitwall_ref": [],
+        "blocked_by": []
+      }
+    },
+    "tech_options": {
+      "TO-A": {
+        "id": "TO-A",
+        "name": "Local on-device (implementação nova)",
+        "summary": "Captura via Electron/PipeWire, STT local streaming classe whisper e diarização local.",
+        "criteria": {
+          "latency_partial_s": "unknown (medir em PH-00)",
+          "diarization": "local, qualidade a medir (OQ-02)",
+          "speaker_names": "rotulagem por embedding de voz, persistente",
+          "privacy": "total: nada sai da máquina",
+          "cost_per_hour": "zero em dinheiro; CPU/GPU local",
+          "platform_support": "Linux-first",
+          "install_friction": "alta: download de modelos e dependências nativas",
+          "offline": "sim"
+        },
+        "enables": [
+          "F-01",
+          "F-02",
+          "F-04",
+          "F-05",
+          "F-20",
+          "F-14"
+        ],
+        "blocks": [],
+        "weakens": [],
+        "risks": [
+          "Latência de partial pode não ser sub-segundo em CPU",
+          "Fricção de instalação de modelos"
+        ],
+        "open_questions": [
+          "OQ-01",
+          "OQ-02",
+          "OQ-05",
+          "OQ-06"
+        ],
+        "sources": [
+          "S-22"
+        ],
+        "decision": "undecided"
+      },
+      "TO-B": {
+        "id": "TO-B",
+        "name": "Cloud streaming (classe Deepgram/AssemblyAI)",
+        "summary": "Captura local e WebSocket para provedor com STT + diarização streaming, como o Granola.",
+        "criteria": {
+          "latency_partial_s": "sub-segundo (classe Deepgram/AssemblyAI)",
+          "diarization": "nativa do provedor, streaming",
+          "speaker_names": "rotulagem posterior pelo usuário sobre os speakers diarizados",
+          "privacy": "áudio sai da máquina para o provedor",
+          "cost_per_hour": "unknown (por hora do provedor; medir em PH-00)",
+          "platform_support": "qualquer desktop com rede",
+          "install_friction": "baixa: só uma API key",
+          "offline": "não"
+        },
+        "enables": [
+          "F-01",
+          "F-02",
+          "F-04",
+          "F-05",
+          "F-14"
+        ],
+        "blocks": [],
+        "weakens": [
+          "F-20"
+        ],
+        "risks": [
+          "Exposição de API key (post-mortem do Granola, S-09)",
+          "Custo recorrente por hora",
+          "Dependência de rede"
+        ],
+        "open_questions": [
+          "OQ-01",
+          "OQ-03",
+          "OQ-04"
+        ],
+        "sources": [
+          "S-08",
+          "S-09"
+        ],
+        "decision": "undecided"
+      },
+      "decision": "undecided",
+      "decision_needed_before": "PH-01",
+      "decision_method": "PH-00: mesmo áudio de teste (5 min, pt-BR, 3 vozes) nos dois caminhos."
+    },
+    "open_questions": [
+      {
+        "id": "OQ-01",
+        "question": "Qual a latência real de partial em pt-BR no hardware alvo, para cada opção?",
+        "resolved_in": "PH-00"
+      },
+      {
+        "id": "OQ-02",
+        "question": "A diarização local separa 3 vozes com qualidade aceitável?",
+        "resolved_in": "PH-00"
+      },
+      {
+        "id": "OQ-03",
+        "question": "Qual o custo por hora do provedor de STT streaming?",
+        "resolved_in": "PH-00"
+      },
+      {
+        "id": "OQ-04",
+        "question": "Como custodiar a key do provedor sem repetir o incidente do post-mortem S-09?",
+        "resolved_in": "PH-00"
+      },
+      {
+        "id": "OQ-05",
+        "question": "Captura de áudio do sistema no Linux: Electron desktopCapturer ou processo PipeWire dedicado?",
+        "resolved_in": "PH-00"
+      },
+      {
+        "id": "OQ-06",
+        "question": "Qual o tamanho e a fricção de instalação dos modelos locais?",
+        "resolved_in": "PH-00"
+      }
+    ],
+    "improvements": [
+      {
+        "id": "IMP-01",
+        "name": "Speaker por nome",
+        "features": [
+          "F-05"
+        ],
+        "phase": "PH-04",
+        "granola_baseline": "Nomes só via extensão de browser, por display name.",
+        "pitwall_target": "Nomes por diarização + rotulagem persistente por voz.",
+        "sources": [
+          "S-02"
+        ]
+      },
+      {
+        "id": "IMP-02",
+        "name": "Resumo automático",
+        "features": [
+          "F-07"
+        ],
+        "phase": "PH-03",
+        "granola_baseline": "Enhanced notes geradas sob demanda ao fim da reunião.",
+        "pitwall_target": "Resumo automático com grounding por citação.",
+        "sources": [
+          "S-03"
+        ]
+      },
+      {
+        "id": "IMP-03",
+        "name": "Adição de notas do usuário",
+        "features": [
+          "F-06"
+        ],
+        "phase": "PH-02",
+        "granola_baseline": "Raw notes na mesma nota, destacadas no enhanced.",
+        "pitwall_target": "Raw notes com autosave e âncora temporal no transcript.",
+        "sources": [
+          "S-03"
+        ]
+      },
+      {
+        "id": "IMP-04",
+        "name": "Criação automática de tasks",
+        "features": [
+          "F-16"
+        ],
+        "phase": "PH-03",
+        "granola_baseline": "Action items só viram tarefas externas via Zapier.",
+        "pitwall_target": "Tasks nativas com origin auto e links a feature/objective.",
+        "sources": [
+          "S-05"
+        ]
+      },
+      {
+        "id": "IMP-05",
+        "name": "Real-time",
+        "features": [
+          "F-02",
+          "F-03"
+        ],
+        "phase": "PH-01",
+        "granola_baseline": "Transcrição ao vivo no desktop com STT em nuvem.",
+        "pitwall_target": "Partials ao vivo com latência medida e opção local.",
+        "sources": [
+          "S-01"
+        ]
+      },
+      {
+        "id": "IMP-06",
+        "name": "Indicador visual de gravação",
+        "features": [
+          "F-12"
+        ],
+        "phase": "PH-02",
+        "granola_baseline": "Indicador flutuante descrito por terceiros.",
+        "pitwall_target": "Tray + badge + overlay sempre visíveis com estado da captura.",
+        "sources": [
+          "S-17",
+          "S-18"
+        ]
+      },
+      {
+        "id": "IMP-07",
+        "name": "Janela flutuante de anotações ao vivo",
+        "features": [
+          "F-13"
+        ],
+        "phase": "PH-02",
+        "granola_baseline": "Janela flutuante dedicada: unknown.",
+        "pitwall_target": "Segunda BrowserWindow always-on-top com transcript e notas.",
+        "sources": [
+          "S-01",
+          "S-17"
+        ]
+      }
+    ]
+  },
+  "roadmap": [
+    {
+      "id": "PH-00",
+      "name": "Spike de decisão TO-A vs TO-B",
+      "delivers": [],
+      "requires_decision": "tech_options.decision",
+      "depends_on_phases": [],
+      "touches": [
+        "docs/research/",
+        "ledger da feature no Pitwall"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-00-01",
+          "check": "Tabela de medições (latência de partial, qualidade, diarização, custo) para TO-A e TO-B no ledger da feature.",
+          "kind": "manual"
+        },
+        {
+          "id": "DC-00-02",
+          "check": "tech_options.decision preenchido com TO-A ou TO-B e rationale.",
+          "kind": "manual"
+        }
+      ],
+      "risks": [
+        "Áudio de teste não representativo",
+        "Hardware do spike diferente do alvo"
+      ]
+    },
+    {
+      "id": "PH-01",
+      "name": "Fundação",
+      "delivers": [
+        "F-01",
+        "F-02",
+        "F-03",
+        "F-04",
+        "F-20"
+      ],
+      "requires_decision": "tech_options.decision",
+      "depends_on_phases": [
+        "PH-00"
+      ],
+      "touches": [
+        "electron/main/services/migrations/045_meetings.ts",
+        "electron/main/services/meetings/",
+        "electron/main/ipc/meetings.ts",
+        "shared/types/ipc.ts",
+        "src/features/meetings/",
+        "src/app/IconRail.tsx"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-01-01",
+          "check": "npm run typecheck e npm run test:unit verdes.",
+          "kind": "gate"
+        },
+        {
+          "id": "DC-01-02",
+          "check": "Screenshot via drive-app com partial exibido em menos de X s (X definido em PH-00).",
+          "kind": "e2e"
+        },
+        {
+          "id": "DC-01-03",
+          "check": "Row em meeting_segments com speaker após sessão fake.",
+          "kind": "db"
+        }
+      ],
+      "risks": [
+        "Captura de áudio do sistema no Linux varia por distro/PipeWire",
+        "Latência real acima do medido no spike"
+      ]
+    },
+    {
+      "id": "PH-02",
+      "name": "Experiência de gravação",
+      "delivers": [
+        "F-12",
+        "F-13",
+        "F-06",
+        "F-14"
+      ],
+      "requires_decision": null,
+      "depends_on_phases": [
+        "PH-01"
+      ],
+      "touches": [
+        "electron/main/index.ts",
+        "electron/main/services/notifications.ts",
+        "src/features/meetings/",
+        "src/lib/themes.ts"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-02-01",
+          "check": "Screenshot via drive-app das duas janelas (principal + flutuante).",
+          "kind": "e2e"
+        },
+        {
+          "id": "DC-02-02",
+          "check": "Janela flutuante sobrevive à troca de workspace.",
+          "kind": "manual"
+        },
+        {
+          "id": "DC-02-03",
+          "check": "Raw notes persistidas no banco após fechar a reunião.",
+          "kind": "db"
+        }
+      ],
+      "risks": [
+        "always-on-top no Wayland depende do compositor",
+        "Tray no Linux varia por DE"
+      ]
+    },
+    {
+      "id": "PH-03",
+      "name": "Inteligência",
+      "delivers": [
+        "F-07",
+        "F-08",
+        "F-09",
+        "F-16"
+      ],
+      "requires_decision": null,
+      "depends_on_phases": [
+        "PH-02"
+      ],
+      "touches": [
+        "electron/main/services/meetings/",
+        "electron/main/services/task-store.ts",
+        "electron/main/services/mcp/tools.ts"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-03-01",
+          "check": "Task criada aparece na área Tasks linkada à feature.",
+          "kind": "e2e"
+        },
+        {
+          "id": "DC-03-02",
+          "check": "Teste unit do extrator com fixture de transcript passa.",
+          "kind": "gate"
+        },
+        {
+          "id": "DC-03-03",
+          "check": "Toda task extraída carrega quote que casa literalmente com o transcript.",
+          "kind": "db"
+        }
+      ],
+      "risks": [
+        "Alucinação de action items sem grounding",
+        "Custo de LLM por reunião"
+      ]
+    },
+    {
+      "id": "PH-04",
+      "name": "Speakers por nome + calendário + auto-start",
+      "delivers": [
+        "F-05",
+        "F-11",
+        "F-15"
+      ],
+      "requires_decision": null,
+      "depends_on_phases": [
+        "PH-03"
+      ],
+      "touches": [
+        "electron/main/services/meetings/",
+        "electron/main/services/calendar/",
+        "src/features/meetings/"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-04-01",
+          "check": "3 vozes nomeadas em e2e com fixture.",
+          "kind": "e2e"
+        },
+        {
+          "id": "DC-04-02",
+          "check": "Evento ICS/Google gera nota automaticamente.",
+          "kind": "e2e"
+        }
+      ],
+      "risks": [
+        "Diarização confunde vozes parecidas",
+        "OAuth do Google Calendar"
+      ]
+    },
+    {
+      "id": "PH-05",
+      "name": "Chat, busca e MCP",
+      "delivers": [
+        "F-10",
+        "F-17",
+        "F-19",
+        "F-18",
+        "F-22",
+        "F-21"
+      ],
+      "requires_decision": null,
+      "depends_on_phases": [
+        "PH-04"
+      ],
+      "touches": [
+        "electron/main/services/mcp/meeting-tools.ts",
+        "electron/main/services/meetings/",
+        "src/features/meetings/"
+      ],
+      "done_criteria": [
+        {
+          "id": "DC-05-01",
+          "check": "As 6 tools de paridade respondem via MCP.",
+          "kind": "e2e"
+        },
+        {
+          "id": "DC-05-02",
+          "check": "FTS retorna trecho para uma query de teste.",
+          "kind": "db"
+        }
+      ],
+      "risks": [
+        "Replay de áudio conflita com o default de não persistir áudio"
+      ]
+    }
+  ],
+  "out_of_roadmap": [
+    {
+      "id": "OOR-01",
+      "scope": "Limpar resíduos RS-01..RS-05 em PR separado e pequeno.",
+      "residue": [
+        "RS-01",
+        "RS-02",
+        "RS-03",
+        "RS-04",
+        "RS-05"
+      ]
+    },
+    {
+      "id": "OOR-02",
+      "scope": "F-23 (follow-up email / Recipes) sem fase atribuída.",
+      "features": [
+        "F-23"
+      ]
+    },
+    {
+      "id": "OOR-03",
+      "scope": "F-24 (mobile) fora de escopo: Pitwall é desktop Linux.",
+      "features": [
+        "F-24"
+      ]
+    }
+  ],
+  "indexes": {
+    "by_status": {
+      "granola_has": [],
+      "pitwall_has": [],
+      "missing": [
+        "F-01",
+        "F-02",
+        "F-03",
+        "F-04",
+        "F-05",
+        "F-06",
+        "F-07",
+        "F-08",
+        "F-09",
+        "F-10",
+        "F-11",
+        "F-12",
+        "F-13",
+        "F-14",
+        "F-15",
+        "F-16",
+        "F-17",
+        "F-18",
+        "F-19",
+        "F-20",
+        "F-21",
+        "F-22",
+        "F-23"
+      ],
+      "pitwall_better": [],
+      "out_of_scope": [
+        "F-24"
+      ]
+    },
+    "dependency_graph": {
+      "F-01": [],
+      "F-02": [
+        "F-01"
+      ],
+      "F-03": [
+        "F-02"
+      ],
+      "F-04": [
+        "F-01",
+        "F-02"
+      ],
+      "F-05": [
+        "F-02",
+        "F-04"
+      ],
+      "F-06": [
+        "F-01"
+      ],
+      "F-07": [
+        "F-02",
+        "F-06"
+      ],
+      "F-08": [
+        "F-07"
+      ],
+      "F-09": [
+        "F-07"
+      ],
+      "F-10": [
+        "F-07",
+        "F-17"
+      ],
+      "F-11": [
+        "F-01",
+        "F-07"
+      ],
+      "F-12": [
+        "F-01"
+      ],
+      "F-13": [
+        "F-03",
+        "F-06"
+      ],
+      "F-14": [
+        "F-01"
+      ],
+      "F-15": [
+        "F-01",
+        "F-11"
+      ],
+      "F-16": [
+        "F-07"
+      ],
+      "F-17": [
+        "F-02",
+        "F-07"
+      ],
+      "F-18": [
+        "F-07"
+      ],
+      "F-19": [
+        "F-02",
+        "F-07",
+        "F-17"
+      ],
+      "F-20": [
+        "F-01"
+      ],
+      "F-21": [
+        "F-01",
+        "F-20"
+      ],
+      "F-22": [
+        "F-02"
+      ],
+      "F-23": [
+        "F-07"
+      ],
+      "F-24": []
+    },
+    "phase_by_feature": {
+      "F-01": "PH-01",
+      "F-02": "PH-01",
+      "F-03": "PH-01",
+      "F-04": "PH-01",
+      "F-05": "PH-04",
+      "F-06": "PH-02",
+      "F-07": "PH-03",
+      "F-08": "PH-03",
+      "F-09": "PH-03",
+      "F-10": "PH-05",
+      "F-11": "PH-04",
+      "F-12": "PH-02",
+      "F-13": "PH-02",
+      "F-14": "PH-02",
+      "F-15": "PH-04",
+      "F-16": "PH-03",
+      "F-17": "PH-05",
+      "F-18": "PH-05",
+      "F-19": "PH-05",
+      "F-20": "PH-01",
+      "F-21": "PH-05",
+      "F-22": "PH-05",
+      "F-23": null,
+      "F-24": null
+    },
+    "feature_by_phase": {
+      "PH-00": [],
+      "PH-01": [
+        "F-01",
+        "F-02",
+        "F-03",
+        "F-04",
+        "F-20"
+      ],
+      "PH-02": [
+        "F-12",
+        "F-13",
+        "F-06",
+        "F-14"
+      ],
+      "PH-03": [
+        "F-07",
+        "F-08",
+        "F-09",
+        "F-16"
+      ],
+      "PH-04": [
+        "F-05",
+        "F-11",
+        "F-15"
+      ],
+      "PH-05": [
+        "F-10",
+        "F-17",
+        "F-19",
+        "F-18",
+        "F-22",
+        "F-21"
+      ]
+    },
+    "improvement_by_feature": {
+      "F-05": "IMP-01",
+      "F-07": "IMP-02",
+      "F-06": "IMP-03",
+      "F-16": "IMP-04",
+      "F-02": "IMP-05",
+      "F-03": "IMP-05",
+      "F-12": "IMP-06",
+      "F-13": "IMP-07"
+    }
+  }
+}
