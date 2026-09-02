@@ -4,6 +4,7 @@ import type {
   Meeting,
   MeetingActionItemDecision,
   MeetingDetail,
+  MeetingDetectionAction,
   MeetingEvent,
   MeetingLiveState,
   MeetingSetupStatus,
@@ -36,6 +37,7 @@ interface MeetingsState {
   resummarize: (id: string) => Promise<void>
   decideActionItem: (id: string, status: MeetingActionItemDecision['status']) => Promise<void>
   toggleFloating: () => Promise<void>
+  decideDetection: (action: MeetingDetectionAction) => Promise<void>
   checkSetup: () => Promise<void>
   clearError: () => void
 
@@ -200,6 +202,11 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
     toggleFloating: async () =>
       attempt(async () => {
         await meetingsApi.floating('toggle')
+      }),
+
+    decideDetection: async (action) =>
+      attempt(async () => {
+        await meetingsApi.detection(action)
       }),
 
     checkSetup: async () =>

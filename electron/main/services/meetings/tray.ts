@@ -1,11 +1,16 @@
-// Ícone na barra do sistema: menu por estado + pisca durante gravação. Sem SNI
+// Ícone na barra do sistema: menu por estado + pisca durante gravação; âmbar
+// fixo enquanto uma reunião detectada aguarda decisão do usuário. Sem SNI
 // host (GNOME sem appindicator) o Tray falha — loga e segue; janela principal e
 // flutuante continuam mostrando o estado.
 import { app, Menu, Tray, type MenuItemConstructorOptions, type NativeImage } from 'electron'
-import type { MeetingEvent, MeetingLiveState } from '../../../../shared/types/meetings'
+import type {
+  MeetingDetection,
+  MeetingEvent,
+  MeetingLiveState,
+} from '../../../../shared/types/meetings'
 import { getMainWindow } from '../notifications'
 import { onMeetingEvent } from './event-bus'
-import { floatingRegistry, recorderRegistry } from './recorder-contract'
+import { detectorRegistry, floatingRegistry, recorderRegistry } from './recorder-contract'
 import { startRecording, stopRecording } from './recording-actions'
 import { trayIcons, type TrayIconKind } from './tray-icons'
 
@@ -39,11 +44,27 @@ function showMainWindow(): void {
   win.focus()
 }
 
+/** Detecção pendente: só conta quando não há gravação e o usuário ainda não ignorou. */
+function pendingDetection(state: MeetingLiveState): MeetingDetection | null {
+  if (state.active || !state.detection || state.detection.ignored) return null
+  return state.detection
+}
+
 export function trayMenuTemplate(
   state: MeetingLiveState,
   clock = formatClock(state.elapsedMs),
 ): MenuItemConstructorOptions[] {
   const active = state.active !== null
+  const detection = pendingDetection(state)
+  const detectionItems: MenuItemConstructorOptions[] = detection
+    ? [
+        {
+          label: `Gravar reunião detectada (${detection.app})`,
+          click: () => detectorRegistry.current?.decide('record'),
+        },
+        { label: 'Ignorar esta reunião', click: () => detectorRegistry.current?.decide('ignore') },
+      ]
+    : []
   const recordingItems: MenuItemConstructorOptions[] = active
     ? [
         { label: `● Gravando ${clock}`, enabled: false },
@@ -52,6 +73,7 @@ export function trayMenuTemplate(
     : [{ label: 'Iniciar gravação', click: () => void startRecording().catch(warn) }]
 
   return [
+    ...detectionItems,
     ...recordingItems,
     {
       label: 'Mostrar/Ocultar janela flutuante',
@@ -99,6 +121,12 @@ export function refreshTray(state: MeetingLiveState): void {
   }
 
   stopBlink()
+  const detection = pendingDetection(state)
+  if (detection) {
+    tray.setImage(icons.detected)
+    tray.setToolTip(`Pitwall — reunião detectada: ${detection.app}`)
+    return
+  }
   tray.setImage(icons.idle)
   tray.setToolTip('Pitwall')
 }

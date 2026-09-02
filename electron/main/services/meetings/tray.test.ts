@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Meeting, MeetingLiveState } from '../../../../shared/types/meetings'
+import type { Meeting, MeetingDetection, MeetingLiveState } from '../../../../shared/types/meetings'
 
 const trayInstances: Array<Record<string, ReturnType<typeof vi.fn>>> = []
 let trayCtorError: Error | null = null
@@ -23,7 +23,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('./tray-icons', () => ({
-  trayIcons: () => ({ idle: 'IDLE', recording: 'REC', recordingDim: 'DIM' }),
+  trayIcons: () => ({ idle: 'IDLE', recording: 'REC', recordingDim: 'DIM', detected: 'AMBER' }),
 }))
 
 const mainWindow = { show: vi.fn(), focus: vi.fn() }
@@ -31,7 +31,7 @@ vi.mock('../notifications', () => ({ getMainWindow: () => mainWindow }))
 vi.mock('../notify', () => ({ broadcast: vi.fn() }))
 
 import { emitMeetingEvent } from './event-bus'
-import { floatingRegistry, recorderRegistry } from './recorder-contract'
+import { detectorRegistry, floatingRegistry, recorderRegistry } from './recorder-contract'
 import { formatClock, installTray, refreshTray, trayMenuTemplate, uninstallTray } from './tray'
 
 const meeting: Meeting = {
@@ -63,6 +63,22 @@ const idle: MeetingLiveState = {
   linkedStreamId: null,
 }
 const recording: MeetingLiveState = { ...idle, active: meeting, elapsedMs: 65_000 }
+const detection: MeetingDetection = {
+  app: 'Google Meet',
+  binary: 'chrome',
+  pid: 4242,
+  streamId: 77,
+  since: 0,
+  ignored: false,
+}
+const detected: MeetingLiveState = { ...idle, detection }
+const ignored: MeetingLiveState = { ...idle, detection: { ...detection, ignored: true } }
+const recordingDetected: MeetingLiveState = { ...recording, detection }
+
+const detector = {
+  getDetection: vi.fn(() => detection),
+  decide: vi.fn(),
+}
 
 const recorder = {
   start: vi.fn(async () => meeting),
@@ -86,6 +102,7 @@ beforeEach(() => {
   trayCtorError = null
   recorder.getState.mockReturnValue(idle)
   recorderRegistry.current = recorder
+  detectorRegistry.current = detector
   floatingRegistry.current = vi.fn()
   vi.clearAllMocks()
 })
@@ -93,6 +110,7 @@ beforeEach(() => {
 afterEach(() => {
   uninstallTray()
   recorderRegistry.current = null
+  detectorRegistry.current = null
   floatingRegistry.current = null
   vi.useRealTimers()
 })
@@ -139,6 +157,37 @@ describe('trayMenuTemplate', () => {
     const stop = trayMenuTemplate(recording).find((i) => i.label === 'Parar gravação')!
     ;(stop.click as () => void)()
     expect(recorder.stop).toHaveBeenCalled()
+  })
+
+  it('detectada: Gravar/Ignorar no topo, Iniciar gravação continua disponível', () => {
+    expect(labels(trayMenuTemplate(detected))).toEqual([
+      'Gravar reunião detectada (Google Meet)',
+      'Ignorar esta reunião',
+      'Iniciar gravação',
+      'Mostrar/Ocultar janela flutuante',
+      'separator',
+      'Abrir Pitwall',
+      'Sair',
+    ])
+  })
+
+  it('detectada: Gravar chama decide(record), Ignorar chama decide(ignore)', () => {
+    const template = trayMenuTemplate(detected)
+    ;(template.find((i) => i.label === 'Gravar reunião detectada (Google Meet)')!.click as () => void)()
+    expect(detector.decide).toHaveBeenCalledWith('record')
+    ;(template.find((i) => i.label === 'Ignorar esta reunião')!.click as () => void)()
+    expect(detector.decide).toHaveBeenCalledWith('ignore')
+  })
+
+  it('detectada sem detector registrado: clicar não crasha', () => {
+    detectorRegistry.current = null
+    const template = trayMenuTemplate(detected)
+    expect(() => (template.find((i) => i.label === 'Ignorar esta reunião')!.click as () => void)()).not.toThrow()
+  })
+
+  it('ignorada ou já gravando: sem os itens de detecção', () => {
+    expect(labels(trayMenuTemplate(ignored))[0]).toBe('Iniciar gravação')
+    expect(labels(trayMenuTemplate(recordingDetected))[0]).toBe('● Gravando 01:05')
   })
 
   it('ações: flutuante toggle, abrir foca a principal, sair encerra o app', () => {
@@ -198,6 +247,41 @@ describe('installTray / refreshTray', () => {
     tray.setImage.mockClear()
     vi.advanceTimersByTime(2100)
     expect(tray.setImage).not.toHaveBeenCalled()
+  })
+
+  it('detectada: ícone âmbar fixo (sem piscar), tooltip com o app', () => {
+    installTray()
+    const tray = lastTray()
+    emitMeetingEvent({ type: 'state', state: detected })
+    expect(tray.setImage).toHaveBeenLastCalledWith('AMBER')
+    expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — reunião detectada: Google Meet')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0]).slice(0, 2)).toEqual([
+      'Gravar reunião detectada (Google Meet)',
+      'Ignorar esta reunião',
+    ])
+    tray.setImage.mockClear()
+    vi.advanceTimersByTime(2100)
+    expect(tray.setImage).not.toHaveBeenCalled()
+  })
+
+  it('detecção ignorada: ícone ocioso e menu sem os itens de detecção', () => {
+    installTray()
+    const tray = lastTray()
+    refreshTray(detected)
+    refreshTray(ignored)
+    expect(tray.setImage).toHaveBeenLastCalledWith('IDLE')
+    expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[0]).toBe('Iniciar gravação')
+  })
+
+  it('gravando com detecção presente: vermelho piscando, não âmbar', () => {
+    installTray()
+    const tray = lastTray()
+    refreshTray(recordingDetected)
+    expect(tray.setImage).toHaveBeenLastCalledWith('REC')
+    expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — gravando 01:05')
+    vi.advanceTimersByTime(700)
+    expect(tray.setImage).toHaveBeenLastCalledWith('DIM')
   })
 
   it('assina o event-bus: evento de estado atualiza o tray', () => {

@@ -14,6 +14,7 @@ const mockApi = {
   resummarize: vi.fn(),
   actionItem: vi.fn(),
   floating: vi.fn(),
+  detection: vi.fn(),
   checkSetup: vi.fn(),
   onEvent: vi.fn((h: (event: MeetingEvent) => void) => {
     eventHandler = h
@@ -118,5 +119,26 @@ describe('meetingsStore events', () => {
     useMeetingsStore.getState().startEventWatch()
     useMeetingsStore.getState().startEventWatch()
     expect(mockApi.onEvent).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('meetingsStore decideDetection', () => {
+  beforeEach(() => {
+    mockApi.detection.mockReset()
+    useMeetingsStore.setState({ error: null })
+  })
+
+  it('encaminha a decisão para a API', async () => {
+    mockApi.detection.mockResolvedValue(undefined)
+    await useMeetingsStore.getState().decideDetection('record')
+    await useMeetingsStore.getState().decideDetection('ignore')
+    expect(mockApi.detection.mock.calls).toEqual([['record'], ['ignore']])
+    expect(useMeetingsStore.getState().error).toBeNull()
+  })
+
+  it('expõe erro da API sem lançar', async () => {
+    mockApi.detection.mockRejectedValue(new Error('sem stream'))
+    await useMeetingsStore.getState().decideDetection('record')
+    expect(useMeetingsStore.getState().error).toBe('sem stream')
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, type CSSProperties } from 'react'
 import { navigateToMeeting } from '@/lib/nav'
 import { useMeetingsStore } from '@/store/meetingsStore'
+import { pendingDetection } from './DetectionBanner'
 import { formatDuration } from './format'
 import { useElapsed } from './useElapsed'
 
@@ -14,6 +15,7 @@ export function RecordingPill() {
   const loadLive = useMeetingsStore((s) => s.loadLive)
   const startEventWatch = useMeetingsStore((s) => s.startEventWatch)
   const stopEventWatch = useMeetingsStore((s) => s.stopEventWatch)
+  const decideDetection = useMeetingsStore((s) => s.decideDetection)
 
   useEffect(() => {
     void loadLive()
@@ -23,6 +25,27 @@ export function RecordingPill() {
 
   const active = live?.active ?? null
   const elapsedMs = useElapsed(active, live?.elapsedMs ?? 0)
+  const detection = pendingDetection(live)
+
+  if (!active && detection) {
+    return (
+      <button
+        type="button"
+        style={{
+          ...noDrag,
+          background: 'color-mix(in srgb, var(--color-warning) 14%, transparent)',
+          color: 'var(--color-warning)',
+        }}
+        className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-medium leading-none hover:brightness-110"
+        title={`${detection.app} está usando o microfone`}
+        onClick={() => void decideDetection('record')}
+      >
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: 'var(--color-warning)' }} />
+        <span>Reunião detectada · Gravar</span>
+      </button>
+    )
+  }
+
   if (!active) return null
 
   return (
