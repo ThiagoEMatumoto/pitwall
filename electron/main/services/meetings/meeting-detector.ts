@@ -19,7 +19,8 @@ export const AUTO_DETECT_KEY = 'meeting_auto_detect'
 export const AUTO_RECORD_KEY = 'meeting_auto_record'
 export const DETECT_SCRIPT_ENV = 'CM_MEETING_DETECT_SCRIPT'
 
-const POLL_MS = 2500
+// 2 s de poll + 3 s de detectMs = pior caso ~7 s até o banner; pw-dump custa ~12 ms.
+const POLL_MS = 2000
 const DETECT_MS = 3000
 const END_MS = 8000
 const GRACE_MS = 8000

@@ -98,6 +98,7 @@ const { app, page, userDataCopy } = await launchApp({
 const { logFile, stop: stopLogs } = captureLogs(app, page);
 watchErrors(page, "main");
 const { apiState, apiGet } = bindApi(page);
+let meetingId: string | null = null;
 
 try {
   await waitReady(page);
@@ -136,7 +137,7 @@ try {
   const hero = page.getByText(/^Gravando/).first();
   await hero.waitFor({ state: "visible", timeout: 10_000 });
   const s = await apiState();
-  const meetingId = s.active?.id ?? null;
+  meetingId = s.active?.id ?? null;
   if (!meetingId) throw new Error("FALHA (2): Gravar não iniciou reunião");
   console.log("[meeting]", meetingId);
 
@@ -178,17 +179,6 @@ try {
     "(4) status final done/error",
     finalStatus === "done" ? "PASS" : "FAIL",
     `finalStatus=${finalStatus}`,
-  );
-
-  const segRows = await queryDb<{ speaker: string; c: number }>(
-    userDataCopy,
-    `SELECT speaker, COUNT(*) AS c FROM meeting_v2_segments WHERE meeting_id = '${meetingId}' GROUP BY speaker`,
-  );
-  const them = segRows.find((r) => r.speaker === "them")?.c ?? 0;
-  record(
-    "(4b) queryDb: segmentos them > 0 (STT real)",
-    them > 0 ? "PASS" : "FAIL",
-    `segRows=${JSON.stringify(segRows)}`,
   );
 
   // --- (5) negativo: gravação MANUAL não gera detecção (pw-record é próprio app, deny-listed) --
@@ -235,6 +225,20 @@ try {
   }
   stopLogs();
   await app.close();
+}
+
+// --- (4b) banco (após o close: queryDb não lê o WAL) ------------------------
+if (meetingId) {
+  const segRows = await queryDb<{ speaker: string; c: number }>(
+    userDataCopy,
+    `SELECT speaker, COUNT(*) AS c FROM meeting_v2_segments WHERE meeting_id = '${meetingId}' GROUP BY speaker`,
+  );
+  const them = segRows.find((r) => r.speaker === "them")?.c ?? 0;
+  record(
+    "(4b) queryDb: segmentos them > 0 (STT real)",
+    them > 0 ? "PASS" : "FAIL",
+    `segRows=${JSON.stringify(segRows)}`,
+  );
 }
 
 console.log("\n=== ERROS DE CONSOLE/PAGEERROR ===");

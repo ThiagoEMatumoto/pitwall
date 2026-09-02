@@ -114,6 +114,34 @@ describe('meetingsStore events', () => {
     expect(useMeetingsStore.getState().live?.active).toBeNull()
   })
 
+  it('meeting event recording com outra selecionada → seleciona e carrega detail', async () => {
+    mockApi.get.mockReset()
+    mockApi.get.mockResolvedValue(makeDetail({ meeting: makeMeeting({ id: 'm2', title: 'Detectada' }) }))
+    useMeetingsStore.setState({ meetings: [makeMeeting()], selectedId: 'm1', detail: makeDetail() })
+    useMeetingsStore.getState().startEventWatch()
+
+    eventHandler?.({ type: 'meeting', meeting: makeMeeting({ id: 'm2', title: 'Detectada', startedAt: 2000 }) })
+
+    expect(useMeetingsStore.getState().selectedId).toBe('m2')
+    expect(mockApi.get).toHaveBeenCalledWith('m2')
+    await vi.waitFor(() => expect(useMeetingsStore.getState().detail?.meeting.id).toBe('m2'))
+    expect(useMeetingsStore.getState().meetings.map((m) => m.id)).toEqual(['m2', 'm1'])
+  })
+
+  it('meeting event done de outra reunião não muda a seleção', () => {
+    mockApi.get.mockReset()
+    useMeetingsStore.setState({ meetings: [makeMeeting()], selectedId: 'm1', detail: makeDetail() })
+    useMeetingsStore.getState().startEventWatch()
+
+    eventHandler?.({ type: 'meeting', meeting: makeMeeting({ id: 'm2', status: 'done', startedAt: 2000 }) })
+
+    const state = useMeetingsStore.getState()
+    expect(state.selectedId).toBe('m1')
+    expect(state.detail?.meeting.id).toBe('m1')
+    expect(mockApi.get).not.toHaveBeenCalled()
+    expect(state.meetings.map((m) => m.id)).toEqual(['m2', 'm1'])
+  })
+
   it('assina onEvent uma única vez (StrictMode-safe)', () => {
     mockApi.onEvent.mockClear()
     useMeetingsStore.getState().startEventWatch()
