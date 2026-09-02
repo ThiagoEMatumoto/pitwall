@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '@/lib/ipc'
-import { fitViewport, unionRects, zoomAt } from '@/features/design/canvas/geometry'
+import { centerViewport, fitViewport, unionRects, zoomAt } from '@/features/design/canvas/geometry'
 import { invertOps } from '@shared/design/ops'
 import type { ArtboardUpdatedEvent, DesignAgentActivity, DesignOp } from '@shared/types/design'
 import type { DesignState } from './designStore.types'
@@ -17,6 +17,7 @@ import {
   releaseTransientAction,
   resetLocalState,
   resyncAction,
+  selectionBounds,
   sendOps,
   stageSize,
   toMeta,
@@ -51,6 +52,8 @@ export {
 
 const SELECTION_DEBOUNCE_MS = 150
 const VIEWPORT_PERSIST_MS = 500
+// A small node framed alone may zoom in this far (artboards stop at 100%).
+const SELECTION_MAX_ZOOM = 4
 
 const EMPTY_SELECTION = { artboardId: null, nodeIds: [] as string[] }
 
@@ -278,6 +281,21 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       const m = get().artboards[artboardId]?.meta
       if (!m || stageSize.w === 0) return
       get().setViewport(fitViewport({ x: m.x, y: m.y, w: m.width, h: m.height }, stageSize))
+    },
+
+    fitToSelection: async (zoom) => {
+      if (stageSize.w === 0) return
+      const bounds = await selectionBounds(store)
+      if (!bounds) {
+        if (zoom === undefined) get().fitToContent()
+        else get().zoomTo(zoom)
+        return
+      }
+      get().setViewport(
+        zoom === undefined
+          ? fitViewport(bounds, stageSize, 64, SELECTION_MAX_ZOOM)
+          : centerViewport(bounds, stageSize, zoom),
+      )
     },
 
     toggleLock: (nodeId) =>

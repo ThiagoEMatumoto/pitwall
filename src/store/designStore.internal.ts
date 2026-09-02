@@ -6,9 +6,11 @@
 import type { StoreApi } from 'zustand'
 import { api } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
+import { showAgentToast } from '@/features/design/design-toasts'
 import { UndoHistory, type UndoEntry } from '@/features/design/undo'
 import type { ArtboardBridge } from '@/features/design/canvas/runtime-bridge'
-import type { Size } from '@/features/design/canvas/geometry'
+import { unionRects, type Size } from '@/features/design/canvas/geometry'
+import type { Rect } from '@shared/design/protocol'
 import { applyOps, buildIndex, type ArtboardPatch, type IndexEntry } from '@shared/design/ops'
 import { newNonce } from '@shared/design/ids'
 import type {
@@ -43,6 +45,12 @@ export let stageSize: Size = { w: 0, h: 0 }
 const REMOTE_TOAST_THROTTLE_MS = 5000
 const ARTBOARD_GAP = 100
 const lastRemoteToastAt = new Map<string, number>()
+// Human edits do not snapshot per op (a drag is one op, a colour scrub is
+// one op...). Once a burst of edits goes quiet, the head is recorded as a
+// version so "before my next change" is restorable from the history.
+export const HUMAN_SNAPSHOT_IDLE_MS = 2500
+const MAX_BURST_SUMMARIES = 4
+const humanBursts = new Map<string, { timer: ReturnType<typeof setTimeout>; summaries: string[] }>()
 
 export function getNodeIndex(artboardId: string): Map<string, IndexEntry> | undefined {
   return indexes.get(artboardId)
@@ -72,6 +80,7 @@ export function canRedo(artboardId: string): boolean {
 }
 
 export function resetLocalState(): void {
+  cancelHumanSnapshots()
   history.clearAll()
   indexes.clear()
   transientBase.clear()
@@ -79,6 +88,9 @@ export function resetLocalState(): void {
 }
 
 export function forgetArtboard(artboardId: string): void {
+  const burst = humanBursts.get(artboardId)
+  if (burst) clearTimeout(burst.timer)
+  humanBursts.delete(artboardId)
   indexes.delete(artboardId)
   history.clear(artboardId)
   transientBase.delete(artboardId)
@@ -91,7 +103,31 @@ export function maybeToastRemoteUpdate(artboard: DesignArtboard, onView: () => v
   const now = Date.now()
   if (now - (lastRemoteToastAt.get(artboard.id) ?? 0) < REMOTE_TOAST_THROTTLE_MS) return
   lastRemoteToastAt.set(artboard.id, now)
-  showToast({ title: `Claude atualizou "${artboard.name}"`, actionLabel: 'Ver', onAction: onView })
+  showAgentToast('update', artboard.id, artboard.name, onView, now)
+}
+
+export function burstSummary(summaries: readonly string[]): string {
+  const unique = [...new Set(summaries.map((s) => s.trim()).filter(Boolean))]
+  if (unique.length === 0) return 'Edição manual'
+  const shown = unique.slice(0, MAX_BURST_SUMMARIES).join(', ')
+  return unique.length > MAX_BURST_SUMMARIES ? `${shown} …` : shown
+}
+
+function scheduleHumanSnapshot(store: DesignStore, artboardId: string, summary?: string): void {
+  const burst = humanBursts.get(artboardId)
+  if (burst) clearTimeout(burst.timer)
+  const summaries = [...(burst?.summaries ?? []), ...(summary ? [summary] : [])]
+  const timer = setTimeout(() => {
+    humanBursts.delete(artboardId)
+    if (!store.getState().artboards[artboardId]) return
+    sendOps(store, artboardId, [], { snapshot: true, summary: burstSummary(summaries) })
+  }, HUMAN_SNAPSHOT_IDLE_MS)
+  humanBursts.set(artboardId, { timer, summaries })
+}
+
+export function cancelHumanSnapshots(): void {
+  for (const burst of humanBursts.values()) clearTimeout(burst.timer)
+  humanBursts.clear()
 }
 
 export function isVersionConflict(err: unknown): boolean {
@@ -140,6 +176,28 @@ export function upsertMeta(
 export function toMeta(doc: DesignDocument): DesignDocumentMeta {
   const { id, title, status, thumbnail, createdAt, updatedAt } = doc
   return { id, title, status, thumbnail, createdAt, updatedAt }
+}
+
+// Canvas-space bounds of the selection: node rects come from the iframe,
+// an artboard-only selection uses its frame. Null without a selection.
+export async function selectionBounds(store: DesignStore): Promise<Rect | null> {
+  const { selection, artboards } = store.getState()
+  if (!selection.artboardId) return null
+  const meta = artboards[selection.artboardId]?.meta
+  if (!meta) return null
+  const frame = { x: meta.x, y: meta.y, w: meta.width, h: meta.height }
+  if (selection.nodeIds.length === 0) return frame
+  const bridge = bridges.get(selection.artboardId)
+  if (!bridge) return frame
+  let rects: Record<string, Rect>
+  try {
+    rects = await bridge.getRects(selection.nodeIds)
+  } catch {
+    return frame
+  }
+  const local = unionRects(Object.values(rects))
+  if (!local) return frame
+  return { x: meta.x + local.x, y: meta.y + local.y, w: local.w, h: local.h }
 }
 
 export function pageArtboards(store: DesignStore): DesignArtboard[] {
@@ -220,6 +278,7 @@ export function sendOps(
   ops: DesignOp[],
   opts: CommitOptions,
 ): void {
+  if (!opts.snapshot) scheduleHumanSnapshot(store, artboardId, opts.summary)
   const prev = sendChains.get(artboardId) ?? Promise.resolve()
   const epoch = sendEpochs.get(artboardId) ?? 0
   const next = prev.then(async () => {

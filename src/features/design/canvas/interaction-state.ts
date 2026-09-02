@@ -138,6 +138,25 @@ export function resolveClickTarget(
   return path[base + 1] ?? null
 }
 
+// Double click on a container: one level deeper along the hit path, below
+// the deepest selected ancestor (Figma's "enter group"). Without a selected
+// ancestor it behaves like a plain click. Null when there is nothing deeper.
+export function resolveDiveTarget(
+  path: readonly string[],
+  selectedIds: readonly string[],
+  scopeId: string | null,
+): { scopeId: string; nodeId: string } | null {
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (!selectedIds.includes(path[i])) continue
+    const next = path[i + 1]
+    return next ? { scopeId: path[i], nodeId: next } : null
+  }
+  const target = resolveClickTarget(path, scopeId, false)
+  if (!target) return null
+  const parent = path[path.indexOf(target) - 1]
+  return parent ? { scopeId: parent, nodeId: target } : null
+}
+
 export function gestureFeedback(): GestureFeedbackStore {
   return useGestureFeedback.getState()
 }

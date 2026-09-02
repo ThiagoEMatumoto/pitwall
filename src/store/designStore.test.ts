@@ -34,9 +34,12 @@ vi.mock('@/lib/ipc', () => ({ api: { design: mockApi } }))
 const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }))
 vi.mock('@/features/notifications/toast-store', () => ({
   showToast: showToastMock,
+  dismissToast: vi.fn(),
 }))
 
 const { useDesignStore, registerBridge } = await import('./designStore')
+const { HUMAN_SNAPSHOT_IDLE_MS, burstSummary, cancelHumanSnapshots } =
+  await import('./designStore.internal')
 
 type FakeBridge = {
   applyOps: ReturnType<typeof vi.fn>
@@ -146,6 +149,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 describe('designStore', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
+    cancelHumanSnapshots()
     mockApi.documentGet.mockResolvedValue(makeDoc())
     mockApi.artboardApplyOps.mockImplementation(
       async (input: { baseVersion: number; origin: { nonce: string } }) => ({
@@ -173,6 +177,34 @@ describe('designStore', () => {
     expect(input.baseVersion).toBe(3)
     expect(input.origin.kind).toBe('human')
     expect(useDesignStore.getState().artboards.ab1.version).toBe(4)
+  })
+
+  it('records one version once a burst of human edits goes quiet', async () => {
+    vi.useFakeTimers()
+    try {
+      const { commit } = useDesignStore.getState()
+      commit('ab1', [{ type: 'setText', id: 'a', text: 'one' }], { summary: 'Move' })
+      commit('ab1', [{ type: 'setText', id: 'a', text: 'two' }], { summary: 'Nudge' })
+      await vi.advanceTimersByTimeAsync(HUMAN_SNAPSHOT_IDLE_MS - 1)
+      expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(3)
+      const last = mockApi.artboardApplyOps.mock.calls[2][0]
+      expect(last.ops).toEqual([])
+      expect(last.snapshot).toBe(true)
+      expect(last.summary).toBe('Move, Nudge')
+      // The snapshot itself must not schedule another one.
+      await vi.advanceTimersByTimeAsync(HUMAN_SNAPSHOT_IDLE_MS * 2)
+      expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('burstSummary folds the burst into one line', () => {
+    expect(burstSummary([])).toBe('Edição manual')
+    expect(burstSummary(['Move', 'Move', 'Nudge'])).toBe('Move, Nudge')
+    expect(burstSummary(['a', 'b', 'c', 'd', 'e'])).toBe('a, b, c, d …')
   })
 
   it('echo of my own nonce only advances version, never reapplies', async () => {

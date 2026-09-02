@@ -1,21 +1,16 @@
-import { showToast } from '@/features/notifications/toast-store'
 import { useDesignStore } from '@/store/designStore'
+import { showAgentToast } from './design-toasts'
 
 // The store toasts "Claude atualizou <artboard>" on every remote update
 // (designStore.internal maybeToastRemoteUpdate, throttled per artboard).
 // This one fires when the agent hands the board back; DesignArea wires it.
+// Both go through the single slot of design-toasts, so they never stack.
 
-function viewAction(artboardId: string): {
-  actionLabel: string
-  onAction: () => void
-} {
-  return {
-    actionLabel: 'Ver',
-    onAction: () => {
-      const s = useDesignStore.getState()
-      s.select(artboardId, [])
-      s.fitToArtboard(artboardId)
-    },
+function viewArtboard(artboardId: string): () => void {
+  return () => {
+    const s = useDesignStore.getState()
+    s.select(artboardId, [])
+    s.fitToArtboard(artboardId)
   }
 }
 
@@ -28,7 +23,7 @@ export function watchAgentFinish(): () => void {
       if (key === '*' || s.agentActivity[key] || (prev.agentActivity[key]?.length ?? 0) === 0)
         continue
       const name = s.artboards[key]?.meta.name ?? 'artboard'
-      showToast({ title: `Claude terminou "${name}"`, ...viewAction(key) })
+      showAgentToast('finish', key, name, viewArtboard(key))
     }
   })
 }

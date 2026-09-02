@@ -115,7 +115,7 @@ export function NumberField({
 
   return (
     <div
-      className={`flex h-6 items-center rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] focus-within:border-[var(--color-accent)] ${
+      className={`flex h-6 min-w-0 flex-1 items-center rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] focus-within:border-[var(--color-accent)] ${
         disabled ? 'opacity-50' : ''
       }`}
     >
@@ -155,7 +155,9 @@ export function NumberField({
           ))}
         </select>
       ) : (
-        unit !== 'auto' && <span className="pr-1.5 text-[10px] text-[var(--color-text-dim)]">{unit}</span>
+        unit !== 'auto' && (
+          <span className="pr-1.5 text-[10px] text-[var(--color-text-dim)]">{unit}</span>
+        )
       )}
     </div>
   )

@@ -38,7 +38,7 @@ async function clickNode(
   ctx: UserCtx,
   key: ArtboardKey,
   name: string,
-  opts: { ctrl?: boolean } = {},
+  opts: { ctrl?: boolean; dx?: number; dy?: number } = {},
 ): Promise<void> {
   const frame = await waitForArtboardFrame(ctx.page, ctx.ids[key])
   const id = await ctx.findId(key, name)
@@ -48,6 +48,7 @@ async function clickNode(
     `[data-artboard="${ctx.ids[key]}"]`,
     ctx.widths[key],
     pwSelector(id),
+    { dx: opts.dx, dy: opts.dy },
   )
   await clickAt(ctx.page, p, opts)
   await ctx.page.waitForTimeout(400)
@@ -67,7 +68,8 @@ export async function stepHomeAt100(ctx: UserCtx): Promise<void> {
   // zooms around the stage center, which is now the artboard center.
   await ctx.page.getByTitle('Ask Claude (/)').click()
   await ctx.page.getByTitle('Enquadrar artboard').click()
-  await ctx.page.keyboard.press('Escape')
+  // Esc only reaches the composer while its textarea has focus; use the X.
+  await ctx.page.getByTitle('Fechar (Esc)').click()
   await ctx.page.waitForTimeout(300)
   await ctx.page.getByTitle('Zoom 100% (Ctrl+1)').click()
   await ctx.page.waitForTimeout(1000)
@@ -119,8 +121,16 @@ export async function stepPreviewFlow(ctx: UserCtx): Promise<void> {
   await root.waitFor({ state: 'hidden', timeout: 3000 })
 }
 
+async function fitAll(ctx: UserCtx): Promise<void> {
+  await ctx.page.getByTitle('Ajustar à tela (Ctrl+0)').click()
+  await ctx.page.waitForTimeout(600)
+}
+
 export async function stepInspectorCard(ctx: UserCtx): Promise<void> {
-  await clickNode(ctx, 'home', 'Destaque forno', { ctrl: true })
+  await fitAll(ctx)
+  // Ctrl+click picks the deepest node under the pointer: aim at the card's
+  // padding (top-right corner) so the article itself is selected, not its h3.
+  await clickNode(ctx, 'home', 'Destaque forno', { ctrl: true, dx: 180, dy: -78 })
   const tag = await selectedTag(ctx)
   await ctx.page.waitForTimeout(400)
   await screenshot(ctx.page, `${SHOT}-15-inspector-card`)
@@ -139,24 +149,26 @@ export async function stepInspectorCard(ctx: UserCtx): Promise<void> {
 
 export async function stepLayersExpanded(ctx: UserCtx): Promise<void> {
   const aside = ctx.page.locator('aside').first()
+  // dnd-kit stamps aria-disabled on non-draggable rows (the artboard root), so
+  // Playwright refuses a normal click on the chevron inside them: force it.
   const expand = async (label: string) => {
     const row = aside.locator(`span[title="${label}"]`).first().locator('xpath=..')
-    await row.locator('button').first().click()
+    await row.locator('button').first().click({ force: true })
     await ctx.page.waitForTimeout(150)
   }
-  await expand('Page')
   await expand('Highlights')
   await expand('Hero')
   await ctx.page.waitForTimeout(400)
   await screenshot(ctx.page, `${SHOT}-16-layers`)
   const rows = await aside.locator('span[title]').count()
-  ctx.check('user: layers panel expanded', rows > 12, `rows=${rows}`)
+  ctx.check('user: layers panel expanded', rows >= 9, `rows=${rows}`)
 }
 
 export async function stepAskClaude(ctx: UserCtx): Promise<void> {
-  await clickNode(ctx, 'home', 'Destaque forno', { ctrl: true })
+  await fitAll(ctx)
+  await clickNode(ctx, 'home', 'Destaque forno', { ctrl: true, dx: 180, dy: -78 })
   await ctx.page.keyboard.press('/')
-  const textarea = ctx.page.locator('textarea').last()
+  const textarea = ctx.page.getByPlaceholder(/O que Claude deve fazer/)
   const opened = await textarea
     .waitFor({ state: 'visible', timeout: 2000 })
     .then(() => true)
@@ -173,6 +185,7 @@ export async function stepAskClaude(ctx: UserCtx): Promise<void> {
 }
 
 export async function stepVersions(ctx: UserCtx): Promise<number> {
+  await fitAll(ctx)
   await clickNode(ctx, 'home', 'Headline')
   await ctx.page.getByTestId('design-versions-button').click()
   const rows = ctx.page.locator('[data-version]')

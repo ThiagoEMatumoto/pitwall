@@ -6,6 +6,7 @@ import { cloneWithNewIds } from '@shared/design/ops'
 import type { Rect } from '@shared/design/protocol'
 import type { DesignNode, DesignOp } from '@shared/types/design'
 import type { IndexEntry } from '@/store/designStore.types'
+import type { ZoomTarget } from './shortcuts-map'
 import {
   DUPLICATE_OFFSET,
   alignBounds,
@@ -204,13 +205,17 @@ export async function nudgeSelection(state: DesignState, dx: number, dy: number)
   state.commit(sel.artboardId, ops, { coalesceKey: key, summary: 'Nudge' })
 }
 
-export function zoom(state: DesignState, to: 'fit' | 'reset' | 'in' | 'out'): void {
+export function zoom(state: DesignState, to: ZoomTarget): void {
   switch (to) {
     case 'fit':
       state.fitToContent()
       return
+    case 'selection':
+      void state.fitToSelection()
+      return
     case 'reset':
-      state.zoomTo(1)
+      // 100% around what the user is working on, not the stage center.
+      void state.fitToSelection(1)
       return
     case 'in':
       state.zoomTo(state.viewport.zoom * ZOOM_STEP)

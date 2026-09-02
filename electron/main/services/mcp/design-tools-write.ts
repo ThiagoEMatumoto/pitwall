@@ -245,9 +245,12 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
         inputSchema: schemas.stylesUpdate,
         handler: (args) => {
           const input = schemas.stylesUpdate.parse(args)
+          // A summary means "this pass is worth a name": record it as a
+          // version the human can roll back to, as design_guide §2 promises.
           const { event } = mutate.updateStyles({
             ...base,
             ...input,
+            snapshot: input.summary !== undefined,
             origin: origin(),
           })
           return ok({

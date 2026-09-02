@@ -130,15 +130,24 @@ export function zoomAt(vp: Viewport, zoom: number, anchor: Point): Viewport {
 }
 
 // Viewport that shows `bounds` (canvas units) centered in a stage of `stage` px.
-export function fitViewport(bounds: Rect, stage: Size, padding = 64): Viewport {
+// Artboards never fit past 100%; a selection may (maxZoom).
+export function fitViewport(bounds: Rect, stage: Size, padding = 64, maxZoom = 1): Viewport {
   const availW = Math.max(1, stage.w - padding * 2)
   const availH = Math.max(1, stage.h - padding * 2)
-  const zoom = clampZoom(Math.min(availW / Math.max(1, bounds.w), availH / Math.max(1, bounds.h), 1))
+  const zoom = clampZoom(
+    Math.min(availW / Math.max(1, bounds.w), availH / Math.max(1, bounds.h), maxZoom),
+  )
+  return centerViewport(bounds, stage, zoom)
+}
+
+// Viewport at exactly `zoom` with `bounds` in the middle of the stage.
+export function centerViewport(bounds: Rect, stage: Size, zoom: number): Viewport {
+  const z = clampZoom(zoom)
   const center = rectCenter(bounds)
   return {
-    x: stage.w / 2 - center.x * zoom,
-    y: stage.h / 2 - center.y * zoom,
-    zoom,
+    x: stage.w / 2 - center.x * z,
+    y: stage.h / 2 - center.y * z,
+    zoom: z,
   }
 }
 
@@ -148,7 +157,12 @@ export type ArtboardUrlMode = 'edit' | 'preview'
 
 // Mirrors the route served by electron/main/services/design/protocol.ts;
 // the renderer cannot import from electron/main.
-export function artboardUrl(id: string, docId: string, mode: ArtboardUrlMode, token: string): string {
+export function artboardUrl(
+  id: string,
+  docId: string,
+  mode: ArtboardUrlMode,
+  token: string,
+): string {
   const query = new URLSearchParams({ doc: docId, mode, t: token })
   return `pitwall-design://artboard/${encodeURIComponent(id)}?${query.toString()}`
 }

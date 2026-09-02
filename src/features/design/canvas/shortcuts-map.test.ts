@@ -155,6 +155,10 @@ describe('resolveShortcut', () => {
       type: 'zoom',
       to: 'reset',
     })
+    expect(resolveShortcut(key('@', { shiftKey: true }, 'Digit2'))).toEqual({
+      type: 'zoom',
+      to: 'selection',
+    })
     expect(resolveShortcut(key('=', { metaKey: true }, 'Equal'))).toEqual({
       type: 'zoom',
       to: 'in',

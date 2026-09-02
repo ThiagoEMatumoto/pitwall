@@ -18,15 +18,13 @@ export function SelectField({ value, options, onChange, allowCustom }: Props) {
   const list = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o))
   const known = list.some((o) => o.value === value)
   return (
-    <div className="relative">
+    <div className="relative min-w-0 flex-1">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="h-6 w-full appearance-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] pl-2 pr-6 text-[11px] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
       >
-        {!known && (allowCustom || value) && (
-          <option value={value}>{value || '—'}</option>
-        )}
+        {!known && (allowCustom || value) && <option value={value}>{value || '—'}</option>}
         {list.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label ?? o.value}

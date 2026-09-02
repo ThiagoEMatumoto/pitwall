@@ -100,6 +100,10 @@ export interface DesignState {
   zoomTo: (zoom: number, anchor?: Point) => void
   fitToContent: () => void
   fitToArtboard: (artboardId: string) => void
+  // Frames the selected nodes (or the selected artboard); with `zoom` it
+  // centers them at that zoom instead of fitting. No selection: fits the
+  // page, or applies `zoom` around the stage center.
+  fitToSelection: (zoom?: number) => Promise<void>
   toggleLock: (nodeId: string) => void
   startTextEdit: (artboardId: string, nodeId: string) => void
   endTextEdit: (result?: TextEditEnd) => void

@@ -30,6 +30,17 @@ const CODE_LABELS: Record<string, string> = {
   Slash: '?',
 }
 
+// Pointer gestures have no keymap entry but are the least discoverable part
+// of the canvas (a plain click lands on the top-level child, not the card).
+const MOUSE_ROWS: ReadonlyArray<{ label: string; keys: string[] }> = [
+  { label: 'Selecionar filho do grupo atual', keys: ['Clique'] },
+  { label: 'Selecionar o elemento mais profundo', keys: [`${isMac ? '⌘' : 'Ctrl'} Clique`] },
+  { label: 'Entrar no grupo / editar texto', keys: ['Duplo clique'] },
+  { label: 'Somar à seleção', keys: ['⇧ Clique'] },
+  { label: 'Mover a tela', keys: ['Espaço Arrastar', 'Botão do meio'] },
+  { label: 'Zoom no cursor', keys: [`${isMac ? '⌘' : 'Ctrl'} Scroll`] },
+]
+
 const GROUPS: readonly ShortcutGroup[] = [
   'Ferramentas',
   'Edição',
@@ -49,7 +60,8 @@ function comboLabel(c: Combo): string {
 }
 
 // Arrow nudges collapse into one row per step size.
-function rows(group: ShortcutGroup): Array<{ label: string; keys: string[] }> {
+function rows(group: ShortcutGroup | 'Mouse'): Array<{ label: string; keys: string[] }> {
+  if (group === 'Mouse') return [...MOUSE_ROWS]
   const out: Array<{ label: string; keys: string[] }> = []
   const nudges = new Map<string, string[]>()
   for (const def of SHORTCUTS.filter((d) => d.group === group)) {
@@ -103,7 +115,7 @@ export function ShortcutsPanel() {
         Atalhos ativos com o canvas em modo de edição.
       </div>
       <div className="grid grid-cols-1 gap-x-8 gap-y-4 overflow-y-auto sm:grid-cols-2">
-        {GROUPS.map((group) => (
+        {[...GROUPS, 'Mouse' as const].map((group) => (
           <section key={group}>
             <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
               {group}

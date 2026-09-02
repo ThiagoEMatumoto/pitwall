@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { registerBridge, useDesignStore } from '@/store/designStore'
 import { newNonce } from '@shared/design/ids'
 import { DESIGN_TESTIDS } from '@shared/types/design'
+import { ArtboardOverflowBadge } from './ArtboardOverflowBadge'
 import { InteractionLayer } from './InteractionLayer'
 import { ArtboardBridge } from './runtime-bridge'
 import { artboardUrl } from './geometry'
@@ -195,12 +196,16 @@ export function ArtboardFrame({ artboardId }: Props) {
       }}
     >
       <div
-        className={`absolute left-0 select-none whitespace-nowrap text-[11px] leading-5 ${
-          selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-dim)]'
+        title={meta.name}
+        className={`absolute left-0 select-none overflow-hidden text-ellipsis whitespace-nowrap text-[11px] leading-5 ${
+          selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
         } ${mode === 'edit' ? 'cursor-grab active:cursor-grabbing' : ''}`}
         style={{
           top: -LABEL_HEIGHT / zoom,
           height: LABEL_HEIGHT / zoom,
+          // Never wider than the artboard (pre-scale px), so neighbours'
+          // labels cannot run into each other when zoomed out.
+          maxWidth: meta.width * zoom,
           transform: `scale(${1 / zoom})`,
           transformOrigin: 'left top',
         }}
@@ -230,7 +235,10 @@ export function ArtboardFrame({ artboardId }: Props) {
       />
 
       {mode === 'edit' && hasBridge && (
-        <InteractionLayer artboardId={artboardId} bridge={bridgeRef.current!} />
+        <>
+          <InteractionLayer artboardId={artboardId} bridge={bridgeRef.current!} />
+          <ArtboardOverflowBadge artboardId={artboardId} bridge={bridgeRef.current!} />
+        </>
       )}
     </div>
   )

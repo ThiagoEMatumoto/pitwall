@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ColorSelect } from '@/components/ui/ColorSelect'
 
 export interface TokenOption {
@@ -16,11 +16,19 @@ interface Props {
 }
 
 const HEX_RE = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+const TOKEN_RE = /^var\(--color-([a-z0-9_-]+)\)$/i
+
+// "var(--color-surface)" does not fit the field; at rest it reads as the
+// token's name. The raw value comes back while editing.
+export function displayColor(value: string): string {
+  const m = TOKEN_RE.exec(value.trim())
+  return m ? `token: ${m[1]}` : value
+}
 
 // Swatch background: a var(--token) resolves inside the app chrome, not in
 // the artboard, so we show the token's declared value instead.
 function swatchColor(value: string, tokens: readonly TokenOption[]): string {
-  const m = /^var\(--color-([a-z0-9_-]+)\)$/i.exec(value.trim())
+  const m = TOKEN_RE.exec(value.trim())
   if (m) return tokens.find((t) => t.name === m[1])?.value ?? 'transparent'
   return value || 'transparent'
 }
@@ -28,9 +36,17 @@ function swatchColor(value: string, tokens: readonly TokenOption[]): string {
 export function ColorField({ value, onCommit, tokens = [], placeholder, computed }: Props) {
   const [draft, setDraft] = useState(value)
   const [open, setOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => setDraft(value), [value])
+
+  // Focusing swaps "token: text" for the raw var, which drops the caret at
+  // the end; select it all so typing replaces instead of appending.
+  useLayoutEffect(() => {
+    if (focused) inputRef.current?.select()
+  }, [focused])
 
   useEffect(() => {
     if (!open) return
@@ -64,12 +80,18 @@ export function ColorField({ value, onCommit, tokens = [], placeholder, computed
           style={{ background: swatchColor(value || computed || '', tokens) }}
         />
         <input
+          ref={inputRef}
           type="text"
-          value={draft}
+          value={focused ? draft : displayColor(draft)}
+          title={draft || undefined}
           placeholder={placeholder ?? computed ?? '—'}
           spellCheck={false}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => commit(draft)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false)
+            commit(draft)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
             if (e.key === 'Escape') {

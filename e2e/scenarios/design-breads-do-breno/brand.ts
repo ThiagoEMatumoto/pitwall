@@ -80,7 +80,7 @@ export const LOGO_MARK = `<svg width="36" height="36" viewBox="0 0 36 36" fill="
 
 // Hero illustration: a country loaf on a board, drawn in brand colors.
 export function loafIllustration(width: number): string {
-  return `<svg width="${width}" viewBox="0 0 360 240" fill="none">
+  return `<svg data-name="Ilustração pão" width="${width}" viewBox="0 0 360 240" fill="none">
 <ellipse cx="180" cy="200" rx="160" ry="22" fill="#4A2E16" opacity="0.35"/>
 <rect x="30" y="170" width="300" height="26" rx="13" fill="#8A5A2B"/>
 <path d="M60 160c0-52 54-88 120-88s120 36 120 88c0 12-9 20-20 20H80c-11 0-20-8-20-20z" fill="#B4712A"/>

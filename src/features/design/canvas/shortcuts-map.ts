@@ -22,7 +22,7 @@ export type ShortcutAction =
   | { type: 'zorder'; dir: ZOrderDirection }
   | { type: 'align'; mode: AlignMode }
   | { type: 'nudge'; dx: number; dy: number }
-  | { type: 'zoom'; to: 'fit' | 'reset' | 'in' | 'out' }
+  | { type: 'zoom'; to: ZoomTarget }
   | { type: 'scope'; dir: 'enter' | 'exit' }
   | { type: 'selectAll' }
   | { type: 'copy' }
@@ -30,6 +30,8 @@ export type ShortcutAction =
   | { type: 'paste' }
   | { type: 'textCommit' }
   | { type: 'shortcutsPanel' }
+
+export type ZoomTarget = 'fit' | 'selection' | 'reset' | 'in' | 'out'
 
 export type ShortcutGroup = 'Ferramentas' | 'Edição' | 'Arranjo' | 'Alinhamento' | 'Navegação'
 
@@ -237,7 +239,14 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   {
     combo: { mod: true, key: '1' },
     action: { type: 'zoom', to: 'reset' },
-    label: 'Zoom 100%',
+    label: 'Zoom 100% na seleção',
+    group: 'Navegação',
+  },
+  {
+    // Shift+2 as in Figma; by code because Shift changes `key` per layout.
+    combo: { shift: true, code: 'Digit2' },
+    action: { type: 'zoom', to: 'selection' },
+    label: 'Enquadrar seleção',
     group: 'Navegação',
   },
   {

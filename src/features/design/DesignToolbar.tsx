@@ -2,6 +2,7 @@ import { useEffect, useState, type ComponentType } from 'react'
 import type { LucideProps } from 'lucide-react'
 import {
   Circle,
+  Focus,
   Frame,
   Hand,
   Image,
@@ -100,6 +101,8 @@ export function DesignToolbar() {
   const zoom = useDesignStore((s) => s.viewport.zoom)
   const zoomTo = useDesignStore((s) => s.zoomTo)
   const fitToContent = useDesignStore((s) => s.fitToContent)
+  const fitToSelection = useDesignStore((s) => s.fitToSelection)
+  const hasSelection = useDesignStore((s) => s.selection.artboardId !== null)
   const mode = useDesignStore((s) => s.mode)
   const startPreview = useDesignStore((s) => s.startPreview)
   const exitPreview = useDesignStore((s) => s.exitPreview)
@@ -149,8 +152,8 @@ export function DesignToolbar() {
         <button
           type="button"
           disabled={!hasDoc}
-          onClick={() => zoomTo(1)}
-          title="Zoom 100% (Ctrl+1)"
+          onClick={() => void fitToSelection(1)}
+          title="Zoom 100% na seleção (Ctrl+1)"
           className="min-w-[3.5rem] rounded-md px-1.5 py-1 text-center text-xs tabular-nums transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-40"
         >
           {Math.round(zoom * 100)}%
@@ -172,6 +175,15 @@ export function DesignToolbar() {
           className={iconButton}
         >
           <Icon as={Maximize2} />
+        </button>
+        <button
+          type="button"
+          disabled={!hasDoc || !hasSelection}
+          onClick={() => void fitToSelection()}
+          title="Enquadrar seleção (Shift+2)"
+          className={iconButton}
+        >
+          <Icon as={Focus} />
         </button>
       </div>
 

@@ -15,7 +15,7 @@ function menuSection(name: string, iconSvg: string, title: string, items: MenuIt
   const rows = items
     .map(
       (it) => `
-    <li style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid var(--color-line)">
+    <li data-name="Item" style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid var(--color-line)">
       <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
         <span style="${DISPLAY};font-size:19px;font-weight:600;color:var(--color-ink)">${it.name}</span>
         <span style="${BODY};font-size:13px;line-height:1.4;color:var(--color-muted)">${it.note}</span>
@@ -28,7 +28,7 @@ function menuSection(name: string, iconSvg: string, title: string, items: MenuIt
 <article data-name="${name}" style="display:flex;flex-direction:column;flex:1;padding:28px 28px 16px;background:var(--color-white);border-radius:var(--radius-md);box-shadow:var(--shadow-card)">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
     <span style="display:flex;width:36px;height:36px;align-items:center;justify-content:center;border-radius:10px;background:var(--color-surface);color:var(--color-crust)">${iconSvg}</span>
-    <h2 style="margin:0;${DISPLAY};font-size:24px;font-weight:600;color:var(--color-ink)">${title}</h2>
+    <h2 data-name="${name} título" style="margin:0;${DISPLAY};font-size:24px;font-weight:600;color:var(--color-ink)">${title}</h2>
   </div>
   <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column">${rows}
   </ul>
@@ -135,7 +135,7 @@ function hoursRow(day: string, hours: string, closed = false): string {
 function field(name: string, label: string, grow = false): string {
   return `
 <label data-name="${name}" style="display:flex;flex-direction:column;gap:8px;${grow ? 'flex:1;' : ''}${BODY};font-size:13px;font-weight:600;color:var(--color-muted);letter-spacing:0.02em">${label}
-  <input style="height:${grow ? '96px' : '48px'};padding:0 14px;border:1.5px solid var(--color-line);border-radius:var(--radius-sm);background:var(--color-bg);color:var(--color-ink);${BODY};font-size:15px;outline:none">
+  <input data-name="${name} input" style="height:${grow ? '96px' : '48px'};padding:0 14px;border:1.5px solid var(--color-line);border-radius:var(--radius-sm);background:var(--color-bg);color:var(--color-ink);${BODY};font-size:15px;outline:none">
 </label>`
 }
 

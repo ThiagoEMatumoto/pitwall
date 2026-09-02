@@ -296,6 +296,24 @@ describe('design tools — Breads do Breno', () => {
     expect(sobreAfter.node).toEqual(sobreBefore.node)
   })
 
+  it('design_styles_update with a summary records a named version', async () => {
+    const before = designStore.listVersions(home.id).length
+    const silent = await call<{ version: number }>('design_styles_update', {
+      artboardId: home.id,
+      items: [{ id: heroId, style: { padding: '8px' } }],
+    })
+    expect(designStore.listVersions(home.id).length).toBe(before)
+    const named = await call<{ version: number }>('design_styles_update', {
+      artboardId: home.id,
+      items: [{ id: heroId, style: { padding: '16px' } }],
+      summary: 'Hero spacing pass',
+    })
+    expect(named.version).toBe(silent.version + 1)
+    const versions = designStore.listVersions(home.id)
+    expect(versions.length).toBe(before + 1)
+    expect(versions[0]).toMatchObject({ version: named.version, summary: 'Hero spacing pass' })
+  })
+
   it('design_tree_summary lists ids', async () => {
     const summary = await call<{ text: string; version: number }>('design_tree_summary', {
       artboardId: home.id,

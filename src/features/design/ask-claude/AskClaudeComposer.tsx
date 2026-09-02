@@ -5,12 +5,7 @@ import { designApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { useAppStore } from '@/store/appStore'
 import { useDesignStore } from '@/store/designStore'
-import {
-  buildAskPrompt,
-  buildTreeSummary,
-  selectionLabel,
-  type AskSelectionItem,
-} from './build-prompt'
+import { buildAskPrompt, buildTreeSummary, type AskSelectionItem } from './build-prompt'
 import { SessionPicker } from './SessionPicker'
 import { useSessionTargets, type SessionTarget } from './useSessionTargets'
 
@@ -19,6 +14,12 @@ import { useSessionTargets, type SessionTarget } from './useSessionTargets'
 // bottom of the stage. Opens through store.askOpen or the '/' key.
 
 const MAX_ROWS = 4
+
+// The prompt carries ids (selectionLabel); the chip shows what the human
+// calls the node, with the id in its tooltip.
+function chipLabel(item: AskSelectionItem): string {
+  return item.name ?? item.tag
+}
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false
@@ -97,6 +98,21 @@ export function AskClaudeComposer() {
     if (open) textareaRef.current?.focus()
   }, [open])
 
+  // Esc closes the bar wherever focus went (a click on the canvas takes it
+  // out of the textarea); capture phase so the canvas keymap does not also
+  // treat it as "clear selection".
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      e.preventDefault()
+      setAskOpen(false)
+      setText('')
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open, setAskOpen])
+
   if (!open) return null
   // No document (empty state): the request stands alone and Claude creates it.
   const noDoc = ctx.docId === null
@@ -164,11 +180,6 @@ export function AskClaudeComposer() {
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
-      return
-    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void send()
@@ -208,7 +219,7 @@ export function AskClaudeComposer() {
               title={`${item.tag}#${item.id}`}
             >
               <Icon as={Layers} size={11} />
-              {selectionLabel(item)}
+              {chipLabel(item)}
             </span>
           ))}
           <span className="flex-1" />

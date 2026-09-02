@@ -249,6 +249,7 @@ export function writeHtml(params: WriteHtmlParams): WriteHtmlResult {
 
 interface NodeTarget extends MutationContext {
   artboardId: string
+  snapshot?: boolean
   summary?: string
 }
 

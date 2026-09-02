@@ -45,7 +45,10 @@ const COMPUTED_PROPS = [
 function hasInline(style: InspectorTarget['style'], keys: readonly string[]): boolean {
   return keys.some((k) => getStyle(style, k) != null)
 }
-const SHADOW_OPTIONS = Object.keys(SHADOW_PRESETS).map((id) => ({ value: id, label: id === 'none' ? 'Nenhuma' : id }))
+const SHADOW_OPTIONS = Object.keys(SHADOW_PRESETS).map((id) => ({
+  value: id,
+  label: id === 'none' ? 'Nenhuma' : id,
+}))
 
 export function AppearanceSection({ target }: Props) {
   const tokens = useColorTokens()
@@ -58,14 +61,26 @@ export function AppearanceSection({ target }: Props) {
   const shadow = readShadow(style)
   // Stylesheet/inherited values show as placeholders until the user writes inline.
   const computed = useComputedStyle(target.artboardId, id, COMPUTED_PROPS)
-  const inlineRadius = hasInline(style, ['border-radius', ...CORNER_KEYS.map((c) => `border-${c}-radius`)])
+  const inlineRadius = hasInline(style, [
+    'border-radius',
+    ...CORNER_KEYS.map((c) => `border-${c}-radius`),
+  ])
   const inlineBorder = hasInline(style, ['border', 'border-width', 'border-style', 'border-color'])
+  // A 0px border has a colour in getComputedStyle too; showing it reads as
+  // "this node has a border".
+  const computedBorderWidth = computedPx(computed['border-top-width'], '0')
+  const computedBorderColor =
+    computedBorderWidth !== '0' ? computedColor(computed['border-top-color']) : undefined
   const radiusValue = (i: number): number | null => (inlineRadius ? radius[i] : null)
-  const radiusPlaceholder = (i: number): string => computedPx(computed[`border-${CORNER_KEYS[i]}-radius`], '0')
+  const radiusPlaceholder = (i: number): string =>
+    computedPx(computed[`border-${CORNER_KEYS[i]}-radius`], '0')
 
   function setRadius(i: number, v: number, transient: boolean): void {
     const next = linked ? [v, v, v, v] : radius.map((r, j) => (j === i ? v : r))
-    target.applyStyle(writeRadius(next), transient ? { transient: true } : { coalesceKey: `${id}:radius` })
+    target.applyStyle(
+      writeRadius(next),
+      transient ? { transient: true } : { coalesceKey: `${id}:radius` },
+    )
   }
 
   return (
@@ -85,7 +100,9 @@ export function AppearanceSection({ target }: Props) {
           min={0}
           max={100}
           onScrub={(v) => target.applyStyle(writeOpacity(v), { transient: true })}
-          onCommit={(v) => target.applyStyle(writeOpacity(v ?? 100), { coalesceKey: `${id}:opacity` })}
+          onCommit={(v) =>
+            target.applyStyle(writeOpacity(v ?? 100), { coalesceKey: `${id}:opacity` })
+          }
         />
       </Row>
       <Row label="Raio">
@@ -128,33 +145,45 @@ export function AppearanceSection({ target }: Props) {
           <div className="flex gap-1">
             <NumberField
               value={inlineBorder ? border.width : null}
-              placeholder={computedPx(computed['border-top-width'], '0')}
+              placeholder={computedBorderWidth}
               min={0}
               onCommit={(v) => target.applyStyle(writeBorder({ ...border, width: v ?? 0 }))}
             />
             <SelectField
               value={border.style}
               options={BORDER_STYLES}
-              onChange={(s) => target.applyStyle(writeBorder({ ...border, style: s, width: border.width || 1 }))}
+              onChange={(s) =>
+                target.applyStyle(writeBorder({ ...border, style: s, width: border.width || 1 }))
+              }
             />
           </div>
           <ColorField
             value={border.color}
-            computed={computedColor(computed['border-top-color'])}
+            computed={computedBorderColor}
             tokens={tokens}
-            onCommit={(color) => target.applyStyle(writeBorder({ ...border, color, width: border.width || 1 }))}
+            onCommit={(color) =>
+              target.applyStyle(writeBorder({ ...border, color, width: border.width || 1 }))
+            }
           />
         </div>
       </Row>
       <Row label="Sombra">
         <SelectField
           value={shadow}
-          options={shadow === 'custom' ? [{ value: 'custom', label: 'Custom' }, ...SHADOW_OPTIONS] : SHADOW_OPTIONS}
+          options={
+            shadow === 'custom'
+              ? [{ value: 'custom', label: 'Custom' }, ...SHADOW_OPTIONS]
+              : SHADOW_OPTIONS
+          }
           onChange={(v) => v !== 'custom' && target.applyStyle(writeShadow(v as ShadowPreset))}
         />
       </Row>
       <Row label="Blend">
-        <SelectField value={readBlend(style)} options={BLEND_MODES} onChange={(v) => target.applyStyle(writeBlend(v))} />
+        <SelectField
+          value={readBlend(style)}
+          options={BLEND_MODES}
+          onChange={(v) => target.applyStyle(writeBlend(v))}
+        />
       </Row>
     </Section>
   )

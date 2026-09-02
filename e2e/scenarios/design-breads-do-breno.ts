@@ -129,11 +129,12 @@ const ids = {} as Record<ArtboardKey, string>
 let docId = ''
 
 // BFS through design_children_get: ids always come from a read, never invented.
-const nameCache = new Map<string, string>()
-async function findId(key: ArtboardKey, name: string): Promise<string> {
+const nameCache = new Map<string, string[]>()
+async function findIds(key: ArtboardKey, name: string): Promise<string[]> {
   const cacheKey = `${key}:${name}`
   const hit = nameCache.get(cacheKey)
   if (hit) return hit
+  const found: string[] = []
   const queue: Array<string | null> = [null]
   while (queue.length) {
     const parent = queue.shift() ?? null
@@ -142,14 +143,32 @@ async function findId(key: ArtboardKey, name: string): Promise<string> {
       nodeId: parent,
     })
     for (const it of res.items) {
-      if (it.name === name) {
-        nameCache.set(cacheKey, it.id)
-        return it.id
-      }
+      if (it.name === name) found.push(it.id)
       if (it.childCount > 0) queue.push(it.id)
     }
   }
-  throw new Error(`node "${name}" not found in ${SPECS[key].name}`)
+  if (!found.length) throw new Error(`node "${name}" not found in ${SPECS[key].name}`)
+  nameCache.set(cacheKey, found)
+  return found
+}
+
+async function findId(key: ArtboardKey, name: string): Promise<string> {
+  return (await findIds(key, name))[0]
+}
+
+// Walks child indices down from a named node, for descendants without a data-name.
+async function findIdAt(key: ArtboardKey, name: string, path: number[] = []): Promise<string> {
+  let id = await findId(key, name)
+  for (const index of path) {
+    const res = await mcp.call<{ items: NodeItem[] }>('design_children_get', {
+      artboardId: ids[key],
+      nodeId: id,
+    })
+    const child = res.items[index]
+    if (!child) throw new Error(`"${name}" has no child ${index} in ${SPECS[key].name}`)
+    id = child.id
+  }
+  return id
 }
 
 async function shotArtboard(key: ArtboardKey, tag: string): Promise<string> {
@@ -172,14 +191,12 @@ async function applyFixes(fixes: Fix[], round: number): Promise<void> {
       style: Record<string, string | null>
     }> = []
     for (const f of list) {
-      const id = await findId(key, f.name)
-      if (f.style) styleItems.push({ id, style: f.style })
-      if (f.text !== undefined) {
-        await mcp.call('design_text_set', {
-          artboardId: ids[key],
-          nodeId: id,
-          text: f.text,
-        })
+      const targets = f.all ? await findIds(key, f.name) : [await findIdAt(key, f.name, f.path)]
+      for (const id of targets) {
+        if (f.style) styleItems.push({ id, style: f.style })
+        if (f.text !== undefined) {
+          await mcp.call('design_text_set', { artboardId: ids[key], nodeId: id, text: f.text })
+        }
       }
     }
     if (styleItems.length) {
@@ -328,8 +345,8 @@ try {
     )
     log('versions (Home) via IPC:', JSON.stringify(versions).slice(0, 600))
     check(
-      '4 Home has ≥ 3 named versions',
-      Array.isArray(versions) && versions.length >= 3,
+      '4 Home has ≥ 4 named versions (initial, first, 2 rounds; finish reuses the head)',
+      Array.isArray(versions) && versions.length >= 4,
       `count=${versions?.length}`,
     )
   })

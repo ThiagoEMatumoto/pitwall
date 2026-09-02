@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { Box, ChevronDown, ChevronRight, Eye, EyeOff, Frame, Image, Lock, LockOpen, Shapes, Type } from 'lucide-react'
+import {
+  Box,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Frame,
+  Image,
+  Lock,
+  LockOpen,
+  Shapes,
+  Type,
+} from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
@@ -34,9 +46,10 @@ const NAME_MAX_LENGTH = 24
 // Display fallback mirroring the parser's deriveName (electron/main/services/
 // design/html-parse.ts) so trees stored before those rules read the same. A
 // name equal to the tag is the old parser fallback, not a user's choice.
+// The root row is the artboard itself, so it carries the artboard's name.
 export function rowLabel(node: DesignNode, rootName?: string): string {
-  if (node.name && node.name !== node.tag) return node.name
   if (rootName) return rootName
+  if (node.name && node.name !== node.tag) return node.name
   if (node.kind === 'text' && node.text) {
     const compact = node.text.replace(/\s+/g, ' ').trim()
     if (compact) return compact.slice(0, NAME_MAX_LENGTH)

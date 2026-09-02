@@ -11,6 +11,7 @@ import type { ArtboardBridge } from './runtime-bridge'
 import type { Point } from './geometry'
 import { HANDLE_CURSOR, handleAt, type ResizeHandle } from './drag-plan'
 import { GestureRunner } from './gesture-runner'
+import { resolveDiveTarget } from './interaction-state'
 
 interface Props {
   artboardId: string
@@ -137,6 +138,8 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
     runner.up(localPoint(e), { shift: e.shiftKey, alt: e.altKey })
   }
 
+  // Text: edit it. Anything else: dive one level into the container under
+  // the pointer, so the deep node is reachable without knowing Ctrl+click.
   const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>): void => {
     if (tool !== 'move') return
     e.stopPropagation()
@@ -144,9 +147,18 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
       .then((msg) => {
         if (!msg.id) return
         const node = getNodeIndex(artboardId)?.get(msg.id)?.node
-        if (node?.kind !== 'text' || node.locked) return
-        setHover(null)
-        startTextEdit(artboardId, msg.id)
+        if (node?.kind === 'text' && !node.locked) {
+          setHover(null)
+          startTextEdit(artboardId, msg.id)
+          return
+        }
+        const { selection, scopeId, select, setScope } = useDesignStore.getState()
+        const selected = selection.artboardId === artboardId ? selection.nodeIds : []
+        const dive = resolveDiveTarget(msg.path, selected, scopeId)
+        if (!dive) return
+        // The root is the artboard itself: no scope, plain top-level selection.
+        setScope(dive.scopeId === msg.path[0] ? null : dive.scopeId)
+        select(artboardId, [dive.nodeId])
       })
       .catch(() => undefined)
   }
