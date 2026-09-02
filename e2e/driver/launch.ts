@@ -129,6 +129,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       ...(options.env ?? {}),
     } as Record<string, string>,
   })
+  // Morte externa do Electron (SIGTERM/SIGKILL, OOM) chega ao cenário só como
+  // "Target page, context or browser has been closed" — sem isto não dá pra
+  // distinguir crash do app de kill de fora.
+  app.process().on('exit', (code, signal) => {
+    if (code !== 0) console.error(`[launch] electron saiu: code=${code} signal=${signal}`)
+  })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   return { app, page, userDataCopy: copy }
