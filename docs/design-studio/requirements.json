@@ -1,0 +1,169 @@
+{
+  "feature": "Design Studio",
+  "goal": "Experiência Paper dentro do Pitwall: canvas HTML/CSS real editável visualmente e por Claude Code via MCP, em tempo real.",
+  "functional": {
+    "F1_documents": [
+      "documento → páginas → artboards",
+      "lista/criar/renomear/duplicar/arquivar",
+      "vínculo a feature/objective/task (design_links)",
+      "versões por artboard (cap 30) + restaurar"
+    ],
+    "F2_canvas": [
+      "pan (H/espaço/wheel) e zoom (Ctrl+wheel, pinch, Cmd+0 fit, Cmd+1 100%)",
+      "artboards com nome, tamanho e fundo; presets desktop 1440×900 / mobile 390×844 / tablet",
+      "mover artboards pelo título",
+      "marquee select",
+      "smart guides + snapping a irmãos",
+      "grid opcional"
+    ],
+    "F3_tools": {
+      "move": "V",
+      "hand": "H",
+      "frame": "F",
+      "wrap_in_frame": "Shift+F",
+      "rectangle": "R",
+      "text": "T",
+      "image": "upload/paste",
+      "ellipse": "O"
+    },
+    "F4_selection": [
+      "click/shift-click/multi",
+      "deep select Cmd+click",
+      "Enter desce / Esc sobe",
+      "Cmd+A irmãos",
+      "handles de resize 8 pontos",
+      "drag move",
+      "nudge setas 1px/10px",
+      "hover highlight"
+    ],
+    "F5_edit": [
+      "duplicar Cmd+D",
+      "delete",
+      "agrupar Cmd+G (wrap em frame)",
+      "auto-layout toggle Shift+A",
+      "z-order Cmd+]/[",
+      "alinhamento Alt+A/H/D/W/V/S + distribuir",
+      "copiar/colar dentro do doc",
+      "undo/redo Cmd+Z / Shift+Cmd+Z",
+      "edição de texto inline (duplo clique)",
+      "hide/lock"
+    ],
+    "F6_inspector": [
+      "Artboard: nome, w/h, background",
+      "Layout: position, x/y, w/h, sizing hug/fill/fixed, auto-layout (direction, gap, padding, align, justify, wrap)",
+      "Appearance: fill/background (hex+oklch+tokens), opacity, radius por canto, border, box-shadow, blend",
+      "Typography: family (tokens + Google Fonts), size, weight, line-height, letter-spacing, align, color",
+      "Image: src/asset, object-fit",
+      "Prototype: link → artboard + transição",
+      "Export"
+    ],
+    "F7_layers": [
+      "árvore por artboard",
+      "seleção bidirecional",
+      "drag reorder/reparent",
+      "rename",
+      "hide/lock",
+      "busca"
+    ],
+    "F8_tokens": [
+      "CSS variables do documento: color, spacing, radius, font-family/size/weight, line-height",
+      "painel de tokens",
+      "aplicáveis por picker no inspector",
+      "importar de brand kit do Video Lab (follow-up)"
+    ],
+    "F9_prototype": [
+      "links nó → artboard",
+      "transições instant/dissolve/slide",
+      "modo Preview/Present em tela cheia",
+      "fluxos com starting point (v2)"
+    ],
+    "F10_agent_mcp": {
+      "read": [
+        "design_document_list",
+        "design_document_get",
+        "design_selection_get",
+        "design_node_get",
+        "design_children_get",
+        "design_tree_summary",
+        "design_screenshot",
+        "design_html_get",
+        "design_computed_styles"
+      ],
+      "write": [
+        "design_document_create",
+        "design_artboard_create",
+        "design_write_html",
+        "design_text_set",
+        "design_nodes_rename",
+        "design_nodes_duplicate",
+        "design_nodes_move",
+        "design_styles_update",
+        "design_nodes_delete",
+        "design_tokens_set",
+        "design_asset_upload",
+        "design_link_set"
+      ],
+      "util": [
+        "design_export",
+        "design_guide",
+        "design_nodes_finish"
+      ]
+    },
+    "F11_agent_ux": [
+      "composer 'Ask Claude' com contexto da seleção → sessão Claude Code do Pitwall",
+      "badge/shimmer 'Claude editando' por nó",
+      "toast 'Claude atualizou X' (throttle)",
+      "abrir sessão nova para o design"
+    ],
+    "F12_export": [
+      "PNG por artboard (1x/2x)",
+      "HTML standalone",
+      "JSX com inline styles",
+      "classes Tailwind aproximadas (v2)"
+    ],
+    "F13_import": [
+      "colar HTML vira layers",
+      "colar imagem vira asset",
+      "colar SVG vira nó svg"
+    ]
+  },
+  "non_functional": {
+    "realtime": "op do agente visível no canvas < 100ms após commit (push via broadcast, sem polling)",
+    "isolation": "HTML do artboard só roda em iframe sandbox sem allow-same-origin, servido por protocolo custom com CSP própria; nunca no renderer do app",
+    "performance": "artboard com 500 nós edita a 60fps; layers virtualizada; ops incrementais (sem reload) exceto replaceTree",
+    "consistency": "eco de op ignorado por origin; conflito agente×usuário resolvido por versão + banner (padrão DiagramEditor)",
+    "durability": "SQLite; versões cap 30/artboard; assets ≤ 2MB cada; thumbnails ≤ 512KB",
+    "themes": "UI segue os 4 temas do Pitwall (tokens CSS)",
+    "a11y_keyboard": "todas as ações principais têm atalho; painel de atalhos Ctrl+Shift+?",
+    "testability": "ops puras testáveis em vitest; tools MCP testáveis sem HTTP; e2e via drive-app"
+  },
+  "technical": {
+    "document_model": "árvore JSON DOM-like por artboard {id, tag, kind, style, attrs, text, children, name, hidden, locked, link}; HTML é projeção e entrada",
+    "storage": "design_documents, design_pages, design_artboards(tree JSON), design_versions, design_assets, design_links",
+    "render": "pitwall-design://artboard/<id> via protocol.handle + runtime injetado; iframe sandbox=allow-scripts; postMessage bidirecional",
+    "mutation_unit": "ops puras em shared/design/ops.ts aplicadas no main (persist) e no runtime (DOM)",
+    "screenshot": "BrowserWindow offscreen carrega a URL do artboard e capturePage → PNG",
+    "agent_channel": "MCP do Pitwall já injetado por sessão (mcp.json ?s=sessionId)",
+    "stack": "React 18 + Zustand 5 + Tailwind v4; parser HTML no main (lib mínima já presente ou htmlparser2)"
+  },
+  "validation_scenario": {
+    "name": "Breads do Breno (padaria)",
+    "artboards": [
+      "Home desktop 1440×900",
+      "Home mobile 390×844",
+      "Cardápio 1440×900",
+      "Contato 1440×900"
+    ],
+    "steps": [
+      "criar documento via MCP",
+      "write_html com hero/cardápio/sobre/contato",
+      "styles_update em nós",
+      "duplicate/move/rename",
+      "screenshot via tool",
+      "selecionar nó no canvas e editar cor no inspector",
+      "undo",
+      "link Home→Cardápio + preview",
+      "export HTML/PNG"
+    ]
+  }
+}

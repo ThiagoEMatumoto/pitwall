@@ -20,6 +20,6 @@
       "@shared/*": ["shared/*"]
     }
   },
-  "include": ["electron/**/*", "shared/**/*", "electron.vite.config.ts"],
+  "include": ["electron/**/*", "shared/**/*", "electron.vite.config.ts", "vite.runtime.config.ts"],
   "exclude": ["electron/**/*.test.ts", "shared/**/*.test.ts"]
 }

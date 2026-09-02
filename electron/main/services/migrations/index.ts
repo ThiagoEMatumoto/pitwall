@@ -44,6 +44,7 @@ import * as featureLoop from './042_feature_loop'
 import * as featureFocus from './043_feature_focus'
 import * as dropRemovedFeatures from './044_drop_removed_features'
 import * as meetingsV2 from './045_meetings_v2'
+import * as designStudio from './046_design_studio'
 
 interface Migration {
   version: number
@@ -103,6 +104,7 @@ export const migrations: Migration[] = [
   featureFocus,
   dropRemovedFeatures,
   meetingsV2,
+  designStudio,
 ]
 
 export function runMigrations(db: Database.Database): void {
