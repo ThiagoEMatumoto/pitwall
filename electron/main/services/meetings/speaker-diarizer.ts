@@ -9,10 +9,13 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { utilityProcess } from 'electron'
+import { getPref } from '../prefs-store'
 import type { WorkerRequest, WorkerResponse, WorkerTurn } from './diarizer-worker'
+import * as meetingStore from './meeting-store'
 import { resolveModels, type ModelPaths } from './model-manager'
 import { sherpaAvailable, sherpaLoadError } from './native-loader'
-import { createMeetingClusterer, type KnownVoice, type MeetingClusterer } from './speaker-clustering'
+import { cosine, createMeetingClusterer, normalize, type KnownVoice, type MeetingClusterer } from './speaker-clustering'
+import { bufferToF32, f32ToBuffer } from './speaker-rename'
 
 export interface DiarizedTurn {
   /** Relativos ao início do chunk, como os segmentos do STT. */
@@ -43,10 +46,10 @@ export interface MeetingDiarizer {
   dispose(): void
 }
 
-// Espelho das funções que o meeting-store expõe pra speakers/vozes; injetado
-// pra este módulo não conhecer o banco.
+// Visão do meeting-store que o motor precisa, em Float32Array; storeAdapter()
+// faz a ponte com o banco (Buffer Float32 LE cru, o mesmo formato que o
+// speaker-rename lê de volta). O id vem do store — é ele quem o gera.
 export interface DiarizerSpeakerRecord {
-  id: string
   meetingId: string
   label: string
   voiceId: string | null
@@ -55,9 +58,37 @@ export interface DiarizerSpeakerRecord {
 }
 
 export interface DiarizerStore {
-  upsertSpeaker(input: DiarizerSpeakerRecord): void
+  upsertSpeaker(input: DiarizerSpeakerRecord): { id: string }
   updateSpeaker(input: { id: string; centroid: Float32Array; turnCount: number }): void
   listVoices(): Array<{ id: string; name: string; embedding: Float32Array }>
+}
+
+export type DiarizerStoreSource = Pick<
+  typeof meetingStore,
+  'upsertSpeaker' | 'updateSpeaker' | 'listVoices' | 'getVoiceEmbedding'
+>
+
+export function storeAdapter(source: DiarizerStoreSource = meetingStore): DiarizerStore {
+  return {
+    upsertSpeaker: (input) => ({
+      id: source.upsertSpeaker({
+        meetingId: input.meetingId,
+        label: input.label,
+        voiceId: input.voiceId,
+        centroid: f32ToBuffer(input.centroid),
+        turnCount: input.turnCount,
+      }).id,
+    }),
+    updateSpeaker: (input) => {
+      source.updateSpeaker(input.id, { centroid: f32ToBuffer(input.centroid), turnCount: input.turnCount })
+    },
+    listVoices: () =>
+      source.listVoices().flatMap((voice) => {
+        const embedding = source.getVoiceEmbedding(voice.id)
+        if (!embedding || embedding.byteLength === 0) return []
+        return [{ id: voice.id, name: voice.name, embedding: bufferToF32(embedding) }]
+      }),
+  }
 }
 
 export interface DiarizerWorkerHandle {
@@ -73,12 +104,14 @@ export interface DiarizeFixture {
 }
 
 export interface DiarizerDeps {
-  store?: DiarizerStore
+  /** undefined = meeting-store real via storeAdapter(); null = sem persistência. */
+  store?: DiarizerStore | null
   spawnWorker?: () => DiarizerWorkerHandle
   addonAvailable?: () => boolean
   addonError?: () => string | null
   models?: () => ModelPaths
-  enabled?: boolean
+  /** Default: preferência `meeting_diarization` (ligada). */
+  enabled?: boolean | (() => boolean)
   timeoutMs?: number
   initTimeoutMs?: number
   maxPending?: number
@@ -91,6 +124,8 @@ export interface DiarizerDeps {
 
 export const DIARIZE_FIXTURE_ENV = 'CM_MEETING_DIARIZE_FIXTURE'
 export const SPEAKER_THRESHOLD_ENV = 'CM_MEETING_SPEAKER_THRESHOLD'
+/** Loga, por turno, o cosseno contra cada centroide — pra calibrar o limiar com áudio real. */
+export const DIARIZE_DEBUG_ENV = 'CM_MEETING_DIARIZE_DEBUG'
 const SAMPLE_RATE = 16000
 const FIXTURE_DIM = 192
 
@@ -151,16 +186,26 @@ interface Worker {
   onResult: Map<number, (msg: WorkerResponse) => void>
 }
 
-function thresholdFrom(deps: DiarizerDeps, env: NodeJS.ProcessEnv): number {
+/** undefined deixa o default do clusterer valer. */
+function thresholdFrom(deps: DiarizerDeps, env: NodeJS.ProcessEnv): number | undefined {
   if (deps.threshold !== undefined) return deps.threshold
   const fromEnv = Number(env[SPEAKER_THRESHOLD_ENV])
-  return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : 0.6
+  return Number.isFinite(fromEnv) && fromEnv > 0 && fromEnv < 1 ? fromEnv : undefined
+}
+
+const DIARIZATION_PREF = 'meeting_diarization'
+
+function enabledFrom(deps: DiarizerDeps): () => boolean {
+  if (typeof deps.enabled === 'function') return deps.enabled
+  if (typeof deps.enabled === 'boolean') return () => deps.enabled as boolean
+  return () => getPref(DIARIZATION_PREF, true)
 }
 
 export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
   const env = deps.env ?? process.env
   const log = deps.log ?? ((msg: string) => console.warn(`[diarizer] ${msg}`))
-  const enabled = deps.enabled ?? true
+  const enabled = enabledFrom(deps)
+  const store = deps.store === undefined ? storeAdapter() : deps.store
   const fixture = deps.fixture === undefined ? loadDiarizeFixture(env) : deps.fixture
   const spawn = deps.spawnWorker ?? defaultSpawn
   const addonAvailable = deps.addonAvailable ?? sherpaAvailable
@@ -171,6 +216,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
   const maxPending = deps.maxPending ?? 3
   const maxRestarts = deps.maxRestarts ?? 1
   const threshold = thresholdFrom(deps, env)
+  const debug = env[DIARIZE_DEBUG_ENV] === '1'
 
   const meetings = new Map<string, MeetingState>()
   const queue: Pending[] = []
@@ -178,6 +224,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
   let worker: Worker | null = null
   let restarts = 0
   let unavailableReason: string | null = null
+  let loggedMissingModels = false
   let loggedBackpressure = false
   let nextId = 1
 
@@ -193,11 +240,14 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
       markUnavailable(addonError() ?? 'addon sherpa-onnx não carregou')
       return false
     }
+    // Modelo ausente não é definitivo: o download pode terminar durante a
+    // sessão, então isto é reavaliado a cada chamada (existsSync barato).
     const paths = models()
     if (!paths.segmentation || !paths.embedding) {
-      markUnavailable(
-        !paths.segmentation ? 'modelo de segmentação ausente' : 'modelo de vozes (TitaNet) ainda não baixado',
-      )
+      if (!loggedMissingModels) {
+        loggedMissingModels = true
+        log(!paths.segmentation ? 'modelo de segmentação ausente' : 'modelo de vozes (TitaNet) ainda não baixado')
+      }
       return false
     }
     return true
@@ -208,7 +258,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
     if (!state) {
       let known: KnownVoice[] = []
       try {
-        known = (deps.store?.listVoices() ?? []).map((v) => ({ voiceId: v.id, name: v.name, embedding: v.embedding }))
+        known = (store?.listVoices() ?? []).map((v) => ({ voiceId: v.id, name: v.name, embedding: v.embedding }))
       } catch (err) {
         log(`listVoices falhou, seguindo sem vozes conhecidas: ${err instanceof Error ? err.message : err}`)
       }
@@ -218,52 +268,60 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
     return state
   }
 
+  // Agrupa os turnos do chunk, persiste os speakers tocados (o id de um
+  // speaker novo vem do store) e só então resolve id/label de cada turno.
   function clusterTurns(meetingId: string, turns: WorkerTurn[]): DiarizedTurn[] {
     const state = meetingState(meetingId)
-    const out: DiarizedTurn[] = []
+    const keyed: Array<{ turn: WorkerTurn; key: string }> = []
     const touched = new Set<string>()
     const created = new Set<string>()
 
     for (const turn of turns) {
       const durationSec = (turn.endMs - turn.startMs) / 1000
-      const assigned = state.clusterer.assign(Float32Array.from(turn.embedding), durationSec)
+      const embedding = Float32Array.from(turn.embedding)
+      if (debug) {
+        const sims = state.clusterer
+          .centroids()
+          .map((c) => `${c.speakerKey}=${cosine(normalize(embedding), c.centroid).toFixed(3)}`)
+          .join(' ')
+        log(`sim turno ${turn.startMs}-${turn.endMs}ms (${durationSec.toFixed(1)}s) local=${turn.localSpeaker} ${sims || '(sem centroides)'}`)
+      }
+      const assigned = state.clusterer.assign(embedding, durationSec)
       const key = assigned?.speakerKey ?? state.lastSpeakerKey
       if (!key) continue
-      if (assigned?.isNew) {
-        state.ids.set(key, randomUUID())
-        created.add(key)
-      }
-      const id = state.ids.get(key)
-      if (!id) continue
+      if (assigned?.isNew) created.add(key)
       touched.add(key)
       state.lastSpeakerKey = key
-      const label = state.clusterer.centroids().find((c) => c.speakerKey === key)?.label ?? assigned?.label ?? ''
-      out.push({ startMs: turn.startMs, endMs: turn.endMs, speakerId: id, speakerLabel: label })
+      keyed.push({ turn, key })
     }
 
-    if (deps.store && touched.size > 0) persist(meetingId, state, touched, created)
-    return out
+    if (touched.size > 0) persist(meetingId, state, touched, created)
+    const labels = new Map(state.clusterer.centroids().map((c) => [c.speakerKey, c.label]))
+    return keyed.map(({ turn, key }) => ({
+      startMs: turn.startMs,
+      endMs: turn.endMs,
+      speakerId: state.ids.get(key)!,
+      speakerLabel: labels.get(key) ?? '',
+    }))
   }
 
   function persist(meetingId: string, state: MeetingState, touched: Set<string>, created: Set<string>): void {
-    const store = deps.store!
     for (const c of state.clusterer.centroids()) {
       if (!touched.has(c.speakerKey)) continue
-      const id = state.ids.get(c.speakerKey)!
+      const record = { centroid: c.centroid, turnCount: c.turnCount }
       try {
         if (created.has(c.speakerKey)) {
-          store.upsertSpeaker({
-            id,
-            meetingId,
-            label: c.label,
-            voiceId: c.voiceId,
-            centroid: c.centroid,
-            turnCount: c.turnCount,
-          })
-        } else {
-          store.updateSpeaker({ id, centroid: c.centroid, turnCount: c.turnCount })
+          const id = store
+            ? store.upsertSpeaker({ meetingId, label: c.label, voiceId: c.voiceId, ...record }).id
+            : randomUUID()
+          state.ids.set(c.speakerKey, id)
+        } else if (store) {
+          store.updateSpeaker({ id: state.ids.get(c.speakerKey)!, ...record })
         }
       } catch (err) {
+        // Sem linha no banco o segmento ainda ganha um id: o label sobrevive
+        // no próprio segmento (desnormalizado), só o rename fica indisponível.
+        if (!state.ids.has(c.speakerKey)) state.ids.set(c.speakerKey, randomUUID())
         log(`persistência de speaker falhou: ${err instanceof Error ? err.message : err}`)
       }
     }
@@ -380,7 +438,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
 
   return {
     process(input) {
-      if (!enabled) return Promise.resolve([])
+      if (!enabled()) return Promise.resolve([])
       if (fixture) {
         const durationMs = Math.round((input.pcm.length / 2 / SAMPLE_RATE) * 1000)
         return Promise.resolve(clusterTurns(input.meetingId, fixtureTurns(fixture, input.chunkIndex, durationMs)))
@@ -400,7 +458,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
       })
     },
     status() {
-      if (!enabled) return 'off'
+      if (!enabled()) return 'off'
       if (fixture) return 'on'
       if (!checkPrereqs()) return 'unavailable'
       return worker?.alive && restarts <= maxRestarts ? 'on' : 'loading'
@@ -409,7 +467,7 @@ export function createDiarizer(deps: DiarizerDeps = {}): MeetingDiarizer {
       meetings.delete(meetingId)
     },
     async warmup() {
-      if (!enabled || fixture) return
+      if (!enabled() || fixture) return
       await ensureWorker()
     },
     dispose() {

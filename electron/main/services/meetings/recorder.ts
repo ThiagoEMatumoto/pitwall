@@ -13,6 +13,8 @@ import {
 } from './audio-capture'
 import { normalizePeak } from './gain'
 import * as meetingStore from './meeting-store'
+import { modelsStatus } from './model-manager'
+import { sherpaAvailable } from './native-loader'
 import { PcmChunker, percentile, rmsLinear, windowDbfs, type Chunk } from './pcm-chunker'
 import {
   detectorRegistry,
@@ -20,6 +22,7 @@ import {
   postProcessRegistry,
   recorderRegistry,
   setupCheckRegistry,
+  type DiarizedTurn,
   type MeetingRecorder,
 } from './recorder-contract'
 import { loadSttConfig, SttError, transcribeChunk, type SttConfig, type SttConfigResult } from './transcriber'
@@ -61,6 +64,8 @@ export interface RecorderDeps {
   /** p95 dBFS de ~1,5 s do source (checkSetup); null sem áudio. */
   measureMicLevel: (source: string | null) => Promise<number | null>
   hasPipewire: () => Promise<boolean>
+  /** Bloco `diarization` do checkSetup (addon carregado + modelos no disco). */
+  diarizationSetup: () => MeetingSetupStatus['diarization']
   broadcast: (channel: string, payload: unknown) => void
   notify: (input: { title: string; body: string }) => void
   env: NodeJS.ProcessEnv
@@ -129,6 +134,11 @@ function defaultDeps(): RecorderDeps {
     resolveSourceForStream: (streamNodeId) => resolveSourceForStream(streamNodeId),
     measureMicLevel: (source) => measureInputLevel({ target: source, durationMs: SETUP_MIC_PROBE_MS }),
     hasPipewire: () => hasPipewire(),
+    diarizationSetup: () => ({
+      supported: process.platform === 'linux',
+      addon: sherpaAvailable(),
+      models: modelsStatus(),
+    }),
     broadcast: (_channel, payload) => emitMeetingEvent(payload as MeetingEvent),
     notify: defaultNotify,
     env: process.env,
@@ -148,6 +158,26 @@ function mmss(ms: number): string {
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+type SegmentSpeaker = Pick<DiarizedTurn, 'speakerId' | 'speakerLabel'>
+
+/**
+ * Turno com maior sobreposição temporal com o segmento (ambos relativos ao
+ * chunk); sem sobreposição, herda o último speaker atribuído no chunk.
+ */
+export function speakerForSegment(
+  turns: DiarizedTurn[],
+  seg: { startMs: number; endMs: number },
+  last: SegmentSpeaker | null,
+): SegmentSpeaker | null {
+  let best: { turn: DiarizedTurn; overlap: number } | null = null
+  for (const turn of turns) {
+    const overlap = Math.min(seg.endMs, turn.endMs) - Math.max(seg.startMs, turn.startMs)
+    if (overlap > 0 && (!best || overlap > best.overlap)) best = { turn, overlap }
+  }
+  if (!best) return last
+  return { speakerId: best.turn.speakerId, speakerLabel: best.turn.speakerLabel }
 }
 
 export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder {
@@ -190,6 +220,12 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     }
   }
 
+  // 'loading' é transitório (worker subindo): pro registro da reunião conta como ligada.
+  const diarizationStatus = (): NonNullable<Parameters<typeof meetingStore.setRuntimeInfo>[1]['diarization']> => {
+    const live = diarizerRegistry.current?.status() ?? 'off'
+    return live === 'loading' ? 'on' : live
+  }
+
   const sttFailed = (s: Session, message: string): void => {
     s.sttOk = false
     s.lastError = message
@@ -213,27 +249,47 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     return result.cfg
   }
 
+  // Só a trilha `them` diariza; o motor já tem timeout e fila curta, então a
+  // promise resolve sempre — falha vira "sem turnos", nunca segura o STT.
+  const diarize = (s: Session, t: TrackState, chunk: Chunk): Promise<DiarizedTurn[]> => {
+    const diarizer = t.track === 'them' ? diarizerRegistry.current : null
+    if (!diarizer) return Promise.resolve([])
+    return diarizer
+      .process({
+        meetingId: s.meetingId,
+        chunkIndex: chunk.index,
+        pcm: chunk.pcmNormalized ?? chunk.pcm,
+        startMs: chunk.startMs,
+      })
+      .catch(() => [])
+  }
+
   const transcribe = async (s: Session, t: TrackState, chunk: Chunk): Promise<void> => {
     const cfg = await ensureStt(s)
     if (!cfg) return
     const prompt = t.words.length ? t.words.slice(-PROMPT_WORDS).join(' ') : cfg.vocabulary || undefined
     try {
-      const segments = await deps.transcribeChunk({
-        wav: encodeWav(chunk.pcmNormalized ?? chunk.pcm),
-        language: cfg.language,
-        prompt,
-        config: cfg,
-        durationMs: chunk.endMs - chunk.startMs,
-      })
+      const [segments, turns] = await Promise.all([
+        deps.transcribeChunk({
+          wav: encodeWav(chunk.pcmNormalized ?? chunk.pcm),
+          language: cfg.language,
+          prompt,
+          config: cfg,
+          durationMs: chunk.endMs - chunk.startMs,
+        }),
+        diarize(s, t, chunk),
+      ])
       if (!s.sttOk) {
         s.sttOk = true
         s.lastError = null
         broadcastState(true)
       }
+      let lastSpeaker: SegmentSpeaker | null = null
       for (const seg of segments) {
         // O 1 s de overlap já foi transcrito no chunk anterior: segmento que
         // termina dentro dele é repetição.
         if (chunk.index > 0 && seg.endMs <= OVERLAP_MS) continue
+        lastSpeaker = speakerForSegment(turns, seg, lastSpeaker)
         const segment = deps.store.appendSegment({
           meetingId: s.meetingId,
           speaker: t.track,
@@ -241,6 +297,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
           startMs: chunk.startMs + seg.startMs,
           endMs: chunk.startMs + seg.endMs,
           chunkIndex: chunk.index,
+          speakerId: lastSpeaker?.speakerId ?? null,
+          speakerLabel: lastSpeaker?.speakerLabel ?? null,
         })
         t.words.push(...seg.text.split(/\s+/))
         if (t.words.length > PROMPT_WORDS * 2) t.words = t.words.slice(-PROMPT_WORDS)
@@ -380,6 +438,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       for (const chunk of t.chunker.flush()) enqueue(s, t, chunk)
     }
     await drain(s)
+    diarizerRegistry.current?.reset(s.meetingId)
+    persistRuntime(s, { diarization: diarizationStatus() })
 
     const endedAt = deps.now()
     let meeting = s.fatal
@@ -465,6 +525,12 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       s.levelTimer = setInterval(() => tick(s), deps.levelIntervalMs)
       // Config do STT já na largada: erro aparece antes do primeiro chunk.
       void ensureStt(s)
+      const diarizer = diarizerRegistry.current
+      if (diarizer) {
+        diarizer.reset(meeting.id)
+        void diarizer.warmup?.().catch(() => {})
+      }
+      persistRuntime(s, { diarization: diarizationStatus() })
       emit({ type: 'meeting', meeting })
       broadcastState(true)
       return meeting
@@ -506,11 +572,7 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       source: devices.source,
       stt: stt.ok ? { ok: true, url: stt.cfg.url, error: null } : { ok: false, url: stt.url, error: stt.error },
       micLevel: { dbfs, source: devices.source, low: dbfs !== null && dbfs < MIC_LOW_DBFS },
-      diarization: {
-        supported: false,
-        addon: false,
-        models: { segmentation: 'missing', embedding: 'missing', progress: null },
-      },
+      diarization: deps.diarizationSetup(),
     }
   }
 

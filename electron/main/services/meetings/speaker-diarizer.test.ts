@@ -7,10 +7,13 @@ import {
   createDiarizer,
   fixtureTurns,
   loadDiarizeFixture,
+  storeAdapter,
   type DiarizerDeps,
   type DiarizerStore,
+  type DiarizerStoreSource,
   type DiarizerWorkerHandle,
 } from './speaker-diarizer'
+import { bufferToF32, f32ToBuffer } from './speaker-rename'
 
 vi.mock('electron', () => ({ utilityProcess: { fork: vi.fn() } }))
 
@@ -79,7 +82,9 @@ function makeStore(): DiarizerStore & { speakers: Map<string, { meetingId: strin
   return {
     speakers,
     upsertSpeaker: vi.fn((s) => {
-      speakers.set(s.id, { meetingId: s.meetingId, label: s.label, voiceId: s.voiceId, turnCount: s.turnCount })
+      const id = `spk-${speakers.size + 1}`
+      speakers.set(id, { meetingId: s.meetingId, label: s.label, voiceId: s.voiceId, turnCount: s.turnCount })
+      return { id }
     }),
     updateSpeaker: vi.fn((s) => {
       const cur = speakers.get(s.id)!
@@ -92,6 +97,8 @@ function makeStore(): DiarizerStore & { speakers: Map<string, { meetingId: strin
 function baseDeps(overrides: Partial<DiarizerDeps> = {}): DiarizerDeps {
   return {
     fixture: null,
+    store: null,
+    enabled: true,
     addonAvailable: () => true,
     addonError: () => null,
     models: () => ({ segmentation: '/seg', embedding: '/emb' }),
@@ -110,6 +117,12 @@ afterEach(() => {
 describe('status', () => {
   it('off quando desabilitado; unavailable sem addon ou sem modelos', () => {
     expect(createDiarizer(baseDeps({ enabled: false })).status()).toBe('off')
+    // preferência lida a cada chamada: desligar no meio da sessão vale na hora
+    let pref = true
+    const byPref = createDiarizer(baseDeps({ enabled: () => pref, spawnWorker: () => makeWorker() }))
+    expect(byPref.status()).toBe('loading')
+    pref = false
+    expect(byPref.status()).toBe('off')
     const noAddon = createDiarizer(baseDeps({ addonAvailable: () => false, addonError: () => 'sem .node' }))
     expect(noAddon.status()).toBe('unavailable')
     const noModel = createDiarizer(baseDeps({ models: () => ({ segmentation: '/seg', embedding: null }) }))
@@ -196,7 +209,76 @@ describe('worker + clustering + persistência', () => {
     const d = createDiarizer(baseDeps({ spawnWorker: () => makeWorker(() => [turn(0, 2000, 0)]), store, log }))
     const turns = await d.process({ meetingId: 'm', chunkIndex: 0, pcm: pcm(2), startMs: 0 })
     expect(turns).toHaveLength(1)
+    expect(turns[0].speakerId).toMatch(/[0-9a-f-]{36}/)
     expect(log).toHaveBeenCalledWith(expect.stringContaining('db locked'))
+  })
+
+  it('modelo ausente não é definitivo: aparecer no disco depois liga a diarização', async () => {
+    let embedding: string | null = null
+    const spawnWorker = vi.fn(() => makeWorker(() => [turn(0, 2000, 0)]))
+    const d = createDiarizer(baseDeps({ spawnWorker, models: () => ({ segmentation: '/seg', embedding }) }))
+    expect(d.status()).toBe('unavailable')
+    expect(await d.process({ meetingId: 'm', chunkIndex: 0, pcm: pcm(2), startMs: 0 })).toEqual([])
+    embedding = '/emb'
+    expect(d.status()).toBe('loading')
+    expect(await d.process({ meetingId: 'm', chunkIndex: 1, pcm: pcm(2), startMs: 0 })).toHaveLength(1)
+    expect(d.status()).toBe('on')
+  })
+})
+
+describe('storeAdapter (meeting-store real)', () => {
+  function fakeSource() {
+    const speakers = new Map<string, { label: string; centroid: Buffer | null; turnCount: number; voiceId: string | null }>()
+    const voices = new Map<string, { name: string; embedding: Buffer }>()
+    const source: DiarizerStoreSource = {
+      upsertSpeaker: vi.fn((input) => {
+        const id = `db-${speakers.size + 1}`
+        speakers.set(id, {
+          label: input.label,
+          centroid: input.centroid ?? null,
+          turnCount: input.turnCount ?? 0,
+          voiceId: input.voiceId ?? null,
+        })
+        return { id, meetingId: input.meetingId, label: input.label, voiceId: input.voiceId ?? null, turnCount: input.turnCount ?? 0 }
+      }),
+      updateSpeaker: vi.fn((id, patch) => {
+        const cur = speakers.get(id)!
+        speakers.set(id, { ...cur, centroid: patch.centroid ?? cur.centroid, turnCount: patch.turnCount ?? cur.turnCount })
+        return { id, meetingId: 'm', label: cur.label, voiceId: cur.voiceId, turnCount: cur.turnCount }
+      }),
+      listVoices: vi.fn(() =>
+        [...voices.entries()].map(([id, v]) => ({ id, name: v.name, dim: 3, sampleCount: 1, createdAt: 0, updatedAt: 0 })),
+      ),
+      getVoiceEmbedding: vi.fn((id) => voices.get(id)?.embedding ?? null),
+    }
+    return { source, speakers, voices }
+  }
+
+  it('grava o centroide como Float32 LE cru — bufferToF32 do speaker-rename lê de volta igual', () => {
+    const { source, speakers } = fakeSource()
+    const store = storeAdapter(source)
+    const centroid = Float32Array.from([0.25, -1.5, 3.75])
+    const { id } = store.upsertSpeaker({ meetingId: 'm', label: 'Participante 1', voiceId: null, centroid, turnCount: 1 })
+    expect(id).toBe('db-1')
+    const saved = speakers.get(id)!.centroid!
+    expect(saved.byteLength).toBe(12)
+    expect(saved.readFloatLE(0)).toBe(0.25)
+    expect(Array.from(bufferToF32(saved))).toEqual(Array.from(centroid))
+
+    const moved = Float32Array.from([1, 2, 3])
+    store.updateSpeaker({ id, centroid: moved, turnCount: 2 })
+    expect(Array.from(bufferToF32(speakers.get(id)!.centroid!))).toEqual([1, 2, 3])
+    expect(speakers.get(id)!.turnCount).toBe(2)
+  })
+
+  it('listVoices junta nome + embedding (Buffer → Float32Array) e pula voz sem embedding', () => {
+    const { source, voices } = fakeSource()
+    voices.set('v-ana', { name: 'Ana', embedding: f32ToBuffer(Float32Array.from([0, 1, 0])) })
+    voices.set('v-vazia', { name: 'Vazia', embedding: Buffer.alloc(0) })
+    const known = storeAdapter(source).listVoices()
+    expect(known).toHaveLength(1)
+    expect(known[0]).toMatchObject({ id: 'v-ana', name: 'Ana' })
+    expect(Array.from(known[0].embedding)).toEqual([0, 1, 0])
   })
 })
 

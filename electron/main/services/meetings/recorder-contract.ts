@@ -56,6 +56,8 @@ export interface MeetingDiarizer {
   status(): MeetingDiarizationLiveStatus
   /** Descarta centroides/estado da reunião (fim da gravação ou reinício). */
   reset(meetingId: string): void
+  /** Sobe o worker cedo (primeiro start()); opcional — process() também o sobe. */
+  warmup?(): Promise<void>
 }
 
 export const diarizerRegistry = { current: null as MeetingDiarizer | null }

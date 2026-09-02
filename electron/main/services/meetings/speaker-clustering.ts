@@ -3,6 +3,14 @@
 // normalizados); um turno novo entra no centroide mais parecido se o cosseno
 // passar do limiar, senão vira "Participante N" — e aí é comparado com as
 // vozes conhecidas (reuniões anteriores renomeadas) pra já nascer com nome.
+//
+// Defaults calibrados com áudio real (TitaNet small, chunks de 12 s): a 0,6 o
+// limiar fragmentava 1 voz em 2 e 2 em 4; a 0,4 acerta 1→1 e 2→2. E um rabicho
+// de ~1 s no fim do chunk rendia embedding ruim o bastante pra virar speaker
+// novo — só turnos ≥ 1,5 s criam speaker.
+
+export const DEFAULT_THRESHOLD = 0.4
+export const DEFAULT_MIN_TURN_SEC = 1.5
 
 export interface KnownVoice {
   voiceId: string
@@ -81,8 +89,8 @@ interface Cluster extends SpeakerCentroid {
 }
 
 export function createMeetingClusterer(opts: MeetingClustererOptions = {}): MeetingClusterer {
-  const threshold = opts.threshold ?? 0.6
-  const minTurnSec = opts.minTurnSec ?? 0.6
+  const threshold = opts.threshold ?? DEFAULT_THRESHOLD
+  const minTurnSec = opts.minTurnSec ?? DEFAULT_MIN_TURN_SEC
   const shortTurnThreshold = opts.shortTurnThreshold ?? 0.5
   const knownThreshold = opts.knownThreshold ?? 0.6
   const known = opts.known ?? []
@@ -121,7 +129,7 @@ export function createMeetingClusterer(opts: MeetingClustererOptions = {}): Meet
       const short = durationSec < minTurnSec
 
       if (top && top.score >= (short ? shortTurnThreshold : threshold)) {
-        // Turno curto não puxa o centroide: embedding de <0,6 s é ruidoso.
+        // Turno curto não puxa o centroide: embedding de turno curto é ruidoso.
         if (!short) absorb(top.cluster, embedding)
         else top.cluster.turnCount += 1
         return {

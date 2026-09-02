@@ -20,10 +20,10 @@ vi.mock('electron', async () => {
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as store from './meeting-store'
-import { detectorRegistry, postProcessRegistry } from './recorder-contract'
+import { detectorRegistry, diarizerRegistry, postProcessRegistry, type DiarizedTurn, type MeetingDiarizer } from './recorder-contract'
 import { startCapture as realStartCapture, type CaptureHandle } from './audio-capture'
 import { peakDbfs } from './pcm-chunker'
-import { createRecorder, type RecorderDeps } from './recorder'
+import { createRecorder, speakerForSegment, type RecorderDeps } from './recorder'
 import { SttError, type SttConfig, type TranscribeChunkInput } from './transcriber'
 
 const fixtures = resolve(__dirname, '../../../../e2e/fixtures/meetings')
@@ -43,7 +43,14 @@ beforeEach(() => {
 afterEach(() => {
   postProcessRegistry.current = null
   detectorRegistry.current = null
+  diarizerRegistry.current = null
 })
+
+const NO_DIARIZATION = {
+  supported: false,
+  addon: false,
+  models: { segmentation: 'missing', embedding: 'missing', progress: null },
+} as const
 
 function fixtureEnv(over: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
@@ -75,6 +82,7 @@ function build(over: Partial<RecorderDeps> = {}) {
     resolveSourceForStream: async () => null,
     measureMicLevel: async () => null,
     hasPipewire: async () => true,
+    diarizationSetup: () => NO_DIARIZATION,
     env: fixtureEnv(),
     levelIntervalMs: 20,
     ...over,
@@ -132,6 +140,9 @@ describe('start → segmentos → stop', () => {
     const me = segments.filter((s) => s.speaker === 'me')
     const them = segments.filter((s) => s.speaker === 'them')
     expect(me.length).toBeGreaterThanOrEqual(1)
+    // sem diarizer registrado: segmentos sem speaker e reunião marcada 'off'
+    for (const s of segments) expect(s).toMatchObject({ speakerId: null, speakerLabel: null })
+    expect(store.get(meeting.id)?.meeting.diarization).toBe('off')
     // 38 s de sistema → pelo menos dois chunks antes do flush
     expect(them.length).toBeGreaterThanOrEqual(2)
     expect(them[0].startMs).toBe(500)
@@ -173,6 +184,92 @@ describe('start → segmentos → stop', () => {
     const stopped = await recorder.stop()
     expect(stopped.status).toBe('processing')
     expect(post).toHaveBeenCalledWith(meeting.id)
+  })
+})
+
+describe('diarização', () => {
+  const A = { speakerId: 'spk-a', speakerLabel: 'Participante 1' }
+  const B = { speakerId: 'spk-b', speakerLabel: 'Participante 2' }
+
+  // Dois segmentos por chunk: um dentro do turno A (0–6 s), outro no B (6–12 s).
+  function twoSegmentStt() {
+    return vi.fn(async () => [
+      { text: 'primeira', startMs: 500, endMs: 1500, noSpeechProb: 0.1 },
+      { text: 'segunda', startMs: 7000, endMs: 8000, noSpeechProb: 0.1 },
+    ])
+  }
+
+  function fakeDiarizer(): MeetingDiarizer & { process: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn> } {
+    return {
+      process: vi.fn(async (): Promise<DiarizedTurn[]> => [
+        { startMs: 0, endMs: 6000, ...A },
+        { startMs: 6000, endMs: 12000, ...B },
+      ]),
+      status: () => 'on',
+      reset: vi.fn(),
+    }
+  }
+
+  it('só a trilha them diariza: cada segmento recebe o speaker do turno com maior sobreposição', async () => {
+    const diarizer = fakeDiarizer()
+    diarizerRegistry.current = diarizer
+    const { recorder } = build({ transcribeChunk: twoSegmentStt() as unknown as RecorderDeps['transcribeChunk'] })
+    const meeting = await recorder.start({})
+    expect(diarizer.reset).toHaveBeenCalledWith(meeting.id)
+    expect(store.get(meeting.id)?.meeting.diarization).toBe('on')
+    await sleep(60)
+    await recorder.stop()
+
+    const segments = store.listSegments(meeting.id)
+    const them = segments.filter((s) => s.speaker === 'them')
+    const me = segments.filter((s) => s.speaker === 'me')
+    expect(them.length).toBeGreaterThanOrEqual(4)
+    for (const s of me) expect(s).toMatchObject({ speakerId: null, speakerLabel: null })
+    for (const s of them) expect(s).toMatchObject(s.text === 'primeira' ? A : B)
+    expect(new Set(them.map((s) => s.speakerLabel))).toEqual(new Set(['Participante 1', 'Participante 2']))
+
+    const calls = diarizer.process.mock.calls as Array<[{ meetingId: string; chunkIndex: number; pcm: Buffer; startMs: number }]>
+    expect(calls.length).toBe(new Set(them.map((s) => s.chunkIndex)).size)
+    expect(calls.map(([c]) => c.chunkIndex)).toEqual(calls.map((_, i) => i))
+    expect(calls[0][0].startMs).toBe(0)
+    for (const [c] of calls) {
+      expect(c.meetingId).toBe(meeting.id)
+      expect(c.pcm.length).toBeGreaterThan(0)
+    }
+    // startMs é a posição absoluta do chunk na reunião: cresce com o índice
+    expect(calls.map(([c]) => c.startMs)).toEqual([...calls.map(([c]) => c.startMs)].sort((a, b) => a - b))
+    expect(diarizer.reset).toHaveBeenCalledTimes(2)
+  })
+
+  it('diarizer que rejeita não derruba o STT: segmentos ficam sem speaker', async () => {
+    diarizerRegistry.current = {
+      process: vi.fn(async () => {
+        throw new Error('worker morto')
+      }),
+      status: () => 'unavailable',
+      reset: vi.fn(),
+    }
+    const { recorder } = build()
+    const meeting = await recorder.start({})
+    await sleep(60)
+    await recorder.stop()
+    const them = store.listSegments(meeting.id).filter((s) => s.speaker === 'them')
+    expect(them.length).toBeGreaterThanOrEqual(2)
+    for (const s of them) expect(s).toMatchObject({ speakerId: null, speakerLabel: null })
+    expect(store.get(meeting.id)?.meeting.diarization).toBe('unavailable')
+  })
+
+  it('speakerForSegment: maior sobreposição vence; sem sobreposição herda o último do chunk', () => {
+    const turns: DiarizedTurn[] = [
+      { startMs: 0, endMs: 5000, ...A },
+      { startMs: 5000, endMs: 12000, ...B },
+    ]
+    expect(speakerForSegment(turns, { startMs: 1000, endMs: 3000 }, null)).toEqual(A)
+    // 4–7 s: 1 s em A, 2 s em B
+    expect(speakerForSegment(turns, { startMs: 4000, endMs: 7000 }, null)).toEqual(B)
+    expect(speakerForSegment(turns, { startMs: 12000, endMs: 13000 }, A)).toEqual(A)
+    expect(speakerForSegment(turns, { startMs: 12000, endMs: 13000 }, null)).toBeNull()
+    expect(speakerForSegment([], { startMs: 0, endMs: 1000 }, null)).toBeNull()
   })
 })
 

@@ -3,6 +3,7 @@
 // de recorder-contract.ts a partir dos hooks abaixo.
 import { registerMeetingsIpc } from '../../ipc/meetings'
 import { installActionItemBatch } from './action-item-batch'
+import { installDiarizer, uninstallDiarizer } from './diarization'
 import { installFloatingWindow, uninstallFloatingWindow } from './floating-window'
 import { installDetector, uninstallDetector } from './meeting-detector'
 import { installPostProcess } from './post-process'
@@ -14,6 +15,7 @@ import { installTray, uninstallTray } from './tray'
 export function initMeetings(): void {
   registerMeetingsIpc()
   installRecorder()
+  installDiarizer()
   installPostProcess()
   installSpeakerRename()
   installActionItemBatch()
@@ -31,4 +33,5 @@ export function onWillQuit(): void {
   uninstallShortcut()
   uninstallTray()
   uninstallFloatingWindow()
+  uninstallDiarizer()
 }
