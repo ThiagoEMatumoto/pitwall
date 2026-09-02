@@ -3,6 +3,7 @@
 // de recorder-contract.ts a partir dos hooks abaixo.
 import { registerMeetingsIpc } from '../../ipc/meetings'
 import { installFloatingWindow, uninstallFloatingWindow } from './floating-window'
+import { installPostProcess } from './post-process'
 import { installRecorder } from './recorder'
 import { installShortcut, uninstallShortcut } from './shortcut'
 import { installTray, uninstallTray } from './tray'
@@ -10,6 +11,7 @@ import { installTray, uninstallTray } from './tray'
 export function initMeetings(): void {
   registerMeetingsIpc()
   installRecorder()
+  installPostProcess()
 }
 
 export function onAppReady(): void {

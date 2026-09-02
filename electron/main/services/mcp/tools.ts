@@ -10,6 +10,7 @@ import * as z from 'zod/v4'
 import { serviceTools } from './service-tools'
 import { videoTools } from './video-tools'
 import { loopTools } from './loop-tools'
+import { meetingTools } from './meeting-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -1473,6 +1474,7 @@ export function buildTools(
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
     ...videoTools(notify),
+    ...meetingTools(notify),
     ...serviceTools(ctx),
   ]
 }

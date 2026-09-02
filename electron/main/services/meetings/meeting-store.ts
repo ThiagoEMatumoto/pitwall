@@ -201,6 +201,14 @@ export function setSummary(id: string, summaryMd: string, summaryModel: string):
   return requireMeeting(id)
 }
 
+export function setSttModel(id: string, sttModel: string): Meeting {
+  requireMeeting(id)
+  getDb()
+    .prepare('UPDATE meetings_v2 SET stt_model = ?, updated_at = ? WHERE id = ?')
+    .run(sttModel, Date.now(), id)
+  return requireMeeting(id)
+}
+
 export function remove(id: string): void {
   // Segmentos e action items saem via ON DELETE CASCADE (foreign_keys = ON em db.ts).
   getDb().prepare('DELETE FROM meetings_v2 WHERE id = ?').run(id)
@@ -266,6 +274,68 @@ export function replaceActionItems(
   })
   tx()
   return listActionItems(meetingId)
+}
+
+export function getActionItem(id: string): MeetingActionItem | null {
+  const row = getDb().prepare('SELECT * FROM meeting_v2_action_items WHERE id = ?').get(id) as
+    | ActionItemRow
+    | undefined
+  return row ? rowToActionItem(row) : null
+}
+
+export interface MeetingSearchHit {
+  meeting: Meeting
+  matchedIn: 'title' | 'notes' | 'summary' | 'transcript'
+  snippet: string
+}
+
+function escapeLike(q: string): string {
+  return q.replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
+function snippetAround(text: string, q: string, radius = 80): string {
+  const idx = text.toLowerCase().indexOf(q.toLowerCase())
+  if (idx === -1) return text.slice(0, radius * 2)
+  const start = Math.max(0, idx - radius)
+  const end = Math.min(text.length, idx + q.length + radius)
+  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
+}
+
+// LIKE simples em título/notas/resumo/segmentos (sem FTS nesta release). O
+// trecho devolvido é o do primeiro campo que casou, nessa ordem.
+export function search(q: string, limit = 20): MeetingSearchHit[] {
+  const needle = q.trim()
+  if (!needle) return []
+  const like = `%${escapeLike(needle)}%`
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `${SELECT_MEETING}
+       WHERE m.title LIKE ? ESCAPE '\\'
+          OR m.raw_notes LIKE ? ESCAPE '\\'
+          OR m.summary_md LIKE ? ESCAPE '\\'
+          OR EXISTS (SELECT 1 FROM meeting_v2_segments s WHERE s.meeting_id = m.id AND s.text LIKE ? ESCAPE '\\')
+       ORDER BY m.started_at DESC LIMIT ?`,
+    )
+    .all(like, like, like, like, limit) as MeetingRow[]
+  const firstSegment = db.prepare(
+    `SELECT text FROM meeting_v2_segments WHERE meeting_id = ? AND text LIKE ? ESCAPE '\\' ORDER BY start_ms ASC LIMIT 1`,
+  )
+  const lower = needle.toLowerCase()
+  return rows.map((row) => {
+    const meeting = rowToMeeting(row)
+    if (meeting.title.toLowerCase().includes(lower)) {
+      return { meeting, matchedIn: 'title', snippet: meeting.title }
+    }
+    if (meeting.rawNotes.toLowerCase().includes(lower)) {
+      return { meeting, matchedIn: 'notes', snippet: snippetAround(meeting.rawNotes, needle) }
+    }
+    if (meeting.summaryMd?.toLowerCase().includes(lower)) {
+      return { meeting, matchedIn: 'summary', snippet: snippetAround(meeting.summaryMd, needle) }
+    }
+    const seg = firstSegment.get(meeting.id, like) as { text: string } | undefined
+    return { meeting, matchedIn: 'transcript', snippet: snippetAround(seg?.text ?? '', needle) }
+  })
 }
 
 export function setActionItemStatus(

@@ -34,7 +34,7 @@ const LEVEL_INTERVAL_MS = 250
 const STATE_THROTTLE_MS = 250
 
 export interface RecorderDeps {
-  store: Pick<typeof meetingStore, 'create' | 'get' | 'update' | 'setStatus' | 'appendSegment'>
+  store: Pick<typeof meetingStore, 'create' | 'get' | 'update' | 'setStatus' | 'appendSegment' | 'setSttModel'>
   startCapture: typeof startCapture
   transcribeChunk: typeof transcribeChunk
   loadSttConfig: () => Promise<SttConfigResult>
@@ -157,6 +157,7 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       return null
     }
     s.sttConfig = result.cfg
+    deps.store.setSttModel(s.meetingId, result.cfg.model)
     return result.cfg
   }
 
