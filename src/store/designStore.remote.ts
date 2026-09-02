@@ -31,7 +31,12 @@ export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEv
   } else {
     void store.getState().resync(evt.artboardId)
   }
-  if (evt.origin.kind === 'claude') maybeToastRemoteUpdate(ab.meta)
+  if (evt.origin.kind === 'claude') {
+    maybeToastRemoteUpdate(ab.meta, () => {
+      store.getState().select(evt.artboardId, [])
+      store.getState().fitToArtboard(evt.artboardId)
+    })
+  }
 }
 
 export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity): void {
@@ -51,7 +56,12 @@ export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity):
 }
 
 export async function handleDocumentUpdated(store: DesignStore, docId: string): Promise<void> {
-  if (docId !== store.getState().docId) return
+  if (docId !== store.getState().docId) {
+    // Claude creating or renaming a document that is not open (the empty
+    // state suggests exactly that) has to reach the DocsPanel list.
+    await store.getState().loadDocs()
+    return
+  }
   const doc = await api.design.documentGet(docId)
   const prev = store.getState().doc
   if (!doc || !prev) return
@@ -81,7 +91,8 @@ export function handleArtboardDeleted(store: DesignStore, artboardId: string): v
     return {
       artboards,
       doc,
-      selection: s.selection.artboardId === artboardId ? { artboardId: null, nodeIds: [] } : s.selection,
+      selection:
+        s.selection.artboardId === artboardId ? { artboardId: null, nodeIds: [] } : s.selection,
       hover: s.hover?.artboardId === artboardId ? null : s.hover,
       textEditing: s.textEditing?.artboardId === artboardId ? null : s.textEditing,
       previewArtboardId: s.previewArtboardId === artboardId ? null : s.previewArtboardId,

@@ -5,6 +5,7 @@ import {
   Frame,
   Hand,
   Image,
+  Keyboard,
   Maximize2,
   Minus,
   MousePointer2,
@@ -17,10 +18,12 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button } from '@/components/ui/Button'
-import { ControlPill } from '@/features/brand'
 import { useDesignStore, type DesignTool } from '@/store/designStore'
 import { DESIGN_TESTIDS } from '@shared/types/design'
+import { AgentActivityBadge } from './AgentActivityBadge'
 import { STAGE_MAX_ZOOM, STAGE_MIN_ZOOM, clampStageZoom } from './canvas/CanvasStage'
+import { SHORTCUTS_PANEL_TOGGLE_EVENT } from './canvas/useCanvasShortcuts'
+import { VersionsButton } from './versions/VersionsPanel'
 
 interface ToolDef {
   id: DesignTool
@@ -91,34 +94,6 @@ function DocTitle() {
   )
 }
 
-function AgentBadge() {
-  const activity = useDesignStore((s) => s.agentActivity)
-  const artboards = useDesignStore((s) => s.artboards)
-  const entries = Object.values(activity).flat()
-  if (entries.length === 0) return null
-  const latest = entries.reduce((a, b) => (b.at > a.at ? b : a))
-  const target = latest.artboardId ? (artboards[latest.artboardId]?.meta.name ?? 'artboard') : 'documento'
-  return (
-    <>
-      <style>{`
-        @keyframes pw-design-shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
-        .pw-design-shimmer {
-          background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accent) 22%, transparent) 50%, transparent 100%);
-          background-size: 200% 100%;
-          animation: pw-design-shimmer 1.6s linear infinite;
-        }
-      `}</style>
-      <ControlPill
-        icon={Sparkles}
-        tone="accent"
-        label={`Claude editando ▸ ${target}`}
-        title={latest.summary ?? latest.tool}
-        className="pw-design-shimmer"
-      />
-    </>
-  )
-}
-
 export function DesignToolbar() {
   const tool = useDesignStore((s) => s.tool)
   const setTool = useDesignStore((s) => s.setTool)
@@ -131,7 +106,10 @@ export function DesignToolbar() {
   const setAskOpen = useDesignStore((s) => s.setAskOpen)
   const hasDoc = useDesignStore((s) => s.docId !== null)
   const previewTarget = useDesignStore(
-    (s) => s.selection.artboardId ?? s.doc?.pages.find((p) => p.id === s.pageId)?.artboards[0]?.id ?? null,
+    (s) =>
+      s.selection.artboardId ??
+      s.doc?.pages.find((p) => p.id === s.pageId)?.artboards[0]?.id ??
+      null,
   )
 
   const inPreview = mode === 'preview'
@@ -203,7 +181,7 @@ export function DesignToolbar() {
 
       <div className="flex-1" />
 
-      <AgentBadge />
+      <AgentActivityBadge />
 
       {hasDoc && (
         <Button variant="ghost" className="px-3 py-1 text-xs" onClick={() => setAskOpen(true)}>
@@ -211,6 +189,19 @@ export function DesignToolbar() {
           Ask Claude
         </Button>
       )}
+
+      {hasDoc && (
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent(SHORTCUTS_PANEL_TOGGLE_EVENT))}
+          title="Atalhos do teclado (Ctrl+Shift+?)"
+          className={iconButton}
+        >
+          <Icon as={Keyboard} />
+        </button>
+      )}
+
+      {hasDoc && <VersionsButton />}
 
       <button
         type="button"

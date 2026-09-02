@@ -30,6 +30,7 @@ export function ArtboardFrame({ artboardId }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const bridgeRef = useRef<ArtboardBridge | null>(null)
   const dragRef = useRef<LabelDrag | null>(null)
+  const loadedRef = useRef<{ url: string; reloadNonce: number } | null>(null)
   // Per-mount secret echoed in `init`; the runtime ignores inits without it.
   const token = useMemo(() => newNonce(), [])
   const [hasBridge, setHasBridge] = useState(false)
@@ -94,8 +95,15 @@ export function ArtboardFrame({ artboardId }: Props) {
       fonts: fonts ?? [],
       mode,
     })
+    const url = artboardUrl(artboardId, docId, mode, token)
+    // The effect re-runs when hasBridge flips on the same commit that set the
+    // src; assigning the same URL again would abort the in-flight load and
+    // start over (net::ERR_ABORTED). Only reloadNonce may repeat a URL.
+    const last = loadedRef.current
+    if (last && last.url === url && last.reloadNonce === reloadNonce) return
+    loadedRef.current = { url, reloadNonce }
     setArtboardReady(artboardId, false)
-    iframe.src = artboardUrl(artboardId, docId, mode, token)
+    iframe.src = url
   }, [artboardId, docId, mode, token, reloadNonce, setArtboardReady, hasBridge])
 
   // Narrow rectsChanged to the nodes the overlay draws and prime the cache.

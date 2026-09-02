@@ -505,20 +505,32 @@ function installInteractionGuards(): void {
   document.addEventListener(
     'keydown',
     (e) => {
-      if (mode !== 'edit') return
       const mod = e.metaKey || e.ctrlKey
-      if (e.key === 'Escape' || (mod && e.key === 'Enter')) {
-        post({
-          v: PROTOCOL_VERSION,
-          type: 'key',
-          key: e.key,
-          mod,
-          shift: e.shiftKey,
-        })
-      }
+      // Focus lands inside the iframe after a click or a text edit; the keys
+      // the parent owns are forwarded. In preview those are the overlay's
+      // navigation keys, unless the prototype itself is taking typed input.
+      const forward =
+        mode === 'edit'
+          ? e.key === 'Escape' || (mod && e.key === 'Enter')
+          : PREVIEW_FORWARDED_KEYS.has(e.key) && !isTypingTarget(e.target)
+      if (!forward) return
+      post({
+        v: PROTOCOL_VERSION,
+        type: 'key',
+        key: e.key,
+        mod,
+        shift: e.shiftKey,
+      })
     },
     true,
   )
+}
+
+const PREVIEW_FORWARDED_KEYS = new Set(['Escape', 'Backspace', 'ArrowLeft', 'ArrowRight'])
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
 }
 
 // ---- message dispatch ----

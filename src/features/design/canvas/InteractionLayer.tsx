@@ -1,55 +1,44 @@
 // Transparent layer over an artboard iframe in edit mode. Pointer events
-// never cross the iframe boundary, so hover/select/dblclick are resolved
-// here through the bridge's hitTest. Wave 3 adds move/resize/draw on top of
-// the same pointerdown/move/up skeleton (see the `gesture` ref).
+// never cross the iframe boundary, so hover, clicks and every drag gesture
+// are resolved here through the bridge's hitTest. The gesture itself lives in
+// GestureRunner (interaction-state.ts); this component only translates DOM
+// events into artboard-local points and owns hover + cursor.
 
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { getNodeIndex, useDesignStore } from '@/store/designStore'
 import type { HitMessage } from '@shared/design/protocol'
 import type { ArtboardBridge } from './runtime-bridge'
 import type { Point } from './geometry'
+import { HANDLE_CURSOR, handleAt, type ResizeHandle } from './drag-plan'
+import { GestureRunner } from './gesture-runner'
 
 interface Props {
   artboardId: string
   bridge: ArtboardBridge
 }
 
-const CLICK_THRESHOLD_PX = 3
-
-// Extension point: wave 3 turns 'press' into 'move' | 'resize' | 'draw'
-// once the pointer travels past CLICK_THRESHOLD_PX.
-interface Gesture {
-  kind: 'press'
-  pointerId: number
-  start: Point
-  moved: boolean
-}
-
-// Which node a plain click lands on: the direct child of the current scope
-// (or of the root when there is no scope). Cmd/Ctrl click takes the deepest.
-function resolveClickTarget(path: string[], scopeId: string | null, deep: boolean): string | null {
-  if (path.length === 0) return null
-  if (deep) return path[path.length - 1]
-  const scopeIndex = scopeId ? path.indexOf(scopeId) : 0
-  const base = scopeIndex === -1 ? 0 : scopeIndex
-  return path[base + 1] ?? null
-}
+const HANDLE_HIT_RADIUS_PX = 6
 
 export function InteractionLayer({ artboardId, bridge }: Props) {
-  const gestureRef = useRef<Gesture | null>(null)
+  const runnerRef = useRef<GestureRunner | null>(null)
   const hoverFrame = useRef<number | null>(null)
   const hoverSeq = useRef(0)
   const lastHoverPoint = useRef<Point | null>(null)
+  const [cursor, setCursor] = useState<string | undefined>(undefined)
 
   const editingHere = useDesignStore((s) => s.textEditing?.artboardId === artboardId)
   const tool = useDesignStore((s) => s.tool)
   const setHover = useDesignStore((s) => s.setHover)
-  const select = useDesignStore((s) => s.select)
   const startTextEdit = useDesignStore((s) => s.startTextEdit)
+
+  if (!runnerRef.current) runnerRef.current = new GestureRunner(artboardId, bridge)
+  runnerRef.current.bridge = bridge
+  const runner = runnerRef.current
 
   useEffect(
     () => () => {
       if (hoverFrame.current !== null) cancelAnimationFrame(hoverFrame.current)
+      runnerRef.current?.dispose()
     },
     [],
   )
@@ -64,6 +53,20 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
   }
 
   const hit = (p: Point): Promise<HitMessage> => bridge.hitTest(p.x, p.y)
+
+  // Resize handle under the pointer, if this artboard owns the selection.
+  const handleUnder = (p: Point): { nodeId: string; handle: ResizeHandle } | null => {
+    const { selection, viewport, textEditing } = useDesignStore.getState()
+    if (selection.artboardId !== artboardId || textEditing) return null
+    const radius = HANDLE_HIT_RADIUS_PX / viewport.zoom
+    for (const nodeId of selection.nodeIds) {
+      const rect = bridge.getCachedRect(nodeId)
+      if (!rect) continue
+      const handle = handleAt(p, rect, radius)
+      if (handle) return { nodeId, handle }
+    }
+    return null
+  }
 
   // One hitTest per frame at most; stale replies are dropped by sequence.
   const scheduleHover = (p: Point): void => {
@@ -84,19 +87,26 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
   }
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>): void => {
-    const g = gestureRef.current
-    if (g && g.pointerId === e.pointerId) {
-      const p = localPoint(e)
-      const zoom = useDesignStore.getState().viewport.zoom
-      if (Math.hypot(p.x - g.start.x, p.y - g.start.y) * zoom > CLICK_THRESHOLD_PX) g.moved = true
+    const p = localPoint(e)
+    if (runner.active(e.pointerId)) {
+      runner.move(p, { shift: e.shiftKey, alt: e.altKey })
       return
     }
-    if (tool === 'move') scheduleHover(localPoint(e))
+    if (tool !== 'move') return
+    const handle = handleUnder(p)
+    setCursor(handle ? HANDLE_CURSOR[handle.handle] : undefined)
+    if (handle) {
+      hoverSeq.current++
+      setHover(null)
+      return
+    }
+    scheduleHover(p)
   }
 
   const onPointerLeave = (): void => {
     hoverSeq.current++
     setHover(null)
+    setCursor(undefined)
   }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
@@ -104,40 +114,27 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
     if (e.button !== 0 || tool === 'hand') return
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
-    gestureRef.current = {
+    hoverSeq.current++
+    const start = localPoint(e)
+    runner.press({
       kind: 'press',
       pointerId: e.pointerId,
-      start: localPoint(e),
+      start,
+      last: start,
       moved: false,
-    }
+      tool,
+      handle: tool === 'move' ? handleUnder(start) : null,
+      hit: null,
+      shift: e.shiftKey,
+      deep: e.metaKey || e.ctrlKey,
+      alt: e.altKey,
+    })
   }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>): void => {
-    const g = gestureRef.current
-    if (!g || g.pointerId !== e.pointerId) return
-    gestureRef.current = null
+    if (!runner.active(e.pointerId)) return
     e.currentTarget.releasePointerCapture(e.pointerId)
-    if (g.moved || tool !== 'move') return
-    const deep = e.metaKey || e.ctrlKey
-    const additive = e.shiftKey
-    void hit(g.start)
-      .then((msg) => {
-        const { scopeId, selection } = useDesignStore.getState()
-        const target = resolveClickTarget(msg.path, scopeId, deep)
-        if (!target) {
-          if (!additive) select(artboardId, [])
-          return
-        }
-        if (additive && selection.artboardId === artboardId) {
-          const ids = selection.nodeIds.includes(target)
-            ? selection.nodeIds.filter((id) => id !== target)
-            : [...selection.nodeIds, target]
-          select(artboardId, ids)
-          return
-        }
-        select(artboardId, [target])
-      })
-      .catch(() => undefined)
+    runner.up(localPoint(e), { shift: e.shiftKey, alt: e.altKey })
   }
 
   const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>): void => {
@@ -160,7 +157,7 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
   return (
     <div
       className="absolute inset-0"
-      style={{ pointerEvents: passthrough ? 'none' : 'auto' }}
+      style={{ pointerEvents: passthrough ? 'none' : 'auto', cursor }}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
       onPointerDown={onPointerDown}

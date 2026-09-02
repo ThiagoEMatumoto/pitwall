@@ -80,11 +80,11 @@ export function forgetArtboard(artboardId: string): void {
 
 // ---- pure helpers ----
 
-export function maybeToastRemoteUpdate(artboard: DesignArtboard): void {
+export function maybeToastRemoteUpdate(artboard: DesignArtboard, onView: () => void): void {
   const now = Date.now()
   if (now - (lastRemoteToastAt.get(artboard.id) ?? 0) < REMOTE_TOAST_THROTTLE_MS) return
   lastRemoteToastAt.set(artboard.id, now)
-  showToast({ title: `Claude atualizou "${artboard.name}"` })
+  showToast({ title: `Claude atualizou "${artboard.name}"`, actionLabel: 'Ver', onAction: onView })
 }
 
 export function isVersionConflict(err: unknown): boolean {
@@ -123,7 +123,10 @@ export function artboardsOf(doc: DesignDocument): Record<string, ArtboardState> 
   return out
 }
 
-export function upsertMeta(list: DesignDocumentMeta[], meta: DesignDocumentMeta): DesignDocumentMeta[] {
+export function upsertMeta(
+  list: DesignDocumentMeta[],
+  meta: DesignDocumentMeta,
+): DesignDocumentMeta[] {
   return [...list.filter((m) => m.id !== meta.id), meta].sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
@@ -189,7 +192,12 @@ export function applyLocal(store: DesignStore, artboardId: string, ops: DesignOp
   return true
 }
 
-export function sendOps(store: DesignStore, artboardId: string, ops: DesignOp[], opts: CommitOptions): void {
+export function sendOps(
+  store: DesignStore,
+  artboardId: string,
+  ops: DesignOp[],
+  opts: CommitOptions,
+): void {
   const prev = sendChains.get(artboardId) ?? Promise.resolve()
   const next = prev.then(async () => {
     const ab = store.getState().artboards[artboardId]
