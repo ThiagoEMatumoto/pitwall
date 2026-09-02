@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useMeetingsStore } from '@/store/meetingsStore'
 import type { MeetingLiveState, MeetingSetupStatus } from '../../../shared/types/ipc'
+import { DetectionBanner } from './DetectionBanner'
 import { MeetingDetail } from './MeetingDetail'
 import { MeetingList } from './MeetingList'
 import { SetupBanner, setupProblems } from './SetupBanner'
@@ -49,6 +50,7 @@ export function MeetingsArea() {
   const rename = useMeetingsStore((s) => s.rename)
   const remove = useMeetingsStore((s) => s.remove)
   const toggleFloating = useMeetingsStore((s) => s.toggleFloating)
+  const decideDetection = useMeetingsStore((s) => s.decideDetection)
   const clearError = useMeetingsStore((s) => s.clearError)
   const startEventWatch = useMeetingsStore((s) => s.startEventWatch)
 
@@ -125,6 +127,7 @@ export function MeetingsArea() {
         </div>
       </header>
 
+      <DetectionBanner live={live} onDecide={(action) => void decideDetection(action)} />
       {setup && <SetupBanner setup={setup} ignorePipewire={live?.captureMode === 'fixture'} />}
 
       {error && (

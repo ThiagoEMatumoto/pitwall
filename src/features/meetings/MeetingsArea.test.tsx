@@ -9,6 +9,8 @@ const idleState: MeetingLiveState = {
   sttOk: true,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 
 const okSetup: MeetingSetupStatus = {

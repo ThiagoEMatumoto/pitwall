@@ -31,6 +31,7 @@ import {
 } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { TerminalSection } from './TerminalSection'
+import { MeetingsSection } from './MeetingsSection'
 import { useProjectsPrefsStore } from '@/lib/projects-prefs-store'
 import { useSessionPrefsStore, type KeyboardSendMode } from '@/lib/session-prefs-store'
 import { MODEL_OPTIONS, EFFORT_OPTIONS, ADVISOR_OPTIONS } from '@/features/sessions/spawn-options'
@@ -281,6 +282,7 @@ function GeneralTab({ open }: { open: boolean }) {
       </div>
 
       <TerminalSection open={open} />
+      <MeetingsSection open={open} />
 
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">
         <div className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--color-text-dim)]">

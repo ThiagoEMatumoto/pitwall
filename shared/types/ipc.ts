@@ -17,6 +17,8 @@ export type {
   MeetingActionItemStatus,
   MeetingCaptureMode,
   MeetingDetail,
+  MeetingDetection,
+  MeetingDetectionAction,
   MeetingEvent,
   MeetingFloatingAction,
   MeetingLiveState,
@@ -32,6 +34,7 @@ import type {
   MeetingActionItem,
   MeetingActionItemDecision,
   MeetingDetail,
+  MeetingDetectionAction,
   MeetingEvent,
   MeetingFloatingAction,
   MeetingLiveState,
@@ -2611,6 +2614,8 @@ export interface MeetingsApi {
   /** 'created' força criar a task mesmo sem grounding. */
   actionItem(input: MeetingActionItemDecision): Promise<MeetingActionItem>
   floating(action: MeetingFloatingAction): Promise<void>
+  /** Decide sobre a reunião detectada: gravar ou ignorar até o stream acabar. */
+  detection(action: MeetingDetectionAction): Promise<void>
   checkSetup(): Promise<MeetingSetupStatus>
   /** Estado ao vivo, segmentos, reunião e action items — um canal só. */
   onEvent(handler: (event: MeetingEvent) => void): () => void

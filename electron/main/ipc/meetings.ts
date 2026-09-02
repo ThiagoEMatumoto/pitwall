@@ -3,6 +3,7 @@ import { z } from 'zod'
 import * as meetingStore from '../services/meetings/meeting-store'
 import {
   actionItemRegistry,
+  detectorRegistry,
   floatingRegistry,
   getRecorder,
   resummarizeRegistry,
@@ -32,6 +33,8 @@ const actionItemSchema = z.object({
 })
 
 const floatingSchema = z.object({ action: z.enum(['show', 'hide', 'toggle']) })
+
+const detectionSchema = z.object({ action: z.enum(['record', 'ignore']) })
 
 function unavailable(what: string): never {
   throw new Error(`${what} não disponível`)
@@ -89,6 +92,12 @@ export function registerMeetingsIpc(): void {
     const { action } = floatingSchema.parse(payload)
     const control = floatingRegistry.current ?? unavailable('Janela flutuante')
     control(action)
+  })
+
+  ipcMain.handle('meetings:detection', (_e, payload: unknown) => {
+    const { action } = detectionSchema.parse(payload)
+    const detector = detectorRegistry.current ?? unavailable('Detecção de reunião')
+    detector.decide(action)
   })
 
   ipcMain.handle('meetings:checkSetup', () => {

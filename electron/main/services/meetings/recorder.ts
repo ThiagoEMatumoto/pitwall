@@ -13,6 +13,7 @@ import {
 import * as meetingStore from './meeting-store'
 import { PcmChunker, rmsLinear, type Chunk } from './pcm-chunker'
 import {
+  detectorRegistry,
   postProcessRegistry,
   recorderRegistry,
   setupCheckRegistry,
@@ -68,6 +69,8 @@ interface Session {
   meetingId: string
   startedAt: number
   captureMode: MeetingLiveState['captureMode']
+  /** Stream do detector no momento do start — auto-stop quando ele some. */
+  linkedStreamId: number | null
   targets: { sink: string | null; source: string | null }
   pace: number
   tracks: Record<Track, TrackState>
@@ -130,6 +133,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     sttOk: session ? session.sttOk : true,
     lastError: session?.lastError ?? null,
     captureMode: session?.captureMode ?? 'pipewire',
+    detection: detectorRegistry.current?.getDetection() ?? null,
+    linkedStreamId: session?.linkedStreamId ?? null,
   })
 
   const broadcastState = (force = false): void => {
@@ -340,6 +345,7 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
         meetingId: meeting.id,
         startedAt,
         captureMode,
+        linkedStreamId: detectorRegistry.current?.getDetection()?.streamId ?? null,
         targets,
         pace: fixturePaceFromEnv(deps.env),
         tracks: {
@@ -409,7 +415,9 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     }
   }
 
-  return { start, stop, getState, appendQuickNote, checkSetup }
+  const refreshState = (): void => broadcastState(true)
+
+  return { start, stop, getState, appendQuickNote, refreshState, checkSetup }
 }
 
 function newTrack(track: Track): TrackState {

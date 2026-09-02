@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/Button'
 import { meetingsApi } from '@/lib/ipc'
+import { DetectionBanner } from '@/features/meetings/DetectionBanner'
 import type { Meeting, MeetingLiveState, MeetingSegment } from '@shared/types/meetings'
 
 const MAX_SEGMENTS = 8
@@ -19,6 +20,8 @@ const IDLE_STATE: MeetingLiveState = {
   sttOk: false,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 
 export function formatClock(ms: number): string {
@@ -217,6 +220,14 @@ export function FloatingApp() {
           ×
         </button>
       </header>
+
+      {!active && (
+        <DetectionBanner
+          live={state}
+          compact
+          onDecide={(action) => void run(() => meetingsApi.detection(action))}
+        />
+      )}
 
       <div className="flex flex-col gap-1 border-b border-[var(--color-border)] px-3 py-2">
         <Level label="Eu" value={state.levels.me} />

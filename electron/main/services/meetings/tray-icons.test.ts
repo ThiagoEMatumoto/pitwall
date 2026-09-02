@@ -87,6 +87,14 @@ describe('drawIcon', () => {
     expect(pixel(rgba, size, c, c)).toEqual([0xe5, 0x48, 0x4d, Math.round(0.45 * 255)])
   })
 
+  it('detected: disco âmbar opaco no centro, mesmo formato do recording', () => {
+    const rgba = drawIcon('detected', size)
+    expect(pixel(rgba, size, c, c)).toEqual([0xf5, 0xa5, 0x24, 255])
+    expect(pixel(rgba, size, 0, 0)[3]).toBe(0)
+    const recording = drawIcon('recording', size)
+    for (let i = 3; i < rgba.length; i += 4) expect(rgba[i]).toBe(recording[i])
+  })
+
   it('idle: anel cinza-claro — centro vazado, borda do anel preenchida', () => {
     const rgba = drawIcon('idle', size)
     expect(pixel(rgba, size, c, c)[3]).toBe(0)
@@ -97,11 +105,13 @@ describe('drawIcon', () => {
   })
 
   it('iconPng embrulha o desenho num PNG válido nas duas escalas', () => {
-    for (const size of [22, 44]) {
-      const png = iconPng('recording', size)
-      const chunks = parseChunks(png)
-      expect(chunks[0].data.readUInt32BE(0)).toBe(size)
-      expect(chunks.every((ch) => ch.crcOk)).toBe(true)
+    for (const kind of ['recording', 'detected'] as const) {
+      for (const size of [22, 44]) {
+        const png = iconPng(kind, size)
+        const chunks = parseChunks(png)
+        expect(chunks[0].data.readUInt32BE(0)).toBe(size)
+        expect(chunks.every((ch) => ch.crcOk)).toBe(true)
+      }
     }
   })
 })
@@ -109,20 +119,20 @@ describe('drawIcon', () => {
 describe('trayIcons', () => {
   beforeEach(() => createFromBuffer.mockReset())
 
-  it('cria os três ícones a partir de PNG 22px e anexa a representação @2x', () => {
+  it('cria os quatro ícones a partir de PNG 22px e anexa a representação @2x', () => {
     const reps: unknown[] = []
     createFromBuffer.mockImplementation(() => ({
       addRepresentation: (rep: unknown) => reps.push(rep),
     }))
     const icons = trayIcons()
-    expect(Object.keys(icons)).toEqual(['idle', 'recording', 'recordingDim'])
-    expect(createFromBuffer).toHaveBeenCalledTimes(3)
+    expect(Object.keys(icons)).toEqual(['idle', 'recording', 'recordingDim', 'detected'])
+    expect(createFromBuffer).toHaveBeenCalledTimes(4)
     for (const call of createFromBuffer.mock.calls) {
       const buf = call[0] as Buffer
       expect(buf.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true)
       expect(call[1]).toEqual({ scaleFactor: 1 })
     }
-    expect(reps).toHaveLength(3)
+    expect(reps).toHaveLength(4)
     expect(reps[0]).toMatchObject({ scaleFactor: 2, width: 44, height: 44 })
   })
 })

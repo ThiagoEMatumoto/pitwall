@@ -65,7 +65,10 @@ function createWindow(): BrowserWindow {
     frame: false,
     transparent: false,
     alwaysOnTop: true,
-    type: 'toolbar',
+    // Sem `type: 'toolbar'`: no X11/XWayland vira _NET_WM_WINDOW_TYPE_TOOLBAR e o
+    // mutter tira _NET_WM_ACTION_MOVE/RESIZE da janela, então o drag do header
+    // (-webkit-app-region → _NET_WM_MOVERESIZE) é ignorado. skipTaskbar já a
+    // tira do alt-tab/taskbar.
     skipTaskbar: true,
     resizable: true,
     show: false,
