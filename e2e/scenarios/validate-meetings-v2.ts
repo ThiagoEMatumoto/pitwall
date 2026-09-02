@@ -158,7 +158,8 @@ console.log("[perfil] base podada em", process.env.CM_REAL_USERDATA);
 const summaryFixture = join(FIXTURES, "summary-fixture.json");
 const systemWav = join(FIXTURES, "system-participante.wav");
 const micWav = join(FIXTURES, "mic-eu.wav");
-for (const f of [summaryFixture, systemWav, micWav]) {
+const diarizeFixture = join(FIXTURES, "diarize-ab.json");
+for (const f of [summaryFixture, systemWav, micWav, diarizeFixture]) {
   if (!existsSync(f)) throw new Error(`fixture ausente: ${f}`);
 }
 
@@ -170,6 +171,8 @@ const { app, page, userDataCopy } = await launchApp({
     CM_MEETING_FIXTURE_MIC: micWav,
     CM_MEETING_FIXTURE_PACE: "1",
     CM_MEETING_SUMMARY_FIXTURE: summaryFixture,
+    CM_MEETING_DIARIZE_FIXTURE: diarizeFixture,
+    CM_MEETING_DIARIZE_DEBUG: "1",
   },
 });
 const { logFile, stop: stopLogs } = captureLogs(app, page);
@@ -193,7 +196,7 @@ interface ApiMeeting {
 }
 interface ApiDetail {
   meeting: ApiMeeting;
-  segments: Array<{ speaker: string; text: string }>;
+  segments: Array<{ speaker: string; text: string; speakerId: string | null; speakerLabel: string | null }>;
   actionItems: Array<{
     title: string;
     quote: string | null;
@@ -286,6 +289,19 @@ try {
     "(b) Iniciar gravação → Gravando",
     state.captureMode === "fixture" ? "PASS" : "FAIL",
     `${shot02} · meeting=${meetingId} captureMode=${state.captureMode}`,
+  );
+
+  // --- (b2) diarização liga (worker sherpa-onnx + fixture ABAB) ------------
+  let diarizationOn = (state as unknown as { diarization?: string }).diarization;
+  const deadlineB2 = Date.now() + 30_000;
+  while (diarizationOn !== "on" && diarizationOn !== "unavailable" && Date.now() < deadlineB2) {
+    await sleep(500);
+    diarizationOn = ((await apiState()) as unknown as { diarization?: string }).diarization;
+  }
+  record(
+    "(b2) diarização ligada",
+    diarizationOn === "on" ? "PASS" : "FAIL",
+    `diarization=${diarizationOn}`,
   );
 
   // --- (j) pill "Gravando" na barra superior, fora da área -----------------
@@ -475,20 +491,87 @@ try {
   await tasksHeading.scrollIntoViewIfNeeded().catch(() => {});
   const shot07 = await screenshot(page, "meetings-07-tasks");
   const summaryInDom = await page
-    .getByText("Próximos passos", { exact: false })
+    .getByText("Próximas etapas", { exact: false })
     .first()
     .isVisible()
     .catch(() => false);
-  const proposedBtn = await page
-    .getByRole("button", { name: "Criar tarefa" })
+  const participantesInDom = await page
+    .getByText("Participantes", { exact: false })
+    .first()
+    .isVisible()
+    .catch(() => false);
+  const proposedCheckboxes = await page
+    .locator('input[type="checkbox"][aria-label^="Selecionar "]')
     .count();
-  const createdLink = await page
+  const createdLinkPre = await page
     .getByRole("button", { name: "Ver na área Tarefas" })
     .count();
   record(
     "(f) Parar → Processando → Concluída",
-    statusLabelVisible && summaryInDom ? "PASS" : "FAIL",
-    `${shot06}, ${shot07} · viuProcessando=${sawProcessing} label=${statusLabelVisible} resumoNoDOM=${summaryInDom} btnCriarTarefa=${proposedBtn} linkVerTarefa=${createdLink}`,
+    statusLabelVisible && summaryInDom && participantesInDom ? "PASS" : "FAIL",
+    `${shot06}, ${shot07} · viuProcessando=${sawProcessing} label=${statusLabelVisible} resumoNoDOM=${summaryInDom} participantesNoDOM=${participantesInDom} checkboxesPropostos=${proposedCheckboxes}`,
+  );
+  record(
+    "(f2) nenhuma tarefa auto-criada antes do lote",
+    createdLinkPre === 0 ? "PASS" : "FAIL",
+    `linkVerTarefa (antes do lote)=${createdLinkPre}`,
+  );
+
+  // --- (f3) renomear speaker "Participante N" → "Ana" via UI ---------------
+  const speakerBtn = page.getByRole("button", { name: /^Participante \d+$/ }).first();
+  const speakerBtnVisible = await speakerBtn
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  let renameOk = false;
+  let beforeLabel = "";
+  if (speakerBtnVisible) {
+    beforeLabel = ((await speakerBtn.textContent()) ?? "").trim();
+    await speakerBtn.click();
+    const input = page.getByRole("textbox", { name: `Renomear ${beforeLabel}` });
+    await input.fill("Ana");
+    await input.press("Enter");
+    for (let i = 0; i < 10 && !renameOk; i++) {
+      await sleep(300);
+      renameOk = await page
+        .getByRole("button", { name: "Ana" })
+        .first()
+        .isVisible()
+        .catch(() => false);
+    }
+  }
+  const shotRename = await screenshot(page, "meetings-07b-rename");
+  record(
+    "(f3) renomear participante → Ana",
+    speakerBtnVisible && renameOk ? "PASS" : "FAIL",
+    `${shotRename} · botãoVisível=${speakerBtnVisible} labelAntes=${beforeLabel} renomeadoNoDOM=${renameOk}`,
+  );
+
+  // --- (f4) criar tarefa em lote pela UI (item com dono "Mariana") ---------
+  const marianaCheckbox = page.getByLabel(
+    "Selecionar Comprar um servidor novo para o ambiente de staging",
+  );
+  const marianaVisible = await marianaCheckbox
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  let taskCreatedViaUi = false;
+  if (marianaVisible) {
+    await marianaCheckbox.check();
+    await page.getByRole("button", { name: "Criar tarefas" }).click();
+    for (let i = 0; i < 10 && !taskCreatedViaUi; i++) {
+      await sleep(300);
+      taskCreatedViaUi = await page
+        .getByRole("button", { name: "Ver na área Tarefas" })
+        .count()
+        .then((c) => c === 1);
+    }
+  }
+  const shotBatch = await screenshot(page, "meetings-07c-batch-created");
+  record(
+    "(f4) criar tarefas em lote pela UI",
+    marianaVisible && taskCreatedViaUi ? "PASS" : "FAIL",
+    `${shotBatch} · checkboxVisível=${marianaVisible} taskCriadaNoDOM=${taskCreatedViaUi}`,
   );
 } catch (err) {
   if (!(err instanceof PendingW2A)) {
@@ -544,31 +627,12 @@ if (meetingId && finalDetail?.meeting.status === "done") {
   );
   const me = speakers.find((s) => s.speaker === "me")?.c ?? 0;
   const them = speakers.find((s) => s.speaker === "them")?.c ?? 0;
-  const created = items.filter((i) => i.status === "created");
-  const proposed = items.filter((i) => i.status === "proposed");
-  const groundedOk =
-    created.length === 1 &&
-    created[0].quote === GROUNDED_QUOTE &&
-    proposed.length === 1;
-  let taskOk = false;
-  let taskEvidence = "sem task_id";
-  if (created[0]?.task_id) {
-    const tasks = await queryDb<{ id: string; origin: string; tags: string }>(
-      userDataCopy,
-      `SELECT id, origin, tags FROM tasks WHERE id = '${created[0].task_id}'`,
-    );
-    const t = tasks[0];
-    let tags: string[] = [];
-    try {
-      tags = t ? (JSON.parse(t.tags) as string[]) : [];
-    } catch {
-      tags = [];
-    }
-    taskOk = !!t && t.origin === "auto" && tags.includes("meeting");
-    taskEvidence = t
-      ? `task ${t.id} origin=${t.origin} tags=${t.tags}`
-      : `task_id ${created[0].task_id} não existe em tasks`;
-  }
+  // Comportamento novo: NADA é auto-criado — os 2 itens ficam "proposed",
+  // um com owner "Eu" (ex-quote-real) e um com owner "Mariana" (criado via UI em f4).
+  const groundedItem = items.find((i) => i.quote === GROUNDED_QUOTE);
+  const marianaItem = items.find((i) =>
+    (i.quote ?? "").includes("servidor novo para o staging"),
+  );
   record(
     "(g) meetings_v2 done + summary_md",
     meetings[0]?.status === "done" && !!meetings[0]?.summary_md
@@ -582,14 +646,59 @@ if (meetingId && finalDetail?.meeting.status === "done") {
     `me=${me} them=${them}`,
   );
   record(
-    "(g) action items 1 created (quote real) + 1 proposed",
-    groundedOk ? "PASS" : "FAIL",
+    "(g) action items ancorado(Eu) + criado via UI(Mariana)",
+    groundedItem?.grounded === 1 &&
+      groundedItem?.status === "proposed" &&
+      marianaItem?.status === "created"
+      ? "PASS"
+      : "FAIL",
     JSON.stringify(items),
   );
+  let taskOk = false;
+  let taskEvidence = "task da item Mariana não encontrada";
+  if (marianaItem?.task_id) {
+    const tasks = await queryDb<{ id: string; origin: string; tags: string; title: string }>(
+      userDataCopy,
+      `SELECT id, origin, tags, title FROM tasks WHERE id = '${marianaItem.task_id}'`,
+    );
+    const t = tasks[0];
+    let tags: string[] = [];
+    try {
+      tags = t ? (JSON.parse(t.tags) as string[]) : [];
+    } catch {
+      tags = [];
+    }
+    taskOk = !!t && tags.includes("meeting") && t.title.startsWith("[Mariana]");
+    taskEvidence = t
+      ? `task ${t.id} origin=${t.origin} tags=${t.tags} title=${t.title}`
+      : `task_id ${marianaItem.task_id} não existe em tasks`;
+  }
   record(
-    "(g) task da action item created",
+    "(g2) task criada em lote tem título [Mariana] + tag meeting",
     taskOk ? "PASS" : "FAIL",
     taskEvidence,
+  );
+  const voices = await queryDb<{ id: string; name: string }>(
+    userDataCopy,
+    `SELECT id, name FROM meeting_v2_voices`,
+  );
+  const speakersV2 = await queryDb<{ label: string }>(
+    userDataCopy,
+    `SELECT label FROM meeting_v2_speakers WHERE meeting_id = '${meetingId}'`,
+  );
+  const anaSegments = await queryDb<{ c: number }>(
+    userDataCopy,
+    `SELECT COUNT(*) AS c FROM meeting_v2_segments WHERE meeting_id = '${meetingId}' AND speaker_label = 'Ana'`,
+  );
+  record(
+    "(g3) 2 speakers no banco (fixture ABAB)",
+    speakersV2.length === 2 ? "PASS" : "FAIL",
+    speakersV2.map((s) => s.label).join(", ") || "nenhum",
+  );
+  record(
+    "(g4) renomear cria 1 voz + reescreve speaker_label",
+    voices.length === 1 && (anaSegments[0]?.c ?? 0) > 0 ? "PASS" : "FAIL",
+    `voices=${voices.map((v) => v.name).join(",")} segmentosAna=${anaSegments[0]?.c ?? 0}`,
   );
 } else {
   record(
