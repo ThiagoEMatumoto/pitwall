@@ -38,8 +38,12 @@ export function NotesEditor({ meetingId, initial, onSave }: Props) {
       timer.current = null
       setSaveState('saving')
       const sent = latest.current
+      // Marca sincronizado ANTES do round-trip: o eco do próprio save via
+      // broadcast pode chegar (e re-renderizar com `initial`) antes deste
+      // .then() rodar, e o efeito abaixo confundiria o próprio save com uma
+      // mudança externa, duplicando o texto (self-echo loop).
+      syncedRef.current = sent
       void onSave(meetingId, sent).then(() => {
-        syncedRef.current = sent
         setSaveState((s) => (s === 'saving' ? 'saved' : s))
       })
     }, AUTOSAVE_MS)
