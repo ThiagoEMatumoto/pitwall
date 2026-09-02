@@ -41,7 +41,7 @@ Diagrams are a real [Excalidraw](https://excalidraw.com) canvas, editable by han
 
 - **`diagram_create`** takes a _skeleton_: semantic nodes and arrows, ids instead of coordinates. Omit `x`/`y` and the converter lays it out; arrows reference node ids via `start`/`end` and carry a label. Raw Excalidraw scenes are accepted too, but the skeleton is the preferred input.
 - **`diagram_patch` is the reason this works.** It applies incremental `add | update | delete` ops addressing elements by skeleton id **on top of the current scene**, so the box you dragged and the color you changed survive the agent's next edit. `diagram_update` exists for a deliberate full redraw and says out loud that it discards your refinements. Both record a version snapshot with a changelog line.
-- **`diagram_link`** attaches a diagram to a parent — project, repo, feature, task, objective, key result, dossier, meeting, content contract, session or handoff — so it shows up in that context. Deletion is a two-step guard: only an archived diagram can be deleted, and only with `confirm`.
+- **`diagram_link`** attaches a diagram to a parent — project, repo, feature, task, objective, key result, session or handoff — so it shows up in that context. Deletion is a two-step guard: only an archived diagram can be deleted, and only with `confirm`.
 - A global shape library is shared by every canvas (`diagram_library_install` / `_list` / `_remove`).
 
 ## Delegated sessions: the nickname is the address
@@ -83,7 +83,7 @@ These clips show real screens with a fictional dataset.
 
 **Ingest and dossiers _(experimental)_.** A staged research pipeline with human approval gates and checkpoints, fed by a Tavily source provider with source classification.
 
-**Meetings.** Local recording and transcription through a Python sidecar (`faster-whisper` large-v3 plus speaker diarization with `sherpa-onnx` — no gated models, no PyTorch), a live transcript view and a guided installer. Extraction of action items, decisions and feedback runs through `claude -p` or a local Ollama model, with every item grounded on a literal quote that must match the transcript. Includes an ICS calendar watcher.
+**Meetings.** Recording and live transcription of calls without leaving the desk: start from the Meetings area, the tray or `Ctrl+Shift+R`, and a floating always-on-top window shows the timer, audio levels and the last lines while you take quick notes. System audio and microphone are captured through PipeWire (`pw-record`) and transcribed in chunks by the same OpenAI-compatible STT endpoint the voice mode uses (`~/.config/voz/voz.env`). When you stop, `claude -p` writes the summary (decisions, next steps, open questions, your notes folded in) and extracts action items — each one grounded on a literal transcript quote before it becomes a task. Exposed to agents as `meeting_*` MCP tools.
 
 **Claude Code configuration.** Read and edit `CLAUDE.md`, rules, CLI settings, hooks, keybindings, MCP servers, plugins/marketplace and the statusline script from the app.
 
@@ -139,7 +139,7 @@ electron/
       handoff/    # alias, prepare, spawn-child, compose-prompt, adopt
       baton/      # distill, compose-baton-prompt
       mcp/        # MCP server, tools, service-tools, session-identity
-      content-gates/, ingest/, meeting/, dossier/, sync/, architecture/
+      meetings/, video/, sync/, architecture/
   preload/        # contextIsolation bridge (window.api.*)
 shared/
   types/          # types shared across main ↔ renderer
@@ -151,7 +151,6 @@ src/
                   # dossiers, objectives, tasks, features, metrics, files,
                   # settings, brand
   lib/            # renderer-side IPC helpers
-sidecar/          # Python meeting-transcription sidecar
 ```
 
 **Stack:** Electron 32 · React 18 · TypeScript 5 · electron-vite · Tailwind CSS 4 · Zustand · SQLite (`better-sqlite3`) · `node-pty` · xterm.js · Excalidraw · `@xyflow/react` · `simple-git` · Recharts · `@modelcontextprotocol` SDK. Tested with Vitest and Playwright.

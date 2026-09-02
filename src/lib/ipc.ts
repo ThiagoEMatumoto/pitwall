@@ -38,6 +38,7 @@ export const notificationsApi = api.notifications
 export const mcpApi = api.mcp
 export const syncApi = api.sync
 export const voiceApi = api.voice
+export const meetingsApi = api.meetings
 
 // Video Lab: a chave `video` entra em `Api` no commit que implementa o preload.
 // Até lá o acesso é por cast pro tipo já declarado na fundação — a UI programa

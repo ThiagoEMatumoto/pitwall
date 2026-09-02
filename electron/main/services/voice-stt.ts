@@ -12,7 +12,7 @@ import { clearVoiceSecrets, getVoiceConfig, resolveSecret, type VoiceDeps } from
 
 // Porte de stt.py:_mensagem_de_erro — erro em português, já pronto para a tela,
 // e nunca genérico: um "falhou" único manda quem depura procurar no lugar errado.
-function errorMessage(http: number, data: Record<string, unknown>, raw: string): string {
+export function errorMessage(http: number, data: Record<string, unknown>, raw: string): string {
   const detail = extractDetail(data)
 
   if (http === 401 || http === 403) {

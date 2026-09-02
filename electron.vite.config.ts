@@ -54,7 +54,10 @@ export default defineConfig({
     build: {
       outDir: "out/renderer",
       rollupOptions: {
-        input: resolve("src/index.html"),
+        input: {
+          index: resolve("src/index.html"),
+          floating: resolve("src/floating.html"),
+        },
       },
     },
   },

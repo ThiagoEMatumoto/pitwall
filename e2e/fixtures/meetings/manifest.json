@@ -1,0 +1,20 @@
+[
+  {
+    "file": "system-participante.wav",
+    "seconds": 38.24,
+    "transcript": "Bom, então recapitulando o que a gente decidiu hoje. A prioridade da semana é fechar a integração com o calendário. O Thiago vai revisar o pull request de autenticação até quinta-feira. Também combinamos que a Mariana vai preparar o relatório de métricas para a reunião de segunda. Ficou em aberto se vamos migrar o banco agora ou depois da release. Alguém precisa levantar o custo do provedor de transcrição antes de decidirmos.",
+    "generator": "elevenlabs eleven_flash_v2_5, voice Keren (33B4UnXyTNbgLmdEDh5P), speed 0.85, <break 1.2s> entre frases; ffmpeg adelay 2s + apad 1s, 16 kHz mono s16le"
+  },
+  {
+    "file": "mic-eu.wav",
+    "seconds": 17.94,
+    "transcript": "Perfeito. Eu fico responsável por escrever a proposta técnica da migração e mando para todo mundo até sexta. E vou agendar uma conversa com o time de infraestrutura sobre o custo.",
+    "generator": "elevenlabs eleven_flash_v2_5, voice Flavio Francisco (x6uRgOliu4lpcrqMH3s1), speed 0.85, <break 1.2s> entre frases; ffmpeg adelay 2s + apad 1s, 16 kHz mono s16le"
+  },
+  {
+    "file": "silence-5s.wav",
+    "seconds": 5.0,
+    "transcript": "",
+    "generator": "ffmpeg -f lavfi -i anullsrc=r=16000:cl=mono -t 5 -c:a pcm_s16le"
+  }
+]

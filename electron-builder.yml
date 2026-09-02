@@ -16,14 +16,6 @@ asar: true
 asarUnpack:
   - node_modules/better-sqlite3/**
   - node_modules/node-pty/**
-# O sidecar python NÃO pode ficar dentro do asar (python3 não lê de dentro do
-# arquivo). extraResources copia `sidecar/` para `<resources>/sidecar`, de onde
-# resolveSidecarScript o resolve via process.resourcesPath em packaged.
-extraResources:
-  - from: sidecar
-    to: sidecar
-    filter:
-      - '**/*'
 npmRebuild: false
 publish:
   provider: github

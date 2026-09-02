@@ -88,6 +88,11 @@ import type {
   VideoProjectListFilter,
   VideoRenderListFilter,
   VideoTemplateListFilter,
+  MeetingActionItemDecision,
+  MeetingEvent,
+  MeetingFloatingAction,
+  StartMeetingInput,
+  UpdateMeetingInput,
 } from '../../shared/types/ipc'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -502,6 +507,21 @@ const api: Api = {
       onProgress: (handler) => subscribe<unknown>('videoRender:progress', handler),
       onUpdated: (handler) => subscribe<unknown>('videoRender:updated', handler),
     },
+  },
+  meetings: {
+    start: (input?: StartMeetingInput) => invoke('meetings:start', input ?? {}),
+    stop: () => invoke('meetings:stop'),
+    state: () => invoke('meetings:state'),
+    list: () => invoke('meetings:list'),
+    get: (id: string) => invoke('meetings:get', id),
+    update: (input: UpdateMeetingInput) => invoke('meetings:update', input),
+    quickNote: (meetingId: string, text: string) => invoke('meetings:quickNote', { meetingId, text }),
+    delete: (id: string) => invoke('meetings:delete', id),
+    resummarize: (id: string) => invoke('meetings:resummarize', id),
+    actionItem: (input: MeetingActionItemDecision) => invoke('meetings:actionItem', input),
+    floating: (action: MeetingFloatingAction) => invoke('meetings:floating', { action }),
+    checkSetup: () => invoke('meetings:checkSetup'),
+    onEvent: (handler) => subscribe<MeetingEvent>('meetings:event', handler),
   },
   window: {
     minimize: () => invoke('window:minimize'),

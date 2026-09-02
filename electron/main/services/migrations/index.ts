@@ -43,6 +43,7 @@ import * as videoLab from './041_video_lab'
 import * as featureLoop from './042_feature_loop'
 import * as featureFocus from './043_feature_focus'
 import * as dropRemovedFeatures from './044_drop_removed_features'
+import * as meetingsV2 from './045_meetings_v2'
 
 interface Migration {
   version: number
@@ -101,6 +102,7 @@ export const migrations: Migration[] = [
   featureLoop,
   featureFocus,
   dropRemovedFeatures,
+  meetingsV2,
 ]
 
 export function runMigrations(db: Database.Database): void {

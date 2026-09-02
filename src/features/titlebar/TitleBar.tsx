@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { windowApi } from '@/lib/ipc'
 import { PitwallLogo, type PitwallLogoState } from '@/features/brand'
 import { useWaitingCount } from '@/features/session-switcher/useWaitingCount'
+import { RecordingPill } from '@/features/meetings/RecordingPill'
 import { UsageWidget } from './UsageWidget'
 
 const drag = { WebkitAppRegion: 'drag' } as CSSProperties
@@ -54,6 +55,7 @@ export function TitleBar() {
             {waitingCount} no box
           </span>
         )}
+        <RecordingPill />
       </div>
 
       <div className="flex items-center gap-2" style={noDrag}>

@@ -55,6 +55,11 @@ import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
 import {
+  initMeetings,
+  onAppReady as meetingsOnAppReady,
+  onWillQuit as meetingsOnWillQuit,
+} from './services/meetings'
+import {
   forgetSessionSummaries,
   scheduleTurnSummary,
   setVoiceSessionFilter,
@@ -298,6 +303,7 @@ app.whenReady().then(async () => {
   registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
+  initMeetings()
   registerSyncIpc()
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via
@@ -317,6 +323,9 @@ app.whenReady().then(async () => {
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o
   // watcher via watcherHooks internamente quando importa.
   createMainWindow()
+  // Tray, atalho global e janela flutuante das reuniões dependem do ready e da
+  // janela principal (o menu do tray a foca).
+  meetingsOnAppReady()
   initUpdater()
   startUsageMonitor()
   startFeatureWatcher()
@@ -457,6 +466,12 @@ app.on('before-quit', (event) => {
     runFinalShutdown()
     app.quit() // re-dispara o quit; didShutdown=true → before-quit é no-op agora
   })
+})
+
+// Atalho global e tray precisam sair antes do processo morrer (globalShortcut
+// não limpa sozinho no Linux).
+app.on('will-quit', () => {
+  meetingsOnWillQuit()
 })
 
 app.on('window-all-closed', () => {

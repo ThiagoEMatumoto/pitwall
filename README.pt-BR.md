@@ -41,7 +41,7 @@ Os diagramas são um canvas [Excalidraw](https://excalidraw.com) de verdade, edi
 
 - **`diagram_create`** recebe um _esqueleto_: nós e setas semânticos, ids no lugar de coordenadas. Omita `x`/`y` e o conversor faz o auto-layout; as setas referenciam ids de nós por `start`/`end` e aceitam rótulo. Cena Excalidraw crua também é aceita, mas o esqueleto é a entrada preferida.
 - **`diagram_patch` é o motivo de isso funcionar.** Ele aplica ops incrementais (`add | update | delete`, endereçando elementos pelo id do esqueleto) **sobre a cena ATUAL**, então a caixa que você arrastou e a cor que você trocou sobrevivem à próxima edição do agente. `diagram_update` existe para o redesenho integral deliberado — e diz na cara que descarta o seu refinamento. Ambos gravam um snapshot de versão com uma linha de changelog.
-- **`diagram_link`** prende o diagrama a um pai — projeto, repo, feature, task, objetivo, key result, dossiê, reunião, contrato de conteúdo, sessão ou handoff — para ele aparecer naquele contexto. Apagar tem guarda de dois passos: só diagrama arquivado pode ser apagado, e só com `confirm`.
+- **`diagram_link`** prende o diagrama a um pai — projeto, repo, feature, task, objetivo, key result, sessão ou handoff — para ele aparecer naquele contexto. Apagar tem guarda de dois passos: só diagrama arquivado pode ser apagado, e só com `confirm`.
 - Uma biblioteca global de formas é compartilhada por todos os canvas (`diagram_library_install` / `_list` / `_remove`).
 
 ## Sessões delegadas: o apelido é o endereço
@@ -83,7 +83,7 @@ Estes clipes mostram telas reais com dataset fictício.
 
 **Ingest e dossiês _(experimental)_.** Um pipeline de pesquisa em etapas, com gates de aprovação humana e checkpoints, alimentado por um provedor de fontes Tavily com classificação de fonte.
 
-**Reuniões.** Gravação e transcrição locais por um sidecar Python (`faster-whisper` large-v3 mais diarização de locutor com `sherpa-onnx` — sem modelo gated, sem PyTorch), com transcript ao vivo e instalador guiado. A extração de action items, decisões e feedbacks roda por `claude -p` ou por um modelo local no Ollama, com cada item ancorado numa citação literal que precisa casar com o transcript real. Inclui um watcher de calendário ICS.
+**Reuniões.** Gravação e transcrição ao vivo de chamadas sem sair da mesa: inicie pela área Reuniões, pela bandeja ou por `Ctrl+Shift+R`, e uma janela flutuante sempre no topo mostra o timer, os níveis de áudio e as últimas falas enquanto você faz anotações rápidas. Áudio do sistema e microfone são capturados pelo PipeWire (`pw-record`) e transcritos em chunks pelo mesmo endpoint STT compatível com OpenAI do modo voz (`~/.config/voz/voz.env`). Ao parar, o `claude -p` escreve o resumo (decisões, próximos passos, perguntas em aberto, suas anotações incorporadas) e extrai itens de ação — cada um ancorado numa citação literal do transcript antes de virar task. Exposto aos agentes como tools MCP `meeting_*`.
 
 **Configuração do Claude Code.** Ler e editar `CLAUDE.md`, rules, settings da CLI, hooks, keybindings, servidores MCP, plugins/marketplace e o script de statusline pelo app.
 
@@ -139,7 +139,7 @@ electron/
       handoff/    # alias, prepare, spawn-child, compose-prompt, adopt
       baton/      # distill, compose-baton-prompt
       mcp/        # servidor MCP, tools, service-tools, session-identity
-      content-gates/, ingest/, meeting/, dossier/, sync/, architecture/
+      meetings/, video/, sync/, architecture/
   preload/        # ponte de contextIsolation (window.api.*)
 shared/
   types/          # tipos compartilhados main ↔ renderer
@@ -151,7 +151,6 @@ src/
                   # dossiers, objectives, tasks, features, metrics, files,
                   # settings, brand
   lib/            # helpers de IPC no renderer
-sidecar/          # sidecar Python de transcrição de reuniões
 ```
 
 **Stack:** Electron 32 · React 18 · TypeScript 5 · electron-vite · Tailwind CSS 4 · Zustand · SQLite (`better-sqlite3`) · `node-pty` · xterm.js · Excalidraw · `@xyflow/react` · `simple-git` · Recharts · SDK `@modelcontextprotocol`. Testado com Vitest e Playwright.
