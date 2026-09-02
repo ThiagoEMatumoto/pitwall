@@ -66,4 +66,36 @@ describe('NotesEditor', () => {
     rerender(<NotesEditor meetingId="m1" initial={local} onSave={onSave} />)
     expect(textarea).toHaveValue(local)
   })
+
+  it('não trata o eco do próprio save como mudança externa (regressão: nota duplicada)', async () => {
+    let resolveSave!: () => void
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+    const { rerender } = render(<NotesEditor meetingId="m1" initial={BASE} onSave={onSave} />)
+    const textarea = screen.getByPlaceholderText(PLACEHOLDER)
+    const local = `${BASE}\nMinha edição`
+    fireEvent.change(textarea, { target: { value: local } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onSave).toHaveBeenCalledWith('m1', local)
+    expect(screen.getByText('Salvando…')).toBeInTheDocument()
+
+    // O broadcast do store re-renderiza com o texto enviado ANTES do onSave resolver.
+    rerender(<NotesEditor meetingId="m1" initial={local} onSave={onSave} />)
+    expect(textarea).toHaveValue(local)
+
+    await act(async () => {
+      resolveSave()
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(textarea).toHaveValue(local)
+    expect(screen.getByText('Salvo')).toBeInTheDocument()
+  })
 })
