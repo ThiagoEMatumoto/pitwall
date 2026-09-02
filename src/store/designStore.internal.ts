@@ -12,6 +12,7 @@ import type { Size } from '@/features/design/canvas/geometry'
 import { applyOps, buildIndex, type ArtboardPatch, type IndexEntry } from '@shared/design/ops'
 import { newNonce } from '@shared/design/ids'
 import type {
+  ArtboardPreset,
   DesignArtboard,
   DesignDocument,
   DesignDocumentMeta,
@@ -34,9 +35,13 @@ export const pendingNonces = new Set<string>()
 export const transientBase = new Map<string, { tree: DesignNode; meta: DesignArtboard }>()
 // Serialises applyOps per artboard so each call carries the latest version.
 const sendChains = new Map<string, Promise<void>>()
+// Bumped when a send fails: sends queued before the failure are dropped, since
+// the resync replaces the local tree they were computed against.
+const sendEpochs = new Map<string, number>()
 export let stageSize: Size = { w: 0, h: 0 }
 
 const REMOTE_TOAST_THROTTLE_MS = 5000
+const ARTBOARD_GAP = 100
 const lastRemoteToastAt = new Map<string, number>()
 
 export function getNodeIndex(artboardId: string): Map<string, IndexEntry> | undefined {
@@ -70,12 +75,14 @@ export function resetLocalState(): void {
   history.clearAll()
   indexes.clear()
   transientBase.clear()
+  for (const [id, epoch] of sendEpochs) sendEpochs.set(id, epoch + 1)
 }
 
 export function forgetArtboard(artboardId: string): void {
   indexes.delete(artboardId)
   history.clear(artboardId)
   transientBase.delete(artboardId)
+  sendEpochs.set(artboardId, (sendEpochs.get(artboardId) ?? 0) + 1)
 }
 
 // ---- pure helpers ----
@@ -187,9 +194,24 @@ export function applyLocal(store: DesignStore, artboardId: string, ops: DesignOp
   const bridge = bridges.get(artboardId)
   if (bridge) {
     for (const op of ops) if (op.type === 'remove') bridge.dropRects(op.ids)
-    void bridge.applyOps(ops).catch(() => undefined)
+    // The runtime refusing an op (not initialised yet, node missing) means its
+    // DOM no longer mirrors the tree: repaint it from the store.
+    void bridge.applyOps(ops).then(
+      (res) => {
+        if (!res.ok) bridge.reinit()
+      },
+      () => bridge.reinit(),
+    )
   }
   return true
+}
+
+// Called after a failed send: whatever this client queued or could undo was
+// computed against a tree the server never accepted.
+function dropLocalPending(artboardId: string): void {
+  sendEpochs.set(artboardId, (sendEpochs.get(artboardId) ?? 0) + 1)
+  history.clear(artboardId)
+  transientBase.delete(artboardId)
 }
 
 export function sendOps(
@@ -199,9 +221,10 @@ export function sendOps(
   opts: CommitOptions,
 ): void {
   const prev = sendChains.get(artboardId) ?? Promise.resolve()
+  const epoch = sendEpochs.get(artboardId) ?? 0
   const next = prev.then(async () => {
     const ab = store.getState().artboards[artboardId]
-    if (!ab) return
+    if (!ab || (sendEpochs.get(artboardId) ?? 0) !== epoch) return
     const nonce = newNonce()
     pendingNonces.add(nonce)
     try {
@@ -216,14 +239,16 @@ export function sendOps(
       bumpVersion(store, artboardId, evt.version)
     } catch (err) {
       pendingNonces.delete(nonce)
+      dropLocalPending(artboardId)
       if (isVersionConflict(err)) {
         store.setState({ conflict: { artboardId } })
-        await store.getState().resync(artboardId)
       } else {
         store.setState({
           error: err instanceof Error ? err.message : String(err),
         })
       }
+      // Either way the local tree diverged from what the server holds.
+      await store.getState().resync(artboardId)
     }
   })
   sendChains.set(artboardId, next)
@@ -243,4 +268,72 @@ export function applyHistoryEntry(
     return
   }
   sendOps(store, artboardId, ops, {})
+}
+
+// ---- actions with bodies too long for the store definition ----
+
+export async function createArtboardAction(
+  store: DesignStore,
+  preset: ArtboardPreset,
+): Promise<DesignArtboard> {
+  const { docId, pageId } = store.getState()
+  if (!docId || !pageId) throw new Error('no document open')
+  const existing = pageArtboards(store)
+  const x = existing.length ? Math.max(...existing.map((m) => m.x + m.width)) + ARTBOARD_GAP : 0
+  const artboard = await api.design.artboardCreate({
+    docId,
+    pageId,
+    name: `${preset.label} ${existing.length + 1}`,
+    width: preset.width,
+    height: preset.height,
+    x,
+    y: 0,
+  })
+  indexes.set(artboard.id, buildIndex(artboard.tree))
+  store.setState((s) => ({
+    artboards: {
+      ...s.artboards,
+      [artboard.id]: {
+        meta: artboard,
+        tree: artboard.tree,
+        version: artboard.version,
+        ready: false,
+      },
+    },
+    doc: s.doc
+      ? {
+          ...s.doc,
+          pages: s.doc.pages.map((p) =>
+            p.id === pageId ? { ...p, artboards: [...p.artboards, artboard] } : p,
+          ),
+        }
+      : s.doc,
+    selection: { artboardId: artboard.id, nodeIds: [] },
+  }))
+  return artboard
+}
+
+// A gesture that never produced a final commit: what it painted is not on
+// the server, so the canvas goes back to the last committed state.
+export function releaseTransientAction(store: DesignStore, artboardId: string): void {
+  const base = transientBase.get(artboardId)
+  if (!base) return
+  transientBase.delete(artboardId)
+  const ab = store.getState().artboards[artboardId]
+  if (!ab || (ab.tree === base.tree && ab.meta === base.meta)) return
+  setLocal(store, artboardId, base.tree, base.meta)
+  bridges.get(artboardId)?.reinit()
+}
+
+export async function resyncAction(store: DesignStore, artboardId: string): Promise<void> {
+  const { docId } = store.getState()
+  if (!docId) return
+  const doc = await api.design.documentGet(docId)
+  const fresh = doc?.pages.flatMap((p) => p.artboards).find((a) => a.id === artboardId)
+  if (!doc || !fresh) return
+  transientBase.delete(artboardId)
+  store.setState((s) => ({ doc, docs: upsertMeta(s.docs, toMeta(doc)) }))
+  setLocal(store, artboardId, fresh.tree, fresh, fresh.version)
+  // The bridge's own getter (ArtboardFrame) reads the store just updated.
+  bridges.get(artboardId)?.reinit()
 }

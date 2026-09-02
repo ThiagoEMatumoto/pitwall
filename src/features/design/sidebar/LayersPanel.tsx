@@ -20,14 +20,15 @@ import { useWindowedRows } from './useWindowedRows'
 
 const CONTAINER_KINDS = new Set(['frame', 'element'])
 
-function flatten(tree: DesignNode, expanded: ReadonlySet<string>, query: string): FlatRow[] {
+function flatten(tree: DesignNode, rootName: string, expanded: ReadonlySet<string>, query: string): FlatRow[] {
   const rows: FlatRow[] = []
   const q = query.trim().toLowerCase()
   const visit = (node: DesignNode, depth: number, parentId: string | null): void => {
     const open = depth === 0 || expanded.has(node.id)
-    const matches = !q || rowLabel(node).toLowerCase().includes(q) || (node.text ?? '').toLowerCase().includes(q)
+    const label = rowLabel(node, depth === 0 ? rootName : undefined)
+    const matches = !q || label.toLowerCase().includes(q) || (node.text ?? '').toLowerCase().includes(q)
     if (matches) {
-      rows.push({ id: node.id, node, depth, parentId, hasChildren: node.children.length > 0, expanded: open })
+      rows.push({ id: node.id, node, label, depth, parentId, hasChildren: node.children.length > 0, expanded: open })
     }
     // A search shows every match regardless of collapse state.
     if (open || q) for (const child of node.children) visit(child, depth + 1, node.id)
@@ -99,12 +100,16 @@ export function LayersPanel() {
       .sort((a, b) => a.position - b.position)[0]?.id ??
     null
   const tree = artboardId ? artboards[artboardId]?.tree : undefined
+  const artboardName = artboardId ? (artboards[artboardId]?.meta.name ?? '') : ''
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
   const [drag, setDrag] = useState<{ activeId: string; overId: string | null; offsetX: number } | null>(null)
 
-  const rows = useMemo(() => (tree ? flatten(tree, expanded, query) : []), [tree, expanded, query])
+  const rows = useMemo(
+    () => (tree ? flatten(tree, artboardName, expanded, query) : []),
+    [tree, artboardName, expanded, query],
+  )
   // While dragging, the active subtree collapses so it cannot be dropped into itself.
   const visibleRows = useMemo(() => {
     if (!drag) return rows

@@ -27,6 +27,22 @@ import { designTools } from './design-tools'
 import { type McpNotify, type ToolDef } from './tools'
 import * as designStore from '../design/design-store'
 import * as liveState from '../design/live-state'
+import { applyArtboardOps } from '../design/mutate'
+import type { ArtboardUpdatedEvent, DesignOp } from '../../../../shared/types/design'
+
+// The IPC path (human paste) lands on the same applyArtboardOps as MCP.
+function mutateApply(input: {
+  artboardId: string
+  ops: DesignOp[]
+  baseVersion: number
+}): ArtboardUpdatedEvent {
+  return applyArtboardOps({
+    ...input,
+    author: 'human',
+    origin: { kind: 'human', sessionId: null, nonce: 'n' },
+    send: () => {},
+  }).event
+}
 import type { DesignAgentActivity, DesignNodeSummary } from '../../../../shared/types/design'
 
 interface NotifySpy extends McpNotify {
@@ -377,6 +393,101 @@ describe('design tools — Breads do Breno', () => {
       artboardId: cardapio.id,
       transition: 'push',
     })
+  })
+
+  it('input limits: oversized artboards, html, names and assets are refused by the schema', async () => {
+    await expect(
+      call('design_artboard_create', { docId, name: 'Huge', width: 30000, height: 30000 }),
+    ).rejects.toThrow()
+    await expect(
+      call('design_write_html', {
+        artboardId: home.id,
+        html: '<p>' + 'x'.repeat(512 * 1024) + '</p>',
+        summary: 'big',
+      }),
+    ).rejects.toThrow()
+    await expect(
+      call('design_nodes_rename', {
+        artboardId: home.id,
+        items: [{ id: heroId, name: 'n'.repeat(201) }],
+      }),
+    ).rejects.toThrow()
+    await expect(
+      call('design_asset_upload', {
+        docId,
+        name: 'big.png',
+        mime: 'image/png',
+        dataBase64: 'A'.repeat(Math.ceil((5 * 1024 * 1024) / 3) * 4 + 4),
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('design_asset_upload sanitizes svg and refuses bytes that do not match the mime', async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("https://x")</script><rect/></svg>'
+    const { asset } = await call<{ asset: { id: string; size: number; url: string } }>(
+      'design_asset_upload',
+      {
+        docId,
+        name: 'icon.svg',
+        mime: 'image/svg+xml',
+        dataBase64: Buffer.from(svg).toString('base64'),
+      },
+    )
+    expect(asset.size).toBe('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>'.length)
+    await expect(
+      call('design_asset_upload', {
+        docId,
+        name: 'fake.png',
+        mime: 'image/png',
+        dataBase64: Buffer.from(svg).toString('base64'),
+      }),
+    ).rejects.toThrow(/do not look like/)
+  })
+
+  it('a pasted subtree with a <style> child and a vbscript: url is sanitized before persisting', async () => {
+    const { version } = await call<{ version: number }>('design_text_set', {
+      artboardId: home.id,
+      nodeId: heroId,
+      text: 'x',
+    })
+    const evt = mutateApply({
+      artboardId: home.id,
+      ops: [
+        {
+          type: 'insert',
+          parentId: heroId,
+          index: 0,
+          node: {
+            id: 'pasted',
+            tag: 'div',
+            kind: 'frame',
+            style: {},
+            attrs: { onclick: 'x()', href: 'vbscript:x' },
+            children: [
+              {
+                id: 'st',
+                tag: 'style',
+                kind: 'element',
+                style: {},
+                attrs: {},
+                text: 'body{}',
+                children: [],
+              },
+              { id: 'ok', tag: 'p', kind: 'text', style: {}, attrs: {}, text: 'hi', children: [] },
+            ],
+          },
+        },
+      ],
+      baseVersion: version,
+    })
+    expect(evt.version).toBe(version + 1)
+    const pasted = await call<{
+      node: { attrs: Record<string, string> }
+      children: Array<{ tag: string }>
+    }>('design_node_get', { artboardId: home.id, nodeId: 'pasted' })
+    expect(pasted.node.attrs).toEqual({})
+    expect(pasted.children.map((c) => c.tag)).toEqual(['p'])
   })
 
   it('design_selection_get reads the live selection', async () => {

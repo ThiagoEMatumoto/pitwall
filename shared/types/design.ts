@@ -51,14 +51,7 @@ export interface DesignOrigin {
 }
 
 export type DesignParentType =
-  | 'project'
-  | 'repo'
-  | 'feature'
-  | 'task'
-  | 'objective'
-  | 'key_result'
-  | 'session'
-  | 'handoff'
+  'project' | 'repo' | 'feature' | 'task' | 'objective' | 'key_result' | 'session' | 'handoff'
 
 export interface DesignLink {
   documentId: string
@@ -130,11 +123,7 @@ export interface DesignVersion extends DesignVersionMeta {
 }
 
 export type DesignAssetMime =
-  | 'image/png'
-  | 'image/jpeg'
-  | 'image/webp'
-  | 'image/gif'
-  | 'image/svg+xml'
+  'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | 'image/svg+xml'
 
 // Sem os bytes: eles saem só pelo scheme pitwall-design://asset/<id>.
 export interface DesignAsset {
@@ -159,8 +148,12 @@ export type DesignOp =
   | { type: 'setAttrs'; id: string; patch: Record<string, string | null> }
   | { type: 'setText'; id: string; text: string }
   | { type: 'rename'; id: string; name: string }
+  | { type: 'setLink'; id: string; link: DesignNodeLink | null }
   | { type: 'replaceTree'; tree: DesignNode }
-  | { type: 'setArtboard'; patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>> }
+  | {
+      type: 'setArtboard'
+      patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>>
+    }
 
 // Broadcast 'design:artboard-updated'. full=true quando a árvore inteira
 // mudou (replaceTree/restore) e o iframe precisa recarregar.

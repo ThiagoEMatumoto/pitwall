@@ -5,7 +5,16 @@
 import { parse, parseFragment, type DefaultTreeAdapterTypes } from 'parse5'
 import type { DesignNode, DesignNodeKind } from '../../../../shared/types/design'
 import { newNodeId } from '../../../../shared/design/ids'
-import { validateTree } from '../../../../shared/design/ops'
+import {
+  ATTR_NAME_RE,
+  BLOCKED_TAGS,
+  MAX_TREE_DEPTH,
+  URL_ATTRS,
+  isUnsafeUrl,
+} from '../../../../shared/design/safety'
+
+// Same rules, applied to trees that did not come through the parser.
+export { sanitizeTree, type SanitizeResult } from './sanitize-tree'
 
 type P5Node = DefaultTreeAdapterTypes.Node
 type P5Element = DefaultTreeAdapterTypes.Element
@@ -20,26 +29,69 @@ export interface ParseHtmlResult {
 }
 
 const FRAME_TAGS = new Set([
-  'div', 'section', 'header', 'footer', 'nav', 'main', 'article', 'aside', 'ul', 'ol', 'form',
+  'div',
+  'section',
+  'header',
+  'footer',
+  'nav',
+  'main',
+  'article',
+  'aside',
+  'ul',
+  'ol',
+  'form',
 ])
 
 const TEXT_TAGS = new Set([
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'span', 'a', 'button', 'li', 'label', 'small',
-  'strong', 'em', 'b', 'i', 'u', 's', 'code', 'pre', 'blockquote', 'td', 'th', 'dt', 'dd',
-  'figcaption', 'caption', 'legend', 'summary', 'mark', 'sub', 'sup', 'time', 'abbr', 'cite', 'q',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'p',
+  'span',
+  'a',
+  'button',
+  'li',
+  'label',
+  'small',
+  'strong',
+  'em',
+  'b',
+  'i',
+  'u',
+  's',
+  'code',
+  'pre',
+  'blockquote',
+  'td',
+  'th',
+  'dt',
+  'dd',
+  'figcaption',
+  'caption',
+  'legend',
+  'summary',
+  'mark',
+  'sub',
+  'sup',
+  'time',
+  'abbr',
+  'cite',
+  'q',
 ])
 
-const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+// Landmarks read better capitalised in the layer list than as raw tags.
+const LANDMARK_TAGS = new Set(['section', 'header', 'footer', 'nav', 'main'])
 
 // Whitespace inside these is content, not formatting.
 const PREFORMATTED_TAGS = new Set(['pre', 'textarea'])
 
-const DROPPED_TAGS = new Set(['script', 'iframe', 'object', 'embed', 'meta', 'base', 'template'])
-
-// Same list the renderer refuses; sanitizeTree is the last line before the iframe.
-const BLOCKED_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base'])
-
-const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction'])
+// <style>/<link> feed the document; the rest of BLOCKED_TAGS is dropped.
+const DROPPED_TAGS = new Set(
+  [...BLOCKED_TAGS, 'template'].filter((t) => t !== 'style' && t !== 'link'),
+)
 
 const GOOGLE_FONTS_HOST = 'fonts.googleapis.com'
 const NAME_MAX_LENGTH = 24
@@ -52,10 +104,6 @@ function isElement(node: P5Node): node is P5Element {
 
 function isText(node: P5Node): node is P5Text {
   return node.nodeName === '#text'
-}
-
-function isUnsafeUrl(value: string): boolean {
-  return /^\s*(javascript|vbscript|data:text\/html)/i.test(value)
 }
 
 // Splits `a: b; c: url("x;y")` on ';' only outside parentheses and quotes.
@@ -110,13 +158,21 @@ function attrName(attr: { name: string; prefix?: string }): string {
   return attr.prefix ? `${attr.prefix}:${attr.name}` : attr.name
 }
 
-function deriveName(tag: string, attrs: Record<string, string>, text: string | undefined): string {
+// Layer name fallback; the renderer's LayerRow.rowLabel mirrors these rules
+// for trees that predate them, so keep the two in sync.
+export function deriveName(
+  tag: string,
+  attrs: Record<string, string>,
+  text: string | undefined,
+  kind: DesignNodeKind,
+): string {
   if (attrs.id) return attrs.id
   if (attrs['data-name']) return attrs['data-name']
-  if (HEADING_TAGS.has(tag) && text) {
+  if (kind === 'text' && text) {
     const compact = text.replace(/\s+/g, ' ').trim()
     if (compact) return compact.slice(0, NAME_MAX_LENGTH)
   }
+  if (LANDMARK_TAGS.has(tag)) return tag[0].toUpperCase() + tag.slice(1)
   return tag
 }
 
@@ -177,7 +233,7 @@ class Collector {
         style = parseStyleAttr(attr.value)
         continue
       }
-      if (lower.startsWith('on')) {
+      if (lower.startsWith('on') || !ATTR_NAME_RE.test(name)) {
         this.warn(`dropped attribute ${name} on <${el.tagName}>`)
         continue
       }
@@ -192,7 +248,13 @@ class Collector {
     return { attrs, style }
   }
 
-  children(parent: P5Parent, inSvg: boolean, preformatted: boolean): { nodes: DesignNode[]; text: string } {
+  children(
+    parent: P5Parent,
+    inSvg: boolean,
+    preformatted: boolean,
+    depth = 0,
+  ): { nodes: DesignNode[]; text: string } {
+    if (depth > MAX_TREE_DEPTH) throw new Error(`html nests deeper than ${MAX_TREE_DEPTH} levels`)
     const nodes: DesignNode[] = []
     // Inside SVG loose text has no <span> to live in; it rides on the parent.
     let svgText = ''
@@ -212,18 +274,18 @@ class Collector {
           attrs: {},
           text,
           children: [],
-          name: 'span',
+          name: deriveName('span', {}, text, 'text'),
         })
         continue
       }
       if (!isElement(child)) continue
-      const node = this.element(child, inSvg)
+      const node = this.element(child, inSvg, depth)
       if (node) nodes.push(node)
     }
     return { nodes, text: svgText }
   }
 
-  element(el: P5Element, parentInSvg: boolean): DesignNode | null {
+  element(el: P5Element, parentInSvg: boolean, depth = 0): DesignNode | null {
     if (this.consumeSpecial(el)) return null
     const tag = el.tagName
     const inSvg = parentInSvg || tag === 'svg'
@@ -239,14 +301,14 @@ class Collector {
       const raw = textContent(el)
       text = preformatted ? raw : normalizeText(raw)
     } else {
-      const result = this.children(el, inSvg, preformatted)
+      const result = this.children(el, inSvg, preformatted, depth + 1)
       children = result.nodes
       if (result.text) text = result.text
     }
 
     const node: DesignNode = { id: newNodeId(), tag, kind, style, attrs, children }
     if (text !== undefined) node.text = text
-    node.name = deriveName(tag, attrs, text)
+    node.name = deriveName(tag, attrs, text, kind)
     return node
   }
 }
@@ -277,65 +339,4 @@ export function parseHtml(html: string): ParseHtmlResult {
     fonts: collector.fonts,
     warnings: collector.warnings,
   }
-}
-
-export interface SanitizeResult {
-  tree: DesignNode
-  warnings: string[]
-}
-
-// Defensive pass over a tree that did not come through parseHtml (MCP
-// replaceTree/insert payloads): blocked tags out, event handlers and unsafe
-// URLs out, ids present and unique. Returns a new tree. What cannot be
-// repaired (invalid kind, text node with children) is left to validateTree,
-// which throws instead of silently persisting a malformed tree.
-export function sanitizeTree(tree: DesignNode): SanitizeResult {
-  const warnings: string[] = []
-  const seen = new Set<string>()
-
-  const visit = (node: DesignNode): DesignNode => {
-    let id = node.id
-    if (!id || seen.has(id)) {
-      id = newNodeId()
-      if (node.id) warnings.push(`duplicate id ${node.id} reassigned to ${id}`)
-    }
-    seen.add(id)
-
-    const attrs: Record<string, string> = {}
-    for (const [name, value] of Object.entries(node.attrs)) {
-      const lower = name.toLowerCase()
-      if (lower.startsWith('on')) {
-        warnings.push(`dropped attribute ${name} on <${node.tag}>`)
-        continue
-      }
-      if (URL_ATTRS.has(lower) && isUnsafeUrl(value)) {
-        warnings.push(`dropped unsafe ${name} on <${node.tag}>`)
-        continue
-      }
-      attrs[name] = value
-    }
-
-    const children: DesignNode[] = []
-    for (const child of node.children) {
-      if (BLOCKED_TAGS.has(child.tag.toLowerCase())) {
-        warnings.push(`dropped <${child.tag}>`)
-        continue
-      }
-      children.push(visit(child))
-    }
-
-    return { ...node, id, attrs, children }
-  }
-
-  if (BLOCKED_TAGS.has(tree.tag.toLowerCase())) {
-    warnings.push(`root <${tree.tag}> replaced by an empty frame`)
-    return {
-      tree: { id: newNodeId(), tag: 'div', kind: 'frame', style: {}, attrs: {}, children: [] },
-      warnings,
-    }
-  }
-  const sanitized = visit(tree)
-  const errors = validateTree(sanitized)
-  if (errors.length > 0) throw new Error(`invalid design tree: ${errors.join('; ')}`)
-  return { tree: sanitized, warnings }
 }

@@ -155,6 +155,7 @@ export async function exportArtboardPng(input: ExportPngInput): Promise<ExportPn
     height: artboard.height,
     scale: input.scale ?? 1,
     version: artboard.version,
+    docUpdatedAt: doc.updatedAt,
     nodeId: input.nodeId,
   })
   return {

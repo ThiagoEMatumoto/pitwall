@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { PenTool, Plus } from 'lucide-react'
+import { PenTool, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useDesignStore } from '@/store/designStore'
 import { ARTBOARD_PRESETS } from '@shared/types/design'
+import { AskClaudeComposer } from './ask-claude/AskClaudeComposer'
 
 interface Props {
   variant: 'no-doc' | 'no-artboards'
@@ -14,6 +15,7 @@ const DEFAULT_DOC_TITLE = 'Sem título'
 export function EmptyState({ variant }: Props) {
   const createDoc = useDesignStore((s) => s.createDoc)
   const createArtboard = useDesignStore((s) => s.createArtboard)
+  const setAskOpen = useDesignStore((s) => s.setAskOpen)
   const error = useDesignStore((s) => s.error)
   const [busy, setBusy] = useState(false)
 
@@ -28,18 +30,27 @@ export function EmptyState({ variant }: Props) {
 
   if (variant === 'no-doc') {
     return (
-      <div className="flex h-full flex-1 items-center justify-center">
+      // The composer docks to this container (CanvasHost is not mounted without a doc).
+      <div className="relative flex h-full flex-1 items-center justify-center">
         <div className="flex max-w-sm flex-col items-center gap-3 text-center text-sm text-[var(--color-text-dim)]">
           <Icon as={PenTool} size={32} />
           <span>
-            Selecione um documento — ou peça ao Claude para criar um (ex.: “desenha a landing do produto”).
+            Selecione um documento — ou peça ao Claude para criar um (ex.: “desenha a landing do
+            produto”).
           </span>
-          <Button loading={busy} onClick={() => void run(() => createDoc(DEFAULT_DOC_TITLE))}>
-            <Icon as={Plus} size={14} />
-            Novo documento
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button loading={busy} onClick={() => void run(() => createDoc(DEFAULT_DOC_TITLE))}>
+              <Icon as={Plus} size={14} />
+              Novo documento
+            </Button>
+            <Button variant="ghost" title="Ask Claude" onClick={() => setAskOpen(true)}>
+              <Icon as={Sparkles} size={14} />
+              Pedir ao Claude
+            </Button>
+          </div>
           {error && <span className="text-xs text-[var(--color-danger)]">{error}</span>}
         </div>
+        <AskClaudeComposer />
       </div>
     )
   }

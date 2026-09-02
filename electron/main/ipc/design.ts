@@ -8,6 +8,7 @@ import { formatPtyInjection, injectIntoSession } from '../services/handoff/injec
 import { ptyManager } from '../services/pty-manager'
 import { broadcast } from '../services/notify'
 import { newNonce } from '../../../shared/design/ids'
+import { MAX_ASSET_BASE64_CHARS } from '../../../shared/design/safety'
 import type {
   ApplyDesignOpsInput,
   ArtboardUpdatedEvent,
@@ -196,6 +197,10 @@ export function registerDesignIpc(): void {
   // ---- assets ----
 
   ipcMain.handle('design:asset-upload', (_e, input: DesignAssetUploadInput): DesignAsset => {
+    // Length check before decoding: a huge payload must not become a Buffer.
+    if (typeof input.dataBase64 !== 'string' || input.dataBase64.length > MAX_ASSET_BASE64_CHARS) {
+      throw new Error(`asset exceeds ${assetStore.MAX_ASSET_BYTES} bytes`)
+    }
     const asset = assetStore.upload({
       documentId: input.docId,
       name: input.name,

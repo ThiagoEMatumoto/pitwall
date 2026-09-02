@@ -12,7 +12,8 @@ export interface AskSelectionItem {
 }
 
 export interface BuildAskPromptInput {
-  docId: string
+  // null when asked from the empty state: Claude creates the document itself.
+  docId: string | null
   docTitle: string
   artboardId: string | null
   artboardName: string | null
@@ -26,6 +27,8 @@ const TREE_SUMMARY_DEPTH = 2
 
 const INSTRUCTION =
   'Instrução: use SOMENTE as tools mcp__pitwall__design_* (comece por design_guide + design_tree_summary; termine com design_nodes_finish).'
+const NO_DOC_INSTRUCTION =
+  'Instrução: nenhum documento aberto — use SOMENTE as tools mcp__pitwall__design_* (comece por design_guide, crie o documento e o artboard; termine com design_nodes_finish).'
 
 function findNode(tree: DesignNode, id: string): DesignNode | null {
   if (tree.id === id) return tree
@@ -60,7 +63,7 @@ export function selectionLabel(item: AskSelectionItem): string {
 export function buildAskPrompt(input: BuildAskPromptInput): string {
   const ids = input.selection.map((s) => s.id).join(',')
   const header =
-    `[Pitwall Design Studio] doc=${JSON.stringify(input.docTitle)} docId=${input.docId}` +
+    `[Pitwall Design Studio] doc=${JSON.stringify(input.docTitle)} docId=${input.docId ?? 'none'}` +
     ` artboardId=${input.artboardId ?? 'none'}` +
     (input.artboardName ? ` artboard=${JSON.stringify(input.artboardName)}` : '') +
     ` selection=[${ids}]`
@@ -73,6 +76,6 @@ export function buildAskPrompt(input: BuildAskPromptInput): string {
   }
   const tree = input.treeSummaryText?.trim()
   if (tree) lines.push('Tree:', truncateLines(tree, TREE_SUMMARY_MAX_LINES))
-  lines.push(INSTRUCTION, `Pedido: ${input.request.trim()}`)
+  lines.push(input.docId ? INSTRUCTION : NO_DOC_INSTRUCTION, `Pedido: ${input.request.trim()}`)
   return lines.join('\n')
 }

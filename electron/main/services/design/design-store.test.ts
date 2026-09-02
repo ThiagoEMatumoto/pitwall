@@ -14,6 +14,10 @@ vi.mock('../db', () => ({
 import * as store from './design-store'
 import * as assets from './asset-store'
 
+// Real PNG magic so the upload sniff accepts the fake bytes.
+const png = (tail: string): Buffer =>
+  Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(tail)])
+
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
     if (m.disableForeignKeys) {
@@ -166,9 +170,15 @@ describe('design-store', () => {
   it('removeDocument cascateia páginas, artboards, versões, assets e links', () => {
     const doc = newDoc()
     const page = store.createPage({ docId: doc.id, name: 'Page 2' })
-    const ab = store.createArtboard({ docId: doc.id, pageId: page.id, name: 'A', width: 10, height: 10 })
+    const ab = store.createArtboard({
+      docId: doc.id,
+      pageId: page.id,
+      name: 'A',
+      width: 10,
+      height: 10,
+    })
     store.setTree(ab.id, tree('x'), { snapshot: true, author: 'claude', summary: 's' })
-    assets.upload({ documentId: doc.id, name: 'a.png', mime: 'image/png', bytes: Buffer.from('png') })
+    assets.upload({ documentId: doc.id, name: 'a.png', mime: 'image/png', bytes: png('png') })
 
     store.removeDocument(doc.id)
     expect(store.getDocument(doc.id)).toBeNull()
@@ -184,7 +194,11 @@ describe('design-store', () => {
     const doc = newDoc()
     const p2 = store.createPage({ docId: doc.id, name: 'Page 2' })
     expect(p2.position).toBe(1)
-    const renamed = store.updatePage({ id: p2.id, name: 'Mobile', viewport: { x: 5, y: 6, zoom: 2 } })
+    const renamed = store.updatePage({
+      id: p2.id,
+      name: 'Mobile',
+      viewport: { x: 5, y: 6, zoom: 2 },
+    })
     expect(renamed.name).toBe('Mobile')
     expect(renamed.viewport).toEqual({ x: 5, y: 6, zoom: 2 })
 
@@ -197,13 +211,18 @@ describe('design-store', () => {
 
   it('listDocuments filtra por status, parent e search', () => {
     const a = newDoc('Landing sync')
-    const b = store.createDocument({ title: 'Onboarding', links: [{ parentType: 'repo', parentId: 'r9' }] })
+    const b = store.createDocument({
+      title: 'Onboarding',
+      links: [{ parentType: 'repo', parentId: 'r9' }],
+    })
     store.archiveDocument(b.id)
 
     expect(store.listDocuments().map((d) => d.id)).toEqual([a.id])
     expect(store.listDocuments({ status: 'all' })).toHaveLength(2)
     expect(store.listDocuments({ status: 'archived' }).map((d) => d.id)).toEqual([b.id])
-    expect(store.listDocuments({ parentType: 'feature', parentId: 'f1' }).map((d) => d.id)).toEqual([a.id])
+    expect(store.listDocuments({ parentType: 'feature', parentId: 'f1' }).map((d) => d.id)).toEqual(
+      [a.id],
+    )
     expect(store.listDocuments({ search: 'sync' }).map((d) => d.id)).toEqual([a.id])
   })
 
@@ -236,7 +255,7 @@ describe('asset-store', () => {
 
   it('upload dedupe por sha256 dentro do mesmo escopo; escopos diferentes não colidem', () => {
     const doc = newDoc()
-    const bytes = Buffer.from('same-bytes')
+    const bytes = png('same-bytes')
     const first = assets.upload({ documentId: doc.id, name: 'a.png', mime: 'image/png', bytes })
     const again = assets.upload({ documentId: doc.id, name: 'b.png', mime: 'image/png', bytes })
     expect(again.id).toBe(first.id)
@@ -255,7 +274,12 @@ describe('asset-store', () => {
 
   it('upload rejeita mime fora da allowlist e asset acima de 5MB', () => {
     expect(() =>
-      assets.upload({ documentId: null, name: 'x.pdf', mime: 'application/pdf', bytes: Buffer.from('x') }),
+      assets.upload({
+        documentId: null,
+        name: 'x.pdf',
+        mime: 'application/pdf',
+        bytes: Buffer.from('x'),
+      }),
     ).toThrow(/mime/)
     expect(() =>
       assets.upload({
@@ -265,5 +289,67 @@ describe('asset-store', () => {
         bytes: Buffer.alloc(assets.MAX_ASSET_BYTES + 1),
       }),
     ).toThrow(/exceeds/)
+  })
+
+  it('upload sniffs the bytes and sanitizes svg before storing', () => {
+    expect(() =>
+      assets.upload({
+        documentId: null,
+        name: 'fake.png',
+        mime: 'image/png',
+        bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>'),
+      }),
+    ).toThrow(/do not look like image\/png/)
+    const svg = assets.upload({
+      documentId: null,
+      name: 'icon.svg',
+      mime: 'image/svg+xml',
+      bytes: Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" onload="x()"><script>1</script><rect/></svg>',
+      ),
+    })
+    expect(assets.get(svg.id)!.bytes.toString()).toBe(
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+    )
+  })
+})
+
+describe('design-store — input limits', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+  })
+
+  afterEach(() => {
+    testDb.close()
+  })
+
+  it('artboard width/height are clamped on create and update', () => {
+    const doc = store.createDocument({ title: 'T' })
+    const page = doc.pages[0]
+    const ab = store.createArtboard({
+      docId: doc.id,
+      pageId: page.id,
+      name: 'A',
+      width: 30000,
+      height: 1,
+    })
+    expect([ab.width, ab.height]).toEqual([8192, 16])
+    const updated = store.updateArtboard(ab.id, { width: 99999, height: 400.4 })
+    expect([updated.width, updated.height]).toEqual([8192, 400])
+  })
+
+  it('globalCss over the cap and token groups over 200 keys are refused; names are truncated', () => {
+    const doc = store.createDocument({ title: 'x'.repeat(500) })
+    expect(doc.title).toHaveLength(200)
+    expect(() =>
+      store.updateDocument({ id: doc.id, globalCss: 'a'.repeat(512 * 1024 + 1) }),
+    ).toThrow(/globalCss exceeds/)
+    const color: Record<string, string> = {}
+    for (let i = 0; i < 201; i++) color[`c${i}`] = '#000'
+    expect(() => store.updateDocument({ id: doc.id, tokens: { color } })).toThrow(
+      /more than 200 keys/,
+    )
   })
 })

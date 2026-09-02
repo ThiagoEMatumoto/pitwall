@@ -59,6 +59,16 @@ describe('parseHtml — fragment', () => {
     expect(h2.text).toBe(' Ship designs faster than ever ')
   })
 
+  it('names every text node by its text and landmarks by their capitalised tag', () => {
+    const nav = byTag(hero.children, 'nav')
+    expect(nav.name).toBe('Nav')
+    expect(nav.children.map((n) => n.name)).toEqual(['Docs', 'Pricing'])
+    const p = byTag(hero.children, 'p')
+    expect(p.name).toBe('p')
+    expect(p.children.map((n) => n.name)).toEqual(['Read the', 'docs', 'now'])
+    expect(parseHtml('<header><div></div></header>').nodes[0].name).toBe('Header')
+  })
+
   it('wraps loose text between elements in text spans, keeping inline spaces', () => {
     const p = byTag(hero.children, 'p')
     expect(p.children.map((n) => [n.tag, n.kind, n.text])).toEqual([
@@ -135,7 +145,12 @@ describe('parseHtml — full document', () => {
   it('returns body children as nodes', () => {
     expect(result.nodes.map((n) => n.tag)).toEqual(['main'])
     expect(result.nodes[0].attrs).toEqual({ class: 'hero' })
-    expect(result.nodes[0].children[0]).toMatchObject({ tag: 'h1', kind: 'text', text: 'Hello', name: 'Hello' })
+    expect(result.nodes[0].children[0]).toMatchObject({
+      tag: 'h1',
+      kind: 'text',
+      text: 'Hello',
+      name: 'Hello',
+    })
   })
 
   it('also recognises documents that start with <html>', () => {
@@ -146,13 +161,17 @@ describe('parseHtml — full document', () => {
 
 describe('parseHtml — sanitizing', () => {
   it('drops script/iframe with warnings', () => {
-    const { nodes, warnings } = parseHtml('<div><script>alert(1)</script><iframe src="x"></iframe><p>ok</p></div>')
+    const { nodes, warnings } = parseHtml(
+      '<div><script>alert(1)</script><iframe src="x"></iframe><p>ok</p></div>',
+    )
     expect(nodes[0].children.map((n) => n.tag)).toEqual(['p'])
     expect(warnings).toEqual(['dropped <script>', 'dropped <iframe>'])
   })
 
   it('removes on* handlers', () => {
-    const { nodes, warnings } = parseHtml('<button onclick="steal()" onMouseOver="x()" class="cta">Go</button>')
+    const { nodes, warnings } = parseHtml(
+      '<button onclick="steal()" onMouseOver="x()" class="cta">Go</button>',
+    )
     expect(nodes[0].attrs).toEqual({ class: 'cta' })
     expect(warnings).toEqual([
       'dropped attribute onclick on <button>',
@@ -161,7 +180,9 @@ describe('parseHtml — sanitizing', () => {
   })
 
   it('removes javascript: urls', () => {
-    const { nodes, warnings } = parseHtml('<a href=" JavaScript:alert(1)">x</a><img src="javascript:1"><a href="https://ok.test">y</a>')
+    const { nodes, warnings } = parseHtml(
+      '<a href=" JavaScript:alert(1)">x</a><img src="javascript:1"><a href="https://ok.test">y</a>',
+    )
     expect(nodes[0].attrs).toEqual({})
     expect(nodes[1].attrs).toEqual({})
     expect(nodes[2].attrs).toEqual({ href: 'https://ok.test' })
@@ -241,5 +262,84 @@ describe('sanitizeTree', () => {
     const { tree, warnings } = sanitizeTree(node({ id: 'r', tag: 'script' }))
     expect(tree.kind).toBe('frame')
     expect(warnings).toEqual(['root <script> replaced by an empty frame'])
+  })
+})
+
+describe('sanitizeTree — renderer-grade rules', () => {
+  const node = (partial: Partial<DesignNode> & { id: string; tag: string }): DesignNode => ({
+    kind: 'element',
+    style: {},
+    attrs: {},
+    children: [],
+    ...partial,
+  })
+
+  it('drops style/link/meta/base/area tags, bad attribute names, obfuscated urls and bad links', () => {
+    const tree = node({
+      id: 'root',
+      tag: 'div',
+      kind: 'frame',
+      children: [
+        node({ id: 's', tag: 'style', text: 'body{}' }),
+        node({ id: 'm', tag: 'META' }),
+        node({ id: 'ar', tag: 'area', attrs: { href: 'pitwall-design://asset/x' } }),
+        node({
+          id: 'a',
+          tag: 'a',
+          attrs: {
+            href: 'java\nscript:alert(1)',
+            'xlink:href': 'vbscript:x',
+            src: 'data:text/html,<script>',
+            'bad name': '1',
+            'data-pw-id': 'spoof',
+            title: 'ok',
+          },
+          link: { artboardId: 'x', transition: '"><img src=x>' } as never,
+        }),
+        node({
+          id: 'ok',
+          tag: 'img',
+          attrs: { src: 'data:image/png;base64,AA==' },
+          link: { artboardId: 'ab2', transition: 'fade' },
+        }),
+      ],
+    })
+    const { tree: out, warnings } = sanitizeTree(tree)
+    expect(out.children.map((n) => n.tag)).toEqual(['a', 'img'])
+    expect(out.children[0].attrs).toEqual({ title: 'ok' })
+    expect(out.children[0].link).toBeUndefined()
+    expect(out.children[1].link).toEqual({ artboardId: 'ab2', transition: 'fade' })
+    expect(warnings).toEqual([
+      'dropped <style>',
+      'dropped <META>',
+      'dropped <area>',
+      'dropped unsafe href on <a>',
+      'dropped unsafe xlink:href on <a>',
+      'dropped unsafe src on <a>',
+      'dropped attribute bad name on <a>',
+      'dropped invalid link on a',
+    ])
+  })
+
+  it('refuses a tree nesting deeper than the limit', () => {
+    let tree: DesignNode = node({ id: 'leaf', tag: 'span' })
+    for (let i = 0; i < 400; i++) tree = node({ id: `n${i}`, tag: 'div', children: [tree] })
+    expect(() => sanitizeTree(tree)).toThrow(/deeper than 256/)
+  })
+})
+
+describe('parseHtml — limits', () => {
+  it('refuses html nesting deeper than the limit', () => {
+    const html = '<div>'.repeat(400) + 'x' + '</div>'.repeat(400)
+    expect(() => parseHtml(html)).toThrow(/deeper than 256/)
+  })
+
+  it('drops <area> and attributes with invalid names', () => {
+    const { nodes, warnings } = parseHtml(
+      '<map><area href="/x"><img src="a.png" data-pw-id="z"></map>',
+    )
+    expect(nodes[0].children.map((n) => n.tag)).toEqual(['img'])
+    expect(nodes[0].children[0].attrs).toEqual({ src: 'a.png' })
+    expect(warnings).toEqual(['dropped <area>'])
   })
 })

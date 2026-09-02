@@ -5,6 +5,16 @@ import * as z from 'zod/v4'
 import * as designStore from '../design/design-store'
 import * as liveState from '../design/live-state'
 import { newNonce } from '../../../../shared/design/ids'
+import {
+  ARTBOARD_MAX_PX,
+  ARTBOARD_MIN_PX,
+  MAX_ASSET_BASE64_CHARS,
+  MAX_GLOBAL_CSS_BYTES,
+  MAX_HTML_BYTES,
+  MAX_NAME_CHARS,
+  MAX_SUMMARY_CHARS,
+  MAX_TOKEN_KEYS,
+} from '../../../../shared/design/safety'
 import type { McpNotify, McpRequestContext, ToolDef } from './tools'
 import type {
   DesignAgentActivity,
@@ -107,7 +117,16 @@ export const artboardId = id
 export const docId = id
 
 const stylePatch = z.record(z.string(), z.string().nullable())
-const tokenGroup = z.record(z.string(), z.string())
+const tokenGroup = z
+  .record(z.string(), z.string())
+  .refine((group) => Object.keys(group).length <= MAX_TOKEN_KEYS, {
+    message: `at most ${MAX_TOKEN_KEYS} tokens per category`,
+  })
+const name = z.string().min(1).max(MAX_NAME_CHARS)
+const summary = z.string().min(1).max(MAX_SUMMARY_CHARS)
+const html = z.string().min(1).max(MAX_HTML_BYTES)
+const globalCss = z.string().max(MAX_GLOBAL_CSS_BYTES)
+const artboardPx = z.number().int().min(ARTBOARD_MIN_PX).max(ARTBOARD_MAX_PX)
 
 export const tokensSchema = z.object({
   color: tokenGroup.optional(),
@@ -163,34 +182,34 @@ export const schemas = {
     props: z.array(z.string().min(1)).max(40).optional(),
   }),
   documentCreate: z.object({
-    title: z.string().min(1),
+    title: name,
     tokens: tokensSchema.optional(),
     fonts: z.array(z.string().url()).optional(),
-    globalCss: z.string().optional(),
+    globalCss: globalCss.optional(),
     links: z.array(z.object({ parentType, parentId: z.string().min(1) })).optional(),
   }),
   artboardCreate: z.object({
     docId,
     pageId: id.optional(),
-    name: z.string().min(1),
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
+    name,
+    width: artboardPx,
+    height: artboardPx,
     x: z.number().optional(),
     y: z.number().optional(),
-    html: z.string().optional(),
+    html: html.optional(),
   }),
   writeHtml: z.object({
     artboardId,
-    html: z.string().min(1),
+    html,
     mode: z.enum(['replace', 'insert']).default('replace'),
     parentId: id.optional(),
     index: z.number().int().min(0).optional(),
-    summary: z.string().min(1),
+    summary,
   }),
   textSet: z.object({ artboardId, nodeId: id, text: z.string() }),
   nodesRename: z.object({
     artboardId,
-    items: z.array(z.object({ id, name: z.string().min(1) })).min(1),
+    items: z.array(z.object({ id, name })).min(1),
   }),
   nodesDuplicate: z.object({
     artboardId,
@@ -207,20 +226,20 @@ export const schemas = {
   stylesUpdate: z.object({
     artboardId,
     items: z.array(z.object({ id, style: stylePatch })).min(1),
-    summary: z.string().optional(),
+    summary: summary.optional(),
   }),
   nodesDelete: z.object({ artboardId, ids: z.array(id).min(1) }),
   tokensSet: z.object({
     docId,
     tokens: tokensSchema.optional(),
     fonts: z.array(z.string().url()).optional(),
-    globalCss: z.string().optional(),
+    globalCss: globalCss.optional(),
   }),
   assetUpload: z.object({
     docId: docId.nullable().optional(),
-    name: z.string().min(1),
+    name,
     mime: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml']),
-    dataBase64: z.string().min(1),
+    dataBase64: z.string().min(1).max(MAX_ASSET_BASE64_CHARS),
   }),
   linkSet: z.object({
     artboardId,
@@ -237,6 +256,6 @@ export const schemas = {
   nodesFinish: z.object({
     artboardId,
     ids: z.array(id).optional(),
-    summary: z.string().optional(),
+    summary: summary.optional(),
   }),
 }

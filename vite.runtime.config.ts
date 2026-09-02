@@ -13,7 +13,7 @@ export default defineConfig({
     minify: 'esbuild',
     sourcemap: false,
     lib: {
-      entry: resolve('src/design-runtime/runtime.ts'),
+      entry: resolve('src/design-runtime/runtime/index.ts'),
       name: 'PitwallDesignRuntime',
       formats: ['iife'],
       fileName: () => 'runtime.js',

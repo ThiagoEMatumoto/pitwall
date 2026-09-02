@@ -600,9 +600,14 @@ export function AppShell() {
         return
       }
 
+      // A área de design tem os próprios atalhos de zoom/dígitos
+      // (useCanvasShortcuts); os combos de pane e de fonte do terminal abaixo
+      // não podem roubá-los.
+      const inDesign = useAppStore.getState().area === 'design'
+
       // Ctrl+1..9 (pane.focusN): foca o n-ésimo pane diretamente (fallback caso
       // Ctrl+Tab seja interceptado pelo SO/Electron). Combo fixo (não editável).
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+      if (!inDesign && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
         const panels = api?.panels ?? []
         const target = panels[Number(e.key) - 1]
         if (target) {
@@ -656,6 +661,7 @@ export function AppShell() {
 
       // Zoom da fonte do terminal (fontSize compartilhado por todos os panes). O
       // preventDefault evita o zoom nativo do Electron. Combos configuráveis na aba Atalhos.
+      if (inDesign) return
       if (matchCombo(e, resolveCombo('terminal.zoomIn', overrides))) {
         e.preventDefault()
         void useTerminalPrefsStore.getState().zoomIn()

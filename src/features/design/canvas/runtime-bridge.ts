@@ -30,12 +30,24 @@ export interface BridgeInit {
 }
 
 export type BridgeEventType =
-  'ready' | 'rendered' | 'hit' | 'rects' | 'rectsChanged' | 'contentSize' | 'textEditEnd' | 'key' | 'navigate'
+  | 'ready'
+  | 'rendered'
+  | 'hit'
+  | 'rects'
+  | 'rectsChanged'
+  | 'contentSize'
+  | 'textEditEnd'
+  | 'key'
+  | 'navigate'
 
 export type BridgeEvent<T extends BridgeEventType> = Extract<RuntimeToParentMessage, { type: T }>
 type Handler<T extends BridgeEventType> = (msg: BridgeEvent<T>) => void
 
-type Outgoing = ParentToRuntimeMessage extends infer M ? (M extends unknown ? Omit<M, 'v'> : never) : never
+type Outgoing = ParentToRuntimeMessage extends infer M
+  ? M extends unknown
+    ? Omit<M, 'v'>
+    : never
+  : never
 type RequestMsg =
   | Omit<OpsMessage, 'v' | 'reqId'>
   | Omit<HitTestMessage, 'v' | 'reqId'>
@@ -69,7 +81,8 @@ export class ArtboardBridge {
   private readonly pending = new Map<string, Pending>()
   private readonly handlers = new Map<BridgeEventType, Set<Handler<BridgeEventType>>>()
   private readonly rects = new Map<string, Rect>()
-  private initPayload: BridgeInit | null = null
+  // A getter, not a snapshot: 'ready' may arrive after ops changed the tree.
+  private initPayload: (() => BridgeInit) | null = null
   private ready = false
   private disposed = false
 
@@ -86,14 +99,20 @@ export class ArtboardBridge {
 
   // Sends 'init' now if the runtime is ready, otherwise as soon as it is.
   // Calling it again re-renders the whole artboard (resync / full update).
-  init(payload: BridgeInit): void {
-    this.initPayload = payload
+  init(payload: BridgeInit | (() => BridgeInit)): void {
+    this.initPayload = typeof payload === 'function' ? payload : () => payload
+    if (this.ready) this.sendInit()
+  }
+
+  // Re-render from the current payload (an op the runtime could not apply
+  // means its DOM and the store's tree drifted apart).
+  reinit(): void {
     if (this.ready) this.sendInit()
   }
 
   private sendInit(): void {
     if (!this.initPayload) return
-    this.post({ type: 'init', ...this.initPayload, token: this.token })
+    this.post({ type: 'init', ...this.initPayload(), token: this.token })
   }
 
   post(msg: Outgoing): void {
@@ -142,7 +161,8 @@ export class ArtboardBridge {
   }
 
   setTokens(tokens: DesignTokens): void {
-    if (this.initPayload) this.initPayload = { ...this.initPayload, tokens }
+    const previous = this.initPayload
+    if (previous) this.initPayload = () => ({ ...previous(), tokens })
     this.post({ type: 'setTokens', tokens })
   }
 

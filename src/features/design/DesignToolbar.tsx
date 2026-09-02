@@ -45,7 +45,7 @@ const TOOLS: ToolDef[] = [
 const ZOOM_STEP = 1.25
 
 const iconButton =
-  'flex h-7 w-7 items-center justify-center rounded-md transition disabled:opacity-40 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition disabled:opacity-40 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
 
 function DocTitle() {
   const title = useDesignStore((s) => s.doc?.title ?? '')
@@ -70,7 +70,7 @@ function DocTitle() {
         type="button"
         onClick={() => setEditing(true)}
         title="Renomear documento"
-        className="max-w-[16rem] truncate rounded-md px-2 py-1 text-sm font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
+        className="max-w-full truncate rounded-md px-2 py-1 text-sm font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
       >
         {title || 'Sem título'}
       </button>
@@ -89,7 +89,7 @@ function DocTitle() {
           setEditing(false)
         }
       }}
-      className="w-56 rounded-md border border-[var(--color-accent)] bg-[var(--color-bg)] px-2 py-1 text-sm text-[var(--color-text)] outline-none"
+      className="w-full max-w-sm rounded-md border border-[var(--color-accent)] bg-[var(--color-bg)] px-2 py-1 text-sm text-[var(--color-text)] outline-none"
     />
   )
 }
@@ -177,14 +177,21 @@ export function DesignToolbar() {
 
       <span className="mx-1 h-5 w-px bg-[var(--color-border)]" />
 
-      {hasDoc && <DocTitle />}
+      {/* The title owns the slack and is the only thing that truncates; the
+          agent badge and the actions on the right never get squeezed. */}
+      <div className="flex min-w-0 flex-1 items-center">{hasDoc && <DocTitle />}</div>
 
-      <div className="flex-1" />
-
-      <AgentActivityBadge />
+      <div className="shrink-0">
+        <AgentActivityBadge />
+      </div>
 
       {hasDoc && (
-        <Button variant="ghost" className="px-3 py-1 text-xs" onClick={() => setAskOpen(true)}>
+        <Button
+          variant="ghost"
+          className="shrink-0 px-3 py-1 text-xs"
+          title="Ask Claude (/)"
+          onClick={() => setAskOpen(true)}
+        >
           <Icon as={Sparkles} size={13} />
           Ask Claude
         </Button>
@@ -208,8 +215,8 @@ export function DesignToolbar() {
         data-testid={DESIGN_TESTIDS.previewButton}
         disabled={!hasDoc || (!inPreview && !previewTarget)}
         onClick={() => (inPreview ? exitPreview() : previewTarget && startPreview(previewTarget))}
-        title={inPreview ? 'Sair do preview (Esc)' : 'Preview'}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition disabled:opacity-40 ${
+        title={inPreview ? 'Sair do preview (Esc)' : 'Abrir o preview do artboard selecionado'}
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition disabled:opacity-40 ${
           inPreview
             ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]'
             : 'border-[var(--color-border)] hover:border-[var(--color-accent)]/60 hover:text-[var(--color-text)]'

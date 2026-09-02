@@ -187,6 +187,7 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
             height: artboard.height,
             scale,
             version: artboard.version,
+            docUpdatedAt: designStore.getDocument(docId)?.updatedAt,
             nodeId,
           })
         } catch (err) {
@@ -201,19 +202,13 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
           width: shot.width,
           height: shot.height,
         }
+        const pngBase64 = shot.png.toString('base64')
         const result = {
           content: [
-            {
-              type: 'image',
-              data: shot.png.toString('base64'),
-              mimeType: 'image/png',
-            },
+            { type: 'image', data: pngBase64, mimeType: 'image/png' },
             { type: 'text', text: JSON.stringify(meta) },
           ],
-          structuredContent: {
-            ...meta,
-            pngBase64: shot.png.toString('base64'),
-          },
+          structuredContent: { ...meta, pngBase64 },
         }
         // ToolResult types content as text-only; MCP accepts image blocks.
         return result as unknown as ToolResult

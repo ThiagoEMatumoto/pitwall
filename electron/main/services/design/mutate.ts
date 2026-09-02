@@ -4,7 +4,7 @@
 // canvas of the other party.
 
 import * as designStore from './design-store'
-import { parseHtml } from './html-parse'
+import { parseHtml, sanitizeTree } from './html-parse'
 import { broadcast as notifyBroadcast, type Broadcast } from '../notify'
 import {
   applyOps,
@@ -13,6 +13,7 @@ import {
   validateTree,
   type ArtboardPatch,
 } from '../../../../shared/design/ops'
+import { clampArtboardSize } from '../../../../shared/design/safety'
 import type {
   ArtboardUpdatedEvent,
   DesignArtboard,
@@ -67,6 +68,22 @@ function loadArtboard(artboardId: string): {
   return { artboard, docId }
 }
 
+// Subtrees arriving over IPC/MCP are the one place untrusted structure enters
+// the store: sanitize them before they touch the tree. The other ops only
+// patch existing nodes and are covered by validateTree below.
+function sanitizeOp(op: DesignOp): DesignOp {
+  if (op.type === 'insert') return { ...op, node: sanitizeTree(op.node).tree }
+  if (op.type === 'replaceTree') return { ...op, tree: sanitizeTree(op.tree).tree }
+  return op
+}
+
+function clampPatch(patch: ArtboardPatch): ArtboardPatch {
+  const next = { ...patch }
+  if (next.width !== undefined) next.width = clampArtboardSize(next.width)
+  if (next.height !== undefined) next.height = clampArtboardSize(next.height)
+  return next
+}
+
 export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
   const { artboard, docId } = loadArtboard(params.artboardId)
   if (params.baseVersion !== undefined && params.baseVersion !== artboard.version) {
@@ -76,8 +93,8 @@ export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
   const artboardPatch: ArtboardPatch = {}
   const treeOps: DesignOp[] = []
   for (const op of params.ops) {
-    if (op.type === 'setArtboard') Object.assign(artboardPatch, op.patch)
-    else treeOps.push(op)
+    if (op.type === 'setArtboard') Object.assign(artboardPatch, clampPatch(op.patch))
+    else treeOps.push(sanitizeOp(op))
   }
 
   const { tree } = applyOps(artboard.tree, treeOps)
@@ -113,7 +130,15 @@ export interface RestoreVersionParams extends MutationContext {
 
 export function restoreArtboardVersion(params: RestoreVersionParams): ApplyResult {
   const { docId } = loadArtboard(params.artboardId)
-  const artboard = designStore.restoreVersion(params.artboardId, params.version, params.author)
+  const snapshot = designStore.getVersion(params.artboardId, params.version)
+  if (!snapshot)
+    throw new Error(`design version not found: ${params.artboardId} v${params.version}`)
+  // Snapshots written before the current rules may carry what is refused now.
+  const artboard = designStore.setTree(params.artboardId, sanitizeTree(snapshot.tree).tree, {
+    snapshot: true,
+    author: params.author,
+    summary: `restore version ${params.version}`,
+  })
   const event: ArtboardUpdatedEvent = {
     docId,
     artboardId: params.artboardId,
@@ -306,21 +331,14 @@ export function updateStyles(
   })
 }
 
-// `link` has no op of its own: re-inserting the same subtree (same ids) at
-// the same slot carries the new link through the existing insert/remove pair.
 export function setNodeLink(
   params: NodeTarget & { nodeId: string; link: DesignNodeLink | null },
 ): ApplyResult {
   const { artboard } = loadArtboard(params.artboardId)
   const found = findNode(artboard.tree, params.nodeId)
   if (!found || !found.parent) throw new Error(`node not found or is the root: ${params.nodeId}`)
-  const { link: _old, ...rest } = found.node
-  const node: DesignNode = params.link ? { ...rest, link: params.link } : rest
   return applyArtboardOps({
     ...params,
-    ops: [
-      { type: 'remove', ids: [params.nodeId] },
-      { type: 'insert', parentId: found.parent.id, index: found.index, node },
-    ],
+    ops: [{ type: 'setLink', id: params.nodeId, link: params.link }],
   })
 }

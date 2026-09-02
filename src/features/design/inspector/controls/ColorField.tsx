@@ -11,6 +11,8 @@ interface Props {
   onCommit: (value: string) => void
   tokens?: readonly TokenOption[]
   placeholder?: string
+  // Computed colour shown as swatch + placeholder while there is no inline value.
+  computed?: string
 }
 
 const HEX_RE = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
@@ -23,7 +25,7 @@ function swatchColor(value: string, tokens: readonly TokenOption[]): string {
   return value || 'transparent'
 }
 
-export function ColorField({ value, onCommit, tokens = [], placeholder }: Props) {
+export function ColorField({ value, onCommit, tokens = [], placeholder, computed }: Props) {
   const [draft, setDraft] = useState(value)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -45,7 +47,11 @@ export function ColorField({ value, onCommit, tokens = [], placeholder }: Props)
     if (trimmed !== value) onCommit(trimmed)
   }
 
-  const pickerValue = HEX_RE.test(value) ? value : '#000000'
+  const pickerValue = HEX_RE.test(value)
+    ? value
+    : HEX_RE.test(computed ?? '')
+      ? computed!
+      : '#000000'
 
   return (
     <div ref={rootRef} className="relative">
@@ -55,12 +61,12 @@ export function ColorField({ value, onCommit, tokens = [], placeholder }: Props)
           aria-label="Escolher cor"
           onClick={() => setOpen((o) => !o)}
           className="h-4 w-4 shrink-0 rounded-sm border border-[var(--color-border)]"
-          style={{ background: swatchColor(value, tokens) }}
+          style={{ background: swatchColor(value || computed || '', tokens) }}
         />
         <input
           type="text"
           value={draft}
-          placeholder={placeholder ?? '—'}
+          placeholder={placeholder ?? computed ?? '—'}
           spellCheck={false}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => commit(draft)}

@@ -7,7 +7,15 @@ vi.mock('electron', () => ({
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
 }))
 
-import { artboardCsp, artboardUrl, assetUrl, createDesignProtocolHandler, routeDesignUrl } from './protocol'
+import {
+  ASSET_CSP,
+  artboardCsp,
+  artboardUrl,
+  assetUrl,
+  createDesignProtocolHandler,
+  isAllowedFrameNavigation,
+  routeDesignUrl,
+} from './protocol'
 
 describe('routeDesignUrl', () => {
   it('routes artboard urls with doc and mode', () => {
@@ -30,7 +38,9 @@ describe('routeDesignUrl', () => {
 
   it('rejects artboard urls without doc or with an unknown mode', () => {
     expect(routeDesignUrl('pitwall-design://artboard/ab-1')).toEqual({ kind: 'notFound' })
-    expect(routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&mode=nope')).toEqual({ kind: 'notFound' })
+    expect(routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&mode=nope')).toEqual({
+      kind: 'notFound',
+    })
   })
 
   it('routes asset urls', () => {
@@ -97,18 +107,34 @@ describe('createDesignProtocolHandler', () => {
     expect(await res.text()).not.toContain('<script')
   })
 
-  it('serves asset bytes as immutable', async () => {
+  it('serves asset bytes as immutable, sandboxed and never sniffed', async () => {
     const res = await handler(new Request('pitwall-design://asset/as-1'))
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('image/png')
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+    expect(res.headers.get('Content-Security-Policy')).toBe(ASSET_CSP)
+    expect(ASSET_CSP).toMatch(/default-src 'none'/)
+    expect(ASSET_CSP).toMatch(/\bsandbox\b/)
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(res.headers.get('Content-Disposition')).toBe('inline')
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 
   it('returns 404 for unknown ids and routes', async () => {
     expect((await handler(new Request('pitwall-design://asset/nope'))).status).toBe(404)
-    expect((await handler(new Request('pitwall-design://artboard/nope?doc=doc-1'))).status).toBe(404)
+    expect((await handler(new Request('pitwall-design://artboard/nope?doc=doc-1'))).status).toBe(
+      404,
+    )
     expect((await handler(new Request('pitwall-design://artboard/ab-1?doc=nope'))).status).toBe(404)
     expect((await handler(new Request('pitwall-design://zzz/1'))).status).toBe(404)
+  })
+})
+
+describe('isAllowedFrameNavigation', () => {
+  it('only artboard documents may load in a sub-frame', () => {
+    expect(isAllowedFrameNavigation(artboardUrl('ab', 'doc', 'preview', 't'))).toBe(true)
+    expect(isAllowedFrameNavigation(assetUrl('as-1'))).toBe(false)
+    expect(isAllowedFrameNavigation('https://evil.example/')).toBe(false)
+    expect(isAllowedFrameNavigation('about:blank')).toBe(false)
   })
 })

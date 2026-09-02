@@ -46,8 +46,6 @@ function Thumb({ meta, active }: { meta: DesignArtboard; active: boolean }) {
   )
 }
 
-// DesignNode.link has no op of its own, so the link travels as data-pw-link /
-// data-pw-transition attrs; html-render reads them as a fallback to node.link.
 export function LinkSection({ target }: Props) {
   const pageId = useDesignStore((s) => s.pageId)
   const artboards = useDesignStore((s) => s.artboards)
@@ -58,20 +56,16 @@ export function LinkSection({ target }: Props) {
     .filter((m) => m.pageId === pageId && m.id !== target.artboardId)
     .sort((a, b) => a.position - b.position)
 
-  const linkTo = node.attrs['data-pw-link'] ?? node.link?.artboardId ?? NONE
-  const transition = (node.attrs['data-pw-transition'] ??
-    node.link?.transition ??
-    'none') as DesignTransition
+  const linkTo = node.link?.artboardId ?? NONE
+  const transition: DesignTransition = node.link?.transition ?? 'none'
   const linkTarget = linkTo ? artboards[linkTo]?.meta : undefined
 
   function write(to: string, t: DesignTransition): void {
     target.commit(
       target.nodes.map((n) => ({
-        type: 'setAttrs',
+        type: 'setLink',
         id: n.id,
-        patch: to
-          ? { 'data-pw-link': to, 'data-pw-transition': t }
-          : { 'data-pw-link': null, 'data-pw-transition': null },
+        link: to ? { artboardId: to, transition: t } : null,
       })),
       {
         summary: to ? `Link → ${artboards[to]?.meta.name ?? to}` : 'Remove link',

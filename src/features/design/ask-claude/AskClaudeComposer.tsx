@@ -97,7 +97,10 @@ export function AskClaudeComposer() {
     if (open) textareaRef.current?.focus()
   }, [open])
 
-  if (!open || !ctx.docId) return null
+  if (!open) return null
+  // No document (empty state): the request stands alone and Claude creates it.
+  const noDoc = ctx.docId === null
+  const sessionLabel = noDoc ? 'novo design' : ctx.docTitle
 
   const close = (): void => {
     setAskOpen(false)
@@ -106,7 +109,7 @@ export function AskClaudeComposer() {
 
   const prompt = (): string =>
     buildAskPrompt({
-      docId: ctx.docId!,
+      docId: ctx.docId,
       docTitle: ctx.docTitle,
       artboardId: ctx.artboardId,
       artboardName: ctx.artboardName,
@@ -154,10 +157,10 @@ export function AskClaudeComposer() {
       null,
       undefined,
       undefined,
-      `Design: ${ctx.docTitle}`,
+      `Design: ${sessionLabel}`,
       prompt(),
     )
-    showToast({ title: `Sessão aberta para "${ctx.docTitle}"` })
+    showToast({ title: `Sessão aberta para "${sessionLabel}"` })
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -194,7 +197,9 @@ export function AskClaudeComposer() {
               {ctx.artboardName}
             </button>
           ) : (
-            <span className="italic">nenhum artboard selecionado</span>
+            <span className="italic">
+              {noDoc ? 'nenhum documento aberto' : 'nenhum artboard selecionado'}
+            </span>
           )}
           {ctx.selection.map((item) => (
             <span
@@ -224,7 +229,11 @@ export function AskClaudeComposer() {
           disabled={busy}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="O que Claude deve fazer neste design? Enter envia, Shift+Enter quebra linha"
+          placeholder={
+            noDoc
+              ? 'Crie a landing page de … (Enter envia, Shift+Enter quebra linha)'
+              : 'O que Claude deve fazer neste design? Enter envia, Shift+Enter quebra linha'
+          }
           className="w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-accent)]"
         />
 

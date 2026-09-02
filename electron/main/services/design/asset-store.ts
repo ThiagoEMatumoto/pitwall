@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { getDb } from '../db'
+import { prepareAssetBytes } from './asset-sanitize'
+import { MAX_ASSET_BYTES } from '../../../../shared/design/safety'
 import type { DesignAsset, DesignAssetMime } from '../../../../shared/types/design'
 
 // Assets binários do Design Studio, guardados no SQLite como BLOB. Os bytes
@@ -16,7 +18,7 @@ const ALLOWED_MIMES: ReadonlySet<string> = new Set<DesignAssetMime>([
   'image/svg+xml',
 ])
 
-export const MAX_ASSET_BYTES = 5 * 1024 * 1024
+export { MAX_ASSET_BYTES }
 export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 
 interface AssetRow {
@@ -80,14 +82,15 @@ export function upload(input: AssetUploadInput): DesignAsset {
   if (input.bytes.length > MAX_ASSET_BYTES) {
     throw new Error(`asset exceeds ${MAX_ASSET_BYTES} bytes: ${input.bytes.length}`)
   }
+  const bytes = prepareAssetBytes(input.mime as DesignAssetMime, input.bytes)
 
-  const sha256 = createHash('sha256').update(input.bytes).digest('hex')
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
   // Dedupe por escopo: o mesmo arquivo mandado duas vezes pro mesmo doc
   // devolve o registro existente em vez de dobrar o banco.
   const existing = findBySha(sha256, input.documentId)
   if (existing) return rowToAsset(existing)
 
-  if (usedBytes(input.documentId) + input.bytes.length > MAX_DOCUMENT_BYTES) {
+  if (usedBytes(input.documentId) + bytes.length > MAX_DOCUMENT_BYTES) {
     throw new Error(`document asset quota exceeded (${MAX_DOCUMENT_BYTES} bytes)`)
   }
 
@@ -103,8 +106,8 @@ export function upload(input: AssetUploadInput): DesignAsset {
       input.documentId,
       input.name.trim() || 'asset',
       input.mime,
-      input.bytes,
-      input.bytes.length,
+      bytes,
+      bytes.length,
       sha256,
       Date.now(),
     )
@@ -112,16 +115,14 @@ export function upload(input: AssetUploadInput): DesignAsset {
 }
 
 export function getMeta(id: string): DesignAsset | null {
-  const row = getDb()
-    .prepare(`SELECT ${META_COLUMNS} FROM design_assets WHERE id = ?`)
-    .get(id) as AssetRow | undefined
+  const row = getDb().prepare(`SELECT ${META_COLUMNS} FROM design_assets WHERE id = ?`).get(id) as
+    AssetRow | undefined
   return row ? rowToAsset(row) : null
 }
 
 export function get(id: string): { mime: DesignAssetMime; bytes: Buffer } | null {
-  const row = getDb()
-    .prepare('SELECT mime, bytes FROM design_assets WHERE id = ?')
-    .get(id) as { mime: string; bytes: Buffer } | undefined
+  const row = getDb().prepare('SELECT mime, bytes FROM design_assets WHERE id = ?').get(id) as
+    { mime: string; bytes: Buffer } | undefined
   if (!row) return null
   return { mime: row.mime as DesignAssetMime, bytes: row.bytes }
 }

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ArtboardUpdatedEvent, DesignArtboard, DesignDocument, DesignNode } from '@shared/types/design'
+import type {
+  ArtboardUpdatedEvent,
+  DesignArtboard,
+  DesignDocument,
+  DesignNode,
+} from '@shared/types/design'
 
 let updatedHandler: ((payload: unknown) => void) | null = null
 
@@ -31,7 +36,27 @@ vi.mock('@/features/notifications/toast-store', () => ({
   showToast: showToastMock,
 }))
 
-const { useDesignStore } = await import('./designStore')
+const { useDesignStore, registerBridge } = await import('./designStore')
+
+type FakeBridge = {
+  applyOps: ReturnType<typeof vi.fn>
+  reinit: ReturnType<typeof vi.fn>
+  dropRects: ReturnType<typeof vi.fn>
+  init: ReturnType<typeof vi.fn>
+  setTokens: ReturnType<typeof vi.fn>
+}
+
+function fakeBridge(opResult: { ok: boolean } | Error): FakeBridge {
+  return {
+    applyOps: vi.fn(() =>
+      opResult instanceof Error ? Promise.reject(opResult) : Promise.resolve(opResult),
+    ),
+    reinit: vi.fn(),
+    dropRects: vi.fn(),
+    init: vi.fn(),
+    setTokens: vi.fn(),
+  }
+}
 
 function node(id: string, over: Partial<DesignNode> = {}): DesignNode {
   return {
@@ -194,7 +219,9 @@ describe('designStore', () => {
   it('undo restores the tree deep-equal and redo reapplies', async () => {
     const before = useDesignStore.getState().artboards.ab1.tree
     useDesignStore.getState().commit('ab1', [{ type: 'remove', ids: ['a'] }])
-    useDesignStore.getState().commit('ab1', [{ type: 'setStyle', id: 'b', patch: { color: 'blue' } }])
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { color: 'blue' } }])
     expect(useDesignStore.getState().artboards.ab1.tree.children).toHaveLength(1)
     useDesignStore.getState().undo('ab1')
     useDesignStore.getState().undo('ab1')
@@ -208,13 +235,19 @@ describe('designStore', () => {
 
   it('a drag of transient ops plus one final commit is a single undo step', async () => {
     const before = useDesignStore.getState().artboards.ab1.tree
-    useDesignStore.getState().commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '10px' } }], {
-      transient: true,
-    })
-    useDesignStore.getState().commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '20px' } }], {
-      transient: true,
-    })
-    useDesignStore.getState().commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '30px' } }])
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '10px' } }], {
+        transient: true,
+      })
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '20px' } }], {
+        transient: true,
+      })
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '30px' } }])
     expect(useDesignStore.getState().artboards.ab1.tree.children[1].style.left).toBe('30px')
     useDesignStore.getState().undo('ab1')
     expect(useDesignStore.getState().artboards.ab1.tree).toEqual(before)
@@ -223,7 +256,9 @@ describe('designStore', () => {
   })
 
   it('DESIGN_VERSION_CONFLICT sets the conflict banner and resyncs', async () => {
-    mockApi.artboardApplyOps.mockRejectedValueOnce(new Error('DESIGN_VERSION_CONFLICT: base 3, head 5'))
+    mockApi.artboardApplyOps.mockRejectedValueOnce(
+      new Error('DESIGN_VERSION_CONFLICT: base 3, head 5'),
+    )
     const fresh = makeArtboard({ version: 5 })
     mockApi.documentGet.mockResolvedValue(makeDoc(fresh))
     useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'late' }])
@@ -231,6 +266,83 @@ describe('designStore', () => {
     expect(useDesignStore.getState().conflict).toEqual({ artboardId: 'ab1' })
     expect(useDesignStore.getState().artboards.ab1.version).toBe(5)
     expect(useDesignStore.getState().artboards.ab1.tree.children[0].text).toBe('hello')
+  })
+
+  it('after a conflict the queued sends are dropped and the undo history cleared', async () => {
+    mockApi.artboardApplyOps.mockRejectedValueOnce(
+      new Error('DESIGN_VERSION_CONFLICT: base 3, head 5'),
+    )
+    const fresh = makeArtboard({ version: 5 })
+    mockApi.documentGet.mockResolvedValue(makeDoc(fresh))
+    useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'A' }])
+    useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'B' }])
+    await flush()
+    await flush()
+    // Only A reached IPC; B was computed against a tree the server refused.
+    expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(1)
+    const ab = useDesignStore.getState().artboards.ab1
+    expect(ab.version).toBe(5)
+    expect(ab.tree.children[0].text).toBe('hello')
+    const { canUndo } = await import('./designStore')
+    expect(canUndo('ab1')).toBe(false)
+  })
+
+  it('a non-conflict IPC error also resyncs from the server', async () => {
+    mockApi.artboardApplyOps.mockRejectedValueOnce(new Error('boom'))
+    const fresh = makeArtboard({ version: 7 })
+    mockApi.documentGet.mockResolvedValue(makeDoc(fresh))
+    useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'lost' }])
+    await flush()
+    await flush()
+    expect(useDesignStore.getState().error).toBe('boom')
+    expect(useDesignStore.getState().conflict).toBeNull()
+    expect(useDesignStore.getState().artboards.ab1.version).toBe(7)
+    expect(useDesignStore.getState().artboards.ab1.tree.children[0].text).toBe('hello')
+  })
+
+  it('releaseTransient reverts a gesture that never committed and repaints the frame', async () => {
+    const bridge = fakeBridge({ ok: true })
+    const unregister = registerBridge('ab1', bridge as never)
+    const before = useDesignStore.getState().artboards.ab1
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '10px' } }], {
+        transient: true,
+      })
+    useDesignStore.getState().commit('ab1', [{ type: 'setArtboard', patch: { x: 50 } }], {
+      transient: true,
+    })
+    expect(useDesignStore.getState().artboards.ab1.tree.children[1].style.left).toBe('10px')
+    useDesignStore.getState().releaseTransient('ab1')
+    const after = useDesignStore.getState().artboards.ab1
+    expect(after.tree).toBe(before.tree)
+    expect(after.meta).toBe(before.meta)
+    expect(bridge.reinit).toHaveBeenCalledTimes(1)
+    // Nothing went to IPC and the next commit inverts against the right base.
+    await flush()
+    expect(mockApi.artboardApplyOps).not.toHaveBeenCalled()
+    useDesignStore
+      .getState()
+      .commit('ab1', [{ type: 'setStyle', id: 'b', patch: { left: '99px' } }])
+    useDesignStore.getState().undo('ab1')
+    expect(useDesignStore.getState().artboards.ab1.tree).toEqual(before.tree)
+    unregister()
+  })
+
+  it('an op the runtime refuses triggers a re-init from the current tree', async () => {
+    const bridge = fakeBridge({ ok: false })
+    const unregister = registerBridge('ab1', bridge as never)
+    useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'x' }])
+    await flush()
+    expect(bridge.applyOps).toHaveBeenCalledTimes(1)
+    expect(bridge.reinit).toHaveBeenCalledTimes(1)
+    unregister()
+    const rejecting = fakeBridge(new Error('design runtime timeout'))
+    const unregister2 = registerBridge('ab1', rejecting as never)
+    useDesignStore.getState().commit('ab1', [{ type: 'setText', id: 'a', text: 'y' }])
+    await flush()
+    expect(rejecting.reinit).toHaveBeenCalledTimes(1)
+    unregister2()
   })
 
   it('selection is mirrored to main debounced', async () => {

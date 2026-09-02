@@ -41,7 +41,13 @@ const makeTree = (): DesignNode =>
         tag: 'header',
         name: 'Header',
         children: [
-          node({ id: 't', tag: 'h1', kind: 'text', text: 'Hello', style: { color: 'red', margin: '0' } }),
+          node({
+            id: 't',
+            tag: 'h1',
+            kind: 'text',
+            text: 'Hello',
+            style: { color: 'red', margin: '0' },
+          }),
           node({
             id: 'n',
             tag: 'nav',
@@ -52,7 +58,11 @@ const makeTree = (): DesignNode =>
           }),
         ],
       }),
-      node({ id: 'm', tag: 'main', children: [node({ id: 'i', tag: 'img', kind: 'image', attrs: { src: 'x.png' } })] }),
+      node({
+        id: 'm',
+        tag: 'main',
+        children: [node({ id: 'i', tag: 'img', kind: 'image', attrs: { src: 'x.png' } })],
+      }),
     ],
   })
 
@@ -124,7 +134,12 @@ describe('applyOp', () => {
   })
 
   it('move keeps the relative order of several ids', () => {
-    const { tree, touched } = applyOp(makeTree(), { type: 'move', ids: ['a2', 't'], parentId: 'm', index: 0 })
+    const { tree, touched } = applyOp(makeTree(), {
+      type: 'move',
+      ids: ['a2', 't'],
+      parentId: 'm',
+      index: 0,
+    })
     expect(childIds(tree, 'm')).toEqual(['t', 'a2', 'i'])
     expect(childIds(tree, 'h')).toEqual(['n'])
     expect(childIds(tree, 'n')).toEqual(['a1'])
@@ -137,9 +152,9 @@ describe('applyOp', () => {
   })
 
   it('move refuses to put a node inside itself', () => {
-    expect(() => applyOp(makeTree(), { type: 'move', ids: ['h'], parentId: 'n', index: 0 })).toThrow(
-      'cannot move node into itself: h',
-    )
+    expect(() =>
+      applyOp(makeTree(), { type: 'move', ids: ['h'], parentId: 'n', index: 0 }),
+    ).toThrow('cannot move node into itself: h')
   })
 
   it('setStyle / setAttrs delete keys on null', () => {
@@ -153,22 +168,33 @@ describe('applyOp', () => {
 
   it('setText / rename / replaceTree / setArtboard', () => {
     const tree = makeTree()
-    expect(findNode(applyOp(tree, { type: 'setText', id: 't', text: 'Bye' }).tree, 't')!.node.text).toBe('Bye')
-    expect(findNode(applyOp(tree, { type: 'rename', id: 'm', name: 'Main' }).tree, 'm')!.node.name).toBe('Main')
-    expect(findNode(applyOp(tree, { type: 'rename', id: 'h', name: '' }).tree, 'h')!.node).not.toHaveProperty('name')
+    expect(
+      findNode(applyOp(tree, { type: 'setText', id: 't', text: 'Bye' }).tree, 't')!.node.text,
+    ).toBe('Bye')
+    expect(
+      findNode(applyOp(tree, { type: 'rename', id: 'm', name: 'Main' }).tree, 'm')!.node.name,
+    ).toBe('Main')
+    expect(
+      findNode(applyOp(tree, { type: 'rename', id: 'h', name: '' }).tree, 'h')!.node,
+    ).not.toHaveProperty('name')
     const fresh = node({ id: 'r2' })
-    expect(applyOp(tree, { type: 'replaceTree', tree: fresh })).toEqual({ tree: fresh, touched: ['r2'] })
+    expect(applyOp(tree, { type: 'replaceTree', tree: fresh })).toEqual({
+      tree: fresh,
+      touched: ['r2'],
+    })
     const untouched = applyOp(tree, { type: 'setArtboard', patch: { width: 100 } })
     expect(untouched.tree).toBe(tree)
     expect(untouched.touched).toEqual([])
   })
 
   it('throws node not found', () => {
-    expect(() => applyOp(makeTree(), { type: 'setText', id: 'zz', text: '' })).toThrow('node not found: zz')
-    expect(() => applyOp(makeTree(), { type: 'remove', ids: ['zz'] })).toThrow('node not found: zz')
-    expect(() => applyOp(makeTree(), { type: 'insert', parentId: 'zz', index: 0, node: node({ id: 'q' }) })).toThrow(
+    expect(() => applyOp(makeTree(), { type: 'setText', id: 'zz', text: '' })).toThrow(
       'node not found: zz',
     )
+    expect(() => applyOp(makeTree(), { type: 'remove', ids: ['zz'] })).toThrow('node not found: zz')
+    expect(() =>
+      applyOp(makeTree(), { type: 'insert', parentId: 'zz', index: 0, node: node({ id: 'q' }) }),
+    ).toThrow('node not found: zz')
   })
 
   it('applyOps dedupes touched ids', () => {
@@ -182,7 +208,12 @@ describe('applyOp', () => {
 
 describe('invertOp restores the tree', () => {
   it('insert', () => {
-    roundTrip({ type: 'insert', parentId: 'n', index: 1, node: node({ id: 'a15', tag: 'a', kind: 'text', text: 'x' }) })
+    roundTrip({
+      type: 'insert',
+      parentId: 'n',
+      index: 1,
+      node: node({ id: 'a15', tag: 'a', kind: 'text', text: 'x' }),
+    })
   })
 
   it('remove of siblings and nested ids', () => {
@@ -194,7 +225,9 @@ describe('invertOp restores the tree', () => {
   })
 
   it('move across and within parents', () => {
-    expect(invertOp(makeTree(), { type: 'move', ids: ['a2', 't'], parentId: 'm', index: 0 })).toEqual([
+    expect(
+      invertOp(makeTree(), { type: 'move', ids: ['a2', 't'], parentId: 'm', index: 0 }),
+    ).toEqual([
       { type: 'move', ids: ['t'], parentId: 'h', index: 0 },
       { type: 'move', ids: ['a2'], parentId: 'n', index: 1 },
     ])
@@ -204,9 +237,9 @@ describe('invertOp restores the tree', () => {
   })
 
   it('setStyle / setAttrs record old values and null for absent keys', () => {
-    expect(invertOp(makeTree(), { type: 'setStyle', id: 't', patch: { color: 'blue', padding: '1px' } })).toEqual([
-      { type: 'setStyle', id: 't', patch: { color: 'red', padding: null } },
-    ])
+    expect(
+      invertOp(makeTree(), { type: 'setStyle', id: 't', patch: { color: 'blue', padding: '1px' } }),
+    ).toEqual([{ type: 'setStyle', id: 't', patch: { color: 'red', padding: null } }])
     roundTrip({ type: 'setStyle', id: 't', patch: { color: null, padding: '1px' } })
     roundTrip({ type: 'setAttrs', id: 'a1', patch: { href: null, rel: 'nofollow' } })
   })
@@ -220,9 +253,9 @@ describe('invertOp restores the tree', () => {
 
   it('setArtboard takes the current values from the caller', () => {
     const op: DesignOp = { type: 'setArtboard', patch: { width: 800, name: 'Wide' } }
-    expect(invertOp(makeTree(), op, { x: 0, y: 0, width: 1440, height: 900, name: 'Home' })).toEqual([
-      { type: 'setArtboard', patch: { width: 1440, name: 'Home' } },
-    ])
+    expect(
+      invertOp(makeTree(), op, { x: 0, y: 0, width: 1440, height: 900, name: 'Home' }),
+    ).toEqual([{ type: 'setArtboard', patch: { width: 1440, name: 'Home' } }])
     expect(invertOp(makeTree(), op)).toEqual([{ type: 'setArtboard', patch: {} }])
   })
 
@@ -295,7 +328,11 @@ describe('validateTree', () => {
       children: [
         node({ id: 'dup' }),
         node({ id: 'dup', tag: 'SCRIPT' }),
-        node({ id: 'bad', kind: 'widget' as DesignNode['kind'], attrs: { onclick: 'x()', href: ' JavaScript:alert(1)' } }),
+        node({
+          id: 'bad',
+          kind: 'widget' as DesignNode['kind'],
+          attrs: { onclick: 'x()', href: ' JavaScript:alert(1)' },
+        }),
         node({ id: 'txt', kind: 'text', children: [node({ id: 'inner' })] }),
         node({ id: '' }),
       ],
@@ -305,9 +342,57 @@ describe('validateTree', () => {
       'dup: forbidden tag <SCRIPT>',
       'bad: invalid kind "widget"',
       'bad: event handler attribute "onclick"',
-      'bad: javascript: URL in "href"',
+      'bad: unsafe URL in "href"',
       'txt: text node must not have children',
       'node with empty id',
     ])
+  })
+})
+
+describe('validateTree — limits and links', () => {
+  it('refuses trees nesting deeper than the limit without blowing the stack', () => {
+    let tree: DesignNode = node({ id: 'leaf' })
+    for (let i = 0; i < 5000; i++) tree = node({ id: `n${i}`, children: [tree] })
+    const errors = validateTree(tree)
+    expect(errors).toEqual(['tree nests deeper than 256 levels'])
+  })
+
+  it('reports invalid attribute names, obfuscated schemes and malformed links', () => {
+    const tree = node({
+      id: 'root',
+      children: [
+        node({ id: 'a', attrs: { 'bad name': '1', href: 'java\nscript:alert(1)' } }),
+        node({ id: 'b', attrs: { src: 'vbscript:x', 'xlink:href': 'data:text/html,x' } }),
+        node({ id: 'c', link: { artboardId: 'x', transition: 'wipe' } as never }),
+        node({ id: 'd', tag: 'area' }),
+        node({ id: 'e', attrs: { href: '#top', src: 'data:image/png;base64,AA==' } }),
+      ],
+    })
+    expect(validateTree(tree)).toEqual([
+      'a: invalid attribute name "bad name"',
+      'a: unsafe URL in "href"',
+      'b: unsafe URL in "src"',
+      'b: unsafe URL in "xlink:href"',
+      'c: invalid link',
+      'd: forbidden tag <area>',
+    ])
+  })
+})
+
+describe('setLink op', () => {
+  it('sets, replaces and clears node.link; inverse restores the previous link', () => {
+    const tree = makeTree()
+    const set: DesignOp = {
+      type: 'setLink',
+      id: 't',
+      link: { artboardId: 'ab2', transition: 'push' },
+    }
+    const inverse = invertOps(tree, [set])
+    const linked = applyOps(tree, [set]).tree
+    expect(findNode(linked, 't')!.node.link).toEqual({ artboardId: 'ab2', transition: 'push' })
+    expect(inverse).toEqual([{ type: 'setLink', id: 't', link: null }])
+    const cleared = applyOps(linked, inverse).tree
+    expect('link' in findNode(cleared, 't')!.node).toBe(false)
+    expect(cleared).toEqual(tree)
   })
 })

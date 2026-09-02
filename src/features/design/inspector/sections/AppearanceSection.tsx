@@ -22,6 +22,8 @@ import {
   writeShadow,
   type ShadowPreset,
 } from '../style-mapping'
+import { computedColor, computedPx } from '../computed-format'
+import { useComputedStyle } from '../computed'
 import { useColorTokens, type InspectorTarget } from '../target'
 
 interface Props {
@@ -29,6 +31,20 @@ interface Props {
 }
 
 const CORNER_LABELS = ['TL', 'TR', 'BR', 'BL'] as const
+const CORNER_KEYS = ['top-left', 'top-right', 'bottom-right', 'bottom-left'] as const
+const COMPUTED_PROPS = [
+  'background-color',
+  'border-top-left-radius',
+  'border-top-right-radius',
+  'border-bottom-right-radius',
+  'border-bottom-left-radius',
+  'border-top-width',
+  'border-top-color',
+] as const
+
+function hasInline(style: InspectorTarget['style'], keys: readonly string[]): boolean {
+  return keys.some((k) => getStyle(style, k) != null)
+}
 const SHADOW_OPTIONS = Object.keys(SHADOW_PRESETS).map((id) => ({ value: id, label: id === 'none' ? 'Nenhuma' : id }))
 
 export function AppearanceSection({ target }: Props) {
@@ -40,6 +56,12 @@ export function AppearanceSection({ target }: Props) {
   const radius = readRadius(style)
   const border = readBorder(style)
   const shadow = readShadow(style)
+  // Stylesheet/inherited values show as placeholders until the user writes inline.
+  const computed = useComputedStyle(target.artboardId, id, COMPUTED_PROPS)
+  const inlineRadius = hasInline(style, ['border-radius', ...CORNER_KEYS.map((c) => `border-${c}-radius`)])
+  const inlineBorder = hasInline(style, ['border', 'border-width', 'border-style', 'border-color'])
+  const radiusValue = (i: number): number | null => (inlineRadius ? radius[i] : null)
+  const radiusPlaceholder = (i: number): string => computedPx(computed[`border-${CORNER_KEYS[i]}-radius`], '0')
 
   function setRadius(i: number, v: number, transient: boolean): void {
     const next = linked ? [v, v, v, v] : radius.map((r, j) => (j === i ? v : r))
@@ -51,6 +73,7 @@ export function AppearanceSection({ target }: Props) {
       <Row label="Fundo">
         <ColorField
           value={fill}
+          computed={computedColor(computed['background-color'])}
           tokens={tokens}
           onCommit={(v) => target.applyStyle({ background: v || null, 'background-color': null })}
         />
@@ -69,7 +92,8 @@ export function AppearanceSection({ target }: Props) {
         <div className="flex items-start gap-1">
           {linked ? (
             <NumberField
-              value={radius[0]}
+              value={radiusValue(0)}
+              placeholder={radiusPlaceholder(0)}
               min={0}
               onScrub={(v) => setRadius(0, v, true)}
               onCommit={(v) => setRadius(0, v ?? 0, false)}
@@ -80,7 +104,8 @@ export function AppearanceSection({ target }: Props) {
                 <NumberField
                   key={label}
                   label={label}
-                  value={radius[i]}
+                  value={radiusValue(i)}
+                  placeholder={radiusPlaceholder(i)}
                   min={0}
                   onScrub={(v) => setRadius(i, v, true)}
                   onCommit={(v) => setRadius(i, v ?? 0, false)}
@@ -102,7 +127,8 @@ export function AppearanceSection({ target }: Props) {
         <div className="flex flex-col gap-1">
           <div className="flex gap-1">
             <NumberField
-              value={border.width}
+              value={inlineBorder ? border.width : null}
+              placeholder={computedPx(computed['border-top-width'], '0')}
               min={0}
               onCommit={(v) => target.applyStyle(writeBorder({ ...border, width: v ?? 0 }))}
             />
@@ -114,6 +140,7 @@ export function AppearanceSection({ target }: Props) {
           </div>
           <ColorField
             value={border.color}
+            computed={computedColor(computed['border-top-color'])}
             tokens={tokens}
             onCommit={(color) => target.applyStyle(writeBorder({ ...border, color, width: border.width || 1 }))}
           />

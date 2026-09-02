@@ -79,7 +79,11 @@ import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
 import { setMainWindow, emitToast } from './services/notifications'
-import { registerDesignScheme, installDesignProtocol } from './services/design/protocol'
+import {
+  registerDesignScheme,
+  installDesignProtocol,
+  installDesignFrameGuard,
+} from './services/design/protocol'
 import * as designStore from './services/design/design-store'
 import * as designAssets from './services/design/asset-store'
 
@@ -157,6 +161,7 @@ function createMainWindow(): BrowserWindow {
       openExternalSafe(url)
     }
   })
+  installDesignFrameGuard(win.webContents)
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)

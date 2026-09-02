@@ -2,8 +2,11 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, protocol } from 'electron'
-import { buildArtboardDocument, type ArtboardRenderMode } from '../../../../shared/design/html-render'
+import { app, protocol, type WebContents } from 'electron'
+import {
+  buildArtboardDocument,
+  type ArtboardRenderMode,
+} from '../../../../shared/design/html-render'
 import type { DesignArtboard, DesignAsset, DesignDocument } from '../../../../shared/types/design'
 
 // pitwall-design:// serves artboard documents and asset bytes to the sandboxed
@@ -68,6 +71,11 @@ export function assetUrl(assetId: string): string {
   return `${DESIGN_SCHEME}://asset/${encodeURIComponent(assetId)}`
 }
 
+// An asset can also be navigated to (a click on <area>/<a> pointing at it):
+// as a document it must not run anything, reach anywhere or be sniffed
+// into something else.
+export const ASSET_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
 export function artboardCsp(nonce: string): string {
   return (
     "default-src 'none'; " +
@@ -87,7 +95,9 @@ export interface DesignAssetBytes {
 }
 
 export interface DesignProtocolDeps {
-  getDocument(docId: string): MaybePromise<Pick<DesignDocument, 'tokens' | 'fonts' | 'globalCss'> | null>
+  getDocument(
+    docId: string,
+  ): MaybePromise<Pick<DesignDocument, 'tokens' | 'fonts' | 'globalCss'> | null>
   getArtboard(artboardId: string): MaybePromise<DesignArtboard | null>
   getAsset(assetId: string): MaybePromise<DesignAssetBytes | null>
   // Test seam; defaults to the built bundle on disk.
@@ -112,7 +122,10 @@ function readRuntimeJsFromDisk(): string {
   for (const path of candidates) {
     if (existsSync(path)) return readFileSync(path, 'utf8')
   }
-  console.error('[design] runtime bundle not found; artboards will render without the runtime', candidates)
+  console.error(
+    '[design] runtime bundle not found; artboards will render without the runtime',
+    candidates,
+  )
   return ''
 }
 
@@ -120,7 +133,9 @@ function notFound(): Response {
   return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } })
 }
 
-export function createDesignProtocolHandler(deps: DesignProtocolDeps): (request: Request) => Promise<Response> {
+export function createDesignProtocolHandler(
+  deps: DesignProtocolDeps,
+): (request: Request) => Promise<Response> {
   const readRuntimeJs = deps.readRuntimeJs ?? readRuntimeJsFromDisk
   return async (request) => {
     const route = routeDesignUrl(request.url)
@@ -133,15 +148,27 @@ export function createDesignProtocolHandler(deps: DesignProtocolDeps): (request:
           'Content-Type': asset.mime,
           'Content-Length': String(asset.bytes.byteLength),
           'Cache-Control': 'public, max-age=31536000, immutable',
+          'Content-Security-Policy': ASSET_CSP,
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition': 'inline',
         },
       })
     }
     if (route.kind !== 'artboard') return notFound()
-    const [doc, artboard] = await Promise.all([deps.getDocument(route.docId), deps.getArtboard(route.id)])
+    const [doc, artboard] = await Promise.all([
+      deps.getDocument(route.docId),
+      deps.getArtboard(route.id),
+    ])
     if (!doc || !artboard) return notFound()
     if (runtimeJsCache === null) runtimeJsCache = readRuntimeJs()
     const nonce = randomBytes(16).toString('base64')
-    const html = buildArtboardDocument({ doc, artboard, runtimeJs: runtimeJsCache, nonce, mode: route.mode })
+    const html = buildArtboardDocument({
+      doc,
+      artboard,
+      runtimeJs: runtimeJsCache,
+      nonce,
+      mode: route.mode,
+    })
     return new Response(html, {
       status: 200,
       headers: {
@@ -156,4 +183,18 @@ export function createDesignProtocolHandler(deps: DesignProtocolDeps): (request:
 // Must run after app.whenReady(), before any window loads an artboard.
 export function installDesignProtocol(deps: DesignProtocolDeps): void {
   protocol.handle(DESIGN_SCHEME, createDesignProtocolHandler(deps))
+}
+
+// Sub-frames of the app window may only ever show artboard documents: a
+// click inside a sandboxed iframe that resolves to an asset (or anything
+// else on the scheme) is refused in main, whatever the runtime let through.
+export function isAllowedFrameNavigation(url: string): boolean {
+  return routeDesignUrl(url).kind === 'artboard'
+}
+
+export function installDesignFrameGuard(contents: WebContents): void {
+  contents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame) return
+    if (!isAllowedFrameNavigation(event.url)) event.preventDefault()
+  })
 }

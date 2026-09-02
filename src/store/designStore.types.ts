@@ -86,6 +86,8 @@ export interface DesignState {
   updateArtboardMeta: (artboardId: string, patch: ArtboardPatch) => void
   setArtboardReady: (artboardId: string, ready: boolean) => void
   commit: (artboardId: string, ops: DesignOp[], opts?: CommitOptions) => void
+  // Ends a gesture that never committed: reverts its transient ops.
+  releaseTransient: (artboardId: string) => void
   resync: (artboardId: string) => Promise<void>
   dismissConflict: () => void
   undo: (artboardId: string) => void

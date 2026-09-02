@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { api } from '@/lib/ipc'
 import { fitViewport, unionRects, zoomAt } from '@/features/design/canvas/geometry'
-import { buildIndex, invertOps } from '@shared/design/ops'
+import { invertOps } from '@shared/design/ops'
 import type { ArtboardUpdatedEvent, DesignAgentActivity, DesignOp } from '@shared/types/design'
 import type { DesignState } from './designStore.types'
 import {
@@ -9,13 +9,15 @@ import {
   applyLocal,
   artboardsOf,
   bridges,
+  createArtboardAction,
   history,
   indexes,
   metaPatch,
   pageArtboards,
+  releaseTransientAction,
   resetLocalState,
+  resyncAction,
   sendOps,
-  setLocal,
   stageSize,
   toMeta,
   transientBase,
@@ -49,7 +51,6 @@ export {
 
 const SELECTION_DEBOUNCE_MS = 150
 const VIEWPORT_PERSIST_MS = 500
-const ARTBOARD_GAP = 100
 
 const EMPTY_SELECTION = { artboardId: null, nodeIds: [] as string[] }
 
@@ -185,43 +186,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       get().selectPage(page.id)
     },
 
-    createArtboard: async (preset) => {
-      const { docId, pageId } = get()
-      if (!docId || !pageId) throw new Error('no document open')
-      const existing = pageArtboards(store)
-      const x = existing.length ? Math.max(...existing.map((m) => m.x + m.width)) + ARTBOARD_GAP : 0
-      const artboard = await api.design.artboardCreate({
-        docId,
-        pageId,
-        name: `${preset.label} ${existing.length + 1}`,
-        width: preset.width,
-        height: preset.height,
-        x,
-        y: 0,
-      })
-      indexes.set(artboard.id, buildIndex(artboard.tree))
-      set((s) => ({
-        artboards: {
-          ...s.artboards,
-          [artboard.id]: {
-            meta: artboard,
-            tree: artboard.tree,
-            version: artboard.version,
-            ready: false,
-          },
-        },
-        doc: s.doc
-          ? {
-              ...s.doc,
-              pages: s.doc.pages.map((p) =>
-                p.id === pageId ? { ...p, artboards: [...p.artboards, artboard] } : p,
-              ),
-            }
-          : s.doc,
-        selection: { artboardId: artboard.id, nodeIds: [] },
-      }))
-      return artboard
-    },
+    createArtboard: (preset) => createArtboardAction(store, preset),
 
     updateArtboardMeta: (artboardId, patch) => {
       get().commit(artboardId, [{ type: 'setArtboard', patch }], {
@@ -264,22 +229,9 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       sendOps(store, artboardId, ops, opts)
     },
 
-    resync: async (artboardId) => {
-      const { docId } = get()
-      if (!docId) return
-      const doc = await api.design.documentGet(docId)
-      const fresh = doc?.pages.flatMap((p) => p.artboards).find((a) => a.id === artboardId)
-      if (!doc || !fresh) return
-      transientBase.delete(artboardId)
-      set((s) => ({ doc, docs: upsertMeta(s.docs, toMeta(doc)) }))
-      setLocal(store, artboardId, fresh.tree, fresh, fresh.version)
-      bridges.get(artboardId)?.init({
-        tree: fresh.tree,
-        tokens: doc.tokens,
-        fonts: doc.fonts,
-        mode: get().mode,
-      })
-    },
+    releaseTransient: (artboardId) => releaseTransientAction(store, artboardId),
+
+    resync: (artboardId) => resyncAction(store, artboardId),
 
     dismissConflict: () => set({ conflict: null }),
 

@@ -1,26 +1,28 @@
 // Árvore → HTML. TS puro (sem DOM): roda no main (protocol handler,
 // export) e no renderer. O parse (HTML → árvore) fica no main com parse5.
 
-import type {
-  DesignArtboard,
-  DesignDocument,
-  DesignNode,
-  DesignNodeLink,
-  DesignTokens,
-} from '../types/design'
+import type { DesignArtboard, DesignDocument, DesignNode, DesignTokens } from '../types/design'
+import { BLOCKED_TAGS, TAG_NAME_RE, isAllowedAttr, isTransition } from './safety'
 
 const VOID_TAGS = new Set([
-  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
-  'param', 'source', 'track', 'wbr',
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
 ])
 
 // Defesa em profundidade: o parser já recusa, mas o render é a última linha
-// antes do iframe.
-const BLOCKED_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base'])
-
-const TAG_NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]*$/
-const ATTR_NAME_RE = /^[a-zA-Z_:][a-zA-Z0-9_:.-]*$/
-const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction'])
+// antes do iframe. As regras (BLOCKED_TAGS, urls, atributos) vivem em safety.ts.
 
 export interface RenderOptions {
   // false = export standalone: sem data-pw-*, nós hidden omitidos.
@@ -31,10 +33,7 @@ const EDIT: RenderOptions = { ids: true }
 const EXPORT: RenderOptions = { ids: false }
 
 export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 export function escapeAttr(value: string): string {
@@ -57,24 +56,10 @@ export function styleToString(style: Record<string, string>): string {
   return parts.join(';')
 }
 
-function isUnsafeUrl(value: string): boolean {
-  return /^\s*(javascript|vbscript|data:text\/html)/i.test(value)
-}
-
-function linkFromAttrs(attrs: DesignNode['attrs']): DesignNodeLink | undefined {
-  const artboardId = attrs['data-pw-link']
-  if (!artboardId) return undefined
-  const transition = (attrs['data-pw-transition'] || 'none') as DesignNodeLink['transition']
-  return { artboardId, transition }
-}
-
 function renderAttrs(node: DesignNode, opts: RenderOptions): string {
   let out = ''
   for (const [name, value] of Object.entries(node.attrs)) {
-    if (!ATTR_NAME_RE.test(name)) continue
-    const lower = name.toLowerCase()
-    if (lower === 'style' || lower.startsWith('on') || lower.startsWith('data-pw-')) continue
-    if (URL_ATTRS.has(lower) && isUnsafeUrl(value)) continue
+    if (!isAllowedAttr(name, value)) continue
     out += ` ${name}="${escapeAttr(value)}"`
   }
   let style = styleToString(node.style)
@@ -83,10 +68,10 @@ function renderAttrs(node: DesignNode, opts: RenderOptions): string {
   if (opts.ids) {
     out += ` data-pw-id="${escapeAttr(node.id)}"`
     if (node.hidden) out += ' data-pw-hidden=""'
-    // The inspector has no setLink op, so it stores the link as data-pw-* attrs.
-    const link = node.link ?? linkFromAttrs(node.attrs)
-    if (link) {
-      out += ` data-pw-link="${escapeAttr(link.artboardId)}" data-pw-transition="${link.transition}"`
+    const link = node.link
+    if (link && link.artboardId) {
+      const transition = isTransition(link.transition) ? link.transition : 'none'
+      out += ` data-pw-link="${escapeAttr(link.artboardId)}" data-pw-transition="${transition}"`
     }
   }
   return out
@@ -105,8 +90,9 @@ function renderTree(node: DesignNode, opts: RenderOptions, inSvg: boolean): stri
   return `${open}${inner}</${tag}>`
 }
 
-export function renderNode(node: DesignNode, opts: RenderOptions = EDIT): string {
-  return renderTree(node, opts, false)
+// inSvg: the node is inserted under an <svg> parent (tag case preserved).
+export function renderNode(node: DesignNode, opts: RenderOptions = EDIT, inSvg = false): string {
+  return renderTree(node, opts, inSvg)
 }
 
 // Dentro de <style>, '</' encerraria o elemento; '\/' é escape CSS válido.
@@ -142,15 +128,30 @@ export interface BuildArtboardDocumentInput {
   mode: ArtboardRenderMode
 }
 
-function artboardBackground(tree: DesignNode): string {
-  return tree.style.background || tree.style.backgroundColor || '#ffffff'
+const DEFAULT_BACKGROUND = '#ffffff'
+// A value that could close the declaration/block or the <style> element is
+// not a colour; the root node still paints it through its own style attr.
+const UNSAFE_CSS_VALUE_RE = /[<>{};\\]|[\x00-\x1f\x7f]/
+
+export function artboardBackground(tree: DesignNode): string {
+  const value = tree.style.background || tree.style.backgroundColor || DEFAULT_BACKGROUND
+  return UNSAFE_CSS_VALUE_RE.test(value) ? DEFAULT_BACKGROUND : value
+}
+
+function safeInt(value: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.round(n) : 0
+}
+
+function cssPx(value: number): string {
+  return `${safeInt(value)}px`
 }
 
 function baseCss(artboard: DesignArtboard): string {
-  return (
+  return cssSafe(
     'html,body{margin:0;padding:0}' +
-    `body{width:${artboard.width}px;height:${artboard.height}px;overflow:hidden;` +
-    `background:${artboardBackground(artboard.tree)}}`
+      `body{width:${cssPx(artboard.width)};height:${cssPx(artboard.height)};overflow:hidden;` +
+      `background:${artboardBackground(artboard.tree)}}`,
   )
 }
 
@@ -182,7 +183,7 @@ export function renderStandaloneHtml(
 ): string {
   return (
     '<!doctype html><html><head><meta charset="utf-8">' +
-    `<meta name="viewport" content="width=${artboard.width}">` +
+    `<meta name="viewport" content="width=${safeInt(artboard.width)}">` +
     `<title>${escapeHtml(artboard.name)}</title>` +
     fontsToLinks(doc.fonts) +
     `<style>${tokensToCss(doc.tokens)}${cssSafe(doc.globalCss)}</style>` +

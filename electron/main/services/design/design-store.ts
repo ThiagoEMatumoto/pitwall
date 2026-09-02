@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { getDb } from '../db'
 import { newNodeId } from '../../../../shared/design/ids'
 import { cloneWithNewIds } from '../../../../shared/design/ops'
+import {
+  MAX_GLOBAL_CSS_BYTES,
+  MAX_NAME_CHARS,
+  MAX_SUMMARY_CHARS,
+  MAX_TOKEN_KEYS,
+  clampArtboardSize,
+} from '../../../../shared/design/safety'
 import type {
   CreateDesignArtboardInput,
   CreateDesignDocumentInput,
@@ -93,6 +100,23 @@ interface LinkRow {
 }
 
 const DEFAULT_VIEWPORT: DesignPageViewport = { x: 0, y: 0, zoom: 1 }
+
+// ---- input limits (IPC and MCP both land here) ----
+
+function clampName(name: string): string {
+  return name.trim().slice(0, MAX_NAME_CHARS)
+}
+
+function assertDocumentLimits(input: { tokens?: DesignTokens; globalCss?: string }): void {
+  if (input.globalCss !== undefined && Buffer.byteLength(input.globalCss) > MAX_GLOBAL_CSS_BYTES) {
+    throw new Error(`globalCss exceeds ${MAX_GLOBAL_CSS_BYTES} bytes`)
+  }
+  for (const [category, values] of Object.entries(input.tokens ?? {})) {
+    if (values && Object.keys(values).length > MAX_TOKEN_KEYS) {
+      throw new Error(`tokens.${category} has more than ${MAX_TOKEN_KEYS} keys`)
+    }
+  }
+}
 
 export function defaultTree(): DesignNode {
   return {
@@ -212,8 +236,7 @@ function rowToLink(row: LinkRow): DesignLink {
 
 function getDocumentRow(id: string): DocumentRow | undefined {
   return getDb().prepare('SELECT * FROM design_documents WHERE id = ?').get(id) as
-    | DocumentRow
-    | undefined
+    DocumentRow | undefined
 }
 
 function getPageRow(id: string): PageRow | undefined {
@@ -222,8 +245,7 @@ function getPageRow(id: string): PageRow | undefined {
 
 function getArtboardRow(id: string): ArtboardRow | undefined {
   return getDb().prepare('SELECT * FROM design_artboards WHERE id = ?').get(id) as
-    | ArtboardRow
-    | undefined
+    ArtboardRow | undefined
 }
 
 function touchDocument(id: string, now: number): void {
@@ -296,6 +318,7 @@ export function getDocument(id: string): DesignDocument | null {
 }
 
 export function createDocument(input: CreateDesignDocumentInput): DesignDocument {
+  assertDocumentLimits(input)
   const now = Date.now()
   const id = randomUUID()
   const db = getDb()
@@ -306,7 +329,7 @@ export function createDocument(input: CreateDesignDocumentInput): DesignDocument
        VALUES (?, ?, 'active', ?, ?, ?, NULL, ?, ?)`,
     ).run(
       id,
-      input.title.trim(),
+      clampName(input.title),
       JSON.stringify(input.tokens ?? {}),
       JSON.stringify(input.fonts ?? []),
       input.globalCss ?? '',
@@ -336,6 +359,7 @@ export function createDocument(input: CreateDesignDocumentInput): DesignDocument
 export function updateDocument(input: UpdateDesignDocumentInput): DesignDocument {
   const row = getDocumentRow(input.id)
   if (!row) throw new Error(`design document not found: ${input.id}`)
+  assertDocumentLimits(input)
   getDb()
     .prepare(
       `UPDATE design_documents
@@ -343,7 +367,7 @@ export function updateDocument(input: UpdateDesignDocumentInput): DesignDocument
        WHERE id = ?`,
     )
     .run(
-      input.title?.trim() || row.title,
+      (input.title && clampName(input.title)) || row.title,
       input.tokens ? JSON.stringify(input.tokens) : row.tokens,
       input.fonts ? JSON.stringify(input.fonts) : row.fonts,
       input.globalCss ?? row.global_css,
@@ -384,7 +408,9 @@ export function setThumbnail(id: string, dataUrl: string): void {
 
 export function listPages(documentId: string): DesignPage[] {
   const rows = getDb()
-    .prepare('SELECT * FROM design_pages WHERE document_id = ? ORDER BY position ASC, created_at ASC')
+    .prepare(
+      'SELECT * FROM design_pages WHERE document_id = ? ORDER BY position ASC, created_at ASC',
+    )
     .all(documentId) as PageRow[]
   return rows.map(rowToPage)
 }
@@ -402,11 +428,13 @@ export function createPage(input: CreateDesignPageInput): DesignPage {
   const tx = db.transaction(() => {
     const position =
       input.position ??
-      ((
+      (
         db
-          .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM design_pages WHERE document_id = ?')
+          .prepare(
+            'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM design_pages WHERE document_id = ?',
+          )
           .get(input.docId) as { next: number }
-      ).next)
+      ).next
     db.prepare(INSERT_PAGE_SQL).run(
       id,
       input.docId,
@@ -470,7 +498,9 @@ export function removePage(id: string): void {
 
 export function listArtboards(pageId: string): DesignArtboard[] {
   const rows = getDb()
-    .prepare('SELECT * FROM design_artboards WHERE page_id = ? ORDER BY position ASC, created_at ASC')
+    .prepare(
+      'SELECT * FROM design_artboards WHERE page_id = ? ORDER BY position ASC, created_at ASC',
+    )
     .all(pageId) as ArtboardRow[]
   return rows.map(rowToArtboard)
 }
@@ -506,7 +536,9 @@ function insertArtboard(
   const tx = db.transaction(() => {
     const position = (
       db
-        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM design_artboards WHERE page_id = ?')
+        .prepare(
+          'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM design_artboards WHERE page_id = ?',
+        )
         .get(page.id) as { next: number }
     ).next
     db.prepare(
@@ -557,11 +589,11 @@ export function createArtboard(input: CreateDesignArtboardInput): DesignArtboard
   const id = insertArtboard(
     page,
     {
-      name: input.name,
+      name: clampName(input.name) || 'Artboard',
       x: input.x ?? 0,
       y: input.y ?? 0,
-      width: input.width,
-      height: input.height,
+      width: clampArtboardSize(input.width),
+      height: clampArtboardSize(input.height),
       tree: input.tree ?? defaultTree(),
     },
     input.author ?? 'human',
@@ -584,11 +616,11 @@ export function updateArtboard(
        SET name = ?, x = ?, y = ?, width = ?, height = ?, position = ?, updated_at = ?
        WHERE id = ?`,
     ).run(
-      patch.name?.trim() || row.name,
+      (patch.name && clampName(patch.name)) || row.name,
       patch.x ?? row.x,
       patch.y ?? row.y,
-      patch.width ?? row.width,
-      patch.height ?? row.height,
+      patch.width !== undefined ? clampArtboardSize(patch.width) : row.width,
+      patch.height !== undefined ? clampArtboardSize(patch.height) : row.height,
       patch.position ?? row.position,
       now,
       id,
@@ -641,7 +673,11 @@ export interface SetTreeOptions {
 
 // Único caminho de escrita da árvore. Sempre bumpa `version` (o cliente
 // detecta divergência por ela); só snapshot=true grava histórico.
-export function setTree(artboardId: string, tree: DesignNode, opts: SetTreeOptions): DesignArtboard {
+export function setTree(
+  artboardId: string,
+  tree: DesignNode,
+  opts: SetTreeOptions,
+): DesignArtboard {
   const row = getArtboardRow(artboardId)
   if (!row) throw new Error(`design artboard not found: ${artboardId}`)
 
@@ -650,19 +686,16 @@ export function setTree(artboardId: string, tree: DesignNode, opts: SetTreeOptio
   const nextVersion = row.version + 1
   const db = getDb()
   const tx = db.transaction(() => {
-    db.prepare('UPDATE design_artboards SET tree = ?, version = ?, updated_at = ? WHERE id = ?').run(
-      treeJson,
-      nextVersion,
-      now,
-      artboardId,
-    )
+    db.prepare(
+      'UPDATE design_artboards SET tree = ?, version = ?, updated_at = ? WHERE id = ?',
+    ).run(treeJson, nextVersion, now, artboardId)
     if (opts.snapshot) {
       db.prepare(INSERT_VERSION_SQL).run({
         id: randomUUID(),
         artboard_id: artboardId,
         version: nextVersion,
         author: opts.author,
-        summary: opts.summary?.trim() || `version ${nextVersion}`,
+        summary: opts.summary?.trim().slice(0, MAX_SUMMARY_CHARS) || `version ${nextVersion}`,
         tree: treeJson,
         created_at: now,
       })
@@ -735,9 +768,7 @@ export function link(input: DesignLink): DesignLink[] {
 
 export function unlink(input: DesignLink): DesignLink[] {
   getDb()
-    .prepare(
-      'DELETE FROM design_links WHERE document_id = ? AND parent_type = ? AND parent_id = ?',
-    )
+    .prepare('DELETE FROM design_links WHERE document_id = ? AND parent_type = ? AND parent_id = ?')
     .run(input.documentId, input.parentType, input.parentId)
   return listLinks(input.documentId)
 }

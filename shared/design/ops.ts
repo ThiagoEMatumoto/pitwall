@@ -2,8 +2,12 @@
 // renderer (designStore) and the iframe runtime, so no DOM/electron here.
 // Every function returns a new tree; the input is never mutated.
 
-import type { DesignArtboard, DesignNode, DesignNodeKind, DesignNodeSummary, DesignOp } from '../types/design'
+import type { DesignArtboard, DesignNode, DesignOp } from '../types/design'
 import { newNodeId } from './ids'
+
+// Re-exported so callers keep one import surface for tree utilities.
+export { validateTree } from './tree-check'
+export { summarize, summaryToText } from './summary'
 
 export interface FoundNode {
   node: DesignNode
@@ -18,10 +22,6 @@ export interface IndexEntry {
 }
 
 export type ArtboardPatch = Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>>
-
-const KINDS: ReadonlySet<DesignNodeKind> = new Set(['frame', 'text', 'image', 'svg', 'element'])
-const FORBIDDEN_TAGS = new Set(['script', 'iframe', 'object', 'embed'])
-const SUMMARY_TEXT_MAX = 60
 
 // ---- Traversal ----
 
@@ -202,12 +202,18 @@ export function applyOp(tree: DesignNode, op: DesignOp): { tree: DesignNode; tou
     }
     case 'setStyle':
       return {
-        tree: updateAt(tree, op.id, (node) => ({ ...node, style: applyPatch(node.style, op.patch) })),
+        tree: updateAt(tree, op.id, (node) => ({
+          ...node,
+          style: applyPatch(node.style, op.patch),
+        })),
         touched: [op.id],
       }
     case 'setAttrs':
       return {
-        tree: updateAt(tree, op.id, (node) => ({ ...node, attrs: applyPatch(node.attrs, op.patch) })),
+        tree: updateAt(tree, op.id, (node) => ({
+          ...node,
+          attrs: applyPatch(node.attrs, op.patch),
+        })),
         touched: [op.id],
       }
     case 'setText':
@@ -227,6 +233,14 @@ export function applyOp(tree: DesignNode, op: DesignOp): { tree: DesignNode; tou
         }),
         touched: [op.id],
       }
+    case 'setLink':
+      return {
+        tree: updateAt(tree, op.id, (node) => {
+          const { link: _link, ...rest } = node
+          return op.link ? { ...rest, link: op.link } : rest
+        }),
+        touched: [op.id],
+      }
     case 'replaceTree':
       return { tree: op.tree, touched: [op.tree.id] }
     case 'setArtboard':
@@ -235,7 +249,10 @@ export function applyOp(tree: DesignNode, op: DesignOp): { tree: DesignNode; tou
   }
 }
 
-export function applyOps(tree: DesignNode, ops: readonly DesignOp[]): { tree: DesignNode; touched: string[] } {
+export function applyOps(
+  tree: DesignNode,
+  ops: readonly DesignOp[],
+): { tree: DesignNode; touched: string[] } {
   const touched = new Set<string>()
   let current = tree
   for (const op of ops) {
@@ -267,13 +284,27 @@ export function invertOp(tree: DesignNode, op: DesignOp, current?: ArtboardPatch
         return { type: 'move', ids: [id], parentId: parent!.id, index }
       })
     case 'setStyle':
-      return [{ type: 'setStyle', id: op.id, patch: inversePatch(requireNode(tree, op.id).node.style, op.patch) }]
+      return [
+        {
+          type: 'setStyle',
+          id: op.id,
+          patch: inversePatch(requireNode(tree, op.id).node.style, op.patch),
+        },
+      ]
     case 'setAttrs':
-      return [{ type: 'setAttrs', id: op.id, patch: inversePatch(requireNode(tree, op.id).node.attrs, op.patch) }]
+      return [
+        {
+          type: 'setAttrs',
+          id: op.id,
+          patch: inversePatch(requireNode(tree, op.id).node.attrs, op.patch),
+        },
+      ]
     case 'setText':
       return [{ type: 'setText', id: op.id, text: requireNode(tree, op.id).node.text ?? '' }]
     case 'rename':
       return [{ type: 'rename', id: op.id, name: requireNode(tree, op.id).node.name ?? '' }]
+    case 'setLink':
+      return [{ type: 'setLink', id: op.id, link: requireNode(tree, op.id).node.link ?? null }]
     case 'replaceTree':
       return [{ type: 'replaceTree', tree }]
     case 'setArtboard': {
@@ -289,7 +320,11 @@ export function invertOp(tree: DesignNode, op: DesignOp, current?: ArtboardPatch
 }
 
 // Inverses for a batch, already in undo order (last op first).
-export function invertOps(tree: DesignNode, ops: readonly DesignOp[], current?: ArtboardPatch): DesignOp[] {
+export function invertOps(
+  tree: DesignNode,
+  ops: readonly DesignOp[],
+  current?: ArtboardPatch,
+): DesignOp[] {
   const inverses: DesignOp[][] = []
   let working = tree
   for (const op of ops) {
@@ -299,45 +334,10 @@ export function invertOps(tree: DesignNode, ops: readonly DesignOp[], current?: 
   return inverses.reverse().flat()
 }
 
-// ---- Agent-facing views ----
-
-export function summarize(tree: DesignNode, maxDepth: number): DesignNodeSummary {
-  const build = (node: DesignNode, depth: number): DesignNodeSummary => {
-    const summary: DesignNodeSummary = {
-      id: node.id,
-      tag: node.tag,
-      kind: node.kind,
-      childCount: node.children.length,
-    }
-    if (node.name) summary.name = node.name
-    if (node.text) {
-      summary.text = node.text.length > SUMMARY_TEXT_MAX
-        ? `${node.text.slice(0, SUMMARY_TEXT_MAX)}…`
-        : node.text
-    }
-    if (depth < maxDepth && node.children.length > 0) {
-      summary.children = node.children.map((child) => build(child, depth + 1))
-    }
-    return summary
-  }
-  return build(tree, 0)
-}
-
-export function summaryToText(summary: DesignNodeSummary): string {
-  const lines: string[] = []
-  const emit = (item: DesignNodeSummary, depth: number): void => {
-    let line = `${'  '.repeat(depth)}${item.id} ${item.tag}.${item.kind}`
-    if (item.name) line += ` "${item.name}"`
-    if (item.text) line += ` ${JSON.stringify(item.text)}`
-    if (item.childCount > 0 && !item.children) line += ` (${item.childCount} children)`
-    lines.push(line)
-    for (const child of item.children ?? []) emit(child, depth + 1)
-  }
-  emit(summary, 0)
-  return lines.join('\n')
-}
-
-export function cloneWithNewIds(node: DesignNode): { node: DesignNode; idMap: Record<string, string> } {
+export function cloneWithNewIds(node: DesignNode): {
+  node: DesignNode
+  idMap: Record<string, string>
+} {
   const idMap: Record<string, string> = {}
   const clone = (source: DesignNode): DesignNode => {
     const id = newNodeId()
@@ -359,25 +359,4 @@ function stripUndefinedLink(node: DesignNode): DesignNode {
   const next = { ...node, children: node.children.map(stripUndefinedLink) }
   if (next.link === undefined) delete next.link
   return next
-}
-
-export function validateTree(tree: DesignNode): string[] {
-  const errors: string[] = []
-  const seen = new Set<string>()
-  walk(tree, (node) => {
-    const where = node.id || '<empty id>'
-    if (!node.id) errors.push('node with empty id')
-    else if (seen.has(node.id)) errors.push(`duplicate id: ${node.id}`)
-    seen.add(node.id)
-    if (!KINDS.has(node.kind)) errors.push(`${where}: invalid kind "${String(node.kind)}"`)
-    if (FORBIDDEN_TAGS.has(node.tag.toLowerCase())) errors.push(`${where}: forbidden tag <${node.tag}>`)
-    for (const [key, value] of Object.entries(node.attrs)) {
-      if (/^on/i.test(key)) errors.push(`${where}: event handler attribute "${key}"`)
-      if (/^\s*javascript:/i.test(value)) errors.push(`${where}: javascript: URL in "${key}"`)
-    }
-    if (node.kind === 'text' && node.children.length > 0) {
-      errors.push(`${where}: text node must not have children`)
-    }
-  })
-  return errors
 }

@@ -55,6 +55,8 @@ export class GestureRunner implements GestureHost {
     this.frame = null
     if (this.gesture) gestureFeedback().clear()
     this.gesture = null
+    // Unmounted mid-drag: the transient ops never reached the server.
+    useDesignStore.getState().releaseTransient(this.artboardId)
   }
 
   press(g: PressGesture): void {
@@ -95,6 +97,13 @@ export class GestureRunner implements GestureHost {
     if (this.frame !== null) cancelAnimationFrame(this.frame)
     this.frame = null
     gestureFeedback().clear()
+    this.finish(g, mods)
+    // A gesture that ended without a final commit (nothing changed, cancel)
+    // still applied transient ops; the store must not keep their base.
+    useDesignStore.getState().releaseTransient(this.artboardId)
+  }
+
+  private finish(g: Gesture, mods: Mods): void {
     switch (g.kind) {
       case 'press':
         if (!g.moved) void this.click(g)
@@ -295,8 +304,8 @@ export class GestureRunner implements GestureHost {
     useDesignStore.getState().commit(this.artboardId, ops, { transient: true, coalesceKey })
   }
 
-  // The final op of a drag; runs even when nothing changed if transient ops
-  // went out, so the store's transient base is always released.
+  // The final op of a drag. When nothing changed, up() releases the store's
+  // transient base instead.
   commit(ops: DesignOp[], summary: string, dirty: boolean): void {
     if (!dirty || ops.length === 0) return
     useDesignStore.getState().commit(this.artboardId, ops, { summary })

@@ -6,15 +6,26 @@ import { NumberField } from '../controls/NumberField'
 import { Row, Section } from '../controls/Section'
 import { Segmented } from '../controls/Segmented'
 import { SelectField } from '../controls/SelectField'
-import { FONT_WEIGHTS, readTypography, writeTypography } from '../style-mapping'
+import { FONT_WEIGHTS, getStyle, readTypography, writeTypography } from '../style-mapping'
+import { computedColor, computedPx, computedText } from '../computed-format'
+import { useComputedStyle } from '../computed'
 import { useColorTokens, type InspectorTarget } from '../target'
 
 interface Props {
   target: InspectorTarget
 }
 
+const COMPUTED_PROPS = [
+  'font-family',
+  'font-size',
+  'font-weight',
+  'line-height',
+  'letter-spacing',
+  'text-align',
+  'color',
+] as const
+
 const FAMILIES = [
-  { value: '', label: 'Herdada' },
   'Inter, sans-serif',
   'system-ui, sans-serif',
   'Georgia, serif',
@@ -48,15 +59,28 @@ function TextField({ value, onCommit, placeholder }: { value: string; onCommit: 
   )
 }
 
+// The browser resolves the default to start/end; the segmented control speaks left/right.
+function alignFromComputed(value: string | undefined): string {
+  if (value === 'start') return 'left'
+  if (value === 'end') return 'right'
+  return value || 'left'
+}
+
 export function TypographySection({ target }: Props) {
   const tokens = useColorTokens()
   const fontTokens = useDesignStore((s) => s.doc?.tokens.font)
   const typo = readTypography(target.style)
   const id = target.nodes[0].id
+  // Inline-less properties show what the artboard actually renders.
+  const computed = useComputedStyle(target.artboardId, id, COMPUTED_PROPS)
+  const inlineWeight = getStyle(target.style, 'font-weight') ?? ''
+  const inlineAlign = getStyle(target.style, 'text-align')
   const families = [
+    { value: '', label: computedText(computed['font-family']) },
     ...FAMILIES,
     ...Object.keys(fontTokens ?? {}).map((name) => ({ value: `var(--font-${name})`, label: `token: ${name}` })),
   ]
+  const weights = [{ value: '', label: computedText(computed['font-weight']) }, ...FONT_WEIGHTS]
 
   return (
     <Section title="Tipografia">
@@ -73,13 +97,13 @@ export function TypographySection({ target }: Props) {
           <NumberField
             value={typo.fontSize}
             min={1}
-            placeholder="16"
+            placeholder={computedPx(computed['font-size'], '16')}
             onScrub={(v) => target.applyStyle(writeTypography({ fontSize: v }), { transient: true })}
             onCommit={(v) => target.applyStyle(writeTypography({ fontSize: v }), { coalesceKey: `${id}:font-size` })}
           />
           <SelectField
-            value={typo.fontWeight}
-            options={FONT_WEIGHTS}
+            value={inlineWeight}
+            options={weights}
             allowCustom
             onChange={(fontWeight) => target.applyStyle(writeTypography({ fontWeight }))}
           />
@@ -88,26 +112,31 @@ export function TypographySection({ target }: Props) {
       <Row label="Entrelinha">
         <TextField
           value={typo.lineHeight}
-          placeholder="1.5"
+          placeholder={computedText(computed['line-height'], '1.5')}
           onCommit={(lineHeight) => target.applyStyle(writeTypography({ lineHeight }))}
         />
       </Row>
       <Row label="Espaço">
         <NumberField
           value={typo.letterSpacing}
-          placeholder="0"
+          placeholder={computedPx(computed['letter-spacing'], '0')}
           onCommit={(v) => target.applyStyle(writeTypography({ letterSpacing: v }))}
         />
       </Row>
       <Row label="Alinhar">
         <Segmented
-          value={typo.textAlign}
+          value={inlineAlign ?? alignFromComputed(computed['text-align'])}
           options={ALIGN_OPTIONS}
           onChange={(textAlign) => target.applyStyle(writeTypography({ textAlign }))}
         />
       </Row>
       <Row label="Cor">
-        <ColorField value={typo.color} tokens={tokens} onCommit={(color) => target.applyStyle(writeTypography({ color }))} />
+        <ColorField
+          value={typo.color}
+          computed={computedColor(computed.color)}
+          tokens={tokens}
+          onCommit={(color) => target.applyStyle(writeTypography({ color }))}
+        />
       </Row>
     </Section>
   )

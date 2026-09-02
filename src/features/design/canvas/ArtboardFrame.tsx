@@ -37,8 +37,6 @@ export function ArtboardFrame({ artboardId }: Props) {
 
   const artboard = useDesignStore((s) => s.artboards[artboardId])
   const docId = useDesignStore((s) => s.docId)
-  const tokens = useDesignStore((s) => s.doc?.tokens)
-  const fonts = useDesignStore((s) => s.doc?.fonts)
   const mode = useDesignStore((s) => s.mode)
   const zoom = useDesignStore((s) => s.viewport.zoom)
   const reloadNonce = useDesignStore((s) => s.reloadNonce)
@@ -83,17 +81,28 @@ export function ArtboardFrame({ artboardId }: Props) {
   }, [artboardId, docId, token, setArtboardReady, endTextEdit])
 
   // (Re)load the iframe. A src change makes the runtime post 'ready' again,
-  // which re-sends the init payload set here.
+  // which rebuilds the init payload from the store at that moment, so ops
+  // applied while the frame was still loading are not lost.
   useEffect(() => {
     const iframe = iframeRef.current
     const bridge = bridgeRef.current
-    const state = useDesignStore.getState().artboards[artboardId]
-    if (!iframe || !bridge || !docId || !state) return
-    bridge.init({
-      tree: state.tree,
-      tokens: tokens ?? {},
-      fonts: fonts ?? [],
-      mode,
+    if (!iframe || !bridge || !docId || !useDesignStore.getState().artboards[artboardId]) return
+    bridge.init(() => {
+      const s = useDesignStore.getState()
+      const state = s.artboards[artboardId]
+      return {
+        tree: state?.tree ?? {
+          id: '',
+          tag: 'div',
+          kind: 'frame',
+          style: {},
+          attrs: {},
+          children: [],
+        },
+        tokens: s.doc?.tokens ?? {},
+        fonts: s.doc?.fonts ?? [],
+        mode: s.mode,
+      }
     })
     const url = artboardUrl(artboardId, docId, mode, token)
     // The effect re-runs when hasBridge flips on the same commit that set the

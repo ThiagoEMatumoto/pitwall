@@ -13,6 +13,7 @@ export const INDENT = 14
 export interface FlatRow {
   id: string
   node: DesignNode
+  label: string
   depth: number
   parentId: string | null
   hasChildren: boolean
@@ -27,9 +28,20 @@ const KIND_ICON: Record<DesignNodeKind, ComponentType<LucideProps>> = {
   element: Box,
 }
 
-export function rowLabel(node: DesignNode): string {
-  if (node.name) return node.name
-  if (node.kind === 'text' && node.text) return node.text.slice(0, 40)
+const LANDMARK_TAGS = new Set(['section', 'header', 'footer', 'nav', 'main'])
+const NAME_MAX_LENGTH = 24
+
+// Display fallback mirroring the parser's deriveName (electron/main/services/
+// design/html-parse.ts) so trees stored before those rules read the same. A
+// name equal to the tag is the old parser fallback, not a user's choice.
+export function rowLabel(node: DesignNode, rootName?: string): string {
+  if (node.name && node.name !== node.tag) return node.name
+  if (rootName) return rootName
+  if (node.kind === 'text' && node.text) {
+    const compact = node.text.replace(/\s+/g, ' ').trim()
+    if (compact) return compact.slice(0, NAME_MAX_LENGTH)
+  }
+  if (LANDMARK_TAGS.has(node.tag)) return node.tag[0].toUpperCase() + node.tag.slice(1)
   return node.tag
 }
 
@@ -131,7 +143,7 @@ export function LayerRow({
           ref={inputRef}
           autoFocus
           value={draft}
-          placeholder={rowLabel(row.node)}
+          placeholder={row.label}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commitRename}
           onClick={(e) => e.stopPropagation()}
@@ -144,8 +156,8 @@ export function LayerRow({
           className="h-5 min-w-0 flex-1 rounded border border-[var(--color-accent)] bg-[var(--color-bg)] px-1 text-[11px] text-[var(--color-text)] outline-none"
         />
       ) : (
-        <span className="min-w-0 flex-1 truncate" title={rowLabel(row.node)}>
-          {rowLabel(row.node)}
+        <span className="min-w-0 flex-1 truncate" title={row.label}>
+          {row.label}
         </span>
       )}
       <button

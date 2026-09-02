@@ -139,3 +139,22 @@ describe('helpers', () => {
     expect(selectionLabel({ id: 'n2', tag: 'p', kind: 'text' })).toBe('p#n2')
   })
 })
+
+describe('buildAskPrompt without a document', () => {
+  it('marks docId=none and tells Claude to create the document', () => {
+    const text = buildAskPrompt({
+      docId: null,
+      docTitle: '',
+      artboardId: null,
+      artboardName: null,
+      selection: [],
+      request: 'Crie a landing page de uma padaria',
+    })
+    expect(text.split('\n')[0]).toBe(
+      '[Pitwall Design Studio] doc="" docId=none artboardId=none selection=[]',
+    )
+    expect(text).toContain('nenhum documento aberto')
+    expect(text).toContain('crie o documento e o artboard')
+    expect(text.endsWith('Pedido: Crie a landing page de uma padaria')).toBe(true)
+  })
+})

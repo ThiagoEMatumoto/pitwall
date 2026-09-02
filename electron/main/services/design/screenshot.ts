@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { artboardUrl } from './protocol'
+import { MAX_CAPTURE_PIXELS } from '../../../../shared/design/safety'
 
 // Offscreen renderer for design_screenshot / design_computed_styles. One
 // hidden window is shared by every capture: a serial queue keeps loads from
@@ -15,6 +16,9 @@ export interface CaptureArtboardInput {
   scale: 1 | 2
   // Part of the cache key; without it the capture is never cached.
   version?: number
+  // Document-level changes (tokens, fonts, globalCss) do not bump the
+  // artboard version; the document's updatedAt keys them.
+  docUpdatedAt?: number
   nodeId?: string
 }
 
@@ -36,7 +40,8 @@ export type ComputedStyles = Record<string, Record<string, string>>
 const TOTAL_TIMEOUT_MS = 10_000
 const FONTS_TIMEOUT_MS = 2_000
 const IDLE_DESTROY_MS = 60_000
-const CACHE_MAX = 20
+// PNG bytes kept across calls, whatever the entry count.
+const CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 interface ClipRect {
   x: number
@@ -49,6 +54,7 @@ let win: BrowserWindow | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let queue: Promise<unknown> = Promise.resolve()
 const cache = new Map<string, CaptureArtboardResult>()
+let cacheBytes = 0
 
 function getWindow(width: number, height: number): BrowserWindow {
   if (win && !win.isDestroyed()) return win
@@ -117,8 +123,18 @@ function nodeRectScript(nodeId: string): string {
   })()`
 }
 
+function assertCaptureBudget(width: number, height: number, scale: number): void {
+  const pixels = width * height * scale * scale
+  if (pixels > MAX_CAPTURE_PIXELS) {
+    throw new Error(
+      `capture of ${width}x${height} at scale ${scale} exceeds the ${MAX_CAPTURE_PIXELS} pixel budget; use scale 1 or a smaller artboard`,
+    )
+  }
+}
+
 async function capture(input: CaptureArtboardInput): Promise<CaptureArtboardResult> {
   const { artboardId, docId, width, height, scale, nodeId } = input
+  assertCaptureBudget(width, height, scale)
   const w = getWindow(width, height)
   w.setContentSize(width, height)
   await loadArtboard(w, artboardId, docId)
@@ -152,15 +168,25 @@ async function capture(input: CaptureArtboardInput): Promise<CaptureArtboardResu
 
 function cacheKey(input: CaptureArtboardInput): string | null {
   if (input.version == null) return null
-  return `${input.artboardId}:${input.version}:${input.scale}:${input.nodeId ?? ''}`
+  return `${input.artboardId}:${input.version}:${input.docUpdatedAt ?? ''}:${input.scale}:${input.nodeId ?? ''}`
+}
+
+function forget(key: string): void {
+  const gone = cache.get(key)
+  if (!gone) return
+  cache.delete(key)
+  cacheBytes -= gone.png.byteLength
 }
 
 function remember(key: string, result: CaptureArtboardResult): void {
-  cache.delete(key)
+  forget(key)
+  if (result.png.byteLength > CACHE_MAX_BYTES) return
   cache.set(key, result)
-  if (cache.size > CACHE_MAX) {
+  cacheBytes += result.png.byteLength
+  while (cacheBytes > CACHE_MAX_BYTES) {
     const oldest = cache.keys().next().value
-    if (oldest !== undefined) cache.delete(oldest)
+    if (oldest === undefined) break
+    forget(oldest)
   }
 }
 
