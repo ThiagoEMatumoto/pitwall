@@ -229,11 +229,15 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
   }
 
   const openCapture = (s: Session, t: TrackState): void => {
+    // Modo por trilha: mic em fixture + sistema real é combinação válida (teste
+    // de áudio real). Um modo único pra ambas punha a trilha real em fixture
+    // sem path — silêncio pra sempre, sem erro.
+    const fixturePath = fixtureFromEnv(t.track, deps.env)
     const handle = deps.startCapture({
       track: t.track,
       target: t.track === 'them' ? s.targets.sink : s.targets.source,
-      fixturePath: fixtureFromEnv(t.track, deps.env),
-      mode: s.captureMode,
+      fixturePath,
+      mode: fixturePath ? 'fixture' : 'pipewire',
       pace: s.pace,
     })
     t.capture = handle
@@ -325,9 +329,11 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     if (session || starting) throw new Error('Já existe uma gravação em andamento')
     starting = true
     try {
-      const fixture = TRACKS.some((track) => fixtureFromEnv(track, deps.env))
-      const captureMode = fixture ? 'fixture' : 'pipewire'
-      const targets = fixture ? { sink: null, source: null } : await deps.resolveDefaultDevices()
+      // 'fixture' só quando as DUAS trilhas são fixture; com uma real, os
+      // dispositivos precisam ser resolvidos.
+      const allFixture = TRACKS.every((track) => fixtureFromEnv(track, deps.env))
+      const captureMode = allFixture ? 'fixture' : 'pipewire'
+      const targets = allFixture ? { sink: null, source: null } : await deps.resolveDefaultDevices()
       const meeting = deps.store.create({ title })
       const startedAt = deps.now()
       const s: Session = {

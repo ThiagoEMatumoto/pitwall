@@ -197,6 +197,30 @@ describe('auto-stop', () => {
   })
 })
 
+describe('modo de captura por trilha', () => {
+  it('mic fixture + sistema real: them vai pro pipewire com o sink, me fica em fixture', async () => {
+    const startCapture = vi.fn<RecorderDeps['startCapture']>(() => ({
+      onData: () => {},
+      onExit: () => {},
+      stop: () => {},
+    }))
+    const mic = resolve(fixtures, 'mic-eu.wav')
+    const { recorder } = build({
+      startCapture,
+      env: { CM_MEETING_FIXTURE_MIC: mic, CM_MEETING_FIXTURE_PACE: '0' },
+    })
+
+    await recorder.start({})
+    expect(recorder.getState().captureMode).toBe('pipewire')
+
+    const byTrack = Object.fromEntries(startCapture.mock.calls.map(([opts]) => [opts.track, opts]))
+    expect(byTrack.them).toMatchObject({ mode: 'pipewire', target: 'sink.x', fixturePath: undefined })
+    expect(byTrack.me).toMatchObject({ mode: 'fixture', target: 'source.x', fixturePath: mic })
+
+    await recorder.stop()
+  })
+})
+
 describe('appendQuickNote', () => {
   it('concatena com timestamp [mm:ss] e faz broadcast da reunião', async () => {
     let now = 1_000_000
