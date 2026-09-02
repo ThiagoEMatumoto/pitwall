@@ -54,6 +54,7 @@ import { registerVideoIpc } from './ipc/video'
 import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
+import { initMeetings } from './services/meetings'
 import {
   forgetSessionSummaries,
   scheduleTurnSummary,
@@ -298,6 +299,7 @@ app.whenReady().then(async () => {
   registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
+  initMeetings()
   registerSyncIpc()
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via

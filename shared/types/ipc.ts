@@ -9,6 +9,36 @@ import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
 // Re-export: os consumidores continuam importando tudo de '@shared/types/ipc'.
 export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
+// Reuniões v2: tipos moram em ./meetings e são re-exportados aqui.
+export type {
+  Meeting,
+  MeetingActionItem,
+  MeetingActionItemDecision,
+  MeetingActionItemStatus,
+  MeetingCaptureMode,
+  MeetingDetail,
+  MeetingEvent,
+  MeetingFloatingAction,
+  MeetingLiveState,
+  MeetingSegment,
+  MeetingSetupStatus,
+  MeetingSpeaker,
+  MeetingStatus,
+  StartMeetingInput,
+  UpdateMeetingInput,
+} from './meetings'
+import type {
+  Meeting,
+  MeetingActionItem,
+  MeetingActionItemDecision,
+  MeetingDetail,
+  MeetingEvent,
+  MeetingFloatingAction,
+  MeetingLiveState,
+  MeetingSetupStatus,
+  StartMeetingInput,
+  UpdateMeetingInput,
+} from './meetings'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -2560,6 +2590,26 @@ export interface VideoApi {
   }
 }
 
+export interface MeetingsApi {
+  /** Inicia gravação (sistema + mic) e devolve a reunião em status 'recording'. */
+  start(input?: StartMeetingInput): Promise<Meeting>
+  /** Para a gravação; resumo e extração seguem em background (processing → done). */
+  stop(): Promise<Meeting>
+  state(): Promise<MeetingLiveState>
+  list(): Promise<Meeting[]>
+  get(id: string): Promise<MeetingDetail>
+  update(input: UpdateMeetingInput): Promise<Meeting>
+  delete(id: string): Promise<void>
+  /** Re-roda resumo + extração de tarefas. */
+  resummarize(id: string): Promise<Meeting>
+  /** 'created' força criar a task mesmo sem grounding. */
+  actionItem(input: MeetingActionItemDecision): Promise<MeetingActionItem>
+  floating(action: MeetingFloatingAction): Promise<void>
+  checkSetup(): Promise<MeetingSetupStatus>
+  /** Estado ao vivo, segmentos, reunião e action items — um canal só. */
+  onEvent(handler: (event: MeetingEvent) => void): () => void
+}
+
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2957,4 +3007,5 @@ export interface Api {
     onMaximizeChange(handler: (maximized: boolean) => void): () => void
   }
   video: VideoApi
+  meetings: MeetingsApi
 }
