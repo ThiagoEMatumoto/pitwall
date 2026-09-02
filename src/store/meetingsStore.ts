@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { meetingsApi } from '@/lib/ipc'
 import type {
   Meeting,
-  MeetingActionItemDecision,
+  MeetingActionItemBatch,
   MeetingDetail,
   MeetingDetectionAction,
   MeetingEvent,
@@ -35,7 +35,7 @@ interface MeetingsState {
   setThemLabel: (id: string, label: string) => Promise<void>
   remove: (id: string) => Promise<void>
   resummarize: (id: string) => Promise<void>
-  decideActionItem: (id: string, status: MeetingActionItemDecision['status']) => Promise<void>
+  decideActionItems: (batch: MeetingActionItemBatch) => Promise<void>
   toggleFloating: () => Promise<void>
   decideDetection: (action: MeetingDetectionAction) => Promise<void>
   checkSetup: () => Promise<void>
@@ -194,17 +194,12 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
         set((s) => withMeeting(s, meeting))
       }),
 
-    decideActionItem: async (id, status) =>
+    decideActionItems: async (batch) =>
       attempt(async () => {
-        const item = await meetingsApi.actionItem({ id, status })
+        const items = await meetingsApi.actionItemsBatch(batch)
         set((s) => {
-          if (!s.detail || s.detail.meeting.id !== item.meetingId) return {}
-          return {
-            detail: {
-              ...s.detail,
-              actionItems: s.detail.actionItems.map((a) => (a.id === item.id ? item : a)),
-            },
-          }
+          if (!s.detail || s.detail.meeting.id !== batch.meetingId) return {}
+          return { detail: { ...s.detail, actionItems: items } }
         })
       }),
 

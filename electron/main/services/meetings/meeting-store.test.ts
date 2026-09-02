@@ -20,16 +20,30 @@ import { closeDb, getDb } from '../db'
 import {
   appendSegment,
   create,
+  createVoice,
+  deleteVoice,
+  findVoiceByName,
   get,
   getActive,
+  getSpeaker,
+  getSpeakerCentroid,
+  getVoiceEmbedding,
   list,
   listSegments,
+  listSpeakers,
+  listVoices,
   remove,
   replaceActionItems,
+  setActionItemOwner,
   setActionItemStatus,
+  setRuntimeInfo,
   setStatus,
   setSummary,
   update,
+  updateSegmentsSpeaker,
+  updateSpeaker,
+  updateVoice,
+  upsertSpeaker,
 } from './meeting-store'
 
 afterAll(() => {
@@ -38,7 +52,9 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  getDb().exec('DELETE FROM meeting_v2_action_items; DELETE FROM meeting_v2_segments; DELETE FROM meetings_v2;')
+  getDb().exec(
+    'DELETE FROM meeting_v2_action_items; DELETE FROM meeting_v2_segments; DELETE FROM meeting_v2_speakers; DELETE FROM meetings_v2; DELETE FROM meeting_v2_voices;',
+  )
 })
 
 function segment(meetingId: string, startMs: number, speaker: 'me' | 'them' = 'me') {
@@ -65,6 +81,8 @@ describe('create / getActive', () => {
     expect(m.themLabel).toBe('Participante')
     expect(m.segmentCount).toBe(0)
     expect(m.durationMs).toBeGreaterThanOrEqual(0)
+    expect(m.speakers).toEqual([])
+    expect(m).toMatchObject({ lastError: null, respawns: 0, micLevelDbfs: null, diarization: null })
   })
 
   it('gera título default quando não informado', () => {
@@ -175,6 +193,8 @@ describe('segments', () => {
     expect(first.meetingId).toBe(m.id)
     expect(first.speaker).toBe('me')
     expect(first.chunkIndex).toBe(0)
+    expect(first.speakerId).toBeNull()
+    expect(first.speakerLabel).toBeNull()
 
     const segs = listSegments(m.id)
     expect(segs.map((s) => s.startMs)).toEqual([0, 6000, 12000])
@@ -251,5 +271,158 @@ describe('remove', () => {
     const db = getDb()
     expect(db.prepare('SELECT COUNT(*) AS n FROM meeting_v2_segments').get()).toEqual({ n: 0 })
     expect(db.prepare('SELECT COUNT(*) AS n FROM meeting_v2_action_items').get()).toEqual({ n: 0 })
+  })
+})
+
+describe('speakers', () => {
+  it('upsertSpeaker cria com id gerado e label trimado; get() devolve speakers na reunião', () => {
+    const m = create({ title: 'Falantes' })
+    const s1 = upsertSpeaker({ meetingId: m.id, label: '  Participante 1 ' })
+    expect(s1.id).toBeTruthy()
+    expect(s1).toMatchObject({ meetingId: m.id, label: 'Participante 1', voiceId: null, turnCount: 0 })
+    expect(listSpeakers(m.id)).toEqual([s1])
+    expect(get(m.id)?.meeting.speakers).toEqual([s1])
+    expect(list()[0].speakers).toEqual([s1])
+  })
+
+  it('upsertSpeaker com label repetido na mesma reunião atualiza em vez de duplicar', () => {
+    const m = create({ title: 'Único' })
+    const first = upsertSpeaker({ meetingId: m.id, label: 'Ana', turnCount: 1 })
+    const again = upsertSpeaker({ meetingId: m.id, label: 'Ana', turnCount: 3, centroid: Buffer.from([1, 2]) })
+    expect(again.id).toBe(first.id)
+    expect(again.turnCount).toBe(3)
+    expect(listSpeakers(m.id)).toHaveLength(1)
+    expect(getSpeakerCentroid(first.id)).toEqual(Buffer.from([1, 2]))
+
+    const other = create({ title: 'Outra' })
+    expect(upsertSpeaker({ meetingId: other.id, label: 'Ana' }).id).not.toBe(first.id)
+  })
+
+  it('upsertSpeaker rejeita label vazio', () => {
+    const m = create({ title: 'Vazio' })
+    expect(() => upsertSpeaker({ meetingId: m.id, label: '  ' })).toThrow(/label vazio/)
+  })
+
+  it('updateSpeaker altera só o que veio e lança para id desconhecido', () => {
+    const m = create({ title: 'Upd' })
+    const s = upsertSpeaker({ meetingId: m.id, label: 'Participante 1', centroid: Buffer.from([9]) })
+    const voice = createVoice({ name: 'Bia', embedding: Buffer.from([1]), dim: 1 })
+
+    const renamed = updateSpeaker(s.id, { label: 'Bia', voiceId: voice.id })
+    expect(renamed).toMatchObject({ id: s.id, label: 'Bia', voiceId: voice.id, turnCount: 0 })
+    expect(getSpeakerCentroid(s.id)).toEqual(Buffer.from([9]))
+
+    expect(updateSpeaker(s.id, { turnCount: 7 })).toMatchObject({ label: 'Bia', voiceId: voice.id, turnCount: 7 })
+    expect(updateSpeaker(s.id, { label: '   ' }).label).toBe('Bia')
+    expect(updateSpeaker(s.id, { voiceId: null }).voiceId).toBeNull()
+    expect(getSpeaker('nope')).toBeNull()
+    expect(() => updateSpeaker('nope', { label: 'x' })).toThrow(/speaker not found/)
+  })
+
+  it('appendSegment grava speakerId/speakerLabel e updateSegmentsSpeaker reescreve só os daquele speaker', () => {
+    const m = create({ title: 'Seg speakers' })
+    const a = upsertSpeaker({ meetingId: m.id, label: 'Participante 1' })
+    const b = upsertSpeaker({ meetingId: m.id, label: 'Participante 2' })
+    appendSegment({ meetingId: m.id, speaker: 'them', text: 'a1', startMs: 0, endMs: 1, chunkIndex: 0, speakerId: a.id, speakerLabel: a.label })
+    appendSegment({ meetingId: m.id, speaker: 'them', text: 'b1', startMs: 1, endMs: 2, chunkIndex: 0, speakerId: b.id, speakerLabel: b.label })
+    appendSegment({ meetingId: m.id, speaker: 'me', text: 'eu', startMs: 2, endMs: 3, chunkIndex: 0 })
+
+    expect(updateSegmentsSpeaker(m.id, a.id, 'Ana')).toBe(1)
+    const segs = listSegments(m.id)
+    expect(segs.map((x) => [x.speakerId, x.speakerLabel])).toEqual([
+      [a.id, 'Ana'],
+      [b.id, 'Participante 2'],
+      [null, null],
+    ])
+  })
+
+  it('remove() cascateia os speakers da reunião', () => {
+    const m = create({ title: 'Cascade' })
+    upsertSpeaker({ meetingId: m.id, label: 'Participante 1' })
+    remove(m.id)
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM meeting_v2_speakers').get()).toEqual({ n: 0 })
+  })
+})
+
+describe('voices', () => {
+  it('createVoice/listVoices/findVoiceByName: metadados sem embedding, ordem por nome, busca case-insensitive', () => {
+    const zed = createVoice({ name: 'Zed', embedding: Buffer.from([1, 2, 3]), dim: 3 })
+    const ana = createVoice({ name: ' Ana ', embedding: Buffer.from([4]), dim: 1, sampleCount: 4 })
+    expect(ana).toMatchObject({ name: 'Ana', dim: 1, sampleCount: 4 })
+    expect(zed.sampleCount).toBe(1)
+    expect(ana).not.toHaveProperty('embedding')
+
+    expect(listVoices().map((v) => v.name)).toEqual(['Ana', 'Zed'])
+    expect(findVoiceByName('ana')?.id).toBe(ana.id)
+    expect(findVoiceByName('Ninguém')).toBeNull()
+    expect(getVoiceEmbedding(zed.id)).toEqual(Buffer.from([1, 2, 3]))
+    expect(getVoiceEmbedding('nope')).toBeNull()
+  })
+
+  it('createVoice rejeita nome ou embedding vazios', () => {
+    expect(() => createVoice({ name: ' ', embedding: Buffer.from([1]), dim: 1 })).toThrow(/name vazio/)
+    expect(() => createVoice({ name: 'X', embedding: Buffer.alloc(0), dim: 1 })).toThrow(/embedding vazio/)
+  })
+
+  it('updateVoice altera nome/embedding/sampleCount e lança para id desconhecido', () => {
+    const v = createVoice({ name: 'Ana', embedding: Buffer.from([1]), dim: 1 })
+    const merged = updateVoice(v.id, { embedding: Buffer.from([2]), sampleCount: 2 })
+    expect(merged).toMatchObject({ id: v.id, name: 'Ana', sampleCount: 2 })
+    expect(merged.updatedAt).toBeGreaterThanOrEqual(v.updatedAt)
+    expect(getVoiceEmbedding(v.id)).toEqual(Buffer.from([2]))
+    expect(updateVoice(v.id, { name: 'Ana Paula' }).name).toBe('Ana Paula')
+    expect(() => updateVoice('nope', { name: 'x' })).toThrow(/voice not found/)
+  })
+
+  it('deleteVoice zera voiceId dos speakers vinculados (ON DELETE SET NULL)', () => {
+    const m = create({ title: 'Voz' })
+    const v = createVoice({ name: 'Ana', embedding: Buffer.from([1]), dim: 1 })
+    const s = upsertSpeaker({ meetingId: m.id, label: 'Ana', voiceId: v.id })
+    expect(s.voiceId).toBe(v.id)
+
+    deleteVoice(v.id)
+    expect(listVoices()).toEqual([])
+    expect(getSpeaker(s.id)?.voiceId).toBeNull()
+    expect(get(m.id)?.meeting.speakers[0].voiceId).toBeNull()
+  })
+})
+
+describe('setRuntimeInfo', () => {
+  it('grava só os campos informados e preserva o resto; não toca em status/error', () => {
+    const m = create({ title: 'Runtime' })
+    const a = setRuntimeInfo(m.id, { respawns: 2, micLevelDbfs: -48.5 })
+    expect(a).toMatchObject({ respawns: 2, micLevelDbfs: -48.5, lastError: null, diarization: null })
+
+    const b = setRuntimeInfo(m.id, { lastError: 'pw-record morreu', diarization: 'unavailable' })
+    expect(b).toMatchObject({ respawns: 2, micLevelDbfs: -48.5, lastError: 'pw-record morreu', diarization: 'unavailable' })
+    expect(b.status).toBe('recording')
+    expect(b.error).toBeNull()
+
+    const c = setRuntimeInfo(m.id, { lastError: null, micLevelDbfs: null })
+    expect(c).toMatchObject({ lastError: null, micLevelDbfs: null, diarization: 'unavailable' })
+    expect(() => setRuntimeInfo('nope', { respawns: 1 })).toThrow(/meeting not found/)
+  })
+})
+
+describe('action item owner', () => {
+  it('replaceActionItems aceita owner/ownerKind com default unknown', () => {
+    const m = create({ title: 'Donos' })
+    const items = replaceActionItems(m.id, [
+      { title: 'A', quote: null, grounded: false, status: 'proposed', taskId: null, owner: 'Ana', ownerKind: 'named' },
+      { title: 'B', quote: null, grounded: false, status: 'proposed', taskId: null },
+    ])
+    expect(items[0]).toMatchObject({ owner: 'Ana', ownerKind: 'named' })
+    expect(items[1]).toMatchObject({ owner: null, ownerKind: 'unknown' })
+  })
+
+  it('setActionItemOwner atualiza dono e tipo, normaliza vazio pra null e lança para id desconhecido', () => {
+    const m = create({ title: 'Dono 2' })
+    const [item] = replaceActionItems(m.id, [
+      { title: 'A', quote: null, grounded: false, status: 'proposed', taskId: null },
+    ])
+    expect(setActionItemOwner(item.id, ' Bia ', 'named')).toMatchObject({ owner: 'Bia', ownerKind: 'named' })
+    expect(get(m.id)?.actionItems[0]).toMatchObject({ owner: 'Bia', ownerKind: 'named' })
+    expect(setActionItemOwner(item.id, '', 'me')).toMatchObject({ owner: null, ownerKind: 'me' })
+    expect(() => setActionItemOwner('nope', null, 'unknown')).toThrow(/action item not found/)
   })
 })

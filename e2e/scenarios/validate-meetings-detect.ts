@@ -358,6 +358,27 @@ async function phase1(): Promise<void> {
   } else {
     record("(g) queryDb", "SKIP", "sem meetingId — fase 1 falhou antes de gravar");
   }
+
+  // --- (h) action items só propostos: 0 tasks origin=auto até seleção -------
+  if (meetingId) {
+    const items = await queryDb<{ status: string }>(
+      userDataCopy,
+      `SELECT status FROM meeting_v2_action_items WHERE meeting_id = '${meetingId}'`,
+    );
+    const autoTasks = await queryDb<{ c: number }>(
+      userDataCopy,
+      `SELECT COUNT(*) AS c FROM tasks WHERE origin = 'auto' AND created_at >= ${t0}`,
+    );
+    const autoTaskCount = autoTasks[0]?.c ?? 0;
+    const allProposed = items.length > 0 && items.every((i) => i.status === "proposed");
+    record(
+      "(h) action items proposed + 0 tasks origin=auto até seleção",
+      allProposed && autoTaskCount === 0 ? "PASS" : "FAIL",
+      `items=${JSON.stringify(items)} tasksOrigemAuto=${autoTaskCount}`,
+    );
+  } else {
+    record("(h) queryDb action items", "SKIP", "sem meetingId — fase 1 falhou antes de gravar");
+  }
   console.log("log fase1:", logFile);
 }
 

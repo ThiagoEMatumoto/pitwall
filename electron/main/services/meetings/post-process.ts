@@ -1,19 +1,19 @@
 // Dono da transição 'processing' → 'done'/'error': resumo + extração de tarefas
-// após stop(), re-execução sob demanda (resummarize) e decisão do usuário sobre
-// itens propostos. Registra nos registries de recorder-contract.ts.
-import type { Meeting, MeetingActionItem, MeetingActionItemDecision } from '../../../../shared/types/meetings'
+// após stop() e re-execução sob demanda (resummarize). Registra nos registries
+// de recorder-contract.ts. A decisão sobre itens propostos vive em
+// action-item-batch.ts.
+import type { Meeting, MeetingActionItem } from '../../../../shared/types/meetings'
 import { notify as defaultNotify } from '../notifications'
 import { emitMeetingEvent } from './event-bus'
-import { createMeetingTask, extractActionItems } from './extract-actions'
+import { extractActionItems } from './extract-actions'
 import * as meetingStore from './meeting-store'
-import { actionItemRegistry, postProcessRegistry, resummarizeRegistry } from './recorder-contract'
+import { postProcessRegistry, resummarizeRegistry } from './recorder-contract'
 import { summarizeMeeting } from './summarize'
 
 export interface PostProcessDeps {
-  store: Pick<typeof meetingStore, 'get' | 'setStatus' | 'getActionItem' | 'setActionItemStatus'>
+  store: Pick<typeof meetingStore, 'get' | 'setStatus' | 'listSpeakers'>
   summarize: (meetingId: string) => Promise<Meeting>
-  extract: (meetingId: string) => Promise<MeetingActionItem[]>
-  createTask: typeof createMeetingTask
+  extract: (meetingId: string, participants: string[]) => Promise<MeetingActionItem[]>
   emit: typeof emitMeetingEvent
   notify: (input: { title: string; body: string }) => void
 }
@@ -22,8 +22,7 @@ function defaultDeps(): PostProcessDeps {
   return {
     store: meetingStore,
     summarize: (id) => summarizeMeeting(id),
-    extract: (id) => extractActionItems(id),
-    createTask: createMeetingTask,
+    extract: (id, participants) => extractActionItems(id, { participants: () => participants }),
     emit: emitMeetingEvent,
     notify: defaultNotify,
   }
@@ -41,7 +40,8 @@ export function createPostProcessor(overrides: Partial<PostProcessDeps> = {}) {
   const run = async (meetingId: string): Promise<Meeting> => {
     try {
       await deps.summarize(meetingId)
-      await deps.extract(meetingId)
+      const participants = deps.store.listSpeakers(meetingId).map((s) => s.label)
+      await deps.extract(meetingId, participants)
       const meeting = deps.store.setStatus(meetingId, 'done')
       deps.emit({ type: 'meeting', meeting })
       deps.notify({ title: 'Reunião processada', body: meeting.title })
@@ -61,27 +61,7 @@ export function createPostProcessor(overrides: Partial<PostProcessDeps> = {}) {
     return run(meetingId)
   }
 
-  const decide = async ({ id, status }: MeetingActionItemDecision): Promise<MeetingActionItem> => {
-    const item = deps.store.getActionItem(id)
-    if (!item) throw new Error(`Item não encontrado: ${id}`)
-    const detail = deps.store.get(item.meetingId)
-    if (!detail) throw new Error(`Reunião não encontrada: ${item.meetingId}`)
-
-    let updated: MeetingActionItem
-    if (status === 'dismissed') {
-      updated = deps.store.setActionItemStatus(id, 'dismissed')
-    } else if (item.taskId) {
-      updated = deps.store.setActionItemStatus(id, 'created')
-    } else {
-      const task = deps.createTask(detail.meeting, { title: item.title, quote: item.quote })
-      updated = deps.store.setActionItemStatus(id, 'created', task.id)
-    }
-    const items = deps.store.get(item.meetingId)?.actionItems ?? [updated]
-    deps.emit({ type: 'action_items', meetingId: item.meetingId, items })
-    return updated
-  }
-
-  return { run, resummarize, decide }
+  return { run, resummarize }
 }
 
 export function installPostProcess(overrides: Partial<PostProcessDeps> = {}): void {
@@ -90,5 +70,4 @@ export function installPostProcess(overrides: Partial<PostProcessDeps> = {}): vo
     await processor.run(id)
   }
   resummarizeRegistry.current = processor.resummarize
-  actionItemRegistry.current = processor.decide
 }

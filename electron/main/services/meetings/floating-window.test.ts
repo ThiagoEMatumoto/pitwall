@@ -71,6 +71,8 @@ const idle: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 const recording: MeetingLiveState = { ...idle, active: meeting, elapsedMs: 1000 }
 

@@ -2,21 +2,27 @@ import type { Meeting, MeetingEvent, MeetingLiveState, MeetingSetupStatus } from
 import { notify as defaultNotify } from '../notifications'
 import { emitMeetingEvent } from './event-bus'
 import { clearVoiceSecrets } from '../voice-config'
-import { hasPipewire, resolveDefaultDevices } from './audio-devices'
+import { hasPipewire, resolveDefaultDevices, resolveSourceForStream } from './audio-devices'
 import {
   fixtureFromEnv,
   fixturePaceFromEnv,
+  measureInputLevel,
   startCapture,
   type CaptureHandle,
   type Track,
 } from './audio-capture'
+import { normalizePeak } from './gain'
 import * as meetingStore from './meeting-store'
-import { PcmChunker, rmsLinear, type Chunk } from './pcm-chunker'
+import { modelsStatus } from './model-manager'
+import { sherpaAvailable } from './native-loader'
+import { PcmChunker, percentile, rmsLinear, windowDbfs, type Chunk } from './pcm-chunker'
 import {
   detectorRegistry,
+  diarizerRegistry,
   postProcessRegistry,
   recorderRegistry,
   setupCheckRegistry,
+  type DiarizedTurn,
   type MeetingRecorder,
 } from './recorder-contract'
 import { loadSttConfig, SttError, transcribeChunk, type SttConfig, type SttConfigResult } from './transcriber'
@@ -33,14 +39,33 @@ const AUTO_STOP_MS = 15 * 60_000
 const STT_DRAIN_TIMEOUT_MS = 30_000
 const LEVEL_INTERVAL_MS = 250
 const STATE_THROTTLE_MS = 250
+/** p95 do mic abaixo disto = ganho de hardware baixo demais (fala a −48 some no STT). */
+export const MIC_LOW_DBFS = -40
+// Sonda do mic: p95 das janelas de 20 ms depois de 2 s de janelas ativas
+// (> −60 dBFS) — os 2 s do relógio incluiriam o silêncio antes da primeira
+// fala e dariam −100 pra qualquer mic. Teto de 10 s pra um mic mudo de vez.
+const MIC_PROBE_ACTIVE_DBFS = -60
+const MIC_PROBE_ACTIVE_WINDOWS = 2000 / 20
+const MIC_PROBE_MAX_BYTES = (16000 * 10_000 * 2) / 1000
+const SETUP_MIC_PROBE_MS = 1500
+const MAX_RESPAWNS_PER_TRACK = 1
 
 export interface RecorderDeps {
-  store: Pick<typeof meetingStore, 'create' | 'get' | 'update' | 'setStatus' | 'appendSegment' | 'setSttModel'>
+  store: Pick<
+    typeof meetingStore,
+    'create' | 'get' | 'update' | 'setStatus' | 'appendSegment' | 'setSttModel' | 'setRuntimeInfo'
+  >
   startCapture: typeof startCapture
   transcribeChunk: typeof transcribeChunk
   loadSttConfig: () => Promise<SttConfigResult>
   resolveDefaultDevices: () => Promise<{ sink: string | null; source: string | null }>
+  /** Source real do stream detectado (Link do pw-dump); null cai no default. */
+  resolveSourceForStream: (streamNodeId: number) => Promise<string | null>
+  /** p95 dBFS de ~1,5 s do source (checkSetup); null sem áudio. */
+  measureMicLevel: (source: string | null) => Promise<number | null>
   hasPipewire: () => Promise<boolean>
+  /** Bloco `diarization` do checkSetup (addon carregado + modelos no disco). */
+  diarizationSetup: () => MeetingSetupStatus['diarization']
   broadcast: (channel: string, payload: unknown) => void
   notify: (input: { title: string; body: string }) => void
   env: NodeJS.ProcessEnv
@@ -60,9 +85,17 @@ interface TrackState {
   inFlight: boolean
   /** Palavras já transcritas — as últimas ~150 vão de prompt pro próximo chunk. */
   words: string[]
-  respawned: boolean
+  respawns: number
   /** Maior RMS de bloco desde o último tick de níveis. */
   peak: number
+}
+
+/** Início da trilha `me`: p95 das janelas ativas vira `micLevelDbfs`. */
+interface MicProbe {
+  windows: number[]
+  active: number
+  bytes: number
+  done: boolean
 }
 
 interface Session {
@@ -72,6 +105,10 @@ interface Session {
   /** Stream do detector no momento do start — auto-stop quando ele some. */
   linkedStreamId: number | null
   targets: { sink: string | null; source: string | null }
+  /** Nome do mic pro aviso de nível ('fixture' quando a trilha me é fixture). */
+  micSource: string
+  micProbe: MicProbe
+  micWarning: MeetingLiveState['micWarning']
   pace: number
   tracks: Record<Track, TrackState>
   sttConfig: SttConfig | null
@@ -94,7 +131,14 @@ function defaultDeps(): RecorderDeps {
     transcribeChunk,
     loadSttConfig: () => loadSttConfig(),
     resolveDefaultDevices: () => resolveDefaultDevices(),
+    resolveSourceForStream: (streamNodeId) => resolveSourceForStream(streamNodeId),
+    measureMicLevel: (source) => measureInputLevel({ target: source, durationMs: SETUP_MIC_PROBE_MS }),
     hasPipewire: () => hasPipewire(),
+    diarizationSetup: () => ({
+      supported: process.platform === 'linux',
+      addon: sherpaAvailable(),
+      models: modelsStatus(),
+    }),
     broadcast: (_channel, payload) => emitMeetingEvent(payload as MeetingEvent),
     notify: defaultNotify,
     env: process.env,
@@ -116,6 +160,26 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+type SegmentSpeaker = Pick<DiarizedTurn, 'speakerId' | 'speakerLabel'>
+
+/**
+ * Turno com maior sobreposição temporal com o segmento (ambos relativos ao
+ * chunk); sem sobreposição, herda o último speaker atribuído no chunk.
+ */
+export function speakerForSegment(
+  turns: DiarizedTurn[],
+  seg: { startMs: number; endMs: number },
+  last: SegmentSpeaker | null,
+): SegmentSpeaker | null {
+  let best: { turn: DiarizedTurn; overlap: number } | null = null
+  for (const turn of turns) {
+    const overlap = Math.min(seg.endMs, turn.endMs) - Math.max(seg.startMs, turn.startMs)
+    if (overlap > 0 && (!best || overlap > best.overlap)) best = { turn, overlap }
+  }
+  if (!best) return last
+  return { speakerId: best.turn.speakerId, speakerLabel: best.turn.speakerLabel }
+}
+
 export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder {
   const deps: RecorderDeps = { ...defaultDeps(), ...overrides }
   let session: Session | null = null
@@ -135,6 +199,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     captureMode: session?.captureMode ?? 'pipewire',
     detection: detectorRegistry.current?.getDetection() ?? null,
     linkedStreamId: session?.linkedStreamId ?? null,
+    micWarning: session?.micWarning ?? null,
+    diarization: diarizerRegistry.current?.status() ?? 'off',
   })
 
   const broadcastState = (force = false): void => {
@@ -144,9 +210,26 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     emit({ type: 'state', state: getState() })
   }
 
+  // Diagnóstico persistido (journal não guarda o stderr do pw-record). A
+  // reunião pode ter sido apagada no meio da gravação: não derruba o handler.
+  const persistRuntime = (s: Session, info: Parameters<typeof meetingStore.setRuntimeInfo>[1]): void => {
+    try {
+      deps.store.setRuntimeInfo(s.meetingId, info)
+    } catch {
+      /* reunião removida durante a gravação */
+    }
+  }
+
+  // 'loading' é transitório (worker subindo): pro registro da reunião conta como ligada.
+  const diarizationStatus = (): NonNullable<Parameters<typeof meetingStore.setRuntimeInfo>[1]['diarization']> => {
+    const live = diarizerRegistry.current?.status() ?? 'off'
+    return live === 'loading' ? 'on' : live
+  }
+
   const sttFailed = (s: Session, message: string): void => {
     s.sttOk = false
     s.lastError = message
+    persistRuntime(s, { lastError: message })
     if (!s.sttNotified) {
       s.sttNotified = true
       deps.notify({ title: 'Transcrição indisponível', body: message })
@@ -166,27 +249,47 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     return result.cfg
   }
 
+  // Só a trilha `them` diariza; o motor já tem timeout e fila curta, então a
+  // promise resolve sempre — falha vira "sem turnos", nunca segura o STT.
+  const diarize = (s: Session, t: TrackState, chunk: Chunk): Promise<DiarizedTurn[]> => {
+    const diarizer = t.track === 'them' ? diarizerRegistry.current : null
+    if (!diarizer) return Promise.resolve([])
+    return diarizer
+      .process({
+        meetingId: s.meetingId,
+        chunkIndex: chunk.index,
+        pcm: chunk.pcmNormalized ?? chunk.pcm,
+        startMs: chunk.startMs,
+      })
+      .catch(() => [])
+  }
+
   const transcribe = async (s: Session, t: TrackState, chunk: Chunk): Promise<void> => {
     const cfg = await ensureStt(s)
     if (!cfg) return
     const prompt = t.words.length ? t.words.slice(-PROMPT_WORDS).join(' ') : cfg.vocabulary || undefined
     try {
-      const segments = await deps.transcribeChunk({
-        wav: encodeWav(chunk.pcm),
-        language: cfg.language,
-        prompt,
-        config: cfg,
-        durationMs: chunk.endMs - chunk.startMs,
-      })
+      const [segments, turns] = await Promise.all([
+        deps.transcribeChunk({
+          wav: encodeWav(chunk.pcmNormalized ?? chunk.pcm),
+          language: cfg.language,
+          prompt,
+          config: cfg,
+          durationMs: chunk.endMs - chunk.startMs,
+        }),
+        diarize(s, t, chunk),
+      ])
       if (!s.sttOk) {
         s.sttOk = true
         s.lastError = null
         broadcastState(true)
       }
+      let lastSpeaker: SegmentSpeaker | null = null
       for (const seg of segments) {
         // O 1 s de overlap já foi transcrito no chunk anterior: segmento que
         // termina dentro dele é repetição.
         if (chunk.index > 0 && seg.endMs <= OVERLAP_MS) continue
+        lastSpeaker = speakerForSegment(turns, seg, lastSpeaker)
         const segment = deps.store.appendSegment({
           meetingId: s.meetingId,
           speaker: t.track,
@@ -194,6 +297,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
           startMs: chunk.startMs + seg.startMs,
           endMs: chunk.startMs + seg.endMs,
           chunkIndex: chunk.index,
+          speakerId: lastSpeaker?.speakerId ?? null,
+          speakerLabel: lastSpeaker?.speakerLabel ?? null,
         })
         t.words.push(...seg.text.split(/\s+/))
         if (t.words.length > PROMPT_WORDS * 2) t.words = t.words.slice(-PROMPT_WORDS)
@@ -221,15 +326,45 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
   }
 
   const enqueue = (s: Session, t: TrackState, chunk: Chunk): void => {
+    if (t.track === 'me' && s.micWarning && chunk.p95Dbfs > MIC_LOW_DBFS) {
+      s.micWarning = null
+      broadcastState(true)
+    }
     if (chunk.silent) return
+    // O mesmo PCM normalizado vai pro STT e pra diarização (W1-B lê chunk.pcmNormalized).
+    const normalized = normalizePeak(chunk.pcm)
+    chunk.pcmNormalized = normalized.pcm
+    chunk.gainDb = normalized.gainDb
     s.lastVoiceAt = deps.now()
     t.queue.push(chunk)
     pump(s, t)
   }
 
+  const probeMic = (s: Session, pcm: Buffer): void => {
+    const probe = s.micProbe
+    for (const db of windowDbfs(pcm)) {
+      if (db > MIC_PROBE_ACTIVE_DBFS) {
+        probe.windows.push(db)
+        probe.active++
+      }
+    }
+    probe.bytes += pcm.length
+    if (probe.active < MIC_PROBE_ACTIVE_WINDOWS && probe.bytes < MIC_PROBE_MAX_BYTES) return
+    probe.done = true
+    const sorted = probe.windows.sort((a, b) => a - b)
+    const dbfs = Math.round(percentile(sorted, 0.95) * 10) / 10
+    probe.windows = []
+    persistRuntime(s, { micLevelDbfs: dbfs })
+    if (dbfs < MIC_LOW_DBFS) {
+      s.micWarning = { dbfs, source: s.micSource }
+      broadcastState(true)
+    }
+  }
+
   const onPcm = (s: Session, t: TrackState, pcm: Buffer): void => {
     if (s.stopping) return
     t.peak = Math.max(t.peak, rmsLinear(pcm))
+    if (t.track === 'me' && !s.micProbe.done) probeMic(s, pcm)
     for (const chunk of t.chunker.push(pcm)) enqueue(s, t, chunk)
   }
 
@@ -251,10 +386,11 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       if (s.stopping || t.capture !== handle) return
       const message = `pw-record (${t.track}) saiu com código ${code}${stderr ? ': ' + stderr : ''}`
       s.lastError = message
-      if (!t.respawned) {
-        t.respawned = true
+      if (t.respawns < MAX_RESPAWNS_PER_TRACK) {
+        t.respawns++
         try {
           openCapture(s, t)
+          persistRuntime(s, { lastError: message, respawns: totalRespawns(s) })
           broadcastState(true)
           return
         } catch (err) {
@@ -262,6 +398,7 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
         }
       }
       s.fatal = s.lastError
+      persistRuntime(s, { lastError: s.fatal, respawns: totalRespawns(s) })
       void stop().catch(() => {})
     })
   }
@@ -301,6 +438,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       for (const chunk of t.chunker.flush()) enqueue(s, t, chunk)
     }
     await drain(s)
+    diarizerRegistry.current?.reset(s.meetingId)
+    persistRuntime(s, { diarization: diarizationStatus() })
 
     const endedAt = deps.now()
     let meeting = s.fatal
@@ -339,14 +478,24 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       const allFixture = TRACKS.every((track) => fixtureFromEnv(track, deps.env))
       const captureMode = allFixture ? 'fixture' : 'pipewire'
       const targets = allFixture ? { sink: null, source: null } : await deps.resolveDefaultDevices()
+      const linkedStreamId = detectorRegistry.current?.getDetection()?.streamId ?? null
+      // O mic que o app de chamada está usando pode não ser o default do
+      // PipeWire: segue o Link do stream detectado; sem link, fica o default.
+      if (linkedStreamId !== null && !fixtureFromEnv('me', deps.env)) {
+        const linked = await deps.resolveSourceForStream(linkedStreamId)
+        if (linked) targets.source = linked
+      }
       const meeting = deps.store.create({ title })
       const startedAt = deps.now()
       const s: Session = {
         meetingId: meeting.id,
         startedAt,
         captureMode,
-        linkedStreamId: detectorRegistry.current?.getDetection()?.streamId ?? null,
+        linkedStreamId,
         targets,
+        micSource: fixtureFromEnv('me', deps.env) ? 'fixture' : (targets.source ?? '@DEFAULT_AUDIO_SOURCE@'),
+        micProbe: { windows: [], active: 0, bytes: 0, done: false },
+        micWarning: null,
         pace: fixturePaceFromEnv(deps.env),
         tracks: {
           me: newTrack('me'),
@@ -376,6 +525,12 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       s.levelTimer = setInterval(() => tick(s), deps.levelIntervalMs)
       // Config do STT já na largada: erro aparece antes do primeiro chunk.
       void ensureStt(s)
+      const diarizer = diarizerRegistry.current
+      if (diarizer) {
+        diarizer.reset(meeting.id)
+        void diarizer.warmup?.().catch(() => {})
+      }
+      persistRuntime(s, { diarization: diarizationStatus() })
       emit({ type: 'meeting', meeting })
       broadcastState(true)
       return meeting
@@ -407,11 +562,17 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       deps.resolveDefaultDevices(),
       deps.loadSttConfig(),
     ])
+    // Sonda de 1,5 s do mic default; não roda em fixture, sem PipeWire nem
+    // durante uma gravação (o pw-record extra brigaria pelo device).
+    const canProbe = pipewire && !!devices.source && !fixtureFromEnv('me', deps.env) && !session
+    const dbfs = canProbe ? await deps.measureMicLevel(devices.source) : null
     return {
       pipewire,
       sink: devices.sink,
       source: devices.source,
       stt: stt.ok ? { ok: true, url: stt.cfg.url, error: null } : { ok: false, url: stt.url, error: stt.error },
+      micLevel: { dbfs, source: devices.source, low: dbfs !== null && dbfs < MIC_LOW_DBFS },
+      diarization: deps.diarizationSetup(),
     }
   }
 
@@ -428,9 +589,13 @@ function newTrack(track: Track): TrackState {
     queue: [],
     inFlight: false,
     words: [],
-    respawned: false,
+    respawns: 0,
     peak: 0,
   }
+}
+
+function totalRespawns(s: Session): number {
+  return TRACKS.reduce((n, track) => n + s.tracks[track].respawns, 0)
 }
 
 export function installRecorder(): Recorder {

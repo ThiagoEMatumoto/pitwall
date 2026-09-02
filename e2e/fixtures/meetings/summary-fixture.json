@@ -1,13 +1,17 @@
 {
-  "summaryMd": "## Contexto\n\nReunião curta de alinhamento semanal entre o Thiago e a participante para recapitular as decisões do dia e distribuir responsabilidades.\n\n## Decisões\n\n- A prioridade da semana é fechar a integração com o calendário.\n- A Mariana prepara o relatório de métricas para a reunião de segunda.\n- A migração do banco fica para depois da release (ver notas).\n\n## Pendências\n\n- Levantar o custo do provedor de transcrição antes de decidir a migração.\n- Conversa com o time de infraestrutura sobre o custo.\n\n## Próximos passos\n\n- Revisão do pull request de autenticação até quinta-feira.\n- Proposta técnica da migração enviada a todos até sexta.\n",
+  "summaryMd": "## Participantes\n\n- Eu\n- Mariana\n\n## Resumo\n\nReunião curta de alinhamento semanal entre o Thiago e a Mariana para recapitular as decisões do dia e distribuir responsabilidades.\n\n## Decisões\n\n- A prioridade da semana é fechar a integração com o calendário.\n- A migração do banco fica para depois da release (ver notas).\n\n## Próximas etapas\n\n- [Eu] Revisar o pull request de autenticação até quinta-feira. (00:01)\n- [Mariana] Comprar um servidor novo para o ambiente de staging. (00:12)\n",
   "actionItems": [
     {
       "title": "Revisar o pull request de autenticação até quinta-feira",
-      "quote": "O Thiago vai revisar o pull request de autenticação até quinta-feira."
+      "quote": "O Thiago vai revisar o pull request de autenticação até quinta-feira.",
+      "owner": "Eu",
+      "at": "00:01"
     },
     {
       "title": "Comprar um servidor novo para o ambiente de staging",
-      "quote": "Vamos comprar um servidor novo para o staging na próxima semana."
+      "quote": "Vamos comprar um servidor novo para o staging na próxima semana.",
+      "owner": "Mariana",
+      "at": "00:12"
     }
   ]
 }

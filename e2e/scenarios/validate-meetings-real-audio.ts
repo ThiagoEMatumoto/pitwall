@@ -13,14 +13,19 @@ import { goToArea, waitReady } from "../driver/nav";
 // STT real (config de ~/.config/voz/voz.env, sem override), e resumo real via
 // `claude -p` (sem CM_MEETING_SUMMARY_FIXTURE). O "participante remoto" é
 // simulado tocando o WAV de fixture no sink default com `pw-play`.
+//
+// system-duas-vozes.wav (56,18s) é a concatenação byte-a-byte de
+// system-participante.wav (Keren, 38,24s) + mic-eu.wav (Flavio, 17,94s) —
+// confirmado por diff de PCM. O transcript esperado pra similaridade é a
+// concatenação dos dois campos `transcript` do manifest, na mesma ordem.
 
 const execFileAsync = promisify(execFile);
 const FIXTURES = join(REPO_ROOT, "e2e/fixtures/meetings");
 const SILENCE_WAV = join(FIXTURES, "silence-5s.wav");
-const SYSTEM_WAV = join(FIXTURES, "system-participante.wav");
+const SYSTEM_WAV = join(FIXTURES, "system-duas-vozes.wav");
 const MANIFEST_PATH = join(FIXTURES, "manifest.json");
-const SEGMENTS_WANTED = 3;
-const TRANSCRIPT_TIMEOUT_MS = 90_000;
+const SEGMENTS_WANTED = 5;
+const TRANSCRIPT_TIMEOUT_MS = 120_000;
 const FINISH_TIMEOUT_MS = 240_000;
 
 for (const f of [SILENCE_WAV, SYSTEM_WAV, MANIFEST_PATH]) {
@@ -34,9 +39,14 @@ interface ManifestEntry {
 const manifest = JSON.parse(
   readFileSync(MANIFEST_PATH, "utf8"),
 ) as ManifestEntry[];
-const expectedEntry = manifest.find((m) => m.file === "system-participante.wav");
-if (!expectedEntry) throw new Error("manifest sem entrada system-participante.wav");
-const expectedWords = expectedEntry.transcript
+// system-duas-vozes.wav = system-participante.wav + mic-eu.wav concatenados
+// (verificado por diff de PCM) — o texto esperado é a soma dos dois.
+const partEntry = manifest.find((m) => m.file === "system-participante.wav");
+const micEntry = manifest.find((m) => m.file === "mic-eu.wav");
+if (!partEntry) throw new Error("manifest sem entrada system-participante.wav");
+if (!micEntry) throw new Error("manifest sem entrada mic-eu.wav");
+const expectedTranscript = `${partEntry.transcript} ${micEntry.transcript}`;
+const expectedWords = expectedTranscript
   .toLowerCase()
   .replace(/[.,!?]/g, "")
   .split(/\s+/)
@@ -250,10 +260,28 @@ if (meetingId) {
     userDataCopy,
     `SELECT text FROM meeting_v2_segments WHERE meeting_id = '${meetingId}' AND speaker = 'me' ORDER BY start_ms`,
   );
-  const items = await queryDb<{ title: string; quote: string | null; status: string }>(
+  const items = await queryDb<{
+    title: string;
+    quote: string | null;
+    status: string;
+    owner: string | null;
+    owner_kind: string;
+    task_id: string | null;
+  }>(
     userDataCopy,
-    `SELECT title, quote, status FROM meeting_v2_action_items WHERE meeting_id = '${meetingId}' ORDER BY created_at, rowid`,
+    `SELECT title, quote, status, owner, owner_kind, task_id FROM meeting_v2_action_items WHERE meeting_id = '${meetingId}' ORDER BY created_at, rowid`,
   );
+  const speakers = await queryDb<{ id: string; label: string }>(
+    userDataCopy,
+    `SELECT id, label FROM meeting_v2_speakers WHERE meeting_id = '${meetingId}' ORDER BY rowid`,
+  );
+  const taskIds = items.map((i) => i.task_id).filter((id): id is string => !!id);
+  const autoTasks = taskIds.length
+    ? await queryDb<{ id: string; origin: string }>(
+        userDataCopy,
+        `SELECT id, origin FROM tasks WHERE id IN (${taskIds.map((id) => `'${id}'`).join(",") || "''"}) AND origin = 'auto'`,
+      )
+    : [];
 
   const themText = themSegments.map((s) => s.text).join(" ");
   const themWords = new Set(
@@ -282,9 +310,35 @@ if (meetingId) {
     "INFO",
     items.length ? JSON.stringify(items) : "nenhum action item extraído",
   );
+  record(
+    "(5e) ≥2 speakers em meeting_v2_speakers",
+    speakers.length >= 2 ? "PASS" : "FAIL",
+    speakers.map((s) => s.label).join(" · ") || "nenhum speaker",
+  );
+  const summaryMd = meetings[0]?.summary_md ?? "";
+  const hasParticipantes = summaryMd.includes("## Participantes");
+  const hasProximasEtapas = summaryMd.includes("## Próximas etapas");
+  const hasOwnerBracket = /\[[^\]]+\]/.test(summaryMd);
+  record(
+    "(5f) summary_md tem estrutura Gemini (Participantes/Próximas etapas/dono)",
+    hasParticipantes && hasProximasEtapas && hasOwnerBracket ? "PASS" : "FAIL",
+    `participantes=${hasParticipantes} proximas_etapas=${hasProximasEtapas} owner_bracket=${hasOwnerBracket}`,
+  );
+  const allProposed = items.length > 0 && items.every((i) => i.status === "proposed");
+  const withOwner = items.filter((i) => i.owner && i.owner.trim().length > 0);
+  record(
+    "(5g) action items todos 'proposed' com owner em ≥1",
+    allProposed && withOwner.length >= 1 ? "PASS" : "FAIL",
+    items.map((i) => `${i.title} status=${i.status} owner=${i.owner ?? "∅"}(${i.owner_kind})`).join(" | ") || "nenhum item",
+  );
+  record(
+    "(5h) 0 tasks origin=auto entre as criadas pelos action items",
+    autoTasks.length === 0 ? "PASS" : "FAIL",
+    autoTasks.length ? JSON.stringify(autoTasks) : `nenhuma task criada ainda (task_ids=${taskIds.length})`,
+  );
   if (meetings[0]?.summary_md) {
-    console.log("\n=== summary_md (primeiros 800 chars) ===");
-    console.log(meetings[0].summary_md.slice(0, 800));
+    console.log("\n=== summary_md (primeiros 1200 chars) ===");
+    console.log(meetings[0].summary_md.slice(0, 1200));
   }
 } else {
   record("(5) banco", "SKIP", "pulado — reunião nunca foi criada");

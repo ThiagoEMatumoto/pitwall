@@ -18,6 +18,11 @@ const meeting: Meeting = {
   updatedAt: Date.now(),
   segmentCount: 0,
   durationMs: 0,
+  speakers: [],
+  lastError: null,
+  respawns: 0,
+  micLevelDbfs: null,
+  diarization: null,
 }
 
 const base: MeetingLiveState = {
@@ -29,6 +34,8 @@ const base: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 const mockApi = vi.hoisted(() => ({
@@ -54,6 +61,17 @@ describe('RecordingPill', () => {
     const pill = await screen.findByRole('button', { name: /Gravando 00:0\d/ })
     expect(pill).toHaveAttribute('title', 'Clique para abrir · Ctrl+Shift+R para parar')
     expect(mockApi.onEvent).toHaveBeenCalled()
+  })
+
+  it('acrescenta "· mic baixo" quando a gravação tem micWarning', async () => {
+    mockApi.state.mockResolvedValue({
+      ...base,
+      active: meeting,
+      elapsedMs: 5_000,
+      micWarning: { dbfs: -48, source: 'alsa_input.headset' },
+    })
+    render(<RecordingPill />)
+    await screen.findByRole('button', { name: /Gravando 00:0\d · mic baixo/ })
   })
 
   it('fica âmbar com "Reunião detectada · Gravar" quando há detecção pendente', async () => {

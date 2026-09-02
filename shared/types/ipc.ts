@@ -13,32 +13,40 @@ export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-lo
 export type {
   Meeting,
   MeetingActionItem,
-  MeetingActionItemDecision,
+  MeetingActionItemBatch,
+  MeetingActionItemOwnerKind,
   MeetingActionItemStatus,
   MeetingCaptureMode,
   MeetingDetail,
   MeetingDetection,
   MeetingDetectionAction,
+  MeetingDiarizationLiveStatus,
+  MeetingDiarizationStatus,
   MeetingEvent,
   MeetingFloatingAction,
   MeetingLiveState,
   MeetingSegment,
   MeetingSetupStatus,
   MeetingSpeaker,
+  MeetingSpeakerTrack,
   MeetingStatus,
+  MeetingVoice,
+  RenameMeetingSpeakerInput,
   StartMeetingInput,
   UpdateMeetingInput,
 } from './meetings'
 import type {
   Meeting,
   MeetingActionItem,
-  MeetingActionItemDecision,
+  MeetingActionItemBatch,
   MeetingDetail,
   MeetingDetectionAction,
   MeetingEvent,
   MeetingFloatingAction,
   MeetingLiveState,
   MeetingSetupStatus,
+  MeetingVoice,
+  RenameMeetingSpeakerInput,
   StartMeetingInput,
   UpdateMeetingInput,
 } from './meetings'
@@ -2611,8 +2619,14 @@ export interface MeetingsApi {
   delete(id: string): Promise<void>
   /** Re-roda resumo + extração de tarefas. */
   resummarize(id: string): Promise<Meeting>
-  /** 'created' força criar a task mesmo sem grounding. */
-  actionItem(input: MeetingActionItemDecision): Promise<MeetingActionItem>
+  /** Decisão em lote: 'create' cria as tasks (com overrides de dono/título), 'dismiss' descarta. Devolve a lista completa. */
+  actionItemsBatch(input: MeetingActionItemBatch): Promise<MeetingActionItem[]>
+  /** Renomeia o speaker, reescreve os segmentos e cria/atualiza a voz conhecida. */
+  renameSpeaker(input: RenameMeetingSpeakerInput): Promise<Meeting>
+  listVoices(): Promise<MeetingVoice[]>
+  deleteVoice(id: string): Promise<void>
+  /** Baixa o modelo de embedding; progresso chega por onEvent ('model_progress'). */
+  downloadModels(): Promise<void>
   floating(action: MeetingFloatingAction): Promise<void>
   /** Decide sobre a reunião detectada: gravar ou ignorar até o stream acabar. */
   detection(action: MeetingDetectionAction): Promise<void>

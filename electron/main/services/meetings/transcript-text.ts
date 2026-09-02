@@ -1,6 +1,8 @@
 // Renderização do transcript pros prompts de resumo e extração: uma linha por
-// segmento, `[mm:ss] Eu|<themLabel>: texto`. Compartilhado pra que o trecho que
-// o modelo cita na extração seja exatamente o texto que ele viu.
+// segmento, `[mm:ss] <speakerLabel>: texto`. O label vem da diarização quando
+// existe; sem ela, 'Eu' pro microfone e themLabel pro áudio do sistema.
+// Compartilhado pra que o trecho que o modelo cita na extração seja exatamente
+// o texto que ele viu.
 import type { MeetingSegment } from '../../../../shared/types/meetings'
 
 export function mmss(ms: number): string {
@@ -14,10 +16,12 @@ export function speakerLabel(speaker: MeetingSegment['speaker'], themLabel: stri
   return speaker === 'me' ? 'Eu' : themLabel
 }
 
+export function segmentLabel(seg: Pick<MeetingSegment, 'speaker' | 'speakerLabel'>, themLabel: string): string {
+  return seg.speakerLabel?.trim() || speakerLabel(seg.speaker, themLabel)
+}
+
 export function renderTranscript(segments: MeetingSegment[], themLabel: string): string {
-  return segments
-    .map((seg) => `[${mmss(seg.startMs)}] ${speakerLabel(seg.speaker, themLabel)}: ${seg.text.trim()}`)
-    .join('\n')
+  return segments.map((seg) => `[${mmss(seg.startMs)}] ${segmentLabel(seg, themLabel)}: ${seg.text.trim()}`).join('\n')
 }
 
 export function formatMeetingDate(startedAt: number): string {

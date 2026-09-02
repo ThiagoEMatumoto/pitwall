@@ -11,6 +11,8 @@ const idleState: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 const okSetup: MeetingSetupStatus = {
@@ -18,6 +20,8 @@ const okSetup: MeetingSetupStatus = {
   sink: 'alsa_output',
   source: 'alsa_input',
   stt: { ok: true, url: 'http://localhost:9000', error: null },
+  micLevel: { dbfs: null, source: null, low: false },
+  diarization: { supported: false, addon: false, models: { segmentation: 'missing', embedding: 'missing', progress: null } },
 }
 
 vi.mock('@/lib/ipc', () => ({
