@@ -20,7 +20,7 @@ vi.mock('electron', async () => {
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as store from './meeting-store'
-import { postProcessRegistry } from './recorder-contract'
+import { detectorRegistry, postProcessRegistry } from './recorder-contract'
 import { createRecorder, type RecorderDeps } from './recorder'
 import { SttError, type SttConfig, type TranscribeChunkInput } from './transcriber'
 
@@ -40,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   postProcessRegistry.current = null
+  detectorRegistry.current = null
 })
 
 function fixtureEnv(over: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -259,5 +260,25 @@ describe('checkSetup', () => {
       source: null,
       stt: { ok: false, url: 'https://stt/v1', error: 'sem key' },
     })
+  })
+})
+
+describe('vínculo com o detector', () => {
+  it('start() copia o streamId da detecção corrente pra linkedStreamId e expõe a detecção no estado', async () => {
+    const detection = { app: 'navegador (Google Chrome input)', binary: 'chrome', pid: 4242, streamId: 147, since: 1, ignored: false }
+    detectorRegistry.current = { getDetection: () => detection, decide: () => {} }
+    const { recorder } = build()
+    expect(recorder.getState()).toMatchObject({ detection, linkedStreamId: null })
+    await recorder.start({})
+    expect(recorder.getState()).toMatchObject({ detection, linkedStreamId: 147 })
+    await recorder.stop()
+    expect(recorder.getState().linkedStreamId).toBeNull()
+  })
+
+  it('sem detector registrado, linkedStreamId e detection ficam null', async () => {
+    const { recorder } = build()
+    await recorder.start({})
+    expect(recorder.getState()).toMatchObject({ detection: null, linkedStreamId: null })
+    await recorder.stop()
   })
 })
