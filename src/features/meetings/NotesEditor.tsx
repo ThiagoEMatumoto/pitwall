@@ -15,12 +15,14 @@ export function NotesEditor({ meetingId, initial, onSave }: Props) {
   const [saveState, setSaveState] = useState<SaveState>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latest = useRef(initial)
+  // Último rawNotes do servidor que este editor já incorporou. É a base pra
+  // distinguir "eu mandei isso" de "chegou nota rápida pela flutuante".
+  const syncedRef = useRef(initial)
 
-  // Só ressincroniza ao trocar de reunião — o valor vindo do store depois de um
-  // save é o que o próprio editor mandou (ou mais velho que o texto atual).
   useEffect(() => {
     setText(initial)
     latest.current = initial
+    syncedRef.current = initial
     setSaveState('idle')
   }, [meetingId])
 
@@ -30,18 +32,47 @@ export function NotesEditor({ meetingId, initial, onSave }: Props) {
     }
   }, [])
 
-  const onChange = (value: string) => {
-    setText(value)
-    latest.current = value
-    setSaveState('dirty')
+  const scheduleSave = () => {
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
       timer.current = null
       setSaveState('saving')
-      void onSave(meetingId, latest.current).then(() => {
+      const sent = latest.current
+      void onSave(meetingId, sent).then(() => {
+        syncedRef.current = sent
         setSaveState((s) => (s === 'saving' ? 'saved' : s))
       })
     }, AUTOSAVE_MS)
+  }
+
+  // Servidor mudou por fora (nota rápida da flutuante): sem edição local,
+  // adota; com edição local e o servidor só anexou, anexa o mesmo trecho aqui
+  // e reagenda o save; se divergiu de verdade, o texto local vence.
+  useEffect(() => {
+    const server = initial
+    const synced = syncedRef.current
+    if (server === synced) return
+    const local = latest.current
+    if (local === synced) {
+      setText(server)
+      latest.current = server
+    } else if (server.startsWith(synced)) {
+      const merged = local + server.slice(synced.length)
+      setText(merged)
+      latest.current = merged
+      setSaveState('dirty')
+      scheduleSave()
+    } else {
+      return
+    }
+    syncedRef.current = server
+  }, [initial])
+
+  const onChange = (value: string) => {
+    setText(value)
+    latest.current = value
+    setSaveState('dirty')
+    scheduleSave()
   }
 
   return (

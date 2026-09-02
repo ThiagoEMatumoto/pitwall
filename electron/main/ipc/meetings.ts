@@ -21,6 +21,11 @@ const updateSchema = z.object({
   themLabel: z.string().optional(),
 })
 
+const quickNoteSchema = z.object({
+  meetingId: z.string().min(1),
+  text: z.string(),
+})
+
 const actionItemSchema = z.object({
   id: z.string().min(1),
   status: z.enum(['dismissed', 'created']),
@@ -55,6 +60,13 @@ export function registerMeetingsIpc(): void {
     const meeting = meetingStore.update(updateSchema.parse(payload))
     broadcast('meetings:event', { type: 'meeting', meeting })
     return meeting
+  })
+
+  // O recorder concatena a linha e emite o evento 'meeting' — o editor da
+  // janela principal anexa em vez de sobrescrever.
+  ipcMain.handle('meetings:quickNote', (_e, payload: unknown) => {
+    const { meetingId, text } = quickNoteSchema.parse(payload)
+    return getRecorder().appendQuickNote(meetingId, text)
   })
 
   ipcMain.handle('meetings:delete', (_e, payload: unknown) => {

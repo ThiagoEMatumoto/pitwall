@@ -2599,6 +2599,8 @@ export interface MeetingsApi {
   list(): Promise<Meeting[]>
   get(id: string): Promise<MeetingDetail>
   update(input: UpdateMeetingInput): Promise<Meeting>
+  /** Anexa "- [mm:ss] texto" às notas no main (sem clobber do editor). */
+  quickNote(meetingId: string, text: string): Promise<Meeting>
   delete(id: string): Promise<void>
   /** Re-roda resumo + extração de tarefas. */
   resummarize(id: string): Promise<Meeting>

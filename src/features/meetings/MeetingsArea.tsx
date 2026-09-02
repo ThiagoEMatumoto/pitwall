@@ -1,27 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { AppWindow, Mic, Square } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useMeetingsStore } from '@/store/meetingsStore'
-import type { Meeting, MeetingLiveState, MeetingSetupStatus } from '../../../shared/types/ipc'
+import type { MeetingLiveState, MeetingSetupStatus } from '../../../shared/types/ipc'
 import { MeetingDetail } from './MeetingDetail'
 import { MeetingList } from './MeetingList'
 import { SetupBanner, setupProblems } from './SetupBanner'
 import { formatDuration } from './format'
+import { useElapsed } from './useElapsed'
 
 const SHORTCUT_HINT = 'Ctrl+Shift+R'
-
-function useElapsed(active: Meeting | null, reportedMs: number): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!active) return
-    setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [active?.id])
-  if (!active) return 0
-  return Math.max(reportedMs, now - active.startedAt)
-}
 
 function LevelMeter({ label, level, accent }: { label: string; level: number; accent: boolean }) {
   const pct = Math.round(Math.min(1, Math.max(0, level)) * 100)
@@ -62,15 +51,15 @@ export function MeetingsArea() {
   const toggleFloating = useMeetingsStore((s) => s.toggleFloating)
   const clearError = useMeetingsStore((s) => s.clearError)
   const startEventWatch = useMeetingsStore((s) => s.startEventWatch)
-  const stopEventWatch = useMeetingsStore((s) => s.stopEventWatch)
 
+  // Sem stopEventWatch no unmount: o RecordingPill da barra superior é o dono
+  // da assinatura pela vida do app — parar aqui mataria o indicador global.
   useEffect(() => {
     void refresh()
     void loadLive()
     void checkSetup()
     startEventWatch()
-    return () => stopEventWatch()
-  }, [refresh, loadLive, checkSetup, startEventWatch, stopEventWatch])
+  }, [refresh, loadLive, checkSetup, startEventWatch])
 
   const active = live?.active ?? null
   const elapsedMs = useElapsed(active, live?.elapsedMs ?? 0)

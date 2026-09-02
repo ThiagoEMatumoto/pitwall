@@ -28,12 +28,6 @@ export function formatClock(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-export function appendNoteLine(rawNotes: string, line: string): string {
-  const text = line.trim()
-  if (!text) return rawNotes
-  return rawNotes.trim() ? `${rawNotes.replace(/\s+$/, '')}\n${text}` : text
-}
-
 const dragStyle = { WebkitAppRegion: 'drag' } as CSSProperties
 const noDragStyle = { WebkitAppRegion: 'no-drag' } as CSSProperties
 
@@ -81,9 +75,6 @@ export function FloatingApp() {
   const [busy, setBusy] = useState(false)
   const [clock, setClock] = useState('00:00')
   const [error, setError] = useState<string | null>(null)
-  // Notas cru da reunião ativa: o state.active do gravador pode não refletir um
-  // update recém-feito, então a base do append vive aqui.
-  const rawNotesRef = useRef('')
   const activeIdRef = useRef<string | null>(null)
   const anchorRef = useRef<number | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -94,12 +85,10 @@ export function FloatingApp() {
   const adoptMeeting = useCallback((meeting: Meeting | null) => {
     if (!meeting) {
       activeIdRef.current = null
-      rawNotesRef.current = ''
       return
     }
     if (activeIdRef.current !== meeting.id) {
       activeIdRef.current = meeting.id
-      rawNotesRef.current = meeting.rawNotes
       setSegments([])
       meetingsApi
         .get(meeting.id)
@@ -128,8 +117,6 @@ export function FloatingApp() {
       else if (event.type === 'segment') {
         if (event.segment.meetingId !== activeIdRef.current) return
         setSegments((prev) => [...prev, event.segment].slice(-MAX_SEGMENTS))
-      } else if (event.type === 'meeting' && event.meeting.id === activeIdRef.current) {
-        rawNotesRef.current = event.meeting.rawNotes
       }
     })
   }, [applyState])
@@ -163,12 +150,10 @@ export function FloatingApp() {
     const id = activeIdRef.current
     const text = note.trim()
     if (!id || !text) return
-    const rawNotes = appendNoteLine(rawNotesRef.current, text)
     setNote('')
-    void run(async () => {
-      const meeting = await meetingsApi.update({ id, rawNotes })
-      rawNotesRef.current = meeting.rawNotes
-    })
+    // O main anexa "- [mm:ss] texto" — a base nunca vive aqui, então não há
+    // como clobberar o que o editor da janela principal está digitando.
+    void run(() => meetingsApi.quickNote(id, text))
   }
 
   const onNoteKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {

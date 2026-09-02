@@ -515,6 +515,7 @@ const api: Api = {
     list: () => invoke('meetings:list'),
     get: (id: string) => invoke('meetings:get', id),
     update: (input: UpdateMeetingInput) => invoke('meetings:update', input),
+    quickNote: (meetingId: string, text: string) => invoke('meetings:quickNote', { meetingId, text }),
     delete: (id: string) => invoke('meetings:delete', id),
     resummarize: (id: string) => invoke('meetings:resummarize', id),
     actionItem: (input: MeetingActionItemDecision) => invoke('meetings:actionItem', input),
