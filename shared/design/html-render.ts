@@ -1,7 +1,13 @@
 // Árvore → HTML. TS puro (sem DOM): roda no main (protocol handler,
 // export) e no renderer. O parse (HTML → árvore) fica no main com parse5.
 
-import type { DesignArtboard, DesignDocument, DesignNode, DesignTokens } from '../types/design'
+import type {
+  DesignArtboard,
+  DesignDocument,
+  DesignNode,
+  DesignNodeLink,
+  DesignTokens,
+} from '../types/design'
 
 const VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta',
@@ -55,6 +61,13 @@ function isUnsafeUrl(value: string): boolean {
   return /^\s*(javascript|vbscript|data:text\/html)/i.test(value)
 }
 
+function linkFromAttrs(attrs: DesignNode['attrs']): DesignNodeLink | undefined {
+  const artboardId = attrs['data-pw-link']
+  if (!artboardId) return undefined
+  const transition = (attrs['data-pw-transition'] || 'none') as DesignNodeLink['transition']
+  return { artboardId, transition }
+}
+
 function renderAttrs(node: DesignNode, opts: RenderOptions): string {
   let out = ''
   for (const [name, value] of Object.entries(node.attrs)) {
@@ -70,8 +83,10 @@ function renderAttrs(node: DesignNode, opts: RenderOptions): string {
   if (opts.ids) {
     out += ` data-pw-id="${escapeAttr(node.id)}"`
     if (node.hidden) out += ' data-pw-hidden=""'
-    if (node.link) {
-      out += ` data-pw-link="${escapeAttr(node.link.artboardId)}" data-pw-transition="${node.link.transition}"`
+    // The inspector has no setLink op, so it stores the link as data-pw-* attrs.
+    const link = node.link ?? linkFromAttrs(node.attrs)
+    if (link) {
+      out += ` data-pw-link="${escapeAttr(link.artboardId)}" data-pw-transition="${link.transition}"`
     }
   }
   return out

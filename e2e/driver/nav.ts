@@ -1,6 +1,6 @@
 import { type Page } from 'playwright'
 
-export type Area = 'projects' | 'features' | 'cc-configs' | 'metrics' | 'diagrams' | 'meetings' | 'tasks'
+export type Area = 'projects' | 'features' | 'cc-configs' | 'metrics' | 'diagrams' | 'meetings' | 'tasks' | 'design'
 
 // Labels reais do IconRail (atributo title de cada botão) — ver src/app/IconRail.tsx.
 const AREA_TITLE: Record<Area, string> = {
@@ -11,6 +11,7 @@ const AREA_TITLE: Record<Area, string> = {
   diagrams: 'Diagramas',
   meetings: 'Reuniões',
   tasks: 'Tarefas',
+  design: 'Design',
 }
 
 // Pronto quando o IconRail está montado (botão "Projetos" visível).

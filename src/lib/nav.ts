@@ -1,4 +1,5 @@
 import { useAppStore } from "@/store/appStore";
+import { useDesignStore } from "@/store/designStore";
 import { useDiagramsStore } from "@/store/diagramsStore";
 import { useFeaturesStore } from "@/store/featuresStore";
 import { useMeetingsStore } from "@/store/meetingsStore";
@@ -43,4 +44,10 @@ export function navigateToProject(id: string): void {
 export function navigateToDiagram(id: string): void {
   void useDiagramsStore.getState().select(id);
   useAppStore.getState().setArea("diagrams");
+}
+
+// Same circular-import shape as diagrams: designStore toasts navigate here.
+export function navigateToDesign(docId?: string): void {
+  if (docId) void useDesignStore.getState().openDoc(docId);
+  useAppStore.getState().setArea("design");
 }

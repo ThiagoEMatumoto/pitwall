@@ -50,6 +50,7 @@ import { registerHandoffsIpc } from './ipc/handoffs'
 import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
+import { registerDesignIpc } from './ipc/design'
 import { registerVideoIpc } from './ipc/video'
 import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
@@ -305,6 +306,7 @@ app.whenReady().then(async () => {
   registerObjectivesIpc()
   registerTasksIpc()
   registerDiagramsIpc()
+  registerDesignIpc()
   registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()

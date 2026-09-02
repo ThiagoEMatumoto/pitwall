@@ -46,3 +46,6 @@ export const meetingsApi = api.meetings
 export const videoApi = (api as unknown as { video: VideoApi }).video
 
 export { api }
+
+// Design Studio.
+export const designApi = api.design

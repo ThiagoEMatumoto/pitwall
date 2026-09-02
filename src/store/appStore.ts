@@ -23,6 +23,7 @@ export type Area =
   | 'architecture'
   | 'handoffs'
   | 'diagrams'
+  | 'design'
   | 'videos'
   | 'meetings'
 
