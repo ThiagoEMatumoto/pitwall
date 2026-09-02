@@ -4,8 +4,8 @@ import { migrations } from '../migrations/index'
 import * as designStudioMigration from '../migrations/046_design_studio'
 import type { DesignNode } from '../../../../shared/types/design'
 
-// Mesmo padrão de diagram-store.test: o store importa getDb de '../db' (que
-// depende de electron.app); mockamos pra um SQLite in-memory migrado.
+// Same pattern as diagram-store.test: the store imports getDb from '../db'
+// (which depends on electron.app); we mock it to a migrated in-memory SQLite.
 let testDb: Database.Database
 vi.mock('../db', () => ({
   getDb: () => testDb,
@@ -31,7 +31,7 @@ function applyAllMigrations(db: Database.Database): void {
       m.up(db)
     }
   }
-  // Até a integração registrar a 045 em migrations/index.ts, aplicamos à mão.
+  // Until the integration registers 045 in migrations/index.ts, apply it by hand.
   if (!migrations.some((m) => m.version === designStudioMigration.version)) {
     designStudioMigration.up(db)
   }
@@ -71,7 +71,7 @@ describe('design-store', () => {
     testDb.close()
   })
 
-  it('createDocument nasce com 1 página "Page 1", defaults e links', () => {
+  it('createDocument starts with 1 page "Page 1", defaults and links', () => {
     const doc = newDoc()
     expect(doc.status).toBe('active')
     expect(doc.tokens).toEqual({})
@@ -83,7 +83,7 @@ describe('design-store', () => {
     expect(doc.links).toEqual([{ documentId: doc.id, parentType: 'feature', parentId: 'f1' }])
   })
 
-  it('createArtboard sem pageId cai na primeira página, com frame raiz e versão 1', () => {
+  it('createArtboard without pageId lands on the first page, with a root frame and version 1', () => {
     const doc = newDoc()
     const ab = store.createArtboard({ docId: doc.id, name: 'Home', width: 1440, height: 900 })
     expect(ab.pageId).toBe(doc.pages[0].id)
@@ -99,7 +99,7 @@ describe('design-store', () => {
     expect(store.getArtboardDocumentId(ab.id)).toBe(doc.id)
   })
 
-  it('setTree sem snapshot bumpa versão mas não grava histórico', () => {
+  it('setTree without snapshot bumps the version but writes no history', () => {
     const doc = newDoc()
     const ab = store.createArtboard({ docId: doc.id, name: 'Home', width: 100, height: 100 })
     const updated = store.setTree(ab.id, tree('draft'), { snapshot: false, author: 'human' })
@@ -108,25 +108,46 @@ describe('design-store', () => {
     expect(store.listVersions(ab.id)).toHaveLength(1)
   })
 
-  it('cap de 30 versões: 35 snapshots mantêm só os 30 mais recentes', () => {
+  it('cap of 50 versions: 55 claude snapshots keep only the 50 most recent', () => {
     const doc = newDoc()
     const ab = store.createArtboard({ docId: doc.id, name: 'Home', width: 100, height: 100 })
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < 55; i++) {
       store.setTree(ab.id, tree(`v${i + 2}`), {
         snapshot: true,
         author: 'claude',
         summary: `edit ${i + 2}`,
       })
     }
-    expect(store.getArtboard(ab.id)!.version).toBe(36)
+    expect(store.getArtboard(ab.id)!.version).toBe(56)
     const versions = store.listVersions(ab.id)
-    expect(versions).toHaveLength(30)
-    expect(versions[0].version).toBe(36)
+    expect(versions).toHaveLength(store.MAX_SNAPSHOTS)
+    expect(versions[0].version).toBe(56)
     expect(versions[versions.length - 1].version).toBe(7)
     expect(store.getVersion(ab.id, 6)).toBeNull()
   })
 
-  it('restoreVersion grava versão NOVA com a árvore do snapshot', () => {
+  it('pruning drops the oldest human snapshots before any claude one', () => {
+    const doc = newDoc()
+    const ab = store.createArtboard({ docId: doc.id, name: 'Home', width: 100, height: 100 })
+    // 20 named claude versions first (v2..v21), then a burst of 35 human ones (v22..v56).
+    for (let i = 0; i < 20; i++) {
+      store.setTree(ab.id, tree(`c${i}`), { snapshot: true, author: 'claude', summary: `c${i}` })
+    }
+    for (let i = 0; i < 35; i++) {
+      store.setTree(ab.id, tree(`h${i}`), { snapshot: true, author: 'human' })
+    }
+    const versions = store.listVersions(ab.id)
+    expect(versions).toHaveLength(50)
+    expect(versions.filter((v) => v.author === 'claude')).toHaveLength(20)
+    expect(versions.filter((v) => v.author === 'human')).toHaveLength(30)
+    // The oldest claude version survives while the oldest human ones (v1, v22..v26) are gone.
+    expect(store.getVersion(ab.id, 2)?.author).toBe('claude')
+    expect(store.getVersion(ab.id, 1)).toBeNull()
+    expect(store.getVersion(ab.id, 26)).toBeNull()
+    expect(store.getVersion(ab.id, 27)?.author).toBe('human')
+  })
+
+  it('restoreVersion writes a NEW version with the snapshot tree', () => {
     const doc = newDoc()
     const ab = store.createArtboard({
       docId: doc.id,
@@ -146,7 +167,7 @@ describe('design-store', () => {
     expect(store.getVersion(ab.id, 2)!.tree).toEqual(tree('v2'))
   })
 
-  it('duplicateArtboard gera ids novos em toda a árvore e posiciona ao lado', () => {
+  it('duplicateArtboard generates new ids across the tree and places the copy beside', () => {
     const doc = newDoc()
     const ab = store.createArtboard({
       docId: doc.id,
@@ -167,7 +188,7 @@ describe('design-store', () => {
     expect(copy.tree.children.map((c) => c.text)).toEqual(['orig', 'orig-b'])
   })
 
-  it('removeDocument cascateia páginas, artboards, versões, assets e links', () => {
+  it('removeDocument cascades pages, artboards, versions, assets and links', () => {
     const doc = newDoc()
     const page = store.createPage({ docId: doc.id, name: 'Page 2' })
     const ab = store.createArtboard({
@@ -190,7 +211,7 @@ describe('design-store', () => {
     expect(count.n).toBe(0)
   })
 
-  it('páginas: create/update/reorder/delete', () => {
+  it('pages: create/update/reorder/delete', () => {
     const doc = newDoc()
     const p2 = store.createPage({ docId: doc.id, name: 'Page 2' })
     expect(p2.position).toBe(1)
@@ -209,7 +230,7 @@ describe('design-store', () => {
     expect(store.getDocument(doc.id)!.pages.map((p) => p.id)).toEqual([doc.pages[0].id])
   })
 
-  it('listDocuments filtra por status, parent e search', () => {
+  it('listDocuments filters by status, parent and search', () => {
     const a = newDoc('Landing sync')
     const b = store.createDocument({
       title: 'Onboarding',
@@ -224,6 +245,11 @@ describe('design-store', () => {
       [a.id],
     )
     expect(store.listDocuments({ search: 'sync' }).map((d) => d.id)).toEqual([a.id])
+    // LIKE wildcards in the search are literal characters, not "match anything".
+    expect(store.listDocuments({ status: 'all', search: '%' })).toEqual([])
+    expect(store.listDocuments({ status: 'all', search: '_' })).toEqual([])
+    const pct = store.createDocument({ title: '50% off' })
+    expect(store.listDocuments({ search: '0%' }).map((d) => d.id)).toEqual([pct.id])
   })
 
   it('updateDocument persiste tokens/fonts/globalCss', () => {
@@ -253,7 +279,7 @@ describe('asset-store', () => {
     testDb.close()
   })
 
-  it('upload dedupe por sha256 dentro do mesmo escopo; escopos diferentes não colidem', () => {
+  it('upload dedupes by sha256 within the same scope; different scopes do not collide', () => {
     const doc = newDoc()
     const bytes = png('same-bytes')
     const first = assets.upload({ documentId: doc.id, name: 'a.png', mime: 'image/png', bytes })
@@ -272,7 +298,7 @@ describe('asset-store', () => {
     expect(assets.get(first.id)).toBeNull()
   })
 
-  it('upload rejeita mime fora da allowlist e asset acima de 5MB', () => {
+  it('upload refuses a mime outside the allowlist and an asset above 5MB', () => {
     expect(() =>
       assets.upload({
         documentId: null,

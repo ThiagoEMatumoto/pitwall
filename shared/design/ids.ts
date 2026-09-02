@@ -1,5 +1,5 @@
-// Ids curtos para nós e nonces. Roda no main, no renderer e no runtime do
-// iframe, por isso não importa 'node:crypto'.
+// Short ids for nodes and nonces. Runs in main, in the renderer and in the
+// iframe runtime, hence no 'node:crypto' import.
 
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz'
 

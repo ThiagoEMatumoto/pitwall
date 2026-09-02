@@ -1,9 +1,9 @@
 import type { DesignAgentActivity, DesignSelection } from '../../../../shared/types/design'
 
-// Estado efêmero do Design Studio, só em memória do main: o que o humano tem
-// selecionado (lido por design_selection_get no MCP), qual documento está
-// aberto e o que o agente está mexendo agora (HUD no canvas). Nada disso
-// sobrevive a restart nem tem razão de ir pro banco.
+// Ephemeral Design Studio state, in main-process memory only: what the human
+// has selected (read by design_selection_get on the MCP side), which document
+// is open and what the agent is touching right now (HUD on the canvas). None
+// of it survives a restart nor has any reason to go to the database.
 
 export interface LiveSelection {
   artboardId: string | null
@@ -11,9 +11,13 @@ export interface LiveSelection {
   updatedAt: number
 }
 
-// Atividade sem `finish` some sozinha: um agente que morreu no meio não pode
-// deixar o HUD piscando pra sempre.
+// Activity without a `finish` fades on its own: an agent that died halfway
+// must not leave the HUD blinking forever.
 export const ACTIVITY_TTL_MS = 5 * 60 * 1000
+
+// A runaway agent (or one that never calls finish) must not grow the list
+// without bound: the oldest entries are dropped on write.
+export const MAX_ACTIVITY_ENTRIES = 200
 
 const selections = new Map<string, LiveSelection>()
 const activities = new Map<string, DesignAgentActivity[]>()
@@ -41,7 +45,8 @@ export function getActiveDoc(): string | null {
 
 export function setActivity(activity: DesignAgentActivity): void {
   const current = activities.get(activity.docId) ?? []
-  activities.set(activity.docId, [...current, activity])
+  const next = [...current, activity]
+  activities.set(activity.docId, next.slice(Math.max(0, next.length - MAX_ACTIVITY_ENTRIES)))
 }
 
 export function clearActivity(
@@ -73,7 +78,7 @@ export function listActivity(docId: string, now = Date.now()): DesignAgentActivi
   return fresh
 }
 
-// Só pra testes: zera tudo entre casos.
+// Tests only: wipes everything between cases.
 export function resetLiveState(): void {
   selections.clear()
   activities.clear()

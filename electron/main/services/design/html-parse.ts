@@ -93,7 +93,8 @@ const DROPPED_TAGS = new Set(
   [...BLOCKED_TAGS, 'template'].filter((t) => t !== 'style' && t !== 'link'),
 )
 
-const GOOGLE_FONTS_HOST = 'fonts.googleapis.com'
+// Same rule as fontsToLinks in html-render: prefix match, not substring.
+const GOOGLE_FONTS_PREFIX = 'https://fonts.googleapis.com/'
 const NAME_MAX_LENGTH = 24
 
 const DOCUMENT_RE = /^\s*(<!doctype|<html)/i
@@ -209,7 +210,7 @@ class Collector {
     }
     if (tag === 'link') {
       const href = el.attrs.find((a) => a.name === 'href')?.value ?? ''
-      if (href.includes(GOOGLE_FONTS_HOST)) {
+      if (href.startsWith(GOOGLE_FONTS_PREFIX)) {
         if (!this.fonts.includes(href)) this.fonts.push(href)
       } else {
         this.warn(`dropped <link> (only Google Fonts stylesheets are kept): ${href || '(no href)'}`)

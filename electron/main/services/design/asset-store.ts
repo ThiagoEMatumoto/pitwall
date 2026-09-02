@@ -4,9 +4,9 @@ import { prepareAssetBytes } from './asset-sanitize'
 import { MAX_ASSET_BYTES } from '../../../../shared/design/safety'
 import type { DesignAsset, DesignAssetMime } from '../../../../shared/types/design'
 
-// Assets binários do Design Studio, guardados no SQLite como BLOB. Os bytes
-// nunca viajam pelo IPC de listagem: saem só pelo scheme
-// pitwall-design://asset/<id> (registrado no protocol do main).
+// Design Studio binary assets, stored in SQLite as BLOBs. The bytes never
+// travel through the listing IPC: they only leave through the
+// pitwall-design://asset/<id> scheme (registered in the main protocol).
 
 export const ASSET_URL_PREFIX = 'pitwall-design://asset/'
 
@@ -85,8 +85,8 @@ export function upload(input: AssetUploadInput): DesignAsset {
   const bytes = prepareAssetBytes(input.mime as DesignAssetMime, input.bytes)
 
   const sha256 = createHash('sha256').update(bytes).digest('hex')
-  // Dedupe por escopo: o mesmo arquivo mandado duas vezes pro mesmo doc
-  // devolve o registro existente em vez de dobrar o banco.
+  // Dedupe per scope: the same file sent twice to the same doc returns the
+  // existing record instead of doubling the database.
   const existing = findBySha(sha256, input.documentId)
   if (existing) return rowToAsset(existing)
 
@@ -127,7 +127,7 @@ export function get(id: string): { mime: DesignAssetMime; bytes: Buffer } | null
   return { mime: row.mime as DesignAssetMime, bytes: row.bytes }
 }
 
-// documentId null = só os compartilhados.
+// documentId null = only the shared ones.
 export function list(documentId: string | null): DesignAsset[] {
   const rows = getDb()
     .prepare(

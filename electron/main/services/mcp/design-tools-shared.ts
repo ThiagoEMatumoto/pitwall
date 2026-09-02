@@ -58,10 +58,38 @@ function resolveScope(scope: ActivityScope): { docId: string; artboardId: string
   return docId ? { docId, artboardId } : null
 }
 
-function touchedIds(result: unknown): string[] | null {
-  const ids = (result as { structuredContent?: { nodeIds?: unknown } } | undefined)
-    ?.structuredContent?.nodeIds
-  return Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? ids : null
+// Tools that write into an artboard without naming nodes target its root
+// (write_html replace) or the parent the fragment lands under (insert), so
+// the canvas veils exactly the region about to change.
+function startNodeIds(picked: ActivityScope, args: Record<string, unknown>): string[] {
+  if (picked.nodeIds?.length) return picked.nodeIds
+  if (!picked.artboardId) return []
+  const root = designStore.getArtboard(picked.artboardId)?.tree.id
+  if (args.mode === 'insert' && typeof args.parentId === 'string') return [args.parentId]
+  return root ? [root] : []
+}
+
+interface Touched {
+  artboardId?: string
+  nodeIds: string[]
+}
+
+// What the handler reports it changed: the ids it returns, or — for a tool
+// that created an artboard — that artboard's root, so the 'end' lands on it.
+function touched(result: unknown): Touched | null {
+  const sc = (result as { structuredContent?: Record<string, unknown> } | undefined)
+    ?.structuredContent
+  if (!sc) return null
+  const ids = sc.nodeIds
+  if (Array.isArray(ids) && ids.every((id) => typeof id === 'string')) return { nodeIds: ids }
+  const artboard = sc.artboard as { id?: unknown; rootId?: unknown } | undefined
+  if (artboard && typeof artboard.id === 'string') {
+    return {
+      artboardId: artboard.id,
+      nodeIds: typeof artboard.rootId === 'string' ? [artboard.rootId] : [],
+    }
+  }
+  return null
 }
 
 // Wraps a write tool: 'start' before the handler, 'end' in a finally, both
@@ -75,13 +103,19 @@ export function withActivity(
   return {
     ...def,
     handler: async (args) => {
-      const picked = pick((args ?? {}) as Record<string, unknown>)
+      const input = (args ?? {}) as Record<string, unknown>
+      const picked = pick(input)
       const scope = resolveScope(picked)
       if (!scope) return def.handler(args)
 
-      const emit = (phase: DesignAgentActivity['phase'], nodeIds: string[]): void => {
+      const emit = (
+        phase: DesignAgentActivity['phase'],
+        nodeIds: string[],
+        artboardId = scope.artboardId,
+      ): void => {
         const activity: DesignAgentActivity = {
-          ...scope,
+          docId: scope.docId,
+          artboardId,
           nodeIds,
           tool: def.name,
           phase,
@@ -97,14 +131,15 @@ export function withActivity(
         deps.notify.broadcast('design:agent-activity', activity)
       }
 
-      const startIds = picked.nodeIds ?? []
+      const startIds = startNodeIds(picked, input)
       emit('start', startIds)
       let result: unknown
       try {
         result = await def.handler(args)
         return result as Awaited<ReturnType<ToolDef['handler']>>
       } finally {
-        emit('end', touchedIds(result) ?? startIds)
+        const done = touched(result)
+        emit('end', done?.nodeIds ?? startIds, done?.artboardId ?? scope.artboardId)
       }
     },
   }

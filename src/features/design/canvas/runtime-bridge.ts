@@ -65,12 +65,48 @@ export const REQUEST_TIMEOUT_MS = 2000
 
 let reqSeq = 0
 
-function isIncoming(data: unknown): data is RuntimeToParentMessage {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// Per-type shape check. The runtime is ours, but a foreign postMessage or a
+// half-built runtime bundle must be ignored, never thrown on.
+function hasShape(msg: Record<string, unknown>): boolean {
+  switch (msg.type) {
+    case 'opResult':
+      return typeof msg.reqId === 'string' && typeof msg.ok === 'boolean'
+    case 'hit':
+      return (
+        typeof msg.reqId === 'string' &&
+        Array.isArray(msg.path) &&
+        (msg.id === null || typeof msg.id === 'string')
+      )
+    case 'rects':
+      return typeof msg.reqId === 'string' && isRecord(msg.rects)
+    case 'computed':
+      return typeof msg.reqId === 'string' && isRecord(msg.values)
+    case 'rectsChanged':
+      return isRecord(msg.rects)
+    case 'ready':
+      return typeof msg.artboardId === 'string'
+    case 'rendered':
+      return true
+    case 'contentSize':
+      return typeof msg.w === 'number' && typeof msg.h === 'number'
+    case 'textEditEnd':
+      return typeof msg.id === 'string' && typeof msg.text === 'string'
+    case 'key':
+      return typeof msg.key === 'string'
+    case 'navigate':
+      return typeof msg.toArtboardId === 'string'
+    default:
+      return false
+  }
+}
+
+export function isIncoming(data: unknown): data is RuntimeToParentMessage {
   return (
-    typeof data === 'object' &&
-    data !== null &&
-    (data as { v?: unknown }).v === PROTOCOL_VERSION &&
-    typeof (data as { type?: unknown }).type === 'string'
+    isRecord(data) && data.v === PROTOCOL_VERSION && typeof data.type === 'string' && hasShape(data)
   )
 }
 

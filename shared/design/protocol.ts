@@ -1,6 +1,6 @@
-// Protocolo postMessage v1 entre o parent (canvas) e o runtime dentro do
-// iframe do artboard. A origem do iframe é opaca: os dois lados usam
-// targetOrigin '*' e validam `event.source`.
+// postMessage protocol v1 between the parent (canvas) and the runtime inside
+// the artboard iframe. The iframe origin is opaque: both sides use
+// targetOrigin '*' and validate `event.source`.
 
 import type { DesignNode, DesignOp, DesignTokens, DesignTransition } from '../types/design'
 
@@ -25,7 +25,7 @@ export interface InitMessage extends Msg<'init'> {
   tokens: DesignTokens
   fonts: string[]
   mode: 'edit' | 'preview'
-  // Ecoa o `?t=` da URL do iframe: o runtime só aceita init com o token certo.
+  // Echoes the `?t=` of the iframe URL: the runtime only accepts init with the right token.
   token: string
 }
 
@@ -47,7 +47,7 @@ export interface HitTestMessage extends Msg<'hitTest'> {
 
 export interface GetRectsMessage extends Msg<'getRects'> {
   reqId: string
-  // Omitido = todos os nós.
+  // Omitted = all nodes.
   ids?: string[]
 }
 
@@ -95,7 +95,7 @@ export interface HitMessage extends Msg<'hit'> {
   reqId: string
   id: string | null
   rect: Rect | null
-  // Da raiz até o nó atingido.
+  // From the root down to the hit node.
   path: string[]
 }
 

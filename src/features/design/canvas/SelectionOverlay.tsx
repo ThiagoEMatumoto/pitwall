@@ -1,9 +1,10 @@
 // Screen-space SVG drawn over the whole stage: hover, selection box with
-// handles, the selected artboard's outline, agent shimmer, the canvas marquee
+// handles, the selected artboard's outline, the canvas marquee
 // and the in-flight gesture feedback (snap guides, flex insertion line, drop
 // target, in-artboard marquee, draw preview). Node rects come from each
 // bridge's cache (non-reactive), so the overlay subscribes to bridge rect
-// events and re-renders on a tick.
+// events and re-renders on a tick. The agent's in-place presence (veil +
+// pill) is AgentOverlay, mounted alongside.
 
 import { useEffect, useReducer } from 'react'
 import { getBridge, useDesignStore } from '@/store/designStore'
@@ -17,6 +18,7 @@ import {
 } from './geometry'
 import { handleCenters } from './drag-plan'
 import { useGestureFeedback } from './interaction-state'
+import { AgentOverlay } from './AgentOverlay'
 
 interface Props {
   marquee: Rect | null
@@ -135,7 +137,6 @@ export function SelectionOverlay({ marquee }: Props) {
   const selection = useDesignStore((s) => s.selection)
   const hover = useDesignStore((s) => s.hover)
   const textEditing = useDesignStore((s) => s.textEditing)
-  const agentActivity = useDesignStore((s) => s.agentActivity)
   const mode = useDesignStore((s) => s.mode)
   const gestureActive = useGestureFeedback((s) => s.active)
   const selectedMeta = useDesignStore((s) =>
@@ -145,25 +146,21 @@ export function SelectionOverlay({ marquee }: Props) {
     s.selection.artboardId ? (s.artboards[s.selection.artboardId]?.ready ?? false) : false,
   )
 
-  const agentArtboardIds = Object.keys(agentActivity).filter((k) => k !== '*')
-  const watchedKey = [selection.artboardId ?? '', ...agentArtboardIds].join('|')
+  const watchedId = selection.artboardId
 
   // Rect cache changes are not React state: listen and tick.
   useEffect(() => {
-    const ids = watchedKey.split('|').filter(Boolean)
-    const offs = ids.flatMap((id) => {
-      const bridge = getBridge(id)
-      if (!bridge) return []
-      return [
-        bridge.on('rects', bump),
-        bridge.on('rectsChanged', bump),
-        bridge.on('rendered', bump),
-      ]
-    })
+    const bridge = watchedId ? getBridge(watchedId) : undefined
+    if (!bridge) return
+    const offs = [
+      bridge.on('rects', bump),
+      bridge.on('rectsChanged', bump),
+      bridge.on('rendered', bump),
+    ]
     return () => {
       for (const off of offs) off()
     }
-  }, [watchedKey, selectedReady])
+  }, [watchedId, selectedReady])
 
   if (mode !== 'edit') return null
 
@@ -178,100 +175,74 @@ export function SelectionOverlay({ marquee }: Props) {
 
   const hoverRect = hover && !gestureActive ? hoverScreenRect(viewport) : null
 
-  const agentRects = agentArtboardIds.flatMap((artboardId) =>
-    (agentActivity[artboardId] ?? [])
-      .flatMap((a) => a.nodeIds)
-      .map((id) => nodeScreenRect(artboardId, id, viewport))
-      .filter((r): r is Rect => r !== null),
-  )
-
   const artboardOutline = selectedMeta ? artboardScreenRect(selectedMeta, viewport) : null
   const editingNodeId =
     textEditing?.artboardId === selection.artboardId ? textEditing?.nodeId : null
 
   return (
-    <svg
-      className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-      aria-hidden
-    >
-      {artboardOutline && (
-        <rect
-          x={artboardOutline.x - 0.5}
-          y={artboardOutline.y - 0.5}
-          width={artboardOutline.w + 1}
-          height={artboardOutline.h + 1}
-          fill="none"
-          stroke={ACCENT}
-          strokeWidth={selection.nodeIds.length === 0 ? 2 : 1}
-          strokeOpacity={selection.nodeIds.length === 0 ? 1 : 0.5}
-        />
-      )}
-
-      {hoverRect && (
-        <rect
-          x={hoverRect.x}
-          y={hoverRect.y}
-          width={hoverRect.w}
-          height={hoverRect.h}
-          fill="none"
-          stroke={ACCENT}
-          strokeWidth={1}
-        />
-      )}
-
-      {agentRects.map((r, i) => (
-        <rect
-          key={`agent-${i}`}
-          x={r.x}
-          y={r.y}
-          width={r.w}
-          height={r.h}
-          fill="color-mix(in srgb, var(--color-accent) 12%, transparent)"
-          stroke={ACCENT}
-          strokeWidth={1.5}
-          strokeDasharray="6 4"
-        >
-          <animate
-            attributeName="stroke-dashoffset"
-            from="0"
-            to="-20"
-            dur="0.8s"
-            repeatCount="indefinite"
-          />
-        </rect>
-      ))}
-
-      {selectedNodeRects.map(({ id, rect }) => (
-        <g key={id}>
+    <>
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+        aria-hidden
+      >
+        {artboardOutline && (
           <rect
-            x={rect.x}
-            y={rect.y}
-            width={rect.w}
-            height={rect.h}
+            x={artboardOutline.x - 0.5}
+            y={artboardOutline.y - 0.5}
+            width={artboardOutline.w + 1}
+            height={artboardOutline.h + 1}
             fill="none"
             stroke={ACCENT}
-            strokeWidth={2}
+            strokeWidth={selection.nodeIds.length === 0 ? 2 : 1}
+            strokeOpacity={selection.nodeIds.length === 0 ? 1 : 0.5}
           />
-          {id !== editingNodeId &&
-            !gestureActive &&
-            handleCenters(rect).map(([handle, hx, hy]) => (
-              <rect
-                key={handle}
-                x={hx - HANDLE_SIZE / 2}
-                y={hy - HANDLE_SIZE / 2}
-                width={HANDLE_SIZE}
-                height={HANDLE_SIZE}
-                fill="var(--color-surface)"
-                stroke={ACCENT}
-                strokeWidth={1.5}
-              />
-            ))}
-        </g>
-      ))}
+        )}
 
-      <GestureLayer viewport={viewport} />
+        {hoverRect && (
+          <rect
+            x={hoverRect.x}
+            y={hoverRect.y}
+            width={hoverRect.w}
+            height={hoverRect.h}
+            fill="none"
+            stroke={ACCENT}
+            strokeWidth={1}
+          />
+        )}
 
-      {marquee && <MarqueeRect rect={marquee} />}
-    </svg>
+        {selectedNodeRects.map(({ id, rect }) => (
+          <g key={id}>
+            <rect
+              x={rect.x}
+              y={rect.y}
+              width={rect.w}
+              height={rect.h}
+              fill="none"
+              stroke={ACCENT}
+              strokeWidth={2}
+            />
+            {id !== editingNodeId &&
+              !gestureActive &&
+              handleCenters(rect).map(([handle, hx, hy]) => (
+                <rect
+                  key={handle}
+                  x={hx - HANDLE_SIZE / 2}
+                  y={hy - HANDLE_SIZE / 2}
+                  width={HANDLE_SIZE}
+                  height={HANDLE_SIZE}
+                  fill="var(--color-surface)"
+                  stroke={ACCENT}
+                  strokeWidth={1.5}
+                />
+              ))}
+          </g>
+        ))}
+
+        <GestureLayer viewport={viewport} />
+
+        {marquee && <MarqueeRect rect={marquee} />}
+      </svg>
+      <AgentOverlay />
+    </>
   )
 }

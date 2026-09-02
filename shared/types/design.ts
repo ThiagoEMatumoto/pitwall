@@ -1,6 +1,6 @@
-// Design Studio — contrato compartilhado main ↔ renderer ↔ MCP.
-// O modelo canônico é a árvore JSON por artboard; HTML é projeção
-// (shared/design/html-render.ts) e entrada (parse5 no main).
+// Design Studio — contract shared by main ↔ renderer ↔ MCP.
+// The canonical model is the JSON tree per artboard; HTML is a projection
+// (shared/design/html-render.ts) and an input (parse5 in main).
 
 export type DesignNodeKind = 'frame' | 'text' | 'image' | 'svg' | 'element'
 
@@ -21,11 +21,15 @@ export interface DesignNode {
   children: DesignNode[]
   name?: string
   locked?: boolean
+  // No op sets this: visibility is toggled through setStyle on `display` and
+  // the UI treats `hidden || display === 'none'` as hidden. The flag only
+  // arrives on trees written whole (paste/import); the edit render maps it to
+  // display:none and the export drops the node.
   hidden?: boolean
   link?: DesignNodeLink
 }
 
-// Cada categoria vira um prefixo de CSS variable: color.primary → --color-primary.
+// Each category becomes a CSS variable prefix: color.primary → --color-primary.
 export interface DesignTokens {
   color?: Record<string, string>
   spacing?: Record<string, string>
@@ -36,14 +40,14 @@ export interface DesignTokens {
 
 export type DesignTokenCategory = keyof DesignTokens
 
-// URLs de stylesheet do Google Fonts (https://fonts.googleapis.com/css2?...).
+// Google Fonts stylesheet URLs (https://fonts.googleapis.com/css2?...).
 export type DesignFonts = string[]
 
 export type DesignDocumentStatus = 'active' | 'archived'
 
 export type DesignAuthor = 'claude' | 'human'
 
-// nonce identifica a mutação para o emissor ignorar o próprio eco do broadcast.
+// nonce identifies the mutation so the emitter can ignore its own broadcast echo.
 export interface DesignOrigin {
   kind: DesignAuthor
   sessionId: string | null
@@ -91,7 +95,7 @@ export interface DesignPage {
   updatedAt: number
 }
 
-// Cabeçalho sem páginas: o que documentsList() devolve.
+// Header without pages: what documentsList() returns.
 export interface DesignDocumentMeta {
   id: string
   title: string
@@ -125,10 +129,10 @@ export interface DesignVersion extends DesignVersionMeta {
 export type DesignAssetMime =
   'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | 'image/svg+xml'
 
-// Sem os bytes: eles saem só pelo scheme pitwall-design://asset/<id>.
+// Without the bytes: those only leave through the pitwall-design://asset/<id> scheme.
 export interface DesignAsset {
   id: string
-  // null = compartilhado entre documentos.
+  // null = shared across documents.
   documentId: string | null
   name: string
   mime: DesignAssetMime
@@ -155,8 +159,8 @@ export type DesignOp =
       patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>>
     }
 
-// Broadcast 'design:artboard-updated'. full=true quando a árvore inteira
-// mudou (replaceTree/restore) e o iframe precisa recarregar.
+// Broadcast 'design:artboard-updated'. full=true when the whole tree
+// changed (replaceTree/restore) and the iframe must reload.
 export interface ArtboardUpdatedEvent {
   docId: string
   artboardId: string
@@ -183,7 +187,7 @@ export interface DesignNodeSummary {
   tag: string
   kind: DesignNodeKind
   name?: string
-  // Truncado a 60 chars.
+  // Truncated to 60 chars.
   text?: string
   childCount: number
   children?: DesignNodeSummary[]
@@ -195,10 +199,10 @@ export interface DesignSelection {
   nodeIds: string[]
 }
 
-// ---- Inputs de IPC ----
+// ---- IPC inputs ----
 
 export interface DesignListFilter {
-  // Default 'active' no store.
+  // Defaults to 'active' in the store.
   status?: DesignDocumentStatus | 'all'
   parentType?: DesignParentType
   parentId?: string
@@ -236,14 +240,14 @@ export interface UpdateDesignPageInput {
 
 export interface CreateDesignArtboardInput {
   docId: string
-  // Omitido = primeira página do documento.
+  // Omitted = first page of the document.
   pageId?: string
   name: string
   width: number
   height: number
   x?: number
   y?: number
-  // Omitido = frame raiz vazio.
+  // Omitted = empty root frame.
   tree?: DesignNode
   author?: DesignAuthor
 }
@@ -259,9 +263,9 @@ export interface ApplyDesignOpsInput {
   artboardId: string
   ops: DesignOp[]
   origin: DesignOrigin
-  // Versão que o cliente tinha ao gerar as ops; divergência = 409 (resync).
+  // Version the client had when it generated the ops; mismatch = 409 (resync).
   baseVersion?: number
-  // Humano edita em rascunho e snapshota explicitamente; MCP sempre snapshota.
+  // Humans edit as a draft and snapshot explicitly; MCP always snapshots.
   snapshot?: boolean
   summary?: string
 }
@@ -283,7 +287,7 @@ export interface DesignExportInput {
 
 export interface DesignExportResult {
   format: DesignExportFormat
-  // png → base64; html/jsx → texto.
+  // png → base64; html/jsx → text.
   data: string
   width: number
   height: number
@@ -292,20 +296,20 @@ export interface DesignExportResult {
 export interface DesignAskInput {
   sessionId: string
   prompt: string
-  // false = só insere no composer da sessão para o humano revisar.
+  // false = only inserts into the session composer for the human to review.
   submit: boolean
 }
 
-// ---- API exposta pelo preload (chave `design` da Api) ----
+// ---- API exposed by the preload (`design` key of Api) ----
 
 export interface DesignApi {
   // design:documents-list
   documentsList(filter?: DesignListFilter): Promise<DesignDocumentMeta[]>
-  // design:document-get — páginas + artboards + links.
+  // design:document-get — pages + artboards + links.
   documentGet(id: string): Promise<DesignDocument | null>
-  // design:document-create — cria o documento com 1 página vazia.
+  // design:document-create — creates the document with 1 empty page.
   documentCreate(input: CreateDesignDocumentInput): Promise<DesignDocument>
-  // design:document-update — título/tokens/fonts/globalCss.
+  // design:document-update — title/tokens/fonts/globalCss.
   documentUpdate(input: UpdateDesignDocumentInput): Promise<DesignDocument>
   // design:document-archive
   documentArchive(id: string): Promise<DesignDocument>
@@ -325,17 +329,17 @@ export interface DesignApi {
   artboardDuplicate(input: DuplicateDesignArtboardInput): Promise<DesignArtboard>
   // design:artboard-delete
   artboardDelete(id: string): Promise<void>
-  // design:artboard-apply-ops — único caminho de mutação da árvore.
+  // design:artboard-apply-ops — the only tree mutation path.
   artboardApplyOps(input: ApplyDesignOpsInput): Promise<ArtboardUpdatedEvent>
   // design:versions-list
   versionsList(artboardId: string): Promise<DesignVersionMeta[]>
   // design:version-get
   versionGet(artboardId: string, version: number): Promise<DesignVersion | null>
-  // design:version-restore — grava versão NOVA; histórico nunca é reescrito.
+  // design:version-restore — writes a NEW version; history is never rewritten.
   versionRestore(artboardId: string, version: number): Promise<DesignArtboard>
   // design:asset-upload
   assetUpload(input: DesignAssetUploadInput): Promise<DesignAsset>
-  // design:asset-list — docId null = só os compartilhados.
+  // design:asset-list — docId null = only the shared ones.
   assetList(docId: string | null): Promise<DesignAsset[]>
   // design:asset-delete
   assetDelete(id: string): Promise<void>
@@ -343,16 +347,16 @@ export interface DesignApi {
   link(input: DesignLink): Promise<DesignLink[]>
   // design:unlink
   unlink(input: DesignLink): Promise<DesignLink[]>
-  // design:selection-set — live-state lido por design_selection_get.
+  // design:selection-set — live state read by design_selection_get.
   selectionSet(input: DesignSelection): Promise<void>
   // design:active-doc-set
   activeDocSet(docId: string | null): Promise<void>
   // design:export
   export(input: DesignExportInput): Promise<DesignExportResult>
-  // design:ask-session — injeta o prompt numa sessão Claude Code rodando.
+  // design:ask-session — injects the prompt into a running Claude Code session.
   askSession(input: DesignAskInput): Promise<void>
 
-  // Payload = { docId } — tokens/fonts/css mudaram: recarregar frames.
+  // Payload = { docId } — tokens/fonts/css changed: reload the frames.
   onDocumentUpdated(handler: (payload: unknown) => void): () => void
   // Payload = { docId }.
   onDocumentDeleted(handler: (payload: unknown) => void): () => void
@@ -368,7 +372,7 @@ export interface DesignApi {
   onAssetsUpdated(handler: (payload: unknown) => void): () => void
 }
 
-// Seletores estáveis para o e2e (drive-app).
+// Stable selectors for the e2e (drive-app).
 export const DESIGN_TESTIDS = {
   artboard: 'data-artboard',
   node: 'data-node-id',

@@ -1,5 +1,5 @@
-// Árvore → HTML. TS puro (sem DOM): roda no main (protocol handler,
-// export) e no renderer. O parse (HTML → árvore) fica no main com parse5.
+// Tree → HTML. Pure TS (no DOM): runs in main (protocol handler, export)
+// and in the renderer. Parsing (HTML → tree) stays in main with parse5.
 
 import type { DesignArtboard, DesignDocument, DesignNode, DesignTokens } from '../types/design'
 import { BLOCKED_TAGS, TAG_NAME_RE, isAllowedAttr, isTransition } from './safety'
@@ -21,11 +21,11 @@ const VOID_TAGS = new Set([
   'wbr',
 ])
 
-// Defesa em profundidade: o parser já recusa, mas o render é a última linha
-// antes do iframe. As regras (BLOCKED_TAGS, urls, atributos) vivem em safety.ts.
+// Defence in depth: the parser already refuses, but the render is the last
+// line before the iframe. The rules (BLOCKED_TAGS, urls, attrs) live in safety.ts.
 
 export interface RenderOptions {
-  // false = export standalone: sem data-pw-*, nós hidden omitidos.
+  // false = standalone export: no data-pw-*, hidden nodes omitted.
   ids: boolean
 }
 
@@ -41,7 +41,7 @@ export function escapeAttr(value: string): string {
 }
 
 function kebab(key: string): string {
-  // Custom properties (--x) e chaves já em kebab passam intactas.
+  // Custom properties (--x) and keys already in kebab pass through untouched.
   if (key.startsWith('--') || !/[A-Z]/.test(key)) return key
   return key.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())
 }
@@ -50,7 +50,7 @@ export function styleToString(style: Record<string, string>): string {
   const parts: string[] = []
   for (const [key, value] of Object.entries(style)) {
     if (value === '' || value == null) continue
-    // ';' dentro do valor abriria outra declaração — vira espaço.
+    // A ';' inside the value would open another declaration — becomes a space.
     parts.push(`${kebab(key)}:${value.replace(/;/g, ' ')}`)
   }
   return parts.join(';')
@@ -80,7 +80,7 @@ function renderAttrs(node: DesignNode, opts: RenderOptions): string {
 function renderTree(node: DesignNode, opts: RenderOptions, inSvg: boolean): string {
   if (!opts.ids && node.hidden) return ''
   const svg = inSvg || node.tag.toLowerCase() === 'svg'
-  // Fora de SVG o HTML é case-insensitive; dentro, viewBox/linearGradient importam.
+  // Outside SVG, HTML is case-insensitive; inside, viewBox/linearGradient matter.
   const tag = svg ? node.tag : node.tag.toLowerCase()
   if (!TAG_NAME_RE.test(tag) || BLOCKED_TAGS.has(tag.toLowerCase())) return ''
   const open = `<${tag}${renderAttrs(node, opts)}>`
@@ -95,7 +95,7 @@ export function renderNode(node: DesignNode, opts: RenderOptions = EDIT, inSvg =
   return renderTree(node, opts, inSvg)
 }
 
-// Dentro de <style>, '</' encerraria o elemento; '\/' é escape CSS válido.
+// Inside <style>, '</' would close the element; '\/' is a valid CSS escape.
 function cssSafe(css: string): string {
   return css.replace(/<\//g, '<\\/')
 }
@@ -176,7 +176,7 @@ export function buildArtboardDocument(input: BuildArtboardDocumentInput): string
   )
 }
 
-// Export: sem runtime, sem data-pw-*, nós hidden fora.
+// Export: no runtime, no data-pw-*, hidden nodes left out.
 export function renderStandaloneHtml(
   doc: Pick<DesignDocument, 'tokens' | 'fonts' | 'globalCss'>,
   artboard: DesignArtboard,

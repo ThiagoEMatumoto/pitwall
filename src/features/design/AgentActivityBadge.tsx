@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, Sparkles } from 'lucide-react'
-import { Icon } from '@/components/ui/Icon'
+import { Sparkles } from 'lucide-react'
 import { ControlPill } from '@/features/brand'
 import { getNodeIndex, useDesignStore } from '@/store/designStore'
 import type { DesignAgentActivity } from '@shared/types/design'
+import { actionLabel } from './canvas/agent-presence'
+import { rowLabel } from './sidebar/LayerRow'
 
 // A session that dies mid-edit never sends 'finish'; entries older than this
 // stop being shown so the badge cannot get stuck.
@@ -17,10 +18,6 @@ const SHIMMER_CSS = `
   background-size: 200% 100%;
   animation: pw-design-shimmer 1.6s linear infinite;
 }`
-
-export function toolLabel(tool: string): string {
-  return tool.replace(/^design_/, '')
-}
 
 function useLiveEntries(): DesignAgentActivity[] {
   const activity = useDesignStore((s) => s.agentActivity)
@@ -36,36 +33,40 @@ function useLiveEntries(): DesignAgentActivity[] {
   return useMemo(() => all.filter((a) => now - a.at < ACTIVITY_STALE_MS), [all, now])
 }
 
-function nodeName(artboardId: string | null, nodeId: string): string {
-  const entry = artboardId ? getNodeIndex(artboardId)?.get(nodeId) : undefined
-  if (!entry) return nodeId
-  return entry.node.name ?? `${entry.node.tag}#${nodeId}`
+// The same label the Layers panel shows; the root row carries the artboard.
+function targetName(a: DesignAgentActivity, artboardName: string | undefined): string {
+  if (!a.artboardId) return 'documento'
+  const name = artboardName ?? 'artboard'
+  const index = getNodeIndex(a.artboardId)
+  const entry = a.nodeIds.length ? index?.get(a.nodeIds[0]) : undefined
+  if (!entry || entry.parentId === null) return name
+  const label = rowLabel(entry.node)
+  return a.nodeIds.length > 1 ? `${label} +${a.nodeIds.length - 1}` : label
 }
 
-// "Claude editando ▸ Hero · styles_update" while an agent has a tool call in
-// flight; click to list the touched nodes. Vanishes on finish (the store
+// "Claude · ajustando estilo · Hero" while an agent has a tool call in
+// flight; click jumps to what it is touching. Vanishes on finish (the store
 // drops the entries) or when they go stale.
 export function AgentActivityBadge() {
   const entries = useLiveEntries()
   const artboards = useDesignStore((s) => s.artboards)
-  const [expanded, setExpanded] = useState(false)
-
-  useEffect(() => {
-    if (entries.length === 0) setExpanded(false)
-  }, [entries.length])
 
   if (entries.length === 0) return null
 
   const latest = entries.reduce((a, b) => (b.at > a.at ? b : a))
-  const target = latest.artboardId
-    ? (artboards[latest.artboardId]?.meta.name ?? 'artboard')
-    : 'documento'
-  const nodes = entries.flatMap((a) =>
-    a.nodeIds.map((id) => ({
-      key: `${a.artboardId ?? '*'}:${id}`,
-      label: nodeName(a.artboardId, id),
-    })),
-  )
+  const artboardName = latest.artboardId ? artboards[latest.artboardId]?.meta.name : undefined
+  const label = `Claude · ${actionLabel(latest.tool)} · ${targetName(latest, artboardName)}`
+
+  const goThere = (): void => {
+    const s = useDesignStore.getState()
+    const artboardId = latest.artboardId
+    if (!artboardId || !s.artboards[artboardId]) return
+    const index = getNodeIndex(artboardId)
+    const nodeIds = latest.nodeIds.filter((id) => index?.get(id)?.parentId != null)
+    s.select(artboardId, nodeIds)
+    if (nodeIds.length) void s.fitToSelection()
+    else s.fitToArtboard(artboardId)
+  }
 
   return (
     <div className="relative">
@@ -73,27 +74,11 @@ export function AgentActivityBadge() {
       <ControlPill
         icon={Sparkles}
         tone="accent"
-        caret={nodes.length > 0}
-        label={`Claude editando ▸ ${target} · ${toolLabel(latest.tool)}`}
-        title={latest.summary ?? latest.tool}
-        onClick={nodes.length > 0 ? () => setExpanded((e) => !e) : undefined}
+        label={label}
+        title={latest.summary ?? 'Ir para onde o Claude está editando'}
+        onClick={latest.artboardId ? goThere : undefined}
         className="pw-design-shimmer max-w-[22rem]"
       />
-      {expanded && nodes.length > 0 && (
-        <div className="absolute right-0 top-full z-30 mt-1 min-w-[12rem] max-w-[20rem] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs shadow-lg">
-          <div className="mb-1 flex items-center gap-1 text-[var(--color-text-dim)]">
-            <Icon as={ChevronDown} size={11} />
-            {nodes.length} {nodes.length === 1 ? 'nó' : 'nós'} em edição
-          </div>
-          <ul className="max-h-40 overflow-auto">
-            {nodes.map((n) => (
-              <li key={n.key} className="truncate py-0.5 text-[var(--color-text)]">
-                {n.label}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   )
 }
