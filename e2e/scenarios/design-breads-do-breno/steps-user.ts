@@ -71,10 +71,10 @@ export async function stepHomeAt100(ctx: UserCtx): Promise<void> {
   // Esc only reaches the composer while its textarea has focus; use the X.
   await ctx.page.getByTitle('Fechar (Esc)').click()
   await ctx.page.waitForTimeout(300)
-  await ctx.page.getByTitle('Zoom 100% (Ctrl+1)').click()
+  await ctx.page.getByTitle('Zoom 100% na seleção (Ctrl+1)').click()
   await ctx.page.waitForTimeout(1000)
   await screenshot(ctx.page, `${SHOT}-11-home-100`)
-  const zoomLabel = await ctx.page.getByTitle('Zoom 100% (Ctrl+1)').textContent()
+  const zoomLabel = await ctx.page.getByTitle('Zoom 100% na seleção (Ctrl+1)').textContent()
   ctx.check('user: Home at 100%', zoomLabel?.trim() === '100%', `label=${zoomLabel}`)
 }
 

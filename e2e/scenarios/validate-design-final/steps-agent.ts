@@ -121,7 +121,7 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
   // 2b. new artboard + write_html replace — fire and poll for the skeleton.
   // Waits cover hold + done + fade (≈2.3s) so no earlier pill lingers.
   await page.waitForTimeout(2600);
-  const promo = await mcp.call("design_artboard_create", {
+  const create = mcp.call("design_artboard_create", {
     docId: doc.docId,
     name: "Promoções",
     width: 1440,
@@ -129,7 +129,22 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
     x: 0,
     y: 2000,
   });
+  // Doc-level call: the badge names it, but nothing on the page is veiled.
+  const started = Date.now();
+  let atCreate = await readOverlay(ctx);
+  while (atCreate.badge === null && Date.now() - started < 2500) {
+    await new Promise((r) => setTimeout(r, 8));
+    atCreate = await readOverlay(ctx);
+  }
+  await screenshot(ctx.page, `${SHOT}-02b-agent-create`);
+  const promo = await create;
   const promoId: string = promo.artboard.id;
+  ctx.log(`02b artboard_create: ${fmt(atCreate)}`);
+  ctx.check(
+    "2b artboard_create: badge shows, existing artboards get no veil",
+    atCreate.badge !== null && atCreate.veils === 0,
+    fmt(atCreate),
+  );
   await page.waitForTimeout(2600);
   const listed = await page
     .locator("aside")

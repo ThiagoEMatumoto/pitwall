@@ -25,6 +25,15 @@ export function displayColor(value: string): string {
   return m ? `token: ${m[1]}` : value
 }
 
+// Tooltip for the swatch and the field: the token's full name and the value
+// it resolves to, since at rest the field only shows "token: <name>".
+export function colorTitle(value: string, tokens: readonly TokenOption[]): string | undefined {
+  const m = TOKEN_RE.exec(value.trim())
+  if (!m) return value || undefined
+  const resolved = tokens.find((t) => t.name === m[1])?.value
+  return `Token --color-${m[1]}${resolved ? ` · ${resolved}` : ''}`
+}
+
 // Swatch background: a var(--token) resolves inside the app chrome, not in
 // the artboard, so we show the token's declared value instead.
 function swatchColor(value: string, tokens: readonly TokenOption[]): string {
@@ -63,6 +72,7 @@ export function ColorField({ value, onCommit, tokens = [], placeholder, computed
     if (trimmed !== value) onCommit(trimmed)
   }
 
+  const tooltip = colorTitle(draft, tokens)
   const pickerValue = HEX_RE.test(value)
     ? value
     : HEX_RE.test(computed ?? '')
@@ -75,6 +85,7 @@ export function ColorField({ value, onCommit, tokens = [], placeholder, computed
         <button
           type="button"
           aria-label="Escolher cor"
+          title={tooltip}
           onClick={() => setOpen((o) => !o)}
           className="h-4 w-4 shrink-0 rounded-sm border border-[var(--color-border)]"
           style={{ background: swatchColor(value || computed || '', tokens) }}
@@ -83,7 +94,7 @@ export function ColorField({ value, onCommit, tokens = [], placeholder, computed
           ref={inputRef}
           type="text"
           value={focused ? draft : displayColor(draft)}
-          title={draft || undefined}
+          title={tooltip}
           placeholder={placeholder ?? computed ?? '—'}
           spellCheck={false}
           onChange={(e) => setDraft(e.target.value)}
@@ -120,6 +131,7 @@ export function ColorField({ value, onCommit, tokens = [], placeholder, computed
                   <li key={t.name}>
                     <button
                       type="button"
+                      title={`--color-${t.name} · ${t.value}`}
                       onClick={() => {
                         commit(`var(--color-${t.name})`)
                         setOpen(false)

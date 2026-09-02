@@ -34,6 +34,11 @@ import {
 } from './transitions'
 
 const STAGE_PADDING = 24
+const SCALE_MODE_LABELS: Record<ScaleMode, string> = { fit: 'Ajustar à tela', actual: '100%' }
+const SCALE_MODE_TITLES: Record<ScaleMode, string> = {
+  fit: 'Ajustar à tela: encaixa o artboard inteiro no espaço disponível',
+  actual: 'Tamanho real: 1 px do artboard = 1 px da tela',
+}
 
 export const PREVIEW_TESTIDS = {
   root: 'design-preview-root',
@@ -218,7 +223,7 @@ function PreviewOverlay({ startId }: { startId: string }) {
             value={current}
             onChange={(e) => navigate(e.target.value, 'none')}
             className={selectClass}
-            title="Artboard"
+            title="Trocar de artboard"
           >
             {order.map((m) => (
               <option key={m.id} value={m.id}>
@@ -230,7 +235,7 @@ function PreviewOverlay({ startId }: { startId: string }) {
             <Icon as={ChevronDown} size={12} />
           </span>
         </div>
-        <span className="text-xs tabular-nums">
+        <span className="text-xs tabular-nums" title="Tamanho do artboard (px)">
           {meta.width}×{meta.height}
         </span>
 
@@ -242,15 +247,16 @@ function PreviewOverlay({ startId }: { startId: string }) {
               key={m}
               type="button"
               aria-pressed={scaleMode === m}
+              title={SCALE_MODE_TITLES[m]}
               onClick={() => setScaleMode(m)}
               className={`rounded-md px-2 py-1 transition hover:text-[var(--color-text)] ${
                 scaleMode === m ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]' : ''
               }`}
             >
-              {m === 'fit' ? 'Ajustar' : '100%'}
+              {SCALE_MODE_LABELS[m]}
             </button>
           ))}
-          <span className="ml-1 min-w-[3rem] text-right tabular-nums">
+          <span className="ml-1 min-w-[3rem] text-right tabular-nums" title="Zoom atual">
             {Math.round(scale * 100)}%
           </span>
         </div>

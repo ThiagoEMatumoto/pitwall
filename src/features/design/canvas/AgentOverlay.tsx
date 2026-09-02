@@ -1,9 +1,11 @@
 // In-place "Claude is editing" indicator: a shimmering veil over each node
 // the agent is touching plus a pill naming the action, anchored to the
 // node's top-left. A whole-artboard target (write_html replace, fresh
-// artboard) veils the artboard, takes over its label and shows a skeleton
-// while the tree is still empty. Screen-space HTML over the stage, never
-// interactive. SelectionOverlay mounts it in edit mode only.
+// artboard) veils the artboard, pins its pill inside the frame's top-left
+// corner (the label above stays readable) and shows a skeleton while the
+// tree is still empty. Screen-space HTML over the stage, never interactive.
+// SelectionOverlay mounts it in edit mode only, under the selection svg so
+// handles stay on top of the pill.
 
 import { useEffect, useReducer, useRef } from 'react'
 import { Sparkles } from 'lucide-react'
@@ -19,6 +21,7 @@ import {
   presenceTargets,
   presenceText,
   reconcilePresence,
+  targetName,
   type PresenceItem,
   type PresenceStage,
 } from './agent-presence'
@@ -27,6 +30,8 @@ import {
 const TICK_MS = 100
 const PILL_HEIGHT = 20
 const PILL_GAP = 2
+// Whole-artboard pill: inset from the frame corner, clear of the label line.
+const PILL_INSET = 8
 
 interface Placed {
   item: PresenceItem
@@ -69,7 +74,7 @@ function place(s: DesignState, item: PresenceItem, vp: Viewport): Placed | null 
     }
   }
   const entry = getNodeIndex(item.artboardId)?.get(item.nodeId!)
-  const name = entry ? rowLabel(entry.node) : item.nodeId!
+  const name = targetName(entry && { node: entry.node, label: rowLabel(entry.node) }, ab.meta.name)
   const rect = nodeRect(s, item.artboardId, item.nodeId!, vp) ?? artboardRect
   return { item, rect, artboardRect, name, whole, skeleton: false }
 }
@@ -106,19 +111,21 @@ function Skeleton({ rect }: { rect: Rect }) {
 function Pill({ placed, stage }: { placed: Placed; stage: PresenceStage }) {
   const { item, rect, artboardRect, name, whole } = placed
   const done = stage === 'done' || stage === 'leave'
-  // Whole-artboard: sit on the artboard's label line. Node: just above the
-  // node when there is room inside the artboard, else tucked in its corner.
-  const above = whole || rect.y - artboardRect.y >= PILL_HEIGHT + PILL_GAP
-  const top = above ? rect.y - PILL_HEIGHT - PILL_GAP : rect.y + PILL_GAP
+  // Whole-artboard: inside the frame's top-left corner, so the artboard
+  // label above it stays readable. Node: just above the node when there is
+  // room inside the artboard, else tucked in its corner.
+  const above = !whole && rect.y - artboardRect.y >= PILL_HEIGHT + PILL_GAP
+  const inset = whole ? PILL_INSET : PILL_GAP
+  const top = above ? rect.y - PILL_HEIGHT - PILL_GAP : rect.y + inset
   const tone = done ? 'var(--color-success)' : 'var(--color-accent)'
   return (
     <div
       className="absolute flex items-center gap-1 whitespace-nowrap rounded-full px-2 text-[11px] font-medium leading-5"
       style={{
-        left: whole ? rect.x : rect.x + (above ? 0 : PILL_GAP),
+        left: rect.x + (above ? 0 : inset),
         top,
         height: PILL_HEIGHT,
-        maxWidth: Math.max(120, rect.w),
+        maxWidth: Math.max(120, rect.w - inset * 2),
         color: tone,
         background: `color-mix(in srgb, ${tone} 14%, var(--color-surface))`,
         boxShadow: `0 0 0 1px color-mix(in srgb, ${tone} 40%, transparent)`,

@@ -191,7 +191,7 @@ export function DesignToolbar() {
 
       {/* The title owns the slack and is the only thing that truncates; the
           agent badge and the actions on the right never get squeezed. */}
-      <div className="flex min-w-0 flex-1 items-center">{hasDoc && <DocTitle />}</div>
+      <div className="flex min-w-[10rem] flex-1 items-center">{hasDoc && <DocTitle />}</div>
 
       <div className="shrink-0">
         <AgentActivityBadge />

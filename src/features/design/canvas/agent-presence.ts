@@ -3,7 +3,7 @@
 // node, and keeps targets that just vanished around long enough to fade out.
 // No React, no DOM: AgentOverlay feeds it and draws the result.
 
-import type { DesignAgentActivity } from '@shared/types/design'
+import type { DesignAgentActivity, DesignNode, DesignNodeKind } from '@shared/types/design'
 
 export const FADE_IN_MS = 150
 export const FADE_OUT_MS = 400
@@ -30,6 +30,34 @@ const ACTION_LABELS: Record<string, string> = {
 
 export function actionLabel(tool: string): string {
   return ACTION_LABELS[tool] ?? tool.replace(/^design_/, '').replace(/_/g, ' ')
+}
+
+// A write_html call touches one region (the artboard root on replace, the
+// parent on insert); the children it produced are covered by that veil and
+// never earn a pill of their own.
+const SINGLE_REGION_TOOLS = new Set(['design_write_html'])
+
+// Document-level calls that repaint nothing already on the page: no veil on
+// the existing artboards, only the toolbar badge until the new one mounts.
+const DOC_LEVEL_WITHOUT_VEIL = new Set(['design_artboard_create'])
+
+const KIND_LABELS: Record<DesignNodeKind, string> = {
+  frame: 'elemento',
+  element: 'elemento',
+  text: 'texto',
+  image: 'imagem',
+  svg: 'ícone',
+}
+
+// Never a raw id in the pill or the badge: a node the index does not know
+// yet (a fragment still being inserted) reads as the artboard it lands on,
+// and an unnamed generic node reads as its kind instead of its tag.
+export function targetName(
+  entry: { node: Pick<DesignNode, 'tag' | 'kind'>; label: string } | undefined,
+  artboardName: string,
+): string {
+  if (!entry) return artboardName
+  return entry.label === entry.node.tag ? KIND_LABELS[entry.node.kind] : entry.label
 }
 
 export type PresencePhase = 'active' | 'done'
@@ -85,10 +113,12 @@ export function presenceTargets(
   for (const [key, entries] of Object.entries(activity)) {
     for (const a of entries) {
       if (a.phase === 'finish') continue
+      if (key === '*' && DOC_LEVEL_WITHOUT_VEIL.has(a.tool)) continue
       const phase: PresencePhase = a.phase === 'start' ? 'active' : 'done'
       const boards = key === '*' ? artboardIds : [key]
+      const ids = SINGLE_REGION_TOOLS.has(a.tool) ? a.nodeIds.slice(0, 1) : a.nodeIds
       for (const artboardId of boards) {
-        const nodeIds = key === '*' || a.nodeIds.length === 0 ? [null] : a.nodeIds
+        const nodeIds = key === '*' || ids.length === 0 ? [null] : ids
         for (const nodeId of nodeIds) {
           keepLatest(map, {
             key: presenceKey(artboardId, nodeId),

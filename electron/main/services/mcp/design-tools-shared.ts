@@ -74,6 +74,11 @@ interface Touched {
   nodeIds: string[]
 }
 
+// write_html returns the children it produced; the region that changed (and
+// the canvas veiled) is the root or the parent the start landed on, so the
+// 'end' stays there instead of fanning out one pill per new node.
+const END_ON_START_IDS = new Set(['design_write_html'])
+
 // What the handler reports it changed: the ids it returns, or — for a tool
 // that created an artboard — that artboard's root, so the 'end' lands on it.
 function touched(result: unknown): Touched | null {
@@ -138,7 +143,7 @@ export function withActivity(
         result = await def.handler(args)
         return result as Awaited<ReturnType<ToolDef['handler']>>
       } finally {
-        const done = touched(result)
+        const done = END_ON_START_IDS.has(def.name) ? null : touched(result)
         emit('end', done?.nodeIds ?? startIds, done?.artboardId ?? scope.artboardId)
       }
     },

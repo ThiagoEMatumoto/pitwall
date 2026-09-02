@@ -39,8 +39,10 @@ vi.mock('@/features/notifications/toast-store', () => ({
 
 const { useDesignStore, registerBridge } = await import('./designStore')
 const { handleAgentActivity, handleDocumentUpdated } = await import('./designStore.remote')
-const { HUMAN_SNAPSHOT_IDLE_MS, burstSummary, cancelHumanSnapshots } =
+const { HUMAN_SNAPSHOT_IDLE_MS, burstSummary, cancelHumanSnapshots, setStageSize } =
   await import('./designStore.internal')
+const { watchAgentFinish } = await import('@/features/design/AgentActivityToasts')
+const { resetAgentToasts } = await import('@/features/design/design-toasts')
 
 type FakeBridge = {
   applyOps: ReturnType<typeof vi.fn>
@@ -151,6 +153,8 @@ describe('designStore', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     cancelHumanSnapshots()
+    resetAgentToasts()
+    setStageSize({ w: 0, h: 0 })
     mockApi.documentGet.mockResolvedValue(makeDoc())
     mockApi.artboardApplyOps.mockImplementation(
       async (input: { baseVersion: number; origin: { nonce: string } }) => ({
@@ -233,6 +237,43 @@ describe('designStore', () => {
     expect(ab.version).toBe(4)
     expect(showToastMock).toHaveBeenCalledTimes(1)
     expect(showToastMock.mock.calls[0][0].title).toContain('Desktop 1')
+  })
+
+  it('skips the update toast while the artboard is on screen', () => {
+    // The per-artboard toast throttle is module state: outrun the previous test.
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + 60_000)
+    try {
+      setStageSize({ w: 1600, h: 1000 })
+      updatedHandler!(updatedEvent())
+      expect(useDesignStore.getState().artboards.ab1.version).toBe(4)
+      expect(showToastMock).not.toHaveBeenCalled()
+      // Panned away: the pill is off screen, so the toast is the only signal.
+      useDesignStore.getState().setViewport({ x: -5000, y: 0, zoom: 1 })
+      updatedHandler!(updatedEvent({ version: 5 }))
+      expect(showToastMock).toHaveBeenCalledTimes(1)
+      expect(showToastMock.mock.calls[0][0].title).toBe('Claude atualizou "Desktop 1"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('toasts "terminou" only for an artboard off screen', () => {
+    const stop = watchAgentFinish()
+    try {
+      const base = { docId: 'doc1', nodeIds: ['a'], sessionId: 's1', tool: 'design_text_set' }
+      setStageSize({ w: 1600, h: 1000 })
+      handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab1', phase: 'start', at: 1 })
+      handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab1', phase: 'finish', at: 2 })
+      expect(showToastMock).not.toHaveBeenCalled()
+      useDesignStore.getState().setViewport({ x: -5000, y: 0, zoom: 1 })
+      handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab1', phase: 'start', at: 3 })
+      handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab1', phase: 'finish', at: 4 })
+      expect(showToastMock).toHaveBeenCalledTimes(1)
+      expect(showToastMock.mock.calls[0][0].title).toBe('Claude terminou "Desktop 1"')
+    } finally {
+      stop()
+    }
   })
 
   it('adopts an artboard Claude created while the doc is open', async () => {

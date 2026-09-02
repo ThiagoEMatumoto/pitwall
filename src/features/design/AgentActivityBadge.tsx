@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react'
 import { ControlPill } from '@/features/brand'
 import { getNodeIndex, useDesignStore } from '@/store/designStore'
 import type { DesignAgentActivity } from '@shared/types/design'
-import { actionLabel } from './canvas/agent-presence'
+import { actionLabel, targetName as presenceName } from './canvas/agent-presence'
 import { rowLabel } from './sidebar/LayerRow'
 
 // A session that dies mid-edit never sends 'finish'; entries older than this
@@ -40,7 +40,7 @@ function targetName(a: DesignAgentActivity, artboardName: string | undefined): s
   const index = getNodeIndex(a.artboardId)
   const entry = a.nodeIds.length ? index?.get(a.nodeIds[0]) : undefined
   if (!entry || entry.parentId === null) return name
-  const label = rowLabel(entry.node)
+  const label = presenceName({ node: entry.node, label: rowLabel(entry.node) }, name)
   return a.nodeIds.length > 1 ? `${label} +${a.nodeIds.length - 1}` : label
 }
 

@@ -8,6 +8,8 @@ const CAPTIONS: Record<string, string> = {
     "Canvas com o doc Breads do Breno (tokens + 4 artboards + links), ajustado à tela",
   "02-agent-inplace":
     "design_styles_update no hero da Home — indicador in-place + badge na toolbar",
+  "02b-agent-create":
+    "design_artboard_create — badge na toolbar, sem véu nos artboards existentes",
   "03-agent-writing":
     "design_write_html no artboard novo Promoções (1440×600) — durante a escrita",
   "04-agent-done": 'design_nodes_finish — "Claude terminou" antes de sumir',

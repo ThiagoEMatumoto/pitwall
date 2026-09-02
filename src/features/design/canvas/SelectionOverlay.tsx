@@ -181,6 +181,7 @@ export function SelectionOverlay({ marquee }: Props) {
 
   return (
     <>
+      <AgentOverlay />
       <svg
         className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
         aria-hidden
@@ -242,7 +243,6 @@ export function SelectionOverlay({ marquee }: Props) {
 
         {marquee && <MarqueeRect rect={marquee} />}
       </svg>
-      <AgentOverlay />
     </>
   )
 }

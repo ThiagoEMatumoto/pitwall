@@ -11,6 +11,7 @@ import {
   presenceTargets,
   presenceText,
   reconcilePresence,
+  targetName,
   type PresenceItem,
 } from './agent-presence'
 
@@ -91,6 +92,48 @@ describe('presenceTargets', () => {
     expect(targets).toHaveLength(1)
     expect(targets[0].tool).toBe('design_text_set')
     expect(targets[0].phase).toBe('active')
+  })
+
+  it('gives a write_html call one pill: the region it landed on, never its new children', () => {
+    const targets = presenceTargets(
+      {
+        a1: [
+          row({
+            tool: 'design_write_html',
+            nodeIds: ['parent', 'child1', 'child2', 'child3'],
+            phase: 'end',
+          }),
+        ],
+      },
+      ['a1'],
+      1100,
+    )
+    expect(targets.map((t) => t.nodeId)).toEqual(['parent'])
+  })
+
+  it('does not veil the existing artboards while a new one is being created', () => {
+    const creating = presenceTargets(
+      { '*': [row({ artboardId: null, tool: 'design_artboard_create' })] },
+      ['a1', 'a2'],
+      1100,
+    )
+    expect(creating).toEqual([])
+    // Once the call ends on the artboard it made, that one gets the pill.
+    const made = presenceTargets(
+      {
+        a3: [
+          row({
+            artboardId: 'a3',
+            tool: 'design_artboard_create',
+            nodeIds: ['root'],
+            phase: 'end',
+          }),
+        ],
+      },
+      ['a1', 'a2', 'a3'],
+      1100,
+    )
+    expect(made.map((t) => t.key)).toEqual(['a3:root'])
   })
 
   it('drops stale active rows and expired done rows', () => {
@@ -187,6 +230,24 @@ describe('reconcilePresence — synchronous calls', () => {
     const gone = reconcilePresence(live, [], 1010)
     expect(gone[0].doneAt).toBe(1000 + MIN_ACTIVE_MS)
     expect(presenceStage(gone[0], 1300)).toBe('steady')
+  })
+})
+
+describe('targetName', () => {
+  const node = (tag: string, kind: 'frame' | 'text' | 'image') => ({ tag, kind })
+
+  it('reads as the artboard when the index does not know the node yet', () => {
+    expect(targetName(undefined, 'Home')).toBe('Home')
+  })
+
+  it('reads as the kind when the layer label is only the tag', () => {
+    expect(targetName({ node: node('div', 'frame'), label: 'div' }, 'Home')).toBe('elemento')
+    expect(targetName({ node: node('p', 'text'), label: 'p' }, 'Home')).toBe('texto')
+    expect(targetName({ node: node('img', 'image'), label: 'img' }, 'Home')).toBe('imagem')
+  })
+
+  it('keeps a real layer label', () => {
+    expect(targetName({ node: node('section', 'frame'), label: 'Hero' }, 'Home')).toBe('Hero')
   })
 })
 

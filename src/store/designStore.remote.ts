@@ -2,7 +2,12 @@
 // echo/version/resync rules read as one unit.
 
 import { api } from '@/lib/ipc'
-import type { ArtboardUpdatedEvent, DesignAgentActivity } from '@shared/types/design'
+import { artboardScreenRect, rectsIntersect } from '@/features/design/canvas/geometry'
+import type {
+  ArtboardUpdatedEvent,
+  DesignAgentActivity,
+  DesignArtboard,
+} from '@shared/types/design'
 import {
   applyLocal,
   artboardsOf,
@@ -11,10 +16,22 @@ import {
   forgetArtboard,
   maybeToastRemoteUpdate,
   pendingNonces,
+  stageSize,
   toMeta,
   upsertMeta,
   type DesignStore,
 } from './designStore.internal'
+
+// The artboard's frame intersects the mounted stage on the current page. No
+// stage (canvas not mounted) counts as not visible. A visible artboard already
+// shows the in-place pill and the toolbar badge, so the "Claude atualizou" /
+// "Claude terminou" toasts are only for one the human cannot see right now.
+export function artboardInView(store: DesignStore, artboard: DesignArtboard): boolean {
+  const { viewport, pageId } = store.getState()
+  if (stageSize.w === 0 || stageSize.h === 0 || artboard.pageId !== pageId) return false
+  const stage = { x: 0, y: 0, w: stageSize.w, h: stageSize.h }
+  return rectsIntersect(artboardScreenRect(artboard, viewport), stage)
+}
 
 export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEvent): void {
   const ab = store.getState().artboards[evt.artboardId]
@@ -38,7 +55,7 @@ export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEv
   } else {
     void store.getState().resync(evt.artboardId)
   }
-  if (evt.origin.kind === 'claude') {
+  if (evt.origin.kind === 'claude' && !artboardInView(store, ab.meta)) {
     maybeToastRemoteUpdate(ab.meta, () => {
       store.getState().select(evt.artboardId, [])
       store.getState().fitToArtboard(evt.artboardId)
@@ -56,6 +73,7 @@ async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise
   store.setState((s) =>
     s.artboards[artboardId] ? {} : { doc, artboards: { ...s.artboards, [artboardId]: fresh } },
   )
+  if (artboardInView(store, fresh.meta)) return
   maybeToastRemoteUpdate(fresh.meta, () => {
     store.getState().select(artboardId, [])
     store.getState().fitToArtboard(artboardId)

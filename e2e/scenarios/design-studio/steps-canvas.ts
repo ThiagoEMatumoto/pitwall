@@ -244,12 +244,21 @@ export async function step10Preview(ctx: Ctx): Promise<void> {
 export async function step11AgentLive(ctx: Ctx): Promise<void> {
   const { page, mcp, ids, checker } = ctx
   const hero = await findNode(ctx, ids.home, byName('Hero'))
-  const badge = page.getByText('Claude editando', { exact: false }).first()
+  // The toolbar badge names the action ("Claude · ajustando estilo · Hero").
+  const badge = page.locator('.pw-design-shimmer').first()
   const visible = (loc: typeof badge, state: 'visible' | 'hidden') =>
     loc.waitFor({ state, timeout: 3000 }).then(
       () => true,
       () => false,
     )
+  // "Claude atualizou" only toasts for an artboard the human cannot see; the
+  // in-place pill + badge already cover a visible one.
+  const homeInView = await page.evaluate((id) => {
+    const el = document.querySelector(`[data-artboard="${id}"]`)
+    if (!el) return false
+    const r = el.getBoundingClientRect()
+    return r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight
+  }, ids.home)
   await mcp.call('design_styles_update', {
     artboardId: ids.home,
     items: [{ id: hero.id, style: { 'background-color': '#f4e9d8' } }],
@@ -264,8 +273,8 @@ export async function step11AgentLive(ctx: Ctx): Promise<void> {
   })
   const hidden = await visible(badge, 'hidden')
   checker.check(
-    '11 "Claude editando" badge shows, toast "Claude atualizou", badge clears on finish',
-    shown && hidden && toasted,
-    `badge=${JSON.stringify(badgeText)} hidden=${hidden} toast=${toasted}`,
+    '11 badge names the action, toast only when Home is off-screen, badge clears on finish',
+    shown && /ajustando estilo/.test(badgeText ?? '') && hidden && toasted === !homeInView,
+    `badge=${JSON.stringify(badgeText)} hidden=${hidden} toast=${toasted} homeInView=${homeInView}`,
   )
 }
