@@ -7,6 +7,9 @@ import type { DesignAgentActivity } from '@shared/types/design'
 
 export const FADE_IN_MS = 150
 export const FADE_OUT_MS = 400
+// Tool handlers run synchronously in main, so 'start' and 'end' reach the
+// renderer back to back: without a floor the veil would never be seen.
+export const MIN_ACTIVE_MS = 700
 // "Claude terminou" stays readable this long before the fade-out starts.
 export const DONE_HOLD_MS = 1200
 // A session that dies mid-call never sends 'end'/'finish'.
@@ -66,7 +69,9 @@ function keepLatest(map: Map<string, PresenceTarget>, t: PresenceTarget): void {
 
 function fresh(t: PresenceTarget, now: number): boolean {
   const age = now - t.at
-  return t.phase === 'active' ? age < PRESENCE_STALE_MS : age < DONE_HOLD_MS + FADE_OUT_MS
+  return t.phase === 'active'
+    ? age < PRESENCE_STALE_MS
+    : age < MIN_ACTIVE_MS + DONE_HOLD_MS + FADE_OUT_MS
 }
 
 // One target per (artboard, node). Document-level activity ('*' key, e.g.
@@ -104,6 +109,12 @@ export function isExpired(item: PresenceItem, now: number): boolean {
   return item.doneAt !== null && now - item.doneAt >= DONE_HOLD_MS + FADE_OUT_MS
 }
 
+// The moment a target may show "terminou": never before it has been active
+// for MIN_ACTIVE_MS, so a synchronous call still reads as an edit.
+function doneAfter(startedAt: number, endedAt: number): number {
+  return Math.max(endedAt, startedAt + MIN_ACTIVE_MS)
+}
+
 // Carries state across ticks: a target that disappeared (design_nodes_finish
 // drops the rows) becomes done now and lingers until it has faded out.
 export function reconcilePresence(
@@ -122,25 +133,34 @@ export function reconcilePresence(
       next.push({ ...t, startedAt, doneAt: null })
     } else {
       const startedAt = old?.startedAt ?? t.at
-      const doneAt = old?.doneAt ?? Math.min(t.at, now)
+      const doneAt = old?.doneAt ?? doneAfter(startedAt, Math.min(t.at, now))
       next.push({ ...t, startedAt, doneAt })
     }
   }
   for (const old of prev) {
     if (seen.has(old.key)) continue
-    const gone: PresenceItem = old.doneAt === null ? { ...old, phase: 'done', doneAt: now } : old
+    const gone: PresenceItem =
+      old.doneAt === null ? { ...old, phase: 'done', doneAt: doneAfter(old.startedAt, now) } : old
     if (!isExpired(gone, now)) next.push(gone)
   }
   return next
 }
 
 export function presenceStage(item: PresenceItem, now: number): PresenceStage {
-  if (item.doneAt === null) return now - item.startedAt < FADE_IN_MS ? 'enter' : 'steady'
+  if (item.doneAt === null || now < item.doneAt) {
+    return now - item.startedAt < FADE_IN_MS ? 'enter' : 'steady'
+  }
   return now - item.doneAt < DONE_HOLD_MS ? 'done' : 'leave'
 }
 
-export function presenceText(item: PresenceItem, name: string, stage: PresenceStage): string {
+// `whole` = the target is the artboard itself (null node or its root).
+export function presenceText(
+  item: PresenceItem,
+  name: string,
+  stage: PresenceStage,
+  whole = item.nodeId === null,
+): string {
   if (stage === 'done' || stage === 'leave') return 'Claude terminou'
-  if (item.nodeId === null) return `Claude está ${actionLabel(item.tool)} ${name}…`
+  if (whole) return `Claude está ${actionLabel(item.tool)} ${name}…`
   return `Claude · ${actionLabel(item.tool)} · ${name}`
 }

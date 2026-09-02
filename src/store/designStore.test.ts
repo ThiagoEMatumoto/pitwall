@@ -38,6 +38,7 @@ vi.mock('@/features/notifications/toast-store', () => ({
 }))
 
 const { useDesignStore, registerBridge } = await import('./designStore')
+const { handleAgentActivity, handleDocumentUpdated } = await import('./designStore.remote')
 const { HUMAN_SNAPSHOT_IDLE_MS, burstSummary, cancelHumanSnapshots } =
   await import('./designStore.internal')
 
@@ -248,6 +249,35 @@ describe('designStore', () => {
       'ab1',
       'ab2',
     ])
+  })
+
+  it('adopts an empty artboard announced only by document-updated', async () => {
+    const created = makeArtboard({ id: 'ab2', name: 'Promoções', version: 1, position: 1 })
+    const doc = makeDoc()
+    doc.pages[0].artboards.push(created)
+    mockApi.documentGet.mockResolvedValue(doc)
+    await handleDocumentUpdated(useDesignStore, 'doc1')
+    const s = useDesignStore.getState()
+    expect(s.artboards.ab2?.meta.name).toBe('Promoções')
+    // The known artboard keeps its local state (not replaced by the fetch).
+    expect(s.artboards.ab1.version).toBe(3)
+  })
+
+  it("retires a call's 'start' wherever it was keyed once its 'end' arrives", () => {
+    const base = { docId: 'doc1', nodeIds: [], sessionId: 's1', tool: 'design_artboard_create' }
+    handleAgentActivity(useDesignStore, { ...base, artboardId: null, phase: 'start', at: 1 })
+    expect(useDesignStore.getState().agentActivity['*']).toHaveLength(1)
+    handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab2', phase: 'end', at: 2 })
+    const activity = useDesignStore.getState().agentActivity
+    expect(activity['*']).toBeUndefined()
+    expect(activity.ab2?.map((a) => a.phase)).toEqual(['end'])
+    // Document-level ends (tokens) do not wait for design_nodes_finish.
+    const tokens = { ...base, tool: 'design_tokens_set', artboardId: null }
+    handleAgentActivity(useDesignStore, { ...tokens, phase: 'start', at: 3 })
+    handleAgentActivity(useDesignStore, { ...tokens, phase: 'end', at: 4 })
+    expect(useDesignStore.getState().agentActivity['*']).toBeUndefined()
+    handleAgentActivity(useDesignStore, { ...base, artboardId: 'ab2', phase: 'finish', at: 5 })
+    expect(useDesignStore.getState().agentActivity).toEqual({})
   })
 
   it('skipped version triggers resync from documentGet', async () => {

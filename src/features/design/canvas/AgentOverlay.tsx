@@ -65,7 +65,7 @@ function place(s: DesignState, item: PresenceItem, vp: Viewport): Placed | null 
       artboardRect,
       name: ab.meta.name,
       whole,
-      skeleton: item.doneAt === null && ab.tree.children.length === 0,
+      skeleton: ab.tree.children.length === 0,
     }
   }
   const entry = getNodeIndex(item.artboardId)?.get(item.nodeId!)
@@ -125,7 +125,7 @@ function Pill({ placed, stage }: { placed: Placed; stage: PresenceStage }) {
       }}
     >
       <Icon as={Sparkles} size={11} className="shrink-0" />
-      <span className="truncate">{presenceText(item, name, stage)}</span>
+      <span className="truncate">{presenceText(item, name, stage, whole)}</span>
     </div>
   )
 }

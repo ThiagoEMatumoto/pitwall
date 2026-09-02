@@ -151,28 +151,27 @@ interface ChromeSample {
 }
 
 // Contrast between a Layers row label and its panel background (WCAG ratio).
+// Evaluated from source text: tsx's esbuild wraps named inner functions in a
+// `__name` helper that does not exist inside the page.
+const SAMPLE_CHROME_JS = `(() => {
+  const aside = document.querySelector("aside");
+  const label = aside ? aside.querySelector("span[title]") : null;
+  const parse = (css) => (css.match(/\\d+(\\.\\d+)?/g) || ["0", "0", "0"]).map(Number).slice(0, 3);
+  const channel = (c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const lum = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  const layerColor = label ? getComputedStyle(label).color : "none";
+  const asideBg = aside ? getComputedStyle(aside).backgroundColor : "none";
+  const l1 = lum(parse(layerColor));
+  const l2 = lum(parse(asideBg));
+  const contrast = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  return { layerColor, asideBg, contrast: Math.round(contrast * 10) / 10 };
+})()`;
+
 async function sampleChrome(ctx: FinalCtx): Promise<ChromeSample> {
-  return ctx.page.evaluate(() => {
-    const aside = document.querySelector("aside");
-    const label = aside?.querySelector("span[title]");
-    const parse = (css: string) => {
-      const m = css.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
-      return m.slice(0, 3);
-    };
-    const lum = ([r, g, b]: number[]) => {
-      const f = (c: number) => {
-        const s = c / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
-    };
-    const layerColor = label ? getComputedStyle(label).color : "none";
-    const asideBg = aside ? getComputedStyle(aside).backgroundColor : "none";
-    const l1 = lum(parse(layerColor));
-    const l2 = lum(parse(asideBg));
-    const contrast = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-    return { layerColor, asideBg, contrast: Math.round(contrast * 10) / 10 };
-  });
+  return ctx.page.evaluate(SAMPLE_CHROME_JS) as Promise<ChromeSample>;
 }
 
 async function pageBackground(ctx: FinalCtx): Promise<string> {
@@ -190,10 +189,15 @@ export async function stepThemes(ctx: FinalCtx): Promise<void> {
   let allOk = true;
   for (const preset of PRESETS) {
     await openSettings(page);
-    await page.getByRole("button", { name: "Aparência" }).click();
+    // The inspector has an "Aparência" section header too: scope to the tabs.
+    await page.locator("nav").getByRole("button", { name: "Aparência" }).click();
     await page.getByRole("button", { name: preset.label, exact: true }).click();
     await page.waitForTimeout(200);
-    await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    // The dialog closes on a backdrop click (Escape can be swallowed by the
+    // focused control): click the overlay itself, far from the panel.
+    const backdrop = page.locator("div.fixed.inset-0.z-\\[1000\\]").last();
+    await backdrop.click({ position: { x: 12, y: 12 } });
+    await backdrop.waitFor({ state: "hidden", timeout: 3000 });
     await page.waitForTimeout(500);
     await screenshot(page, `${SHOT}-10-theme-${preset.id}`);
     const chrome = await sampleChrome(ctx);

@@ -1,8 +1,9 @@
 // The in-place "Claude is editing" indicator, exercised through real tool
 // calls: styles on the Home hero, a fresh artboard written from scratch, then
 // design_nodes_finish. Tool handlers run synchronously in main, so 'start' and
-// 'end' reach the renderer back to back — the calls are fired without await
-// and the DOM is polled every few ms to catch whatever the overlay shows.
+// 'end' reach the renderer back to back; the overlay holds the active stage
+// for MIN_ACTIVE_MS, and the calls are fired without await while the DOM is
+// polled every few ms to catch that window.
 import { screenshot } from "../../driver/capture";
 import { desktopHeader } from "../design-breads-do-breno/content-home";
 import { SHOT, type FinalCtx } from "./ctx";
@@ -102,6 +103,11 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
     fmt(a.first),
   );
   ctx.check(
+    "2a active stage visible: veil + 'Claude · ajustando estilo · Hero'",
+    a.first.veils > 0 && a.first.pills.some((t) => /ajustando estilo · Hero/.test(t)),
+    fmt(a.first),
+  );
+  ctx.check(
     "2a toolbar badge names the action (Claude · ajustando estilo · Hero)",
     /ajustando estilo/.test(a.atShot.badge ?? "") &&
       /Hero/.test(a.atShot.badge ?? ""),
@@ -112,8 +118,9 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
   );
   ctx.log(`02 active (veil/"ajustando estilo") state observed: ${sawActive}`);
 
-  // 2b. new artboard + write_html replace — fire and poll for the skeleton
-  await page.waitForTimeout(2200);
+  // 2b. new artboard + write_html replace — fire and poll for the skeleton.
+  // Waits cover hold + done + fade (≈2.3s) so no earlier pill lingers.
+  await page.waitForTimeout(2600);
   const promo = await mcp.call("design_artboard_create", {
     docId: doc.docId,
     name: "Promoções",
@@ -123,7 +130,14 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
     y: 2000,
   });
   const promoId: string = promo.artboard.id;
-  await page.waitForTimeout(2200);
+  await page.waitForTimeout(2600);
+  const listed = await page
+    .locator("aside")
+    .first()
+    .getByText("Promoções", { exact: true })
+    .isVisible()
+    .catch(() => false);
+  ctx.check("2b empty artboard created by Claude is adopted by the open doc", listed);
   await page.getByTitle("Ajustar à tela (Ctrl+0)").click();
   await page.waitForTimeout(600);
   const write = mcp.call("design_write_html", {
@@ -143,6 +157,11 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
     ),
     fmt(b.first),
   );
+  ctx.check(
+    "2b writing stage visible: 'Claude está escrevendo Promoções…'",
+    [b.first, b.atShot].some((s) => s.pills.some((t) => /escrevendo Promoções/.test(t))),
+    fmt(b.first),
+  );
   const sawWriting = [b.first, b.atShot].some(
     (s) =>
       s.skeletons > 0 || s.pills.some((t) => /escrevendo Promoções/.test(t)),
@@ -152,7 +171,7 @@ export async function stepAgentInPlace(ctx: FinalCtx): Promise<string> {
   );
 
   // 2c. finish → "Claude terminou", then nothing
-  await page.waitForTimeout(2200);
+  await page.waitForTimeout(2600);
   const before = await readOverlay(ctx);
   ctx.check(
     "2c badge persists until design_nodes_finish",

@@ -51,7 +51,7 @@ async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise
   if (!docId) return
   const doc = await api.design.documentGet(docId)
   if (!doc || store.getState().docId !== docId) return
-  const fresh = artboardsOf(doc)[artboardId]
+  const fresh = artboardsOf(doc, (id) => id === artboardId)[artboardId]
   if (!fresh) return
   store.setState((s) =>
     s.artboards[artboardId] ? {} : { doc, artboards: { ...s.artboards, [artboardId]: fresh } },
@@ -71,10 +71,21 @@ export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity):
       const { [key]: _gone, ...rest } = s.agentActivity
       return { agentActivity: rest }
     }
-    // 'end' replaces the matching 'start' so the overlay keeps one row per call.
-    const list = s.agentActivity[key] ?? []
-    const others = list.filter((x) => !(x.tool === a.tool && x.sessionId === a.sessionId))
-    return { agentActivity: { ...s.agentActivity, [key]: [...others, a] } }
+    // 'end' replaces the matching 'start' so the overlay keeps one row per
+    // call. A call may end on a different key than it started (an artboard
+    // create starts at the document and ends on the artboard it made), so the
+    // start is retired wherever it lives — else it veils every artboard until
+    // it goes stale.
+    const sameCall = (x: DesignAgentActivity) => x.tool === a.tool && x.sessionId === a.sessionId
+    const next: Record<string, DesignAgentActivity[]> = {}
+    for (const [k, list] of Object.entries(s.agentActivity)) {
+      const kept = list.filter((x) => !(sameCall(x) && (k === key || x.phase === 'start')))
+      if (kept.length) next[k] = kept
+    }
+    // Document-level writes are instantaneous and nothing waits for
+    // design_nodes_finish on them (main clears them on 'end' too).
+    if (a.phase === 'end' && a.artboardId === null) return { agentActivity: next }
+    return { agentActivity: { ...next, [key]: [...(next[key] ?? []), a] } }
   })
 }
 
@@ -90,10 +101,15 @@ export async function handleDocumentUpdated(store: DesignStore, docId: string): 
   if (!doc || !prev) return
   const needsReload =
     doc.globalCss !== prev.globalCss || JSON.stringify(doc.fonts) !== JSON.stringify(prev.fonts)
+  // An artboard Claude created empty (design_artboard_create without html)
+  // announces itself only through this broadcast: adopt it here.
+  const known = store.getState().artboards
+  const added = artboardsOf(doc, (id) => !known[id])
   store.setState((s) => ({
     doc,
     docs: upsertMeta(s.docs, toMeta(doc)),
     reloadNonce: s.reloadNonce + (needsReload ? 1 : 0),
+    artboards: { ...s.artboards, ...added },
   }))
   for (const bridge of bridges.values()) bridge.setTokens(doc.tokens)
 }

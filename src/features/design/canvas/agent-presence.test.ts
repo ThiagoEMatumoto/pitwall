@@ -4,6 +4,7 @@ import {
   DONE_HOLD_MS,
   FADE_IN_MS,
   FADE_OUT_MS,
+  MIN_ACTIVE_MS,
   PRESENCE_STALE_MS,
   actionLabel,
   presenceStage,
@@ -139,10 +140,53 @@ describe('reconcilePresence', () => {
       2100,
     )
     const done = reconcilePresence([], ended, 2100)
-    expect(done[0].doneAt).toBe(2000)
+    // Never seen active: the end row alone still earns MIN_ACTIVE_MS of veil.
+    expect(done[0].startedAt).toBe(2000)
+    expect(done[0].doneAt).toBe(2000 + MIN_ACTIVE_MS)
+    expect(presenceStage(done[0], 2100 + FADE_IN_MS)).toBe('steady')
+    expect(presenceStage(done[0], 2000 + MIN_ACTIVE_MS)).toBe('done')
     const again = reconcilePresence(done, active('n1', 2500), 2500)
     expect(again[0].doneAt).toBeNull()
     expect(again[0].startedAt).toBe(2500)
+  })
+})
+
+describe('reconcilePresence — synchronous calls', () => {
+  it('holds a call that ended right after it started in the active stage', () => {
+    const live = reconcilePresence(
+      [],
+      presenceTargets({ a1: [row({ nodeIds: ['n1'] })] }, ['a1'], 1000),
+      1000,
+    )
+    const ended = presenceTargets(
+      { a1: [row({ nodeIds: ['n1'], phase: 'end', at: 1005 })] },
+      ['a1'],
+      1005,
+    )
+    const done = reconcilePresence(live, ended, 1005)
+    expect(done[0].doneAt).toBe(1000 + MIN_ACTIVE_MS)
+    expect(presenceStage(done[0], 1300)).toBe('steady')
+    expect(presenceStage(done[0], 1000 + MIN_ACTIVE_MS)).toBe('done')
+    // The end row stays a target long enough to cover the hold and the fade.
+    expect(ended).toHaveLength(1)
+    expect(
+      presenceTargets(
+        { a1: [row({ nodeIds: ['n1'], phase: 'end', at: 1005 })] },
+        ['a1'],
+        1005 + MIN_ACTIVE_MS + DONE_HOLD_MS + FADE_OUT_MS - 1,
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('a target that vanishes right after starting is held active before terminou', () => {
+    const live = reconcilePresence(
+      [],
+      presenceTargets({ a1: [row({ nodeIds: ['n1'] })] }, ['a1'], 1000),
+      1000,
+    )
+    const gone = reconcilePresence(live, [], 1010)
+    expect(gone[0].doneAt).toBe(1000 + MIN_ACTIVE_MS)
+    expect(presenceStage(gone[0], 1300)).toBe('steady')
   })
 })
 
@@ -164,6 +208,12 @@ describe('presenceText', () => {
     )
     expect(presenceText(item('n1', 'design_styles_update'), 'Botão', 'steady')).toBe(
       'Claude · ajustando estilo · Botão',
+    )
+  })
+
+  it('phrases a root-node target as the whole artboard', () => {
+    expect(presenceText(item('root', 'design_write_html'), 'Promoções', 'steady', true)).toBe(
+      'Claude está escrevendo Promoções…',
     )
   })
 

@@ -150,10 +150,16 @@ export function applyArtboardOps(meta: DesignArtboard, ops: readonly DesignOp[])
   return next
 }
 
-export function artboardsOf(doc: DesignDocument): Record<string, ArtboardState> {
+// `only` limits the read (and the index rebuild) to some artboards: adopting
+// a new one must not reindex the ones already live in the store.
+export function artboardsOf(
+  doc: DesignDocument,
+  only: (id: string) => boolean = () => true,
+): Record<string, ArtboardState> {
   const out: Record<string, ArtboardState> = {}
   for (const page of doc.pages) {
     for (const ab of page.artboards) {
+      if (!only(ab.id)) continue
       out[ab.id] = {
         meta: ab,
         tree: ab.tree,
