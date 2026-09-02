@@ -2,7 +2,14 @@
 import { EventEmitter } from 'node:events'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { fixtureFromEnv, fixturePaceFromEnv, pwRecordArgs, startCapture } from './audio-capture'
+import {
+  fixtureFromEnv,
+  fixturePaceFromEnv,
+  measureInputLevel,
+  pwRecordArgs,
+  startCapture,
+  type CaptureHandle,
+} from './audio-capture'
 
 const fixtures = resolve(__dirname, '../../../../e2e/fixtures/meetings')
 
@@ -110,6 +117,7 @@ describe('modo pipewire', () => {
     child.stdout.emit('data', Buffer.from([1, 2]))
     expect(data).toHaveBeenCalledWith(Buffer.from([1, 2]))
     child.stderr.emit('data', Buffer.from('boom'))
+    expect(handle.stderr()).toBe('boom')
     child.emit('exit', 1)
     expect(exit).toHaveBeenCalledWith(1, 'boom')
   })
@@ -150,5 +158,40 @@ describe('modo pipewire', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('measureInputLevel', () => {
+  function tone(seconds: number, amplitude: number): Buffer {
+    const samples = Math.round(seconds * 16000)
+    const buf = Buffer.alloc(samples * 2)
+    for (let i = 0; i < samples; i++) {
+      buf.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / 16000) * amplitude * 32767), i * 2)
+    }
+    return buf
+  }
+
+  it('devolve o p95 das janelas de 20 ms dos primeiros durationMs e para a captura', async () => {
+    const stop = vi.fn()
+    const startCaptureImpl = vi.fn((opts: Parameters<typeof startCapture>[0]) => {
+      let onData: (pcm: Buffer) => void = () => {}
+      setImmediate(() => onData(tone(2, Math.pow(10, -48 / 20) * Math.SQRT2)))
+      expect(opts).toMatchObject({ track: 'me', target: 'source.x', mode: 'pipewire' })
+      const handle: CaptureHandle = { onData: (cb) => (onData = cb), onExit: () => {}, stop, stderr: () => '' }
+      return handle
+    }) as unknown as typeof startCapture
+    const dbfs = await measureInputLevel({ target: 'source.x', durationMs: 1500, startCaptureImpl })
+    expect(dbfs).toBeCloseTo(-48, 0)
+    expect(stop).toHaveBeenCalled()
+  })
+
+  it('null quando a captura sai sem dados', async () => {
+    const startCaptureImpl = (() => {
+      let onExit: (code: number | null, stderr: string) => void = () => {}
+      setImmediate(() => onExit(1, 'sem device'))
+      const handle: CaptureHandle = { onData: () => {}, onExit: (cb) => (onExit = cb), stop: () => {}, stderr: () => '' }
+      return handle
+    }) as unknown as typeof startCapture
+    expect(await measureInputLevel({ target: null, startCaptureImpl })).toBeNull()
   })
 })

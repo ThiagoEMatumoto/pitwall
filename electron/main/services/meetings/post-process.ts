@@ -1,19 +1,19 @@
 // Dono da transição 'processing' → 'done'/'error': resumo + extração de tarefas
-// após stop(), re-execução sob demanda (resummarize) e decisão do usuário sobre
-// itens propostos. Registra nos registries de recorder-contract.ts.
+// após stop() e re-execução sob demanda (resummarize). Registra nos registries
+// de recorder-contract.ts. A decisão sobre itens propostos vive em
+// action-item-batch.ts.
 import type { Meeting, MeetingActionItem } from '../../../../shared/types/meetings'
 import { notify as defaultNotify } from '../notifications'
 import { emitMeetingEvent } from './event-bus'
-import { createMeetingTask, extractActionItems } from './extract-actions'
+import { extractActionItems } from './extract-actions'
 import * as meetingStore from './meeting-store'
 import { postProcessRegistry, resummarizeRegistry } from './recorder-contract'
 import { summarizeMeeting } from './summarize'
 
 export interface PostProcessDeps {
-  store: Pick<typeof meetingStore, 'get' | 'setStatus' | 'getActionItem' | 'setActionItemStatus'>
+  store: Pick<typeof meetingStore, 'get' | 'setStatus' | 'listSpeakers'>
   summarize: (meetingId: string) => Promise<Meeting>
-  extract: (meetingId: string) => Promise<MeetingActionItem[]>
-  createTask: typeof createMeetingTask
+  extract: (meetingId: string, participants: string[]) => Promise<MeetingActionItem[]>
   emit: typeof emitMeetingEvent
   notify: (input: { title: string; body: string }) => void
 }
@@ -22,8 +22,7 @@ function defaultDeps(): PostProcessDeps {
   return {
     store: meetingStore,
     summarize: (id) => summarizeMeeting(id),
-    extract: (id) => extractActionItems(id),
-    createTask: createMeetingTask,
+    extract: (id, participants) => extractActionItems(id, { participants: () => participants }),
     emit: emitMeetingEvent,
     notify: defaultNotify,
   }
@@ -41,7 +40,8 @@ export function createPostProcessor(overrides: Partial<PostProcessDeps> = {}) {
   const run = async (meetingId: string): Promise<Meeting> => {
     try {
       await deps.summarize(meetingId)
-      await deps.extract(meetingId)
+      const participants = deps.store.listSpeakers(meetingId).map((s) => s.label)
+      await deps.extract(meetingId, participants)
       const meeting = deps.store.setStatus(meetingId, 'done')
       deps.emit({ type: 'meeting', meeting })
       deps.notify({ title: 'Reunião processada', body: meeting.title })
@@ -61,13 +61,7 @@ export function createPostProcessor(overrides: Partial<PostProcessDeps> = {}) {
     return run(meetingId)
   }
 
-  // Decisão unitária foi substituída por meetings:actionItems:batch
-  // (actionItemBatchRegistry); W2-A registra a implementação em action-item-batch.ts.
-  const decide = async (): Promise<MeetingActionItem> => {
-    throw new Error('decide() foi substituído por actionItemBatchRegistry (meetings:actionItems:batch)')
-  }
-
-  return { run, resummarize, decide }
+  return { run, resummarize }
 }
 
 export function installPostProcess(overrides: Partial<PostProcessDeps> = {}): void {

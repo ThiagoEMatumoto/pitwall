@@ -1,6 +1,17 @@
 /** @vitest-environment node */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { hasPipewire, parseNodeName, resolveDefaultDevices, type Exec } from './audio-devices'
+import {
+  hasPipewire,
+  parseNodeName,
+  resolveDefaultDevices,
+  resolveSourceForStream,
+  sourceForStream,
+  type Exec,
+} from './audio-devices'
+
+const realDump = readFileSync(resolve(__dirname, '__fixtures__/pw-dump-arecord-real.json'), 'utf8')
 
 const SINK_OUTPUT = `id 58, type PipeWire:Interface:Node
     node.name = "alsa_output.usb-Actions_USB_Audio___HID_0123456789AC-01.analog-stereo"
@@ -48,5 +59,34 @@ describe('hasPipewire', () => {
         throw new Error('exit 1')
       }),
     ).toBe(false)
+  })
+})
+
+describe('resolveSourceForStream', () => {
+  it('segue o Link input-node-id=stream → output-node-id → node.name da Audio/Source (dump real)', async () => {
+    const exec = vi.fn<Exec>(async () => ({ stdout: realDump }))
+    expect(await resolveSourceForStream(147, exec)).toBe(
+      'alsa_input.usb-Actions_USB_Audio___HID_0123456789AC-01.mono-fallback',
+    )
+    expect(exec).toHaveBeenCalledWith('pw-dump', [])
+  })
+
+  it('null sem link pro stream, quando o alvo não é Audio/Source, ou quando pw-dump falha', async () => {
+    const dump = JSON.parse(realDump) as unknown[]
+    expect(sourceForStream(dump, 999)).toBeNull()
+    // link apontando pro sink (61) em vez da source
+    const toSink = dump.map((o) =>
+      (o as { id: number }).id === 144
+        ? { ...(o as object), info: { 'output-node-id': 61, 'input-node-id': 147 } }
+        : o,
+    )
+    expect(sourceForStream(toSink, 147)).toBeNull()
+    expect(sourceForStream('não é array', 147)).toBeNull()
+    expect(
+      await resolveSourceForStream(147, async () => {
+        throw new Error('ENOENT')
+      }),
+    ).toBeNull()
+    expect(await resolveSourceForStream(147, async () => ({ stdout: '{nope' }))).toBeNull()
   })
 })

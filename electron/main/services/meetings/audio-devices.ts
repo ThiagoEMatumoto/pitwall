@@ -10,7 +10,7 @@ export type Exec = (cmd: string, args: string[]) => Promise<{ stdout: string }>
 const execFileAsync = promisify(execFile)
 
 const defaultExec: Exec = (cmd, args) =>
-  execFileAsync(cmd, args, { timeout: 5_000 }) as Promise<{ stdout: string }>
+  execFileAsync(cmd, args, { timeout: 5_000, maxBuffer: 8 * 1024 * 1024 }) as Promise<{ stdout: string }>
 
 export function parseNodeName(output: string): string | null {
   const match = output.match(/node\.name\s*=\s*"([^"]+)"/)
@@ -42,5 +42,43 @@ export async function hasPipewire(exec: Exec = defaultExec): Promise<boolean> {
     return stdout.trim().length > 0
   } catch {
     return false
+  }
+}
+
+// A source real de um stream de captura (o mic que o Chrome está usando) é o
+// `output-node-id` do Link cujo `input-node-id` é o nó do stream. Sem link
+// (stream ainda negociando, ou pw-dump sem Links) devolve null e quem chama
+// cai no default.
+interface PwObject {
+  id?: number
+  type?: string
+  info?: {
+    'output-node-id'?: number
+    'input-node-id'?: number
+    props?: Record<string, unknown>
+  }
+}
+
+export function sourceForStream(dump: unknown, streamNodeId: number): string | null {
+  if (!Array.isArray(dump)) return null
+  const objects = dump as PwObject[]
+  const link = objects.find(
+    (o) => o.type === 'PipeWire:Interface:Link' && o.info?.['input-node-id'] === streamNodeId,
+  )
+  const sourceId = link?.info?.['output-node-id']
+  if (sourceId === undefined) return null
+  const node = objects.find((o) => o.type === 'PipeWire:Interface:Node' && o.id === sourceId)
+  const props = node?.info?.props
+  if (!props || props['media.class'] !== 'Audio/Source') return null
+  const name = props['node.name']
+  return typeof name === 'string' ? name : null
+}
+
+export async function resolveSourceForStream(streamNodeId: number, exec: Exec = defaultExec): Promise<string | null> {
+  try {
+    const { stdout } = await exec('pw-dump', [])
+    return sourceForStream(JSON.parse(stdout), streamNodeId)
+  } catch {
+    return null
   }
 }

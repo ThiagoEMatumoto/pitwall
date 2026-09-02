@@ -16,6 +16,11 @@ asar: true
 asarUnpack:
   - node_modules/better-sqlite3/**
   - node_modules/node-pty/**
+  - node_modules/sherpa-onnx-node/**
+  - node_modules/sherpa-onnx-linux-x64/**
+extraResources:
+  - from: build/models/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx
+    to: models/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx
 npmRebuild: false
 publish:
   provider: github

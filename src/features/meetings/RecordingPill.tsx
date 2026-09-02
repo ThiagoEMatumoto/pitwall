@@ -65,7 +65,10 @@ export function RecordingPill() {
         className="h-1.5 w-1.5 animate-pulse rounded-full"
         style={{ background: 'var(--color-danger)' }}
       />
-      <span className="tabular-nums">Gravando {formatDuration(elapsedMs)}</span>
+      <span className="tabular-nums">
+        Gravando {formatDuration(elapsedMs)}
+        {live?.micWarning ? ' · mic baixo' : ''}
+      </span>
     </button>
   )
 }

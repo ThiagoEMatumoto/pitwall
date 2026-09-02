@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { percentile, windowDbfs } from './pcm-chunker'
 import { readWavPcm } from './wav'
 
 // Uma captura por trilha: `them` = o que sai no sink (o outro lado da
@@ -16,6 +17,8 @@ export interface CaptureHandle {
   onData(cb: (pcm: Buffer) => void): void
   onExit(cb: (code: number | null, stderr: string) => void): void
   stop(): void
+  /** Último stderr do pw-record (vazio em fixture) — pra `lastError` mesmo sem exit. */
+  stderr(): string
 }
 
 export interface StartCaptureOptions {
@@ -75,7 +78,7 @@ function startPipewire(opts: StartCaptureOptions): CaptureHandle {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     queueMicrotask(() => onExit(null, message))
-    return { onData: (cb) => (onData = cb), onExit: (cb) => (onExit = cb), stop: () => {} }
+    return { onData: (cb) => (onData = cb), onExit: (cb) => (onExit = cb), stop: () => {}, stderr: () => message }
   }
 
   child.stdout?.on('data', (buf: Buffer) => onData(buf))
@@ -94,6 +97,7 @@ function startPipewire(opts: StartCaptureOptions): CaptureHandle {
   return {
     onData: (cb) => (onData = cb),
     onExit: (cb) => (onExit = cb),
+    stderr: () => stderr.trim(),
     stop: () => {
       if (exited) return
       child.kill('SIGINT')
@@ -147,6 +151,7 @@ function startFixture(opts: StartCaptureOptions): CaptureHandle {
   return {
     onData: (cb) => (onData = cb),
     onExit: (cb) => (onExit = cb),
+    stderr: () => '',
     stop: () => {
       if (stopped) return
       stopped = true
@@ -155,4 +160,47 @@ function startFixture(opts: StartCaptureOptions): CaptureHandle {
       queueMicrotask(() => onExit(0, ''))
     },
   }
+}
+
+export interface MeasureInputLevelOptions {
+  target: string | null
+  durationMs?: number
+  spawnImpl?: typeof spawn
+  startCaptureImpl?: typeof startCapture
+}
+
+const MEASURE_DEFAULT_MS = 1500
+const MEASURE_GRACE_MS = 1500
+
+/**
+ * p95 (dBFS, janelas de 20 ms) de `durationMs` de captura do source — a
+ * medida de "quão alto o mic está" usada no checkSetup. null se o pw-record
+ * não entregar áudio a tempo (sem device, sem permissão).
+ */
+export function measureInputLevel(opts: MeasureInputLevelOptions): Promise<number | null> {
+  const durationMs = opts.durationMs ?? MEASURE_DEFAULT_MS
+  const wantedBytes = (RATE * durationMs * 2) / 1000
+  const start = opts.startCaptureImpl ?? startCapture
+  return new Promise((resolve) => {
+    const parts: Buffer[] = []
+    let got = 0
+    let done = false
+    const handle = start({ track: 'me', target: opts.target, mode: 'pipewire', spawnImpl: opts.spawnImpl })
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      handle.stop()
+      if (got === 0) return resolve(null)
+      const windows = windowDbfs(Buffer.concat(parts).subarray(0, wantedBytes), RATE)
+      resolve(percentile(windows.sort((a, b) => a - b), 0.95))
+    }
+    const timer = setTimeout(finish, durationMs + MEASURE_GRACE_MS)
+    handle.onData((pcm) => {
+      parts.push(pcm)
+      got += pcm.length
+      if (got >= wantedBytes) finish()
+    })
+    handle.onExit(finish)
+  })
 }

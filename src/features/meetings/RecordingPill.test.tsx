@@ -63,6 +63,17 @@ describe('RecordingPill', () => {
     expect(mockApi.onEvent).toHaveBeenCalled()
   })
 
+  it('acrescenta "· mic baixo" quando a gravação tem micWarning', async () => {
+    mockApi.state.mockResolvedValue({
+      ...base,
+      active: meeting,
+      elapsedMs: 5_000,
+      micWarning: { dbfs: -48, source: 'alsa_input.headset' },
+    })
+    render(<RecordingPill />)
+    await screen.findByRole('button', { name: /Gravando 00:0\d · mic baixo/ })
+  })
+
   it('fica âmbar com "Reunião detectada · Gravar" quando há detecção pendente', async () => {
     const detection = { app: 'Google Meet', binary: 'chrome', pid: 1, streamId: 9, since: Date.now(), ignored: false }
     mockApi.state.mockResolvedValue({ ...base, detection })
