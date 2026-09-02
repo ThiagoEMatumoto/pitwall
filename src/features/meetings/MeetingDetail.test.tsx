@@ -120,6 +120,7 @@ describe('MeetingDetail › Participantes', () => {
     expect(screen.getByText('1 turno')).toBeInTheDocument()
     expect(screen.getAllByText('voz salva')).toHaveLength(1)
     expect(screen.getByText('Vozes identificadas automaticamente')).toBeInTheDocument()
+    expect(screen.queryByText('Participante:')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Participante 2' }))
     const input = screen.getByRole('textbox', {
@@ -133,6 +134,13 @@ describe('MeetingDetail › Participantes', () => {
       name: 'Pedro',
     })
     await vi.waitFor(() => expect(storeState.loadDetail).toHaveBeenCalledWith('m1'))
+  })
+
+  it('sem speakers mantém o editor de themLabel no cabeçalho', () => {
+    storeState.detail = detailOf(meeting({ speakers: [] }))
+    render(<MeetingDetail activeElapsedMs={0} />)
+    expect(screen.getByText('Participante:')).toBeInTheDocument()
+    expect(screen.getByTitle('Renomear participante')).toBeInTheDocument()
   })
 
   it('diarização indisponível mostra o aviso curto', () => {

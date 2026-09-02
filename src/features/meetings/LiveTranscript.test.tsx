@@ -59,6 +59,23 @@ describe('LiveTranscript', () => {
     })
   })
 
+  it('paleta tem 6 cores distintas e não repete família entre índices vizinhos', () => {
+    expect(new Set(SPEAKER_COLORS).size).toBe(6)
+    // Regressão do QA: "Participante 1" e "Participante 2" eram dois azuis.
+    expect(SPEAKER_COLORS[0]).not.toMatch(/info|accent2/)
+    expect(SPEAKER_COLORS[1]).not.toMatch(/info|accent2/)
+    // Nenhum índice deriva do accent do tema (colidiria com "Eu").
+    for (const c of SPEAKER_COLORS) expect(c).not.toMatch(/accent/)
+  })
+
+  it('bolha do participante leva borda esquerda na cor do speaker; Eu e sem diarização não', () => {
+    render(<LiveTranscript segments={segments} themLabel="Cliente" recording={false} />)
+    expect(screen.getByText('oi')).toHaveStyle({ borderLeft: `2px solid ${SPEAKER_COLORS[0]}` })
+    expect(screen.getByText('sim')).toHaveStyle({ borderLeft: `2px solid ${SPEAKER_COLORS[1]}` })
+    expect(screen.getByText('tudo bem').style.borderLeft).toBe('')
+    expect(screen.getByText('sem diarização').style.borderLeft).toBe('')
+  })
+
   it('só labels com speakerId são clicáveis; Enter renomeia, Escape cancela', () => {
     const onRename = vi.fn()
     render(<LiveTranscript segments={segments} themLabel="Cliente" recording={false} onRenameSpeaker={onRename} />)

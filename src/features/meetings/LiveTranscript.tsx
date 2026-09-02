@@ -77,8 +77,11 @@ export function LiveTranscript({ segments, themLabel, recording, onRenameSpeaker
               }`}
               style={{
                 background: color
-                  ? `color-mix(in srgb, ${color} ${me ? 22 : 14}%, transparent)`
+                  ? `color-mix(in srgb, ${color} ${me ? 22 : 12}%, transparent)`
                   : 'var(--color-surface-2)',
+                // Borda na cor do speaker: o tint sozinho é sutil demais para
+                // separar participantes de relance.
+                borderLeft: color && !me ? `2px solid ${color}` : undefined,
               }}
             >
               {seg.text}

@@ -36,6 +36,8 @@ const FIXTURES = join(REPO_ROOT, "e2e/fixtures/meetings");
 const RECORD_MS = 60_000;
 const FINISH_TIMEOUT_MS = 60_000;
 const EXPECTED_SPEAKERS = 2;
+const RENAME_FROM = "Participante 1";
+const RENAME_TO = "Ana";
 
 async function prunedBaseProfile(): Promise<string> {
   const real = resolveRealUserData();
@@ -173,6 +175,7 @@ const apiGet = (id: string) =>
   ) as Promise<ApiDetail>;
 
 let meetingId: string | null = null;
+let meetingId2: string | null = null;
 let finalDetail: ApiDetail | null = null;
 let stopped = false;
 
@@ -258,6 +261,75 @@ try {
     finalDetail?.meeting.status === "done" ? "PASS" : "FAIL",
     `${shotDone} · status=${finalDetail?.meeting.status ?? "timeout"} error=${finalDetail?.meeting.error ?? "-"} diarization=${finalDetail?.meeting.diarization}`,
   );
+
+  // --- (f) renomear "Participante 1" → "Ana" pela UI --------------------------
+  const renameBtn = page.getByRole("button", { name: RENAME_FROM, exact: true }).first();
+  await renameBtn.waitFor({ state: "visible", timeout: 10_000 });
+  await renameBtn.click();
+  const renameInput = page.getByLabel(`Renomear ${RENAME_FROM}`);
+  await renameInput.waitFor({ state: "visible", timeout: 5_000 });
+  await renameInput.fill(RENAME_TO);
+  await renameInput.press("Enter");
+
+  const deadlineRename = Date.now() + 15_000;
+  let renamed = await apiGet(meetingId);
+  while (
+    !renamed.segments.some((s) => s.speakerLabel === RENAME_TO) &&
+    Date.now() < deadlineRename
+  ) {
+    await sleep(500);
+    renamed = await apiGet(meetingId);
+  }
+  const shotRenamed = await screenshot(page, "speakers-03-renamed");
+  const renamedLabels = new Set(renamed.segments.filter((s) => s.speaker === "them").map((s) => s.speakerLabel));
+  record(
+    "(f) renomear Participante 1 → Ana",
+    renamedLabels.has(RENAME_TO) ? "PASS" : "FAIL",
+    `${shotRenamed} · labels=${[...renamedLabels].join("|")}`,
+  );
+
+  // --- (g) segunda reunião no MESMO app: voz deve nascer já reconhecida -------
+  // meetingState() no diarizer é lazy por meetingId (speaker-diarizer.ts) e
+  // startFixture() relê o WAV do zero a cada startCapture — não precisa
+  // relançar o app nem trocar userDataCopy: um segundo start() já basta.
+  const startBtn2 = page.getByRole("button", { name: "Iniciar gravação" }).first();
+  await startBtn2.waitFor({ state: "visible", timeout: 10_000 });
+  if (!(await startBtn2.isEnabled())) {
+    await screenshot(page, "speakers-98-debug-start2-disabled");
+    throw new Error('segunda gravação: "Iniciar gravação" desabilitado');
+  }
+  await startBtn2.click();
+  await page.getByText(/^Gravando/).first().waitFor({ state: "visible", timeout: 15_000 });
+  const state2 = await apiState();
+  meetingId2 = state2.active?.id ?? null;
+  if (!meetingId2) throw new Error("segunda reunião: estado ativo sem reunião");
+  if (meetingId2 === meetingId) throw new Error("segunda reunião reusou o mesmo id da primeira");
+  record("(g0) segunda reunião iniciada", "INFO", `meeting2=${meetingId2}`);
+
+  const started2 = Date.now();
+  while (Date.now() - started2 < RECORD_MS) {
+    await sleep(2_000);
+  }
+  await page.getByRole("button", { name: "Parar" }).first().click();
+  const deadlineC2 = Date.now() + FINISH_TIMEOUT_MS;
+  let finalDetail2: ApiDetail | null = null;
+  while (Date.now() < deadlineC2) {
+    const d2 = await apiGet(meetingId2);
+    if (d2.meeting.status === "done" || d2.meeting.status === "error") {
+      finalDetail2 = d2;
+      break;
+    }
+    await sleep(500);
+  }
+  const shotSecond = await screenshot(page, "speakers-04-second-meeting");
+  const secondLabels = new Set(
+    finalDetail2?.segments.filter((s) => s.speaker === "them").map((s) => s.speakerLabel) ?? [],
+  );
+  record(
+    "(g) segunda reunião concluída, voz reconhecida",
+    finalDetail2?.meeting.status === "done" && secondLabels.has(RENAME_TO) ? "PASS" : "FAIL",
+    `${shotSecond} · status=${finalDetail2?.meeting.status ?? "timeout"} labels=${[...secondLabels].join("|")}`,
+  );
 } catch (err) {
   console.log("[erro]", err instanceof Error ? err.message : String(err));
   await screenshot(page, "speakers-99-debug-failure").catch(() => {});
@@ -303,6 +375,44 @@ if (meetingId) {
   );
 } else {
   record("(d)/(e) banco", "FAIL", "sem reunião");
+}
+
+if (meetingId2) {
+  const voices = await queryDb<{ id: string; name: string; sample_count: number }>(
+    userDataCopy,
+    `SELECT id, name, sample_count FROM meeting_v2_voices ORDER BY rowid`,
+  );
+  record(
+    "(h) meeting_v2_voices tem 1 voz 'Ana'",
+    voices.length === 1 && voices[0]?.name === RENAME_TO ? "PASS" : "FAIL",
+    voices.map((v) => `${v.name}(id=${v.id}, amostras=${v.sample_count})`).join(" · ") || "nenhuma voz",
+  );
+
+  const speakers2 = await queryDb<{ id: string; label: string; voice_id: string | null }>(
+    userDataCopy,
+    `SELECT id, label, voice_id FROM meeting_v2_speakers WHERE meeting_id = '${meetingId2}' ORDER BY rowid`,
+  );
+  const distribution2 = await queryDb<{ speaker_label: string | null; c: number }>(
+    userDataCopy,
+    `SELECT speaker_label, COUNT(*) AS c FROM meeting_v2_segments
+      WHERE meeting_id = '${meetingId2}' AND speaker = 'them'
+      GROUP BY speaker_label ORDER BY c DESC`,
+  );
+  const anaRecognized = speakers2.some(
+    (s) => s.label === RENAME_TO && s.voice_id === (voices[0]?.id ?? "__none__"),
+  );
+  record(
+    "(i) 2ª reunião: voz reconhecida nasce com voice_id preenchido",
+    anaRecognized ? "PASS" : "FAIL",
+    speakers2.map((s) => `${s.label}(voice_id=${s.voice_id ?? "∅"})`).join(" · ") || "nenhum speaker",
+  );
+  record(
+    "(j) 2ª reunião: segmentos rotulados",
+    distribution2.some((d) => d.speaker_label === RENAME_TO) ? "PASS" : "FAIL",
+    distribution2.map((d) => `${d.speaker_label ?? "∅"}=${d.c}`).join(" · ") || "nenhum segmento",
+  );
+} else {
+  record("(h)/(i)/(j) banco 2ª reunião", "FAIL", "segunda reunião nunca foi criada");
 }
 
 await sleep(300);

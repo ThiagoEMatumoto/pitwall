@@ -1,14 +1,20 @@
 import { useState } from 'react'
 
-// Paleta por speaker: 6 tokens do tema, atribuídos pela ordem de aparição.
+// Paleta por speaker, atribuída pela ordem de aparição na reunião.
 // 'me' nunca passa por aqui — fica com o accent.
+//
+// Os 4 temas são escuros (bg ≈ #08-#10) e o texto é fixo, então cores claras
+// e saturadas funcionam em todos. A ordem foi escolhida para que os 3 primeiros
+// participantes (caso comum) fiquem a >=25° de hue de qualquer accent de tema
+// (roxo/verde/ciano/laranja) e que dois índices vizinhos nunca sejam da mesma
+// família — em especial, sem dois azuis seguidos (era o caso accent2 → info).
 export const SPEAKER_COLORS = [
-  'var(--color-accent2)',
-  'var(--color-info)',
-  'var(--color-success)',
-  'var(--color-warning)',
-  'var(--color-violet)',
-  'var(--color-accent-dim)',
+  '#F5C542', // amarelo
+  '#F472B6', // rosa
+  '#A3E635', // lima
+  'var(--color-info)', // azul (#7FA7E8, fixo entre temas)
+  'var(--color-danger)', // coral (#FF8D75, fixo entre temas)
+  '#2EC4B6', // teal
 ] as const
 
 export function speakerColor(index: number): string {

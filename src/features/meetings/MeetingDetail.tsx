@@ -230,17 +230,21 @@ export function MeetingDetail({ activeElapsedMs }: Props) {
           <span className="tabular-nums">{formatDuration(recording ? activeElapsedMs : meeting.durationMs)}</span>
           <span>·</span>
           <span style={{ color: STATUS_COLOR[meeting.status] }}>{STATUS_LABEL[meeting.status]}</span>
-          <span>·</span>
-          <span className="inline-flex items-center gap-1">
-            Participante:
-            <InlineEdit
-              value={meeting.themLabel}
-              onSave={(label) => void setThemLabel(meeting.id, label)}
-              title="Renomear participante"
-              className="text-xs text-[var(--color-text)]"
-              inputClassName="w-40 text-xs text-[var(--color-text)]"
-            />
-          </span>
+          {meeting.speakers.length === 0 && (
+            <>
+              <span>·</span>
+              <span className="inline-flex items-center gap-1">
+                Participante:
+                <InlineEdit
+                  value={meeting.themLabel}
+                  onSave={(label) => void setThemLabel(meeting.id, label)}
+                  title="Renomear participante"
+                  className="text-xs text-[var(--color-text)]"
+                  inputClassName="w-40 text-xs text-[var(--color-text)]"
+                />
+              </span>
+            </>
+          )}
         </p>
         {meeting.status === 'error' && meeting.error && (
           <p className="text-xs text-[var(--color-danger)]">{meeting.error}</p>
