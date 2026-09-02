@@ -18,6 +18,11 @@ const meeting: Meeting = {
   updatedAt: Date.now(),
   segmentCount: 0,
   durationMs: 0,
+  speakers: [],
+  lastError: null,
+  respawns: 0,
+  micLevelDbfs: null,
+  diarization: null,
 }
 
 const base: MeetingLiveState = {
@@ -29,6 +34,8 @@ const base: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 const mockApi = vi.hoisted(() => ({

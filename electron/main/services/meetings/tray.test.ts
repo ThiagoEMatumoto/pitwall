@@ -50,6 +50,11 @@ const meeting: Meeting = {
   updatedAt: 0,
   segmentCount: 0,
   durationMs: 0,
+  speakers: [],
+  lastError: null,
+  respawns: 0,
+  micLevelDbfs: null,
+  diarization: null,
 }
 
 const idle: MeetingLiveState = {
@@ -61,6 +66,8 @@ const idle: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 const recording: MeetingLiveState = { ...idle, active: meeting, elapsedMs: 65_000 }
 const detection: MeetingDetection = {
@@ -126,6 +133,8 @@ describe('formatClock', () => {
 describe('trayMenuTemplate', () => {
   it('ocioso: Iniciar gravação, sem Parar, com flutuante/abrir/sair', () => {
     expect(labels(trayMenuTemplate(idle))).toEqual([
+      'Pitwall',
+      'separator',
       'Iniciar gravação',
       'Mostrar/Ocultar janela flutuante',
       'separator',
@@ -136,7 +145,10 @@ describe('trayMenuTemplate', () => {
 
   it('gravando: linha de status desabilitada com o relógio + Parar gravação', () => {
     const template = trayMenuTemplate(recording)
+    expect(template[0]).toEqual({ label: 'Pitwall', enabled: false })
     expect(labels(template)).toEqual([
+      'Pitwall',
+      'separator',
       '● Gravando 01:05',
       'Parar gravação',
       'Mostrar/Ocultar janela flutuante',
@@ -144,7 +156,7 @@ describe('trayMenuTemplate', () => {
       'Abrir Pitwall',
       'Sair',
     ])
-    expect(template[0].enabled).toBe(false)
+    expect(template[2].enabled).toBe(false)
   })
 
   it('ações: iniciar chama o gravador e mostra a flutuante; parar chama stop', async () => {
@@ -161,6 +173,8 @@ describe('trayMenuTemplate', () => {
 
   it('detectada: Gravar/Ignorar no topo, Iniciar gravação continua disponível', () => {
     expect(labels(trayMenuTemplate(detected))).toEqual([
+      'Pitwall',
+      'separator',
       'Gravar reunião detectada (Google Meet)',
       'Ignorar esta reunião',
       'Iniciar gravação',
@@ -186,8 +200,8 @@ describe('trayMenuTemplate', () => {
   })
 
   it('ignorada ou já gravando: sem os itens de detecção', () => {
-    expect(labels(trayMenuTemplate(ignored))[0]).toBe('Iniciar gravação')
-    expect(labels(trayMenuTemplate(recordingDetected))[0]).toBe('● Gravando 01:05')
+    expect(labels(trayMenuTemplate(ignored))[2]).toBe('Iniciar gravação')
+    expect(labels(trayMenuTemplate(recordingDetected))[2]).toBe('● Gravando 01:05')
   })
 
   it('ações: flutuante toggle, abrir foca a principal, sair encerra o app', () => {
@@ -209,7 +223,7 @@ describe('installTray / refreshTray', () => {
     expect(tray.image).toBe('IDLE')
     expect(tray.setToolTip).toHaveBeenCalledWith('Pitwall')
     expect(tray.on).toHaveBeenCalledWith('click', expect.any(Function))
-    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[0]).toBe('Iniciar gravação')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[2]).toBe('Iniciar gravação')
   })
 
   it('não crasha quando o Tray não pode ser criado', () => {
@@ -227,14 +241,14 @@ describe('installTray / refreshTray', () => {
     refreshTray(recording)
     expect(tray.setImage).toHaveBeenLastCalledWith('REC')
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — gravando 01:05')
-    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[0]).toBe('● Gravando 01:05')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[2]).toBe('● Gravando 01:05')
 
     vi.advanceTimersByTime(700)
     expect(tray.setImage).toHaveBeenLastCalledWith('DIM')
     vi.advanceTimersByTime(700)
     expect(tray.setImage).toHaveBeenLastCalledWith('REC')
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — gravando 01:06')
-    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[0]).toBe('● Gravando 01:06')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[2]).toBe('● Gravando 01:06')
   })
 
   it('ao parar volta pro ícone ocioso e para de piscar', () => {
@@ -255,7 +269,7 @@ describe('installTray / refreshTray', () => {
     emitMeetingEvent({ type: 'state', state: detected })
     expect(tray.setImage).toHaveBeenLastCalledWith('AMBER')
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — reunião detectada: Google Meet')
-    expect(labels(buildFromTemplate.mock.calls.at(-1)![0]).slice(0, 2)).toEqual([
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0]).slice(2, 4)).toEqual([
       'Gravar reunião detectada (Google Meet)',
       'Ignorar esta reunião',
     ])
@@ -271,7 +285,7 @@ describe('installTray / refreshTray', () => {
     refreshTray(ignored)
     expect(tray.setImage).toHaveBeenLastCalledWith('IDLE')
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall')
-    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[0]).toBe('Iniciar gravação')
+    expect(labels(buildFromTemplate.mock.calls.at(-1)![0])[2]).toBe('Iniciar gravação')
   })
 
   it('gravando com detecção presente: vermelho piscando, não âmbar', () => {
@@ -289,7 +303,7 @@ describe('installTray / refreshTray', () => {
     const tray = lastTray()
     emitMeetingEvent({ type: 'state', state: recording })
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — gravando 01:05')
-    emitMeetingEvent({ type: 'segment', segment: { id: 's', meetingId: 'm1', speaker: 'me', text: 'x', startMs: 0, endMs: 1, chunkIndex: 0, createdAt: 0 } })
+    emitMeetingEvent({ type: 'segment', segment: { id: 's', meetingId: 'm1', speaker: 'me', text: 'x', startMs: 0, endMs: 1, chunkIndex: 0, createdAt: 0, speakerId: null, speakerLabel: null } })
     expect(tray.setToolTip).toHaveBeenLastCalledWith('Pitwall — gravando 01:05')
   })
 })

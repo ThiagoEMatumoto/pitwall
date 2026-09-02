@@ -248,6 +248,8 @@ describe('checkSetup', () => {
       sink: 'sink.x',
       source: 'source.x',
       stt: { ok: true, url: 'https://stt/v1', error: null },
+      micLevel: { dbfs: null, source: 'source.x', low: false },
+      diarization: { supported: false, addon: false, models: { segmentation: 'missing', embedding: 'missing', progress: null } },
     })
     const broken = build({
       hasPipewire: async () => false,
@@ -259,6 +261,8 @@ describe('checkSetup', () => {
       sink: null,
       source: null,
       stt: { ok: false, url: 'https://stt/v1', error: 'sem key' },
+      micLevel: { dbfs: null, source: null, low: false },
+      diarization: { supported: false, addon: false, models: { segmentation: 'missing', embedding: 'missing', progress: null } },
     })
   })
 })

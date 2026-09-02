@@ -1,12 +1,12 @@
 // Dono da transição 'processing' → 'done'/'error': resumo + extração de tarefas
 // após stop(), re-execução sob demanda (resummarize) e decisão do usuário sobre
 // itens propostos. Registra nos registries de recorder-contract.ts.
-import type { Meeting, MeetingActionItem, MeetingActionItemDecision } from '../../../../shared/types/meetings'
+import type { Meeting, MeetingActionItem } from '../../../../shared/types/meetings'
 import { notify as defaultNotify } from '../notifications'
 import { emitMeetingEvent } from './event-bus'
 import { createMeetingTask, extractActionItems } from './extract-actions'
 import * as meetingStore from './meeting-store'
-import { actionItemRegistry, postProcessRegistry, resummarizeRegistry } from './recorder-contract'
+import { postProcessRegistry, resummarizeRegistry } from './recorder-contract'
 import { summarizeMeeting } from './summarize'
 
 export interface PostProcessDeps {
@@ -61,24 +61,10 @@ export function createPostProcessor(overrides: Partial<PostProcessDeps> = {}) {
     return run(meetingId)
   }
 
-  const decide = async ({ id, status }: MeetingActionItemDecision): Promise<MeetingActionItem> => {
-    const item = deps.store.getActionItem(id)
-    if (!item) throw new Error(`Item não encontrado: ${id}`)
-    const detail = deps.store.get(item.meetingId)
-    if (!detail) throw new Error(`Reunião não encontrada: ${item.meetingId}`)
-
-    let updated: MeetingActionItem
-    if (status === 'dismissed') {
-      updated = deps.store.setActionItemStatus(id, 'dismissed')
-    } else if (item.taskId) {
-      updated = deps.store.setActionItemStatus(id, 'created')
-    } else {
-      const task = deps.createTask(detail.meeting, { title: item.title, quote: item.quote })
-      updated = deps.store.setActionItemStatus(id, 'created', task.id)
-    }
-    const items = deps.store.get(item.meetingId)?.actionItems ?? [updated]
-    deps.emit({ type: 'action_items', meetingId: item.meetingId, items })
-    return updated
+  // Decisão unitária foi substituída por meetings:actionItems:batch
+  // (actionItemBatchRegistry); W2-A registra a implementação em action-item-batch.ts.
+  const decide = async (): Promise<MeetingActionItem> => {
+    throw new Error('decide() foi substituído por actionItemBatchRegistry (meetings:actionItems:batch)')
   }
 
   return { run, resummarize, decide }
@@ -90,5 +76,4 @@ export function installPostProcess(overrides: Partial<PostProcessDeps> = {}): vo
     await processor.run(id)
   }
   resummarizeRegistry.current = processor.resummarize
-  actionItemRegistry.current = processor.decide
 }

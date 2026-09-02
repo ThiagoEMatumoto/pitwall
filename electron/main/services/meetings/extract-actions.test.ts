@@ -43,7 +43,7 @@ beforeEach(() => {
 })
 
 function seg(text: string, speaker: 'me' | 'them' = 'them', startMs = 0): MeetingSegment {
-  return { id: `s${startMs}`, meetingId: 'm', speaker, text, startMs, endMs: startMs + 1000, chunkIndex: 0, createdAt: 0 }
+  return { id: `s${startMs}`, meetingId: 'm', speaker, text, startMs, endMs: startMs + 1000, chunkIndex: 0, createdAt: 0, speakerId: null, speakerLabel: null }
 }
 
 function seed(texts: string[]) {

@@ -78,7 +78,7 @@ import { startMcpServer, stopMcpServer } from './services/mcp/server'
 import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
-import { setMainWindow, emitToast } from './services/notifications'
+import { setMainWindow, getMainWindow, emitToast } from './services/notifications'
 import {
   registerDesignScheme,
   installDesignProtocol,
@@ -90,6 +90,21 @@ import * as designAssets from './services/design/asset-store'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const isDev = !app.isPackaged
+
+// Instância única: o auto-update relança o app sem derrubar o antigo, e duas
+// instâncias viram dois ícones no tray e dois PTYs brigando pelo mesmo banco.
+// A segunda só acorda a janela da primeira e sai — antes de abrir o DB.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+  app.exit(0)
+}
+app.on('second-instance', () => {
+  const win = getMainWindow()
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
 
 // GPU: default agora é aceleração LIGADA em todas as plataformas (nitidez do
 // terminal via renderer WebGL). Em drivers problemáticos (ex: nVidia/Wayland,

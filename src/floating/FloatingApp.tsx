@@ -22,6 +22,8 @@ const IDLE_STATE: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 export function formatClock(ms: number): string {

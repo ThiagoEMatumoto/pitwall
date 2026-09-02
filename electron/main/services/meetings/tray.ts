@@ -73,6 +73,8 @@ export function trayMenuTemplate(
     : [{ label: 'Iniciar gravação', click: () => void startRecording().catch(warn) }]
 
   return [
+    { label: 'Pitwall', enabled: false },
+    { type: 'separator' },
     ...detectionItems,
     ...recordingItems,
     {
@@ -144,6 +146,8 @@ const IDLE_STATE: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: null,
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 function currentState(): MeetingLiveState {

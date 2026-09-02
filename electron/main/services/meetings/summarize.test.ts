@@ -60,8 +60,8 @@ describe('buildSummaryPrompt', () => {
       themLabel: 'Cliente',
       rawNotes: '- [00:10] lembrar do prazo',
       segments: [
-        { id: 'a', meetingId: 'm', speaker: 'them', text: 'Bom dia', startMs: 65_000, endMs: 66_000, chunkIndex: 0, createdAt: 0 },
-        { id: 'b', meetingId: 'm', speaker: 'me', text: 'Olá', startMs: 70_000, endMs: 71_000, chunkIndex: 0, createdAt: 0 },
+        { id: 'a', meetingId: 'm', speaker: 'them', text: 'Bom dia', startMs: 65_000, endMs: 66_000, chunkIndex: 0, createdAt: 0, speakerId: null, speakerLabel: null },
+        { id: 'b', meetingId: 'm', speaker: 'me', text: 'Olá', startMs: 70_000, endMs: 71_000, chunkIndex: 0, createdAt: 0, speakerId: null, speakerLabel: null },
       ],
     })
     expect(prompt).toContain('[01:05] Cliente: Bom dia')

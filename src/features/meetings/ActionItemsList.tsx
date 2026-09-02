@@ -2,11 +2,11 @@ import { ArrowUpRight } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { navigateToTask } from '@/lib/nav'
-import type { MeetingActionItem, MeetingActionItemDecision } from '../../../shared/types/ipc'
+import type { MeetingActionItem, MeetingActionItemBatch } from '../../../shared/types/ipc'
 
 interface Props {
   items: MeetingActionItem[]
-  onDecide: (id: string, status: MeetingActionItemDecision['status']) => void
+  onDecide: (id: string, action: MeetingActionItemBatch['action']) => void
 }
 
 export function ActionItemsList({ items, onDecide }: Props) {
@@ -44,14 +44,14 @@ export function ActionItemsList({ items, onDecide }: Props) {
                     <span className="flex shrink-0 items-center gap-1">
                       <Button
                         variant="ghost"
-                        onClick={() => onDecide(item.id, 'created')}
+                        onClick={() => onDecide(item.id, 'create')}
                         className="!px-2.5 !py-0.5 !text-xs"
                       >
                         Criar tarefa
                       </Button>
                       <Button
                         variant="ghost"
-                        onClick={() => onDecide(item.id, 'dismissed')}
+                        onClick={() => onDecide(item.id, 'dismiss')}
                         className="!px-2.5 !py-0.5 !text-xs"
                       >
                         Descartar

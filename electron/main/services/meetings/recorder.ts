@@ -14,6 +14,7 @@ import * as meetingStore from './meeting-store'
 import { PcmChunker, rmsLinear, type Chunk } from './pcm-chunker'
 import {
   detectorRegistry,
+  diarizerRegistry,
   postProcessRegistry,
   recorderRegistry,
   setupCheckRegistry,
@@ -135,6 +136,8 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
     captureMode: session?.captureMode ?? 'pipewire',
     detection: detectorRegistry.current?.getDetection() ?? null,
     linkedStreamId: session?.linkedStreamId ?? null,
+    micWarning: null,
+    diarization: diarizerRegistry.current?.status() ?? 'off',
   })
 
   const broadcastState = (force = false): void => {
@@ -412,6 +415,12 @@ export function createRecorder(overrides: Partial<RecorderDeps> = {}): Recorder 
       sink: devices.sink,
       source: devices.source,
       stt: stt.ok ? { ok: true, url: stt.cfg.url, error: null } : { ok: false, url: stt.url, error: stt.error },
+      micLevel: { dbfs: null, source: devices.source, low: false },
+      diarization: {
+        supported: false,
+        addon: false,
+        models: { segmentation: 'missing', embedding: 'missing', progress: null },
+      },
     }
   }
 

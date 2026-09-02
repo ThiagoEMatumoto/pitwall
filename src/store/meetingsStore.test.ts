@@ -45,6 +45,11 @@ function makeMeeting(over: Partial<Meeting> = {}): Meeting {
     updatedAt: 1000,
     segmentCount: 0,
     durationMs: 0,
+    speakers: [],
+    lastError: null,
+    respawns: 0,
+    micLevelDbfs: null,
+    diarization: null,
     ...over,
   }
 }
@@ -109,7 +114,7 @@ describe('meetingsStore events', () => {
 
     eventHandler?.({
       type: 'state',
-      state: { active: null, elapsedMs: 0, levels: { me: 0, them: 0 }, sttOk: true, lastError: null, captureMode: 'pipewire', detection: null, linkedStreamId: null },
+      state: { active: null, elapsedMs: 0, levels: { me: 0, them: 0 }, sttOk: true, lastError: null, captureMode: 'pipewire', detection: null, linkedStreamId: null, micWarning: null, diarization: 'off' },
     })
     expect(useMeetingsStore.getState().live?.active).toBeNull()
   })

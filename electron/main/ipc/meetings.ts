@@ -2,12 +2,14 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import * as meetingStore from '../services/meetings/meeting-store'
 import {
-  actionItemRegistry,
+  actionItemBatchRegistry,
   detectorRegistry,
   floatingRegistry,
   getRecorder,
+  modelDownloadRegistry,
   resummarizeRegistry,
   setupCheckRegistry,
+  speakerRenameRegistry,
 } from '../services/meetings/recorder-contract'
 import { broadcast } from '../services/notify'
 
@@ -27,9 +29,22 @@ const quickNoteSchema = z.object({
   text: z.string(),
 })
 
-const actionItemSchema = z.object({
-  id: z.string().min(1),
-  status: z.enum(['dismissed', 'created']),
+const actionItemBatchSchema = z.object({
+  meetingId: z.string().min(1),
+  ids: z.array(z.string().min(1)).min(1),
+  action: z.enum(['create', 'dismiss']),
+  overrides: z
+    .record(
+      z.string().min(1),
+      z.object({ owner: z.string().nullable().optional(), title: z.string().min(1).optional() }),
+    )
+    .optional(),
+})
+
+const renameSpeakerSchema = z.object({
+  meetingId: z.string().min(1),
+  speakerId: z.string().min(1),
+  name: z.string().trim().min(1),
 })
 
 const floatingSchema = z.object({ action: z.enum(['show', 'hide', 'toggle']) })
@@ -82,10 +97,27 @@ export function registerMeetingsIpc(): void {
     return run(id)
   })
 
-  ipcMain.handle('meetings:actionItem', (_e, payload: unknown) => {
-    const input = actionItemSchema.parse(payload)
-    const decide = actionItemRegistry.current ?? unavailable('Tarefas de reunião')
+  ipcMain.handle('meetings:actionItems:batch', (_e, payload: unknown) => {
+    const input = actionItemBatchSchema.parse(payload)
+    const decide = actionItemBatchRegistry.current ?? unavailable('Tarefas de reunião')
     return decide(input)
+  })
+
+  ipcMain.handle('meetings:renameSpeaker', (_e, payload: unknown) => {
+    const input = renameSpeakerSchema.parse(payload)
+    const rename = speakerRenameRegistry.current ?? unavailable('Renomear participante')
+    return rename(input)
+  })
+
+  ipcMain.handle('meetings:voices:list', () => meetingStore.listVoices())
+
+  ipcMain.handle('meetings:voices:delete', (_e, payload: unknown) => {
+    meetingStore.deleteVoice(idSchema.parse(payload))
+  })
+
+  ipcMain.handle('meetings:models:download', () => {
+    const download = modelDownloadRegistry.current ?? unavailable('Download de modelos')
+    return download()
   })
 
   ipcMain.handle('meetings:floating', (_e, payload: unknown) => {

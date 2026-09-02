@@ -19,6 +19,11 @@ const meeting: Meeting = {
   updatedAt: Date.now(),
   segmentCount: 0,
   durationMs: 0,
+  speakers: [],
+  lastError: null,
+  respawns: 0,
+  micLevelDbfs: null,
+  diarization: null,
 }
 
 const detected: MeetingLiveState = {
@@ -30,6 +35,8 @@ const detected: MeetingLiveState = {
   captureMode: 'pipewire',
   detection: { app: 'Google Meet', binary: 'chrome', pid: 42, streamId: 7, since: Date.now(), ignored: false },
   linkedStreamId: null,
+  micWarning: null,
+  diarization: 'off',
 }
 
 describe('DetectionBanner', () => {

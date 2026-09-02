@@ -74,7 +74,7 @@ export function MeetingDetail({ activeElapsedMs }: Props) {
   const setThemLabel = useMeetingsStore((s) => s.setThemLabel)
   const updateNotes = useMeetingsStore((s) => s.updateNotes)
   const resummarize = useMeetingsStore((s) => s.resummarize)
-  const decideActionItem = useMeetingsStore((s) => s.decideActionItem)
+  const decideActionItems = useMeetingsStore((s) => s.decideActionItems)
 
   if (!detail) {
     return <p className="px-6 py-6 text-sm text-[var(--color-text-dim)]">Carregando…</p>
@@ -141,7 +141,10 @@ export function MeetingDetail({ activeElapsedMs }: Props) {
         ) : (
           <>
             <SummaryView meeting={meeting} onResummarize={() => void resummarize(meeting.id)} />
-            <ActionItemsList items={actionItems} onDecide={(id, status) => void decideActionItem(id, status)} />
+            <ActionItemsList
+              items={actionItems}
+              onDecide={(id, action) => void decideActionItems({ meetingId: meeting.id, ids: [id], action })}
+            />
             {notes}
             {transcript}
           </>

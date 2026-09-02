@@ -1,15 +1,18 @@
 // Ponto de costura entre as waves: o IPC (W0) só conhece estas interfaces; a
-// captura/STT (W1-A), tray/janela flutuante (W1-B) e resumo/extração (W2)
-// registram suas implementações nos registries abaixo em initMeetings.
+// captura/STT (W1-A), diarização (W1-B), tray/janela flutuante e resumo/
+// extração (W2) registram suas implementações nos registries abaixo em
+// initMeetings.
 import type {
   Meeting,
   MeetingActionItem,
-  MeetingActionItemDecision,
+  MeetingActionItemBatch,
   MeetingDetection,
   MeetingDetectionAction,
+  MeetingDiarizationLiveStatus,
   MeetingFloatingAction,
   MeetingLiveState,
   MeetingSetupStatus,
+  RenameMeetingSpeakerInput,
 } from '../../../../shared/types/meetings'
 
 export type { MeetingSetupStatus } from '../../../../shared/types/meetings'
@@ -39,6 +42,24 @@ export interface MeetingDetector {
 
 export const detectorRegistry = { current: null as MeetingDetector | null }
 
+// Diarização da trilha 'them' (W1-B). Turnos são relativos ao início do chunk;
+// quem chama soma startMs pra obter tempo absoluto da reunião.
+export interface DiarizedTurn {
+  startMs: number
+  endMs: number
+  speakerId: string
+  speakerLabel: string
+}
+
+export interface MeetingDiarizer {
+  process(input: { meetingId: string; chunkIndex: number; pcm: Buffer; startMs: number }): Promise<DiarizedTurn[]>
+  status(): MeetingDiarizationLiveStatus
+  /** Descarta centroides/estado da reunião (fim da gravação ou reinício). */
+  reset(meetingId: string): void
+}
+
+export const diarizerRegistry = { current: null as MeetingDiarizer | null }
+
 export const setupCheckRegistry = {
   current: null as (() => Promise<MeetingSetupStatus>) | null,
 }
@@ -51,8 +72,19 @@ export const resummarizeRegistry = {
   current: null as ((meetingId: string) => Promise<Meeting>) | null,
 }
 
-export const actionItemRegistry = {
-  current: null as ((input: MeetingActionItemDecision) => Promise<MeetingActionItem>) | null,
+// Renomear um speaker: label + segmentos + voz conhecida (W2-B).
+export const speakerRenameRegistry = {
+  current: null as ((input: RenameMeetingSpeakerInput) => Promise<Meeting>) | null,
+}
+
+// Download do modelo de embedding (W1-B); progresso sai como MeetingEvent 'model_progress'.
+export const modelDownloadRegistry = {
+  current: null as (() => Promise<void>) | null,
+}
+
+// Decisão em lote sobre itens propostos (W2-A). Devolve a lista completa da reunião.
+export const actionItemBatchRegistry = {
+  current: null as ((input: MeetingActionItemBatch) => Promise<MeetingActionItem[]>) | null,
 }
 
 // Pós-processamento após stop() (resumo + extração de tarefas, W2). Quem
