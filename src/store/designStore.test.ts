@@ -234,6 +234,22 @@ describe('designStore', () => {
     expect(showToastMock.mock.calls[0][0].title).toContain('Desktop 1')
   })
 
+  it('adopts an artboard Claude created while the doc is open', async () => {
+    const created = makeArtboard({ id: 'ab2', name: 'Cardápio', version: 1, position: 1 })
+    const doc = makeDoc()
+    doc.pages[0].artboards.push(created)
+    mockApi.documentGet.mockResolvedValue(doc)
+    updatedHandler!(updatedEvent({ artboardId: 'ab2', version: 1, ops: [], full: true }))
+    await flush()
+    const ab = useDesignStore.getState().artboards.ab2
+    expect(ab).toBeDefined()
+    expect(ab.meta.name).toBe('Cardápio')
+    expect(useDesignStore.getState().doc?.pages[0].artboards.map((a) => a.id)).toEqual([
+      'ab1',
+      'ab2',
+    ])
+  })
+
   it('skipped version triggers resync from documentGet', async () => {
     const fresh = makeArtboard({
       version: 9,

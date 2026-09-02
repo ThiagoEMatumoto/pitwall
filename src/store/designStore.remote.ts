@@ -5,6 +5,7 @@ import { api } from '@/lib/ipc'
 import type { ArtboardUpdatedEvent, DesignAgentActivity } from '@shared/types/design'
 import {
   applyLocal,
+  artboardsOf,
   bridges,
   bumpVersion,
   forgetArtboard,
@@ -17,7 +18,13 @@ import {
 
 export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEvent): void {
   const ab = store.getState().artboards[evt.artboardId]
-  if (!ab) return
+  if (!ab) {
+    // Claude created an artboard while this doc is open: the broadcast is the
+    // only signal, so pull the fresh document and adopt it instead of waiting
+    // for a remount.
+    if (evt.docId === store.getState().docId) void adoptNewArtboard(store, evt.artboardId)
+    return
+  }
   // My own write coming back: the tree already has it, only the version moves.
   if (pendingNonces.has(evt.origin.nonce)) {
     pendingNonces.delete(evt.origin.nonce)
@@ -37,6 +44,22 @@ export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEv
       store.getState().fitToArtboard(evt.artboardId)
     })
   }
+}
+
+async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise<void> {
+  const docId = store.getState().docId
+  if (!docId) return
+  const doc = await api.design.documentGet(docId)
+  if (!doc || store.getState().docId !== docId) return
+  const fresh = artboardsOf(doc)[artboardId]
+  if (!fresh) return
+  store.setState((s) =>
+    s.artboards[artboardId] ? {} : { doc, artboards: { ...s.artboards, [artboardId]: fresh } },
+  )
+  maybeToastRemoteUpdate(fresh.meta, () => {
+    store.getState().select(artboardId, [])
+    store.getState().fitToArtboard(artboardId)
+  })
 }
 
 export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity): void {
