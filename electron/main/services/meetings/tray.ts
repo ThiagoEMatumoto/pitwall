@@ -114,6 +114,8 @@ const IDLE_STATE: MeetingLiveState = {
   sttOk: false,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 
 function currentState(): MeetingLiveState {

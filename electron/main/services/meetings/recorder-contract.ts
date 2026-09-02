@@ -5,6 +5,8 @@ import type {
   Meeting,
   MeetingActionItem,
   MeetingActionItemDecision,
+  MeetingDetection,
+  MeetingDetectionAction,
   MeetingFloatingAction,
   MeetingLiveState,
   MeetingSetupStatus,
@@ -17,6 +19,8 @@ export interface MeetingRecorder {
   stop(): Promise<Meeting>
   getState(): MeetingLiveState
   appendQuickNote(meetingId: string, text: string): Meeting
+  /** Reemite o evento 'state' (sem throttle) — usado pelo detector a cada transição. */
+  refreshState(): void
 }
 
 export const recorderRegistry = { current: null as MeetingRecorder | null }
@@ -25,6 +29,15 @@ export function getRecorder(): MeetingRecorder {
   if (!recorderRegistry.current) throw new Error('Gravador não inicializado')
   return recorderRegistry.current
 }
+
+// Detecção de reunião via PipeWire (W1-A). O recorder lê a detecção corrente
+// pra vincular a gravação ao stream; o IPC encaminha a decisão do usuário.
+export interface MeetingDetector {
+  getDetection(): MeetingDetection | null
+  decide(action: MeetingDetectionAction): void
+}
+
+export const detectorRegistry = { current: null as MeetingDetector | null }
 
 export const setupCheckRegistry = {
   current: null as (() => Promise<MeetingSetupStatus>) | null,

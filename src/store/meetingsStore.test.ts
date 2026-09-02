@@ -108,7 +108,7 @@ describe('meetingsStore events', () => {
 
     eventHandler?.({
       type: 'state',
-      state: { active: null, elapsedMs: 0, levels: { me: 0, them: 0 }, sttOk: true, lastError: null, captureMode: 'pipewire' },
+      state: { active: null, elapsedMs: 0, levels: { me: 0, them: 0 }, sttOk: true, lastError: null, captureMode: 'pipewire', detection: null, linkedStreamId: null },
     })
     expect(useMeetingsStore.getState().live?.active).toBeNull()
   })

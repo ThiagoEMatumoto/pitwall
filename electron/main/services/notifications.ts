@@ -65,10 +65,13 @@ export function notify({
   title,
   body,
   ccSessionId,
+  onClick,
 }: {
   title: string
   body: string
   ccSessionId?: string
+  /** Só no main: roda no clique da notificação nativa; não vai pro renderer. */
+  onClick?: () => void
 }): void {
   const prefs = getNotifPrefs()
   if (!prefs.enabled) return
@@ -84,6 +87,7 @@ export function notify({
           win.webContents.send('notify:open-session', ccSessionId)
         }
       }
+      onClick?.()
     })
     native.show()
   }

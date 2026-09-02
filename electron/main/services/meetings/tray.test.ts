@@ -59,6 +59,8 @@ const idle: MeetingLiveState = {
   sttOk: true,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 const recording: MeetingLiveState = { ...idle, active: meeting, elapsedMs: 65_000 }
 
@@ -67,6 +69,7 @@ const recorder = {
   stop: vi.fn(async () => meeting),
   getState: vi.fn(() => idle),
   appendQuickNote: vi.fn(() => meeting),
+  refreshState: vi.fn(),
 }
 
 function labels(template: unknown): string[] {

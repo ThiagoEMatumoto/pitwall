@@ -19,6 +19,8 @@ const IDLE_STATE: MeetingLiveState = {
   sttOk: false,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 
 export function formatClock(ms: number): string {

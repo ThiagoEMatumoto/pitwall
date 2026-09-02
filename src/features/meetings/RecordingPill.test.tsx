@@ -27,6 +27,8 @@ const base: MeetingLiveState = {
   sttOk: true,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 
 const mockApi = vi.hoisted(() => ({
