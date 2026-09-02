@@ -6,6 +6,7 @@ export type MeetingSpeaker = 'me' | 'them'
 export type MeetingActionItemStatus = 'proposed' | 'created' | 'dismissed'
 export type MeetingCaptureMode = 'pipewire' | 'fixture'
 export type MeetingFloatingAction = 'show' | 'hide' | 'toggle'
+export type MeetingDetectionAction = 'record' | 'ignore'
 
 export interface Meeting {
   id: string
@@ -47,6 +48,16 @@ export interface MeetingActionItem {
   createdAt: number
 }
 
+/** App de chamada com stream de microfone aberto no PipeWire. */
+export interface MeetingDetection {
+  app: string
+  binary: string
+  pid: number
+  streamId: number
+  since: number
+  ignored: boolean
+}
+
 export interface MeetingLiveState {
   active: Meeting | null
   elapsedMs: number
@@ -55,6 +66,9 @@ export interface MeetingLiveState {
   sttOk: boolean
   lastError: string | null
   captureMode: MeetingCaptureMode
+  detection: MeetingDetection | null
+  /** streamId da detecção que originou a gravação ativa (auto-stop vinculado). */
+  linkedStreamId: number | null
 }
 
 export interface MeetingDetail {

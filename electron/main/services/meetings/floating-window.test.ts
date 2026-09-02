@@ -69,6 +69,8 @@ const idle: MeetingLiveState = {
   sttOk: true,
   lastError: null,
   captureMode: 'pipewire',
+  detection: null,
+  linkedStreamId: null,
 }
 const recording: MeetingLiveState = { ...idle, active: meeting, elapsedMs: 1000 }
 
@@ -106,7 +108,6 @@ describe('installFloatingWindow', () => {
       frame: false,
       transparent: false,
       alwaysOnTop: true,
-      type: 'toolbar',
       skipTaskbar: true,
       resizable: true,
       show: false,
@@ -116,6 +117,9 @@ describe('installFloatingWindow', () => {
     expect((win.options.webPreferences as { preload: string }).preload).toMatch(
       /preload[\\/]index\.mjs$/,
     )
+    // type:'toolbar' vira _NET_WM_WINDOW_TYPE_TOOLBAR no X11 e o mutter recusa
+    // mover/redimensionar a janela — a flutuante ficava presa no lugar.
+    expect(win.options).not.toHaveProperty('type')
     expect(win.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, { visibleOnFullScreen: true })
     expect(win.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver')
     expect(win.loadFile).toHaveBeenCalledWith(expect.stringMatching(/renderer[\\/]floating\.html$/))

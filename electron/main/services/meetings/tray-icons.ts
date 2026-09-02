@@ -3,7 +3,7 @@
 import { deflateSync } from 'node:zlib'
 import { nativeImage, type NativeImage } from 'electron'
 
-export type TrayIconKind = 'idle' | 'recording' | 'recordingDim'
+export type TrayIconKind = 'idle' | 'recording' | 'recordingDim' | 'detected'
 
 export const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -63,12 +63,14 @@ export function encodePng(width: number, height: number, rgba: Buffer): Buffer {
 
 const IDLE_RGB: [number, number, number] = [0xc8, 0xc8, 0xc8]
 const RECORDING_RGB: [number, number, number] = [0xe5, 0x48, 0x4d]
+const DETECTED_RGB: [number, number, number] = [0xf5, 0xa5, 0x24]
 const DIM_ALPHA = 0.45
 const SUPERSAMPLE = 4
 
 /**
  * Desenha o ícone como RGBA (não pré-multiplicado). idle = anel cinza-claro;
- * recording = disco vermelho; recordingDim = mesmo disco a 45% (fase do pisca).
+ * recording = disco vermelho; recordingDim = mesmo disco a 45% (fase do pisca);
+ * detected = disco âmbar (reunião detectada, aguardando decisão).
  * Antialias por supersampling 4×4.
  */
 export function drawIcon(kind: TrayIconKind, size: number): Buffer {
@@ -76,7 +78,7 @@ export function drawIcon(kind: TrayIconKind, size: number): Buffer {
   const center = size / 2
   const outer = size * 0.36
   const inner = kind === 'idle' ? outer - size * 0.11 : 0
-  const [r, g, b] = kind === 'idle' ? IDLE_RGB : RECORDING_RGB
+  const [r, g, b] = kind === 'idle' ? IDLE_RGB : kind === 'detected' ? DETECTED_RGB : RECORDING_RGB
   const alphaScale = kind === 'recordingDim' ? DIM_ALPHA : 1
   const step = 1 / SUPERSAMPLE
 
@@ -117,5 +119,6 @@ export function trayIcons(): Record<TrayIconKind, NativeImage> {
     idle: buildImage('idle'),
     recording: buildImage('recording'),
     recordingDim: buildImage('recordingDim'),
+    detected: buildImage('detected'),
   }
 }
