@@ -85,9 +85,18 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
         set({ detail: { ...detail, segments: [...detail.segments, event.segment] } })
         return
       }
-      case 'meeting':
-        set(withMeeting(state, event.meeting))
+      case 'meeting': {
+        const next = withMeeting(state, event.meeting)
+        // Gravação iniciada por detecção (banner/pill/auto-record) não passa por
+        // store.start(), que é quem chama select() — sem isto o hero fica vazio.
+        if (event.meeting.status === 'recording' && state.selectedId !== event.meeting.id) {
+          set({ ...next, selectedId: event.meeting.id, detail: null })
+          void get().loadDetail(event.meeting.id)
+        } else {
+          set(next)
+        }
         return
+      }
       case 'action_items': {
         const { detail } = state
         if (!detail || detail.meeting.id !== event.meetingId) return
