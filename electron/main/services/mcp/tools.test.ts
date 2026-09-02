@@ -166,7 +166,12 @@ describe('mcp tools — objectives/KRs', () => {
   it('não expõe tools de delete destrutivo (exceção: diagram_delete, two-step)', () => {
     const names = tools.map((t) => t.name)
     // diagram_delete é a exceção documentada: exige archive prévio + confirm.
-    expect(names.filter((n) => n.includes('delete'))).toEqual(['diagram_delete'])
+    // design_nodes_delete apaga nós dentro de um artboard (não um recurso raiz)
+    // e cada versão fica no histórico, então o undo é possível.
+    expect(names.filter((n) => n.includes('delete'))).toEqual([
+      'diagram_delete',
+      'design_nodes_delete',
+    ])
   })
 
   it('key_result_update altera o KR e broadcasta o marcador', () => {

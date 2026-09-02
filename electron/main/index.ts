@@ -50,6 +50,7 @@ import { registerHandoffsIpc } from './ipc/handoffs'
 import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
+import { registerDesignIpc } from './ipc/design'
 import { registerVideoIpc } from './ipc/video'
 import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
@@ -78,6 +79,13 @@ import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
 import { setMainWindow, emitToast } from './services/notifications'
+import {
+  registerDesignScheme,
+  installDesignProtocol,
+  installDesignFrameGuard,
+} from './services/design/protocol'
+import * as designStore from './services/design/design-store'
+import * as designAssets from './services/design/asset-store'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -111,6 +119,8 @@ const ozoneWayland =
   safeGetBoolPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT)
 if (ozoneWayland) app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
 setGpuState({ hwAccelDisabled: gpuOff, ozoneWayland })
+// Scheme privilegiado precisa ser registrado antes do ready.
+registerDesignScheme()
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -151,6 +161,7 @@ function createMainWindow(): BrowserWindow {
       openExternalSafe(url)
     }
   })
+  installDesignFrameGuard(win.webContents)
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -300,6 +311,7 @@ app.whenReady().then(async () => {
   registerObjectivesIpc()
   registerTasksIpc()
   registerDiagramsIpc()
+  registerDesignIpc()
   registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
@@ -318,6 +330,11 @@ app.whenReady().then(async () => {
   // Sessão que sumiu do índice limpa o estado de dedupe do resumo.
   setSessionGoneHook(forgetSessionSummaries)
   registerWindowIpc()
+  installDesignProtocol({
+    getDocument: (id) => designStore.getDocument(id),
+    getArtboard: (id) => designStore.getArtboard(id),
+    getAsset: (id) => designAssets.get(id),
+  })
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o

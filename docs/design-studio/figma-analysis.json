@@ -1,0 +1,200 @@
+{
+  "product": "Figma (Design + MCP oficial)",
+  "sources": [
+    "https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout",
+    "https://www.figma.com/blog/how-figmas-multiplayer-technology-works/",
+    "https://help.figma.com/hc/en-us/articles/360040314193-Guide-to-prototyping-in-Figma",
+    "https://developers.figma.com/docs/figma-mcp-server/tools-and-prompts/",
+    "https://www.figma.com/blog/building-a-professional-design-tool-on-the-web/",
+    "https://www.figma.com/blog/introducing-claude-code-to-figma/"
+  ],
+  "node_model": {
+    "tree": "Document → Page → SceneNode (árvore com ids, 'similar ao DOM')",
+    "types": [
+      "FRAME",
+      "GROUP",
+      "COMPONENT",
+      "COMPONENT_SET",
+      "INSTANCE",
+      "RECTANGLE",
+      "ELLIPSE",
+      "LINE",
+      "POLYGON",
+      "STAR",
+      "VECTOR",
+      "BOOLEAN_OPERATION",
+      "TEXT",
+      "SECTION",
+      "SLICE",
+      "TABLE"
+    ],
+    "mixins": {
+      "layout": [
+        "x",
+        "y",
+        "width",
+        "height",
+        "rotation",
+        "resize()"
+      ],
+      "auto_layout": [
+        "layoutMode",
+        "primary/counter axis align",
+        "padding L/T/R/B",
+        "itemSpacing",
+        "layoutSizingHorizontal/Vertical: HUG|FILL|FIXED",
+        "layoutWrap"
+      ],
+      "auto_layout_child": [
+        "layoutAlign",
+        "layoutGrow",
+        "layoutPositioning ABSOLUTE"
+      ],
+      "grid": [
+        "tracks",
+        "gap",
+        "template (CSS grid)"
+      ],
+      "geometry": [
+        "fills[]",
+        "strokes[]",
+        "strokeWeight",
+        "strokeAlign"
+      ],
+      "blend": [
+        "opacity",
+        "blendMode",
+        "isMask",
+        "effects[] (drop/inner shadow, blur, noise, glass)"
+      ],
+      "corner": [
+        "cornerRadius",
+        "per-corner radius"
+      ],
+      "constraints": [
+        "MIN|CENTER|MAX|STRETCH|SCALE"
+      ],
+      "text": [
+        "characters",
+        "fontName",
+        "fontSize",
+        "lineHeight",
+        "letterSpacing",
+        "textAlign",
+        "styled segments"
+      ],
+      "reaction": [
+        "trigger + action (protótipo)"
+      ]
+    },
+    "paints": [
+      "SOLID",
+      "GRADIENT_LINEAR/RADIAL/ANGULAR/DIAMOND",
+      "IMAGE",
+      "VIDEO",
+      "PATTERN"
+    ],
+    "variables": {
+      "types": [
+        "COLOR",
+        "FLOAT",
+        "STRING",
+        "BOOLEAN"
+      ],
+      "collections_with_modes": true,
+      "applies_to": [
+        "fills",
+        "strokes",
+        "radius",
+        "spacing",
+        "size",
+        "text",
+        "visibility",
+        "component props"
+      ]
+    },
+    "styles": [
+      "PaintStyle",
+      "TextStyle",
+      "EffectStyle",
+      "GridStyle"
+    ]
+  },
+  "editing_tools": {
+    "align": {
+      "left": "Alt+A",
+      "h_center": "Alt+H",
+      "right": "Alt+D",
+      "top": "Alt+W",
+      "v_center": "Alt+V",
+      "bottom": "Alt+S",
+      "distribute": "h/v",
+      "tidy_up": true
+    },
+    "snapping": [
+      "snap to objects (smart guides vermelhas; S segura p/ desativar)",
+      "snap to pixel grid"
+    ],
+    "navigation": [
+      "setas pan",
+      "Ctrl +/- zoom",
+      "Tab/Shift+Tab entre filhos",
+      "Ctrl+Shift+? atalhos"
+    ],
+    "common_unconfirmed": [
+      "Shift+A auto-layout",
+      "Ctrl+G grupo",
+      "Ctrl+D duplicar",
+      "Ctrl+Z / Shift+Ctrl+Z"
+    ]
+  },
+  "prototyping": {
+    "model": "flows com starting point; connections hotspot→frame; triggers (click/drag/hover); actions (navigate, open URL, overlay, scroll, back); transitions (instant, dissolve, smart animate, slide) 1-10000ms + easing; presentation view"
+  },
+  "mcp": {
+    "server": "https://mcp.figma.com/mcp (remoto) + desktop local (Dev/Full seat)",
+    "tools_read": [
+      "get_design_context (React+Tailwind por padrão)",
+      "get_metadata (XML esparso)",
+      "get_screenshot",
+      "get_variable_defs",
+      "download_assets",
+      "get_motion_context",
+      "get_figjam",
+      "get_libraries",
+      "search_design_system",
+      "get_code_connect_map",
+      "whoami"
+    ],
+    "tools_write": [
+      "use_figma (executa JS da Plugin API; ≤10 ops; retorna ids)",
+      "generate_figma_design (captura UI de URL → frames editáveis)",
+      "create_new_file",
+      "upload_assets",
+      "generate_diagram",
+      "add_code_connect_map"
+    ],
+    "flow": "get_metadata (mapa leve) → get_design_context no nó exato → implementar; re-fetch por subárvore se truncar",
+    "use_figma_extensions": [
+      "node.query(seletor CSS-like)",
+      "node.set({...})",
+      "node.screenshot()",
+      "node.placeholder (shimmer)",
+      "figma.createAutoLayout()"
+    ]
+  },
+  "architecture": {
+    "renderer": "C++/WASM + WebGL tile-based próprio (rejeitaram DOM/SVG/Canvas)",
+    "multiplayer": "árvore com ids; last-writer-wins por propriedade; servidor autoritativo; parent como prop do filho; fractional indexing; offline com replay",
+    "file_format": ".fig = kiwi schema embutido + chunks deflate/zstd",
+    "replicable_small_scale": "HTML/CSS absoluto + flexbox cobre frame/auto-layout/fills/radius/effects quase 1:1; WebGL só p/ milhares de nós"
+  },
+  "non_functional": [
+    "60fps",
+    "~200 editores por doc",
+    "undo por snapshot explícito",
+    "load incremental por página",
+    "rate limits do MCP",
+    "atalhos sempre ativos"
+  ]
+}

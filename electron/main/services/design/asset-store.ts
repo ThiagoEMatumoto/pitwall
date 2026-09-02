@@ -1,0 +1,143 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { getDb } from '../db'
+import { prepareAssetBytes } from './asset-sanitize'
+import { MAX_ASSET_BYTES } from '../../../../shared/design/safety'
+import type { DesignAsset, DesignAssetMime } from '../../../../shared/types/design'
+
+// Design Studio binary assets, stored in SQLite as BLOBs. The bytes never
+// travel through the listing IPC: they only leave through the
+// pitwall-design://asset/<id> scheme (registered in the main protocol).
+
+export const ASSET_URL_PREFIX = 'pitwall-design://asset/'
+
+const ALLOWED_MIMES: ReadonlySet<string> = new Set<DesignAssetMime>([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/svg+xml',
+])
+
+export { MAX_ASSET_BYTES }
+export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+interface AssetRow {
+  id: string
+  document_id: string | null
+  name: string
+  mime: string
+  size: number
+  width: number | null
+  height: number | null
+  sha256: string
+  created_at: number
+}
+
+export interface AssetUploadInput {
+  documentId: string | null
+  name: string
+  mime: string
+  bytes: Buffer
+}
+
+function rowToAsset(row: AssetRow): DesignAsset {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    name: row.name,
+    mime: row.mime as DesignAssetMime,
+    size: row.size,
+    width: row.width,
+    height: row.height,
+    sha256: row.sha256,
+    url: `${ASSET_URL_PREFIX}${row.id}`,
+    createdAt: row.created_at,
+  }
+}
+
+const META_COLUMNS = 'id, document_id, name, mime, size, width, height, sha256, created_at'
+
+function findBySha(sha256: string, documentId: string | null): AssetRow | undefined {
+  return getDb()
+    .prepare(
+      `SELECT ${META_COLUMNS} FROM design_assets
+       WHERE sha256 = ? AND COALESCE(document_id, '') = ?`,
+    )
+    .get(sha256, documentId ?? '') as AssetRow | undefined
+}
+
+function usedBytes(documentId: string | null): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COALESCE(SUM(size), 0) AS total FROM design_assets
+       WHERE COALESCE(document_id, '') = ?`,
+    )
+    .get(documentId ?? '') as { total: number }
+  return row.total
+}
+
+export function upload(input: AssetUploadInput): DesignAsset {
+  if (!ALLOWED_MIMES.has(input.mime)) throw new Error(`asset mime not allowed: ${input.mime}`)
+  if (input.bytes.length === 0) throw new Error('asset is empty')
+  if (input.bytes.length > MAX_ASSET_BYTES) {
+    throw new Error(`asset exceeds ${MAX_ASSET_BYTES} bytes: ${input.bytes.length}`)
+  }
+  const bytes = prepareAssetBytes(input.mime as DesignAssetMime, input.bytes)
+
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  // Dedupe per scope: the same file sent twice to the same doc returns the
+  // existing record instead of doubling the database.
+  const existing = findBySha(sha256, input.documentId)
+  if (existing) return rowToAsset(existing)
+
+  if (usedBytes(input.documentId) + bytes.length > MAX_DOCUMENT_BYTES) {
+    throw new Error(`document asset quota exceeded (${MAX_DOCUMENT_BYTES} bytes)`)
+  }
+
+  const id = randomUUID()
+  getDb()
+    .prepare(
+      `INSERT INTO design_assets
+        (id, document_id, name, mime, bytes, size, width, height, sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+    )
+    .run(
+      id,
+      input.documentId,
+      input.name.trim() || 'asset',
+      input.mime,
+      bytes,
+      bytes.length,
+      sha256,
+      Date.now(),
+    )
+  return getMeta(id)!
+}
+
+export function getMeta(id: string): DesignAsset | null {
+  const row = getDb().prepare(`SELECT ${META_COLUMNS} FROM design_assets WHERE id = ?`).get(id) as
+    AssetRow | undefined
+  return row ? rowToAsset(row) : null
+}
+
+export function get(id: string): { mime: DesignAssetMime; bytes: Buffer } | null {
+  const row = getDb().prepare('SELECT mime, bytes FROM design_assets WHERE id = ?').get(id) as
+    { mime: string; bytes: Buffer } | undefined
+  if (!row) return null
+  return { mime: row.mime as DesignAssetMime, bytes: row.bytes }
+}
+
+// documentId null = only the shared ones.
+export function list(documentId: string | null): DesignAsset[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT ${META_COLUMNS} FROM design_assets
+       WHERE COALESCE(document_id, '') = ? ORDER BY created_at DESC`,
+    )
+    .all(documentId ?? '') as AssetRow[]
+  return rows.map(rowToAsset)
+}
+
+export function remove(id: string): void {
+  getDb().prepare('DELETE FROM design_assets WHERE id = ?').run(id)
+}

@@ -42,6 +42,10 @@ import type {
   StartMeetingInput,
   UpdateMeetingInput,
 } from './meetings'
+// Design Studio: tipos em ./design (o contrato é grande), re-exportados aqui
+// pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
+export type * from './design'
+import type { DesignApi } from './design'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -3015,4 +3019,5 @@ export interface Api {
   }
   video: VideoApi
   meetings: MeetingsApi
+  design: DesignApi
 }

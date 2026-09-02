@@ -1,0 +1,160 @@
+{
+  "product": "Paper (paper.design)",
+  "sources": [
+    "https://paper.design/docs/mcp",
+    "https://paper.design/docs/tokens",
+    "https://paper.design/docs/paste",
+    "https://paper.design/docs/support",
+    "https://paper.design/roadmap",
+    "https://paper.design/compare/figma",
+    "https://www.braintrust.dev/evals/paper-vs-figma-mcp",
+    "https://github.com/paper-design/shaders"
+  ],
+  "positioning": "Canvas infinito cujo documento é HTML/CSS real renderizado pelo DOM; elimina handoff design→código; agentes escrevem e leem o canvas via MCP local.",
+  "features": {
+    "canvas": [
+      "infinito com pan/zoom",
+      "artboards/frames",
+      "deep-select Cmd+clique",
+      "Enter entra nos filhos",
+      "Cmd+A seleciona irmãos",
+      "alinhamento Alt+W/A/S/D",
+      "distribuição",
+      "z-order com [ ]",
+      "opacidade por teclas 0-9"
+    ],
+    "tools_shortcuts": {
+      "move": "V",
+      "pan": "H",
+      "frame": "F",
+      "wrap_in_frame": "Shift+F",
+      "rectangle": "R",
+      "pen": "P",
+      "text": "T",
+      "shader": "S"
+    },
+    "primitives": [
+      "Frame (flex real)",
+      "Rectangle",
+      "Text",
+      "Image",
+      "Path (pen)",
+      "Shader (WebGL)"
+    ],
+    "not_yet": [
+      "componentes/variantes",
+      "CSS Grid",
+      "theme modes",
+      "responsive automático",
+      "prototipagem com transições (não confirmado)",
+      "múltiplas páginas (não confirmado)"
+    ],
+    "tokens": {
+      "model": "CSS variables mapeadas ao Tailwind",
+      "types": [
+        "color",
+        "radius",
+        "spacing",
+        "container",
+        "breakpoint",
+        "font-family",
+        "font-weight",
+        "font-size",
+        "line-height",
+        "letter-spacing"
+      ]
+    },
+    "color": [
+      "OkLCH/Oklab",
+      "sRGB e Display P3 por elemento"
+    ],
+    "effects": [
+      "Paper Shaders (mesh gradient, grain, halftone, liquid metal...) exportáveis como código"
+    ],
+    "import_paste": [
+      "imagens",
+      "SVG",
+      "texto",
+      "cola do Figma",
+      "cola de HTML vira layers editáveis",
+      "extensão Chrome Paper Snapshot"
+    ],
+    "export": [
+      "imagem Cmd+Shift+E",
+      "seleção como classes Tailwind Alt+T",
+      "JSX React+Tailwind ou inline styles",
+      "vídeo (Pro)"
+    ],
+    "collab": [
+      "multiplayer",
+      "comentários em thread",
+      "tabs multi-arquivo no desktop"
+    ],
+    "ai": [
+      "agente canvas-aware embutido",
+      "geração de imagem (Flux 2, Nano Banana Pro, OpenAI Image Edit, Seedream 4.5)"
+    ]
+  },
+  "technical": {
+    "document_model": "HTML/CSS/DOM nativo; flexbox real; fontes reais; output majoritariamente <div> com inline styles (46% divs no eval Braintrust)",
+    "layers_tree": "virtualizada para performance",
+    "desktop": "Paper Desktop (mac/win/linux) sobe servidor MCP local http://127.0.0.1:29979/mcp automaticamente; stack (Electron/Tauri) NÃO confirmada",
+    "sync": "mecanismo de propagação MCP→canvas não documentado (não confirmado)"
+  },
+  "mcp": {
+    "install": "claude mcp add paper --transport http http://127.0.0.1:29979/mcp --scope user",
+    "scope": "opera sobre o arquivo aberto no desktop",
+    "tools_read": [
+      "get_basic_info",
+      "get_selection",
+      "get_node_info",
+      "get_children",
+      "get_tree_summary",
+      "get_screenshot",
+      "get_jsx",
+      "get_computed_styles",
+      "get_fill_image",
+      "get_font_family_info"
+    ],
+    "tools_write": [
+      "create_artboard",
+      "write_html",
+      "set_text_content",
+      "rename_nodes",
+      "duplicate_nodes",
+      "move_nodes",
+      "update_styles",
+      "delete_nodes"
+    ],
+    "tools_util": [
+      "export",
+      "get_guide",
+      "finish_working_on_nodes"
+    ],
+    "how_agent_sees": [
+      "screenshot base64 1x/2x",
+      "JSX (React+Tailwind ou inline)",
+      "resumo hierárquico da árvore com profundidade limitada"
+    ],
+    "flow": "usuário seleciona → get_selection → agente lê nó/screenshot → write_html/update_styles → canvas atualiza ao vivo → agente tira screenshot p/ auto-correção (~3.4 por sessão) → finish_working_on_nodes",
+    "limits": {
+      "free": "100 tool calls/semana, imagem 25MB",
+      "pro": "US$20/mês, 1M calls/semana"
+    },
+    "eval": "Braintrust: 42% mais rápido que Figma MCP, 32% menor custo por ponto de qualidade, variância 1.9x menor"
+  },
+  "strengths": [
+    "zero drift design↔código",
+    "Tailwind idiomático",
+    "shaders GPU",
+    "agente escreve, não só lê"
+  ],
+  "weaknesses": [
+    "alpha instável",
+    "sem componentes",
+    "sem responsive",
+    "sem grid",
+    "sem plugins/templates",
+    "exige CSS"
+  ]
+}

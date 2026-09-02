@@ -9,6 +9,7 @@
 import * as z from 'zod/v4'
 import { serviceTools } from './service-tools'
 import { videoTools } from './video-tools'
+import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
 import { meetingTools } from './meeting-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
@@ -1473,6 +1474,7 @@ export function buildTools(
     ...repoPullTools(),
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
+    ...designTools(notify, ctx),
     ...videoTools(notify),
     ...meetingTools(notify),
     ...serviceTools(ctx),
