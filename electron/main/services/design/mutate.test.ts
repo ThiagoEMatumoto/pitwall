@@ -75,6 +75,35 @@ describe('mutate — setArtboard sizing and clamp warnings', () => {
     expect([result.artboard.width, result.artboard.height]).toEqual([1920, 1080])
   })
 
+  it('a patch equal to the row bumps nothing and still broadcasts, unless a snapshot is asked', () => {
+    const ab = newArtboard()
+    const send = vi.fn()
+    const same = applyArtboardOps({
+      artboardId: ab.id,
+      ops: [{ type: 'setArtboard', patch: { height: 900, width: 1440 } }],
+      author: 'human',
+      origin,
+      send,
+    })
+    expect(same.artboard.version).toBe(ab.version)
+    expect(same.artboard.updatedAt).toBe(ab.updatedAt)
+    expect(same.event.version).toBe(ab.version)
+    expect(send).toHaveBeenCalledWith('design:artboard-updated', same.event)
+    expect(store.getArtboard(ab.id)!.version).toBe(ab.version)
+
+    const snap = applyArtboardOps({
+      artboardId: ab.id,
+      ops: [],
+      author: 'claude',
+      origin,
+      snapshot: true,
+      summary: 'done',
+      send,
+    })
+    expect(snap.artboard.version).toBe(ab.version + 1)
+    expect(store.listVersions(ab.id)[0]?.version).toBe(ab.version + 1)
+  })
+
   it('persists sizing flow and ignores an unknown sizing with a warning', () => {
     const ab = newArtboard()
     const flow = applyArtboardOps({

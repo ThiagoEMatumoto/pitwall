@@ -151,6 +151,22 @@ describe('reportFlowHeight', () => {
     expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(1)
   })
 
+  it('a failed quiet persist keeps the undo history and does not resync', async () => {
+    state().commit('ab1', [{ type: 'setStyle', id: 'root', patch: { color: 'red' } }])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(canUndo('ab1')).toBe(true)
+    const getsBefore = mockApi.documentGet.mock.calls.length
+    mockApi.artboardApplyOps.mockRejectedValueOnce(new Error('artboard gone'))
+    state().reportFlowHeight('ab1', 2340)
+    await vi.advanceTimersByTimeAsync(FLOW_HEIGHT_PERSIST_MS)
+    expect(mockApi.artboardApplyOps).toHaveBeenCalledTimes(2)
+    expect(canUndo('ab1')).toBe(true)
+    expect(state().error).toBeNull()
+    expect(state().conflict).toBeNull()
+    expect(mockApi.documentGet.mock.calls.length).toBe(getsBefore)
+    expect(meta().height).toBe(2340)
+  })
+
   it('ignores sub-pixel changes, the flow minimum and fixed artboards', () => {
     state().reportFlowHeight('ab1', 600.4)
     expect(meta().height).toBe(600)

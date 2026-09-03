@@ -98,6 +98,35 @@ export async function shotViaTool(
   return { png, meta, file }
 }
 
+// RGBA of one pixel of a PNG, decoded by the renderer (no PNG decoder in
+// node): the evidence that a capture holds the whole layout, not a crop.
+export async function samplePng(
+  ctx: V2Ctx,
+  png: Buffer,
+  x: number,
+  y: number,
+): Promise<[number, number, number, number]> {
+  return ctx.page.evaluate(
+    ({ b64, x, y }) =>
+      new Promise<[number, number, number, number]>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => {
+          const c = document.createElement('canvas')
+          c.width = img.width
+          c.height = img.height
+          const g = c.getContext('2d')
+          if (!g) return reject(new Error('no 2d context'))
+          g.drawImage(img, 0, 0)
+          const d = g.getImageData(x, y, 1, 1).data
+          resolve([d[0], d[1], d[2], d[3]])
+        }
+        img.onerror = () => reject(new Error('png decode failed'))
+        img.src = `data:image/png;base64,${b64}`
+      }),
+    { b64: png.toString('base64'), x, y },
+  )
+}
+
 export async function fitAll(ctx: V2Ctx): Promise<void> {
   await ctx.page.getByTitle('Ajustar à tela (Ctrl+0)').click()
   await ctx.page.waitForTimeout(700)
@@ -153,9 +182,12 @@ export async function nodeAttrs(
     if (!el) return null
     const attrs: Record<string, string> = {}
     for (const a of Array.from(el.attributes)) attrs[a.name] = a.value
+    // A patched style is re-serialised by the browser ("--pw-dur: 600ms;");
+    // the rendered one is verbatim ("--pw-dur:600ms"). Compare without the spaces.
+    const style = (el.getAttribute('style') ?? '').replace(/:\s+/g, ':').replace(/;\s+/g, ';')
     return {
       attrs,
-      style: el.getAttribute('style') ?? '',
+      style,
       classes: Array.from(el.classList),
     }
   }, pwSelector(nodeId))

@@ -152,8 +152,8 @@ export function MotionSection({ target }: Props) {
             data-testid={MOTION_TESTIDS.warning}
             className="text-[10px] leading-snug text-[var(--color-warning)]"
           >
-            Este elemento tem <code>transform</code> no estilo; a animação sobrescreve esse valor
-            enquanto toca.
+            Este elemento tem <code>transform</code> no estilo; entrada e loop substituem esse
+            valor enquanto tocam (hover e parallax se somam a ele).
           </p>
         )}
 

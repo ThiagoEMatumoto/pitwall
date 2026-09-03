@@ -50,8 +50,10 @@ export function PreviewMode() {
   const mode = useDesignStore((s) => s.mode)
   const startId = useDesignStore((s) => s.previewArtboardId)
   if (mode !== 'preview' || !startId) return null
-  // Keyed so re-entering the preview starts a fresh history.
-  return <PreviewOverlay key={startId} startId={startId} />
+  // Not keyed by the artboard: navigating updates previewArtboardId, and a
+  // remount here would replace the player mid-transition. Leaving the
+  // preview unmounts the overlay, so re-entering still starts a fresh history.
+  return <PreviewOverlay startId={startId} />
 }
 
 function isEditableTarget(e: KeyboardEvent): boolean {

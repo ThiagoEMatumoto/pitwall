@@ -8,9 +8,11 @@ import { renderJsx } from '../design/export'
 import { renderNode } from '../../../../shared/design/html-render'
 import { findNode, summarize, summaryToText } from '../../../../shared/design/ops'
 import { treeHasMotion } from '../../../../shared/design/motion'
+import { newNonce } from '../../../../shared/design/ids'
 import { ARTBOARD_MAX_PX } from '../../../../shared/design/safety'
+import type { ArtboardMotionPose } from '../../../../shared/design/html-render'
 import { ok, type ToolDef, type ToolResult } from './tools'
-import { claudeOrigin, loadArtboard, schemas, type DesignToolDeps } from './design-tools-shared'
+import { loadArtboard, schemas, type DesignToolDeps } from './design-tools-shared'
 import type { DesignArtboard, DesignNode, DesignPage } from '../../../../shared/types/design'
 
 const DEFAULT_COMPUTED_PROPS = [
@@ -72,18 +74,23 @@ function requireNode(artboard: DesignArtboard, nodeId: string): DesignNode {
 
 // A capture of a flow artboard re-measures the content; storing that height
 // keeps the canvas, the tools and the next capture in agreement. No snapshot:
-// the tree did not change.
+// the tree did not change. Only the final pose counts: at 'initial' the
+// entrances still sit at their `from` pose and the layout is not the page's.
+// The origin is not the agent's: a measurement is no edit of Claude's for the
+// renderer to announce.
 function persistMeasuredHeight(
   deps: DesignToolDeps,
   artboard: DesignArtboard,
   measuredHeight: number | undefined,
+  motion: ArtboardMotionPose | undefined,
 ): void {
   if (measuredHeight === undefined || measuredHeight === artboard.height) return
+  if (motion === 'initial') return
   mutate.applyArtboardOps({
     artboardId: artboard.id,
     ops: [{ type: 'setArtboard', patch: { height: measuredHeight } }],
     author: 'claude',
-    origin: claudeOrigin(deps),
+    origin: { kind: 'human', sessionId: null, nonce: newNonce() },
     snapshot: false,
     send: deps.notify.broadcast.bind(deps.notify),
   })
@@ -236,7 +243,7 @@ export function readTools(deps: DesignToolDeps): ToolDef[] {
             `design_screenshot unavailable (${reason}). The Pitwall window must be running; use design_tree_summary or design_computed_styles meanwhile.`,
           )
         }
-        persistMeasuredHeight(deps, artboard, shot.measuredHeight)
+        persistMeasuredHeight(deps, artboard, shot.measuredHeight, motion)
         const version = designStore.getArtboard(artboardId)?.version ?? artboard.version
         const warnings: string[] = []
         if (shot.measuredHeight !== undefined && shot.measuredHeight >= ARTBOARD_MAX_PX) {

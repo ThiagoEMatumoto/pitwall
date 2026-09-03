@@ -141,11 +141,12 @@ export async function step10Export(ctx: V2Ctx): Promise<void> {
   }>('design_export', { artboardId: ctx.ids.landing, format: 'html' })
   const html = res.data ?? ''
   const standalone = html.toLowerCase().startsWith('<!doctype') && !html.includes('data-pw-id')
+  // The hero left step 7 as slide-up; the script compares indexes ('<').
   const motion =
     html.includes('id="pw-motion"') &&
-    html.includes('data-pw-m-in="fade"') &&
+    html.includes('data-pw-m-in="slide-up"') &&
     html.includes('data-pw-m-loop="marquee"') &&
-    /<script>[^<]*pw-m-play[^<]*<\/script>/.test(html)
+    /<script>(?:(?!<\/script>)[\s\S])*pw-m-play(?:(?!<\/script>)[\s\S])*<\/script>/.test(html)
   ctx.check(
     '10 export html: standalone, pw-motion sheet + minimal script, no data-pw-id',
     standalone && motion,

@@ -28,8 +28,14 @@ describe('MOTION_CSS', () => {
     )
     expect(MOTION_CSS).toContain('var(--pw-marquee-w,100%)')
     expect(MOTION_CSS).toContain(
-      '[data-pw-m-par]{will-change:transform;transform:translateY(calc(var(--pw-par-y,0)*1px))}',
+      '[data-pw-m-par]{will-change:translate;translate:0 calc(var(--pw-par-y,0)*1px)}',
     )
+  })
+
+  it('moves hover and parallax through translate/scale so an inline transform composes with them', () => {
+    expect(MOTION_CSS).toContain('[data-pw-m-hover="lift"]:hover{translate:0 calc(-4px*var(--pw-int,1))')
+    expect(MOTION_CSS).toContain('[data-pw-m-hover="scale"]:hover{scale:calc(1 + 0.04*var(--pw-int,1))}')
+    expect(MOTION_CSS).not.toMatch(/\[data-pw-m-(hover|par)[^{]*\{[^}]*transform:/)
   })
 
   it('freezes without a runtime (final/initial), honours reduced motion, defines the view transitions', () => {

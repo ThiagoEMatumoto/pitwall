@@ -37,12 +37,16 @@ const ENTRANCE_PRESETS_CSS =
   '@keyframes pw-in-blur{from{opacity:0;filter:blur(8px)}to{opacity:1;filter:blur(0)}}'
 
 // Hover is pure CSS; --pw-int scales the effect (1 = the preset as designed).
+// Lift, scale and parallax move through the individual translate/scale
+// properties, not transform: they compose with a transform in the user's
+// style (a rotate keeps rotating) and with the entrance/loop keyframes, which
+// animate transform, instead of losing to the inline declaration.
 const HOVER_CSS =
   '[data-pw-m-hover]{transition-duration:var(--pw-hdur,160ms);transition-timing-function:var(--pw-hease,cubic-bezier(0.16,1,0.3,1))}' +
-  '[data-pw-m-hover="lift"]{transition-property:transform,box-shadow}' +
-  '[data-pw-m-hover="lift"]:hover{transform:translateY(calc(-4px*var(--pw-int,1)));box-shadow:0 12px 24px -8px rgba(0,0,0,0.25)}' +
-  '[data-pw-m-hover="scale"]{transition-property:transform}' +
-  '[data-pw-m-hover="scale"]:hover{transform:scale(calc(1 + 0.04*var(--pw-int,1)))}' +
+  '[data-pw-m-hover="lift"]{transition-property:translate,box-shadow}' +
+  '[data-pw-m-hover="lift"]:hover{translate:0 calc(-4px*var(--pw-int,1));box-shadow:0 12px 24px -8px rgba(0,0,0,0.25)}' +
+  '[data-pw-m-hover="scale"]{transition-property:scale}' +
+  '[data-pw-m-hover="scale"]:hover{scale:calc(1 + 0.04*var(--pw-int,1))}' +
   '[data-pw-m-hover="glow"]{transition-property:box-shadow}' +
   '[data-pw-m-hover="glow"]:hover{box-shadow:0 0 calc(20px*var(--pw-int,1)) 0 currentColor}' +
   '[data-pw-m-hover="color"]{transition-property:filter}' +
@@ -64,7 +68,7 @@ const LOOP_CSS =
 
 // --pw-par-y (px, unitless) is written per scroll by the runtime.
 const PARALLAX_CSS =
-  '[data-pw-m-par]{will-change:transform;transform:translateY(calc(var(--pw-par-y,0)*1px))}'
+  '[data-pw-m-par]{will-change:translate;translate:0 calc(var(--pw-par-y,0)*1px)}'
 
 const STATIC_CSS =
   'html[data-pw-motion="final"] [data-pw-m-in]{animation:none}' +
@@ -76,7 +80,7 @@ const REDUCED_MOTION_CSS =
   '@media (prefers-reduced-motion:reduce){' +
   '[data-pw-m-in],[data-pw-m-loop],[data-pw-m-loop]>*{animation:none!important}' +
   '[data-pw-m-hover]{transition:none!important}' +
-  '[data-pw-m-par]{transform:none!important}' +
+  '[data-pw-m-par]{translate:none!important}' +
   '}'
 
 // View Transitions for the preview player: html[data-pw-vt="push"|"fade"|

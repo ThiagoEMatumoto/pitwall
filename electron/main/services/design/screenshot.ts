@@ -2,11 +2,10 @@ import { BrowserWindow, nativeImage } from 'electron'
 import { artboardUrl } from './protocol'
 import { captureCacheKey, lookupCapture, rememberCapture } from './screenshot-cache'
 import {
+  BitmapComposer,
   assertCaptureBudget,
   captureTimeoutMs,
-  composeBitmapTiles,
   planCaptureTiles,
-  type BitmapTile,
   type CapturePlan,
 } from './capture-plan'
 import {
@@ -162,8 +161,10 @@ function nodeRectScript(nodeId: string): string {
   })()`
 }
 
-const SCROLL_HEIGHT_SCRIPT =
-  'Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)'
+// The body's layout box, as the runtime measures it (hit.ts): scrollHeight
+// is floored at the window height and counts the transform overflow of
+// entrances still waiting at their `from` pose.
+const FLOW_HEIGHT_SCRIPT = 'document.body.offsetHeight'
 
 function clampFlowHeight(h: unknown): number {
   const n = typeof h === 'number' && Number.isFinite(h) ? Math.ceil(h) : MIN_FLOW_HEIGHT_PX
@@ -187,7 +188,7 @@ async function prepare(input: CaptureArtboardInput): Promise<Prepared> {
   let measuredHeight: number | undefined
   if (input.sizing === 'flow') {
     measuredHeight = clampFlowHeight(
-      await w.webContents.executeJavaScript(SCROLL_HEIGHT_SCRIPT, true),
+      await w.webContents.executeJavaScript(FLOW_HEIGHT_SCRIPT, true),
     )
     height = measuredHeight
   }
@@ -223,13 +224,21 @@ async function captureTile(
   return Buffer.from(data, 'base64')
 }
 
+interface Raster {
+  png: Buffer
+  // Device px of the composed bitmap: Chromium rounds each scaled clip
+  // itself, so this is what landed rather than the plan's outW/outH.
+  width: number
+  height: number
+}
+
 async function rasterize(
   w: BrowserWindow,
   rect: ClipRect,
   page: { width: number; height: number },
   scale: number,
   plan: CapturePlan,
-): Promise<Buffer> {
+): Promise<Raster> {
   const dbg = w.webContents.debugger
   if (!dbg.isAttached()) dbg.attach('1.3')
   await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
@@ -239,23 +248,21 @@ async function rasterize(
     mobile: false,
   })
   try {
-    if (plan.tiles.length === 1) return captureTile(dbg, rect, 0, plan.tiles[0].h)
-    const bitmaps: BitmapTile[] = []
-    let outW = plan.outW
-    for (const [i, tile] of plan.tiles.entries()) {
+    // Each tile is copied into the final bitmap as it arrives and dropped:
+    // the peak is one bitmap plus one tile, not every tile and their concat.
+    let composer: BitmapComposer | null = null
+    for (const tile of plan.tiles) {
       const img = nativeImage.createFromBuffer(await captureTile(dbg, rect, tile.y, tile.h))
       const size = img.getSize()
-      // Chromium rounds the scaled clip itself; trust the first tile's width.
-      if (i === 0) outW = size.width
-      bitmaps.push({ bitmap: img.toBitmap(), h: size.height })
+      composer ??= new BitmapComposer(size.width, plan.outH, plan.tiles.length)
+      composer.append({ bitmap: img.toBitmap(), h: size.height })
     }
-    const composed = composeBitmapTiles(bitmaps, outW)
-    return nativeImage
-      .createFromBitmap(composed.bitmap, {
-        width: composed.width,
-        height: composed.height,
-      })
+    if (!composer) throw new Error('design screenshot: empty capture plan')
+    const composed = composer.finish()
+    const png = nativeImage
+      .createFromBitmap(composed.bitmap, { width: composed.width, height: composed.height })
       .toPNG()
+    return { png, width: composed.width, height: composed.height }
   } finally {
     await dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => undefined)
   }
@@ -275,18 +282,12 @@ async function capture(input: CaptureArtboardInput): Promise<CaptureArtboardResu
   const plan = planCaptureTiles(planInput)
   assertCaptureBudget(planInput, plan)
   const page = { width: input.width, height: measuredHeight ?? input.height }
-  const png = await withTimeout(
+  const raster = await withTimeout(
     rasterize(w, rect, page, input.scale, plan),
     captureTimeoutMs(plan.tiles.length),
     'design screenshot',
   )
-  return {
-    png,
-    width: plan.outW,
-    height: plan.outH,
-    tiles: plan.tiles.length,
-    measuredHeight,
-  }
+  return { ...raster, tiles: plan.tiles.length, measuredHeight }
 }
 
 export function captureArtboard(input: CaptureArtboardInput): Promise<CaptureArtboardResult> {

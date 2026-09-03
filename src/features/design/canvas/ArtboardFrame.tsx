@@ -107,12 +107,15 @@ export function ArtboardFrame({ artboardId }: Props) {
         },
         tokens: s.doc?.tokens ?? {},
         fonts: s.doc?.fonts ?? [],
-        mode: s.mode,
+        // Always the editor's frame: the preview has its own player, and
+        // switching this iframe to preview mode would reload every artboard
+        // on the canvas when the preview opens and again when it closes.
+        mode: 'edit',
         sizing: state?.meta.sizing ?? 'fixed',
-        motion: s.mode === 'edit' && !s.interaction ? 'off' : 'on',
+        motion: s.interaction ? 'on' : 'off',
       }
     })
-    const url = artboardUrl(artboardId, docId, mode, token)
+    const url = artboardUrl(artboardId, docId, 'edit', token)
     // The effect re-runs when hasBridge flips on the same commit that set the
     // src; assigning the same URL again would abort the in-flight load and
     // start over (net::ERR_ABORTED). Only reloadNonce may repeat a URL.
@@ -121,7 +124,7 @@ export function ArtboardFrame({ artboardId }: Props) {
     loadedRef.current = { url, reloadNonce }
     setArtboardReady(artboardId, false)
     iframe.src = url
-  }, [artboardId, docId, mode, token, reloadNonce, setArtboardReady, hasBridge])
+  }, [artboardId, docId, token, reloadNonce, setArtboardReady, hasBridge])
 
   // Flow: the iframe is as tall as its content. The runtime reports the
   // scroll size on every reflow; the store grows the frame at once and

@@ -30,7 +30,7 @@ import * as liveState from '../design/live-state'
 import type { DesignMotion, DesignNodeSummary } from '../../../../shared/types/design'
 import { HOME_HTML, makeHarness, type ArtboardMeta } from './design-tools-test-support'
 
-const { call } = makeHarness()
+const { call, notify } = makeHarness()
 
 interface ArtboardMetaV2 extends ArtboardMeta {
   sizing: 'fixed' | 'flow'
@@ -263,12 +263,12 @@ describe('design tools v2 — flow artboards, motion and tiled screenshots', () 
       warnings: string[]
       version: number
       pngBase64: string
-    }>('design_screenshot', { artboardId: landing.id, motion: 'initial' })
+    }>('design_screenshot', { artboardId: landing.id, motion: 'final' })
     expect(captureArtboard).toHaveBeenCalledWith(
       expect.objectContaining({
         artboardId: landing.id,
         sizing: 'flow',
-        motion: 'initial',
+        motion: 'final',
         width: 1440,
         height: 600,
         scale: 1,
@@ -276,7 +276,7 @@ describe('design tools v2 — flow artboards, motion and tiled screenshots', () 
     )
     expect(shot).toMatchObject({
       sizing: 'flow',
-      motion: 'initial',
+      motion: 'final',
       tiles: 2,
       measuredHeight: 4200,
       warnings: [],
@@ -291,6 +291,18 @@ describe('design tools v2 — flow artboards, motion and tiled screenshots', () 
     // Height is metadata: no named version, tree untouched.
     expect(designStore.listVersions(landing.id).length).toBe(versionsBefore)
     expect(after.tree).toEqual(before.tree)
+    // A measurement is not an agent edit for the renderer to announce.
+    const persisted = notify.calls
+      .filter(
+        ([channel, evt]) =>
+          channel === 'design:artboard-updated' &&
+          (evt as { artboardId: string }).artboardId === landing.id,
+      )
+      .at(-1)
+    expect((persisted![1] as { origin: { kind: string }; version: number }).version).toBe(
+      after.version,
+    )
+    expect((persisted![1] as { origin: { kind: string } }).origin.kind).toBe('human')
 
     // Same height again: nothing to persist.
     captureArtboard.mockResolvedValueOnce({
@@ -305,6 +317,26 @@ describe('design tools v2 — flow artboards, motion and tiled screenshots', () 
     })
     expect(again.version).toBe(after.version)
     expect(again.motion).toBe('final')
+  })
+
+  it('design_screenshot at the initial pose reports the measure but never persists it', async () => {
+    captureArtboard.mockResolvedValueOnce({
+      png: Buffer.from([0x89]),
+      width: 1440,
+      height: 900,
+      tiles: 2,
+      measuredHeight: 900,
+    })
+    const before = designStore.getArtboard(landing.id)!
+    const shot = await call<{ measuredHeight?: number; version: number }>('design_screenshot', {
+      artboardId: landing.id,
+      motion: 'initial',
+    })
+    expect(shot.measuredHeight).toBe(900)
+    const after = designStore.getArtboard(landing.id)!
+    expect(after.height).toBe(before.height)
+    expect(after.version).toBe(before.version)
+    expect(shot.version).toBe(before.version)
   })
 
   it('design_screenshot warns when the content hits the height limit', async () => {

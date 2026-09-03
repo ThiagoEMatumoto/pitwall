@@ -116,11 +116,10 @@ export function CanvasStage() {
   const pageArtboardIds = pageArtboards.map((m) => m.id)
 
   // Selected / being edited / previewed / touched by an agent: always live.
-  const mounted = new Set(
-    stage.w === 0
-      ? pageArtboardIds
-      : visibleArtboardIds(pageArtboards, viewport, stage, LAZY_MOUNT_MARGIN),
-  )
+  // An unmeasured stage (first commit) mounts nothing: the ResizeObserver
+  // measures it right away, and a frame mounted now only to be swapped for
+  // a placeholder on the next commit would abort its load (net::ERR_ABORTED).
+  const mounted = new Set(visibleArtboardIds(pageArtboards, viewport, stage, LAZY_MOUNT_MARGIN))
   for (const id of [selectedArtboardId, textEditingArtboardId, previewArtboardId]) {
     if (id) mounted.add(id)
   }

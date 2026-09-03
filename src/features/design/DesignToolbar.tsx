@@ -121,7 +121,9 @@ export function DesignToolbar() {
   const inPreview = mode === 'preview'
 
   return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[var(--color-text-dim)]">
+    // @container: below 64rem the action labels give way to their icons, so
+    // Interagir/Preview stay reachable on a laptop with both side panels open.
+    <div className="@container flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[var(--color-text-dim)]">
       <div className="flex items-center gap-0.5">
         {TOOLS.map((t) => (
           <button
@@ -196,7 +198,7 @@ export function DesignToolbar() {
           agent badge and the actions on the right never get squeezed. */}
       <div className="flex min-w-[10rem] flex-1 items-center">{hasDoc && <DocTitle />}</div>
 
-      <div className="shrink-0">
+      <div className="min-w-0 shrink">
         <AgentActivityBadge />
       </div>
 
@@ -208,7 +210,7 @@ export function DesignToolbar() {
           onClick={() => setAskOpen(true)}
         >
           <Icon as={Sparkles} size={13} />
-          Ask Claude
+          <span className="hidden @5xl:inline">Ask Claude</span>
         </Button>
       )}
 
@@ -243,7 +245,7 @@ export function DesignToolbar() {
         }`}
       >
         <Icon as={MousePointerClick} size={13} />
-        Interagir
+        <span className="hidden @5xl:inline">Interagir</span>
       </button>
 
       <button
@@ -259,7 +261,7 @@ export function DesignToolbar() {
         }`}
       >
         <Icon as={inPreview ? X : Play} size={13} />
-        {inPreview ? 'Sair' : 'Preview'}
+        <span className="hidden @5xl:inline">{inPreview ? 'Sair' : 'Preview'}</span>
       </button>
     </div>
   )

@@ -169,9 +169,20 @@ export async function step9Preview(ctx: V2Ctx): Promise<void> {
     pwSelector(navId),
   )
   await clickAt(page, p)
-  // Two frames of the 300ms View Transition, straight after the click.
+  // The runtime marks <html data-pw-vt="smart"> for the 1000ms View
+  // Transition; seeing it is the evidence the swap animated in place.
+  let vtSeen = ''
+  const vtDeadline = Date.now() + 900
+  while (Date.now() < vtDeadline && vtSeen !== 'smart') {
+    vtSeen =
+      (await frame
+        .evaluate(() => document.documentElement.getAttribute('data-pw-vt') ?? '')
+        .catch(() => '')) || vtSeen
+  }
+  // Two frames of the transition, straight after the click.
   await screenshot(page, `${SHOT}-09-transition-a`)
   await screenshot(page, `${SHOT}-09-transition-b`)
+  ctx.check('9 smart link: View Transition ran in the player (data-pw-vt=smart)', vtSeen === 'smart', `seen=${vtSeen}`)
   const current = await waitForValue(() => select.inputValue(), ctx.ids.menu, 4000)
   await page.waitForTimeout(600)
   frame = await waitForPreviewFrame(page)

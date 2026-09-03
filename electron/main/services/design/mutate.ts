@@ -81,6 +81,13 @@ function sanitizeOp(op: DesignOp): DesignOp {
   return op
 }
 
+// True when every field of the patch already holds in the row.
+function isNoopPatch(artboard: DesignArtboard, patch: ArtboardPatch): boolean {
+  return (Object.keys(patch) as (keyof ArtboardPatch)[]).every(
+    (key) => patch[key] === undefined || patch[key] === artboard[key],
+  )
+}
+
 function clampPatch(patch: ArtboardPatch, warnings: string[]): ArtboardPatch {
   const next = { ...patch }
   for (const key of ['width', 'height'] as const) {
@@ -109,6 +116,23 @@ export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
   for (const op of params.ops) {
     if (op.type === 'setArtboard') Object.assign(artboardPatch, clampPatch(op.patch, warnings))
     else treeOps.push(sanitizeOp(op))
+  }
+
+  // A patch that changes nothing (a flow height re-measured to the value
+  // already stored) is not a write: no version bump, no updated_at. The
+  // event still goes out so the sender's pending nonce settles. A snapshot
+  // request (design_nodes_finish) is a write of its own and goes through.
+  if (treeOps.length === 0 && !params.snapshot && isNoopPatch(artboard, artboardPatch)) {
+    const event: ArtboardUpdatedEvent = {
+      docId,
+      artboardId: params.artboardId,
+      ops: params.ops,
+      version: artboard.version,
+      origin: params.origin,
+      full: false,
+    }
+    ;(params.send ?? notifyBroadcast)('design:artboard-updated', event)
+    return warnings.length ? { event, artboard, warnings } : { event, artboard }
   }
 
   const { tree } = applyOps(artboard.tree, treeOps)

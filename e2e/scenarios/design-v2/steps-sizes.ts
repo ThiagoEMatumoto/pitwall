@@ -6,7 +6,7 @@ import { waitForValue } from '../../driver/design'
 import { FONTS, TOKENS } from '../design-breads-do-breno/brand'
 import { MENU_HTML } from '../design-breads-do-breno/content-pages'
 import { LANDING_HTML, LANDING_MIN_HEIGHT, LANDING_NODES, POSTER_4K_HTML } from './content'
-import { fitAll, shotViaTool, SHOT, type V2Ctx } from './ctx'
+import { fitAll, samplePng, shotViaTool, SHOT, type V2Ctx } from './ctx'
 
 export const DOC_TITLE = 'Breads do Breno v2'
 const ARTBOARD_MAX_PX = 16384
@@ -101,9 +101,9 @@ export async function step1Build(ctx: V2Ctx): Promise<void> {
     nodeId: navId,
     targetArtboardId: ctx.ids.menu,
     transition: 'smart',
-    duration: 300,
+    duration: 1000,
   })
-  ctx.check('1 smart link Landing → Cardápio (300ms)', typeof link.version === 'number')
+  ctx.check('1 smart link Landing → Cardápio (1000ms)', typeof link.version === 'number')
 }
 
 // With the document open: the iframe grows with the content and the height
@@ -178,6 +178,16 @@ export async function step3Poster4k(ctx: V2Ctx): Promise<void> {
     '3 design_screenshot 4K at scale 1',
     shot.meta.width === 3840 && shot.meta.height === 2160 && shot.png.length > 0,
     `bytes=${shot.png.length} tiles=${shot.meta.tiles}`,
+  )
+  // The whole layout at 1x: the "Poster visual" box (x ≥ 2320) is a different
+  // colour from the page background. A capture copied from the 2x surface
+  // would show the top-left quarter only, all background there.
+  const bg = await samplePng(ctx, shot.png, 100, 100)
+  const visual = await samplePng(ctx, shot.png, 3200, 1080)
+  ctx.check(
+    '3 4K at 1x holds the whole layout (visual box differs from the background)',
+    bg.join(',') !== visual.join(','),
+    `bg=${bg.join(',')} visual=${visual.join(',')}`,
   )
 
   // 3840×2160 × 4² = 133 Mpx, above the 120 Mpx budget: refused before rendering.

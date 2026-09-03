@@ -42,7 +42,7 @@ Artboard sizes (use these unless asked otherwise):
 ${presetLines}
 Mobile and desktop are separate artboards; @media is allowed but a dedicated mobile artboard is what the human reviews.
 
-Landing pages and other long pages: create the artboard with sizing "flow" (Landing preset) and stack the sections in a flex column on the root — display:flex;flex-direction:column on the root, each <section> with its own padding. Never position:absolute the root or the sections; height comes from the content. A flow artboard taller than 4096 px is screenshotted in tiles (see the tiles count) — that is normal.`,
+Landing pages and other long pages: create the artboard with sizing "flow" (Landing preset) and stack the sections in a flex column on the root — display:flex;flex-direction:column on the root, each <section> with its own padding. Never position:absolute the root or the sections; height comes from the content. Every capture is composed from tiles (see the tiles count; tall flow artboards need more) — that is normal.`,
   },
   {
     n: 3,

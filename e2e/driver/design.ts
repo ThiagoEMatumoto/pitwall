@@ -21,8 +21,29 @@ function frameUrlMatches(f: Frame, artboardId: string, mode: 'edit' | 'preview')
   )
 }
 
-// Frame of one artboard. The canvas frame is `edit`; PreviewMode mounts a
-// second iframe for the same artboard with `mode=preview`.
+// The preview player's URL names the artboard it booted with; after a
+// navigate the runtime stamps the artboard on screen on <body>.
+async function frameShowsArtboard(f: Frame, artboardId: string): Promise<boolean> {
+  if (!f.url().includes('mode=preview')) return false
+  const shown = await f
+    .evaluate(() => document.body.getAttribute('data-pw-artboard'))
+    .catch(() => null)
+  return shown === artboardId
+}
+
+async function findArtboardFrame(
+  page: Page,
+  artboardId: string,
+  mode: 'edit' | 'preview',
+): Promise<Frame | undefined> {
+  const byUrl = page.frames().find((f) => frameUrlMatches(f, artboardId, mode))
+  if (byUrl || mode === 'edit') return byUrl
+  for (const f of page.frames()) if (await frameShowsArtboard(f, artboardId)) return f
+  return undefined
+}
+
+// Frame of one artboard. The canvas frame is `edit`; the preview is a single
+// player (`mode=preview`) that shows the artboard it navigated to.
 export async function waitForArtboardFrame(
   page: Page,
   artboardId: string,
@@ -31,7 +52,7 @@ export async function waitForArtboardFrame(
   const mode = opts.mode ?? 'edit'
   const deadline = Date.now() + (opts.timeoutMs ?? 10_000)
   while (Date.now() < deadline) {
-    const frame = page.frames().find((f) => frameUrlMatches(f, artboardId, mode))
+    const frame = await findArtboardFrame(page, artboardId, mode)
     if (frame) {
       const nodes = await frame
         .locator('[data-pw-id]')

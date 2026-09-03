@@ -27,10 +27,24 @@ export interface CapturePlan {
   pixels: number
 }
 
+// Never a single tile. Chromium's offscreen renderer only honours the
+// emulated deviceScaleFactor when the clip is smaller than the emulated
+// viewport: a clip covering the whole page is copied from the compositor's
+// surface at the display's native scale (a 1x capture on a 2x display comes
+// back as the top-left quarter at 2x). Two half-height tiles are always
+// re-rasterised at the requested scale. Measured on Electron 32 / Linux.
+const MIN_TILES = 2
+
 export function planCaptureTiles(input: CapturePlanInput): CapturePlan {
   const width = Math.max(1, Math.ceil(input.width))
   const height = Math.max(1, Math.ceil(input.height))
-  const tileMax = Math.max(1, Math.floor(input.tileMax ?? CAPTURE_TILE_MAX_PX))
+  const tileMax = Math.max(
+    1,
+    Math.min(
+      Math.floor(input.tileMax ?? CAPTURE_TILE_MAX_PX),
+      Math.ceil(height / MIN_TILES),
+    ),
+  )
   const tiles: CaptureTile[] = []
   for (let y = 0; y < height; y += tileMax) {
     tiles.push({ y, h: Math.min(tileMax, height - y) })

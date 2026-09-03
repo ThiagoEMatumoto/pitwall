@@ -171,8 +171,9 @@ export function hasMotion(node: Pick<DesignNode, 'motion'>): boolean {
   return !!node.motion && Object.keys(node.motion).length > 0
 }
 
-// The presets animate transform; a transform in the user's style is what
-// the animation would overwrite (entrance/hover) or fight (loop).
+// Entrance and loop keyframes animate transform, so a transform in the
+// user's style is replaced while they play; hover and parallax move through
+// translate/scale and compose with it.
 export function hasUserTransform(node: Pick<DesignNode, 'style'>): boolean {
   const value = getStyle(node.style, 'transform')
   return value != null && value.trim() !== '' && value.trim() !== 'none'

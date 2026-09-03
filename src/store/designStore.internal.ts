@@ -319,6 +319,9 @@ export function sendOps(
       bumpVersion(store, artboardId, evt.version)
     } catch (err) {
       pendingNonces.delete(nonce)
+      // A quiet write carries a measurement, not an edit: losing it costs
+      // nothing the human did, so the undo history and the tree stay put.
+      if (opts.quiet) return
       dropLocalPending(artboardId)
       if (isVersionConflict(err)) {
         store.setState({ conflict: { artboardId } })

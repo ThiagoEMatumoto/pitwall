@@ -78,6 +78,8 @@ export async function navigate(msg: NavigateMessage, current: DesignNode | null)
       : { from: new Map<string, string>(), to: new Map<string, string>() }
   const swap = (): void => {
     renderBody(msg.tree, size)
+    // The body keeps naming the artboard it shows (readConfig / tooling).
+    document.body.setAttribute('data-pw-artboard', msg.artboardId)
     applyNames(pairs.to)
   }
   // jsdom and old engines have no startViewTransition: instant swap.
