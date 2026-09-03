@@ -116,6 +116,23 @@ export function rectCenter(rect: Rect): Point {
   return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 }
 }
 
+// Artboards whose frame meets the stage grown by `marginFactor` stage sizes
+// on every side: what the canvas keeps mounted (the rest are placeholders).
+export function visibleArtboardIds(
+  metas: readonly (ArtboardPlacement & { id: string })[],
+  vp: Viewport,
+  stage: Size,
+  marginFactor = 1,
+): string[] {
+  const band = {
+    x: -stage.w * marginFactor,
+    y: -stage.h * marginFactor,
+    w: stage.w * (1 + marginFactor * 2),
+    h: stage.h * (1 + marginFactor * 2),
+  }
+  return metas.filter((m) => rectsIntersect(artboardScreenRect(m, vp), band)).map((m) => m.id)
+}
+
 // ---- viewport ----
 
 // New viewport with `zoom`, keeping the canvas point under `anchor` (screen) fixed.

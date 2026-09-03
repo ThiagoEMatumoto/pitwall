@@ -99,6 +99,7 @@ function makeArtboard(over: Partial<DesignArtboard> = {}): DesignArtboard {
     y: 0,
     width: 1440,
     height: 900,
+    sizing: 'fixed',
     tree: makeTree(),
     version: 3,
     position: 0,

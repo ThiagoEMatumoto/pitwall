@@ -6,8 +6,6 @@ import * as designStore from '../design/design-store'
 import * as liveState from '../design/live-state'
 import { newNonce } from '../../../../shared/design/ids'
 import {
-  ARTBOARD_MAX_PX,
-  ARTBOARD_MIN_PX,
   MAX_ASSET_BASE64_CHARS,
   MAX_GLOBAL_CSS_BYTES,
   MAX_HTML_BYTES,
@@ -15,6 +13,15 @@ import {
   MAX_SUMMARY_CHARS,
   MAX_TOKEN_KEYS,
 } from '../../../../shared/design/safety'
+import {
+  EASINGS,
+  ENTRANCE_PRESETS,
+  ENTRANCE_TRIGGERS,
+  HOVER_PRESETS,
+  LOOP_DIRECTIONS,
+  LOOP_PRESETS,
+  MOTION_RANGES,
+} from '../../../../shared/design/motion'
 import type { McpNotify, McpRequestContext, ToolDef } from './tools'
 import type {
   DesignAgentActivity,
@@ -166,7 +173,48 @@ const name = z.string().min(1).max(MAX_NAME_CHARS)
 const summary = z.string().min(1).max(MAX_SUMMARY_CHARS)
 const html = z.string().min(1).max(MAX_HTML_BYTES)
 const globalCss = z.string().max(MAX_GLOBAL_CSS_BYTES)
-const artboardPx = z.number().int().min(ARTBOARD_MIN_PX).max(ARTBOARD_MAX_PX)
+// Sizes are clamped to ARTBOARD_MIN_PX..ARTBOARD_MAX_PX by the store; the
+// tool reports the clamp as a warning instead of refusing the call.
+const artboardPx = z.number().int().min(1)
+const sizing = z.enum(['fixed', 'flow'])
+const easing = z.enum(EASINGS)
+
+function ranged(key: keyof typeof MOTION_RANGES) {
+  const [min, max] = MOTION_RANGES[key]
+  return z.number().min(min).max(max)
+}
+
+// Mirrors shared/design/motion.ts: every field but the preset is optional and
+// normalizeMotion fills the defaults; the ranges here fail fast with a
+// readable message instead of a silent clamp.
+const entranceSchema = z.object({
+  preset: z.enum(ENTRANCE_PRESETS),
+  trigger: z.enum(ENTRANCE_TRIGGERS).optional(),
+  duration: ranged('duration').optional(),
+  delay: ranged('delay').optional(),
+  easing: easing.optional(),
+  distance: ranged('distance').optional(),
+  stagger: ranged('stagger').optional(),
+})
+const hoverSchema = z.object({
+  preset: z.enum(HOVER_PRESETS),
+  duration: ranged('duration').optional(),
+  easing: easing.optional(),
+  intensity: ranged('intensity').optional(),
+})
+const loopSchema = z.object({
+  preset: z.enum(LOOP_PRESETS),
+  duration: ranged('loopDuration').optional(),
+  direction: z.enum(LOOP_DIRECTIONS).optional(),
+})
+const parallaxSchema = z.object({ factor: ranged('factor') })
+
+export const motionSchema = z.object({
+  entrance: entranceSchema.nullable().optional(),
+  hover: hoverSchema.nullable().optional(),
+  loop: loopSchema.nullable().optional(),
+  parallax: parallaxSchema.nullable().optional(),
+})
 
 export const tokensSchema = z.object({
   color: tokenGroup.optional(),
@@ -210,6 +258,7 @@ export const schemas = {
     artboardId,
     scale: z.union([z.literal(1), z.literal(2)]).default(1),
     nodeId: id.optional(),
+    motion: z.enum(['final', 'initial']).default('final'),
   }),
   htmlGet: z.object({
     artboardId,
@@ -228,16 +277,24 @@ export const schemas = {
     globalCss: globalCss.optional(),
     links: z.array(z.object({ parentType, parentId: z.string().min(1) })).optional(),
   }),
-  artboardCreate: z.object({
-    docId,
-    pageId: id.optional(),
-    name,
-    width: artboardPx,
-    height: artboardPx,
-    x: z.number().optional(),
-    y: z.number().optional(),
-    html: html.optional(),
-  }),
+  artboardCreate: z
+    .object({
+      docId,
+      pageId: id.optional(),
+      name,
+      width: artboardPx,
+      // Required for fixed; a flow artboard starts at the default height and
+      // grows with its content.
+      height: artboardPx.optional(),
+      sizing: sizing.default('fixed'),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      html: html.optional(),
+    })
+    .refine((a) => a.sizing === 'flow' || a.height !== undefined, {
+      message: 'height is required for a fixed artboard (omit it only with sizing "flow")',
+      path: ['height'],
+    }),
   writeHtml: z.object({
     artboardId,
     html,
@@ -285,14 +342,24 @@ export const schemas = {
     artboardId,
     nodeId: id,
     targetArtboardId: artboardId.nullable(),
-    transition: z.enum(['none', 'push', 'fade']).default('none'),
+    transition: z.enum(['none', 'push', 'fade', 'smart']).default('none'),
+    duration: ranged('duration').int().optional(),
+    easing: easing.optional(),
+  }),
+  motionSet: z.object({
+    artboardId,
+    items: z
+      .array(z.object({ id, motion: motionSchema.nullable() }))
+      .min(1)
+      .max(200),
+    summary: summary.optional(),
   }),
   export: z.object({
     artboardId,
     format: z.enum(['png', 'html', 'jsx']).default('html'),
     scale: z.union([z.literal(1), z.literal(2)]).default(1),
   }),
-  guide: z.object({ section: z.number().int().min(1).max(9).optional() }),
+  guide: z.object({ section: z.number().int().min(1).max(10).optional() }),
   nodesFinish: z.object({
     artboardId,
     ids: z.array(id).optional(),

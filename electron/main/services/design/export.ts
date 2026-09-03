@@ -5,7 +5,12 @@ import * as designStore from './design-store'
 import * as assetStore from './asset-store'
 import { captureArtboard } from './screenshot'
 import { renderStandaloneHtml } from '../../../../shared/design/html-render'
-import type { DesignArtboard, DesignDocument, DesignNode } from '../../../../shared/types/design'
+import type {
+  DesignArtboard,
+  DesignDocument,
+  DesignExportScale,
+  DesignNode,
+} from '../../../../shared/types/design'
 
 interface Loaded {
   artboard: DesignArtboard
@@ -136,7 +141,8 @@ export function exportArtboardJsx(artboardId: string): ExportTextResult {
 
 export interface ExportPngInput {
   artboardId: string
-  scale?: 1 | 2
+  // Refused (before any rendering) when width*height*scale² is over MAX_CAPTURE_PIXELS.
+  scale?: DesignExportScale
   nodeId?: string
 }
 
@@ -144,6 +150,8 @@ export interface ExportPngResult {
   pngBase64: string
   width: number
   height: number
+  // Flow artboards: content height (css px) the capture laid out.
+  measuredHeight?: number
 }
 
 export async function exportArtboardPng(input: ExportPngInput): Promise<ExportPngResult> {
@@ -153,6 +161,7 @@ export async function exportArtboardPng(input: ExportPngInput): Promise<ExportPn
     docId: doc.id,
     width: artboard.width,
     height: artboard.height,
+    sizing: artboard.sizing,
     scale: input.scale ?? 1,
     version: artboard.version,
     docUpdatedAt: doc.updatedAt,
@@ -162,5 +171,6 @@ export async function exportArtboardPng(input: ExportPngInput): Promise<ExportPn
     pngBase64: shot.png.toString('base64'),
     width: shot.width,
     height: shot.height,
+    ...(shot.measuredHeight != null ? { measuredHeight: shot.measuredHeight } : {}),
   }
 }

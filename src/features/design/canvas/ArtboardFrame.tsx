@@ -1,6 +1,7 @@
 // One artboard on the stage: a draggable name label, the sandboxed iframe
 // running the design runtime, and the InteractionLayer that sits over it in
-// edit mode. Owns the ArtboardBridge lifecycle for this iframe.
+// edit mode (lifted in interaction mode, when the iframe takes the pointer
+// and motion plays). Owns the ArtboardBridge lifecycle for this iframe.
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { registerBridge, useDesignStore } from '@/store/designStore'
@@ -46,6 +47,10 @@ export function ArtboardFrame({ artboardId }: Props) {
     s.selection.artboardId === artboardId ? s.selection.nodeIds : null,
   )
   const agentNodeIds = useDesignStore((s) => s.agentActivity[artboardId])
+  const interaction = useDesignStore((s) => s.interaction)
+  const sizing = useDesignStore((s) => s.artboards[artboardId]?.meta.sizing)
+  const metaHeight = useDesignStore((s) => s.artboards[artboardId]?.meta.height)
+  const reportFlowHeight = useDesignStore((s) => s.reportFlowHeight)
   const setArtboardReady = useDesignStore((s) => s.setArtboardReady)
   const endTextEdit = useDesignStore((s) => s.endTextEdit)
   const select = useDesignStore((s) => s.select)
@@ -102,10 +107,15 @@ export function ArtboardFrame({ artboardId }: Props) {
         },
         tokens: s.doc?.tokens ?? {},
         fonts: s.doc?.fonts ?? [],
-        mode: s.mode,
+        // Always the editor's frame: the preview has its own player, and
+        // switching this iframe to preview mode would reload every artboard
+        // on the canvas when the preview opens and again when it closes.
+        mode: 'edit',
+        sizing: state?.meta.sizing ?? 'fixed',
+        motion: s.interaction ? 'on' : 'off',
       }
     })
-    const url = artboardUrl(artboardId, docId, mode, token)
+    const url = artboardUrl(artboardId, docId, 'edit', token)
     // The effect re-runs when hasBridge flips on the same commit that set the
     // src; assigning the same URL again would abort the in-flight load and
     // start over (net::ERR_ABORTED). Only reloadNonce may repeat a URL.
@@ -114,7 +124,25 @@ export function ArtboardFrame({ artboardId }: Props) {
     loadedRef.current = { url, reloadNonce }
     setArtboardReady(artboardId, false)
     iframe.src = url
-  }, [artboardId, docId, mode, token, reloadNonce, setArtboardReady, hasBridge])
+  }, [artboardId, docId, token, reloadNonce, setArtboardReady, hasBridge])
+
+  // Flow: the iframe is as tall as its content. The runtime reports the
+  // scroll size on every reflow; the store grows the frame at once and
+  // persists the height once it settles.
+  useEffect(() => {
+    const bridge = bridgeRef.current
+    if (!bridge || sizing !== 'flow') return
+    return bridge.on('contentSize', (msg) => reportFlowHeight(artboardId, msg.h))
+  }, [artboardId, sizing, reportFlowHeight, hasBridge])
+
+  // Interaction: motion plays and, since the canvas never scrolls the iframe,
+  // the whole artboard counts as in view (in-view entrances play like load).
+  useEffect(() => {
+    const bridge = bridgeRef.current
+    if (!bridge || mode !== 'edit') return
+    bridge.setMotionMode(interaction ? 'on' : 'off')
+    if (interaction && metaHeight) bridge.scroll(0, metaHeight)
+  }, [interaction, mode, metaHeight, hasBridge])
 
   // Narrow rectsChanged to the nodes the overlay draws and prime the cache.
   useEffect(() => {
@@ -228,18 +256,54 @@ export function ArtboardFrame({ artboardId }: Props) {
         style={{
           width: meta.width,
           height: meta.height,
-          pointerEvents: mode === 'edit' ? 'none' : 'auto',
+          pointerEvents: mode === 'edit' && !interaction ? 'none' : 'auto',
           boxShadow:
             '0 0 0 1px var(--color-border), 0 8px 24px color-mix(in srgb, var(--color-bg) 60%, transparent)',
         }}
       />
 
-      {mode === 'edit' && hasBridge && (
+      {mode === 'edit' && !interaction && hasBridge && (
         <>
           <InteractionLayer artboardId={artboardId} bridge={bridgeRef.current!} />
           <ArtboardOverflowBadge artboardId={artboardId} bridge={bridgeRef.current!} />
         </>
       )}
+    </div>
+  )
+}
+
+// What the stage shows for an artboard far outside the viewport: the frame's
+// footprint and name, no iframe (each one is a renderer process).
+export function ArtboardPlaceholder({ artboardId }: Props) {
+  const meta = useDesignStore((s) => s.artboards[artboardId]?.meta)
+  const zoom = useDesignStore((s) => s.viewport.zoom)
+  if (!meta) return null
+  return (
+    <div
+      className="absolute"
+      style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }}
+      {...{ [DESIGN_TESTIDS.artboard]: artboardId }}
+      data-placeholder=""
+    >
+      <div
+        className="absolute left-0 select-none overflow-hidden text-ellipsis whitespace-nowrap text-[11px] leading-5 text-[var(--color-text-muted)]"
+        style={{
+          top: -LABEL_HEIGHT / zoom,
+          height: LABEL_HEIGHT / zoom,
+          maxWidth: meta.width * zoom,
+          transform: `scale(${1 / zoom})`,
+          transformOrigin: 'left top',
+        }}
+      >
+        {meta.name}
+      </div>
+      <div
+        className="h-full w-full"
+        style={{
+          background: 'var(--color-surface-2)',
+          boxShadow: '0 0 0 1px var(--color-border)',
+        }}
+      />
     </div>
   )
 }

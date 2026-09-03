@@ -2,7 +2,7 @@
 // renderer (designStore) and the iframe runtime, so no DOM/electron here.
 // Every function returns a new tree; the input is never mutated.
 
-import type { DesignArtboard, DesignNode, DesignOp } from '../types/design'
+import type { DesignArtboard, DesignMotion, DesignNode, DesignOp } from '../types/design'
 import { newNodeId } from './ids'
 
 // Re-exported so callers keep one import surface for tree utilities.
@@ -21,7 +21,9 @@ export interface IndexEntry {
   parentId: string | null
 }
 
-export type ArtboardPatch = Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>>
+export type ArtboardPatch = Partial<
+  Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name' | 'sizing'>
+>
 
 // ---- Traversal ----
 
@@ -241,6 +243,14 @@ export function applyOp(tree: DesignNode, op: DesignOp): { tree: DesignNode; tou
         }),
         touched: [op.id],
       }
+    case 'setMotion':
+      return {
+        tree: updateAt(tree, op.id, (node) => {
+          const { motion: _motion, ...rest } = node
+          return op.motion ? { ...rest, motion: cloneMotion(op.motion) } : rest
+        }),
+        touched: [op.id],
+      }
     case 'replaceTree':
       return { tree: op.tree, touched: [op.tree.id] }
     case 'setArtboard':
@@ -305,6 +315,10 @@ export function invertOp(tree: DesignNode, op: DesignOp, current?: ArtboardPatch
       return [{ type: 'rename', id: op.id, name: requireNode(tree, op.id).node.name ?? '' }]
     case 'setLink':
       return [{ type: 'setLink', id: op.id, link: requireNode(tree, op.id).node.link ?? null }]
+    case 'setMotion':
+      return [
+        { type: 'setMotion', id: op.id, motion: requireNode(tree, op.id).node.motion ?? null },
+      ]
     case 'replaceTree':
       return [{ type: 'replaceTree', tree }]
     case 'setArtboard': {
@@ -348,15 +362,27 @@ export function cloneWithNewIds(node: DesignNode): {
       style: { ...source.style },
       attrs: { ...source.attrs },
       link: source.link ? { ...source.link } : undefined,
+      motion: source.motion ? cloneMotion(source.motion) : undefined,
       children: source.children.map(clone),
     }
   }
   const cloned = clone(node)
-  return { node: stripUndefinedLink(cloned), idMap }
+  return { node: stripUndefined(cloned), idMap }
 }
 
-function stripUndefinedLink(node: DesignNode): DesignNode {
-  const next = { ...node, children: node.children.map(stripUndefinedLink) }
+// Sections are flat objects: a spread per section is a deep copy.
+export function cloneMotion(motion: DesignMotion): DesignMotion {
+  const next: DesignMotion = {}
+  if (motion.entrance) next.entrance = { ...motion.entrance }
+  if (motion.hover) next.hover = { ...motion.hover }
+  if (motion.loop) next.loop = { ...motion.loop }
+  if (motion.parallax) next.parallax = { ...motion.parallax }
+  return next
+}
+
+function stripUndefined(node: DesignNode): DesignNode {
+  const next = { ...node, children: node.children.map(stripUndefined) }
   if (next.link === undefined) delete next.link
+  if (next.motion === undefined) delete next.motion
   return next
 }

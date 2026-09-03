@@ -10,6 +10,7 @@ import {
   Maximize2,
   Minus,
   MousePointer2,
+  MousePointerClick,
   Play,
   Plus,
   Sparkles,
@@ -106,6 +107,8 @@ export function DesignToolbar() {
   const mode = useDesignStore((s) => s.mode)
   const startPreview = useDesignStore((s) => s.startPreview)
   const exitPreview = useDesignStore((s) => s.exitPreview)
+  const interaction = useDesignStore((s) => s.interaction)
+  const setInteraction = useDesignStore((s) => s.setInteraction)
   const setAskOpen = useDesignStore((s) => s.setAskOpen)
   const hasDoc = useDesignStore((s) => s.docId !== null)
   const previewTarget = useDesignStore(
@@ -118,7 +121,9 @@ export function DesignToolbar() {
   const inPreview = mode === 'preview'
 
   return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[var(--color-text-dim)]">
+    // @container: below 64rem the action labels give way to their icons, so
+    // Interagir/Preview stay reachable on a laptop with both side panels open.
+    <div className="@container flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[var(--color-text-dim)]">
       <div className="flex items-center gap-0.5">
         {TOOLS.map((t) => (
           <button
@@ -193,7 +198,7 @@ export function DesignToolbar() {
           agent badge and the actions on the right never get squeezed. */}
       <div className="flex min-w-[10rem] flex-1 items-center">{hasDoc && <DocTitle />}</div>
 
-      <div className="shrink-0">
+      <div className="min-w-0 shrink">
         <AgentActivityBadge />
       </div>
 
@@ -205,7 +210,7 @@ export function DesignToolbar() {
           onClick={() => setAskOpen(true)}
         >
           <Icon as={Sparkles} size={13} />
-          Ask Claude
+          <span className="hidden @5xl:inline">Ask Claude</span>
         </Button>
       )}
 
@@ -224,6 +229,27 @@ export function DesignToolbar() {
 
       <button
         type="button"
+        data-testid="design-interact"
+        disabled={!hasDoc || inPreview}
+        aria-pressed={interaction}
+        onClick={() => setInteraction(!interaction)}
+        title={
+          interaction
+            ? 'Sair do modo interagir (Esc)'
+            : 'Interagir: clicar, passar o mouse e ver as animações no canvas'
+        }
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition disabled:opacity-40 ${
+          interaction
+            ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]'
+            : 'border-[var(--color-border)] hover:border-[var(--color-accent)]/60 hover:text-[var(--color-text)]'
+        }`}
+      >
+        <Icon as={MousePointerClick} size={13} />
+        <span className="hidden @5xl:inline">Interagir</span>
+      </button>
+
+      <button
+        type="button"
         data-testid={DESIGN_TESTIDS.previewButton}
         disabled={!hasDoc || (!inPreview && !previewTarget)}
         onClick={() => (inPreview ? exitPreview() : previewTarget && startPreview(previewTarget))}
@@ -235,7 +261,7 @@ export function DesignToolbar() {
         }`}
       >
         <Icon as={inPreview ? X : Play} size={13} />
-        {inPreview ? 'Sair' : 'Preview'}
+        <span className="hidden @5xl:inline">{inPreview ? 'Sair' : 'Preview'}</span>
       </button>
     </div>
   )

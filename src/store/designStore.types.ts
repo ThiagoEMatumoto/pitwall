@@ -41,6 +41,8 @@ export interface CommitOptions {
   coalesceKey?: string
   snapshot?: boolean
   summary?: string
+  // Persist only (a measured flow height): no human snapshot, no baseVersion.
+  quiet?: boolean
 }
 
 export interface TextEditEnd {
@@ -67,6 +69,9 @@ export interface DesignState {
   error: string | null
   previewArtboardId: string | null
   mode: 'edit' | 'preview'
+  // Edit mode with live artboards: pointer events reach the iframes, motion
+  // plays (motionMode on). Esc or the toolbar leaves it.
+  interaction: boolean
   askOpen: boolean
   // Bumps when fonts/globalCss change: iframes must reload, not just re-init.
   reloadNonce: number
@@ -84,6 +89,9 @@ export interface DesignState {
   createPage: (name: string) => Promise<void>
   createArtboard: (preset: ArtboardPreset) => Promise<DesignArtboard>
   updateArtboardMeta: (artboardId: string, patch: ArtboardPatch) => void
+  // Flow artboard: the runtime measured its content. Local height moves at
+  // once; the persist is coalesced and quiet (no undo, no snapshot).
+  reportFlowHeight: (artboardId: string, height: number) => void
   setArtboardReady: (artboardId: string, ready: boolean) => void
   commit: (artboardId: string, ops: DesignOp[], opts?: CommitOptions) => void
   // Ends a gesture that never committed: reverts its transient ops.
@@ -111,6 +119,7 @@ export interface DesignState {
   startPreview: (artboardId: string) => void
   navigatePreview: (artboardId: string) => void
   exitPreview: () => void
+  setInteraction: (on: boolean) => void
   setAskOpen: (open: boolean) => void
   startWatch: () => void
   stopWatch: () => void

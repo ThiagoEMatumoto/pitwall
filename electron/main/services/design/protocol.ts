@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { app, protocol, type WebContents } from 'electron'
 import {
   buildArtboardDocument,
+  isMotionPose,
+  type ArtboardMotionPose,
   type ArtboardRenderMode,
 } from '../../../../shared/design/html-render'
 import type { DesignArtboard, DesignAsset, DesignDocument } from '../../../../shared/types/design'
@@ -18,7 +20,14 @@ export const DESIGN_SCHEME = 'pitwall-design'
 const RENDER_MODES: ReadonlySet<string> = new Set(['edit', 'shot', 'preview'])
 
 export type DesignRoute =
-  | { kind: 'artboard'; id: string; docId: string; mode: ArtboardRenderMode }
+  | {
+      kind: 'artboard'
+      id: string
+      docId: string
+      mode: ArtboardRenderMode
+      // ?motion=initial|final (omitted = final).
+      motion: ArtboardMotionPose
+    }
   | { kind: 'asset'; id: string }
   | { kind: 'notFound' }
 
@@ -46,8 +55,9 @@ export function routeDesignUrl(raw: string): DesignRoute {
     case 'artboard': {
       const docId = url.searchParams.get('doc')
       const mode = url.searchParams.get('mode') ?? 'edit'
-      if (!docId || !RENDER_MODES.has(mode)) return { kind: 'notFound' }
-      return { kind: 'artboard', id, docId, mode: mode as ArtboardRenderMode }
+      const motion = url.searchParams.get('motion') ?? 'final'
+      if (!docId || !RENDER_MODES.has(mode) || !isMotionPose(motion)) return { kind: 'notFound' }
+      return { kind: 'artboard', id, docId, mode: mode as ArtboardRenderMode, motion }
     }
     case 'asset':
       return { kind: 'asset', id }
@@ -61,9 +71,11 @@ export function artboardUrl(
   docId: string,
   mode: ArtboardRenderMode,
   token?: string,
+  motion?: ArtboardMotionPose,
 ): string {
   const params = new URLSearchParams({ doc: docId, mode })
   if (token) params.set('t', token)
+  if (motion && motion !== 'final') params.set('motion', motion)
   return `${DESIGN_SCHEME}://artboard/${encodeURIComponent(artboardId)}?${params.toString()}`
 }
 
@@ -168,6 +180,7 @@ export function createDesignProtocolHandler(
       runtimeJs: runtimeJsCache,
       nonce,
       mode: route.mode,
+      motion: route.motion,
     })
     return new Response(html, {
       status: 200,

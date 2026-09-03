@@ -38,7 +38,7 @@ function utilTools(deps: DesignToolDeps): ToolDef[] {
       name: 'design_guide',
       title: 'Design Studio guide',
       description:
-        'READ FIRST. How to work in the Design Studio: required flow, model, which tool for which edit, accepted HTML, tokens/fonts, assets, self-correction, prototype links, common mistakes. Optional section 1-9.',
+        'READ FIRST. How to work in the Design Studio: required flow, model, which tool for which edit, accepted HTML, tokens/fonts, assets, self-correction, prototype links, common mistakes. Optional section 1-10.',
       inputSchema: schemas.guide,
       handler: (args) => {
         const { section } = schemas.guide.parse(args)

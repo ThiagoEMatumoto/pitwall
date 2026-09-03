@@ -21,8 +21,29 @@ function frameUrlMatches(f: Frame, artboardId: string, mode: 'edit' | 'preview')
   )
 }
 
-// Frame of one artboard. The canvas frame is `edit`; PreviewMode mounts a
-// second iframe for the same artboard with `mode=preview`.
+// The preview player's URL names the artboard it booted with; after a
+// navigate the runtime stamps the artboard on screen on <body>.
+async function frameShowsArtboard(f: Frame, artboardId: string): Promise<boolean> {
+  if (!f.url().includes('mode=preview')) return false
+  const shown = await f
+    .evaluate(() => document.body.getAttribute('data-pw-artboard'))
+    .catch(() => null)
+  return shown === artboardId
+}
+
+async function findArtboardFrame(
+  page: Page,
+  artboardId: string,
+  mode: 'edit' | 'preview',
+): Promise<Frame | undefined> {
+  const byUrl = page.frames().find((f) => frameUrlMatches(f, artboardId, mode))
+  if (byUrl || mode === 'edit') return byUrl
+  for (const f of page.frames()) if (await frameShowsArtboard(f, artboardId)) return f
+  return undefined
+}
+
+// Frame of one artboard. The canvas frame is `edit`; the preview is a single
+// player (`mode=preview`) that shows the artboard it navigated to.
 export async function waitForArtboardFrame(
   page: Page,
   artboardId: string,
@@ -31,7 +52,7 @@ export async function waitForArtboardFrame(
   const mode = opts.mode ?? 'edit'
   const deadline = Date.now() + (opts.timeoutMs ?? 10_000)
   while (Date.now() < deadline) {
-    const frame = page.frames().find((f) => frameUrlMatches(f, artboardId, mode))
+    const frame = await findArtboardFrame(page, artboardId, mode)
     if (frame) {
       const nodes = await frame
         .locator('[data-pw-id]')
@@ -45,6 +66,30 @@ export async function waitForArtboardFrame(
   throw new Error(
     `artboard frame ${artboardId} (${mode}) not found; frames: ${JSON.stringify(urls)}`,
   )
+}
+
+// The preview is a single player iframe: its URL names the artboard it booted
+// with and later screens arrive through `navigate`, so it is found by mode
+// alone. The title follows the artboard on screen ("Preview: <name>").
+export const PREVIEW_IFRAME_SELECTOR = 'iframe[title^="Preview: "]'
+
+export async function waitForPreviewFrame(page: Page, timeoutMs = 10_000): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const frame = page
+      .frames()
+      .find((f) => f.url().startsWith(ARTBOARD_URL_PREFIX) && f.url().includes('mode=preview'))
+    if (frame) {
+      const nodes = await frame
+        .locator('[data-pw-id]')
+        .count()
+        .catch(() => 0)
+      if (nodes > 0) return frame
+    }
+    await page.waitForTimeout(200)
+  }
+  const urls = page.frames().map((f) => f.url())
+  throw new Error(`preview frame not found; frames: ${JSON.stringify(urls)}`)
 }
 
 export async function nodeBoxInFrame(frame: Frame, selector: string): Promise<NodeBox | null> {

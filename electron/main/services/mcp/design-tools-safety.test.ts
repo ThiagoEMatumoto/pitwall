@@ -83,9 +83,17 @@ describe('design tools — limits and safety', () => {
     expect(summary.text).toContain('safe text')
   })
 
-  it('input limits: oversized artboards, html, names and assets are refused by the schema', async () => {
+  it('input limits: oversized artboards are clamped with a warning; html, names and assets are refused by the schema', async () => {
+    const huge = await call<{ artboard: ArtboardMeta; warnings: string[] }>(
+      'design_artboard_create',
+      { docId, name: 'Huge', width: 30000, height: 30000 },
+    )
+    expect(huge.artboard.width).toBe(16384)
+    expect(huge.artboard.height).toBe(16384)
+    expect(huge.warnings).toHaveLength(2)
+    expect(huge.warnings[0]).toMatch(/width 30000 clamped to 16384/)
     await expect(
-      call('design_artboard_create', { docId, name: 'Huge', width: 30000, height: 30000 }),
+      call('design_artboard_create', { docId, name: 'Zero', width: 0, height: 100 }),
     ).rejects.toThrow()
     await expect(
       call('design_write_html', {

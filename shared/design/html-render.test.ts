@@ -24,6 +24,7 @@ const artboard = (tree: DesignNode): DesignArtboard => ({
   y: 0,
   width: 1440,
   height: 900,
+  sizing: 'fixed',
   tree,
   version: 1,
   position: 0,
@@ -148,7 +149,9 @@ describe('buildArtboardDocument', () => {
       mode: 'edit',
     })
     expect(
-      html.startsWith('<!doctype html><html data-pw-mode="edit"><head><meta charset="utf-8">'),
+      html.startsWith(
+        '<!doctype html><html data-pw-mode="edit" data-pw-sizing="fixed" data-pw-motion="final"><head><meta charset="utf-8">',
+      ),
     ).toBe(true)
     expect(html).toContain('<script nonce="N0nce">console.log(1)</script>')
     expect(html).toContain(':root{--color-bg:#fff}p{margin:0}<\\/style><script>')
@@ -175,6 +178,48 @@ describe('buildArtboardDocument', () => {
     expect(html).not.toContain('<script nonce')
     expect(html).toContain('<title>Home</title>')
     expect(html).toContain('<div style="background:#eee"><p>hi</p></div>')
+  })
+
+  it('flow: body cresce com o conteúdo, sem overflow hidden, e o html anuncia o sizing', () => {
+    const flow = { ...artboard(tree), sizing: 'flow' as const, height: 2340 }
+    const html = buildArtboardDocument({
+      doc,
+      artboard: flow,
+      runtimeJs: '',
+      nonce: 'n',
+      mode: 'edit',
+    })
+    expect(html).toContain(
+      '<html data-pw-mode="edit" data-pw-sizing="flow" data-pw-motion="final">',
+    )
+    expect(html).toContain(
+      'html,body{margin:0;padding:0}body{width:1440px;min-height:200px;height:auto;overflow:visible;background:#eee}',
+    )
+    expect(html).not.toContain('height:2340px')
+    // The marquee rule of the motion sheet clips too; only the body matters here.
+    expect(html).not.toMatch(/body\{[^}]*overflow:hidden/)
+  })
+
+  it('flow standalone: herda o body de fluxo e continua sem data-pw-*', () => {
+    const flow = { ...artboard(tree), sizing: 'flow' as const, height: 2340 }
+    const html = renderStandaloneHtml(doc, flow)
+    expect(html).toContain('body{width:1440px;min-height:200px;height:auto;overflow:visible;')
+    expect(html).not.toContain('height:2340px')
+    expect(html).not.toContain('data-pw-')
+    expect(html).toContain('<meta name="viewport" content="width=1440">')
+  })
+
+  it('sizing desconhecido renderiza como fixed', () => {
+    const odd = { ...artboard(tree), sizing: 'fluid' as unknown as 'fixed' }
+    const html = buildArtboardDocument({
+      doc,
+      artboard: odd,
+      runtimeJs: '',
+      nonce: 'n',
+      mode: 'shot',
+    })
+    expect(html).toContain('data-pw-sizing="fixed"')
+    expect(html).toContain('body{width:1440px;height:900px;overflow:hidden;')
   })
 })
 

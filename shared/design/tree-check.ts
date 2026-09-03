@@ -10,8 +10,10 @@ import {
   TAG_NAME_RE,
   URL_ATTRS,
   isNodeLink,
+  isReservedStyleKey,
   isUnsafeUrl,
 } from './safety'
+import { isMotion } from './motion'
 
 const KINDS: ReadonlySet<DesignNodeKind> = new Set(['frame', 'text', 'image', 'svg', 'element'])
 
@@ -59,7 +61,11 @@ function validateNode(node: DesignNode, seen: Set<string>, errors: string[]): vo
       errors.push(`${where}: unsafe URL in "${key}"`)
     }
   }
+  for (const key of Object.keys(node.style)) {
+    if (isReservedStyleKey(key)) errors.push(`${where}: reserved style property "${key}"`)
+  }
   if (node.link !== undefined && !isNodeLink(node.link)) errors.push(`${where}: invalid link`)
+  if (node.motion !== undefined && !isMotion(node.motion)) errors.push(`${where}: invalid motion`)
   if (node.kind === 'text' && node.children.length > 0) {
     errors.push(`${where}: text node must not have children`)
   }

@@ -13,6 +13,7 @@ vi.mock('../db', () => ({
 
 import * as store from './design-store'
 import * as assets from './asset-store'
+import { rowToArtboard, type ArtboardRow } from './design-rows'
 
 // Real PNG magic so the upload sniff accepts the fake bytes.
 const png = (tail: string): Buffer =>
@@ -361,9 +362,65 @@ describe('design-store — input limits', () => {
       width: 30000,
       height: 1,
     })
-    expect([ab.width, ab.height]).toEqual([8192, 16])
+    expect([ab.width, ab.height]).toEqual([16384, 16])
     const updated = store.updateArtboard(ab.id, { width: 99999, height: 400.4 })
-    expect([updated.width, updated.height]).toEqual([8192, 400])
+    expect([updated.width, updated.height]).toEqual([16384, 400])
+  })
+
+  it('sizing: defaults to fixed; flow without height starts at 600; update/duplicate keep it', () => {
+    const doc = store.createDocument({ title: 'T' })
+    const fixed = store.createArtboard({ docId: doc.id, name: 'A', width: 1440, height: 900 })
+    expect(fixed.sizing).toBe('fixed')
+
+    const flow = store.createArtboard({ docId: doc.id, name: 'L', width: 1440, sizing: 'flow' })
+    expect([flow.sizing, flow.width, flow.height]).toEqual(['flow', 1440, 600])
+
+    const toFlow = store.updateArtboard(fixed.id, { sizing: 'flow', height: 2340 })
+    expect([toFlow.sizing, toFlow.height]).toEqual(['flow', 2340])
+    const ignored = store.updateArtboard(fixed.id, {
+      sizing: 'fluid' as unknown as 'flow',
+    })
+    expect(ignored.sizing).toBe('flow')
+
+    const copy = store.duplicateArtboard({ artboardId: flow.id })
+    expect(copy.sizing).toBe('flow')
+    expect(store.getDocument(doc.id)!.pages[0].artboards.map((a) => a.sizing)).toEqual([
+      'flow',
+      'flow',
+      'flow',
+    ])
+  })
+
+  it('create refuses an unknown sizing at the store boundary by falling back to fixed', () => {
+    const doc = store.createDocument({ title: 'T' })
+    const ab = store.createArtboard({
+      docId: doc.id,
+      name: 'A',
+      width: 300,
+      height: 300,
+      sizing: 'fluid' as unknown as 'fixed',
+    })
+    expect(ab.sizing).toBe('fixed')
+  })
+
+  it('rowToArtboard falls back to fixed when the column carries a stray value', () => {
+    const row: ArtboardRow = {
+      id: 'ab',
+      page_id: 'p',
+      name: 'A',
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      sizing: 'fluid',
+      tree: '{}',
+      version: 1,
+      position: 0,
+      created_at: 0,
+      updated_at: 0,
+    }
+    expect(rowToArtboard(row).sizing).toBe('fixed')
+    expect(rowToArtboard({ ...row, sizing: 'flow' }).sizing).toBe('flow')
   })
 
   it('globalCss over the cap and token groups over 200 keys are refused; names are truncated', () => {

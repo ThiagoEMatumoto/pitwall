@@ -259,6 +259,17 @@ describe('invertOp restores the tree', () => {
     expect(invertOp(makeTree(), op)).toEqual([{ type: 'setArtboard', patch: {} }])
   })
 
+  it('setArtboard sizing: leaves the tree alone and inverts to the previous sizing', () => {
+    const tree = makeTree()
+    const op: DesignOp = { type: 'setArtboard', patch: { sizing: 'flow' } }
+    const applied = applyOp(tree, op)
+    expect(applied.tree).toBe(tree)
+    expect(applied.touched).toEqual([])
+    expect(invertOp(tree, op, { sizing: 'fixed', height: 900 })).toEqual([
+      { type: 'setArtboard', patch: { sizing: 'fixed' } },
+    ])
+  })
+
   it('invertOps undoes a batch in reverse', () => {
     const original = makeTree()
     const ops: DesignOp[] = [

@@ -2,13 +2,19 @@
 // inside. Pan/zoom/marquee/drop live here; per-artboard pointer work lives
 // in InteractionLayer (rendered by ArtboardFrame inside the stage).
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useDesignStore, setStageSize } from '@/store/designStore'
 import type { DesignTool } from '@/store/designStore'
 import { newNodeId } from '@shared/design/ids'
 import type { Rect } from '@shared/design/protocol'
 import type { DesignAssetMime, DesignNode } from '@shared/types/design'
-import { ArtboardFrame } from './ArtboardFrame'
+import { ArtboardFrame, ArtboardPlaceholder } from './ArtboardFrame'
 import { SelectionOverlay } from './SelectionOverlay'
 import {
   artboardBounds,
@@ -17,20 +23,31 @@ import {
   rectFromPoints,
   rectsIntersect,
   screenToCanvas,
+  visibleArtboardIds,
   zoomAt,
   type Point,
+  type Size,
 } from './geometry'
 import { EmptyState } from '../EmptyState'
 
-// Tighter than geometry's hard limits: below 10% artboards are unreadable,
-// above 800% the iframe re-raster gets slow.
-export const STAGE_MIN_ZOOM = 0.1
+// Tighter than geometry's hard limit above: past 800% the iframe re-raster
+// gets slow. 2% is what fits a 16384px landing next to its siblings.
+export const STAGE_MIN_ZOOM = 0.02
 export const STAGE_MAX_ZOOM = 8
+// Artboards this many stage sizes away from the viewport are not mounted
+// (each iframe is a renderer process); generous so panning rarely flickers.
+const LAZY_MOUNT_MARGIN = 2
 const WHEEL_ZOOM_SENSITIVITY = 0.01
 const GRID_STEP = 24
 const MARQUEE_THRESHOLD_PX = 3
 
-const IMAGE_MIMES = new Set<string>(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml'])
+const IMAGE_MIMES = new Set<string>([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/svg+xml',
+])
 
 export function clampStageZoom(zoom: number): number {
   return Math.min(STAGE_MAX_ZOOM, Math.max(STAGE_MIN_ZOOM, zoom))
@@ -74,6 +91,7 @@ export function CanvasStage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const gestureRef = useRef<Gesture | null>(null)
   const [marquee, setMarquee] = useState<Rect | null>(null)
+  const [stage, setStage] = useState<Size>({ w: 0, h: 0 })
 
   const viewport = useDesignStore((s) => s.viewport)
   const setViewport = useDesignStore((s) => s.setViewport)
@@ -86,17 +104,36 @@ export function CanvasStage() {
   const select = useDesignStore((s) => s.select)
   const setScope = useDesignStore((s) => s.setScope)
   const commit = useDesignStore((s) => s.commit)
+  const selectedArtboardId = useDesignStore((s) => s.selection.artboardId)
+  const textEditingArtboardId = useDesignStore((s) => s.textEditing?.artboardId ?? null)
+  const previewArtboardId = useDesignStore((s) => s.previewArtboardId)
+  const agentActivity = useDesignStore((s) => s.agentActivity)
 
-  const pageArtboardIds = Object.values(artboards)
+  const pageArtboards = Object.values(artboards)
     .filter((a) => a.meta.pageId === pageId)
     .sort((a, b) => a.meta.position - b.meta.position)
-    .map((a) => a.meta.id)
+    .map((a) => a.meta)
+  const pageArtboardIds = pageArtboards.map((m) => m.id)
+
+  // Selected / being edited / previewed / touched by an agent: always live.
+  // An unmeasured stage (first commit) mounts nothing: the ResizeObserver
+  // measures it right away, and a frame mounted now only to be swapped for
+  // a placeholder on the next commit would abort its load (net::ERR_ABORTED).
+  const mounted = new Set(visibleArtboardIds(pageArtboards, viewport, stage, LAZY_MOUNT_MARGIN))
+  for (const id of [selectedArtboardId, textEditingArtboardId, previewArtboardId]) {
+    if (id) mounted.add(id)
+  }
+  for (const id of Object.keys(agentActivity)) mounted.add(id)
 
   // Stage size feeds zoomTo/fitToContent in the store.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const update = (): void => setStageSize({ w: el.clientWidth, h: el.clientHeight })
+    const update = (): void => {
+      const size = { w: el.clientWidth, h: el.clientHeight }
+      setStageSize(size)
+      setStage(size)
+    }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
@@ -237,7 +274,10 @@ export function CanvasStage() {
     const file = Array.from(e.dataTransfer.files).find((f) => IMAGE_MIMES.has(f.type))
     if (!file) return
     const bounds = e.currentTarget.getBoundingClientRect()
-    const canvasPoint = screenToCanvas({ x: e.clientX - bounds.left, y: e.clientY - bounds.top }, viewport)
+    const canvasPoint = screenToCanvas(
+      { x: e.clientX - bounds.left, y: e.clientY - bounds.top },
+      viewport,
+    )
     const targetId = pageArtboardIds.find((id) =>
       rectContains(artboardBounds(artboards[id].meta), canvasPoint),
     )
@@ -312,9 +352,13 @@ export function CanvasStage() {
           willChange: 'transform',
         }}
       >
-        {pageArtboardIds.map((id) => (
-          <ArtboardFrame key={id} artboardId={id} />
-        ))}
+        {pageArtboardIds.map((id) =>
+          mounted.has(id) ? (
+            <ArtboardFrame key={id} artboardId={id} />
+          ) : (
+            <ArtboardPlaceholder key={id} artboardId={id} />
+          ),
+        )}
       </div>
 
       <SelectionOverlay marquee={marquee} />

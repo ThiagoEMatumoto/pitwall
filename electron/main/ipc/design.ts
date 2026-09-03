@@ -8,7 +8,7 @@ import { formatPtyInjection, injectIntoSession } from '../services/handoff/injec
 import { ptyManager } from '../services/pty-manager'
 import { broadcast } from '../services/notify'
 import { newNonce } from '../../../shared/design/ids'
-import { MAX_ASSET_BASE64_CHARS } from '../../../shared/design/safety'
+import { MAX_ASSET_BASE64_CHARS, isSizing } from '../../../shared/design/safety'
 import type {
   ApplyDesignOpsInput,
   ArtboardUpdatedEvent,
@@ -23,6 +23,7 @@ import type {
   DesignDocumentMeta,
   DesignExportInput,
   DesignExportResult,
+  DesignExportScale,
   DesignLink,
   DesignListFilter,
   DesignPage,
@@ -49,6 +50,15 @@ import type {
 const MAX_ID_CHARS = 200
 const MAX_PROMPT_CHARS = 8 * 1024
 const EXPORT_FORMATS: ReadonlySet<string> = new Set(['png', 'html', 'jsx'])
+const EXPORT_SCALES: ReadonlySet<DesignExportScale> = new Set([1, 2, 3, 4])
+
+function readExportScale(value: unknown): DesignExportScale {
+  if (value === undefined) return 1
+  if (typeof value === 'number' && EXPORT_SCALES.has(value as DesignExportScale)) {
+    return value as DesignExportScale
+  }
+  throw new Error('scale must be 1, 2, 3 or 4')
+}
 
 function requireId(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ID_CHARS) {
@@ -164,6 +174,9 @@ export function registerDesignIpc(): void {
   ipcMain.handle('design:artboard-create', (_e, raw: unknown): DesignArtboard => {
     const input = requireInput<CreateDesignArtboardInput>(raw, 'input')
     requireId(input.docId, 'docId')
+    if (input.sizing !== undefined && !isSizing(input.sizing)) {
+      throw new Error("sizing must be 'fixed' or 'flow'")
+    }
     const artboard = designStore.createArtboard({
       ...input,
       author: input.author ?? 'human',
@@ -312,7 +325,7 @@ export function registerDesignIpc(): void {
     const artboardId = requireId(input.artboardId, 'artboardId')
     if (!EXPORT_FORMATS.has(input.format)) throw new Error(`unknown export format: ${input.format}`)
     if (input.format === 'png') {
-      const scale = input.scale === 2 ? 2 : 1
+      const scale = readExportScale(input.scale)
       const png = await exportArtboardPng({ artboardId, scale })
       return { format: 'png', data: png.pngBase64, width: png.width, height: png.height }
     }

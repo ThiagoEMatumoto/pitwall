@@ -1,6 +1,7 @@
 // Agent-facing views of a tree (design_tree_summary, design_node_get).
 
 import type { DesignNode, DesignNodeSummary } from '../types/design'
+import { motionSummary } from './motion'
 
 const SUMMARY_TEXT_MAX = 60
 
@@ -17,6 +18,10 @@ export function summarize(tree: DesignNode, maxDepth: number): DesignNodeSummary
       summary.text =
         node.text.length > SUMMARY_TEXT_MAX ? `${node.text.slice(0, SUMMARY_TEXT_MAX)}…` : node.text
     }
+    if (node.motion) {
+      const motion = motionSummary(node.motion)
+      if (motion) summary.motion = motion
+    }
     if (depth < maxDepth && node.children.length > 0) {
       summary.children = node.children.map((child) => build(child, depth + 1))
     }
@@ -31,6 +36,7 @@ export function summaryToText(summary: DesignNodeSummary): string {
     let line = `${'  '.repeat(depth)}${item.id} ${item.tag}.${item.kind}`
     if (item.name) line += ` "${item.name}"`
     if (item.text) line += ` ${JSON.stringify(item.text)}`
+    if (item.motion) line += ` [motion ${item.motion}]`
     if (item.childCount > 0 && !item.children) line += ` (${item.childCount} children)`
     lines.push(line)
     for (const child of item.children ?? []) emit(child, depth + 1)

@@ -13,7 +13,8 @@ import {
   validateTree,
   type ArtboardPatch,
 } from '../../../../shared/design/ops'
-import { clampArtboardSize } from '../../../../shared/design/safety'
+import { clampArtboardSizeReport, isSizing } from '../../../../shared/design/safety'
+import { normalizeMotion, type DesignMotionInput } from '../../../../shared/design/motion'
 import type {
   ArtboardUpdatedEvent,
   DesignArtboard,
@@ -56,6 +57,9 @@ export interface ApplyArtboardOpsParams extends MutationContext {
 export interface ApplyResult {
   event: ArtboardUpdatedEvent
   artboard: DesignArtboard
+  // Present only when something in a setArtboard patch was not taken as sent
+  // (size clamped, sizing ignored): the tool surfaces it, the UI toasts it.
+  warnings?: string[]
 }
 
 function loadArtboard(artboardId: string): {
@@ -77,10 +81,26 @@ function sanitizeOp(op: DesignOp): DesignOp {
   return op
 }
 
-function clampPatch(patch: ArtboardPatch): ArtboardPatch {
+// True when every field of the patch already holds in the row.
+function isNoopPatch(artboard: DesignArtboard, patch: ArtboardPatch): boolean {
+  return (Object.keys(patch) as (keyof ArtboardPatch)[]).every(
+    (key) => patch[key] === undefined || patch[key] === artboard[key],
+  )
+}
+
+function clampPatch(patch: ArtboardPatch, warnings: string[]): ArtboardPatch {
   const next = { ...patch }
-  if (next.width !== undefined) next.width = clampArtboardSize(next.width)
-  if (next.height !== undefined) next.height = clampArtboardSize(next.height)
+  for (const key of ['width', 'height'] as const) {
+    const raw = next[key]
+    if (raw === undefined) continue
+    const { value, clamped } = clampArtboardSizeReport(raw)
+    if (clamped) warnings.push(`${key} ${raw} clamped to ${value}`)
+    next[key] = value
+  }
+  if (next.sizing !== undefined && !isSizing(next.sizing)) {
+    warnings.push(`sizing ${String(next.sizing)} ignored; use 'fixed' or 'flow'`)
+    delete next.sizing
+  }
   return next
 }
 
@@ -92,9 +112,27 @@ export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
 
   const artboardPatch: ArtboardPatch = {}
   const treeOps: DesignOp[] = []
+  const warnings: string[] = []
   for (const op of params.ops) {
-    if (op.type === 'setArtboard') Object.assign(artboardPatch, clampPatch(op.patch))
+    if (op.type === 'setArtboard') Object.assign(artboardPatch, clampPatch(op.patch, warnings))
     else treeOps.push(sanitizeOp(op))
+  }
+
+  // A patch that changes nothing (a flow height re-measured to the value
+  // already stored) is not a write: no version bump, no updated_at. The
+  // event still goes out so the sender's pending nonce settles. A snapshot
+  // request (design_nodes_finish) is a write of its own and goes through.
+  if (treeOps.length === 0 && !params.snapshot && isNoopPatch(artboard, artboardPatch)) {
+    const event: ArtboardUpdatedEvent = {
+      docId,
+      artboardId: params.artboardId,
+      ops: params.ops,
+      version: artboard.version,
+      origin: params.origin,
+      full: false,
+    }
+    ;(params.send ?? notifyBroadcast)('design:artboard-updated', event)
+    return warnings.length ? { event, artboard, warnings } : { event, artboard }
   }
 
   const { tree } = applyOps(artboard.tree, treeOps)
@@ -120,7 +158,7 @@ export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
     full: params.ops.some((op) => op.type === 'replaceTree'),
   }
   ;(params.send ?? notifyBroadcast)('design:artboard-updated', event)
-  return { event, artboard: saved }
+  return warnings.length ? { event, artboard: saved, warnings } : { event, artboard: saved }
 }
 
 export interface RestoreVersionParams extends MutationContext {
@@ -342,4 +380,18 @@ export function setNodeLink(
     ...params,
     ops: [{ type: 'setLink', id: params.nodeId, link: params.link }],
   })
+}
+
+// Inputs are normalised (defaults, clamping) so the inspector and the agent
+// may send partial sections; an unknown preset throws before anything is written.
+export function setNodeMotion(
+  params: NodeTarget & { items: Array<{ id: string; motion: DesignMotionInput | null }> },
+): ApplyResult {
+  const { artboard } = loadArtboard(params.artboardId)
+  const ops: DesignOp[] = params.items.map((item) => {
+    const found = findNode(artboard.tree, item.id)
+    if (!found || !found.parent) throw new Error(`node not found or is the root: ${item.id}`)
+    return { type: 'setMotion', id: item.id, motion: normalizeMotion(item.motion) }
+  })
+  return applyArtboardOps({ ...params, ops })
 }

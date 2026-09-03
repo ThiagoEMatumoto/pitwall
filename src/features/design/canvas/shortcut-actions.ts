@@ -226,8 +226,13 @@ export function zoom(state: DesignState, to: ZoomTarget): void {
 }
 
 // Enter: dive into the selected container (first child selected).
-// Esc: climb one level, or clear the selection at the top.
+// Esc: leave interaction mode first; else climb one level, or clear the
+// selection at the top.
 export function changeScope(state: DesignState, dir: 'enter' | 'exit'): void {
+  if (dir === 'exit' && state.interaction) {
+    state.setInteraction(false)
+    return
+  }
   const { artboardId, nodeIds } = state.selection
   if (!artboardId) return
   const index = getNodeIndex(artboardId)

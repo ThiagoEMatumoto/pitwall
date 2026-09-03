@@ -13,6 +13,8 @@ import {
   type GetRectsMessage,
   type HitMessage,
   type HitTestMessage,
+  type MotionMode,
+  type NavigateMessage,
   type OpResultMessage,
   type OpsMessage,
   type ParentToRuntimeMessage,
@@ -20,14 +22,19 @@ import {
   type RectsMessage,
   type RuntimeToParentMessage,
 } from '@shared/design/protocol'
-import type { DesignNode, DesignOp, DesignTokens } from '@shared/types/design'
+import type { ArtboardSizing, DesignNode, DesignOp, DesignTokens } from '@shared/types/design'
 
 export interface BridgeInit {
   tree: DesignNode
   tokens: DesignTokens
   fonts: string[]
   mode: 'edit' | 'preview'
+  // Omitted = fixed / the mode's default (off in edit, on in preview).
+  sizing?: ArtboardSizing
+  motion?: MotionMode
 }
+
+export type NavigatePayload = Omit<NavigateMessage, 'v' | 'type'>
 
 export type BridgeEventType =
   | 'ready'
@@ -38,7 +45,8 @@ export type BridgeEventType =
   | 'contentSize'
   | 'textEditEnd'
   | 'key'
-  | 'navigate'
+  | 'linkClick'
+  | 'navigated'
 
 export type BridgeEvent<T extends BridgeEventType> = Extract<RuntimeToParentMessage, { type: T }>
 type Handler<T extends BridgeEventType> = (msg: BridgeEvent<T>) => void
@@ -62,6 +70,8 @@ interface Pending {
 }
 
 export const REQUEST_TIMEOUT_MS = 2000
+// A navigate waits for the View Transition to settle: link duration + slack.
+export const NAVIGATE_TIMEOUT_MS = 8000
 
 let reqSeq = 0
 
@@ -97,8 +107,10 @@ function hasShape(msg: Record<string, unknown>): boolean {
       return typeof msg.id === 'string' && typeof msg.text === 'string'
     case 'key':
       return typeof msg.key === 'string'
-    case 'navigate':
+    case 'linkClick':
       return typeof msg.toArtboardId === 'string'
+    case 'navigated':
+      return typeof msg.artboardId === 'string'
     default:
       return false
   }
@@ -119,6 +131,11 @@ export class ArtboardBridge {
   private readonly rects = new Map<string, Rect>()
   // A getter, not a snapshot: 'ready' may arrive after ops changed the tree.
   private initPayload: (() => BridgeInit) | null = null
+  private navigating: {
+    artboardId: string
+    resolve: () => void
+    reject: (err: Error) => void
+  } | null = null
   private ready = false
   private disposed = false
 
@@ -210,6 +227,48 @@ export class ArtboardBridge {
     this.post({ type: 'textEditStart', id })
   }
 
+  // Remembered in the init payload too: a reload must come back in the same mode.
+  setMotionMode(mode: MotionMode): void {
+    const previous = this.initPayload
+    if (previous) this.initPayload = () => ({ ...previous(), motion: mode })
+    this.post({ type: 'motionMode', mode })
+  }
+
+  replayMotion(ids?: string[]): void {
+    this.post({ type: 'motionReplay', ids })
+  }
+
+  // Artboard-local css px (already divided by the canvas scale).
+  scroll(y: number, viewportH: number): void {
+    this.post({ type: 'scroll', y, viewportH })
+  }
+
+  // Resolves when the runtime posts `navigated` for this artboard; a later
+  // navigate supersedes an earlier one still in flight (it rejects).
+  navigate(payload: NavigatePayload, timeoutMs = NAVIGATE_TIMEOUT_MS): Promise<void> {
+    this.navigating?.reject(new Error('superseded by a later navigate'))
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.navigating = null
+        reject(new Error(`design runtime timeout: navigate (${this.artboardId})`))
+      }, timeoutMs)
+      this.navigating = {
+        artboardId: payload.artboardId,
+        resolve: () => {
+          clearTimeout(timer)
+          this.navigating = null
+          resolve()
+        },
+        reject: (err) => {
+          clearTimeout(timer)
+          this.navigating = null
+          reject(err)
+        },
+      }
+      this.post({ type: 'navigate', ...payload })
+    })
+  }
+
   on<T extends BridgeEventType>(type: T, handler: Handler<T>): () => void {
     let set = this.handlers.get(type)
     if (!set) {
@@ -258,6 +317,9 @@ export class ArtboardBridge {
       case 'rectsChanged':
         this.cacheRects(msg.rects)
         break
+      case 'navigated':
+        if (this.navigating?.artboardId === msg.artboardId) this.navigating.resolve()
+        break
       default:
         break
     }
@@ -288,6 +350,7 @@ export class ArtboardBridge {
       p.reject(new Error('bridge disposed'))
     }
     this.pending.clear()
+    this.navigating?.reject(new Error('bridge disposed'))
     this.handlers.clear()
     this.rects.clear()
   }

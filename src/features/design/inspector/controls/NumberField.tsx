@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 
-export type NumberUnit = 'px' | '%' | 'auto'
+// 'auto' and 'none' print no suffix ('auto' also placeholders the empty value).
+export type NumberUnit = 'px' | '%' | 'ms' | 'auto' | 'none'
 
 interface Props {
   value: number | null
@@ -17,6 +18,10 @@ interface Props {
   max?: number
   step?: number
   disabled?: boolean
+  // Shown but not editable (a measured value, e.g. the height of a flow artboard).
+  readOnly?: boolean
+  // A typed value fell outside [min, max]: the caller may say so (toast).
+  onClamped?: (requested: number, value: number) => void
 }
 
 const SCRUB_PX_PER_UNIT = 2
@@ -40,6 +45,8 @@ export function NumberField({
   max,
   step = 1,
   disabled,
+  readOnly,
+  onClamped,
 }: Props) {
   const [draft, setDraft] = useState<string>(value == null ? '' : String(value))
   const [editing, setEditing] = useState(false)
@@ -62,6 +69,7 @@ export function NumberField({
       return
     }
     const next = clamp(n, min, max)
+    if (next !== n) onClamped?.(n, next)
     if (next !== value) onCommit(next)
   }
 
@@ -87,7 +95,7 @@ export function NumberField({
   }
 
   function onLabelPointerDown(e: PointerEvent<HTMLSpanElement>): void {
-    if (disabled || value == null) return
+    if (disabled || readOnly || value == null) return
     e.currentTarget.setPointerCapture(e.pointerId)
     scrub.current = { startX: e.clientX, startValue: value }
   }
@@ -124,8 +132,8 @@ export function NumberField({
           onPointerDown={onLabelPointerDown}
           onPointerMove={onLabelPointerMove}
           onPointerUp={onLabelPointerUp}
-          title="Arraste para ajustar"
-          className="select-none px-1.5 text-[var(--color-text-dim)] cursor-ew-resize"
+          title={readOnly ? undefined : 'Arraste para ajustar'}
+          className={`select-none px-1.5 text-[var(--color-text-dim)] ${readOnly ? '' : 'cursor-ew-resize'}`}
         >
           {label}
         </span>
@@ -134,13 +142,16 @@ export function NumberField({
         type="text"
         inputMode="decimal"
         disabled={disabled}
+        readOnly={readOnly}
         value={draft}
         placeholder={placeholder ?? (unit === 'auto' ? 'auto' : '')}
         onFocus={() => setEditing(true)}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={commitDraft}
-        onKeyDown={onKeyDown}
-        className="h-full w-full min-w-0 bg-transparent px-1 tabular-nums text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
+        onBlur={readOnly ? undefined : commitDraft}
+        onKeyDown={readOnly ? undefined : onKeyDown}
+        className={`h-full w-full min-w-0 bg-transparent px-1 tabular-nums outline-none placeholder:text-[var(--color-text-dim)] ${
+          readOnly ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text)]'
+        }`}
       />
       {showUnits ? (
         <select
@@ -155,7 +166,8 @@ export function NumberField({
           ))}
         </select>
       ) : (
-        unit !== 'auto' && (
+        unit !== 'auto' &&
+        unit !== 'none' && (
           <span className="pr-1.5 text-[10px] text-[var(--color-text-dim)]">{unit}</span>
         )
       )}

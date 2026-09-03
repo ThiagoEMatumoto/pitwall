@@ -69,7 +69,7 @@ export function AgentActivityBadge() {
   }
 
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <style>{SHIMMER_CSS}</style>
       <ControlPill
         icon={Sparkles}
@@ -77,7 +77,7 @@ export function AgentActivityBadge() {
         label={label}
         title={latest.summary ?? 'Ir para onde o Claude está editando'}
         onClick={latest.artboardId ? goThere : undefined}
-        className="pw-design-shimmer max-w-[22rem]"
+        className="pw-design-shimmer max-w-[min(22rem,100%)]"
       />
     </div>
   )

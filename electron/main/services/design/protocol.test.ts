@@ -24,6 +24,7 @@ describe('routeDesignUrl', () => {
       id: 'ab-1',
       docId: 'doc-1',
       mode: 'shot',
+      motion: 'final',
     })
   })
 
@@ -33,6 +34,7 @@ describe('routeDesignUrl', () => {
       id: 'a b',
       docId: 'd',
       mode: 'edit',
+      motion: 'final',
     })
   })
 
@@ -61,6 +63,7 @@ describe('routeDesignUrl', () => {
       id: 'a b',
       docId: 'd',
       mode: 'preview',
+      motion: 'final',
     })
     expect(routeDesignUrl(assetUrl('x/y'))).toEqual({ kind: 'asset', id: 'x/y' })
   })
@@ -75,6 +78,7 @@ describe('createDesignProtocolHandler', () => {
     y: 0,
     width: 320,
     height: 200,
+    sizing: 'fixed',
     tree: { id: 'root', tag: 'div', kind: 'frame', style: {}, attrs: {}, children: [] },
     version: 1,
     position: 0,
@@ -107,6 +111,15 @@ describe('createDesignProtocolHandler', () => {
     expect(await res.text()).not.toContain('<script')
   })
 
+  it('passes the motion pose of the url to the document', async () => {
+    const final = await handler(new Request('pitwall-design://artboard/ab-1?doc=doc-1&mode=shot'))
+    expect(await final.text()).toContain('data-pw-motion="final"')
+    const initial = await handler(
+      new Request('pitwall-design://artboard/ab-1?doc=doc-1&mode=shot&motion=initial'),
+    )
+    expect(await initial.text()).toContain('data-pw-motion="initial"')
+  })
+
   it('serves asset bytes as immutable, sandboxed and never sniffed', async () => {
     const res = await handler(new Request('pitwall-design://asset/as-1'))
     expect(res.status).toBe(200)
@@ -136,5 +149,36 @@ describe('isAllowedFrameNavigation', () => {
     expect(isAllowedFrameNavigation(assetUrl('as-1'))).toBe(false)
     expect(isAllowedFrameNavigation('https://evil.example/')).toBe(false)
     expect(isAllowedFrameNavigation('about:blank')).toBe(false)
+  })
+})
+
+describe('routeDesignUrl — motion pose', () => {
+  it('defaults to final, accepts initial and refuses anything else', () => {
+    expect(routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&mode=shot').kind).toBe('artboard')
+    expect(routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&mode=shot')).toMatchObject({
+      motion: 'final',
+    })
+    expect(
+      routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&mode=shot&motion=initial'),
+    ).toMatchObject({
+      motion: 'initial',
+    })
+    expect(routeDesignUrl('pitwall-design://artboard/ab-1?doc=d&motion=paused')).toEqual({
+      kind: 'notFound',
+    })
+  })
+
+  it('artboardUrl only writes motion when it is not the default', () => {
+    expect(artboardUrl('ab', 'd', 'shot', undefined, 'initial')).toBe(
+      'pitwall-design://artboard/ab?doc=d&mode=shot&motion=initial',
+    )
+    expect(artboardUrl('ab', 'd', 'shot', undefined, 'final')).toBe(
+      'pitwall-design://artboard/ab?doc=d&mode=shot',
+    )
+    expect(routeDesignUrl(artboardUrl('ab', 'd', 'shot', 't', 'initial'))).toMatchObject({
+      kind: 'artboard',
+      mode: 'shot',
+      motion: 'initial',
+    })
   })
 })
