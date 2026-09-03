@@ -4,12 +4,7 @@
 
 export type DesignNodeKind = 'frame' | 'text' | 'image' | 'svg' | 'element'
 
-export type DesignTransition = 'none' | 'push' | 'fade'
-
-export interface DesignNodeLink {
-  artboardId: string
-  transition: DesignTransition
-}
+import type { DesignMotion, DesignNodeLink } from './design-motion'
 
 export interface DesignNode {
   id: string
@@ -27,6 +22,9 @@ export interface DesignNode {
   // display:none and the export drops the node.
   hidden?: boolean
   link?: DesignNodeLink
+  // Rendered as data-pw-m-* attributes + --pw-* variables derived after the
+  // user's style (html-render.ts); the static sheet is MOTION_CSS.
+  motion?: DesignMotion
 }
 
 // Each category becomes a CSS variable prefix: color.primary → --color-primary.
@@ -69,6 +67,11 @@ export interface DesignPageViewport {
   zoom: number
 }
 
+// fixed: the body is width×height and clips. flow: the width is fixed and the
+// body grows with its content; `height` is the last height measured by the
+// runtime (or the capture), persisted so the canvas and the tools agree.
+export type ArtboardSizing = 'fixed' | 'flow'
+
 export interface DesignArtboard {
   id: string
   pageId: string
@@ -77,6 +80,7 @@ export interface DesignArtboard {
   y: number
   width: number
   height: number
+  sizing: ArtboardSizing
   tree: DesignNode
   version: number
   position: number
@@ -153,10 +157,11 @@ export type DesignOp =
   | { type: 'setText'; id: string; text: string }
   | { type: 'rename'; id: string; name: string }
   | { type: 'setLink'; id: string; link: DesignNodeLink | null }
+  | { type: 'setMotion'; id: string; motion: DesignMotion | null }
   | { type: 'replaceTree'; tree: DesignNode }
   | {
       type: 'setArtboard'
-      patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name'>>
+      patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name' | 'sizing'>>
     }
 
 // Broadcast 'design:artboard-updated'. full=true when the whole tree
@@ -189,6 +194,8 @@ export interface DesignNodeSummary {
   name?: string
   // Truncated to 60 chars.
   text?: string
+  // One line, e.g. "in: slide-up 240ms +stagger 60 · hover: lift" (motionSummary).
+  motion?: string
   childCount: number
   children?: DesignNodeSummary[]
 }
@@ -244,7 +251,11 @@ export interface CreateDesignArtboardInput {
   pageId?: string
   name: string
   width: number
-  height: number
+  // Omitted = DEFAULT_ARTBOARD_HEIGHT_PX (safety.ts): the natural case is a
+  // flow artboard, whose height is measured from the content anyway.
+  height?: number
+  // Omitted = 'fixed'.
+  sizing?: ArtboardSizing
   x?: number
   y?: number
   // Omitted = empty root frame.
@@ -279,10 +290,13 @@ export interface DesignAssetUploadInput {
 
 export type DesignExportFormat = 'png' | 'html' | 'jsx'
 
+export type DesignExportScale = 1 | 2 | 3 | 4
+
 export interface DesignExportInput {
   artboardId: string
   format: DesignExportFormat
-  scale?: 1 | 2
+  // PNG only. 3/4 are refused when width*height*scale² exceeds MAX_CAPTURE_PIXELS.
+  scale?: DesignExportScale
 }
 
 export interface DesignExportResult {
@@ -379,15 +393,5 @@ export const DESIGN_TESTIDS = {
   previewButton: 'design-preview',
 } as const
 
-export interface ArtboardPreset {
-  id: 'desktop' | 'tablet' | 'mobile'
-  label: string
-  width: number
-  height: number
-}
-
-export const ARTBOARD_PRESETS: readonly ArtboardPreset[] = [
-  { id: 'desktop', label: 'Desktop', width: 1440, height: 900 },
-  { id: 'tablet', label: 'Tablet', width: 834, height: 1194 },
-  { id: 'mobile', label: 'Mobile', width: 390, height: 844 },
-]
+export * from './design-presets'
+export * from './design-motion'

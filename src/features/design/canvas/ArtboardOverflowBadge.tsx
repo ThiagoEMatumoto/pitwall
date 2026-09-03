@@ -1,11 +1,12 @@
-// Content taller (or wider) than its artboard is clipped by the iframe with
-// no hint that anything is missing. The runtime reports its scroll size
+// Content taller (or wider) than a fixed artboard is clipped by the iframe
+// with no hint that anything is missing. The runtime reports its scroll size
 // (contentSize); this badge names the overflow and offers to grow the
-// artboard to fit, the way Figma's "resize to fit" does.
+// artboard to fit (Figma's "resize to fit") or to switch it to flow, where
+// the height follows the content. Flow artboards never show it.
 
 import { useEffect, useState } from 'react'
 import { useDesignStore } from '@/store/designStore'
-import { overflowLabel, overflowOf, type OverflowSize } from './artboard-overflow'
+import { overflowApplies, overflowLabel, overflowOf, type OverflowSize } from './artboard-overflow'
 import type { ArtboardBridge } from './runtime-bridge'
 
 interface Props {
@@ -27,7 +28,7 @@ export function ArtboardOverflowBadge({ artboardId, bridge }: Props) {
     return bridge.on('contentSize', (msg) => setContent({ w: msg.w, h: msg.h }))
   }, [bridge])
 
-  if (!meta || !content) return null
+  if (!meta || !content || !overflowApplies(meta)) return null
   const over = overflowOf(content, meta)
   if (!over) return null
   // The badge keeps its screen size; zoomed out it would be wider than the
@@ -39,6 +40,9 @@ export function ArtboardOverflowBadge({ artboardId, bridge }: Props) {
       width: over.w ? meta.width + over.w : meta.width,
       height: over.h ? meta.height + over.h : meta.height,
     })
+  const toFlow = (): void => updateArtboardMeta(artboardId, { sizing: 'flow' })
+  const action =
+    'rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
 
   return (
     <div
@@ -53,13 +57,19 @@ export function ArtboardOverflowBadge({ artboardId, bridge }: Props) {
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="text-[var(--color-warning)]">{overflowLabel(over)}</span>
-      <button
-        type="button"
-        onClick={grow}
-        className="rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-      >
+      <button type="button" onClick={grow} className={action}>
         Ajustar artboard
       </button>
+      {over.h > 0 && (
+        <button
+          type="button"
+          onClick={toFlow}
+          title="A altura passa a seguir o conteúdo"
+          className={action}
+        >
+          Converter em fluxo
+        </button>
+      )}
     </div>
   )
 }

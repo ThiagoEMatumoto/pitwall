@@ -10,6 +10,7 @@ import {
   Maximize2,
   Minus,
   MousePointer2,
+  MousePointerClick,
   Play,
   Plus,
   Sparkles,
@@ -106,6 +107,8 @@ export function DesignToolbar() {
   const mode = useDesignStore((s) => s.mode)
   const startPreview = useDesignStore((s) => s.startPreview)
   const exitPreview = useDesignStore((s) => s.exitPreview)
+  const interaction = useDesignStore((s) => s.interaction)
+  const setInteraction = useDesignStore((s) => s.setInteraction)
   const setAskOpen = useDesignStore((s) => s.setAskOpen)
   const hasDoc = useDesignStore((s) => s.docId !== null)
   const previewTarget = useDesignStore(
@@ -221,6 +224,27 @@ export function DesignToolbar() {
       )}
 
       {hasDoc && <VersionsButton />}
+
+      <button
+        type="button"
+        data-testid="design-interact"
+        disabled={!hasDoc || inPreview}
+        aria-pressed={interaction}
+        onClick={() => setInteraction(!interaction)}
+        title={
+          interaction
+            ? 'Sair do modo interagir (Esc)'
+            : 'Interagir: clicar, passar o mouse e ver as animações no canvas'
+        }
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition disabled:opacity-40 ${
+          interaction
+            ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]'
+            : 'border-[var(--color-border)] hover:border-[var(--color-accent)]/60 hover:text-[var(--color-text)]'
+        }`}
+      >
+        <Icon as={MousePointerClick} size={13} />
+        Interagir
+      </button>
 
       <button
         type="button"

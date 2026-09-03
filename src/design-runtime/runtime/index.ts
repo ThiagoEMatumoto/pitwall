@@ -4,9 +4,22 @@
 // CSP nonce, so nothing here may import outside src/design-runtime except
 // `import type` and the pure modules under shared/design.
 
-import type { DesignTransition } from '../../../shared/types/design'
-import type { ParentToRuntimeMessage } from '../../../shared/design/protocol'
-import { applyOp, ensureFonts, renderBody, tokensStyleEl, tokensToCss } from './dom'
+import type { DesignEasing, DesignTransition } from '../../../shared/types/design'
+import type {
+  MotionMode,
+  ParentToRuntimeMessage,
+  RuntimeToParentMessage as RuntimeMessage,
+} from '../../../shared/design/protocol'
+import { isEasing } from '../../../shared/design/motion'
+import {
+  applyBodySize,
+  applyOp,
+  currentTree,
+  ensureFonts,
+  renderBody,
+  tokensStyleEl,
+  tokensToCss,
+} from './dom'
 import {
   allRects,
   collectRects,
@@ -18,6 +31,8 @@ import {
   setWatched,
 } from './hit'
 import { PROTOCOL_VERSION, post } from './messaging'
+import * as motion from './motion'
+import { navigate } from './motion-navigate'
 import { startTextEdit } from './text-edit'
 
 interface RuntimeConfig {
@@ -66,25 +81,37 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
 }
 
+function linkClickMessage(link: HTMLElement): Extract<RuntimeMessage, { type: 'linkClick' }> {
+  const transition = (link.getAttribute('data-pw-transition') || 'none') as DesignTransition
+  const dur = Number(link.getAttribute('data-pw-t-dur'))
+  const ease = link.getAttribute('data-pw-t-ease')
+  return {
+    v: PROTOCOL_VERSION,
+    type: 'linkClick',
+    toArtboardId: link.getAttribute('data-pw-link') ?? '',
+    transition,
+    ...(Number.isFinite(dur) && link.hasAttribute('data-pw-t-dur') ? { duration: dur } : {}),
+    ...(isEasing(ease) ? { easing: ease as DesignEasing } : {}),
+  }
+}
+
 function installInteractionGuards(): void {
   document.addEventListener(
     'click',
     (e) => {
       const target = e.target as Element | null
       if (!target) return
+      // Links are live in preview and in the editor's interaction mode.
+      const link =
+        mode === 'preview' || motion.motionMode() === 'on'
+          ? target.closest<HTMLElement>('[data-pw-link]')
+          : null
+      if (link) {
+        e.preventDefault()
+        post(linkClickMessage(link))
+        return
+      }
       if (mode === 'preview') {
-        const link = target.closest<HTMLElement>('[data-pw-link]')
-        if (link) {
-          e.preventDefault()
-          const transition = (link.getAttribute('data-pw-transition') || 'none') as DesignTransition
-          post({
-            v: PROTOCOL_VERSION,
-            type: 'navigate',
-            toArtboardId: link.getAttribute('data-pw-link') ?? '',
-            transition,
-          })
-          return
-        }
         // Real anchors / image-map areas would navigate the iframe away.
         if (target.closest('a, area')) e.preventDefault()
         return
@@ -122,6 +149,20 @@ function installInteractionGuards(): void {
 
 let initialised = false
 
+// Edit: everything sits in its final pose (off) unless the parent asks for
+// interaction; preview plays.
+function initialMotionMode(msg: Extract<ParentToRuntimeMessage, { type: 'init' }>): MotionMode {
+  return msg.motion ?? (msg.mode === 'preview' ? 'on' : 'off')
+}
+
+function handleNavigate(msg: Extract<ParentToRuntimeMessage, { type: 'navigate' }>): void {
+  void navigate(msg, currentTree()).then(() => {
+    resetChangeTracking()
+    post({ v: PROTOCOL_VERSION, type: 'navigated', artboardId: msg.artboardId })
+    scheduleChanges()
+  })
+}
+
 function handleInit(msg: Extract<ParentToRuntimeMessage, { type: 'init' }>): void {
   if (config.token && msg.token !== config.token) return
   mode = msg.mode
@@ -129,6 +170,8 @@ function handleInit(msg: Extract<ParentToRuntimeMessage, { type: 'init' }>): voi
   tokensStyleEl().textContent = tokensToCss(msg.tokens)
   ensureFonts(msg.fonts)
   renderBody(msg.tree)
+  applyBodySize({ sizing: msg.sizing ?? 'fixed' })
+  motion.mount(initialMotionMode(msg))
   resetChangeTracking()
   if (!initialised) {
     initialised = true
@@ -213,6 +256,19 @@ function handleMessage(msg: ParentToRuntimeMessage): void {
         reqId: msg.reqId,
         values: getComputed(msg.id, msg.props),
       })
+      return
+    case 'motionMode':
+      motion.setMotionMode(msg.mode)
+      scheduleChanges()
+      return
+    case 'motionReplay':
+      motion.replay(msg.ids)
+      return
+    case 'scroll':
+      motion.onScroll(msg.y, msg.viewportH)
+      return
+    case 'navigate':
+      if (initialised) handleNavigate(msg)
       return
   }
 }

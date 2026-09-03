@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { overflowLabel, overflowOf } from './artboard-overflow'
+import { overflowApplies, overflowLabel, overflowOf } from './artboard-overflow'
 
 describe('overflowOf', () => {
   const frame = { width: 1440, height: 900 }
@@ -17,5 +17,13 @@ describe('overflowOf', () => {
   it('names the overflow in the badge', () => {
     expect(overflowLabel({ w: 0, h: 320 })).toBe('Conteúdo passa 320px abaixo')
     expect(overflowLabel({ w: 60, h: 320 })).toBe('Conteúdo passa 320px abaixo e 60px à direita')
+  })
+})
+
+describe('overflowApplies', () => {
+  it('is only for fixed artboards (flow grows with the content)', () => {
+    expect(overflowApplies({ sizing: 'fixed' })).toBe(true)
+    expect(overflowApplies({})).toBe(true)
+    expect(overflowApplies({ sizing: 'flow' })).toBe(false)
   })
 })

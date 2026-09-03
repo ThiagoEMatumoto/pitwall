@@ -19,9 +19,16 @@ export function collectRects(ids: Iterable<string>): Record<string, Rect> {
   return rects
 }
 
+// Marquee clones (data-pw-clone, built by motion.ts) carry no data-pw-id,
+// but a clone's subtree is still skipped explicitly: the tree never has them.
+function isClone(el: Element): boolean {
+  return el.closest('[data-pw-clone]') != null
+}
+
 export function allRects(): Record<string, Rect> {
   const rects: Record<string, Rect> = {}
   for (const el of Array.from(document.querySelectorAll('[data-pw-id]'))) {
+    if (isClone(el)) continue
     rects[nodeId(el)] = toRect(el)
   }
   return rects
@@ -87,6 +94,7 @@ export function hitTest(
   const skip = new Set(ignore)
   const ignoredEls = ignore.map(byId).filter((el): el is HTMLElement => el != null)
   for (const el of document.elementsFromPoint(x, y)) {
+    if (isClone(el)) continue
     const target = el.closest('[data-pw-id]')
     if (!target) continue
     const id = nodeId(target)

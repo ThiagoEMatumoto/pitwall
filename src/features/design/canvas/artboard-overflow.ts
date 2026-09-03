@@ -1,9 +1,16 @@
 // Pure part of ArtboardOverflowBadge: how far the runtime's content size
-// runs past the artboard, and how the badge words it.
+// runs past a FIXED artboard, and how the badge words it. A flow artboard
+// never overflows vertically (its height is the content's).
+
+import type { ArtboardSizing } from '@shared/types/design'
 
 export interface OverflowSize {
   w: number
   h: number
+}
+
+export function overflowApplies(frame: { sizing?: ArtboardSizing }): boolean {
+  return frame.sizing !== 'flow'
 }
 
 // Sub-pixel rounding in the runtime's scroll size is not an overflow.

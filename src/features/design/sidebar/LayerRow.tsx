@@ -10,6 +10,7 @@ import {
   Lock,
   LockOpen,
   Shapes,
+  Sparkles,
   Type,
 } from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
@@ -18,6 +19,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Icon } from '@/components/ui/Icon'
 import type { DesignNode, DesignNodeKind } from '@shared/types/design'
+import { hasMotion } from '../inspector/motion-mapping'
 
 export const ROW_HEIGHT = 24
 export const INDENT = 14
@@ -171,6 +173,15 @@ export function LayerRow({
       ) : (
         <span className="min-w-0 flex-1 truncate" title={row.label}>
           {row.label}
+        </span>
+      )}
+      {hasMotion(row.node) && (
+        <span
+          title="Animação"
+          data-testid="design-layer-motion"
+          className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--color-accent)]"
+        >
+          <Icon as={Sparkles} size={10} />
         </span>
       )}
       <button

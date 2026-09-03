@@ -2,12 +2,15 @@
 
 import * as designStore from '../design/design-store'
 import * as liveState from '../design/live-state'
+import * as mutate from '../design/mutate'
 import { captureArtboard, computeStyles } from '../design/screenshot'
 import { renderJsx } from '../design/export'
 import { renderNode } from '../../../../shared/design/html-render'
 import { findNode, summarize, summaryToText } from '../../../../shared/design/ops'
+import { treeHasMotion } from '../../../../shared/design/motion'
+import { ARTBOARD_MAX_PX } from '../../../../shared/design/safety'
 import { ok, type ToolDef, type ToolResult } from './tools'
-import { loadArtboard, schemas, type DesignToolDeps } from './design-tools-shared'
+import { claudeOrigin, loadArtboard, schemas, type DesignToolDeps } from './design-tools-shared'
 import type { DesignArtboard, DesignNode, DesignPage } from '../../../../shared/types/design'
 
 const DEFAULT_COMPUTED_PROPS = [
@@ -25,9 +28,25 @@ const DEFAULT_COMPUTED_PROPS = [
   'display',
 ]
 
+// In flow the stored height is the last one measured (runtime or capture);
+// naming it measuredHeight keeps the agent from treating it as a limit.
+function sizeMeta(artboard: DesignArtboard) {
+  return {
+    sizing: artboard.sizing,
+    width: artboard.width,
+    height: artboard.height,
+    ...(artboard.sizing === 'flow' ? { measuredHeight: artboard.height } : {}),
+  }
+}
+
 function artboardMeta(artboard: DesignArtboard) {
   const { tree: _tree, ...meta } = artboard
-  return { ...meta, rootId: artboard.tree.id }
+  return {
+    ...meta,
+    ...sizeMeta(artboard),
+    rootId: artboard.tree.id,
+    hasMotion: treeHasMotion(artboard.tree),
+  }
 }
 
 function pageWithSummaries(page: DesignPage, depth: number) {
@@ -51,7 +70,26 @@ function requireNode(artboard: DesignArtboard, nodeId: string): DesignNode {
   return found.node
 }
 
-export function readTools(_deps: DesignToolDeps): ToolDef[] {
+// A capture of a flow artboard re-measures the content; storing that height
+// keeps the canvas, the tools and the next capture in agreement. No snapshot:
+// the tree did not change.
+function persistMeasuredHeight(
+  deps: DesignToolDeps,
+  artboard: DesignArtboard,
+  measuredHeight: number | undefined,
+): void {
+  if (measuredHeight === undefined || measuredHeight === artboard.height) return
+  mutate.applyArtboardOps({
+    artboardId: artboard.id,
+    ops: [{ type: 'setArtboard', patch: { height: measuredHeight } }],
+    author: 'claude',
+    origin: claudeOrigin(deps),
+    snapshot: false,
+    send: deps.notify.broadcast.bind(deps.notify),
+  })
+}
+
+export function readTools(deps: DesignToolDeps): ToolDef[] {
   return [
     {
       name: 'design_document_list',
@@ -69,7 +107,7 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
       name: 'design_document_get',
       title: 'Get design document',
       description:
-        'Get one document: tokens, fonts, globalCss, pages and artboards (each with an indented tree summary to `depth`, default 2). Artboard ids and root ids come from here. See design_guide §2.',
+        'Get one document: tokens, fonts, globalCss, pages and artboards (each with sizing, width/height — measuredHeight for flow —, hasMotion and an indented tree summary to `depth`, default 2; nodes with motion show [motion …]). Artboard ids and root ids come from here. See design_guide §2.',
       inputSchema: schemas.documentGet,
       handler: (args) => {
         const { docId, depth } = schemas.documentGet.parse(args)
@@ -154,7 +192,7 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
       name: 'design_tree_summary',
       title: 'Tree summary',
       description:
-        'Indented text outline of an artboard (or of rootId): one line per node with id, tag.kind, name and truncated text, down to `depth` (default 3). Cheapest way to find ids. See design_guide §1.',
+        'Indented text outline of an artboard (or of rootId): one line per node with id, tag.kind, name, truncated text and [motion …] when the node animates, down to `depth` (default 3). Also returns sizing and the measured height of a flow artboard. Cheapest way to find ids. See design_guide §1.',
       inputSchema: schemas.treeSummary,
       handler: (args) => {
         const { artboardId, depth, rootId } = schemas.treeSummary.parse(args)
@@ -163,8 +201,8 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
         return ok({
           artboardId,
           version: artboard.version,
-          width: artboard.width,
-          height: artboard.height,
+          ...sizeMeta(artboard),
+          hasMotion: treeHasMotion(artboard.tree),
           text: summaryToText(summarize(root, depth)),
         })
       },
@@ -173,10 +211,10 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
       name: 'design_screenshot',
       title: 'Screenshot artboard',
       description:
-        'Render the artboard (or one node) to PNG and return it as an image. Do this after every edit pass and fix what you see. scale 2 for fine detail. See design_guide §7.',
+        'Render the artboard (or one node) to PNG and return it as an image. Do this after every edit pass and fix what you see. scale 2 for fine detail. A flow artboard is captured whole (tall ones in tiles) and its measured height is stored. motion "final" (default) shows the state after every entrance animation, "initial" the pose before they play. See design_guide §7 and §10.',
       inputSchema: schemas.screenshot,
       handler: async (args) => {
-        const { artboardId, scale, nodeId } = schemas.screenshot.parse(args)
+        const { artboardId, scale, nodeId, motion } = schemas.screenshot.parse(args)
         const { artboard, docId } = loadArtboard(artboardId)
         let shot
         try {
@@ -185,7 +223,9 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
             docId,
             width: artboard.width,
             height: artboard.height,
+            sizing: artboard.sizing,
             scale,
+            motion,
             version: artboard.version,
             docUpdatedAt: designStore.getDocument(docId)?.updatedAt,
             nodeId,
@@ -196,11 +236,22 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
             `design_screenshot unavailable (${reason}). The Pitwall window must be running; use design_tree_summary or design_computed_styles meanwhile.`,
           )
         }
+        persistMeasuredHeight(deps, artboard, shot.measuredHeight)
+        const version = designStore.getArtboard(artboardId)?.version ?? artboard.version
+        const warnings: string[] = []
+        if (shot.measuredHeight !== undefined && shot.measuredHeight >= ARTBOARD_MAX_PX) {
+          warnings.push(`content reaches the ${ARTBOARD_MAX_PX}px limit; anything below is cut`)
+        }
         const meta = {
           artboardId,
-          version: artboard.version,
+          version,
           width: shot.width,
           height: shot.height,
+          sizing: artboard.sizing,
+          motion,
+          tiles: shot.tiles,
+          ...(shot.measuredHeight !== undefined ? { measuredHeight: shot.measuredHeight } : {}),
+          warnings,
         }
         const pngBase64 = shot.png.toString('base64')
         const result = {
@@ -236,10 +287,12 @@ export function readTools(_deps: DesignToolDeps): ToolDef[] {
       inputSchema: schemas.computedStyles,
       handler: async (args) => {
         const { artboardId, nodeIds, props } = schemas.computedStyles.parse(args)
-        const { docId } = loadArtboard(artboardId)
+        const { artboard, docId } = loadArtboard(artboardId)
         const styles = await computeStyles({
           artboardId,
           docId,
+          width: artboard.width,
+          height: artboard.height,
           nodeIds,
           props: props ?? DEFAULT_COMPUTED_PROPS,
         })

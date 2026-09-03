@@ -43,10 +43,9 @@ describe('migration 047_meetings_speakers', () => {
     db.close()
   })
 
-  it('está registrada como versão 47 no final da cadeia', () => {
-    const last = migrations[migrations.length - 1]
-    expect(last.version).toBe(47)
-    expect(last.name).toBe('047_meetings_speakers')
+  it('está registrada como versão 47 na cadeia', () => {
+    const entry = migrations.find((m) => m.version === 47)
+    expect(entry?.name).toBe('047_meetings_speakers')
   })
 
   it('cria meeting_v2_voices e meeting_v2_speakers com as colunas do contrato', () => {

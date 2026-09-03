@@ -9,14 +9,12 @@ import {
   applyLocal,
   artboardsOf,
   bridges,
-  createArtboardAction,
   history,
   indexes,
   metaPatch,
   pageArtboards,
-  releaseTransientAction,
+  reportFlowHeightAction,
   resetLocalState,
-  resyncAction,
   selectionBounds,
   sendOps,
   stageSize,
@@ -24,6 +22,7 @@ import {
   transientBase,
   upsertMeta,
 } from './designStore.internal'
+import { createArtboardAction, releaseTransientAction, resyncAction } from './designStore.actions'
 import {
   handleAgentActivity,
   handleArtboardDeleted,
@@ -91,6 +90,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     error: null,
     previewArtboardId: null,
     mode: 'edit',
+    interaction: false,
     askOpen: false,
     reloadNonce: 0,
     lockedIds: {},
@@ -131,6 +131,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         viewport: page?.viewport ?? { x: 0, y: 0, zoom: 1 },
         previewArtboardId: null,
         mode: 'edit',
+        interaction: false,
         loading: false,
       })
       await api.design.activeDocSet(docId)
@@ -196,6 +197,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         coalesceKey: `artboard:${artboardId}`,
       })
     },
+
+    reportFlowHeight: (artboardId, height) => reportFlowHeightAction(store, artboardId, height),
 
     setArtboardReady: (artboardId, ready) => {
       set((s) => {
@@ -336,9 +339,12 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         mode: 'preview',
         previewArtboardId: artboardId,
         textEditing: null,
+        interaction: false,
       }),
     navigatePreview: (artboardId) => set({ previewArtboardId: artboardId }),
-    exitPreview: () => set({ mode: 'edit', previewArtboardId: null }),
+    exitPreview: () => set({ mode: 'edit', previewArtboardId: null, interaction: false }),
+    setInteraction: (on) =>
+      set((s) => (s.interaction === on ? s : { interaction: on, textEditing: null, hover: null })),
     setAskOpen: (askOpen) => set({ askOpen }),
 
     startWatch: () => {

@@ -4,6 +4,7 @@ import { ArtboardSection } from './sections/ArtboardSection'
 import { ExportSection } from './sections/ExportSection'
 import { LayoutSection } from './sections/LayoutSection'
 import { LinkSection } from './sections/LinkSection'
+import { MotionSection } from './sections/MotionSection'
 import { TokensSection } from './sections/TokensSection'
 import { TypographySection } from './sections/TypographySection'
 import { useInspectorTarget } from './target'
@@ -30,6 +31,7 @@ export function Inspector() {
           <AppearanceSection target={target} />
           {allText && <TypographySection target={target} />}
           <LinkSection target={target} />
+          <MotionSection target={target} />
           <ExportSection artboardId={target.artboardId} />
         </>
       ) : (

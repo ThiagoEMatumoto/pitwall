@@ -5,12 +5,14 @@
 import type { DesignNode } from '../../../../shared/types/design'
 import { newNodeId } from '../../../../shared/design/ids'
 import { validateTree } from '../../../../shared/design/ops'
+import { isMotion } from '../../../../shared/design/motion'
 import {
   ATTR_NAME_RE,
   BLOCKED_TAGS,
   MAX_TREE_DEPTH,
   URL_ATTRS,
   isNodeLink,
+  isReservedStyleKey,
   isUnsafeUrl,
 } from '../../../../shared/design/safety'
 
@@ -54,6 +56,14 @@ export function sanitizeTree(tree: DesignNode): SanitizeResult {
       attrs[name] = value
     }
 
+    let style = node.style ?? {}
+    for (const key of Object.keys(style)) {
+      if (!isReservedStyleKey(key)) continue
+      warnings.push(`dropped reserved style ${key} on <${node.tag}>`)
+      const { [key]: _dropped, ...rest } = style
+      style = rest
+    }
+
     const children: DesignNode[] = []
     for (const child of node.children ?? []) {
       if (typeof child.tag !== 'string' || BLOCKED_TAGS.has(child.tag.toLowerCase())) {
@@ -63,10 +73,15 @@ export function sanitizeTree(tree: DesignNode): SanitizeResult {
       children.push(visit(child, depth + 1))
     }
 
-    const next: DesignNode = { ...node, id, attrs, children }
+    const next: DesignNode = { ...node, id, attrs, style, children }
     if (node.link !== undefined && !isNodeLink(node.link)) {
       warnings.push(`dropped invalid link on ${id}`)
       delete next.link
+    }
+    // Invalid = dropped, never repaired: a half-understood motion must not persist.
+    if (node.motion !== undefined && !isMotion(node.motion)) {
+      warnings.push(`dropped invalid motion on ${id}`)
+      delete next.motion
     }
     return next
   }

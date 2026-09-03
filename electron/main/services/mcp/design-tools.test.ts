@@ -52,7 +52,7 @@ afterAll(() => {
 })
 
 describe('design tools — Breads do Breno authoring flow', () => {
-  it('registers the 24 tools from F10', () => {
+  it('registers the 25 tools (24 from F10 + design_motion_set)', () => {
     const names = tools.map((t) => t.name).sort()
     expect(names).toEqual(
       [
@@ -77,6 +77,7 @@ describe('design tools — Breads do Breno authoring flow', () => {
         'design_tokens_set',
         'design_asset_upload',
         'design_link_set',
+        'design_motion_set',
         'design_export',
         'design_guide',
         'design_nodes_finish',
@@ -338,7 +339,7 @@ describe('design tools — Breads do Breno authoring flow', () => {
 
   it('design_guide returns the whole guide or one section', async () => {
     const all = await call<{ guide: string }>('design_guide', {})
-    for (let n = 1; n <= 9; n++) expect(all.guide).toContain(`## §${n} `)
+    for (let n = 1; n <= 10; n++) expect(all.guide).toContain(`## §${n} `)
     expect(all.guide).toContain('1440×900')
     const one = await call<{ guide: string }>('design_guide', { section: 4 })
     expect(one.guide).toContain('§4')

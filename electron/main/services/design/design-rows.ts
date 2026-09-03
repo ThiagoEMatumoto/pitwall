@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 import { newNodeId } from '../../../../shared/design/ids'
-import { MAX_NAME_CHARS } from '../../../../shared/design/safety'
+import { MAX_NAME_CHARS, isSizing } from '../../../../shared/design/safety'
 import type {
   DesignArtboard,
   DesignAuthor,
@@ -46,6 +46,7 @@ export interface ArtboardRow {
   y: number
   width: number
   height: number
+  sizing: string
   tree: string
   version: number
   position: number
@@ -129,6 +130,8 @@ export function rowToArtboard(row: ArtboardRow): DesignArtboard {
     y: row.y,
     width: row.width,
     height: row.height,
+    // The CHECK keeps the column honest; the fallback covers a hand-edited db.
+    sizing: isSizing(row.sizing) ? row.sizing : 'fixed',
     tree: parseTree(row.tree),
     version: row.version,
     position: row.position,

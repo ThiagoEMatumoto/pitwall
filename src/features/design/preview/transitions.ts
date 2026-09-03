@@ -1,8 +1,9 @@
-// Pure preview logic: navigation history, sibling stepping, fit scale and
-// the CSS each frame gets during a transition. PreviewMode drives it.
+// Pure preview logic: navigation history, sibling stepping and the active
+// transition the player hands to the runtime (View Transitions happen inside
+// the iframe; the parent only animates the wrapper size). PreviewMode drives it.
 
-import type { CSSProperties } from 'react'
-import type { DesignTransition } from '@shared/types/design'
+import { viewTransitionName } from '@shared/design/motion'
+import type { DesignEasing, DesignNode, DesignTransition } from '@shared/types/design'
 
 export type NavDirection = 'forward' | 'back'
 
@@ -16,6 +17,10 @@ export interface ActiveTransition {
   to: string
   kind: DesignTransition
   direction: NavDirection
+  // ms, already resolved (link duration or the kind's default).
+  duration: number
+  // Omitted = the runtime's default for the kind.
+  easing?: DesignEasing
 }
 
 export interface PreviewNavState {
@@ -27,6 +32,7 @@ export const TRANSITION_DURATION_MS: Record<DesignTransition, number> = {
   none: 0,
   fade: 200,
   push: 280,
+  smart: 300,
 }
 
 export function createHistory(startId: string): PreviewHistory {
@@ -71,7 +77,13 @@ export function siblingArtboard(order: readonly string[], id: string, step: 1 | 
 }
 
 export type PreviewNavAction =
-  | { type: 'navigate'; to: string; transition: DesignTransition }
+  | {
+      type: 'navigate'
+      to: string
+      transition: DesignTransition
+      duration?: number
+      easing?: DesignEasing
+    }
   | { type: 'back' }
   | { type: 'forward' }
   // Replaces the current entry without animating (external sync, e.g. the
@@ -94,7 +106,7 @@ export function previewNavReducer(
       const history = pushHistory(state.history, action.to)
       return {
         history,
-        transition: startTransition(from, action.to, action.transition, 'forward'),
+        transition: startTransition(from, action.to, action.transition, 'forward', action),
       }
     }
     case 'back': {
@@ -130,60 +142,38 @@ function startTransition(
   to: string,
   kind: DesignTransition,
   direction: NavDirection,
+  timing: { duration?: number; easing?: DesignEasing } = {},
 ): ActiveTransition | null {
-  return kind === 'none' ? null : { from, to, kind, direction }
+  if (kind === 'none') return null
+  const t: ActiveTransition = {
+    from,
+    to,
+    kind,
+    direction,
+    duration: timing.duration ?? TRANSITION_DURATION_MS[kind],
+  }
+  return timing.easing ? { ...t, easing: timing.easing } : t
 }
 
-// ---- frame styles ----
+// ---- Smart Animate pairing ----
 
-export type FrameRole = 'incoming' | 'outgoing'
-export type FramePhase = 'start' | 'end'
-
-// Where the frame sits at the start and at the end of the animation. The
-// component renders `start` on mount, then flips to `end` on the next frame
-// so the CSS transition tweens between the two.
-export function frameStyle(
-  t: ActiveTransition,
-  role: FrameRole,
-  phase: FramePhase,
-  scale: number,
-): CSSProperties {
-  const duration = TRANSITION_DURATION_MS[t.kind]
-  // No tween into the start pose: a frame that was hidden must snap there.
-  const base: CSSProperties = {
-    transition:
-      phase === 'end'
-        ? `transform ${duration}ms cubic-bezier(0.2, 0, 0, 1), opacity ${duration}ms ease`
-        : 'none',
-  }
-  if (t.kind === 'fade') {
-    const visible = role === 'incoming' ? phase === 'end' : phase === 'start'
-    return { ...base, transform: `scale(${scale})`, opacity: visible ? 1 : 0 }
-  }
-  // push: forward slides the incoming in from the right; back reverses.
-  const sign = t.direction === 'forward' ? 1 : -1
-  const offset =
-    role === 'incoming' ? (phase === 'start' ? 100 * sign : 0) : phase === 'start' ? 0 : -100 * sign
-  // scale first so the percentage offset is in artboard px, not screen px.
-  return {
-    ...base,
-    transform: `scale(${scale}) translateX(${offset}%)`,
-    opacity: 1,
-  }
+function countVtNames(tree: DesignNode, counts = new Map<string, number>()): Map<string, number> {
+  const vt = tree.name ? viewTransitionName(tree.name) : null
+  if (vt) counts.set(vt, (counts.get(vt) ?? 0) + 1)
+  for (const child of tree.children) countVtNames(child, counts)
+  return counts
 }
 
-export type ScaleMode = 'fit' | 'actual'
-
-export interface Size {
-  w: number
-  h: number
-}
-
-// Fit never upscales: a 390px mobile artboard stays 390px on a 4K screen.
-export function fitScale(artboard: Size, viewport: Size, mode: ScaleMode, padding = 0): number {
-  if (mode === 'actual') return 1
-  const availW = viewport.w - padding * 2
-  const availH = viewport.h - padding * 2
-  if (availW <= 0 || availH <= 0 || artboard.w <= 0 || artboard.h <= 0) return 1
-  return Math.min(1, availW / artboard.w, availH / artboard.h)
+// view-transition-names shared by both trees and unique in each: Chromium
+// aborts the whole View Transition when a name appears twice on either side,
+// so duplicates are left out (they get the root cross-fade). Order follows
+// the origin tree.
+export function vtNames(fromTree: DesignNode, toTree: DesignNode): string[] {
+  const from = countVtNames(fromTree)
+  const to = countVtNames(toTree)
+  const names: string[] = []
+  for (const [name, n] of from) {
+    if (n === 1 && to.get(name) === 1) names.push(name)
+  }
+  return names
 }

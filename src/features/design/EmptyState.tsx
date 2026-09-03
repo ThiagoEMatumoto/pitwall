@@ -3,7 +3,7 @@ import { PenTool, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useDesignStore } from '@/store/designStore'
-import { ARTBOARD_PRESETS } from '@shared/types/design'
+import { formatPresetSize, groupPresets } from './artboard-format'
 import { AskClaudeComposer } from './ask-claude/AskClaudeComposer'
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
 }
 
 const DEFAULT_DOC_TITLE = 'Sem título'
+const PRESET_GROUPS = groupPresets()
 
 export function EmptyState({ variant }: Props) {
   const createDoc = useDesignStore((s) => s.createDoc)
@@ -58,21 +59,26 @@ export function EmptyState({ variant }: Props) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-5 text-center text-sm text-[var(--color-text-dim)] shadow-lg">
       <span className="text-[var(--color-text)]">Este documento ainda não tem artboards.</span>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        {ARTBOARD_PRESETS.map((preset) => (
-          <Button
-            key={preset.id}
-            variant="ghost"
-            loading={busy}
-            className="px-3 py-1 text-xs"
-            onClick={() => void run(() => createArtboard(preset))}
-          >
-            <Icon as={Plus} size={13} />
-            {preset.label}
-            <span className="tabular-nums opacity-60">
-              {preset.width}×{preset.height}
+      <div className="flex flex-col items-center gap-2">
+        {PRESET_GROUPS.map((group) => (
+          <div key={group.group} className="flex flex-wrap items-center justify-center gap-2">
+            <span className="w-14 text-right text-[10px] uppercase tracking-wider opacity-60">
+              {group.label}
             </span>
-          </Button>
+            {group.presets.map((preset) => (
+              <Button
+                key={preset.id}
+                variant="ghost"
+                loading={busy}
+                className="px-3 py-1 text-xs"
+                onClick={() => void run(() => createArtboard(preset))}
+              >
+                <Icon as={Plus} size={13} />
+                {preset.label}
+                <span className="tabular-nums opacity-60">{formatPresetSize(preset)}</span>
+              </Button>
+            ))}
+          </div>
         ))}
       </div>
     </div>

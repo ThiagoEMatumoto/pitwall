@@ -46,6 +46,7 @@ import * as dropRemovedFeatures from './044_drop_removed_features'
 import * as meetingsV2 from './045_meetings_v2'
 import * as designStudio from './046_design_studio'
 import * as meetingsSpeakers from './047_meetings_speakers'
+import * as designArtboardSizing from './048_design_artboard_sizing'
 
 interface Migration {
   version: number
@@ -107,6 +108,7 @@ export const migrations: Migration[] = [
   meetingsV2,
   designStudio,
   meetingsSpeakers,
+  designArtboardSizing,
 ]
 
 export function runMigrations(db: Database.Database): void {

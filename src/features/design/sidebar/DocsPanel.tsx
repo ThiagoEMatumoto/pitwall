@@ -5,7 +5,7 @@ import { Menu } from '@/components/ui/Menu'
 import { activeMarker } from '@/features/brand'
 import { api } from '@/lib/ipc'
 import { useDesignStore } from '@/store/designStore'
-import { ARTBOARD_PRESETS } from '@shared/types/design'
+import { formatArtboardSize, formatPresetSize, groupPresets } from '../artboard-format'
 
 function InlineInput({
   placeholder,
@@ -59,6 +59,8 @@ function Header({ title, onAdd, addTitle }: { title: string; onAdd?: () => void;
   )
 }
 
+const PRESET_GROUPS = groupPresets()
+
 const rowClass = (active: boolean) =>
   `group flex w-full items-center gap-2 px-3 py-1 text-left text-[11px] transition ${
     active
@@ -88,6 +90,14 @@ export function DocsPanel() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [presetsOpen, setPresetsOpen] = useState(false)
+
+  const presetSections = PRESET_GROUPS.map((g) => ({
+    title: g.label,
+    items: g.presets.map((p) => ({
+      label: `${p.label} · ${formatPresetSize(p)}`,
+      onClick: () => void createArtboard(p),
+    })),
+  }))
 
   const pageArtboards = Object.values(artboards)
     .map((a) => a.meta)
@@ -178,10 +188,7 @@ export function DocsPanel() {
               open={presetsOpen}
               onClose={() => setPresetsOpen(false)}
               portal
-              items={ARTBOARD_PRESETS.map((p) => ({
-                label: `${p.label} · ${p.width}×${p.height}`,
-                onClick: () => void createArtboard(p),
-              }))}
+              sections={presetSections}
             >
               <button
                 type="button"
@@ -210,7 +217,7 @@ export function DocsPanel() {
                   <Icon as={LayoutTemplate} size={12} className="shrink-0 opacity-70" />
                   <span className="truncate">{m.name}</span>
                   <span className="ml-auto tabular-nums text-[10px] opacity-60">
-                    {m.width}×{m.height}
+                    {formatArtboardSize(m)}
                   </span>
                 </button>
               </li>

@@ -6,13 +6,13 @@ import * as designStore from '../design/design-store'
 import * as assetStore from '../design/asset-store'
 import * as mutate from '../design/mutate'
 import { ok, type ToolDef } from './tools'
+import { claudeOrigin, schemas, withActivity, type DesignToolDeps } from './design-tools-shared'
+import { prototypeTools } from './design-tools-write-prototype'
 import {
-  claudeOrigin,
-  loadArtboard,
-  schemas,
-  withActivity,
-  type DesignToolDeps,
-} from './design-tools-shared'
+  ARTBOARD_MAX_PX,
+  DEFAULT_ARTBOARD_HEIGHT_PX,
+  clampArtboardSizeReport,
+} from '../../../../shared/design/safety'
 import type { DesignDocument, DesignTokens } from '../../../../shared/types/design'
 
 // Artboards created without x land to the right of the page's last one; the
@@ -23,6 +23,13 @@ function nextArtboardX(doc: DesignDocument, pageId: string | undefined): number 
   const page = pageId ? doc.pages.find((p) => p.id === pageId) : doc.pages[0]
   if (!page || page.artboards.length === 0) return 0
   return Math.max(...page.artboards.map((a) => a.x + a.width)) + ARTBOARD_GAP
+}
+
+// The store clamps silently; the agent asked for a size, so it hears about it.
+function clampSize(axis: 'width' | 'height', raw: number, warnings: string[]): number {
+  const { value, clamped } = clampArtboardSizeReport(raw)
+  if (clamped) warnings.push(`${axis} ${raw} clamped to ${value} (max ${ARTBOARD_MAX_PX})`)
+  return value
 }
 
 function mergeTokens(current: DesignTokens, patch: DesignTokens): DesignTokens {
@@ -79,18 +86,20 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
         name: 'design_artboard_create',
         title: 'Create artboard',
         description:
-          'Add a fixed-size artboard (px) to a document; omitted x places it right of the last one. Optional html fills it like design_write_html mode "replace". Sizes in design_guide §2.',
+          'Add an artboard (px) to a document. sizing "fixed" (default; width × height, clips) or "flow" (fixed width, height grows with the content — use it for long landing pages; height optional). Sizes above the max are clamped with a warning. Omitted x places it right of the last one. Optional html fills it like design_write_html mode "replace". Sizes in design_guide §2.',
         inputSchema: schemas.artboardCreate,
         handler: (args) => {
           const input = schemas.artboardCreate.parse(args)
           const doc = designStore.getDocument(input.docId)
           if (!doc) throw new Error(`design document not found: ${input.docId}`)
+          let warnings: string[] = []
           let artboard = designStore.createArtboard({
             docId: input.docId,
             pageId: input.pageId,
             name: input.name,
-            width: input.width,
-            height: input.height,
+            width: clampSize('width', input.width, warnings),
+            height: clampSize('height', input.height ?? DEFAULT_ARTBOARD_HEIGHT_PX, warnings),
+            sizing: input.sizing,
             x: input.x ?? nextArtboardX(doc, input.pageId),
             y: input.y,
             author: 'claude',
@@ -98,7 +107,6 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
           deps.notify.broadcast('design:document-updated', {
             docId: input.docId,
           })
-          let warnings: string[] = []
           if (input.html) {
             const written = mutate.writeHtml({
               ...base,
@@ -110,7 +118,7 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
               summary: `create ${input.name}`,
             })
             artboard = written.artboard
-            warnings = written.warnings
+            warnings = [...warnings, ...written.warnings]
           }
           const { tree, ...meta } = artboard
           return ok({ artboard: { ...meta, rootId: tree.id }, warnings })
@@ -335,36 +343,6 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
         return ok({ asset, url: asset.url })
       },
     },
-    wrap(
-      {
-        name: 'design_link_set',
-        title: 'Set prototype link',
-        description:
-          'Make a node navigate to targetArtboardId in Preview (transition none|push|fade); null removes the link. See design_guide §8.',
-        inputSchema: schemas.linkSet,
-        handler: (args) => {
-          const input = schemas.linkSet.parse(args)
-          if (input.targetArtboardId) loadArtboard(input.targetArtboardId)
-          const { event } = mutate.setNodeLink({
-            ...base,
-            artboardId: input.artboardId,
-            nodeId: input.nodeId,
-            link: input.targetArtboardId
-              ? {
-                  artboardId: input.targetArtboardId,
-                  transition: input.transition,
-                }
-              : null,
-            origin: origin(),
-          })
-          return ok({
-            artboardId: input.artboardId,
-            version: event.version,
-            nodeIds: [input.nodeId],
-          })
-        },
-      },
-      byArtboardNode,
-    ),
+    ...prototypeTools(deps),
   ]
 }

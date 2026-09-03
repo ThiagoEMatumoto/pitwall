@@ -13,8 +13,8 @@ import { unionRects, type Size } from '@/features/design/canvas/geometry'
 import type { Rect } from '@shared/design/protocol'
 import { applyOps, buildIndex, type ArtboardPatch, type IndexEntry } from '@shared/design/ops'
 import { newNonce } from '@shared/design/ids'
+import { MIN_FLOW_HEIGHT_PX, clampArtboardSize } from '@shared/design/safety'
 import type {
-  ArtboardPreset,
   DesignArtboard,
   DesignDocument,
   DesignDocumentMeta,
@@ -43,7 +43,6 @@ const sendEpochs = new Map<string, number>()
 export let stageSize: Size = { w: 0, h: 0 }
 
 const REMOTE_TOAST_THROTTLE_MS = 5000
-const ARTBOARD_GAP = 100
 const lastRemoteToastAt = new Map<string, number>()
 // Human edits do not snapshot per op (a drag is one op, a colour scrub is
 // one op...). Once a burst of edits goes quiet, the head is recorded as a
@@ -51,6 +50,10 @@ const lastRemoteToastAt = new Map<string, number>()
 export const HUMAN_SNAPSHOT_IDLE_MS = 2500
 const MAX_BURST_SUMMARIES = 4
 const humanBursts = new Map<string, { timer: ReturnType<typeof setTimeout>; summaries: string[] }>()
+// A flow artboard reports its height on every reflow; the persist waits for
+// the content to settle.
+export const FLOW_HEIGHT_PERSIST_MS = 500
+const flowHeightTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export function getNodeIndex(artboardId: string): Map<string, IndexEntry> | undefined {
   return indexes.get(artboardId)
@@ -79,8 +82,14 @@ export function canRedo(artboardId: string): boolean {
   return history.canRedo(artboardId)
 }
 
+export function cancelFlowHeightPersists(): void {
+  for (const timer of flowHeightTimers.values()) clearTimeout(timer)
+  flowHeightTimers.clear()
+}
+
 export function resetLocalState(): void {
   cancelHumanSnapshots()
+  cancelFlowHeightPersists()
   history.clearAll()
   indexes.clear()
   transientBase.clear()
@@ -91,6 +100,9 @@ export function forgetArtboard(artboardId: string): void {
   const burst = humanBursts.get(artboardId)
   if (burst) clearTimeout(burst.timer)
   humanBursts.delete(artboardId)
+  const flowTimer = flowHeightTimers.get(artboardId)
+  if (flowTimer) clearTimeout(flowTimer)
+  flowHeightTimers.delete(artboardId)
   indexes.delete(artboardId)
   history.clear(artboardId)
   transientBase.delete(artboardId)
@@ -141,6 +153,7 @@ export function metaPatch(meta: DesignArtboard): ArtboardPatch {
     width: meta.width,
     height: meta.height,
     name: meta.name,
+    sizing: meta.sizing,
   }
 }
 
@@ -284,7 +297,7 @@ export function sendOps(
   ops: DesignOp[],
   opts: CommitOptions,
 ): void {
-  if (!opts.snapshot) scheduleHumanSnapshot(store, artboardId, opts.summary)
+  if (!opts.snapshot && !opts.quiet) scheduleHumanSnapshot(store, artboardId, opts.summary)
   const prev = sendChains.get(artboardId) ?? Promise.resolve()
   const epoch = sendEpochs.get(artboardId) ?? 0
   const next = prev.then(async () => {
@@ -297,8 +310,10 @@ export function sendOps(
         artboardId,
         ops,
         origin: { kind: 'human', sessionId: null, nonce },
-        baseVersion: ab.version,
-        snapshot: opts.snapshot,
+        // A quiet write (measured height) touches no node: it must not
+        // conflict with an agent's tree edit racing it.
+        baseVersion: opts.quiet ? undefined : ab.version,
+        snapshot: opts.quiet ? false : opts.snapshot,
         summary: opts.summary,
       })
       bumpVersion(store, artboardId, evt.version)
@@ -335,70 +350,27 @@ export function applyHistoryEntry(
   sendOps(store, artboardId, ops, {})
 }
 
-// ---- actions with bodies too long for the store definition ----
-
-export async function createArtboardAction(
-  store: DesignStore,
-  preset: ArtboardPreset,
-): Promise<DesignArtboard> {
-  const { docId, pageId } = store.getState()
-  if (!docId || !pageId) throw new Error('no document open')
-  const existing = pageArtboards(store)
-  const x = existing.length ? Math.max(...existing.map((m) => m.x + m.width)) + ARTBOARD_GAP : 0
-  const artboard = await api.design.artboardCreate({
-    docId,
-    pageId,
-    name: `${preset.label} ${existing.length + 1}`,
-    width: preset.width,
-    height: preset.height,
-    x,
-    y: 0,
-  })
-  indexes.set(artboard.id, buildIndex(artboard.tree))
-  store.setState((s) => ({
-    artboards: {
-      ...s.artboards,
-      [artboard.id]: {
-        meta: artboard,
-        tree: artboard.tree,
-        version: artboard.version,
-        ready: false,
-      },
-    },
-    doc: s.doc
-      ? {
-          ...s.doc,
-          pages: s.doc.pages.map((p) =>
-            p.id === pageId ? { ...p, artboards: [...p.artboards, artboard] } : p,
-          ),
-        }
-      : s.doc,
-    selection: { artboardId: artboard.id, nodeIds: [] },
-  }))
-  return artboard
-}
-
-// A gesture that never produced a final commit: what it painted is not on
-// the server, so the canvas goes back to the last committed state.
-export function releaseTransientAction(store: DesignStore, artboardId: string): void {
-  const base = transientBase.get(artboardId)
-  if (!base) return
-  transientBase.delete(artboardId)
+// The iframe grows in the same frame (setLocal only: nothing reaches the
+// runtime, which ignores height in flow anyway, nor the undo history); the
+// server learns the height once the content stops moving.
+export function reportFlowHeightAction(store: DesignStore, artboardId: string, h: number): void {
   const ab = store.getState().artboards[artboardId]
-  if (!ab || (ab.tree === base.tree && ab.meta === base.meta)) return
-  setLocal(store, artboardId, base.tree, base.meta)
-  bridges.get(artboardId)?.reinit()
-}
-
-export async function resyncAction(store: DesignStore, artboardId: string): Promise<void> {
-  const { docId } = store.getState()
-  if (!docId) return
-  const doc = await api.design.documentGet(docId)
-  const fresh = doc?.pages.flatMap((p) => p.artboards).find((a) => a.id === artboardId)
-  if (!doc || !fresh) return
-  transientBase.delete(artboardId)
-  store.setState((s) => ({ doc, docs: upsertMeta(s.docs, toMeta(doc)) }))
-  setLocal(store, artboardId, fresh.tree, fresh, fresh.version)
-  // The bridge's own getter (ArtboardFrame) reads the store just updated.
-  bridges.get(artboardId)?.reinit()
+  if (!ab || ab.meta.sizing !== 'flow' || !Number.isFinite(h)) return
+  const next = clampArtboardSize(Math.max(MIN_FLOW_HEIGHT_PX, Math.round(h)))
+  if (Math.abs(next - ab.meta.height) < 1) return
+  setLocal(store, artboardId, ab.tree, { ...ab.meta, height: next })
+  const base = transientBase.get(artboardId)
+  if (base) transientBase.set(artboardId, { ...base, meta: { ...base.meta, height: next } })
+  const pending = flowHeightTimers.get(artboardId)
+  if (pending) clearTimeout(pending)
+  flowHeightTimers.set(
+    artboardId,
+    setTimeout(() => {
+      flowHeightTimers.delete(artboardId)
+      const cur = store.getState().artboards[artboardId]
+      if (!cur || cur.meta.sizing !== 'flow') return
+      const patch: ArtboardPatch = { height: cur.meta.height }
+      sendOps(store, artboardId, [{ type: 'setArtboard', patch }], { quiet: true })
+    }, FLOW_HEIGHT_PERSIST_MS),
+  )
 }

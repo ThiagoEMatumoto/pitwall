@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db'
 import { cloneWithNewIds } from '../../../../shared/design/ops'
-import { MAX_SUMMARY_CHARS, clampArtboardSize } from '../../../../shared/design/safety'
+import {
+  DEFAULT_ARTBOARD_HEIGHT_PX,
+  MAX_SUMMARY_CHARS,
+  clampArtboardSize,
+  isSizing,
+} from '../../../../shared/design/safety'
 import type {
+  ArtboardSizing,
   CreateDesignArtboardInput,
   DesignArtboard,
   DesignAuthor,
@@ -83,9 +89,19 @@ export function getArtboardDocumentId(artboardId: string): string | null {
   return row?.document_id ?? null
 }
 
+interface ArtboardFields {
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  sizing: ArtboardSizing
+  tree: DesignNode
+}
+
 function insertArtboard(
   page: PageRow,
-  fields: { name: string; x: number; y: number; width: number; height: number; tree: DesignNode },
+  fields: ArtboardFields,
   author: DesignAuthor,
   summary: string,
 ): string {
@@ -105,8 +121,9 @@ function insertArtboard(
     ).next
     db.prepare(
       `INSERT INTO design_artboards
-        (id, page_id, name, x, y, width, height, tree, version, position, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+        (id, page_id, name, x, y, width, height, sizing, tree, version, position,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     ).run(
       id,
       page.id,
@@ -115,6 +132,7 @@ function insertArtboard(
       fields.y,
       fields.width,
       fields.height,
+      fields.sizing,
       treeJson,
       position,
       now,
@@ -155,7 +173,8 @@ export function createArtboard(input: CreateDesignArtboardInput): DesignArtboard
       x: input.x ?? 0,
       y: input.y ?? 0,
       width: clampArtboardSize(input.width),
-      height: clampArtboardSize(input.height),
+      height: clampArtboardSize(input.height ?? DEFAULT_ARTBOARD_HEIGHT_PX),
+      sizing: isSizing(input.sizing) ? input.sizing : 'fixed',
       tree: input.tree ?? defaultTree(),
     },
     input.author ?? 'human',
@@ -166,7 +185,9 @@ export function createArtboard(input: CreateDesignArtboardInput): DesignArtboard
 
 export function updateArtboard(
   id: string,
-  patch: Partial<Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name' | 'position'>>,
+  patch: Partial<
+    Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name' | 'sizing' | 'position'>
+  >,
 ): DesignArtboard {
   const row = getArtboardRow(id)
   if (!row) throw new Error(`design artboard not found: ${id}`)
@@ -175,7 +196,8 @@ export function updateArtboard(
   const tx = db.transaction(() => {
     db.prepare(
       `UPDATE design_artboards
-       SET name = ?, x = ?, y = ?, width = ?, height = ?, position = ?, updated_at = ?
+       SET name = ?, x = ?, y = ?, width = ?, height = ?, sizing = ?, position = ?,
+           updated_at = ?
        WHERE id = ?`,
     ).run(
       (patch.name && clampName(patch.name)) || row.name,
@@ -183,6 +205,7 @@ export function updateArtboard(
       patch.y ?? row.y,
       patch.width !== undefined ? clampArtboardSize(patch.width) : row.width,
       patch.height !== undefined ? clampArtboardSize(patch.height) : row.height,
+      isSizing(patch.sizing) ? patch.sizing : row.sizing,
       patch.position ?? row.position,
       now,
       id,
@@ -207,6 +230,7 @@ export function duplicateArtboard(input: DuplicateDesignArtboardInput): DesignAr
       y: input.y ?? row.y,
       width: row.width,
       height: row.height,
+      sizing: rowToArtboard(row).sizing,
       tree: cloneWithNewIds(parseTree(row.tree)).node,
     },
     'human',

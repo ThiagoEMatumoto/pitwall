@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import type { DesignNode } from '@shared/types/design'
 import {
+  TRANSITION_DURATION_MS,
   backHistory,
   canGoBack,
   canGoForward,
   createHistory,
   createNavState,
   currentId,
-  fitScale,
   forwardHistory,
-  frameStyle,
   previewNavReducer,
   pushHistory,
   siblingArtboard,
-  type ActiveTransition,
+  vtNames,
 } from './transitions'
 
 describe('history', () => {
@@ -60,7 +60,7 @@ describe('siblingArtboard', () => {
 })
 
 describe('previewNavReducer', () => {
-  it('navigate with a transition records it; settle clears it', () => {
+  it('navigate with a transition records it with the default duration; settle clears it', () => {
     let s = createNavState('home')
     s = previewNavReducer(s, {
       type: 'navigate',
@@ -73,9 +73,28 @@ describe('previewNavReducer', () => {
       to: 'menu',
       kind: 'push',
       direction: 'forward',
+      duration: TRANSITION_DURATION_MS.push,
     })
     s = previewNavReducer(s, { type: 'settle' })
     expect(s.transition).toBeNull()
+  })
+
+  it('navigate keeps the link duration and easing', () => {
+    const s = previewNavReducer(createNavState('home'), {
+      type: 'navigate',
+      to: 'menu',
+      transition: 'smart',
+      duration: 500,
+      easing: 'spring-gentle',
+    })
+    expect(s.transition).toEqual({
+      from: 'home',
+      to: 'menu',
+      kind: 'smart',
+      direction: 'forward',
+      duration: 500,
+      easing: 'spring-gentle',
+    })
   })
 
   it('navigate with none has no transition', () => {
@@ -102,6 +121,7 @@ describe('previewNavReducer', () => {
       to: 'home',
       kind: 'push',
       direction: 'back',
+      duration: TRANSITION_DURATION_MS.push,
     })
     s = previewNavReducer(s, { type: 'forward' })
     expect(currentId(s.history)).toBe('menu')
@@ -122,52 +142,52 @@ describe('previewNavReducer', () => {
   })
 })
 
-describe('frameStyle', () => {
-  const push: ActiveTransition = {
-    from: 'a',
-    to: 'b',
-    kind: 'push',
-    direction: 'forward',
+function node(id: string, name: string | undefined, children: DesignNode[] = []): DesignNode {
+  const n: DesignNode = {
+    id,
+    tag: 'div',
+    kind: 'frame',
+    style: {},
+    attrs: {},
+    children,
   }
-  const back: ActiveTransition = { ...push, direction: 'back' }
-  const fade: ActiveTransition = { ...push, kind: 'fade' }
+  return name === undefined ? n : { ...n, name }
+}
 
-  it('push forward: incoming enters from the right, outgoing leaves to the left', () => {
-    expect(frameStyle(push, 'incoming', 'start', 0.5).transform).toBe('scale(0.5) translateX(100%)')
-    expect(frameStyle(push, 'incoming', 'end', 0.5).transform).toBe('scale(0.5) translateX(0%)')
-    expect(frameStyle(push, 'outgoing', 'start', 0.5).transform).toBe('scale(0.5) translateX(0%)')
-    expect(frameStyle(push, 'outgoing', 'end', 0.5).transform).toBe('scale(0.5) translateX(-100%)')
+describe('vtNames', () => {
+  it('returns names present once on both sides, in origin order', () => {
+    const from = node('r', 'Root', [
+      node('a', 'Hero Title'),
+      node('b', 'Card'),
+      node('c', 'Only here'),
+      node('d', undefined),
+    ])
+    const to = node('r2', 'Root', [node('x', 'Card'), node('y', 'hero title'), node('z', 'New')])
+    expect(vtNames(from, to)).toEqual(['pw-root', 'pw-hero-title', 'pw-card'])
   })
 
-  it('push back mirrors the direction', () => {
-    expect(frameStyle(back, 'incoming', 'start', 1).transform).toBe('scale(1) translateX(-100%)')
-    expect(frameStyle(back, 'outgoing', 'end', 1).transform).toBe('scale(1) translateX(100%)')
+  it('drops names duplicated on either side, including slug collisions', () => {
+    const from = node('r', undefined, [
+      node('a', 'Item'),
+      node('b', 'Item'),
+      node('c', 'Badge'),
+      node('d', 'Logo'),
+      node('e', 'Price Tag'),
+    ])
+    const to = node('r2', undefined, [
+      node('x', 'Item'),
+      node('y', 'Badge'),
+      node('z', 'Badge'),
+      node('w', 'Logo'),
+      node('v', 'price-tag'),
+      node('u', 'Price  Tag!'),
+    ])
+    expect(vtNames(from, to)).toEqual(['pw-logo'])
   })
 
-  it('fade only touches opacity', () => {
-    expect(frameStyle(fade, 'incoming', 'start', 1).opacity).toBe(0)
-    expect(frameStyle(fade, 'incoming', 'end', 1).opacity).toBe(1)
-    expect(frameStyle(fade, 'outgoing', 'end', 1).opacity).toBe(0)
-    expect(frameStyle(fade, 'outgoing', 'end', 1).transform).toBe('scale(1)')
-  })
-})
-
-describe('fitScale', () => {
-  it('never upscales and respects padding', () => {
-    expect(fitScale({ w: 390, h: 844 }, { w: 1920, h: 1080 }, 'fit')).toBe(1)
-    expect(fitScale({ w: 1440, h: 900 }, { w: 720, h: 900 }, 'fit')).toBe(0.5)
-    expect(fitScale({ w: 1000, h: 1000 }, { w: 600, h: 1000 }, 'fit', 50)).toBe(0.5)
-  })
-
-  it('actual is always 1', () => {
-    expect(fitScale({ w: 1440, h: 900 }, { w: 100, h: 100 }, 'actual')).toBe(1)
-  })
-})
-
-describe('frameStyle transition property', () => {
-  const push: ActiveTransition = { from: 'a', to: 'b', kind: 'push', direction: 'forward' }
-  it('snaps to the start pose and tweens only towards the end pose', () => {
-    expect(frameStyle(push, 'incoming', 'start', 1).transition).toBe('none')
-    expect(frameStyle(push, 'incoming', 'end', 1).transition).toContain('transform 280ms')
+  it('ignores names that slug to nothing', () => {
+    expect(
+      vtNames(node('r', '***', [node('a', 'ok')]), node('r2', '***', [node('b', 'ok')])),
+    ).toEqual(['pw-ok'])
   })
 })

@@ -343,3 +343,48 @@ describe('parseHtml — limits', () => {
     expect(warnings).toEqual(['dropped <area>'])
   })
 })
+
+describe('sanitizeTree — motion and reserved style', () => {
+  const node = (partial: Partial<DesignNode> & { id: string; tag: string }): DesignNode => ({
+    kind: 'element',
+    style: {},
+    attrs: {},
+    children: [],
+    ...partial,
+  })
+
+  it('drops an invalid motion with a warning and keeps a valid one', () => {
+    const valid = { hover: { preset: 'lift' as const, duration: 160, easing: 'ease-out' as const } }
+    const tree = node({
+      id: 'root',
+      tag: 'div',
+      kind: 'frame',
+      children: [
+        node({ id: 'a', tag: 'p', motion: valid }),
+        node({ id: 'b', tag: 'p', motion: { entrance: { preset: 'wiggle' } } as never }),
+        node({ id: 'c', tag: 'p', motion: { hover: { ...valid.hover, durration: 1 } } as never }),
+      ],
+    })
+    const { tree: out, warnings } = sanitizeTree(tree)
+    expect(out.children[0].motion).toEqual(valid)
+    expect('motion' in out.children[1]).toBe(false)
+    expect('motion' in out.children[2]).toBe(false)
+    expect(warnings).toEqual(['dropped invalid motion on b', 'dropped invalid motion on c'])
+  })
+
+  it('drops --pw-* declarations from the user style', () => {
+    const tree = node({
+      id: 'root',
+      tag: 'div',
+      kind: 'frame',
+      style: { color: 'red', '--pw-dur': '1s', '--PW-i': '2', '--gap': '4px' },
+    })
+    const { tree: out, warnings } = sanitizeTree(tree)
+    expect(out.style).toEqual({ color: 'red', '--gap': '4px' })
+    expect(warnings).toEqual([
+      'dropped reserved style --pw-dur on <div>',
+      'dropped reserved style --PW-i on <div>',
+    ])
+    expect(tree.style['--pw-dur']).toBe('1s')
+  })
+})
