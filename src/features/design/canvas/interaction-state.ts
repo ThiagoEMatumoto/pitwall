@@ -8,7 +8,7 @@ import type { DesignTool } from '@/store/designStore'
 import type { HitMessage, Rect } from '@shared/design/protocol'
 import type { DesignOp } from '@shared/types/design'
 import type { ArtboardBridge } from './runtime-bridge'
-import type { Point } from './geometry'
+import type { ArtboardPlacement, Point } from './geometry'
 import type { DragNode, ResizeHandle } from './drag-plan'
 import type { InsertionLine } from './reorder-plan'
 import type { SnapGuide } from './snapping'
@@ -102,6 +102,21 @@ export interface ResizeGesture {
   dirty: boolean
 }
 
+// Dragging the artboard's own background. `start`/`last` are artboard-local
+// like every other gesture, but the layer travels with the frame, so the
+// pointer's canvas position is rebuilt from the box as it is at each tick.
+export interface ArtboardGesture {
+  kind: 'artboard'
+  pointerId: number
+  start: Point
+  last: Point
+  startCanvas: Point
+  box: ArtboardPlacement
+  candidates: Rect[]
+  delta: Point
+  dirty: boolean
+}
+
 export interface MarqueeGesture {
   kind: 'marquee'
   pointerId: number
@@ -119,7 +134,13 @@ export interface DrawGesture {
   target: DropTarget
 }
 
-export type Gesture = PressGesture | MoveGesture | ResizeGesture | MarqueeGesture | DrawGesture
+export type Gesture =
+  | PressGesture
+  | MoveGesture
+  | ResizeGesture
+  | ArtboardGesture
+  | MarqueeGesture
+  | DrawGesture
 
 export const CLICK_THRESHOLD_PX = 3
 export const DEFAULT_DRAW_SIZE = 100
