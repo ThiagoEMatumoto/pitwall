@@ -13,16 +13,14 @@ import {
   DEFAULT_ARTBOARD_HEIGHT_PX,
   clampArtboardSizeReport,
 } from '../../../../shared/design/safety'
+import { nextArtboardX as placeAfterLast } from '../../../../shared/design/artboard-layout'
 import type { DesignDocument, DesignTokens } from '../../../../shared/types/design'
 
 // Artboards created without x land to the right of the page's last one; the
 // agent should not have to lay out the canvas.
-const ARTBOARD_GAP = 120
-
 function nextArtboardX(doc: DesignDocument, pageId: string | undefined): number {
   const page = pageId ? doc.pages.find((p) => p.id === pageId) : doc.pages[0]
-  if (!page || page.artboards.length === 0) return 0
-  return Math.max(...page.artboards.map((a) => a.x + a.width)) + ARTBOARD_GAP
+  return placeAfterLast(page?.artboards ?? [])
 }
 
 // The store clamps silently; the agent asked for a size, so it hears about it.

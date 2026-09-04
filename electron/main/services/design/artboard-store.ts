@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db'
+import { duplicateArtboardX } from '../../../../shared/design/artboard-layout'
 import { cloneWithNewIds } from '../../../../shared/design/ops'
 import {
   DEFAULT_ARTBOARD_HEIGHT_PX,
@@ -226,7 +227,7 @@ export function duplicateArtboard(input: DuplicateDesignArtboardInput): DesignAr
     {
       name: input.name ?? `${row.name} copy`,
       // Default: to the right of the original, with a gap.
-      x: input.x ?? row.x + row.width + 80,
+      x: input.x ?? duplicateArtboardX(row),
       y: input.y ?? row.y,
       width: row.width,
       height: row.height,

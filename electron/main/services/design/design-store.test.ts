@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations } from '../migrations/index'
 import * as designStudioMigration from '../migrations/046_design_studio'
 import type { DesignNode } from '../../../../shared/types/design'
+import { ARTBOARD_GAP } from '../../../../shared/design/safety'
 
 // Same pattern as diagram-store.test: the store imports getDb from '../db'
 // (which depends on electron.app); we mock it to a migrated in-memory SQLite.
@@ -180,7 +181,7 @@ describe('design-store', () => {
     const copy = store.duplicateArtboard({ artboardId: ab.id })
     expect(copy.id).not.toBe(ab.id)
     expect(copy.name).toBe('Home copy')
-    expect(copy.x).toBe(ab.x + 200 + 80)
+    expect(copy.x).toBe(ab.x + 200 + ARTBOARD_GAP)
 
     const originalIds = new Set(collectIds(ab.tree))
     const copyIds = collectIds(copy.tree)

@@ -3,6 +3,7 @@
 // follows a rejected write.
 
 import { api } from '@/lib/ipc'
+import { nextArtboardX } from '@shared/design/artboard-layout'
 import { buildIndex } from '@shared/design/ops'
 import type { ArtboardPreset, DesignArtboard } from '@shared/types/design'
 import {
@@ -16,8 +17,6 @@ import {
   type DesignStore,
 } from './designStore.internal'
 
-const ARTBOARD_GAP = 100
-
 export async function createArtboardAction(
   store: DesignStore,
   preset: ArtboardPreset,
@@ -25,7 +24,7 @@ export async function createArtboardAction(
   const { docId, pageId } = store.getState()
   if (!docId || !pageId) throw new Error('no document open')
   const existing = pageArtboards(store)
-  const x = existing.length ? Math.max(...existing.map((m) => m.x + m.width)) + ARTBOARD_GAP : 0
+  const x = nextArtboardX(existing)
   const artboard = await api.design.artboardCreate({
     docId,
     pageId,
