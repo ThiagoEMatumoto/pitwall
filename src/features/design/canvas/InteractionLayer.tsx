@@ -66,18 +66,20 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
   )
 
   // Cmd/Ctrl and the scope change the resolution without the pointer moving;
-  // the last hit is kept so both re-resolve with no new probe.
+  // the last hit is kept so both re-resolve with no new probe. Both listeners
+  // are global and every mounted artboard has one, so a layer with no hit of
+  // its own stays quiet instead of clearing the hovered layer's outline.
   useEffect(() => {
     const onModifier = (e: KeyboardEvent): void => {
       const next = e.metaKey || e.ctrlKey
       if (next === deep.current) return
       deep.current = next
-      applyHover(lastHit.current)
+      if (lastHit.current) applyHover(lastHit.current)
     }
     window.addEventListener('keydown', onModifier)
     window.addEventListener('keyup', onModifier)
     const unsubscribe = useDesignStore.subscribe((s, prev) => {
-      if (s.scopeId !== prev.scopeId) applyHover(lastHit.current)
+      if (s.scopeId !== prev.scopeId && lastHit.current) applyHover(lastHit.current)
     })
     return () => {
       window.removeEventListener('keydown', onModifier)
