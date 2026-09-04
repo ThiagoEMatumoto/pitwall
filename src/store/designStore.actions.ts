@@ -1,8 +1,9 @@
 // Store actions with bodies too long for the store definition: artboard
-// creation, releasing a gesture that never committed, and the resync that
-// follows a rejected write.
+// creation/duplication/removal, releasing a gesture that never committed, and
+// the resync that follows a rejected write.
 
 import { api } from '@/lib/ipc'
+import { nextArtboardX } from '@shared/design/artboard-layout'
 import { buildIndex } from '@shared/design/ops'
 import type { ArtboardPreset, DesignArtboard } from '@shared/types/design'
 import type { ArtboardPlacement } from '@/features/design/canvas/geometry'
@@ -16,31 +17,10 @@ import {
   upsertMeta,
   type DesignStore,
 } from './designStore.internal'
+import { handleArtboardDeleted } from './designStore.remote'
 
-const ARTBOARD_GAP = 100
-
-// Without `placement` the artboard is parked to the right of the page;
-// a frame drawn on the canvas brings its own box.
-export async function createArtboardAction(
-  store: DesignStore,
-  preset: ArtboardPreset,
-  placement?: ArtboardPlacement,
-): Promise<DesignArtboard> {
-  const { docId, pageId } = store.getState()
-  if (!docId || !pageId) throw new Error('no document open')
-  const existing = pageArtboards(store)
-  const x = existing.length ? Math.max(...existing.map((m) => m.x + m.width)) + ARTBOARD_GAP : 0
-  const box = placement ?? { x, y: 0, width: preset.width, height: preset.height }
-  const artboard = await api.design.artboardCreate({
-    docId,
-    pageId,
-    name: `${preset.label} ${existing.length + 1}`,
-    width: box.width,
-    height: box.height,
-    sizing: preset.sizing,
-    x: box.x,
-    y: box.y,
-  })
+// Puts a freshly created artboard on the canvas and selects it.
+function adopt(store: DesignStore, artboard: DesignArtboard, pageId: string): void {
   indexes.set(artboard.id, buildIndex(artboard.tree))
   store.setState((s) => ({
     artboards: {
@@ -62,7 +42,54 @@ export async function createArtboardAction(
       : s.doc,
     selection: { artboardId: artboard.id, nodeIds: [] },
   }))
+}
+
+// Without `placement` the artboard is parked to the right of the page;
+// a frame drawn on the canvas brings its own box.
+export async function createArtboardAction(
+  store: DesignStore,
+  preset: ArtboardPreset,
+  placement?: ArtboardPlacement,
+): Promise<DesignArtboard> {
+  const { docId, pageId } = store.getState()
+  if (!docId || !pageId) throw new Error('no document open')
+  const existing = pageArtboards(store)
+  const x = nextArtboardX(existing)
+  const box = placement ?? { x, y: 0, width: preset.width, height: preset.height }
+  const artboard = await api.design.artboardCreate({
+    docId,
+    pageId,
+    name: `${preset.label} ${existing.length + 1}`,
+    width: box.width,
+    height: box.height,
+    sizing: preset.sizing,
+    x: box.x,
+    y: box.y,
+  })
+  adopt(store, artboard, pageId)
   return artboard
+}
+
+// The copy's position comes from the main process (next to the original).
+export async function duplicateArtboardAction(
+  store: DesignStore,
+  artboardId: string,
+): Promise<DesignArtboard> {
+  const source = store.getState().artboards[artboardId]?.meta
+  if (!source) throw new Error(`design artboard not found: ${artboardId}`)
+  const artboard = await api.design.artboardDuplicate({
+    artboardId,
+    name: `${source.name} cópia`,
+  })
+  adopt(store, artboard, source.pageId)
+  return artboard
+}
+
+// The broadcast would clean the local state too, but the sidebar should not
+// wait a round trip to stop showing a row the user just deleted.
+export async function deleteArtboardAction(store: DesignStore, artboardId: string): Promise<void> {
+  await api.design.artboardDelete(artboardId)
+  handleArtboardDeleted(store, artboardId)
 }
 
 // A gesture that never produced a final commit: what it painted is not on

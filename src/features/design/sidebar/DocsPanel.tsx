@@ -5,6 +5,8 @@ import { Menu } from '@/components/ui/Menu'
 import { activeMarker } from '@/features/brand'
 import { api } from '@/lib/ipc'
 import { useDesignStore } from '@/store/designStore'
+import { customPreset } from '@shared/types/design'
+import { ArtboardSizeDialog } from '../ArtboardSizeDialog'
 import { formatArtboardSize, formatPresetSize, groupPresets } from '../artboard-format'
 
 function InlineInput({
@@ -83,6 +85,9 @@ export function DocsPanel() {
   const selectPage = useDesignStore((s) => s.selectPage)
   const createPage = useDesignStore((s) => s.createPage)
   const createArtboard = useDesignStore((s) => s.createArtboard)
+  const duplicateArtboard = useDesignStore((s) => s.duplicateArtboard)
+  const requestDeleteArtboard = useDesignStore((s) => s.requestDeleteArtboard)
+  const updateArtboardMeta = useDesignStore((s) => s.updateArtboardMeta)
   const select = useDesignStore((s) => s.select)
   const fitToArtboard = useDesignStore((s) => s.fitToArtboard)
 
@@ -90,14 +95,23 @@ export function DocsPanel() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [presetsOpen, setPresetsOpen] = useState(false)
+  const [customOpen, setCustomOpen] = useState(false)
+  const [artboardMenuFor, setArtboardMenuFor] = useState<string | null>(null)
+  const [renamingArtboard, setRenamingArtboard] = useState<string | null>(null)
 
-  const presetSections = PRESET_GROUPS.map((g) => ({
-    title: g.label,
-    items: g.presets.map((p) => ({
-      label: `${p.label} · ${formatPresetSize(p)}`,
-      onClick: () => void createArtboard(p),
+  const presetSections = [
+    ...PRESET_GROUPS.map((g) => ({
+      title: g.label,
+      items: g.presets.map((p) => ({
+        label: `${p.label} · ${formatPresetSize(p)}`,
+        onClick: () => void createArtboard(p),
+      })),
     })),
-  }))
+    {
+      title: 'Outro',
+      items: [{ label: 'Personalizado…', onClick: () => setCustomOpen(true) }],
+    },
+  ]
 
   const pageArtboards = Object.values(artboards)
     .map((a) => a.meta)
@@ -204,25 +218,71 @@ export function DocsPanel() {
             {pageArtboards.length === 0 && (
               <li className="px-3 py-1 text-[11px] text-[var(--color-text-dim)]">Nenhum artboard. Crie um acima.</li>
             )}
-            {pageArtboards.map((m) => (
-              <li key={m.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    select(m.id, [])
-                    fitToArtboard(m.id)
-                  }}
-                  className={rowClass(m.id === selectedArtboard)}
-                >
-                  <Icon as={LayoutTemplate} size={12} className="shrink-0 opacity-70" />
-                  <span className="truncate">{m.name}</span>
-                  <span className="ml-auto tabular-nums text-[10px] opacity-60">
-                    {formatArtboardSize(m)}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {pageArtboards.map((m) =>
+              renamingArtboard === m.id ? (
+                <li key={m.id}>
+                  <InlineInput
+                    placeholder="Nome"
+                    initial={m.name}
+                    onSubmit={(name) => {
+                      setRenamingArtboard(null)
+                      updateArtboardMeta(m.id, { name })
+                    }}
+                    onCancel={() => setRenamingArtboard(null)}
+                  />
+                </li>
+              ) : (
+                <li key={m.id} className={rowClass(m.id === selectedArtboard)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      select(m.id, [])
+                      fitToArtboard(m.id)
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-2"
+                  >
+                    <Icon as={LayoutTemplate} size={12} className="shrink-0 opacity-70" />
+                    <span className="truncate">{m.name}</span>
+                    <span className="ml-auto tabular-nums text-[10px] opacity-60">
+                      {formatArtboardSize(m)}
+                    </span>
+                  </button>
+                  <Menu
+                    open={artboardMenuFor === m.id}
+                    onClose={() => setArtboardMenuFor(null)}
+                    portal
+                    items={[
+                      { label: 'Renomear', onClick: () => setRenamingArtboard(m.id) },
+                      { label: 'Duplicar', onClick: () => void duplicateArtboard(m.id) },
+                      {
+                        label: 'Excluir',
+                        onClick: () => requestDeleteArtboard(m.id),
+                        danger: true,
+                      },
+                    ]}
+                  >
+                    <button
+                      type="button"
+                      title="Opções"
+                      onClick={() => setArtboardMenuFor(artboardMenuFor === m.id ? null : m.id)}
+                      className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition group-hover:opacity-100 hover:bg-[var(--color-surface-2)]"
+                    >
+                      <Icon as={MoreHorizontal} size={12} />
+                    </button>
+                  </Menu>
+                </li>
+              ),
+            )}
           </ul>
+
+          {customOpen && (
+            <ArtboardSizeDialog
+              title="Novo artboard"
+              initial={{ width: 1440, height: 900 }}
+              onClose={() => setCustomOpen(false)}
+              onSubmit={(width, height) => void createArtboard(customPreset(width, height))}
+            />
+          )}
         </>
       )}
     </div>

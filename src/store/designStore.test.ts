@@ -15,6 +15,8 @@ const mockApi = {
   documentUpdate: vi.fn(),
   pageUpdate: vi.fn().mockResolvedValue(undefined),
   artboardCreate: vi.fn(),
+  artboardDuplicate: vi.fn(),
+  artboardDelete: vi.fn().mockResolvedValue(undefined),
   artboardApplyOps: vi.fn(),
   selectionSet: vi.fn().mockResolvedValue(undefined),
   activeDocSet: vi.fn().mockResolvedValue(undefined),
@@ -38,7 +40,9 @@ vi.mock('@/features/notifications/toast-store', () => ({
 }))
 
 const { useDesignStore, registerBridge } = await import('./designStore')
-const { handleAgentActivity, handleDocumentUpdated } = await import('./designStore.remote')
+const { handleAgentActivity, handleArtboardDeleted, handleDocumentUpdated } = await import(
+  './designStore.remote'
+)
 const { HUMAN_SNAPSHOT_IDLE_MS, burstSummary, cancelHumanSnapshots, setStageSize } =
   await import('./designStore.internal')
 const { watchAgentFinish } = await import('@/features/design/AgentActivityToasts')
@@ -477,5 +481,50 @@ describe('designStore', () => {
       artboardId: 'ab1',
       nodeIds: ['a', 'b'],
     })
+  })
+})
+
+describe('artboard duplicate/delete', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    mockApi.documentGet.mockResolvedValue(makeDoc())
+    mockApi.artboardDelete.mockResolvedValue(undefined)
+    useDesignStore.getState().stopWatch()
+    await useDesignStore.getState().openDoc('doc1')
+  })
+
+  it('duplicates through the IPC, adopts the copy and selects it', async () => {
+    const copy = makeArtboard({ id: 'ab2', name: 'Desktop 1 cópia', x: 1560, position: 1 })
+    mockApi.artboardDuplicate.mockResolvedValue(copy)
+
+    const result = await useDesignStore.getState().duplicateArtboard('ab1')
+
+    expect(mockApi.artboardDuplicate).toHaveBeenCalledWith({
+      artboardId: 'ab1',
+      name: 'Desktop 1 cópia',
+    })
+    expect(result.id).toBe('ab2')
+    const state = useDesignStore.getState()
+    expect(Object.keys(state.artboards).sort()).toEqual(['ab1', 'ab2'])
+    expect(state.doc?.pages[0].artboards.map((a) => a.id)).toEqual(['ab1', 'ab2'])
+    expect(state.selection).toEqual({ artboardId: 'ab2', nodeIds: [] })
+  })
+
+  it('drops the artboard locally without waiting for the broadcast', async () => {
+    useDesignStore.getState().select('ab1', [])
+
+    await useDesignStore.getState().deleteArtboard('ab1')
+
+    expect(mockApi.artboardDelete).toHaveBeenCalledWith('ab1')
+    const state = useDesignStore.getState()
+    expect(state.artboards).toEqual({})
+    expect(state.doc?.pages[0].artboards).toEqual([])
+    expect(state.selection).toEqual({ artboardId: null, nodeIds: [] })
+  })
+
+  it('closes a pending confirmation when that artboard is deleted elsewhere', () => {
+    useDesignStore.getState().requestDeleteArtboard('ab1')
+    handleArtboardDeleted(useDesignStore, 'ab1')
+    expect(useDesignStore.getState().artboardToDelete).toBeNull()
   })
 })

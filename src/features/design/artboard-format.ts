@@ -29,9 +29,20 @@ export const PRESET_GROUP_LABELS: Record<ArtboardPresetGroup, string> = {
   mobile: 'Mobile',
   large: 'Grandes',
   landing: 'Landing',
+  document: 'Documento',
+  presentation: 'Apresentação',
+  custom: 'Personalizado',
 }
 
-const GROUP_ORDER: readonly ArtboardPresetGroup[] = ['desktop', 'mobile', 'large', 'landing']
+// 'custom' is missing on purpose: a typed size is never a menu entry.
+const GROUP_ORDER: readonly ArtboardPresetGroup[] = [
+  'desktop',
+  'mobile',
+  'large',
+  'landing',
+  'document',
+  'presentation',
+]
 
 export interface PresetGroup {
   group: ArtboardPresetGroup

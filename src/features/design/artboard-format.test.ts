@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ARTBOARD_PRESETS } from '@shared/types/design'
+import { ARTBOARD_MAX_PX, ARTBOARD_MIN_PX } from '@shared/design/safety'
+import { ARTBOARD_PRESETS, customPreset } from '@shared/types/design'
 import {
   formatArtboardSize,
   formatPresetSize,
@@ -32,11 +33,23 @@ describe('formatPresetSize', () => {
 })
 
 describe('groupPresets', () => {
-  it('orders groups Desktop, Mobile, Grandes, Landing and keeps every preset', () => {
+  it('orders the groups and keeps every preset', () => {
     const groups = groupPresets()
-    expect(groups.map((g) => g.label)).toEqual(['Desktop', 'Mobile', 'Grandes', 'Landing'])
+    expect(groups.map((g) => g.label)).toEqual([
+      'Desktop',
+      'Mobile',
+      'Grandes',
+      'Landing',
+      'Documento',
+      'Apresentação',
+    ])
     expect(groups.flatMap((g) => g.presets).length).toBe(ARTBOARD_PRESETS.length)
     expect(groups[3].presets.map((p) => p.id)).toEqual(['landing', 'landing-mobile'])
+  })
+
+  it('never lists a typed size', () => {
+    const groups = groupPresets([...ARTBOARD_PRESETS, customPreset(300, 300)])
+    expect(groups.flatMap((g) => g.presets).map((p) => p.id)).not.toContain('custom')
   })
 
   it('drops empty groups', () => {
@@ -57,5 +70,34 @@ describe('presetMatches', () => {
   it('matches a fixed preset by full size', () => {
     expect(presetMatches(desktop, { width: 1440, height: 900, sizing: 'fixed' })).toBe(true)
     expect(presetMatches(desktop, { width: 1440, height: 901, sizing: 'fixed' })).toBe(false)
+  })
+})
+
+describe('customPreset', () => {
+  it('keeps a size inside the limits as typed', () => {
+    const preset = customPreset(794, 1123)
+    expect(preset).toMatchObject({ width: 794, height: 1123, sizing: 'fixed' })
+  })
+
+  it('clamps both axes to the artboard limits', () => {
+    expect(customPreset(0, 999_999)).toMatchObject({
+      width: ARTBOARD_MIN_PX,
+      height: ARTBOARD_MAX_PX,
+    })
+  })
+
+  it('rounds a fractional size instead of refusing it', () => {
+    expect(customPreset(793.7, 1122.5)).toMatchObject({ width: 794, height: 1123 })
+  })
+})
+
+describe('document presets', () => {
+  it('carries A4 and Letter at 96 DPI, both orientations', () => {
+    const byId = Object.fromEntries(ARTBOARD_PRESETS.map((p) => [p.id, p]))
+    expect(byId['a4']).toMatchObject({ width: 794, height: 1123 })
+    expect(byId['a4-landscape']).toMatchObject({ width: 1123, height: 794 })
+    expect(byId['letter']).toMatchObject({ width: 816, height: 1056 })
+    expect(byId['letter-landscape']).toMatchObject({ width: 1056, height: 816 })
+    expect(byId['slide-16-9']).toMatchObject({ width: 1920, height: 1080 })
   })
 })

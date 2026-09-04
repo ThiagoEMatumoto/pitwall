@@ -73,6 +73,9 @@ export interface DesignState {
   // plays (motionMode on). Esc or the toolbar leaves it.
   interaction: boolean
   askOpen: boolean
+  // Artboard waiting for the delete confirmation. Deleting one is not undoable
+  // (the history is per artboard), so nothing removes it without a dialog.
+  artboardToDelete: string | null
   // Bumps when fonts/globalCss change: iframes must reload, not just re-init.
   reloadNonce: number
   // Layers-panel lock. Not an op and not persisted: DesignNode.locked has no
@@ -88,6 +91,10 @@ export interface DesignState {
   archiveDoc: (docId: string) => Promise<void>
   createPage: (name: string) => Promise<void>
   createArtboard: (preset: ArtboardPreset, placement?: ArtboardPlacement) => Promise<DesignArtboard>
+  duplicateArtboard: (artboardId: string) => Promise<DesignArtboard>
+  deleteArtboard: (artboardId: string) => Promise<void>
+  // Opens/closes the delete confirmation; null closes it.
+  requestDeleteArtboard: (artboardId: string | null) => void
   updateArtboardMeta: (artboardId: string, patch: ArtboardPatch) => void
   // Flow artboard: the runtime measured its content. Local height moves at
   // once; the persist is coalesced and quiet (no undo, no snapshot).

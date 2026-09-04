@@ -3,6 +3,8 @@ import { PenTool, Plus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useDesignStore } from '@/store/designStore'
+import { customPreset } from '@shared/types/design'
+import { ArtboardSizeDialog } from './ArtboardSizeDialog'
 import { formatPresetSize, groupPresets } from './artboard-format'
 import { AskClaudeComposer } from './ask-claude/AskClaudeComposer'
 
@@ -19,6 +21,7 @@ export function EmptyState({ variant }: Props) {
   const setAskOpen = useDesignStore((s) => s.setAskOpen)
   const error = useDesignStore((s) => s.error)
   const [busy, setBusy] = useState(false)
+  const [customOpen, setCustomOpen] = useState(false)
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -81,6 +84,18 @@ export function EmptyState({ variant }: Props) {
           </div>
         ))}
       </div>
+      <Button variant="ghost" className="px-3 py-1 text-xs" onClick={() => setCustomOpen(true)}>
+        <Icon as={Plus} size={13} />
+        Personalizado…
+      </Button>
+      {customOpen && (
+        <ArtboardSizeDialog
+          title="Novo artboard"
+          initial={{ width: 1440, height: 900 }}
+          onClose={() => setCustomOpen(false)}
+          onSubmit={(width, height) => void run(() => createArtboard(customPreset(width, height)))}
+        />
+      )}
     </div>
   )
 }

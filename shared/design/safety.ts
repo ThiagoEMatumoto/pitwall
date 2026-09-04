@@ -16,6 +16,10 @@ export const ARTBOARD_MAX_PX = 16384
 export const MIN_FLOW_HEIGHT_PX = 200
 // Height of an artboard created without one; a flow artboard grows from here.
 export const DEFAULT_ARTBOARD_HEIGHT_PX = MIN_FLOW_HEIGHT_PX * 3
+// Gutter between artboards laid out automatically (new one at the end of the
+// page, duplicate next to its original). One value so the canvas, the MCP
+// tools and the duplicate path agree on what a row looks like.
+export const ARTBOARD_GAP = 120
 // Offscreen capture is sliced into tiles no taller than this (css px) and composed.
 export const CAPTURE_TILE_MAX_PX = 4096
 // width * height * scale^2 the offscreen capture is allowed to rasterize (all tiles).

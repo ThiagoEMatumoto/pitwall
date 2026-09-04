@@ -7,6 +7,7 @@ import { useDesignStore } from '@/store/designStore'
 import { ARTBOARD_MAX_PX, ARTBOARD_MIN_PX } from '@shared/design/safety'
 import type { ArtboardPreset, ArtboardSizing } from '@shared/types/design'
 import type { ArtboardPatch } from '@shared/design/ops'
+import { ArtboardSizeDialog } from '../../ArtboardSizeDialog'
 import { formatPresetSize, groupPresets, presetMatches } from '../../artboard-format'
 import { ColorField } from '../controls/ColorField'
 import { NumberField } from '../controls/NumberField'
@@ -56,6 +57,7 @@ export function ArtboardSection({ artboardId }: Props) {
   const tokens = useColorTokens()
   const [name, setName] = useState(meta?.name ?? '')
   const [presetsOpen, setPresetsOpen] = useState(false)
+  const [customOpen, setCustomOpen] = useState(false)
 
   useEffect(() => setName(meta?.name ?? ''), [meta?.name])
 
@@ -72,14 +74,20 @@ export function ArtboardSection({ artboardId }: Props) {
   const background =
     getStyle(tree.style, 'background') ?? getStyle(tree.style, 'background-color') ?? ''
 
-  const presetSections = PRESET_GROUPS.map((g) => ({
-    title: g.label,
-    items: g.presets.map((p) => ({
-      label: `${p.label} · ${formatPresetSize(p)}`,
-      active: presetMatches(p, meta),
-      onClick: () => updateArtboardMeta(artboardId, presetPatch(p)),
+  const presetSections = [
+    ...PRESET_GROUPS.map((g) => ({
+      title: g.label,
+      items: g.presets.map((p) => ({
+        label: `${p.label} · ${formatPresetSize(p)}`,
+        active: presetMatches(p, meta),
+        onClick: () => updateArtboardMeta(artboardId, presetPatch(p)),
+      })),
     })),
-  }))
+    {
+      title: 'Outro',
+      items: [{ label: 'Personalizado…', onClick: () => setCustomOpen(true) }],
+    },
+  ]
 
   return (
     <Section title="Artboard">
@@ -146,6 +154,17 @@ export function ArtboardSection({ artboardId }: Props) {
           </Menu>
         </div>
       </Row>
+      {customOpen && (
+        <ArtboardSizeDialog
+          title="Tamanho do artboard"
+          submitLabel="Aplicar"
+          initial={{ width: meta.width, height: meta.height }}
+          onClose={() => setCustomOpen(false)}
+          onSubmit={(width, height) =>
+            updateArtboardMeta(artboardId, { width, height, sizing: 'fixed' })
+          }
+        />
+      )}
       {flow && (
         <p className="text-[10px] leading-snug text-[var(--color-text-dim)]">
           A altura segue o conteúdo; o valor mostrado é a última medida.
