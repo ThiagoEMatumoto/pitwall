@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/Button'
 import { useDesignStore, type DesignTool } from '@/store/designStore'
 import { DESIGN_TESTIDS } from '@shared/types/design'
 import { AgentActivityBadge } from './AgentActivityBadge'
+import { DocumentExportMenu } from './DocumentExportMenu'
 import { STAGE_MAX_ZOOM, STAGE_MIN_ZOOM, clampStageZoom } from './canvas/CanvasStage'
 import { SHORTCUTS_PANEL_TOGGLE_EVENT } from './canvas/useCanvasShortcuts'
 import { VersionsButton } from './versions/VersionsPanel'
@@ -224,6 +225,8 @@ export function DesignToolbar() {
           <Icon as={Keyboard} />
         </button>
       )}
+
+      {hasDoc && <DocumentExportMenu />}
 
       {hasDoc && <VersionsButton />}
 
