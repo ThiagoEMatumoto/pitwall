@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { registerBridge, useDesignStore } from '@/store/designStore'
 import { newNonce } from '@shared/design/ids'
 import { DESIGN_TESTIDS } from '@shared/types/design'
+import { ArtboardHandles } from './ArtboardHandles'
 import { ArtboardOverflowBadge } from './ArtboardOverflowBadge'
 import { InteractionLayer } from './InteractionLayer'
 import { ArtboardBridge } from './runtime-bridge'
@@ -267,6 +268,12 @@ export function ArtboardFrame({ artboardId }: Props) {
           <InteractionLayer artboardId={artboardId} bridge={bridgeRef.current!} />
           <ArtboardOverflowBadge artboardId={artboardId} bridge={bridgeRef.current!} />
         </>
+      )}
+
+      {/* After the InteractionLayer on purpose: DOM order decides which one
+          takes the pointer where the handles overhang the frame. */}
+      {mode === 'edit' && !interaction && selectedNodeIds?.length === 0 && (
+        <ArtboardHandles artboardId={artboardId} />
       )}
     </div>
   )
