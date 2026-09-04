@@ -24,6 +24,11 @@ export const ARTBOARD_GAP = 120
 export const CAPTURE_TILE_MAX_PX = 4096
 // width * height * scale^2 the offscreen capture is allowed to rasterize (all tiles).
 export const MAX_CAPTURE_PIXELS = 120_000_000
+// PDF export is vectorial: MAX_CAPTURE_PIXELS is a rasterization limit and
+// does not apply. What has to be bounded is the work — one print per artboard.
+export const MAX_PDF_PAGES = 60
+export const PDF_PAGE_TIMEOUT_MS = 10_000
+export const PDF_TOTAL_TIMEOUT_MS = 120_000
 export const MAX_HTML_BYTES = 512 * 1024
 export const MAX_GLOBAL_CSS_BYTES = 512 * 1024
 export const MAX_TOKEN_KEYS = 200

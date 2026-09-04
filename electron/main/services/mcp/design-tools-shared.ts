@@ -10,6 +10,7 @@ import {
   MAX_GLOBAL_CSS_BYTES,
   MAX_HTML_BYTES,
   MAX_NAME_CHARS,
+  MAX_PDF_PAGES,
   MAX_SUMMARY_CHARS,
   MAX_TOKEN_KEYS,
 } from '../../../../shared/design/safety'
@@ -358,6 +359,11 @@ export const schemas = {
     artboardId,
     format: z.enum(['png', 'html', 'jsx']).default('html'),
     scale: z.union([z.literal(1), z.literal(2)]).default(1),
+  }),
+  pdfExport: z.object({
+    docId,
+    pageId: id.optional(),
+    artboardIds: z.array(id).min(1).max(MAX_PDF_PAGES).optional(),
   }),
   guide: z.object({ section: z.number().int().min(1).max(10).optional() }),
   nodesFinish: z.object({

@@ -15,6 +15,8 @@ import { newNodeId } from '@shared/design/ids'
 import type { Rect } from '@shared/design/protocol'
 import type { DesignAssetMime, DesignNode } from '@shared/types/design'
 import { ArtboardFrame, ArtboardPlaceholder } from './ArtboardFrame'
+import { DRAWN_ARTBOARD_PRESET, normalizeDrawnArtboard } from './artboard-drag'
+import { SelectionBreadcrumb } from './SelectionBreadcrumb'
 import { SelectionOverlay } from './SelectionOverlay'
 import {
   artboardBounds,
@@ -62,6 +64,9 @@ type Gesture =
       current: Point
       additive: boolean
     }
+  // Frame tool on empty canvas. Screen space, like the marquee it previews
+  // with; the box only becomes canvas units on commit.
+  | { kind: 'drawArtboard'; pointerId: number; origin: Point; current: Point }
 
 const CURSOR: Record<DesignTool, string> = {
   move: 'default',
@@ -101,6 +106,7 @@ export function CanvasStage() {
   const docId = useDesignStore((s) => s.docId)
   const pageId = useDesignStore((s) => s.pageId)
   const artboards = useDesignStore((s) => s.artboards)
+  const createArtboard = useDesignStore((s) => s.createArtboard)
   const select = useDesignStore((s) => s.select)
   const setScope = useDesignStore((s) => s.setScope)
   const commit = useDesignStore((s) => s.commit)
@@ -205,8 +211,18 @@ export function CanvasStage() {
       gestureRef.current = { kind: 'pan', pointerId: e.pointerId, last: point }
       return
     }
-    // Only the empty canvas starts a marquee; artboard layers stop propagation.
+    // Only the empty canvas starts a gesture; artboard layers stop propagation.
     if (e.button !== 0 || e.target !== e.currentTarget) return
+    if (tool === 'frame') {
+      e.currentTarget.setPointerCapture(e.pointerId)
+      gestureRef.current = {
+        kind: 'drawArtboard',
+        pointerId: e.pointerId,
+        origin: point,
+        current: point,
+      }
+      return
+    }
     if (tool !== 'move') return
     e.currentTarget.setPointerCapture(e.pointerId)
     gestureRef.current = {
@@ -246,6 +262,13 @@ export function CanvasStage() {
     setMarquee(null)
     const rect = rectFromPoints(g.origin, g.current)
     const vp = useDesignStore.getState().viewport
+    if (g.kind === 'drawArtboard') {
+      const a = screenToCanvas({ x: rect.x, y: rect.y }, vp)
+      const b = screenToCanvas({ x: rect.x + rect.w, y: rect.y + rect.h }, vp)
+      setTool('move')
+      void createArtboard(DRAWN_ARTBOARD_PRESET, normalizeDrawnArtboard(rectFromPoints(a, b)))
+      return
+    }
     const hits = pageArtboardIds.filter((id) =>
       rectsIntersect(rect, artboardScreenRect(artboards[id].meta, vp)),
     )
@@ -266,6 +289,14 @@ export function CanvasStage() {
       select(null)
       setScope(null)
     }
+  }
+
+  const onPointerCancel = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    const g = gestureRef.current
+    if (!g || g.pointerId !== e.pointerId) return
+    gestureRef.current = null
+    e.currentTarget.releasePointerCapture(e.pointerId)
+    setMarquee(null)
   }
 
   const onDrop = async (e: React.DragEvent<HTMLDivElement>): Promise<void> => {
@@ -340,7 +371,7 @@ export function CanvasStage() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => void onDrop(e)}
     >
@@ -362,6 +393,8 @@ export function CanvasStage() {
       </div>
 
       <SelectionOverlay marquee={marquee} />
+
+      <SelectionBreadcrumb />
 
       {docId && pageArtboardIds.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

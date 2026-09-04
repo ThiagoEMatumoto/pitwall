@@ -107,6 +107,8 @@ import type {
   DesignLink,
   DesignSelection,
   DesignExportInput,
+  DesignPdfInput,
+  DesignPngBatchInput,
   DesignAskInput,
 } from '../../shared/types/ipc'
 
@@ -573,6 +575,8 @@ const api: Api = {
     selectionSet: (input: DesignSelection) => invoke('design:selection-set', input),
     activeDocSet: (docId: string | null) => invoke('design:active-doc-set', docId),
     export: (input: DesignExportInput) => invoke('design:export', input),
+    pdfExport: (input: DesignPdfInput) => invoke('design:pdf-export', input),
+    pngBatchExport: (input: DesignPngBatchInput) => invoke('design:png-batch', input),
     askSession: (input: DesignAskInput) => invoke('design:ask-session', input),
     onDocumentUpdated: (handler) => subscribe<unknown>('design:document-updated', handler),
     onDocumentDeleted: (handler) => subscribe<unknown>('design:document-deleted', handler),

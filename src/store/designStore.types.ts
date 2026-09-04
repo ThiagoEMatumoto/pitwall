@@ -11,7 +11,7 @@ import type {
   DesignOp,
   DesignTokens,
 } from '@shared/types/design'
-import type { Point, Viewport } from '@/features/design/canvas/geometry'
+import type { ArtboardPlacement, Point, Viewport } from '@/features/design/canvas/geometry'
 
 export type { IndexEntry }
 
@@ -90,7 +90,7 @@ export interface DesignState {
   renameDoc: (title: string) => Promise<void>
   archiveDoc: (docId: string) => Promise<void>
   createPage: (name: string) => Promise<void>
-  createArtboard: (preset: ArtboardPreset) => Promise<DesignArtboard>
+  createArtboard: (preset: ArtboardPreset, placement?: ArtboardPlacement) => Promise<DesignArtboard>
   duplicateArtboard: (artboardId: string) => Promise<DesignArtboard>
   deleteArtboard: (artboardId: string) => Promise<void>
   // Opens/closes the delete confirmation; null closes it.

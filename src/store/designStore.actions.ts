@@ -6,6 +6,7 @@ import { api } from '@/lib/ipc'
 import { nextArtboardX } from '@shared/design/artboard-layout'
 import { buildIndex } from '@shared/design/ops'
 import type { ArtboardPreset, DesignArtboard } from '@shared/types/design'
+import type { ArtboardPlacement } from '@/features/design/canvas/geometry'
 import {
   bridges,
   indexes,
@@ -43,23 +44,27 @@ function adopt(store: DesignStore, artboard: DesignArtboard, pageId: string): vo
   }))
 }
 
+// Without `placement` the artboard is parked to the right of the page;
+// a frame drawn on the canvas brings its own box.
 export async function createArtboardAction(
   store: DesignStore,
   preset: ArtboardPreset,
+  placement?: ArtboardPlacement,
 ): Promise<DesignArtboard> {
   const { docId, pageId } = store.getState()
   if (!docId || !pageId) throw new Error('no document open')
   const existing = pageArtboards(store)
   const x = nextArtboardX(existing)
+  const box = placement ?? { x, y: 0, width: preset.width, height: preset.height }
   const artboard = await api.design.artboardCreate({
     docId,
     pageId,
     name: `${preset.label} ${existing.length + 1}`,
-    width: preset.width,
-    height: preset.height,
+    width: box.width,
+    height: box.height,
     sizing: preset.sizing,
-    x,
-    y: 0,
+    x: box.x,
+    y: box.y,
   })
   adopt(store, artboard, pageId)
   return artboard

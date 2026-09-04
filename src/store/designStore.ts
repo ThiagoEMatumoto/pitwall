@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api } from '@/lib/ipc'
 import { centerViewport, fitViewport, unionRects, zoomAt } from '@/features/design/canvas/geometry'
+import { scopeAfterSelect } from '@/features/design/canvas/scope-path'
 import { invertOps } from '@shared/design/ops'
 import type { ArtboardUpdatedEvent, DesignAgentActivity, DesignOp } from '@shared/types/design'
 import type { DesignState } from './designStore.types'
@@ -59,6 +60,17 @@ const SELECTION_DEBOUNCE_MS = 150
 const VIEWPORT_PERSIST_MS = 500
 // A small node framed alone may zoom in this far (artboards stop at 100%).
 const SELECTION_MAX_ZOOM = 4
+
+function ancestorIds(artboardId: string | null, nodeId: string): string[] {
+  const index = artboardId ? indexes.get(artboardId) : undefined
+  const ids: string[] = []
+  let cur = index?.get(nodeId)?.parentId ?? null
+  while (cur) {
+    ids.push(cur)
+    cur = index?.get(cur)?.parentId ?? null
+  }
+  return ids
+}
 
 const EMPTY_SELECTION = { artboardId: null, nodeIds: [] as string[] }
 
@@ -197,7 +209,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       get().selectPage(page.id)
     },
 
-    createArtboard: (preset) => createArtboardAction(store, preset),
+    createArtboard: (preset, placement) => createArtboardAction(store, preset, placement),
 
     duplicateArtboard: (artboardId) => duplicateArtboardAction(store, artboardId),
 
@@ -265,7 +277,13 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       if (entry) applyHistoryEntry(store, artboardId, entry, entry.ops)
     },
 
-    select: (artboardId, nodeIds = []) => set({ selection: { artboardId, nodeIds } }),
+    // Selecting outside the current scope leaves it: the scope is only kept
+    // while every selected node still lives inside it.
+    select: (artboardId, nodeIds = []) =>
+      set((s) => ({
+        selection: { artboardId, nodeIds },
+        scopeId: scopeAfterSelect(s.scopeId, nodeIds, (id) => ancestorIds(artboardId, id)),
+      })),
     setScope: (scopeId) => set({ scopeId }),
     setHover: (hover) => set({ hover }),
     setTool: (tool) => set({ tool }),

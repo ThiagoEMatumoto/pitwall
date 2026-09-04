@@ -1,9 +1,15 @@
-import { ipcMain } from 'electron'
+import { dialog, ipcMain } from 'electron'
+import { writeFile } from 'node:fs/promises'
 import * as designStore from '../services/design/design-store'
 import * as assetStore from '../services/design/asset-store'
 import * as liveState from '../services/design/live-state'
 import { applyArtboardOps, restoreArtboardVersion } from '../services/design/mutate'
 import { exportArtboardHtml, exportArtboardJsx, exportArtboardPng } from '../services/design/export'
+import {
+  exportDocumentPdf,
+  exportDocumentPngs,
+  fileSafeName,
+} from '../services/design/document-export'
 import { formatPtyInjection, injectIntoSession } from '../services/handoff/inject'
 import { ptyManager } from '../services/pty-manager'
 import { broadcast } from '../services/notify'
@@ -27,6 +33,10 @@ import type {
   DesignLink,
   DesignListFilter,
   DesignPage,
+  DesignPdfInput,
+  DesignPdfResult,
+  DesignPngBatchInput,
+  DesignPngBatchResult,
   DesignSelection,
   DesignVersion,
   DesignVersionMeta,
@@ -69,6 +79,12 @@ function requireId(value: unknown, label: string): string {
 
 function optionalId(value: unknown, label: string): string | null {
   return value === null || value === undefined ? null : requireId(value, label)
+}
+
+function optionalIdList(value: unknown, label: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array of ids`)
+  return value.map((id) => requireId(id, label))
 }
 
 function requireVersion(value: unknown): number {
@@ -332,6 +348,50 @@ export function registerDesignIpc(): void {
     const text =
       input.format === 'jsx' ? exportArtboardJsx(artboardId) : exportArtboardHtml(artboardId)
     return { format: input.format, ...text }
+  })
+
+  // ---- document-level export ----
+
+  // The PDF is written by the main process: a multi-page document has no
+  // business crossing the IPC bridge as base64.
+  ipcMain.handle('design:pdf-export', async (_e, raw: unknown): Promise<DesignPdfResult> => {
+    const input = requireInput<DesignPdfInput>(raw, 'input')
+    const scope = {
+      docId: requireId(input.docId, 'docId'),
+      pageId: input.pageId === undefined ? undefined : requireId(input.pageId, 'pageId'),
+      artboardIds: optionalIdList(input.artboardIds, 'artboardIds'),
+    }
+    const doc = designStore.getDocument(scope.docId)
+    if (!doc) throw new Error(`design document not found: ${scope.docId}`)
+    const res = await dialog.showSaveDialog({
+      title: 'Exportar PDF',
+      defaultPath: `${fileSafeName(doc.title, 'design')}.pdf`,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    })
+    if (res.canceled || !res.filePath) return { state: 'canceled', filePath: null, pages: 0 }
+    const { pdf, pages } = await exportDocumentPdf(scope)
+    await writeFile(res.filePath, pdf)
+    return { state: 'saved', filePath: res.filePath, pages }
+  })
+
+  ipcMain.handle('design:png-batch', async (_e, raw: unknown): Promise<DesignPngBatchResult> => {
+    const input = requireInput<DesignPngBatchInput>(raw, 'input')
+    const scope = {
+      docId: requireId(input.docId, 'docId'),
+      pageId: input.pageId === undefined ? undefined : requireId(input.pageId, 'pageId'),
+      artboardIds: optionalIdList(input.artboardIds, 'artboardIds'),
+      scale: readExportScale(input.scale),
+    }
+    const res = await dialog.showOpenDialog({
+      title: 'Escolher a pasta dos PNGs',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (res.canceled || res.filePaths.length === 0) {
+      return { state: 'canceled', dirPath: null, files: [] }
+    }
+    const dirPath = res.filePaths[0]
+    const files = await exportDocumentPngs({ ...scope, dir: dirPath })
+    return { state: 'saved', dirPath, files }
   })
 
   // ---- Ask Claude ----
