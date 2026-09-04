@@ -17,6 +17,7 @@ import type { ArtboardBridge } from './runtime-bridge'
 import type { Point } from './geometry'
 import { HANDLE_CURSOR, handleAt, type ResizeHandle } from './drag-plan'
 import { GestureRunner } from './gesture-runner'
+import { reportHitFailure } from './hit-failure'
 import { resolveDiveTarget, resolveHoverTarget } from './interaction-state'
 
 interface Props {
@@ -125,7 +126,12 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
           lastHit.current = msg
           applyHover(msg)
         })
-        .catch(() => undefined)
+        .catch((err) => {
+          if (seq !== hoverSeq.current) return
+          lastHit.current = null
+          applyHover(null)
+          reportHitFailure(artboardId, 'hover', err)
+        })
     })
   }
 
@@ -206,7 +212,7 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
         setScope(dive.scopeId === msg.path[0] ? null : dive.scopeId)
         select(artboardId, [dive.nodeId])
       })
-      .catch(() => undefined)
+      .catch((err) => reportHitFailure(artboardId, 'duplo clique', err))
   }
 
   // While editing text the iframe needs the real pointer (caret, selection).
