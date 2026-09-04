@@ -11,7 +11,7 @@ import type {
   DesignOp,
   DesignTokens,
 } from '@shared/types/design'
-import type { Point, Viewport } from '@/features/design/canvas/geometry'
+import type { ArtboardPlacement, Point, Viewport } from '@/features/design/canvas/geometry'
 
 export type { IndexEntry }
 
@@ -87,7 +87,7 @@ export interface DesignState {
   renameDoc: (title: string) => Promise<void>
   archiveDoc: (docId: string) => Promise<void>
   createPage: (name: string) => Promise<void>
-  createArtboard: (preset: ArtboardPreset) => Promise<DesignArtboard>
+  createArtboard: (preset: ArtboardPreset, placement?: ArtboardPlacement) => Promise<DesignArtboard>
   updateArtboardMeta: (artboardId: string, patch: ArtboardPatch) => void
   // Flow artboard: the runtime measured its content. Local height moves at
   // once; the persist is coalesced and quiet (no undo, no snapshot).
