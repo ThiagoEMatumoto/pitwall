@@ -15,6 +15,7 @@ import { newNodeId } from '@shared/design/ids'
 import type { Rect } from '@shared/design/protocol'
 import type { DesignAssetMime, DesignNode } from '@shared/types/design'
 import { ArtboardFrame, ArtboardPlaceholder } from './ArtboardFrame'
+import { SelectionBreadcrumb } from './SelectionBreadcrumb'
 import { SelectionOverlay } from './SelectionOverlay'
 import {
   artboardBounds,
@@ -362,6 +363,8 @@ export function CanvasStage() {
       </div>
 
       <SelectionOverlay marquee={marquee} />
+
+      <SelectionBreadcrumb />
 
       {docId && pageArtboardIds.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
