@@ -202,7 +202,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       get().selectPage(page.id)
     },
 
-    createArtboard: (preset) => createArtboardAction(store, preset),
+    createArtboard: (preset, placement) => createArtboardAction(store, preset, placement),
 
     updateArtboardMeta: (artboardId, patch) => {
       get().commit(artboardId, [{ type: 'setArtboard', patch }], {

@@ -8,8 +8,10 @@ import { getNodeIndex, useDesignStore, type DesignTool } from '@/store/designSto
 import type { HitMessage, Rect } from '@shared/design/protocol'
 import type { DesignOp } from '@shared/types/design'
 import type { ArtboardBridge } from './runtime-bridge'
-import { rectFromPoints, rectsIntersect, type Point } from './geometry'
+import { artboardToCanvas, rectFromPoints, rectsIntersect, type Point } from './geometry'
 import { planResize } from './drag-plan'
+import { planArtboardMove, siblingBounds } from './artboard-drag'
+import { computeSnap } from './snapping'
 import {
   dropFrameOnPath,
   prepareDropTarget,
@@ -27,6 +29,7 @@ import {
   DEFAULT_DRAW_SIZE,
   gestureFeedback,
   resolveClickTarget,
+  type ArtboardGesture,
   type Gesture,
   type GestureHost,
   type MarqueeGesture,
@@ -116,6 +119,9 @@ export class GestureRunner implements GestureHost {
       case 'resize':
         this.commit(planResize(g.node, g.handle, g.delta.x, g.delta.y, mods), 'Resize', g.dirty)
         return
+      case 'artboard':
+        this.commit(planArtboardMove(g.box, g.delta.x, g.delta.y), 'Move artboard', g.dirty)
+        return
       case 'marquee':
         void this.finishMarquee(g)
         return
@@ -164,7 +170,7 @@ export class GestureRunner implements GestureHost {
     }
     const { scopeId, selection, select } = useDesignStore.getState()
     const target = resolveClickTarget(g.hit?.path ?? [], scopeId, g.deep)
-    if (!target) return { kind: 'marquee', ...base, additive: g.shift }
+    if (!target) return this.artboardDrag(g) ?? { kind: 'marquee', ...base, additive: g.shift }
     const selected = selection.artboardId === this.artboardId ? selection.nodeIds : []
     const ids = selected.includes(target) ? selected : g.shift ? [...selected, target] : [target]
     if (ids !== selected) select(this.artboardId, ids)
@@ -183,6 +189,33 @@ export class GestureRunner implements GestureHost {
       dropIndex: 0,
       probeSeq: 0,
       probing: false,
+    }
+  }
+
+  // Dragging the artboard's background moves the frame, but only once the
+  // frame itself is the selection: with a node selected the same drag is a
+  // marquee, and the click that precedes it is what deselects.
+  private artboardDrag(g: PressGesture): ArtboardGesture | null {
+    // An empty path is a failed probe, not the artboard's background.
+    if (g.shift || !g.hit || g.hit.path.length === 0) return null
+    const state = useDesignStore.getState()
+    const { selection } = state
+    if (selection.artboardId !== this.artboardId || selection.nodeIds.length > 0) return null
+    const meta = state.artboards[this.artboardId]?.meta
+    if (!meta) return null
+    return {
+      kind: 'artboard',
+      pointerId: g.pointerId,
+      start: g.start,
+      last: g.last,
+      startCanvas: artboardToCanvas(g.start, meta),
+      box: { x: meta.x, y: meta.y, width: meta.width, height: meta.height },
+      candidates: siblingBounds(
+        Object.values(state.artboards).map((a) => a.meta),
+        meta,
+      ),
+      delta: { x: 0, y: 0 },
+      dirty: false,
     }
   }
 
@@ -213,6 +246,9 @@ export class GestureRunner implements GestureHost {
       case 'resize':
         tickResize(this, g)
         return
+      case 'artboard':
+        this.tickArtboard(g)
+        return
       case 'marquee':
         gestureFeedback().update({ marquee: rectFromPoints(g.start, g.last) })
         return
@@ -225,6 +261,21 @@ export class GestureRunner implements GestureHost {
       default:
         return
     }
+  }
+
+  private tickArtboard(g: ArtboardGesture): void {
+    const meta = useDesignStore.getState().artboards[this.artboardId]?.meta
+    if (!meta) return
+    const now = artboardToCanvas(g.last, meta)
+    const dx = now.x - g.startCanvas.x
+    const dy = now.y - g.startCanvas.y
+    const moving = { x: g.box.x + dx, y: g.box.y + dy, w: g.box.width, h: g.box.height }
+    const snap = computeSnap(moving, g.candidates, this.snapThreshold())
+    g.delta = { x: dx + snap.dx, y: dy + snap.dy }
+    const ops = planArtboardMove(g.box, g.delta.x, g.delta.y)
+    if (ops.length === 0) return
+    g.dirty = true
+    this.commitTransient(ops, `artboard:${this.artboardId}`)
   }
 
   snapThreshold(): number {
