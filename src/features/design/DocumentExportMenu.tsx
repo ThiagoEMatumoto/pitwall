@@ -82,7 +82,7 @@ export function DocumentExportMenu() {
   ]
 
   return (
-    <Menu open={open} onClose={() => setOpen(false)} items={items}>
+    <Menu open={open} onClose={() => setOpen(false)} portal items={items}>
       <button
         type="button"
         data-testid="design-export-doc"
