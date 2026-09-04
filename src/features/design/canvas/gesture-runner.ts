@@ -19,6 +19,7 @@ import {
   type DropTarget,
 } from './drag-prep'
 import { planInsertForTool } from './draw-tools'
+import { reportHitFailure } from './hit-failure'
 import { SNAP_THRESHOLD_PX } from './snapping'
 import { finishMove, tickMove, tickResize } from './gesture-move'
 import {
@@ -69,7 +70,7 @@ export class GestureRunner implements GestureHost {
         g.hit = hit
         if (g.moved) void this.begin(g)
       })
-      .catch(() => undefined)
+      .catch((err) => reportHitFailure(this.artboardId, 'início do gesto', err))
   }
 
   move(p: Point, mods: Mods): void {
@@ -128,7 +129,10 @@ export class GestureRunner implements GestureHost {
 
   private async begin(g: PressGesture): Promise<void> {
     g.preparing = true
-    const next = await this.gestureFor(g).catch(() => null)
+    const next = await this.gestureFor(g).catch((err) => {
+      reportHitFailure(this.artboardId, 'arrastar', err)
+      return null
+    })
     if (this.gesture !== g) return
     this.gesture = next
     if (next) {
@@ -231,7 +235,10 @@ export class GestureRunner implements GestureHost {
 
   private async finishMarquee(g: MarqueeGesture): Promise<void> {
     const rect = rectFromPoints(g.start, g.last)
-    const children = await scopeChildrenRects(this.artboardId, this.bridge).catch(() => [])
+    const children = await scopeChildrenRects(this.artboardId, this.bridge).catch((err) => {
+      reportHitFailure(this.artboardId, 'seleção por área', err)
+      return []
+    })
     const hits = children.filter((c) => rectsIntersect(rect, c.rect)).map((c) => c.id)
     const { selection, select } = useDesignStore.getState()
     const previous = g.additive && selection.artboardId === this.artboardId ? selection.nodeIds : []
@@ -240,7 +247,15 @@ export class GestureRunner implements GestureHost {
 
   private async click(g: PressGesture): Promise<void> {
     if (g.handle) return
-    const hit = g.hit ?? (await this.bridge.hitTest(g.start.x, g.start.y).catch(() => null))
+    const hit =
+      g.hit ??
+      (await this.bridge.hitTest(g.start.x, g.start.y).catch((err) => {
+        reportHitFailure(this.artboardId, 'clique', err)
+        return null
+      }))
+    // A probe that failed says nothing about what is under the pointer;
+    // treating it as an empty hit is what cleared the selection at random.
+    if (!hit) return
     if (g.tool !== 'move') {
       const target = await this.drawTarget(hit)
       if (!target) return
@@ -254,7 +269,7 @@ export class GestureRunner implements GestureHost {
       return
     }
     const { scopeId, selection, select } = useDesignStore.getState()
-    const target = resolveClickTarget(hit?.path ?? [], scopeId, g.deep)
+    const target = resolveClickTarget(hit.path, scopeId, g.deep)
     if (!target) {
       if (!g.shift) select(this.artboardId, [])
       return

@@ -151,6 +151,9 @@ export interface HitMessage extends Msg<'hit'> {
   rect: Rect | null
   // From the root down to the hit node.
   path: string[]
+  // Rect of every node on the path: the parent resolves the click/hover
+  // target somewhere along it and needs that node's box, not the leaf's.
+  pathRects: Record<string, Rect>
 }
 
 export interface RectsMessage extends Msg<'rects'> {
