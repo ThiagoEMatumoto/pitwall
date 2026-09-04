@@ -2,10 +2,14 @@
 // in tools.ts with one spread; reads in design-tools-read.ts, writes in
 // design-tools-write.ts, the guide in design-guide.ts.
 
+import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
+import { app } from 'electron'
 import * as designStore from '../design/design-store'
 import * as liveState from '../design/live-state'
 import * as mutate from '../design/mutate'
 import { exportArtboardHtml, exportArtboardJsx, exportArtboardPng } from '../design/export'
+import { exportDocumentPdf, fileSafeName } from '../design/document-export'
 import { ok, type McpNotify, type McpRequestContext, type ToolDef } from './tools'
 import { readTools } from './design-tools-read'
 import { writeTools } from './design-tools-write'
@@ -32,6 +36,23 @@ function utilTools(deps: DesignToolDeps): ToolDef[] {
         const text =
           format === 'jsx' ? exportArtboardJsx(artboardId) : exportArtboardHtml(artboardId)
         return ok({ artboardId, format, ...text })
+      },
+    },
+    {
+      name: 'design_pdf_export',
+      title: 'Export document to PDF',
+      description:
+        'Export a whole document (or one page, or a chosen set) to a multi-page vector PDF: one artboard per page, in reading order. Writes the file to the Downloads folder and returns its filePath — the bytes never come back through the tool. See design_guide §6.',
+      inputSchema: schemas.pdfExport,
+      handler: async (args) => {
+        const input = schemas.pdfExport.parse(args)
+        const { pdf, pages, doc, artboards } = await exportDocumentPdf(input)
+        const filePath = join(
+          app.getPath('downloads'),
+          `${fileSafeName(doc.title, 'design')}-${Date.now()}.pdf`,
+        )
+        await writeFile(filePath, pdf)
+        return ok({ docId: doc.id, filePath, pages, artboards })
       },
     },
     {

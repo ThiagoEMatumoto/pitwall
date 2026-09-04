@@ -307,6 +307,37 @@ export interface DesignExportResult {
   height: number
 }
 
+// ---- document-level export (PDF / PNG batch) ----
+
+// Precedence: artboardIds > pageId > the whole document. The artboards are
+// always taken in reading order (rows top to bottom, left to right).
+export interface DesignExportScopeInput {
+  docId: string
+  pageId?: string
+  artboardIds?: string[]
+}
+
+export type DesignPdfInput = DesignExportScopeInput
+
+export interface DesignPngBatchInput extends DesignExportScopeInput {
+  scale?: DesignExportScale
+}
+
+// The file never travels through IPC: the main process writes it and reports
+// where it landed. 'canceled' = the human dismissed the dialog.
+export interface DesignPdfResult {
+  state: 'saved' | 'canceled'
+  filePath: string | null
+  pages: number
+}
+
+export interface DesignPngBatchResult {
+  state: 'saved' | 'canceled'
+  dirPath: string | null
+  // File names written into dirPath, in reading order.
+  files: string[]
+}
+
 export interface DesignAskInput {
   sessionId: string
   prompt: string
@@ -367,6 +398,10 @@ export interface DesignApi {
   activeDocSet(docId: string | null): Promise<void>
   // design:export
   export(input: DesignExportInput): Promise<DesignExportResult>
+  // design:pdf-export — one artboard per page; opens a save dialog.
+  pdfExport(input: DesignPdfInput): Promise<DesignPdfResult>
+  // design:png-batch — one PNG per artboard into a directory the human picks.
+  pngBatchExport(input: DesignPngBatchInput): Promise<DesignPngBatchResult>
   // design:ask-session — injects the prompt into a running Claude Code session.
   askSession(input: DesignAskInput): Promise<void>
 

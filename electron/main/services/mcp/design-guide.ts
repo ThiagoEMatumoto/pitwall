@@ -92,7 +92,8 @@ Example of a good fragment (hero with a Google Font and a token):
   {
     n: 6,
     title: 'Assets',
-    body: `design_asset_upload({ docId, name, mime, dataBase64 }) stores an image (png/jpeg/webp/gif/svg, ≤ 5 MB) and returns a URL like pitwall-design://asset/<id>. Use that URL in src. External http(s) image URLs do not load inside the artboard (CSP) — upload instead, or use an inline <svg>. Exports inline the bytes as data: URIs.`,
+    body: `design_asset_upload({ docId, name, mime, dataBase64 }) stores an image (png/jpeg/webp/gif/svg, ≤ 5 MB) and returns a URL like pitwall-design://asset/<id>. Use that URL in src. External http(s) image URLs do not load inside the artboard (CSP) — upload instead, or use an inline <svg>. Exports inline the bytes as data: URIs.
+design_pdf_export({ docId }) writes a multi-page vector PDF — one artboard per page, in reading order (rows top to bottom, left to right) — to the Downloads folder and returns its filePath; scope it with pageId or artboardIds.`,
   },
   {
     n: 7,
