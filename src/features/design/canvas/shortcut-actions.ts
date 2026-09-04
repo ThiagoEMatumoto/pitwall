@@ -109,6 +109,12 @@ export function offsetClone(node: DesignNode, delta: number): DesignNode {
 // ---- actions ----
 
 export function deleteSelection(state: DesignState): void {
+  // Nothing selected inside the artboard: the target is the artboard itself,
+  // and that one asks first — its undo history does not survive the delete.
+  if (state.selection.artboardId && state.selection.nodeIds.length === 0) {
+    state.requestDeleteArtboard(state.selection.artboardId)
+    return
+  }
   const sel = editableSelection(state)
   if (!sel) return
   state.commit(sel.artboardId, [{ type: 'remove', ids: sel.nodes.map((n) => n.id) }], {
@@ -118,6 +124,10 @@ export function deleteSelection(state: DesignState): void {
 }
 
 export function duplicateSelection(state: DesignState): void {
+  if (state.selection.artboardId && state.selection.nodeIds.length === 0) {
+    void state.duplicateArtboard(state.selection.artboardId)
+    return
+  }
   const sel = editableSelection(state)
   if (!sel) return
   const ops: DesignOp[] = []

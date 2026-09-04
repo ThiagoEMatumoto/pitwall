@@ -22,7 +22,13 @@ import {
   transientBase,
   upsertMeta,
 } from './designStore.internal'
-import { createArtboardAction, releaseTransientAction, resyncAction } from './designStore.actions'
+import {
+  createArtboardAction,
+  deleteArtboardAction,
+  duplicateArtboardAction,
+  releaseTransientAction,
+  resyncAction,
+} from './designStore.actions'
 import {
   handleAgentActivity,
   handleArtboardDeleted,
@@ -92,6 +98,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     mode: 'edit',
     interaction: false,
     askOpen: false,
+    artboardToDelete: null,
     reloadNonce: 0,
     lockedIds: {},
 
@@ -191,6 +198,12 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     },
 
     createArtboard: (preset) => createArtboardAction(store, preset),
+
+    duplicateArtboard: (artboardId) => duplicateArtboardAction(store, artboardId),
+
+    deleteArtboard: (artboardId) => deleteArtboardAction(store, artboardId),
+
+    requestDeleteArtboard: (artboardToDelete) => set({ artboardToDelete }),
 
     updateArtboardMeta: (artboardId, patch) => {
       get().commit(artboardId, [{ type: 'setArtboard', patch }], {

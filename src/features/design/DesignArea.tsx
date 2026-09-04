@@ -3,6 +3,7 @@ import { useDesignStore } from '@/store/designStore'
 import { watchAgentFinish } from './AgentActivityToasts'
 import { AskClaudeComposer } from './ask-claude/AskClaudeComposer'
 import { CanvasStage } from './canvas/CanvasStage'
+import { DeleteArtboardDialog } from './DeleteArtboardDialog'
 import { useCanvasShortcuts } from './canvas/useCanvasShortcuts'
 import { DesignToolbar } from './DesignToolbar'
 import { EmptyState } from './EmptyState'
@@ -60,6 +61,7 @@ export function DesignArea() {
 
       <ShortcutsPanel />
       <PreviewMode />
+      <DeleteArtboardDialog />
     </>
   )
 }

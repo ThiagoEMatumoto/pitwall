@@ -151,6 +151,7 @@ export function handleArtboardDeleted(store: DesignStore, artboardId: string): v
       selection:
         s.selection.artboardId === artboardId ? { artboardId: null, nodeIds: [] } : s.selection,
       hover: s.hover?.artboardId === artboardId ? null : s.hover,
+      artboardToDelete: s.artboardToDelete === artboardId ? null : s.artboardToDelete,
       textEditing: s.textEditing?.artboardId === artboardId ? null : s.textEditing,
       previewArtboardId: s.previewArtboardId === artboardId ? null : s.previewArtboardId,
     }
