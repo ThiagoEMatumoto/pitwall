@@ -54,15 +54,19 @@ function getWindow(width: number, height: number): BrowserWindow {
   return win
 }
 
-export function destroyPdfWindow(): void {
+function cancelIdle(): void {
   if (idleTimer) clearTimeout(idleTimer)
   idleTimer = null
+}
+
+export function destroyPdfWindow(): void {
+  cancelIdle()
   if (win && !win.isDestroyed()) win.destroy()
   win = null
 }
 
 function touchIdle(): void {
-  if (idleTimer) clearTimeout(idleTimer)
+  cancelIdle()
   idleTimer = setTimeout(destroyPdfWindow, IDLE_DESTROY_MS)
 }
 
@@ -136,6 +140,9 @@ async function merge(pdfs: Buffer[]): Promise<PdfExportResult> {
 export function exportArtboardsPdf(artboards: readonly PdfArtboardInput[]): Promise<PdfExportResult> {
   if (artboards.length === 0) throw new Error('design pdf: no artboards to export')
   return enqueue(async () => {
+    // The previous job's idle timer would otherwise fire mid-export and
+    // destroy the window under an in-flight printToPDF, which never settles.
+    cancelIdle()
     try {
       return await withTimeout(
         (async () => {
