@@ -121,7 +121,7 @@ export function hitTest(
   x: number,
   y: number,
   ignore: string[],
-): { id: string | null; rect: Rect | null; path: string[] } {
+): { id: string | null; rect: Rect | null; path: string[]; pathRects: Record<string, Rect> } {
   const skip = new Set(ignore)
   const ignoredEls = ignore.map(byId).filter((el): el is HTMLElement => el != null)
   for (const el of document.elementsFromPoint(x, y)) {
@@ -131,14 +131,17 @@ export function hitTest(
     const id = nodeId(target)
     if (skip.has(id) || ignoredEls.some((ig) => ig.contains(target))) continue
     const path: string[] = []
+    const pathRects: Record<string, Rect> = {}
     let cur: Element | null = target
     while (cur) {
-      path.unshift(nodeId(cur))
+      const curId = nodeId(cur)
+      path.unshift(curId)
+      pathRects[curId] = toRect(cur)
       cur = cur.parentElement?.closest('[data-pw-id]') ?? null
     }
-    return { id, rect: toRect(target), path }
+    return { id, rect: pathRects[id], path, pathRects }
   }
-  return { id: null, rect: null, path: [] }
+  return { id: null, rect: null, path: [], pathRects: {} }
 }
 
 export function getComputed(id: string, props: string[]): Record<string, string> {

@@ -4,14 +4,20 @@
 // GestureRunner (interaction-state.ts); this component only translates DOM
 // events into artboard-local points and owns hover + cursor.
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { getNodeIndex, useDesignStore } from '@/store/designStore'
 import type { HitMessage } from '@shared/design/protocol'
 import type { ArtboardBridge } from './runtime-bridge'
 import type { Point } from './geometry'
 import { HANDLE_CURSOR, handleAt, type ResizeHandle } from './drag-plan'
 import { GestureRunner } from './gesture-runner'
-import { resolveDiveTarget } from './interaction-state'
+import { resolveDiveTarget, resolveHoverTarget } from './interaction-state'
 
 interface Props {
   artboardId: string
@@ -25,6 +31,8 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
   const hoverFrame = useRef<number | null>(null)
   const hoverSeq = useRef(0)
   const lastHoverPoint = useRef<Point | null>(null)
+  const lastHit = useRef<HitMessage | null>(null)
+  const deep = useRef(false)
   const [cursor, setCursor] = useState<string | undefined>(undefined)
 
   const editingHere = useDesignStore((s) => s.textEditing?.artboardId === artboardId)
@@ -43,6 +51,39 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
     },
     [],
   )
+
+  // The outline must name the node a click would take, not the deepest one
+  // under the pointer: same path, same scope, same modifier as the click.
+  const applyHover = useCallback(
+    (msg: HitMessage | null): void => {
+      const target = msg
+        ? resolveHoverTarget(msg, useDesignStore.getState().scopeId, deep.current)
+        : null
+      setHover(target ? { artboardId, nodeId: target.nodeId, rect: target.rect } : null)
+    },
+    [artboardId, setHover],
+  )
+
+  // Cmd/Ctrl and the scope change the resolution without the pointer moving;
+  // the last hit is kept so both re-resolve with no new probe.
+  useEffect(() => {
+    const onModifier = (e: KeyboardEvent): void => {
+      const next = e.metaKey || e.ctrlKey
+      if (next === deep.current) return
+      deep.current = next
+      applyHover(lastHit.current)
+    }
+    window.addEventListener('keydown', onModifier)
+    window.addEventListener('keyup', onModifier)
+    const unsubscribe = useDesignStore.subscribe((s, prev) => {
+      if (s.scopeId !== prev.scopeId) applyHover(lastHit.current)
+    })
+    return () => {
+      window.removeEventListener('keydown', onModifier)
+      window.removeEventListener('keyup', onModifier)
+      unsubscribe()
+    }
+  }, [applyHover])
 
   const localPoint = (e: ReactPointerEvent | React.MouseEvent): Point => {
     const bounds = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -81,7 +122,8 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
       void hit(point)
         .then((msg) => {
           if (seq !== hoverSeq.current) return
-          setHover(msg.id && msg.rect ? { artboardId, nodeId: msg.id, rect: msg.rect } : null)
+          lastHit.current = msg
+          applyHover(msg)
         })
         .catch(() => undefined)
     })
@@ -94,10 +136,12 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
       return
     }
     if (tool !== 'move') return
+    deep.current = e.metaKey || e.ctrlKey
     const handle = handleUnder(p)
     setCursor(handle ? HANDLE_CURSOR[handle.handle] : undefined)
     if (handle) {
       hoverSeq.current++
+      lastHit.current = null
       setHover(null)
       return
     }
@@ -106,6 +150,7 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
 
   const onPointerLeave = (): void => {
     hoverSeq.current++
+    lastHit.current = null
     setHover(null)
     setCursor(undefined)
   }
@@ -116,6 +161,7 @@ export function InteractionLayer({ artboardId, bridge }: Props) {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     hoverSeq.current++
+    lastHit.current = null
     const start = localPoint(e)
     runner.press({
       kind: 'press',

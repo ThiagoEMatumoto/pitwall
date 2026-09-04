@@ -138,6 +138,20 @@ export function resolveClickTarget(
   return path[base + 1] ?? null
 }
 
+// The hover outline must name the node a click would take: resolved from the
+// same path, scope and modifier, and drawn with that node's box (the leaf's
+// box would frame the text while the click lands on the card around it).
+export function resolveHoverTarget(
+  hit: { path: readonly string[]; pathRects: Record<string, Rect> },
+  scopeId: string | null,
+  deep: boolean,
+): { nodeId: string; rect: Rect } | null {
+  const nodeId = resolveClickTarget(hit.path, scopeId, deep)
+  if (!nodeId) return null
+  const rect = hit.pathRects[nodeId]
+  return rect ? { nodeId, rect } : null
+}
+
 // Double click on a container: one level deeper along the hit path, below
 // the deepest selected ancestor (Figma's "enter group"). Without a selected
 // ancestor it behaves like a plain click. Null when there is nothing deeper.
