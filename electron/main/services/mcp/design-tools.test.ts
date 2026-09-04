@@ -79,6 +79,7 @@ describe('design tools — Breads do Breno authoring flow', () => {
         'design_link_set',
         'design_motion_set',
         'design_export',
+        'design_pdf_export',
         'design_guide',
         'design_nodes_finish',
       ].sort(),
