@@ -16,6 +16,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     // Só testes unitários — o Playwright cuida de e2e/.
-    include: ['src/**/*.test.{ts,tsx}', 'electron/**/*.test.ts', 'shared/**/*.test.ts'],
+    include: [
+      'src/**/*.test.{ts,tsx}',
+      'electron/**/*.test.ts',
+      'shared/**/*.test.ts',
+      'scripts/**/*.test.ts',
+    ],
   },
 })

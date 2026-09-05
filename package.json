@@ -16,6 +16,7 @@
   "scripts": {
     "predev": "npm run build:runtime",
     "dev": "electron-vite dev -- --no-sandbox",
+    "postinstall": "node scripts/check-electron-install.mjs",
     "prebuild": "npm run build:runtime",
     "build": "electron-vite build",
     "build:runtime": "vite build --config vite.runtime.config.ts",
