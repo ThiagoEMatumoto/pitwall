@@ -47,6 +47,7 @@ import * as meetingsV2 from './045_meetings_v2'
 import * as designStudio from './046_design_studio'
 import * as meetingsSpeakers from './047_meetings_speakers'
 import * as designArtboardSizing from './048_design_artboard_sizing'
+import * as normalizeRelativePaths from './049_normalize_relative_paths'
 
 interface Migration {
   version: number
@@ -109,6 +110,7 @@ export const migrations: Migration[] = [
   designStudio,
   meetingsSpeakers,
   designArtboardSizing,
+  normalizeRelativePaths,
 ]
 
 export function runMigrations(db: Database.Database): void {

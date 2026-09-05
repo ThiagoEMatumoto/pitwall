@@ -58,10 +58,9 @@ describe('migration 048_design_artboard_sizing', () => {
     db.close()
   })
 
-  it('is registered as version 48 at the end of the chain', () => {
-    const last = migrations[migrations.length - 1]
-    expect(last.version).toBe(48)
-    expect(last.name).toBe('048_design_artboard_sizing')
+  it('is registered as version 48', () => {
+    const entry = migrations.find((m) => m.version === 48)
+    expect(entry?.name).toBe('048_design_artboard_sizing')
   })
 
   it('adds sizing NOT NULL DEFAULT fixed; existing rows get the default', () => {
