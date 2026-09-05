@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, cp, rm, symlink, lstat, unlink } from 'node:fs/promises'
 import { getDb } from '../services/db'
 import { backfillRepoRemotes } from '../services/git-remote'
+import { resolveRepoPath } from '../services/repo-path'
 import { cloneMissingRepos, listMissingRepos } from '../services/repo-clone'
 import { pullAllRepos, pullOneRepo } from '../services/repo-pull'
 import { getLastPullRun, recordPullRun, type PullRunTrigger } from '../services/repo-pull-store'
@@ -131,7 +132,19 @@ export function registerGitIpc(): void {
 
   ipcMain.handle('repo:move-into-vault', async (_e, payload: unknown) => {
     const { source, vaultPath, label } = moveSchema.parse(payload)
-    const dest = path.join(vaultPath, label)
+    const vaultDir = resolveRepoPath(vaultPath)
+
+    // NÃO criamos o vault aqui de propósito: quando o vault_path do projeto
+    // aponta pra pasta inexistente (typo, projeto renomeado), criar esconderia o
+    // erro e espalharia pastas órfãs. Falhar com o path na mensagem é o que leva
+    // o usuário a corrigir o caminho nas configurações do projeto.
+    if (!existsSync(vaultDir)) {
+      throw new Error(
+        `A pasta do vault não existe: ${vaultDir}. Corrija o caminho do projeto nas configurações do projeto.`,
+      )
+    }
+
+    const dest = path.join(vaultDir, label)
 
     // O destino pode já existir. Caso comum: um symlink órfão deixado por um
     // registro 'symlink' anterior que foi deletado. Tratamos antes do rename

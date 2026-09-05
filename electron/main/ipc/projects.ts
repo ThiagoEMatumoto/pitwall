@@ -6,6 +6,7 @@ import { getDb } from '../services/db'
 import { pingSyncMutation } from '../services/notify'
 import { readOriginUrl } from '../services/git-remote'
 import { normalizePath, selectUntracked } from './untracked-folders'
+import { resolveRepoPath } from '../services/repo-path'
 import type {
   Project,
   Repo,
@@ -315,14 +316,19 @@ export function registerProjectIpc(): void {
     const project = db
       .prepare('SELECT vault_path FROM projects WHERE id = ?')
       .get(projectId) as { vault_path: string | null } | undefined
-    const vaultPath = project?.vault_path
-    if (!vaultPath) return [] as UntrackedFolder[]
+    const rawVaultPath = project?.vault_path
+    if (!rawVaultPath) return [] as UntrackedFolder[]
 
+    // Rows legados guardam path RELATIVO (ver repo-path.ts). Sem resolver, o
+    // readdirSync resolveria contra o cwd do PROCESSO e `registered` (relativo)
+    // nunca casaria com as entries (absolutas) — a pasta do próprio projeto
+    // reaparecia como "não adicionada".
+    const vaultPath = resolveRepoPath(rawVaultPath)
     const registered = (
       db.prepare('SELECT path FROM repos WHERE project_id = ?').all(projectId) as {
         path: string
       }[]
-    ).map((r) => r.path)
+    ).map((r) => resolveRepoPath(r.path))
 
     try {
       const entries = readdirSync(vaultPath, { withFileTypes: true })

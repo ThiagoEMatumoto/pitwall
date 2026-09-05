@@ -1,5 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { normalizePath, selectUntracked, type DirEntryLike } from './untracked-folders'
+
+// getDb mockado: devolve o valor configurado pra app_prefs.vault_root.
+let vaultRootPref: string | undefined
+vi.mock('../services/db', () => ({
+  getDb: () => ({
+    prepare: () => ({
+      get: () => (vaultRootPref === undefined ? undefined : { value: vaultRootPref }),
+    }),
+  }),
+}))
+
+import { resolveRepoPath } from '../services/repo-path'
 
 function dir(name: string): DirEntryLike {
   return { name, isDirectory: () => true }
@@ -45,5 +57,48 @@ describe('selectUntracked', () => {
 
   it('vault vazio retorna lista vazia', () => {
     expect(selectUntracked(vault, [], [])).toEqual([])
+  })
+})
+
+// Reproduz a composição do handler vault:list-untracked: tanto o vault do projeto
+// quanto os repos registrados passam por resolveRepoPath antes da comparação.
+function listUntracked(vaultPath: string, entries: DirEntryLike[], registered: string[]) {
+  return selectUntracked(resolveRepoPath(vaultPath), entries, registered.map(resolveRepoPath))
+}
+
+describe('vault:list-untracked (resolução de paths do DB)', () => {
+  const root = '/home/u/projetos'
+
+  it('registered RELATIVO casa com entries do vault relativo já resolvido', () => {
+    vaultRootPref = root
+    const entries = [dir('api'), dir('web')]
+    expect(listUntracked('diligencia', entries, ['diligencia/api'])).toEqual([
+      { name: 'web', path: '/home/u/projetos/diligencia/web' },
+    ])
+  })
+
+  it('mistura registered relativo + absoluto casa nos dois formatos', () => {
+    vaultRootPref = root
+    const entries = [dir('api'), dir('web'), dir('infra')]
+    const registered = ['diligencia/api', '/home/u/projetos/diligencia/web']
+    expect(listUntracked('diligencia', entries, registered)).toEqual([
+      { name: 'infra', path: '/home/u/projetos/diligencia/infra' },
+    ])
+  })
+
+  it('vault absoluto + registered relativo (caso do banco meio-migrado)', () => {
+    vaultRootPref = root
+    const entries = [dir('api'), dir('web')]
+    expect(listUntracked('/home/u/projetos/diligencia', entries, ['diligencia/api'])).toEqual([
+      { name: 'web', path: '/home/u/projetos/diligencia/web' },
+    ])
+  })
+
+  it('sem resolver, o mesmo cenário não casaria (regressão que gerou o bug)', () => {
+    vaultRootPref = root
+    const entries = [dir('api')]
+    expect(selectUntracked('/home/u/projetos/diligencia', entries, ['diligencia/api'])).toEqual([
+      { name: 'api', path: '/home/u/projetos/diligencia/api' },
+    ])
   })
 })
