@@ -274,9 +274,24 @@ export function withAutoCompactDisabled(
   return disabled ? { ...base, DISABLE_AUTOCOMPACT: '1' } : { ...base }
 }
 
+// Markers que a CLI usa para se reconhecer como sessão FILHA: com qualquer um
+// deles setado ela desliga o transcript. O Pitwall nunca os define — mas herda
+// process.env de quem abriu o app, e abrir o Pitwall de dentro de uma sessão
+// Claude Code contaminava toda sessão nova em silêncio (sem transcript não há
+// Chat View, `--resume` nem handoff). O ambiente do app não é o da sessão.
+const CHILD_SESSION_MARKERS = ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SKIP_PROMPT_HISTORY']
+
+export function stripChildSessionMarkers(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...base }
+  for (const key of CHILD_SESSION_MARKERS) delete out[key]
+  return out
+}
+
 // Env dos spawns de sessão (PTY do `claude`). O custom env do usuário entra por
-// último e pode sobrescrever a var.
+// último e pode sobrescrever a var — inclusive remarcar a sessão como filha, se
+// for isso que ele quer.
 export function sessionSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const withFlag = withAutoCompactDisabled(base, getPref<boolean>(DISABLE_AUTOCOMPACT_KEY, false))
+  const clean = stripChildSessionMarkers(base)
+  const withFlag = withAutoCompactDisabled(clean, getPref<boolean>(DISABLE_AUTOCOMPACT_KEY, false))
   return mergeCustomEnv(withFlag, readCustomEnv())
 }

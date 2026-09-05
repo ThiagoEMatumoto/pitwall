@@ -169,6 +169,30 @@ describe('sessionSpawnEnv', () => {
     expect('DISABLE_AUTOCOMPACT' in sessionSpawnEnv({ PATH: '/usr/bin' })).toBe(false)
   })
 
+  it('remove os markers de sessão filha herdados do ambiente do app', () => {
+    mockPrefs({})
+    const env = sessionSpawnEnv({
+      PATH: '/usr/bin',
+      CLAUDE_CODE_CHILD_SESSION: '1',
+      CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1',
+    })
+    expect('CLAUDE_CODE_CHILD_SESSION' in env).toBe(false)
+    expect('CLAUDE_CODE_SKIP_PROMPT_HISTORY' in env).toBe(false)
+    expect(env.PATH).toBe('/usr/bin')
+  })
+
+  it('não muta o base recebido', () => {
+    mockPrefs({})
+    const base = { PATH: '/usr/bin', CLAUDE_CODE_CHILD_SESSION: '1' }
+    sessionSpawnEnv(base)
+    expect(base.CLAUDE_CODE_CHILD_SESSION).toBe('1')
+  })
+
+  it('custom env do usuário ainda pode remarcar a sessão como filha', () => {
+    mockPrefs({ custom: { CLAUDE_CODE_CHILD_SESSION: '1' } })
+    expect(sessionSpawnEnv({ PATH: '/usr/bin' }).CLAUDE_CODE_CHILD_SESSION).toBe('1')
+  })
+
   it('custom env do usuário sobrescreve a var', () => {
     mockPrefs({
       disableAutoCompact: true,
