@@ -1,5 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from 'playwright'
 import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +9,17 @@ import { isSecretsBackup } from '../../electron/main/services/db-maintenance'
 const here = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(here, '../..')
 const MAIN_ENTRY = join(REPO_ROOT, 'out/main/index.js')
+// node:sqlite via require: @types/node do repo (20.x) ainda não tipa o módulo,
+// então o recorte usado aqui é tipado à mão.
+const nodeRequire = createRequire(import.meta.url)
+interface SqliteSync {
+  prepare(sql: string): {
+    get(): unknown
+    run(...params: unknown[]): { changes: number | bigint }
+  }
+  exec(sql: string): void
+  close(): void
+}
 
 // O dir de userData real é o que contém o app.db — db.ts deriva o path do banco
 // de app.getPath('userData'), então o dir com app.db É a instalação real.
@@ -60,6 +72,12 @@ export interface LaunchOptions {
   // subida roda migrations, cenário semeia o app.db, 2ª subida valida". A limpeza
   // continua com o launch que criou a cópia.
   userDataDir?: string
+  // Default false: a cópia nasce SEM as abas restauráveis e sem handoffs
+  // 'pending' (ver neutralizeBootSpawns). true mantém o comportamento antigo — o
+  // boot re-spawna `claude --resume` das sessões REAIS, com o HOME real, e elas
+  // podem agir sozinhas nos repos. Só ligar com env.HOME apontando pra um
+  // fake-home. Ignorado quando userDataDir é passado (a cópia já existe).
+  restoreTabs?: boolean
 }
 
 // Lança o app BUILDADO (out/main/index.js) contra uma CÓPIA do userData real.
@@ -71,7 +89,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       `Build não encontrado em ${MAIN_ENTRY}.\nRode antes: npm run rebuild:native && npm run build`,
     )
   }
-  const copy = options.userDataDir ?? copyRealUserData()
+  const copy = options.userDataDir ?? copyRealUserData(options.restoreTabs ?? false)
   // A cópia carrega o app_prefs inteiro, incluindo as chaves de API do usuário.
   // Elas ficam cifradas em repouso, mas a cópia roda como o MESMO usuário do SO —
   // o cofre decifraria normalmente. Por padrão o app troca os valores por um
@@ -109,7 +127,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
   return { app, page, userDataCopy: copy }
 }
 
-function copyRealUserData(): string {
+export function copyRealUserData(restoreTabs = false): string {
   const real = resolveRealUserData()
   const copy = mkdtempSync(join(tmpdir(), 'cm-drive-userdata-'))
 
@@ -152,5 +170,67 @@ function copyRealUserData(): string {
       },
     })
   }
+  if (!restoreTabs && existsSync(join(copy, 'app.db'))) {
+    const { panes, handoffs } = neutralizeBootSpawns(copy)
+    console.log(
+      `[launch] cópia sem gatilhos de spawn: ${panes} aba(s), ${handoffs} handoff(s) pending`,
+    )
+  }
   return copy
+}
+
+// O boot do app spawna PTYs sozinho por dois caminhos, ambos lidos deste banco:
+// - restoreWorkspace (src/store/appStore.ts) roda `claude --resume` para cada
+//   pane de workspace_state.open_panes (dock_layout só posiciona esses panes);
+// - useHandoffs (src/features/handoffs/useHandoffs.ts), com o gate desligado
+//   (default), aprova todo handoff 'pending' e sobe a filha no repo-alvo.
+// Na cópia do perfil real, os dois ressuscitam sessões REAIS com o HOME real.
+//
+// node:sqlite, e não sql.js: o app real costuma estar aberto, então as abas
+// recentes vivem só no app.db-wal. sql.js lê só o app.db e, ao regravá-lo, o
+// -wal copiado seria reaplicado por cima no boot. node:sqlite lê o WAL e faz o
+// checkpoint no close, deixando o app.db autocontido.
+function neutralizeBootSpawns(userDataDir: string): { panes: number; handoffs: number } {
+  const db = openCopyDb(userDataDir)
+  try {
+    const panes = db.prepare('SELECT open_panes FROM workspace_state WHERE id = 1').get() as
+      { open_panes: string | null } | undefined
+    db.exec('UPDATE workspace_state SET open_panes = NULL, dock_layout = NULL')
+    const handoffs = db
+      .prepare("UPDATE handoffs SET status = 'rejected' WHERE status = 'pending'")
+      .run()
+    return { panes: countPanes(panes?.open_panes), handoffs: Number(handoffs.changes) }
+  } finally {
+    db.close()
+  }
+}
+
+function openCopyDb(userDataDir: string): SqliteSync {
+  const { DatabaseSync } = nodeRequire('node:sqlite') as {
+    DatabaseSync: new (path: string) => SqliteSync
+  }
+  return new DatabaseSync(join(userDataDir, 'app.db'))
+}
+
+// Ajusta app_prefs de uma cópia ANTES do boot (null apaga a chave). Mesmo motivo
+// do node:sqlite acima: a cópia pode ter o -wal do app real aberto. Ex.: zerar os
+// atalhos remapeados do perfil real num cenário que aperta os defaults.
+export function writeCopyPrefs(userDataDir: string, prefs: Record<string, string | null>): void {
+  const db = openCopyDb(userDataDir)
+  try {
+    for (const [key, value] of Object.entries(prefs)) {
+      if (value == null) db.prepare('DELETE FROM app_prefs WHERE key = ?').run(key)
+      else db.prepare('INSERT OR REPLACE INTO app_prefs (key, value) VALUES (?, ?)').run(key, value)
+    }
+  } finally {
+    db.close()
+  }
+}
+
+function countPanes(raw: string | null | undefined): number {
+  try {
+    return raw ? (JSON.parse(raw) as unknown[]).length : 0
+  } catch {
+    return 0
+  }
 }

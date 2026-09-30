@@ -7,7 +7,9 @@ import { createFakeHome } from '../driver/fake-home'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
 
-// Evidência visual dos 3 estados do Crew Dock (colapsado / auto-reveal / peek).
+// Evidência visual dos estados do Crew Dock (colapsado / sinal no rail / aberto
+// pelo atalho 'Focar a equipe' / peek). Desde o 1994f7d o dock NÃO abre sozinho
+// quando uma filha passa a esperar: o sinal fica no rail de 40px.
 // O binário `claude` é substituído por um stub (pref claude_command) que só
 // escreve os artefatos de disco que o app observa — nenhuma API é chamada e
 // nenhum repo é modificado. HOME é redirecionado para um fake-home, então
@@ -71,6 +73,9 @@ db.run(
 db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
   fake.fakeCliPath('claude'),
 ])
+// O cenário aperta Ctrl+J (default de crew.focus): um remapeamento do perfil real
+// deixaria o dock fechado e o cenário esperando à toa.
+db.run("DELETE FROM app_prefs WHERE key = 'keybindings'")
 
 // Sem restaurar o workspace do perfil real: o restore re-spawnaria as sessões do
 // usuário (panes de terminal) e poluiria a evidência do dock.
@@ -188,7 +193,7 @@ try {
   console.log('[crew] estado 1 — dots:', JSON.stringify(await dotTitles()))
   await page.screenshot({ path: join(SCRATCH, 'crew-1-colapsado.png') })
 
-  // ---------- auto-reveal: mauricio passa a esperar ----------
+  // ---------- sinal no rail: mauricio passa a esperar ----------
   const files = fake.readSessionFiles()
   console.log('[crew] session files:', files.map((f) => `${f.data.name}=${f.data.status}`).join(' | '))
   const waitingOne = files.find((f) => String(f.data.name ?? '').startsWith('mauricio'))
@@ -196,23 +201,33 @@ try {
   fake.setStatus(waitingOne.data.pid, 'waiting')
   console.log('[crew] flip para waiting em', waitingOne.file)
 
-  await waitFor('dock auto-revelado', async () => {
-    const expanded = await dock.getAttribute('data-expanded')
-    return expanded === 'true'
-  }, 60_000)
+  await waitFor('rail sinaliza quem espera', async () =>
+    (await dotTitles()).some((t) => t.includes('esperando você')),
+  60_000)
   await page.waitForTimeout(1500)
+  if ((await dock.getAttribute('data-expanded')) === 'true') {
+    throw new Error('dock abriu sozinho — desde o 1994f7d só abre por clique ou atalho')
+  }
+  console.log('[crew] estado 2 — rail:', JSON.stringify(await dotTitles()))
+  await page.screenshot({ path: join(SCRATCH, 'crew-2-sinal-no-rail.png') })
 
+  // ---------- 'Focar a equipe' (crew.focus, default Ctrl+J) abre o dock ----------
+  await page.keyboard.press('Control+j')
+  await waitFor('dock aberto pelo atalho', async () =>
+    (await dock.getAttribute('data-expanded')) === 'true',
+  10_000)
+  await page.waitForTimeout(1000)
   const w2 = await dock.evaluate((el) => el.getBoundingClientRect().width)
-  console.log('[crew] estado 2 — largura:', w2, 'expanded:', await dock.getAttribute('data-expanded'))
-  console.log('[crew] estado 2 — header:', await dock.locator('header').innerText())
-  await page.screenshot({ path: join(SCRATCH, 'crew-2-autoreveal.png') })
+  console.log('[crew] estado 3 — largura:', w2, 'expanded:', await dock.getAttribute('data-expanded'))
+  console.log('[crew] estado 3 — header:', await dock.locator('header').innerText())
+  await page.screenshot({ path: join(SCRATCH, 'crew-3-focar-equipe.png') })
 
   // ---------- peek: card da filha em espera, sem abrir pane ----------
   const card = dock.locator('[data-testid="handoff-card"]').first()
-  console.log('[crew] estado 3 — card:\n' + (await card.innerText()))
+  console.log('[crew] estado 4 — card:\n' + (await card.innerText()))
   const panes = await page.locator('.dv-tab, .dv-view').count()
   console.log('[crew] panes dockview abertos (nenhum terminal aberto por este cenário):', panes)
-  await card.screenshot({ path: join(SCRATCH, 'crew-3-peek.png') })
+  await card.screenshot({ path: join(SCRATCH, 'crew-4-peek.png') })
 
   console.log('[crew] --- console errors/warnings ---')
   console.log(consoleErrors.length ? consoleErrors.join('\n') : 'nenhum')
