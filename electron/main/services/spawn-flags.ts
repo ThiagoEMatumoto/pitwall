@@ -2,6 +2,8 @@
 // sem I/O). Fonte ÚNICA do spawn interativo (ipc/sessions, via PTY) e das
 // sessões-filhas de handoff. Concentrar aqui garante que o denylist destrutivo
 // (guard-rail de modo autônomo) NÃO drife entre os caminhos de spawn.
+// São as flags do provider claude (providers/claude.ts): outro provider traz as
+// próprias. Fica fora de providers/ porque o renderer também importa daqui.
 
 import { SPAWNABLE_MODEL_ALIASES } from '../../../shared/models'
 

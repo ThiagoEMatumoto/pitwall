@@ -48,6 +48,9 @@ export function featuresDir(bundleDir: string): string {
 // As tabelas EXCLUÍDAS (machine-local/derivado) NÃO entram aqui:
 //   _migrations, metrics_session_cache, sessions, feature_session_records,
 //   workspace_state, layouts, app_prefs.
+// Por isso a 050 (sessions.provider/launch_json) não muda o conteúdo do bundle;
+// só sobe o schemaVersion (MAX(_migrations)), e o importer de um app < 050
+// recusa bundle exportado por um app >= 050 — como em toda migration.
 //
 // Nota sobre objectives self-FK (parent_objective_id REFERENCES objectives
 // ON DELETE SET NULL): no INSERT em massa o import roda com foreign_keys=OFF,

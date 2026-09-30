@@ -433,6 +433,9 @@ export interface FsFile {
   content: string
 }
 
+// CLI de agente que roda a sessão (migration 050). Só 'claude' tem provider hoje.
+export type AgentProviderId = 'claude' | 'codex'
+
 export interface Session {
   id: string
   // null = sessão avulsa (sem repo), rodando no scratch dir.
@@ -446,6 +449,8 @@ export interface Session {
   status: 'running' | 'exited' | 'crashed' | 'closed_by_user'
   startedAt: number
   endedAt: number | null
+  // Opcional: linhas lidas por SELECT parcial (e fixtures do renderer) não o trazem.
+  provider?: AgentProviderId
 }
 
 export interface CreateProjectInput {

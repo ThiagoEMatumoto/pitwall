@@ -44,6 +44,8 @@ import {
   HANDOFF_CHILD_SETTINGS_JSON,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { getProvider } from '../services/providers/registry'
+import type { LaunchOpts } from '../services/providers/types'
 import {
   buildImageFilename,
   isImageTempFile,
@@ -60,6 +62,7 @@ import type {
   ChatTranscript,
   Handoff,
   HandoffStatus,
+  AgentProviderId,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -72,18 +75,12 @@ interface SessionRow {
   status: 'running' | 'exited' | 'crashed' | 'closed_by_user'
   started_at: number
   ended_at: number | null
+  provider?: AgentProviderId
 }
 
 interface RepoPathRow {
   path: string
   label: string
-}
-
-// O name é input do usuário e entra na linha de `zsh -c '<innerCmd>'`.
-// Aspas simples POSIX impedem qualquer interpretação pelo shell; o único caractere
-// perigoso dentro de '...' é a própria aspa simples, fechada com '\'' e reaberta.
-function shquote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'"
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -104,15 +101,20 @@ const toSession = (row: SessionRow): Session => ({
   status: row.status,
   startedAt: row.started_at,
   endedAt: row.ended_at,
+  provider: row.provider,
 })
 
-const CLAUDE_COMMAND_KEY = 'claude_command'
+// Todo spawn interativo hoje é claude; o seam existe para Codex/OpenCode depois.
+const SESSION_PROVIDER: AgentProviderId = 'claude'
 
-function resolveClaudeCommand(): string {
-  const row = getDb()
-    .prepare('SELECT value FROM app_prefs WHERE key = ?')
-    .get(CLAUDE_COMMAND_KEY) as { value: string } | undefined
-  return row?.value?.trim() || 'claude'
+function readPref(key: string): string | undefined {
+  const row = getDb().prepare('SELECT value FROM app_prefs WHERE key = ?').get(key) as
+    { value: string } | undefined
+  return row?.value?.trim()
+}
+
+function resolveAgentCommand(): string {
+  return getProvider(SESSION_PROVIDER).resolveCommand(readPref)
 }
 
 const SCRATCH_DIR_KEY = 'scratch_dir'
@@ -144,9 +146,8 @@ function resolveScratchDir(): string {
   return dir
 }
 
-// B4: conecta a sessão ao MCP server do Pitwall via --mcp-config. Sem
-// --strict-mcp-config: os servers de user/projeto do claude continuam valendo.
-// Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
+// B4: conecta a sessão ao MCP server do Pitwall (o formato do argumento é do
+// provider — mcpInject). Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
 // sessão sobe normal.
 //
 // Com `internalSessionId` (o sessions.id que ESTA sessão vai receber) escrevemos
@@ -164,12 +165,12 @@ function mcpConfigArg(internalSessionId: string | null): string {
         { url: runtime.url, token: runtime.token, pid: process.pid },
         internalSessionId,
       )
-      return ` --mcp-config ${shquote(path)}`
+      return getProvider(SESSION_PROVIDER).mcpInject({ configPath: path })
     } catch (err) {
       console.error('[sessions] per-session mcp config failed, using the global one:', err)
     }
   }
-  return ` --mcp-config ${shquote(mcpClientConfigPath())}`
+  return getProvider(SESSION_PROVIDER).mcpInject({ configPath: mcpClientConfigPath() })
 }
 
 // O claude vive em ~/.local/bin e o env do Electron GUI não herda o PATH do rc.
@@ -297,65 +298,13 @@ function resolveFeatureWorktree(featureId: string | null, repoId: string | null)
   }
 }
 
-// Monta a string do innerCmd do spawn novo. PURA: sem I/O — recebe os pedaços já
-// resolvidos (claudeCmd, sessionId já validado, name, mcpConfigArg pronto, modelo
-// já validado contra whitelist ou null, e o path opcional do system-prompt-file
-// já escrito). Mantém a ordem das flags do handler original.
-//
-// `initialPrompt` (opcional): prompt posicional entregue no COMANDO de spawn, não
-// injetado no PTY. `claude "<prompt>"` em modo interativo faz auto-submit do 1º
-// turno — é o caminho confiável pra background (o kickoff colado no PTY é
-// descartado quando ninguém dá resize no TUI). Como posicional, TEM que ser o
-// último token, depois de todas as flags.
-export function buildSpawnInnerCmd(parts: {
-  claudeCmd: string
-  sessionId: string
-  // true = o sessionId acima é o cc_session_id de uma sessão EXISTENTE e o
-  // comando abre com `--resume <id>` em vez de `--session-id <id>`. Existe para
-  // o relance da filha reusar esta montagem — sem isto o resume montaria as
-  // flags à mão e voltaria a esquecer permission-mode/denylist.
-  resume?: boolean
-  name: string
-  mcpConfigArg: string
-  model: string | null
-  effort?: string | null
-  advisorModel?: string | null
-  systemPromptFilePath: string | null
-  permissionMode?: string | null
-  disallowedTools?: string[] | null
-  // JSON inline pro `--settings` (a CLI aceita file OU json). Usado só pela filha
-  // de handoff (crossSessionInbound=accept) — por sessão, nunca global.
-  settingsJson?: string | null
-  initialPrompt?: string | null
-}): string {
-  const idFlag = parts.resume ? '--resume' : '--session-id'
-  let innerCmd = `${parts.claudeCmd} ${idFlag} ${parts.sessionId} -n ${shquote(parts.name)}${parts.mcpConfigArg}`
-  if (parts.model) {
-    innerCmd += ` --model ${shquote(parts.model)}`
-  }
-  if (parts.effort) {
-    innerCmd += ` --effort ${shquote(parts.effort)}`
-  }
-  if (parts.advisorModel) {
-    innerCmd += ` --advisor ${shquote(parts.advisorModel)}`
-  }
-  if (parts.permissionMode) {
-    innerCmd += ` --permission-mode ${shquote(parts.permissionMode)}`
-  }
-  if (parts.disallowedTools && parts.disallowedTools.length > 0) {
-    innerCmd += ` --disallowedTools ${parts.disallowedTools.map(shquote).join(' ')}`
-  }
-  if (parts.settingsJson) {
-    innerCmd += ` --settings ${shquote(parts.settingsJson)}`
-  }
-  if (parts.systemPromptFilePath) {
-    innerCmd += ` --append-system-prompt-file ${shquote(parts.systemPromptFilePath)}`
-  }
-  // Posicional por último: `claude [flags] "<prompt>"` auto-submete o 1º turno.
-  if (parts.initialPrompt?.trim()) {
-    innerCmd += ` ${shquote(parts.initialPrompt.trim())}`
-  }
-  return innerCmd
+// Compat: a montagem mora em providers/claude.ts (buildLaunch). Mantido com o
+// nome/shape antigos (`claudeCmd`) porque sessions.test.ts e o histórico o usam.
+export function buildSpawnInnerCmd(
+  parts: Omit<LaunchOpts, 'command'> & { claudeCmd: string },
+): string {
+  const { claudeCmd, ...rest } = parts
+  return getProvider(SESSION_PROVIDER).buildLaunch({ command: claudeCmd, ...rest })
 }
 
 // Reexport: mantém a superfície pública de './sessions' estável (sessions.test.ts
@@ -429,11 +378,12 @@ function startSession(opts: {
     status: 'running',
     started_at: Date.now(),
     ended_at: null,
+    provider: SESSION_PROVIDER,
   }
   db.prepare(
     `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.repo_id,
@@ -444,6 +394,7 @@ function startSession(opts: {
     row.started_at,
     row.ended_at,
     opts.featureId ?? null,
+    row.provider,
   )
 
   try {
@@ -506,7 +457,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
   const name = input.name?.trim() || defaultName
 
   if (!UUID_RE.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`)
-  const claudeCmd = resolveClaudeCommand()
+  const command = resolveAgentCommand()
 
   // Defesa em profundidade: só passa adiante o valor que estiver na whitelist.
   const model = resolveModel(input.model)
@@ -528,8 +479,8 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // a identidade da sessão no mcp-config, e o mesmo valor vai pro startSession.
   const internalSessionId = randomUUID()
 
-  const innerCmd = buildSpawnInnerCmd({
-    claudeCmd,
+  const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+    command,
     sessionId,
     name,
     mcpConfigArg: mcpConfigArg(internalSessionId),
@@ -597,7 +548,7 @@ export interface ResumeHandoffChildResult {
 // sessions.id via markRunning.
 //
 // Vive aqui (não em services/) porque reusa os helpers de spawn deste módulo —
-// resolveClaudeCommand, mcpConfigArg, startSession, findTranscriptPath,
+// resolveAgentCommand, mcpConfigArg, startSession, findTranscriptPath,
 // injectInitialCommandOnFirstData. Mover o helper pra fora arrastaria todos eles
 // (e o ciclo com mcp/server) sem ganho nenhum.
 export function resumeHandoffChild(
@@ -627,7 +578,7 @@ export function resumeHandoffChild(
   // fixado no spawn — é o endereço do peer e tem que sobreviver ao resume.
   const childRow = db
     .prepare(
-      `SELECT id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at
+      `SELECT id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at, provider
          FROM sessions WHERE id = ?`,
     )
     .get(handoff.childSessionId) as SessionRow | undefined
@@ -662,7 +613,7 @@ export function resumeHandoffChild(
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
   const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
-  const claudeCmd = resolveClaudeCommand()
+  const command = resolveAgentCommand()
   // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
   const internalSessionId = randomUUID()
 
@@ -675,8 +626,8 @@ export function resumeHandoffChild(
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
-  const innerCmd = buildSpawnInnerCmd({
-    claudeCmd,
+  const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+    command,
     sessionId: ccSessionId,
     resume: true,
     name,
@@ -924,11 +875,11 @@ export function registerSessionIpc(): void {
     const transcript = findTranscriptPath(input.ccSessionId)
     const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
 
-    const claudeCmd = resolveClaudeCommand()
+    const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
-    const innerCmd = buildSpawnInnerCmd({
-      claudeCmd,
+    const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+      command,
       sessionId: input.ccSessionId,
       resume: true,
       name,

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getDb } from './db'
 import { spawnEnv } from './custom-env'
+import { claudeProvider } from './providers/claude'
 
 const execFileAsync = promisify(execFile)
 
@@ -18,8 +19,6 @@ export interface RunOpts {
   cwd?: string
 }
 
-const CLAUDE_COMMAND_KEY = 'claude_command'
-
 // Guard-rail para `claude -p` que processa texto de terceiros (transcript,
 // ditado): nenhuma tool built-in (`--tools ""`) e nenhum servidor MCP
 // (`--strict-mcp-config` sem --mcp-config). O modelo só pode responder texto —
@@ -35,10 +34,11 @@ let resolving: Promise<string> | null = null
 
 function prefClaudeCommand(): string {
   try {
-    const row = getDb()
-      .prepare('SELECT value FROM app_prefs WHERE key = ?')
-      .get(CLAUDE_COMMAND_KEY) as { value: string } | undefined
-    return row?.value?.trim() || 'claude'
+    return claudeProvider.resolveCommand((key) => {
+      const row = getDb().prepare('SELECT value FROM app_prefs WHERE key = ?').get(key) as
+        { value: string } | undefined
+      return row?.value?.trim()
+    })
   } catch {
     return 'claude'
   }
