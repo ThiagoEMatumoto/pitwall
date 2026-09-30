@@ -55,6 +55,11 @@ export interface LaunchOptions {
   extraArgs?: string[]
   // Variáveis a mais no ambiente do main (sobrepõem o process.env herdado).
   env?: Record<string, string>
+  // Reusa uma cópia de userData já existente (o userDataCopy de um launch anterior
+  // do mesmo processo) em vez de copiar o perfil real de novo — o padrão "1ª
+  // subida roda migrations, cenário semeia o app.db, 2ª subida valida". A limpeza
+  // continua com o launch que criou a cópia.
+  userDataDir?: string
 }
 
 // Lança o app BUILDADO (out/main/index.js) contra uma CÓPIA do userData real.
@@ -66,6 +71,40 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       `Build não encontrado em ${MAIN_ENTRY}.\nRode antes: npm run rebuild:native && npm run build`,
     )
   }
+  const copy = options.userDataDir ?? copyRealUserData()
+  // A cópia carrega o app_prefs inteiro, incluindo as chaves de API do usuário.
+  // Elas ficam cifradas em repouso, mas a cópia roda como o MESMO usuário do SO —
+  // o cofre decifraria normalmente. Por padrão o app troca os valores por um
+  // placeholder no boot (CM_SCRUB_SECRETS; só vale para userData dentro do
+  // tmpdir — ver services/secret-scrub.ts), então nenhum segredo utilizável vive
+  // na cópia. Os testes que só checam "a integração está configurada" continuam
+  // passando, porque o placeholder é não-vazio.
+  //
+  // CM_KEEP_SECRETS=1 é o opt-out EXPLÍCITO para o punhado de cenários que
+  // precisam da credencial real (ex.: integration-webaudit, que loga no legal-ui
+  // staging). Nunca ligar por padrão.
+  const keepSecrets = process.env.CM_KEEP_SECRETS === '1'
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
+    env: {
+      ...process.env,
+      CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
+      CM_MCP_EPHEMERAL_PORT: '1',
+      ...(options.env ?? {}),
+    } as Record<string, string>,
+  })
+  // Morte externa do Electron (SIGTERM/SIGKILL, OOM) chega ao cenário só como
+  // "Target page, context or browser has been closed" — sem isto não dá pra
+  // distinguir crash do app de kill de fora.
+  app.process().on('exit', (code, signal) => {
+    if (code !== 0) console.error(`[launch] electron saiu: code=${code} signal=${signal}`)
+  })
+  const page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+  return { app, page, userDataCopy: copy }
+}
+
+function copyRealUserData(): string {
   const real = resolveRealUserData()
   const copy = mkdtempSync(join(tmpdir(), 'cm-drive-userdata-'))
 
@@ -108,34 +147,5 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       },
     })
   }
-  // A cópia carrega o app_prefs inteiro, incluindo as chaves de API do usuário.
-  // Elas ficam cifradas em repouso, mas a cópia roda como o MESMO usuário do SO —
-  // o cofre decifraria normalmente. Por padrão o app troca os valores por um
-  // placeholder no boot (CM_SCRUB_SECRETS; só vale para userData dentro do
-  // tmpdir — ver services/secret-scrub.ts), então nenhum segredo utilizável vive
-  // na cópia. Os testes que só checam "a integração está configurada" continuam
-  // passando, porque o placeholder é não-vazio.
-  //
-  // CM_KEEP_SECRETS=1 é o opt-out EXPLÍCITO para o punhado de cenários que
-  // precisam da credencial real (ex.: integration-webaudit, que loga no legal-ui
-  // staging). Nunca ligar por padrão.
-  const keepSecrets = process.env.CM_KEEP_SECRETS === '1'
-  const app = await electron.launch({
-    args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
-    env: {
-      ...process.env,
-      CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
-      CM_MCP_EPHEMERAL_PORT: '1',
-      ...(options.env ?? {}),
-    } as Record<string, string>,
-  })
-  // Morte externa do Electron (SIGTERM/SIGKILL, OOM) chega ao cenário só como
-  // "Target page, context or browser has been closed" — sem isto não dá pra
-  // distinguir crash do app de kill de fora.
-  app.process().on('exit', (code, signal) => {
-    if (code !== 0) console.error(`[launch] electron saiu: code=${code} signal=${signal}`)
-  })
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
-  return { app, page, userDataCopy: copy }
+  return copy
 }

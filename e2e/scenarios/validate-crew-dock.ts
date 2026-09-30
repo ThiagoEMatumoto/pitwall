@@ -1,9 +1,9 @@
-import { _electron as electron } from 'playwright'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
-import { launchApp, REPO_ROOT } from '../driver/launch'
+import { launchApp } from '../driver/launch'
+import { createFakeHome } from '../driver/fake-home'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
 
@@ -15,9 +15,7 @@ import { queryDb } from '../driver/inspect'
 
 const require = createRequire(import.meta.url)
 const SCRATCH = process.env.CREW_SCRATCH!
-const FAKE_CLAUDE = join(SCRATCH, 'fake-claude.sh')
-const FAKE_HOME = join(SCRATCH, 'fake-home')
-const MAIN_ENTRY = join(REPO_ROOT, 'out/main/index.js')
+const fake = createFakeHome({ parentDir: SCRATCH })
 
 interface Seed {
   id: string
@@ -70,7 +68,9 @@ const now = Date.now()
 db.run(
   "UPDATE handoffs SET status = 'done' WHERE status IN ('pending','approved','running','needs_input')",
 )
-db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [FAKE_CLAUDE])
+db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
+  fake.fakeCliPath('claude'),
+])
 
 // Sem restaurar o workspace do perfil real: o restore re-spawnaria as sessões do
 // usuário (panes de terminal) e poluiria a evidência do dock.
@@ -97,20 +97,8 @@ writeFileSync(join(userData, 'app.db'), Buffer.from(db.export()))
 db.close()
 console.log('[crew]', SEEDS.length, 'handoffs pendentes seedados em', userData)
 
-mkdirSync(join(FAKE_HOME, '.claude', 'sessions'), { recursive: true })
-mkdirSync(join(FAKE_HOME, '.claude', 'projects'), { recursive: true })
-// O spawn usa `zsh -l -i -c`; sem ~/.zshrc o zsh dispara o zsh-newuser-install e
-// FICA PARADO num prompt interativo — a filha nunca sobe. Arquivo vazio resolve.
-writeFileSync(join(FAKE_HOME, '.zshrc'), '')
-writeFileSync(join(FAKE_HOME, '.zshenv'), '')
-
 // ---------- 2ª subida: app real, HOME fake, claude stub ----------
-const app = await electron.launch({
-  args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${userData}`],
-  env: { ...process.env, HOME: FAKE_HOME },
-})
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
+const { app, page } = await launchApp({ userDataDir: userData, env: fake.env })
 
 const consoleErrors: string[] = []
 const pageErrors: string[] = []
@@ -122,16 +110,6 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => pageErrors.push(e.stack ?? e.message))
 page.on('requestfailed', (r) => failedRequests.push(`${r.failure()?.errorText ?? '?'} ${r.url()}`))
 app.process().stderr?.on('data', (d) => mainErr.push(String(d).trimEnd()))
-
-function sessionFiles(): Array<{ file: string; data: Record<string, unknown> }> {
-  const dir = join(FAKE_HOME, '.claude', 'sessions')
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => ({
-      file: join(dir, f),
-      data: JSON.parse(readFileSync(join(dir, f), 'utf8')) as Record<string, unknown>,
-    }))
-}
 
 async function dotTitles(): Promise<string[]> {
   return page.$$eval('[data-testid="crew-dock"] button[title]', (els) =>
@@ -211,14 +189,11 @@ try {
   await page.screenshot({ path: join(SCRATCH, 'crew-1-colapsado.png') })
 
   // ---------- auto-reveal: mauricio passa a esperar ----------
-  const files = sessionFiles()
+  const files = fake.readSessionFiles()
   console.log('[crew] session files:', files.map((f) => `${f.data.name}=${f.data.status}`).join(' | '))
   const waitingOne = files.find((f) => String(f.data.name ?? '').startsWith('mauricio'))
   if (!waitingOne) throw new Error('sessão da mauricio não encontrada no fake-home')
-  writeFileSync(
-    waitingOne.file,
-    JSON.stringify({ ...waitingOne.data, status: 'waiting', updatedAt: Date.now() }),
-  )
+  fake.setStatus(waitingOne.data.pid, 'waiting')
   console.log('[crew] flip para waiting em', waitingOne.file)
 
   await waitFor('dock auto-revelado', async () => {
@@ -259,4 +234,5 @@ try {
   } catch {
     // já saiu
   }
+  fake.cleanup()
 }
