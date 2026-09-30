@@ -44,11 +44,20 @@ export interface AttentionFlash {
   item: AttentionItem | null
 }
 
+// Quem abriu por último o popover de uma sessão (fixado pelo Alt+A ou expandido
+// na lista da TitleBar): o outro fecha o dele. Dois popovers da mesma sessão
+// mandariam duas respostas pro mesmo menu.
+export interface AttentionPopoverClaim {
+  sessionId: string
+  by: 'pinned' | 'list'
+}
+
 interface AttentionState {
   // Sessão ativa no dockview (espelhada pelo AppShell, que é quem sabe).
   activeCc: string | null
   cursor: StoredAttentionCursor | null
   flash: AttentionFlash | null
+  popoverClaim: AttentionPopoverClaim | null
   setActiveCc: (cc: string | null) => void
 }
 
@@ -56,8 +65,22 @@ export const useAttentionStore = create<AttentionState>((set) => ({
   activeCc: null,
   cursor: null,
   flash: null,
+  popoverClaim: null,
   setActiveCc: (activeCc) => set({ activeCc }),
 }))
+
+export function claimAttentionPopover(sessionId: string | null, by: AttentionPopoverClaim['by']) {
+  if (sessionId) useAttentionStore.setState({ popoverClaim: { sessionId, by } })
+}
+
+// true quando o OUTRO dono acabou de abrir o popover desta sessão.
+export function isClaimedByOther(
+  claim: AttentionPopoverClaim | null,
+  sessionId: string | null | undefined,
+  me: AttentionPopoverClaim['by'],
+): boolean {
+  return claim != null && claim.by !== me && sessionId != null && claim.sessionId === sessionId
+}
 
 function showFlash(position: number, total: number, item: AttentionItem | null): void {
   const nonce = (useAttentionStore.getState().flash?.nonce ?? 0) + 1

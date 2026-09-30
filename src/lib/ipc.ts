@@ -30,6 +30,7 @@ export const loopApi = api.loop
 export const objectivesApi = api.objectives
 export const handoffsApi = api.handoffs
 export const batonApi = api.baton
+export const sessionGraphApi = api.sessionGraph
 export const architectureApi = api.repoDeps
 export const tasksApi = api.tasks
 export const diagramsApi = api.diagrams

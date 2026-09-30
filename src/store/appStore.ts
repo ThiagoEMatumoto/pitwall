@@ -689,6 +689,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             lastActivityAt: u.lastActivityAt,
             lastText: u.lastText !== undefined ? u.lastText : sess.lastText,
             tokens: u.tokens ?? sess.tokens,
+            // Substitui (não herda): ausente no batch = motivo limpo.
+            attentionReason: u.attentionReason,
           }
         }),
       }))
@@ -723,6 +725,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         return {
           ...sess,
           status: p.status,
+          // Anda junto com o status: os dois vêm do mesmo batch do stream.
+          attentionReason: p.attentionReason,
           lastActivityAt: p.lastActivityAt ?? sess.lastActivityAt,
           lastText: p.lastText ?? sess.lastText,
           tokens: p.tokens ?? sess.tokens,

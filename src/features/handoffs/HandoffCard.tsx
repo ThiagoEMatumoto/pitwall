@@ -107,7 +107,7 @@ const STATUS_LABEL: Record<HandoffStatus, string> = {
   pending: 'Pendente',
   approved: 'Aprovado',
   running: 'Em andamento',
-  needs_input: 'Aguardando resposta',
+  needs_input: 'Pergunta pendente',
   done: 'Concluído',
   rejected: 'Rejeitado',
   failed: 'Falhou',

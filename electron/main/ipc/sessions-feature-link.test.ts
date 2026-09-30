@@ -37,6 +37,7 @@ const seam = vi.hoisted(() => ({
   lastFeatureSessionsSql: '',
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
+  ptyListeners: new Map<string, (e: unknown) => void>(),
 }))
 
 vi.mock('electron', () => ({
@@ -109,7 +110,7 @@ vi.mock('../services/db', () => ({
 
 vi.mock('../services/pty-manager', () => ({
   ptyManager: {
-    on: () => {},
+    on: (event: string, fn: (e: unknown) => void) => seam.ptyListeners.set(event, fn),
     off: () => {},
     write: () => {},
     isRunning: (id: string) => seam.runningIds.includes(id),
@@ -158,6 +159,7 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
+import { onBroadcast } from '../services/notify'
 import type { FeatureSessionSummary, SessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
@@ -395,5 +397,22 @@ describe('sessions:set-feature — vincular sessão em curso', () => {
   it('featureId null desfaz o vínculo', () => {
     handler('sessions:set-feature')(null, 'sess-1' as never, null as never)
     expect(seam.featureUpdates).toEqual([[null, 'sess-1']])
+  })
+})
+
+// O grafo de sessões escuta pelo onBroadcast do notify: um produtor com broadcast
+// próprio (webContents.send direto) chega no renderer e nunca no grafo.
+describe('broadcasts de sessão chegam aos ouvintes do main (grafo)', () => {
+  it('set-feature, rename e pty exit passam pelo notify', () => {
+    const heard: string[] = []
+    const offs = [
+      onBroadcast('session:', (channel) => heard.push(channel)),
+      onBroadcast('pty:exit', (channel) => heard.push(channel)),
+    ]
+    handler('sessions:set-feature')(null, 'sess-1' as never, 'feat-1' as never)
+    handler('sessions:rename')(null, 'sess-1' as never, 'Novo nome' as never)
+    seam.ptyListeners.get('exit')?.({ sessionId: 'sess-1', exitCode: 0, signal: null })
+    for (const off of offs) off()
+    expect(heard).toEqual(['session:feature-changed', 'session:renamed', 'pty:exit'])
   })
 })

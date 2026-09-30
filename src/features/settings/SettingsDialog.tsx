@@ -717,7 +717,7 @@ function comboFromEvent(e: KeyboardEvent): Combo | null {
   if (e.shiftKey) combo.shift = true
   if (e.altKey) combo.alt = true
   if (e.code === 'Backslash') combo.code = 'Backslash'
-  else if (e.altKey && /^Key[A-Z]$/.test(e.code)) combo.code = e.code
+  else if (e.altKey && /^(Key[A-Z]|Comma|Period)$/.test(e.code)) combo.code = e.code
   else combo.key = key
   return combo
 }

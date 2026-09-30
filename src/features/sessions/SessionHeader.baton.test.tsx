@@ -11,6 +11,10 @@ vi.mock('@/lib/ipc', () => ({
   featuresApi: { listWithStats: vi.fn().mockResolvedValue([]), get: vi.fn() },
   sessionsApi: { setFeature: vi.fn().mockResolvedValue(undefined), listByFeature: vi.fn() },
   loopApi: { onUpdated: vi.fn(() => () => {}) },
+  sessionGraphApi: {
+    get: vi.fn().mockResolvedValue({ nodes: [], lanes: [], edges: [] }),
+    onUpdated: vi.fn(() => () => {}),
+  },
 }))
 vi.mock('@/lib/nav', () => ({
   navigateToFeature: vi.fn(),

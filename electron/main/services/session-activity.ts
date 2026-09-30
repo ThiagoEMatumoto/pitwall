@@ -1,4 +1,3 @@
-import { BrowserWindow } from 'electron'
 import { EventEmitter } from 'node:events'
 import {
   existsSync,
@@ -19,7 +18,14 @@ import chokidar, { FSWatcher } from 'chokidar'
 import type { SessionActivity, GlobalActivityBatch } from '../../../shared/types/ipc'
 import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
-import { isActiveCrewChild } from './handoff-store'
+import { getByChildSession, isActiveCrewChild } from './handoff-store'
+import { broadcast } from './notify'
+import { tuiMenuWatch } from './tui-menu-watch'
+import {
+  deriveAttentionReason,
+  handoffAsking,
+  type AttentionReason,
+} from '../../../shared/tui/attention-reason'
 import { deriveSubagentActivity } from './subagent-activity'
 import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
@@ -327,6 +333,37 @@ export function getActivityFor(ccSessionId: string): ActivitySnapshot | null {
   return { status, lastActivityAt, lastText, tokens }
 }
 
+// Motivo da espera de uma PTY deste app (sessions.id). Nunca decide fila nem
+// notificação — só descreve; qualquer dúvida devolve undefined (como antes).
+export function attentionReasonForPty(
+  ptyId: string,
+  status: SessionActivity['status'],
+): AttentionReason | undefined {
+  if (!tuiMenuWatch.has(ptyId)) return undefined
+  tuiMenuWatch.noteUnparsed(ptyId, status)
+  const handoff = getByChildSession(ptyId)
+  return deriveAttentionReason({
+    status,
+    scan: tuiMenuWatch.current(ptyId),
+    handoffAsking: handoff ? handoffAsking(handoff) : false,
+  })
+}
+
+// O índice de sessions/<pid>.json fala ccSessionId; a tela é por PTY (sessions.id).
+// O cc→pty vem do próprio TuiMenuWatch (gravado no spawn): o batch global roda a
+// cada tick para TODA sessão indexada, e uma query por sessão por tick não se paga.
+// Relê a tela antes de derivar: o scan em cache é o da última rajada assentada e,
+// com saída contínua (spinner), pode ser o prompt de antes justo na borda do status.
+async function attentionReasonForCc(
+  ccSessionId: string,
+  status: SessionActivity['status'],
+): Promise<AttentionReason | undefined> {
+  const ptyId = tuiMenuWatch.ptyForCc(ccSessionId)
+  if (!ptyId) return undefined
+  await tuiMenuWatch.rescan(ptyId)
+  return attentionReasonForPty(ptyId, status)
+}
+
 interface WatchEntry {
   transcriptPath: string | null
   enrichment: TranscriptEnrichment
@@ -352,6 +389,26 @@ class SessionActivityService extends EventEmitter {
   private globalWatch = false
   private dirWatcher: FSWatcher | null = null
   private timer: NodeJS.Timeout | null = null
+  private globalTimer: NodeJS.Timeout | null = null
+  // broadcastGlobal é async e não serializado: só o batch da geração mais nova sai,
+  // senão um batch velho chegando depois recoloca 'waiting' na fila do renderer.
+  private globalGen = 0
+
+  constructor() {
+    super()
+    // Menu apareceu/sumiu na tela sem o sessions/<pid>.json mudar (o status já
+    // era waiting): re-emite o batch pra o motivo chegar ao renderer. N PTYs
+    // mudando de tela juntas viram UM batch (coalesce, não reinicia o timer).
+    tuiMenuWatch.on('change', () => this.scheduleGlobal())
+  }
+
+  private scheduleGlobal(): void {
+    if (!this.globalWatch || this.globalTimer) return
+    this.globalTimer = setTimeout(() => {
+      this.globalTimer = null
+      void this.broadcastGlobal()
+    }, DEBOUNCE_MS)
+  }
 
   watch(ccSessionId: string): void {
     if (this.watched.has(ccSessionId)) return
@@ -484,6 +541,7 @@ class SessionActivityService extends EventEmitter {
   // Emite o batch global com TODAS as sessões indexadas. lastText/tokens vêm do
   // tail do JSONL (mesma derivação do emitFor), sob demanda por sessão.
   private async broadcastGlobal(): Promise<void> {
+    const gen = ++this.globalGen
     const batch: GlobalActivityBatch = []
     for (const [ccSessionId, entry] of this.index) {
       const status = this.effectiveStatus(entry)
@@ -504,8 +562,10 @@ class SessionActivityService extends EventEmitter {
         lastActivityAt: entry.updatedAt,
         lastText,
         tokens,
+        attentionReason: await attentionReasonForCc(ccSessionId, status),
       })
     }
+    if (gen !== this.globalGen) return
     broadcast('session:activity:global', batch)
   }
 
@@ -616,12 +676,6 @@ class SessionActivityService extends EventEmitter {
       subagents,
     }
     broadcast('session:activity', activity)
-  }
-}
-
-function broadcast(channel: string, payload: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, payload)
   }
 }
 

@@ -31,14 +31,30 @@ export function matchCombo(e: KeyboardEvent, c: Combo): boolean {
   return false
 }
 
+const ARROW_GLYPH: Record<string, string> = {
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+}
+
+const PUNCTUATION_CODE: Record<string, string> = { Comma: ',', Period: '.' }
+
+function arrowGlyph(c: Combo): string | undefined {
+  return ARROW_GLYPH[c.code ?? ''] ?? ARROW_GLYPH[c.key ?? '']
+}
+
 // Representação humana, plataforma-aware. Usada nos <kbd> da UI.
 export function formatCombo(c: Combo): string {
   const parts: string[] = []
   if (c.mod) parts.push(isMac ? '⌘' : 'Ctrl')
   if (c.shift) parts.push('Shift')
   if (c.alt) parts.push(isMac ? '⌥' : 'Alt')
+  const arrow = arrowGlyph(c)
   if (c.code === 'Backslash') parts.push('\\')
+  else if (c.code && PUNCTUATION_CODE[c.code]) parts.push(PUNCTUATION_CODE[c.code])
   else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
+  else if (arrow) parts.push(arrow)
   else if (c.key === 'Tab') parts.push('Tab')
   else if (c.key) parts.push(c.key.toUpperCase())
   return parts.join('+')
@@ -83,6 +99,24 @@ export const COMMANDS: Command[] = [
     label: 'Voltar à sessão onde você estava',
     context: 'Global',
     defaultCombo: { alt: true, code: 'KeyQ' },
+    editable: true,
+  },
+  // Andar pelas relações da sessão (mãe → irmãs → filhas; bastão ao lado dela).
+  // Alt+,/Alt+. (os "<" e ">" do teclado) e NÃO Alt+←/→: no prompt do Claude Code
+  // (2.1.286) meta+←/→ é pular palavra, e o listener global engoliria a tecla.
+  // Por code, pelo mesmo motivo do Alt+A (com Option o e.key vira '≤'/'≥' no mac).
+  {
+    id: 'session.linkPrev',
+    label: 'Sessão relacionada anterior (mãe, irmã, bastão de)',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'Comma' },
+    editable: true,
+  },
+  {
+    id: 'session.linkNext',
+    label: 'Próxima sessão relacionada (filha, irmã, bastão para)',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'Period' },
     editable: true,
   },
   {

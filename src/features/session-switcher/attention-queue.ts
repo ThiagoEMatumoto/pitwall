@@ -9,6 +9,9 @@ import { liveSessionLabel } from './session-label'
 
 export type AttentionReason = 'handoff-input' | 'waiting' | 'crew'
 
+// O PORQUÊ da espera (tela parseada no main). Enfeite: nunca muda quem entra na fila.
+export type AttentionDetail = NonNullable<LiveSessionInfo['attentionReason']>
+
 export interface AttentionItem {
   // Identidade estável dentro da fila (cursor do ciclo): session:<id> | crew:<handoffId>.
   key: string
@@ -21,6 +24,7 @@ export interface AttentionItem {
   projectName: string | null
   title: string
   reason: AttentionReason
+  detail?: AttentionDetail
   // Desde quando espera (ms epoch); null quando não há relógio confiável.
   since: number | null
   liveStatus: LiveSessionInfo['status'] | null
@@ -56,6 +60,7 @@ function sessionItem(
     projectName: s.projectName,
     title: liveSessionLabel(s),
     reason,
+    detail: reason === 'handoff-input' ? 'handoff-input' : s.attentionReason,
     since,
     liveStatus: s.status,
   }
@@ -72,6 +77,7 @@ function crewItem(h: Handoff, liveChild: LiveSessionInfo | undefined): Attention
     projectName: liveChild?.projectName ?? h.targetRepoLabel,
     title: liveChild?.title ?? liveChild?.name ?? h.task,
     reason: asking ? 'handoff-input' : 'crew',
+    detail: asking ? 'handoff-input' : liveChild?.attentionReason,
     since: asking ? h.questionAskedAt : (liveChild?.lastActivityAt ?? null),
     liveStatus: liveChild?.status ?? null,
   }

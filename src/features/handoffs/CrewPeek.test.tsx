@@ -138,7 +138,7 @@ describe('CrewPeek', () => {
     // O PTY diz 'working' porque a filha está parada num prompt — o cabeçalho não
     // pode anunciar "trabalhando" enquanto o corpo mostra a pergunta em aberto.
     mount({ status: 'needs_input', pendingQuestion: 'Posso apagar a tabela?' }, 'working')
-    expect(screen.getByText('Aguardando resposta')).toBeInTheDocument()
+    expect(screen.getByText('Pergunta pendente')).toBeInTheDocument()
     expect(screen.queryByText('trabalhando')).not.toBeInTheDocument()
   })
 
@@ -155,7 +155,7 @@ describe('CrewPeek', () => {
       'working',
     )
     expect(screen.getByText('trabalhando')).toBeInTheDocument()
-    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pergunta pendente')).not.toBeInTheDocument()
     const box = screen.getByTestId('peek-question')
     expect(box).toHaveTextContent('BLOQUEIO: escopo da Frente 2?')
     expect(box).toHaveTextContent(/já retomou/)
@@ -165,7 +165,7 @@ describe('CrewPeek', () => {
   it('sem bloqueio, o selo mostra o estado ao vivo da filha', () => {
     mount({}, 'working')
     expect(screen.getByText('trabalhando')).toBeInTheDocument()
-    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pergunta pendente')).not.toBeInTheDocument()
   })
 })
 

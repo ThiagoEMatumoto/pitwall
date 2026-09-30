@@ -8,6 +8,7 @@ import type {
   HandoffOutcome,
   HandoffStatus,
 } from '../../../shared/types/ipc'
+import type { HandoffEvent } from '../../../shared/types/session-graph'
 
 interface HandoffRow {
   id: string
@@ -35,6 +36,8 @@ interface HandoffRow {
   outcome: string | null
   // Dispensa manual no Crew Dock (migration 036). Vem no h.* do SELECT_HANDOFF.
   dismissed_at: number | null
+  // Antecessora no bastão (migration 037): quem a filha atual substituiu.
+  predecessor_session_id: string | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
 }
@@ -121,6 +124,7 @@ function toEntity(row: HandoffRow): Handoff {
     fromRepoId: row.from_repo_id,
     outcome: (row.outcome as HandoffOutcome | null) ?? null,
     dismissedAt: row.dismissed_at,
+    predecessorSessionId: row.predecessor_session_id,
     resumable: isResumable(row),
   }
 }
@@ -643,4 +647,31 @@ export function findActiveByTarget(
           .get(targetRepoId)
   ) as HandoffRow | undefined
   return row ? toEntity(row) : null
+}
+
+interface HandoffEventRow {
+  id: string
+  handoff_id: string
+  from_status: string | null
+  to_status: string
+  event: string
+  detail: string | null
+  at: number
+}
+
+// Linha do tempo de um handoff (trilha imutável do logEvent), da mais antiga pra
+// mais nova. rowid desempata eventos gravados no mesmo milissegundo.
+export function listEvents(handoffId: string): HandoffEvent[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM handoff_events WHERE handoff_id = ? ORDER BY at, rowid')
+    .all(handoffId) as HandoffEventRow[]
+  return rows.map((r) => ({
+    id: r.id,
+    handoffId: r.handoff_id,
+    fromStatus: r.from_status,
+    toStatus: r.to_status,
+    event: r.event,
+    detail: r.detail,
+    at: r.at,
+  }))
 }

@@ -136,7 +136,11 @@ const PLAN_QUESTION_RE = /Would you like to proceed|Exit plan mode/i
 const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep planning/i
 
 // Bordas de box-drawing (moldura do box de diff/comando) aparadas do contexto.
-const BOX_EDGE_RE = /^[\s│╭╮╰╯─]+|[\s│╭╮╰╯─]+$/g
+// ╌ é a moldura tracejada do comando no prompt de permissão do 2.1.286.
+const BOX_EDGE_RE = /^[\s│╭╮╰╯─╌]+|[\s│╭╮╰╯─╌]+$/g
+// No 2.1.286 o prompt não tem box ╭: começa numa régua cheia de ─ (captura real
+// em shared/tui/__fixtures__) — acima dela é conversa.
+const PROMPT_TOP_RULE_RE = /^─{10,}$/
 
 // Bloco de contexto do prompt de permissão/trust: linhas ACIMA da pergunta (o
 // box com o diff/comando/config que o usuário está aprovando). Sobe no máximo
@@ -148,6 +152,7 @@ function extractContext(lines: string[], questionLine: number, max = 15): string
     const cleaned = raw.replace(BOX_EDGE_RE, '')
     if (cleaned !== '') parts.unshift(cleaned)
     if (raw.includes('╭')) break // topo do box — acima é conversa antiga
+    if (PROMPT_TOP_RULE_RE.test(raw.trim())) break
   }
   return parts.length > 0 ? parts.join('\n') : undefined
 }
@@ -218,7 +223,7 @@ function extractTabBar(lines: string[], questionLine: number, max = 6): TuiMenuT
 // (TAB_BAR_RE) ou linha de moldura de box (permission/trust: o diff/comando
 // acima da pergunta usa ╭╮╰╯─│, nunca é wrap da pergunta) — `max` limita o
 // pior caso (blank/chip/box ausentes) pra não engolir conversa anterior.
-const BOX_DRAWING_RE = /[┌┐└┘│╭╮╰╯─]/
+const BOX_DRAWING_RE = /[┌┐└┘│╭╮╰╯─╌]/
 function extractQuestion(
   lines: string[],
   firstOptionLine: number,
@@ -456,14 +461,17 @@ export function questionPositionLabel(
   return `Pergunta ${current} de ${questionTabs.length}`
 }
 
-// Identidade estável de um menu parseado (pergunta + labels na ordem). Usada pra:
-// (a) não re-renderizar quando o re-parse produz o mesmo menu; (b) guard de
-// clique — re-parse fresco divergente do menu clicado → NÃO digitar no PTY.
+// Identidade estável de um menu parseado (pergunta + context + labels na ordem).
+// Usada pra: (a) não re-renderizar quando o re-parse produz o mesmo menu; (b) guard
+// de clique — re-parse fresco divergente do menu clicado → NÃO digitar no PTY.
+// O context entra porque no 2.1.286 é o ÚNICO lugar com o comando/diff aprovado:
+// sem ele, dois Bash no mesmo cwd têm a mesma identidade.
 export function menuFingerprint(menu: TuiMenu): string {
   return [
     menu.kind,
     menu.multiSelect ? 'multi' : 'single',
     menu.question ?? '',
+    ...(menu.context?.split('\n').map((l) => `ctx:${l.trim()}`) ?? []),
     ...(menu.tabs?.map((t) => `tab:${t.label}:${t.done}`) ?? []),
     ...menu.options.map((o) => `${o.index}:${o.label}:${o.checked ?? ''}`),
     // \n como separador: nenhum campo pode conter quebra (todos vêm de split('\n')).

@@ -1,7 +1,7 @@
 import { RefreshCw } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot, GradientBorder } from '@/features/brand'
-import { useAppStore } from '@/store/appStore'
+import { useVisibleLiveSessions } from '@/features/session-switcher/useGlobalSessions'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { OverviewCounts } from '../../../shared/types/ipc'
 
@@ -10,7 +10,9 @@ import type { OverviewCounts } from '../../../shared/types/ipc'
 // contexto de decisão, pills de estado (no box / em pista) e chips-stat dos
 // contadores do agregado. Voz de engenheiro de pista.
 export function HomeHero({ counts, onRefresh }: { counts: OverviewCounts; onRefresh: () => void }) {
-  const liveSessions = useAppStore((s) => s.liveSessions)
+  // Mesmo conjunto do card "Sessões agora": filha de handoff mora no Crew Dock
+  // (com badge próprio). Contar ela aqui dava "1 no box" com o card dizendo 0.
+  const liveSessions = useVisibleLiveSessions()
   const groups = groupLiveSessions(liveSessions)
   const inBox = groups.waiting.length
   const onTrack = groups.working.length

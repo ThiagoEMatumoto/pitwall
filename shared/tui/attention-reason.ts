@@ -1,0 +1,93 @@
+import { gateMenuByStatus, parseTuiMenu, type TuiMenu } from './tui-menu-parser'
+import { parseWithGrowingWindow } from './tui-read-window'
+
+// POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
+// sessão entra/sai da fila nem se notifica — isso continua no status do
+// ~/.claude/sessions/<pid>.json. Motivo ausente = exatamente o comportamento de antes.
+export type AttentionReason = 'permission' | 'trust' | 'question' | 'turn-end' | 'handoff-input'
+
+export type LiveStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'ended'
+
+export interface ScreenScan {
+  menu: TuiMenu | null
+  // Caixa de input ociosa do claude (❯ entre as réguas) — prova de fim de turno.
+  inputPrompt: boolean
+  nonBlankLines: number
+}
+
+const PROMPT_WINDOW = 40
+// Abaixo disso a tela ainda está nascendo (banner) — não é falha de parse.
+const UNPARSED_MIN_LINES = 3
+
+const RULE_RE = /^─{10,}$/
+const INPUT_LINE_RE = /^❯(\s|$)/
+
+// Caixa de input do claude 2.1.286 (captura real em __fixtures__/…idle-prompt):
+// régua, "❯ …", régua. A linha ❯ de uma opção de menu não tem régua logo acima.
+export function hasInputPrompt(text: string): boolean {
+  const lines = text.split('\n').map((l) => l.trim())
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (!INPUT_LINE_RE.test(lines[i]) || !RULE_RE.test(lines[i - 1])) continue
+    if (lines.slice(i + 1, i + 8).some((l) => RULE_RE.test(l))) return true
+  }
+  return false
+}
+
+export function scanScreen(readTail: (lines: number) => string, bufferLines: number): ScreenScan {
+  const menu = parseWithGrowingWindow(readTail, parseTuiMenu, bufferLines)
+  const tail = readTail(PROMPT_WINDOW)
+  return {
+    menu,
+    inputPrompt: menu == null && hasInputPrompt(tail),
+    nonBlankLines: tail.split('\n').filter((l) => l.trim() !== '').length,
+  }
+}
+
+function menuReason(menu: TuiMenu): AttentionReason {
+  if (menu.kind === 'permission' || menu.kind === 'trust') return menu.kind
+  return 'question'
+}
+
+export interface ReasonInput {
+  status: LiveStatus
+  // null = nenhuma PTY deste app observada para a sessão.
+  scan: ScreenScan | null
+  handoffAsking: boolean
+}
+
+export function deriveAttentionReason({
+  status,
+  scan,
+  handoffAsking,
+}: ReasonInput): AttentionReason | undefined {
+  if (handoffAsking) return 'handoff-input'
+  if (!scan) return undefined
+  const menu = gateMenuByStatus(scan.menu, status)
+  if (menu) return menuReason(menu)
+  if (status === 'waiting' && scan.inputPrompt) return 'turn-end'
+  return undefined
+}
+
+// A sessão espera você e a tela tem conteúdo, mas nada foi reconhecido: é o
+// sinal de drift do parser (nova versão da CLI) que o contador expõe.
+export function isUnparsedWaiting(status: LiveStatus, scan: ScreenScan): boolean {
+  return (
+    status === 'waiting' &&
+    !scan.menu &&
+    !scan.inputPrompt &&
+    scan.nonBlankLines > UNPARSED_MIN_LINES
+  )
+}
+
+// Mesma regra de crewResumedAfterQuestion (src/features/handoffs/crew.ts): o
+// needs_input vale até a filha registrar progresso depois da pergunta. O main
+// não importa de src/, por isso a cópia.
+export function handoffAsking(h: {
+  status: string
+  questionAskedAt: number | null
+  stepUpdatedAt: number | null
+}): boolean {
+  if (h.status !== 'needs_input') return false
+  if (h.questionAskedAt == null || h.stepUpdatedAt == null) return true
+  return h.stepUpdatedAt <= h.questionAskedAt
+}

@@ -13,6 +13,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureLink } from './SessionFeatureLink'
+import { ConnectedChips } from './ConnectedChips'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
@@ -216,6 +217,7 @@ export function SessionHeader({
               </button>
             </>
           ))}
+        {tier !== 'narrow' && sessionId && <ConnectedChips sessionId={sessionId} />}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 text-[var(--color-text-dim)]">
         {exited &&

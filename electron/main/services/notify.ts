@@ -35,11 +35,35 @@ function isSyncedChannel(channel: string): boolean {
   )
 }
 
+// O main não tem event bus: quem precisa reagir a uma mutação dentro do próprio
+// main (ex.: o grafo de sessões) escuta aqui os MESMOS canais que o renderer
+// recebe, sem que cada produtor tenha que saber quem depende dele.
+type BroadcastListener = (channel: string, payload: unknown) => void
+const listeners = new Set<{ prefix: string; fn: BroadcastListener }>()
+
+export function onBroadcast(channelPrefix: string, fn: BroadcastListener): () => void {
+  const entry = { prefix: channelPrefix, fn }
+  listeners.add(entry)
+  return () => {
+    listeners.delete(entry)
+  }
+}
+
 export function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
   if (isSyncedChannel(channel)) syncMutationHook()
+  for (const { prefix, fn } of listeners) {
+    if (!channel.startsWith(prefix)) continue
+    // Um ouvinte com defeito não pode fazer a mutação que já aconteceu parecer
+    // ter falhado pra quem chamou broadcast.
+    try {
+      fn(channel, payload)
+    } catch (err) {
+      console.error(`[notify] ouvinte de ${prefix} falhou:`, err)
+    }
+  }
 }
 
 // Mutações de tarefa que tocam parents objective/key_result mudam o progresso

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { windowApi } from '@/lib/ipc'
 import { PitwallLogo, type PitwallLogoState } from '@/features/brand'
 import { attentionSessionCount } from '@/features/session-switcher/attention-queue'
+import { AttentionQueueButton } from '@/features/session-switcher/AttentionPopover'
 import { cycleAttention, useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
 import { formatCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -67,6 +68,7 @@ export function TitleBar() {
             {waitingCount} no box
           </button>
         )}
+        <AttentionQueueButton queue={queue} />
         <RecordingPill />
       </div>
 

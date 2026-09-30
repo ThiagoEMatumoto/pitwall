@@ -47,6 +47,7 @@ import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
 import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useToastPlacement } from './useToastPlacement'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { AttentionHud } from '@/features/session-switcher/AttentionHud'
 import {
@@ -60,6 +61,8 @@ import {
   useAttentionStore,
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
+import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
+import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
 
 interface PaneParams {
   pane: ActivePane
@@ -173,6 +176,8 @@ export function AppShell() {
   // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
   // largura dele pra não cobrir os cards das filhas (e o input de resposta).
   const crewDockWidth = useCrewDockWidth()
+  // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
+  const toastPlacement = useToastPlacement(crewDockWidth)
 
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
@@ -479,6 +484,17 @@ export function AppShell() {
         if (e.repeat) return
         if (attention === 'back') goBackSession()
         else cycleAttention(getAttentionQueue(), attention === 'next' ? 1 : -1)
+        return
+      }
+      // Alt+,/Alt+.: anda pelas relações da sessão (mãe → irmãs → filhas; bastão ao
+      // lado). Mesmo contrato do Alt+A: engole antes do xterm e cede a overlays; em
+      // campo de texto do app a tecla fica pro campo (sessionLinkKeyAction).
+      const linkStep = sessionLinkKeyAction(e, overrides, useAppStore.getState().area)
+      if (linkStep && !attentionKeysBlocked()) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        stepSessionLink(linkStep === 'next' ? 1 : -1)
         return
       }
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
@@ -815,6 +831,7 @@ export function AppShell() {
           SessionSwitcher (o dockview segue montado por trás, nenhuma pane nasce). */}
       <CrewPeek />
       <AttentionHud />
+      <SessionLinkHud />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HandoffApprovalDialog />
@@ -827,8 +844,9 @@ export function AppShell() {
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
       <div
-        className="pointer-events-none fixed bottom-4 z-50 flex flex-col items-end gap-2"
-        style={{ right: crewDockWidth + 16 }}
+        data-testid="toast-stack"
+        className="pointer-events-none fixed flex flex-col items-end gap-2"
+        style={toastPlacement}
       >
         <UpdateToast />
         <NotificationToast />

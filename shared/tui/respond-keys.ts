@@ -1,4 +1,4 @@
-import type { TuiMenu } from '../tui-menu-parser'
+import type { TuiMenu } from './tui-menu-parser'
 
 // Tradução dos cliques nos cards interativos do chat (QuestionCard/PlanCard) em
 // teclas pro PTY vivo — o mesmo canal write() usado pelo onForwardKey do composer.

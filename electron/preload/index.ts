@@ -111,6 +111,7 @@ import type {
   DesignPngBatchInput,
   DesignAskInput,
 } from '../../shared/types/ipc'
+import type { SessionGraph } from '../../shared/types/session-graph'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -164,6 +165,9 @@ const api: Api = {
     },
     onGlobalActivity: (handler) =>
       subscribe<GlobalActivityBatch>('session:activity:global', handler),
+    attentionMenu: (sessionId) => invoke('sessions:attention-menu', sessionId),
+    attentionRespond: (input) => invoke('sessions:attention-respond', input),
+    attentionDebug: () => invoke('sessions:attention-debug'),
     setRendererFocus: (ccSessionId) => {
       void invoke('sessions:renderer-focus', ccSessionId)
     },
@@ -372,6 +376,11 @@ const api: Api = {
   baton: {
     distill: (input: DistillBatonInput) => invoke('baton:distill', input),
     pass: (input: PassBatonInput) => invoke('baton:pass', input),
+  },
+  sessionGraph: {
+    get: () => invoke('session-graph:get'),
+    handoffEvents: (input: { handoffId: string }) => invoke('handoff-events:list', input),
+    onUpdated: (handler) => subscribe<SessionGraph>('session-graph:updated', handler),
   },
   objectives: {
     list: (filter?: ObjectiveListFilter) => invoke('objectives:list', filter),

@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
+import { z } from 'zod'
 import { getDb } from '../services/db'
 import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
@@ -25,8 +26,11 @@ import {
   deriveEnrichment,
   isPidAlive,
   mapStatus,
+  attentionReasonForPty,
 } from '../services/session-activity'
+import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { setRendererFocusedSession } from '../services/notifications'
+import { broadcast } from '../services/notify'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   mcpClientConfigPath,
@@ -44,7 +48,7 @@ import {
   HANDOFF_CHILD_SETTINGS_JSON,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
-import { getProvider } from '../services/providers/registry'
+import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
 import type { LaunchOpts } from '../services/providers/types'
 import {
   buildImageFilename,
@@ -63,6 +67,7 @@ import type {
   Handoff,
   HandoffStatus,
   AgentProviderId,
+  AttentionRespondInput,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -82,6 +87,23 @@ interface RepoPathRow {
   path: string
   label: string
 }
+
+// O renderer só manda a intenção; as teclas saem do menu fresco no main.
+const attentionActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('select'), optionIndex: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal('other'),
+    optionIndex: z.number().int().nonnegative(),
+    text: z.string().min(1).max(4000),
+  }),
+])
+const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
+  sessionId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  menuSeq: z.number().int().positive(),
+  action: attentionActionSchema,
+})
+const attentionSessionSchema = z.string().min(1)
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -182,12 +204,6 @@ function loginShellSpawn(innerCmd: string): { command: string; args: string[] } 
   }
   const shell = process.env.SHELL || '/usr/bin/zsh'
   return { command: shell, args: ['-l', '-i', '-c', `exec ${innerCmd}`] }
-}
-
-function broadcast(channel: string, payload: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, payload)
-  }
 }
 
 // Escreve um arquivo temporário em <userData>/tmp/<prefix>-<ts>.md (mkdir
@@ -702,8 +718,19 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 
 let listenersAttached = false
 
+// Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
+// provider com menus na TUI ganha o espelho headless do tui-menu-watch.
+function screenWatchTarget(ptyId: string): { ccSessionId: string } | null {
+  const row = getDb()
+    .prepare('SELECT cc_session_id, provider FROM sessions WHERE id = ?')
+    .get(ptyId) as { cc_session_id: string | null; provider: AgentProviderId | null } | undefined
+  if (!row?.cc_session_id || !providerSupportsTuiMenus(row.provider)) return null
+  return { ccSessionId: row.cc_session_id }
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
+    tuiMenuWatch.attach(ptyManager, screenWatchTarget)
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
@@ -1117,6 +1144,7 @@ export function registerSessionIpc(): void {
         tokens,
         isResumable: transcript !== null,
         titleSource: row.session_title_source,
+        attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
       })
     }
 
@@ -1190,6 +1218,16 @@ export function registerSessionIpc(): void {
     return out
   })
 
+  // Resposta inline da fila de atenção (sem abrir o terminal): o main re-parseia
+  // a tela e recusa se o menu mudou desde o que o usuário viu.
+  ipcMain.handle('sessions:attention-menu', (_e, sessionId: unknown) =>
+    tuiMenuWatch.snapshot(attentionSessionSchema.parse(sessionId)),
+  )
+  ipcMain.handle('sessions:attention-respond', (_e, input: unknown) =>
+    tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
+  )
+  ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)
   })
@@ -1224,6 +1262,7 @@ export function registerSessionIpc(): void {
     getDb()
       .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
       .run(trimmed.length > 0 ? trimmed : null, trimmed.length > 0 ? 'manual' : null, sessionId)
+    broadcast('session:renamed', { sessionId, title: trimmed.length > 0 ? trimmed : null })
   })
 
   // Vincular/trocar a frente de uma sessão JÁ EM CURSO — o momento em que a

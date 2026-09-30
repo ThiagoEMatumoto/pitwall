@@ -23,7 +23,17 @@ export interface PtyExitEvent {
   signal: number | null
 }
 
+// Tamanho da PTY: quem espelha a tela fora do renderer (tui-menu-watch) precisa
+// dele desde o spawn — sem pane montada ninguém mais redimensiona.
+export interface PtySizeEvent {
+  sessionId: string
+  cols: number
+  rows: number
+}
+
 interface PtyEvents {
+  spawn: (e: PtySizeEvent) => void
+  resize: (e: PtySizeEvent) => void
   data: (e: PtyDataEvent) => void
   exit: (e: PtyExitEvent) => void
 }
@@ -57,10 +67,12 @@ class PtyManager extends TypedEmitter {
       throw new Error(`cwd does not exist or is not a directory: ${opts.cwd}`)
     }
 
+    const cols = opts.cols ?? 80
+    const rows = opts.rows ?? 24
     const pty = spawn(opts.command, opts.args ?? [], {
       name: 'xterm-256color',
-      cols: opts.cols ?? 80,
-      rows: opts.rows ?? 24,
+      cols,
+      rows,
       cwd: opts.cwd,
       env: {
         ...process.env,
@@ -72,6 +84,7 @@ class PtyManager extends TypedEmitter {
 
     this.ptys.set(opts.sessionId, pty)
     this.backlog.set(opts.sessionId, '')
+    this.emit('spawn', { sessionId: opts.sessionId, cols, rows })
 
     pty.onData((data) => {
       const prev = this.backlog.get(opts.sessionId) ?? ''
@@ -103,6 +116,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     pty.resize(cols, rows)
+    this.emit('resize', { sessionId, cols, rows })
   }
 
   kill(sessionId: string): void {

@@ -12,3 +12,9 @@ export function getProvider(id: AgentProviderId | null | undefined = 'claude'): 
   if (!provider) throw new Error(`Provider de agente não suportado: ${id}`)
   return provider
 }
+
+// Não lança (ao contrário de getProvider): roda dentro do evento de spawn da PTY,
+// onde um throw sairia pelo ptyManager.spawn depois do processo já ter nascido.
+export function providerSupportsTuiMenus(id: AgentProviderId | null | undefined): boolean {
+  return PROVIDERS[id ?? 'claude']?.supports.tuiMenus ?? false
+}

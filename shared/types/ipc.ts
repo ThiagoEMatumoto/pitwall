@@ -5,6 +5,8 @@
 // consumidores sigam importando tudo de '@shared/types/ipc'.
 export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
+import type { AttentionReason } from '../tui/attention-reason'
+import type { TuiMenu } from '../tui/tui-menu-parser'
 import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
 // Re-export: os consumidores continuam importando tudo de '@shared/types/ipc'.
@@ -54,6 +56,7 @@ import type {
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { HandoffEvent, SessionGraph } from './session-graph'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -292,6 +295,9 @@ export interface Handoff {
   // desfecho — `status` segue intocado (a filha pode até continuar viva). NULL =
   // nunca dispensado.
   dismissedAt: number | null
+  // Passagem de bastão: sessions.id da filha que a atual substituiu (a antecessora
+  // segue viva até o humano encerrar). NULL = nunca houve bastão neste handoff.
+  predecessorSessionId: string | null
   // DERIVADO (não é coluna): este handoff interrompido pode ser retomado via
   // `claude --resume`? Só é true com status 'interrupted', filha atrelada e o
   // transcript dela ainda no disco — o mesmo gate do handoffs:is-resumable, agora
@@ -1288,6 +1294,9 @@ export interface LiveSessionInfo {
   // Espelho de sessions.title_source: 'manual' faz `title` carregar o rename do
   // usuário (precedência sobre o nome automático) em chips/panes re-attachados.
   titleSource?: 'manual' | 'auto' | null
+  // Por que a sessão espera você (tela da PTY parseada no main). Só enfeite:
+  // ausente = sem motivo reconhecido, e a fila funciona exatamente como antes.
+  attentionReason?: AttentionReason
 }
 
 // Batch de atualização de atividade de TODAS as sessões indexadas, emitido pelo
@@ -1298,7 +1307,50 @@ export type GlobalActivityBatch = {
   lastActivityAt: number | null
   lastText?: string | null
   tokens?: { output: number; context: number }
+  attentionReason?: AttentionReason
 }[]
+
+// Resposta inline da fila de atenção: o renderer manda a INTENÇÃO (qual opção) e
+// o fingerprint do menu que o usuário viu; o main re-parseia a tela e só digita
+// se o menu ainda é o mesmo — as teclas saem do menu fresco, nunca do renderer.
+export type { AttentionReason } from '../tui/attention-reason'
+export type { TuiMenu, TuiMenuOption } from '../tui/tui-menu-parser'
+
+// menuSeq: aparição do menu na tela (sobe a cada menu que entra). O fingerprint
+// sozinho não separa dois prompts idênticos seguidos (mesmo comando retentado).
+export interface AttentionMenuSnapshot {
+  sessionId: string
+  fingerprint: string
+  menuSeq: number
+  menu: TuiMenu
+}
+
+export type AttentionAction =
+  | { kind: 'select'; optionIndex: number }
+  | { kind: 'other'; optionIndex: number; text: string }
+
+export interface AttentionRespondInput {
+  sessionId: string
+  fingerprint: string
+  menuSeq: number
+  action: AttentionAction
+}
+
+export type AttentionRespondResult =
+  | { ok: true }
+  | {
+      ok: false
+      // busy: outra resposta a este menu ainda está em voo.
+      error: 'not-running' | 'no-menu' | 'menu-changed' | 'invalid-action' | 'busy'
+      snapshot: AttentionMenuSnapshot | null
+    }
+
+// Contador consumível do gate de contract-drift: waiting com a tela cheia e
+// nenhum menu/prompt reconhecido. Subindo sem parar = parser desatualizado.
+export interface AttentionReasonCounters {
+  attentionReasonUnparsed: number
+  lastUnparsedAt: number | null
+}
 
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'
 
@@ -2683,6 +2735,11 @@ export interface Api {
     watchGlobalActivity(): void
     unwatchGlobalActivity(): void
     onGlobalActivity(handler: (batch: GlobalActivityBatch) => void): () => void
+    /** Menu pendente na tela da PTY (parse fresco no main); null = nenhum menu reconhecido. */
+    attentionMenu(sessionId: string): Promise<AttentionMenuSnapshot | null>
+    /** Responde o menu sem abrir o terminal; recusa se o menu mudou desde o snapshot. */
+    attentionRespond(input: AttentionRespondInput): Promise<AttentionRespondResult>
+    attentionDebug(): Promise<AttentionReasonCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
   }
@@ -2934,6 +2991,13 @@ export interface Api {
     // Sobe a sucessora com o briefing APROVADO, no mesmo repo/feature. Herda o papel
     // de filha de handoff quando houver. NÃO encerra a antecessora.
     pass(input: PassBatonInput): Promise<PassBatonResult>
+  }
+  // Sessões como sistema conectado (mãe→filha, bastão, repos ligados, feature).
+  // onUpdated recebe o grafo inteiro já recalculado pelo main.
+  sessionGraph: {
+    get(): Promise<SessionGraph>
+    handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
+    onUpdated(handler: (graph: SessionGraph) => void): () => void
   }
   objectives: {
     list(filter?: ObjectiveListFilter): Promise<ObjectiveWithProgress[]>

@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
+import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import type { AttentionItem, AttentionReason } from './attention-queue'
+import { attentionKeysBlocked } from './attention-keys'
+import { AttentionPopover, isActionableDetail, reasonMeta } from './AttentionPopover'
 import { hudTop, type HudAnchors } from './hud-position'
-import { useAttentionStore } from './useAttentionQueue'
+import {
+  claimAttentionPopover,
+  isClaimedByOther,
+  useAttentionQueue,
+  useAttentionStore,
+} from './useAttentionQueue'
 
 const VISIBLE_MS = 1200
 const FALLBACK_TOP = 56
+const POPOVER_GAP = 36
 
 const REASON_LABEL: Record<AttentionReason, string> = {
   'handoff-input': 'pergunta pendente',
@@ -19,7 +28,8 @@ function dotColor(item: AttentionItem): string {
 }
 
 function hudText(item: AttentionItem, position: number, total: number): string {
-  const parts = [`${position}/${total}`, item.projectName, item.title, REASON_LABEL[item.reason]]
+  const why = item.detail ? reasonMeta(item.detail).label.toLowerCase() : REASON_LABEL[item.reason]
+  const parts = [`${position}/${total}`, item.projectName, item.title, why]
   return parts.filter(Boolean).join(' · ')
 }
 
@@ -88,42 +98,115 @@ export function AttentionHud() {
   }, [flash])
 
   const item = flash?.item ?? null
+  const pinned = usePinnedPopover(flash?.nonce ?? null, item)
 
   return (
-    <div
-      ref={ref}
-      data-testid="attention-hud"
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
-      aria-hidden={visible ? undefined : true}
-      data-visible={visible}
-      data-item-kind={flash ? (item?.kind ?? 'none') : ''}
-      data-active-cc={activeCc ?? ''}
-      // z acima do peek (1000) para aparecer sobre o backdrop dele; os modais que
-      // bloqueiam o Alt+A nunca coexistem com o HUD visível.
-      className="pointer-events-none fixed left-1/2 z-[1100] flex max-w-[min(560px,80vw)] -translate-x-1/2 items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs shadow-lg transition-opacity duration-150 motion-reduce:transition-none"
-      style={{
-        top,
-        opacity: visible ? 1 : 0,
-        background: 'color-mix(in srgb, var(--color-surface-2) 92%, transparent)',
-        borderColor: 'var(--color-border)',
-        color: 'var(--color-text)',
-      }}
-    >
-      {flash &&
-        (item ? (
-          <>
-            <span
-              aria-hidden
-              className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ background: dotColor(item) }}
-            />
-            <span className="truncate">{hudText(item, flash.position, flash.total)}</span>
-          </>
-        ) : (
-          <span className="text-[var(--color-text-dim)]">Nada esperando</span>
-        ))}
-    </div>
+    <>
+      <div
+        ref={ref}
+        data-testid="attention-hud"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-hidden={visible ? undefined : true}
+        data-visible={visible}
+        data-item-kind={flash ? (item?.kind ?? 'none') : ''}
+        data-active-cc={activeCc ?? ''}
+        // z acima do peek (1000) para aparecer sobre o backdrop dele; os modais que
+        // bloqueiam o Alt+A nunca coexistem com o HUD visível.
+        className="pointer-events-none fixed left-1/2 z-[1100] flex max-w-[min(560px,80vw)] -translate-x-1/2 items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs shadow-lg transition-opacity duration-150 motion-reduce:transition-none"
+        style={{
+          top,
+          opacity: visible ? 1 : 0,
+          background: 'color-mix(in srgb, var(--color-surface-2) 92%, transparent)',
+          borderColor: 'var(--color-border)',
+          color: 'var(--color-text)',
+        }}
+      >
+        {flash &&
+          (item ? (
+            <>
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: dotColor(item) }}
+              />
+              <span className="truncate">{hudText(item, flash.position, flash.total)}</span>
+            </>
+          ) : (
+            <span className="text-[var(--color-text-dim)]">Nada esperando</span>
+          ))}
+      </div>
+      {pinned && (
+        <div
+          className="fixed left-1/2 z-[1100] -translate-x-1/2"
+          style={{ top: top + POPOVER_GAP }}
+          data-testid="attention-hud-popover"
+        >
+          <AttentionPopover item={pinned.item} onClose={pinned.close} pinned />
+        </div>
+      )}
+    </>
   )
+}
+
+// Onde o pulo deixou o usuário: o quick look da filha (crew) ou a aba da sessão.
+export function isAtAttentionTarget(
+  item: AttentionItem,
+  where: { activeCc: string | null; peekId: string | null },
+): boolean {
+  if (item.kind === 'crew') return where.peekId != null && where.peekId === item.handoffId
+  return where.activeCc != null && where.activeCc === item.ccSessionId
+}
+
+// O pulo que cai numa sessão com menu (permissão/trust/pergunta) deixa o
+// popover aberto abaixo do HUD — o HUD some em 1,2 s, a decisão não. Fecha (de
+// vez: nunca reaparece sozinho) no ×, no Esc, no próximo pulo, quando o item sai
+// da fila / perde o menu, quando o usuário sai da sessão do item ou quando um
+// overlay bloqueante (Settings, palette…) toma o foco — o popover fica acima
+// deles e seria clicável achando que é da sessão da frente.
+function usePinnedPopover(nonce: number | null, flashItem: AttentionItem | null) {
+  const [pinnedKey, setPinnedKey] = useState<string | null>(null)
+  const queue = useAttentionQueue()
+  const activeCc = useAttentionStore((s) => s.activeCc)
+  const peekId = useCrewDockStore((s) => s.peekId)
+  // A aba/peek do alvo monta alguns renders depois do pulo: só "saiu do alvo"
+  // depois de ter chegado nele.
+  const reachedRef = useRef(false)
+
+  useEffect(() => {
+    reachedRef.current = false
+    const pin = flashItem && isActionableDetail(flashItem.detail) ? flashItem : null
+    setPinnedKey(pin?.key ?? null)
+    if (pin) claimAttentionPopover(pin.sessionId, 'pinned')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonce])
+
+  const live = pinnedKey ? queue.find((i) => i.key === pinnedKey) : undefined
+  const claim = useAttentionStore((s) => s.popoverClaim)
+  useEffect(() => {
+    if (isClaimedByOther(claim, live?.sessionId, 'pinned')) setPinnedKey(null)
+  }, [claim, live?.sessionId])
+
+  const open = live != null && isActionableDetail(live.detail)
+  const atTarget = live != null && isAtAttentionTarget(live, { activeCc, peekId })
+
+  useEffect(() => {
+    if (!pinnedKey) return
+    if (!open) setPinnedKey(null)
+    else if (atTarget) reachedRef.current = true
+    else if (reachedRef.current) setPinnedKey(null)
+  }, [pinnedKey, open, atTarget])
+
+  useEffect(() => {
+    if (!pinnedKey) return
+    const onFocus = () => {
+      if (attentionKeysBlocked()) setPinnedKey(null)
+    }
+    document.addEventListener('focusin', onFocus)
+    return () => document.removeEventListener('focusin', onFocus)
+  }, [pinnedKey])
+
+  if (!open) return null
+  return { item: live, close: () => setPinnedKey(null) }
 }

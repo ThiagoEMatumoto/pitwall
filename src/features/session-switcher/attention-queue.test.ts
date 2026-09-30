@@ -53,6 +53,34 @@ const hf = (over: Partial<Handoff> & { id: string }): Handoff =>
     ...over,
   }) as Handoff
 
+describe('buildAttentionQueue — motivo (attentionReason)', () => {
+  it('carrega o motivo da sessão sem mudar quem entra na fila', () => {
+    const perm = live({ id: 'p', status: 'waiting', attentionReason: 'permission', lastActivityAt: 1 })
+    const plain = live({ id: 'q', status: 'waiting', lastActivityAt: 2 })
+    const busyWithStale = live({ id: 'b', status: 'working', attentionReason: 'permission' })
+    const all = [perm, plain, busyWithStale]
+    const q = buildAttentionQueue({ visibleSessions: all, liveSessions: all, handoffs: [] })
+    expect(q.map((i) => [i.sessionId, i.detail])).toEqual([
+      ['p', 'permission'],
+      ['q', undefined],
+    ])
+  })
+
+  it('filha com pergunta de handoff: detail handoff-input mesmo com menu na tela', () => {
+    const child = live({ id: 'c', status: 'waiting', attentionReason: 'permission' })
+    const h = hf({ id: 'h', childSessionId: 'c', status: 'needs_input', questionAskedAt: 5 })
+    const q = buildAttentionQueue({ visibleSessions: [child], liveSessions: [child], handoffs: [h] })
+    expect(q[0]).toMatchObject({ sessionId: 'c', detail: 'handoff-input' })
+  })
+
+  it('filha no dock (sem aba) herda o motivo da sessão viva', () => {
+    const child = live({ id: 'c', status: 'waiting', attentionReason: 'permission' })
+    const h = hf({ id: 'h', childSessionId: 'c', status: 'running' })
+    const q = buildAttentionQueue({ visibleSessions: [], liveSessions: [child], handoffs: [h] })
+    expect(q[0]).toMatchObject({ kind: 'crew', sessionId: 'c', detail: 'permission' })
+  })
+})
+
 describe('buildAttentionQueue', () => {
   it('fila vazia quando ninguém espera', () => {
     const s = live({ id: 'a', status: 'working' })
