@@ -63,6 +63,9 @@ interface CrewDockState {
   // Handoff aberto no quick look (CrewPeek). null = nenhum overlay.
   peekId: string | null
   peekMode: CrewPeekMode
+  // Lido pelo CrewPeek ao desmontar: false quando quem fechou já levou o foco pra
+  // outro lugar (pulo da fila de atenção) e devolvê-lo à origem desfaria o pulo.
+  peekRestoreFocus: boolean
   // Nonce do pedido de foco: o AppShell incrementa, o dock (já expandido e
   // renderizado) reage focando o card. Um id não serviria — pedir foco duas
   // vezes pro mesmo card não mudaria o valor e o efeito não rodaria.
@@ -78,7 +81,7 @@ interface CrewDockState {
   requestFocus: () => void
   openPeek: (id: string, mode?: CrewPeekMode) => void
   setPeekMode: (mode: CrewPeekMode) => void
-  closePeek: () => void
+  closePeek: (opts?: { restoreFocus?: boolean }) => void
 }
 
 const persisted = readPersisted()
@@ -89,6 +92,7 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   focusedId: null,
   peekId: null,
   peekMode: 'chat',
+  peekRestoreFocus: true,
   focusNonce: 0,
 
   expand: () => {
@@ -127,5 +131,6 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
 
   setPeekMode: (peekMode) => set({ peekMode }),
 
-  closePeek: () => set({ peekId: null, peekMode: 'chat' }),
+  closePeek: (opts) =>
+    set({ peekId: null, peekMode: 'chat', peekRestoreFocus: opts?.restoreFocus !== false }),
 }))

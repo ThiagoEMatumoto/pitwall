@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -249,5 +249,45 @@ describe('CrewPeek em modo terminal', () => {
     fireEvent.click(screen.getByText('abrir como aba'))
     expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
     expect(useCrewDockStore.getState().peekId).toBeNull()
+  })
+
+  describe('foco ao fechar', () => {
+    function focusedButton(): HTMLButtonElement {
+      const el = document.createElement('button')
+      document.body.appendChild(el)
+      el.focus()
+      return el
+    }
+
+    it('fechar devolve o foco a quem abriu o peek', () => {
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 0
+      })
+      const origin = focusedButton()
+      mount()
+      act(() => useCrewDockStore.getState().closePeek())
+      expect(document.activeElement).toBe(origin)
+      raf.mockRestore()
+    })
+
+    // Alt+A/Alt+Q pulam do peek pra uma aba: devolver o foco à origem reativaria o
+    // grupo dela no dockview e desfaria o pulo.
+    it('fechar sem restaurar deixa o foco com a sessão de destino', () => {
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 0
+      })
+      focusedButton()
+      mount()
+      const target = document.createElement('button')
+      document.body.appendChild(target)
+      act(() => {
+        useCrewDockStore.getState().closePeek({ restoreFocus: false })
+        target.focus()
+      })
+      expect(document.activeElement).toBe(target)
+      raf.mockRestore()
+    })
   })
 })

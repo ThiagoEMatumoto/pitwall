@@ -134,7 +134,7 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
     // na TUI é o motivo de se estar ali.
     requestAnimationFrame(() => inputRef.current?.focus())
     return () => {
-      if (skipRestoreRef.current) return
+      if (skipRestoreRef.current || !useCrewDockStore.getState().peekRestoreFocus) return
       const origin = originRef.current
       requestAnimationFrame(() => {
         if (origin?.isConnected) origin.focus()

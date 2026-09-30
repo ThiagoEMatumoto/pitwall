@@ -1,4 +1,4 @@
-import { BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow, Notification } from 'electron'
 import { getDb } from './db'
 import type { NotificationEvent, NotificationPrefs } from '../../../shared/types/ipc'
 
@@ -14,6 +14,28 @@ let mainWindow: BrowserWindow | null = null
 
 export function setMainWindow(win: BrowserWindow): void {
   mainWindow = win
+  pendingAttention = 0
+  win.on('focus', clearWindowAttention)
+}
+
+// Sessões que passaram a esperar você com a janela fora de foco, desde o último
+// foco. Vira o flash na barra de tarefas e o contador do launcher; focar zera.
+let pendingAttention = 0
+
+// app.setBadgeCount é best-effort: no Linux só launchers Unity (Ubuntu Dock) exibem.
+function requestWindowAttention(): void {
+  const win = mainWindow
+  if (!win || win.isDestroyed() || win.isFocused()) return
+  win.flashFrame(true)
+  pendingAttention += 1
+  app.setBadgeCount(pendingAttention)
+}
+
+function clearWindowAttention(): void {
+  mainWindow?.flashFrame(false)
+  if (pendingAttention === 0) return
+  pendingAttention = 0
+  app.setBadgeCount(0)
 }
 
 export function getMainWindow(): BrowserWindow | null {
@@ -75,6 +97,9 @@ export function notify({
 }): void {
   const prefs = getNotifPrefs()
   if (!prefs.enabled) return
+
+  // Só aviso de sessão pede atenção da janela: é o único que tem pra onde pular.
+  if (ccSessionId) requestWindowAttention()
 
   if (Notification.isSupported()) {
     const native = new Notification({ title, body })

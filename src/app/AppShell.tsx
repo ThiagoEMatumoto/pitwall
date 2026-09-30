@@ -48,6 +48,18 @@ import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
+import { AttentionHud } from '@/features/session-switcher/AttentionHud'
+import {
+  attentionKeyAction,
+  attentionKeysBlocked,
+} from '@/features/session-switcher/attention-keys'
+import {
+  cycleAttention,
+  getAttentionQueue,
+  goBackSession,
+  useAttentionStore,
+} from '@/features/session-switcher/useAttentionQueue'
+import { useSessionMruStore } from '@/store/session-mru-store'
 
 interface PaneParams {
   pane: ActivePane
@@ -457,6 +469,18 @@ export function AppShell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Fila de atenção (Alt+A / Alt+Shift+A / Alt+Q). stopPropagation além do
+      // preventDefault: sem ele o xterm ainda recebe o keydown e manda ESC+a pro PTY.
+      // Autorepeat é engolido sem andar: segurar a tecla não dispara uma rajada de pulos.
+      const attention = attentionKeyAction(e, overrides, useAppStore.getState().area)
+      if (attention && !attentionKeysBlocked()) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        if (attention === 'back') goBackSession()
+        else cycleAttention(getAttentionQueue(), attention === 'next' ? 1 : -1)
+        return
+      }
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
         e.preventDefault()
         setPaletteOpen((v) => !v)
@@ -514,6 +538,8 @@ export function AppShell() {
 
   useEffect(() => {
     sessionsApi.setRendererFocus(activeCcSessionId)
+    useAttentionStore.getState().setActiveCc(activeCcSessionId)
+    if (activeCcSessionId) useSessionMruStore.getState().touch(activeCcSessionId)
   }, [activeCcSessionId])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot
@@ -788,6 +814,7 @@ export function AppShell() {
       {/* Quick look da filha em foco: overlay por cima de tudo, no padrão do
           SessionSwitcher (o dockview segue montado por trás, nenhuma pane nasce). */}
       <CrewPeek />
+      <AttentionHud />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HandoffApprovalDialog />

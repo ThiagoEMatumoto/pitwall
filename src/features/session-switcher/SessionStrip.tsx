@@ -20,6 +20,7 @@ import { useWaitingCount } from './useWaitingCount'
 import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
+import { liveSessionLabel } from './session-label'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -232,7 +233,7 @@ interface ChipProps {
 }
 
 function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }: ChipProps) {
-  const title = (item.title ?? item.name ?? item.repo?.label) || (item.repo?.label ?? 'Avulsa')
+  const title = liveSessionLabel(item)
   const preview = item.lastText?.replace(/\s+/g, ' ').trim()
   const tooltip = `${statusLabel(item.status)} · ${relativeTime(item.lastActivityAt)}${
     preview ? `\n${preview}` : ''

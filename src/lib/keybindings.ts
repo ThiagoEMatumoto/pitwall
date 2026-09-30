@@ -38,6 +38,7 @@ export function formatCombo(c: Combo): string {
   if (c.shift) parts.push('Shift')
   if (c.alt) parts.push(isMac ? '⌥' : 'Alt')
   if (c.code === 'Backslash') parts.push('\\')
+  else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
   else if (c.key === 'Tab') parts.push('Tab')
   else if (c.key) parts.push(c.key.toUpperCase())
   return parts.join('+')
@@ -57,6 +58,31 @@ export const COMMANDS: Command[] = [
     label: 'Abrir seletor de sessões',
     context: 'Global',
     defaultCombo: { mod: true, shift: true, key: 'a' },
+    editable: true,
+  },
+  // Fila de atenção: pular direto pra sessão que precisa de você. Alt (e não
+  // Ctrl) porque Ctrl+letra é do shell/TUI; Alt+A/Alt+Q não colidem com o GNOME
+  // nem com os defaults do Claude Code. O AppShell engole a tecla antes do PTY.
+  // Por code: com Alt, e.key vira 'å'/'œ' no mac e 'ф' no layout russo.
+  {
+    id: 'attention.next',
+    label: 'Próxima sessão que precisa de você',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'KeyA' },
+    editable: true,
+  },
+  {
+    id: 'attention.prev',
+    label: 'Sessão anterior na fila de atenção',
+    context: 'Global',
+    defaultCombo: { alt: true, shift: true, code: 'KeyA' },
+    editable: true,
+  },
+  {
+    id: 'session.back',
+    label: 'Voltar à sessão onde você estava',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'KeyQ' },
     editable: true,
   },
   {
