@@ -26,6 +26,7 @@ import { listMissingRepos } from './services/repo-clone'
 import { getPref, setPref } from './services/prefs-store'
 import { setGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from './services/gpu-state'
 import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/repo-pull-scheduler'
+import { driveSafeBlocks } from './services/drive-safe'
 import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
 import { registerSecretsIpc } from './ipc/secrets'
@@ -193,6 +194,7 @@ function createMainWindow(): BrowserWindow {
 async function autoCloneMissingOnBoot(): Promise<void> {
   try {
     await backfillRepoRemotes()
+    if (driveSafeBlocks('repo auto-clone')) return
     if (getPref('autoCloneMissing', true) && listMissingRepos().length > 0) {
       await cloneMissingWithToasts()
     }

@@ -90,6 +90,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
       ...process.env,
       CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
       CM_MCP_EPHEMERAL_PORT: '1',
+      // A cópia protege o banco, não o filesystem nem o microfone: sem isto o
+      // app buildado roda auto-pull/auto-clone nos repos REAIS e a detecção de
+      // reunião reage ao mic real (ver electron/main/services/drive-safe.ts).
+      // Opt-out explícito: options.env = { CM_DRIVE_SAFE: '0' }.
+      CM_DRIVE_SAFE: '1',
       ...(options.env ?? {}),
     } as Record<string, string>,
   })

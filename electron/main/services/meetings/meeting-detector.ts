@@ -6,6 +6,7 @@ import { notify as defaultNotify } from '../notifications'
 import { getPref as defaultGetPref } from '../prefs-store'
 import { hasPipewire as defaultHasPipewire, type Exec } from './audio-devices'
 import { detectorRegistry, recorderRegistry } from './recorder-contract'
+import { driveSafeBlocks } from '../drive-safe'
 import { startRecording as defaultStartRecording, stopRecording as defaultStopRecording } from './recording-actions'
 
 // Detecção de reunião: faz poll do `pw-dump` e procura streams de captura de
@@ -446,6 +447,8 @@ export function createDetector(overrides: Partial<DetectorDeps> = {}): Detector 
 let installed: Detector | null = null
 
 export function installDetector(): void {
+  // Não cria o detector: rescheduleDetector (toggle da pref) vira no-op junto.
+  if (driveSafeBlocks('meeting auto-detect')) return
   if (!installed) installed = createDetector()
   installed.start()
 }

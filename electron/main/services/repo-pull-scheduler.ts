@@ -1,5 +1,6 @@
 import { getPref } from './prefs-store'
 import { pullAllWithToasts } from '../ipc/git'
+import { driveSafeBlocks } from './drive-safe'
 
 // Cron de auto-pull dos repos de projeto, LIGADO por padrão (opt-out). Extraído
 // de index.ts pra poder ser chamado também pelo handler prefs:set — sem isso,
@@ -15,6 +16,7 @@ let autoPullTimer: ReturnType<typeof setInterval> | null = null
 // autoPullEnabled (default TRUE: sem a pref gravada, roda). Best-effort:
 // qualquer falha é logada e o boot/tick segue.
 export async function runAutoPullNow(): Promise<void> {
+  if (driveSafeBlocks('repo auto-pull')) return
   if (!getPref(AUTO_PULL_ENABLED_KEY, true)) return
   try {
     await pullAllWithToasts('auto')
@@ -33,6 +35,7 @@ export function rescheduleAutoPull(): void {
     clearInterval(autoPullTimer)
     autoPullTimer = null
   }
+  if (driveSafeBlocks('repo auto-pull')) return
   if (!getPref(AUTO_PULL_ENABLED_KEY, true)) return
   const minutes = Math.max(1, getPref(AUTO_PULL_INTERVAL_MINUTES_KEY, 30))
   autoPullTimer = setInterval(() => void runAutoPullNow(), minutes * 60 * 1000)

@@ -109,4 +109,18 @@ describe('repo-pull-scheduler', () => {
     stopAutoPull()
     expect(vi.getTimerCount()).toBe(0)
   })
+  it('CM_DRIVE_SAFE=1: não agenda nem executa, mesmo com a pref ligada', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.stubEnv('CM_DRIVE_SAFE', '1')
+    try {
+      setPrefs({ [AUTO_PULL_ENABLED_KEY]: true, [AUTO_PULL_INTERVAL_MINUTES_KEY]: 1 })
+      rescheduleAutoPull()
+      expect(vi.getTimerCount()).toBe(0)
+      await runAutoPullNow()
+      expect(pullAllWithToastsMock).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+      vi.restoreAllMocks()
+    }
+  })
 })
