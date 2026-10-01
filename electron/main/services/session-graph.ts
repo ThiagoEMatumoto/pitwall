@@ -12,6 +12,7 @@ import type {
   SessionGraphNode,
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
+import { resolvePurpose } from './session-purpose'
 
 // Estado vivo por sessions.id (PTY + ~/.claude/sessions/<pid>.json). Ausente = ended.
 export interface LiveSessionState {
@@ -30,6 +31,11 @@ export interface GraphSessionRow {
   provider: AgentProviderId
   feature_id: string | null
   started_at: number
+  ended_at?: number | null
+  purpose: string | null
+  group_id: string | null
+  last_summary: string | null
+  last_summary_at: number | null
 }
 
 export interface GraphHandoffRow {
@@ -77,6 +83,13 @@ export interface SessionGraphInput {
   repoDependencies: GraphRepoDepRow[]
   featureRecords: GraphFeatureRecordRow[]
   live: Map<string, LiveSessionState>
+  // 1º prompt humano por sessions.id — só pra quem não tem propósito melhor.
+  firstPrompts?: Map<string, string | null>
+  // Tarefa do handoff mais recente em que a sessão foi filha/antecessora, mesmo
+  // fora da janela de handoffs do grafo (a mãe de hoje foi filha semana passada).
+  pastTasks?: Map<string, string>
+  // Última mensagem humana por sessions.id (fallback do "Onde parei").
+  lastPrompts?: Map<string, string | null>
 }
 
 const LOOSE_LABEL = 'Avulsas'
@@ -102,7 +115,22 @@ function attentionFor(
   return null
 }
 
+// Quem passou o bastão deixa de ser filha (o handoff aponta pra sucessora), mas a
+// tarefa que ela carregava continua sendo "do que ela se trata" — sem isto a
+// antecessora viva virava "Sem propósito" no mapa. O handoff mais recente vence.
+function predecessorHandoffIndex(handoffs: GraphHandoffRow[]): Map<string, GraphHandoffRow> {
+  const out = new Map<string, GraphHandoffRow>()
+  for (const h of handoffs) {
+    const pred = h.predecessor_session_id
+    if (!pred || pred === h.child_session_id) continue
+    const prev = out.get(pred)
+    if (!prev || prev.created_at <= h.created_at) out.set(pred, h)
+  }
+  return out
+}
+
 function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHandoffRow>) {
+  const passedBaton = predecessorHandoffIndex(input.handoffs)
   const repoById = new Map(input.repos.map((r) => [r.id, r]))
   const sorted = [...input.sessions].sort(
     (a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id),
@@ -112,6 +140,12 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
     const live = input.live.get(s.id)
     const status = live?.status ?? 'ended'
     const handoff = childHandoff.get(s.id)
+    const purpose = resolvePurpose({
+      userPurpose: s.purpose,
+      handoffTask:
+        handoff?.task ?? passedBaton.get(s.id)?.task ?? input.pastTasks?.get(s.id) ?? null,
+      firstPrompt: input.firstPrompts?.get(s.id) ?? null,
+    })
     return {
       sessionId: s.id,
       ccSessionId: s.cc_session_id,
@@ -128,7 +162,15 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       status,
       attentionReason: attentionFor(handoff, status),
       lastActivityAt: live?.lastActivityAt ?? null,
+      startedAt: s.started_at,
+      endedAt: live ? null : (s.ended_at ?? null),
       purposeHint: handoff?.task ?? null,
+      purpose: purpose?.text ?? null,
+      purposeSource: purpose?.source ?? null,
+      groupId: s.group_id ?? null,
+      lastSummary: s.last_summary ?? null,
+      lastSummaryAt: s.last_summary_at ?? null,
+      lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
     }
   })
@@ -308,12 +350,37 @@ function readGraphHandoffs(db: Database.Database, now: number): GraphHandoffRow[
     ) as GraphHandoffRow[]
 }
 
+function readPastTasks(db: Database.Database, sessionIds: string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  if (sessionIds.length === 0) return out
+  const rows = db
+    .prepare(
+      `SELECT sid, task FROM (
+         SELECT child_session_id AS sid, task, created_at FROM handoffs
+          WHERE child_session_id IN (SELECT value FROM json_each(?))
+         UNION ALL
+         SELECT predecessor_session_id AS sid, task, created_at FROM handoffs
+          WHERE predecessor_session_id IN (SELECT value FROM json_each(?))
+       ) WHERE task IS NOT NULL AND trim(task) <> '' ORDER BY created_at`,
+    )
+    .all(JSON.stringify(sessionIds), JSON.stringify(sessionIds)) as Array<{
+    sid: string
+    task: string
+  }>
+  // ORDER BY created_at: o mais recente sobrescreve.
+  for (const r of rows) out.set(r.sid, r.task)
+  return out
+}
+
 // Nós = sessões vivas + as que os handoffs em vista citam (mãe, filha,
 // antecessora do bastão). Uma mãe encerrada continua sendo "de onde a filha saiu".
 export function readSessionGraphInput(
   db: Database.Database,
   live: Map<string, LiveSessionState>,
   now = Date.now(),
+  // live: sessão viva ainda pode ganhar o 1º prompt (o leitor retenta mais cedo).
+  firstPrompt: (ccSessionId: string, live: boolean) => string | null = () => null,
+  lastPrompt: (ccSessionId: string, live: boolean) => string | null = () => null,
 ): SessionGraphInput {
   const handoffs = readGraphHandoffs(db, now)
 
@@ -326,10 +393,41 @@ export function readSessionGraphInput(
 
   const sessions = db
     .prepare(
-      `SELECT id, repo_id, cc_session_id, title, title_source, provider, feature_id, started_at
+      `SELECT id, repo_id, cc_session_id, title, title_source, provider, feature_id, started_at,
+              ended_at, purpose, group_id, last_summary, last_summary_at
          FROM sessions WHERE id IN (SELECT value FROM json_each(?))`,
     )
     .all(ids) as GraphSessionRow[]
+  // Filha e antecessora do bastão têm a tarefa do handoff: o transcript não é lido.
+  const children = new Set(
+    handoffs.flatMap((h) => [h.child_session_id, h.predecessor_session_id]),
+  )
+  const pastTasks = readPastTasks(
+    db,
+    sessions.filter((s) => !s.purpose?.trim() && !children.has(s.id)).map((s) => s.id),
+  )
+  // Só o claude grava transcript em ~/.claude/projects: codex nem entra na busca.
+  const firstPrompts = new Map(
+    sessions
+      .filter(
+        (s) =>
+          s.provider === 'claude' &&
+          !s.purpose?.trim() &&
+          !children.has(s.id) &&
+          !pastTasks.has(s.id) &&
+          s.cc_session_id,
+      )
+      .map(
+        (s) =>
+          [s.id, firstPrompt(s.cc_session_id!, live.has(s.id))] as const,
+      ),
+  )
+  // "Onde parei" sem resumo: só quem não tem um ganha a leitura do fim do transcript.
+  const lastPrompts = new Map(
+    sessions
+      .filter((s) => s.provider === 'claude' && !s.last_summary && s.cc_session_id)
+      .map((s) => [s.id, lastPrompt(s.cc_session_id!, live.has(s.id))] as const),
+  )
   const featureRecords = db
     .prepare(
       `SELECT session_id, feature_id FROM feature_session_records
@@ -341,6 +439,9 @@ export function readSessionGraphInput(
     sessions,
     handoffs,
     featureRecords,
+    firstPrompts,
+    pastTasks,
+    lastPrompts,
     repos: db.prepare('SELECT id, project_id, label, position FROM repos').all() as GraphRepoRow[],
     projects: db
       .prepare('SELECT id, name, color, position FROM projects')

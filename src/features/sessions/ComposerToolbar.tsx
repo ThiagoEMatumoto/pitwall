@@ -46,6 +46,8 @@ interface Props {
   summarize?: { state: SummarizeState; run: () => void }
   /** Resumo automático — o estado mora no Terminal. Ausente = sem o controle. */
   autoSummary?: { enabled: boolean | null; toggle: () => void }
+  /** Cartão do mapa: inline só Interromper; o resto no "⋯". */
+  compact?: boolean
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -77,6 +79,7 @@ export function ComposerToolbar({
   voice,
   summarize,
   autoSummary,
+  compact = false,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -122,7 +125,8 @@ export function ComposerToolbar({
     summarize: Boolean(summarize),
     autoSummary: Boolean(autoSummary),
   }
-  const layout = composerToolbarLayout(tier, width)
+  // Largura 0 = abaixo do piso: inline só Interromper (ver composerToolbarLayout).
+  const layout = composerToolbarLayout(tier, compact ? 0 : width)
   const inline = layout.inline.filter((c) => available[c])
   const overflow = layout.overflow.filter((c) => available[c])
 

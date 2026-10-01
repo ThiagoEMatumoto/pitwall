@@ -122,7 +122,7 @@ describe('AttentionPopover', () => {
     })
     attentionRespond.mockResolvedValue({ ok: true })
     render(<AttentionPopover item={item} />)
-    expect(await screen.findByText('Do you want to proceed?')).toBeInTheDocument()
+    expect(await screen.findByText('Quer continuar?')).toBeInTheDocument()
     expect(screen.getByText('Pede permissão')).toBeInTheDocument()
     await act(async () => fireEvent.click(screen.getByTestId('attention-action-approve')))
     expect(attentionRespond).toHaveBeenCalledWith({
@@ -154,7 +154,7 @@ describe('AttentionPopover', () => {
       },
     })
     render(<AttentionPopover item={item} />)
-    await screen.findByText('Do you want to proceed?')
+    await screen.findByText('Quer continuar?')
     await act(async () => fireEvent.click(screen.getByTestId('attention-action-deny')))
     expect(screen.getByTestId('attention-notice')).toHaveTextContent('O menu mudou')
     expect(screen.getByText('Do you want to make this edit?')).toBeInTheDocument()
@@ -170,7 +170,7 @@ describe('AttentionPopover', () => {
     })
     attentionRespond.mockResolvedValue({ ok: true })
     const { rerender } = render(<AttentionPopover item={item} />)
-    await screen.findByText('Do you want to proceed?')
+    await screen.findByText('Quer continuar?')
     await act(async () => fireEvent.click(screen.getByTestId('attention-action-approve')))
     expect(screen.queryByTestId('attention-action-approve')).toBeNull()
     expect(screen.getByTestId('attention-notice')).toHaveTextContent('Resposta enviada.')
@@ -202,13 +202,21 @@ describe('AttentionPopover', () => {
       menu,
     })
     render(<AttentionPopover item={item} />)
-    await screen.findByText('Do you want to proceed?')
+    await screen.findByText('Quer continuar?')
     const always = menu.options[1].label
     expect(always).toMatch(/always allow access/)
     expect(menu.context).toMatch(/^Tip:/m)
     expect(screen.getByTestId('attention-action-always')).toHaveAttribute('title', always)
-    expect(screen.getByTestId('attention-always-hint')).toHaveTextContent(always)
+    // Em português, com o caminho curto (a TUI quebra o caminho entre label e descrição).
+    expect(screen.getByTestId('attention-always-hint')).toHaveTextContent(
+      /^Sempre: permitir acesso a …\/[^/]+\/cwd-\d+ em todo o projeto$/,
+    )
     expect(screen.getByTestId('attention-popover')).not.toHaveTextContent('Tip:')
+    // Cabeçalho da caixa da TUI e o resto quebrado do Tip somem; o comando fica.
+    const ctx = screen.getByTestId('attention-context')
+    expect(ctx).not.toHaveTextContent('Bash command')
+    expect(ctx.textContent).not.toMatch(/^below$/m)
+    expect(ctx).toHaveTextContent('touch permissao-fixture.txt')
   })
 
   it('fixado: é diálogo rotulado, e o Esc fecha sem vazar pro terminal', async () => {
@@ -240,7 +248,7 @@ describe('AttentionPopover', () => {
     })
     attentionRespond.mockResolvedValue({ ok: false, error: 'busy', snapshot: null })
     render(<AttentionPopover item={item} />)
-    await screen.findByText('Do you want to proceed?')
+    await screen.findByText('Quer continuar?')
     await act(async () => fireEvent.click(screen.getByTestId('attention-action-approve')))
     expect(screen.getByTestId('attention-notice')).toHaveTextContent('já está a caminho')
     expect(screen.queryByTestId('attention-action-approve')).toBeNull()

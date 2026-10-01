@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSessionFile, createFakeHome, withStatus, type FakeHome } from './fake-home'
+import { hasInputPrompt } from '../../shared/tui/attention-reason'
 
 // session-activity importa electron e serviços com banco; só o leitor de
 // sessions/<pid>.json interessa aqui.
@@ -109,6 +110,12 @@ describe('fake-claude.sh', () => {
     expect(log).toContain('--session-id cc-1')
     expect(log).toContain('stdin: olá\n')
     expect(log).toContain('stdin: segunda\n')
+  })
+
+  it('desenha a caixa de input ociosa que o leitor real (hasInputPrompt) reconhece', () => {
+    fake = createFakeHome()
+    const out = runStub(fake.fakeCliPath('claude'), ['--session-id', 'cc-3'], 'oi\n')
+    expect(hasInputPrompt(out)).toBe(true)
   })
 
   it('--resume também vira o sessionId', () => {

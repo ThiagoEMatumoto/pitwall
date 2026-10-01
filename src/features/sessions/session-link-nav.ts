@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
-import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { peekedSessionId, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
 import type { Area } from '@/store/appStore'
 import {
@@ -44,11 +44,13 @@ export function sessionLinkKeyAction(
 // aba); senão a aba ativa.
 export function currentGraphNode(
   graph: SessionGraph,
-  where: { activeCc: string | null; peekId: string | null },
+  where: { activeCc: string | null; peekId: string | null; peekSessionId?: string | null },
 ): SessionGraphNode | null {
   const peeked = where.peekId
     ? graph.nodes.find((n) => n.childOfHandoffId === where.peekId)
-    : undefined
+    : where.peekSessionId
+      ? graph.nodes.find((n) => n.sessionId === where.peekSessionId)
+      : undefined
   if (peeked) return peeked
   return graph.nodes.find((n) => n.ccSessionId === where.activeCc) ?? null
 }
@@ -76,6 +78,7 @@ export function stepSessionLink(delta: 1 | -1): void {
   const current = currentGraphNode(graph, {
     activeCc: useAttentionStore.getState().activeCc,
     peekId: useCrewDockStore.getState().peekId,
+    peekSessionId: peekedSessionId(useCrewDockStore.getState().peekTarget),
   })
   const step = current
     ? stepLink(graph, current.sessionId, delta, (n) => canOpenGraphNode(n))

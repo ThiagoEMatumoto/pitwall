@@ -12,9 +12,9 @@ import {
   stepSessionLink,
   useSessionLinkHudStore,
 } from './session-link-nav'
-import { useSessionGraphStore } from './session-graph-store'
+import { openGraphNode, useSessionGraphStore } from './session-graph-store'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
-import { useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
+import { openAttentionItem, useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
@@ -113,6 +113,11 @@ describe('currentGraphNode', () => {
     expect(currentGraphNode(graph, { activeCc: 'cc-tab', peekId: 'h1' })?.sessionId).toBe('kid')
   })
 
+  it('com o peek de uma sessão (mapa) aberto, a atual é a sessão espiada', () => {
+    const where = { activeCc: 'cc-tab', peekId: null, peekSessionId: 'kid' }
+    expect(currentGraphNode(graph, where)?.sessionId).toBe('kid')
+  })
+
   it('sem peek, é a aba ativa', () => {
     expect(currentGraphNode(graph, { activeCc: 'cc-tab', peekId: null })?.sessionId).toBe('tab')
     expect(currentGraphNode(graph, { activeCc: 'cc-x', peekId: null })).toBeNull()
@@ -160,5 +165,28 @@ describe('stepSessionLink', () => {
       position: 2,
       total: 2,
     })
+  })
+})
+
+// O peek de sessão (aberto pelo mapa) tem peekId null: os pulos que focam uma aba
+// precisam fechá-lo pelo peekTarget, senão o overlay fica por cima da aba nova.
+describe('pulos fecham o peek de sessão', () => {
+  function openSessionPeek() {
+    useCrewDockStore.getState().openSessionPeek('S')
+    expect(useCrewDockStore.getState().peekTarget).toEqual({ kind: 'session', id: 'S' })
+  }
+
+  it('Alt+A (openAttentionItem) numa sessão', () => {
+    openSessionPeek()
+    openAttentionItem({ kind: 'session', ccSessionId: 'cc-T', sessionId: 'T' } as never)
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
+  })
+
+  it('navegação do grafo (openGraphNode) numa sessão com aba', () => {
+    useAppStore.setState({ liveSessions: [{ ccSessionId: 'cc-T' } as LiveSessionInfo] })
+    useHandoffsStore.setState({ handoffs: [] })
+    openSessionPeek()
+    openGraphNode(node('T', { status: 'idle' }))
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
   })
 })

@@ -57,6 +57,27 @@ import type {
 export type * from './design'
 import type { DesignApi } from './design'
 import type { HandoffEvent, SessionGraph } from './session-graph'
+import type {
+  CanvasNote,
+  CanvasPositionInput,
+  CanvasViewStateInput,
+  CanvasState,
+  CanvasUpdatedEvent,
+  CreateCanvasNoteInput,
+  CreateSessionGroupInput,
+  SessionGroup,
+  SummarizeSessionResult,
+  UpdateCanvasNoteInput,
+  UpdateSessionGroupInput,
+} from './canvas'
+import type {
+  PromptQueueSnapshot,
+  RepoFilesResult,
+  ScreenPreview,
+  ScreenTailUpdate,
+  SendPromptInput,
+  SendPromptResult,
+} from './send-prompt'
 
 export type LinkKind = 'inside' | 'symlink' | 'external'
 
@@ -335,6 +356,9 @@ export interface CreateHandoffInput {
   composedPrompt: string
   // Modo de permissão da filha; omitido = 'interactive'.
   mode?: HandoffMode
+  // Omitido = 'pending' (espera o gate). 'approved' = um humano já decidiu (criação
+  // manual, adoção): nasce fora do loop de auto-aprovação, que spawnaria uma 2ª filha.
+  status?: 'pending' | 'approved'
 }
 
 // ---- Passagem de bastão (baton) ----
@@ -1297,6 +1321,9 @@ export interface LiveSessionInfo {
   // Por que a sessão espera você (tela da PTY parseada no main). Só enfeite:
   // ausente = sem motivo reconhecido, e a fila funciona exatamente como antes.
   attentionReason?: AttentionReason
+  // cwd real da sessão (sessions/<pid>.json do claude): o worktree da feature,
+  // não o checkout do repo. Ausente = sessão fora do índice.
+  cwd?: string | null
 }
 
 // Batch de atualização de atividade de TODAS as sessões indexadas, emitido pelo
@@ -2998,6 +3025,36 @@ export interface Api {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
     onUpdated(handler: (graph: SessionGraph) => void): () => void
+  }
+  // Mapa de sessões (P8): posições, notas, grupos, propósito e "onde parei".
+  canvas: {
+    get(input: { scope: string }): Promise<CanvasState>
+    setPositions(input: { scope: string; items: CanvasPositionInput[] }): Promise<void>
+    setViewStates(input: { scope: string; items: CanvasViewStateInput[] }): Promise<void>
+    clearPositions(input: { scope: string }): Promise<void>
+    createNote(input: CreateCanvasNoteInput): Promise<CanvasNote>
+    updateNote(input: UpdateCanvasNoteInput): Promise<CanvasNote>
+    deleteNote(input: { id: string }): Promise<void>
+    createGroup(input: CreateSessionGroupInput): Promise<SessionGroup>
+    updateGroup(input: UpdateSessionGroupInput): Promise<SessionGroup>
+    deleteGroup(input: { id: string }): Promise<void>
+    setSessionGroup(input: { sessionId: string; groupId: string | null }): Promise<void>
+    setPurpose(input: { sessionId: string; purpose: string | null }): Promise<void>
+    summarize(input: { sessionId: string }): Promise<SummarizeSessionResult>
+    onUpdated(handler: (event: CanvasUpdatedEvent) => void): () => void
+  }
+  // Enviar prompt pra qualquer sessão viva sem abri-la (agora ou quando terminar).
+  sendTo: {
+    send(input: SendPromptInput): Promise<SendPromptResult>
+    cancel(id: string): Promise<boolean>
+    queue(): Promise<PromptQueueSnapshot>
+    // Fim da tela espelhada da PTY; null = sem espelho (shell, codex).
+    preview(sessionId: string): Promise<ScreenPreview | null>
+    // Saída ao vivo dos cartões abertos do mapa: a lista substitui a anterior (máx. 25).
+    subscribeTail(sessionIds: string[]): Promise<void>
+    onTail(handler: (update: ScreenTailUpdate) => void): () => void
+    listRepoFiles(cwd: string): Promise<RepoFilesResult>
+    onQueueUpdated(handler: (snapshot: PromptQueueSnapshot) => void): () => void
   }
   objectives: {
     list(filter?: ObjectiveListFilter): Promise<ObjectiveWithProgress[]>

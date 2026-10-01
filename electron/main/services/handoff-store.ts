@@ -171,6 +171,7 @@ function logEvent(
 export function create(input: CreateHandoffInput): Handoff {
   const now = Date.now()
   const id = input.id ?? randomUUID()
+  const status = input.status ?? 'pending'
   getDb()
     .prepare(
       `INSERT INTO handoffs
@@ -191,7 +192,7 @@ export function create(input: CreateHandoffInput): Handoff {
       task: input.task,
       context_json: input.contextJson ?? null,
       composed_prompt: input.composedPrompt,
-      status: 'pending',
+      status,
       mode: input.mode ?? 'interactive',
       current_step: null,
       step_updated_at: null,
@@ -200,8 +201,8 @@ export function create(input: CreateHandoffInput): Handoff {
       created_at: now,
       updated_at: now,
     })
-  // Nascimento do handoff: from_status null (não existia antes), to pending.
-  logEvent(id, 'create', 'pending', null)
+  // Nascimento do handoff: from_status null (não existia antes).
+  logEvent(id, 'create', status, null)
   // Re-lê via JOIN pra preencher target_repo_label.
   return fresh(id)
 }

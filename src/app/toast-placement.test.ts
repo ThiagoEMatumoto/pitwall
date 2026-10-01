@@ -33,4 +33,43 @@ describe('toastStackPlacement', () => {
     expect(p.top).toBe(peek.top + PEEK_HEADER_HEIGHT)
     expect(p.zIndex).toBeGreaterThan(1000)
   })
+
+  it('mapa visível: a pilha sobe pra cima do minimapa em vez de cobri-lo', () => {
+    const minimap = { left: 1020, top: 760, width: 200, height: 150 }
+    expect(
+      toastStackPlacement({
+        dockWidth: 360,
+        peek: null,
+        viewportWidth: 1600,
+        viewportHeight: 925,
+        minimap,
+      }),
+    ).toEqual({ right: 360 + TOAST_MARGIN, bottom: 925 - 760 + TOAST_MARGIN, zIndex: 50 })
+  })
+
+  it('minimapa longe da coluna da pilha não muda nada', () => {
+    const minimap = { left: 10, top: 760, width: 200, height: 150 }
+    expect(
+      toastStackPlacement({
+        dockWidth: 0,
+        peek: null,
+        viewportWidth: 1600,
+        viewportHeight: 925,
+        minimap,
+      }).bottom,
+    ).toBe(TOAST_MARGIN)
+  })
+
+  it('vista Terminais: a pilha sobe pra cima do composer dock em vez de cobrir o campo', () => {
+    const composer = { left: 460, top: 1080, width: 1150, height: 200 }
+    expect(
+      toastStackPlacement({
+        dockWidth: 390,
+        peek: null,
+        viewportWidth: 2000,
+        viewportHeight: 1286,
+        obstacles: [composer],
+      }).bottom,
+    ).toBe(1286 - 1080 + TOAST_MARGIN)
+  })
 })

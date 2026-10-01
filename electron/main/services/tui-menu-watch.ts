@@ -1,8 +1,11 @@
 import xtermHeadless from '@xterm/headless'
 import { EventEmitter } from 'node:events'
 import {
+  inputBoxHasUserText,
+  inputBoxRows,
   isUnparsedWaiting,
   scanScreen,
+  type InputCell,
   type LiveStatus,
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
@@ -16,6 +19,7 @@ import type {
   AttentionRespondResult,
 } from '../../../shared/types/ipc'
 import type { PtyDataEvent, PtyExitEvent, PtySizeEvent } from './pty-manager'
+import { readStyledTail, type TailSnapshot } from './screen-tail'
 
 // Espelho headless da tela de cada PTY viva, no main. O parser de menu só rodava
 // dentro do Terminal.tsx montado — e a fila de atenção existe justamente pra
@@ -82,6 +86,28 @@ function readTail(term: HeadlessTerminal, n: number): string {
     text += (buf.getLine(y)?.translateToString(true) ?? '') + '\n'
   }
   return text
+}
+
+// Atributos de célula da caixa de input (só o fim da tela: é onde ela mora).
+function readInputDirty(term: HeadlessTerminal): boolean {
+  const buf = term.buffer.active
+  const first = Math.max(0, buf.length - term.rows - 1)
+  const lines: string[] = []
+  for (let y = first; y < buf.length; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
+  const box = inputBoxRows(lines)
+  if (!box) return false
+  const rows: InputCell[][] = []
+  for (let r = box.start; r < box.end; r++) {
+    const line = buf.getLine(first + r)
+    if (!line) continue
+    const cells: InputCell[] = []
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x)
+      if (cell) cells.push({ chars: cell.getChars(), dim: cell.isDim() !== 0 })
+    }
+    rows.push(cells)
+  }
+  return inputBoxHasUserText(rows)
 }
 
 function scanKey(scan: ScreenScan): string {
@@ -191,7 +217,8 @@ export class TuiMenuWatch extends EventEmitter {
     // write() do xterm é assíncrono: drena o que está na fila antes de ler a tela.
     await new Promise<void>((resolve) => entry.term.write('', resolve))
     if (this.entries.get(sessionId) !== entry) return null
-    const scan = scanScreen((n) => readTail(entry.term, n), entry.term.buffer.active.length)
+    const base = scanScreen((n) => readTail(entry.term, n), entry.term.buffer.active.length)
+    const scan = base.inputPrompt ? { ...base, inputDirty: readInputDirty(entry.term) } : base
     const key = scanKey(scan)
     entry.scan = scan
     if (key !== entry.key) {
@@ -203,6 +230,32 @@ export class TuiMenuWatch extends EventEmitter {
       this.emit('change', sessionId)
     }
     return scan
+  }
+
+  // Fim da tela espelhada, sem ANSI: a prévia do "enviar para" lê daqui em vez de
+  // montar outro xterm no renderer. Linhas em branco do fim são descartadas.
+  async screenTail(sessionId: string, lines: number): Promise<string[] | null> {
+    const scan = await this.rescan(sessionId)
+    const entry = this.entries.get(sessionId)
+    if (!scan || !entry) return null
+    const text = readTail(entry.term, entry.term.rows + 1).split('\n')
+    const kept = text.map((l) => l.trimEnd())
+    while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
+    return kept.slice(-lines)
+  }
+
+  // Fim da tela COM cor, pros cartões abertos do mapa. Não re-parseia o menu (é
+  // lido a cada ~400ms por cartão): hasMenu/inputDirty vêm do último scan.
+  async styledTail(sessionId: string, lines: number): Promise<TailSnapshot | null> {
+    const entry = this.entries.get(sessionId)
+    if (!entry) return null
+    await new Promise<void>((resolve) => entry.term.write('', resolve))
+    if (this.entries.get(sessionId) !== entry) return null
+    return {
+      lines: readStyledTail(entry.term, lines),
+      hasMenu: entry.scan.menu != null,
+      inputDirty: entry.scan.inputDirty === true,
+    }
   }
 
   // Arma a confirmação; quem conta é confirmUnparsed, se a mesma tela seguir

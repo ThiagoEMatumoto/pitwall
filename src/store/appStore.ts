@@ -148,6 +148,7 @@ const resuming = new Set<string>()
 // mesmo `liveSessions`). `offGlobalActivity` guarda o unsubscribe do onGlobalActivity;
 // `liveWatchStarted` guarda contra o duplo-mount do StrictMode.
 let offGlobalActivity: (() => void) | null = null
+let offPtyExit: (() => void) | null = null
 let liveWatchStarted = false
 
 // Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
@@ -695,12 +696,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         }),
       }))
     })
+    // PTY que sai sozinha (filha do dock sem aba, antecessora do bastão, /exit)
+    // não passa por mutação nenhuma do store: sem este refetch ela ficava na
+    // lista — e no mapa, como "encerrada" — até outra coisa refazer o snapshot.
+    offPtyExit = sessionsApi.onExit(() => {
+      void get().refreshLiveSessions()
+    })
   },
 
   stopLiveWatch: () => {
     if (offGlobalActivity) {
       offGlobalActivity()
       offGlobalActivity = null
+    }
+    if (offPtyExit) {
+      offPtyExit()
+      offPtyExit = null
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false

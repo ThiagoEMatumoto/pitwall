@@ -110,7 +110,7 @@ describe('HandoffCard no dock (tier mid)', () => {
     const { container } = mountDock()
     const card = container.querySelector('[data-testid="handoff-card"]')!
     const peek = screen.getByTitle('Espiar a conversa desta filha (Espaço)')
-    const name = screen.getByText('Maurício')
+    const name = screen.getByText('mauricio-melhorar-modo-chat')
     // A coluna de conteúdo é filha direta do card (não há coluna lateral), e o
     // cluster de ações é um irmão POSTERIOR dela.
     const contentColumn = name.closest('.min-w-0')!
@@ -184,7 +184,7 @@ describe('HandoffCard no inbox (tier wide)', () => {
   it('mantém a coluna lateral com data e ações — lá há largura de sobra', () => {
     useAppStore.setState({ liveSessions: [live] })
     render(<HandoffCard handoff={handoff} ttlHours={2} />)
-    const name = screen.getByText('Maurício')
+    const name = screen.getByText('mauricio-melhorar-modo-chat')
     const terminal = screen.getByTitle('Anexar o terminal desta sessão-filha')
     const row = name.closest('.min-w-0')!.parentElement!
     expect(row.className).toContain('justify-between')

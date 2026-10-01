@@ -5,9 +5,11 @@ import { Icon } from '@/components/ui/Icon'
 interface ChatEmptyStateProps {
   viewState: 'loading' | 'waiting' | 'empty'
   children?: ReactNode
+  // Substitui o convite padrão (peek só-leitura: não há campo "abaixo").
+  hint?: string
 }
 
-export function ChatEmptyState({ viewState, children }: ChatEmptyStateProps) {
+export function ChatEmptyState({ viewState, children, hint }: ChatEmptyStateProps) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 overflow-y-auto bg-[var(--color-bg)] p-6">
       {viewState === 'loading' ? (
@@ -15,6 +17,10 @@ export function ChatEmptyState({ viewState, children }: ChatEmptyStateProps) {
           <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-text-dim)]" />
           Carregando conversa…
         </div>
+      ) : hint ? (
+        <p data-testid="chat-empty-hint" className="text-center text-sm text-[var(--color-text-dim)]">
+          {hint}
+        </p>
       ) : (
         <div className="flex flex-col items-center gap-2 text-center">
           <span

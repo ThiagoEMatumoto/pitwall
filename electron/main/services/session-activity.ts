@@ -48,6 +48,14 @@ export function setTurnEndedHook(fn: TurnEndedHook): void {
   turnEndedHook = fn
 }
 
+// Segundo consumidor da mesma borda: a fila de prompts "quando terminar"
+// (prompt-queue.ts). Hook separado pra não disputar o slot do resumo por voz.
+let promptQueueTurnHook: TurnEndedHook = () => {}
+
+export function setPromptQueueTurnHook(fn: TurnEndedHook): void {
+  promptQueueTurnHook = fn
+}
+
 // Sessão que sumiu do índice (PID morreu / arquivo removido) — sinal de
 // limpeza pra quem guarda estado por ccSessionId (ex.: dedupe do resumo por
 // voz). Mesmo padrão injetável do turnEndedHook.
@@ -589,6 +597,7 @@ class SessionActivityService extends EventEmitter {
       // tem quem ouça o resumo.
       if (prev === 'working' && (current === 'waiting' || current === 'idle')) {
         turnEndedHook(sessionId)
+        promptQueueTurnHook(sessionId)
       }
       // "Sessão aguardando" é a borda working→waiting especificamente (não
       // qualquer não-busy). Só notifica com o app fora de foco, pra não spammar

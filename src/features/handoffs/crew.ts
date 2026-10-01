@@ -124,7 +124,9 @@ export function crewResumedAfterQuestion(handoff: Handoff): boolean {
 // espera — mesmo com progresso registrado depois. O needs_input é registro, e
 // registro vence só enquanto não há evidência de retomada.
 export function crewNeedsAttention(handoff: Handoff, live: LiveSessionInfo | undefined): boolean {
-  if (live?.status === 'waiting') return true
+  // Fim de turno reconhecido na tela ('turn-end') é "pronto", não "esperando":
+  // a mesma regra do cardIndicator do mapa, senão dock e cartão divergem.
+  if (live?.status === 'waiting' && live.attentionReason !== 'turn-end') return true
   if (handoff.status === 'needs_input') return !crewResumedAfterQuestion(handoff)
   return false
 }

@@ -22,7 +22,7 @@ export function HandoffRow({ handoff }: Props) {
     isLiveHandoff && handoff.childSessionId
       ? liveSessions.find((s) => s.id === handoff.childSessionId)
       : undefined
-  const live = isLiveHandoff ? liveBadgeFor(childLive?.status) : null
+  const live = isLiveHandoff ? liveBadgeFor(childLive) : null
 
   function onClick() {
     if (childLive) {

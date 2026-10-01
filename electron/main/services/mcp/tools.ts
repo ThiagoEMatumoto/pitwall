@@ -12,6 +12,7 @@ import { videoTools } from './video-tools'
 import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
 import { meetingTools } from './meeting-tools'
+import { canvasTools } from './canvas-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -1477,6 +1478,7 @@ export function buildTools(
     ...designTools(notify, ctx),
     ...videoTools(notify),
     ...meetingTools(notify),
+    ...canvasTools(notify, ctx),
     ...serviceTools(ctx),
   ]
 }

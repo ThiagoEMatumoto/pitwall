@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { openSessionByCc } from '@/features/sessions/open-session'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -96,7 +97,11 @@ export function openAttentionItem(item: AttentionItem): void {
     if (item.handoffId) dock.openPeek(item.handoffId)
     return
   }
-  if (dock.peekId) dock.closePeek({ restoreFocus: false })
+  if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
+  // Mapa na frente: o SessionMap só centraliza o cartão (pelo flash). Abrir a aba
+  // a focaria atrás do overlay, com o xterm pegando as teclas às cegas.
+  if (useAppStore.getState().area === 'projects' && useProjectsViewStore.getState().view === 'map')
+    return
   if (item.ccSessionId) openSessionByCc(item.ccSessionId)
 }
 
@@ -129,6 +134,6 @@ export function goBackSession(): void {
     dock.openPeek(target.handoffId)
     return
   }
-  if (dock.peekId) dock.closePeek({ restoreFocus: false })
+  if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
   openSessionByCc(target.ccSessionId)
 }

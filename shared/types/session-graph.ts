@@ -22,9 +22,24 @@ export interface SessionGraphNode {
   status: SessionGraphStatus
   attentionReason: SessionGraphAttention | null
   lastActivityAt: number | null
+  // sessions.started_at / ended_at: o filtro do mapa ("Ativas", "Hoje") decide por
+  // quando a sessão encerrada foi vista pela última vez.
+  startedAt?: number
+  endedAt?: number | null
   // Do que a sessão se trata: a tarefa do handoff quando é filha. null por ora
   // nas demais (a P8 completa).
   purposeHint: string | null
+  // Memória de trabalho (P8). Propósito por precedência: edição do usuário ou da
+  // própria sessão (MCP) > tarefa do handoff > 1º prompt humano do transcript.
+  purpose: string | null
+  purposeSource: 'user' | 'handoff' | 'transcript' | null
+  // Grupo do usuário no mapa (session_groups.id).
+  groupId: string | null
+  // "Onde parei": resumo sob demanda; desatualizado se lastActivityAt > lastSummaryAt.
+  lastSummary: string | null
+  lastSummaryAt: number | null
+  // Última mensagem humana do transcript (só sem resumo): o "Onde parei" barato.
+  lastPrompt?: string | null
   // Handoff em que esta sessão é a filha atual — é o que abre o quick look da
   // crew em vez de uma aba.
   childOfHandoffId: string | null

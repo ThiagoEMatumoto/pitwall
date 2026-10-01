@@ -43,10 +43,9 @@ describe('migration 050_sessions_provider', () => {
     db.close()
   })
 
-  it('is registered as the last migration, version 50', () => {
+  it('is registered as migration 50', () => {
     const entry = migrations.find((m) => m.version === 50)
     expect(entry?.name).toBe('050_sessions_provider')
-    expect(Math.max(...migrations.map((m) => m.version))).toBe(50)
   })
 
   it("adds provider NOT NULL DEFAULT 'claude' and a nullable launch_json", () => {

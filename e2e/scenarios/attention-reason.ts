@@ -215,7 +215,7 @@ async function run(scratch: string): Promise<void> {
     await page.getByTestId('titlebar-attention-list').click()
     await page.getByTestId('attention-queue-item').first().click()
     const popover = page.getByTestId('attention-popover').first()
-    await popover.getByText('Do you want to proceed?').waitFor({ timeout: 10_000 })
+    await popover.getByText('Quer continuar?').waitFor({ timeout: 10_000 })
     const text = await popover.innerText()
     for (const want of ['Pede permissão', 'Aprovar', 'Sempre', 'Negar', 'Abrir']) {
       if (!text.includes(want)) throw new Error(`popover sem "${want}":\n${text}`)
@@ -230,7 +230,7 @@ async function run(scratch: string): Promise<void> {
     const keysBefore = readStubLog(fake).split('\n').filter((l) => l.startsWith('key:'))
     await page.keyboard.press('Alt+a')
     const pinned = page.locator('[data-testid="attention-popover"][role="dialog"]')
-    await pinned.getByText('Do you want to proceed?').waitFor({ timeout: 10_000 })
+    await pinned.getByText('Quer continuar?').waitFor({ timeout: 10_000 })
     await pinned.screenshot({ path: shot('popover-pinned') })
     await page.screenshot({ path: shot('hud-pinned') })
     await page.keyboard.press('Escape')
@@ -260,7 +260,7 @@ async function run(scratch: string): Promise<void> {
     // O item lembra que estava expandido desde o 1º popover: o clique pode ter colapsado.
     await page.waitForTimeout(800)
     if ((await pop2.count()) === 0) await queueItem.click()
-    await pop2.getByText('Do you want to proceed?').waitFor({ timeout: 10_000 }).catch(async (e) => {
+    await pop2.getByText('Quer continuar?').waitFor({ timeout: 10_000 }).catch(async (e) => {
       const all = await page.getByTestId('attention-popover').allInnerTexts()
       console.log('[attn] popovers na tela:', JSON.stringify(all))
       console.log('[attn] stub log:\n' + readStubLog(fake))

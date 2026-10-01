@@ -39,7 +39,7 @@ export interface PreparedHandoff {
   alias: string
 }
 
-// Cria o handoff (status pending) e devolve o apelido resolvido. Não spawna nada
+// Cria o handoff (status approved) e devolve o apelido resolvido. Não spawna nada
 // e não mata nada — só toca a tabela handoffs e emite o broadcast de UI.
 export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
   const db = getDb()
@@ -117,6 +117,10 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     contextJson: input.context ? JSON.stringify(input.context) : null,
     composedPrompt,
     mode,
+    // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
+    // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
+    // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.
+    status: 'approved',
   })
   broadcast('handoff:updated', handoff)
   return { handoff, alias }

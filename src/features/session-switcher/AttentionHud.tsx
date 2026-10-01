@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { peekedSessionId, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import type { AttentionItem, AttentionReason } from './attention-queue'
 import { attentionKeysBlocked } from './attention-keys'
 import { AttentionPopover, isActionableDetail, reasonMeta } from './AttentionPopover'
@@ -153,9 +153,11 @@ export function AttentionHud() {
 // Onde o pulo deixou o usuário: o quick look da filha (crew) ou a aba da sessão.
 export function isAtAttentionTarget(
   item: AttentionItem,
-  where: { activeCc: string | null; peekId: string | null },
+  where: { activeCc: string | null; peekId: string | null; peekSessionId?: string | null },
 ): boolean {
   if (item.kind === 'crew') return where.peekId != null && where.peekId === item.handoffId
+  // O peek de sessão cobre a aba: quem o usuário vê é a sessão espiada.
+  if (where.peekSessionId) return where.peekSessionId === item.sessionId
   return where.activeCc != null && where.activeCc === item.ccSessionId
 }
 
@@ -170,6 +172,7 @@ function usePinnedPopover(nonce: number | null, flashItem: AttentionItem | null)
   const queue = useAttentionQueue()
   const activeCc = useAttentionStore((s) => s.activeCc)
   const peekId = useCrewDockStore((s) => s.peekId)
+  const peekSessionId = useCrewDockStore((s) => peekedSessionId(s.peekTarget))
   // A aba/peek do alvo monta alguns renders depois do pulo: só "saiu do alvo"
   // depois de ter chegado nele.
   const reachedRef = useRef(false)
@@ -189,7 +192,7 @@ function usePinnedPopover(nonce: number | null, flashItem: AttentionItem | null)
   }, [claim, live?.sessionId])
 
   const open = live != null && isActionableDetail(live.detail)
-  const atTarget = live != null && isAtAttentionTarget(live, { activeCc, peekId })
+  const atTarget = live != null && isAtAttentionTarget(live, { activeCc, peekId, peekSessionId })
 
   useEffect(() => {
     if (!pinnedKey) return

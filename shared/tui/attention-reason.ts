@@ -12,6 +12,9 @@ export interface ScreenScan {
   menu: TuiMenu | null
   // Caixa de input ociosa do claude (❯ entre as réguas) — prova de fim de turno.
   inputPrompt: boolean
+  // Texto do usuário na caixa de input (não o placeholder esmaecido). Só quem
+  // enxerga os atributos de célula sabe: o texto puro dos dois é igual em forma.
+  inputDirty?: boolean
   nonBlankLines: number
 }
 
@@ -31,6 +34,33 @@ export function hasInputPrompt(text: string): boolean {
     if (lines.slice(i + 1, i + 8).some((l) => RULE_RE.test(l))) return true
   }
   return false
+}
+
+// Linhas da caixa de input, de baixo pra cima: a linha ❯ logo abaixo de uma régua,
+// com outra régua até 8 linhas abaixo. Devolve [linha ❯, linha da régua de baixo).
+export function inputBoxRows(lines: string[]): { start: number; end: number } | null {
+  const trimmed = lines.map((l) => l.trim())
+  for (let i = trimmed.length - 1; i > 0; i--) {
+    if (!INPUT_LINE_RE.test(trimmed[i]) || !RULE_RE.test(trimmed[i - 1])) continue
+    const close = trimmed.slice(i + 1, i + 8).findIndex((l) => RULE_RE.test(l))
+    if (close >= 0) return { start: i, end: i + 1 + close }
+  }
+  return null
+}
+
+export interface InputCell {
+  chars: string
+  dim: boolean
+}
+
+// O claude 2.1.286 desenha o placeholder ("Try \"…\"") com SGR 2 (dim) e o que o
+// usuário digitou com atributo normal (capturas input-placeholder / input-dirty).
+// Qualquer caractere visível não-dim depois do ❯ é texto que o \r enviaria junto.
+export function inputBoxHasUserText(rows: InputCell[][]): boolean {
+  return rows.some((cells, r) => {
+    const from = r === 0 ? cells.findIndex((c) => c.chars === '❯') + 1 : 0
+    return cells.slice(Math.max(0, from)).some((c) => c.chars.trim() !== '' && !c.dim)
+  })
 }
 
 export function scanScreen(readTail: (lines: number) => string, bufferLines: number): ScreenScan {

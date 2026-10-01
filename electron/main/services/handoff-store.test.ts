@@ -82,6 +82,12 @@ describe('handoff-store', () => {
       })
       expect(h.mode).toBe('auto-edits')
     })
+
+    it('nasce pending por padrão e approved quando um humano já decidiu', () => {
+      expect(newHandoff().status).toBe('pending')
+      const h = store.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p', status: 'approved' })
+      expect(h.status).toBe('approved')
+    })
   })
 
   describe('progress (não-terminal)', () => {

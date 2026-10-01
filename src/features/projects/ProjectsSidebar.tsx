@@ -26,6 +26,7 @@ import { useProjects } from './useProjects'
 import { NewProjectDialog } from './NewProjectDialog'
 import { EditProjectDialog } from './EditProjectDialog'
 import { ProjectRepos } from './ProjectRepos'
+import { ProjectSessionPurposes } from '@/features/session-canvas/ProjectSessionPurposes'
 import { Menu } from '@/components/ui/Menu'
 import { Icon } from '@/components/ui/Icon'
 import { Button, ControlPill } from '@/features/brand'
@@ -391,6 +392,7 @@ function SortableProjectItem({
       </div>
 
       {expanded && <ProjectRepos project={project} />}
+      {expanded && <ProjectSessionPurposes projectId={project.id} />}
     </li>
   )
 }

@@ -4,6 +4,10 @@
 // peek aberto (overlay por cima do dock): no respiro à direita do painel, acima
 // do backdrop; se não couber, no topo do transcript do peek — nunca em cima do
 // input de resposta, que é onde o usuário está digitando.
+//
+// Sem peek, o canto inferior direito tem dono: o minimapa (mapa de sessões) ou o
+// composer dock do terminal (vista Terminais). A pilha sobe pra cima do mais alto
+// deles que encosta na coluna dela, em vez de cobrir onde o usuário digita.
 
 export const TOAST_MARGIN = 16
 export const TOAST_MIN_WIDTH = 160
@@ -33,8 +37,24 @@ export function toastStackPlacement(a: {
   dockWidth: number
   peek: PeekBox | null
   viewportWidth: number
+  // Minimapa do mapa de sessões, quando visível (o obstáculo do canto).
+  minimap?: PeekBox | null
+  // Composer dock dos terminais visíveis.
+  obstacles?: PeekBox[]
+  viewportHeight?: number
 }): ToastPlacement {
-  if (!a.peek) return { right: a.dockWidth + TOAST_MARGIN, bottom: TOAST_MARGIN, zIndex: BASE_Z }
+  if (!a.peek) {
+    const right = a.dockWidth + TOAST_MARGIN
+    const columnLeft = a.viewportWidth - right - TOAST_MIN_WIDTH
+    const hits = [a.minimap, ...(a.obstacles ?? [])].filter(
+      (b): b is PeekBox => !!b && b.left + b.width > columnLeft,
+    )
+    if (hits.length > 0 && a.viewportHeight) {
+      const top = Math.min(...hits.map((b) => b.top))
+      return { right, bottom: a.viewportHeight - top + TOAST_MARGIN, zIndex: BASE_Z }
+    }
+    return { right, bottom: TOAST_MARGIN, zIndex: BASE_Z }
+  }
   const sideGap = a.viewportWidth - (a.peek.left + a.peek.width)
   if (sideGap >= TOAST_MIN_WIDTH + 2 * TOAST_MARGIN) {
     return {

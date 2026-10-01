@@ -1,12 +1,17 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { ChevronRight, CornerDownLeft, Image as ImageIcon, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
-import { sessionsApi } from '@/lib/ipc'
+import { sendToApi, sessionsApi } from '@/lib/ipc'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
 import { insertDictation } from './composer-insert'
 import { insertPathToken, pickImageFiles, pickImageItems } from './image-paste'
+import { MentionMenu, SessionPill, useMentionMenu } from './MentionMenu'
+import { applyCompletion, parseSend, rewriteFileMentions, type ActiveToken } from './mention-parser'
+import { useSendTargets } from '@/features/quick-composer/quick-composer-store'
+import { defaultWhen, sendRefusalReason } from '@/features/quick-composer/target-search'
 
 export interface ComposerHandle {
   focus: () => void
@@ -42,6 +47,8 @@ interface Props {
   // valor recolhido é global e persistido (useSessionPrefsStore); este flag só
   // liga/desliga o controle — em chat o dock fica sempre expandido.
   collapsible?: boolean
+  // Cartão do mapa: uma linha de input, sem "Inserir" nem a dica de teclas.
+  compact?: boolean
 }
 
 // Drafts em memória por sessão — princípio "nunca perder input". Sobrevive ao
@@ -83,7 +90,7 @@ const MAX_HEIGHT = 192
 // resolvendo a dor do Enter/Shift+Enter do input nativo do claude no xterm. É
 // aditivo: o input direto na TUI continua funcionando.
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
-  { sessionId, onSend, onInsert, onForwardKey, toolbar, collapsible = false },
+  { sessionId, onSend, onInsert, onForwardKey, toolbar, collapsible = false, compact = false },
   ref,
 ) {
   const [text, setText] = useState(() => drafts.get(sessionId) ?? '')
@@ -103,6 +110,23 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Espelha `attached` pra revogar os object URLs no unmount sem recriar o efeito.
   const attachedRef = useRef<Attachment[]>([])
   const innerRef = useRef<HTMLTextAreaElement>(null)
+  // @alias no início manda pra outra sessão; #arquivo vira @arquivo do destino.
+  const [caret, setCaret] = useState(0)
+  const [routeNotice, setRouteNotice] = useState<string | null>(null)
+  // Só os #arquivos escolhidos no menu viram @arquivo; o resto do texto vai como está.
+  const [pickedFiles, setPickedFiles] = useState<ReadonlySet<string>>(new Set())
+  const targets = useSendTargets()
+  const selfTarget = targets.find((t) => t.sessionId === sessionId) ?? null
+  const parsed = parseSend(text, targets, selfTarget, pickedFiles)
+  const routedTo =
+    parsed.kind === 'ok' && parsed.target.sessionId !== sessionId ? parsed.target : null
+  const mention = useMentionMenu({
+    text,
+    caret,
+    targets,
+    cwd: (parsed.kind === 'ok' ? parsed.target : selfTarget)?.cwd ?? null,
+    strict: false,
+  })
   const keyboardMode = useSessionPrefsStore((s) => s.keyboardMode)
   const loadPrefs = useSessionPrefsStore((s) => s.load)
   // Recolhido do dock, POR SESSÃO (collapsedBySession acima) — só em memória,
@@ -324,16 +348,69 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
   }
 
-  function submit() {
-    const value = text
-    if (value.trim().length === 0) return
-    onSend(value)
+  function applyMention(token: ActiveToken, replacement: string) {
+    const next = applyCompletion(text, token, replacement)
+    if (token.kind === 'file') setPickedFiles((prev) => new Set(prev).add(replacement.slice(1)))
+    // Síncrono pelo mesmo motivo do QuickComposer: rAF deixa a próxima tecla cair
+    // antes do caret reposicionado.
+    flushSync(() => {
+      setText(next.value)
+      setCaret(next.caret)
+    })
+    innerRef.current?.setSelectionRange(next.caret, next.caret)
+  }
+
+  function clearDraft(value: string) {
     pushHistory(sessionId, value)
     setText('')
+    setPickedFiles(new Set())
     setHistIndex(null)
     clearAttachments()
     drafts.delete(sessionId)
     refocus()
+  }
+
+  // Destino por @alias: vai pela fila do main (agora se a sessão pode receber,
+  // senão quando ela terminar) — nunca pelo PTY desta aba.
+  async function sendElsewhere(value: string) {
+    if (parsed.kind !== 'ok') return
+    const target = parsed.target
+    try {
+      const res = await sendToApi.send({
+        sessionId: target.sessionId,
+        text: parsed.body,
+        when: defaultWhen(target, false),
+      })
+      if (res.ok) clearDraft(value)
+      setRouteNotice(
+        !res.ok
+          ? `Não deu pra enviar para @${target.alias} (${sendRefusalReason(res.error)}).`
+          : res.delivered
+            ? `Enviado para @${target.alias}.`
+            : `Na fila de @${target.alias} — entrega quando ela terminar o turno.`,
+      )
+    } catch (err) {
+      console.error('[composer] falha ao enviar para outra sessão:', err)
+      setRouteNotice(`Não deu pra enviar para @${target.alias} — tente de novo.`)
+    }
+  }
+
+  function submit() {
+    const value = text
+    if (value.trim().length === 0) return
+    // @palavra que não é sessão viva (@Makefile, @src) é menção do próprio claude.
+    if (parsed.kind === 'no-match') return sendHere(value)
+    if (parsed.kind === 'ambiguous') {
+      return setRouteNotice(`Mais de uma sessão chamada @${parsed.alias} — escolha pelo menu`)
+    }
+    if (routedTo) return void sendElsewhere(value)
+    sendHere(value)
+  }
+
+  function sendHere(value: string) {
+    setRouteNotice(null)
+    onSend(rewriteFileMentions(value, selfTarget?.cwd ?? null, pickedFiles))
+    clearDraft(value)
   }
 
   function insertOnly() {
@@ -354,7 +431,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       : 'Enter envia · Shift+Enter quebra linha'
 
   return (
-    <div className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-2 pb-1 pt-2">
+    <div
+      data-composer-dock
+      className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-2 pb-1 pt-2"
+    >
       <div className="flex items-center gap-1">
         {collapsible && (
           <button
@@ -409,6 +489,20 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
           ))}
         </div>
       )}
+      {!collapsed && (routedTo || routeNotice) && (
+        <div
+          data-testid="composer-route"
+          className="mb-1 flex min-w-0 items-center gap-2 px-1 text-[11px] text-[var(--color-text-dim)]"
+        >
+          {routedTo && (
+            <>
+              <span className="shrink-0">Enviar para</span>
+              <SessionPill target={routedTo} />
+            </>
+          )}
+          {routeNotice && <span className="min-w-0 truncate">{routeNotice}</span>}
+        </div>
+      )}
       {!collapsed && (
         <>
           <GradientBorder
@@ -419,6 +513,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
             innerClassName="flex items-end gap-2 px-2.5 py-2"
           >
             <div className="relative min-w-0 flex-1">
+              <MentionMenu
+                menu={mention}
+                className="absolute bottom-full left-0 mb-3"
+                onPick={(p) => applyMention(p.token, p.replacement)}
+              />
               {/* Placeholder da marca: texto + cursor piscante (pw-cursor). Overlay
               decorativo (pointer-events-none) mostrado só com o input vazio — não
               interfere no textarea real por baixo. */}
@@ -436,9 +535,12 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                 value={text}
                 onChange={(e) => {
                   setText(e.target.value)
+                  setCaret(e.target.selectionStart ?? e.target.value.length)
+                  setRouteNotice(null)
                   // Editar manualmente sai do modo histórico (vira um novo rascunho).
                   if (histIndex !== null) setHistIndex(null)
                 }}
+                onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
@@ -452,13 +554,20 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   pendingDictationRef.current = []
                   for (const d of pending) applyDictation(d)
                 }}
-                rows={2}
+                rows={compact ? 1 : 2}
                 placeholder=""
                 aria-label="Escreva um prompt — vai pro mesmo claude. Vazio: setas/Esc/Ctrl+C dirigem a TUI."
-                className="max-h-48 min-h-[2.5rem] w-full resize-none overflow-auto border-0 bg-transparent p-0 font-mono text-sm text-[var(--color-text)] outline-none"
+                className={`max-h-48 ${compact ? 'min-h-[1.5rem]' : 'min-h-[2.5rem]'} w-full resize-none overflow-auto border-0 bg-transparent p-0 font-mono text-sm text-[var(--color-text)] outline-none`}
                 onKeyDown={(e) => {
                   // Não deixa atalhos globais/terminal interceptarem enquanto compõe.
                   e.stopPropagation()
+                  // Menu de @/# aberto: setas, Enter, Tab e Esc são dele (não da TUI).
+                  const m = mention.onKey(e)
+                  if (m) {
+                    e.preventDefault()
+                    if (m.kind === 'pick') applyMention(m.pick.token, m.pick.replacement)
+                    return
+                  }
                   // Histórico de prompts: Ctrl+↑/↓ recupera prompts despachados na sessão.
                   // Vem ANTES do forward pro PTY pra não conflitar com o ↑/↓ puro (que
                   // dirige a TUI do claude quando o composer está vazio).
@@ -513,14 +622,16 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                 <Icon as={CornerDownLeft} size={13} />
                 Enviar
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={insertOnly}
-                title="Insere o texto no prompt do claude sem enviar — você revisa e aperta Enter"
-              >
-                Inserir
-              </Button>
+              {!compact && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={insertOnly}
+                  title="Insere o texto no prompt do claude sem enviar — você revisa e aperta Enter"
+                >
+                  Inserir
+                </Button>
+              )}
             </div>
           </GradientBorder>
         </>

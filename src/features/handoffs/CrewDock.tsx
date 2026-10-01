@@ -46,17 +46,17 @@ export function useCrewDockWidth(): number {
 // ela não está pedindo nada, só esperando você mandar continuar; âmbar ali seria
 // o mesmo alarme de quem realmente espera resposta.
 function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
-  if (live) return liveBadgeFor(live.status).color
+  if (live) return liveBadgeFor(live).color
   if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
   return STATUS_COLOR[handoff.status]
 }
 
 function crewDotTitle(handoff: Handoff, live: LiveSessionInfo | undefined): string {
   const alias = splitAlias(live?.title)
-  const who = alias?.name ?? handoff.targetRepoLabel ?? handoff.targetRepoId
-  const scope = alias?.scope ? ` (${alias.scope})` : ''
+  const who = live?.title ?? handoff.targetRepoLabel ?? handoff.targetRepoId
+  const scope = alias ? ` (${alias.name})` : ''
   const state = live
-    ? liveBadgeFor(live.status).label
+    ? liveBadgeFor(live).label
     : handoff.status === 'interrupted' && handoff.resumable
       ? 'pausada, dá pra retomar'
       : 'despachando'
@@ -243,9 +243,9 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
               <span
                 className="truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
                 style={{
-                  color: 'var(--color-warning)',
-                  borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',
-                  background: 'color-mix(in srgb, var(--color-warning) 12%, transparent)',
+                  color: 'var(--color-danger)',
+                  borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
+                  background: 'color-mix(in srgb, var(--color-danger) 12%, transparent)',
                 }}
                 title="Filhas aguardando você responder"
               >
@@ -334,7 +334,7 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
                 : `${crew.length} sessão(ões) delegada(s)`
             }
             className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
-            style={{ color: attention > 0 ? 'var(--color-warning)' : 'var(--color-text-dim)' }}
+            style={{ color: attention > 0 ? 'var(--color-danger)' : 'var(--color-text-dim)' }}
           >
             {attention > 0 ? `${attention}!` : crew.length}
           </button>

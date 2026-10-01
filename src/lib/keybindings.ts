@@ -76,6 +76,15 @@ export const COMMANDS: Command[] = [
     defaultCombo: { mod: true, shift: true, key: 'a' },
     editable: true,
   },
+  // Mandar um prompt pra qualquer sessão sem abri-la. Não colide: Shift+Enter é a
+  // nova linha do terminal e Ctrl+Enter o envio do composer / commit de texto do Design.
+  {
+    id: 'quickComposer.open',
+    label: 'Enviar mensagem para uma sessão',
+    context: 'Global',
+    defaultCombo: { mod: true, shift: true, key: 'Enter' },
+    editable: true,
+  },
   // Fila de atenção: pular direto pra sessão que precisa de você. Alt (e não
   // Ctrl) porque Ctrl+letra é do shell/TUI; Alt+A/Alt+Q não colidem com o GNOME
   // nem com os defaults do Claude Code. O AppShell engole a tecla antes do PTY.
@@ -143,6 +152,17 @@ export const COMMANDS: Command[] = [
     label: 'Trabalhar na feature em foco',
     context: 'Global',
     defaultCombo: { mod: true, shift: true, key: 'f' },
+    editable: true,
+  },
+  // Mapa ⇄ Terminais na área Projetos. Ctrl+Shift+G ("grafo"): o Ctrl+Shift+G
+  // do Design (desagrupar) só vive na área de design, e este só na de projetos;
+  // não colide com GNOME nem com os meta+letra do Claude Code. Por code: estável
+  // com Shift em qualquer layout.
+  {
+    id: 'projects.toggleMap',
+    label: 'Alternar Mapa de sessões ⇄ Terminais',
+    context: 'Workspace',
+    defaultCombo: { mod: true, shift: true, code: 'KeyG' },
     editable: true,
   },
   {

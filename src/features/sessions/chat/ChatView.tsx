@@ -94,6 +94,8 @@ interface Props {
   tuiPicker?: TuiPicker | null
   // Re-parse fresco do picker, mesmo papel de reparseMenu.
   reparsePicker?: () => TuiPicker | null
+  // Estado vazio de quem só LÊ (peek): "digite abaixo" mentiria, não há campo.
+  emptyHint?: string
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
@@ -119,7 +121,7 @@ function TranscriptPlanCard({
   return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
 }
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint }, ref) {
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -635,7 +637,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   if (viewState !== 'ready') {
     return (
-      <ChatEmptyState viewState={viewState}>
+      <ChatEmptyState viewState={viewState} hint={emptyHint}>
         {/* Prompt TTY-only pré-transcript (ex.: trust de diretório): o card
             precisa aparecer MESMO sem nenhuma mensagem — é o que destrava a
             sessão pra própria conversa nascer. */}

@@ -1145,6 +1145,7 @@ export function registerSessionIpc(): void {
         isResumable: transcript !== null,
         titleSource: row.session_title_source,
         attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
+        cwd: isLive ? indexed!.cwd : null,
       })
     }
 

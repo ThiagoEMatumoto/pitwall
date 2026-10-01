@@ -11,6 +11,8 @@ import type { Project, Repo } from '../../../shared/types/ipc'
 interface Props {
   open: boolean
   onClose: () => void
+  // Repo já escolhido (o "+ Nova sessão" de uma lane do mapa): pula o passo 1.
+  initialRepoId?: string | null
 }
 
 interface RepoEntry {
@@ -28,7 +30,7 @@ function normalize(s: string): string {
 
 // Fluxo global de nova sessão (Ctrl+N): funciona sem pane ativo. Passo 1 escolhe
 // o repo (busca + teclado); passo 2 é o SpawnSessionDialog com os controles.
-export function NewSessionFlow({ open, onClose }: Props) {
+export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
   const openSession = useAppStore((s) => s.openSession)
   const [entries, setEntries] = useState<RepoEntry[]>([])
   const [query, setQuery] = useState('')
@@ -55,12 +57,15 @@ export function NewSessionFlow({ open, onClose }: Props) {
         }),
       )
       if (cancelled) return
-      setEntries(perProject.flat())
+      const all = perProject.flat()
+      setEntries(all)
+      const preset = initialRepoId ? all.find((e) => e.repo.id === initialRepoId) : undefined
+      if (preset) setChosen(preset)
     })()
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, initialRepoId])
 
   const filtered = useMemo(() => {
     if (!query) return entries
@@ -81,6 +86,8 @@ export function NewSessionFlow({ open, onClose }: Props) {
   }, [active])
 
   if (!open) return null
+  // Com repo pré-escolhido, nada de lista piscando enquanto os repos carregam.
+  if (initialRepoId && !chosen && entries.length === 0) return null
 
   // Passo 2: repo escolhido — o SpawnSessionDialog assume (Enter confirma rápido).
   if (chosen) {

@@ -169,6 +169,27 @@ describe('session-graph', () => {
     expect(g.nodes.find((n) => n.sessionId === 'new')?.childOfHandoffId).toBe(h)
   })
 
+  it('antecessora viva que passou o bastão mantém a tarefa original como propósito', () => {
+    addSession('mother', 'r-web')
+    addSession('old', 'r-api')
+    addSession('new', 'r-api')
+    const h = dispatch('mother', 'old', 'Refatorar auth')
+    passBaton(h, 'old', 'new')
+
+    const asked: string[] = []
+    const g = buildSessionGraph(
+      readSessionGraphInput(testDb, live({ mother: {}, old: {}, new: {} }), Date.now(), (cc) => {
+        asked.push(cc)
+        return null
+      }),
+    )
+    const node = (id: string) => g.nodes.find((n) => n.sessionId === id)!
+    expect([node('old').purpose, node('old').purposeSource]).toEqual(['Refatorar auth', 'handoff'])
+    expect([node('new').purpose, node('new').purposeSource]).toEqual(['Refatorar auth', 'handoff'])
+    // Nenhuma das duas paga leitura de transcript.
+    expect(asked).toEqual(['cc-mother'])
+  })
+
   it('sessão readotada por outra mãe: só a mãe do handoff atual, coerente com o nó', () => {
     addSession('old-mother', 'r-web')
     addSession('new-mother', 'r-web')
@@ -354,5 +375,91 @@ describe('session-graph', () => {
       ['p2', 'Site', [['site', ['s']]]],
       [null, 'Avulsas', [['Avulsas', ['loose']]]],
     ])
+  })
+})
+
+describe('session graph — memória de trabalho (P8)', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    applyAllMigrations(testDb)
+    seedBase(testDb)
+  })
+
+  afterEach(() => testDb.close())
+
+  it('propósito: sessions.purpose > tarefa do handoff > 1º prompt do transcript', () => {
+    addSession('mae', 'r-web')
+    addSession('filha', 'r-api')
+    addSession('solta', 'r-site')
+    addSession('editada', 'r-site')
+    dispatch('mae', 'filha', 'Refatorar o auth')
+    // Mesmo UPDATE do canvas-store.setSessionPurpose (o escritor real).
+    testDb.prepare(`UPDATE sessions SET purpose = 'Frente de pagamentos' WHERE id = 'editada'`).run()
+
+    const asked: string[] = []
+    const firstPrompt = (cc: string) => {
+      asked.push(cc)
+      return cc === 'cc-solta' ? 'Migrar o checkout' : null
+    }
+    const g = buildSessionGraph(
+      readSessionGraphInput(testDb, live({ mae: {}, filha: {}, solta: {}, editada: {} }), Date.now(), firstPrompt),
+    )
+    const node = (id: string) => g.nodes.find((n) => n.sessionId === id)!
+    expect([node('editada').purpose, node('editada').purposeSource]).toEqual(['Frente de pagamentos', 'user'])
+    expect([node('filha').purpose, node('filha').purposeSource]).toEqual(['Refatorar o auth', 'handoff'])
+    expect([node('solta').purpose, node('solta').purposeSource]).toEqual(['Migrar o checkout', 'transcript'])
+    expect([node('mae').purpose, node('mae').purposeSource]).toEqual([null, null])
+    // Transcript só é lido pra quem não tem propósito melhor (custo por rebuild).
+    expect(asked.sort()).toEqual(['cc-mae', 'cc-solta'])
+  })
+
+  it('provider sem transcript do Claude (codex) não entra na busca do 1º prompt', () => {
+    addSession('cl', 'r-web')
+    addSession('cx', 'r-web')
+    testDb.prepare(`UPDATE sessions SET provider = 'codex' WHERE id = 'cx'`).run()
+    const asked: string[] = []
+    readSessionGraphInput(testDb, live({ cl: {}, cx: {} }), Date.now(), (cc, isLive) => {
+      asked.push(`${cc}@${isLive}`)
+      return null
+    })
+    expect(asked).toEqual(['cc-cl@true'])
+  })
+
+  it('mãe que foi filha de um handoff fora da janela: o propósito é a tarefa daquele handoff', () => {
+    addSession('avo', 'r-web')
+    addSession('mae', 'r-api')
+    addSession('neta', 'r-site')
+    const old = dispatch('avo', 'mae', 'Combinar o início da perícia com o app')
+    // Fora da janela de handoffs do grafo: concluído há 30 dias.
+    testDb
+      .prepare(`UPDATE handoffs SET status = 'done', updated_at = ?, created_at = 1 WHERE id = ?`)
+      .run(Date.now() - 30 * 86_400_000, old)
+    dispatch('mae', 'neta', 'Medir a adesão')
+    const asked: string[] = []
+    const g = buildSessionGraph(
+      readSessionGraphInput(
+        testDb,
+        live({ mae: {}, neta: {} }),
+        Date.now(),
+        (cc) => {
+          asked.push(cc)
+          return 'Comece a tarefa…'
+        },
+        (cc) => (cc === 'cc-mae' ? 'agora abre o PR' : null),
+      ),
+    )
+    const mae = g.nodes.find((n) => n.sessionId === 'mae')!
+    expect([mae.purpose, mae.purposeSource]).toEqual(['Combinar o início da perícia com o app', 'handoff'])
+    expect(mae.lastPrompt).toBe('agora abre o PR')
+    expect(asked).not.toContain('cc-mae')
+  })
+
+  it('grupo e "onde parei" vêm das colunas que o canvas-store grava', () => {
+    addSession('s1', 'r-web')
+    testDb
+      .prepare(`UPDATE sessions SET group_id = 'g1', last_summary = 'Parou no webhook.', last_summary_at = 42 WHERE id = 's1'`)
+      .run()
+    const n = graphFor(live({ s1: {} })).nodes[0]
+    expect(n).toMatchObject({ groupId: 'g1', lastSummary: 'Parou no webhook.', lastSummaryAt: 42 })
   })
 })

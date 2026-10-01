@@ -10,6 +10,8 @@ import {
   readSessionGraphInput,
   type LiveSessionState,
 } from '../services/session-graph'
+import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
+import { transcriptIndex } from '../services/transcript-index'
 import type { HandoffEvent, SessionGraph } from '../../../shared/types/session-graph'
 
 // O que muda o grafo: handoffs (despacho, bastão, progresso), dependências entre
@@ -23,6 +25,8 @@ const GRAPH_CHANNEL_PREFIXES = [
   'session:feature-changed',
   'session:renamed',
   'pty:exit',
+  // Propósito, grupo e "onde parei" da sessão (P8) viajam no nó do grafo.
+  'canvas:',
 ] as const
 export const GRAPH_PUSH_DELAY_MS = 300
 
@@ -49,7 +53,7 @@ function liveSessionStates(): Map<string, LiveSessionState> {
 
 export function loadSessionGraph(): SessionGraph {
   const db = getDb()
-  return buildSessionGraph(readSessionGraphInput(db, liveSessionStates()))
+  return buildSessionGraph(readSessionGraphInput(db, liveSessionStates(), Date.now(), readFirstPrompt, readLastPrompt))
 }
 
 // Coalesce em vez de debounce puro: o 1º evento arma o timer e os seguintes na
@@ -65,6 +69,8 @@ export function watchSessionGraph(push: () => void, delayMs = GRAPH_PUSH_DELAY_M
     }, delayMs)
   }
   const offs = GRAPH_CHANNEL_PREFIXES.map((prefix) => onBroadcast(prefix, schedule))
+  // Transcript novo no índice = 1º prompt que agora dá pra ler.
+  offs.push(transcriptIndex.onGrow(schedule))
   return () => {
     for (const off of offs) off()
     if (timer) clearTimeout(timer)

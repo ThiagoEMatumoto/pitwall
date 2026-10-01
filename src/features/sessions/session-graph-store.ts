@@ -82,6 +82,6 @@ export function openGraphNode(node: SessionGraphNode): boolean {
     dock.openPeek(handoffId)
     return true
   }
-  if (dock.peekId) dock.closePeek({ restoreFocus: false })
+  if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
   return openSessionByCc(node.ccSessionId!)
 }

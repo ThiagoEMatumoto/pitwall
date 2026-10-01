@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { sessionsApi } from '@/lib/ipc'
 import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
+import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import type { AttentionDetail, AttentionItem } from './attention-queue'
 import {
@@ -119,11 +120,47 @@ function otherOptionIndex(menu: TuiMenu): number | null {
   return menu.options.find((o) => o.sentinel === 'other')?.index ?? null
 }
 
-// "Tip: … choose "switch to auto mode" below" aponta pra opção que o popover não oferece.
+// "Tip: … choose "switch to auto mode" below" aponta pra opção que o popover não
+// oferece; a TUI quebra a frase e o "below" sobra sozinho na linha seguinte.
 const TIP_LINE_RE = /^Tip:/
+const TIP_TAIL_RE = /^[a-z][^A-Z]{0,30}$/
+// Cabeçalho da caixa da TUI ("Bash command"): o popover já diz "Pede permissão".
+const TOOL_HEADER_RE = /^(Bash command|Edit file|Create file|Write file|Read file|Fetch|Web fetch|Web search)$/i
 
 export function contextLines(context: string): string[] {
-  return context.split('\n').filter((l) => !TIP_LINE_RE.test(l.trim()))
+  const out: string[] = []
+  let afterTip = false
+  for (const raw of context.split('\n')) {
+    const line = raw.trim()
+    if (TIP_LINE_RE.test(line)) {
+      afterTip = !/[.!?]$/.test(line)
+      continue
+    }
+    if (afterTip && TIP_TAIL_RE.test(line)) {
+      afterTip = false
+      continue
+    }
+    afterTip = false
+    if (TOOL_HEADER_RE.test(line)) continue
+    out.push(raw)
+  }
+  return out
+}
+
+function shortPath(path: string): string {
+  const parts = path.replace(/\s+/g, '').split('/').filter(Boolean)
+  return parts.length <= 2 ? path : `…/${parts.slice(-2).join('/')}`
+}
+
+// O que o "Sempre" concede, em português. A TUI quebra o caminho longo entre o
+// label e a descrição da opção; os dois juntos refazem a frase.
+export function alwaysHintText(label: string, description?: string): string {
+  const full = `${label}${description ? ` ${description}` : ''}`
+  const access = /always allow access to (.+?) from this project/i.exec(full)
+  if (access) return `permitir acesso a ${shortPath(access[1])} em todo o projeto`
+  if (/don't ask again/i.test(full)) return 'não perguntar de novo por este comando'
+  if (/allow all edits/i.test(full)) return 'permitir todas as edições nesta sessão'
+  return label
 }
 
 function MenuContext({ menu }: { menu: TuiMenu }) {
@@ -234,20 +271,40 @@ interface PopoverProps {
   pinned?: boolean
 }
 
-// Por que a sessão precisa de você + as ações do menu real, sem abrir o terminal.
-// O clique manda só a intenção + o fingerprint do menu exibido: o main re-parseia
-// a tela e recusa se mudou (aí mostramos o menu novo, nunca digitamos às cegas).
-export function AttentionPopover({ item, onClose, pinned = false }: PopoverProps) {
+// O menu real da tela + as ações dele (Aprovar/Negar/Sempre/Responder). O clique
+// manda só a intenção + o fingerprint/menuSeq do menu exibido: o main re-parseia a
+// tela e recusa se mudou (aí mostramos o menu novo, nunca digitamos às cegas).
+// Também mora no cartão aberto do mapa — por isso sem moldura nem cabeçalho.
+// O cabeçalho do menu vem da TUI em inglês; no meio da UI em pt-BR ele vira o
+// equivalente (o original fica no tooltip). Pergunta desconhecida passa como veio.
+const QUESTION_PT: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+  [/^Do you want to proceed\?$/i, () => 'Quer continuar?'],
+  [/^Do you want to make this edit to (.+)\?$/i, (m) => `Aplicar esta edição em ${m[1]}?`],
+  [/^Do you want to create (.+)\?$/i, (m) => `Criar ${m[1]}?`],
+  [/^Do you want to allow (.+)\?$/i, (m) => `Permitir ${m[1]}?`],
+]
+
+export function questionPt(question: string): string {
+  const q = question.trim()
+  for (const [re, pt] of QUESTION_PT) {
+    const m = q.match(re)
+    if (m) return pt(m)
+  }
+  return question
+}
+
+export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useAttentionMenu(item, () => setNotice(null))
   const [sending, setSending] = useState(false)
-  const rootRef = useDialogFocus(pinned)
-  const titleId = useId()
-  const meta = item.detail ? REASON_META[item.detail] : null
   const menu = snapshot?.menu ?? null
   const actions = menu ? menuActions(menu) : []
   const otherIndex = menu ? otherOptionIndex(menu) : null
-  const alwaysHint = actions.find((a) => a.key === 'always')?.optionLabel
+  const alwaysAction = actions.find((a) => a.key === 'always')
+  const alwaysOption = menu?.options.find((o) => o.index === alwaysAction?.optionIndex)
+  const alwaysHint = alwaysAction
+    ? alwaysHintText(alwaysAction.optionLabel, alwaysOption?.description)
+    : undefined
 
   async function send(act: AttentionAction) {
     if (!snapshot || !item.sessionId) return
@@ -268,6 +325,64 @@ export function AttentionPopover({ item, onClose, pinned = false }: PopoverProps
     setSnapshot(res.snapshot)
     setNotice(ERROR_NOTICE[res.error] ?? 'Não deu pra responder daqui.')
   }
+
+  return (
+    <>
+      {menu?.question && (
+        <p className="text-[13px] leading-snug" title={menu.question}>
+          {questionPt(menu.question)}
+        </p>
+      )}
+      {menu && <MenuContext menu={menu} />}
+      {snapshot === undefined && isActionableDetail(item.detail) && (
+        <p className="text-[var(--color-text-dim)]">Lendo o menu…</p>
+      )}
+      {snapshot === null && isActionableDetail(item.detail) && !notice && (
+        <p className="text-[var(--color-text-dim)]">Menu não reconhecido — responda no terminal.</p>
+      )}
+
+      {actions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {actions.map((a) => (
+            <Button
+              key={a.key}
+              data-testid={`attention-action-${a.key}`}
+              variant={a.variant}
+              disabled={sending}
+              className="!px-3 !py-1 text-xs"
+              title={a.optionLabel}
+              onClick={() => void send({ kind: 'select', optionIndex: a.optionIndex })}
+            >
+              {a.label}
+            </Button>
+          ))}
+        </div>
+      )}
+      {alwaysHint && (
+        <p data-testid="attention-always-hint" className="text-[var(--color-text-dim)]">
+          Sempre: {alwaysHint}
+        </p>
+      )}
+      {otherIndex != null && (
+        <OtherAnswer
+          disabled={sending}
+          onSend={(text) => void send({ kind: 'other', optionIndex: otherIndex, text })}
+        />
+      )}
+      {notice && (
+        <p data-testid="attention-notice" className="text-[var(--color-text-dim)]">
+          {notice}
+        </p>
+      )}
+    </>
+  )
+}
+
+// Por que a sessão precisa de você + as ações do menu real, sem abrir o terminal.
+export function AttentionPopover({ item, onClose, pinned = false }: PopoverProps) {
+  const rootRef = useDialogFocus(pinned)
+  const titleId = useId()
+  const meta = item.detail ? REASON_META[item.detail] : null
 
   return (
     <div
@@ -312,50 +427,23 @@ export function AttentionPopover({ item, onClose, pinned = false }: PopoverProps
         )}
       </div>
 
-      {menu?.question && <p className="text-[13px] leading-snug">{menu.question}</p>}
-      {menu && <MenuContext menu={menu} />}
-      {snapshot === undefined && isActionableDetail(item.detail) && (
-        <p className="text-[var(--color-text-dim)]">Lendo o menu…</p>
-      )}
-      {snapshot === null && isActionableDetail(item.detail) && !notice && (
-        <p className="text-[var(--color-text-dim)]">Menu não reconhecido — responda no terminal.</p>
-      )}
+      <AttentionMenuPanel item={item} />
 
-      {actions.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {actions.map((a) => (
-            <Button
-              key={a.key}
-              data-testid={`attention-action-${a.key}`}
-              variant={a.variant}
-              disabled={sending}
-              className="!px-3 !py-1 text-xs"
-              title={a.optionLabel}
-              onClick={() => void send({ kind: 'select', optionIndex: a.optionIndex })}
-            >
-              {a.label}
-            </Button>
-          ))}
-        </div>
-      )}
-      {alwaysHint && (
-        <p data-testid="attention-always-hint" className="text-[var(--color-text-dim)]">
-          Sempre: {alwaysHint}
-        </p>
-      )}
-      {otherIndex != null && (
-        <OtherAnswer
-          disabled={sending}
-          onSend={(text) => void send({ kind: 'other', optionIndex: otherIndex, text })}
-        />
-      )}
-      {notice && (
-        <p data-testid="attention-notice" className="text-[var(--color-text-dim)]">
-          {notice}
-        </p>
-      )}
-
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-1.5">
+        {/* Filha do dock fica fora dos alvos de envio: fala com ela pelo CrewPeek. */}
+        {item.detail === 'turn-end' && item.kind !== 'crew' && item.sessionId && (
+          <Button
+            variant="ghost"
+            data-testid="attention-send-message"
+            className="!px-3 !py-1 text-xs"
+            onClick={() => {
+              useQuickComposerStore.getState().openFor(item.sessionId)
+              onClose?.()
+            }}
+          >
+            Enviar mensagem
+          </Button>
+        )}
         <Button
           variant="ghost"
           data-testid="attention-open"

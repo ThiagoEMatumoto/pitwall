@@ -116,6 +116,12 @@ echo_loop() {
 }`
 }
 
+// Caixa de input ociosa do claude 2.1.286 (régua, "❯ ", régua): é a prova
+// positiva que a fila de envio exige antes de escrever na sessão.
+// 50 colunas (não a largura toda): não quebra linha em PTY estreita.
+const INPUT_RULE = '─'.repeat(50)
+const CLAUDE_INPUT_BOX = `\n${INPUT_RULE}\n❯ \n${INPUT_RULE}\n`
+
 // Stub do `claude`: lê --session-id/--resume e -n do comando montado por
 // buildSpawnInnerCmd, grava sessions/<pid>.json com status 'busy' (a sessão
 // "trabalhando") e fica viva ecoando o stdin. O caminho do sessionsDir é
@@ -124,7 +130,7 @@ export function fakeClaudeScript(sessionsDir: string, logDir: string): string {
   return `#!/usr/bin/env bash
 # Stub do claude para cenários e2e — gerado por e2e/driver/fake-home.ts.
 SESSIONS_DIR=${shSingleQuote(sessionsDir)}
-${echoLoop(logDir, 'claude', '> ')}
+${echoLoop(logDir, 'claude', CLAUDE_INPUT_BOX)}
 
 session_id=''
 name=''
@@ -150,9 +156,11 @@ printf '{"pid":%s,"sessionId":%s,"cwd":%s,"status":"busy","name":%s,"startedAt":
 
 printf '\\u256d\\u2500 Fake Claude Code (stub e2e)\\n'
 printf '\\u2502  sessao: %s\\n' "$session_id"
-printf '\\u2502  nome:   %s\\n' "$name"
 printf '\\u2502  cwd:    %s\\n' "$PWD"
-printf '\\u2570\\u2500\\n\\n'
+# Nome por último e sem linha em branco antes da caixa de input: a prévia do
+# "enviar para" mostra só as 6 últimas linhas, e é o nome que prova de quem é a tela.
+printf '\\u2502  nome:   %s\\n' "$name"
+printf '\\u2570\\u2500\\n'
 echo_loop
 `
 }

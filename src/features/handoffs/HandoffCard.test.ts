@@ -22,52 +22,45 @@ const HOUR = 3_600_000
 const mk = (over: Partial<Handoff>) => ({ ...over }) as Handoff
 
 describe('liveBadgeFor', () => {
+  // O MESMO tom do cartão do mapa (cardIndicator): dock e cartão não divergem.
   it('working → trabalhando, info, sem attention', () => {
-    expect(liveBadgeFor('working')).toEqual({
+    expect(liveBadgeFor({ status: 'working' })).toEqual({
       label: 'trabalhando',
       color: 'var(--color-info)',
       attention: false,
     })
   })
 
-  it('waiting → aguardando você, warning/âmbar, com attention', () => {
-    expect(liveBadgeFor('waiting')).toEqual({
-      label: 'aguardando você',
-      color: 'var(--color-warning)',
-      attention: true,
+  it('waiting com fim de turno reconhecido → pronto, success, sem attention', () => {
+    expect(liveBadgeFor({ status: 'waiting', attentionReason: 'turn-end' })).toEqual({
+      label: 'pronto',
+      color: 'var(--color-success)',
+      attention: false,
     })
   })
 
-  it('starting → iniciando, info, sem attention', () => {
-    expect(liveBadgeFor('starting')).toEqual({
-      label: 'iniciando',
+  it('waiting com menu (permissão) ou tela não reconhecida → precisa de você, danger', () => {
+    const needsYou = { label: 'precisa de você', color: 'var(--color-danger)', attention: true }
+    expect(liveBadgeFor({ status: 'waiting', attentionReason: 'permission' })).toEqual(needsYou)
+    expect(liveBadgeFor({ status: 'waiting' })).toEqual(needsYou)
+  })
+
+  it('pergunta de handoff aberta vence o status do PTY', () => {
+    expect(liveBadgeFor({ status: 'working' }, true).attention).toBe(true)
+  })
+
+  it('starting → subindo, info, sem attention', () => {
+    expect(liveBadgeFor({ status: 'starting' })).toEqual({
+      label: 'subindo',
       color: 'var(--color-info)',
       attention: false,
     })
   })
 
-  it('idle → ociosa, text-dim, sem attention', () => {
-    expect(liveBadgeFor('idle')).toEqual({
-      label: 'ociosa',
-      color: 'var(--color-text-dim)',
-      attention: false,
-    })
-  })
-
-  it('ended → filha encerrou, danger, com attention', () => {
-    expect(liveBadgeFor('ended')).toEqual({
-      label: 'filha encerrou',
-      color: 'var(--color-danger)',
-      attention: true,
-    })
-  })
-
-  it('undefined → igual a ended (filha encerrou, danger, attention)', () => {
-    expect(liveBadgeFor(undefined)).toEqual({
-      label: 'filha encerrou',
-      color: 'var(--color-danger)',
-      attention: true,
-    })
+  it('ended/undefined → filha encerrou, danger, com attention', () => {
+    const gone = { label: 'filha encerrou', color: 'var(--color-danger)', attention: true }
+    expect(liveBadgeFor({ status: 'ended' })).toEqual(gone)
+    expect(liveBadgeFor(undefined)).toEqual(gone)
   })
 })
 

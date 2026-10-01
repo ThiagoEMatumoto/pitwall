@@ -19,6 +19,7 @@ import { handoffsApi, prefsApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
+import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
 import { crewResumedAfterQuestion, splitAlias } from './crew'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -76,30 +77,35 @@ export function contextLabel(tokens: LiveSessionInfo['tokens']): string | null {
   return `${ctx} ctx`
 }
 
-// Liveness derivada do status da sessão-filha viva (LiveSessionInfo). `undefined`
-// = filha não está mais no liveSessions (PTY encerrou). Mapeia pra label + token
-// de cor existente. Puro → testável.
+// Liveness da sessão-filha viva. `undefined` = filha não está mais no
+// liveSessions (PTY encerrou). O tom vem do MESMO cardIndicator do mapa: o dock
+// dizia "aguardando você" em âmbar para a filha que o cartão chamava de "pronto"
+// (fim de turno), e as duas superfícies não podem divergir. Puro → testável.
 export interface LiveBadge {
   label: string
   color: string
-  // waiting/ended pedem destaque/ação no card.
+  // Precisa de você (ou encerrou): pede destaque/ação no card.
   attention: boolean
 }
 
-export function liveBadgeFor(status: LiveSessionInfo['status'] | undefined): LiveBadge {
-  switch (status) {
-    case 'working':
-      return { label: 'trabalhando', color: 'var(--color-info)', attention: false }
-    case 'waiting':
-      return { label: 'aguardando você', color: 'var(--color-warning)', attention: true }
-    case 'starting':
-      return { label: 'iniciando', color: 'var(--color-info)', attention: false }
-    case 'idle':
-      return { label: 'ociosa', color: 'var(--color-text-dim)', attention: false }
-    case 'ended':
-    case undefined:
-    default:
-      return { label: 'filha encerrou', color: 'var(--color-danger)', attention: true }
+export function liveBadgeFor(
+  live: Pick<LiveSessionInfo, 'status' | 'attentionReason'> | undefined,
+  needsInput = false,
+): LiveBadge {
+  if (!live || live.status === 'ended') {
+    return { label: 'filha encerrou', color: 'var(--color-danger)', attention: true }
+  }
+  const ind = cardIndicator({
+    status: live.status,
+    graphAttention: needsInput ? 'handoff-input' : null,
+    detail: live.attentionReason,
+    lastActivityAt: null,
+    workingSince: null,
+  })
+  return {
+    label: indicatorText(ind, 0),
+    color: TONE_COLOR[ind.tone],
+    attention: ind.tone === 'needs-you',
   }
 }
 
@@ -119,7 +125,7 @@ const STATUS_LABEL: Record<HandoffStatus, string> = {
 export const STATUS_COLOR: Record<HandoffStatus, string> = {
   pending: 'var(--color-warning)',
   running: 'var(--color-info)',
-  needs_input: 'var(--color-warning)',
+  needs_input: TONE_COLOR['needs-you'],
   done: 'var(--color-success)',
   failed: 'var(--color-danger)',
   rejected: 'var(--color-text-dim)',
@@ -340,7 +346,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
 
   // Sinais vivos da filha. badge.attention (waiting/ended) ou needs_input pedem
   // realce âmbar. needs_input vence: a mãe pediu input explícito.
-  const live = isLiveHandoff ? liveBadgeFor(childLive?.status) : null
+  const live = isLiveHandoff ? liveBadgeFor(childLive) : null
   // needs_input com progresso posterior à pergunta = ela já foi respondida fora
   // do app e a filha retomou (ver crewResumedAfterQuestion). O registro segue no
   // banco; o card é que para de anunciar um bloqueio que não existe mais.
@@ -573,7 +579,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
     <div className="min-w-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="truncate text-sm font-medium text-[var(--color-text)]">
-          {alias ? alias.name : `→ ${repoLabel}`}
+          {/* O alias da sessão, o MESMO rótulo do cartão no mapa e da aba; o nome
+              da pessoa fica em segundo plano na linha de baixo. */}
+          {childSession?.title ?? (alias ? alias.name : `→ ${repoLabel}`)}
         </span>
         {liveBadgeWins && live ? (
           tight ? (
@@ -605,7 +613,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           className="truncate text-[11px] text-[var(--color-text-dim)]"
           title={`${childSession?.title ?? alias.name} → ${repoLabel}`}
         >
-          {alias.scope ? `${alias.scope} · → ${repoLabel}` : `→ ${repoLabel}`}
+          {`${alias.name} · → ${repoLabel}`}
         </div>
       )}
 
@@ -643,8 +651,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           data-testid="handoff-question"
           className="mt-1.5 rounded-md border px-2 py-1.5 text-sm"
           style={{
-            borderColor: 'var(--color-warning)',
-            background: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
+            borderColor: 'var(--color-danger)',
+            background: 'color-mix(in srgb, var(--color-danger) 8%, transparent)',
             color: 'var(--color-text)',
           }}
         >
@@ -713,9 +721,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
       data-testid="handoff-card"
       className="shrink-0 rounded-[14px] border bg-[var(--color-surface)] p-3"
       style={{
-        borderColor: highlight ? 'var(--color-warning)' : 'var(--color-border)',
+        borderColor: highlight ? 'var(--color-danger)' : 'var(--color-border)',
         background: highlight
-          ? 'color-mix(in srgb, var(--color-warning) 8%, transparent)'
+          ? 'color-mix(in srgb, var(--color-danger) 6%, transparent)'
           : undefined,
       }}
     >
@@ -766,8 +774,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
             title={`${sendLabel} (Enter)`}
             className="flex shrink-0 items-center justify-center gap-1 rounded border px-2 py-1.5 text-[11px] font-medium transition disabled:opacity-40"
             style={{
-              color: highlight ? 'var(--color-warning)' : 'var(--color-accent)',
-              borderColor: highlight ? 'var(--color-warning)' : 'var(--color-accent)',
+              color: highlight ? 'var(--color-danger)' : 'var(--color-accent)',
+              borderColor: highlight ? 'var(--color-danger)' : 'var(--color-accent)',
             }}
           >
             <Icon as={answering ? CornerDownLeft : Send} size={12} />

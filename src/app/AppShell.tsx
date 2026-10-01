@@ -31,6 +31,8 @@ import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
 import { SessionStrip } from '@/features/session-switcher/SessionStrip'
 import { SessionSwitcher } from '@/features/session-switcher/SessionSwitcher'
+import { QuickComposer } from '@/features/quick-composer/QuickComposer'
+import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
 import { UpdateToast } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
@@ -46,6 +48,11 @@ import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
 import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
+import { SessionMap } from '@/features/session-canvas/SessionMap'
+import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { focusActiveTerminal } from '@/features/session-canvas/focus-active-terminal'
+import { useLeaveMapOnSessionFocus } from '@/features/session-canvas/useLeaveMapOnSessionFocus'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useToastPlacement } from './useToastPlacement'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
@@ -172,6 +179,8 @@ export function AppShell() {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const overrides = useKeybindingsStore((s) => s.overrides)
+  const projectsView = useProjectsViewStore((s) => s.view)
+  useLeaveMapOnSessionFocus()
   const loadKeybindings = useKeybindingsStore((s) => s.load)
   // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
   // largura dele pra não cobrir os cards das filhas (e o input de resposta).
@@ -387,6 +396,26 @@ export function AppShell() {
     }
   }, [panes, ready, pendingLayout, gridRequest])
 
+  // Saiu do mapa (toggle, atalho ou aba aberta de dentro dele): o foco volta pro
+  // xterm do painel ativo. Dois frames: o overlay do mapa desmonta e, quando a
+  // saída foi por abrir uma aba, o dockview ativa o painel novo antes.
+  const prevProjectsView = useRef(projectsView)
+  useEffect(() => {
+    const leftMap = prevProjectsView.current === 'map' && projectsView === 'terminals'
+    prevProjectsView.current = projectsView
+    if (!leftMap || area !== 'projects') return
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        focusActiveTerminal(apiRef.current?.activePanel?.view.content.element)
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
+  }, [projectsView, area])
+
   // Foca um painel existente quando a lista de sessões pede (clique simples). Roda
   // após a reconciliação garantir que o painel existe.
   useEffect(() => {
@@ -500,6 +529,16 @@ export function AppShell() {
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
         e.preventDefault()
         setPaletteOpen((v) => !v)
+        return
+      }
+      // Ctrl+Shift+Enter: compositor flutuante (manda pra qualquer sessão viva).
+      // stopPropagation: no composer da aba, Ctrl+Enter enviaria o rascunho.
+      if (matchCombo(e, resolveCombo('quickComposer.open', overrides))) {
+        e.preventDefault()
+        e.stopPropagation()
+        const qc = useQuickComposerStore.getState()
+        if (qc.open) qc.close()
+        else qc.openFor(null)
         return
       }
       // Ctrl+Shift+A: abre o seletor de sessões (overlay). Não troca de área —
@@ -805,11 +844,18 @@ export function AppShell() {
           <div className="min-w-0 flex-1">
             <SessionStrip onOpenSwitcher={() => setSwitcherOpen(true)} />
           </div>
+          <ProjectsViewToggle />
         </div>
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
           <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && <EmptyMain />}
+            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
+            {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
+            {area === 'projects' && projectsView === 'map' && (
+              <div className="absolute inset-0 z-20 bg-[var(--color-bg)]">
+                <SessionMap />
+              </div>
+            )}
             <DockviewReact
               className="absolute inset-0"
               theme={themeAbyss}
@@ -842,6 +888,7 @@ export function AppShell() {
         activeCcSessionId={activeCcSessionId}
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <QuickComposer />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
       <div
         data-testid="toast-stack"
