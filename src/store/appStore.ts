@@ -2,8 +2,10 @@ import { create } from 'zustand'
 import { sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
+import { providerSupports } from '../../shared/agent-providers'
 import type {
   AdvisorModel,
+  AgentProviderId,
   EffortLevel,
   LiveSessionInfo,
   PaneSnapshot,
@@ -227,14 +229,24 @@ export function sessionFromLiveSession(item: LiveSessionInfo, paneId: string | n
   return {
     id: item.id,
     repoId: item.repo?.id ?? null,
-    ccSessionId: item.ccSessionId,
+    // O Codex vem com ccSessionId = sessions.id (chave do batch global), não um id
+    // nativo: copiado, a pane viraria "claude" — watch de transcript, baton e um
+    // restore que sobe claude no lugar dela.
+    ccSessionId: providerSupports(item.provider).resume ? item.ccSessionId : null,
     title: item.title ?? item.name,
     titleSource: item.titleSource ?? null,
     paneId,
     status: 'running',
     startedAt: item.lastActivityAt ?? Date.now(),
     endedAt: null,
+    provider: item.provider,
   }
+}
+
+// A pane já exibe esta sessão viva? Sessão sem id nativo (Codex) tem pane com
+// ccSessionId null e item da lista com ccSessionId = sessions.id: casa pelo id.
+function paneShowsLive(pane: ActivePane, item: LiveSessionInfo): boolean {
+  return pane.session.id === item.id || pane.session.ccSessionId === item.ccSessionId
 }
 
 function paneFromLiveSession(item: LiveSessionInfo, paneId: string): ActivePane {
@@ -309,6 +321,8 @@ interface AppState {
     // Modelo do advisor tool (--advisor <model>); validado no main. Trailing/
     // opcional: callers existentes omitem (= advisor desligado).
     advisorModel?: AdvisorModel,
+    // CLI da sessão; ausente = claude.
+    provider?: AgentProviderId,
     // Retorna o id da sessão criada. Callers existentes ignoram o retorno; o fluxo
     // de handoff usa pra marcar mark-running com o childSessionId.
   ) => Promise<string>
@@ -457,6 +471,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     systemPromptText,
     permissionMode,
     advisorModel,
+    provider,
   ) => {
     // Consome ANTES do await: se dois spawns dispararem em sequência, cada um
     // leva (no máximo) a escolha do seu próprio diálogo.
@@ -473,6 +488,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       systemPromptText,
       permissionMode,
       advisorModel,
+      provider,
     })
     set((s) => ({
       panes: [
@@ -635,7 +651,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   focusOrOpenSession: async (item) => {
-    const existing = get().panes.find((p) => p.session.ccSessionId === item.ccSessionId)
+    const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
       set({ focusPaneId: existing.paneId, area: 'projects' })
       return
@@ -657,7 +673,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const current = get().panes
     const wanted: ActivePane[] = items.map(
       (item) =>
-        current.find((p) => p.session.ccSessionId === item.ccSessionId) ??
+        current.find((p) => paneShowsLive(p, item)) ??
         paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`),
     )
     set({

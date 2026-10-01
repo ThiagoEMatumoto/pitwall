@@ -22,6 +22,8 @@ const {
   resolveCrewFocus,
   stepCrewFocus,
   crewFocusAfterDismiss,
+  openPaneKeys,
+  paneShowsLive,
 } = await import('./crew')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -404,7 +406,9 @@ describe('orderCrew', () => {
 })
 
 describe('crewTerminalTarget', () => {
-  const pane = (ccSessionId: string | null) => ({ session: { ccSessionId } })
+  const pane = (ccSessionId: string | null, id = 'pane-session') => ({
+    session: { id, ccSessionId },
+  })
 
   it('sem pane aberta o terminal abre no overlay (nenhuma aba nasce)', () => {
     expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [])).toBe('overlay')
@@ -422,8 +426,27 @@ describe('crewTerminalTarget', () => {
     expect(crewTerminalTarget(undefined, [pane('cc1')])).toBe('none')
   })
 
-  it('pane sem ccSessionId nunca casa', () => {
-    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane(null)])).toBe('overlay')
+  it('pane sem ccSessionId de outra sessão não casa', () => {
+    expect(crewTerminalTarget(live({ id: 's1', ccSessionId: 'cc1' }), [pane(null)])).toBe(
+      'overlay',
+    )
+  })
+
+  // Shape real do Codex: pane com ccSessionId null, item da lista viva com
+  // ccSessionId = sessions.id (live-session-pty.ts).
+  it('Codex com aba aberta: casa pelo sessions.id', () => {
+    const codex = live({ id: 'sx', ccSessionId: 'sx', provider: 'codex' })
+    expect(crewTerminalTarget(codex, [pane(null, 'sx')])).toBe('pane')
+  })
+})
+
+describe('paneShowsLive / hiddenCrewSessionIds — Codex', () => {
+  it('filha Codex com aba aberta não some da barra', () => {
+    const handoffs = [hf({ id: 'h', status: 'running', childSessionId: 'sx' })]
+    const sessions = [live({ id: 'sx', ccSessionId: 'sx', provider: 'codex' })]
+    const open = openPaneKeys([{ session: { id: 'sx', ccSessionId: null } }])
+    expect(hiddenCrewSessionIds(handoffs, sessions, open)).toEqual(new Set())
+    expect(paneShowsLive({ session: { id: 'sx', ccSessionId: null } }, sessions[0])).toBe(true)
   })
 })
 

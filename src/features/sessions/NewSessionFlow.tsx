@@ -96,6 +96,7 @@ export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
         open
         onClose={onClose}
         repo={chosen.repo}
+        providerChoice
         onConfirmChild={({ task, motherSessionId, featureId, permission }) => {
           const repoId = chosen.repo.id
           // O main compõe o briefing (o MESMO que a filha despachada por MCP
@@ -127,7 +128,16 @@ export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
           })()
           onClose()
         }}
-        onConfirm={(name, featureId, model, effort, permission, advisorModel, initialCommand) => {
+        onConfirm={(
+          name,
+          featureId,
+          model,
+          effort,
+          permission,
+          advisorModel,
+          initialCommand,
+          provider,
+        ) => {
           void openSession(
             chosen.repo,
             chosen.project.name,
@@ -142,6 +152,7 @@ export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
             undefined,
             permission,
             advisorModel,
+            provider,
           )
           onClose()
         }}

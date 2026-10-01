@@ -57,6 +57,7 @@ import type {
 export type * from './design'
 import type { DesignApi } from './design'
 import type { HandoffEvent, SessionGraph } from './session-graph'
+import type { AgentBusSnapshot } from './agent-bus'
 import type {
   CanvasNote,
   CanvasPositionInput,
@@ -572,6 +573,9 @@ export interface SpawnSessionInput {
   // Ferramentas a NEGAR via `--disallowedTools <specs...>` (ex.: 'Bash(rm:*)').
   // Denylist destrutivo do handoff auto-edits. Cada spec é validado/escapado.
   disallowedTools?: string[]
+  // CLI de agente da sessão. Ausente = 'claude'. 'codex' é experimental: sem
+  // resume, sem Chat View, status pela PTY; filha autônoma só em plan.
+  provider?: AgentProviderId
   // Marca o spawn como sessão-filha de handoff. Efeitos (decididos no MAIN, não
   // aqui — o renderer não consegue injetar settings arbitrários):
   //  1. `--settings '{"crossSessionInbound":"accept"}'` POR filha, pra ela receber
@@ -1324,6 +1328,9 @@ export interface LiveSessionInfo {
   // cwd real da sessão (sessions/<pid>.json do claude): o worktree da feature,
   // não o checkout do repo. Ausente = sessão fora do índice.
   cwd?: string | null
+  // Ausente = 'claude'. Sessão sem id nativo (Codex) vem com ccSessionId = id
+  // (sessions.id): é a chave com que o batch global a atualiza.
+  provider?: AgentProviderId
 }
 
 // Batch de atualização de atividade de TODAS as sessões indexadas, emitido pelo
@@ -3025,6 +3032,11 @@ export interface Api {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
     onUpdated(handler: (graph: SessionGraph) => void): () => void
+  }
+  // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
+  agentBus: {
+    list(): Promise<AgentBusSnapshot>
+    onUpdated(handler: (snapshot: AgentBusSnapshot) => void): () => void
   }
   // Mapa de sessões (P8): posições, notas, grupos, propósito e "onde parei".
   canvas: {

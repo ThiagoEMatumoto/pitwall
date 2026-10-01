@@ -46,7 +46,7 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
-import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
+import { CrewDock, useCrewDockWidth, useHasCrew } from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { SessionMap } from '@/features/session-canvas/SessionMap'
 import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
@@ -69,6 +69,7 @@ import {
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
+import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
 
 interface PaneParams {
@@ -136,6 +137,7 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         style={{ background: color ?? 'var(--color-border)' }}
       />
       <DockviewDefaultTab {...props} />
+      <ProviderBadge provider={pane?.session.provider} className="mr-1.5" />
       <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
   )
@@ -185,6 +187,7 @@ export function AppShell() {
   // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
   // largura dele pra não cobrir os cards das filhas (e o input de resposta).
   const crewDockWidth = useCrewDockWidth()
+  const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
   const toastPlacement = useToastPlacement(crewDockWidth)
 
@@ -561,7 +564,7 @@ export function AppShell() {
       // os cards e Espaço abre o peek. Sem equipe não há o que focar: a tecla
       // segue pro xterm em vez de abrir um painel vazio.
       if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
-        if (crewDockWidth === 0) return
+        if (!hasCrew) return
         e.preventDefault()
         useCrewDockStore.getState().requestFocus()
         return
@@ -574,7 +577,7 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [overrides, toggleFiles, crewDockWidth])
+  }, [overrides, toggleFiles, hasCrew])
 
   // Abre Configurações sob demanda (ex: error state do Terminal, renderizado pelo
   // dockview fora desta árvore — ver requestOpenSettings).

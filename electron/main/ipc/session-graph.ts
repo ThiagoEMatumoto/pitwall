@@ -3,7 +3,12 @@ import { z } from 'zod'
 import { getDb } from '../services/db'
 import { broadcast, onBroadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
-import { buildSessionsFileIndex, isPidAlive, mapStatus } from '../services/session-activity'
+import {
+  buildSessionsFileIndex,
+  isPidAlive,
+  mapStatus,
+  ptyStatusFor,
+} from '../services/session-activity'
 import * as handoffStore from '../services/handoff-store'
 import {
   buildSessionGraph,
@@ -40,7 +45,16 @@ function liveSessionStates(): Map<string, LiveSessionState> {
   const index = buildSessionsFileIndex()
   const out = new Map<string, LiveSessionState>()
   for (const row of rows) {
-    const entry = row.cc_session_id ? index.get(row.cc_session_id) : undefined
+    // Sem id nativo (Codex): não há session file — o status é o da própria PTY.
+    if (!row.cc_session_id) {
+      out.set(row.id, {
+        status: ptyStatusFor(row.id),
+        lastActivityAt: ptyManager.getActivitySample(row.id)?.lastByteAt ?? null,
+        name: null,
+      })
+      continue
+    }
+    const entry = index.get(row.cc_session_id)
     const alive = entry ? isPidAlive(entry.pid) : false
     out.set(row.id, {
       status: entry && alive ? mapStatus(entry.status) : 'starting',

@@ -18,6 +18,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Map as MapIcon, Maximize } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { paneShowsLive } from '@/features/handoffs/crew'
 import './session-map.css'
 import { useAppStore } from '@/store/appStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
@@ -67,6 +68,7 @@ import { sameIdList, tailSubscription, tailText, type TailCandidate } from './ca
 import { advanceWorkingClocks, indicatorFor } from './card-indicator'
 import { MapLiveContext, useMinuteClock, type MapLive } from './map-live'
 import { MapStatusCounters } from './MapStatusCounters'
+import { usePendingAsks } from '@/features/handoffs/ConversationsTab'
 
 const nodeTypes = {
   session: SessionCardNode,
@@ -143,6 +145,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const terminalSizes = useCardViewStore((s) => s.terminalSizes)
   const terminalId = terminalOf(views)
+  const asks = usePendingAsks()
 
   // Estado de exibição dos cartões: lido do banco uma vez por escopo.
   useEffect(() => {
@@ -169,8 +172,9 @@ function SessionMapInner() {
       expandedMothers,
       views,
       terminalSizes,
+      asks,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, terminalSizes],
+    [graph, scope, canvas, inUse, expandedMothers, views, terminalSizes, asks],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -353,7 +357,7 @@ function SessionMapInner() {
     if (!terminalId) return
     const liveSession = liveSessions.find((x) => x.id === terminalId)
     const hasPane =
-      !!liveSession && panes.some((p) => p.session.ccSessionId === liveSession.ccSessionId)
+      !!liveSession && panes.some((p) => paneShowsLive(p, liveSession))
     const peeked =
       peekedSessionId(peekTarget) ??
       (peekTarget?.kind === 'handoff'

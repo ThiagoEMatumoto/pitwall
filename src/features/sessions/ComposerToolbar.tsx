@@ -48,6 +48,8 @@ interface Props {
   autoSummary?: { enabled: boolean | null; toggle: () => void }
   /** Cartão do mapa: inline só Interromper; o resto no "⋯". */
   compact?: boolean
+  /** Presente = Modelo/Esforço/Permissão operam a TUI do claude e somem; o motivo vai no tooltip. */
+  claudeOnlyReason?: string | null
 }
 
 function pendingLabel(pending: PendingSelection): string {
@@ -80,6 +82,7 @@ export function ComposerToolbar({
   summarize,
   autoSummary,
   compact = false,
+  claudeOnlyReason = null,
 }: Props) {
   const hasPending = !isPendingEmpty(pending)
   // Confirmação do Ctrl+C: o efeito não é instantâneo (a CLI só reage no
@@ -116,10 +119,11 @@ export function ComposerToolbar({
 
   // Disponibilidade é filtrada DEPOIS de separar inline/overflow: o layout fala
   // só de largura, e um controle ausente não pode abrir vaga inline pra outro.
+  const claudeControls = !claudeOnlyReason
   const available: Record<ToolbarControl, boolean> = {
-    model: true,
-    effort: true,
-    permission: true,
+    model: claudeControls,
+    effort: claudeControls,
+    permission: claudeControls,
     interrupt: Boolean(onInterrupt),
     mic: Boolean(voice),
     summarize: Boolean(summarize),
@@ -249,6 +253,15 @@ export function ComposerToolbar({
 
   return (
     <div ref={ref} className="flex items-center gap-2 px-1 pb-1">
+      {claudeOnlyReason && (
+        <span
+          data-testid="claude-only-controls"
+          title={claudeOnlyReason}
+          className="cursor-not-allowed whitespace-nowrap rounded px-1 text-[10px] text-[var(--color-text-dim)] opacity-60"
+        >
+          Modelo · Permissão
+        </span>
+      )}
       {inline.map((control) => nodes[control])}
       {sections.length > 0 && (
         <Menu

@@ -28,6 +28,8 @@ import {
   mapStatus,
   attentionReasonForPty,
 } from '../services/session-activity'
+import { livePtySessionInfo } from './live-session-pty'
+import { buildSessionEndpoint } from '../services/mcp/session-identity'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
@@ -46,10 +48,12 @@ import {
   resolveAdvisor,
   permissionModeForHandoffMode,
   HANDOFF_CHILD_SETTINGS_JSON,
+  assertAutonomousSpawnGuarded,
+  resolveCodexModel,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
-import type { LaunchOpts } from '../services/providers/types'
+import type { AgentProvider, LaunchOpts } from '../services/providers/types'
 import {
   buildImageFilename,
   isImageTempFile,
@@ -126,7 +130,8 @@ const toSession = (row: SessionRow): Session => ({
   provider: row.provider,
 })
 
-// Todo spawn interativo hoje é claude; o seam existe para Codex/OpenCode depois.
+// Default de todo spawn sem provider explícito, e o ÚNICO dos caminhos de
+// resume/relink: só o claude tem id nativo para retomar.
 const SESSION_PROVIDER: AgentProviderId = 'claude'
 
 function readPref(key: string): string | undefined {
@@ -193,6 +198,22 @@ function mcpConfigArg(internalSessionId: string | null): string {
     }
   }
   return getProvider(SESSION_PROVIDER).mcpInject({ configPath: mcpClientConfigPath() })
+}
+
+// Provider que recebe o endpoint direto (Codex): URL com o carimbo da sessão na
+// linha de comando, bearer pelo env da PTY. Sem arquivo de config por sessão.
+function mcpLaunch(
+  provider: AgentProvider,
+  internalSessionId: string,
+): { arg: string; env: Record<string, string> } {
+  if (provider.mcpVia === 'config-file') return { arg: mcpConfigArg(internalSessionId), env: {} }
+  const runtime = getMcpRuntime()
+  if (!runtime) return { arg: '', env: {} }
+  const { url } = buildSessionEndpoint(runtime, internalSessionId)
+  return {
+    arg: provider.mcpInject({ configPath: '', url }),
+    env: provider.mcpEnv?.({ token: runtime.token }) ?? {},
+  }
 }
 
 // O claude vive em ~/.local/bin e o env do Electron GUI não herda o PATH do rc.
@@ -278,6 +299,20 @@ export function sweepOrphanImageTemps(): void {
 // (arquitetura do repo + contexto da feature + texto livre) e grava o arquivo
 // temporário. ÚNICO caminho — spawn e resume passam por aqui, pra nunca mais
 // divergirem. NUNCA bloqueia o spawn: qualquer falha vira sessão sem o bloco.
+// Mesmo conteúdo do arquivo, como texto (provider sem flag de arquivo).
+function buildSessionSystemPromptOrNull(opts: {
+  repoId?: string | null
+  featureId?: string | null
+  systemPromptText?: string | null
+}): string | null {
+  try {
+    return buildSessionSystemPrompt(opts) || null
+  } catch (err) {
+    console.error('[sessions] system-prompt build failed:', err)
+    return null
+  }
+}
+
 function writeSessionSystemPromptFile(opts: {
   repoId?: string | null
   featureId?: string | null
@@ -373,7 +408,8 @@ function startSession(opts: {
   // spawn (é o caso do mcp-config por sessão: o arquivo tem o id no nome e no
   // endpoint). Omitido → gera aqui, como antes.
   id?: string
-  ccSessionId: string
+  // null = provider sem id nativo (Codex): a sessão vive só pelo sessions.id.
+  ccSessionId: string | null
   repoId: string | null
   cwd: string
   innerCmd: string
@@ -381,7 +417,10 @@ function startSession(opts: {
   initialCommand?: string
   cols?: number
   rows?: number
+  provider?: AgentProvider
+  env?: Record<string, string>
 }): Session {
+  const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
   const id = opts.id ?? randomUUID()
   const row: SessionRow = {
@@ -394,7 +433,7 @@ function startSession(opts: {
     status: 'running',
     started_at: Date.now(),
     ended_at: null,
-    provider: SESSION_PROVIDER,
+    provider: provider.id,
   }
   db.prepare(
     `INSERT INTO sessions
@@ -422,7 +461,8 @@ function startSession(opts: {
       cwd: opts.cwd,
       cols: opts.cols,
       rows: opts.rows,
-      env: sessionSpawnEnv(),
+      env: { ...sessionSpawnEnv(), ...opts.env },
+      sampleActivity: !provider.supports.nativeTranscript,
     })
   } catch (err) {
     db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
@@ -431,6 +471,9 @@ function startSession(opts: {
     )
     throw err
   }
+
+  // Sem índice nativo de status (~/.claude/sessions), o status vem da PTY.
+  if (!provider.supports.nativeTranscript) sessionActivityService.trackPty(row.id)
 
   if (opts.initialCommand) {
     injectInitialCommandOnFirstData(row.id, opts.initialCommand)
@@ -473,33 +516,51 @@ export function spawnSession(input: SpawnSessionInput): Session {
   const name = input.name?.trim() || defaultName
 
   if (!UUID_RE.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`)
-  const command = resolveAgentCommand()
+  // Id desconhecido lança aqui, antes de qualquer efeito (linha no banco, PTY).
+  const provider = getProvider(input.provider)
+  const command = provider.resolveCommand(readPref)
+
+  // Permission mode validado contra a whitelist; em modo autônomo aplica SEMPRE o
+  // denylist destrutivo canônico (o renderer não consegue enfraquecê-lo). Filha
+  // de handoff num provider sem trava equivalente é recusada antes do spawn.
+  const permissionMode = resolvePermissionMode(input.permissionMode)
+  assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
+  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
 
   // Defesa em profundidade: só passa adiante o valor que estiver na whitelist.
-  const model = resolveModel(input.model)
+  const model =
+    provider.id === 'claude' ? resolveModel(input.model) : resolveCodexModel(input.model)
   const effort = resolveEffort(input.effort)
   const advisorModel = resolveAdvisor(input.advisorModel)
 
-  const systemPromptFilePath = writeSessionSystemPromptFile({
-    repoId,
-    featureId: input.featureId,
-    systemPromptText: input.systemPromptText,
-  })
-
-  // Permission mode validado contra a whitelist; em modo autônomo aplica SEMPRE o
-  // denylist destrutivo canônico (o renderer não consegue enfraquecê-lo).
-  const permissionMode = resolvePermissionMode(input.permissionMode)
-  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
+  // Provider com arquivo de system-prompt (claude) recebe o path; os outros, o texto.
+  const systemPromptFilePath =
+    provider.id === 'claude'
+      ? writeSessionSystemPromptFile({
+          repoId,
+          featureId: input.featureId,
+          systemPromptText: input.systemPromptText,
+        })
+      : null
+  const systemPromptText =
+    provider.id === 'claude'
+      ? null
+      : buildSessionSystemPromptOrNull({
+          repoId,
+          featureId: input.featureId,
+          systemPromptText: input.systemPromptText,
+        })
 
   // Id INTERNO (sessions.id) gerado aqui, antes do innerCmd: é ele que carimba
   // a identidade da sessão no mcp-config, e o mesmo valor vai pro startSession.
   const internalSessionId = randomUUID()
+  const mcp = mcpLaunch(provider, internalSessionId)
 
-  const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+  const innerCmd = provider.buildLaunch({
     command,
     sessionId,
     name,
-    mcpConfigArg: mcpConfigArg(internalSessionId),
+    mcpConfigArg: mcp.arg,
     model,
     effort,
     advisorModel,
@@ -510,11 +571,13 @@ export function spawnSession(input: SpawnSessionInput): Session {
     // main (o renderer não escolhe settings — só sinaliza que é filha).
     settingsJson: input.handoffChild ? HANDOFF_CHILD_SETTINGS_JSON : null,
     initialPrompt: input.initialPrompt,
+    systemPromptText,
   })
 
   const session = startSession({
     id: internalSessionId,
-    ccSessionId: sessionId,
+    // O --session-id só existe no claude; sem id nativo a linha nasce sem ele.
+    ccSessionId: provider.supports.resume ? sessionId : null,
     repoId,
     cwd,
     innerCmd,
@@ -522,7 +585,16 @@ export function spawnSession(input: SpawnSessionInput): Session {
     initialCommand: input.initialCommand,
     cols: input.cols,
     rows: input.rows,
+    provider,
+    env: mcp.env,
   })
+
+  // Sem `-n` na CLI (Codex): o nome só existe aqui, e é dele que a lista viva
+  // e o mapa tiram o rótulo.
+  if (!provider.supports.nativeTranscript && !input.handoffChild) {
+    db.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(name, session.id)
+    return { ...session, title: name }
+  }
 
   // O alias da filha é o ENDEREÇO do peer (SendMessage.to == o `-n <name>`).
   // Espelha em sessions.title como 'manual' pra o rename automático do Claude
@@ -840,6 +912,7 @@ export function registerSessionIpc(): void {
       systemPromptText: input.systemPromptText,
       permissionMode: (input.permissionMode ?? undefined) as SpawnSessionInput['permissionMode'],
       handoffChild: true,
+      provider: input.provider,
     }),
   )
 
@@ -1075,6 +1148,7 @@ export function registerSessionIpc(): void {
         .prepare(
           `SELECT
              s.cc_session_id AS cc_session_id,
+             s.provider AS provider,
              s.title AS session_title,
              s.title_source AS session_title_source,
              r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
@@ -1084,14 +1158,27 @@ export function registerSessionIpc(): void {
            FROM sessions s
            LEFT JOIN repos r ON r.id = s.repo_id
            LEFT JOIN projects p ON p.id = r.project_id
-           WHERE s.id = ? AND s.cc_session_id IS NOT NULL`,
+           WHERE s.id = ?`,
         )
-        .get(sessionId) as LiveSessionJoinRow | undefined
+        .get(sessionId) as
+        | (Omit<LiveSessionJoinRow, 'cc_session_id'> & {
+            cc_session_id: string | null
+            provider: AgentProviderId | null
+          })
+        | undefined
 
       if (!row) continue
+      // Sem id nativo (Codex): status pela PTY, chaveada pelo sessions.id.
+      if (!row.cc_session_id) {
+        out.push(livePtySessionInfo(sessionId, row))
+        continue
+      }
       const ccSessionId = row.cc_session_id
 
-      const { repo, projectName, projectIcon, projectColor } = mapLiveSessionRepo(row)
+      const { repo, projectName, projectIcon, projectColor } = mapLiveSessionRepo({
+        ...row,
+        cc_session_id: ccSessionId,
+      })
 
       const transcript = findTranscriptPath(ccSessionId)
       const indexed = liveIndex.get(ccSessionId)
@@ -1146,6 +1233,7 @@ export function registerSessionIpc(): void {
         titleSource: row.session_title_source,
         attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
         cwd: isLive ? indexed!.cwd : null,
+        provider: row.provider ?? 'claude',
       })
     }
 

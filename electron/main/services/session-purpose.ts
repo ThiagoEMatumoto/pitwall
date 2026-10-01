@@ -8,6 +8,7 @@
 // pedido do usuário + o que o agente respondeu depois. Nunca em massa — custo.
 import { openSync, readSync, closeSync, readFileSync, fstatSync } from 'node:fs'
 import type { ChatMessage } from '../../../shared/types/chat'
+import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { parseChatMessages } from './chat-transcript'
 import { findTranscriptPath } from './transcript-path'
 import { transcriptIndex } from './transcript-index'
@@ -61,7 +62,7 @@ const MIN_PROMPT_CHARS = 3
 // O prompt como ele serve pra identificar a sessão, ou null se não serve.
 export function cleanPrompt(raw: string): string | null {
   let text = raw.trim()
-  if (KICKOFF_RE.test(text)) return null
+  if (KICKOFF_RE.test(text) || isAgentAskEnvelope(text)) return null
   if (BATON_KICKOFF_RE.test(text)) {
     const instruction = BATON_INSTRUCTION_RE.exec(text)?.[1]?.trim()
     if (!instruction) return null

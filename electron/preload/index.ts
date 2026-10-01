@@ -112,6 +112,7 @@ import type {
   DesignAskInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
+import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
 import type {
   PromptQueueSnapshot,
@@ -387,6 +388,10 @@ const api: Api = {
     get: () => invoke('session-graph:get'),
     handoffEvents: (input: { handoffId: string }) => invoke('handoff-events:list', input),
     onUpdated: (handler) => subscribe<SessionGraph>('session-graph:updated', handler),
+  },
+  agentBus: {
+    list: () => invoke('agent-bus:list'),
+    onUpdated: (handler) => subscribe<AgentBusSnapshot>('agent-bus:updated', handler),
   },
   canvas: {
     get: (input) => invoke('canvas:get', input),

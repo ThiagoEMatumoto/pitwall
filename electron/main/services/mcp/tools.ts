@@ -13,6 +13,7 @@ import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
 import { meetingTools } from './meeting-tools'
 import { canvasTools } from './canvas-tools'
+import { agentTools } from './agent-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -37,13 +38,18 @@ import { injectIntoChild } from '../handoff/inject'
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
-import { getActivityFor } from '../session-activity'
+import { getActivityFor, ptyStatusFor } from '../session-activity'
 import { ptyManager } from '../pty-manager'
 import { getDb } from '../db'
 import { getPref } from '../prefs-store'
-import { permissionModeForHandoffMode } from '../spawn-flags'
+import {
+  assertAutonomousSpawnGuarded,
+  permissionModeForHandoffMode,
+  resolvePermissionMode,
+} from '../spawn-flags'
 import { randomUUID } from 'node:crypto'
 import type {
+  AgentProviderId,
   Diagram,
   DiagramLibraryItem,
   DiagramScene,
@@ -566,16 +572,34 @@ function resolveRepo(ref: string): ResolvedRepo {
 
 // Resolve a atividade ao vivo da sessão-filha de um handoff: childSessionId
 // (sessions.id) → cc_session_id → derivação do session-activity (status do PID +
-// tail do JSONL). Null se não há filha atrelada, se ela não tem cc_session_id
-// ainda, ou se não está mais no índice. Reusa getActivityFor (mesma derivação do
-// watcher) — sem duplicar a lógica de status/enrichment.
+// tail do JSONL). Null se não há filha atrelada ou se ela não está mais no índice.
+// Reusa getActivityFor (mesma derivação do watcher) — sem duplicar a lógica de
+// status/enrichment. Filha sem id nativo (Codex): status pela PTY.
 function childActivity(childSessionId: string | null): ReturnType<typeof getActivityFor> {
   if (!childSessionId) return null
   const row = getDb()
-    .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-    .get(childSessionId) as { cc_session_id: string | null } | undefined
-  if (!row?.cc_session_id) return null
-  return getActivityFor(row.cc_session_id)
+    .prepare('SELECT cc_session_id, provider FROM sessions WHERE id = ?')
+    .get(childSessionId) as { cc_session_id: string | null; provider: string | null } | undefined
+  if (!row) return null
+  if (row.cc_session_id) return getActivityFor(row.cc_session_id)
+  if (!row.provider || row.provider === 'claude') return null
+  return {
+    status: ptyStatusFor(childSessionId),
+    lastActivityAt: ptyManager.getActivitySample(childSessionId)?.lastByteAt ?? null,
+    lastText: null,
+    tokens: undefined,
+  }
+}
+
+function handoffDispatchMessage(
+  alias: string,
+  repoLabel: string,
+  provider: AgentProviderId | undefined,
+): string {
+  if (provider && provider !== 'claude') {
+    return `Filha "${alias}" despachada para ${repoLabel}. Ela é ${provider}, sem canal cross-session: fale com ela por handoff_message (cola no terminal dela) e acompanhe por handoff_result.`
+  }
+  return `Filha "${alias}" despachada para ${repoLabel}. Mande AGORA a primeira SendMessage({ to: "${alias}", ... }) — é ela que abre o canal de volta (a filha responde a quem escreveu primeiro).`
 }
 
 // Resolve label+role de um repo por id (pra descrever a ponta oposta de uma aresta).
@@ -607,6 +631,9 @@ const sessionHandoffSchema = z.object({
   // Despacha mesmo havendo um handoff ativo pro mesmo repo-alvo (default: recusa
   // com erro, sem entregar o handle da filha que já está lá).
   force: z.boolean().optional(),
+  // CLI da filha. Default 'claude'. 'codex' (experimental) só sobe em mode
+  // 'plan': sem denylist destrutivo, auto-edits autônomo é recusado no spawn.
+  provider: z.enum(['claude', 'codex']).optional(),
 })
 
 const handoffResultSchema = z.object({ handoffId: z.string().min(1) })
@@ -718,10 +745,25 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it; pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result.',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it; pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
+        const provider = input.provider ?? 'claude'
+        // Recusa ANTES de criar o handoff: filha Codex que editaria sem trava
+        // nunca vira linha no inbox. O spawnSession repete a checagem (autoridade).
+        assertAutonomousSpawnGuarded(
+          provider,
+          resolvePermissionMode(permissionModeForHandoffMode(input.mode ?? 'plan')),
+          true,
+        )
+        // O gate humano spawna pelo renderer, que não sabe o provider (o handoff
+        // não o guarda): a filha subiria como claude em silêncio.
+        if (provider !== 'claude' && getPref('handoffs.requireApproval', false)) {
+          throw new Error(
+            'provider "codex" não é suportado com a aprovação humana ligada (pref handoffs.requireApproval). Desligue a aprovação ou use provider "claude".',
+          )
+        }
 
         // Reconcilia órfãos ANTES do dedup: filha morta/crashada não pode barrar
         // um despacho novo pro mesmo repo-alvo como falso-ativo.
@@ -807,6 +849,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           handoffId,
           alias,
           mode,
+          provider: input.provider,
         })
 
         const handoff = handoffStore.create({
@@ -849,6 +892,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             initialPrompt: kickoff,
             systemPromptText: composed,
             permissionMode: permissionModeForHandoffMode(mode),
+            provider: input.provider,
           })
           const running = handoffStore.markRunning(handoffId, child.id)
           notify.broadcast('handoff:updated', running)
@@ -856,7 +900,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             handoffId,
             alias,
             status: running.status,
-            message: `Filha "${alias}" despachada para ${target.label}. Mande AGORA a primeira SendMessage({ to: "${alias}", ... }) — é ela que abre o canal de volta (a filha responde a quem escreveu primeiro).`,
+            message: handoffDispatchMessage(alias, target.label, input.provider),
           })
         } catch (err) {
           // Spawn falhou (repo sumiu do disco, PTY não subiu): o handoff não pode
@@ -1479,6 +1523,7 @@ export function buildTools(
     ...videoTools(notify),
     ...meetingTools(notify),
     ...canvasTools(notify, ctx),
+    ...agentTools(ctx),
     ...serviceTools(ctx),
   ]
 }

@@ -1,4 +1,4 @@
-import type { Session } from '../../../../shared/types/ipc'
+import type { AgentProviderId, Session } from '../../../../shared/types/ipc'
 
 // Seam leaf (sem electron) pro spawn da sessão-filha disparado direto pelo MCP.
 // A implementação real é spawnSession (ipc/sessions.ts, que puxa electron + PTY);
@@ -16,6 +16,8 @@ export interface SpawnHandoffChildInput {
   // Prompt composto do handoff, entregue via --append-system-prompt-file.
   systemPromptText: string
   permissionMode?: string | null
+  // CLI da filha. Ausente = claude.
+  provider?: AgentProviderId
 }
 
 type SpawnHandoffChildFn = (input: SpawnHandoffChildInput) => Session

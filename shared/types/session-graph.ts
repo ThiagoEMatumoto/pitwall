@@ -15,6 +15,8 @@ export interface SessionGraphNode {
   // Mesma precedência do nome da aba: rename manual > nome vivo do CLI > título
   // salvo > label do repo.
   title: string
+  // Nome vivo do CLI (o `-n`): o endereço do SendMessage, que o rename não muda.
+  cliName?: string | null
   projectId: string | null
   repoId: string | null
   repoLabel: string | null

@@ -67,6 +67,15 @@ export interface MapInput {
   // Estado de exibição de cada cartão (ausente = 'open') e o tamanho do terminal.
   views?: ViewMap
   terminalSizes?: Readonly<Record<string, { w: number; h: number }>>
+  // Asks agente↔agente pendentes (P7): fio temporário até a resposta/expiração.
+  asks?: readonly PendingAsk[]
+}
+
+export interface PendingAsk {
+  id: string
+  from: string
+  to: string
+  text: string
 }
 
 export function cardSize(view: CardViewState, terminal?: { w: number; h: number }): Size {
@@ -124,7 +133,7 @@ export interface NoteData {
   [key: string]: unknown
 }
 
-export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'feature' | 'note'
+export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'feature' | 'note' | 'ask'
 
 export interface MapEdgeData {
   kind: MapEdgeKind
@@ -588,6 +597,20 @@ function graphEdges(
   return out.filter((e) => has(e.source) && has(e.target))
 }
 
+const ASK_LABEL_MAX = 80
+
+function askEdges(asks: readonly PendingAsk[], has: (id: string) => boolean): MapEdge[] {
+  return asks
+    .map((a) =>
+      edge(`e:a:${a.id}`, sessionNodeId(a.from), sessionNodeId(a.to), {
+        kind: 'ask',
+        live: true,
+        label: a.text.length > ASK_LABEL_MAX ? `${a.text.slice(0, ASK_LABEL_MAX - 1)}…` : a.text,
+      }),
+    )
+    .filter((e) => has(e.source) && has(e.target))
+}
+
 export interface FlowResult {
   nodes: MapNode[]
   edges: MapEdge[]
@@ -676,9 +699,11 @@ export function graphToFlow(input: MapInput): FlowResult {
           kind: 'note',
         }),
       ),
+    ...askEdges(input.asks ?? [], (id) => ids.has(id)),
   ]
   // feature (mesma frente) só aparece no foco, sempre; repoDep só com o mapa cheio.
-  const busy = raw.length > EDGE_BUSY_THRESHOLD
+  // O fio de ask é temporário e não conta: senão cada pergunta piscaria o mapa.
+  const busy = raw.filter((e) => e.data!.kind !== 'ask').length > EDGE_BUSY_THRESHOLD
   const edges = raw.map((e) => {
     const kind = e.data!.kind
     const aggregate = kind === 'feature' || (busy && kind === 'repoDep')

@@ -170,3 +170,28 @@ describe('composeHandoffPrompt', () => {
     expect(auto).toMatch(/auto-edits|destrutivos/i)
   })
 })
+
+describe('composeHandoffPrompt — filha Codex', () => {
+  // O Codex sobe sem -n e sem inbox cross-session: SendMessage não existe pra ele.
+  const codex = composeHandoffPrompt({
+    targetRepoLabel: 'backend',
+    targetRepoPath: '/repos/backend',
+    task: 'Investigar a fila',
+    edges: [],
+    handoffId: 'h-9',
+    alias: 'leitor-fila',
+    mode: 'plan',
+    provider: 'codex',
+  })
+
+  it('não manda responder por SendMessage nem cita <cross-session-message>', () => {
+    expect(codex).not.toContain('SendMessage')
+    expect(codex).not.toContain('<cross-session-message>')
+  })
+
+  it('o canal é o terminal (handoff_message) e o log é handoff_progress/handoff_ask', () => {
+    expect(codex).toContain('handoff_progress')
+    expect(codex).toContain('handoff_ask')
+    expect(codex).toContain('handoff_report')
+  })
+})

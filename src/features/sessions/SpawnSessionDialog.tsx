@@ -20,13 +20,27 @@ import { setNextPaneMode, type PaneMode } from '@/store/appStore'
 import { PERMISSION_OPTIONS } from './permission-modes'
 import { MODEL_OPTIONS, EFFORT_OPTIONS, ADVISOR_OPTIONS } from './spawn-options'
 import { WORK_MODE_PRESETS } from './work-mode-presets'
+import { PROVIDER_LABELS } from '../../../shared/agent-providers'
 import type {
   AdvisorModel,
+  AgentProviderId,
   EffortLevel,
   FeatureWithStats,
   PermissionMode,
   Repo,
 } from '../../../shared/types/ipc'
+
+const PROVIDER_OPTIONS: { value: AgentProviderId; label: string }[] = [
+  { value: 'claude', label: PROVIDER_LABELS.claude },
+  { value: 'codex', label: PROVIDER_LABELS.codex },
+]
+
+// O Codex não tem --permission-mode: o main traduz para sandbox. Só os dois
+// modos que mudam alguma coisa lá (plan → read-only; o resto → workspace-write).
+const CODEX_PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
+  { value: 'default', label: 'Edita o workspace' },
+  { value: 'plan', label: 'Somente leitura' },
+]
 
 const PANE_MODE_OPTIONS = [
   { value: 'terminal', label: 'Terminal' },
@@ -48,7 +62,11 @@ interface Props {
     permission: PermissionMode,
     advisorModel: AdvisorModel | undefined,
     initialCommand: string | undefined,
+    provider: AgentProviderId,
   ) => void
+  // Mostra o seletor de CLI (Claude Code | Codex). Só quem repassa o provider
+  // ao spawn liga isto — os outros callers seguem só com o claude.
+  providerChoice?: boolean
   // Saída ALTERNATIVA: abrir como sessão-filha de handoff em vez de aba. A
   // presença do callback é o que habilita a opção no diálogo — caller que não
   // sabe criar filha simplesmente não a oferece (evita um 8º parâmetro posicional
@@ -71,7 +89,10 @@ export function SpawnSessionDialog({
   onConfirm,
   onConfirmChild,
   initialFeatureId,
+  providerChoice = false,
 }: Props) {
+  const [provider, setProvider] = useState<AgentProviderId>('claude')
+  const isCodex = provider === 'codex'
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
   const [features, setFeatures] = useState<FeatureWithStats[]>([])
@@ -106,6 +127,9 @@ export function SpawnSessionDialog({
   const [hasRepoDefaults, setHasRepoDefaults] = useState(false)
   const [saveAsRepoDefault, setSaveAsRepoDefault] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
+  // O que o Codex desligou ao ser escolhido volta quando o Claude é reescolhido:
+  // olhar o Codex e voltar não pode trocar o modo pré-preenchido do repo.
+  const claudeChoice = useRef<{ permission: PermissionMode; asChild: boolean } | null>(null)
 
   function applyDefaults(d: RepoSessionDefaults) {
     setModel(d.model)
@@ -158,6 +182,8 @@ export function SpawnSessionDialog({
     setAsChild(false)
     setChildTask('')
     setMotherSessionId(null)
+    setProvider('claude')
+    claudeChoice.current = null
     // Pré-preenche modelo + effort + permissão + advisor: override do repo
     // (app_prefs session.defaults.<repoId>) > defaults globais (Settings).
     void Promise.all([
@@ -219,9 +245,26 @@ export function SpawnSessionDialog({
     setConfirmingBypass(false)
   }
 
+  function pickProvider(v: AgentProviderId) {
+    if (v === provider) return
+    setProvider(v)
+    setConfirmingBypass(false)
+    if (v === 'codex') {
+      claudeChoice.current = { permission, asChild }
+      setAsChild(false)
+      if (permission !== 'plan') setPermission('default')
+      return
+    }
+    const saved = claudeChoice.current
+    claudeChoice.current = null
+    if (!saved) return
+    setPermission(saved.permission)
+    setAsChild(saved.asChild)
+  }
+
   function confirm() {
     // bypassPermissions pula todas as permissões — pede um 2º clique de confirmação.
-    if (permission === 'bypassPermissions' && !confirmingBypass) {
+    if (!isCodex && permission === 'bypassPermissions' && !confirmingBypass) {
       setConfirmingBypass(true)
       return
     }
@@ -232,6 +275,22 @@ export function SpawnSessionDialog({
       const task = childTask.trim()
       if (!task || !motherSessionId) return
       onConfirmChild({ task, motherSessionId, featureId, permission })
+      onClose()
+      return
+    }
+    if (isCodex) {
+      // Sem Chat View no Codex: a pane abre no terminal, seja qual for o default.
+      setNextPaneMode('terminal')
+      onConfirm(
+        name.trim() || undefined,
+        featureId,
+        undefined,
+        undefined,
+        permission,
+        undefined,
+        undefined,
+        'codex',
+      )
       onClose()
       return
     }
@@ -255,6 +314,7 @@ export function SpawnSessionDialog({
       permission,
       advisorModel || undefined,
       initialCommand || undefined,
+      'claude',
     )
     onClose()
   }
@@ -276,28 +336,63 @@ export function SpawnSessionDialog({
       }
     >
       <div className="flex flex-col gap-4">
-        <div>
-          <label className="mb-1 block text-xs text-[var(--color-text-dim)]">
-            Modo de trabalho
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {WORK_MODE_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => applyPreset(preset.id)}
-                title={preset.description}
-                className={`rounded-full border px-3 py-1 text-xs transition ${
-                  selectedPreset === preset.id
-                    ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                    : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
+        {providerChoice && (
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Agente</label>
+            <div
+              data-testid="spawn-provider"
+              className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]"
+            >
+              {PROVIDER_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-provider={opt.value}
+                  aria-pressed={provider === opt.value}
+                  onClick={() => pickProvider(opt.value)}
+                  className={`px-3 py-1.5 text-xs transition ${
+                    provider === opt.value
+                      ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                      : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {isCodex && (
+              <div className="mt-1.5 text-[11px] text-[var(--color-text-dim)]">
+                Experimental: abre no terminal, sem Chat View e sem retomar depois. O status vem da
+                tela (trabalhando enquanto imprime, ocioso quando para).
+              </div>
+            )}
           </div>
-        </div>
+        )}
+
+        {!isCodex && (
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">
+              Modo de trabalho
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {WORK_MODE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyPreset(preset.id)}
+                  title={preset.description}
+                  className={`rounded-full border px-3 py-1 text-xs transition ${
+                    selectedPreset === preset.id
+                      ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <Input
           ref={nameRef}
@@ -310,7 +405,7 @@ export function SpawnSessionDialog({
           }}
         />
 
-        {onConfirmChild && (
+        {onConfirmChild && !isCodex && (
           <div className="flex flex-col gap-3 rounded-md border border-[var(--color-border)] p-3">
             <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text-dim)]">
               <input
@@ -347,97 +442,99 @@ export function SpawnSessionDialog({
           </div>
         )}
 
-        <div className="flex flex-wrap gap-4">
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Modelo</label>
-            <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
-              {MODEL_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setModel(opt.value)}
-                  className={`px-3 py-1.5 text-xs transition ${
-                    model === opt.value
-                      ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                      : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Esforço</label>
-            <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
-              {EFFORT_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setEffort(opt.value)}
-                  className={`px-3 py-1.5 text-xs transition ${
-                    effort === opt.value
-                      ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                      : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Advisor</label>
-            <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
-              {ADVISOR_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setAdvisorModel(opt.value)}
-                  className={`px-3 py-1.5 text-xs transition ${
-                    advisorModel === opt.value
-                      ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                      : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            {advisorModel && (
-              <div className="mt-1 text-[10px] text-[var(--color-text-dim)]">
-                Experimental — só Anthropic API direta.
+        {!isCodex && (
+          <div className="flex flex-wrap gap-4">
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Modelo</label>
+              <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
+                {MODEL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setModel(opt.value)}
+                    className={`px-3 py-1.5 text-xs transition ${
+                      model === opt.value
+                        ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
-            )}
-          </div>
+            </div>
 
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Abrir em</label>
-            <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
-              {PANE_MODE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setPaneMode(opt.value)}
-                  className={`px-3 py-1.5 text-xs transition ${
-                    paneMode === opt.value
-                      ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                      : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Esforço</label>
+              <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
+                {EFFORT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setEffort(opt.value)}
+                    className={`px-3 py-1.5 text-xs transition ${
+                      effort === opt.value
+                        ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Advisor</label>
+              <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
+                {ADVISOR_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setAdvisorModel(opt.value)}
+                    className={`px-3 py-1.5 text-xs transition ${
+                      advisorModel === opt.value
+                        ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {advisorModel && (
+                <div className="mt-1 text-[10px] text-[var(--color-text-dim)]">
+                  Experimental — só Anthropic API direta.
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Abrir em</label>
+              <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]">
+                {PANE_MODE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setPaneMode(opt.value)}
+                    className={`px-3 py-1.5 text-xs transition ${
+                      paneMode === opt.value
+                        ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-dim)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <div>
           <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Permissão</label>
           <div className="inline-flex max-w-full flex-wrap overflow-hidden rounded-md border border-[var(--color-border)]">
-            {PERMISSION_OPTIONS.map((opt) => (
+            {(isCodex ? CODEX_PERMISSION_OPTIONS : PERMISSION_OPTIONS).map((opt) => (
               <button
                 key={opt.value}
                 type="button"
@@ -452,35 +549,37 @@ export function SpawnSessionDialog({
               </button>
             ))}
           </div>
-          {permission === 'bypassPermissions' && (
+          {!isCodex && permission === 'bypassPermissions' && (
             <div className="mt-1.5 text-[11px] text-[var(--color-danger)]">
-              Bypass pula TODAS as permissões — o Claude executa qualquer ação sem
-              perguntar. Clique em "Confirmar bypass" para prosseguir.
+              Bypass pula TODAS as permissões — o Claude executa qualquer ação sem perguntar. Clique
+              em "Confirmar bypass" para prosseguir.
             </div>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text-dim)]">
-            <input
-              type="checkbox"
-              checked={saveAsRepoDefault}
-              onChange={(e) => setSaveAsRepoDefault(e.target.checked)}
-              className="size-3.5 accent-[var(--color-accent)]"
-            />
-            Salvar como padrão deste repo (modelo/esforço/permissão/advisor/painel)
-          </label>
-          {hasRepoDefaults && (
-            <button
-              type="button"
-              onClick={clearRepoDefaults}
-              className="text-[11px] text-[var(--color-text-dim)] underline decoration-dotted hover:text-[var(--color-text)]"
-              title="Remove o override deste repo e volta aos defaults globais"
-            >
-              Padrões deste repo aplicados — limpar
-            </button>
-          )}
-        </div>
+        {!isCodex && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text-dim)]">
+              <input
+                type="checkbox"
+                checked={saveAsRepoDefault}
+                onChange={(e) => setSaveAsRepoDefault(e.target.checked)}
+                className="size-3.5 accent-[var(--color-accent)]"
+              />
+              Salvar como padrão deste repo (modelo/esforço/permissão/advisor/painel)
+            </label>
+            {hasRepoDefaults && (
+              <button
+                type="button"
+                onClick={clearRepoDefaults}
+                className="text-[11px] text-[var(--color-text-dim)] underline decoration-dotted hover:text-[var(--color-text)]"
+                title="Remove o override deste repo e volta aos defaults globais"
+              >
+                Padrões deste repo aplicados — limpar
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="w-full">
           <label className="mb-1 block text-xs text-[var(--color-text-dim)]">

@@ -13,9 +13,12 @@ import {
   buildSessionsFileIndex,
   isPidAlive,
   mapStatus,
+  ptyStatusFor,
+  sessionActivityService,
   setPromptQueueTurnHook,
 } from '../services/session-activity'
 import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
+import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
@@ -42,6 +45,8 @@ const tailSubscribeSchema = z.object({
 })
 
 function statusOf(ptyId: string): LiveStatus | null {
+  // Provider sem índice nativo (Codex): o status é o da PTY.
+  if (sessionActivityService.isPtyTracked(ptyId)) return ptyStatusFor(ptyId)
   const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(ptyId) as
     { cc_session_id: string | null } | undefined
   if (!row?.cc_session_id) return null
@@ -58,6 +63,8 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
   const ev = snapshot.lastEvent
   if (!ev || ev.id === lastNotifiedEventId) return
   if (ev.kind !== 'expired' && ev.kind !== 'session-gone') return
+  // Pergunta de agente: quem perguntou fica sabendo pelo agent_check, não o usuário.
+  if (isAgentAskEnvelope(ev.text)) return
   lastNotifiedEventId = ev.id
   notify({
     title: 'Mensagem não entregue',
@@ -71,6 +78,9 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
 export const promptQueue = new PromptQueue({
   isRunning: (id) => ptyManager.isRunning(id),
   status: statusOf,
+  // Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
+  // tela parada parece 'idle' — um \r ali aprovaria. null recusa 'quando terminar'
+  // e deixa só o 'agora' explícito do usuário.
   screen: (id) => (tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)),
   handoffAsking: (id) => {
     const h = getByChildSession(id)
@@ -98,9 +108,11 @@ export function registerSendPromptIpc(): void {
   if (registered) return
   registered = true
   // A borda vem por ccSessionId; a fila é por PTY. Só PTY espelhada entra em
-  // 'quando terminar', e o espelho é quem guarda o cc→pty.
-  setPromptQueueTurnHook((cc) => {
-    const ptyId = tuiMenuWatch.ptyForCc(cc)
+  // 'quando terminar', e o espelho é quem guarda o cc→pty. Sessão sem id nativo
+  // (Codex) já chega pelo sessions.id, que é o próprio id da PTY.
+  setPromptQueueTurnHook((key) => {
+    const ptyId =
+      tuiMenuWatch.ptyForCc(key) ?? (sessionActivityService.isPtyTracked(key) ? key : null)
     if (ptyId) promptQueue.onTurnEnded(ptyId)
   })
   ptyManager.on('exit', (e) => promptQueue.onSessionExit(e.sessionId))

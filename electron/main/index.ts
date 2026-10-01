@@ -21,6 +21,7 @@ import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
 import { registerCanvasIpc } from './ipc/canvas'
 import { registerSendPromptIpc } from './ipc/send-prompt'
+import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
 import { registerDialogIpc } from './ipc/dialog'
@@ -314,6 +315,7 @@ app.whenReady().then(async () => {
   registerSessionGraphIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
+  registerAgentBusIpc()
   registerRepoFilesIpc()
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
   // composer) deixados por sessões de execuções anteriores.

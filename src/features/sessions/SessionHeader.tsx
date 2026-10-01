@@ -44,6 +44,9 @@ interface Props {
   error: string | null
   mode: PaneMode
   onToggleMode?: () => void
+  // Chat indisponível para esta sessão (provider sem transcript legível): o
+  // toggle aparece desabilitado explicando o porquê, em vez de sumir.
+  toggleDisabledReason?: string | null
   onMinimize: () => void
   onEndSession: () => void
   // Passar o bastão: sobe uma sessão LIMPA com o briefing destilado desta. Fica
@@ -95,6 +98,7 @@ export function SessionHeader({
   error,
   mode,
   onToggleMode,
+  toggleDisabledReason = null,
   onMinimize,
   onEndSession,
   onPassBaton,
@@ -322,6 +326,16 @@ export function SessionHeader({
           >
             <Icon as={mode === 'terminal' ? MessageSquare : SquareTerminal} size={13} />
           </button>
+        )}
+        {!onToggleMode && toggleDisabledReason && tier !== 'narrow' && (
+          <span
+            data-testid="chat-toggle-disabled"
+            title={`Chat — ${toggleDisabledReason}`}
+            aria-label={`Chat indisponível: ${toggleDisabledReason}`}
+            className="cursor-not-allowed rounded p-1 opacity-40"
+          >
+            <Icon as={MessageSquare} size={13} />
+          </span>
         )}
         {/* Ícones consistentes com as tabs (lucide): Minus = minimizar, Power =
             encerrar (hover danger). Tooltip/aria-label preservam o texto antigo. */}
