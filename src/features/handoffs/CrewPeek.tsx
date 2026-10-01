@@ -12,7 +12,16 @@ import { stepLift } from '@/features/session-canvas/card-view'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { StatusBadge, contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
+import {
+  STATUS_COLOR,
+  STATUS_LABEL,
+  SUCCESSOR_PENDING_BADGE,
+  StatusBadge,
+  childIdentity,
+  contextLabel,
+  liveActivityLabel,
+  liveBadgeFor,
+} from './HandoffCard'
 import {
   crewNeedsAttention,
   crewResumedAfterQuestion,
@@ -294,11 +303,15 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   }, [onClose, mode])
 
   const titleId = useId()
-  const alias = splitAlias(live?.title)
+  // Bastão de uma filha: a sucessora pode ainda não estar em liveSessions.
+  // Mesma identidade do card (childIdentity), senão o header e o HUD diziam
+  // "filha encerrou" no meio de uma troca que deu certo.
+  const identity = handoff ? childIdentity(handoff, liveSessions) : null
+  const alias = splitAlias(live?.title ?? identity?.title)
   const repoLabel = handoff
     ? (handoff.targetRepoLabel ?? handoff.targetRepoId)
     : (live?.repo?.label ?? 'Avulsa')
-  const badge = liveBadgeFor(live ?? undefined)
+  const badge = identity?.successorPending ? SUCCESSOR_PENDING_BADGE : liveBadgeFor(live ?? undefined)
   const activityLabel = liveActivityLabel(live?.lastActivityAt ?? null, Date.now())
   const ctxLabel = contextLabel(live?.tokens)
 
@@ -411,6 +424,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                     borderColor: `color-mix(in srgb, ${badge.color} 45%, transparent)`,
                     background: `color-mix(in srgb, ${badge.color} 12%, transparent)`,
                   }}
+                  data-testid="peek-live-badge"
                   title="Estado ao vivo da sessão-filha"
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: badge.color }} />
@@ -522,6 +536,11 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                 chrome="bare"
                 leaseHost="modal"
                 fontSize={lift ? Math.max(LIFT_FONT_PX, prefFontSize) : undefined}
+                hudStatus={
+                  blocked && handoff
+                    ? { label: STATUS_LABEL.needs_input, color: STATUS_COLOR.needs_input }
+                    : badge
+                }
                 onClose={() => onClose()}
               />
             </div>

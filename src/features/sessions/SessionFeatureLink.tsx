@@ -39,7 +39,9 @@ export function SessionFeatureLink({ feature, sessionId, repoId = null }: Props)
 
   function pick(featureId: string | null) {
     setOpen(false)
-    if (!sessionId || featureId === null || featureId === feature?.id) return
+    // A mesma feature também grava: confirmar o vínculo da heurística o torna
+    // do usuário (a resolução contínua deixa de mexer nesta sessão).
+    if (!sessionId || featureId === null) return
     void sessionsApi.setFeature(sessionId, featureId).then(() => {
       // O índice reverso é do renderer: sem isto as outras superfícies (abas,
       // strip, switcher, palette) só veriam o vínculo novo depois de um reload.

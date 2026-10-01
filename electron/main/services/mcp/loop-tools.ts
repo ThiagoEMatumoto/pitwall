@@ -1,7 +1,7 @@
 import * as z from 'zod/v4'
 import * as loopStore from '../loop-store'
 import { duplicateSuspectOf, mergeDuplicate, setFocus } from '../feature-focus'
-import { get as getFeature } from '../feature-store'
+import { absorbUserSections, get as getFeature } from '../feature-store'
 import { loopSnapshot } from '../loop-snapshot'
 import { exportLoopDoc } from '../loop-export'
 import { ok, type McpNotify, type ToolDef } from './tools'
@@ -278,6 +278,7 @@ export function loopTools(notify: McpNotify): ToolDef[] {
       handler: (args) => {
         const { sourceId, targetId } = mergeDuplicateSchema.parse(args)
         mergeDuplicate(sourceId, targetId)
+        absorbUserSections(sourceId, targetId)
         const target = getFeature(targetId)
         // Mesmo par de broadcasts do IPC 'features:merge-duplicate': as duas
         // rows mudaram na lista, e é 'feature:updated' que pinga o sync.

@@ -127,6 +127,28 @@ describe('buildFeatureContextContent', () => {
     expect(content).not.toContain('## Visão geral')
   })
 
+  it('regras de negócio do usuário entram inteiras (exceção ao "aponta, não despeja")', () => {
+    const body =
+      '## Visão geral\n\nNão vai.\n\n## Regras de negócio\n\n- Desconto máx 10%\n\n## Notas fixadas\n\nlembrete\n'
+    const content = buildFeatureContextContent(makeFeature({ body }), [], makeLoop())
+    expect(content).toContain('## Regras de negócio\n\n- Desconto máx 10%')
+    expect(content).not.toContain('Não vai.')
+    expect(content).not.toContain('lembrete')
+  })
+
+  it('regras de negócio enormes são cortadas com o endereço do doc', () => {
+    const body = `## Regras de negócio\n\n${'R'.repeat(5000)}\n`
+    const content = buildFeatureContextContent(makeFeature({ body }), [], makeLoop())
+    expect(content).toContain('(continua em /tmp/feat.md)')
+    expect(content.length).toBeLessThan(3600)
+  })
+
+  it('sem regras de negócio o bloco não ganha seção vazia', () => {
+    const body = '## Regras de negócio\n\n## Notas fixadas\n\nx\n'
+    const content = buildFeatureContextContent(makeFeature({ body }), [], makeLoop())
+    expect(content).not.toContain('Regras de negócio')
+  })
+
   it('sem OKR linkado (default []): avisa e sugere feature_set_objective_links', () => {
     const content = buildFeatureContextContent(makeFeature())
     expect(content).toContain('ainda não está sob nenhum OKR')

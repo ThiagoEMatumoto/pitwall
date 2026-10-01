@@ -11,10 +11,22 @@ interface SessionFeatureState {
   hydrated: boolean
   /** Vínculo recém-criado (spawn): entra no índice sem esperar hydrate. */
   note: (sessionId: string, featureId: string) => void
+  /** Vínculo desfeito ("sem vínculo" no Mover para feature…). */
+  forget: (sessionId: string) => void
   hydrate: () => Promise<void>
 }
 
 let hydrating: Promise<void> | null = null
+
+// O main move sessões sozinho (resolução contínua por branch/worktree/fuzzy):
+// sem ouvir o broadcast, chip/abas/switcher ficariam na feature antiga.
+export function listenSessionFeatureChanges(): () => void {
+  return sessionsApi.onFeatureChanged(({ sessionId, featureId }) => {
+    const { note, forget } = useSessionFeatureStore.getState()
+    if (featureId) note(sessionId, featureId)
+    else forget(sessionId)
+  })
+}
 
 export const useSessionFeatureStore = create<SessionFeatureState>((set, get) => ({
   bySessionId: {},
@@ -27,6 +39,13 @@ export const useSessionFeatureStore = create<SessionFeatureState>((set, get) => 
     void featuresApi.get(featureId).then((f) => {
       if (!f) return
       set((s) => ({ featureTitles: { ...s.featureTitles, [f.id]: f.title } }))
+    })
+  },
+
+  forget: (sessionId) => {
+    set((s) => {
+      const { [sessionId]: _gone, ...rest } = s.bySessionId
+      return { bySessionId: rest }
     })
   },
 

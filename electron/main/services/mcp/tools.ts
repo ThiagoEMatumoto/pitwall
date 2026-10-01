@@ -19,6 +19,7 @@ import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
 import * as taskStore from '../task-store'
 import * as featureStore from '../feature-store'
+import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
 import * as repoPullStore from '../repo-pull-store'
@@ -393,9 +394,16 @@ const featureCreateSchema = z.object({
   repos: z.array(featureRepoLinkSchema).optional(),
   origin: featureOrigin.optional(),
   overview: z.string().optional(),
-  businessRules: z.string().optional(),
   approach: z.string().optional(),
 })
+
+// Regras de negócio e notas fixadas são do USUÁRIO e só ele as escreve, pelo
+// painel da feature. As regras entram no system prompt de toda sessão futura da
+// feature rotuladas "definidas pelo usuário"; aceitá-las de um agente (que pode
+// ter lido um PR/issue/página hostil) abriria um canal persistente de prompt
+// injection entre sessões — a restrição na descrição da tool não é enforcement.
+const USER_OWNED_REFUSAL =
+  'Regras de negócio e notas fixadas são do usuário: peça a ele para editá-las no painel da feature.'
 
 // Espelha UpdateFeatureInput.
 const featureUpdateSchema = z.object({
@@ -405,6 +413,10 @@ const featureUpdateSchema = z.object({
   objective: z.string().nullish(),
   synthMode: featureSynthMode.optional(),
   model: z.string().nullish(),
+  // Troca só UMA seção do doc. Regras de negócio e notas fixadas são recusadas
+  // no handler (USER_OWNED_REFUSAL).
+  section: z.enum(FEATURE_SECTIONS).optional(),
+  markdown: z.string().max(100_000).optional(),
 })
 
 const featureObjectiveLinkSchema = z.object({
@@ -445,9 +457,12 @@ function featureTools(notify: McpNotify): ToolDef[] {
       name: 'feature_create',
       title: 'Create feature',
       description:
-        'Create a feature in a project (writes its markdown doc). Optional seed sections: overview, businessRules, approach.',
+        'Create a feature in a project (writes its markdown doc). Optional seed sections: overview, approach. Business rules are written only by the user, in the feature panel.',
       inputSchema: featureCreateSchema,
       handler: (args) => {
+        if ((args as { businessRules?: unknown } | null)?.businessRules !== undefined) {
+          throw new Error(USER_OWNED_REFUSAL)
+        }
         const input = featureCreateSchema.parse(args)
         const feature = featureStore.create(input)
         notify.broadcast('feature:updated', feature)
@@ -458,10 +473,19 @@ function featureTools(notify: McpNotify): ToolDef[] {
       name: 'feature_update',
       title: 'Update feature',
       description:
-        'Update index fields of an existing feature by id (title, status, objective, synthMode, model).',
+        'Update index fields of an existing feature by id (title, status, objective, synthMode, model). Pass section + markdown to replace ONE section of the feature doc (only that section changes). "Regras de negócio" and "Notas fixadas" belong to the user and are refused here: the user edits them in the feature panel.',
       inputSchema: featureUpdateSchema,
       handler: (args) => {
-        const input = featureUpdateSchema.parse(args)
+        const { section, markdown, ...input } = featureUpdateSchema.parse(args)
+        if ((section === undefined) !== (markdown === undefined)) {
+          throw new Error('section and markdown must be passed together')
+        }
+        if (section !== undefined && USER_OWNED_SECTIONS.includes(section)) {
+          throw new Error(USER_OWNED_REFUSAL)
+        }
+        if (section !== undefined && markdown !== undefined) {
+          featureStore.updateSection(input.id, section, markdown)
+        }
         const feature = featureStore.update(input)
         notify.broadcast('feature:updated', feature)
         return ok({ feature })
@@ -889,6 +913,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             repoId: target.id,
             name: alias,
             featureId: input.featureId ?? null,
+            motherSessionId: ctx.motherSessionId,
             initialPrompt: kickoff,
             systemPromptText: composed,
             permissionMode: permissionModeForHandoffMode(mode),

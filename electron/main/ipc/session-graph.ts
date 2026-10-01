@@ -17,7 +17,10 @@ import {
 } from '../services/session-graph'
 import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
 import { transcriptIndex } from '../services/transcript-index'
+import { resolveLiveSessionFeatures } from '../services/feature-session-live'
 import type { HandoffEvent, SessionGraph } from '../../../shared/types/session-graph'
+
+type SessionsFileIndex = ReturnType<typeof buildSessionsFileIndex>
 
 // O que muda o grafo: handoffs (despacho, bastão, progresso), dependências entre
 // repos e o ciclo de vida/status das sessões (spawn aparece no índice global de
@@ -32,17 +35,30 @@ const GRAPH_CHANNEL_PREFIXES = [
   'pty:exit',
   // Propósito, grupo e "onde parei" da sessão (P8) viajam no nó do grafo.
   'canvas:',
+  // Título, status, foco e pulso do card da feature também viajam no grafo.
+  'feature:updated',
+  'loop:updated',
 ] as const
 export const GRAPH_PUSH_DELAY_MS = 300
+// A branch muda no transcript, que nem sempre acorda um broadcast: este tick
+// garante que a troca de branch leva a sessão pro card certo em poucos segundos.
+const FEATURE_RESOLVE_TICK_MS = 3000
+
+function resolveFeaturesSafely(index?: SessionsFileIndex): void {
+  try {
+    resolveLiveSessionFeatures(index)
+  } catch (err) {
+    console.error('[feature-resolver] falhou:', err)
+  }
+}
 
 // PTY viva neste app = sessão viva; o status vem do session file do CLI. PTY sem
 // session file ainda é uma sessão que está subindo.
-function liveSessionStates(): Map<string, LiveSessionState> {
+function liveSessionStates(index: SessionsFileIndex): Map<string, LiveSessionState> {
   const running = ptyManager.runningIds()
   const rows = getDb()
     .prepare(`SELECT id, cc_session_id FROM sessions WHERE id IN (SELECT value FROM json_each(?))`)
     .all(JSON.stringify(running)) as Array<{ id: string; cc_session_id: string | null }>
-  const index = buildSessionsFileIndex()
   const out = new Map<string, LiveSessionState>()
   for (const row of rows) {
     // Sem id nativo (Codex): não há session file — o status é o da própria PTY.
@@ -65,9 +81,11 @@ function liveSessionStates(): Map<string, LiveSessionState> {
   return out
 }
 
-export function loadSessionGraph(): SessionGraph {
+export function loadSessionGraph(index: SessionsFileIndex = buildSessionsFileIndex()): SessionGraph {
   const db = getDb()
-  return buildSessionGraph(readSessionGraphInput(db, liveSessionStates(), Date.now(), readFirstPrompt, readLastPrompt))
+  return buildSessionGraph(
+    readSessionGraphInput(db, liveSessionStates(index), Date.now(), readFirstPrompt, readLastPrompt),
+  )
 }
 
 // Coalesce em vez de debounce puro: o 1º evento arma o timer e os seguintes na
@@ -102,8 +120,14 @@ export function registerSessionGraphIpc(): void {
   })
   // Cada tick de atividade reconstrói o grafo; só vai pras janelas quando mudou.
   let last = ''
+  const tick = setInterval(() => resolveFeaturesSafely(), FEATURE_RESOLVE_TICK_MS)
+  tick.unref?.()
   watchSessionGraph(() => {
-    const graph = loadSessionGraph()
+    // Antes do grafo: a sessão que trocou de branch já sai no card novo. Um
+    // índice de session files só para os dois.
+    const index = buildSessionsFileIndex()
+    resolveFeaturesSafely(index)
+    const graph = loadSessionGraph(index)
     const serialized = JSON.stringify(graph)
     if (serialized === last) return
     last = serialized

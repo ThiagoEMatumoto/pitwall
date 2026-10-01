@@ -28,8 +28,10 @@ import { BatonDialog } from '@/features/sessions/BatonDialog'
 import { GLOBAL_CANVAS_SCOPE, type CanvasPositionInput } from '../../../shared/types/canvas'
 import {
   graphToFlow,
+  homeRepoLaneId,
+  lastSeenAt,
+  noteNodeId,
   positionKey,
-  repoLaneId,
   sessionNodeId,
   type LaneData,
   type MapEdge,
@@ -48,6 +50,7 @@ import {
   actionsFor,
   toolbarPositionFor,
 } from './MapChrome'
+import { FeaturePanel } from './FeaturePanel'
 import { DelegateDialog } from './DelegateDialog'
 import { SessionCardNode } from './SessionCardNode'
 import { LaneGroupNode } from './LaneGroupNode'
@@ -71,6 +74,9 @@ import { advanceWorkingClocks, indicatorFor } from './card-indicator'
 import { MapLiveContext, useMinuteClock, type MapLive } from './map-live'
 import { MapStatusCounters } from './MapStatusCounters'
 import { usePendingAsks } from '@/features/handoffs/ConversationsTab'
+import { useCrewDockWidth } from '@/features/handoffs/CrewDock'
+import { RAIL_WIDTH } from '@/features/handoffs/crew-dock-store'
+import { MapFeatureMovePicker } from './MapChrome'
 
 const nodeTypes = {
   session: SessionCardNode,
@@ -107,7 +113,13 @@ function overlayInsets(container: HTMLElement): Insets {
   const bar = rect('[data-testid="map-top-bar"]')
   const controls = rect('.react-flow__controls')
   const minimap = rect('.react-flow__minimap')
+  // Equipe/Conversas aberta flutua sobre a borda direita do mapa (CrewDock).
+  const dock = document
+    .querySelector<HTMLElement>('[data-testid="crew-dock"][data-overlay]')
+    ?.getBoundingClientRect()
+  const dockOver = dock && dock.width > 0 && dock.left < box.right ? box.right - dock.left : 0
   return {
+    right: dockOver ? dockOver + INSET_GAP : 0,
     top: bar ? bar.bottom - box.top + INSET_GAP : 0,
     left: controls ? controls.right - box.left + INSET_GAP : 0,
     bottom: minimap ? box.bottom - minimap.top + INSET_GAP : 0,
@@ -141,6 +153,9 @@ function SessionMapInner() {
   const scope = scopeMode === 'project' && activeProjectId ? activeProjectId : GLOBAL_CANVAS_SCOPE
   const graph = useSessionGraph()
   const inUse = useMapSessionIds()
+  // Painel Equipe/Conversas aberto sobre o mapa: a barra do topo não põe a pílula
+  // de contadores embaixo dele (o rail segue no layout, fora do mapa).
+  const dockOverlay = Math.max(0, useCrewDockWidth() - RAIL_WIDTH)
   const canvas = useCanvasState(scope)
   const savePositions = useCanvasStateStore((s) => s.savePositions)
   const flowApi = useReactFlow<MapNode, MapEdge>()
@@ -201,12 +216,13 @@ function SessionMapInner() {
   const focusNode =
     selectedCard ??
     (hoveredId ? nodes.find((n) => n.id === hoveredId && n.type === 'session') : undefined)
-  const focusRepo = focusNode ? (focusNode.data as SessionCardData).node.repoId : null
+  // A lane de repo em que o cartão mora (o mesmo repo pode estar em vários cards).
+  const focusRepo = focusNode?.parentId?.startsWith('lane:') ? focusNode.parentId : null
   const focus = useMemo(
     () =>
       focusFor(
         focusNode?.id ?? null,
-        focusNode ? repoLaneId(focusRepo) : null,
+        focusRepo,
         baseEdges,
         !!selectedCard,
       ),
@@ -266,6 +282,14 @@ function SessionMapInner() {
     },
     [flowApi],
   )
+  const topAncestorOf = useCallback(
+    (id: string): string => {
+      let cur = flowApi.getNode(id)
+      while (cur?.parentId) cur = flowApi.getNode(cur.parentId)
+      return cur?.id ?? id
+    },
+    [flowApi],
+  )
   const visibleBounds = useCallback(() => {
     const top = flowApi
       .getNodes()
@@ -295,9 +319,15 @@ function SessionMapInner() {
         'needs-you'
       )
     })
-    const priority = boundsOf(
-      needsYou.map((n) => rectOf(sessionNodeId(n.sessionId))).filter((r): r is Rect => r !== null),
-    )
+    // Sem ninguém pedindo você: o card (feature ou projeto) da sessão mais recente.
+    const recent = [...cards].sort((a, b) => lastSeenAt(b) - lastSeenAt(a))[0]
+    const recentCard = recent ? topAncestorOf(sessionNodeId(recent.sessionId)) : null
+    const priority =
+      boundsOf(
+        needsYou
+          .map((n) => rectOf(sessionNodeId(n.sessionId)))
+          .filter((r): r is Rect => r !== null),
+      ) ?? (recentCard ? rectOf(recentCard) : null)
     const viewport = readableViewport({
       visible: visibleBounds(),
       priority,
@@ -305,7 +335,7 @@ function SessionMapInner() {
       insets: overlayInsets(el),
     })
     if (viewport) void flowApi.setViewport(viewport, { duration: 0 })
-  }, [flowApi, rectOf, visibleBounds])
+  }, [flowApi, rectOf, visibleBounds, topAncestorOf])
 
   const actualSize = useCallback(() => {
     const el = containerRef.current
@@ -329,6 +359,30 @@ function SessionMapInner() {
     },
     [flowApi],
   )
+
+  // Nota nova nasce acima das lanes (posição padrão) — muitas vezes fora da tela.
+  // Ao entrar em edição, traz para a vista se não estiver nela; visível, não mexe.
+  const editingNoteId = cmd.editingNoteId
+  const revealedNote = useRef<string | null>(null)
+  useEffect(() => {
+    if (!editingNoteId || revealedNote.current === editingNoteId) return
+    const internal = flowApi.getInternalNode(noteNodeId(editingNoteId))
+    const box = containerRef.current?.getBoundingClientRect()
+    if (!internal || !box) return
+    revealedNote.current = editingNoteId
+    const abs = internal.internals.positionAbsolute
+    const w = internal.measured.width ?? internal.width ?? 0
+    const h = internal.measured.height ?? internal.height ?? 0
+    const tl = flowApi.flowToScreenPosition(abs)
+    const br = flowApi.flowToScreenPosition({ x: abs.x + w, y: abs.y + h })
+    const inView =
+      tl.x >= box.left && tl.y >= box.top && br.x <= box.right && br.y <= box.bottom
+    if (inView) return
+    void flowApi.setCenter(abs.x + w / 2, abs.y + h / 2, {
+      zoom: flowApi.getZoom(),
+      duration: reducedMotion() ? 0 : 200,
+    })
+  }, [editingNoteId, nodes, flowApi])
 
   const liveSessions = useAppStore((s) => s.liveSessions)
 
@@ -478,7 +532,10 @@ function SessionMapInner() {
           .getIntersectingNodes(node)
           .find((n) => n.type === 'userGroup' && n.id !== node.id)
         const newParent =
-          hit?.id ?? (node.parentId?.startsWith('g:') ? repoLaneId(session.repoId) : node.parentId)
+          hit?.id ??
+          (node.parentId?.startsWith('g:')
+            ? homeRepoLaneId(inputRef.current.graph, session.sessionId)
+            : node.parentId)
         const parentAbs = newParent ? absOf(newParent) : null
         if (node.parentId?.startsWith('g:') && !hit && !parentAbs) {
           // A lane do repo não existe (a sessão era a única dele): sai do grupo sem
@@ -678,6 +735,7 @@ function SessionMapInner() {
               />
             </ReactFlow>
             <MapTopBar
+              rightInset={dockOverlay}
               scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
               hasProject={!!activeProjectId}
               onScope={setScopeMode}
@@ -698,6 +756,8 @@ function SessionMapInner() {
                 onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
               />
             </MapTopBar>
+            <FeaturePanel rightInset={dockOverlay} />
+            <MapFeatureMovePicker />
             {menu && menuNode && (
               <MapContextMenu
                 at={menu}

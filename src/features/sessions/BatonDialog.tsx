@@ -127,6 +127,7 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
         setPhase('ready')
       } catch (err) {
         if (run !== distillRun.current) return
+        console.warn('[baton] destilação falhou:', err)
         setError(messageOf(err))
         setPhase('error')
       }
@@ -177,7 +178,7 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
       if (result.relinkedChildren) {
         showToast({
           title: 'Bastão da mãe passado',
-          body: `${result.relinkedChildren} ${result.relinkedChildren === 1 ? 'filha agora responde' : 'filhas agora respondem'} a "${result.alias}". A nota vai ao terminal de cada uma; se alguma não receber, você é avisado com o nome dela. A anterior ficou como "bastão passado" — encerre quando quiser.`,
+          body: `${result.relinkedChildren} ${result.relinkedChildren === 1 ? 'filha agora responde' : 'filhas agora respondem'} a "${result.alias}". A anterior fica como "bastão passado".`,
         })
         // Mãe que também é filha: o aviso do endereço trocado (para a avó) segue.
         if (!result.aliasChanged) {
@@ -320,7 +321,9 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
           >
             <span className="flex items-start gap-1.5">
               <Icon as={AlertTriangle} size={13} className="mt-px shrink-0" />
-              <span>Destilação indisponível, escreva o briefing abaixo. ({error})</span>
+              {/* Sem o erro cru (UUID, caminho do transcript): quem lê precisa
+                  saber o que fazer, não o que quebrou. O detalhe vai pro console. */}
+              <span>Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo.</span>
             </span>
             <div className="flex justify-end">
               <Button variant="ghost" onClick={() => void distill(note)}>

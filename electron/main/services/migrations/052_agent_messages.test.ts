@@ -37,10 +37,9 @@ describe('migration 052_agent_messages', () => {
     db.close()
   })
 
-  it('is registered as the last migration, version 52', () => {
+  it('is registered as version 52', () => {
     const entry = migrations.find((m) => m.version === 52)
     expect(entry?.name).toBe('052_agent_messages')
-    expect(Math.max(...migrations.map((m) => m.version))).toBe(52)
   })
 
   it('creates agent_messages with the ask/reply columns', () => {

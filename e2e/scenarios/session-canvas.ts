@@ -280,12 +280,18 @@ async function bringIntoView(target: ReturnType<typeof page.locator>): Promise<v
     const mapBox = await page.getByTestId('session-map').boundingBox()
     const bar = await page.getByTestId('map-top-bar').boundingBox()
     if (!box || !mapBox) return
-    // O mapa corre por baixo da sidebar: a área útil começa na borda direita dela.
-    const asideRight = await page.evaluate(
-      () => document.querySelector('aside')?.getBoundingClientRect().right ?? 0,
-    )
-    const left = Math.max(mapBox.x, asideRight) + 12
-    const right = mapBox.x + mapBox.width - 12
+    // O mapa corre por baixo da sidebar (à esquerda) e da Equipe (à direita, também
+    // um <aside>): a área útil fica entre as duas.
+    const asides = await page.evaluate(() => {
+      const mid = window.innerWidth / 2
+      const rects = [...document.querySelectorAll('aside')].map((a) => a.getBoundingClientRect())
+      return {
+        leftEdge: Math.max(0, ...rects.filter((r) => r.left < mid).map((r) => r.right)),
+        rightEdge: Math.min(window.innerWidth, ...rects.filter((r) => r.left >= mid && r.width > 0).map((r) => r.left)),
+      }
+    })
+    const left = Math.max(mapBox.x, asides.leftEdge) + 12
+    const right = Math.min(mapBox.x + mapBox.width, asides.rightEdge) - 12
     const top = (bar ? bar.y + bar.height : mapBox.y) + 12
     const bottom = mapBox.y + mapBox.height - 12
     const inside =

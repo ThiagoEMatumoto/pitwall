@@ -147,7 +147,10 @@ export class AgentBusError extends Error {}
 // do nó é o alias (rename manual > nome vivo do CLI); o `-n` vai em address — só
 // o claude tem SendMessage.
 export function peersFromGraph(graph: SessionGraph): AgentPeer[] {
-  const projectName = new Map(graph.lanes.map((l) => [l.projectId, l.name]))
+  // O topo do mapa é a feature: o nome do projeto mora em cada lane de repo.
+  const projectName = new Map(
+    graph.lanes.flatMap((l) => l.repos.map((r) => [r.projectId ?? null, r.projectName ?? null])),
+  )
   return graph.nodes
     .filter((n) => n.status !== 'ended')
     .map((n) => ({

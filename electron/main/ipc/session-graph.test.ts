@@ -38,6 +38,16 @@ describe('watchSessionGraph', () => {
     expect(push).toHaveBeenCalledTimes(1)
   })
 
+  it('pulso, foco e status da feature reconstroem o card (feature:updated, loop:updated)', () => {
+    const push = vi.fn()
+    stop = watchSessionGraph(push)
+    broadcast('loop:updated', { featureId: 'f1' })
+    vi.advanceTimersByTime(GRAPH_PUSH_DELAY_MS)
+    broadcast('feature:updated', { id: 'f1' })
+    vi.advanceTimersByTime(GRAPH_PUSH_DELAY_MS)
+    expect(push).toHaveBeenCalledTimes(2)
+  })
+
   it('canais que não mexem no grafo não disparam (nem o próprio push)', () => {
     const push = vi.fn()
     stop = watchSessionGraph(push)

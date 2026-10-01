@@ -255,27 +255,57 @@ describe('session-graph', () => {
     expect(g.nodes.map((n) => n.sessionId)).toEqual(['w1', 'w2', 'a1'])
   })
 
-  it('feature: sessões da mesma feature (sessions.feature_id ou registro sintetizado)', () => {
+  it('feature: 1 card com 3 repos de 2 projetos; sem feature cai em "Sem feature · <Projeto>"', () => {
+    // Mesmos INSERTs do feature-store.createFeature/upsert (features + feature_repos).
     testDb
       .prepare(
         `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
-         VALUES ('f1','p1','auth','Auth','active','/tmp/f1.md',1,1)`,
+         VALUES ('f1','p1','checkout','Checkout E2E','in-progress','/tmp/f1.md',1,1),
+                ('f-arch','p1','old','Velha','done','/tmp/f2.md',1,1)`,
       )
       .run()
-    addSession('x', 'r-web', { featureId: 'f1' })
-    addSession('y', 'r-api')
-    addSession('z', 'r-site')
+    testDb.prepare(`UPDATE features SET archived_at = 5 WHERE id = 'f-arch'`).run()
     testDb
       .prepare(
-        `INSERT INTO feature_session_records (session_id, feature_id, summary, session_at, created_at)
-         VALUES ('y','f1','resumo',1,1)`,
+        `INSERT INTO feature_repos (feature_id, repo_id, branch, worktree_path) VALUES
+           ('f1','r-api','feat/checkout',NULL), ('f1','r-web','feat/checkout',NULL),
+           ('f1','r-site','feat/checkout',NULL)`,
       )
       .run()
+    testDb
+      .prepare(
+        `INSERT INTO feature_pulses (id, feature_id, body, source, created_at)
+         VALUES ('pu1','f1','antigo','human',1), ('pu2','f1','Pagamento integrado','human',2)`,
+      )
+      .run()
+    addSession('m', 'r-api', { featureId: 'f1' })
+    addSession('c', 'r-site', { featureId: 'f1' })
+    addSession('solta', 'r-web')
+    addSession('arq', 'r-web', { featureId: 'f-arch' })
 
-    const g = graphFor(live({ x: {}, y: {}, z: {} }))
-    expect(edgesOf(g.edges, 'feature')).toEqual([
-      { kind: 'feature', featureId: 'f1', sessionIds: ['x', 'y'] },
+    const g = graphFor(live({ m: {}, c: {}, solta: {}, arq: {} }))
+    const feature = g.lanes.find((l) => l.kind === 'feature')
+    expect(g.lanes.filter((l) => l.kind === 'feature')).toHaveLength(1)
+    expect(feature).toMatchObject({
+      featureId: 'f1',
+      name: 'Checkout E2E',
+      pulse: 'Pagamento integrado',
+      projectName: 'Plataforma',
+    })
+    expect(feature!.repos.map((r) => [r.label, r.projectName, r.sessionIds])).toEqual([
+      ['api-core', 'Plataforma', ['m']],
+      ['web', 'Plataforma', []],
+      ['site', 'Site', ['c']],
     ])
+    expect(g.nodes.find((n) => n.sessionId === 'm')).toMatchObject({
+      featureId: 'f1',
+      featureTitle: 'Checkout E2E',
+    })
+    // Arquivada = sem feature no mapa.
+    expect(g.nodes.find((n) => n.sessionId === 'arq')?.featureId).toBeNull()
+    expect(
+      g.lanes.filter((l) => l.kind === 'project').map((l) => [l.name, l.repos.map((r) => r.sessionIds)]),
+    ).toEqual([['Sem feature · Plataforma', [['solta', 'arq']]]])
   })
 
   it('encerrados: só os últimos 7 dias e até 20 por mãe; ativo e needs_input sempre entram', () => {
@@ -369,13 +399,13 @@ describe('session-graph', () => {
     ).toEqual([
       [
         'p1',
-        'Plataforma',
+        'Sem feature · Plataforma',
         [
           ['api-core', ['a']],
           ['web', ['w']],
         ],
       ],
-      ['p2', 'Site', [['site', ['s']]]],
+      ['p2', 'Sem feature · Site', [['site', ['s']]]],
       [null, 'Avulsas', [['Avulsas', ['loose']]]],
     ])
   })

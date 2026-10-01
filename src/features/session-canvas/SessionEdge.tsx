@@ -16,8 +16,8 @@ import { useMapFocus } from './map-focus'
 
 // Cada tipo de fio se lê sem legenda: mãe→filha é a corda sólida com seta (corre
 // quando vivo, pulsa vermelho quando a filha pergunta), bastão é violeta com ⟲,
-// dependência entre repos é pontilhada e discreta, feature (mesma frente) só
-// aparece no foco. Animações desligam em prefers-reduced-motion (session-map.css).
+// dependência entre repos é pontilhada e discreta (a mesma frente agora é o card
+// da feature, não um fio). Animações desligam em prefers-reduced-motion (session-map.css).
 const BASE: Record<MapEdgeKind, CSSProperties> = {
   handoff: { stroke: 'var(--color-text-dim)', strokeWidth: 1.5 },
   baton: { stroke: 'var(--color-violet)', strokeWidth: 1.5 },
@@ -27,12 +27,6 @@ const BASE: Record<MapEdgeKind, CSSProperties> = {
     strokeDasharray: '1 4',
     strokeLinecap: 'round',
     opacity: 0.9,
-  },
-  feature: {
-    stroke: 'var(--color-info)',
-    strokeWidth: 1.5,
-    strokeDasharray: '1 5',
-    strokeLinecap: 'round',
   },
   note: { stroke: 'var(--color-text-dim)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 },
   // Pergunta agente↔agente esperando resposta: pontilhado que corre, some na resposta.

@@ -236,6 +236,24 @@ describe('mergeDuplicate', () => {
     expect(n).toBe(1)
   })
 
+  it('a sessão vinculada pelo resolvedor perde a posse dele (não é solta no tick seguinte)', () => {
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, status, started_at, feature_id, feature_source)
+         VALUES ('sess-r', 'r1', 'running', ?, 'feat-2', 'resolver:branch'),
+                ('sess-m', 'r1', 'running', ?, 'feat-2', 'manual')`,
+      )
+      .run(Date.now(), Date.now())
+    focus.mergeDuplicate('feat-2', 'feat-1')
+    const rows = testDb
+      .prepare(`SELECT id, feature_id, feature_source FROM sessions WHERE id IN ('sess-r', 'sess-m') ORDER BY id`)
+      .all()
+    expect(rows).toEqual([
+      { id: 'sess-m', feature_id: 'feat-1', feature_source: 'manual' },
+      { id: 'sess-r', feature_id: 'feat-1', feature_source: null },
+    ])
+  })
+
   it('recusa mesclar consigo mesma ou com feature inexistente', () => {
     expect(() => focus.mergeDuplicate('feat-1', 'feat-1')).toThrow(/itself/)
     expect(() => focus.mergeDuplicate('feat-2', 'nao-existe')).toThrow(/feature not found/)

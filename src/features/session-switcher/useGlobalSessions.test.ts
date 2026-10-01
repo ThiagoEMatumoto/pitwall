@@ -7,7 +7,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { mapSessionIds, visibleLiveSessions } = await import('./useGlobalSessions')
+const { mapSessionIds, unknownLiveIds, visibleLiveSessions } = await import('./useGlobalSessions')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -34,12 +34,27 @@ describe('mapSessionIds — o conjunto que o mapa desenha', () => {
       'mae',
       'filha-aberta',
     ])
-    expect(mapSessionIds(sessions, panes, handoffs)).toEqual(
-      new Set(['mae', 'filha', 'filha-aberta']),
-    )
+    expect(mapSessionIds(sessions)).toEqual(new Set(['mae', 'filha', 'filha-aberta']))
   })
 
   it('sessão que saiu da lista de vivas (encerrou) não entra', () => {
-    expect(mapSessionIds(sessions.slice(0, 1), [], handoffs)).toEqual(new Set(['mae']))
+    expect(mapSessionIds(sessions.slice(0, 1))).toEqual(new Set(['mae']))
+  })
+
+  it('viva no grafo do main sem aba e fora do snapshot entra; na janela de undo não', () => {
+    expect(mapSessionIds(sessions.slice(0, 1), ['s4', 's5'], new Set(['s5']))).toEqual(
+      new Set(['mae', 's4']),
+    )
+  })
+})
+
+describe('unknownLiveIds — PTYs vivas no grafo que o snapshot do renderer não conhece', () => {
+  it('lista só as que faltam no snapshot, em ordem estável (chave do refetch)', () => {
+    const snap = [live({ id: 'mae', ccSessionId: 'cc-mae' })]
+    expect(unknownLiveIds(snap, ['s5', 'mae', 's4'])).toEqual(['s4', 's5'])
+  })
+
+  it('nada a buscar quando o snapshot já tem todas', () => {
+    expect(unknownLiveIds([live({ id: 'mae', ccSessionId: 'cc-mae' })], ['mae'])).toEqual([])
   })
 })

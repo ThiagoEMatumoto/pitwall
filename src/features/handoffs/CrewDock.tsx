@@ -8,7 +8,7 @@ import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
+import { HandoffCard, crewDotColor, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
 import {
   crewFocusAfterDismiss,
   crewNeedsAttention,
@@ -16,7 +16,6 @@ import {
   dockCrew,
   orderCrew,
   resolveCrewFocus,
-  splitAlias,
   stepCrewFocus,
 } from './crew'
 import { RAIL_WIDTH, clampWidth, useCrewDockStore } from './crew-dock-store'
@@ -69,28 +68,6 @@ export function useHasCrew(): boolean {
 function useHasDockConversations(): boolean {
   const snapshot = useAgentBusSnapshot()
   return hasDockConversations(snapshot, Date.now())
-}
-
-// A trilha colapsada é o resumo de 40px do dock: cor = estado. A filha PAUSADA
-// (interrompida mas retomável) fica apagada em vez do âmbar de 'interrupted' —
-// ela não está pedindo nada, só esperando você mandar continuar; âmbar ali seria
-// o mesmo alarme de quem realmente espera resposta.
-function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
-  if (live) return liveBadgeFor(live).color
-  if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
-  return STATUS_COLOR[handoff.status]
-}
-
-function crewDotTitle(handoff: Handoff, live: LiveSessionInfo | undefined): string {
-  const alias = splitAlias(live?.title)
-  const who = live?.title ?? handoff.targetRepoLabel ?? handoff.targetRepoId
-  const scope = alias ? ` (${alias.name})` : ''
-  const state = live
-    ? liveBadgeFor(live).label
-    : handoff.status === 'interrupted' && handoff.resumable
-      ? 'pausada, dá pra retomar'
-      : 'despachando'
-  return `${who}${scope} — ${state}`
 }
 
 // Gate: o painel abaixo só monta quando há equipe — o que também garante que o
@@ -162,6 +139,7 @@ function DockTabButton(props: {
 }
 
 function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
+  const liveList = useMemo(() => [...liveById.values()], [liveById])
   const [tab, setTab] = useState<DockTab>(crew.length > 0 ? 'crew' : 'conversations')
   const shownTab: DockTab = crew.length === 0 ? 'conversations' : tab
   // Filha nova (0 → n) com Conversas aberta: a equipe aparece, não fica escondida.
@@ -472,13 +450,13 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
-          const color = crewDotColor(h, live)
+          const color = crewDotColor(h, live, liveList)
           return (
             <button
               key={h.id}
               type="button"
               onClick={openCrew}
-              title={crewDotTitle(h, live)}
+              title={crewDotTitle(h, live, liveList)}
               className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--color-surface-2)]"
             >
               {h.id === apexId ? (

@@ -93,8 +93,10 @@ describe('BatonDialog', () => {
     distill.mockRejectedValueOnce(new Error('timeout de 90s'))
     await setup()
 
-    expect(screen.getByTestId('baton-error')).toHaveTextContent('timeout de 90s')
-    expect(screen.getByTestId('baton-error')).toHaveTextContent('escreva o briefing')
+    expect(screen.getByTestId('baton-error')).toHaveTextContent(
+      'Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo',
+    )
+    expect(screen.getByTestId('baton-error')).not.toHaveTextContent('timeout de 90s')
     // O campo segue disponível: a falha da destilação não tranca o bastão.
     expect(screen.getByTestId('baton-briefing')).toHaveValue('')
 
@@ -106,16 +108,20 @@ describe('BatonDialog', () => {
     expect(screen.getByTestId('baton-briefing')).toHaveValue('briefing na segunda tentativa')
   })
 
-  it('erro da destilação não mostra o prefixo cru do IPC do Electron', async () => {
+  it('erro da destilação não mostra erro cru (prefixo do IPC, UUID, caminho)', async () => {
     distill.mockRejectedValueOnce(
-      new Error("Error invoking remote method 'baton:distill': Error: Transcript não encontrado"),
+      new Error(
+        "Error invoking remote method 'baton:distill': Error: Transcript não encontrado: /home/u/.claude/projects/x/3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f.jsonl",
+      ),
     )
     await setup()
 
     const box = screen.getByTestId('baton-error')
-    expect(box).toHaveTextContent('Transcript não encontrado')
+    expect(box).toHaveTextContent('escreva o briefing abaixo')
     expect(box).not.toHaveTextContent('remote method')
     expect(box).not.toHaveTextContent('Error:')
+    expect(box).not.toHaveTextContent('3f2a9c1e')
+    expect(box).not.toHaveTextContent('/home/u')
   })
 
   it('leva o briefing EDITADO pro baton.pass (não o destilado original)', async () => {

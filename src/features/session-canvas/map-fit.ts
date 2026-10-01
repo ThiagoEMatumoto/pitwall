@@ -5,11 +5,11 @@
 // canto superior esquerdo — centralizado, sobrava uma faixa vazia no topo e a
 // lane da esquerda nascia cortada.
 import type { Rect } from './edge-anchor'
-import { BRIEF_BELOW } from './card-display'
 
-// "Legível" = o cartão vivo inteiro (saída ao vivo + prompt + aprovação). Com 0.6
-// o enquadrar caía no modo resumido: caixas altas vazias só com o título.
-export const MIN_READABLE_ZOOM = BRIEF_BELOW
+// "Legível" = o cartão vivo inteiro (saída ao vivo + prompt + aprovação) e o
+// cabeçalho do card da feature lido sem compensação. Com 0.75 os títulos ficavam
+// em ~10px efetivos; 0.9 é o piso pedido no uso diário.
+export const MIN_READABLE_ZOOM = 0.9
 export const MAX_FIT_ZOOM = 1
 const PADDING = 24
 
@@ -57,7 +57,8 @@ export interface Insets {
 }
 
 // Insets: o que flutua por cima do mapa — a barra do topo (escopo/ações), os
-// controles de zoom (esquerda) e o minimapa (base). Sem descontá-los, o
+// controles de zoom (esquerda), o minimapa (base) e o painel Equipe/Conversas
+// aberto sobre o mapa (direita). Sem descontá-los, o
 // cabeçalho da lane nascia embaixo da barra e os cartões da base embaixo do
 // minimapa.
 export function readableViewport(args: {

@@ -108,7 +108,16 @@ export function mergeDuplicate(sourceId: string, targetId: string): void {
   if (!rowOf(targetId)) throw new Error(`feature not found: ${targetId}`)
   const now = Date.now()
   const tx = db.transaction(() => {
-    db.prepare('UPDATE sessions SET feature_id = ? WHERE feature_id = ?').run(targetId, sourceId)
+    // A posse do resolvedor contínuo cai junto: 'resolver:branch' apontando pro
+    // destino diria "eu vinculei pelo sinal X", mas o sinal era da ORIGEM (agora
+    // arquivada) — no tick seguinte ele não casa mais e o resolvedor soltaria a
+    // sessão viva do card de destino. NULL = vínculo que ele não pôs; manual fica.
+    db.prepare(
+      `UPDATE sessions
+          SET feature_id = ?,
+              feature_source = CASE WHEN feature_source LIKE 'resolver:%' THEN NULL ELSE feature_source END
+        WHERE feature_id = ?`,
+    ).run(targetId, sourceId)
     db.prepare('UPDATE feature_session_records SET feature_id = ? WHERE feature_id = ?').run(
       targetId,
       sourceId,

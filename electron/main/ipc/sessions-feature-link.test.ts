@@ -30,6 +30,9 @@ const seam = vi.hoisted(() => ({
   existingDirs: new Set<string>(),
   // feature_id devolvido pelo lookup do resume (null = sessão sem feature).
   resumeFeatureId: null as string | null,
+  resumeFeatureSource: null as string | null,
+  // Args do SELECT do resume (cc_session_id, origem manual).
+  resumeLookupArgs: [] as unknown[][],
   // worktree_path registrado em feature_repos (null = nenhum).
   worktreePath: null as string | null,
   featureSessionRows: [] as Record<string, unknown>[],
@@ -38,6 +41,9 @@ const seam = vi.hoisted(() => ({
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
   ptyListeners: new Map<string, (e: unknown) => void>(),
+  // Linha lida no pty:exit para o auto-registro (null = sessão não encontrada).
+  exitRow: null as Record<string, unknown> | null,
+  sessionExits: [] as unknown[],
   // Linha anterior da conversa (propósito/grupo/resumo) e o UPDATE que a herda.
   prevCanvasRow: null as Record<string, unknown> | null,
   canvasInherits: [] as unknown[][],
@@ -90,6 +96,15 @@ vi.mock('../services/db', () => ({
       },
       get: (..._args: unknown[]) => {
         if (sql.includes('SELECT purpose, group_id')) return seam.prevCanvasRow ?? undefined
+        if (sql.includes('SELECT feature_id, feature_source, cc_session_id, repo_id')) {
+          return seam.exitRow ?? undefined
+        }
+        if (sql.includes('SELECT feature_id, feature_source FROM sessions')) {
+          seam.resumeLookupArgs.push(_args)
+          return seam.resumeFeatureId || seam.resumeFeatureSource
+            ? { feature_id: seam.resumeFeatureId, feature_source: seam.resumeFeatureSource }
+            : undefined
+        }
         if (sql.includes('SELECT feature_id FROM sessions')) {
           return seam.resumeFeatureId ? { feature_id: seam.resumeFeatureId } : undefined
         }
@@ -138,7 +153,9 @@ vi.mock('../services/loop-snapshot', () => ({
   }),
 }))
 vi.mock('../services/repo-dependency-store', () => ({ listByRepo: () => [] }))
-vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
+vi.mock('../services/feature-memory', () => ({
+  featureMemory: { onSessionExit: (info: unknown) => seam.sessionExits.push(info) },
+}))
 vi.mock('../services/loop-export', () => ({ exportLoopDoc: () => Promise.resolve() }))
 vi.mock('../services/handoff-store', () => ({
   get: () => null,
@@ -217,6 +234,8 @@ beforeEach(() => {
   seam.writtenFiles.clear()
   seam.existingDirs = new Set([REPO_PATH])
   seam.resumeFeatureId = null
+  seam.resumeFeatureSource = null
+  seam.resumeLookupArgs.length = 0
   seam.worktreePath = null
   seam.featureSessionRows = []
   seam.repoSessionRows = []
@@ -229,6 +248,7 @@ beforeEach(() => {
 // Índices do INSERT INTO sessions (id, repo_id, cc_session_id, title, pane_id,
 // status, started_at, ended_at, feature_id).
 const INSERTED_FEATURE_ID = 8
+const INSERTED_FEATURE_SOURCE = 10
 
 describe('sessions:resume preserva o vínculo com a feature', () => {
   it('herda o feature_id da sessão retomada (sem isso a nova linha nasce NULL)', () => {
@@ -253,6 +273,22 @@ describe('sessions:resume preserva o vínculo com a feature', () => {
     resume()
     expect(seam.inserted[0][INSERTED_FEATURE_ID]).toBeNull()
     expect(seam.spawns[0].innerCmd).not.toContain('--append-system-prompt-file')
+  })
+
+  it('herda a origem do vínculo: resolver:branch continua do resolvedor', () => {
+    seam.resumeFeatureId = 'feat-1'
+    seam.resumeFeatureSource = 'resolver:branch'
+    resume()
+    expect(seam.inserted[0][INSERTED_FEATURE_ID]).toBe('feat-1')
+    expect(seam.inserted[0][INSERTED_FEATURE_SOURCE]).toBe('resolver:branch')
+  })
+
+  it('"Sem feature" manual sobrevive ao resume (a busca aceita feature_id NULL + manual)', () => {
+    seam.resumeFeatureSource = 'manual'
+    resume()
+    expect(seam.resumeLookupArgs[0]).toEqual([CC_SESSION_ID, 'manual'])
+    expect(seam.inserted[0][INSERTED_FEATURE_ID]).toBeNull()
+    expect(seam.inserted[0][INSERTED_FEATURE_SOURCE]).toBe('manual')
   })
 
   it('mantém o --resume <cc_session_id> do comando', () => {
@@ -349,6 +385,7 @@ describe('sessions:list-by-feature', () => {
         startedAt: 200,
         endedAt: null,
         isLive: true,
+        motherSessionId: null,
       },
       {
         id: 's1',
@@ -360,6 +397,7 @@ describe('sessions:list-by-feature', () => {
         startedAt: 100,
         endedAt: 150,
         isLive: false,
+        motherSessionId: null,
       },
     ])
   })
@@ -415,15 +453,17 @@ describe('sessions:list-by-repo', () => {
 describe('sessions:set-feature — vincular sessão em curso', () => {
   it('grava sessions.feature_id e avisa o renderer', () => {
     handler('sessions:set-feature')(null, 'sess-1' as never, 'feat-1' as never)
-    expect(seam.featureUpdates).toEqual([['feat-1', 'sess-1']])
+    expect(seam.featureUpdates).toEqual([['feat-1', 'manual', 'sess-1']])
     expect(seam.broadcasts).toEqual([
       { channel: 'session:feature-changed', payload: { sessionId: 'sess-1', featureId: 'feat-1' } },
+      // A posição salva era relativa ao card antigo: esquecida, o mapa recarrega.
+      { channel: 'canvas:updated', payload: { scope: null } },
     ])
   })
 
   it('featureId null desfaz o vínculo', () => {
     handler('sessions:set-feature')(null, 'sess-1' as never, null as never)
-    expect(seam.featureUpdates).toEqual([[null, 'sess-1']])
+    expect(seam.featureUpdates).toEqual([[null, 'manual', 'sess-1']])
   })
 })
 
@@ -441,5 +481,26 @@ describe('broadcasts de sessão chegam aos ouvintes do main (grafo)', () => {
     seam.ptyListeners.get('exit')?.({ sessionId: 'sess-1', exitCode: 0, signal: null })
     for (const off of offs) off()
     expect(heard).toEqual(['session:feature-changed', 'session:renamed', 'pty:exit'])
+  })
+})
+
+describe('pty:exit respeita o "Sem feature" escolhido pelo usuário', () => {
+  const exit = () =>
+    seam.ptyListeners.get('exit')?.({ sessionId: 'sess-1', exitCode: 0, signal: null })
+
+  it('manual + NULL: o auto-registro não roda (não revincula nem cria rascunho)', () => {
+    seam.sessionExits = []
+    seam.exitRow = { feature_id: null, feature_source: 'manual', cc_session_id: 'cc-1', repo_id: 'r1' }
+    exit()
+    expect(seam.sessionExits).toEqual([])
+  })
+
+  it('sem escolha manual, a sessão sem feature segue para o auto-registro', () => {
+    seam.sessionExits = []
+    seam.exitRow = { feature_id: null, feature_source: null, cc_session_id: 'cc-1', repo_id: 'r1' }
+    exit()
+    expect(seam.sessionExits).toEqual([
+      { sessionId: 'sess-1', ccSessionId: 'cc-1', repoId: 'r1', featureId: null },
+    ])
   })
 })

@@ -1,6 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { BookmarkPlus } from 'lucide-react'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
+import { Icon } from '@/components/ui/Icon'
+import { FeaturePicker } from '@/features/features/FeaturePicker'
+import type { FeatureWithActivity } from '@/features/features/feature-activity'
+import { showToast } from '@/features/notifications/toast-store'
+import { canvasApi, featuresApi } from '@/lib/ipc'
 import type { MapNode, NoteData } from './graph-to-flow'
 import { useMapActions } from './map-context'
 
@@ -54,6 +60,7 @@ function NoteNodeImpl({ data, selected }: NodeProps<MapNode>) {
             sessão encerrada
           </span>
         )}
+        {!editing && note.bodyMd.trim() && <FixToFeature noteId={note.id} text={note.bodyMd} />}
       </div>
       {editing ? (
         <textarea
@@ -79,6 +86,75 @@ function NoteNodeImpl({ data, selected }: NodeProps<MapNode>) {
             </span>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// "Fixar na feature": o texto vai para as notas fixadas da feature escolhida
+// (doc .md da feature) e a nota sai do canvas — ela mudou de casa, não duplicou.
+function FixToFeature({ noteId, text }: { noteId: string; text: string }) {
+  const [open, setOpen] = useState(false)
+  const [features, setFeatures] = useState<FeatureWithActivity[]>([])
+
+  function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setOpen(true)
+    void featuresApi.listWithStats().then(setFeatures)
+  }
+
+  async function pick(featureId: string | null) {
+    setOpen(false)
+    if (!featureId) return
+    let feature: Awaited<ReturnType<typeof featuresApi.appendFixedNote>>
+    try {
+      feature = await featuresApi.appendFixedNote({ featureId, text })
+    } catch {
+      showToast({ title: 'Não deu para fixar a nota', body: 'A nota continua no mapa.' })
+      return
+    }
+    // Já está na feature: falhar aqui não pode convidar a tentar de novo (duplicaria).
+    try {
+      await canvasApi.deleteNote({ id: noteId })
+    } catch {
+      showToast({
+        title: 'Nota fixada, mas continua no mapa',
+        body: `Já está em «${feature.title}». Apague a nota do mapa à mão.`,
+      })
+      return
+    }
+    showToast({ title: 'Nota fixada na feature', body: `Agora está em «${feature.title}».` })
+  }
+
+  return (
+    <div className="nodrag relative ml-auto">
+      <button
+        type="button"
+        data-testid="note-fix-to-feature"
+        onClick={(e) => {
+          e.stopPropagation()
+          toggle()
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+        title="Fixar na feature"
+        aria-label="Fixar na feature"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+      >
+        <Icon as={BookmarkPlus} size={11} />
+        <span>Fixar na feature</span>
+      </button>
+      {open && (
+        <FeaturePicker
+          features={features}
+          value={null}
+          onPick={(id) => void pick(id)}
+          onClose={() => setOpen(false)}
+          align="right"
+          testId="note-feature-picker"
+        />
       )}
     </div>
   )

@@ -31,6 +31,7 @@ import { list as listObjectives, loadKeyResults } from './objective-store'
 import { findTranscriptPath } from './session-activity'
 import { runClaude } from './claude-cli'
 import { PULSE_MAX_LENGTH } from '../../../shared/feature-loop'
+import { spliceUserSections, stripUserSections } from '../../../shared/feature-sections'
 import {
   isProtectedBranch,
   normalizeBranch,
@@ -254,6 +255,27 @@ type LinkKind = 'manual' | 'auto-linked' | 'auto-created'
 interface RecordJob {
   info: SessionExitInfo
   featureId: string
+}
+
+
+// Frontmatter da síntese em 3 vias. O prompt deixa o LLM refinar só `title` e
+// `status`; o resto vem SEMPRE do disco. E mesmo esses dois só valem se ninguém
+// os mudou durante a chamada (disco == snapshot enviado): um feature_update de
+// status ou um rename no meio não pode ser revertido pela cópia velha que o
+// modelo ecoou — o reindex levaria a reversão pro índice também.
+const SYNTH_OWNED_FIELDS = ['title', 'status'] as const
+
+export function mergeSynthFrontmatter(
+  snapshot: Record<string, unknown>,
+  fromLlm: Record<string, unknown>,
+  disk: Record<string, unknown>,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = { ...disk }
+  for (const k of SYNTH_OWNED_FIELDS) {
+    if (fromLlm[k] !== undefined && disk[k] === snapshot[k]) data[k] = fromLlm[k]
+  }
+  data.last_updated = Date.now()
+  return data
 }
 
 class FeatureMemoryService {
@@ -550,7 +572,9 @@ class FeatureMemoryService {
       })()
       if (!currentMd) return
 
-      const prompt = buildHolisticPrompt(currentMd, records)
+      // As seções do usuário (regras de negócio, notas fixadas) ficam FORA do
+      // prompt: o modelo não tem o que reescrever nelas.
+      const prompt = buildHolisticPrompt(stripUserSections(currentMd), records)
       const model = resolveModel(feature)
       const args = ['-p', prompt, '--output-format', 'text']
       if (model) args.push('--model', model)
@@ -571,8 +595,13 @@ class FeatureMemoryService {
       // depois re-indexa pelo doc e emite o update.
       try {
         const reparsed = matter(md)
-        reparsed.data.last_updated = Date.now()
-        const finalMd = matter.stringify(reparsed.content, reparsed.data)
+        // Relê o disco AGORA (o autosave do painel ou um feature_update pode ter
+        // escrito durante a chamada do LLM) e devolve as seções do usuário dessa
+        // cópia, byte a byte.
+        const disk = matter(readFileSync(feature.docPath, 'utf8'))
+        const body = spliceUserSections(reparsed.content, disk.content)
+        const data = mergeSynthFrontmatter(matter(currentMd).data, reparsed.data, disk.data)
+        const finalMd = matter.stringify(body, data)
         markSelfWrite(feature.docPath)
         writeFileSync(feature.docPath, finalMd, 'utf8')
       } catch (err) {
@@ -589,6 +618,11 @@ class FeatureMemoryService {
     }
   }
 
+  // Síntese holística imediata, sem esperar o debounce (gatilho manual).
+  synthesizeNow(featureId: string): Promise<void> {
+    return this.synthesizeHolistic(featureId)
+  }
+
   close(): void {
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()
@@ -597,22 +631,3 @@ class FeatureMemoryService {
 }
 
 export const featureMemory = new FeatureMemoryService()
-
-// Helper público pra fase 6: extrai seções-chave do corpo de um doc pra injeção
-// no system prompt (Visão geral / Estado atual / Pontos em aberto).
-export function extractKeySections(body: string): string {
-  const wanted = ['Visão geral', 'Estado atual', 'Pontos em aberto']
-  const out: string[] = []
-  // Quebra o body por headings de nível 2.
-  const sections = body.split(/^## /m)
-  for (const chunk of sections) {
-    const nlIdx = chunk.indexOf('\n')
-    if (nlIdx === -1) continue
-    const heading = chunk.slice(0, nlIdx).trim()
-    const content = chunk.slice(nlIdx + 1).trim()
-    if (wanted.includes(heading) && content) {
-      out.push(`## ${heading}\n\n${content}`)
-    }
-  }
-  return out.join('\n\n')
-}

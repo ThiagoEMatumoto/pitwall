@@ -1,4 +1,6 @@
 import type { AgentProviderId, Session } from '../../../../shared/types/ipc'
+import { getDb } from '../db'
+import { inheritFeatureId } from '../feature-session-resolver'
 
 // Seam leaf (sem electron) pro spawn da sessão-filha disparado direto pelo MCP.
 // A implementação real é spawnSession (ipc/sessions.ts, que puxa electron + PTY);
@@ -11,6 +13,8 @@ export interface SpawnHandoffChildInput {
   // Alias da filha: vira o `-n <name>` e, por tabela, o endereço do SendMessage.
   name: string
   featureId?: string | null
+  // Quem despachou: sem featureId explícito a filha nasce na feature dela.
+  motherSessionId?: string | null
   // Prompt posicional (1º turno auto-submetido).
   initialPrompt: string
   // Prompt composto do handoff, entregue via --append-system-prompt-file.
@@ -34,5 +38,13 @@ export function spawnHandoffChild(input: SpawnHandoffChildInput): Session {
   if (!impl) {
     throw new Error('spawn de sessão-filha indisponível: o IPC de sessões não foi inicializado')
   }
-  return impl(input)
+  return impl({ ...input, featureId: inheritFeatureId(input.featureId, motherFeatureOf(input)) })
+}
+
+function motherFeatureOf(input: SpawnHandoffChildInput): string | null {
+  if (input.featureId || !input.motherSessionId) return null
+  const row = getDb()
+    .prepare('SELECT feature_id FROM sessions WHERE id = ?')
+    .get(input.motherSessionId) as { feature_id: string | null } | undefined
+  return row?.feature_id ?? null
 }

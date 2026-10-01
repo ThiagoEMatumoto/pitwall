@@ -129,6 +129,13 @@ export function clearPositions(scope: CanvasScope): void {
   db.transaction(() => forgetPositions('scope = ?', scope))()
 }
 
+// A posição salva de uma sessão é relativa à lane do card em que ela estava:
+// quando a sessão troca de feature (de card), ela cairia em cima dos cartões do
+// card novo. Esquecida, a sessão entra no slot determinístico do card novo.
+export function forgetSessionPositions(sessionId: string): void {
+  forgetPositions(`kind = 'session' AND entity_id = ?`, sessionId)
+}
+
 export function setViewStates(scope: CanvasScope, items: CanvasViewStateInput[]): void {
   const db = getDb()
   const upsert = db.prepare(

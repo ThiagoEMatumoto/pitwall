@@ -83,7 +83,7 @@ describe('readableViewport', () => {
   })
 
   it('desconta controles (esquerda) e minimapa (base): o enquadramento cabe no que sobra', () => {
-    const all = { x: 0, y: 0, w: 1000, h: 600 }
+    const all = { x: 0, y: 0, w: 1000, h: 560 }
     const v = readableViewport({
       visible: all,
       priority: null,
@@ -91,9 +91,9 @@ describe('readableViewport', () => {
       insets: { top: 60, left: 50, bottom: 170 },
     })
     // Zoom limitado pela altura livre (800 - 60 - 170 - 2*24), não pela janela inteira.
-    expect(v!.zoom).toBeCloseTo((800 - 60 - 170 - 48) / 600)
+    expect(v!.zoom).toBeCloseTo((800 - 60 - 170 - 48) / 560)
     expect(v!.x).toBeGreaterThanOrEqual(50)
-    expect(v!.y + 600 * v!.zoom).toBeLessThanOrEqual(800 - 170)
+    expect(v!.y + 560 * v!.zoom).toBeLessThanOrEqual(800 - 170)
   })
 
   it('100%: canto superior esquerdo do conteúdo no canto livre do mapa', () => {
@@ -112,3 +112,21 @@ describe('readableViewport', () => {
   })
 })
 
+
+describe('readableViewport — piso 0.9 e painel da Equipe', () => {
+  it('nunca abaixo de 0.9; a prioridade cabe inteira à esquerda do painel', () => {
+    const view = { w: 1400, h: 800 }
+    const right = 360
+    const priority = { x: 2000, y: 0, w: 600, h: 300 }
+    const v = readableViewport({
+      visible: { x: 0, y: 0, w: 3000, h: 600 },
+      priority,
+      view,
+      insets: { right },
+    })!
+    expect(MIN_READABLE_ZOOM).toBe(0.9)
+    expect(v.zoom).toBe(0.9)
+    const screenRight = v.x + (priority.x + priority.w) * v.zoom
+    expect(screenRight).toBeLessThanOrEqual(view.w - right)
+  })
+})

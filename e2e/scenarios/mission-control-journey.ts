@@ -387,7 +387,11 @@ try {
   const beforeB = new Set(files().map((f) => f.data.pid))
   const idB = await page.evaluate(
     async ({ repoId, mother }) => {
-      const b = await window.api.sessions.spawn({ repoId, name: 'perm-jornada', handoffChild: true })
+      const b = await window.api.sessions.spawn({
+        repoId,
+        name: 'perm-jornada',
+        handoffChild: true,
+      })
       const { handoff } = await window.api.handoffs.createManual({
         repoId,
         motherSessionId: mother,
@@ -414,6 +418,17 @@ try {
     60_000,
   )
   check(waiting, 'B espera com motivo "permissão" (fixture real do 2.1.286)')
+  // live() lê o main; o Alt+A lê a fila do store do renderer, que chega depois.
+  // Sem esperar o renderer, o Alt+A cai numa fila ainda vazia (flaky).
+  await waitFor(
+    'renderer vê B esperando',
+    async () =>
+      (await page
+        .locator('[data-crew-card]', { hasText: 'perm-jornada' })
+        .getByText('precisa de você')
+        .count()) > 0,
+    15_000,
+  )
   const tabsBefore = await page.locator('.dv-tab').count()
   await page.keyboard.press('Alt+a')
   const pinned = page.locator('[data-testid="attention-popover"][role="dialog"]')

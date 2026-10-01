@@ -37,6 +37,10 @@ export interface SessionGraphNode {
   purposeSource: 'user' | 'handoff' | 'transcript' | null
   // Grupo do usuário no mapa (session_groups.id).
   groupId: string | null
+  // Frente da sessão (sessions.feature_id; uma por sessão). Feature arquivada ou
+  // inexistente vira null: a sessão cai no agrupamento do projeto.
+  featureId?: string | null
+  featureTitle?: string | null
   // "Onde parei": resumo sob demanda; desatualizado se lastActivityAt > lastSummaryAt.
   lastSummary: string | null
   lastSummaryAt: number | null
@@ -58,15 +62,41 @@ export interface SessionGraphLaneRepo {
   // null = sessões avulsas (sem repo).
   repoId: string | null
   label: string
+  // Projeto do repo: o card da feature junta repos de projetos diferentes e mostra
+  // o nome do projeto quando ele não é o "home" da feature.
+  projectId?: string | null
+  projectName?: string | null
   sessionIds: string[]
 }
 
-export interface SessionGraphLane {
+// Nível de topo do mapa. 'feature' = o card da feature (uma lane por repo, de
+// qualquer projeto); 'project' = "Sem feature · <Projeto>" (ou as avulsas).
+// projectId/name existem nos dois: no card da feature são o projeto "home" e o
+// título.
+export interface SessionGraphProjectLane {
+  kind: 'project'
   projectId: string | null
   name: string
   color: string | null
   repos: SessionGraphLaneRepo[]
 }
+
+export interface SessionGraphFeatureLane {
+  kind: 'feature'
+  featureId: string
+  projectId: string
+  projectName: string | null
+  name: string
+  color: string | null
+  // Pulso vigente (feature_pulses, o mais recente), 1 linha.
+  pulse: string | null
+  status: string
+  // features.pinned: o foco que o usuário deu na parede.
+  pinned: boolean
+  repos: SessionGraphLaneRepo[]
+}
+
+export type SessionGraphLane = SessionGraphProjectLane | SessionGraphFeatureLane
 
 export interface SessionGraphHandoffEdge {
   kind: 'handoff'
@@ -98,18 +128,10 @@ export interface SessionGraphRepoDepEdge {
   toSessionIds: string[]
 }
 
-// Sessões que trabalharam na mesma feature (≥ 2).
-export interface SessionGraphFeatureEdge {
-  kind: 'feature'
-  featureId: string
-  sessionIds: string[]
-}
-
 export type SessionGraphEdge =
   | SessionGraphHandoffEdge
   | SessionGraphBatonEdge
   | SessionGraphRepoDepEdge
-  | SessionGraphFeatureEdge
 
 export interface SessionGraph {
   nodes: SessionGraphNode[]

@@ -101,6 +101,8 @@ interface Props {
   // Fonte do xterm fixada por quem monta (o lift do mapa usa 14px). Ausente =
   // a preferência do usuário (Configurações / zoom do terminal).
   fontSize?: number
+  // Selo de status de quem monta (modal do mapa): o HUD mostra o mesmo do header.
+  hudStatus?: { label: string; color: string }
   onClose: () => void
   onTitleChange?: (title: string) => void
   onReopen?: () => void
@@ -211,6 +213,7 @@ function TerminalHost({
   renderer = 'auto',
   composer = 'full',
   fontSize: fontSizeOverride,
+  hudStatus,
   onClose,
   onTitleChange,
   onReopen,
@@ -1375,7 +1378,7 @@ function TerminalHost({
 
       {/* HUD fino de agentes (statusline): FORA do container relative, entre o
           terminal e o composer — visível nos dois modos (terminal e chat). */}
-      {!exited && composer === 'full' && <AgentHud activity={activity} now={now} />}
+      {!exited && composer === 'full' && <AgentHud activity={activity} now={now} status={hudStatus} />}
 
       {/* Resumo falado do último turno (modo voz) — faixa acima do composer,
           fora do fluxo de mensagens do chat (transcript é read-only). */}

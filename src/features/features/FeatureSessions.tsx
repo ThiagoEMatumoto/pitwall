@@ -4,7 +4,7 @@ import { Icon } from '@/components/ui/Icon'
 import { sessionsApi } from '@/lib/ipc'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
-import { sessionMoment } from './feature-sessions-api'
+import { orderWithMothers, sessionMoment, type FeatureSessionEntry } from './feature-sessions-api'
 import type { FeatureSessionSummary, Project, Repo } from '../../../shared/types/ipc'
 
 interface Props {
@@ -91,8 +91,13 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
         </p>
       ) : (
         <ul className="flex flex-col gap-1.5">
-          {sessions.map((s) => (
-            <SessionRow key={s.id} session={s} onGo={() => go(s)} />
+          {orderWithMothers(sessions).map((entry) => (
+            <SessionRow
+              key={entry.session.id}
+              entry={entry}
+              repoLabel={repoLabelOf(entry.session.repoId, reposById, projectsById)}
+              onGo={() => go(entry.session)}
+            />
           ))}
         </ul>
       )}
@@ -100,18 +105,51 @@ export function FeatureSessions({ featureId, reposById, projectsById }: Props) {
   )
 }
 
-function SessionRow({ session, onGo }: { session: FeatureSessionSummary; onGo: () => void }) {
+// Repo da sessão com o projeto: a feature junta repos de projetos diferentes.
+function repoLabelOf(
+  repoId: string | null,
+  reposById: Map<string, Repo>,
+  projectsById: Map<string, Project>,
+): string | null {
+  const repo = repoId ? reposById.get(repoId) : undefined
+  if (!repo) return null
+  const project = projectsById.get(repo.projectId)
+  return project ? `${project.name} / ${repo.label}` : repo.label
+}
+
+function SessionRow({
+  entry,
+  repoLabel,
+  onGo,
+}: {
+  entry: FeatureSessionEntry
+  repoLabel: string | null
+  onGo: () => void
+}) {
+  const { session, depth, childCount, motherTitle } = entry
   const alive = session.isLive
   // Sem cc_session_id não há transcript no disco: retomar é impossível e o botão
   // diz por quê em vez de sumir (ou pior, não fazer nada).
   const blocked = !alive && !session.ccSessionId
   return (
-    <li className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
+    <li
+      data-testid="feature-session-row"
+      data-depth={depth}
+      className={`flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 ${depth ? 'ml-6' : ''}`}
+    >
       <div className="min-w-0">
-        <div className="truncate text-xs text-[var(--color-text)]">
-          {session.title ?? 'sessão sem título'}
+        <div className="flex items-center gap-1.5 truncate text-xs text-[var(--color-text)]">
+          {depth === 1 && <span className="text-[var(--color-text-dim)]">↳</span>}
+          <span className="truncate">{session.title ?? 'sessão sem título'}</span>
+          {childCount > 0 && (
+            <span className="shrink-0 rounded-full border border-[var(--color-accent)] px-1.5 text-[10px] text-[var(--color-accent)]">
+              mãe · {childCount} {childCount === 1 ? 'filha' : 'filhas'}
+            </span>
+          )}
         </div>
         <div className="mt-0.5 text-[10px] text-[var(--color-text-dim)]">
+          {repoLabel && <span className="mr-1.5 font-mono">{repoLabel} ·</span>}
+          {motherTitle && <span className="mr-1.5">filha de {motherTitle} ·</span>}
           {relativeTime(sessionMoment(session))}
           {alive && <span className="ml-1.5 text-[var(--color-success)]">· viva</span>}
         </div>

@@ -6,7 +6,9 @@ import {
   OPEN_H,
   OPEN_W,
   graphToFlow,
+  homeRepoLaneId,
   noteExcerpt,
+  positionKey,
   type LaneData,
   type MapInput,
   type SessionCardData,
@@ -259,7 +261,7 @@ describe('graphToFlow — arestas', () => {
     expect(asking.data).toMatchObject({ live: false, alert: true })
   })
 
-  it('bastão, repoDep entre lanes e feature pontilhada entre as sessões', () => {
+  it('bastão e repoDep entre lanes', () => {
     const { edges, nodes } = graphToFlow(
       input({
         graph: graph(base, [
@@ -272,7 +274,6 @@ describe('graphToFlow — arestas', () => {
             fromSessionIds: ['mae'],
             toSessionIds: ['filha'],
           },
-          { kind: 'feature', featureId: 'f1', sessionIds: ['mae', 'filha', 'suc'] },
         ]),
       }),
     )
@@ -281,8 +282,6 @@ describe('graphToFlow — arestas', () => {
       expect.arrayContaining([
         ['e:b:filha:suc', 's:filha', 's:suc', 'baton'],
         ['e:r:r-api:r-web', 'lane:r:r-api', 'lane:r:r-web', 'repoDep'],
-        ['e:f:f1:0', 's:mae', 's:filha', 'feature'],
-        ['e:f:f1:1', 's:filha', 's:suc', 'feature'],
       ]),
     )
     // A mãe mostra quantas filhas tem.
@@ -401,30 +400,27 @@ describe('graphToFlow — escopo: só as sessões em uso', () => {
     )
   })
 
-  it('mais de 8 fios: repoDep/feature viram agregados e todos os rótulos ficam "busy"', () => {
+  const chain = (ids: string[]): SessionGraph['edges'] =>
+    ids.slice(1).map((to, i) => ({ kind: 'baton', from: ids[i], to, handoffId: `b${i}` }))
+
+  it('mais de 8 fios: todos os rótulos ficam "busy"', () => {
     const many = Array.from({ length: 10 }, (_, i) => node(`s${i}`))
-    const edges: SessionGraph['edges'] = [
-      { kind: 'feature', featureId: 'f1', sessionIds: many.map((n) => n.sessionId) },
-    ]
-    const r = graphToFlow(input({ graph: graph(many, edges) }))
+    const r = graphToFlow(input({ graph: graph(many, chain(many.map((n) => n.sessionId))) }))
     expect(r.edges.length).toBe(9)
-    expect(r.edges.every((e) => e.data?.aggregate && e.data.busy)).toBe(true)
-    const few = graphToFlow(
-      input({ graph: graph(many.slice(0, 3), [{ ...edges[0], sessionIds: ['s0', 's1', 's2'] }]) }),
-    )
-    // feature só no foco, sempre; mas sem mapa cheio nenhum rótulo fica "busy".
-    expect(few.edges.every((e) => e.data?.aggregate && !e.data?.busy)).toBe(true)
+    expect(r.edges.every((e) => e.data?.busy)).toBe(true)
+    const few = graphToFlow(input({ graph: graph(many.slice(0, 3), chain(['s0', 's1', 's2'])) }))
+    expect(few.edges.some((e) => e.data?.busy)).toBe(false)
   })
 
   // Fio de ask é temporário: um pendente não pode virar o mapa inteiro pra "busy"
   // (rótulos somem, repoDep esconde) e desvirar quando respondem.
   it('8 fios + 1 ask pendente: o ask não conta pro mapa cheio', () => {
     const nine = Array.from({ length: 9 }, (_, i) => node(`s${i}`))
-    const edges: SessionGraph['edges'] = [
-      { kind: 'feature', featureId: 'f1', sessionIds: nine.map((n) => n.sessionId) },
-    ]
     const r = graphToFlow(
-      input({ graph: graph(nine, edges), asks: [{ id: 'q', from: 's0', to: 's1', text: 'oi' }] }),
+      input({
+        graph: graph(nine, chain(nine.map((n) => n.sessionId))),
+        asks: [{ id: 'q', from: 's0', to: 's1', text: 'oi' }],
+      }),
     )
     expect(r.edges).toHaveLength(9)
     expect(r.edges.some((e) => e.data?.busy)).toBe(false)
@@ -567,5 +563,210 @@ describe('graphToFlow — ask agente↔agente pendente', () => {
       input({ graph: g, asks: [{ id: 'q2', from: 'a', to: 'fora', text: 'oi' }] }),
     )
     expect(flow.edges.some((e) => e.data?.kind === 'ask')).toBe(false)
+  })
+})
+
+describe('graphToFlow — card da feature', () => {
+  // Mesmo shape do buildSessionGraph: um card 'feature' com 3 repos de 2 projetos.
+  function featureGraph(nodes: SessionGraphNode[], edges: SessionGraph['edges'] = []): SessionGraph {
+    const inRepo = (repoId: string) => nodes.filter((n) => n.repoId === repoId && n.featureId === 'f1')
+    return {
+      nodes,
+      edges,
+      lanes: [
+        {
+          kind: 'feature',
+          featureId: 'f1',
+          projectId: 'p1',
+          projectName: 'Loja',
+          name: 'Checkout E2E',
+          color: null,
+          pulse: 'Pagamento integrado',
+          status: 'in-progress',
+          pinned: false,
+          repos: [
+            { repoId: 'r-api', label: 'api', projectId: 'p1', projectName: 'Loja', sessionIds: inRepo('r-api').map((n) => n.sessionId) },
+            { repoId: 'r-web', label: 'web', projectId: 'p1', projectName: 'Loja', sessionIds: inRepo('r-web').map((n) => n.sessionId) },
+            { repoId: 'r-data', label: 'data', projectId: 'p2', projectName: 'Dados', sessionIds: inRepo('r-data').map((n) => n.sessionId) },
+          ],
+        },
+        {
+          kind: 'project',
+          projectId: 'p1',
+          name: 'Sem feature · Loja',
+          color: null,
+          repos: [
+            {
+              repoId: 'r-api',
+              label: 'api',
+              sessionIds: nodes.filter((n) => !n.featureId).map((n) => n.sessionId),
+            },
+          ],
+        },
+      ],
+    }
+  }
+  const f = (id: string, repoId: string, patch: Partial<SessionGraphNode> = {}) =>
+    node(id, { repoId, featureId: 'f1', featureTitle: 'Checkout E2E', ...patch })
+  const handoff = (from: string, to: string): SessionGraph['edges'][number] => ({
+    kind: 'handoff',
+    from,
+    to,
+    handoffId: `h-${to}`,
+    handoffStatus: 'running',
+    currentStep: null,
+    createdAt: 1,
+  })
+
+  it('1 card com 3 lanes de repo (inclusive vazias), projeto alheio marcado; sem feature à parte', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data'), node('solta')])
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    expect(card.data).toMatchObject({
+      level: 'feature',
+      label: 'Checkout E2E',
+      pulse: 'Pagamento integrado',
+      sessionCount: 2,
+      repoCount: 3,
+    })
+    const lanes = nodes.filter((n) => n.parentId === 'lane:f:f1')
+    expect(lanes.map((n) => [n.id, (n.data as LaneData).projectName])).toEqual([
+      ['lane:f:f1:r:r-api', null],
+      ['lane:f:f1:r:r-web', null],
+      ['lane:f:f1:r:r-data', 'Dados'],
+    ])
+    expect(nodes.find((n) => n.id === 's:c')?.parentId).toBe('lane:f:f1:r:r-data')
+    // O mesmo repo no card e em "Sem feature": ids distintos.
+    expect(nodes.find((n) => n.id === 's:solta')?.parentId).toBe('lane:r:r-api')
+    expect((nodes.find((n) => n.id === 'lane:p:p1')!.data as LaneData).label).toBe(
+      'Sem feature · Loja',
+    )
+  })
+
+  it('mãe acima das filhas, mesmo em outra lane; antecessora do bastão ao lado da sucessora', () => {
+    const g = featureGraph(
+      [
+        f('c1', 'r-api', { lastActivityAt: 9_000 }),
+        f('m', 'r-api'),
+        f('c2', 'r-data'),
+        f('suc', 'r-web'),
+        f('pred', 'r-web', { lastActivityAt: 9_999 }),
+      ],
+      [handoff('m', 'c1'), handoff('m', 'c2'), { kind: 'baton', from: 'pred', to: 'suc', handoffId: 'b' }],
+    )
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    const bottom = (id: string) => at(id).position.y + at(id).height!
+    expect(at('c1').position.y).toBeGreaterThanOrEqual(bottom('m'))
+    // c2 está em outra lane, mas começa abaixo da geração da mãe.
+    expect(at('c2').position.y).toBeGreaterThanOrEqual(bottom('m'))
+    expect(at('pred').position.y).toBe(at('suc').position.y)
+    expect(at('pred').position.x).toBeGreaterThanOrEqual(at('suc').position.x + at('suc').width!)
+    // Caixa justa: a lane do web cabe as duas lado a lado, sem sobrar coluna.
+    const web = nodes.find((n) => n.id === 'lane:f:f1:r:r-web')!
+    expect(web.width).toBe(at('pred').position.x + at('pred').width! + 12)
+  })
+
+  it('caixa justa: a filha encosta na própria mãe, não abaixo da pilha alta de outra coluna', () => {
+    const g = featureGraph(
+      [
+        f('m', 'r-web'),
+        f('x1', 'r-data'),
+        f('x2', 'r-data'),
+        f('x3', 'r-data'),
+        f('x4', 'r-data'),
+        f('c-web', 'r-web'),
+        f('c-api', 'r-api'),
+      ],
+      [handoff('m', 'c-web'), handoff('m', 'c-api')],
+    )
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    const bottom = (id: string) => at(id).position.y + at(id).height!
+    for (const c of ['c-web', 'c-api']) {
+      expect(at(c).position.y).toBeGreaterThanOrEqual(bottom('m'))
+      expect(at(c).position.y).toBeLessThanOrEqual(bottom('m') + 24)
+    }
+    // A pilha sem relação segue alta na coluna dela.
+    expect(bottom('x4')).toBeGreaterThan(at('c-web').position.y + 600)
+  })
+
+  it('tidy determinístico e posição do card persistida por lane:f; migra a de lane:p', () => {
+    const g = featureGraph([f('m', 'r-api')])
+    expect(positionKey('lane:f:f1')).toEqual({ kind: 'lane', entityId: 'f:f1' })
+    expect(positionKey('lane:f:f1:r:r-api')).toBeNull()
+    const migrated = graphToFlow(
+      input({ graph: g, positions: [{ scope: 'all', kind: 'lane', entityId: 'p:p1', x: 500, y: 70, w: null, h: null }] }),
+    )
+    expect(migrated.nodes.find((n) => n.id === 'lane:f:f1')?.position).toEqual({ x: 500, y: 70 })
+    const own = graphToFlow(
+      input({
+        graph: g,
+        positions: [
+          { scope: 'all', kind: 'lane', entityId: 'p:p1', x: 500, y: 70, w: null, h: null },
+          { scope: 'all', kind: 'lane', entityId: 'f:f1', x: 10, y: 20, w: null, h: null },
+        ],
+      }),
+    )
+    expect(own.nodes.find((n) => n.id === 'lane:f:f1')?.position).toEqual({ x: 10, y: 20 })
+    const a = graphToFlow(input({ graph: g })).nodes.map((n) => [n.id, n.position])
+    const b = graphToFlow(input({ graph: g })).nodes.map((n) => [n.id, n.position])
+    expect(a).toEqual(b)
+  })
+
+  it('card salvo que cresceu (resolvedor moveu sessões) não cobre o vizinho salvo; nada é persistido', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data'), node('solta')])
+    const positions = [
+      { scope: 'all', kind: 'lane', entityId: 'f:f1', x: 0, y: 0, w: null, h: null },
+      // Salvo por "Organizar" quando o card tinha 1 lane: agora ele tem 3.
+      { scope: 'all', kind: 'lane', entityId: 'p:p1', x: 320, y: 0, w: null, h: null },
+    ] as MapInput['positions']
+    const { nodes } = graphToFlow(input({ graph: g, positions }))
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    const loose = nodes.find((n) => n.id === 'lane:p:p1')!
+    expect(card.position).toEqual({ x: 0, y: 0 })
+    expect(card.width!).toBeGreaterThan(320)
+    expect(loose.position.x).toBeGreaterThanOrEqual(card.position.x + card.width!)
+    expect(loose.position.y).toBe(0)
+  })
+
+  it('card novo não nasce em cima da lane "Sem feature" salva no v1 (lane:p ainda exibida)', () => {
+    const g = featureGraph([f('m', 'r-api'), node('solta')])
+    const { nodes } = graphToFlow(
+      input({ graph: g, positions: [{ scope: 'all', kind: 'lane', entityId: 'p:p1', x: 0, y: 0, w: null, h: null }] }),
+    )
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    const loose = nodes.find((n) => n.id === 'lane:p:p1')!
+    expect(loose.position).toEqual({ x: 0, y: 0 })
+    expect(card.position.x).toBeGreaterThanOrEqual(loose.position.x + loose.width!)
+  })
+
+  it('escopo de projeto: o card cross-project mostra a sessão do repo do outro projeto', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data', { projectId: 'p2' })])
+    const { nodes } = graphToFlow(input({ graph: g, scope: 'p1' }))
+    expect(nodes.find((n) => n.id === 's:c')?.parentId).toBe('lane:f:f1:r:r-data')
+    expect((nodes.find((n) => n.id === 'lane:f:f1')!.data as LaneData).sessionCount).toBe(2)
+    // E o escopo do outro projeto também vê o card inteiro (ele tem repo lá).
+    const other = graphToFlow(input({ graph: g, scope: 'p2' })).nodes
+    expect(other.find((n) => n.id === 's:m')?.parentId).toBe('lane:f:f1:r:r-api')
+  })
+
+  it('mãe com posição salva (v1): a filha de outra lane nasce abaixo dela', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c1', 'r-data')], [handoff('m', 'c1')])
+    const { nodes } = graphToFlow(
+      input({
+        graph: g,
+        positions: [{ scope: 'all', kind: 'session', entityId: 'm', x: 12, y: 600, w: null, h: null }],
+      }),
+    )
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    expect(at('m').position.y).toBe(600)
+    expect(at('c1').position.y).toBeGreaterThanOrEqual(at('m').position.y + at('m').height!)
+  })
+
+  it('homeRepoLaneId: a lane de repo do card em que a sessão mora', () => {
+    const g = featureGraph([f('m', 'r-api'), node('solta')])
+    expect(homeRepoLaneId(g, 'm')).toBe('lane:f:f1:r:r-api')
+    expect(homeRepoLaneId(g, 'solta')).toBe('lane:r:r-api')
   })
 })

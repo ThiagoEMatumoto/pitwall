@@ -1,6 +1,6 @@
 // Grafo de sessões: quem delegou pra quem (handoff), quem herdou o bastão de quem,
-// quais repos ligados têm sessões vivas ao mesmo tempo e quais sessões trabalham
-// na mesma feature. buildSessionGraph é PURA; readSessionGraphInput só lê o banco
+// quais repos ligados têm sessões vivas ao mesmo tempo e, no topo, o card de cada
+// feature (sessões agrupadas por sessions.feature_id). buildSessionGraph é PURA; readSessionGraphInput só lê o banco
 // (recebe o db por parâmetro, sem electron) — o wrapper vivo mora no ipc.
 import type Database from 'better-sqlite3'
 import type { AgentProviderId, HandoffStatus } from '../../../shared/types/ipc'
@@ -9,6 +9,7 @@ import type {
   SessionGraphAttention,
   SessionGraphEdge,
   SessionGraphLane,
+  SessionGraphLaneRepo,
   SessionGraphNode,
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
@@ -74,9 +75,19 @@ export interface GraphRepoDepRow {
   kind: string
 }
 
-export interface GraphFeatureRecordRow {
-  session_id: string
+// Features não-arquivadas citadas pelas sessões do grafo, com o pulso vigente.
+export interface GraphFeatureRow {
+  id: string
+  project_id: string
+  title: string
+  status: string
+  pinned: number
+  pulse: string | null
+}
+
+export interface GraphFeatureRepoRow {
   feature_id: string
+  repo_id: string
 }
 
 // handoff_events 'mother_transferred' (handoffStore.transferMother): de quem
@@ -95,7 +106,8 @@ export interface SessionGraphInput {
   repos: GraphRepoRow[]
   projects: GraphProjectRow[]
   repoDependencies: GraphRepoDepRow[]
-  featureRecords: GraphFeatureRecordRow[]
+  features?: GraphFeatureRow[]
+  featureRepos?: GraphFeatureRepoRow[]
   live: Map<string, LiveSessionState>
   // 1º prompt humano por sessions.id — só pra quem não tem propósito melhor.
   firstPrompts?: Map<string, string | null>
@@ -108,6 +120,7 @@ export interface SessionGraphInput {
 }
 
 const LOOSE_LABEL = 'Avulsas'
+export const NO_FEATURE_PREFIX = 'Sem feature · '
 
 // Espelha o displayTitle do Terminal.tsx: rename manual > nome vivo do CLI >
 // título salvo > label do repo.
@@ -172,6 +185,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
     (input.motherTransfers ?? []).filter((t) => t.from !== t.to).map((t) => t.from),
   )
   const repoById = new Map(input.repos.map((r) => [r.id, r]))
+  const featureById = new Map((input.features ?? []).map((f) => [f.id, f]))
   const sorted = [...input.sessions].sort(
     (a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id),
   )
@@ -209,6 +223,8 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       purpose: purpose?.text ?? null,
       purposeSource: purpose?.source ?? null,
       groupId: s.group_id ?? null,
+      featureId: (s.feature_id && featureById.get(s.feature_id)?.id) ?? null,
+      featureTitle: (s.feature_id && featureById.get(s.feature_id)?.title) ?? null,
       lastSummary: s.last_summary ?? null,
       lastSummaryAt: s.last_summary_at ?? null,
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
@@ -325,46 +341,106 @@ function repoDepEdges(deps: GraphRepoDepRow[], nodes: SessionGraphNode[]): Sessi
   }))
 }
 
-function featureEdges(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphEdge[] {
-  const featuresBySession = new Map<string, Set<string>>()
-  const add = (sessionId: string, featureId: string | null) => {
-    if (!featureId) return
-    featuresBySession.set(
-      sessionId,
-      new Set([...(featuresBySession.get(sessionId) ?? []), featureId]),
-    )
-  }
-  for (const s of input.sessions) add(s.id, s.feature_id)
-  for (const r of input.featureRecords) add(r.session_id, r.feature_id)
+const byPosition = <T extends { position: number }>(a: T, b: T) => a.position - b.position
 
-  const sessionsByFeature = new Map<string, string[]>()
-  for (const n of nodes) {
-    for (const f of featuresBySession.get(n.sessionId) ?? []) {
-      sessionsByFeature.set(f, [...(sessionsByFeature.get(f) ?? []), n.sessionId])
-    }
-  }
-  return [...sessionsByFeature.entries()]
-    .filter(([, ids]) => ids.length >= 2)
-    .map(([featureId, sessionIds]) => ({ kind: 'feature', featureId, sessionIds }))
+// Repos de uma lane na ordem do usuário: projeto (home primeiro) → posição do repo.
+function laneRepos(
+  repoIds: Set<string>,
+  sessionsByRepo: Map<string, string[]>,
+  input: SessionGraphInput,
+  homeProjectId: string | null,
+): SessionGraphLaneRepo[] {
+  const project = new Map(input.projects.map((p) => [p.id, p]))
+  const rank = (projectId: string) =>
+    projectId === homeProjectId ? -1 : (project.get(projectId)?.position ?? Infinity)
+  return input.repos
+    .filter((r) => repoIds.has(r.id))
+    .sort((a, b) => rank(a.project_id) - rank(b.project_id) || byPosition(a, b))
+    .map((r) => ({
+      repoId: r.id,
+      label: r.label,
+      projectId: r.project_id,
+      projectName: project.get(r.project_id)?.name ?? null,
+      sessionIds: sessionsByRepo.get(r.id) ?? [],
+    }))
 }
 
+function featureLanes(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphLane[] {
+  const byFeature = new Map<string, SessionGraphNode[]>()
+  for (const n of nodes) {
+    if (n.featureId) byFeature.set(n.featureId, [...(byFeature.get(n.featureId) ?? []), n])
+  }
+  const projects = new Map(input.projects.map((p) => [p.id, p]))
+  const registered = new Map<string, Set<string>>()
+  for (const fr of input.featureRepos ?? []) {
+    registered.set(fr.feature_id, new Set([...(registered.get(fr.feature_id) ?? []), fr.repo_id]))
+  }
+  // Ordem estável (a atividade muda a cada tick e faria os cards pularem): o foco
+  // do usuário primeiro, depois a feature cuja 1ª sessão nasceu antes.
+  const firstStart = (members: SessionGraphNode[]) =>
+    Math.min(...members.map((m) => m.startedAt ?? 0))
+  return (input.features ?? [])
+    .filter((f) => byFeature.has(f.id))
+    .sort(
+      (a, b) =>
+        b.pinned - a.pinned ||
+        firstStart(byFeature.get(a.id)!) - firstStart(byFeature.get(b.id)!) ||
+        a.id.localeCompare(b.id),
+    )
+    .map((f): SessionGraphLane => {
+      const members = byFeature.get(f.id)!
+      const sessionsByRepo = new Map<string, string[]>()
+      const loose: string[] = []
+      for (const n of members) {
+        if (n.repoId)
+          sessionsByRepo.set(n.repoId, [...(sessionsByRepo.get(n.repoId) ?? []), n.sessionId])
+        else loose.push(n.sessionId)
+      }
+      const repoIds = new Set([...(registered.get(f.id) ?? []), ...sessionsByRepo.keys()])
+      const repos = laneRepos(repoIds, sessionsByRepo, input, f.project_id)
+      if (loose.length) repos.push({ repoId: null, label: LOOSE_LABEL, sessionIds: loose })
+      const home = projects.get(f.project_id)
+      return {
+        kind: 'feature',
+        featureId: f.id,
+        projectId: f.project_id,
+        projectName: home?.name ?? null,
+        name: f.title,
+        color: home?.color ?? null,
+        pulse: f.pulse,
+        status: f.status,
+        pinned: !!f.pinned,
+        repos,
+      }
+    })
+}
+
+// Topo do mapa: um card por feature (lanes de repo de qualquer projeto) e, pra
+// quem não tem feature, "Sem feature · <Projeto>"; avulsas sem feature por último.
 function buildLanes(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphLane[] {
   const byRepo = new Map<string, string[]>()
   const loose: string[] = []
   for (const n of nodes) {
+    if (n.featureId) continue
     if (n.repoId) byRepo.set(n.repoId, [...(byRepo.get(n.repoId) ?? []), n.sessionId])
     else loose.push(n.sessionId)
   }
-  const byPosition = <T extends { position: number }>(a: T, b: T) => a.position - b.position
-  const lanes: SessionGraphLane[] = [...input.projects].sort(byPosition).flatMap((p) => {
-    const repos = input.repos
-      .filter((r) => r.project_id === p.id && byRepo.has(r.id))
-      .sort(byPosition)
-      .map((r) => ({ repoId: r.id, label: r.label, sessionIds: byRepo.get(r.id) ?? [] }))
-    return repos.length ? [{ projectId: p.id, name: p.name, color: p.color, repos }] : []
-  })
+  const lanes: SessionGraphLane[] = featureLanes(input, nodes)
+  for (const p of [...input.projects].sort(byPosition)) {
+    const repoIds = new Set(input.repos.filter((r) => r.project_id === p.id && byRepo.has(r.id)).map((r) => r.id))
+    const repos = laneRepos(repoIds, byRepo, input, p.id)
+    if (repos.length)
+      lanes.push({
+        kind: 'project',
+        projectId: p.id,
+        name: `${NO_FEATURE_PREFIX}${p.name}`,
+        color: p.color,
+        repos,
+      })
+  }
   if (loose.length) {
     lanes.push({
+      kind: 'project',
       projectId: null,
       name: LOOSE_LABEL,
       color: null,
@@ -386,7 +462,6 @@ export function buildSessionGraph(input: SessionGraphInput): SessionGraph {
       ...lineage,
       ...motherBatonEdges(input.motherTransfers ?? [], ids, lineage),
       ...repoDepEdges(input.repoDependencies, nodes),
-      ...featureEdges(input, nodes),
     ],
   }
 }
@@ -531,18 +606,32 @@ export function readSessionGraphInput(
       .filter((s) => s.provider === 'claude' && !s.last_summary && s.cc_session_id)
       .map((s) => [s.id, lastPrompt(s.cc_session_id!, live.has(s.id))] as const),
   )
-  const featureRecords = db
+  const featureIds = JSON.stringify([
+    ...new Set(sessions.map((s) => s.feature_id).filter((id): id is string => !!id)),
+  ])
+  // Pulso vigente = o mais recente (mesma ordem do loop-store.currentPulse).
+  const features = db
     .prepare(
-      `SELECT session_id, feature_id FROM feature_session_records
-        WHERE session_id IN (SELECT value FROM json_each(?))`,
+      `SELECT f.id, f.project_id, f.title, f.status, f.pinned,
+              (SELECT body FROM feature_pulses p WHERE p.feature_id = f.id
+                ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1) AS pulse
+         FROM features f
+        WHERE f.id IN (SELECT value FROM json_each(?)) AND f.archived_at IS NULL`,
     )
-    .all(ids) as GraphFeatureRecordRow[]
+    .all(featureIds) as GraphFeatureRow[]
+  const featureRepos = db
+    .prepare(
+      `SELECT feature_id, repo_id FROM feature_repos
+        WHERE feature_id IN (SELECT value FROM json_each(?))`,
+    )
+    .all(featureIds) as GraphFeatureRepoRow[]
 
   return {
     sessions,
     handoffs,
     motherTransfers: readMotherTransfers(db, handoffs),
-    featureRecords,
+    features,
+    featureRepos,
     firstPrompts,
     pastTasks,
     lastPrompts,

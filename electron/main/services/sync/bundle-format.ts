@@ -57,6 +57,7 @@ export function featuresDir(bundleDir: string): string {
 // group_id e last_summary* moram em `sessions`, também excluída).
 // Idem a 052: agent_messages referencia sessions.id locais e o Q&A cru não sai
 // da máquina (no feature ledger entram só decisões).
+// Idem a 053: sessions.feature_source (origem do vínculo) mora em `sessions`.
 //
 // Nota sobre objectives self-FK (parent_objective_id REFERENCES objectives
 // ON DELETE SET NULL): no INSERT em massa o import roda com foreign_keys=OFF,

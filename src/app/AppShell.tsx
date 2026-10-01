@@ -75,6 +75,7 @@ import {
   useAttentionStore,
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
+import { listenSessionFeatureChanges } from '@/store/sessionFeatureStore'
 import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
@@ -200,6 +201,13 @@ export function AppShell() {
   const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
   const toastPlacement = useToastPlacement(crewDockWidth)
+  const toastStyle = {
+    right: toastPlacement.right,
+    top: toastPlacement.top,
+    bottom: toastPlacement.bottom,
+    zIndex: toastPlacement.zIndex,
+    maxWidth: toastPlacement.maxWidth,
+  }
 
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
@@ -285,6 +293,8 @@ export function AppShell() {
     () => batonApi.onChildrenMissed((payload) => showToast(childrenMissedToast(payload))),
     [],
   )
+
+  useEffect(() => listenSessionFeatureChanges(), [])
 
   // Restore do layout exato. Quando há pendingLayout, aplicamos api.fromJSON UMA
   // vez — em vez de deixar o effect de reconciliação criar os painéis no arranjo
@@ -932,10 +942,15 @@ export function AppShell() {
       <div
         data-testid="toast-stack"
         className="pointer-events-none fixed flex flex-col items-end gap-2"
-        style={toastPlacement}
+        style={toastStyle}
+        hidden={toastPlacement.hidden}
       >
-        <UpdateToast />
-        <NotificationToast />
+        {/* Mesmo teto dos avisos: na faixa sobre a modal não cabe o card de update.
+            Escondido, não desmontado, para não perder o "dispensar". */}
+        <div hidden={toastPlacement.maxVisible === 0}>
+          <UpdateToast />
+        </div>
+        <NotificationToast maxVisible={toastPlacement.maxVisible} />
       </div>
     </div>
   )

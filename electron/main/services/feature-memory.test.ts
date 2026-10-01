@@ -3,7 +3,8 @@
 // o feature_link direto; score médio e baixo não escrevem NADA — nem link, nem
 // task de revisão (a task era ruído que ninguém consumia). Mesma
 // estratégia de setup de mcp/tools.test.ts — DB real (tmp dir), electron mockado.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import matter from 'gray-matter'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,7 +30,12 @@ import {
   get as getFeature,
   listObjectiveLinks,
   sessionRecordCount,
+  saveSessionRecord,
+  updateSection,
+  update as updateFeature,
+  appendFixedNote,
 } from './feature-store'
+import { getSection } from '../../../shared/feature-sections'
 import { create as createObjective, createKeyResult } from './objective-store'
 import { list as listTasks } from './task-store'
 import {
@@ -37,6 +43,7 @@ import {
   isSelfRepoPath,
   featureMemory,
   pulseCandidateFromSummary,
+  mergeSynthFrontmatter,
 } from './feature-memory'
 import { currentPulse, pulseHistory, setPulse } from './loop-store'
 import { findTranscriptPath } from './session-activity'
@@ -437,5 +444,141 @@ describe('generateSessionRecord — pulso automático', () => {
     expect(pulseHistory(feature.id)).toHaveLength(2)
     expect(currentPulse(feature.id)?.body).toBe('Rede de segurança do pulso está de pé.')
     featureMemory.close()
+  })
+})
+
+describe('síntese holística — seções do usuário', () => {
+  // Corpo do .md de uma seção, exatamente como está no disco (do heading até
+  // antes do próximo heading).
+  function chunkOf(md: string, heading: string): string {
+    const start = md.indexOf(`## ${heading}\n`)
+    const next = md.indexOf('\n## ', start + 1)
+    return md.slice(start, next === -1 ? md.length : next)
+  }
+
+  it('o LLM "reescreve" regras e notas: saem byte a byte iguais; autosave durante a síntese não se perde', async () => {
+    const feature = createFeature({
+      projectId: 'proj-1',
+      title: 'Checkout com regras',
+      synthMode: 'auto',
+      businessRules: 'Desconto máx 10%',
+    })
+    updateSection(feature.id, 'Notas fixadas', 'Nota A')
+    seedSession('sess-synth-user')
+    saveSessionRecord({
+      sessionId: 'sess-synth-user',
+      featureId: feature.id,
+      ccSessionId: 'cc-synth-user',
+      summary: 'Implementou o carrinho.',
+      model: null,
+    })
+    const before = readFileSync(feature.docPath, 'utf8')
+
+    let promptSeen = ''
+    vi.mocked(runClaude).mockImplementation(async (args) => {
+      promptSeen = args[args.indexOf('-p') + 1]
+      // Autosave do painel chega no meio da chamada do LLM.
+      updateSection(feature.id, 'Notas fixadas', 'Nota A\n\n---\n\nNota B (autosave)')
+      const fm = matter(before).data
+      const hostile = [
+        '## Visão geral\n\nCheckout reescrito.',
+        '## Regras de negócio\n\n- Desconto máx 50%',
+        '## Notas fixadas\n\n(apagadas pelo modelo)',
+        '## Estado atual\n\nCarrinho pronto.',
+      ].join('\n\n')
+      return { code: 0, stdout: matter.stringify(hostile, fm), stderr: '' }
+    })
+
+    await featureMemory.synthesizeNow(feature.id)
+
+    const after = readFileSync(feature.docPath, 'utf8')
+    expect(promptSeen).not.toContain('Desconto')
+    expect(promptSeen).not.toContain('Nota A')
+    expect(chunkOf(after, 'Regras de negócio')).toBe(chunkOf(before, 'Regras de negócio'))
+    expect(getSection(matter(after).content, 'Notas fixadas')).toBe('Nota A\n\n---\n\nNota B (autosave)')
+    expect(after).not.toContain('50%')
+    expect(after).not.toContain('apagadas pelo modelo')
+    expect(getSection(matter(after).content, 'Estado atual')).toBe('Carrinho pronto.')
+    featureMemory.close()
+  })
+})
+
+describe('síntese holística — frontmatter', () => {
+  it('status/título mudados DURANTE a chamada do LLM não são revertidos pela cópia velha', async () => {
+    const feature = createFeature({ projectId: 'proj-1', title: 'Checkout fm', synthMode: 'auto' })
+    seedSession('sess-synth-fm')
+    saveSessionRecord({
+      sessionId: 'sess-synth-fm',
+      featureId: feature.id,
+      ccSessionId: 'cc-synth-fm',
+      summary: 'Mexeu no carrinho.',
+      model: null,
+    })
+    const before = readFileSync(feature.docPath, 'utf8')
+    vi.mocked(runClaude).mockImplementation(async () => {
+      // feature_update/rename no meio da síntese.
+      updateFeature({ id: feature.id, status: 'done', title: 'Checkout renomeado' })
+      // O LLM ecoa o frontmatter do snapshot (status/título antigos).
+      return {
+        code: 0,
+        stdout: matter.stringify('## Estado atual\n\nok.', matter(before).data),
+        stderr: '',
+      }
+    })
+
+    await featureMemory.synthesizeNow(feature.id)
+
+    const data = matter(readFileSync(feature.docPath, 'utf8')).data
+    expect(data.status).toBe('done')
+    expect(data.title).toBe('Checkout renomeado')
+    featureMemory.close()
+  })
+
+  it('mergeSynthFrontmatter: o LLM refina title/status só quando o disco não mudou; o resto vem do disco', () => {
+    const snap = { id: 'f', title: 'A', status: 'in-progress', objective: 'o1' }
+    const llm = { id: 'X', title: 'A refinado', status: 'done', objective: 'inventado' }
+    expect(mergeSynthFrontmatter(snap, llm, { ...snap })).toMatchObject({
+      id: 'f',
+      title: 'A refinado',
+      status: 'done',
+      objective: 'o1',
+    })
+    const moved = { ...snap, status: 'blocked' }
+    expect(mergeSynthFrontmatter(snap, llm, moved)).toMatchObject({ title: 'A refinado', status: 'blocked' })
+  })
+})
+
+describe('feature-store — seções', () => {
+  it('seed de regras de negócio cai na seção própria, não na Visão geral', () => {
+    const f = createFeature({
+      projectId: 'proj-1',
+      title: 'Seeds',
+      overview: 'Objetivo X',
+      businessRules: 'Só PJ',
+    })
+    const body = matter(readFileSync(f.docPath, 'utf8')).content
+    expect(getSection(body, 'Regras de negócio')).toBe('Só PJ')
+    expect(getSection(body, 'Visão geral')).toBe('Objetivo X')
+  })
+
+  it('updateSection troca só a seção alvo', () => {
+    const f = createFeature({ projectId: 'proj-1', title: 'Só uma', overview: 'Visão intacta' })
+    updateSection(f.id, 'Regras de negócio', 'Desconto máx 10%')
+    const body = getFeature(f.id)?.body ?? ''
+    expect(getSection(body, 'Regras de negócio')).toBe('Desconto máx 10%')
+    expect(getSection(body, 'Visão geral')).toBe('Visão intacta')
+    for (const h of ['Notas fixadas', 'Estado atual', 'Decisões', 'Pontos em aberto', 'Linha do tempo']) {
+      expect(body).toContain(`## ${h}`)
+      expect(getSection(body, h)).toBe('')
+    }
+  })
+
+  it('appendFixedNote anexa ao fim das notas', () => {
+    const f = createFeature({ projectId: 'proj-1', title: 'Notas' })
+    appendFixedNote(f.id, 'primeira')
+    appendFixedNote(f.id, 'segunda')
+    expect(getSection(getFeature(f.id)?.body ?? '', 'Notas fixadas')).toBe(
+      'primeira\n\n---\n\nsegunda',
+    )
   })
 })

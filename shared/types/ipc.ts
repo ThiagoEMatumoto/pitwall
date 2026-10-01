@@ -730,6 +730,20 @@ export interface UpdateFeatureInput {
   model?: string | null
 }
 
+// Painel da feature / MCP feature_update: troca só uma seção do doc `.md`.
+// `section` é um heading de FEATURE_SECTIONS (shared/feature-sections.ts).
+export interface UpdateFeatureSectionInput {
+  featureId: string
+  section: string
+  markdown: string
+}
+
+// "Fixar na feature": anexa o texto às notas fixadas da feature.
+export interface AppendFeatureFixedNoteInput {
+  featureId: string
+  text: string
+}
+
 export interface SetFeatureReposInput {
   id: string
   repos: FeatureRepoLink[]
@@ -1258,6 +1272,8 @@ export interface FeatureSessionSummary {
   endedAt: number | null
   /** true = a PTY desta sessão está viva NESTE app agora. */
   isLive: boolean
+  /** Mãe do handoff mais recente em que esta sessão é a filha (sessions.id). */
+  motherSessionId?: string | null
 }
 
 export interface PaneSnapshot {
@@ -1290,6 +1306,13 @@ export interface PtyExitEvent {
   sessionId: string
   exitCode: number
   signal: number | null
+}
+
+// 'session:feature-changed': o vínculo sessão→feature mudou no main (resolução
+// contínua ou "Mover para feature…"). featureId null = sem feature.
+export interface SessionFeatureChangedEvent {
+  sessionId: string
+  featureId: string | null
 }
 
 // Subagente (Task tool) visível no tail do transcript da sessão. 'running' =
@@ -2776,6 +2799,7 @@ export interface Api {
     list(): Promise<Session[]>
     onData(handler: (event: PtyDataEvent) => void): () => void
     onExit(handler: (event: PtyExitEvent) => void): () => void
+    onFeatureChanged(handler: (event: SessionFeatureChangedEvent) => void): () => void
     watchActivity(ccSessionId: string): Promise<void>
     unwatchActivity(ccSessionId: string): Promise<void>
     onActivity(handler: (event: SessionActivity) => void): () => void
@@ -2961,6 +2985,12 @@ export interface Api {
     dismissDuplicate(featureId: string): Promise<Feature>
     /** Absorve o rascunho no destino e ARQUIVA a origem (nunca apaga). */
     mergeDuplicate(input: MergeFeatureDuplicateInput): Promise<Feature>
+    /** Troca só uma seção do doc (painel da feature: notas fixadas, regras de negócio). */
+    updateSection(input: UpdateFeatureSectionInput): Promise<Feature>
+    /** "Fixar na feature": anexa o texto às notas fixadas. */
+    appendFixedNote(input: AppendFeatureFixedNoteInput): Promise<Feature>
+    /** Roda a síntese holística agora, sem esperar o debounce. */
+    synthesizeNow(featureId: string): Promise<void>
     onUpdated(handler: (feature: Feature) => void): () => void
     onSynthError(handler: (event: FeatureSynthError) => void): () => void
   }
