@@ -37,7 +37,16 @@ interface CardViewStoreState {
   leaveTerminal: (sessionId: string) => void
   setTerminalSize: (sessionId: string, size: CardSize) => void
   setTail: (update: ScreenTailUpdate) => void
+  // Sessão criada com o mapa na frente: vira cartão em modo terminal assim que
+  // existir (PTY viva + nó no grafo). Quem consome é o SessionMap.
+  pendingTerminal: string | null
+  requestTerminal: (sessionId: string) => void
+  clearPendingTerminal: () => void
 }
+
+// Sessão que não chega ao mapa (escopo de outro projeto, spawn que morreu) não
+// pode segurar o pedido e entrar em terminal minutos depois, do nada.
+const PENDING_TERMINAL_TTL_MS = 20_000
 
 export const useCardViewStore = create<CardViewStoreState>((set, get) => {
   const commit = (change: ViewChange) => {
@@ -68,5 +77,13 @@ export const useCardViewStore = create<CardViewStoreState>((set, get) => {
     setTerminalSize: (id, size) =>
       set((s) => ({ terminalSizes: { ...s.terminalSizes, [id]: size } })),
     setTail: (update) => set((s) => ({ tails: { ...s.tails, [update.sessionId]: update } })),
+    pendingTerminal: null,
+    requestTerminal: (sessionId) => {
+      set({ pendingTerminal: sessionId })
+      setTimeout(() => {
+        if (get().pendingTerminal === sessionId) set({ pendingTerminal: null })
+      }, PENDING_TERMINAL_TTL_MS)
+    },
+    clearPendingTerminal: () => set({ pendingTerminal: null }),
   }
 })

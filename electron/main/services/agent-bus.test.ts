@@ -171,6 +171,7 @@ function harness(): Harness {
     isRunning: (id) => peers.some((p) => p.sessionId === id),
     status: (id) => status.get(id) ?? null,
     screen: async (id) => screens.get(id) ?? null,
+    nativeStatus: (id) => id !== CODEX,
     handoffAsking: () => false,
     write: (sessionId, text) => written.push({ sessionId, text }),
     emit: (snap) => bus?.onQueueEvent(snap.lastEvent),

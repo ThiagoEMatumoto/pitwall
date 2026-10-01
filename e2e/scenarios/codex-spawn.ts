@@ -18,7 +18,7 @@ import type { LiveSessionInfo } from '../../shared/types/ipc'
 //   3. Um turno (o stub imprime ~3s) deixa a sessão 'working'; quando a tela
 //      para, 'idle'. Sem espelho da tela não há prova de input livre (o overlay
 //      de aprovação do Codex também é tela parada): "quando terminar" é recusado
-//      sem escrever nada, e só o "Enviar agora" explícito chega ao stdin.
+//      sem escrever nada, "Enviar agora" também; falar com ele é pelo terminal.
 // HOME fake + codex stub: nem o ~/.codex real nem a API são tocados.
 
 const require = createRequire(import.meta.url)
@@ -166,7 +166,13 @@ try {
     !!sessionId && entry?.ccSessionId === sessionId,
     JSON.stringify(entry),
   )
-  // Ctrl+N a partir da Home não troca de área: a pane vive em Projetos.
+  // Ctrl+N a partir da Home leva até Projetos, com a aba nova em foco.
+  await waitFor(
+    'Ctrl+N da Home leva a Projetos',
+    async () => page.getByTestId('projects-view-map').isVisible(),
+    10_000,
+  )
+  check('Ctrl+N a partir da Home leva a Projetos', true)
   await goToArea(page, 'projects')
   const hud = (label: string) => page.locator('[role="status"]', { hasText: label })
   await waitFor('HUD da pane ocioso', async () => (await hud('Ocioso').count()) >= 1, 10_000)
@@ -214,12 +220,30 @@ try {
   await page.waitForTimeout(IDLE_SETTLE_MS)
   check('nada da fila chegou ao stdin', !codexLog().includes('stdin: segunda mensagem'))
 
-  // "Enviar agora" é a decisão explícita do usuário: escreve.
-  await input.fill(`@${SESSION_NAME} terceira mensagem`)
+  // "Enviar agora" também é recusado: o status da PTY nunca diz 'waiting', então
+  // o overlay de aprovação parado parece ocioso e o \r o aprovaria.
+  await input.fill(`@${SESSION_NAME} mensagem agora`)
   await page.getByTestId('when-now').click()
   await input.press('End')
   await input.press('Enter')
+  await page.waitForTimeout(600)
+  const nowNotice = await page
+    .getByTestId('quick-notice')
+    .innerText()
+    .catch(() => '')
+  check(
+    'enviar agora no Codex: recusado, aponta o terminal',
+    /terminal dela/.test(nowNotice),
+    nowNotice,
+  )
   await page.keyboard.press('Escape')
+  await page.waitForTimeout(800)
+  check('nada do "agora" chegou ao stdin', !codexLog().includes('stdin: mensagem agora'))
+
+  // Falar com o Codex é pelo terminal dele: digitar no xterm chega ao stdin.
+  await page.locator('.xterm:visible').first().click()
+  await page.keyboard.type('terceira mensagem')
+  await page.keyboard.press('Enter')
   await waitFor(
     'stdin recebe o envio agora',
     async () => codexLog().includes('stdin: terceira mensagem'),

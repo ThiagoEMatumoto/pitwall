@@ -5,6 +5,8 @@ import { handoffsApi, projectsApi } from '@/lib/ipc'
 import { dispatchHandoffChild, handoffModeForPermission } from '@/features/handoffs/spawn-child'
 import { showToast } from '@/features/notifications/toast-store'
 import { useAppStore } from '@/store/appStore'
+import { useCardViewStore } from '@/features/session-canvas/card-view-store'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { SpawnSessionDialog } from './SpawnSessionDialog'
 import type { Project, Repo } from '../../../shared/types/ipc'
 
@@ -26,6 +28,12 @@ function normalize(s: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
+}
+
+function isMapVisible(): boolean {
+  return (
+    useAppStore.getState().area === 'projects' && useProjectsViewStore.getState().view === 'map'
+  )
 }
 
 // Fluxo global de nova sessão (Ctrl+N): funciona sem pane ativo. Passo 1 escolhe
@@ -138,22 +146,52 @@ export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
           initialCommand,
           provider,
         ) => {
-          void openSession(
-            chosen.repo,
-            chosen.project.name,
-            chosen.project.icon,
-            chosen.project.color,
-            undefined,
-            featureId,
-            name,
-            initialCommand,
-            model,
-            effort,
-            undefined,
-            permission,
-            advisorModel,
-            provider,
-          )
+          const { repo, project } = chosen
+          void (async () => {
+            try {
+              // Mapa na frente: a sessão nasce sem aba e vira cartão em modo
+              // terminal ali mesmo (uma aba tiraria o usuário do mapa).
+              if (isMapVisible()) {
+                const sessionId = await useAppStore.getState().spawnSessionBackground({
+                  repoId: repo.id,
+                  name,
+                  featureId,
+                  initialCommand,
+                  permissionMode: permission,
+                  model,
+                  effort,
+                  advisorModel,
+                  provider,
+                })
+                useCardViewStore.getState().requestTerminal(sessionId)
+                return
+              }
+              await openSession(
+                repo,
+                project.name,
+                project.icon,
+                project.color,
+                undefined,
+                featureId,
+                name,
+                initialCommand,
+                model,
+                effort,
+                undefined,
+                permission,
+                advisorModel,
+                provider,
+              )
+              // De fora de Projetos (Home, Features…) a aba nascia escondida:
+              // leva o usuário até ela (o dockview já ativa o painel novo).
+              useAppStore.getState().setArea('projects')
+            } catch (err) {
+              showToast({
+                title: 'Não foi possível abrir a sessão',
+                body: err instanceof Error ? err.message : String(err),
+              })
+            }
+          })()
           onClose()
         }}
       />

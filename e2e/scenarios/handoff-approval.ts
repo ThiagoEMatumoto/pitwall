@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
@@ -99,7 +99,10 @@ try {
   const tmpDir = join(userDataCopy, 'tmp')
   let handoffFile: string | null = null
   if (existsSync(tmpDir)) {
-    const f = readdirSync(tmpDir).find((n) => n.startsWith('handoff-') && n.endsWith('.md'))
+    // O perfil copiado traz handoff-*.md de runs reais: o desta aprovação é o mais novo.
+    const f = readdirSync(tmpDir)
+      .filter((n) => n.startsWith('handoff-') && n.endsWith('.md'))
+      .sort((a, b) => statSync(join(tmpDir, b)).mtimeMs - statSync(join(tmpDir, a)).mtimeMs)[0]
     if (f) handoffFile = join(tmpDir, f)
   }
   if (handoffFile) {

@@ -31,9 +31,9 @@ import {
   skeletonToElements,
 } from '../../../../shared/diagram-skeleton'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
-// Seam de injeção mãe→filha (importa SÓ de inject.ts, não de ipc/sessions.ts —
+// Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
 // evita arrastar electron/ipcMain pros handlers e permite mockar nos testes).
-import { injectIntoChild } from '../handoff/inject'
+import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 // Seam de spawn da filha (impl real em ipc/sessions.ts) — mesma motivação do
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
@@ -597,7 +597,7 @@ function handoffDispatchMessage(
   provider: AgentProviderId | undefined,
 ): string {
   if (provider && provider !== 'claude') {
-    return `Filha "${alias}" despachada para ${repoLabel}. Ela é ${provider}, sem canal cross-session: fale com ela por handoff_message (cola no terminal dela) e acompanhe por handoff_result.`
+    return `Filha "${alias}" despachada para ${repoLabel}. Ela é ${provider}, sem canal cross-session e sem espelho da tela: acompanhe por handoff_result. Não há canal seguro para escrever nela (handoff_message é recusado — o Enter poderia aprovar um overlay de aprovação); se ela travar, avise o humano.`
   }
   return `Filha "${alias}" despachada para ${repoLabel}. Mande AGORA a primeira SendMessage({ to: "${alias}", ... }) — é ela que abre o canal de volta (a filha responde a quem escreveu primeiro).`
 }
@@ -974,11 +974,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             `a sessão-filha do handoff ${handoffId} não está mais viva (PTY encerrada) — não dá pra entregar a mensagem.`,
           )
         }
-        injectIntoChild(handoff.childSessionId, text)
-        // A mãe respondeu: a filha retoma (needs_input → running, limpa a pergunta).
-        const updated = handoffStore.resume(handoffId)
-        notify.broadcast('handoff:updated', updated)
-        return ok({ status: updated.status, delivered: true })
+        // A mãe não vê a tela da filha: o Enter do paste não pode cair num menu.
+        return injectIntoChildGuarded(handoff.childSessionId, text).then(() => {
+          // A mãe respondeu: a filha retoma (needs_input → running, limpa a pergunta).
+          const updated = handoffStore.resume(handoffId)
+          notify.broadcast('handoff:updated', updated)
+          return ok({ status: updated.status, delivered: true })
+        })
       },
     },
     {

@@ -451,6 +451,7 @@ try {
   // ---------- 2. criar sessão pelo "+" da lane ----------
   {
     const before = new Set(await mapCardIds())
+    const laneTabsBefore = await page.locator('.dv-tab').count()
     const lane = page.locator('[data-testid="lane-repo"]', { hasText: 'alpha-web' }).first()
     await bringIntoView(lane)
     await lane.getByTestId('lane-new-session').click()
@@ -489,15 +490,50 @@ try {
         )?.sessionId,
       )
     }
-    // A sessão nova vira aba e o app sai do mapa (useLeaveMapOnSessionFocus): volta.
-    const leftMap = (await page.getByTestId('session-map').count()) === 0
-    console.log('[map] após criar pela lane o app saiu do mapa:', leftMap)
-    await goToArea(page, 'projects')
-    await page.getByTestId('projects-view-map').click().catch(() => {})
+    // Com o mapa na frente a sessão nasce SEM aba e vira cartão em modo terminal
+    // ali mesmo: o usuário não sai do mapa.
     const onMap = newId
       ? await waitFor('cartão aparece', async () => (await card(newId!).count()) === 1, 15_000)
       : false
     check(ok && onMap, 'sessão criada pelo "+" da lane aparece no mapa')
+    check(
+      (await page.getByTestId('session-map').count()) === 1,
+      'criar pela lane não tira o usuário do mapa',
+    )
+    const inTerminal = newId
+      ? await waitFor(
+          'cartão novo em modo terminal',
+          async () => (await card(newId!).getAttribute('data-view')) === 'terminal',
+          15_000,
+        )
+      : false
+    check(inTerminal, 'sessão nova abre como cartão em modo terminal')
+    check(
+      (await page.locator('[data-testid="session-card"][data-view="terminal"]').count()) === 1,
+      'um terminal por vez no mapa',
+    )
+    const alive = await page.evaluate(
+      (id) =>
+        (window as unknown as { api: Api }).api.sessions
+          .listLiveGlobal()
+          .then((l) => l.some((s) => s.id === id)),
+      newId ?? '',
+    )
+    check(alive, 'a sessão nova está viva')
+    check(
+      (await page.locator('.dv-tab').count()) === laneTabsBefore,
+      'nenhuma aba nasceu (o terminal mora no cartão)',
+    )
+    await page.screenshot({ path: shot('02b-lane-new-session-terminal') })
+    // Os passos seguintes partem do cartão aberto, não do terminal.
+    if (inTerminal) {
+      await card(newId!).getByTestId('card-leave-terminal').click()
+      await waitFor(
+        'cartão novo sai do terminal',
+        async () => (await card(newId!).getAttribute('data-view')) === 'open',
+        10_000,
+      )
+    }
   }
 
   // ---------- 3. filha pelo cartão (Nova filha) e o fio ----------

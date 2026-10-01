@@ -273,6 +273,32 @@ export function setSessionSummary(sessionId: string, summary: string, at: number
   )
 }
 
+// Retomar cria outra linha em sessions (novo sessions.id) para o mesmo id nativo.
+// Propósito, grupo e "onde parei" são da conversa, não da linha: a nova herda os
+// da linha anterior mais recente desta conversa.
+export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
+  const db = getDb()
+  const prev = db
+    .prepare(
+      `SELECT purpose, group_id, last_summary, last_summary_at FROM sessions
+        WHERE cc_session_id = ? AND id <> ?
+        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(ccSessionId, sessionId) as
+    | {
+        purpose: string | null
+        group_id: string | null
+        last_summary: string | null
+        last_summary_at: number | null
+      }
+    | undefined
+  if (!prev) return
+  db.prepare(
+    `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?
+      WHERE id = ?`,
+  ).run(prev.purpose, prev.group_id, prev.last_summary, prev.last_summary_at, sessionId)
+}
+
 export function sessionCcId(sessionId: string): string | null {
   const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
     { cc_session_id: string | null } | undefined

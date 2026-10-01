@@ -12,7 +12,7 @@ import {
   stepSessionLink,
   useSessionLinkHudStore,
 } from './session-link-nav'
-import { openGraphNode, useSessionGraphStore } from './session-graph-store'
+import { canOpenGraphNode, openGraphNode, useSessionGraphStore } from './session-graph-store'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { openAttentionItem, useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
 import { useAppStore } from '@/store/appStore'
@@ -121,6 +121,34 @@ describe('currentGraphNode', () => {
   it('sem peek, é a aba ativa', () => {
     expect(currentGraphNode(graph, { activeCc: 'cc-tab', peekId: null })?.sessionId).toBe('tab')
     expect(currentGraphNode(graph, { activeCc: 'cc-x', peekId: null })).toBeNull()
+  })
+})
+
+// Shape real do Codex: o nó traz cc_session_id NULL (spawnSession grava null sem
+// supports.resume) e o LiveSessionInfo traz ccSessionId = sessions.id
+// (livePtySessionInfo). A chave viva das duas pontas tem de ser a mesma.
+describe('Codex (sem id nativo) no grafo', () => {
+  const codex = node('codex-1', { ccSessionId: null, provider: 'codex' })
+  const graph: SessionGraph = { nodes: [codex, node('tab')], lanes: [], edges: [] }
+
+  it('a aba Codex ativa é achada pela chave viva (sessions.id)', () => {
+    expect(currentGraphNode(graph, { activeCc: 'codex-1', peekId: null })?.sessionId).toBe(
+      'codex-1',
+    )
+  })
+
+  it('sem aba ativa não casa o primeiro nó sem id nativo (null === null)', () => {
+    expect(currentGraphNode(graph, { activeCc: null, peekId: null })).toBeNull()
+  })
+
+  it('o chip de uma sessão Codex viva abre', () => {
+    useHandoffsStore.setState({ handoffs: [] })
+    useAppStore.setState({
+      liveSessions: [
+        { id: 'codex-1', ccSessionId: 'codex-1', provider: 'codex' } as LiveSessionInfo,
+      ],
+    })
+    expect(canOpenGraphNode(codex)).toBe(true)
   })
 })
 

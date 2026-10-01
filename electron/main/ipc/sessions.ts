@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
+import { inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
@@ -451,6 +452,7 @@ function startSession(opts: {
     opts.featureId ?? null,
     row.provider,
   )
+  if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
   try {
     const { command, args } = loginShellSpawn(opts.innerCmd)

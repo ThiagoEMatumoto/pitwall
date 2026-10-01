@@ -79,9 +79,10 @@ export const promptQueue = new PromptQueue({
   isRunning: (id) => ptyManager.isRunning(id),
   status: statusOf,
   // Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
-  // tela parada parece 'idle' — um \r ali aprovaria. null recusa 'quando terminar'
-  // e deixa só o 'agora' explícito do usuário.
+  // tela parada parece 'idle' — um \r ali aprovaria. null + status não nativo recusa
+  // os dois modos; quem quer falar com o Codex usa o terminal dele.
   screen: (id) => (tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)),
+  nativeStatus: (id) => !sessionActivityService.isPtyTracked(id),
   handoffAsking: (id) => {
     const h = getByChildSession(id)
     return h ? handoffAsking(h) : false

@@ -45,7 +45,13 @@ import { useCanvasState, useCanvasStateStore } from './canvas-state-store'
 import { useProjectsViewStore } from './projects-view-store'
 import { useMapCommands } from './useMapCommands'
 import { MapActionsContext, type MapActions } from './map-context'
-import { MapContextMenu, MapTopBar, SelectionToolbar, actionsFor } from './MapChrome'
+import {
+  MapContextMenu,
+  MapTopBar,
+  SelectionToolbar,
+  actionsFor,
+  toolbarPositionFor,
+} from './MapChrome'
 import { DelegateDialog } from './DelegateDialog'
 import { SessionCardNode } from './SessionCardNode'
 import { LaneGroupNode } from './LaneGroupNode'
@@ -371,6 +377,20 @@ function SessionMapInner() {
     })
     if (leave) useCardViewStore.getState().leaveTerminal(terminalId)
   }, [terminalId, liveSessions, panes, peekTarget, peekMode, handoffs])
+
+  // Sessão nova criada com o mapa na frente (sem aba): entra em terminal no
+  // próprio cartão quando a PTY e o nó existirem — antes disso o efeito acima a
+  // devolveria a 'open' por não estar viva.
+  const pendingTerminal = useCardViewStore((s) => s.pendingTerminal)
+  const interact = cmd.interact
+  useEffect(() => {
+    if (!pendingTerminal) return
+    const alive = liveSessions.some((x) => x.id === pendingTerminal && x.status !== 'ended')
+    const onMap = nodes.some((n) => n.id === sessionNodeId(pendingTerminal))
+    if (!alive || !onMap) return
+    useCardViewStore.getState().clearPendingTerminal()
+    interact(pendingTerminal)
+  }, [pendingTerminal, liveSessions, nodes, interact])
 
   // Afastar o zoom (gesto do usuário — o setCenter de entrada não tem evento)
   // devolve o terminal: abaixo de ~0.85 ele não se lê nem se clica.
@@ -731,6 +751,7 @@ function SessionMapInner() {
             <SelectionToolbar
               nodeId={selected.length === 1 ? selected[0].id : null}
               actions={selectionActions}
+              position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
               onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
             />
           </ReactFlow>

@@ -154,7 +154,8 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
   }
   const hasMenu = tail?.hasMenu ?? false
   const when = whenChoice ?? defaultWhen(target, hasMenu)
-  const disabled = !live || sending
+  // O canal do handoff não tem fila: com menu na tela o Enter o responderia.
+  const disabled = !live || sending || (crewHandoffId != null && hasMenu)
 
   async function submit() {
     const body = text.trim()
@@ -180,7 +181,9 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
   }
 
   const warning = hasMenu
-    ? 'Responda o menu acima — ou deixe na fila para quando ela terminar'
+    ? crewHandoffId
+      ? 'Responda o menu acima antes de escrever para ela'
+      : 'Responda o menu acima — ou deixe na fila para quando ela terminar'
     : tail?.inputDirty
       ? 'Há texto não enviado no prompt dela'
       : null
@@ -188,7 +191,7 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
 
   return (
     <Interactive className="shrink-0">
-      {warning && !crewHandoffId && (
+      {warning && (
         <p
           data-testid="card-prompt-warning"
           className="mb-1 flex items-center gap-1 text-[10px] text-[var(--color-warning)]"

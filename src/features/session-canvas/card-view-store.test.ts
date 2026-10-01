@@ -53,4 +53,29 @@ describe('useCardViewStore', () => {
     useCardViewStore.getState().toggle('a')
     expect(setViewStates).not.toHaveBeenCalled()
   })
+
+  it('pedido de terminal de sessão nova expira se o cartão nunca aparecer', () => {
+    vi.useFakeTimers()
+    try {
+      useCardViewStore.getState().requestTerminal('nova')
+      expect(useCardViewStore.getState().pendingTerminal).toBe('nova')
+      vi.advanceTimersByTime(20_000)
+      expect(useCardViewStore.getState().pendingTerminal).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pedido mais novo não é apagado pelo timer do anterior', () => {
+    vi.useFakeTimers()
+    try {
+      useCardViewStore.getState().requestTerminal('a')
+      vi.advanceTimersByTime(10_000)
+      useCardViewStore.getState().requestTerminal('b')
+      vi.advanceTimersByTime(10_000)
+      expect(useCardViewStore.getState().pendingTerminal).toBe('b')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

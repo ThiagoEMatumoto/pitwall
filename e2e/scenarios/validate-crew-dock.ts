@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
@@ -6,6 +6,7 @@ import { launchApp } from '../driver/launch'
 import { createFakeHome } from '../driver/fake-home'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
+import { PERMISSION_FIXTURE } from './attention-reason'
 
 // Evidência visual dos estados do Crew Dock (colapsado / sinal no rail / aberto
 // pelo atalho 'Focar a equipe' / peek). Desde o 1994f7d o dock NÃO abre sozinho
@@ -18,6 +19,57 @@ import { queryDb } from '../driver/inspect'
 const require = createRequire(import.meta.url)
 const SCRATCH = process.env.CREW_SCRATCH!
 const fake = createFakeHome({ parentDir: SCRATCH })
+
+// "Esperando você" exige a TELA de um menu (status 'waiting' com o prompt ocioso
+// é fim de turno — "pronto"). A filha mauricio-* roda um stub que trabalha até o
+// gatilho existir e então desenha o menu real de permissão (fixture 2.1.286).
+const WAIT_TRIGGER = join(fake.root, 'mauricio-wait')
+function shq(v: string): string {
+  return `'${v.replaceAll("'", `'\\''`)}'`
+}
+const waitingStub = join(fake.root, 'bin', 'crew-waiting-claude.sh')
+writeFileSync(
+  waitingStub,
+  `#!/usr/bin/env bash
+export LC_ALL=C
+session_id=''; name=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-id|--resume) session_id="$2"; shift 2 ;;
+    -n|--name) name="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+write_status() {
+  local now; now=$(date +%s%3N)
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","status":"%s","name":"%s","startedAt":%s,"updatedAt":%s}' \\
+    "$$" "$session_id" "$PWD" "$1" "$name" "$now" "$now" > ${shq(fake.sessionsDir)}/$$.json
+}
+write_status busy
+stty raw -echo
+printf 'trabalhando\\r\\n'
+while [ ! -f ${shq(WAIT_TRIGGER)} ]; do sleep 0.2; done
+cat ${shq(PERMISSION_FIXTURE)}
+write_status waiting
+while IFS= read -r -s -n1 -d '' _; do :; done
+`,
+)
+const dispatchStub = join(fake.root, 'bin', 'crew-dispatch-claude.sh')
+writeFileSync(
+  dispatchStub,
+  `#!/usr/bin/env bash
+name=''
+args=("$@")
+for ((i=0; i<\${#args[@]}; i++)); do
+  case "\${args[$i]}" in -n|--name) name="\${args[$((i+1))]}" ;; esac
+done
+case "$name" in
+  mauricio*) exec ${shq(waitingStub)} "$@" ;;
+  *) exec ${shq(fake.fakeCliPath('claude'))} "$@" ;;
+esac
+`,
+)
+for (const p of [waitingStub, dispatchStub]) chmodSync(p, 0o755)
 
 interface Seed {
   id: string
@@ -71,7 +123,7 @@ db.run(
   "UPDATE handoffs SET status = 'done' WHERE status IN ('pending','approved','running','needs_input')",
 )
 db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
-  fake.fakeCliPath('claude'),
+  dispatchStub,
 ])
 // O cenário aperta Ctrl+J (default de crew.focus): um remapeamento do perfil real
 // deixaria o dock fechado e o cenário esperando à toa.
@@ -198,8 +250,8 @@ try {
   console.log('[crew] session files:', files.map((f) => `${f.data.name}=${f.data.status}`).join(' | '))
   const waitingOne = files.find((f) => String(f.data.name ?? '').startsWith('mauricio'))
   if (!waitingOne) throw new Error('sessão da mauricio não encontrada no fake-home')
-  fake.setStatus(waitingOne.data.pid, 'waiting')
-  console.log('[crew] flip para waiting em', waitingOne.file)
+  writeFileSync(WAIT_TRIGGER, '')
+  console.log('[crew] mauricio passa a pedir permissão:', waitingOne.file)
 
   await waitFor('rail sinaliza quem espera', async () =>
     (await dotTitles()).some((t) => t.includes('esperando você')),

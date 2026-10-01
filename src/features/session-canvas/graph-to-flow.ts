@@ -38,6 +38,8 @@ export const NOTE_H = 132
 const GAP = 16
 const PAD = 12
 const HEADER = 30
+// Faixa do cabeçalho de lane/grupo acima do primeiro cartão (a toolbar não a cobre).
+export const LANE_HEADER_H = HEADER
 const LANE_GAP = 48
 const GROUP_MIN_W = CARD_W + 2 * PAD
 const GROUP_MIN_H = HEADER + 72

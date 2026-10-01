@@ -46,7 +46,12 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
-import { CrewDock, useCrewDockWidth, useHasCrew } from '@/features/handoffs/CrewDock'
+import {
+  CrewDock,
+  MAP_DOCK_HOST_ID,
+  useCrewDockWidth,
+  useHasCrew,
+} from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { SessionMap } from '@/features/session-canvas/SessionMap'
 import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
@@ -68,6 +73,7 @@ import {
   useAttentionStore,
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
+import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
@@ -121,7 +127,8 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   )
 }
 
-// Aba do dockview com um dot na cor do projeto antes do título/close padrão.
+// Aba do dockview com um dot na cor do projeto e o badge do provider antes do
+// título/close padrão.
 // Reusa DockviewDefaultTab pra herdar o título dinâmico (api.title via setTitle) e o X.
 function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   // Mesma regra do TerminalPanel: a pane vem do STORE pelo id do painel
@@ -136,8 +143,9 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         className="ml-2 mr-1.5 h-2 w-2 shrink-0 rounded-full"
         style={{ background: color ?? 'var(--color-border)' }}
       />
+      {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
+      <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
-      <ProviderBadge provider={pane?.session.provider} className="mr-1.5" />
       <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
   )
@@ -593,12 +601,20 @@ export function AppShell() {
   // da palette.
   const activePane = area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
   const activeCcSessionId = activePane?.session.ccSessionId ?? null
+  // Fila de atenção, Alt+,/. e MRU casam pela chave das sessões vivas, que no Codex
+  // (sem id nativo) é o sessions.id — com o cc puro a aba Codex nunca seria a atual.
+  const activeLiveKey = activePane
+    ? liveKeyOf(activePane.session.id, activeCcSessionId, activePane.session.provider)
+    : null
 
   useEffect(() => {
     sessionsApi.setRendererFocus(activeCcSessionId)
-    useAttentionStore.getState().setActiveCc(activeCcSessionId)
-    if (activeCcSessionId) useSessionMruStore.getState().touch(activeCcSessionId)
   }, [activeCcSessionId])
+
+  useEffect(() => {
+    useAttentionStore.getState().setActiveCc(activeLiveKey)
+    if (activeLiveKey) useSessionMruStore.getState().touch(activeLiveKey)
+  }, [activeLiveKey])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot
   // + stream global no mount; cleanup no unmount (StrictMode-safe no store).
@@ -855,7 +871,7 @@ export function AppShell() {
             {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
-              <div className="absolute inset-0 z-20 bg-[var(--color-bg)]">
+              <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
                 <SessionMap />
               </div>
             )}

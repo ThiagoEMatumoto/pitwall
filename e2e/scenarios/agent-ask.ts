@@ -216,6 +216,14 @@ try {
     pair.includes('web-front @ Ask Front') && pair.includes('api-contrato @ Ask API'),
     pair,
   )
+  // O par trunca a ORIGEM primeiro: o destinatário fica inteiro à vista.
+  const toFits = await row
+    .getByTestId('conversation-pair')
+    .evaluate((el) => {
+      const to = el.lastElementChild as HTMLElement | null
+      return !!to && to.scrollWidth <= to.clientWidth + 1
+    })
+  check('Conversas: destinatário visível sem truncar', toFits)
   await page.screenshot({ path: shot('1-pending') })
 
   // ---------- 3. B responde; A lê; o fio some ----------

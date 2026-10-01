@@ -144,25 +144,39 @@ function ConversationRow({ m }: { m: AgentMessageView }) {
         />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)]">
-            <span className="truncate" data-testid="conversation-pair">
-              {m.fromLabel} → {m.toLabel}
+            {/* A origem trunca primeiro: o destinatário é o que se procura no
+                par e só encolhe se sozinho passar de 3/4 da linha. */}
+            <span
+              className="flex min-w-0 flex-1 items-center gap-1"
+              data-testid="conversation-pair"
+              title={`${m.fromLabel} → ${m.toLabel}`}
+            >
+              <span className="min-w-0 truncate">{m.fromLabel}</span>
+              <span className="shrink-0">→</span>
+              <span className="max-w-[75%] shrink-0 truncate text-[var(--color-text)]">
+                {m.toLabel}
+              </span>
             </span>
-            <span className="ml-auto shrink-0 font-mono tabular-nums">{time(m.createdAt)}</span>
+            <span className="shrink-0 font-mono tabular-nums">{time(m.createdAt)}</span>
           </span>
-          <span
-            className={`block text-xs text-[var(--color-text)] ${open ? 'whitespace-pre-wrap' : 'truncate'}`}
-          >
-            {m.text}
+          {/* O status mora na linha do texto: na do par ele comia a largura do
+              destinatário. */}
+          <span className="flex items-start gap-1.5">
+            <span
+              className={`min-w-0 flex-1 text-xs text-[var(--color-text)] ${open ? 'whitespace-pre-wrap' : 'truncate'}`}
+            >
+              {m.text}
+            </span>
+            <span
+              className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+              style={{
+                color: status.color,
+                background: `color-mix(in srgb, ${status.color} 14%, transparent)`,
+              }}
+            >
+              {status.label}
+            </span>
           </span>
-        </span>
-        <span
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-          style={{
-            color: status.color,
-            background: `color-mix(in srgb, ${status.color} 14%, transparent)`,
-          }}
-        >
-          {status.label}
         </span>
       </button>
       {open && (

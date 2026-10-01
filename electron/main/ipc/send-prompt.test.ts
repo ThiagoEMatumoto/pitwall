@@ -70,9 +70,16 @@ describe('promptQueue wiring — PTY sem espelho (Codex)', () => {
     expect(promptQueue.snapshot().items).toHaveLength(0)
   })
 
-  it('"enviar agora" é decisão explícita do usuário e escreve às cegas', async () => {
-    const res = await promptQueue.send({ sessionId: CODEX, text: 'agora', when: 'now' })
+  it('"enviar agora" também recusa: o \\r cairia no overlay de aprovação parado', async () => {
+    const res = await promptQueue.send({ sessionId: CODEX, text: 'continue', when: 'now' })
+    expect(res).toEqual({ ok: false, error: 'no-screen' })
+    expect(seam.writes).toHaveLength(0)
+  })
+
+  it('"enviar agora" para claude sem espelho (status nativo) segue escrevendo', async () => {
+    seam.tracked.clear()
+    const res = await promptQueue.send({ sessionId: 'claude-pty', text: 'agora', when: 'now' })
     expect(res).toEqual({ ok: true, delivered: true })
-    expect(seam.writes).toEqual([{ id: CODEX, text: 'agora' }])
+    expect(seam.writes).toEqual([{ id: 'claude-pty', text: 'agora' }])
   })
 })

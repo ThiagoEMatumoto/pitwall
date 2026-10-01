@@ -214,3 +214,40 @@ describe('canvas-store — propósito e resumo', () => {
     expect(() => store.setSessionPurpose('ghost', 'x')).toThrow(/Sessão não encontrada/)
   })
 })
+
+describe('canvas-store — retomar herda os campos da conversa', () => {
+  it('a linha nova (mesmo cc_session_id) recebe propósito, grupo e resumo da anterior', () => {
+    seedSession('old')
+    const group = store.createGroup({ scope: 'all', name: 'Pagamentos' })
+    store.setSessionPurpose('old', 'Migrar billing p/ Stripe')
+    store.setSessionGroup('old', group.id)
+    store.setSessionSummary('old', 'parei no webhook', 42)
+    // Linha que o startSession do resume insere: novo id, mesmo id nativo.
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('new', NULL, 'cc-old', 'running', 2)`,
+      )
+      .run()
+
+    store.inheritSessionCanvasFields('new', 'cc-old')
+
+    expect(sessionRow('new')).toEqual({
+      purpose: 'Migrar billing p/ Stripe',
+      group_id: group.id,
+      last_summary: 'parei no webhook',
+      last_summary_at: 42,
+    })
+  })
+
+  it('vale a linha anterior mais recente: um propósito apagado não ressuscita', () => {
+    seedSession('a')
+    store.setSessionPurpose('a', 'antigo')
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('b', NULL, 'cc-a', 'running', 5), ('c', NULL, 'cc-a', 'running', 9)`,
+      )
+      .run()
+    store.inheritSessionCanvasFields('c', 'cc-a')
+    expect(sessionRow('c')).toMatchObject({ purpose: null })
+  })
+})

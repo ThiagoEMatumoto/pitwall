@@ -342,6 +342,11 @@ interface AppState {
     // Filha de handoff: o main fixa o título (alias = endereço do peer) e passa
     // `--settings crossSessionInbound=accept` só nessa sessão.
     handoffChild?: boolean
+    // Controles do diálogo de spawn (sessão criada no mapa, sem aba).
+    model?: string
+    effort?: EffortLevel
+    advisorModel?: AdvisorModel
+    provider?: AgentProviderId
   }) => Promise<string>
   // Sessão avulsa: spawn sem repo (cwd = scratch dir do backend).
   openQuickSession: () => Promise<void>
@@ -526,7 +531,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       permissionMode: input.permissionMode,
       disallowedTools: input.disallowedTools,
       handoffChild: input.handoffChild,
+      model: input.model,
+      effort: input.effort,
+      advisorModel: input.advisorModel,
+      provider: input.provider,
     })
+    if (input.featureId) useSessionFeatureStore.getState().note(session.id, input.featureId)
     void get().refreshLiveSessions()
     return session.id
   },

@@ -693,8 +693,9 @@ describe('mcp tools — session_handoff sem gate', () => {
       expect(spawned[0]).toMatchObject({ provider: 'codex', permissionMode: 'plan' })
     })
 
-    // Codex não tem -n nem inbox cross-session: o canal da mãe é handoff_message.
-    it('codex: a mensagem de retorno não manda abrir canal por SendMessage', () => {
+    // Codex não tem -n nem inbox cross-session, nem espelho da tela: handoff_message
+    // colaria um Enter às cegas sobre o overlay de aprovação. Só resta acompanhar.
+    it('codex: a mensagem de retorno não manda abrir canal por SendMessage nem handoff_message', () => {
       seedRepo('prov-codex-msg', '/repos/prov-codex-msg')
       const res = call<HandoffResult & { message?: string }>('session_handoff', {
         targetRepo: 'prov-codex-msg',
@@ -703,7 +704,8 @@ describe('mcp tools — session_handoff sem gate', () => {
         provider: 'codex',
       })
       expect(res.message).not.toContain('SendMessage')
-      expect(res.message).toContain('handoff_message')
+      expect(res.message).not.toMatch(/fale com ela por handoff_message/)
+      expect(res.message).toContain('handoff_result')
       expect(spawned[0].systemPromptText).not.toContain('SendMessage')
     })
 

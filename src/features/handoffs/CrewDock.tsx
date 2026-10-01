@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronRight, MessageCircle, Users } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { usePanelTier } from '@/features/sessions/use-panel-tier'
 import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount'
 import { useAppStore } from '@/store/appStore'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
 import {
@@ -39,8 +41,23 @@ export function useCrewDockWidth(): number {
   const width = useCrewDockStore((s) => s.width)
   const hasCrew = useHasCrew()
   const hasConversations = useHasDockConversations()
+  const overMap = useDockOverMap()
   if (!hasCrew && !hasConversations) return 0
-  return collapsed ? RAIL_WIDTH : width
+  if (collapsed) return RAIL_WIDTH
+  // Sobre o mapa o painel flutua à esquerda da trilha, que segue no layout.
+  return overMap ? RAIL_WIDTH + width : width
+}
+
+// Elemento do AppShell que hospeda o mapa (o overlay sobre o dockview).
+export const MAP_DOCK_HOST_ID = 'map-dock-host'
+
+// Com o mapa na frente, o dock expandido vira overlay sobre ele em vez de
+// roubar largura: dentro do layout, 340px deixavam ~1,5 lane visível. Na vista
+// Terminais segue empurrando o dockview (o xterm precisa da área real).
+function useDockOverMap(): boolean {
+  const area = useAppStore((s) => s.area)
+  const view = useProjectsViewStore((s) => s.view)
+  return area === 'projects' && view === 'map'
 }
 
 // Há card de filha pra focar? O Ctrl+J só é do dock quando há.
@@ -173,6 +190,14 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   const expanded = !collapsed
   const shownWidth = dragWidth ?? width
 
+  // O host do mapa nasce no mesmo commit do AppShell; o layout effect o acha
+  // antes da pintura, sem um frame do painel dentro do layout.
+  const overMap = useDockOverMap()
+  const [overMapHost, setOverMapHost] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    setOverMapHost(overMap ? document.getElementById(MAP_DOCK_HOST_ID) : null)
+  }, [overMap])
+
   function openCrew() {
     setTab('crew')
     expand()
@@ -271,209 +296,245 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
     crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined),
   )?.id
 
+  const expandedContent = (
+    <>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        title="Arraste para redimensionar"
+        className="absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/40"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          e.currentTarget.setPointerCapture(e.pointerId)
+          dragRef.current = { startX: e.clientX, startWidth: width }
+          setDragWidth(width)
+        }}
+        onPointerMove={(e) => {
+          const drag = dragRef.current
+          if (!drag) return
+          // Dock encostado na direita: arrastar pra esquerda alarga.
+          setDragWidth(clampWidth(drag.startWidth - (e.clientX - drag.startX)))
+        }}
+        onPointerUp={(e) => {
+          if (!dragRef.current) return
+          e.currentTarget.releasePointerCapture(e.pointerId)
+          dragRef.current = null
+          if (dragWidth != null) setWidth(dragWidth)
+          setDragWidth(null)
+        }}
+      />
+
+      <header className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
+        <div role="tablist" className="flex min-w-0 items-center gap-0.5">
+          {crew.length > 0 && (
+            <DockTabButton
+              active={shownTab === 'crew'}
+              onClick={() => setTab('crew')}
+              icon={Users}
+              label="Equipe"
+              count={crew.length}
+              testId="crew-tab"
+            />
+          )}
+          <DockTabButton
+            active={shownTab === 'conversations'}
+            onClick={() => setTab('conversations')}
+            icon={MessageCircle}
+            label="Conversas"
+            count={pendingAsks}
+            testId="conversations-tab-button"
+          />
+        </div>
+        {attention > 0 && (
+          <span
+            className="truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+            style={{
+              color: 'var(--color-danger)',
+              borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
+              background: 'color-mix(in srgb, var(--color-danger) 12%, transparent)',
+            }}
+            title="Filhas aguardando você responder"
+          >
+            {attention} esperando
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={collapse}
+          title="Recolher a equipe"
+          className="ml-auto shrink-0 rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={ChevronRight} size={14} />
+        </button>
+      </header>
+
+      {shownTab === 'conversations' ? (
+        <div id={DOCK_PANEL_ID} role="tabpanel" className="flex min-h-0 flex-1 flex-col">
+          <ConversationsTab />
+        </div>
+      ) : (
+        <div
+          id={DOCK_PANEL_ID}
+          role="tabpanel"
+          ref={listRef}
+          onFocus={() => setDockFocused(true)}
+          onBlur={() => setDockFocused(false)}
+          className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
+        >
+          {crew.map((h) => (
+            // Wrapper focável de verdade: sem um elemento que receba foco, o
+            // Espaço vazaria pro xterm em vez de abrir o peek. tabIndex -1
+            // porque a entrada é pelo Ctrl+J — os botões/textarea de dentro do
+            // card já ocupam a ordem natural do Tab.
+            <div
+              key={h.id}
+              data-crew-card={h.id}
+              tabIndex={-1}
+              // Foco (do teclado ou do mouse) é a verdade: o cursor do store
+              // segue o DOM, não o contrário.
+              onFocus={() => setFocusedId(h.id)}
+              onKeyDown={(e) => onCardKeyDown(e, h.id)}
+              className={`shrink-0 rounded-[14px] outline-none ${
+                dockFocused && h.id === focusedId
+                  ? 'ring-1 ring-[var(--color-accent)] ring-offset-0'
+                  : ''
+              }`}
+            >
+              <HandoffCard
+                handoff={h}
+                ttlHours={ttlHours}
+                tier={tier}
+                onPeek={() => {
+                  // Foca o card ANTES de abrir: o peek guarda o activeElement
+                  // como origem, e devolver o foco ao card (não ao botão) deixa
+                  // as setas prontas assim que o overlay fecha.
+                  focusCard(h.id)
+                  openPeek(h.id)
+                }}
+                onOpenTerminal={() => {
+                  focusCard(h.id)
+                  openTerminal(h)
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+
+  const railContent = (
+    <div className="flex min-h-0 flex-1 flex-col items-center gap-2 py-2">
+      {/* Aviso de espera cabe nos 40px: O Ápice pulsa na filha que espera
+              (abaixo) e o contador acende em âmbar aqui. Abrir 340px por cima da
+              leitura, sozinho, era interrupção maior que o aviso — agora é
+              clique ou Ctrl+J. */}
+      <button
+        type="button"
+        onClick={openCrew}
+        title={
+          attention > 0
+            ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
+            : `Equipe: ${crew.length} sessão(ões) delegada(s) — clique ou Ctrl+J para abrir`
+        }
+        className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+      >
+        <Icon as={Users} size={16} />
+      </button>
+      <button
+        type="button"
+        onClick={openCrew}
+        title={
+          attention > 0
+            ? `${attention} filha(s) esperando você`
+            : `${crew.length} sessão(ões) delegada(s)`
+        }
+        className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
+        style={{ color: attention > 0 ? 'var(--color-danger)' : 'var(--color-text-dim)' }}
+      >
+        {attention > 0 ? `${attention}!` : crew.length}
+      </button>
+      {pendingAsks > 0 && (
+        <button
+          type="button"
+          data-testid="crew-rail-conversations"
+          onClick={() => {
+            setTab('conversations')
+            expand()
+          }}
+          title={`${pendingAsks} pergunta(s) entre agentes esperando resposta`}
+          className="flex items-center gap-0.5 rounded px-1 text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
+          style={{ color: 'var(--color-info)' }}
+        >
+          <Icon as={MessageCircle} size={12} />
+          {pendingAsks}
+        </button>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
+        {crew.map((h) => {
+          const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
+          const color = crewDotColor(h, live)
+          return (
+            <button
+              key={h.id}
+              type="button"
+              onClick={openCrew}
+              title={crewDotTitle(h, live)}
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--color-surface-2)]"
+            >
+              {h.id === apexId ? (
+                <ApexDot size={9} color="var(--color-warning)" />
+              ) : (
+                <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+
+  const asideClass =
+    'flex shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface)]'
+
+  // Sobre o mapa: a trilha fica no layout e o painel expandido flutua por cima
+  // do mapa, encostado nela (o mapa mantém a largura toda).
+  if (overMapHost && expanded) {
+    return (
+      <>
+        <aside
+          data-testid="crew-dock-rail"
+          className={`relative ${asideClass}`}
+          style={{ width: RAIL_WIDTH }}
+        >
+          {railContent}
+        </aside>
+        {createPortal(
+          <aside
+            ref={ref}
+            data-testid="crew-dock"
+            data-expanded
+            data-overlay
+            className={`absolute inset-y-0 right-0 z-30 shadow-2xl ${asideClass}`}
+            style={{ width: shownWidth }}
+          >
+            {expandedContent}
+          </aside>,
+          overMapHost,
+        )}
+      </>
+    )
+  }
+
   return (
     <aside
       ref={ref}
       data-testid="crew-dock"
       data-expanded={expanded}
-      className="relative flex shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-surface)]"
+      className={`relative ${asideClass}`}
       style={{ width: expanded ? shownWidth : RAIL_WIDTH }}
     >
-      {expanded ? (
-        <>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            title="Arraste para redimensionar"
-            className="absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/40"
-            onPointerDown={(e) => {
-              e.preventDefault()
-              e.currentTarget.setPointerCapture(e.pointerId)
-              dragRef.current = { startX: e.clientX, startWidth: width }
-              setDragWidth(width)
-            }}
-            onPointerMove={(e) => {
-              const drag = dragRef.current
-              if (!drag) return
-              // Dock encostado na direita: arrastar pra esquerda alarga.
-              setDragWidth(clampWidth(drag.startWidth - (e.clientX - drag.startX)))
-            }}
-            onPointerUp={(e) => {
-              if (!dragRef.current) return
-              e.currentTarget.releasePointerCapture(e.pointerId)
-              dragRef.current = null
-              if (dragWidth != null) setWidth(dragWidth)
-              setDragWidth(null)
-            }}
-          />
-
-          <header className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
-            <div role="tablist" className="flex min-w-0 items-center gap-0.5">
-              {crew.length > 0 && (
-                <DockTabButton
-                  active={shownTab === 'crew'}
-                  onClick={() => setTab('crew')}
-                  icon={Users}
-                  label="Equipe"
-                  count={crew.length}
-                  testId="crew-tab"
-                />
-              )}
-              <DockTabButton
-                active={shownTab === 'conversations'}
-                onClick={() => setTab('conversations')}
-                icon={MessageCircle}
-                label="Conversas"
-                count={pendingAsks}
-                testId="conversations-tab-button"
-              />
-            </div>
-            {attention > 0 && (
-              <span
-                className="truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
-                style={{
-                  color: 'var(--color-danger)',
-                  borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
-                  background: 'color-mix(in srgb, var(--color-danger) 12%, transparent)',
-                }}
-                title="Filhas aguardando você responder"
-              >
-                {attention} esperando
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={collapse}
-              title="Recolher a equipe"
-              className="ml-auto shrink-0 rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-            >
-              <Icon as={ChevronRight} size={14} />
-            </button>
-          </header>
-
-          {shownTab === 'conversations' ? (
-            <div id={DOCK_PANEL_ID} role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-              <ConversationsTab />
-            </div>
-          ) : (
-            <div
-              id={DOCK_PANEL_ID}
-              role="tabpanel"
-              ref={listRef}
-              onFocus={() => setDockFocused(true)}
-              onBlur={() => setDockFocused(false)}
-              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
-            >
-              {crew.map((h) => (
-                // Wrapper focável de verdade: sem um elemento que receba foco, o
-                // Espaço vazaria pro xterm em vez de abrir o peek. tabIndex -1
-                // porque a entrada é pelo Ctrl+J — os botões/textarea de dentro do
-                // card já ocupam a ordem natural do Tab.
-                <div
-                  key={h.id}
-                  data-crew-card={h.id}
-                  tabIndex={-1}
-                  // Foco (do teclado ou do mouse) é a verdade: o cursor do store
-                  // segue o DOM, não o contrário.
-                  onFocus={() => setFocusedId(h.id)}
-                  onKeyDown={(e) => onCardKeyDown(e, h.id)}
-                  className={`shrink-0 rounded-[14px] outline-none ${
-                    dockFocused && h.id === focusedId
-                      ? 'ring-1 ring-[var(--color-accent)] ring-offset-0'
-                      : ''
-                  }`}
-                >
-                  <HandoffCard
-                    handoff={h}
-                    ttlHours={ttlHours}
-                    tier={tier}
-                    onPeek={() => {
-                      // Foca o card ANTES de abrir: o peek guarda o activeElement
-                      // como origem, e devolver o foco ao card (não ao botão) deixa
-                      // as setas prontas assim que o overlay fecha.
-                      focusCard(h.id)
-                      openPeek(h.id)
-                    }}
-                    onOpenTerminal={() => {
-                      focusCard(h.id)
-                      openTerminal(h)
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-center gap-2 py-2">
-          {/* Aviso de espera cabe nos 40px: O Ápice pulsa na filha que espera
-              (abaixo) e o contador acende em âmbar aqui. Abrir 340px por cima da
-              leitura, sozinho, era interrupção maior que o aviso — agora é
-              clique ou Ctrl+J. */}
-          <button
-            type="button"
-            onClick={openCrew}
-            title={
-              attention > 0
-                ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
-                : `Equipe: ${crew.length} sessão(ões) delegada(s) — clique ou Ctrl+J para abrir`
-            }
-            className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-          >
-            <Icon as={Users} size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={openCrew}
-            title={
-              attention > 0
-                ? `${attention} filha(s) esperando você`
-                : `${crew.length} sessão(ões) delegada(s)`
-            }
-            className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
-            style={{ color: attention > 0 ? 'var(--color-danger)' : 'var(--color-text-dim)' }}
-          >
-            {attention > 0 ? `${attention}!` : crew.length}
-          </button>
-          {pendingAsks > 0 && (
-            <button
-              type="button"
-              data-testid="crew-rail-conversations"
-              onClick={() => {
-                setTab('conversations')
-                expand()
-              }}
-              title={`${pendingAsks} pergunta(s) entre agentes esperando resposta`}
-              className="flex items-center gap-0.5 rounded px-1 text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
-              style={{ color: 'var(--color-info)' }}
-            >
-              <Icon as={MessageCircle} size={12} />
-              {pendingAsks}
-            </button>
-          )}
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
-            {crew.map((h) => {
-              const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
-              const color = crewDotColor(h, live)
-              return (
-                <button
-                  key={h.id}
-                  type="button"
-                  onClick={openCrew}
-                  title={crewDotTitle(h, live)}
-                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--color-surface-2)]"
-                >
-                  {h.id === apexId ? (
-                    <ApexDot size={9} color="var(--color-warning)" />
-                  ) : (
-                    <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
+      {expanded ? expandedContent : railContent}
     </aside>
   )
 }

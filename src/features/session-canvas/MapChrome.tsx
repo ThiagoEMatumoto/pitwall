@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { NodeToolbar, Position } from '@xyflow/react'
+import { NodeToolbar, Position, useStore } from '@xyflow/react'
 import {
   ChevronDown,
   ExternalLink,
@@ -25,7 +25,7 @@ import type { SessionGroup } from '../../../shared/types/canvas'
 import type { MapNode, NoteData, SessionCardData, UserGroupData } from './graph-to-flow'
 import { canPassBaton, type MapCommands } from './useMapCommands'
 import type { MapScopeMode } from './projects-view-store'
-import { OPEN_H } from './graph-to-flow'
+import { LANE_HEADER_H, OPEN_H } from './graph-to-flow'
 
 export interface MapAction {
   key: string
@@ -378,18 +378,42 @@ export function MapTopBar({
   )
 }
 
-// Flutua acima do nó selecionado (NodeToolbar segue pan/zoom): fixa no topo do
+// Altura da toolbar (≈ pill de 34px + offset) em unidades do fluxo a zoom 1.
+const TOOLBAR_CLEARANCE = 44
+// Menor largura útil: abaixo disto os botões empilhariam um por linha.
+const TOOLBAR_MIN_W = 180
+
+// Acima do cartão, a não ser que acima dele more o cabeçalho da lane (o 1º
+// cartão da coluna): ali a toolbar cobria o nome do repo/projeto — e, mais
+// larga que o cartão, o da lane vizinha. Então vira pra baixo.
+export function toolbarPositionFor(
+  node: { parentId?: string; position: { y: number } } | undefined,
+): Position {
+  if (!node?.parentId) return Position.Top
+  return node.position.y < LANE_HEADER_H + TOOLBAR_CLEARANCE ? Position.Bottom : Position.Top
+}
+
+// Flutua junto ao nó selecionado (NodeToolbar segue pan/zoom): fixa no topo do
 // mapa ela cobria o título dos cartões da primeira linha.
 export function SelectionToolbar({
   nodeId,
   actions,
+  position = Position.Top,
   onMore,
 }: {
   nodeId: string | null
   actions: MapAction[]
+  position?: Position
   // "⋯ Mais": o menu de contexto completo, ancorado no botão.
   onMore: (at: { x: number; y: number }) => void
 }) {
+  // Não passa da largura do cartão na tela: quebra em linhas em vez de invadir
+  // a lane do lado.
+  const screenW = useStore((s) => {
+    const n = nodeId ? s.nodeLookup.get(nodeId) : undefined
+    const w = n?.measured.width ?? n?.width ?? 0
+    return Math.round(w * s.transform[2])
+  })
   if (!nodeId || actions.length === 0) return null
   // Só as principais, sempre com rótulo (ícone solto ninguém decifra); o resto
   // mora no "⋯ Mais", que é o mesmo menu do clique direito.
@@ -397,8 +421,15 @@ export function SelectionToolbar({
   const shown = primary.length > 0 ? primary : actions
   const hidden = actions.length > shown.length
   return (
-    <NodeToolbar nodeId={nodeId} isVisible position={Position.Top} offset={8}>
-      <div data-testid="map-selection-toolbar" className={pill}>
+    <NodeToolbar nodeId={nodeId} isVisible position={position} offset={8}>
+      <div
+        data-testid="map-selection-toolbar"
+        data-position={position}
+        // Fundo levemente translúcido: virada pra baixo ela pode passar sobre o
+        // título do cartão de baixo, que continua legível por trás.
+        className={`${pill} flex-wrap justify-center !rounded-[18px] !bg-[color-mix(in_srgb,var(--color-surface)_86%,transparent)]`}
+        style={{ maxWidth: Math.max(screenW, TOOLBAR_MIN_W) }}
+      >
         {shown.map((a) => (
           <button
             key={a.key}

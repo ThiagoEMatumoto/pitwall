@@ -107,6 +107,7 @@ const UNDELIVERABLE: Record<SendPromptError, string> = {
   attention: 'o destino está esperando resposta do usuário num handoff',
   unparsed: 'a tela do destino não foi reconhecida',
   'input-dirty': 'há texto não enviado na caixa de input do destino',
+  cancelled: 'a mensagem foi cancelada antes de sair',
 }
 
 // Atributo do envelope: sem aspas, sinais de tag nem quebra — um alias forjado não

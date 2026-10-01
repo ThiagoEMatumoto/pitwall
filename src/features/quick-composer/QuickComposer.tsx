@@ -74,8 +74,6 @@ export function resultNotice(
     return `Na fila de @${t.alias} — entrega quando ela terminar o turno, sem menu na tela.`
   if (res.error === 'menu-open')
     return `Há um menu aberto na tela de @${t.alias} — responda antes ou use “Quando terminar”.`
-  if (res.error === 'no-screen' && t.status !== 'waiting')
-    return `@${t.alias} não tem espelho da tela: só dá pra “Enviar agora”.`
   if (res.error === 'not-running') return `@${t.alias} encerrou — a mensagem não foi enviada.`
   if (res.error === 'input-dirty')
     return `@${t.alias} tem texto não enviado no prompt — envie ou apague lá, ou use “Quando terminar”.`
