@@ -85,7 +85,12 @@ describe('handoff-store', () => {
 
     it('nasce pending por padrão e approved quando um humano já decidiu', () => {
       expect(newHandoff().status).toBe('pending')
-      const h = store.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p', status: 'approved' })
+      const h = store.create({
+        targetRepoId: 'r1',
+        task: 't',
+        composedPrompt: 'p',
+        status: 'approved',
+      })
       expect(h.status).toBe('approved')
     })
   })
@@ -316,9 +321,7 @@ describe('handoff-store', () => {
   // handoff (markRunning). Espelha o que o fluxo real faz no spawn da filha.
   function spawnChild(handoffId: string, childSessionId: string, childStatus: string): void {
     testDb
-      .prepare(
-        `INSERT INTO sessions (id, repo_id, status, started_at) VALUES (?, 'r1', ?, ?)`,
-      )
+      .prepare(`INSERT INTO sessions (id, repo_id, status, started_at) VALUES (?, 'r1', ?, ?)`)
       .run(childSessionId, childStatus, Date.now())
     store.markRunning(handoffId, childSessionId)
   }
@@ -334,7 +337,7 @@ describe('handoff-store', () => {
         .run('Sessão-filha órfã: app reiniciou sem reconciliar o handoff', Date.now())
     }
 
-    it("running/needs_input → interrupted; done/rejected/failed permanecem intactos", () => {
+    it('running/needs_input → interrupted; done/rejected/failed permanecem intactos', () => {
       const running = newHandoff('r1')
       store.approve(running.id, {})
       store.markRunning(running.id, 's-run')
@@ -499,8 +502,16 @@ describe('handoff-store', () => {
       // Confere os pares from→to dos mutadores de status.
       expect(ev[1]).toMatchObject({ from_status: 'pending', to_status: 'approved' })
       expect(ev[2]).toMatchObject({ from_status: 'approved', to_status: 'running' })
-      expect(ev[3]).toMatchObject({ from_status: 'running', to_status: 'running', detail: 'rodando testes' })
-      expect(ev[4]).toMatchObject({ from_status: 'running', to_status: 'needs_input', detail: 'qual versão?' })
+      expect(ev[3]).toMatchObject({
+        from_status: 'running',
+        to_status: 'running',
+        detail: 'rodando testes',
+      })
+      expect(ev[4]).toMatchObject({
+        from_status: 'running',
+        to_status: 'needs_input',
+        detail: 'qual versão?',
+      })
       expect(ev[5]).toMatchObject({ from_status: 'needs_input', to_status: 'running' })
       expect(ev[6]).toMatchObject({ from_status: 'running', to_status: 'done' })
     })
@@ -997,6 +1008,91 @@ describe('handoff-store', () => {
       expect(store.get(h.id)?.predecessorSessionId).toBeNull()
       testDb.prepare('UPDATE handoffs SET predecessor_session_id = ? WHERE id = ?').run('old', h.id)
       expect(store.get(h.id)?.predecessorSessionId).toBe('old')
+    })
+  })
+
+  describe('transferMother (bastão da mãe)', () => {
+    function childOf(mother: string, child: string) {
+      const h = store.create({
+        targetRepoId: 'r1',
+        task: `tarefa de ${child}`,
+        composedPrompt: 'p',
+        motherSessionId: mother,
+        status: 'approved',
+      })
+      return store.markRunning(h.id, child)
+    }
+
+    it('move só os handoffs não-terminais da antecessora e mantém os encerrados', () => {
+      const c1 = childOf('m-old', 'c1')
+      const c2 = childOf('m-old', 'c2')
+      store.ask(c2.id, 'posso?')
+      const done = childOf('m-old', 'c3')
+      store.report(done.id, 'feito')
+      const other = childOf('m-outra', 'c4')
+
+      const moved = store.transferMother('m-old', 'm-new')
+
+      expect(moved.map((h) => h.id).sort()).toEqual([c1.id, c2.id].sort())
+      expect(store.get(c1.id)?.motherSessionId).toBe('m-new')
+      expect(store.get(c2.id)?.motherSessionId).toBe('m-new')
+      expect(store.get(c2.id)?.status).toBe('needs_input')
+      expect(store.get(done.id)?.motherSessionId).toBe('m-old')
+      expect(store.get(other.id)?.motherSessionId).toBe('m-outra')
+    })
+
+    it('registra mother_transferred com {from,to} na trilha, sem tocar predecessor_session_id', () => {
+      const c1 = childOf('m-old', 'c1')
+      store.transferMother('m-old', 'm-new')
+      const ev = store.listEvents(c1.id).find((e) => e.event === 'mother_transferred')
+      expect(ev).toBeDefined()
+      expect(ev?.fromStatus).toBe('running')
+      expect(ev?.toStatus).toBe('running')
+      expect(JSON.parse(ev!.detail!)).toEqual({ from: 'm-old', to: 'm-new' })
+      expect(store.get(c1.id)?.predecessorSessionId).toBeNull()
+    })
+
+    it('report e ask da filha depois do relink apontam para a sucessora', () => {
+      const c1 = childOf('m-old', 'c1')
+      const c2 = childOf('m-old', 'c2')
+      store.transferMother('m-old', 'm-new')
+      store.ask(c1.id, 'qual branch?')
+      store.report(c2.id, 'pronto')
+      expect(store.get(c1.id)?.motherSessionId).toBe('m-new')
+      expect(store.get(c2.id)?.motherSessionId).toBe('m-new')
+      expect(store.get(c2.id)?.status).toBe('done')
+    })
+
+    // Regressão: o recorte era "não-terminal", então uma sessão que só delegou
+    // uma vez (filha interrompida sem transcript, ou dispensada) virava mãe no
+    // bastão sem nunca ter mostrado o badge no mapa.
+    it('não move filha interrompida sem retomada nem handoff dispensado', () => {
+      const live = childOf('m-old', 'c1')
+      const dead = childOf('m-old', 'c2')
+      store.failIfRunning(dead.id, 'pty morreu')
+      const gone = childOf('m-old', 'c3')
+      store.dismiss(gone.id)
+
+      expect(store.get(dead.id)?.status).toBe('interrupted')
+      expect(store.get(dead.id)?.resumable).toBe(false)
+      expect(store.listRelinkableByMother('m-old').map((h) => h.id)).toEqual([live.id])
+      expect(store.transferMother('m-old', 'm-new').map((h) => h.id)).toEqual([live.id])
+      expect(store.get(dead.id)?.motherSessionId).toBe('m-old')
+      expect(store.get(gone.id)?.motherSessionId).toBe('m-old')
+    })
+
+    it('mesma sessão nos dois lados ou sem filhas: no-op', () => {
+      const c1 = childOf('m-old', 'c1')
+      expect(store.transferMother('m-old', 'm-old')).toEqual([])
+      expect(store.transferMother('ninguem', 'm-new')).toEqual([])
+      expect(store.listEvents(c1.id).some((e) => e.event === 'mother_transferred')).toBe(false)
+    })
+
+    it('listRelinkableByMother lista o que o bastão vai mover', () => {
+      const c1 = childOf('m-old', 'c1')
+      const done = childOf('m-old', 'c3')
+      store.report(done.id, 'feito')
+      expect(store.listRelinkableByMother('m-old').map((h) => h.id)).toEqual([c1.id])
     })
   })
 })

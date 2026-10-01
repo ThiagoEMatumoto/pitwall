@@ -399,6 +399,22 @@ export interface PassBatonResult {
   // true = o apelido da antecessora seguia ocupado (ela continua viva) e a sucessora
   // subiu com OUTRO endereço.
   aliasChanged: boolean
+  // Antecessora era MÃE: quantos handoffs passaram a responder à sucessora (0 =
+  // não era mãe). Com > 0, `alias` é o endereço novo da mãe.
+  relinkedChildren?: number
+}
+
+// Broadcast 'baton:children-missed': filhas que NÃO receberam a nota da nova mãe
+// (guard recusou por menu aberto, ou a filha não estava rodando). Elas seguem
+// escrevendo para a antecessora, que continua viva.
+export interface BatonChildrenMissed {
+  alias: string
+  previousAlias: string | null
+  missed: Array<{
+    handoffId: string
+    childAlias: string | null
+    reason: 'child-not-running' | 'inject-refused'
+  }>
 }
 
 // Criação MANUAL de sessão-filha pelo diálogo de nova sessão — o caminho sem
@@ -3025,6 +3041,7 @@ export interface Api {
     // Sobe a sucessora com o briefing APROVADO, no mesmo repo/feature. Herda o papel
     // de filha de handoff quando houver. NÃO encerra a antecessora.
     pass(input: PassBatonInput): Promise<PassBatonResult>
+    onChildrenMissed(handler: (payload: BatonChildrenMissed) => void): () => void
   }
   // Sessões como sistema conectado (mãe→filha, bastão, repos ligados, feature).
   // onUpdated recebe o grafo inteiro já recalculado pelo main.

@@ -38,7 +38,9 @@ import { UpdateToast } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
-import { projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { showToast } from '@/features/notifications/toast-store'
+import { childrenMissedToast } from '@/features/handoffs/crew'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
@@ -274,6 +276,14 @@ export function AppShell() {
       setReady(true)
     },
     [closePane, syncFilesRepoToActivePane],
+  )
+
+  // Bastão da mãe: filha que não recebeu a nota do endereço novo segue escrevendo
+  // para a antecessora. O diálogo já fechou quando a nota termina, então o aviso
+  // mora aqui, assinado uma vez pela vida do app.
+  useEffect(
+    () => batonApi.onChildrenMissed((payload) => showToast(childrenMissedToast(payload))),
+    [],
   )
 
   // Restore do layout exato. Quando há pendingLayout, aplicamos api.fromJSON UMA
@@ -530,6 +540,16 @@ export function AppShell() {
       // lado). Mesmo contrato do Alt+A: engole antes do xterm e cede a overlays; em
       // campo de texto do app a tecla fica pro campo (sessionLinkKeyAction).
       const linkStep = sessionLinkKeyAction(e, overrides, useAppStore.getState().area)
+      // Com o lift do mapa aberto, Alt+,/Alt+. trocam de sessão na faixa da modal
+      // (CrewPeek, listener próprio) em vez de navegar até a aba. A tecla é
+      // engolida aqui mesmo assim: com menos de 2 sessões na faixa ninguém a
+      // trata, e o xterm da modal mandaria ESC+'.' à TUI (lido como Esc).
+      const liftOpen = document.querySelector('[data-peek-lift]') !== null
+      if (linkStep && liftOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       if (linkStep && !attentionKeysBlocked()) {
         e.preventDefault()
         e.stopPropagation()

@@ -1,9 +1,15 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { CornerDownLeft, MessageSquare, SquareTerminal, X } from 'lucide-react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { CornerDownLeft, ExternalLink, MessageSquare, SquareTerminal, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ChatView } from '@/features/sessions/chat/ChatView'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
+import { matchCombo, resolveCombo } from '@/lib/keybindings'
+import { useKeybindingsStore } from '@/lib/keybindings-store'
+import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
+import { useTerminalLease } from '@/features/sessions/terminal-lease'
+import { stepLift } from '@/features/session-canvas/card-view'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { StatusBadge, contextLabel, liveActivityLabel, liveBadgeFor } from './HandoffCard'
@@ -13,7 +19,8 @@ import {
   crewTerminalTarget,
   splitAlias,
 } from './crew'
-import { useCrewDockStore, type CrewPeekMode } from './crew-dock-store'
+import { useCrewDockStore, type CrewPeekMode, type PeekOrigin } from './crew-dock-store'
+import { openMapPeek } from './open-map-peek'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 
@@ -36,6 +43,16 @@ import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-prov
 // chrome="bare" (sem SessionHeader). Num fluxo de "só vou dar uma olhada", um
 // botão de desligar ao alcance do clique é acidente esperando acontecer — quem
 // quer de fato trabalhar na filha usa "abrir como aba", no rodapé.
+//
+// Aberto pelo mapa (origin 'map') vira o LIFT: painel até 1400px × 90vh sobre o
+// mapa esmaecido, xterm em 14px e a faixa de troca entre as sessões do mesmo
+// agrupamento (Alt+, / Alt+.). A vista e a câmera do mapa não mudam; navegar
+// para a aba é só pelo "Abrir na aba". Em terminal, a modal ASSUME a PTY
+// (terminal-lease): a aba da mesma sessão desmonta o xterm enquanto ela estiver
+// aberta, então não há dois xterms brigando pelo resize.
+
+// Fonte mínima do xterm no lift: o motivo de abrir a modal é LER o terminal.
+const LIFT_FONT_PX = 14
 
 // Focáveis do overlay, pro trap do Tab. Consultado NA HORA de cada Tab: o corpo
 // do peek é o ChatView, que ganha e perde botões a cada mensagem — uma lista
@@ -73,15 +90,14 @@ export function CrewPeek() {
   const peekMode = useCrewDockStore((s) => s.peekMode)
   const closePeek = useCrewDockStore((s) => s.closePeek)
   const handoffs = useHandoffsStore((s) => s.handoffs)
+  const origin = useCrewDockStore((s) => s.peekOrigin)
+  const siblings = useCrewDockStore((s) => s.peekSiblings)
   const liveSessions = useAppStore((s) => s.liveSessions)
-  const panes = useAppStore((s) => s.panes)
-  const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
 
   const handoff =
     target?.kind === 'handoff' ? (handoffs.find((h) => h.id === target.id) ?? null) : null
   const liveId = target?.kind === 'session' ? target.id : handoff?.childSessionId
   const live = liveId ? (liveSessions.find((s) => s.id === liveId) ?? null) : null
-  const sessionTabOpen = target?.kind === 'session' && crewTerminalTarget(live, panes) === 'pane'
 
   // Fecha sozinho se o alvo sumiu enquanto o overlay estava aberto — o handoff
   // saiu da lista (concluiu, falhou) ou a sessão avulsa terminou. Melhor que
@@ -91,27 +107,63 @@ export function CrewPeek() {
     if (gone) closePeek()
   }, [gone, closePeek])
 
-  // Peek e aba da mesma sessão não coexistem: se a sessão já tem aba, o peek
-  // cede e leva até ela (dois xterms na mesma PTY brigariam pelo resize).
+  // Quem estava focado quando o peek abriu (o card do dock, o cartão do mapa, ou
+  // o botão clicado). Vive aqui, e não no painel, porque trocar de sessão pela
+  // faixa remonta o painel: a origem é a da abertura, não a do último painel.
+  // Layout effect: roda antes do foco que o painel agenda no mount.
+  // Fechar sem restaurar (pulo da fila de atenção, "Abrir na aba") deixa o foco
+  // com quem o levou.
+  const open = !!target
   useEffect(() => {
-    if (!sessionTabOpen || !live) return
-    closePeek({ restoreFocus: false })
-    void focusOrOpenSession(live)
-  }, [sessionTabOpen, live, closePeek, focusOrOpenSession])
+    if (!open) releaseModalLeases()
+  }, [open])
+  const originRef = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const active = document.activeElement
+    originRef.current = active instanceof HTMLElement ? active : null
+    return () => {
+      if (!useCrewDockStore.getState().peekRestoreFocus) return
+      const el = originRef.current
+      requestAnimationFrame(() => {
+        // preventScroll: o lift devolve o foco ao cartão com a câmera intacta.
+        if (el?.isConnected) el.focus({ preventScroll: true })
+      })
+    }
+  }, [open])
 
-  if (!target || gone || sessionTabOpen) return null
+  // A entrada (pw-rise) é da abertura: trocar de sessão pela faixa remonta o
+  // painel, e repetir o fade a cada Alt+. deixava o mapa vazar por trás.
+  const targetKey = target ? `${target.kind}:${target.id}` : null
+  const openedKeyRef = useRef<string | null>(null)
+  if (!targetKey) openedKeyRef.current = null
+  else if (openedKeyRef.current === null) openedKeyRef.current = targetKey
+
+  if (!target || gone) return null
   // key: trocar de alvo remonta o painel (e o ChatView), zerando o transcript
   // assinado e o texto meio digitado do anterior.
   return (
     <CrewPeekPanel
-      key={`${target.kind}:${target.id}`}
+      key={targetKey}
+      animateIn={targetKey === openedKeyRef.current}
       handoff={handoff}
       live={live}
       // Sem Chat View no provider (Codex): o peek abre direto no terminal.
       mode={providerSupports(live?.provider).chatView ? peekMode : 'terminal'}
+      origin={origin}
+      siblings={siblings}
       onClose={closePeek}
     />
   )
+}
+
+// Fechou a modal: toda PTY que ela segurou (a atual e as visitadas pela faixa)
+// volta pra aba, que remonta e refaz a tela pelo replay.
+function releaseModalLeases() {
+  const { leases, release } = useTerminalLease.getState()
+  for (const [id, host] of Object.entries(leases)) {
+    if (host === 'modal') release(id, 'modal')
+  }
 }
 
 interface PanelProps {
@@ -120,34 +172,30 @@ interface PanelProps {
   handoff: Handoff | null
   live: LiveSessionInfo | null
   mode: CrewPeekMode
-  onClose: () => void
+  origin: PeekOrigin
+  siblings: string[]
+  onClose: (opts?: { restoreFocus?: boolean }) => void
+  animateIn: boolean
 }
 
-function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
+function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animateIn }: PanelProps) {
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
-  const panes = useAppStore((s) => s.panes)
+  const liveSessions = useAppStore((s) => s.liveSessions)
+  const prefFontSize = useTerminalPrefsStore((s) => s.fontSize)
   const setPeekMode = useCrewDockStore((s) => s.setPeekMode)
+  const lift = origin === 'map'
   const load = useHandoffsStore((s) => s.load)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showBriefing, setShowBriefing] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  // Quem estava focado quando o peek abriu (o card do dock, ou o botão clicado).
-  // Padrão novo no repo: sem isto o "fecha rápido" larga o usuário no vazio, que
-  // é exatamente o atrito que esta tela existe pra eliminar.
-  const originRef = useRef<HTMLElement | null>(null)
-  // Fechar promovendo a aba é a exceção: lá o foco pertence ao terminal recém
-  // aberto, e devolvê-lo ao card do dock roubaria a sessão de quem pediu ela.
-  const skipRestoreRef = useRef(false)
   // Corpo do overlay (chat ou terminal). Delimita de quem é o Escape: dentro do
   // terminal ele pertence à filha — ver o handler abaixo.
   const bodyRef = useRef<HTMLDivElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const active = document.activeElement
-    originRef.current = active instanceof HTMLElement ? active : null
     // rAF: mesmo padrão do refocus do Composer — foca depois do paint. Em modo
     // terminal quem toma o foco é o xterm (effect do próprio Terminal): digitar
     // na TUI é o motivo de se estar ali.
@@ -157,14 +205,72 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
       if (inputRef.current) inputRef.current.focus()
       else if (useCrewDockStore.getState().peekMode === 'chat') dialogRef.current?.focus()
     })
-    return () => {
-      if (skipRestoreRef.current || !useCrewDockStore.getState().peekRestoreFocus) return
-      const origin = originRef.current
-      requestAnimationFrame(() => {
-        if (origin?.isConnected) origin.focus()
-      })
-    }
   }, [])
+
+  // A modal em terminal assume a PTY: enquanto ela segura a lease, a aba da mesma
+  // sessão desmonta o xterm (placeholder "Aberto no mapa") e não manda resize.
+  // Só quando o terminal mora AQUI (crewTerminalTarget = 'modal'): pelo dock, com
+  // aba aberta, o terminal da filha é a aba — inclusive no provider sem Chat View,
+  // que abre o peek já em modo terminal. Nesse caso o peek leva até a aba.
+  const panes = useAppStore((s) => s.panes)
+  const terminalHere = mode === 'terminal' && crewTerminalTarget(live, panes, origin) === 'modal'
+  const leaseId = terminalHere ? live?.id : undefined
+  const sendToTab = mode === 'terminal' && crewTerminalTarget(live, panes, origin) === 'pane'
+  useEffect(() => {
+    if (sendToTab) promoteToTab()
+    // Só na abertura: depois disso a aba já é a dona.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // A lease volta pra aba quando a modal FECHA (ver releaseModalLeases), ou quando
+  // este painel deixa o modo terminal. Trocar de sessão pela faixa remonta o
+  // painel mas não devolve a PTY: cada passo do Alt+./Alt+, remontaria um xterm
+  // (replay, fit, resize, contexto WebGL) numa aba que ninguém está vendo.
+  useEffect(() => {
+    if (!leaseId) return
+    useTerminalLease.getState().acquire(leaseId, 'modal')
+    return () => {
+      const next = useCrewDockStore.getState().peekTarget
+      const nextSession =
+        next?.kind === 'handoff'
+          ? useHandoffsStore.getState().handoffs.find((h) => h.id === next.id)?.childSessionId
+          : next?.id
+      const switching = next !== null && nextSession !== leaseId
+      if (!switching || useCrewDockStore.getState().peekMode !== 'terminal') {
+        useTerminalLease.getState().release(leaseId, 'modal')
+      }
+    }
+  }, [leaseId])
+
+  // Faixa de troca do lift: só as irmãs ainda vivas. Alt+, / Alt+. andam por ela
+  // (os mesmos atalhos das relações; o AppShell cede a tecla com o lift aberto).
+  const strip = lift
+    ? siblings.filter((id) => liveSessions.some((s) => s.id === id && s.status !== 'ended'))
+    : []
+  const currentId = live?.id ?? null
+  useEffect(() => {
+    if (strip.length < 2 || !currentId) return
+    const onKey = (e: KeyboardEvent) => {
+      const kb = useKeybindingsStore.getState().overrides
+      const delta = matchCombo(e, resolveCombo('session.linkNext', kb))
+        ? 1
+        : matchCombo(e, resolveCombo('session.linkPrev', kb))
+          ? -1
+          : 0
+      if (!delta) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.repeat) return
+      switchTo(stepLift(strip, currentId, delta))
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strip.join('|'), currentId, mode])
+
+  function switchTo(sessionId: string) {
+    if (sessionId === currentId) return
+    openMapPeek(sessionId, mode, siblings)
+  }
 
   // Esc fecha de qualquer lugar do overlay (inclusive de dentro do textarea).
   // Listener de janela em capture porque o peek é a camada de cima: nenhum outro
@@ -210,28 +316,28 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
   // contradiz o corpo — "trabalhando" a dois centímetros de "A filha perguntou".
   const blocked = handoff?.status === 'needs_input' && !resumed
 
-  // Onde o terminal desta filha mora agora: aqui na janela, ou na aba que já
-  // existe (dois xterms na mesma PTY brigariam pelo resize — crewTerminalTarget).
-  const terminalTarget = crewTerminalTarget(live, panes)
-
-  // "Ver o terminal": alterna o overlay pra modo terminal. Se a filha já tem aba
-  // aberta, o overlay sai da frente e leva o usuário até ela.
+  // "Ver o terminal": alterna o overlay pra modo terminal, aqui na janela. Pelo
+  // dock, com aba aberta, leva até a aba (ver crewTerminalTarget).
   function showTerminal() {
-    if (terminalTarget === 'none') return
-    if (terminalTarget === 'pane') {
+    const target = crewTerminalTarget(live, useAppStore.getState().panes, origin)
+    if (target === 'none') return
+    if (target === 'pane') {
       promoteToTab()
       return
     }
     setPeekMode('terminal')
   }
 
-  // Promover a filha a aba de verdade: ação explícita, no rodapé. É a única
-  // porta pro header completo de sessão (com encerrar) — de propósito.
+  // Promover a sessão a aba de verdade: ação explícita, e a ÚNICA que navega. É a
+  // porta pro header completo de sessão (com encerrar) — de propósito. A lease
+  // sai antes, pra aba remontar o xterm já como dona da PTY; e o foco não volta
+  // à origem: ele pertence ao terminal recém aberto.
   function promoteToTab() {
     if (!live) return
-    skipRestoreRef.current = true
+    useTerminalLease.getState().release(live.id, 'modal')
+    onClose({ restoreFocus: false })
+    if (lift) useProjectsViewStore.getState().setView('terminals')
     void focusOrOpenSession(live)
-    onClose()
   }
 
   // RESPOSTA: handoffs:send-message, chaveado pelo handoffId — NUNCA
@@ -262,7 +368,10 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
       // .dv-sash em 99 e seus overlays em 999 (--dv-overlay-z-index). Qualquer
       // valor abaixo disso põe o peek por baixo das divisórias assim que houver
       // split — não reproduz com painel único, mas quebra na primeira divisão.
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-6"
+      className={`fixed inset-0 z-[1000] flex items-center justify-center p-6 ${
+        lift ? 'bg-black/70' : 'bg-black/60'
+      }`}
+      data-testid="peek-backdrop"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -275,9 +384,12 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
         aria-modal="true"
         aria-labelledby={titleId}
         data-peek-mode={mode}
+        data-peek-lift={lift ? 'true' : undefined}
         tabIndex={-1}
         onKeyDown={trapTab}
-        className="pw-rise flex outline-none h-[88vh] w-[56rem] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+        className={`${animateIn ? 'pw-rise ' : ''}flex outline-none flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl ${
+          lift ? 'h-[90vh] w-[min(1400px,94vw)]' : 'h-[88vh] w-[56rem] max-w-[92vw]'
+        }`}
       >
         <header className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border)] px-4 py-3">
           <div className="min-w-0 flex-1">
@@ -363,18 +475,26 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
                   active={mode === 'terminal'}
                   icon={SquareTerminal}
                   label="Terminal"
-                  title={
-                    terminalTarget === 'pane'
-                      ? 'Esta filha já tem uma aba aberta — o terminal dela está lá'
-                      : 'Terminal cru da filha, aqui na janela (menus TUI clicáveis)'
-                  }
+                  title="Terminal cru da sessão, aqui na janela (menus TUI clicáveis)"
                   onClick={showTerminal}
                 />
               </div>
             )}
+            {lift && live && (
+              <button
+                type="button"
+                data-testid="peek-open-tab"
+                onClick={promoteToTab}
+                title="Sai do mapa e leva até a aba da sessão (o header completo, com encerrar, fica lá)"
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+              >
+                <Icon as={ExternalLink} size={12} />
+                Abrir na aba
+              </button>
+            )}
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => onClose()}
               title="Fechar (Esc)"
               aria-label="Fechar"
               className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
@@ -400,7 +520,9 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
                 projectColor={live.projectColor}
                 mode="terminal"
                 chrome="bare"
-                onClose={onClose}
+                leaseHost="modal"
+                fontSize={lift ? Math.max(LIFT_FONT_PX, prefFontSize) : undefined}
+                onClose={() => onClose()}
               />
             </div>
           ) : (live?.id ?? handoff?.childSessionId) ? (
@@ -421,6 +543,10 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
           )}
         </div>
 
+        {strip.length > 1 && (
+          <LiftStrip ids={strip} currentId={currentId} onPick={switchTo} />
+        )}
+
         {/* Em modo terminal o rodapé encolhe: o input é o composer do próprio
             Terminal, e a pergunta pendente está desenhada na TUI ali em cima.
             Dois campos de texto empilhados seriam duas verdades competindo. */}
@@ -428,10 +554,14 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
           <div className="flex shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 py-1.5 text-[10px] text-[var(--color-text-dim)]">
             <span>esc vai pra {handoff ? 'filha' : 'sessão'}</span>
             <span>shift+esc fecha</span>
-            <PromoteToTabLink live={live} onClick={promoteToTab} />
+            {!lift && <PromoteToTabLink live={live} onClick={promoteToTab} />}
           </div>
         ) : !handoff ? (
-          <SessionChatFooter live={live} onTerminal={showTerminal} onPromote={promoteToTab} />
+          <SessionChatFooter
+            live={live}
+            onTerminal={showTerminal}
+            onPromote={lift ? undefined : promoteToTab}
+          />
         ) : (
         <div className="shrink-0 border-t border-[var(--color-border)] p-3">
           {/* Limitação assumida: menu TUI (escolher opção numerada) é desenhado
@@ -585,6 +715,51 @@ function PeekModeButton({
   )
 }
 
+// Faixa de troca do lift: as sessões do mesmo agrupamento do mapa, na ordem dele.
+// Trocar remonta o painel no mesmo modo (terminal continua terminal).
+function LiftStrip({
+  ids,
+  currentId,
+  onPick,
+}: {
+  ids: string[]
+  currentId: string | null
+  onPick: (id: string) => void
+}) {
+  const liveSessions = useAppStore((s) => s.liveSessions)
+  return (
+    <div
+      data-testid="peek-lift-strip"
+      className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-[var(--color-border)] px-3 py-1.5"
+    >
+      {ids.map((id) => {
+        const s = liveSessions.find((x) => x.id === id)
+        const active = id === currentId
+        return (
+          <button
+            key={id}
+            type="button"
+            data-lift-session={id}
+            aria-pressed={active}
+            onClick={() => onPick(id)}
+            title={s?.title ?? s?.name ?? id}
+            className={`max-w-[14rem] shrink-0 truncate rounded px-2 py-0.5 text-[11px] transition ${
+              active
+                ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
+                : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            {s?.title ?? s?.name ?? s?.repo?.label ?? 'Sessão'}
+          </button>
+        )
+      })}
+      <span className="ml-auto shrink-0 pl-2 text-[10px] text-[var(--color-text-dim)]">
+        alt+, / alt+. troca
+      </span>
+    </div>
+  )
+}
+
 // Rodapé do peek de sessão avulsa em modo chat: não há canal de handoff pra
 // responder, então escrever é no terminal da própria sessão (mesma janela).
 function SessionChatFooter({
@@ -594,7 +769,8 @@ function SessionChatFooter({
 }: {
   live: LiveSessionInfo | null
   onTerminal: () => void
-  onPromote: () => void
+  // Ausente no lift: lá o "Abrir na aba" mora no cabeçalho.
+  onPromote?: () => void
 }) {
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-dim)]">
@@ -610,7 +786,7 @@ function SessionChatFooter({
         </button>
       )}
       <span>esc fechar</span>
-      <PromoteToTabLink live={live} onClick={onPromote} />
+      {onPromote && <PromoteToTabLink live={live} onClick={onPromote} />}
     </div>
   )
 }

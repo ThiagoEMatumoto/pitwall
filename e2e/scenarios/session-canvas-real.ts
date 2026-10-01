@@ -84,7 +84,8 @@ try {
   if (ids[1]) {
     await card(ids[1]).getByTestId('card-interact').click()
     await page.waitForTimeout(1500)
-    await card(ids[1])
+    const lift = page.locator('[role="dialog"][data-peek-lift][data-peek-mode="terminal"]')
+    await lift
       .locator('.xterm')
       .click()
       .catch(() => {})
@@ -92,6 +93,7 @@ try {
     await page.keyboard.press('Enter')
     await page.waitForTimeout(1200)
     await shot('03-real-terminal')
+    await page.keyboard.press('Shift+Escape')
   }
   const views = await page
     .getByTestId('session-card')

@@ -1,13 +1,13 @@
 // PURO: estado de exibição dos cartões de sessão no mapa e as regras dele.
 //   collapsed — identidade + estado (o cartão de antes, mais baixo)
 //   open      — + saída ao vivo, barra de prompt e ações de atenção (default)
-//   terminal  — o xterm real da sessão no lugar do cartão
+// O antigo 'terminal' (xterm no lugar do cartão) não existe mais: o terminal do
+// mapa abre na modal (CrewPeek em size lift). Linhas 'terminal' do banco são
+// rebaixadas a 'open' no hydrate.
 // Toda transição devolve o mapa novo E o que mudou, pra gravar só a diferença.
 import type { CanvasCardView, CardViewState } from '../../../shared/types/canvas'
 
 export const DEFAULT_VIEW: CardViewState = 'open'
-// Abaixo disto o terminal do cartão fica pequeno demais pra ler/clicar: volta a 'open'.
-export const TERMINAL_MIN_ZOOM = 0.85
 
 export type ViewMap = Readonly<Record<string, CardViewState>>
 
@@ -17,51 +17,41 @@ export interface ViewChange {
 }
 
 export function viewOf(views: ViewMap, sessionId: string): CardViewState {
-  return views[sessionId] ?? DEFAULT_VIEW
+  const v = views[sessionId]
+  return v === undefined || v === 'terminal' ? DEFAULT_VIEW : v
 }
 
 function apply(views: ViewMap, updates: Array<[string, CardViewState]>): ViewChange {
   const next: Record<string, CardViewState> = { ...views }
   const changed: CanvasCardView[] = []
   for (const [sessionId, viewState] of updates) {
-    if (viewOf(next, sessionId) === viewState) continue
+    // Cru, não viewOf: o 'terminal' legado lê como 'open' mas precisa ser regravado.
+    if ((next[sessionId] ?? DEFAULT_VIEW) === viewState) continue
     next[sessionId] = viewState
     changed.push({ sessionId, viewState })
   }
   return { next: changed.length ? next : views, changed }
 }
 
-export function terminalOf(views: ViewMap): string | null {
-  return Object.keys(views).find((id) => views[id] === 'terminal') ?? null
-}
-
-// Do banco: no máximo um terminal (o primeiro vence; os outros abrem e gravam).
+// Do banco: o estado legado 'terminal' vira 'open' (e grava a correção).
 export function hydrateViews(rows: CanvasCardView[]): ViewChange {
   const base: Record<string, CardViewState> = {}
   const demote: Array<[string, CardViewState]> = []
-  let terminal: string | null = null
   for (const r of rows) {
-    if (r.viewState === 'terminal') {
-      if (terminal) {
-        base[r.sessionId] = 'terminal'
-        demote.push([r.sessionId, 'open'])
-        continue
-      }
-      terminal = r.sessionId
-    }
     base[r.sessionId] = r.viewState
+    if (r.viewState === 'terminal') demote.push([r.sessionId, 'open'])
   }
   return apply(base, demote)
 }
 
-// Chevron / duplo clique no cabeçalho: recolhido ⇄ aberto (do terminal, recolhe).
+// Chevron: recolhido ⇄ aberto.
 export function toggleCollapsed(views: ViewMap, sessionId: string): ViewChange {
   return apply(views, [
     [sessionId, viewOf(views, sessionId) === 'collapsed' ? 'open' : 'collapsed'],
   ])
 }
 
-// "Abrir todos" abre os recolhidos; o terminal em uso fica como está.
+// "Abrir todos" abre os recolhidos.
 export function openAll(views: ViewMap, ids: string[]): ViewChange {
   return apply(
     views,
@@ -76,30 +66,15 @@ export function collapseAll(views: ViewMap, ids: string[]): ViewChange {
   )
 }
 
-// Um terminal por vez: entrar num devolve o anterior a 'open'.
-export function enterTerminal(views: ViewMap, sessionId: string): ViewChange {
-  const previous = terminalOf(views)
-  const updates: Array<[string, CardViewState]> = []
-  if (previous && previous !== sessionId) updates.push([previous, 'open'])
-  updates.push([sessionId, 'terminal'])
-  return apply(views, updates)
-}
-
-export function leaveTerminal(views: ViewMap, sessionId: string): ViewChange {
-  return viewOf(views, sessionId) === 'terminal'
-    ? apply(views, [[sessionId, 'open']])
-    : { next: views, changed: [] }
-}
-
 // Linhagem: a sucessora do bastão (ou a mesma conversa retomada numa PTY nova)
 // herda o recolhido/aberto da antecessora, em vez de nascer no default. Só quem
-// ainda não tem estado próprio; terminal não se herda (um por vez, e a PTY é outra).
+// ainda não tem estado próprio.
 // `lineage` = [sucessora, antecessora].
 export function inheritViews(views: ViewMap, lineage: Array<[string, string]>): ViewChange {
   const updates: Array<[string, CardViewState]> = []
   for (const [next, prev] of lineage) {
     if (views[next] !== undefined || views[prev] === undefined) continue
-    updates.push([next, views[prev] === 'terminal' ? 'open' : views[prev]])
+    updates.push([next, viewOf(views, prev)])
   }
   return apply(views, updates)
 }
@@ -128,23 +103,52 @@ export function viewLineage(
   return out
 }
 
-// Regra aba × cartão (a mesma do CrewPeek): dois xterms na MESMA PTY brigariam
-// pelo resize. Sessão com aba aberta → "Interagir" leva até a aba; sem PTY viva
-// não há o que montar.
-export type TerminalHost = 'card' | 'tab' | 'none'
+// Onde o terminal do mapa abre: sempre na modal (que assume a PTY mesmo com aba
+// aberta — a aba mostra "Aberto no mapa", ver terminal-lease). Sem PTY viva não
+// há o que montar. Nunca 'tab': navegar é só pelo "Abrir na aba".
+export type TerminalHost = 'modal' | 'none'
 
-export function terminalHostFor(input: { live: boolean; hasPane: boolean }): TerminalHost {
-  if (!input.live) return 'none'
-  return input.hasPane ? 'tab' : 'card'
+// Sessão encerrada continua em liveSessions (status 'ended'): sem PTY a anexar.
+export function terminalHostFor(live: { status: string } | undefined): TerminalHost {
+  return live && live.status !== 'ended' ? 'modal' : 'none'
 }
 
-// O cartão em modo terminal cede quando a mesma sessão ganha outro xterm (aba
-// aberta, peek em modo terminal), quando a PTY morre ou quando o zoom afasta.
-export function mustLeaveTerminal(input: {
-  live: boolean
-  hasPane: boolean
-  peekedInTerminal: boolean
-  zoom: number
-}): boolean {
-  return !input.live || input.hasPane || input.peekedInTerminal || input.zoom < TERMINAL_MIN_ZOOM
+// Faixa de troca da modal (Alt+, / Alt+.): as sessões em uso do mesmo
+// agrupamento do mapa — hoje o projeto (a F2 troca pelo card da feature). Na
+// ordem em que o mapa as empilha: repo, depois a atividade mais recente.
+export function liftGroup(
+  nodes: ReadonlyArray<{
+    sessionId: string
+    projectId: string | null
+    repoLabel: string | null
+    lastActivityAt: number | null
+  }>,
+  sessionId: string,
+  inUse: ReadonlySet<string>,
+): string[] {
+  const self = nodes.find((n) => n.sessionId === sessionId)
+  if (!self) return [sessionId]
+  return nodes
+    .filter((n) => n.projectId === self.projectId && (inUse.has(n.sessionId) || n === self))
+    .sort(
+      (a, b) =>
+        (a.repoLabel ?? '').localeCompare(b.repoLabel ?? '') ||
+        (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),
+    )
+    .map((n) => n.sessionId)
+}
+
+// Próxima sessão da faixa (wrap nas pontas: a faixa é um carrossel curto).
+export function stepLift(ids: string[], current: string, delta: number): string {
+  const i = ids.indexOf(current)
+  if (ids.length === 0 || i < 0) return current
+  return ids[(i + delta + ids.length) % ids.length]
+}
+
+// Duplo clique no cartão abre o terminal na modal — mas não quando os cliques
+// caíram num controle do header (chevron, chip da mãe, fan, lápis): cada botão
+// já fez a sua ação, e o React Flow propagaria o dblclick até o nó.
+export function doubleClickOpensTerminal(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true
+  return !target.closest('button, a, input, textarea, select, [contenteditable="true"]')
 }

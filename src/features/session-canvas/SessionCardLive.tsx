@@ -2,10 +2,9 @@ import { useState, type ReactNode } from 'react'
 import { Clock, CornerDownLeft, ShieldAlert } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sendToApi } from '@/lib/ipc'
-import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
+import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { dockCrew } from '@/features/handoffs/crew'
-import { Terminal } from '@/features/sessions/Terminal'
 import {
   AttentionMenuPanel,
   isActionableDetail,
@@ -268,35 +267,5 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
         </p>
       )}
     </Interactive>
-  )
-}
-
-// O terminal REAL da sessão no lugar do cartão: o mesmo Terminal das abas,
-// anexado à MESMA PTY (backlog replicado no mount), sem header (encerrar não fica
-// a um clique) e no renderer DOM — ver a prop `renderer` do Terminal.
-export function CardTerminal({ node, onLeave }: { node: SessionGraphNode; onLeave: () => void }) {
-  const live = useAppStore((s) => s.liveSessions.find((x) => x.id === node.sessionId))
-  if (!live) return null
-  return (
-    <div
-      data-card-terminal
-      className="nodrag nopan nowheel relative min-h-0 flex-1 overflow-hidden rounded-md border border-[var(--color-border)]"
-      onClick={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-    >
-      <Terminal
-        session={sessionFromLiveSession(live, null)}
-        repoLabel={live.repo?.label ?? 'Avulsa'}
-        repoPath={live.repo?.path ?? ''}
-        projectName={live.projectName ?? ''}
-        projectIcon={live.projectIcon}
-        projectColor={live.projectColor}
-        mode="terminal"
-        chrome="bare"
-        composer="compact"
-        renderer="dom"
-        onClose={onLeave}
-      />
-    </div>
   )
 }

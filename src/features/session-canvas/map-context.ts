@@ -23,12 +23,9 @@ export interface MapActions {
   newSession: (repoId: string | null) => void
   // "N filhas ▾": abre/recolhe o leque de fios de uma mãe com muitas filhas.
   toggleFan: (sessionId: string) => void
-  // Cartão vivo: recolhido ⇄ aberto, o terminal real no lugar do cartão, e o
-  // tamanho dele (NodeResizer → resize da PTY pelo ResizeObserver do Terminal).
+  // Cartão vivo: recolhido ⇄ aberto, e o terminal real na modal do mapa.
   toggleView: (sessionId: string) => void
   interact: (sessionId: string) => void
-  leaveTerminal: (sessionId: string) => void
-  resizeTerminal: (sessionId: string, size: { w: number; h: number }) => void
   // Pan animado até o cartão de outra sessão (chip "↳ de <mãe>").
   centerOn: (sessionId: string) => void
 }

@@ -59,6 +59,16 @@ export interface PeekTarget {
   id: string
 }
 
+// De onde o peek abriu. 'map' é o lift: painel grande sobre o mapa esmaecido,
+// com a faixa de troca entre as sessões do mesmo agrupamento.
+export type PeekOrigin = 'dock' | 'map'
+
+export interface SessionPeekOptions {
+  origin?: PeekOrigin
+  // sessions.id da faixa de troca, na ordem do mapa (ver liftGroup).
+  siblings?: string[]
+}
+
 // Sessão aberta no peek pelo mapa (peekId é null nesse caso).
 export function peekedSessionId(peek: PeekTarget | null): string | null {
   return peek?.kind === 'session' ? peek.id : null
@@ -78,6 +88,8 @@ interface CrewDockState {
   // navegação por relações perguntam). null também com peek de sessão aberto.
   peekId: string | null
   peekMode: CrewPeekMode
+  peekOrigin: PeekOrigin
+  peekSiblings: string[]
   // Lido pelo CrewPeek ao desmontar: false quando quem fechou já levou o foco pra
   // outro lugar (pulo da fila de atenção) e devolvê-lo à origem desfaria o pulo.
   peekRestoreFocus: boolean
@@ -94,8 +106,8 @@ interface CrewDockState {
   setFocusedId: (id: string | null) => void
   // Ctrl+J: abre o dock (se preciso) e pede o foco pro card corrente.
   requestFocus: () => void
-  openPeek: (id: string, mode?: CrewPeekMode) => void
-  openSessionPeek: (sessionId: string, mode?: CrewPeekMode) => void
+  openPeek: (id: string, mode?: CrewPeekMode, opts?: SessionPeekOptions) => void
+  openSessionPeek: (sessionId: string, mode?: CrewPeekMode, opts?: SessionPeekOptions) => void
   setPeekMode: (mode: CrewPeekMode) => void
   closePeek: (opts?: { restoreFocus?: boolean }) => void
 }
@@ -109,6 +121,8 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   peekTarget: null,
   peekId: null,
   peekMode: 'chat',
+  peekOrigin: 'dock',
+  peekSiblings: [],
   peekRestoreFocus: true,
   focusNonce: 0,
 
@@ -144,11 +158,33 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
     set({ focusNonce: get().focusNonce + 1 })
   },
 
-  openPeek: (peekId, peekMode = 'chat') =>
-    set({ peekTarget: { kind: 'handoff', id: peekId }, peekId, peekMode, focusedId: peekId }),
+  // O mapa também abre o peek de handoff (filha do dock): com origin 'map' ele é
+  // o lift, com as mesmas regras do resto do mapa (não navega, assume a PTY).
+  //
+  // Sem origin explícito (fila de atenção, Alt+Q, navegação por relações) com o
+  // lift aberto, o peek CONTINUA lift: virar peek do dock faria o "Ver o terminal"
+  // levar pra aba, e no mapa só o "Abrir na aba" navega. Sem faixa — as irmãs
+  // eram da sessão anterior.
+  openPeek: (peekId, peekMode = 'chat', opts) => {
+    const inLift = get().peekTarget !== null && get().peekOrigin === 'map'
+    set({
+      peekTarget: { kind: 'handoff', id: peekId },
+      peekId,
+      peekMode,
+      focusedId: peekId,
+      peekOrigin: opts?.origin ?? (inLift ? 'map' : 'dock'),
+      peekSiblings: opts?.siblings ?? [],
+    })
+  },
 
-  openSessionPeek: (sessionId, peekMode = 'chat') =>
-    set({ peekTarget: { kind: 'session', id: sessionId }, peekId: null, peekMode }),
+  openSessionPeek: (sessionId, peekMode = 'chat', opts) =>
+    set({
+      peekTarget: { kind: 'session', id: sessionId },
+      peekId: null,
+      peekMode,
+      peekOrigin: opts?.origin ?? 'dock',
+      peekSiblings: opts?.siblings ?? [],
+    }),
 
   setPeekMode: (peekMode) => set({ peekMode }),
 
@@ -157,6 +193,8 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
       peekTarget: null,
       peekId: null,
       peekMode: 'chat',
+      peekOrigin: 'dock',
+      peekSiblings: [],
       peekRestoreFocus: opts?.restoreFocus !== false,
     }),
 }))

@@ -13,6 +13,8 @@ import type {
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
 import { resolvePurpose } from './session-purpose'
+import { isResumableChild } from './handoff-store'
+import { isLedByMother } from '../../../shared/handoff-lead'
 
 // Estado vivo por sessions.id (PTY + ~/.claude/sessions/<pid>.json). Ausente = ended.
 export interface LiveSessionState {
@@ -47,6 +49,9 @@ export interface GraphHandoffRow {
   status: HandoffStatus
   current_step: string | null
   created_at: number
+  // Só 'interrupted' com transcript da filha no disco (isResumableChild). O
+  // readGraphHandoffs já tira os dispensados.
+  resumable?: boolean
 }
 
 export interface GraphRepoRow {
@@ -74,6 +79,15 @@ export interface GraphFeatureRecordRow {
   feature_id: string
 }
 
+// handoff_events 'mother_transferred' (handoffStore.transferMother): de quem
+// para quem a liderança de um handoff passou.
+export interface GraphMotherTransfer {
+  handoff_id: string
+  from: string
+  to: string
+  at: number
+}
+
 export interface SessionGraphInput {
   sessions: GraphSessionRow[]
   // Só handoffs fora do Crew Dock dispensado (o leitor já filtra).
@@ -90,6 +104,7 @@ export interface SessionGraphInput {
   pastTasks?: Map<string, string>
   // Última mensagem humana por sessions.id (fallback do "Onde parei").
   lastPrompts?: Map<string, string | null>
+  motherTransfers?: GraphMotherTransfer[]
 }
 
 const LOOSE_LABEL = 'Avulsas'
@@ -129,8 +144,33 @@ function predecessorHandoffIndex(handoffs: GraphHandoffRow[]): Map<string, Graph
   return out
 }
 
+// Filhas por mãe, no recorte do bastão (isLedByMother): o badge promete
+// exatamente quem o bastão vai relinkar. Com filha atrelada, só o handoff que ela
+// adota (childHandoffIndex), pra uma sessão readotada não contar pras duas mães;
+// pending/approved ainda sem filha contam — o bastão também os move.
+function childCountByMother(
+  handoffs: GraphHandoffRow[],
+  childHandoff: Map<string, GraphHandoffRow>,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const h of handoffs) {
+    const mother = h.mother_session_id
+    const child = h.child_session_id
+    if (!mother || mother === child) continue
+    if (!isLedByMother({ status: h.status, dismissedAt: null, resumable: h.resumable ?? false }))
+      continue
+    if (child && childHandoff.get(child)?.id !== h.id) continue
+    out.set(mother, (out.get(mother) ?? 0) + 1)
+  }
+  return out
+}
+
 function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHandoffRow>) {
   const passedBaton = predecessorHandoffIndex(input.handoffs)
+  const children = childCountByMother(input.handoffs, childHandoff)
+  const gaveMotherBaton = new Set(
+    (input.motherTransfers ?? []).filter((t) => t.from !== t.to).map((t) => t.from),
+  )
   const repoById = new Map(input.repos.map((r) => [r.id, r]))
   const sorted = [...input.sessions].sort(
     (a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id),
@@ -173,8 +213,30 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       lastSummaryAt: s.last_summary_at ?? null,
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
+      isMother: (children.get(s.id) ?? 0) > 0,
+      childCount: children.get(s.id) ?? 0,
+      batonPassed: gaveMotherBaton.has(s.id) && !children.has(s.id),
     }
   })
+}
+
+// Bastão da mãe: um fio por par antecessora→sucessora (não um por handoff movido).
+// `drawn`: pares já desenhados pela linhagem — a mãe que também é filha passa um
+// bastão só, que aparece nos dois registros.
+function motherBatonEdges(
+  transfers: GraphMotherTransfer[],
+  ids: Set<string>,
+  drawn: SessionGraphEdge[],
+): SessionGraphEdge[] {
+  const seen = new Set(drawn.filter((e) => e.kind === 'baton').map((e) => `${e.from}\u0000${e.to}`))
+  const out: SessionGraphEdge[] = []
+  for (const t of [...transfers].sort((a, b) => a.at - b.at)) {
+    const key = `${t.from}\u0000${t.to}`
+    if (t.from === t.to || seen.has(key) || !ids.has(t.from) || !ids.has(t.to)) continue
+    seen.add(key)
+    out.push({ kind: 'baton', from: t.from, to: t.to, handoffId: t.handoff_id })
+  }
+  return out
 }
 
 // Um handoff por filha: o mais recente vence (a mesma sessão pode ter sido filha
@@ -215,10 +277,20 @@ function lineageEdges(
       })
     }
   }
+  const batonPairs = new Set<string>()
   for (const h of byCreation) {
     const pred = h.predecessor_session_id
     const child = h.child_session_id
-    if (pred && child && pred !== child && ids.has(pred) && ids.has(child)) {
+    const key = `${pred}\u0000${child}`
+    if (
+      pred &&
+      child &&
+      pred !== child &&
+      ids.has(pred) &&
+      ids.has(child) &&
+      !batonPairs.has(key)
+    ) {
+      batonPairs.add(key)
       out.push({ kind: 'baton', from: pred, to: child, handoffId: h.id })
     }
   }
@@ -306,11 +378,13 @@ export function buildSessionGraph(input: SessionGraphInput): SessionGraph {
   const childHandoff = childHandoffIndex(input.handoffs)
   const nodes = buildNodes(input, childHandoff)
   const ids = new Set(nodes.map((n) => n.sessionId))
+  const lineage = lineageEdges(input.handoffs, ids, childHandoff)
   return {
     nodes,
     lanes: buildLanes(input, nodes),
     edges: [
-      ...lineageEdges(input.handoffs, ids, childHandoff),
+      ...lineage,
+      ...motherBatonEdges(input.motherTransfers ?? [], ids, lineage),
       ...repoDepEdges(input.repoDependencies, nodes),
       ...featureEdges(input, nodes),
     ],
@@ -329,7 +403,7 @@ const HANDOFF_COLUMNS = `id, mother_session_id, child_session_id, predecessor_se
 
 function readGraphHandoffs(db: Database.Database, now: number): GraphHandoffRow[] {
   const terminal = JSON.stringify(TERMINAL_GRAPH_STATUSES)
-  return db
+  const rows = db
     .prepare(
       `SELECT ${HANDOFF_COLUMNS} FROM handoffs
         WHERE dismissed_at IS NULL AND status NOT IN (SELECT value FROM json_each(?))
@@ -349,6 +423,39 @@ function readGraphHandoffs(db: Database.Database, now: number): GraphHandoffRow[
       now - TERMINAL_HANDOFF_WINDOW_MS,
       TERMINAL_HANDOFFS_PER_MOTHER,
     ) as GraphHandoffRow[]
+  return rows.map((h) =>
+    h.status === 'interrupted'
+      ? { ...h, resumable: isResumableChild(h.status, h.child_session_id) }
+      : h,
+  )
+}
+
+function readMotherTransfers(
+  db: Database.Database,
+  handoffs: GraphHandoffRow[],
+): GraphMotherTransfer[] {
+  if (handoffs.length === 0) return []
+  const rows = db
+    .prepare(
+      `SELECT handoff_id, detail, at FROM handoff_events
+        WHERE event = 'mother_transferred'
+          AND handoff_id IN (SELECT value FROM json_each(?))
+        ORDER BY at, rowid`,
+    )
+    .all(JSON.stringify(handoffs.map((h) => h.id))) as Array<{
+    handoff_id: string
+    detail: string | null
+    at: number
+  }>
+  return rows.flatMap((r) => {
+    try {
+      const d = JSON.parse(r.detail ?? '') as { from?: unknown; to?: unknown }
+      if (typeof d.from !== 'string' || typeof d.to !== 'string') return []
+      return [{ handoff_id: r.handoff_id, from: d.from, to: d.to, at: r.at }]
+    } catch {
+      return []
+    }
+  })
 }
 
 function readPastTasks(db: Database.Database, sessionIds: string[]): Map<string, string> {
@@ -400,9 +507,7 @@ export function readSessionGraphInput(
     )
     .all(ids) as GraphSessionRow[]
   // Filha e antecessora do bastão têm a tarefa do handoff: o transcript não é lido.
-  const children = new Set(
-    handoffs.flatMap((h) => [h.child_session_id, h.predecessor_session_id]),
-  )
+  const children = new Set(handoffs.flatMap((h) => [h.child_session_id, h.predecessor_session_id]))
   const pastTasks = readPastTasks(
     db,
     sessions.filter((s) => !s.purpose?.trim() && !children.has(s.id)).map((s) => s.id),
@@ -418,10 +523,7 @@ export function readSessionGraphInput(
           !pastTasks.has(s.id) &&
           s.cc_session_id,
       )
-      .map(
-        (s) =>
-          [s.id, firstPrompt(s.cc_session_id!, live.has(s.id))] as const,
-      ),
+      .map((s) => [s.id, firstPrompt(s.cc_session_id!, live.has(s.id))] as const),
   )
   // "Onde parei" sem resumo: só quem não tem um ganha a leitura do fim do transcript.
   const lastPrompts = new Map(
@@ -439,6 +541,7 @@ export function readSessionGraphInput(
   return {
     sessions,
     handoffs,
+    motherTransfers: readMotherTransfers(db, handoffs),
     featureRecords,
     firstPrompts,
     pastTasks,

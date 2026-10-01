@@ -613,13 +613,10 @@ try {
   await fit()
   await bringIntoView(card(idC).getByTestId('card-interact'))
   await card(idC).getByTestId('card-interact').click()
-  const inTerm = await waitFor(
-    'C em terminal',
-    async () => (await card(idC).getAttribute('data-view')) === 'terminal',
-    10_000,
-  )
-  check(inTerm, 'abrir C em modo terminal no cartão')
-  const cx = card(idC).locator('.xterm')
+  const liftC = page.locator('[role="dialog"][data-peek-lift][data-peek-mode="terminal"]')
+  const inTerm = await waitFor('C na modal', async () => (await liftC.count()) === 1, 10_000)
+  check(inTerm, 'abrir o terminal de C na modal do mapa')
+  const cx = liftC.locator('.xterm')
   await waitFor('xterm de C', async () => (await cx.count()) === 1, 10_000)
   await page.waitForTimeout(800)
   await cx.click().catch(() => {})
@@ -630,17 +627,10 @@ try {
     async () => stdinOf(fileC?.data.pid).includes('stdin: ola da jornada'),
     10_000,
   )
-  check(typed, 'digitar no terminal do cartão chega ao stdin de C')
+  check(typed, 'digitar no terminal da modal chega ao stdin de C')
   await shot('card-terminal-typed')
-  await card(idC)
-    .getByTestId('card-leave-terminal')
-    .click()
-    .catch(() => {})
-  await waitFor(
-    'C volta a aberto',
-    async () => (await card(idC).getAttribute('data-view')) === 'open',
-    5000,
-  )
+  await page.keyboard.press('Shift+Escape')
+  await waitFor('modal de C fecha', async () => (await liftC.count()) === 0, 5000)
 
   // ---------- nota e grupo ----------
   await fit()

@@ -5,8 +5,6 @@ import {
   CARD_W,
   OPEN_H,
   OPEN_W,
-  TERMINAL_H,
-  TERMINAL_W,
   graphToFlow,
   noteExcerpt,
   type LaneData,
@@ -281,7 +279,7 @@ describe('graphToFlow — arestas', () => {
     const kinds = edges.map((e) => [e.id, e.source, e.target, e.data?.kind])
     expect(kinds).toEqual(
       expect.arrayContaining([
-        ['e:b:h1', 's:filha', 's:suc', 'baton'],
+        ['e:b:filha:suc', 's:filha', 's:suc', 'baton'],
         ['e:r:r-api:r-web', 'lane:r:r-api', 'lane:r:r-web', 'repoDep'],
         ['e:f:f1:0', 's:mae', 's:filha', 'feature'],
         ['e:f:f1:1', 's:filha', 's:suc', 'feature'],
@@ -466,31 +464,18 @@ describe('graphToFlow — hierarquia visual', () => {
           node('b', { lastActivityAt: 2 }),
           node('c', { lastActivityAt: 1 }),
         ]),
+        // 'terminal' legado (do banco antigo) ocupa a vaga de um cartão aberto.
         views: { a: 'collapsed', b: 'terminal' },
       }),
     )
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
     expect(byId.get('s:a')).toMatchObject({ width: CARD_W, height: CARD_H })
-    expect(byId.get('s:b')).toMatchObject({ width: TERMINAL_W, height: TERMINAL_H })
+    expect(byId.get('s:b')).toMatchObject({ width: OPEN_W, height: OPEN_H })
     const ya = byId.get('s:a')!.position.y
     const yb = byId.get('s:b')!.position.y
     const yc = byId.get('s:c')!.position.y
     expect(yb - ya).toBe(CARD_H + 16)
-    expect(yc - yb).toBe(TERMINAL_H + 16)
-    // A lane do repo alarga pro terminal caber.
-    const repoLane = r.nodes.find((n) => n.id === byId.get('s:b')!.parentId)!
-    expect(repoLane.width).toBeGreaterThanOrEqual(TERMINAL_W)
-  })
-
-  it('o terminal usa o tamanho redimensionado pelo usuário', () => {
-    const r = graphToFlow(
-      input({
-        graph: graph([node('a')]),
-        views: { a: 'terminal' },
-        terminalSizes: { a: { w: 900, h: 600 } },
-      }),
-    )
-    expect(r.nodes.find((n) => n.id === 's:a')).toMatchObject({ width: 900, height: 600 })
+    expect(yc - yb).toBe(OPEN_H + 16)
   })
 
   it('mãe com mais de 3 filhas: fios recolhidos (só no foco) até o leque abrir', () => {

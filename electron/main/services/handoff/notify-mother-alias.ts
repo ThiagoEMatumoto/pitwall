@@ -17,6 +17,8 @@
 import { ptyManager } from '../pty-manager'
 import * as store from '../handoff-store'
 import { injectIntoSession } from './inject'
+import { injectIntoChildGuarded } from './guarded-inject'
+import type { Handoff } from '../../../../shared/types/ipc'
 
 export interface AliasChangeNotice {
   handoffId: string
@@ -67,4 +69,76 @@ export function notifyMotherOfAliasChange(args: AliasChangeNotice): AliasChangeD
     console.error('[baton] aviso de troca de apelido não chegou à mãe:', err)
     return { delivered: false, reason: 'inject-failed' }
   }
+}
+
+// ---- Bastão da MÃE: o lado inverso. Quem muda de endereço é a mãe, e quem
+// precisa saber são as filhas — cada uma responde (SendMessage) a quem escreveu
+// primeiro, e continuaria escrevendo para a antecessora viva.
+
+export interface ChildMotherNotice {
+  handoffId: string
+  // Endereço da sucessora (a nova mãe).
+  alias: string
+  // Endereço da antecessora, que segue viva e ainda atende por ele.
+  previousAlias?: string | null
+}
+
+export function buildChildMotherNote(args: ChildMotherNotice): string {
+  const from = args.previousAlias?.trim()
+  return [
+    `[Pitwall] Sua mãe agora é "${args.alias}"${from ? ` (antes "${from}", que passou o bastão)` : ''}.`,
+    // A nota sai logo após o spawn: a sucessora ainda está subindo e o endereço
+    // dela pode nem existir. É ela quem abre o canal (o kickoff manda escrever a
+    // cada filha) — a filha que respondesse já cairia no vazio ou na antecessora.
+    `- Ela ainda está subindo e vai te escrever primeiro: espere essa mensagem e só então use SendMessage({ to: "${args.alias}" }).`,
+    from
+      ? `- "${from}" continua viva: mandar pra lá não dá erro, só chega em quem não lidera mais.`
+      : null,
+    `- O handoff segue o mesmo (handoffId: ${args.handoffId}); até lá, reporte por handoff_progress/handoff_ask/handoff_report, que já vão para a nova mãe.`,
+  ]
+    .filter((l): l is string => l !== null)
+    .join('\n')
+}
+
+export interface ChildMotherDelivery {
+  handoffId: string
+  delivered: boolean
+  reason?: 'no-child' | 'child-not-running' | 'inject-refused'
+}
+
+// Best-effort por filha, pelo guarded-inject: a nota termina em Enter, e um Enter
+// sobre um menu de permissão aberto o aprovaria. Recusa vira motivo, não exceção —
+// o bastão já foi passado e o relink no banco já vale.
+export async function notifyChildrenOfNewMother(args: {
+  handoffs: Pick<Handoff, 'id' | 'childSessionId'>[]
+  alias: string
+  previousAlias?: string | null
+}): Promise<ChildMotherDelivery[]> {
+  const out: ChildMotherDelivery[] = []
+  for (const h of args.handoffs) {
+    const child = h.childSessionId
+    if (!child) {
+      out.push({ handoffId: h.id, delivered: false, reason: 'no-child' })
+      continue
+    }
+    if (!ptyManager.isRunning(child)) {
+      out.push({ handoffId: h.id, delivered: false, reason: 'child-not-running' })
+      continue
+    }
+    try {
+      await injectIntoChildGuarded(
+        child,
+        buildChildMotherNote({
+          handoffId: h.id,
+          alias: args.alias,
+          previousAlias: args.previousAlias,
+        }),
+      )
+      out.push({ handoffId: h.id, delivered: true })
+    } catch (err) {
+      console.error(`[baton] nota da nova mãe não chegou à filha ${child}:`, err)
+      out.push({ handoffId: h.id, delivered: false, reason: 'inject-refused' })
+    }
+  }
+  return out
 }

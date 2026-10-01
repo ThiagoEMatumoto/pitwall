@@ -66,7 +66,7 @@ export function actionsFor(
               key: 'interact',
               label: 'Terminal',
               primary: 'Terminal',
-              hint: 'o terminal real da sessão no cartão (Enter)',
+              hint: 'o terminal real numa janela sobre o mapa (Enter)',
               icon: SquareTerminal,
               onClick: () => cmd.interact(s.sessionId),
             },
@@ -84,9 +84,11 @@ export function actionsFor(
         ? [
             {
               key: 'baton',
-              label: 'Passar o bastão',
+              label: s.isMother ? 'Passar o bastão da mãe…' : 'Passar o bastão',
               primary: 'Bastão',
-              hint: 'destila o contexto e sobe uma sucessora limpa',
+              hint: s.isMother
+                ? 'a sucessora assume a liderança das filhas, com endereço novo'
+                : 'destila o contexto e sobe uma sucessora limpa',
               icon: Repeat,
               onClick: () => cmd.passBatonOf(s),
             },

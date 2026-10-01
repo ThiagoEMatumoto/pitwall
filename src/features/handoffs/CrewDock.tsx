@@ -230,11 +230,10 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // "Abrir terminal" no card: abre o peek JÁ em modo terminal — em janela, sem
   // promover a filha a pane e sem o header de sessão (leia-se: sem o botão de
   // encerrar ao alcance de quem só foi dar uma olhada). Se ela já tem aba, o
-  // terminal dela mora lá; duplicar o xterm na mesma PTY faria os dois brigarem
-  // pelo resize. Ver crewTerminalTarget.
+  // terminal dela mora lá. Ver crewTerminalTarget.
   function openTerminal(handoff: Handoff) {
     const live = handoff.childSessionId ? liveById.get(handoff.childSessionId) : undefined
-    const target = crewTerminalTarget(live, useAppStore.getState().panes)
+    const target = crewTerminalTarget(live, useAppStore.getState().panes, 'dock')
     if (target === 'none') return
     if (target === 'pane') void useAppStore.getState().focusOrOpenSession(live!)
     else openPeek(handoff.id, 'terminal')

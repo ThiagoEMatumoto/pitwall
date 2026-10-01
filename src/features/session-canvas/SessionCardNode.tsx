@@ -1,12 +1,11 @@
 import { memo, useMemo, type CSSProperties } from 'react'
-import { Handle, NodeResizeControl, Position, useStore, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
   History,
   LoaderCircle,
-  PanelTop,
   Pencil,
   Sparkles,
   SquareTerminal,
@@ -28,20 +27,18 @@ import {
 import { useCardViewStore } from './card-view-store'
 import { tailText } from './card-tail'
 import { useMapLive } from './map-live'
-import { CardAttention, CardPromptBar, CardTerminal, LiveTail } from './SessionCardLive'
+import { CardAttention, CardPromptBar, LiveTail } from './SessionCardLive'
 import { isActionableDetail } from '@/features/session-switcher/AttentionPopover'
 import { useMapActions } from './map-context'
 import { useMapFocus } from './map-focus'
 import { cardDetail, cardFooter, cardTitle, compensatedPx, type CardDetail } from './card-display'
 import { PurposeLine } from './PurposeLine'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
+import { BatonPassedChip, MotherBadge } from './MotherBadge'
+import { motherFrame } from './mother-badge'
 
 // Tons que nunca esmaecem no modo foco.
 const ACTIVE_TONES: ReadonlySet<IndicatorTone> = new Set(['working', 'needs-you', 'starting'])
-
-// Menor terminal no cartão: abaixo disso a TUI quebra o layout da caixa de input.
-const TERMINAL_MIN_W = 520
-const TERMINAL_MIN_H = 340
 
 // O indicador do cartão: status do grafo + motivo da tela + relógio de working +
 // a marca de interrupção no fim da tela (só quando o cartão está aberto).
@@ -87,6 +84,8 @@ function FanChip({ data }: { data: SessionCardData }) {
   if (n === 0) return null
   const label = `${n} ${n === 1 ? 'filha' : 'filhas'}`
   if (!data.fanCollapsible) {
+    // O badge "MÃE · n filhas" já diz a contagem; repetir só come o nome.
+    if (data.node.isMother) return null
     return (
       <span
         data-testid="card-children"
@@ -107,8 +106,10 @@ function FanChip({ data }: { data: SessionCardData }) {
       }}
       title={data.fanExpanded ? 'Recolher os fios das filhas' : 'Mostrar os fios até cada filha'}
       className="nodrag flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--color-border)] px-1.5 text-[11px] text-[var(--color-text-dim)] transition hover:text-[var(--color-text)]"
+      aria-label={data.node.isMother ? label : undefined}
     >
-      {label}
+      {/* Na mãe o badge já mostra a contagem: aqui fica só o chevron. */}
+      {!data.node.isMother && label}
       <Icon as={data.fanExpanded ? ChevronUp : ChevronDown} size={11} />
     </button>
   )
@@ -200,6 +201,7 @@ function StateLine({ data, ind }: { data: SessionCardData; ind: CardIndicator })
           {ind.step}
         </span>
       )}
+      <BatonPassedChip node={node} />
       {data.continuesFrom && (
         <span
           data-testid="card-continues-from"
@@ -268,27 +270,11 @@ function ViewToggle({ data, view }: { data: SessionCardData; view: CardViewState
   )
 }
 
-// Botão da direita: entra no terminal real ou volta ao cartão (nunca "Recolher",
+// Botão da direita: abre o terminal real na modal do mapa (nunca "Recolher",
 // que é o chevron da esquerda).
-function TerminalToggle({ data, view }: { data: SessionCardData; view: CardViewState }) {
+function TerminalToggle({ data }: { data: SessionCardData }) {
   const { node } = data
   const actions = useMapActions()
-  if (view === 'terminal') {
-    return (
-      <button
-        type="button"
-        data-testid="card-leave-terminal"
-        onClick={(e) => {
-          e.stopPropagation()
-          actions.leaveTerminal(node.sessionId)
-        }}
-        title="Voltar ao cartão (Esc fora do terminal, ou afaste o zoom)"
-        className="nodrag flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:text-[var(--color-text)]"
-      >
-        <Icon as={PanelTop} size={11} /> Voltar ao cartão
-      </button>
-    )
-  }
   if (node.status === 'ended') return null
   return (
     <button
@@ -298,7 +284,7 @@ function TerminalToggle({ data, view }: { data: SessionCardData; view: CardViewS
         e.stopPropagation()
         actions.interact(node.sessionId)
       }}
-      title="Terminal: o terminal real da sessão aqui no cartão (Enter com o cartão selecionado)"
+      title="Terminal: o terminal real da sessão numa janela grande sobre o mapa (Enter ou duplo clique)"
       className="nodrag flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
     >
       <Icon as={SquareTerminal} size={11} /> Terminal
@@ -317,12 +303,8 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
     <div
       data-testid="card-header"
       className="flex min-w-0 items-center gap-1"
-      // Duplo clique no cabeçalho alterna recolhido ⇄ aberto (no resto do cartão
-      // continua abrindo a aba).
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        actions.toggleView(node.sessionId)
-      }}
+      // O duplo clique (aqui ou no resto do cartão) abre o terminal na modal: é o
+      // onNodeDoubleClick do mapa. Recolher é o chevron.
     >
       <ViewToggle data={data} view={view} />
       <span
@@ -332,6 +314,7 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
       >
         {cardTitle(node)}
       </span>
+      <MotherBadge node={node} />
       <MotherChip data={data} />
       {canWritePurpose && (
         <button
@@ -350,7 +333,7 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
       )}
       <span className="flex-1" />
       <FanChip data={data} />
-      <TerminalToggle data={data} view={view} />
+      <TerminalToggle data={data} />
     </div>
   )
 }
@@ -377,6 +360,8 @@ function CollapsedBody({ data, ind }: { data: SessionCardData; ind: CardIndicato
       >
         {cardTitle(node)}
       </span>
+      <MotherBadge node={node} compact />
+      <BatonPassedChip node={node} compact />
       <span
         className="min-w-0 flex-1 truncate text-[11px]"
         style={{
@@ -392,7 +377,6 @@ function CollapsedBody({ data, ind }: { data: SessionCardData; ind: CardIndicato
 
 function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) {
   const { node, view } = data
-  const actions = useMapActions()
   // Menu inline na tela: o tail repetiria o comando que o painel já mostra.
   const item = useMapLive().attention.get(node.sessionId)
   const menuInline = !!item && isActionableDetail(item.detail)
@@ -400,13 +384,7 @@ function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
     <>
       <Header data={data} view={view} />
       <StateLine data={data} ind={ind} />
-      {view !== 'terminal' && (
-        <PurposeLine
-          sessionId={node.sessionId}
-          purpose={node.purpose}
-          source={node.purposeSource}
-        />
-      )}
+      <PurposeLine sessionId={node.sessionId} purpose={node.purpose} source={node.purposeSource} />
       {view === 'open' && (
         <>
           <Footer data={data} />
@@ -414,9 +392,6 @@ function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
           {!menuInline && <LiveTail node={node} />}
           <CardPromptBar node={node} />
         </>
-      )}
-      {view === 'terminal' && (
-        <CardTerminal node={node} onLeave={() => actions.leaveTerminal(node.sessionId)} />
       )}
     </>
   )
@@ -459,6 +434,8 @@ function BriefBody({
         >
           {cardTitle(node)}
         </span>
+        <MotherBadge node={node} compact />
+        {data.view === 'collapsed' && <BatonPassedChip node={node} compact />}
       </div>
       {data.view !== 'collapsed' && (
         <div
@@ -469,6 +446,8 @@ function BriefBody({
             {indicatorText(ind, now)}
           </span>
           {say && <span className="min-w-0 truncate text-[var(--color-text-dim)]">· {say}</span>}
+          <span className="flex-1" />
+          <BatonPassedChip node={node} compact />
         </div>
       )}
     </div>
@@ -537,17 +516,11 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
   const focus = useMapFocus()
   const zoom = useZoom()
   const ind = useIndicator(node)
-  // Terminal no cartão é sempre o corpo inteiro: o zoom semântico não o encolhe.
-  const detail: CardDetail = card.view === 'terminal' ? 'full' : cardDetail(zoom)
-  // Só esmaece quem não pede nada: o terminal em uso (o clique no xterm não
-  // seleciona o nó), quem trabalha e quem precisa de você ficam legíveis — "ver
-  // as sessões trabalhando" não pode depender de onde está a seleção.
-  const dimmed =
-    focus.dimOthers &&
-    !focus.nodes.has(id) &&
-    card.view !== 'terminal' &&
-    !ACTIVE_TONES.has(ind.tone)
-  const frame = frameStyle(ind.tone, !!selected)
+  const detail: CardDetail = cardDetail(zoom)
+  // Só esmaece quem não pede nada: quem trabalha e quem precisa de você ficam
+  // legíveis — "ver as sessões trabalhando" não pode depender da seleção.
+  const dimmed = focus.dimOthers && !focus.nodes.has(id) && !ACTIVE_TONES.has(ind.tone)
+  const frame = motherFrame(node, frameStyle(ind.tone, !!selected))
   const alertClass = ind.tone === 'needs-you' ? 'session-card-alert' : ''
 
   if (detail === 'blocks') {
@@ -557,6 +530,7 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
         data-testid="session-card"
         data-session-id={node.sessionId}
         data-detail="blocks"
+        data-mother={node.isMother ? 'true' : undefined}
         data-view={card.view}
         data-tone={ind.tone}
         title={cardTitle(node)}
@@ -575,6 +549,7 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
       data-testid="session-card"
       data-session-id={node.sessionId}
       data-detail={detail}
+      data-mother={node.isMother ? 'true' : undefined}
       data-view={card.view}
       data-tone={ind.tone}
       onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
@@ -584,39 +559,18 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
       // isto sobrava uma caixa alta vazia no aberto e no resumido. relative: as
       // âncoras dos fios seguem a borda desenhada, não a da vaga.
       className={`group relative w-full rounded-lg border bg-[var(--color-surface)] transition ${
-        card.view === 'terminal'
-          ? 'h-full'
-          : card.view === 'collapsed'
-            ? 'h-full overflow-hidden'
-            : 'max-h-full'
+        card.view === 'collapsed' ? 'h-full overflow-hidden' : 'max-h-full'
       } ${detail === 'full' && card.view === 'open' ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
       data-dimmed={dimmed ? 'true' : undefined}
       style={frame}
     >
       <BorderHandles />
-      {card.view === 'terminal' && (
-        <NodeResizeControl
-          minWidth={TERMINAL_MIN_W}
-          minHeight={TERMINAL_MIN_H}
-          position="bottom-right"
-          onResizeEnd={(_e, p) =>
-            actions.resizeTerminal(node.sessionId, { w: p.width, h: p.height })
-          }
-          style={{ background: 'transparent', border: 'none' }}
-        >
-          <span
-            data-testid="card-resize"
-            title="Redimensionar o terminal"
-            className="absolute bottom-0.5 right-0.5 h-3 w-3 cursor-nwse-resize border-b-2 border-r-2 border-[var(--color-text-dim)]"
-          />
-        </NodeResizeControl>
-      )}
       <div
         className={`w-full ${dimmed ? 'session-card-dimmed' : ''} ${
           detail === 'full' && card.view !== 'collapsed'
             ? 'flex min-h-0 flex-1 flex-col gap-1.5 px-2.5 py-2'
             : 'h-full'
-        } ${card.view === 'terminal' ? 'h-full' : ''}`}
+        }`}
       >
         {detail === 'brief' ? (
           <BriefBody data={card} zoom={zoom} ind={ind} />

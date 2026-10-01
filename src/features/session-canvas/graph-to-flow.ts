@@ -23,16 +23,14 @@ import type {
 import { GLOBAL_CANVAS_SCOPE } from '../../../shared/types/canvas'
 import { viewOf, type ViewMap } from './card-view'
 
-// Cartão recolhido (identidade + estado). Aberto e terminal crescem: a saída ao
-// vivo precisa de ~55 colunas legíveis, e o terminal de um xterm de verdade.
+// Cartão recolhido (identidade + estado). Aberto cresce: a saída ao vivo precisa
+// de ~55 colunas legíveis.
 // Recolhido é UMA linha (ponto + alias + motivo); aberto é a vaga máxima — o
 // cartão desenhado só ocupa o que tem (saída ao vivo sem caixa vazia).
 export const CARD_W = 248
 export const CARD_H = 40
 export const OPEN_W = 400
 export const OPEN_H = 300
-export const TERMINAL_W = 780
-export const TERMINAL_H = 540
 export const NOTE_W = 220
 export const NOTE_H = 132
 const GAP = 16
@@ -66,9 +64,8 @@ export interface MapInput {
   // Mães com o leque de filhas aberto (sessionId). Sem isto, mãe com mais de
   // FAN_COLLAPSE_AT filhas só mostra os fios dela no foco.
   expandedMothers?: ReadonlySet<string>
-  // Estado de exibição de cada cartão (ausente = 'open') e o tamanho do terminal.
+  // Estado de exibição de cada cartão (ausente = 'open').
   views?: ViewMap
-  terminalSizes?: Readonly<Record<string, { w: number; h: number }>>
   // Asks agente↔agente pendentes (P7): fio temporário até a resposta/expiração.
   asks?: readonly PendingAsk[]
 }
@@ -80,10 +77,8 @@ export interface PendingAsk {
   text: string
 }
 
-export function cardSize(view: CardViewState, terminal?: { w: number; h: number }): Size {
-  if (view === 'collapsed') return { w: CARD_W, h: CARD_H }
-  if (view === 'open') return { w: OPEN_W, h: OPEN_H }
-  return terminal ?? { w: TERMINAL_W, h: TERMINAL_H }
+export function cardSize(view: CardViewState): Size {
+  return view === 'collapsed' ? { w: CARD_W, h: CARD_H } : { w: OPEN_W, h: OPEN_H }
 }
 
 // Acima disto o mapa fica em "modo cheio": fios repoDep/feature só aparecem ao
@@ -569,7 +564,9 @@ function graphEdges(
       )
     } else if (e.kind === 'baton') {
       out.push(
-        edge(`e:b:${e.handoffId}`, sessionNodeId(e.from), sessionNodeId(e.to), {
+        // Por par, não por handoff: o bastão da mãe carrega o id de um handoff
+        // movido, que pode ser o mesmo do bastão da filha desse handoff.
+        edge(`e:b:${e.from}:${e.to}`, sessionNodeId(e.from), sessionNodeId(e.to), {
           kind: 'baton',
           label: '⟲',
           handoffId: e.handoffId,
@@ -647,7 +644,7 @@ export function graphToFlow(input: MapInput): FlowResult {
   const views = input.views ?? {}
   const ctx: CardContext = {
     viewOf: (id) => viewOf(views, id),
-    sizeOf: (id) => cardSize(viewOf(views, id), input.terminalSizes?.[id]),
+    sizeOf: (id) => cardSize(viewOf(views, id)),
     counts,
     notesBySession,
     expandedMothers,

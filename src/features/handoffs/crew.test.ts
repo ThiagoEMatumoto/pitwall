@@ -24,6 +24,7 @@ const {
   crewFocusAfterDismiss,
   openPaneKeys,
   paneShowsLive,
+  childrenMissedToast,
 } = await import('./crew')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -410,33 +411,31 @@ describe('crewTerminalTarget', () => {
     session: { id, ccSessionId },
   })
 
-  it('sem pane aberta o terminal abre no overlay (nenhuma aba nasce)', () => {
-    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [])).toBe('overlay')
-    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc9')])).toBe('overlay')
+  it('sem aba aberta o terminal abre na modal, venha do dock ou do mapa', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [], 'dock')).toBe('modal')
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc9')], 'dock')).toBe('modal')
   })
 
-  // Dois xterms na mesma PTY disputam o resize — com aba aberta, o terminal
-  // dela mora lá e o dock leva o usuário até ela.
-  it('com pane já aberta pra esta filha, o alvo é a pane', () => {
-    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc1')])).toBe('pane')
+  // Pelo mapa a modal assume a PTY (a aba cede via terminal-lease).
+  it('pelo mapa, com aba aberta, ainda abre na modal', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc1')], 'map')).toBe('modal')
   })
 
-  it('sem sessão viva não há PTY a que anexar', () => {
-    expect(crewTerminalTarget(null, [])).toBe('none')
-    expect(crewTerminalTarget(undefined, [pane('cc1')])).toBe('none')
-  })
-
-  it('pane sem ccSessionId de outra sessão não casa', () => {
-    expect(crewTerminalTarget(live({ id: 's1', ccSessionId: 'cc1' }), [pane(null)])).toBe(
-      'overlay',
-    )
+  // Pelo dock a aba pode estar visível ao lado: esvaziá-la seria regressão.
+  it('pelo dock, com aba aberta pra esta filha, o alvo é a aba', () => {
+    expect(crewTerminalTarget(live({ ccSessionId: 'cc1' }), [pane('cc1')], 'dock')).toBe('pane')
   })
 
   // Shape real do Codex: pane com ccSessionId null, item da lista viva com
   // ccSessionId = sessions.id (live-session-pty.ts).
   it('Codex com aba aberta: casa pelo sessions.id', () => {
     const codex = live({ id: 'sx', ccSessionId: 'sx', provider: 'codex' })
-    expect(crewTerminalTarget(codex, [pane(null, 'sx')])).toBe('pane')
+    expect(crewTerminalTarget(codex, [pane(null, 'sx')], 'dock')).toBe('pane')
+  })
+
+  it('sem sessão viva não há PTY a que anexar', () => {
+    expect(crewTerminalTarget(null, [], 'map')).toBe('none')
+    expect(crewTerminalTarget(undefined, [pane('cc1')], 'dock')).toBe('none')
   })
 })
 
@@ -523,5 +522,32 @@ describe('crewFocusAfterDismiss', () => {
 
   it('id fora da lista cai no primeiro (o cursor não fica órfão)', () => {
     expect(crewFocusAfterDismiss(['a', 'b'], 'z')).toBe('a')
+  })
+})
+
+describe('childrenMissedToast', () => {
+  it('nomeia as filhas que não receberam a nota e o endereço novo', () => {
+    const t = childrenMissedToast({
+      alias: 'bruno-mc',
+      previousAlias: 'ana-mc',
+      missed: [
+        { handoffId: 'h1', childAlias: 'mauricio-mapa', reason: 'inject-refused' },
+        { handoffId: 'h2', childAlias: null, reason: 'child-not-running' },
+      ],
+    })
+    expect(t.title).toBe('2 filhas não receberam a nota')
+    expect(t.body).toContain('Maurício (mapa)')
+    expect(t.body).toContain('handoff h2')
+    expect(t.body).toContain('"bruno-mc"')
+    expect(t.body).toContain('"ana-mc"')
+  })
+
+  it('uma filha: singular', () => {
+    const t = childrenMissedToast({
+      alias: 'bruno-mc',
+      previousAlias: null,
+      missed: [{ handoffId: 'h1', childAlias: 'otavio-modal', reason: 'inject-refused' }],
+    })
+    expect(t.title).toBe('1 filha não recebeu a nota')
   })
 })

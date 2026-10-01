@@ -1,5 +1,6 @@
-import { ACTIVE_HANDOFF_STATUSES, childSessionIds } from '@/store/handoffsStore'
-import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+import { childSessionIds } from '@/store/handoffsStore'
+import type { BatonChildrenMissed, Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+import { isLedByMother } from '../../../shared/handoff-lead'
 
 // Domínio da "equipe": as sessões-filhas de handoffs ativos. Elas ficam FORA da
 // strip/switcher (ver useGlobalSessions) e vivem no Crew Dock. Tudo aqui é puro —
@@ -57,11 +58,7 @@ export function splitAlias(alias: string | null | undefined): AliasParts | null 
 // continua no dock (dá pra retomar) sem por isso ser escondida da strip — ela nem
 // tem PTY pra esconder de lugar nenhum.
 export function dockCrew(handoffs: Handoff[]): Handoff[] {
-  return handoffs.filter((h) => {
-    if (h.dismissedAt != null) return false
-    if (ACTIVE_HANDOFF_STATUSES.has(h.status)) return true
-    return h.status === 'interrupted' && h.resumable
-  })
+  return handoffs.filter(isLedByMother)
 }
 
 // Filhas que ficam FORA das superfícies de sessão do usuário (barra, switcher,
@@ -168,19 +165,22 @@ export function paneShowsLive(pane: OpenPaneRef, live: LiveSessionInfo): boolean
 
 // Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
 //
-// 'overlay' é o default: o terminal abre DENTRO do quick look, em janela, sem
-// promover a filha a pane — assim "só vou dar uma olhada" não põe o botão de
-// encerrar a sessão a um clique de distância.
-// 'pane' quando ela já tem uma aba aberta: dois xterms na MESMA PTY disputariam
-// o sessionsApi.resize (o último a medir manda) e a TUI refluiria na cara de
-// quem já estava trabalhando nela. Com aba aberta, o terminal dela mora lá.
+// 'modal': dentro do quick look, em janela, sem promover a filha a pane — "só
+// vou dar uma olhada" não põe o botão de encerrar a sessão a um clique.
+// Pelo MAPA a modal assume a PTY mesmo com aba aberta (terminal-lease: a aba
+// desmonta o xterm e mostra "Aberto no mapa").
+// 'pane' pelo DOCK com aba já aberta: o dock vive ao lado das abas, então tomar a
+// PTY esvaziaria uma aba possivelmente visível ao lado (header, chat e estado
+// de busca somem até a modal fechar). Ali o terminal dela mora na aba.
 // 'none' sem sessão viva — não há PTY a que anexar.
 export function crewTerminalTarget(
   live: LiveSessionInfo | null | undefined,
   openPanes: OpenPaneRef[],
-): 'pane' | 'overlay' | 'none' {
+  origin: 'dock' | 'map',
+): 'pane' | 'modal' | 'none' {
   if (!live) return 'none'
-  return openPanes.some((p) => paneShowsLive(p, live)) ? 'pane' : 'overlay'
+  if (origin === 'dock' && openPanes.some((p) => paneShowsLive(p, live))) return 'pane'
+  return 'modal'
 }
 
 // Card sob foco de teclado depois de a lista mudar (filha entrou, saiu, ou a
@@ -231,4 +231,21 @@ export function orderCrew(handoffs: Handoff[], liveSessions: LiveSessionInfo[]):
     else rest.push(h)
   }
   return [...attention, ...rest]
+}
+
+// Aviso do bastão da mãe quando a nota do endereço novo não chegou a alguma filha
+// (menu aberto ou terminal parado): ela segue escrevendo para a antecessora viva.
+// Nomeia QUAIS — "alguma pode não ter recebido" não dá pra agir.
+export function childrenMissedToast(p: BatonChildrenMissed): { title: string; body: string } {
+  const names = p.missed.map((m) => {
+    const parts = splitAlias(m.childAlias)
+    if (!parts) return `handoff ${m.handoffId.slice(0, 8)}`
+    return parts.scope ? `${parts.name} (${parts.scope})` : parts.name
+  })
+  const n = p.missed.length
+  const from = p.previousAlias ? ` e ainda escreve${n === 1 ? '' : 'm'} para "${p.previousAlias}"` : ''
+  return {
+    title: n === 1 ? '1 filha não recebeu a nota' : `${n} filhas não receberam a nota`,
+    body: `${names.join(', ')} não ${n === 1 ? 'soube' : 'souberam'} que a mãe agora é "${p.alias}"${from}. A nova mãe se apresenta por SendMessage; confira no Crew Dock.`,
+  }
 }

@@ -40,6 +40,7 @@ import type {
   HandoffOutcome,
   DistillBatonInput,
   PassBatonInput,
+  BatonChildrenMissed,
   HandoffStatus,
   ObjectiveListFilter,
   CreateObjectiveInput,
@@ -383,6 +384,7 @@ const api: Api = {
   baton: {
     distill: (input: DistillBatonInput) => invoke('baton:distill', input),
     pass: (input: PassBatonInput) => invoke('baton:pass', input),
+    onChildrenMissed: (handler) => subscribe<BatonChildrenMissed>('baton:children-missed', handler),
   },
   sessionGraph: {
     get: () => invoke('session-graph:get'),

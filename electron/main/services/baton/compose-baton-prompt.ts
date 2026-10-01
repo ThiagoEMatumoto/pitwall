@@ -20,6 +20,43 @@ export interface ComposeBatonArgs {
   // Contexto que o humano acrescenta no diálogo da passagem (etapa de UI). O que
   // ele digita ali vale MAIS que o inferido do transcript.
   note?: string | null
+  // Mãe passando o bastão: as filhas que a sucessora vai liderar. A seção é
+  // anexada ao briefing pelo próprio main (renderActiveChildrenSection) — o LLM
+  // só a recebe como contexto, pra não precisar (nem poder) reescrevê-la.
+  children?: BatonChild[]
+}
+
+export interface BatonChild {
+  handoffId: string
+  alias: string | null
+  task: string
+  status: string
+  // Último handoff_progress da filha (current_step); null = ainda não reportou.
+  lastProgress: string | null
+}
+
+export const ACTIVE_CHILDREN_HEADING = '## Filhas ativas'
+
+// Bloco determinístico do briefing da mãe: quem são as filhas, o que cada uma
+// faz e onde parou. Vai literal para a sucessora — a destilação pode omitir uma
+// filha, e uma filha omitida é uma filha órfã.
+export function renderActiveChildrenSection(
+  children: BatonChild[],
+  featureTitle?: string | null,
+): string {
+  const lines = [ACTIVE_CHILDREN_HEADING]
+  if (featureTitle) lines.push(`Feature: ${featureTitle}`)
+  lines.push(
+    `Você passa a ser a MÃE destas ${children.length} filha${children.length === 1 ? '' : 's'}:`,
+  )
+  for (const c of children) {
+    const who = c.alias ? `"${c.alias}"` : '(sem endereço)'
+    const step = c.lastProgress?.trim() ? ` — último progresso: ${c.lastProgress.trim()}` : ''
+    lines.push(
+      `- ${who} · handoffId ${c.handoffId} · ${c.status} · tarefa: ${c.task.trim()}${step}`,
+    )
+  }
+  return lines.join('\n')
 }
 
 // As seções do briefing são fixas e citadas no prompt: a sucessora (e a UI) leem
@@ -55,6 +92,13 @@ export function composeBatonPrompt(args: ComposeBatonArgs): string {
   if (args.featureTitle) contexto.push(`- Feature em andamento: ${args.featureTitle}`)
   if (digest.gitBranch) contexto.push(`- Branch: ${digest.gitBranch}`)
   if (args.note) contexto.push(`- Instrução do humano (prevalece sobre o inferido): ${args.note}`)
+  if (args.children?.length) {
+    contexto.push(
+      '- Esta sessão é MÃE de filhas de handoff; a sucessora vai liderá-las. A lista abaixo é',
+      `  anexada ao briefing automaticamente — NÃO a repita; use-a para o Estado atual e o Próximo passo.`,
+      renderActiveChildrenSection(args.children, args.featureTitle),
+    )
+  }
 
   const tarefa = [
     '## Tarefa',

@@ -13,18 +13,14 @@ import {
   type Connection,
   type Edge,
   type Node,
-  type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Map as MapIcon, Maximize } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
-import { paneShowsLive } from '@/features/handoffs/crew'
 import './session-map.css'
 import { useAppStore } from '@/store/appStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAttentionQueue, useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
-import { useCrewDockStore, peekedSessionId } from '@/features/handoffs/crew-dock-store'
-import { useHandoffsStore } from '@/store/handoffsStore'
 import { sendToApi } from '@/lib/ipc'
 import { useMapSessionIds } from '@/features/session-switcher/useGlobalSessions'
 import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
@@ -68,7 +64,7 @@ import {
   type Insets,
 } from './map-fit'
 import type { Rect } from './edge-anchor'
-import { TERMINAL_MIN_ZOOM, mustLeaveTerminal, terminalOf, viewLineage, viewOf } from './card-view'
+import { doubleClickOpensTerminal, viewLineage, viewOf } from './card-view'
 import { useCardViewStore } from './card-view-store'
 import { sameIdList, tailSubscription, tailText, type TailCandidate } from './card-tail'
 import { advanceWorkingClocks, indicatorFor } from './card-indicator'
@@ -149,8 +145,6 @@ function SessionMapInner() {
   const savePositions = useCanvasStateStore((s) => s.savePositions)
   const flowApi = useReactFlow<MapNode, MapEdge>()
   const views = useCardViewStore((s) => s.views)
-  const terminalSizes = useCardViewStore((s) => s.terminalSizes)
-  const terminalId = terminalOf(views)
   const asks = usePendingAsks()
 
   // Estado de exibição dos cartões: lido do banco uma vez por escopo.
@@ -177,10 +171,9 @@ function SessionMapInner() {
       inUse,
       expandedMothers,
       views,
-      terminalSizes,
       asks,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, terminalSizes, asks],
+    [graph, scope, canvas, inUse, expandedMothers, views, asks],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -254,9 +247,7 @@ function SessionMapInner() {
   const sessionCount = flow.nodes.filter((n) => n.type === 'session').length
   const sessionNodes = useMemo(
     () =>
-      flow.nodes
-        .filter((n) => n.type === 'session')
-        .map((n) => (n.data as SessionCardData).node),
+      flow.nodes.filter((n) => n.type === 'session').map((n) => (n.data as SessionCardData).node),
     [flow.nodes],
   )
   const showMinimap = sessionCount >= MINIMAP_MIN_CARDS && !minimapCollapsed
@@ -305,9 +296,7 @@ function SessionMapInner() {
       )
     })
     const priority = boundsOf(
-      needsYou
-        .map((n) => rectOf(sessionNodeId(n.sessionId)))
-        .filter((r): r is Rect => r !== null),
+      needsYou.map((n) => rectOf(sessionNodeId(n.sessionId))).filter((r): r is Rect => r !== null),
     )
     const viewport = readableViewport({
       visible: visibleBounds(),
@@ -341,46 +330,10 @@ function SessionMapInner() {
     [flowApi],
   )
 
-  // Entrou no modo terminal: zoom 1.0 centrado no cartão — o texto do xterm só é
-  // nítido sem escala, e o mouse do xterm só acerta a célula sem ela.
-  const prevTerminal = useRef<string | null>(null)
-  useEffect(() => {
-    const entered = terminalId && terminalId !== prevTerminal.current
-    prevTerminal.current = terminalId
-    if (!entered) return
-    const raf = requestAnimationFrame(() => requestAnimationFrame(() => centerOn(terminalId, 1)))
-    return () => cancelAnimationFrame(raf)
-  }, [terminalId, centerOn])
-
-  // Regra aba × cartão: se a sessão ganhou outro xterm (aba, peek em terminal) ou
-  // a PTY morreu, o cartão devolve o terminal e volta a aberto.
   const liveSessions = useAppStore((s) => s.liveSessions)
-  const panes = useAppStore((s) => s.panes)
-  const peekTarget = useCrewDockStore((s) => s.peekTarget)
-  const peekMode = useCrewDockStore((s) => s.peekMode)
-  const handoffs = useHandoffsStore((s) => s.handoffs)
-  useEffect(() => {
-    if (!terminalId) return
-    const liveSession = liveSessions.find((x) => x.id === terminalId)
-    const hasPane =
-      !!liveSession && panes.some((p) => paneShowsLive(p, liveSession))
-    const peeked =
-      peekedSessionId(peekTarget) ??
-      (peekTarget?.kind === 'handoff'
-        ? (handoffs.find((h) => h.id === peekTarget.id)?.childSessionId ?? null)
-        : null)
-    const leave = mustLeaveTerminal({
-      live: !!liveSession && liveSession.status !== 'ended',
-      hasPane,
-      peekedInTerminal: peekMode === 'terminal' && peeked === terminalId,
-      zoom: TERMINAL_MIN_ZOOM,
-    })
-    if (leave) useCardViewStore.getState().leaveTerminal(terminalId)
-  }, [terminalId, liveSessions, panes, peekTarget, peekMode, handoffs])
 
-  // Sessão nova criada com o mapa na frente (sem aba): entra em terminal no
-  // próprio cartão quando a PTY e o nó existirem — antes disso o efeito acima a
-  // devolveria a 'open' por não estar viva.
+  // Sessão nova criada com o mapa na frente (sem aba): abre na modal de terminal
+  // quando a PTY e o nó existirem.
   const pendingTerminal = useCardViewStore((s) => s.pendingTerminal)
   const interact = cmd.interact
   useEffect(() => {
@@ -391,17 +344,6 @@ function SessionMapInner() {
     useCardViewStore.getState().clearPendingTerminal()
     interact(pendingTerminal)
   }, [pendingTerminal, liveSessions, nodes, interact])
-
-  // Afastar o zoom (gesto do usuário — o setCenter de entrada não tem evento)
-  // devolve o terminal: abaixo de ~0.85 ele não se lê nem se clica.
-  const onMove = useCallback(
-    (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
-      if (!event || viewport.zoom >= TERMINAL_MIN_ZOOM) return
-      const current = terminalOf(useCardViewStore.getState().views)
-      if (current) useCardViewStore.getState().leaveTerminal(current)
-    },
-    [],
-  )
 
   // Saída ao vivo: assina só os cartões ABERTOS e visíveis (o main empurra com
   // throttle e só quando muda). Recalcula ao fim de cada pan/zoom e quando o
@@ -462,15 +404,9 @@ function SessionMapInner() {
     // setNodes do efeito acima): sem esperar, o fit enquadrava o conjunto anterior.
     if (!sameIds(nodes, flow.nodes)) return
     fittedKey.current = fitKey
-    // Terminal salvo aberto no cartão: o enquadramento é ele, em 1.0.
-    const restored = terminalOf(useCardViewStore.getState().views)
-    if (restored && nodes.some((n) => n.id === sessionNodeId(restored))) {
-      requestAnimationFrame(() => centerOn(restored, 1))
-      return
-    }
     // O minimapa entra/sai junto com o conjunto: mede os insets no frame seguinte.
     requestAnimationFrame(fitReadable)
-  }, [nodesInitialized, nodes, flow.nodes, fitKey, fitReadable, centerOn])
+  }, [nodesInitialized, nodes, flow.nodes, fitKey, fitReadable])
 
   const [menu, setMenu] = useState<{ x: number; y: number; flowId: string } | null>(null)
   const groups = canvas?.groups ?? []
@@ -503,13 +439,6 @@ function SessionMapInner() {
       toggleFan: (sessionId) => setExpandedMothers((prev) => toggled(prev, sessionId)),
       toggleView: (sessionId) => useCardViewStore.getState().toggle(sessionId),
       interact: cmd.interact,
-      leaveTerminal: (sessionId) => {
-        useCardViewStore.getState().leaveTerminal(sessionId)
-        // O foco estava no xterm que acabou de desmontar: volta pro mapa (teclas).
-        containerRef.current?.focus({ preventScroll: true })
-      },
-      resizeTerminal: (sessionId, size) =>
-        useCardViewStore.getState().setTerminalSize(sessionId, size),
       centerOn: (sessionId) => centerOn(sessionId, Math.max(flowApi.getZoom(), MIN_READABLE_ZOOM)),
     }),
     [cmd, centerOn, flowApi],
@@ -629,182 +558,175 @@ function SessionMapInner() {
   return (
     <MapActionsContext.Provider value={actions}>
       <MapLiveContext.Provider value={live}>
-      <MapFocusContext.Provider value={focus}>
-        <div
-          ref={containerRef}
-          tabIndex={-1}
-          className="session-map relative h-full w-full outline-none"
-          data-testid="session-map"
-          onKeyDown={(e) => {
-            if (e.ctrlKey || e.metaKey || e.altKey) return
-            // Esc fora do xterm do cartão devolve o terminal; dentro, é da TUI.
-            if (e.key === 'Escape' && terminalId) {
-              const inTerminal = (e.target as HTMLElement).closest?.('[data-card-terminal]')
-              if (inTerminal) return
+        <MapFocusContext.Provider value={focus}>
+          <div
+            ref={containerRef}
+            tabIndex={-1}
+            className="session-map relative h-full w-full outline-none"
+            data-testid="session-map"
+            onKeyDown={(e) => {
+              if (e.ctrlKey || e.metaKey || e.altKey) return
+              if (e.repeat || isTyping(e.target)) return
+              const selectedSession = selectedCard
+                ? (selectedCard.data as SessionCardData).node
+                : null
+              // Enter com o cartão selecionado: o terminal na modal.
+              if (e.key === 'Enter' && selectedSession && selectedSession.status !== 'ended') {
+                e.preventDefault()
+                cmd.interact(selectedSession.sessionId)
+                return
+              }
+              // N: nova sessão — no repo do cartão selecionado, se houver. Ctrl+N
+              // (session.new) segue global; aqui é só a letra, com o mapa focado.
+              if (e.key.toLowerCase() !== 'n') return
               e.preventDefault()
-              actions.leaveTerminal(terminalId)
-              return
-            }
-            if (e.repeat || isTyping(e.target)) return
-            const selectedSession = selectedCard
-              ? (selectedCard.data as SessionCardData).node
-              : null
-            // Enter com o cartão selecionado: "Interagir".
-            if (e.key === 'Enter' && selectedSession && selectedSession.status !== 'ended') {
-              e.preventDefault()
-              cmd.interact(selectedSession.sessionId)
-              return
-            }
-            // N: nova sessão — no repo do cartão selecionado, se houver. Ctrl+N
-            // (session.new) segue global; aqui é só a letra, com o mapa focado.
-            if (e.key.toLowerCase() !== 'n') return
-            e.preventDefault()
-            cmd.openNewSession(selectedSession?.repoId ?? null)
-          }}
-        >
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            defaultEdgeOptions={defaultEdgeOptions}
-            onNodesChange={onNodesChange}
-            onNodeDragStart={() => {
-              dragging.current = true
+              cmd.openNewSession(selectedSession?.repoId ?? null)
             }}
-            onNodeDragStop={onNodeDragStop}
-            onNodeClick={(_e, n) => {
-              // Cartão aberto já é a vista: o clique só seleciona (Enter → Interagir).
-              // Recolhido, o clique espia a conversa como antes.
-              if (n.type !== 'session') return
-              const card = n.data as SessionCardData
-              if (card.view === 'collapsed') cmd.clickCard(card.node)
-            }}
-            onNodeDoubleClick={(_e, n) => {
-              if (n.type === 'session') cmd.doubleClickCard((n.data as SessionCardData).node)
-              // Área vazia da lane = nova sessão ali. Lane de projeto (entre as
-              // colunas) não sabe qual repo: abre a lista.
-              if (n.type === 'lane') cmd.openNewSession((n.data as LaneData).repoId)
-            }}
-            zoomOnDoubleClick={false}
-            onPaneClick={() => setMenu(null)}
-            onNodeMouseEnter={(_e, n) => {
-              if (n.type === 'session') setHoveredId(n.id)
-            }}
-            onNodeMouseLeave={(_e, n) => setHoveredId((h) => (h === n.id ? null : h))}
-            onMove={onMove}
-            onMoveEnd={resubscribe}
-            onConnect={onConnect}
-            isValidConnection={isValidConnection}
-            deleteKeyCode={null}
-            // Camadas fixas (graph-to-flow): fio nunca sobe acima de cartão.
-            zIndexMode="manual"
-            minZoom={0.2}
-            proOptions={{ hideAttribution: true }}
           >
-            <Background color="var(--color-border)" gap={24} />
-            <Controls
-              position="bottom-left"
-              className="!border-[var(--color-border)] !bg-[var(--color-surface)] [&_button]:!border-[var(--color-border)] [&_button]:!bg-[var(--color-surface)] [&_button]:!fill-[var(--color-text-dim)] [&_button]:!text-[var(--color-text-dim)] [&_button:hover]:!bg-[var(--color-surface-2)]"
-              showInteractive={false}
-              showFitView={false}
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              defaultEdgeOptions={defaultEdgeOptions}
+              onNodesChange={onNodesChange}
+              onNodeDragStart={() => {
+                dragging.current = true
+              }}
+              onNodeDragStop={onNodeDragStop}
+              onNodeClick={(_e, n) => {
+                // Cartão aberto já é a vista: o clique só seleciona (Enter → terminal).
+                // Recolhido, o clique espia a conversa como antes.
+                if (n.type !== 'session') return
+                const card = n.data as SessionCardData
+                if (card.view === 'collapsed') cmd.clickCard(card.node)
+              }}
+              onNodeDoubleClick={(e, n) => {
+                if (n.type === 'session' && doubleClickOpensTerminal(e.target)) {
+                  cmd.doubleClickCard((n.data as SessionCardData).node)
+                }
+                // Área vazia da lane = nova sessão ali. Lane de projeto (entre as
+                // colunas) não sabe qual repo: abre a lista.
+                if (n.type === 'lane') cmd.openNewSession((n.data as LaneData).repoId)
+              }}
+              zoomOnDoubleClick={false}
+              onPaneClick={() => setMenu(null)}
+              onNodeMouseEnter={(_e, n) => {
+                if (n.type === 'session') setHoveredId(n.id)
+              }}
+              onNodeMouseLeave={(_e, n) => setHoveredId((h) => (h === n.id ? null : h))}
+              onMoveEnd={resubscribe}
+              onConnect={onConnect}
+              isValidConnection={isValidConnection}
+              deleteKeyCode={null}
+              // Camadas fixas (graph-to-flow): fio nunca sobe acima de cartão.
+              zIndexMode="manual"
+              minZoom={0.2}
+              proOptions={{ hideAttribution: true }}
             >
-              {/* Mesma classe do fitView padrão: o "enquadrar" agora é o legível. */}
-              <ControlButton
-                className="react-flow__controls-fitview"
-                onClick={fitReadable}
-                title="Enquadrar (no menor zoom em que dá pra ler)"
-                aria-label="Enquadrar"
+              <Background color="var(--color-border)" gap={24} />
+              <Controls
+                position="bottom-left"
+                className="!border-[var(--color-border)] !bg-[var(--color-surface)] [&_button]:!border-[var(--color-border)] [&_button]:!bg-[var(--color-surface)] [&_button]:!fill-[var(--color-text-dim)] [&_button]:!text-[var(--color-text-dim)] [&_button:hover]:!bg-[var(--color-surface-2)]"
+                showInteractive={false}
+                showFitView={false}
               >
-                <Icon as={Maximize} size={12} />
-              </ControlButton>
-              <ControlButton
-                data-testid="map-zoom-100"
-                onClick={actualSize}
-                title="100% a partir do canto superior esquerdo"
-                aria-label="Zoom 100%"
-                className="!text-[10px] !font-semibold"
-              >
-                1:1
-              </ControlButton>
-              {sessionCount >= MINIMAP_MIN_CARDS && (
+                {/* Mesma classe do fitView padrão: o "enquadrar" agora é o legível. */}
                 <ControlButton
-                  data-testid="map-minimap-toggle"
-                  onClick={() => setMinimapCollapsed((c) => !c)}
-                  title={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
-                  aria-label={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
-                  aria-pressed={!minimapCollapsed}
+                  className="react-flow__controls-fitview"
+                  onClick={fitReadable}
+                  title="Enquadrar (no menor zoom em que dá pra ler)"
+                  aria-label="Enquadrar"
                 >
-                  <Icon as={MapIcon} size={12} />
+                  <Icon as={Maximize} size={12} />
                 </ControlButton>
+                <ControlButton
+                  data-testid="map-zoom-100"
+                  onClick={actualSize}
+                  title="100% a partir do canto superior esquerdo"
+                  aria-label="Zoom 100%"
+                  className="!text-[10px] !font-semibold"
+                >
+                  1:1
+                </ControlButton>
+                {sessionCount >= MINIMAP_MIN_CARDS && (
+                  <ControlButton
+                    data-testid="map-minimap-toggle"
+                    onClick={() => setMinimapCollapsed((c) => !c)}
+                    title={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
+                    aria-label={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
+                    aria-pressed={!minimapCollapsed}
+                  >
+                    <Icon as={MapIcon} size={12} />
+                  </ControlButton>
+                )}
+              </Controls>
+              {showMinimap && (
+                <MiniMap
+                  className="!border !border-[var(--color-border)] !bg-[var(--color-surface)]"
+                  nodeColor={minimapColor}
+                  maskColor="color-mix(in srgb, var(--color-bg) 70%, transparent)"
+                  pannable
+                  zoomable
+                />
               )}
-            </Controls>
-            {showMinimap && (
-              <MiniMap
-                className="!border !border-[var(--color-border)] !bg-[var(--color-surface)]"
-                nodeColor={minimapColor}
-                maskColor="color-mix(in srgb, var(--color-bg) 70%, transparent)"
-                pannable
-                zoomable
+              <SelectionToolbar
+                nodeId={selected.length === 1 ? selected[0].id : null}
+                actions={selectionActions}
+                position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
+                onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
+              />
+            </ReactFlow>
+            <MapTopBar
+              scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
+              hasProject={!!activeProjectId}
+              onScope={setScopeMode}
+              hiddenEdges={hiddenEdges}
+              onNewSession={() => cmd.openNewSession(null)}
+              onNote={() => cmd.createNote(null)}
+              onGroup={cmd.createGroup}
+              onTidy={() => void cmd.tidy()}
+              onOpenAll={() =>
+                useCardViewStore.getState().openAll(sessionNodes.map((n) => n.sessionId))
+              }
+              onCollapseAll={() =>
+                useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
+              }
+            >
+              <MapStatusCounters
+                nodes={sessionNodes}
+                onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
+              />
+            </MapTopBar>
+            {menu && menuNode && (
+              <MapContextMenu
+                at={menu}
+                actions={actionsFor(menuNode, cmd, groups, memberCounts)}
+                onClose={() => setMenu(null)}
               />
             )}
-            <SelectionToolbar
-              nodeId={selected.length === 1 ? selected[0].id : null}
-              actions={selectionActions}
-              position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
-              onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
+            {sessionCount === 0 && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[var(--color-text-dim)]">
+                Nenhuma sessão em uso — “Nova sessão” (ou N) abre uma aqui.
+              </div>
+            )}
+            <DelegateDialog target={cmd.delegateTarget} onClose={cmd.closeDelegate} />
+            <NewSessionFlow
+              open={!!cmd.newSession}
+              initialRepoId={cmd.newSession?.repoId ?? null}
+              onClose={cmd.closeNewSession}
             />
-          </ReactFlow>
-          <MapTopBar
-            scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
-            hasProject={!!activeProjectId}
-            onScope={setScopeMode}
-            hiddenEdges={hiddenEdges}
-            onNewSession={() => cmd.openNewSession(null)}
-            onNote={() => cmd.createNote(null)}
-            onGroup={cmd.createGroup}
-            onTidy={() => void cmd.tidy()}
-            onOpenAll={() =>
-              useCardViewStore.getState().openAll(sessionNodes.map((n) => n.sessionId))
-            }
-            onCollapseAll={() =>
-              useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
-            }
-          >
-            <MapStatusCounters
-              nodes={sessionNodes}
-              onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
-            />
-          </MapTopBar>
-          {menu && menuNode && (
-            <MapContextMenu
-              at={menu}
-              actions={actionsFor(menuNode, cmd, groups, memberCounts)}
-              onClose={() => setMenu(null)}
-            />
-          )}
-          {sessionCount === 0 && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[var(--color-text-dim)]">
-              Nenhuma sessão em uso — “Nova sessão” (ou N) abre uma aqui.
-            </div>
-          )}
-          <DelegateDialog target={cmd.delegateTarget} onClose={cmd.closeDelegate} />
-          <NewSessionFlow
-            open={!!cmd.newSession}
-            initialRepoId={cmd.newSession?.repoId ?? null}
-            onClose={cmd.closeNewSession}
-          />
-          {cmd.batonTarget && (
-            <BatonDialog
-              open
-              onClose={cmd.closeBaton}
-              sessionId={cmd.batonTarget.sessionId}
-              ccSessionId={cmd.batonTarget.ccSessionId}
-              repoLabel={cmd.batonTarget.repoLabel}
-            />
-          )}
-        </div>
-      </MapFocusContext.Provider>
+            {cmd.batonTarget && (
+              <BatonDialog
+                open
+                onClose={cmd.closeBaton}
+                sessionId={cmd.batonTarget.sessionId}
+                ccSessionId={cmd.batonTarget.ccSessionId}
+                repoLabel={cmd.batonTarget.repoLabel}
+              />
+            )}
+          </div>
+        </MapFocusContext.Provider>
       </MapLiveContext.Provider>
     </MapActionsContext.Provider>
   )

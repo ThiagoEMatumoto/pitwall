@@ -45,6 +45,13 @@ export interface SessionGraphNode {
   // Handoff em que esta sessão é a filha atual — é o que abre o quick look da
   // crew em vez de uma aba.
   childOfHandoffId: string | null
+  // Mãe = tem handoffs vivos (com filha atrelada) apontando pra ela. Vem do
+  // mother_session_id atual, então o bastão da mãe move os três de nó.
+  isMother?: boolean
+  childCount?: number
+  // Passou o bastão de mãe (handoff_events 'mother_transferred') e não lidera
+  // mais ninguém: segue viva até o humano encerrar.
+  batonPassed?: boolean
 }
 
 export interface SessionGraphLaneRepo {

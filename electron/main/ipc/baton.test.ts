@@ -27,6 +27,7 @@ let distillLookupRow: Record<string, unknown> | undefined
 const insertedSessions: unknown[][] = []
 const predecessorUpdates: unknown[][] = []
 const sessionStatusUpdates: string[] = []
+const titleUpdates: unknown[][] = []
 
 vi.mock('../services/db', () => ({
   getDb: () => ({
@@ -35,6 +36,9 @@ vi.mock('../services/db', () => ({
         if (sql.includes('INSERT INTO sessions')) insertedSessions.push(args)
         if (sql.includes('predecessor_session_id')) predecessorUpdates.push(args)
         if (sql.includes('UPDATE sessions SET status')) sessionStatusUpdates.push(sql)
+        if (sql.includes("UPDATE sessions SET title = ?, title_source = 'manual'")) {
+          titleUpdates.push(args)
+        }
         return { changes: 1 }
       },
       get: (...args: unknown[]) => {
@@ -83,11 +87,14 @@ vi.mock('../services/mcp/config', () => ({
   writeSessionMcpClientConfig: () => '/tmp/mcp.json',
   removeSessionMcpConfig: () => {},
 }))
-vi.mock('../services/notify', () => ({ broadcast: () => {} }))
+const broadcasts = vi.hoisted(() => [] as Array<[string, unknown]>)
+vi.mock('../services/notify', () => ({
+  broadcast: (channel: string, payload: unknown) => broadcasts.push([channel, payload]),
+}))
 vi.mock('../services/session-activity', () => ({
   sessionActivityService: {},
   findTranscriptPath: () => null,
-  buildSessionsFileIndex: () => new Map(),
+  buildSessionsFileIndex: () => sessionFiles,
   readTranscriptTitle: () => null,
   readTail: () => null,
   deriveEnrichment: () => ({}),
@@ -96,6 +103,8 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 let activeNames: string[] = []
+// Session files do CLI por cc_session_id: o nome vivo (o `-n`) de quem não tem título.
+let sessionFiles = new Map<string, { name: string | null }>()
 vi.mock('../services/handoff-store', () => ({
   get: () => null,
   activeSessionNames: () => activeNames,
@@ -106,9 +115,23 @@ vi.mock('../services/handoff-store', () => ({
   })),
   getByChildSession: () => null,
   failIfRunning: () => null,
+  childAlias: (id: string | null) => (id ? (childAliases[id] ?? null) : null),
+  listRelinkableByMother: (id: string) => (id === motherOf ? motherHandoffs : []),
+  transferMother: vi.fn((from: string, to: string) => {
+    if (transferError) throw transferError
+    return from === motherOf ? motherHandoffs.map((h) => ({ ...h, motherSessionId: to })) : []
+  }),
 }))
 
-vi.mock('../services/baton/distill', () => ({ distillBaton: vi.fn(async () => '## Estado atual\nx') }))
+// Mãe passando o bastão: os handoffs dela e os apelidos das filhas.
+let motherOf: string | null = null
+let motherHandoffs: Array<Record<string, unknown>> = []
+let childAliases: Record<string, string> = {}
+let transferError: Error | null = null
+
+vi.mock('../services/baton/distill', () => ({
+  distillBaton: vi.fn(async () => '## Estado atual\nx'),
+}))
 
 // Aviso à mãe: o seam é mockado pra o teste medir QUEM o bastão avisa (e com
 // quê), sem depender de PTY. O comportamento interno dele (mãe viva, ausente,
@@ -117,24 +140,39 @@ const notifyMotherOfAliasChange = vi.fn(
   (_args: { handoffId: string; alias: string; previousAlias?: string | null }) =>
     ({ delivered: true }) as { delivered: boolean },
 )
+type Delivery = { handoffId: string; delivered: boolean; reason?: 'inject-refused' }
+const notifyChildrenOfNewMother = vi.fn(
+  async (_args: {
+    handoffs: Array<{ id: string }>
+    alias: string
+    previousAlias?: string | null
+  }): Promise<Delivery[]> => [],
+)
 vi.mock('../services/handoff/notify-mother-alias', () => ({
   notifyMotherOfAliasChange: (args: {
     handoffId: string
     alias: string
     previousAlias?: string | null
   }) => notifyMotherOfAliasChange(args),
+  notifyChildrenOfNewMother: (args: {
+    handoffs: Array<{ id: string }>
+    alias: string
+    previousAlias?: string | null
+  }) => notifyChildrenOfNewMother(args),
 }))
 
-import { registerBatonIpc } from './baton'
+import { registerBatonIpc, withActiveChildren } from './baton'
 import { DESTRUCTIVE_DENYLIST } from '../services/spawn-flags'
 import { registerSessionIpc } from './sessions'
 import * as handoffStore from '../services/handoff-store'
 import { distillBaton } from '../services/baton/distill'
 const markRunning = vi.mocked(handoffStore.markRunning)
+const transferMother = vi.mocked(handoffStore.transferMother)
 const distillMock = vi.mocked(distillBaton)
 
 const PRED_CC = '11111111-2222-3333-4444-555555555555'
-const BRIEFING = '## Estado atual\nO parser de bastão está pela metade.\n## Próximo passo\nRodar os testes.'
+const BRIEFING =
+  '## Estado atual\nO parser de bastão está pela metade.\n## Próximo passo\nRodar os testes.'
 
 function predecessor(over: Record<string, unknown> = {}): void {
   predecessorRow = {
@@ -170,6 +208,14 @@ function resetSeams(): void {
   insertedSessions.length = 0
   predecessorUpdates.length = 0
   sessionStatusUpdates.length = 0
+  titleUpdates.length = 0
+  transferMother.mockClear()
+  notifyChildrenOfNewMother.mockClear()
+  notifyChildrenOfNewMother.mockImplementation(async () => [])
+  motherOf = null
+  motherHandoffs = []
+  childAliases = {}
+  transferError = null
   predecessorRow = undefined
   handoffRow = undefined
   distillLookupRow = undefined
@@ -180,7 +226,8 @@ function resetSeams(): void {
 }
 
 interface PassResult {
-  session: { id: string; repoId: string | null }
+  session: { id: string; repoId: string | null; title?: string | null }
+  relinkedChildren?: number
   handoff: { id: string; childSessionId: string } | null
   alias: string | null
   aliasChanged: boolean
@@ -412,6 +459,163 @@ describe('baton:pass — conflito de apelido com a antecessora viva', () => {
   })
 })
 
+// Bastão da MÃE: a liderança transfere. Sem o relink, as filhas continuariam
+// presas à antecessora (baton.ts antes da F3) e a sucessora não lideraria ninguém.
+describe('baton:pass — antecessora é mãe', () => {
+  function asMother(): void {
+    motherOf = 'sess-antiga'
+    motherHandoffs = [
+      {
+        id: 'hc1',
+        childSessionId: 'c1',
+        task: 'Mapa por feature',
+        status: 'running',
+        currentStep: 'testes',
+      },
+      { id: 'hc2', childSessionId: 'c2', task: 'Modal', status: 'needs_input', currentStep: null },
+    ]
+    childAliases = { c1: 'mauricio-mapa', c2: 'otavio-modal' }
+  }
+
+  beforeEach(() => {
+    resetSeams()
+    predecessor({ title: 'ana-mission-control' })
+    asMother()
+  })
+
+  it('relinka os handoffs da antecessora para a sucessora', () => {
+    const result = pass()
+    expect(transferMother).toHaveBeenCalledWith('sess-antiga', result.session.id)
+    expect(result.relinkedChildren).toBe(2)
+  })
+
+  it('SEMPRE ganha alias novo, gravado como manual, mesmo com o nome antigo "livre"', () => {
+    activeNames = []
+    const result = pass()
+    expect(result.alias).toBeTruthy()
+    expect(result.alias).not.toBe('ana-mission-control')
+    expect(result.session.title).toBe(result.alias)
+    expect(titleUpdates).toEqual([[result.alias, result.session.id]])
+    expect(spawns[0].innerCmd).toContain(`-n '${result.alias}'`)
+    // Mãe não é filha: nada de --settings nem markRunning.
+    expect(spawns[0].innerCmd).not.toContain('--settings')
+    expect(markRunning).not.toHaveBeenCalled()
+    expect(predecessorUpdates).toHaveLength(0)
+  })
+
+  it('o alias novo não colide com sessões vivas', () => {
+    activeNames = ['ana-mission-control', 'otavio-mission-control']
+    const result = pass()
+    expect(activeNames).not.toContain(result.alias)
+    expect(activeNames).toEqual(['ana-mission-control', 'otavio-mission-control'])
+  })
+
+  it('avisa as filhas com o endereço antigo e o novo', () => {
+    const result = pass()
+    expect(notifyChildrenOfNewMother).toHaveBeenCalledTimes(1)
+    const args = notifyChildrenOfNewMother.mock.calls[0]![0]
+    expect(args.alias).toBe(result.alias)
+    expect(args.previousAlias).toBe('ana-mission-control')
+    expect(args.handoffs).toHaveLength(2)
+  })
+
+  it('mãe sem título salvo: o endereço antigo é o nome vivo do CLI', () => {
+    predecessor({ title: null })
+    sessionFiles = new Map([[PRED_CC, { name: 'mae-sem-titulo' }]])
+    activeNames = []
+    const result = pass()
+    expect(result.alias).not.toBe('mae-sem-titulo')
+    expect(notifyChildrenOfNewMother.mock.calls[0]![0].previousAlias).toBe('mae-sem-titulo')
+    sessionFiles = new Map()
+  })
+
+  it('kickoff lista as filhas e manda abrir o canal com SendMessage', () => {
+    pass()
+    expect(spawns[0].innerCmd).toContain('papel de MÃE de 2 filhas')
+    expect(spawns[0].innerCmd).toContain('mauricio-mapa')
+    expect(spawns[0].innerCmd).toContain('SendMessage')
+  })
+
+  it('briefing escrito à mão ganha a seção Filhas ativas', () => {
+    pass({ briefing: 'Escrevi na mão: continue o mapa.' })
+    const sp = systemPromptOf(spawns[0].innerCmd)
+    expect(sp).toContain('Escrevi na mão: continue o mapa.')
+    expect(sp).toContain('## Filhas ativas')
+    expect(sp).toContain('"otavio-modal"')
+    expect(sp).toContain('último progresso: testes')
+  })
+
+  it('kickoff não promete que toda filha foi avisada', () => {
+    pass()
+    expect(spawns[0].innerCmd).toContain('tentou avisar cada filha')
+    expect(spawns[0].innerCmd).not.toContain('e avisou cada filha')
+  })
+
+  // Regressão: o resultado da nota era descartado — ninguém sabia quais filhas
+  // continuavam escrevendo para a antecessora.
+  it('filha que não recebeu a nota vira broadcast baton:children-missed', async () => {
+    broadcasts.length = 0
+    notifyChildrenOfNewMother.mockImplementation(async (args) =>
+      args.handoffs.map((h, i) =>
+        i === 0
+          ? { handoffId: h.id, delivered: true }
+          : { handoffId: h.id, delivered: false, reason: 'inject-refused' as const },
+      ),
+    )
+    const result = pass()
+    await new Promise((r) => setTimeout(r, 0))
+    const missed = broadcasts.filter(([c]) => c === 'baton:children-missed')
+    expect(missed).toHaveLength(1)
+    const payload = missed[0]![1] as {
+      alias: string
+      missed: Array<{ handoffId: string; reason: string }>
+    }
+    expect(payload.alias).toBe(result.alias)
+    expect(payload.missed).toHaveLength(1)
+    expect(payload.missed[0]!.reason).toBe('inject-refused')
+  })
+
+  it('todas avisadas: nenhum broadcast de nota perdida', async () => {
+    broadcasts.length = 0
+    notifyChildrenOfNewMother.mockImplementation(async (args) =>
+      args.handoffs.map((h) => ({ handoffId: h.id, delivered: true })),
+    )
+    pass()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(broadcasts.some(([c]) => c === 'baton:children-missed')).toBe(false)
+  })
+
+  it('falha na nota às filhas NÃO desfaz o bastão', async () => {
+    notifyChildrenOfNewMother.mockImplementation(async () => {
+      throw new Error('PTY morreu')
+    })
+    const result = pass()
+    await Promise.resolve()
+    expect(result.relinkedChildren).toBe(2)
+    expect(spawns).toHaveLength(1)
+    expect(killed).toHaveLength(0)
+  })
+
+  it('sem filhas: nada de relink, alias ou nota', () => {
+    motherOf = null
+    const result = pass()
+    expect(transferMother).not.toHaveBeenCalled()
+    expect(notifyChildrenOfNewMother).not.toHaveBeenCalled()
+    expect(result.alias).toBeNull()
+    expect(result.relinkedChildren).toBe(0)
+  })
+
+  it('mãe que também é filha: herda o handoff E lidera as filhas', () => {
+    linkedHandoff()
+    activeNames = ['ana-mission-control']
+    const result = pass()
+    expect(markRunning).toHaveBeenCalledWith('h1', result.session.id)
+    expect(transferMother).toHaveBeenCalledWith('sess-antiga', result.session.id)
+    expect(result.aliasChanged).toBe(true)
+    expect(spawns[0].innerCmd).toContain('--settings')
+  })
+})
+
 describe('baton:distill', () => {
   beforeEach(() => {
     resetSeams()
@@ -429,6 +633,7 @@ describe('baton:distill', () => {
       repoLabel: 'Repo 1',
       featureTitle: 'Passagem de bastão',
       note: 'foca no parser',
+      children: [],
     })
   })
 
@@ -439,6 +644,74 @@ describe('baton:distill', () => {
       repoLabel: null,
       featureTitle: null,
       note: null,
+      children: [],
     })
+  })
+
+  it('mãe: destila com as filhas e anexa a seção Filhas ativas', async () => {
+    distillLookupRow = { session_id: 'sess-antiga', repo_label: 'Repo 1', feature_title: 'MC v2' }
+    motherOf = 'sess-antiga'
+    motherHandoffs = [
+      { id: 'hc1', childSessionId: 'c1', task: 'Mapa', status: 'running', currentStep: 'testes' },
+    ]
+    childAliases = { c1: 'mauricio-mapa' }
+    const text = (await handlers.get('baton:distill')!(null, { ccSessionId: PRED_CC })) as string
+    expect(distillMock.mock.calls[0]![1]).toMatchObject({
+      children: [
+        { handoffId: 'hc1', alias: 'mauricio-mapa', task: 'Mapa', lastProgress: 'testes' },
+      ],
+    })
+    expect(text).toContain('## Filhas ativas')
+    expect(text).toContain('Feature: MC v2')
+    expect(text).toContain('"mauricio-mapa"')
+  })
+})
+
+describe('withActiveChildren', () => {
+  const child = (handoffId: string, alias: string) => ({
+    handoffId,
+    alias,
+    task: `tarefa ${handoffId}`,
+    status: 'running' as const,
+    lastProgress: null,
+  })
+  const kids = [child('h1', 'ana-a'), child('h2', 'bia-b'), child('h3', 'caio-c')]
+
+  // O prompt da destilação mostra a seção ao LLM; se ele a copiar sem uma filha,
+  // a lista dele não pode vencer a do banco — filha omitida é filha órfã.
+  it('a seção do briefing é trocada pela lista do banco, mesmo se o LLM a copiou incompleta', () => {
+    const briefing = [
+      '## Estado atual',
+      'tudo andando',
+      '',
+      '## Filhas ativas',
+      '- "ana-a" · handoffId h1',
+      '- "bia-b" · handoffId h2',
+      '',
+      '## Próximo passo',
+      'revisar',
+    ].join('\n')
+    const out = withActiveChildren(briefing, kids)
+    expect(out.match(/## Filhas ativas/g)).toHaveLength(1)
+    expect(out).toContain('"caio-c" · handoffId h3')
+    expect(out).toContain('## Próximo passo\nrevisar')
+    expect(out).toContain('## Estado atual\ntudo andando')
+  })
+
+  // Regressão: o corte ia até o próximo título, e uma instrução escrita pelo
+  // humano abaixo da lista (no diálogo) sumia do prompt da sucessora.
+  it('preserva o que o humano escreveu abaixo da lista', () => {
+    const shown = withActiveChildren('## Estado atual\nok', kids, 'Diligencia')
+    const edited = `${shown}\n\nIMPORTANTE: não fazer merge antes da filha ana-a terminar.`
+    const out = withActiveChildren(edited, kids, 'Diligencia')
+    expect(out).toContain('IMPORTANTE: não fazer merge antes da filha ana-a terminar.')
+    expect(out.match(/## Filhas ativas/g)).toHaveLength(1)
+    expect(out.match(/"caio-c" · handoffId h3/g)).toHaveLength(1)
+    expect(out.endsWith('"caio-c" · handoffId h3 · running · tarefa: tarefa h3')).toBe(true)
+  })
+
+  it('é idempotente: aplicar de novo não duplica a seção', () => {
+    const once = withActiveChildren('## Estado atual\nok', kids)
+    expect(withActiveChildren(once, kids)).toBe(once)
   })
 })
