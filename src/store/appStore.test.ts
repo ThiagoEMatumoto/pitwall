@@ -132,3 +132,25 @@ describe('endSession immediate (fluxo Reabrir)', () => {
     expect(killSpy).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('sessionFromLiveSession — provider sem id nativo', () => {
+  // Shape do produtor (live-session-pty.ts livePtySessionInfo): o Codex chega com
+  // ccSessionId = sessions.id, só como chave do batch global.
+  const codexLive = {
+    id: 'sess-codex',
+    ccSessionId: 'sess-codex',
+    name: 'codex-ops',
+    provider: 'codex',
+  } as unknown as LiveSessionInfo
+
+  it('Codex vira Session sem ccSessionId (sem watch/baton/persistência de claude)', async () => {
+    const { sessionFromLiveSession } = await import('./appStore')
+    expect(sessionFromLiveSession(codexLive, 'p1').ccSessionId).toBeNull()
+  })
+
+  it('Claude mantém o id nativo', async () => {
+    const { sessionFromLiveSession } = await import('./appStore')
+    const claude = { ...codexLive, ccSessionId: 'cc-1', provider: 'claude' } as LiveSessionInfo
+    expect(sessionFromLiveSession(claude, 'p1').ccSessionId).toBe('cc-1')
+  })
+})

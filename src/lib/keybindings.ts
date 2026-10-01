@@ -31,13 +31,30 @@ export function matchCombo(e: KeyboardEvent, c: Combo): boolean {
   return false
 }
 
+const ARROW_GLYPH: Record<string, string> = {
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+}
+
+const PUNCTUATION_CODE: Record<string, string> = { Comma: ',', Period: '.' }
+
+function arrowGlyph(c: Combo): string | undefined {
+  return ARROW_GLYPH[c.code ?? ''] ?? ARROW_GLYPH[c.key ?? '']
+}
+
 // Representação humana, plataforma-aware. Usada nos <kbd> da UI.
 export function formatCombo(c: Combo): string {
   const parts: string[] = []
   if (c.mod) parts.push(isMac ? '⌘' : 'Ctrl')
   if (c.shift) parts.push('Shift')
   if (c.alt) parts.push(isMac ? '⌥' : 'Alt')
+  const arrow = arrowGlyph(c)
   if (c.code === 'Backslash') parts.push('\\')
+  else if (c.code && PUNCTUATION_CODE[c.code]) parts.push(PUNCTUATION_CODE[c.code])
+  else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
+  else if (arrow) parts.push(arrow)
   else if (c.key === 'Tab') parts.push('Tab')
   else if (c.key) parts.push(c.key.toUpperCase())
   return parts.join('+')
@@ -57,6 +74,58 @@ export const COMMANDS: Command[] = [
     label: 'Abrir seletor de sessões',
     context: 'Global',
     defaultCombo: { mod: true, shift: true, key: 'a' },
+    editable: true,
+  },
+  // Mandar um prompt pra qualquer sessão sem abri-la. Não colide: Shift+Enter é a
+  // nova linha do terminal e Ctrl+Enter o envio do composer / commit de texto do Design.
+  {
+    id: 'quickComposer.open',
+    label: 'Enviar mensagem para uma sessão',
+    context: 'Global',
+    defaultCombo: { mod: true, shift: true, key: 'Enter' },
+    editable: true,
+  },
+  // Fila de atenção: pular direto pra sessão que precisa de você. Alt (e não
+  // Ctrl) porque Ctrl+letra é do shell/TUI; Alt+A/Alt+Q não colidem com o GNOME
+  // nem com os defaults do Claude Code. O AppShell engole a tecla antes do PTY.
+  // Por code: com Alt, e.key vira 'å'/'œ' no mac e 'ф' no layout russo.
+  {
+    id: 'attention.next',
+    label: 'Próxima sessão que precisa de você',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'KeyA' },
+    editable: true,
+  },
+  {
+    id: 'attention.prev',
+    label: 'Sessão anterior na fila de atenção',
+    context: 'Global',
+    defaultCombo: { alt: true, shift: true, code: 'KeyA' },
+    editable: true,
+  },
+  {
+    id: 'session.back',
+    label: 'Voltar à sessão onde você estava',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'KeyQ' },
+    editable: true,
+  },
+  // Andar pelas relações da sessão (mãe → irmãs → filhas; bastão ao lado dela).
+  // Alt+,/Alt+. (os "<" e ">" do teclado) e NÃO Alt+←/→: no prompt do Claude Code
+  // (2.1.286) meta+←/→ é pular palavra, e o listener global engoliria a tecla.
+  // Por code, pelo mesmo motivo do Alt+A (com Option o e.key vira '≤'/'≥' no mac).
+  {
+    id: 'session.linkPrev',
+    label: 'Sessão relacionada anterior (mãe, irmã, bastão de)',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'Comma' },
+    editable: true,
+  },
+  {
+    id: 'session.linkNext',
+    label: 'Próxima sessão relacionada (filha, irmã, bastão para)',
+    context: 'Global',
+    defaultCombo: { alt: true, code: 'Period' },
     editable: true,
   },
   {
@@ -83,6 +152,17 @@ export const COMMANDS: Command[] = [
     label: 'Trabalhar na feature em foco',
     context: 'Global',
     defaultCombo: { mod: true, shift: true, key: 'f' },
+    editable: true,
+  },
+  // Mapa ⇄ Terminais na área Projetos. Ctrl+Shift+G ("grafo"): o Ctrl+Shift+G
+  // do Design (desagrupar) só vive na área de design, e este só na de projetos;
+  // não colide com GNOME nem com os meta+letra do Claude Code. Por code: estável
+  // com Shift em qualquer layout.
+  {
+    id: 'projects.toggleMap',
+    label: 'Alternar Mapa de sessões ⇄ Terminais',
+    context: 'Workspace',
+    defaultCombo: { mod: true, shift: true, code: 'KeyG' },
     editable: true,
   },
   {

@@ -3,6 +3,7 @@ import { Bell, X } from 'lucide-react'
 import { notificationsApi } from '@/lib/ipc'
 import { Icon } from '@/components/ui/Icon'
 import { crewCcSessionIds } from '@/features/handoffs/crew'
+import { openSessionByCc } from '@/features/sessions/open-session'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { useToastStore, type LocalToast } from './toast-store'
@@ -48,14 +49,6 @@ function isCrewChild(ccSessionId: string | undefined): boolean {
   const { liveSessions } = useAppStore.getState()
   const { handoffs } = useHandoffsStore.getState()
   return crewCcSessionIds(handoffs, liveSessions).has(ccSessionId)
-}
-
-// Abre/foca a sessão do evento via snapshot de sessões vivas. getState() em vez
-// de hook: chamado de handlers, e a busca é pontual (não precisa re-render).
-function openSessionByCc(ccSessionId: string) {
-  const { liveSessions, focusOrOpenSession } = useAppStore.getState()
-  const item = liveSessions.find((s) => s.ccSessionId === ccSessionId)
-  if (item) void focusOrOpenSession(item)
 }
 
 export function NotificationToast() {

@@ -13,6 +13,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
+import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { relativeTime } from '@/lib/time'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useVisibleLiveSessions } from './useGlobalSessions'
@@ -20,6 +21,7 @@ import { useWaitingCount } from './useWaitingCount'
 import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
+import { liveSessionLabel } from './session-label'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -107,11 +109,10 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   )
 
   // ccSessionId → paneId das sessões exibidas no split (destaque "aberta").
+  // Sessão sem id nativo (Codex) vem na lista viva chaveada pelo sessions.id.
   const openByCc = useMemo(() => {
     const m = new Map<string, string>()
-    for (const p of panes) {
-      if (p.session.ccSessionId) m.set(p.session.ccSessionId, p.paneId)
-    }
+    for (const p of panes) m.set(p.session.ccSessionId ?? p.session.id, p.paneId)
     return m
   }, [panes])
 
@@ -232,7 +233,7 @@ interface ChipProps {
 }
 
 function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }: ChipProps) {
-  const title = (item.title ?? item.name ?? item.repo?.label) || (item.repo?.label ?? 'Avulsa')
+  const title = liveSessionLabel(item)
   const preview = item.lastText?.replace(/\s+/g, ' ').trim()
   const tooltip = `${statusLabel(item.status)} · ${relativeTime(item.lastActivityAt)}${
     preview ? `\n${preview}` : ''
@@ -274,6 +275,7 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
           />
         )}
         <span className="max-w-40 truncate">{title}</span>
+        <ProviderBadge provider={item.provider} />
       </button>
       <SessionFeatureChip sessionId={item.id} density="dot" />
       {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}

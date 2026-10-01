@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MonitorCheck } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { openPaneKeys } from '@/features/handoffs/crew'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { relativeTime } from '@/lib/time'
@@ -73,11 +74,8 @@ export function SessionSwitcher({ open, onClose }: Props) {
     return () => clearInterval(id)
   }, [open])
 
-  // ccSessionIds atualmente exibidos no split (marcador "na tela").
-  const onScreen = useMemo(
-    () => new Set(panes.map((p) => p.session.ccSessionId).filter((id): id is string => Boolean(id))),
-    [panes],
-  )
+  // Chaves (ccSessionId da lista viva) das sessões exibidas no split ("na tela").
+  const onScreen = useMemo(() => openPaneKeys(panes), [panes])
 
   const filtered = useMemo(
     () => liveSessions.filter((s) => matchesSession(query, s)),
@@ -183,6 +181,7 @@ export function SessionSwitcher({ open, onClose }: Props) {
 
   return (
     <div
+      data-modal-overlay
       className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 pt-[12vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()

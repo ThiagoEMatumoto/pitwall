@@ -4,7 +4,7 @@ import * as store from '../services/handoff-store'
 import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
-import { injectIntoChild } from '../services/handoff/inject'
+import { injectIntoChildGuarded } from '../services/handoff/guarded-inject'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { prepareHandoff } from '../services/handoff/prepare'
 import { adoptSession } from '../services/handoff/adopt'
@@ -155,13 +155,13 @@ export function registerHandoffsIpc(): void {
 
   // Intervenção do humano pelo inbox: entrega uma mensagem (texto livre OU resposta
   // a um handoff_ask) à sessão-filha. Resolve o childSessionId pelo handoffId,
-  // exige PTY viva (isRunning) e injeta via injectIntoChild — bracketed-paste com
+  // exige PTY viva (isRunning) e injeta via injectIntoChildGuarded — bracketed-paste com
   // submit, NÃO sessions:write cru (que não submeteria). Entregue o texto, a
   // pergunta pendente se encerra AQUI (needs_input → running): este é o caminho da
   // mãe respondendo, e é o único que fecha o bloqueio — handoff_progress preserva
   // needs_input de propósito. Idempotente fora de needs_input (mensagem avulsa
   // para uma filha running não muda nada).
-  ipcMain.handle('handoffs:send-message', (_e, raw: unknown): void => {
+  ipcMain.handle('handoffs:send-message', async (_e, raw: unknown): Promise<void> => {
     const { id, text } = sendMessageSchema.parse(raw)
     const handoff = store.get(id)
     if (!handoff) throw new Error(`Handoff não encontrado: ${id}`)
@@ -171,7 +171,9 @@ export function registerHandoffsIpc(): void {
     if (!ptyManager.isRunning(handoff.childSessionId)) {
       throw new Error('A sessão-filha não está mais viva — não há para onde enviar.')
     }
-    injectIntoChild(handoff.childSessionId, text)
+    // Mesma prova da fila: o Enter do paste não pode cair num menu de permissão nem
+    // no overlay de aprovação do Codex (sem espelho) — recusa com o motivo.
+    await injectIntoChildGuarded(handoff.childSessionId, text)
     broadcast('handoff:updated', store.resume(id))
   })
 

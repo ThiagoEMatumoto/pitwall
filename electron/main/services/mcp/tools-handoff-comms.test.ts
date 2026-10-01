@@ -3,7 +3,9 @@
 // handoff_ask / enriquecimento do handoff_result). DB better-sqlite3 real (tmp),
 // electron mockado, e os seams externos (inject.ts, pty-manager, session-activity)
 // mockados — o foco é o contrato dos guards e da transição de status.
-import { rmSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', async () => {
@@ -43,6 +45,7 @@ vi.mock('../session-activity', () => ({
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
+import { tuiMenuWatch } from '../tui-menu-watch'
 import {
   buildTools,
   type McpNotify,
@@ -80,8 +83,31 @@ function callAs<T>(callerSessionId: string | null, name: string, args: unknown):
   return (def.handler(args) as ToolResult).structuredContent as T
 }
 
+async function callAsync<T>(name: string, args: unknown): Promise<T> {
+  return ((await tool(name).handler(args)) as ToolResult).structuredContent as T
+}
+
+// Telas REAIS do claude 2.1.286 no espelho headless de produção (o singleton que
+// o handoff_message consulta): o guard lê o ScreenScan que o produtor devolve.
+const FIXTURES = join(__dirname, '..', '..', '..', '..', 'shared', 'tui', '__fixtures__')
+const IDLE_SCREEN = readFileSync(join(FIXTURES, 'claude-2.1.286-idle-prompt.ansi'), 'utf8')
+const PERMISSION_SCREEN = readFileSync(
+  join(FIXTURES, 'claude-2.1.286-permission-bash.ansi'),
+  'utf8',
+)
+const fakePty = new EventEmitter() as EventEmitter & { write(): void }
+fakePty.write = () => {}
+tuiMenuWatch.attach(fakePty, (id) => (id.startsWith('codex') ? null : { ccSessionId: `cc-${id}` }))
+
+function showScreen(sessionId: string, ansi: string): void {
+  fakePty.emit('exit', { sessionId, exitCode: 0 })
+  fakePty.emit('spawn', { sessionId, cols: 80, rows: 24 })
+  fakePty.emit('data', { sessionId, data: ansi })
+}
+
 // Cria um handoff running com filha atrelada (sessions.id + cc_session_id).
 function seedRunningHandoff(childSessionId = 's-child'): string {
+  if (!childSessionId.startsWith('codex')) showScreen(childSessionId, IDLE_SCREEN)
   const db = getDb()
   db.prepare(
     `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',?,?)`,
@@ -137,16 +163,41 @@ describe('handoff_ask (filha → mãe)', () => {
 })
 
 describe('handoff_message (mãe → filha)', () => {
-  it('entrega a mensagem, retoma a filha (needs_input → running) e espia inject', () => {
+  it('entrega a mensagem, retoma a filha (needs_input → running) e espia inject', async () => {
     const id = seedRunningHandoff()
     handoffStore.ask(id, 'pergunta')
-    const res = call<{ status: string; delivered: boolean }>('handoff_message', {
+    const res = await callAsync<{ status: string; delivered: boolean }>('handoff_message', {
       handoffId: id,
       text: 'use zod',
     })
     expect(res.delivered).toBe(true)
     expect(res.status).toBe('running')
     expect(injectIntoChild).toHaveBeenCalledWith('s-child', 'use zod')
+  })
+
+  it('menu de permissão aberto na tela da filha: recusa sem escrever e mantém a pergunta', async () => {
+    const id = seedRunningHandoff('s-menu')
+    handoffStore.ask(id, 'pergunta')
+    showScreen('s-menu', PERMISSION_SCREEN)
+    await expect(callAsync('handoff_message', { handoffId: id, text: 'status?' })).rejects.toThrow(
+      /menu aberto/,
+    )
+    expect(injectIntoChild).not.toHaveBeenCalled()
+    expect(handoffStore.get(id)?.status).toBe('needs_input')
+  })
+
+  it('filha sem espelho da tela (Codex): recusa — o Enter aprovaria o overlay', async () => {
+    const id = seedRunningHandoff('codex-child')
+    await expect(callAsync('handoff_message', { handoffId: id, text: 'status?' })).rejects.toThrow(
+      /espelho da tela/,
+    )
+    expect(injectIntoChild).not.toHaveBeenCalled()
+  })
+
+  it('tira caracteres de controle: um ESC[201~ não fecha o paste antes da hora', async () => {
+    const id = seedRunningHandoff()
+    await callAsync('handoff_message', { handoffId: id, text: 'oi\x1b[201~\x1b[Bfim\nlinha' })
+    expect(injectIntoChild).toHaveBeenCalledWith('s-child', 'oi[201~[Bfim\nlinha')
   })
 
   it('404 quando o handoff não existe', () => {
@@ -198,11 +249,11 @@ describe('handoff_progress durante needs_input (regressão: filha apagava a pró
     expect(polled.pendingQuestion).toBe('posso trocar o schema?')
   })
 
-  it('handoff_message (resposta da mãe) é o que encerra: needs_input → running', () => {
+  it('handoff_message (resposta da mãe) é o que encerra: needs_input → running', async () => {
     const id = seedRunningHandoff()
     call('handoff_ask', { handoffId: id, question: 'posso trocar o schema?' })
     call('handoff_progress', { handoffId: id, step: 'ainda esperando' })
-    call('handoff_message', { handoffId: id, text: 'pode sim' })
+    await callAsync('handoff_message', { handoffId: id, text: 'pode sim' })
 
     const polled = call<{
       status: string

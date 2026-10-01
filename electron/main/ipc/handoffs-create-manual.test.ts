@@ -122,6 +122,13 @@ describe('handoffs:create-manual', () => {
     expect(broadcasts).toHaveLength(1)
   })
 
+  // Regressão: nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e
+  // spawnar uma 2ª filha junto com a do dispatch manual ("Nova filha" no mapa).
+  it('nasce approved: fora do loop de auto-aprovação', () => {
+    createManual(input)
+    expect(created[0]!.status).toBe('approved')
+  })
+
   it('mãe no MESMO repo não vira origem cross-repo (nem rótulo de repo-mãe)', () => {
     motherRepoId = 'repo-target'
     createManual(input)

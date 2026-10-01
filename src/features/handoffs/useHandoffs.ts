@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefsApi } from '@/lib/ipc'
 import { pendingHandoffs, useHandoffsStore } from '@/store/handoffsStore'
 
@@ -19,8 +19,9 @@ export function useHandoffs() {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const pending = useMemo(() => pendingHandoffs(handoffs), [handoffs])
 
-  // Pref lido no mount; mantido em ref pra o effect não re-rodar por identidade.
-  const requireApproval = useRef(false)
+  // null = pref ainda não chegou. Sem esperar por ela, o load() dos handoffs
+  // costuma chegar antes e o loop aprovava os pending com o gate LIGADO.
+  const [requireApproval, setRequireApproval] = useState<boolean | null>(null)
   // Ids já disparados, pra não tentar duas vezes enquanto o approve está em voo
   // (o handoff só sai de 'pending' após o markRunning).
   const firing = useRef(new Set<string>())
@@ -29,13 +30,13 @@ export function useHandoffs() {
     void load()
     start()
     void prefsApi.get<boolean>(HANDOFFS_REQUIRE_APPROVAL_KEY).then((v) => {
-      requireApproval.current = v ?? false
+      setRequireApproval(v ?? false)
     })
     return () => stop()
   }, [load, start, stop])
 
   useEffect(() => {
-    if (requireApproval.current) return
+    if (requireApproval !== false) return
     for (const h of pending) {
       if (firing.current.has(h.id)) continue
       firing.current.add(h.id)
@@ -44,5 +45,5 @@ export function useHandoffs() {
         firing.current.delete(h.id)
       })
     }
-  }, [pending, approve])
+  }, [pending, approve, requireApproval])
 }

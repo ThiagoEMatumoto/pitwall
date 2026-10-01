@@ -46,6 +46,7 @@ import { useFilesStore } from '@/lib/files-store'
 import { xtermTheme } from '@/lib/themes'
 import { getCurrentThemeTokens, onThemeChange } from '@/app/useTheme'
 import type { GpuStatus, PermissionMode, Session, SessionActivity } from '../../../shared/types/ipc'
+import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 
 // Cache módulo-level: o status de GPU é imutável durante o processo (decidido no
 // boot do main), então 1 IPC atende todos os panes/remounts.
@@ -82,6 +83,14 @@ interface Props {
   // e onde encerrar a sessão NÃO deve estar a um clique de distância num fluxo
   // de "só vou dar uma olhada".
   chrome?: 'full' | 'bare'
+  // 'dom' nunca liga o WebGL: o terminal no cartão do mapa vive sob o transform
+  // de zoom do canvas (o bitmap do WebGL reamostra e borra fora de 1.0; o DOM é
+  // re-rasterizado pelo browser) e não deve ocupar um slot do cap nem dividir o
+  // atlas de glifos com as panes (ver terminal-atlas.ts).
+  renderer?: 'auto' | 'dom'
+  // 'compact' (cartão do mapa): só input + Interromper + Enviar; o resto da barra
+  // vai pro "⋯". Nove controles em ~500px espremiam o terminal.
+  composer?: 'full' | 'compact'
   onClose: () => void
   onTitleChange?: (title: string) => void
   onReopen?: () => void
@@ -140,14 +149,20 @@ export function Terminal({
   projectName,
   projectIcon,
   projectColor,
-  mode = 'terminal',
+  mode: requestedMode = 'terminal',
   onToggleMode,
   chrome = 'full',
+  renderer = 'auto',
+  composer = 'full',
   onClose,
   onTitleChange,
   onReopen,
   onOpenSettings,
 }: Props) {
+  // Provider sem Chat View (Codex) fica no terminal cru, seja qual for o modo
+  // lembrado; sem parser de menu, nada de card/pill que digita na TUI do claude.
+  const caps = providerSupports(session.provider)
+  const mode: PaneMode = caps.chatView ? requestedMode : 'terminal'
   const { exited, exitCode, error, write, resize, setDataHandler } = useSession(session.id)
   const endSession = useAppStore((s) => s.endSession)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -225,6 +240,8 @@ export function Terminal({
   // visibilidade do host no viewport (IntersectionObserver do mount effect).
   const modeRef = useRef(mode)
   modeRef.current = mode
+  const rendererRef = useRef(renderer)
+  rendererRef.current = renderer
   const visibleRef = useRef(true)
 
   // Dispose do WebGL vivo (se houver): devolve ao DOM renderer, repinta a tela
@@ -246,6 +263,7 @@ export function Terminal({
     const term = xtermRef.current
     if (!term || !term.element) return // exige term.open() já feito
     if (webglRef.current || webglFailedRef.current) return
+    if (rendererRef.current === 'dom') return
     if (modeRef.current === 'chat' || !visibleRef.current) return
     if (liveWebglCount >= MAX_WEBGL_INSTANCES) return
     void getGpuStatus().then((status) => {
@@ -287,6 +305,7 @@ export function Terminal({
   // só quando 40 linhas não bastam: menus altos (preview/wrap) ficavam cortados
   // e o parser fail-closava, empurrando o usuário pro terminal.
   function readTuiMenuFrom(t: Xterm): TuiMenu | null {
+    if (!caps.tuiMenus) return null
     return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiMenu, t.buffer.active.length)
   }
   function readTuiMenu(): TuiMenu | null {
@@ -307,6 +326,7 @@ export function Terminal({
   // janela adaptativa: a lista do /config e o preview do /theme passam de 40
   // linhas com facilidade.
   function readTuiPickerFrom(t: Xterm): TuiPicker | null {
+    if (!caps.tuiMenus) return null
     return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiPicker, t.buffer.active.length)
   }
   function readTuiPicker(): TuiPicker | null {
@@ -382,6 +402,25 @@ export function Terminal({
       void sessionsApi.unwatchActivity(ccSessionId)
     }
   }, [ccSessionId, exited])
+
+  // Codex não tem ccSessionId nem watch per-sessão: o status vem da PTY pelo
+  // batch global, já mesclado no liveSessions. Sem isto o HUD ficava em "Iniciando".
+  const liveFromPty = useAppStore((s) =>
+    caps.nativeTranscript ? null : (s.liveSessions.find((x) => x.id === session.id) ?? null),
+  )
+  useEffect(() => {
+    if (!liveFromPty || exited) return
+    setActivity({
+      ccSessionId: liveFromPty.ccSessionId,
+      status: liveFromPty.status,
+      name: null,
+      title: null,
+      lastText: null,
+      lastActivityAt: liveFromPty.lastActivityAt,
+      model: null,
+    })
+    statusRef.current = liveFromPty.status
+  }, [liveFromPty, exited])
 
   // Tick para manter o "há Xs" relativo atualizado sem novos broadcasts.
   useEffect(() => {
@@ -1095,7 +1134,8 @@ export function Terminal({
           exitCode={exitCode}
           error={error}
           mode={mode}
-          onToggleMode={onToggleMode}
+          onToggleMode={caps.chatView ? onToggleMode : undefined}
+          toggleDisabledReason={caps.chatView ? null : CLAUDE_ONLY_REASON}
           onMinimize={onClose}
           onEndSession={() => endSession(session.id)}
           // Sem ccSessionId não há transcript pra destilar (sessão sem 1ª
@@ -1254,11 +1294,11 @@ export function Terminal({
 
       {/* HUD fino de agentes (statusline): FORA do container relative, entre o
           terminal e o composer — visível nos dois modos (terminal e chat). */}
-      {!exited && <AgentHud activity={activity} now={now} />}
+      {!exited && composer === 'full' && <AgentHud activity={activity} now={now} />}
 
       {/* Resumo falado do último turno (modo voz) — faixa acima do composer,
           fora do fluxo de mensagens do chat (transcript é read-only). */}
-      {!exited && <SummaryChip ccSessionId={ccSessionId} />}
+      {!exited && composer === 'full' && <SummaryChip ccSessionId={ccSessionId} />}
 
       {!exited && (
         <Composer
@@ -1270,9 +1310,12 @@ export function Terminal({
           // PTY (write escreve no pty, fora do xterm display-only).
           onForwardKey={(seq) => write(seq)}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).
-          collapsible={mode === 'terminal'}
+          collapsible={mode === 'terminal' && composer === 'full'}
+          compact={composer === 'compact'}
           toolbar={
             <ComposerToolbar
+              compact={composer === 'compact'}
+              claudeOnlyReason={caps.tuiMenus ? null : CLAUDE_ONLY_REASON}
               activity={activity}
               canSwitch={canSwitchModel}
               pending={pending}

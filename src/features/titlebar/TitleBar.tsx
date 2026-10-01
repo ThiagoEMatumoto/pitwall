@@ -1,7 +1,11 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { windowApi } from '@/lib/ipc'
 import { PitwallLogo, type PitwallLogoState } from '@/features/brand'
-import { useWaitingCount } from '@/features/session-switcher/useWaitingCount'
+import { attentionSessionCount } from '@/features/session-switcher/attention-queue'
+import { AttentionQueueButton } from '@/features/session-switcher/AttentionPopover'
+import { cycleAttention, useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
+import { formatCombo, resolveCombo } from '@/lib/keybindings'
+import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { RecordingPill } from '@/features/meetings/RecordingPill'
 import { UsageWidget } from './UsageWidget'
 
@@ -18,7 +22,10 @@ function logoState(waiting: number): PitwallLogoState {
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false)
-  const waitingCount = useWaitingCount()
+  const queue = useAttentionQueue()
+  const waitingCount = attentionSessionCount(queue)
+  const overrides = useKeybindingsStore((s) => s.overrides)
+  const nextCombo = formatCombo(resolveCombo('attention.next', overrides))
 
   useEffect(() => {
     void windowApi.isMaximized().then(setMaximized)
@@ -27,6 +34,7 @@ export function TitleBar() {
 
   return (
     <header
+      data-titlebar
       className="flex h-10 shrink-0 items-center justify-between border-b pl-3.5 pr-1 select-none"
       style={{
         ...drag,
@@ -44,17 +52,23 @@ export function TitleBar() {
           Pitwall
         </span>
         {waitingCount > 0 && (
-          <span
-            className="rounded-full px-2.5 py-0.5 text-[10px] font-medium leading-none"
+          <button
+            type="button"
+            data-testid="titlebar-attention-badge"
+            onClick={() => cycleAttention(queue, 1)}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="rounded-full px-2.5 py-0.5 text-[10px] font-medium leading-none transition hover:brightness-125"
             style={{
+              ...noDrag,
               background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)',
               color: 'var(--color-accent)',
             }}
-            title={`${waitingCount} sessão(ões) no box — aguardando você`}
+            title={`${waitingCount} sessão(ões) no box — aguardando você. Pular para a próxima (${nextCombo})`}
           >
             {waitingCount} no box
-          </span>
+          </button>
         )}
+        <AttentionQueueButton queue={queue} />
         <RecordingPill />
       </div>
 

@@ -5,12 +5,16 @@ import { handoffsApi, projectsApi } from '@/lib/ipc'
 import { dispatchHandoffChild, handoffModeForPermission } from '@/features/handoffs/spawn-child'
 import { showToast } from '@/features/notifications/toast-store'
 import { useAppStore } from '@/store/appStore'
+import { useCardViewStore } from '@/features/session-canvas/card-view-store'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { SpawnSessionDialog } from './SpawnSessionDialog'
 import type { Project, Repo } from '../../../shared/types/ipc'
 
 interface Props {
   open: boolean
   onClose: () => void
+  // Repo já escolhido (o "+ Nova sessão" de uma lane do mapa): pula o passo 1.
+  initialRepoId?: string | null
 }
 
 interface RepoEntry {
@@ -26,9 +30,15 @@ function normalize(s: string): string {
     .replace(/[̀-ͯ]/g, '')
 }
 
+function isMapVisible(): boolean {
+  return (
+    useAppStore.getState().area === 'projects' && useProjectsViewStore.getState().view === 'map'
+  )
+}
+
 // Fluxo global de nova sessão (Ctrl+N): funciona sem pane ativo. Passo 1 escolhe
 // o repo (busca + teclado); passo 2 é o SpawnSessionDialog com os controles.
-export function NewSessionFlow({ open, onClose }: Props) {
+export function NewSessionFlow({ open, onClose, initialRepoId }: Props) {
   const openSession = useAppStore((s) => s.openSession)
   const [entries, setEntries] = useState<RepoEntry[]>([])
   const [query, setQuery] = useState('')
@@ -55,12 +65,15 @@ export function NewSessionFlow({ open, onClose }: Props) {
         }),
       )
       if (cancelled) return
-      setEntries(perProject.flat())
+      const all = perProject.flat()
+      setEntries(all)
+      const preset = initialRepoId ? all.find((e) => e.repo.id === initialRepoId) : undefined
+      if (preset) setChosen(preset)
     })()
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, initialRepoId])
 
   const filtered = useMemo(() => {
     if (!query) return entries
@@ -81,6 +94,8 @@ export function NewSessionFlow({ open, onClose }: Props) {
   }, [active])
 
   if (!open) return null
+  // Com repo pré-escolhido, nada de lista piscando enquanto os repos carregam.
+  if (initialRepoId && !chosen && entries.length === 0) return null
 
   // Passo 2: repo escolhido — o SpawnSessionDialog assume (Enter confirma rápido).
   if (chosen) {
@@ -89,6 +104,7 @@ export function NewSessionFlow({ open, onClose }: Props) {
         open
         onClose={onClose}
         repo={chosen.repo}
+        providerChoice
         onConfirmChild={({ task, motherSessionId, featureId, permission }) => {
           const repoId = chosen.repo.id
           // O main compõe o briefing (o MESMO que a filha despachada por MCP
@@ -120,22 +136,62 @@ export function NewSessionFlow({ open, onClose }: Props) {
           })()
           onClose()
         }}
-        onConfirm={(name, featureId, model, effort, permission, advisorModel, initialCommand) => {
-          void openSession(
-            chosen.repo,
-            chosen.project.name,
-            chosen.project.icon,
-            chosen.project.color,
-            undefined,
-            featureId,
-            name,
-            initialCommand,
-            model,
-            effort,
-            undefined,
-            permission,
-            advisorModel,
-          )
+        onConfirm={(
+          name,
+          featureId,
+          model,
+          effort,
+          permission,
+          advisorModel,
+          initialCommand,
+          provider,
+        ) => {
+          const { repo, project } = chosen
+          void (async () => {
+            try {
+              // Mapa na frente: a sessão nasce sem aba e vira cartão em modo
+              // terminal ali mesmo (uma aba tiraria o usuário do mapa).
+              if (isMapVisible()) {
+                const sessionId = await useAppStore.getState().spawnSessionBackground({
+                  repoId: repo.id,
+                  name,
+                  featureId,
+                  initialCommand,
+                  permissionMode: permission,
+                  model,
+                  effort,
+                  advisorModel,
+                  provider,
+                })
+                useCardViewStore.getState().requestTerminal(sessionId)
+                return
+              }
+              await openSession(
+                repo,
+                project.name,
+                project.icon,
+                project.color,
+                undefined,
+                featureId,
+                name,
+                initialCommand,
+                model,
+                effort,
+                undefined,
+                permission,
+                advisorModel,
+                provider,
+              )
+              // De fora de Projetos (Home, Features…) a aba nascia escondida:
+              // leva o usuário até ela (o dockview já ativa o painel novo).
+              useAppStore.getState().setArea('projects')
+            } catch (err) {
+              showToast({
+                title: 'Não foi possível abrir a sessão',
+                body: err instanceof Error ? err.message : String(err),
+              })
+            }
+          })()
           onClose()
         }}
       />
@@ -161,6 +217,7 @@ export function NewSessionFlow({ open, onClose }: Props) {
 
   return (
     <div
+      data-modal-overlay
       className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 pt-[12vh]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()

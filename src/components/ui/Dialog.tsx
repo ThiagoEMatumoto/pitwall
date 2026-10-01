@@ -41,6 +41,9 @@ export function Dialog({
 
   return createPortal(
     <div
+      // Marca de overlay modal: os atalhos globais da fila de atenção cedem a vez
+      // enquanto ele existe (attentionKeysBlocked).
+      data-modal-overlay
       // z-[1000] keeps the dialog above dockview layers (.dv-sash z-index 99,
       // --dv-overlay-z-index 999); the portal escapes any stacking context
       // created by ancestors of the dialog's render site.

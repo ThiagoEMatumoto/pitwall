@@ -31,6 +31,8 @@ import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
 import { SessionStrip } from '@/features/session-switcher/SessionStrip'
 import { SessionSwitcher } from '@/features/session-switcher/SessionSwitcher'
+import { QuickComposer } from '@/features/quick-composer/QuickComposer'
+import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
 import { UpdateToast } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
@@ -44,10 +46,37 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
-import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
+import {
+  CrewDock,
+  MAP_DOCK_HOST_ID,
+  useCrewDockWidth,
+  useHasCrew,
+} from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
+import { SessionMap } from '@/features/session-canvas/SessionMap'
+import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { focusActiveTerminal } from '@/features/session-canvas/focus-active-terminal'
+import { useLeaveMapOnSessionFocus } from '@/features/session-canvas/useLeaveMapOnSessionFocus'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useToastPlacement } from './useToastPlacement'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
+import { AttentionHud } from '@/features/session-switcher/AttentionHud'
+import {
+  attentionKeyAction,
+  attentionKeysBlocked,
+} from '@/features/session-switcher/attention-keys'
+import {
+  cycleAttention,
+  getAttentionQueue,
+  goBackSession,
+  useAttentionStore,
+} from '@/features/session-switcher/useAttentionQueue'
+import { useSessionMruStore } from '@/store/session-mru-store'
+import { liveKeyOf } from '@/features/sessions/live-key'
+import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
+import { ProviderBadge } from '@/features/sessions/ProviderBadge'
+import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
 
 interface PaneParams {
   pane: ActivePane
@@ -98,7 +127,8 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   )
 }
 
-// Aba do dockview com um dot na cor do projeto antes do título/close padrão.
+// Aba do dockview com um dot na cor do projeto e o badge do provider antes do
+// título/close padrão.
 // Reusa DockviewDefaultTab pra herdar o título dinâmico (api.title via setTitle) e o X.
 function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   // Mesma regra do TerminalPanel: a pane vem do STORE pelo id do painel
@@ -113,6 +143,8 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         className="ml-2 mr-1.5 h-2 w-2 shrink-0 rounded-full"
         style={{ background: color ?? 'var(--color-border)' }}
       />
+      {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
+      <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
       <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
@@ -157,10 +189,15 @@ export function AppShell() {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const overrides = useKeybindingsStore((s) => s.overrides)
+  const projectsView = useProjectsViewStore((s) => s.view)
+  useLeaveMapOnSessionFocus()
   const loadKeybindings = useKeybindingsStore((s) => s.load)
   // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
   // largura dele pra não cobrir os cards das filhas (e o input de resposta).
   const crewDockWidth = useCrewDockWidth()
+  const hasCrew = useHasCrew()
+  // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
+  const toastPlacement = useToastPlacement(crewDockWidth)
 
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
@@ -370,6 +407,26 @@ export function AppShell() {
     }
   }, [panes, ready, pendingLayout, gridRequest])
 
+  // Saiu do mapa (toggle, atalho ou aba aberta de dentro dele): o foco volta pro
+  // xterm do painel ativo. Dois frames: o overlay do mapa desmonta e, quando a
+  // saída foi por abrir uma aba, o dockview ativa o painel novo antes.
+  const prevProjectsView = useRef(projectsView)
+  useEffect(() => {
+    const leftMap = prevProjectsView.current === 'map' && projectsView === 'terminals'
+    prevProjectsView.current = projectsView
+    if (!leftMap || area !== 'projects') return
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        focusActiveTerminal(apiRef.current?.activePanel?.view.content.element)
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
+  }, [projectsView, area])
+
   // Foca um painel existente quando a lista de sessões pede (clique simples). Roda
   // após a reconciliação garantir que o painel existe.
   useEffect(() => {
@@ -457,9 +514,42 @@ export function AppShell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Fila de atenção (Alt+A / Alt+Shift+A / Alt+Q). stopPropagation além do
+      // preventDefault: sem ele o xterm ainda recebe o keydown e manda ESC+a pro PTY.
+      // Autorepeat é engolido sem andar: segurar a tecla não dispara uma rajada de pulos.
+      const attention = attentionKeyAction(e, overrides, useAppStore.getState().area)
+      if (attention && !attentionKeysBlocked()) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        if (attention === 'back') goBackSession()
+        else cycleAttention(getAttentionQueue(), attention === 'next' ? 1 : -1)
+        return
+      }
+      // Alt+,/Alt+.: anda pelas relações da sessão (mãe → irmãs → filhas; bastão ao
+      // lado). Mesmo contrato do Alt+A: engole antes do xterm e cede a overlays; em
+      // campo de texto do app a tecla fica pro campo (sessionLinkKeyAction).
+      const linkStep = sessionLinkKeyAction(e, overrides, useAppStore.getState().area)
+      if (linkStep && !attentionKeysBlocked()) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        stepSessionLink(linkStep === 'next' ? 1 : -1)
+        return
+      }
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
         e.preventDefault()
         setPaletteOpen((v) => !v)
+        return
+      }
+      // Ctrl+Shift+Enter: compositor flutuante (manda pra qualquer sessão viva).
+      // stopPropagation: no composer da aba, Ctrl+Enter enviaria o rascunho.
+      if (matchCombo(e, resolveCombo('quickComposer.open', overrides))) {
+        e.preventDefault()
+        e.stopPropagation()
+        const qc = useQuickComposerStore.getState()
+        if (qc.open) qc.close()
+        else qc.openFor(null)
         return
       }
       // Ctrl+Shift+A: abre o seletor de sessões (overlay). Não troca de área —
@@ -482,7 +572,7 @@ export function AppShell() {
       // os cards e Espaço abre o peek. Sem equipe não há o que focar: a tecla
       // segue pro xterm em vez de abrir um painel vazio.
       if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
-        if (crewDockWidth === 0) return
+        if (!hasCrew) return
         e.preventDefault()
         useCrewDockStore.getState().requestFocus()
         return
@@ -495,7 +585,7 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [overrides, toggleFiles, crewDockWidth])
+  }, [overrides, toggleFiles, hasCrew])
 
   // Abre Configurações sob demanda (ex: error state do Terminal, renderizado pelo
   // dockview fora desta árvore — ver requestOpenSettings).
@@ -511,10 +601,20 @@ export function AppShell() {
   // da palette.
   const activePane = area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
   const activeCcSessionId = activePane?.session.ccSessionId ?? null
+  // Fila de atenção, Alt+,/. e MRU casam pela chave das sessões vivas, que no Codex
+  // (sem id nativo) é o sessions.id — com o cc puro a aba Codex nunca seria a atual.
+  const activeLiveKey = activePane
+    ? liveKeyOf(activePane.session.id, activeCcSessionId, activePane.session.provider)
+    : null
 
   useEffect(() => {
     sessionsApi.setRendererFocus(activeCcSessionId)
   }, [activeCcSessionId])
+
+  useEffect(() => {
+    useAttentionStore.getState().setActiveCc(activeLiveKey)
+    if (activeLiveKey) useSessionMruStore.getState().touch(activeLiveKey)
+  }, [activeLiveKey])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot
   // + stream global no mount; cleanup no unmount (StrictMode-safe no store).
@@ -763,11 +863,18 @@ export function AppShell() {
           <div className="min-w-0 flex-1">
             <SessionStrip onOpenSwitcher={() => setSwitcherOpen(true)} />
           </div>
+          <ProjectsViewToggle />
         </div>
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
           <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && <EmptyMain />}
+            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
+            {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
+            {area === 'projects' && projectsView === 'map' && (
+              <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
+                <SessionMap />
+              </div>
+            )}
             <DockviewReact
               className="absolute inset-0"
               theme={themeAbyss}
@@ -788,6 +895,8 @@ export function AppShell() {
       {/* Quick look da filha em foco: overlay por cima de tudo, no padrão do
           SessionSwitcher (o dockview segue montado por trás, nenhuma pane nasce). */}
       <CrewPeek />
+      <AttentionHud />
+      <SessionLinkHud />
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HandoffApprovalDialog />
@@ -798,10 +907,12 @@ export function AppShell() {
         activeCcSessionId={activeCcSessionId}
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <QuickComposer />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
       <div
-        className="pointer-events-none fixed bottom-4 z-50 flex flex-col items-end gap-2"
-        style={{ right: crewDockWidth + 16 }}
+        data-testid="toast-stack"
+        className="pointer-events-none fixed flex flex-col items-end gap-2"
+        style={toastPlacement}
       >
         <UpdateToast />
         <NotificationToast />

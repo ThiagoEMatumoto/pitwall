@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
@@ -6,8 +6,11 @@ import { launchApp } from '../driver/launch'
 import { createFakeHome } from '../driver/fake-home'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
+import { PERMISSION_FIXTURE } from './attention-reason'
 
-// Evidência visual dos 3 estados do Crew Dock (colapsado / auto-reveal / peek).
+// Evidência visual dos estados do Crew Dock (colapsado / sinal no rail / aberto
+// pelo atalho 'Focar a equipe' / peek). Desde o 1994f7d o dock NÃO abre sozinho
+// quando uma filha passa a esperar: o sinal fica no rail de 40px.
 // O binário `claude` é substituído por um stub (pref claude_command) que só
 // escreve os artefatos de disco que o app observa — nenhuma API é chamada e
 // nenhum repo é modificado. HOME é redirecionado para um fake-home, então
@@ -16,6 +19,57 @@ import { queryDb } from '../driver/inspect'
 const require = createRequire(import.meta.url)
 const SCRATCH = process.env.CREW_SCRATCH!
 const fake = createFakeHome({ parentDir: SCRATCH })
+
+// "Esperando você" exige a TELA de um menu (status 'waiting' com o prompt ocioso
+// é fim de turno — "pronto"). A filha mauricio-* roda um stub que trabalha até o
+// gatilho existir e então desenha o menu real de permissão (fixture 2.1.286).
+const WAIT_TRIGGER = join(fake.root, 'mauricio-wait')
+function shq(v: string): string {
+  return `'${v.replaceAll("'", `'\\''`)}'`
+}
+const waitingStub = join(fake.root, 'bin', 'crew-waiting-claude.sh')
+writeFileSync(
+  waitingStub,
+  `#!/usr/bin/env bash
+export LC_ALL=C
+session_id=''; name=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session-id|--resume) session_id="$2"; shift 2 ;;
+    -n|--name) name="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+write_status() {
+  local now; now=$(date +%s%3N)
+  printf '{"pid":%s,"sessionId":"%s","cwd":"%s","status":"%s","name":"%s","startedAt":%s,"updatedAt":%s}' \\
+    "$$" "$session_id" "$PWD" "$1" "$name" "$now" "$now" > ${shq(fake.sessionsDir)}/$$.json
+}
+write_status busy
+stty raw -echo
+printf 'trabalhando\\r\\n'
+while [ ! -f ${shq(WAIT_TRIGGER)} ]; do sleep 0.2; done
+cat ${shq(PERMISSION_FIXTURE)}
+write_status waiting
+while IFS= read -r -s -n1 -d '' _; do :; done
+`,
+)
+const dispatchStub = join(fake.root, 'bin', 'crew-dispatch-claude.sh')
+writeFileSync(
+  dispatchStub,
+  `#!/usr/bin/env bash
+name=''
+args=("$@")
+for ((i=0; i<\${#args[@]}; i++)); do
+  case "\${args[$i]}" in -n|--name) name="\${args[$((i+1))]}" ;; esac
+done
+case "$name" in
+  mauricio*) exec ${shq(waitingStub)} "$@" ;;
+  *) exec ${shq(fake.fakeCliPath('claude'))} "$@" ;;
+esac
+`,
+)
+for (const p of [waitingStub, dispatchStub]) chmodSync(p, 0o755)
 
 interface Seed {
   id: string
@@ -69,8 +123,11 @@ db.run(
   "UPDATE handoffs SET status = 'done' WHERE status IN ('pending','approved','running','needs_input')",
 )
 db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
-  fake.fakeCliPath('claude'),
+  dispatchStub,
 ])
+// O cenário aperta Ctrl+J (default de crew.focus): um remapeamento do perfil real
+// deixaria o dock fechado e o cenário esperando à toa.
+db.run("DELETE FROM app_prefs WHERE key = 'keybindings'")
 
 // Sem restaurar o workspace do perfil real: o restore re-spawnaria as sessões do
 // usuário (panes de terminal) e poluiria a evidência do dock.
@@ -188,31 +245,41 @@ try {
   console.log('[crew] estado 1 — dots:', JSON.stringify(await dotTitles()))
   await page.screenshot({ path: join(SCRATCH, 'crew-1-colapsado.png') })
 
-  // ---------- auto-reveal: mauricio passa a esperar ----------
+  // ---------- sinal no rail: mauricio passa a esperar ----------
   const files = fake.readSessionFiles()
   console.log('[crew] session files:', files.map((f) => `${f.data.name}=${f.data.status}`).join(' | '))
   const waitingOne = files.find((f) => String(f.data.name ?? '').startsWith('mauricio'))
   if (!waitingOne) throw new Error('sessão da mauricio não encontrada no fake-home')
-  fake.setStatus(waitingOne.data.pid, 'waiting')
-  console.log('[crew] flip para waiting em', waitingOne.file)
+  writeFileSync(WAIT_TRIGGER, '')
+  console.log('[crew] mauricio passa a pedir permissão:', waitingOne.file)
 
-  await waitFor('dock auto-revelado', async () => {
-    const expanded = await dock.getAttribute('data-expanded')
-    return expanded === 'true'
-  }, 60_000)
+  await waitFor('rail sinaliza quem espera', async () =>
+    (await dotTitles()).some((t) => t.includes('esperando você')),
+  60_000)
   await page.waitForTimeout(1500)
+  if ((await dock.getAttribute('data-expanded')) === 'true') {
+    throw new Error('dock abriu sozinho — desde o 1994f7d só abre por clique ou atalho')
+  }
+  console.log('[crew] estado 2 — rail:', JSON.stringify(await dotTitles()))
+  await page.screenshot({ path: join(SCRATCH, 'crew-2-sinal-no-rail.png') })
 
+  // ---------- 'Focar a equipe' (crew.focus, default Ctrl+J) abre o dock ----------
+  await page.keyboard.press('Control+j')
+  await waitFor('dock aberto pelo atalho', async () =>
+    (await dock.getAttribute('data-expanded')) === 'true',
+  10_000)
+  await page.waitForTimeout(1000)
   const w2 = await dock.evaluate((el) => el.getBoundingClientRect().width)
-  console.log('[crew] estado 2 — largura:', w2, 'expanded:', await dock.getAttribute('data-expanded'))
-  console.log('[crew] estado 2 — header:', await dock.locator('header').innerText())
-  await page.screenshot({ path: join(SCRATCH, 'crew-2-autoreveal.png') })
+  console.log('[crew] estado 3 — largura:', w2, 'expanded:', await dock.getAttribute('data-expanded'))
+  console.log('[crew] estado 3 — header:', await dock.locator('header').innerText())
+  await page.screenshot({ path: join(SCRATCH, 'crew-3-focar-equipe.png') })
 
   // ---------- peek: card da filha em espera, sem abrir pane ----------
   const card = dock.locator('[data-testid="handoff-card"]').first()
-  console.log('[crew] estado 3 — card:\n' + (await card.innerText()))
+  console.log('[crew] estado 4 — card:\n' + (await card.innerText()))
   const panes = await page.locator('.dv-tab, .dv-view').count()
   console.log('[crew] panes dockview abertos (nenhum terminal aberto por este cenário):', panes)
-  await card.screenshot({ path: join(SCRATCH, 'crew-3-peek.png') })
+  await card.screenshot({ path: join(SCRATCH, 'crew-4-peek.png') })
 
   console.log('[crew] --- console errors/warnings ---')
   console.log(consoleErrors.length ? consoleErrors.join('\n') : 'nenhum')

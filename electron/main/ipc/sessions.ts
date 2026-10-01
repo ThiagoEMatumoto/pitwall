@@ -1,10 +1,12 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
+import { z } from 'zod'
 import { getDb } from '../services/db'
+import { inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
@@ -25,8 +27,13 @@ import {
   deriveEnrichment,
   isPidAlive,
   mapStatus,
+  attentionReasonForPty,
 } from '../services/session-activity'
+import { livePtySessionInfo } from './live-session-pty'
+import { buildSessionEndpoint } from '../services/mcp/session-identity'
+import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { setRendererFocusedSession } from '../services/notifications'
+import { broadcast } from '../services/notify'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   mcpClientConfigPath,
@@ -42,8 +49,12 @@ import {
   resolveAdvisor,
   permissionModeForHandoffMode,
   HANDOFF_CHILD_SETTINGS_JSON,
+  assertAutonomousSpawnGuarded,
+  resolveCodexModel,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
+import type { AgentProvider, LaunchOpts } from '../services/providers/types'
 import {
   buildImageFilename,
   isImageTempFile,
@@ -60,6 +71,8 @@ import type {
   ChatTranscript,
   Handoff,
   HandoffStatus,
+  AgentProviderId,
+  AttentionRespondInput,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -72,6 +85,7 @@ interface SessionRow {
   status: 'running' | 'exited' | 'crashed' | 'closed_by_user'
   started_at: number
   ended_at: number | null
+  provider?: AgentProviderId
 }
 
 interface RepoPathRow {
@@ -79,12 +93,22 @@ interface RepoPathRow {
   label: string
 }
 
-// O name é input do usuário e entra na linha de `zsh -c '<innerCmd>'`.
-// Aspas simples POSIX impedem qualquer interpretação pelo shell; o único caractere
-// perigoso dentro de '...' é a própria aspa simples, fechada com '\'' e reaberta.
-function shquote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'"
-}
+// O renderer só manda a intenção; as teclas saem do menu fresco no main.
+const attentionActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('select'), optionIndex: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal('other'),
+    optionIndex: z.number().int().nonnegative(),
+    text: z.string().min(1).max(4000),
+  }),
+])
+const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
+  sessionId: z.string().min(1),
+  fingerprint: z.string().min(1),
+  menuSeq: z.number().int().positive(),
+  action: attentionActionSchema,
+})
+const attentionSessionSchema = z.string().min(1)
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -104,15 +128,21 @@ const toSession = (row: SessionRow): Session => ({
   status: row.status,
   startedAt: row.started_at,
   endedAt: row.ended_at,
+  provider: row.provider,
 })
 
-const CLAUDE_COMMAND_KEY = 'claude_command'
+// Default de todo spawn sem provider explícito, e o ÚNICO dos caminhos de
+// resume/relink: só o claude tem id nativo para retomar.
+const SESSION_PROVIDER: AgentProviderId = 'claude'
 
-function resolveClaudeCommand(): string {
-  const row = getDb()
-    .prepare('SELECT value FROM app_prefs WHERE key = ?')
-    .get(CLAUDE_COMMAND_KEY) as { value: string } | undefined
-  return row?.value?.trim() || 'claude'
+function readPref(key: string): string | undefined {
+  const row = getDb().prepare('SELECT value FROM app_prefs WHERE key = ?').get(key) as
+    { value: string } | undefined
+  return row?.value?.trim()
+}
+
+function resolveAgentCommand(): string {
+  return getProvider(SESSION_PROVIDER).resolveCommand(readPref)
 }
 
 const SCRATCH_DIR_KEY = 'scratch_dir'
@@ -144,9 +174,8 @@ function resolveScratchDir(): string {
   return dir
 }
 
-// B4: conecta a sessão ao MCP server do Pitwall via --mcp-config. Sem
-// --strict-mcp-config: os servers de user/projeto do claude continuam valendo.
-// Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
+// B4: conecta a sessão ao MCP server do Pitwall (o formato do argumento é do
+// provider — mcpInject). Se o server não subiu (EADDRINUSE → getMcpRuntime() null), não injeta nada —
 // sessão sobe normal.
 //
 // Com `internalSessionId` (o sessions.id que ESTA sessão vai receber) escrevemos
@@ -164,12 +193,28 @@ function mcpConfigArg(internalSessionId: string | null): string {
         { url: runtime.url, token: runtime.token, pid: process.pid },
         internalSessionId,
       )
-      return ` --mcp-config ${shquote(path)}`
+      return getProvider(SESSION_PROVIDER).mcpInject({ configPath: path })
     } catch (err) {
       console.error('[sessions] per-session mcp config failed, using the global one:', err)
     }
   }
-  return ` --mcp-config ${shquote(mcpClientConfigPath())}`
+  return getProvider(SESSION_PROVIDER).mcpInject({ configPath: mcpClientConfigPath() })
+}
+
+// Provider que recebe o endpoint direto (Codex): URL com o carimbo da sessão na
+// linha de comando, bearer pelo env da PTY. Sem arquivo de config por sessão.
+function mcpLaunch(
+  provider: AgentProvider,
+  internalSessionId: string,
+): { arg: string; env: Record<string, string> } {
+  if (provider.mcpVia === 'config-file') return { arg: mcpConfigArg(internalSessionId), env: {} }
+  const runtime = getMcpRuntime()
+  if (!runtime) return { arg: '', env: {} }
+  const { url } = buildSessionEndpoint(runtime, internalSessionId)
+  return {
+    arg: provider.mcpInject({ configPath: '', url }),
+    env: provider.mcpEnv?.({ token: runtime.token }) ?? {},
+  }
 }
 
 // O claude vive em ~/.local/bin e o env do Electron GUI não herda o PATH do rc.
@@ -181,12 +226,6 @@ function loginShellSpawn(innerCmd: string): { command: string; args: string[] } 
   }
   const shell = process.env.SHELL || '/usr/bin/zsh'
   return { command: shell, args: ['-l', '-i', '-c', `exec ${innerCmd}`] }
-}
-
-function broadcast(channel: string, payload: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, payload)
-  }
 }
 
 // Escreve um arquivo temporário em <userData>/tmp/<prefix>-<ts>.md (mkdir
@@ -261,6 +300,20 @@ export function sweepOrphanImageTemps(): void {
 // (arquitetura do repo + contexto da feature + texto livre) e grava o arquivo
 // temporário. ÚNICO caminho — spawn e resume passam por aqui, pra nunca mais
 // divergirem. NUNCA bloqueia o spawn: qualquer falha vira sessão sem o bloco.
+// Mesmo conteúdo do arquivo, como texto (provider sem flag de arquivo).
+function buildSessionSystemPromptOrNull(opts: {
+  repoId?: string | null
+  featureId?: string | null
+  systemPromptText?: string | null
+}): string | null {
+  try {
+    return buildSessionSystemPrompt(opts) || null
+  } catch (err) {
+    console.error('[sessions] system-prompt build failed:', err)
+    return null
+  }
+}
+
 function writeSessionSystemPromptFile(opts: {
   repoId?: string | null
   featureId?: string | null
@@ -297,65 +350,13 @@ function resolveFeatureWorktree(featureId: string | null, repoId: string | null)
   }
 }
 
-// Monta a string do innerCmd do spawn novo. PURA: sem I/O — recebe os pedaços já
-// resolvidos (claudeCmd, sessionId já validado, name, mcpConfigArg pronto, modelo
-// já validado contra whitelist ou null, e o path opcional do system-prompt-file
-// já escrito). Mantém a ordem das flags do handler original.
-//
-// `initialPrompt` (opcional): prompt posicional entregue no COMANDO de spawn, não
-// injetado no PTY. `claude "<prompt>"` em modo interativo faz auto-submit do 1º
-// turno — é o caminho confiável pra background (o kickoff colado no PTY é
-// descartado quando ninguém dá resize no TUI). Como posicional, TEM que ser o
-// último token, depois de todas as flags.
-export function buildSpawnInnerCmd(parts: {
-  claudeCmd: string
-  sessionId: string
-  // true = o sessionId acima é o cc_session_id de uma sessão EXISTENTE e o
-  // comando abre com `--resume <id>` em vez de `--session-id <id>`. Existe para
-  // o relance da filha reusar esta montagem — sem isto o resume montaria as
-  // flags à mão e voltaria a esquecer permission-mode/denylist.
-  resume?: boolean
-  name: string
-  mcpConfigArg: string
-  model: string | null
-  effort?: string | null
-  advisorModel?: string | null
-  systemPromptFilePath: string | null
-  permissionMode?: string | null
-  disallowedTools?: string[] | null
-  // JSON inline pro `--settings` (a CLI aceita file OU json). Usado só pela filha
-  // de handoff (crossSessionInbound=accept) — por sessão, nunca global.
-  settingsJson?: string | null
-  initialPrompt?: string | null
-}): string {
-  const idFlag = parts.resume ? '--resume' : '--session-id'
-  let innerCmd = `${parts.claudeCmd} ${idFlag} ${parts.sessionId} -n ${shquote(parts.name)}${parts.mcpConfigArg}`
-  if (parts.model) {
-    innerCmd += ` --model ${shquote(parts.model)}`
-  }
-  if (parts.effort) {
-    innerCmd += ` --effort ${shquote(parts.effort)}`
-  }
-  if (parts.advisorModel) {
-    innerCmd += ` --advisor ${shquote(parts.advisorModel)}`
-  }
-  if (parts.permissionMode) {
-    innerCmd += ` --permission-mode ${shquote(parts.permissionMode)}`
-  }
-  if (parts.disallowedTools && parts.disallowedTools.length > 0) {
-    innerCmd += ` --disallowedTools ${parts.disallowedTools.map(shquote).join(' ')}`
-  }
-  if (parts.settingsJson) {
-    innerCmd += ` --settings ${shquote(parts.settingsJson)}`
-  }
-  if (parts.systemPromptFilePath) {
-    innerCmd += ` --append-system-prompt-file ${shquote(parts.systemPromptFilePath)}`
-  }
-  // Posicional por último: `claude [flags] "<prompt>"` auto-submete o 1º turno.
-  if (parts.initialPrompt?.trim()) {
-    innerCmd += ` ${shquote(parts.initialPrompt.trim())}`
-  }
-  return innerCmd
+// Compat: a montagem mora em providers/claude.ts (buildLaunch). Mantido com o
+// nome/shape antigos (`claudeCmd`) porque sessions.test.ts e o histórico o usam.
+export function buildSpawnInnerCmd(
+  parts: Omit<LaunchOpts, 'command'> & { claudeCmd: string },
+): string {
+  const { claudeCmd, ...rest } = parts
+  return getProvider(SESSION_PROVIDER).buildLaunch({ command: claudeCmd, ...rest })
 }
 
 // Reexport: mantém a superfície pública de './sessions' estável (sessions.test.ts
@@ -408,7 +409,8 @@ function startSession(opts: {
   // spawn (é o caso do mcp-config por sessão: o arquivo tem o id no nome e no
   // endpoint). Omitido → gera aqui, como antes.
   id?: string
-  ccSessionId: string
+  // null = provider sem id nativo (Codex): a sessão vive só pelo sessions.id.
+  ccSessionId: string | null
   repoId: string | null
   cwd: string
   innerCmd: string
@@ -416,7 +418,10 @@ function startSession(opts: {
   initialCommand?: string
   cols?: number
   rows?: number
+  provider?: AgentProvider
+  env?: Record<string, string>
 }): Session {
+  const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
   const id = opts.id ?? randomUUID()
   const row: SessionRow = {
@@ -429,11 +434,12 @@ function startSession(opts: {
     status: 'running',
     started_at: Date.now(),
     ended_at: null,
+    provider: provider.id,
   }
   db.prepare(
     `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.repo_id,
@@ -444,7 +450,9 @@ function startSession(opts: {
     row.started_at,
     row.ended_at,
     opts.featureId ?? null,
+    row.provider,
   )
+  if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
   try {
     const { command, args } = loginShellSpawn(opts.innerCmd)
@@ -455,7 +463,8 @@ function startSession(opts: {
       cwd: opts.cwd,
       cols: opts.cols,
       rows: opts.rows,
-      env: sessionSpawnEnv(),
+      env: { ...sessionSpawnEnv(), ...opts.env },
+      sampleActivity: !provider.supports.nativeTranscript,
     })
   } catch (err) {
     db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
@@ -464,6 +473,9 @@ function startSession(opts: {
     )
     throw err
   }
+
+  // Sem índice nativo de status (~/.claude/sessions), o status vem da PTY.
+  if (!provider.supports.nativeTranscript) sessionActivityService.trackPty(row.id)
 
   if (opts.initialCommand) {
     injectInitialCommandOnFirstData(row.id, opts.initialCommand)
@@ -506,33 +518,51 @@ export function spawnSession(input: SpawnSessionInput): Session {
   const name = input.name?.trim() || defaultName
 
   if (!UUID_RE.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`)
-  const claudeCmd = resolveClaudeCommand()
+  // Id desconhecido lança aqui, antes de qualquer efeito (linha no banco, PTY).
+  const provider = getProvider(input.provider)
+  const command = provider.resolveCommand(readPref)
+
+  // Permission mode validado contra a whitelist; em modo autônomo aplica SEMPRE o
+  // denylist destrutivo canônico (o renderer não consegue enfraquecê-lo). Filha
+  // de handoff num provider sem trava equivalente é recusada antes do spawn.
+  const permissionMode = resolvePermissionMode(input.permissionMode)
+  assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
+  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
 
   // Defesa em profundidade: só passa adiante o valor que estiver na whitelist.
-  const model = resolveModel(input.model)
+  const model =
+    provider.id === 'claude' ? resolveModel(input.model) : resolveCodexModel(input.model)
   const effort = resolveEffort(input.effort)
   const advisorModel = resolveAdvisor(input.advisorModel)
 
-  const systemPromptFilePath = writeSessionSystemPromptFile({
-    repoId,
-    featureId: input.featureId,
-    systemPromptText: input.systemPromptText,
-  })
-
-  // Permission mode validado contra a whitelist; em modo autônomo aplica SEMPRE o
-  // denylist destrutivo canônico (o renderer não consegue enfraquecê-lo).
-  const permissionMode = resolvePermissionMode(input.permissionMode)
-  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
+  // Provider com arquivo de system-prompt (claude) recebe o path; os outros, o texto.
+  const systemPromptFilePath =
+    provider.id === 'claude'
+      ? writeSessionSystemPromptFile({
+          repoId,
+          featureId: input.featureId,
+          systemPromptText: input.systemPromptText,
+        })
+      : null
+  const systemPromptText =
+    provider.id === 'claude'
+      ? null
+      : buildSessionSystemPromptOrNull({
+          repoId,
+          featureId: input.featureId,
+          systemPromptText: input.systemPromptText,
+        })
 
   // Id INTERNO (sessions.id) gerado aqui, antes do innerCmd: é ele que carimba
   // a identidade da sessão no mcp-config, e o mesmo valor vai pro startSession.
   const internalSessionId = randomUUID()
+  const mcp = mcpLaunch(provider, internalSessionId)
 
-  const innerCmd = buildSpawnInnerCmd({
-    claudeCmd,
+  const innerCmd = provider.buildLaunch({
+    command,
     sessionId,
     name,
-    mcpConfigArg: mcpConfigArg(internalSessionId),
+    mcpConfigArg: mcp.arg,
     model,
     effort,
     advisorModel,
@@ -543,11 +573,13 @@ export function spawnSession(input: SpawnSessionInput): Session {
     // main (o renderer não escolhe settings — só sinaliza que é filha).
     settingsJson: input.handoffChild ? HANDOFF_CHILD_SETTINGS_JSON : null,
     initialPrompt: input.initialPrompt,
+    systemPromptText,
   })
 
   const session = startSession({
     id: internalSessionId,
-    ccSessionId: sessionId,
+    // O --session-id só existe no claude; sem id nativo a linha nasce sem ele.
+    ccSessionId: provider.supports.resume ? sessionId : null,
     repoId,
     cwd,
     innerCmd,
@@ -555,7 +587,16 @@ export function spawnSession(input: SpawnSessionInput): Session {
     initialCommand: input.initialCommand,
     cols: input.cols,
     rows: input.rows,
+    provider,
+    env: mcp.env,
   })
+
+  // Sem `-n` na CLI (Codex): o nome só existe aqui, e é dele que a lista viva
+  // e o mapa tiram o rótulo.
+  if (!provider.supports.nativeTranscript && !input.handoffChild) {
+    db.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(name, session.id)
+    return { ...session, title: name }
+  }
 
   // O alias da filha é o ENDEREÇO do peer (SendMessage.to == o `-n <name>`).
   // Espelha em sessions.title como 'manual' pra o rename automático do Claude
@@ -597,7 +638,7 @@ export interface ResumeHandoffChildResult {
 // sessions.id via markRunning.
 //
 // Vive aqui (não em services/) porque reusa os helpers de spawn deste módulo —
-// resolveClaudeCommand, mcpConfigArg, startSession, findTranscriptPath,
+// resolveAgentCommand, mcpConfigArg, startSession, findTranscriptPath,
 // injectInitialCommandOnFirstData. Mover o helper pra fora arrastaria todos eles
 // (e o ciclo com mcp/server) sem ganho nenhum.
 export function resumeHandoffChild(
@@ -627,7 +668,7 @@ export function resumeHandoffChild(
   // fixado no spawn — é o endereço do peer e tem que sobreviver ao resume.
   const childRow = db
     .prepare(
-      `SELECT id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at
+      `SELECT id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at, provider
          FROM sessions WHERE id = ?`,
     )
     .get(handoff.childSessionId) as SessionRow | undefined
@@ -662,7 +703,7 @@ export function resumeHandoffChild(
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
   const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
-  const claudeCmd = resolveClaudeCommand()
+  const command = resolveAgentCommand()
   // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
   const internalSessionId = randomUUID()
 
@@ -675,8 +716,8 @@ export function resumeHandoffChild(
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
-  const innerCmd = buildSpawnInnerCmd({
-    claudeCmd,
+  const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+    command,
     sessionId: ccSessionId,
     resume: true,
     name,
@@ -751,8 +792,19 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 
 let listenersAttached = false
 
+// Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
+// provider com menus na TUI ganha o espelho headless do tui-menu-watch.
+function screenWatchTarget(ptyId: string): { ccSessionId: string } | null {
+  const row = getDb()
+    .prepare('SELECT cc_session_id, provider FROM sessions WHERE id = ?')
+    .get(ptyId) as { cc_session_id: string | null; provider: AgentProviderId | null } | undefined
+  if (!row?.cc_session_id || !providerSupportsTuiMenus(row.provider)) return null
+  return { ccSessionId: row.cc_session_id }
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
+    tuiMenuWatch.attach(ptyManager, screenWatchTarget)
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
@@ -862,6 +914,7 @@ export function registerSessionIpc(): void {
       systemPromptText: input.systemPromptText,
       permissionMode: (input.permissionMode ?? undefined) as SpawnSessionInput['permissionMode'],
       handoffChild: true,
+      provider: input.provider,
     }),
   )
 
@@ -924,11 +977,11 @@ export function registerSessionIpc(): void {
     const transcript = findTranscriptPath(input.ccSessionId)
     const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
 
-    const claudeCmd = resolveClaudeCommand()
+    const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
-    const innerCmd = buildSpawnInnerCmd({
-      claudeCmd,
+    const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+      command,
       sessionId: input.ccSessionId,
       resume: true,
       name,
@@ -1097,6 +1150,7 @@ export function registerSessionIpc(): void {
         .prepare(
           `SELECT
              s.cc_session_id AS cc_session_id,
+             s.provider AS provider,
              s.title AS session_title,
              s.title_source AS session_title_source,
              r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
@@ -1106,14 +1160,27 @@ export function registerSessionIpc(): void {
            FROM sessions s
            LEFT JOIN repos r ON r.id = s.repo_id
            LEFT JOIN projects p ON p.id = r.project_id
-           WHERE s.id = ? AND s.cc_session_id IS NOT NULL`,
+           WHERE s.id = ?`,
         )
-        .get(sessionId) as LiveSessionJoinRow | undefined
+        .get(sessionId) as
+        | (Omit<LiveSessionJoinRow, 'cc_session_id'> & {
+            cc_session_id: string | null
+            provider: AgentProviderId | null
+          })
+        | undefined
 
       if (!row) continue
+      // Sem id nativo (Codex): status pela PTY, chaveada pelo sessions.id.
+      if (!row.cc_session_id) {
+        out.push(livePtySessionInfo(sessionId, row))
+        continue
+      }
       const ccSessionId = row.cc_session_id
 
-      const { repo, projectName, projectIcon, projectColor } = mapLiveSessionRepo(row)
+      const { repo, projectName, projectIcon, projectColor } = mapLiveSessionRepo({
+        ...row,
+        cc_session_id: ccSessionId,
+      })
 
       const transcript = findTranscriptPath(ccSessionId)
       const indexed = liveIndex.get(ccSessionId)
@@ -1166,6 +1233,9 @@ export function registerSessionIpc(): void {
         tokens,
         isResumable: transcript !== null,
         titleSource: row.session_title_source,
+        attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
+        cwd: isLive ? indexed!.cwd : null,
+        provider: row.provider ?? 'claude',
       })
     }
 
@@ -1239,6 +1309,16 @@ export function registerSessionIpc(): void {
     return out
   })
 
+  // Resposta inline da fila de atenção (sem abrir o terminal): o main re-parseia
+  // a tela e recusa se o menu mudou desde o que o usuário viu.
+  ipcMain.handle('sessions:attention-menu', (_e, sessionId: unknown) =>
+    tuiMenuWatch.snapshot(attentionSessionSchema.parse(sessionId)),
+  )
+  ipcMain.handle('sessions:attention-respond', (_e, input: unknown) =>
+    tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
+  )
+  ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)
   })
@@ -1273,6 +1353,7 @@ export function registerSessionIpc(): void {
     getDb()
       .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
       .run(trimmed.length > 0 ? trimmed : null, trimmed.length > 0 ? 'manual' : null, sessionId)
+    broadcast('session:renamed', { sessionId, title: trimmed.length > 0 ? trimmed : null })
   })
 
   // Vincular/trocar a frente de uma sessão JÁ EM CURSO — o momento em que a

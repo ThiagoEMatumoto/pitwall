@@ -3,14 +3,19 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
 import { launchApp } from '../driver/launch'
+import { createFakeHome } from '../driver/fake-home'
 import { captureLogs, screenshot } from '../driver/capture'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
 
 const require = createRequire(import.meta.url)
 
+// HOME falso + claude stub: o pending semeado é despachado sozinho (gate off) e
+// sobe o stub, nunca o claude real.
+const fake = createFakeHome()
+
 // 1ª subida: roda migrations na cópia (cria a tabela `handoffs`).
-const first = await launchApp()
+const first = await launchApp({ env: fake.env })
 await first.app.close()
 const migrated = first.userDataCopy
 
@@ -41,13 +46,16 @@ for (const [i, s] of seeds.entries()) {
     [s.id, target.id, s.task, s.task, s.status, s.summary, s.error, now - i * 1000, now - i * 1000],
   )
 }
+db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
+  fake.fakeCliPath('claude'),
+])
 writeFileSync(join(migrated, 'app.db'), Buffer.from(db.export()))
 db.close()
 console.log('[inbox]', seeds.length, 'handoffs seedados em', migrated)
 
-// 2ª subida: aponta pra cópia migrada+seedada.
-process.env.CM_REAL_USERDATA = migrated
-const { app, page } = await launchApp()
+// 2ª subida NA MESMA cópia (userDataDir): recopiar via CM_REAL_USERDATA passaria
+// pelo neutralizeBootSpawns, que rejeita o 'inbox-pending' antes do boot.
+const { app, page } = await launchApp({ userDataDir: migrated, env: fake.env })
 const { stop } = captureLogs(app, page)
 try {
   await waitReady(page)
@@ -80,4 +88,5 @@ try {
 } finally {
   stop()
   await app.close()
+  fake.cleanup()
 }

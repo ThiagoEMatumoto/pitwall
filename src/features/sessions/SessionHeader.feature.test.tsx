@@ -25,6 +25,10 @@ vi.mock('@/lib/ipc', () => ({
     listByFeature: vi.fn(),
   },
   loopApi: { onUpdated: vi.fn(() => () => {}) },
+  sessionGraphApi: {
+    get: vi.fn().mockResolvedValue({ nodes: [], lanes: [], edges: [] }),
+    onUpdated: vi.fn(() => () => {}),
+  },
 }))
 
 const { SessionHeader } = await import('./SessionHeader')

@@ -1,4 +1,8 @@
-import { launchApp } from "../driver/launch";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { copyRealUserData, launchApp, writeCopyPrefs } from "../driver/launch";
+import { createFakeHome } from "../driver/fake-home";
 import { captureLogs, screenshot } from "../driver/capture";
 import { waitReady } from "../driver/nav";
 
@@ -11,7 +15,51 @@ import { waitReady } from "../driver/nav";
 //     isso limpava a textura compartilhada e corrompia as OUTRAS panes. Comparamos
 //     o canvas das panes de fundo antes/depois — elas não recebem input nenhum,
 //     então qualquer mudança de pixel é corrupção.
-const { app, page } = await launchApp();
+//
+// A Parte 2 precisa das panes restauradas do perfil (restoreTabs): sem elas não há
+// canvas de fundo pra comparar. HOME falso + claude stub pra que o restore suba o
+// stub, nunca `claude --resume` das sessões reais.
+const fake = createFakeHome();
+const userData = copyRealUserData(true);
+writeCopyPrefs(userData, { claude_command: fake.fakeCliPath("claude") });
+seedCrew(userData);
+
+// O perfil real só tem handoffs terminais: sem seed o dock nasce vazio. 3
+// handoffs 'pending' no repo real mais antigo que existe no disco — o
+// auto-approve do boot (gate desligado) sobe o stub como filha de cada um.
+function seedCrew(dir: string): void {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+    DatabaseSync: new (p: string) => {
+      prepare(sql: string): {
+        all(...a: unknown[]): unknown[];
+        run(...a: unknown[]): unknown;
+      };
+      close(): void;
+    };
+  };
+  const db = new DatabaseSync(join(dir, "app.db"));
+  try {
+    const repos = db.prepare("SELECT id, path FROM repos ORDER BY label").all() as {
+      id: string;
+      path: string;
+    }[];
+    const target = repos.find((r) => r.path && existsSync(r.path));
+    if (!target) throw new Error("nenhum repo da cópia existe no disco");
+    db.prepare("DELETE FROM app_prefs WHERE key = 'handoffs.requireApproval'").run();
+    const now = Date.now();
+    for (const [i, task] of ["Revisar cache", "Auditar logs", "Medir fila"].entries()) {
+      db.prepare(
+        `INSERT INTO handoffs (id, mother_session_id, target_repo_id, child_session_id,
+           feature_id, task, context_json, composed_prompt, status, mode, summary, error,
+           created_at, updated_at)
+         VALUES (?, NULL, ?, NULL, NULL, ?, NULL, ?, 'pending', 'interactive', NULL, NULL, ?, ?)`,
+      ).run(`crew-fix-${i}`, target.id, task, `## Tarefa\n${task}`, now + i, now + i);
+    }
+  } finally {
+    db.close();
+  }
+}
+const { app, page } = await launchApp({ userDataDir: userData, env: fake.env });
 const { stop } = captureLogs(app, page);
 
 async function paneSignature() {
@@ -192,4 +240,5 @@ try {
 } finally {
   stop();
   await app.close();
+  fake.cleanup();
 }

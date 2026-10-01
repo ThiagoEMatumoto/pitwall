@@ -1,10 +1,10 @@
-import { _electron as electron } from 'playwright'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
-import { launchApp, REPO_ROOT } from '../driver/launch'
+import { launchApp } from '../driver/launch'
+import { createFakeHome } from '../driver/fake-home'
 import { waitReady } from '../driver/nav'
 import { queryDb } from '../driver/inspect'
 
@@ -17,9 +17,7 @@ import { queryDb } from '../driver/inspect'
 
 const require = createRequire(import.meta.url)
 const SCRATCH = process.env.CREW_SCRATCH!
-const FAKE_CLAUDE = join(SCRATCH, 'fake-claude-peek.sh')
-const FAKE_HOME = join(SCRATCH, 'peek-home')
-const MAIN_ENTRY = join(REPO_ROOT, 'out/main/index.js')
+const fake = createFakeHome({ parentDir: SCRATCH })
 
 const SEEDS = [
   { id: 'peek-mauricio', task: 'Refatorar auth para tokens rotativos', mode: 'auto-edits' },
@@ -35,7 +33,10 @@ const first = await launchApp()
 await first.app.close()
 const userData = first.userDataCopy
 
-const repos = (await queryDb(userData, 'SELECT id, label, path FROM repos ORDER BY label')) as Array<{
+const repos = (await queryDb(
+  userData,
+  'SELECT id, label, path FROM repos ORDER BY label',
+)) as Array<{
   id: string
   label: string
   path: string
@@ -51,7 +52,9 @@ const now = Date.now()
 db.run(
   "UPDATE handoffs SET status = 'done' WHERE status IN ('pending','approved','running','needs_input')",
 )
-db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [FAKE_CLAUDE])
+db.run("INSERT OR REPLACE INTO app_prefs (key, value) VALUES ('claude_command', ?)", [
+  fake.fakeCliPath('claude'),
+])
 db.run('UPDATE workspace_state SET open_panes = NULL, dock_layout = NULL WHERE id = 1')
 for (const [i, s] of SEEDS.entries()) {
   db.run(
@@ -74,22 +77,17 @@ writeFileSync(join(userData, 'app.db'), Buffer.from(db.export()))
 db.close()
 console.log('[peek]', SEEDS.length, 'handoffs pendentes seedados em', userData)
 
-mkdirSync(join(FAKE_HOME, '.claude', 'sessions'), { recursive: true })
-mkdirSync(join(FAKE_HOME, '.claude', 'projects'), { recursive: true })
-writeFileSync(join(FAKE_HOME, '.zshrc'), '')
-writeFileSync(join(FAKE_HOME, '.zshenv'), '')
-
 // ---------- 2ª subida ----------
+// Via launchApp (e não electron.launch cru) pra herdar CM_DRIVE_SAFE e
+// CM_SCRUB_SECRETS: a cópia é do perfil real.
 // CM_MCP_PORT: sem isto a cópia herda o mcp.json do app REAL (que segura a
 // 41956) e o client falaria com a instância errada — foi o que aconteceu na 1ª
 // tentativa ("handoff não encontrado").
 const MCP_PORT = 41999
-const app = await electron.launch({
-  args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${userData}`],
-  env: { ...process.env, HOME: FAKE_HOME, CM_MCP_PORT: String(MCP_PORT) },
+const { app, page } = await launchApp({
+  userDataDir: userData,
+  env: { ...fake.env, CM_MCP_PORT: String(MCP_PORT) },
 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
 
 const consoleErrors: string[] = []
 const pageErrors: string[] = []
@@ -150,9 +148,12 @@ async function activeElement(): Promise<string> {
     const el = document.activeElement as HTMLElement | null
     if (!el) return '(null)'
     const bits = [el.tagName.toLowerCase()]
-    if (el.getAttribute('data-crew-card')) bits.push(`[data-crew-card="${el.getAttribute('data-crew-card')}"]`)
-    if (el.getAttribute('data-testid')) bits.push(`[data-testid="${el.getAttribute('data-testid')}"]`)
-    if (el.getAttribute('placeholder')) bits.push(`[placeholder="${el.getAttribute('placeholder')}"]`)
+    if (el.getAttribute('data-crew-card'))
+      bits.push(`[data-crew-card="${el.getAttribute('data-crew-card')}"]`)
+    if (el.getAttribute('data-testid'))
+      bits.push(`[data-testid="${el.getAttribute('data-testid')}"]`)
+    if (el.getAttribute('placeholder'))
+      bits.push(`[placeholder="${el.getAttribute('placeholder')}"]`)
     if (el.getAttribute('title')) bits.push(`[title="${el.getAttribute('title')}"]`)
     if (el.className && typeof el.className === 'string') {
       bits.push(`.${el.className.trim().split(/\s+/).slice(0, 3).join('.')}`)
@@ -198,7 +199,10 @@ async function mcpClient(): Promise<Client> {
   return client
 }
 
-async function mcpCall(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function mcpCall(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   const client = await mcpClient()
   try {
     const res = (await client.callTool({ name, arguments: args })) as {
@@ -249,13 +253,16 @@ try {
   // Promover a Otávio a terminal dá ao dockview uma aba de verdade — assim a
   // contagem "antes/depois" mede algo, e a screenshot do peek mostra a aba viva
   // por trás do overlay.
-  await dock.locator('button[title="Equipe: 3 sessão(ões) delegada(s)"]').click()
+  await dock.locator('button[title^="Equipe: 3 sessão(ões) delegada(s)"]').click()
   await page.waitForTimeout(800)
   const otavioCard = page
     .locator('[data-testid="handoff-card"]')
     .filter({ hasText: 'listagem lenta' })
     .first()
+  // "Abrir terminal" abre o terminal no quick look (2b1b349); a aba de verdade sai
+  // do "abrir como aba" do rodapé.
   await otavioCard.locator('button[title="Anexar o terminal desta sessão-filha"]').click()
+  await page.getByRole('button', { name: 'abrir como aba' }).click()
   await waitFor('aba do Otávio no dockview', async () => (await dockviewTabs()).tabs >= 1, 60_000)
   await page.waitForTimeout(2000)
   const tabsBaseline = await dockviewTabs()
@@ -266,15 +273,21 @@ try {
     '[peek] handoff_ask →',
     JSON.stringify(await mcpCall('handoff_ask', { handoffId: 'peek-mauricio', question: ASKED })),
   )
-  await waitFor('handoff em needs_input', async () => {
-    const st = await handoffState('peek-mauricio')
-    return st.status === 'needs_input' && !!st.pendingQuestion
-  }, 30_000)
+  await waitFor(
+    'handoff em needs_input',
+    async () => {
+      const st = await handoffState('peek-mauricio')
+      return st.status === 'needs_input' && !!st.pendingQuestion
+    },
+    30_000,
+  )
   const rowAsked = await handoffState('peek-mauricio')
   console.log('[peek] DB após ask:', JSON.stringify(rowAsked))
-  await waitFor('card em espera na UI', async () =>
-    (await dock.innerText().catch(() => '')).includes('esperando'),
-  30_000)
+  await waitFor(
+    'card em espera na UI',
+    async () => (await dock.innerText().catch(() => '')).includes('esperando'),
+    30_000,
+  )
   await page.waitForTimeout(1200)
 
   // ---------- teclado: Ctrl+J → ↑/↓ → Espaço ----------
@@ -325,20 +338,23 @@ try {
   await page.screenshot({ path: join(SCRATCH, 'peek-1-aberto.png') })
 
   // A11y: o overlay é modal de fato? (role/aria + contenção do Tab)
-  console.log('[peek] ARIA do overlay:', await page.evaluate(() => {
-    const panel = document.querySelector('.pw-rise') as HTMLElement | null
-    const backdrop = panel?.parentElement as HTMLElement | null
-    return JSON.stringify({
-      backdropRole: backdrop?.getAttribute('role'),
-      ariaModal: backdrop?.getAttribute('aria-modal'),
-      ariaLabelledby: backdrop?.getAttribute('aria-labelledby'),
-      peekZ: backdrop ? getComputedStyle(backdrop).zIndex : null,
-      sashes: document.querySelectorAll('.dv-sash').length,
-      sashZ: document.querySelector('.dv-sash')
-        ? getComputedStyle(document.querySelector('.dv-sash')!).zIndex
-        : '(nenhum sash: layout de painel único)',
-    })
-  }))
+  console.log(
+    '[peek] ARIA do overlay:',
+    await page.evaluate(() => {
+      const panel = document.querySelector('.pw-rise') as HTMLElement | null
+      const backdrop = panel?.parentElement as HTMLElement | null
+      return JSON.stringify({
+        backdropRole: backdrop?.getAttribute('role'),
+        ariaModal: backdrop?.getAttribute('aria-modal'),
+        ariaLabelledby: backdrop?.getAttribute('aria-labelledby'),
+        peekZ: backdrop ? getComputedStyle(backdrop).zIndex : null,
+        sashes: document.querySelectorAll('.dv-sash').length,
+        sashZ: document.querySelector('.dv-sash')
+          ? getComputedStyle(document.querySelector('.dv-sash')!).zIndex
+          : '(nenhum sash: layout de painel único)',
+      })
+    }),
+  )
   for (let i = 0; i < 6; i++) {
     await page.keyboard.press('Tab')
     await page.waitForTimeout(250)
@@ -351,14 +367,52 @@ try {
   await textarea.fill(ANSWER)
   await page.waitForTimeout(300)
   await textarea.press('Enter')
-  await waitFor('handoff saiu de needs_input', async () => {
-    const st = await handoffState('peek-mauricio')
-    return st.status !== 'needs_input'
-  }, 30_000)
+  await waitFor(
+    'handoff saiu de needs_input',
+    async () => {
+      const st = await handoffState('peek-mauricio')
+      return st.status !== 'needs_input'
+    },
+    30_000,
+  )
   const rowAnswered = await handoffState('peek-mauricio')
   console.log('[peek] DB após resposta:', JSON.stringify(rowAnswered))
   await page.waitForTimeout(3000)
   await page.screenshot({ path: join(SCRATCH, 'peek-2-respondido.png') })
+
+  // Toasts com o peek aberto: nenhum pode encostar no painel (menos ainda no
+  // input de resposta). Sem toast na tela, a checagem só registra a posição.
+  const toastCheck = await page.evaluate(() => {
+    const panel = document.querySelector('[data-peek-mode]') as HTMLElement | null
+    const stack = document.querySelector('[data-testid="toast-stack"]') as HTMLElement | null
+    const composer = panel?.querySelector('textarea')?.getBoundingClientRect() ?? null
+    const p = panel?.getBoundingClientRect() ?? null
+    // Sem função nomeada aqui dentro: o tsx injeta __name, que não existe na página.
+    const toasts = [...(stack?.children ?? [])].map((c) => c.getBoundingClientRect())
+    let overComposer = false
+    let overPanel = false
+    for (const t of toasts) {
+      for (const [box, which] of [
+        [composer, 'composer'],
+        [p, 'panel'],
+      ] as const) {
+        if (!box) continue
+        const hit =
+          t.left < box.right && box.left < t.right && t.top < box.bottom && box.top < t.bottom
+        if (hit && which === 'composer') overComposer = true
+        if (hit && which === 'panel') overPanel = true
+      }
+    }
+    return {
+      stackZ: stack ? getComputedStyle(stack).zIndex : null,
+      stackStyle: stack?.getAttribute('style') ?? null,
+      toasts: toasts.length,
+      overComposer,
+      overPanel,
+    }
+  })
+  console.log('[peek] toasts com peek aberto:', JSON.stringify(toastCheck))
+  if (toastCheck.overComposer) throw new Error('toast cobre o input de resposta do peek')
 
   const dockTextAfter = await dock.innerText().catch(() => '(sem dock)')
   console.log('[peek] dock innerText após resposta:\n' + dockTextAfter)
@@ -382,7 +436,14 @@ try {
   console.log('[peek] FOCO após 2º Esc (saída do dock):', focusAfterEsc2)
 
   console.log('[peek] ===== RESUMO =====')
-  console.log('[peek] abas antes:', tabsBaseline.tabs, '| durante:', tabsDuringPeek.tabs, '| depois:', tabsAfter.tabs)
+  console.log(
+    '[peek] abas antes:',
+    tabsBaseline.tabs,
+    '| durante:',
+    tabsDuringPeek.tabs,
+    '| depois:',
+    tabsAfter.tabs,
+  )
   console.log('[peek] status handoff: pending→', rowAsked?.status, '→', rowAnswered?.status)
   console.log('[peek] pendingQuestion após resposta:', JSON.stringify(rowAnswered?.pendingQuestion))
   console.log('[peek] liveStatus da filha após resposta:', JSON.stringify(rowAnswered?.liveStatus))
@@ -402,4 +463,5 @@ try {
   } catch {
     // já saiu
   }
+  fake.cleanup()
 }

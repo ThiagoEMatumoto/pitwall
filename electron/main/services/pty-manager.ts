@@ -1,6 +1,7 @@
 import { spawn, IPty } from 'node-pty'
 import { EventEmitter } from 'node:events'
 import { existsSync, statSync } from 'node:fs'
+import { nextPtySample, type PtySample } from './providers/pty-status'
 
 export interface SpawnOptions {
   sessionId: string
@@ -10,6 +11,9 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv
   cols?: number
   rows?: number
+  // Status pela própria tela (provider sem índice nativo, o Codex): só quem pede
+  // paga o hash do tail por chunk.
+  sampleActivity?: boolean
 }
 
 export interface PtyDataEvent {
@@ -23,7 +27,17 @@ export interface PtyExitEvent {
   signal: number | null
 }
 
+// Tamanho da PTY: quem espelha a tela fora do renderer (tui-menu-watch) precisa
+// dele desde o spawn — sem pane montada ninguém mais redimensiona.
+export interface PtySizeEvent {
+  sessionId: string
+  cols: number
+  rows: number
+}
+
 interface PtyEvents {
+  spawn: (e: PtySizeEvent) => void
+  resize: (e: PtySizeEvent) => void
   data: (e: PtyDataEvent) => void
   exit: (e: PtyExitEvent) => void
 }
@@ -41,12 +55,20 @@ class TypedEmitter extends EventEmitter {
 }
 
 const BACKLOG_CAP = 256 * 1024
+// Janela em que a saída é tratada como eco/reflow de input do app.
+const INPUT_ECHO_MS = 300
 
 class PtyManager extends TypedEmitter {
   private ptys = new Map<string, IPty>()
   // Histórico de saída por sessão desde o spawn, para replay quando o renderer
   // anexa depois do processo já ter emitido bytes (banner inicial do claude).
   private backlog = new Map<string, string>()
+  // Último byte e assinatura do tail visível: o status de quem não tem índice
+  // nativo (Codex). Só para PTY spawnada com sampleActivity.
+  private samples = new Map<string, PtySample>()
+  // Última escrita/resize vinda do app: o eco da tecla e o reflow que vêm logo
+  // depois não são o agente trabalhando.
+  private lastInputAt = new Map<string, number>()
 
   spawn(opts: SpawnOptions): void {
     if (this.ptys.has(opts.sessionId)) {
@@ -57,10 +79,12 @@ class PtyManager extends TypedEmitter {
       throw new Error(`cwd does not exist or is not a directory: ${opts.cwd}`)
     }
 
+    const cols = opts.cols ?? 80
+    const rows = opts.rows ?? 24
     const pty = spawn(opts.command, opts.args ?? [], {
       name: 'xterm-256color',
-      cols: opts.cols ?? 80,
-      rows: opts.rows ?? 24,
+      cols,
+      rows,
       cwd: opts.cwd,
       env: {
         ...process.env,
@@ -72,21 +96,36 @@ class PtyManager extends TypedEmitter {
 
     this.ptys.set(opts.sessionId, pty)
     this.backlog.set(opts.sessionId, '')
+    if (opts.sampleActivity) {
+      this.samples.set(opts.sessionId, { lastByteAt: null, tailHash: null, hashChangedAt: null })
+    }
+    this.emit('spawn', { sessionId: opts.sessionId, cols, rows })
 
     pty.onData((data) => {
       const prev = this.backlog.get(opts.sessionId) ?? ''
       const next = prev + data
-      this.backlog.set(
-        opts.sessionId,
-        next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next,
-      )
+      const capped = next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next
+      this.backlog.set(opts.sessionId, capped)
+      const sample = this.samples.get(opts.sessionId)
+      if (sample) {
+        const now = Date.now()
+        const echo = now - (this.lastInputAt.get(opts.sessionId) ?? -Infinity) < INPUT_ECHO_MS
+        this.samples.set(opts.sessionId, nextPtySample(sample, capped, now, { echo }))
+      }
       this.emit('data', { sessionId: opts.sessionId, data })
     })
 
     pty.onExit(({ exitCode, signal }) => {
       this.ptys.delete(opts.sessionId)
+      this.samples.delete(opts.sessionId)
+      this.lastInputAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
     })
+  }
+
+  // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
+  getActivitySample(sessionId: string): PtySample | null {
+    return this.samples.get(sessionId) ?? null
   }
 
   getBacklog(sessionId: string): string {
@@ -96,13 +135,16 @@ class PtyManager extends TypedEmitter {
   write(sessionId: string, data: string): void {
     const pty = this.ptys.get(sessionId)
     if (!pty) throw new Error(`session ${sessionId} not running`)
+    if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
     pty.write(data)
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
+    if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
     pty.resize(cols, rows)
+    this.emit('resize', { sessionId, cols, rows })
   }
 
   kill(sessionId: string): void {
@@ -110,12 +152,16 @@ class PtyManager extends TypedEmitter {
     if (!pty) return
     pty.kill()
     this.backlog.delete(sessionId)
+    this.samples.delete(sessionId)
+    this.lastInputAt.delete(sessionId)
   }
 
   killAll(): void {
     for (const pty of this.ptys.values()) pty.kill()
     this.ptys.clear()
     this.backlog.clear()
+    this.samples.clear()
+    this.lastInputAt.clear()
   }
 
   isRunning(sessionId: string): boolean {

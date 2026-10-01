@@ -52,6 +52,18 @@ function writePersisted(p: Persisted): void {
 // que pediu, senão um "espiar" herdaria o terminal de meia hora atrás.
 export type CrewPeekMode = 'chat' | 'terminal'
 
+// O que o quick look mostra: a filha de um handoff do dock, ou qualquer sessão
+// viva (cartão do mapa de sessões). O id é handoffs.id ou sessions.id.
+export interface PeekTarget {
+  kind: 'session' | 'handoff'
+  id: string
+}
+
+// Sessão aberta no peek pelo mapa (peekId é null nesse caso).
+export function peekedSessionId(peek: PeekTarget | null): string | null {
+  return peek?.kind === 'session' ? peek.id : null
+}
+
 interface CrewDockState {
   // Preferência manual persistida.
   collapsed: boolean
@@ -60,9 +72,15 @@ interface CrewDockState {
   // Card sob o cursor de teclado (id do handoff). Vive aqui, e não no painel,
   // porque o Ctrl+J chega pelo AppShell — fora da árvore do dock.
   focusedId: string | null
-  // Handoff aberto no quick look (CrewPeek). null = nenhum overlay.
+  // Alvo aberto no quick look (CrewPeek). null = nenhum overlay.
+  peekTarget: PeekTarget | null
+  // Espelho do alvo quando ele é um handoff (o que dock, HUD de atenção e
+  // navegação por relações perguntam). null também com peek de sessão aberto.
   peekId: string | null
   peekMode: CrewPeekMode
+  // Lido pelo CrewPeek ao desmontar: false quando quem fechou já levou o foco pra
+  // outro lugar (pulo da fila de atenção) e devolvê-lo à origem desfaria o pulo.
+  peekRestoreFocus: boolean
   // Nonce do pedido de foco: o AppShell incrementa, o dock (já expandido e
   // renderizado) reage focando o card. Um id não serviria — pedir foco duas
   // vezes pro mesmo card não mudaria o valor e o efeito não rodaria.
@@ -77,8 +95,9 @@ interface CrewDockState {
   // Ctrl+J: abre o dock (se preciso) e pede o foco pro card corrente.
   requestFocus: () => void
   openPeek: (id: string, mode?: CrewPeekMode) => void
+  openSessionPeek: (sessionId: string, mode?: CrewPeekMode) => void
   setPeekMode: (mode: CrewPeekMode) => void
-  closePeek: () => void
+  closePeek: (opts?: { restoreFocus?: boolean }) => void
 }
 
 const persisted = readPersisted()
@@ -87,8 +106,10 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
   collapsed: persisted.collapsed,
   width: persisted.width,
   focusedId: null,
+  peekTarget: null,
   peekId: null,
   peekMode: 'chat',
+  peekRestoreFocus: true,
   focusNonce: 0,
 
   expand: () => {
@@ -123,9 +144,19 @@ export const useCrewDockStore = create<CrewDockState>((set, get) => ({
     set({ focusNonce: get().focusNonce + 1 })
   },
 
-  openPeek: (peekId, peekMode = 'chat') => set({ peekId, peekMode, focusedId: peekId }),
+  openPeek: (peekId, peekMode = 'chat') =>
+    set({ peekTarget: { kind: 'handoff', id: peekId }, peekId, peekMode, focusedId: peekId }),
+
+  openSessionPeek: (sessionId, peekMode = 'chat') =>
+    set({ peekTarget: { kind: 'session', id: sessionId }, peekId: null, peekMode }),
 
   setPeekMode: (peekMode) => set({ peekMode }),
 
-  closePeek: () => set({ peekId: null, peekMode: 'chat' }),
+  closePeek: (opts) =>
+    set({
+      peekTarget: null,
+      peekId: null,
+      peekMode: 'chat',
+      peekRestoreFocus: opts?.restoreFocus !== false,
+    }),
 }))

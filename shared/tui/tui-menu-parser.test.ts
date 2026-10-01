@@ -572,6 +572,27 @@ describe('menuFingerprint', () => {
     expect(menuFingerprint(other)).not.toBe(menuFingerprint(a))
   })
 
+  // No 2.1.286 as opções não citam o comando ("Yes" / "Yes, and always allow access
+  // to <dir>…" / "No"): entre dois Bash no mesmo cwd só o context muda.
+  it('distingue dois prompts de permissão que diferem só no comando', () => {
+    const prompt = (cmd: string) => `╭──────────────────────────────────────────────╮
+│ Bash command                                 │
+│ ${cmd.padEnd(45)}│
+╰──────────────────────────────────────────────╯
+Do you want to proceed?
+
+❯ 1. Yes
+  2. Yes, and always allow access to repo from this project
+  3. No
+
+Esc to cancel
+`
+    const a = parseTuiMenu(prompt('touch x'))!
+    const b = parseTuiMenu(prompt('rm -rf y'))!
+    expect(b.options.map((o) => o.label)).toEqual(a.options.map((o) => o.label))
+    expect(menuFingerprint(b)).not.toBe(menuFingerprint(a))
+  })
+
   it('distingue pergunta de plano e single de multi', () => {
     const q = parseTuiMenu(FRUIT_MENU)!
     expect(menuFingerprint(q)).toContain('question')

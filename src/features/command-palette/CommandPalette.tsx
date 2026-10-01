@@ -431,6 +431,7 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
 
   return (
     <div
+      data-modal-overlay
       className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 pt-[12vh] backdrop-blur-[3px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()

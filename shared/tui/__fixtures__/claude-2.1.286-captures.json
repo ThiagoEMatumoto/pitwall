@@ -1,0 +1,14 @@
+{
+  "cli": "claude 2.1.286 (Claude Code)",
+  "capturedAt": "2026-09-30",
+  "pty": { "name": "xterm-256color", "cols": 80, "rows": 24 },
+  "argv": ["--effort", "low", "--permission-mode", "default", "--setting-sources", "project", "--strict-mcp-config"],
+  "note": "Bytes brutos do node-pty desde o spawn (o mesmo que o pty-manager guarda no backlog). Settings do usuario, hooks e MCP desligados para nao vazar conteudo pessoal. Nenhuma permissao foi aprovada: o processo foi morto com o menu na tela.",
+  "files": {
+    "claude-2.1.286-permission-bash.ansi": "Prompt de permissao de Bash ('touch permissao-fixture.txt'); status em ~/.claude/sessions/<pid>.json = waiting no momento da captura",
+    "claude-2.1.286-trust-unnumbered.ansi": "Trust de diretorio; nesta versao as opcoes NAO tem numero; arquivo de status ainda nao existe",
+    "claude-2.1.286-idle-prompt.ansi": "Prefixo do mesmo stream de permission-bash, cortado antes do prompt ser digitado: caixa de input ociosa",
+    "claude-2.1.286-input-placeholder.ansi": "Caixa de input vazia com o placeholder esmaecido (SGR 2, 'Try \"...\"'); env sem CLAUDE_* herdado, dir temporario ja confiado",
+    "claude-2.1.286-input-dirty.ansi": "Mesmo fluxo, depois de digitar 'rascunho que o usuario nao enviou' SEM Enter: texto do usuario com atributo normal (nao dim); processo morto sem enviar"
+  }
+}

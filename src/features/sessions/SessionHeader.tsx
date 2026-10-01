@@ -13,6 +13,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureLink } from './SessionFeatureLink'
+import { ConnectedChips } from './ConnectedChips'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
@@ -43,6 +44,9 @@ interface Props {
   error: string | null
   mode: PaneMode
   onToggleMode?: () => void
+  // Chat indisponível para esta sessão (provider sem transcript legível): o
+  // toggle aparece desabilitado explicando o porquê, em vez de sumir.
+  toggleDisabledReason?: string | null
   onMinimize: () => void
   onEndSession: () => void
   // Passar o bastão: sobe uma sessão LIMPA com o briefing destilado desta. Fica
@@ -94,6 +98,7 @@ export function SessionHeader({
   error,
   mode,
   onToggleMode,
+  toggleDisabledReason = null,
   onMinimize,
   onEndSession,
   onPassBaton,
@@ -216,6 +221,7 @@ export function SessionHeader({
               </button>
             </>
           ))}
+        {tier !== 'narrow' && sessionId && <ConnectedChips sessionId={sessionId} />}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 text-[var(--color-text-dim)]">
         {exited &&
@@ -320,6 +326,16 @@ export function SessionHeader({
           >
             <Icon as={mode === 'terminal' ? MessageSquare : SquareTerminal} size={13} />
           </button>
+        )}
+        {!onToggleMode && toggleDisabledReason && tier !== 'narrow' && (
+          <span
+            data-testid="chat-toggle-disabled"
+            title={`Chat — ${toggleDisabledReason}`}
+            aria-label={`Chat indisponível: ${toggleDisabledReason}`}
+            className="cursor-not-allowed rounded p-1 opacity-40"
+          >
+            <Icon as={MessageSquare} size={13} />
+          </span>
         )}
         {/* Ícones consistentes com as tabs (lucide): Minus = minimizar, Power =
             encerrar (hover danger). Tooltip/aria-label preservam o texto antigo. */}

@@ -3,7 +3,14 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildSessionFile, createFakeHome, withStatus, type FakeHome } from './fake-home'
+import {
+  FAKE_CODEX_DONE,
+  buildSessionFile,
+  createFakeHome,
+  withStatus,
+  type FakeHome,
+} from './fake-home'
+import { hasInputPrompt } from '../../shared/tui/attention-reason'
 
 // session-activity importa electron e serviços com banco; só o leitor de
 // sessions/<pid>.json interessa aqui.
@@ -111,6 +118,12 @@ describe('fake-claude.sh', () => {
     expect(log).toContain('stdin: segunda\n')
   })
 
+  it('desenha a caixa de input ociosa que o leitor real (hasInputPrompt) reconhece', () => {
+    fake = createFakeHome()
+    const out = runStub(fake.fakeCliPath('claude'), ['--session-id', 'cc-3'], 'oi\n')
+    expect(hasInputPrompt(out)).toBe(true)
+  })
+
   it('--resume também vira o sessionId', () => {
     fake = createFakeHome()
     runStub(fake.fakeCliPath('claude'), ['--resume', 'cc-old', '-n', 'x'], '')
@@ -139,13 +152,24 @@ describe('fake-claude.sh', () => {
 })
 
 describe('fake-codex.sh', () => {
-  it('imprime o banner do Codex, o prompt inicial e ecoa/loga o stdin', () => {
+  it('imprime o banner do Codex, roda um turno pelo prompt inicial e ecoa/loga o stdin', () => {
     fake = createFakeHome()
-    const out = runStub(fake.fakeCliPath('codex'), ['tarefa inicial'], 'oi\n')
+    const out = runStub(
+      fake.fakeCliPath('codex'),
+      ['-s', 'read-only', '-c', 'k="v"', 'tarefa inicial'],
+      'oi\n',
+    )
     expect(out).toContain('>_ OpenAI Codex')
     expect(out).toContain('prompt inicial: tarefa inicial')
+    expect(out).toContain('Working (1s')
+    expect(out).toContain(FAKE_CODEX_DONE)
     expect(out).toContain('recebido: oi')
-    expect(fake.readCliLog('codex')).toMatch(/argv: tarefa\\ inicial\nstdin: oi\n/)
+    const log = fake.readCliLog('codex')
+    expect(log).toMatch(/argv: -s read-only -c k=\\"v\\" tarefa\\ inicial\n/)
+    // Sem PITWALL_MCP_TOKEN no env do teste: a linha existe e fica vazia.
+    expect(log).toMatch(/env-token: \n/)
+    // O stdin só é lido depois do turno do prompt inicial.
+    expect(log).toMatch(/turn-end: \d+\nstdin: oi @\d+\nturn-end: \d+\n/)
     expect(readdirSync(fake.sessionsDir)).toEqual([])
   })
 })

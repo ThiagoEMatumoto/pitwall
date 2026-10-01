@@ -82,6 +82,12 @@ describe('handoff-store', () => {
       })
       expect(h.mode).toBe('auto-edits')
     })
+
+    it('nasce pending por padrão e approved quando um humano já decidiu', () => {
+      expect(newHandoff().status).toBe('pending')
+      const h = store.create({ targetRepoId: 'r1', task: 't', composedPrompt: 'p', status: 'approved' })
+      expect(h.status).toBe('approved')
+    })
   })
 
   describe('progress (não-terminal)', () => {
@@ -965,6 +971,32 @@ describe('handoff-store', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+  })
+
+  describe('listEvents (linha do tempo do fio)', () => {
+    it('devolve a trilha na ordem em que aconteceu, só do handoff pedido', () => {
+      const h = newHandoff()
+      const other = newHandoff('r2')
+      store.markRunning(h.id, 'child-1')
+      store.progress(h.id, 'lendo o código')
+      store.markRunning(other.id, 'child-2')
+
+      const events = store.listEvents(h.id)
+      expect(events.map((e) => [e.event, e.fromStatus, e.toStatus])).toEqual([
+        ['create', null, 'pending'],
+        ['markRunning', 'pending', 'running'],
+        ['progress', 'running', 'running'],
+      ])
+      expect(events.every((e) => e.handoffId === h.id)).toBe(true)
+      expect(events[2].detail).toBe('lendo o código')
+    })
+
+    it('mapeia predecessor_session_id da migration 037', () => {
+      const h = newHandoff()
+      expect(store.get(h.id)?.predecessorSessionId).toBeNull()
+      testDb.prepare('UPDATE handoffs SET predecessor_session_id = ? WHERE id = ?').run('old', h.id)
+      expect(store.get(h.id)?.predecessorSessionId).toBe('old')
     })
   })
 })

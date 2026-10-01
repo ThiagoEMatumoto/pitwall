@@ -5,7 +5,7 @@
 // quem a filha é, com quem fala e como escala um bloqueio.
 
 import { describeEdge, type KindEdge } from '../architecture/kind-phrase'
-import type { HandoffMode } from '../../../../shared/types/ipc'
+import type { AgentProviderId, HandoffMode } from '../../../../shared/types/ipc'
 
 // HandoffEdge é a aresta orientada ao repo-mãe (ver KindEdge no módulo compartilhado).
 //   'from-mother': a aresta sai do repo-mãe (mãe → este repo).
@@ -26,10 +26,26 @@ export interface ComposeHandoffArgs {
   alias: string
   // Modo de permissão com que a filha sobe — molda as restrições do prompt.
   mode?: HandoffMode
+  // Codex sobe sem -n e sem inbox cross-session: não há SendMessage.
+  provider?: AgentProviderId
 }
+
+const PEER_CHANNELS = [
+  '- Seu interlocutor é o remetente da primeira mensagem que você receber. Para responder, copie o `from` da <cross-session-message> para o `to` do SendMessage.',
+  '- Você NÃO fala com o humano. Nenhuma pergunta sua vai para ele direto.',
+  '- Você NÃO fala com outras sessões filhas. Coordenação cruzada é do orquestrador.',
+  '- SendMessage é o canal em tempo real; `handoff_progress`/`handoff_report` é o LOG durável. Mudança de estado relevante vai nos DOIS.',
+]
+
+const TERMINAL_CHANNELS = [
+  '- O orquestrador fala com você colando mensagens neste terminal. Você responde a ele pelas tools `handoff_progress`, `handoff_ask` e `handoff_report` — é o único canal de volta.',
+  '- Você NÃO fala com o humano. Nenhuma pergunta sua vai para ele direto.',
+  '- Você NÃO fala com outras sessões filhas. Coordenação cruzada é do orquestrador.',
+]
 
 export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const motherLabel = args.motherRepoLabel ?? 'origem'
+  const peerChannel = (args.provider ?? 'claude') === 'claude'
 
   // O canal de volta NÃO depende de a filha saber quem é a mãe de antemão: ela
   // responde a quem escreveu primeiro (o `from` da <cross-session-message>).
@@ -42,10 +58,7 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
     `- handoffId: ${args.handoffId}`,
     '',
     '## Canais',
-    '- Seu interlocutor é o remetente da primeira mensagem que você receber. Para responder, copie o `from` da <cross-session-message> para o `to` do SendMessage.',
-    '- Você NÃO fala com o humano. Nenhuma pergunta sua vai para ele direto.',
-    '- Você NÃO fala com outras sessões filhas. Coordenação cruzada é do orquestrador.',
-    '- SendMessage é o canal em tempo real; `handoff_progress`/`handoff_report` é o LOG durável. Mudança de estado relevante vai nos DOIS.',
+    ...(peerChannel ? PEER_CHANNELS : TERMINAL_CHANNELS),
   ]
 
   const contextLines: string[] = [
@@ -89,7 +102,7 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const decisao = [
     '## Quando precisar de decisão',
     '- Dentro do seu escopo: decida você e registre no summary.',
-    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}" e mande um SendMessage ao orquestrador, no formato:`,
+    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}"${peerChannel ? ' e mande um SendMessage ao orquestrador' : ''}, no formato:`,
     '  "BLOQUEIO: <1 linha> | OPÇÕES: A) … B) … | RECOMENDO: <A|B> porque <1 linha> | CUSTO DE ERRAR: <reversível|irreversível>"',
     '- Depois PARE e espere. Não escolha sozinho e não invente requisito.',
   ]

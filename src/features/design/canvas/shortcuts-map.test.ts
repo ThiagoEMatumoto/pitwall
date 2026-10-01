@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { formatCombo, matchCombo, COMMANDS } from '@/lib/keybindings'
+import {
+  ATTENTION_COMMAND_IDS,
+  attentionKeyAction,
+} from '@/features/session-switcher/attention-keys'
 import { SHORTCUTS, resolveShortcut, type KeyFacts } from './shortcuts-map'
 
 const key = (
@@ -195,15 +199,24 @@ describe('resolveShortcut', () => {
 
   // Workspace/Terminal combos (Cmd+0/1/±, Cmd+digits) are pane-scoped and
   // are expected to be reused by the canvas.
+  const factsOf = (c: (typeof COMMANDS)[number]['defaultCombo']) =>
+    key(c.key ?? '', { ctrlKey: !!c.mod, shiftKey: !!c.shift, altKey: !!c.alt }, c.code ?? '')
+  const yieldsInDesign = (id: string) => (ATTENTION_COMMAND_IDS as readonly string[]).includes(id)
+
   it('never collides with the global AppShell combos', () => {
-    for (const cmd of COMMANDS.filter((c) => c.context === 'Global')) {
-      const c = cmd.defaultCombo
-      const facts = key(
-        c.key ?? '',
-        { ctrlKey: !!c.mod, shiftKey: !!c.shift, altKey: !!c.alt },
-        c.code ?? '',
-      )
-      expect(resolveShortcut(facts), formatCombo(c)).toBeNull()
+    for (const cmd of COMMANDS.filter((c) => c.context === 'Global' && !yieldsInDesign(c.id))) {
+      expect(resolveShortcut(factsOf(cmd.defaultCombo)), formatCombo(cmd.defaultCombo)).toBeNull()
+    }
+  })
+
+  // Alt+A é "Alinhar à esquerda" aqui e "próxima da fila" no AppShell: a fila cede.
+  it('attention combos that clash with the canvas yield in the Design area', () => {
+    const next = factsOf(COMMANDS.find((c) => c.id === 'attention.next')!.defaultCombo)
+    expect(resolveShortcut(next)).toEqual({ type: 'align', mode: 'left' })
+    for (const id of ATTENTION_COMMAND_IDS) {
+      const facts = factsOf(COMMANDS.find((c) => c.id === id)!.defaultCombo) as KeyboardEvent
+      expect(attentionKeyAction(facts, {}, 'design'), id).toBeNull()
+      expect(attentionKeyAction(facts, {}, 'projects'), id).not.toBeNull()
     }
   })
 

@@ -674,6 +674,87 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(res.error).toMatch(/não existe no disco/)
   })
 
+  describe('provider da filha', () => {
+    it('default é claude: o spawn não recebe provider', () => {
+      seedRepo('prov-default', '/repos/prov-default')
+      call<HandoffResult>('session_handoff', { targetRepo: 'prov-default', task: 'Ler o código' })
+      expect(spawned[0].provider).toBeUndefined()
+    })
+
+    it("provider 'codex' em plan chega ao spawn da filha", () => {
+      seedRepo('prov-codex', '/repos/prov-codex')
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'prov-codex',
+        task: 'Investigar a fila',
+        mode: 'plan',
+        provider: 'codex',
+      })
+      expect(res.status).toBe('running')
+      expect(spawned[0]).toMatchObject({ provider: 'codex', permissionMode: 'plan' })
+    })
+
+    // Codex não tem -n nem inbox cross-session, nem espelho da tela: handoff_message
+    // colaria um Enter às cegas sobre o overlay de aprovação. Só resta acompanhar.
+    it('codex: a mensagem de retorno não manda abrir canal por SendMessage nem handoff_message', () => {
+      seedRepo('prov-codex-msg', '/repos/prov-codex-msg')
+      const res = call<HandoffResult & { message?: string }>('session_handoff', {
+        targetRepo: 'prov-codex-msg',
+        task: 'Investigar a fila',
+        mode: 'plan',
+        provider: 'codex',
+      })
+      expect(res.message).not.toContain('SendMessage')
+      expect(res.message).not.toMatch(/fale com ela por handoff_message/)
+      expect(res.message).toContain('handoff_result')
+      expect(spawned[0].systemPromptText).not.toContain('SendMessage')
+    })
+
+    it('codex: handoff_result tem liveStatus pela PTY mesmo sem cc_session_id', () => {
+      seedRepo('prov-codex-live', '/repos/prov-codex-live')
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'prov-codex-live',
+        task: 'Investigar a fila',
+        mode: 'plan',
+        provider: 'codex',
+      })
+      // Shape real: sessão Codex nasce sem cc_session_id e com provider='codex'
+      // (sessions.ts spawnSession); o fake do seam grava como claude.
+      getDb().prepare(`UPDATE sessions SET cc_session_id = NULL, provider = 'codex'`).run()
+      const result = call<{ liveStatus: string | null }>('handoff_result', {
+        handoffId: res.handoffId,
+      })
+      // Sem PTY de verdade no teste: 'ended', não o null cego de antes.
+      expect(result.liveStatus).toBe('ended')
+    })
+
+    it('codex com auto-edits é recusado ANTES de criar o handoff', () => {
+      seedRepo('prov-codex-edit', '/repos/prov-codex-edit')
+      expect(() =>
+        call<HandoffResult>('session_handoff', {
+          targetRepo: 'prov-codex-edit',
+          task: 'Refatorar',
+          mode: 'auto-edits',
+          provider: 'codex',
+        }),
+      ).toThrow(/Codex.*plan/s)
+      expect(spawned).toHaveLength(0)
+      expect(call<{ items: unknown[] }>('handoff_list', {}).items).toHaveLength(0)
+    })
+
+    it('codex com a aprovação humana ligada é recusado (o gate spawnaria claude)', () => {
+      seedRepo('prov-codex-gate', '/repos/prov-codex-gate')
+      setPref('handoffs.requireApproval', true)
+      expect(() =>
+        call<HandoffResult>('session_handoff', {
+          targetRepo: 'prov-codex-gate',
+          task: 'Investigar',
+          mode: 'plan',
+          provider: 'codex',
+        }),
+      ).toThrow(/requireApproval/)
+    })
+  })
+
   // A identidade da mãe vem do CTX (carimbado pelo app no spawn), nunca dos
   // args da tool. Com ela o dedup ganha um segundo nível: "já é sua" ≠ "não é sua".
   describe('identidade da sessão-mãe (ctx)', () => {

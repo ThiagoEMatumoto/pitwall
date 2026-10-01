@@ -5,9 +5,10 @@ import { useHandoffsStore } from '@/store/handoffsStore'
 import { useVisibleLiveSessions } from './useGlobalSessions'
 
 // Sessões aguardando input do usuário entre as VISÍVEIS (mesma regra da barra e
-// do switcher: filha de handoff só conta aqui depois que ele abre o terminal
-// dela). Alimenta os badges da IconRail e do botão do switcher — que espelham a
-// barra, então contam exatamente o que ela mostra.
+// do switcher). Alimenta os badges da IconRail e do botão do switcher — que
+// espelham a barra, então contam exatamente os chips que ela marca. A TitleBar
+// não usa este número: o "N no box" dela é a fila do Alt+A (attentionSessionCount),
+// que inclui a filha com aba aberta e pergunta pendente mesmo com a PTY trabalhando.
 export function useWaitingCount(): number {
   const visible = useVisibleLiveSessions()
   return useMemo(() => visible.filter((s) => s.status === 'waiting').length, [visible])

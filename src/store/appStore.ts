@@ -2,8 +2,10 @@ import { create } from 'zustand'
 import { sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
+import { providerSupports } from '../../shared/agent-providers'
 import type {
   AdvisorModel,
+  AgentProviderId,
   EffortLevel,
   LiveSessionInfo,
   PaneSnapshot,
@@ -148,6 +150,7 @@ const resuming = new Set<string>()
 // mesmo `liveSessions`). `offGlobalActivity` guarda o unsubscribe do onGlobalActivity;
 // `liveWatchStarted` guarda contra o duplo-mount do StrictMode.
 let offGlobalActivity: (() => void) | null = null
+let offPtyExit: (() => void) | null = null
 let liveWatchStarted = false
 
 // Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
@@ -226,14 +229,24 @@ export function sessionFromLiveSession(item: LiveSessionInfo, paneId: string | n
   return {
     id: item.id,
     repoId: item.repo?.id ?? null,
-    ccSessionId: item.ccSessionId,
+    // O Codex vem com ccSessionId = sessions.id (chave do batch global), não um id
+    // nativo: copiado, a pane viraria "claude" — watch de transcript, baton e um
+    // restore que sobe claude no lugar dela.
+    ccSessionId: providerSupports(item.provider).resume ? item.ccSessionId : null,
     title: item.title ?? item.name,
     titleSource: item.titleSource ?? null,
     paneId,
     status: 'running',
     startedAt: item.lastActivityAt ?? Date.now(),
     endedAt: null,
+    provider: item.provider,
   }
+}
+
+// A pane já exibe esta sessão viva? Sessão sem id nativo (Codex) tem pane com
+// ccSessionId null e item da lista com ccSessionId = sessions.id: casa pelo id.
+function paneShowsLive(pane: ActivePane, item: LiveSessionInfo): boolean {
+  return pane.session.id === item.id || pane.session.ccSessionId === item.ccSessionId
 }
 
 function paneFromLiveSession(item: LiveSessionInfo, paneId: string): ActivePane {
@@ -308,6 +321,8 @@ interface AppState {
     // Modelo do advisor tool (--advisor <model>); validado no main. Trailing/
     // opcional: callers existentes omitem (= advisor desligado).
     advisorModel?: AdvisorModel,
+    // CLI da sessão; ausente = claude.
+    provider?: AgentProviderId,
     // Retorna o id da sessão criada. Callers existentes ignoram o retorno; o fluxo
     // de handoff usa pra marcar mark-running com o childSessionId.
   ) => Promise<string>
@@ -327,6 +342,11 @@ interface AppState {
     // Filha de handoff: o main fixa o título (alias = endereço do peer) e passa
     // `--settings crossSessionInbound=accept` só nessa sessão.
     handoffChild?: boolean
+    // Controles do diálogo de spawn (sessão criada no mapa, sem aba).
+    model?: string
+    effort?: EffortLevel
+    advisorModel?: AdvisorModel
+    provider?: AgentProviderId
   }) => Promise<string>
   // Sessão avulsa: spawn sem repo (cwd = scratch dir do backend).
   openQuickSession: () => Promise<void>
@@ -456,6 +476,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     systemPromptText,
     permissionMode,
     advisorModel,
+    provider,
   ) => {
     // Consome ANTES do await: se dois spawns dispararem em sequência, cada um
     // leva (no máximo) a escolha do seu próprio diálogo.
@@ -472,6 +493,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       systemPromptText,
       permissionMode,
       advisorModel,
+      provider,
     })
     set((s) => ({
       panes: [
@@ -509,7 +531,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       permissionMode: input.permissionMode,
       disallowedTools: input.disallowedTools,
       handoffChild: input.handoffChild,
+      model: input.model,
+      effort: input.effort,
+      advisorModel: input.advisorModel,
+      provider: input.provider,
     })
+    if (input.featureId) useSessionFeatureStore.getState().note(session.id, input.featureId)
     void get().refreshLiveSessions()
     return session.id
   },
@@ -634,7 +661,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   focusOrOpenSession: async (item) => {
-    const existing = get().panes.find((p) => p.session.ccSessionId === item.ccSessionId)
+    const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
       set({ focusPaneId: existing.paneId, area: 'projects' })
       return
@@ -656,7 +683,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const current = get().panes
     const wanted: ActivePane[] = items.map(
       (item) =>
-        current.find((p) => p.session.ccSessionId === item.ccSessionId) ??
+        current.find((p) => paneShowsLive(p, item)) ??
         paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`),
     )
     set({
@@ -689,9 +716,17 @@ export const useAppStore = create<AppState>((set, get) => ({
             lastActivityAt: u.lastActivityAt,
             lastText: u.lastText !== undefined ? u.lastText : sess.lastText,
             tokens: u.tokens ?? sess.tokens,
+            // Substitui (não herda): ausente no batch = motivo limpo.
+            attentionReason: u.attentionReason,
           }
         }),
       }))
+    })
+    // PTY que sai sozinha (filha do dock sem aba, antecessora do bastão, /exit)
+    // não passa por mutação nenhuma do store: sem este refetch ela ficava na
+    // lista — e no mapa, como "encerrada" — até outra coisa refazer o snapshot.
+    offPtyExit = sessionsApi.onExit(() => {
+      void get().refreshLiveSessions()
     })
   },
 
@@ -699,6 +734,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offGlobalActivity) {
       offGlobalActivity()
       offGlobalActivity = null
+    }
+    if (offPtyExit) {
+      offPtyExit()
+      offPtyExit = null
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
@@ -723,6 +762,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         return {
           ...sess,
           status: p.status,
+          // Anda junto com o status: os dois vêm do mesmo batch do stream.
+          attentionReason: p.attentionReason,
           lastActivityAt: p.lastActivityAt ?? sess.lastActivityAt,
           lastText: p.lastText ?? sess.lastText,
           tokens: p.tokens ?? sess.tokens,

@@ -37,7 +37,7 @@ const second = spawn(
   ["out/main/index.js", "--no-sandbox", `--user-data-dir=${userDataCopy}`],
   {
     cwd: process.cwd(),
-    env: { ...process.env, CM_SCRUB_SECRETS: "1", CM_MCP_EPHEMERAL_PORT: "1" },
+    env: { ...process.env, CM_SCRUB_SECRETS: "1", CM_MCP_EPHEMERAL_PORT: "1", CM_DRIVE_SAFE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   },
 );

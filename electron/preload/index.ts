@@ -111,6 +111,14 @@ import type {
   DesignPngBatchInput,
   DesignAskInput,
 } from '../../shared/types/ipc'
+import type { SessionGraph } from '../../shared/types/session-graph'
+import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
+import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
+import type {
+  PromptQueueSnapshot,
+  ScreenTailUpdate,
+  SendPromptInput,
+} from '../../shared/types/send-prompt'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -164,6 +172,9 @@ const api: Api = {
     },
     onGlobalActivity: (handler) =>
       subscribe<GlobalActivityBatch>('session:activity:global', handler),
+    attentionMenu: (sessionId) => invoke('sessions:attention-menu', sessionId),
+    attentionRespond: (input) => invoke('sessions:attention-respond', input),
+    attentionDebug: () => invoke('sessions:attention-debug'),
     setRendererFocus: (ccSessionId) => {
       void invoke('sessions:renderer-focus', ccSessionId)
     },
@@ -372,6 +383,41 @@ const api: Api = {
   baton: {
     distill: (input: DistillBatonInput) => invoke('baton:distill', input),
     pass: (input: PassBatonInput) => invoke('baton:pass', input),
+  },
+  sessionGraph: {
+    get: () => invoke('session-graph:get'),
+    handoffEvents: (input: { handoffId: string }) => invoke('handoff-events:list', input),
+    onUpdated: (handler) => subscribe<SessionGraph>('session-graph:updated', handler),
+  },
+  agentBus: {
+    list: () => invoke('agent-bus:list'),
+    onUpdated: (handler) => subscribe<AgentBusSnapshot>('agent-bus:updated', handler),
+  },
+  canvas: {
+    get: (input) => invoke('canvas:get', input),
+    setPositions: (input) => invoke('canvas:set-positions', input),
+    setViewStates: (input) => invoke('canvas:set-view-states', input),
+    clearPositions: (input) => invoke('canvas:clear-positions', input),
+    createNote: (input) => invoke('canvas:note-create', input),
+    updateNote: (input) => invoke('canvas:note-update', input),
+    deleteNote: (input) => invoke('canvas:note-delete', input),
+    createGroup: (input) => invoke('canvas:group-create', input),
+    updateGroup: (input) => invoke('canvas:group-update', input),
+    deleteGroup: (input) => invoke('canvas:group-delete', input),
+    setSessionGroup: (input) => invoke('canvas:session-group-set', input),
+    setPurpose: (input) => invoke('canvas:purpose-set', input),
+    summarize: (input) => invoke('canvas:summarize', input),
+    onUpdated: (handler) => subscribe<CanvasUpdatedEvent>('canvas:updated', handler),
+  },
+  sendTo: {
+    send: (input: SendPromptInput) => invoke('sessions:send-prompt', input),
+    cancel: (id: string) => invoke('prompt-queue:cancel', { id }),
+    queue: () => invoke('prompt-queue:list'),
+    preview: (sessionId: string) => invoke('sessions:screen-preview', { sessionId }),
+    subscribeTail: (sessionIds: string[]) => invoke('sessions:tail-subscribe', { sessionIds }),
+    onTail: (handler) => subscribe<ScreenTailUpdate>('sessions:tail', handler),
+    listRepoFiles: (cwd: string) => invoke('fs:list-repo-files', { cwd }),
+    onQueueUpdated: (handler) => subscribe<PromptQueueSnapshot>('prompt-queue:updated', handler),
   },
   objectives: {
     list: (filter?: ObjectiveListFilter) => invoke('objectives:list', filter),

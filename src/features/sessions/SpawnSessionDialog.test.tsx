@@ -50,7 +50,7 @@ const repo = { id: 'repo-1', label: 'legal-core' } as Repo
 
 // act assíncrono: o diálogo resolve prefs/features no mount, e sem esperar esse
 // tick o React reclama de update fora de act.
-async function setup(onConfirmChild?: ReturnType<typeof vi.fn>) {
+async function setup(onConfirmChild?: ReturnType<typeof vi.fn>, providerChoice = false) {
   const onConfirm = vi.fn()
   await act(async () => {
     render(
@@ -60,6 +60,7 @@ async function setup(onConfirmChild?: ReturnType<typeof vi.fn>) {
         repo={repo}
         onConfirm={onConfirm}
         onConfirmChild={onConfirmChild}
+        providerChoice={providerChoice}
       />,
     )
   })
@@ -115,5 +116,20 @@ describe('SpawnSessionDialog — abrir como sessão filha', () => {
     await setup(vi.fn())
     fireEvent.click(screen.getByTestId('as-child-toggle'))
     expect(screen.getByText('Abrir como filha')).toBeDisabled()
+  })
+})
+
+describe('SpawnSessionDialog — trocar de provider e voltar', () => {
+  it('olhar o Codex e voltar ao Claude restaura a permissão e o "abrir como filha"', async () => {
+    const { onConfirm } = await setup(vi.fn(), true)
+    fireEvent.click(screen.getByText('Aceitar edições'))
+    fireEvent.click(screen.getByTestId('as-child-toggle'))
+    fireEvent.click(document.querySelector('[data-provider="codex"]')!)
+    fireEvent.click(document.querySelector('[data-provider="claude"]')!)
+    expect(screen.getByTestId('as-child-toggle')).toBeChecked()
+    fireEvent.click(screen.getByTestId('as-child-toggle'))
+    fireEvent.click(screen.getByText('Abrir'))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onConfirm.mock.calls[0][4]).toBe('acceptEdits')
   })
 })

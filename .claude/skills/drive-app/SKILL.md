@@ -16,6 +16,13 @@ Ferramental pra você (Claude) abrir o app **Pitwall** real, navegar como usuár
 
 ⚠️ **Limite de segurança:** a cópia protege o estado do app (DB), mas as linhas de `vault_path`/repos apontam pra pastas reais no disco. **Não execute ações destrutivas de filesystem** (mover vault, deletar repo) por enquanto — só navegação/leitura/validação visual. Cenários destrutivos seguros virão numa fase posterior (rewrite de paths).
 
+## Modo seguro (padrão)
+
+- **`CM_DRIVE_SAFE=1` sempre:** o `launchApp` liga por padrão. O main desliga auto-pull/auto-clone dos repos e a detecção de reunião (mic real) e loga `[drive-safe] <job> disabled` no boot — confira no log. Opt-out só com `env: { CM_DRIVE_SAFE: '0' }`.
+- **A cópia nasce sem gatilhos de spawn:** `open_panes`/`dock_layout` zerados (nenhum `claude --resume` de sessão real no boot) e handoffs `pending` viram `rejected` (o auto-approve não sobe filha no repo real). O launch loga `[launch] cópia sem gatilhos de spawn: N aba(s), M handoff(s) pending`.
+- **`restoreTabs: true`** é opt-in pra testar restore de workspace; só use com `env.HOME` apontando pra um fake-home (`e2e/driver/fake-home.ts`), senão as sessões reais voltam com o HOME real. Ignorado quando `userDataDir` é passado.
+- **Node:** a cópia é editada com `node:sqlite` (lê o `-wal` do app real aberto), que exige **Node >= 22.13**. O repo fixa `24.20.0` no `.nvmrc` (`fnm use`); com Node mais velho o launch quebra antes do app subir.
+
 ## Pré-requisito: build atual
 
 O driver precisa de `out/` buildado com os módulos nativos na ABI do Electron:

@@ -707,7 +707,8 @@ function comboKey(c: Combo): string {
 }
 
 // Constrói um Combo a partir de um keydown (mesma lógica de prioridade do matcher:
-// Backslash vira code; o resto vira key). Retorna null para press só-de-modificador.
+// Backslash e letra com Alt viram code — com Alt o e.key depende do layout/SO, ex:
+// 'å' no mac; o resto vira key). Retorna null para press só-de-modificador.
 function comboFromEvent(e: KeyboardEvent): Combo | null {
   const key = e.key
   if (key === 'Control' || key === 'Meta' || key === 'Shift' || key === 'Alt') return null
@@ -716,6 +717,7 @@ function comboFromEvent(e: KeyboardEvent): Combo | null {
   if (e.shiftKey) combo.shift = true
   if (e.altKey) combo.alt = true
   if (e.code === 'Backslash') combo.code = 'Backslash'
+  else if (e.altKey && /^(Key[A-Z]|Comma|Period)$/.test(e.code)) combo.code = e.code
   else combo.key = key
   return combo
 }
@@ -779,7 +781,11 @@ function ShortcutsTab() {
             </span>
           )}
         </span>
-        <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-dim)]">
+        <kbd
+          // Marca a captura: a fila de atenção não consome o Alt+A que está sendo gravado.
+          data-keybinding-capture={capturing || undefined}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-dim)]"
+        >
           {capturing ? 'Pressione…' : formatCombo(combo)}
         </kbd>
         {cmd.editable && (

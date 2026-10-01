@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -74,13 +74,13 @@ const live: LiveSessionInfo = {
 function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status'] = 'working') {
   useHandoffsStore.setState({ handoffs: [{ ...handoff, ...patch }] })
   useAppStore.setState({ liveSessions: [{ ...live, status: liveStatus }] })
-  useCrewDockStore.setState({ peekId: 'h1' })
+  useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
   return render(<CrewPeek />)
 }
 
 describe('CrewPeek', () => {
   beforeEach(() => {
-    useCrewDockStore.setState({ peekId: null, peekMode: 'chat' })
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
     useAppStore.setState({ panes: [] })
     terminalProps.length = 0
   })
@@ -97,7 +97,7 @@ describe('CrewPeek', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
     const labelledBy = dialog.getAttribute('aria-labelledby')!
-    expect(document.getElementById(labelledBy)).toHaveTextContent('Maurício')
+    expect(document.getElementById(labelledBy)).toHaveTextContent('mauricio-auth-refactor')
   })
 
   it('Tab no último focável volta pro primeiro e Shift+Tab no primeiro vai pro último', () => {
@@ -138,7 +138,7 @@ describe('CrewPeek', () => {
     // O PTY diz 'working' porque a filha está parada num prompt — o cabeçalho não
     // pode anunciar "trabalhando" enquanto o corpo mostra a pergunta em aberto.
     mount({ status: 'needs_input', pendingQuestion: 'Posso apagar a tabela?' }, 'working')
-    expect(screen.getByText('Aguardando resposta')).toBeInTheDocument()
+    expect(screen.getByText('Pergunta pendente')).toBeInTheDocument()
     expect(screen.queryByText('trabalhando')).not.toBeInTheDocument()
   })
 
@@ -155,7 +155,7 @@ describe('CrewPeek', () => {
       'working',
     )
     expect(screen.getByText('trabalhando')).toBeInTheDocument()
-    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pergunta pendente')).not.toBeInTheDocument()
     const box = screen.getByTestId('peek-question')
     expect(box).toHaveTextContent('BLOQUEIO: escopo da Frente 2?')
     expect(box).toHaveTextContent(/já retomou/)
@@ -165,13 +165,13 @@ describe('CrewPeek', () => {
   it('sem bloqueio, o selo mostra o estado ao vivo da filha', () => {
     mount({}, 'working')
     expect(screen.getByText('trabalhando')).toBeInTheDocument()
-    expect(screen.queryByText('Aguardando resposta')).not.toBeInTheDocument()
+    expect(screen.queryByText('Pergunta pendente')).not.toBeInTheDocument()
   })
 })
 
 describe('CrewPeek em modo terminal', () => {
   beforeEach(() => {
-    useCrewDockStore.setState({ peekId: null, peekMode: 'chat' })
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
     useAppStore.setState({ panes: [] })
     terminalProps.length = 0
   })
@@ -179,7 +179,7 @@ describe('CrewPeek em modo terminal', () => {
   function mountTerminal() {
     useHandoffsStore.setState({ handoffs: [handoff] })
     useAppStore.setState({ liveSessions: [live] })
-    useCrewDockStore.setState({ peekId: 'h1', peekMode: 'terminal' })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1', peekMode: 'terminal' })
     return render(<CrewPeek />)
   }
 
@@ -249,5 +249,122 @@ describe('CrewPeek em modo terminal', () => {
     fireEvent.click(screen.getByText('abrir como aba'))
     expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
     expect(useCrewDockStore.getState().peekId).toBeNull()
+  })
+
+  describe('foco ao fechar', () => {
+    function focusedButton(): HTMLButtonElement {
+      const el = document.createElement('button')
+      document.body.appendChild(el)
+      el.focus()
+      return el
+    }
+
+    it('fechar devolve o foco a quem abriu o peek', () => {
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 0
+      })
+      const origin = focusedButton()
+      mount()
+      act(() => useCrewDockStore.getState().closePeek())
+      expect(document.activeElement).toBe(origin)
+      raf.mockRestore()
+    })
+
+    // Alt+A/Alt+Q pulam do peek pra uma aba: devolver o foco à origem reativaria o
+    // grupo dela no dockview e desfaria o pulo.
+    it('fechar sem restaurar deixa o foco com a sessão de destino', () => {
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 0
+      })
+      focusedButton()
+      mount()
+      const target = document.createElement('button')
+      document.body.appendChild(target)
+      act(() => {
+        useCrewDockStore.getState().closePeek({ restoreFocus: false })
+        target.focus()
+      })
+      expect(document.activeElement).toBe(target)
+      raf.mockRestore()
+    })
+  })
+})
+
+// Peek de uma sessão comum (sem handoff): o mapa de sessões abre qualquer
+// cartão aqui em vez de criar aba.
+describe('CrewPeek com peekTarget de sessão', () => {
+  const solo: LiveSessionInfo = {
+    ...live,
+    id: 's-solo',
+    ccSessionId: 'cc-solo',
+    title: 'checkout-gateway',
+  }
+
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    useHandoffsStore.setState({ handoffs: [] })
+    useAppStore.setState({ panes: [], liveSessions: [solo] })
+    terminalProps.length = 0
+  })
+
+  it('openSessionPeek não mexe no peekId de handoff; openPeek espelha o id do handoff', () => {
+    useCrewDockStore.getState().openSessionPeek('s-solo', 'terminal')
+    expect(useCrewDockStore.getState()).toMatchObject({
+      peekTarget: { kind: 'session', id: 's-solo' },
+      peekId: null,
+      peekMode: 'terminal',
+    })
+    useCrewDockStore.getState().openPeek('h1')
+    expect(useCrewDockStore.getState()).toMatchObject({
+      peekTarget: { kind: 'handoff', id: 'h1' },
+      peekId: 'h1',
+    })
+    useCrewDockStore.getState().closePeek()
+    expect(useCrewDockStore.getState()).toMatchObject({ peekTarget: null, peekId: null })
+  })
+
+  it('mostra a sessão sem handoff: título da sessão, conversa, sem briefing', () => {
+    act(() => useCrewDockStore.getState().openSessionPeek('s-solo'))
+    render(<CrewPeek />)
+    const dialog = screen.getByRole('dialog')
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)).toHaveTextContent(
+      'checkout-gateway',
+    )
+    expect(screen.getByTestId('chat-view')).toBeInTheDocument()
+    expect(screen.queryByText('ver briefing')).toBeNull()
+  })
+
+  it('sem handoff (não há campo de resposta), o foco entra no diálogo', async () => {
+    act(() => useCrewDockStore.getState().openSessionPeek('s-solo'))
+    render(<CrewPeek />)
+    const dialog = screen.getByRole('dialog')
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+  })
+
+  it('abre em modo terminal quando pedido (provider sem transcript)', () => {
+    act(() => useCrewDockStore.getState().openSessionPeek('s-solo', 'terminal'))
+    render(<CrewPeek />)
+    expect(terminalProps.at(-1)).toMatchObject({ chrome: 'bare', mode: 'terminal' })
+  })
+
+  it('fecha sozinho quando a sessão termina', () => {
+    act(() => useCrewDockStore.getState().openSessionPeek('s-solo'))
+    render(<CrewPeek />)
+    act(() => useAppStore.setState({ liveSessions: [] }))
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
+  })
+
+  it('peek e aba da mesma sessão não coexistem: com aba aberta, leva pra aba', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({
+      focusOrOpenSession,
+      panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-solo' } }] as never,
+    })
+    act(() => useCrewDockStore.getState().openSessionPeek('s-solo'))
+    render(<CrewPeek />)
+    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-solo' }))
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
   })
 })
