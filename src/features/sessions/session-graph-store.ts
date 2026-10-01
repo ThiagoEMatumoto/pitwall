@@ -6,6 +6,7 @@ import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { openSessionByCc } from './open-session'
+import { graphNodeLiveKey } from './live-key'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraph, SessionGraphNode } from '../../../shared/types/session-graph'
 
@@ -66,8 +67,9 @@ export function canOpenGraphNode(
   ctx: OpenContext = currentOpenContext(),
 ): boolean {
   if (peekHandoffId(node, ctx)) return true
-  if (!node.ccSessionId || node.status === 'ended') return false
-  return ctx.liveSessions.some((s) => s.ccSessionId === node.ccSessionId)
+  const key = graphNodeLiveKey(node)
+  if (!key || node.status === 'ended') return false
+  return ctx.liveSessions.some((s) => s.ccSessionId === key)
 }
 
 // Filha que o Crew Dock mostra abre no quick look (o dock segue dono dela, nenhuma
@@ -83,5 +85,5 @@ export function openGraphNode(node: SessionGraphNode): boolean {
     return true
   }
   if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
-  return openSessionByCc(node.ccSessionId!)
+  return openSessionByCc(graphNodeLiveKey(node)!)
 }

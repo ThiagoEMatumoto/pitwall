@@ -6,6 +6,7 @@
 // próprias. Fica fora de providers/ porque o renderer também importa daqui.
 
 import { SPAWNABLE_MODEL_ALIASES } from '../../../shared/models'
+import type { AgentProviderId } from '../../../shared/types/ipc'
 
 // Whitelist do --model: o valor vem do renderer/preset, mas o main re-valida —
 // nada fora desta lista chega à linha de comando. Deriva do registro canônico
@@ -317,4 +318,52 @@ export function resolveEffort(value: string | null | undefined): string | null {
 // Valida o --advisor contra a whitelist. Retorna o valor ou null (= sem flag).
 export function resolveAdvisor(value: string | null | undefined): string | null {
   return value && SPAWN_ADVISOR_WHITELIST.has(value) ? value : null
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Codex (provider experimental)
+// ─────────────────────────────────────────────────────────────────────────────
+// O Codex não aceita --permission-mode: o equivalente é o par sandbox (-s) +
+// política de aprovação (-a). plan → read-only; o resto → workspace-write. A
+// aprovação é SEMPRE on-request e a sandbox nunca é danger-full-access — nem um
+// bypassPermissions do renderer abre o Codex por inteiro.
+export type CodexSandbox = 'read-only' | 'workspace-write'
+
+export interface CodexPolicy {
+  sandbox: CodexSandbox
+  approval: 'on-request'
+}
+
+export function codexPolicyFor(permissionMode: string | null | undefined): CodexPolicy {
+  return {
+    sandbox: permissionMode === 'plan' ? 'read-only' : 'workspace-write',
+    approval: 'on-request',
+  }
+}
+
+// Spawn autônomo = filha de handoff: ninguém olhando o terminal. O claude ganha
+// o DESTRUCTIVE_DENYLIST (resolveDisallowedTools); o Codex não tem como negar
+// `rm`/`git push` por padrão de comando, então só sobe autônomo em read-only.
+// Provider sem trava conhecida é recusado: fail-closed para quem entrar depois.
+export function assertAutonomousSpawnGuarded(
+  provider: AgentProviderId,
+  permissionMode: string | null,
+  autonomous: boolean,
+): void {
+  if (!autonomous || provider === 'claude') return
+  if (provider === 'codex') {
+    if (codexPolicyFor(permissionMode).sandbox === 'read-only') return
+    throw new Error(
+      'Handoff autônomo com edição não é suportado no Codex: ele não tem equivalente ao denylist destrutivo do Claude (rm, git push, reset --hard). Use mode "plan" (read-only) ou provider "claude".',
+    )
+  }
+  throw new Error(`Handoff autônomo não é suportado no provider "${provider}": sem guard-rail.`)
+}
+
+// Modelos do Codex não têm whitelist local (a lista é da OpenAI); a defesa é o
+// formato — nada que feche a aspa ou vire outro token na linha de comando.
+const CODEX_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+
+export function resolveCodexModel(value: string | null | undefined): string | null {
+  return value && CODEX_MODEL_RE.test(value) ? value : null
 }

@@ -93,6 +93,6 @@ describe('getProvider', () => {
   })
 
   it('provider sem implementação lança em vez de cair no claude', () => {
-    expect(() => getProvider('codex')).toThrow('codex')
+    expect(() => getProvider('opencode' as never)).toThrow('opencode')
   })
 })

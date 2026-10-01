@@ -1,4 +1,5 @@
 import type { AgentProviderId } from '../../../../shared/types/ipc'
+import type { ProviderSupports } from '../../../../shared/agent-providers'
 
 export type { AgentProviderId }
 
@@ -23,6 +24,9 @@ export interface LaunchOpts {
   disallowedTools?: string[] | null
   settingsJson?: string | null
   initialPrompt?: string | null
+  // Instruções de sistema como TEXTO, para provider sem flag de arquivo (Codex:
+  // developer_instructions). O claude usa systemPromptFilePath e ignora isto.
+  systemPromptText?: string | null
 }
 
 export interface AgentProvider {
@@ -31,13 +35,13 @@ export interface AgentProvider {
   resolveCommand(readPref: ReadPref): string
   // String que o login shell executa (`<shell> -l -i -c 'exec <isto>'`).
   buildLaunch(opts: LaunchOpts): string
+  // Como a CLI chega ao MCP server do Pitwall: 'config-file' lê o arquivo de
+  // mcp-config por sessão (configPath); 'url' recebe o endpoint direto e o
+  // bearer por env (mcpEnv).
+  mcpVia: 'config-file' | 'url'
   // Argumento (com espaço inicial) que conecta a CLI ao MCP server do Pitwall.
-  mcpInject(opts: { configPath: string }): string
-  supports: {
-    resume: boolean
-    nativeTranscript: boolean
-    tuiMenus: boolean
-    permissionModes: boolean
-    chatView: boolean
-  }
+  mcpInject(opts: { configPath: string; url?: string }): string
+  // Env extra da PTY para o MCP (ex.: o bearer, que não pode ir na linha de comando).
+  mcpEnv?(opts: { token: string }): Record<string, string>
+  supports: ProviderSupports
 }

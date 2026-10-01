@@ -165,12 +165,31 @@ echo_loop
 `
 }
 
-// Stub do `codex`: banner no formato da TUI do Codex + eco do stdin. Não grava
-// nada em ~/.claude/sessions — o Codex real não escreve ali.
+// Stub do `codex`: banner no formato da TUI do Codex, um "turno" que imprime
+// por ~3s (contador do working, como o Codex real) e eco do stdin. Não grava
+// nada em ~/.claude/sessions — o Codex real não escreve ali, e é exatamente o
+// que obriga o app a tirar o status da tela da PTY.
+export const FAKE_CODEX_TURN_TICKS = 6
+export const FAKE_CODEX_DONE = 'feito.'
+
 export function fakeCodexScript(logDir: string): string {
   return `#!/usr/bin/env bash
 # Stub do codex para cenários e2e — gerado por e2e/driver/fake-home.ts.
-${echoLoop(logDir, 'codex', '\u203a ')}
+LOG=${shSingleQuote(logDir)}/codex-$$.log
+printf 'argv:' >> "$LOG"
+for a in "$@"; do printf ' %q' "$a" >> "$LOG"; done
+printf '\\n' >> "$LOG"
+printf 'env-token: %s\\n' "\${PITWALL_MCP_TOKEN:+set}" >> "$LOG"
+
+turn() {
+  for i in $(seq 1 ${FAKE_CODEX_TURN_TICKS}); do
+    printf '\\u2022 Working (%ss \\u2022 esc to interrupt)\\n' "$i"
+    sleep 0.5
+  done
+  printf '${FAKE_CODEX_DONE}\\n'
+  printf 'turn-end: %s\\n' "$(date +%s%3N)" >> "$LOG"
+  printf '\\u203a '
+}
 
 printf '\\u256d%s\\u256e\\n' '──────────────────────────────────────────────────'
 printf '\\u2502 %-49s\\u2502\\n' '>_ OpenAI Codex (fake stub e2e)'
@@ -178,11 +197,33 @@ printf '\\u2502 %-49s\\u2502\\n' ''
 printf '\\u2502 %-49s\\u2502\\n' 'model:     gpt-5-codex   /model to change'
 printf '\\u2502 %-49s\\u2502\\n' "directory: $PWD"
 printf '\\u2570%s\\u256f\\n\\n' '──────────────────────────────────────────────────'
-printf '  To get started, describe a task or try one of these commands:\\n\\n'
-printf '  /init - create an AGENTS.md file with instructions for Codex\\n'
-printf '  /status - show current session configuration\\n\\n'
-if [ $# -gt 0 ]; then printf 'prompt inicial: %s\\n' "$*"; fi
-echo_loop
+
+# Posicional = prompt inicial (o último argumento, depois das flags).
+last=''
+skip=0
+for a in "$@"; do
+  if [ $skip -eq 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -s|-a|-m|-c) skip=1 ;;
+    --*) ;;
+    *) last="$a" ;;
+  esac
+done
+if [ -n "$last" ]; then
+  printf 'prompt inicial: %s\\n' "$last"
+  turn
+else
+  printf '\\u203a '
+fi
+
+while IFS= read -r line; do
+  line=\${line//$'\\e[200~'/}
+  line=\${line//$'\\e[201~'/}
+  line=\${line%$'\\r'}
+  printf 'stdin: %s @%s\\n' "$line" "$(date +%s%3N)" >> "$LOG"
+  printf 'recebido: %s\\n' "$line"
+  turn
+done
 `
 }
 

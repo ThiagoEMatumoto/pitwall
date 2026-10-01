@@ -20,6 +20,7 @@ import type {
 } from '../../../shared/types/ipc'
 import type { PtyDataEvent, PtyExitEvent, PtySizeEvent } from './pty-manager'
 import { readStyledTail, type TailSnapshot } from './screen-tail'
+import { TAIL_WINDOWS } from '../../../shared/tui/tui-read-window'
 
 // Espelho headless da tela de cada PTY viva, no main. O parser de menu só rodava
 // dentro do Terminal.tsx montado — e a fila de atenção existe justamente pra
@@ -43,7 +44,9 @@ export const SCAN_MAX_WAIT_MS = 500
 export const UNPARSED_STABLE_MS = 1500
 // Quanto uma resposta segura a sessão: até o menu respondido sair da tela ou isto.
 export const RESPOND_LOCK_MS = 2000
-const SCROLLBACK = 1000
+// Um espelho por PTY de agente, sempre ligado: guardar mais do que a maior janela
+// que o parser lê (TAIL_WINDOWS, a partir do fim) é memória e trabalho de reflow à toa.
+export const MIRROR_SCROLLBACK = Math.max(...TAIL_WINDOWS)
 const EMPTY_SCAN: ScreenScan = { menu: null, inputPrompt: false, nonBlankLines: 0 }
 
 export interface PtySource {
@@ -163,7 +166,7 @@ export class TuiMenuWatch extends EventEmitter {
     const target = this.select(sessionId)
     if (!target) return
     this.entries.set(sessionId, {
-      term: new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true }),
+      term: new Terminal({ cols, rows, scrollback: MIRROR_SCROLLBACK, allowProposedApi: true }),
       timer: null,
       pendingSince: null,
       scan: EMPTY_SCAN,

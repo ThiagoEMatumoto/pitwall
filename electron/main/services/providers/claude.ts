@@ -2,6 +2,7 @@
 // buildLaunch vivem em ../spawn-flags.ts (também importado pelo renderer, por isso
 // continua um módulo à parte) e são específicos deste provider.
 import type { AgentProvider, LaunchOpts } from './types'
+import { PROVIDER_LABELS, PROVIDER_SUPPORTS } from '../../../../shared/agent-providers'
 
 const CLAUDE_COMMAND_KEY = 'claude_command'
 
@@ -52,16 +53,11 @@ function buildClaudeInnerCmd(opts: LaunchOpts): string {
 
 export const claudeProvider: AgentProvider = {
   id: 'claude',
-  label: 'Claude Code',
+  label: PROVIDER_LABELS.claude,
   resolveCommand: (readPref) => readPref(CLAUDE_COMMAND_KEY) || 'claude',
   buildLaunch: buildClaudeInnerCmd,
+  mcpVia: 'config-file',
   // Sem --strict-mcp-config: os servers de user/projeto do claude continuam valendo.
   mcpInject: ({ configPath }) => ` --mcp-config ${shquote(configPath)}`,
-  supports: {
-    resume: true,
-    nativeTranscript: true,
-    tuiMenus: true,
-    permissionModes: true,
-    chatView: true,
-  },
+  supports: PROVIDER_SUPPORTS.claude,
 }

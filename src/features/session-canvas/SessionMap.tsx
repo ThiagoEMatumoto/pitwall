@@ -18,6 +18,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Map as MapIcon, Maximize } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { paneShowsLive } from '@/features/handoffs/crew'
 import './session-map.css'
 import { useAppStore } from '@/store/appStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
@@ -44,7 +45,13 @@ import { useCanvasState, useCanvasStateStore } from './canvas-state-store'
 import { useProjectsViewStore } from './projects-view-store'
 import { useMapCommands } from './useMapCommands'
 import { MapActionsContext, type MapActions } from './map-context'
-import { MapContextMenu, MapTopBar, SelectionToolbar, actionsFor } from './MapChrome'
+import {
+  MapContextMenu,
+  MapTopBar,
+  SelectionToolbar,
+  actionsFor,
+  toolbarPositionFor,
+} from './MapChrome'
 import { DelegateDialog } from './DelegateDialog'
 import { SessionCardNode } from './SessionCardNode'
 import { LaneGroupNode } from './LaneGroupNode'
@@ -67,6 +74,7 @@ import { sameIdList, tailSubscription, tailText, type TailCandidate } from './ca
 import { advanceWorkingClocks, indicatorFor } from './card-indicator'
 import { MapLiveContext, useMinuteClock, type MapLive } from './map-live'
 import { MapStatusCounters } from './MapStatusCounters'
+import { usePendingAsks } from '@/features/handoffs/ConversationsTab'
 
 const nodeTypes = {
   session: SessionCardNode,
@@ -143,6 +151,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const terminalSizes = useCardViewStore((s) => s.terminalSizes)
   const terminalId = terminalOf(views)
+  const asks = usePendingAsks()
 
   // Estado de exibição dos cartões: lido do banco uma vez por escopo.
   useEffect(() => {
@@ -169,8 +178,9 @@ function SessionMapInner() {
       expandedMothers,
       views,
       terminalSizes,
+      asks,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, terminalSizes],
+    [graph, scope, canvas, inUse, expandedMothers, views, terminalSizes, asks],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -353,7 +363,7 @@ function SessionMapInner() {
     if (!terminalId) return
     const liveSession = liveSessions.find((x) => x.id === terminalId)
     const hasPane =
-      !!liveSession && panes.some((p) => p.session.ccSessionId === liveSession.ccSessionId)
+      !!liveSession && panes.some((p) => paneShowsLive(p, liveSession))
     const peeked =
       peekedSessionId(peekTarget) ??
       (peekTarget?.kind === 'handoff'
@@ -367,6 +377,20 @@ function SessionMapInner() {
     })
     if (leave) useCardViewStore.getState().leaveTerminal(terminalId)
   }, [terminalId, liveSessions, panes, peekTarget, peekMode, handoffs])
+
+  // Sessão nova criada com o mapa na frente (sem aba): entra em terminal no
+  // próprio cartão quando a PTY e o nó existirem — antes disso o efeito acima a
+  // devolveria a 'open' por não estar viva.
+  const pendingTerminal = useCardViewStore((s) => s.pendingTerminal)
+  const interact = cmd.interact
+  useEffect(() => {
+    if (!pendingTerminal) return
+    const alive = liveSessions.some((x) => x.id === pendingTerminal && x.status !== 'ended')
+    const onMap = nodes.some((n) => n.id === sessionNodeId(pendingTerminal))
+    if (!alive || !onMap) return
+    useCardViewStore.getState().clearPendingTerminal()
+    interact(pendingTerminal)
+  }, [pendingTerminal, liveSessions, nodes, interact])
 
   // Afastar o zoom (gesto do usuário — o setCenter de entrada não tem evento)
   // devolve o terminal: abaixo de ~0.85 ele não se lê nem se clica.
@@ -727,6 +751,7 @@ function SessionMapInner() {
             <SelectionToolbar
               nodeId={selected.length === 1 ? selected[0].id : null}
               actions={selectionActions}
+              position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
               onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
             />
           </ReactFlow>

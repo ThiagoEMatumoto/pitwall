@@ -38,6 +38,9 @@ const seam = vi.hoisted(() => ({
   runningIds: [] as string[],
   feature: null as Record<string, unknown> | null,
   ptyListeners: new Map<string, (e: unknown) => void>(),
+  // Linha anterior da conversa (propósito/grupo/resumo) e o UPDATE que a herda.
+  prevCanvasRow: null as Record<string, unknown> | null,
+  canvasInherits: [] as unknown[][],
 }))
 
 vi.mock('electron', () => ({
@@ -82,9 +85,11 @@ vi.mock('../services/db', () => ({
       run: (...args: unknown[]) => {
         if (sql.includes('INSERT INTO sessions')) seam.inserted.push(args)
         if (sql.includes('UPDATE sessions SET feature_id')) seam.featureUpdates.push(args)
+        if (sql.includes('UPDATE sessions SET purpose')) seam.canvasInherits.push(args)
         return { changes: 1 }
       },
       get: (..._args: unknown[]) => {
+        if (sql.includes('SELECT purpose, group_id')) return seam.prevCanvasRow ?? undefined
         if (sql.includes('SELECT feature_id FROM sessions')) {
           return seam.resumeFeatureId ? { feature_id: seam.resumeFeatureId } : undefined
         }
@@ -202,6 +207,8 @@ function injectedSystemPrompt(): string | null {
 }
 
 beforeEach(() => {
+  seam.prevCanvasRow = null
+  seam.canvasInherits.length = 0
   seam.handlers.clear()
   seam.spawns.length = 0
   seam.inserted.length = 0
@@ -252,6 +259,26 @@ describe('sessions:resume preserva o vínculo com a feature', () => {
     seam.resumeFeatureId = 'feat-1'
     resume()
     expect(seam.spawns[0].innerCmd).toContain(`--resume ${CC_SESSION_ID}`)
+  })
+})
+
+describe('sessions:resume preserva propósito, grupo e "onde parei"', () => {
+  it('a linha nova herda os campos da linha anterior da mesma conversa', () => {
+    seam.prevCanvasRow = {
+      purpose: 'Migrar billing p/ Stripe',
+      group_id: 'g-pag',
+      last_summary: 'parei no webhook',
+      last_summary_at: 42,
+    }
+    const { id } = resume()
+    expect(seam.canvasInherits).toEqual([
+      ['Migrar billing p/ Stripe', 'g-pag', 'parei no webhook', 42, id],
+    ])
+  })
+
+  it('conversa sem linha anterior não escreve nada', () => {
+    resume()
+    expect(seam.canvasInherits).toEqual([])
   })
 })
 

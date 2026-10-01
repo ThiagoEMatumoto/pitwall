@@ -8,7 +8,9 @@ import {
   RESPOND_LOCK_MS,
   SCAN_MAX_WAIT_MS,
   UNPARSED_STABLE_MS,
+  MIRROR_SCROLLBACK,
 } from './tui-menu-watch'
+import { TAIL_WINDOWS } from '../../../shared/tui/tui-read-window'
 
 const FIXTURES = join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__')
 const PERMISSION = readFileSync(join(FIXTURES, 'claude-2.1.286-permission-bash.ansi'), 'utf8')
@@ -341,5 +343,18 @@ describe('TuiMenuWatch.respond — menuSeq e trava por sessão', () => {
     expect(bad).toMatchObject({ ok: false, error: 'menu-changed' })
     expect(await drain(approve(watch, snap))).toEqual({ ok: true })
     expect(pty.writes).toEqual(['1'])
+  })
+})
+
+describe('TuiMenuWatch — custo do espelho sempre ligado', () => {
+  it('o scrollback guarda só a maior janela que o parser lê', () => {
+    expect(MIRROR_SCROLLBACK).toBe(Math.max(...TAIL_WINDOWS))
+  })
+
+  it('um menu depois de muita saída continua reconhecido com o scrollback curto', async () => {
+    const noise = Array.from({ length: 2000 }, (_, i) => `linha ${i}`).join('\r\n')
+    const { watch } = setup(`${noise}\r\n${PERMISSION}`)
+    const scan = await watch.rescan('s1')
+    expect(scan?.menu?.kind).toBe('permission')
   })
 })

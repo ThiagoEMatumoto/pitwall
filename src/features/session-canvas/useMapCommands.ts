@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { canvasApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
-import { dockCrew } from '@/features/handoffs/crew'
+import { dockCrew, paneShowsLive } from '@/features/handoffs/crew'
 import { peekedSessionId, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -91,7 +91,7 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
     }
     const live = liveSessions.find((s) => s.id === node.sessionId)
     if (!live) return
-    if (panes.some((p) => p.session.ccSessionId === live.ccSessionId)) {
+    if (panes.some((p) => paneShowsLive(p, live))) {
       useProjectsViewStore.getState().setView('terminals')
       void focusOrOpenSession(live)
       return
@@ -116,7 +116,7 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
       cancelPendingClick()
       const { liveSessions, panes, focusOrOpenSession } = useAppStore.getState()
       const live = liveSessions.find((s) => s.id === sessionId)
-      const hasPane = !!live && panes.some((p) => p.session.ccSessionId === live.ccSessionId)
+      const hasPane = !!live && panes.some((p) => paneShowsLive(p, live))
       const host = terminalHostFor({ live: !!live, hasPane })
       if (host === 'none' || !live) {
         showToast({ title: 'Sem terminal vivo', body: 'Esta sessão não tem PTY aberta no app.' })

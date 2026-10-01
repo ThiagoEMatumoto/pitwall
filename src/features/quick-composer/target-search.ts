@@ -113,9 +113,10 @@ const REFUSAL_REASON: Record<SendPromptError, string> = {
   'menu-open': 'menu aberto na tela',
   unparsed: 'a tela não mostra o input livre — pode ser um menu',
   attention: 'ela está com uma pergunta de handoff pendente',
-  'no-screen': 'sem espelho da tela e ela espera você',
+  'no-screen': 'sem espelho da tela — fale com ela pelo terminal dela',
   'not-running': 'sessão encerrada',
   'input-dirty': 'ela tem texto não enviado no prompt',
+  cancelled: 'a mensagem foi cancelada',
 }
 
 export function sendRefusalReason(error: SendPromptError): string {

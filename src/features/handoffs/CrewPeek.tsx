@@ -15,6 +15,7 @@ import {
 } from './crew'
 import { useCrewDockStore, type CrewPeekMode } from './crew-dock-store'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 
 // Quick look de uma sessão-filha: abre por cima de tudo, mostra a filha —
 // conversa renderizada ou terminal cru —, deixa responder, e some. O degrau do
@@ -106,7 +107,8 @@ export function CrewPeek() {
       key={`${target.kind}:${target.id}`}
       handoff={handoff}
       live={live}
-      mode={peekMode}
+      // Sem Chat View no provider (Codex): o peek abre direto no terminal.
+      mode={providerSupports(live?.provider).chatView ? peekMode : 'terminal'}
       onClose={closePeek}
     />
   )
@@ -349,7 +351,12 @@ function CrewPeekPanel({ handoff, live, mode, onClose }: PanelProps) {
                   active={mode === 'chat'}
                   icon={MessageSquare}
                   label="Chat"
-                  title="Conversa renderizada do transcript (a PTY segue viva)"
+                  disabled={!providerSupports(live.provider).chatView}
+                  title={
+                    providerSupports(live.provider).chatView
+                      ? 'Conversa renderizada do transcript (a PTY segue viva)'
+                      : CLAUDE_ONLY_REASON
+                  }
                   onClick={() => setPeekMode('chat')}
                 />
                 <PeekModeButton
@@ -550,20 +557,23 @@ function PeekModeButton({
   label,
   title,
   onClick,
+  disabled = false,
 }: {
   active: boolean
   icon: typeof MessageSquare
   label: string
   title: string
   onClick: () => void
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
       title={title}
-      className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition ${
+      className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition disabled:cursor-not-allowed disabled:opacity-40 ${
         active
           ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
           : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'

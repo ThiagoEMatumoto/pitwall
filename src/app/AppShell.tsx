@@ -46,7 +46,12 @@ import { useFilesStore } from '@/lib/files-store'
 import { FilesPanel } from '@/features/files/FilesPanel'
 import { HandoffApprovalDialog } from '@/features/handoffs/HandoffApprovalDialog'
 import { HandoffsPanel } from '@/features/handoffs/HandoffsPanel'
-import { CrewDock, useCrewDockWidth } from '@/features/handoffs/CrewDock'
+import {
+  CrewDock,
+  MAP_DOCK_HOST_ID,
+  useCrewDockWidth,
+  useHasCrew,
+} from '@/features/handoffs/CrewDock'
 import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { SessionMap } from '@/features/session-canvas/SessionMap'
 import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
@@ -68,7 +73,9 @@ import {
   useAttentionStore,
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
+import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
+import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
 
 interface PaneParams {
@@ -120,7 +127,8 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   )
 }
 
-// Aba do dockview com um dot na cor do projeto antes do título/close padrão.
+// Aba do dockview com um dot na cor do projeto e o badge do provider antes do
+// título/close padrão.
 // Reusa DockviewDefaultTab pra herdar o título dinâmico (api.title via setTitle) e o X.
 function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   // Mesma regra do TerminalPanel: a pane vem do STORE pelo id do painel
@@ -135,6 +143,8 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         className="ml-2 mr-1.5 h-2 w-2 shrink-0 rounded-full"
         style={{ background: color ?? 'var(--color-border)' }}
       />
+      {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
+      <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
       <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
@@ -185,6 +195,7 @@ export function AppShell() {
   // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
   // largura dele pra não cobrir os cards das filhas (e o input de resposta).
   const crewDockWidth = useCrewDockWidth()
+  const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
   const toastPlacement = useToastPlacement(crewDockWidth)
 
@@ -561,7 +572,7 @@ export function AppShell() {
       // os cards e Espaço abre o peek. Sem equipe não há o que focar: a tecla
       // segue pro xterm em vez de abrir um painel vazio.
       if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
-        if (crewDockWidth === 0) return
+        if (!hasCrew) return
         e.preventDefault()
         useCrewDockStore.getState().requestFocus()
         return
@@ -574,7 +585,7 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [overrides, toggleFiles, crewDockWidth])
+  }, [overrides, toggleFiles, hasCrew])
 
   // Abre Configurações sob demanda (ex: error state do Terminal, renderizado pelo
   // dockview fora desta árvore — ver requestOpenSettings).
@@ -590,12 +601,20 @@ export function AppShell() {
   // da palette.
   const activePane = area === 'projects' ? panes.find((p) => p.paneId === activePanelId) : undefined
   const activeCcSessionId = activePane?.session.ccSessionId ?? null
+  // Fila de atenção, Alt+,/. e MRU casam pela chave das sessões vivas, que no Codex
+  // (sem id nativo) é o sessions.id — com o cc puro a aba Codex nunca seria a atual.
+  const activeLiveKey = activePane
+    ? liveKeyOf(activePane.session.id, activeCcSessionId, activePane.session.provider)
+    : null
 
   useEffect(() => {
     sessionsApi.setRendererFocus(activeCcSessionId)
-    useAttentionStore.getState().setActiveCc(activeCcSessionId)
-    if (activeCcSessionId) useSessionMruStore.getState().touch(activeCcSessionId)
   }, [activeCcSessionId])
+
+  useEffect(() => {
+    useAttentionStore.getState().setActiveCc(activeLiveKey)
+    if (activeLiveKey) useSessionMruStore.getState().touch(activeLiveKey)
+  }, [activeLiveKey])
 
   // Dono único da assinatura de sessões vivas (strip + overlay só leem). Snapshot
   // + stream global no mount; cleanup no unmount (StrictMode-safe no store).
@@ -852,7 +871,7 @@ export function AppShell() {
             {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
-              <div className="absolute inset-0 z-20 bg-[var(--color-bg)]">
+              <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
                 <SessionMap />
               </div>
             )}

@@ -21,6 +21,7 @@ import { mentionPlacement, type MentionPlacement } from './mention-placement'
 import { counterLines } from './queue-counters'
 import { defaultWhen, sendRefusalReason, type SendTarget } from './target-search'
 import { usePromptQueue, useQuickComposerStore, useSendTargets } from './quick-composer-store'
+import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import type {
   PromptQueueSnapshot,
   QueuedPrompt,
@@ -73,8 +74,6 @@ export function resultNotice(
     return `Na fila de @${t.alias} — entrega quando ela terminar o turno, sem menu na tela.`
   if (res.error === 'menu-open')
     return `Há um menu aberto na tela de @${t.alias} — responda antes ou use “Quando terminar”.`
-  if (res.error === 'no-screen' && t.status !== 'waiting')
-    return `@${t.alias} não tem espelho da tela: só dá pra “Enviar agora”.`
   if (res.error === 'not-running') return `@${t.alias} encerrou — a mensagem não foi enviada.`
   if (res.error === 'input-dirty')
     return `@${t.alias} tem texto não enviado no prompt — envie ou apague lá, ou use “Quando terminar”.`
@@ -140,7 +139,11 @@ function QueueChips({ queue, targets }: { queue: PromptQueueSnapshot; targets: S
             title={q.text}
           >
             <span className="text-[var(--color-text-dim)]">@{t?.alias ?? 'sessão'}</span>
-            <span className="max-w-48 truncate text-[var(--color-text)]">{q.text}</span>
+            {isAgentAskEnvelope(q.text) ? (
+              <span className="text-[var(--color-info)]">pergunta de outro agente</span>
+            ) : (
+              <span className="max-w-48 truncate text-[var(--color-text)]">{q.text}</span>
+            )}
             {q.heldReason && (
               <span className="text-[var(--color-warning)]">{HELD_LABEL[q.heldReason]}</span>
             )}

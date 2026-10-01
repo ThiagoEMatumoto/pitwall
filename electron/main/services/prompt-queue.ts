@@ -34,6 +34,8 @@ export interface PromptQueueDeps {
   status(sessionId: string): LiveStatus | null
   // Tela relida agora. null = PTY sem espelho headless.
   screen(sessionId: string): Promise<ScreenScan | null>
+  // false = o status vem só da PTY (Codex): nunca diz 'waiting', então não prova nada.
+  nativeStatus(sessionId: string): boolean
   handoffAsking(sessionId: string): boolean
   write(sessionId: string, text: string): void
   emit(snapshot: PromptQueueSnapshot): void
@@ -70,10 +72,17 @@ export function deliveryVerdict(
   return 'deliver'
 }
 
-// Sem espelho não há tela pra provar nada: 'now' só escreve se o status não diz
-// que a sessão está esperando você (permissão/pergunta no 2.1.286).
-function blindVerdict(status: LiveStatus | null, handoffAsking: boolean): Verdict {
+// Sem espelho não há tela pra provar nada: 'now' só escreve se o status nativo não
+// diz que a sessão está esperando você (permissão/pergunta no 2.1.286). Status da
+// PTY (Codex) só conhece starting/working/idle: o overlay de aprovação parado parece
+// 'idle' e o \r o aprovaria — recusa sempre.
+function blindVerdict(
+  status: LiveStatus | null,
+  handoffAsking: boolean,
+  nativeStatus: boolean,
+): Verdict {
   if (handoffAsking) return 'attention'
+  if (!nativeStatus) return 'no-screen'
   return status === 'waiting' ? 'no-screen' : 'deliver'
 }
 
@@ -90,6 +99,8 @@ const isHold = (v: Verdict): v is HoldVerdict =>
 
 interface Item extends QueuedPrompt {
   holding: boolean
+  // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
+  outcome?: PromptQueueEventKind
 }
 
 export class PromptQueue {
@@ -117,7 +128,7 @@ export class PromptQueue {
 
   snapshot(): PromptQueueSnapshot {
     return {
-      items: this.items.map(({ holding: _h, ...q }) => q),
+      items: this.items.map(({ holding: _h, outcome: _o, ...q }) => q),
       counters: { ...this.counters },
       lastEvent: this.lastEvent,
     }
@@ -134,9 +145,12 @@ export class PromptQueue {
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
     }
-    const queued = this.items.find((i) => i.id === item.id)
-    if (!queued) return { ok: true, delivered: true }
-    const { holding: _h, ...rest } = queued
+    // A PTY pode morrer (ou o item ser cancelado) durante a releitura da tela: sair
+    // da fila não é entrega. O evento terminal já saiu antes de o chamador saber o id.
+    if (item.outcome === 'delivered') return { ok: true, delivered: true }
+    if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
+    if (item.outcome) return { ok: false, error: 'not-running' }
+    const { holding: _h, outcome: _o, ...rest } = item
     return { ok: true, delivered: false, queued: rest }
   }
 
@@ -145,7 +159,7 @@ export class PromptQueue {
     const asking = this.deps.handoffAsking(sessionId)
     const verdict = scan
       ? deliveryVerdict(status, scan, asking, 'now')
-      : blindVerdict(status, asking)
+      : blindVerdict(status, asking, this.deps.nativeStatus(sessionId))
     const error = REFUSAL[verdict]
     if (error) {
       this.countRefusal(sessionId, verdict)
@@ -292,6 +306,7 @@ export class PromptQueue {
   }
 
   private finish(item: Item, kind: PromptQueueEventKind): void {
+    item.outcome = kind
     this.items = this.items.filter((i) => i !== item)
     if (kind === 'delivered') this.counters.delivered++
     if (kind === 'expired') this.counters.expired++

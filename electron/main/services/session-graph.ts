@@ -155,6 +155,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
         liveName: live?.name ?? null,
         repoLabel: repo?.label ?? null,
       }),
+      cliName: live?.name ?? null,
       projectId: repo?.project_id ?? null,
       repoId: repo ? repo.id : null,
       repoLabel: repo?.label ?? null,

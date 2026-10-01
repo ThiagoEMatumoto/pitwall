@@ -16,7 +16,8 @@ export type SendPromptError =
   // Menu (permissão/pergunta/trust) na tela: o \r do envio responderia ele.
   | 'menu-open'
   // Sem espelho da tela desta PTY: não dá pra provar que não há menu, então
-  // 'quando terminar' não é oferecido. Em 'now', também quando a sessão espera você.
+  // 'quando terminar' não é oferecido. Em 'now', também quando a sessão espera você
+  // ou quando o status é só o da PTY (Codex), que nunca diz 'waiting'.
   | 'no-screen'
   // Filha de handoff com pergunta pendente: responde pelo canal do handoff.
   | 'attention'
@@ -26,6 +27,8 @@ export type SendPromptError =
   // A caixa de input do destino tem texto que o usuário digitou e não enviou: o
   // \r mandaria o rascunho dele junto (ou no lugar) da mensagem.
   | 'input-dirty'
+  // Cancelada da fila enquanto o próprio envio ainda relia a tela.
+  | 'cancelled'
 
 export type SendPromptResult =
   | { ok: true; delivered: true }

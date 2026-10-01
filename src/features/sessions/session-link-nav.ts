@@ -10,6 +10,7 @@ import {
   useSessionGraphStore,
 } from './session-graph-store'
 import { stepLink } from './session-links'
+import { graphNodeLiveKey } from './live-key'
 import type { SessionGraph, SessionGraphNode } from '../../../shared/types/session-graph'
 
 export type SessionLinkKeyAction = 'prev' | 'next'
@@ -52,7 +53,9 @@ export function currentGraphNode(
       ? graph.nodes.find((n) => n.sessionId === where.peekSessionId)
       : undefined
   if (peeked) return peeked
-  return graph.nodes.find((n) => n.ccSessionId === where.activeCc) ?? null
+  // activeCc null não pode casar com o primeiro nó sem id nativo (null === null).
+  if (!where.activeCc) return null
+  return graph.nodes.find((n) => graphNodeLiveKey(n) === where.activeCc) ?? null
 }
 
 export interface SessionLinkFlash {

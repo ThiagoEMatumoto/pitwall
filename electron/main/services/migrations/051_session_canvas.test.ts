@@ -42,10 +42,9 @@ describe('migration 051_session_canvas', () => {
     db.close()
   })
 
-  it('is registered as the last migration, version 51', () => {
+  it('is registered as version 51', () => {
     const entry = migrations.find((m) => m.version === 51)
     expect(entry?.name).toBe('051_session_canvas')
-    expect(Math.max(...migrations.map((m) => m.version))).toBe(51)
   })
 
   it('creates canvas_positions keyed by (scope, kind, entity_id)', () => {

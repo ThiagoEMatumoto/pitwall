@@ -72,12 +72,13 @@ export function dockCrew(handoffs: Handoff[]): Handoff[] {
 export function hiddenCrewSessionIds(
   handoffs: Handoff[],
   liveSessions: LiveSessionInfo[],
-  openCcSessionIds: Set<string>,
+  // Chaves de openPaneKeys.
+  openPaneKeys: Set<string>,
 ): Set<string> {
   const childIds = childSessionIds(handoffs)
   const hidden = new Set<string>()
   for (const s of liveSessions) {
-    if (childIds.has(s.id) && !openCcSessionIds.has(s.ccSessionId)) hidden.add(s.id)
+    if (childIds.has(s.id) && !openPaneKeys.has(s.ccSessionId)) hidden.add(s.id)
   }
   return hidden
 }
@@ -150,7 +151,19 @@ export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessio
 
 // Referência mínima de pane aberta (estrutural, pra não importar o appStore aqui).
 export interface OpenPaneRef {
-  session: { ccSessionId: string | null }
+  session: { id: string; ccSessionId: string | null }
+}
+
+// Chave da pane no vocabulário da lista viva: o id nativo, ou o sessions.id para
+// quem não tem (Codex — a lista viva o traz com ccSessionId = sessions.id).
+const paneLiveKey = (p: OpenPaneRef): string => p.session.ccSessionId ?? p.session.id
+
+export function openPaneKeys(panes: OpenPaneRef[]): Set<string> {
+  return new Set(panes.map(paneLiveKey))
+}
+
+export function paneShowsLive(pane: OpenPaneRef, live: LiveSessionInfo): boolean {
+  return paneLiveKey(pane) === live.ccSessionId
 }
 
 // Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
@@ -167,7 +180,7 @@ export function crewTerminalTarget(
   openPanes: OpenPaneRef[],
 ): 'pane' | 'overlay' | 'none' {
   if (!live) return 'none'
-  return openPanes.some((p) => p.session.ccSessionId === live.ccSessionId) ? 'pane' : 'overlay'
+  return openPanes.some((p) => paneShowsLive(p, live)) ? 'pane' : 'overlay'
 }
 
 // Card sob foco de teclado depois de a lista mudar (filha entrou, saiu, ou a

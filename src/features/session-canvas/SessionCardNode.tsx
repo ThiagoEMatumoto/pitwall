@@ -34,12 +34,11 @@ import { useMapActions } from './map-context'
 import { useMapFocus } from './map-focus'
 import { cardDetail, cardFooter, cardTitle, compensatedPx, type CardDetail } from './card-display'
 import { PurposeLine } from './PurposeLine'
+import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 
 // Tons que nunca esmaecem no modo foco.
 const ACTIVE_TONES: ReadonlySet<IndicatorTone> = new Set(['working', 'needs-you', 'starting'])
 
-// O provider padrão não precisa de rótulo em todo cartão; só o diferente aparece.
-const DEFAULT_PROVIDER = 'claude'
 // Menor terminal no cartão: abaixo disso a TUI quebra o layout da caixa de input.
 const TERMINAL_MIN_W = 520
 const TERMINAL_MIN_H = 340
@@ -210,11 +209,7 @@ function StateLine({ data, ind }: { data: SessionCardData; ind: CardIndicator })
           ⟲ continua de {data.continuesFrom}
         </span>
       )}
-      {node.provider !== DEFAULT_PROVIDER && (
-        <span className="ml-auto shrink-0 rounded border border-[var(--color-border)] px-1 font-mono text-[10px] text-[var(--color-text-dim)]">
-          {node.provider}
-        </span>
-      )}
+      <ProviderBadge provider={node.provider} className="ml-auto" />
     </div>
   )
 }

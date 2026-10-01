@@ -68,13 +68,19 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
     scan: opts.mirrored === false ? null : SCANS[opts.screen ?? 'idle'],
     running: true,
     asking: false,
+    native: true,
+    onScan: null as null | (() => void),
   }
   const writes: string[] = []
   const snapshots: PromptQueueSnapshot[] = []
   const deps: PromptQueueDeps = {
     isRunning: () => state.running,
     status: () => state.status,
-    screen: async () => state.scan,
+    screen: async () => {
+      state.onScan?.()
+      return state.scan
+    },
+    nativeStatus: () => state.native,
     handoffAsking: () => state.asking,
     write: (id, text) => writes.push(`${id}:${text}`),
     emit: (s) => snapshots.push(s),
@@ -300,6 +306,43 @@ describe('PromptQueue — envio para qualquer sessão', () => {
       delivered: true,
     })
     expect(idle.writes).toEqual([`${SID}:oi`])
+  })
+
+  it("'now' sem espelho com status só da PTY (Codex) recusa até 'idle': o overlay parado parece ocioso", async () => {
+    const codex = setup({ status: 'idle', mirrored: false })
+    codex.state.native = false
+    const res = await codex.queue.send({ sessionId: SID, text: 'continue', when: 'now' })
+    expect(res).toEqual({ ok: false, error: 'no-screen' })
+    expect(codex.writes).toEqual([])
+  })
+
+  it('a PTY morre durante a releitura da tela: o envio não se diz entregue', async () => {
+    const { queue, state, writes, snapshots } = setup({ status: 'idle' })
+    let scans = 0
+    // 2ª leitura = a do tryDeliver; o 'exit' do ptyManager chega no meio dela.
+    state.onScan = () => {
+      if (++scans !== 2) return
+      state.running = false
+      queue.onSessionExit(SID)
+    }
+    const res = await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle' })
+    expect(res).toEqual({ ok: false, error: 'not-running' })
+    expect(writes).toEqual([])
+    expect(snapshots.at(-1)?.lastEvent?.kind).toBe('session-gone')
+    expect(queue.snapshot().counters.delivered).toBe(0)
+  })
+
+  it('cancelada durante a releitura da tela: o envio devolve cancelled', async () => {
+    const { queue, state, writes } = setup({ status: 'idle' })
+    let scans = 0
+    state.onScan = () => {
+      if (++scans !== 2) return
+      const id = queue.snapshot().items[0]?.id
+      if (id) queue.cancel(id)
+    }
+    const res = await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle' })
+    expect(res).toEqual({ ok: false, error: 'cancelled' })
+    expect(writes).toEqual([])
   })
 
   it('o poll entrega mesmo se a borda do fim de turno se perder', async () => {

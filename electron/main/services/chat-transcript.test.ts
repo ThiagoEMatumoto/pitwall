@@ -6,6 +6,8 @@ import {
   stripAnsi,
   type SubagentInfo,
 } from './chat-transcript'
+import { formatAskEnvelope } from './agent-bus'
+import { cleanPrompt, lastUserPrompt } from './session-purpose'
 
 // Fixture representativo: prompt do usuário, resposta assistant com texto +
 // tool_use, tool_result do usuário (string e array), uma linha não-mensagem, uma
@@ -952,5 +954,37 @@ describe('parseChatMessages — interrupção por Ctrl+C', () => {
     ].join('\n')
     const msgs = parseChatMessages(jsonl)
     expect(msgs.find((m) => m.kind === 'assistant')).not.toHaveProperty('interrupted')
+  })
+})
+
+describe('parseChatMessages — pergunta de outro agente (pitwall-ask)', () => {
+  // Shape real: o envelope que o agent-bus escreve na PTY do destino.
+  const envelope = formatAskEnvelope({
+    askId: 'ask-1',
+    fromAlias: 'web-front',
+    fromProject: 'Loja',
+    text: 'como está o contrato de /orders?',
+  })
+
+  it.each([
+    ['string', envelope],
+    ['blocos', [{ type: 'text', text: envelope }]],
+  ])('content em %s vira system, nunca bolha do usuário', (_label, content) => {
+    const m = parseChatMessages(
+      JSON.stringify({ type: 'user', message: { role: 'user', content } }),
+    )
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatchObject({ kind: 'system', label: 'Pergunta de web-front @ Loja' })
+  })
+
+  it('não vira propósito nem última mensagem da sessão', () => {
+    const m = parseChatMessages(
+      [
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'migrar o checkout' } }),
+        JSON.stringify({ type: 'user', message: { role: 'user', content: envelope } }),
+      ].join('\n'),
+    )
+    expect(lastUserPrompt(m)).toBe('migrar o checkout')
+    expect(cleanPrompt(envelope)).toBeNull()
   })
 })

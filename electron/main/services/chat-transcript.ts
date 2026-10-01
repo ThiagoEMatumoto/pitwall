@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatQuestion } from '../../../shared/types/chat'
+import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 
 // Subconjunto relevante de uma linha do transcript JSONL do Claude Code. Mantemos
 // um shape LOCAL (sem importar os internos do metrics-service/session-activity)
@@ -309,7 +310,18 @@ export function classifyUserString(obj: RawLine, text: string): ChatMessage {
   if (text.trimStart().startsWith('<system-reminder>')) {
     return { kind: 'meta', text, label: metaLabel(text) }
   }
+  if (isAgentAskEnvelope(text)) return agentAskMessage(text)
   return { kind: 'user', text }
+}
+
+function agentAskMessage(text: string): ChatMessage {
+  const from = /^\s*<pitwall-ask from="([^"]*)"/.exec(text)?.[1] ?? 'outro agente'
+  const body = text
+    .split('\n\n')
+    .slice(1)
+    .join('\n\n')
+    .replace(/<\/pitwall-ask>\s*$/, '')
+  return { kind: 'system', label: `Pergunta de ${from}`, detail: body.trim(), level: 'info' }
 }
 
 // Normaliza o content de um tool_result para string: a CLI grava ou uma string

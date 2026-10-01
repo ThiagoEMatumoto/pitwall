@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { sessionsApi } from '@/lib/ipc'
-import { hiddenCrewSessionIds } from '@/features/handoffs/crew'
+import { hiddenCrewSessionIds, openPaneKeys } from '@/features/handoffs/crew'
 import { useAppStore, type ActivePane } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
@@ -14,11 +14,7 @@ export function visibleLiveSessions(
   panes: ActivePane[],
   handoffs: Handoff[],
 ): LiveSessionInfo[] {
-  const open = new Set<string>()
-  for (const p of panes) {
-    if (p.session.ccSessionId) open.add(p.session.ccSessionId)
-  }
-  const hidden = hiddenCrewSessionIds(handoffs, allLiveSessions, open)
+  const hidden = hiddenCrewSessionIds(handoffs, allLiveSessions, openPaneKeys(panes))
   return allLiveSessions.filter((s) => !hidden.has(s.id))
 }
 

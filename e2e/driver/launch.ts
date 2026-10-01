@@ -60,6 +60,9 @@ export interface LaunchResult {
   app: ElectronApplication
   page: Page
   userDataCopy: string
+  // stdout+stderr do main desde o launch: o captureLogs só assina depois do
+  // firstWindow e perde o boot (ex.: as linhas [drive-safe]).
+  mainOutput: () => string
 }
 
 export interface LaunchOptions {
@@ -122,9 +125,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
   app.process().on('exit', (code, signal) => {
     if (code !== 0) console.error(`[launch] electron saiu: code=${code} signal=${signal}`)
   })
+  const output: string[] = []
+  app.process().stdout?.on('data', (d) => output.push(String(d)))
+  app.process().stderr?.on('data', (d) => output.push(String(d)))
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
-  return { app, page, userDataCopy: copy }
+  return { app, page, userDataCopy: copy, mainOutput: () => output.join('') }
 }
 
 export function copyRealUserData(restoreTabs = false): string {

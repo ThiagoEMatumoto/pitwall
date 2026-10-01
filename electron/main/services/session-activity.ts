@@ -27,6 +27,8 @@ import {
   type AttentionReason,
 } from '../../../shared/tui/attention-reason'
 import { deriveSubagentActivity } from './subagent-activity'
+import { ptyManager } from './pty-manager'
+import { derivePtyStatus } from './providers/pty-status'
 import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
 
@@ -67,6 +69,9 @@ export function setSessionGoneHook(fn: SessionGoneHook): void {
 }
 const TAIL_BYTES = 64 * 1024
 const DEBOUNCE_MS = 250
+// Cadência do status por PTY (provider sem índice nativo): a janela de
+// estabilidade é de 2s, então meio segundo basta pra borda não atrasar.
+const PTY_STATUS_TICK_MS = 500
 export const MAX_TEXT = 200
 
 // Fonte primária de status/name/updatedAt: ~/.claude/sessions/<pid>.json (um por
@@ -372,6 +377,14 @@ async function attentionReasonForCc(
   return attentionReasonForPty(ptyId, status)
 }
 
+// Status de uma PTY sem índice nativo (Codex), pela estabilidade da tela. A
+// chave é o sessions.id — não existe cc_session_id para essas sessões.
+export function ptyStatusFor(sessionId: string): SessionActivity['status'] {
+  const sample = ptyManager.getActivitySample(sessionId)
+  if (!sample || !ptyManager.isRunning(sessionId)) return 'ended'
+  return derivePtyStatus(sample, Date.now())
+}
+
 interface WatchEntry {
   transcriptPath: string | null
   enrichment: TranscriptEnrichment
@@ -401,6 +414,9 @@ class SessionActivityService extends EventEmitter {
   // broadcastGlobal é async e não serializado: só o batch da geração mais nova sai,
   // senão um batch velho chegando depois recoloca 'waiting' na fila do renderer.
   private globalGen = 0
+  // sessions.id → último status das PTYs sem índice nativo (Codex).
+  private ptyTracked = new Map<string, SessionActivity['status']>()
+  private ptyTimer: NodeJS.Timeout | null = null
 
   constructor() {
     super()
@@ -516,6 +532,51 @@ class SessionActivityService extends EventEmitter {
   closeAll(): void {
     for (const id of [...this.watched.keys()]) this.unwatch(id)
     this.unwatchGlobal()
+    for (const id of [...this.ptyTracked.keys()]) this.untrackPty(id)
+  }
+
+  // Sessão de provider sem índice nativo: o status sai da PTY (pty-status.ts),
+  // amostrado num tick próprio — não há arquivo no disco cujo watcher acorde.
+  trackPty(sessionId: string): void {
+    if (this.ptyTracked.has(sessionId)) return
+    this.ptyTracked.set(sessionId, 'starting')
+    if (!this.ptyTimer) {
+      this.ptyTimer = setInterval(() => this.tickPtyStatus(), PTY_STATUS_TICK_MS)
+      this.ptyTimer.unref?.()
+    }
+  }
+
+  untrackPty(sessionId: string): void {
+    this.ptyTracked.delete(sessionId)
+    if (this.ptyTracked.size === 0 && this.ptyTimer) {
+      clearInterval(this.ptyTimer)
+      this.ptyTimer = null
+    }
+  }
+
+  isPtyTracked(sessionId: string): boolean {
+    return this.ptyTracked.has(sessionId)
+  }
+
+  // Mesma borda do detectConsumption (working → idle = fim de turno), mas por
+  // sessions.id: é ela que acorda a fila 'quando terminar' das sessões Codex.
+  // O resumo por voz (turnEndedHook) fica de fora — lê o transcript do claude.
+  private tickPtyStatus(): void {
+    let changed = false
+    for (const [sessionId, prev] of this.ptyTracked) {
+      const current = ptyStatusFor(sessionId)
+      // PTY encerrada sai do tracking aqui mesmo: o exit dela já relista o renderer.
+      if (current === 'ended') {
+        this.untrackPty(sessionId)
+        changed = true
+        continue
+      }
+      if (current === prev) continue
+      changed = true
+      this.ptyTracked.set(sessionId, current)
+      if (prev === 'working' && current === 'idle') promptQueueTurnHook(sessionId)
+    }
+    if (changed) this.scheduleGlobal()
   }
 
   private ensureDirWatcher(): void {
@@ -571,6 +632,15 @@ class SessionActivityService extends EventEmitter {
         lastText,
         tokens,
         attentionReason: await attentionReasonForCc(ccSessionId, status),
+      })
+    }
+    // PTYs sem índice nativo entram chaveadas pelo sessions.id (o mesmo valor
+    // que o list-live-global devolve em ccSessionId para elas).
+    for (const sessionId of this.ptyTracked.keys()) {
+      batch.push({
+        ccSessionId: sessionId,
+        status: ptyStatusFor(sessionId),
+        lastActivityAt: ptyManager.getActivitySample(sessionId)?.lastByteAt ?? null,
       })
     }
     if (gen !== this.globalGen) return
