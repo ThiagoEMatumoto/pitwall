@@ -21,6 +21,7 @@ export default defineConfig({
       'electron/**/*.test.ts',
       'shared/**/*.test.ts',
       'scripts/**/*.test.ts',
+      'e2e/driver/**/*.test.ts',
     ],
   },
 })

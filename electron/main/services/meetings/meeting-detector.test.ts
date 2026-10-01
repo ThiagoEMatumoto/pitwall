@@ -12,6 +12,8 @@ vi.mock('electron', () => ({
 import { detectorRegistry } from './recorder-contract'
 import {
   createDetector,
+  installDetector,
+  uninstallDetector,
   DEFAULT_DENY_LIST,
   parseDump,
   parseScript,
@@ -438,5 +440,20 @@ describe('CM_MEETING_DETECT_SCRIPT', () => {
     await waitFor(() => phase(detector) === 'ending')
     await waitFor(() => phase(detector) === 'idle')
     expect(exec).not.toHaveBeenCalled()
+  })
+})
+
+describe('CM_DRIVE_SAFE', () => {
+  it('installDetector não cria nem inicia o detector', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.stubEnv('CM_DRIVE_SAFE', '1')
+    try {
+      uninstallDetector()
+      installDetector()
+      expect(detectorRegistry.current).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+      vi.restoreAllMocks()
+    }
   })
 })
