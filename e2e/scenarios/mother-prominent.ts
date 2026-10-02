@@ -11,6 +11,7 @@ import { goToArea, waitReady } from '../driver/nav'
 // Fase B — a mãe em destaque, sobre a CÓPIA do perfil real com HOME fake e stubs
 // vivos do `claude` (nunca tocam os repos, nenhuma API é chamada):
 //   feature + M (mãe) + C1/C2 (filhas de handoff de M, PTYs vivas)
+//   → o painel abre sozinho; Ctrl+Shift+P o esconde para medir o cartão em destaque
 //   → Enquadrar: o cartão de M é >= 1.5x a largura das filhas, a saída ao vivo
 //     dele tem >= 12px na tela e o zoom é o de leitura da mãe
 //   → barra de prompt GRANDE da mãe: o texto chega ao stdin do stub de M
@@ -18,7 +19,7 @@ import { goToArea, waitReady } from '../driver/nav'
 //     mapa navegável ao lado, enquadrar desconta a coluna, preferência gravada
 //   → Ctrl+Shift+O com a mãe fixada: o foco vai para o xterm da coluna
 //   → bastão pela UI (botão do cartão, briefing manual) → a coluna passa para S
-//   → desafixar: coluna some; Ctrl+Shift+O abre a mãe na modal do mapa
+//   → soltar: o painel segue a feature (S); escondido, Ctrl+Shift+O abre a mãe na modal
 // Rodar: MOTHER_SHOTS=<dir> npx tsx e2e/scenarios/mother-prominent.ts
 
 const SHOTS =
@@ -141,6 +142,10 @@ const stdinOf = (pid: number | undefined) => {
 const graph = () => page.evaluate(() => window.api.sessionGraph.get())
 const card = (id: string) => page.locator(`[data-testid="session-card"][data-session-id="${id}"]`)
 const dock = () => page.getByTestId('mother-dock')
+const dockIdNow = () =>
+  dock()
+    .getAttribute('data-session-id', { timeout: 1000 })
+    .catch(() => null)
 const fit = async () => {
   await page
     .locator('.react-flow__controls-fitview')
@@ -246,6 +251,16 @@ try {
     ),
     'M desenhada na variante mãe (data-variant=mother)',
   )
+  // O painel abre sozinho com a mãe da feature em foco (mother-focus-panel.ts).
+  // Escondido (Ctrl+Shift+P), o cartão volta a ser a mãe em destaque: é ele que
+  // este cenário mede até o "Fixar".
+  if (await waitFor('painel automático', async () => dock().isVisible(), 5000)) {
+    await page.keyboard.press('Control+Shift+KeyP')
+  }
+  check(
+    await waitFor('painel escondido', async () => (await dock().count()) === 0, 5000),
+    'Ctrl+Shift+P esconde o painel: a mãe fica só no cartão',
+  )
   await fit()
   await shot('enquadrar')
 
@@ -297,6 +312,11 @@ try {
   await shot('barra-da-mae')
 
   // ---------- Fixar a mãe ----------
+  await page.keyboard.press('Control+Shift+KeyP')
+  check(
+    await waitFor('painel de volta', async () => (await dockIdNow()) === idM, 10_000),
+    'Ctrl+Shift+P mostra o painel de novo, com M',
+  )
   await card(idM).getByTestId('mother-pin').click()
   check(
     await waitFor('coluna da mãe', async () => dock().isVisible(), 10_000),
@@ -538,11 +558,24 @@ try {
 
   // ---------- desafixar ----------
   await page.getByTestId('mother-dock-unpin').click()
+  // Solta = volta a seguir a feature em foco: S é a mãe dela, então o painel fica.
   check(
-    await waitFor('coluna some', async () => (await dock().count()) === 0, 5000),
-    'Desafixar: a coluna some',
+    await waitFor(
+      'painel seguindo a feature',
+      async () =>
+        (await dock()
+          .getAttribute('data-mode')
+          .catch(() => null)) === 'focus' && (await dockIdNow()) === idS,
+      5000,
+    ),
+    'Soltar: o painel segue a feature em foco (S)',
   )
   check((await dockPref())?.pinnedId === null, 'preferência desafixada (pinnedId null)')
+  await page.keyboard.press('Control+Shift+KeyP')
+  check(
+    await waitFor('painel some', async () => (await dock().count()) === 0, 5000),
+    'Ctrl+Shift+P esconde o painel',
+  )
   await fit()
   await shot('desafixada')
 

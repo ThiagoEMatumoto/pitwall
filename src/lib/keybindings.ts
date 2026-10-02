@@ -38,7 +38,30 @@ const ARROW_GLYPH: Record<string, string> = {
   ArrowDown: '↓',
 }
 
-const PUNCTUATION_CODE: Record<string, string> = { Comma: ',', Period: '.' }
+const PUNCTUATION_CODE: Record<string, string> = { Comma: ',', Period: '.', Backquote: '`' }
+
+// O que a tecla física imprime no layout de quem usa: no ABNT2 a Backquote (acima
+// do Tab) é a do ' e o ` é tecla morta em outro lugar, então "Ctrl+`" mentiria.
+// Vem do navigator.keyboard (Chromium) no boot; sem ele, os rótulos US acima.
+let layoutLabels: ReadonlyMap<string, string> = new Map()
+
+export function setKeyboardLayoutLabels(labels: ReadonlyMap<string, string>): void {
+  layoutLabels = labels
+}
+
+export async function loadKeyboardLayoutLabels(): Promise<void> {
+  const kb = (
+    navigator as Navigator & {
+      keyboard?: { getLayoutMap?: () => Promise<ReadonlyMap<string, string>> }
+    }
+  ).keyboard
+  try {
+    const map = await kb?.getLayoutMap?.()
+    if (map) layoutLabels = map
+  } catch {
+    // Sem permissão ou sem API: ficam os rótulos US.
+  }
+}
 
 function arrowGlyph(c: Combo): string | undefined {
   return ARROW_GLYPH[c.code ?? ''] ?? ARROW_GLYPH[c.key ?? '']
@@ -52,7 +75,8 @@ export function formatCombo(c: Combo): string {
   if (c.alt) parts.push(isMac ? '⌥' : 'Alt')
   const arrow = arrowGlyph(c)
   if (c.code === 'Backslash') parts.push('\\')
-  else if (c.code && PUNCTUATION_CODE[c.code]) parts.push(PUNCTUATION_CODE[c.code])
+  else if (c.code && PUNCTUATION_CODE[c.code])
+    parts.push(layoutLabels.get(c.code) ?? PUNCTUATION_CODE[c.code])
   else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
   else if (arrow) parts.push(arrow)
   else if (c.key === 'Tab') parts.push('Tab')
@@ -75,6 +99,17 @@ export const COMMANDS: Command[] = [
     label: 'Abrir seletor de sessões',
     context: 'Global',
     defaultCombo: { mod: true, shift: true, key: 'a' },
+    editable: true,
+  },
+  // Trocar de feature como o Alt+Tab: segura o Ctrl, ` (ou Tab) cicla, soltar
+  // confirma, Shift volta. Ctrl+` e não Alt+Tab/Alt+` (do GNOME: switch-applications
+  // e switch-group) nem Ctrl+Tab (pane.next). Por code: a tecla acima do Tab em
+  // qualquer layout (no ABNT2 o e.key dela é a aspa).
+  {
+    id: 'featureSwitcher.open',
+    label: 'Trocar de feature (segure Ctrl, ` cicla)',
+    context: 'Global',
+    defaultCombo: { mod: true, code: 'Backquote' },
     editable: true,
   },
   // Mandar um prompt pra qualquer sessão sem abri-la. Não colide: Shift+Enter é a
@@ -176,6 +211,17 @@ export const COMMANDS: Command[] = [
     label: 'Ir para a sessão mãe da feature em foco',
     context: 'Workspace',
     defaultCombo: { mod: true, shift: true, code: 'KeyO' },
+    editable: true,
+  },
+  // Mostrar/esconder o painel da mãe no mapa. Ctrl+Shift+P ("painel"): o
+  // Ctrl+Shift+M pedido é o ditado (session.dictate); P não é default do app, do
+  // Design (que usa Alt+letra para alinhar), do GNOME nem do Electron, e o
+  // meta+p do Claude Code é Alt/Meta, não Ctrl+Shift. Por code: estável com Shift.
+  {
+    id: 'mother.togglePanel',
+    label: 'Mostrar/esconder o painel da mãe no mapa',
+    context: 'Workspace',
+    defaultCombo: { mod: true, shift: true, code: 'KeyP' },
     editable: true,
   },
   {

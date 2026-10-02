@@ -31,6 +31,7 @@ import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
 import { SessionStrip } from '@/features/session-switcher/SessionStrip'
 import { SessionSwitcher } from '@/features/session-switcher/SessionSwitcher'
+import { FeatureSwitcher } from '@/features/session-canvas/FeatureSwitcher'
 import { QuickComposer } from '@/features/quick-composer/QuickComposer'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
@@ -633,6 +634,23 @@ export function AppShell() {
         useProjectsViewStore.getState().setView('map')
         return
       }
+      // Ctrl+Shift+P fora do mapa: idem (o xterm recebia ^P). Lá o painel não está
+      // na tela, então o atalho leva ao mapa com ele aberto; no mapa, o MotherDock
+      // alterna.
+      if (matchCombo(e, resolveCombo('mother.togglePanel', overrides))) {
+        const onMap =
+          useAppStore.getState().area === 'projects' &&
+          useProjectsViewStore.getState().view === 'map'
+        if (onMap) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const dock = useMotherDockStore.getState()
+        if (dock.mode === 'off') dock.togglePanel()
+        useAppStore.getState().setArea('projects')
+        useProjectsViewStore.getState().setView('map')
+        return
+      }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
@@ -964,6 +982,7 @@ export function AppShell() {
         activeCcSessionId={activeCcSessionId}
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <FeatureSwitcher />
       <QuickComposer />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
       <div

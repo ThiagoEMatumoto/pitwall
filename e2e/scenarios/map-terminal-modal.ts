@@ -202,6 +202,16 @@ try {
     ),
     'cartões de M e F no mapa',
   )
+  // O painel da mãe abre sozinho com M (mother-focus-panel.ts cobre a convivência
+  // dele com a modal e a aba). Aqui ele fica escondido: o fluxo medido é o da modal
+  // sozinha, com a aba de M segurando a PTY quando ela fecha.
+  if (await waitFor('painel automático', async () => (await page.getByTestId('mother-dock').count()) > 0, 5000)) {
+    await page.keyboard.press('Control+Shift+KeyP')
+  }
+  check(
+    await waitFor('painel escondido', async () => (await page.getByTestId('mother-dock').count()) === 0, 5000),
+    'Ctrl+Shift+P esconde o painel da mãe',
+  )
   await page
     .locator('.react-flow__controls-fitview')
     .click()

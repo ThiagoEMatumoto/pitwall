@@ -64,10 +64,7 @@ function motherBigFrame(base: CSSProperties): CSSProperties {
 }
 
 function PinButton({ node }: { node: SessionGraphNode }) {
-  const pinnedId = useMotherDockStore((s) => s.pinnedId)
-  const overrides = useKeybindingsStore((s) => s.overrides)
-  const pinned = pinnedId === node.sessionId
-  const combo = formatCombo(resolveCombo('mother.focus', overrides))
+  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
   return (
     <button
       type="button"
@@ -81,8 +78,8 @@ function PinButton({ node }: { node: SessionGraphNode }) {
       }}
       title={
         pinned
-          ? `Desafixar: o terminal volta para o cartão (${combo} foca a mãe)`
-          : `Fixar a mãe numa coluna à esquerda do mapa, com o terminal interativo (${combo})`
+          ? 'Soltar: o painel volta a seguir a feature em foco'
+          : 'Fixar esta: o painel ao lado do mapa fica nesta mãe ao trocar de feature'
       }
       className={`nodrag flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[12px] font-medium transition ${
         pinned
@@ -91,7 +88,7 @@ function PinButton({ node }: { node: SessionGraphNode }) {
       }`}
     >
       <Icon as={pinned ? PinOff : Pin} size={13} />
-      {pinned ? 'Fixada' : 'Fixar'}
+      {pinned ? 'Soltar' : 'Fixar esta'}
     </button>
   )
 }
@@ -236,8 +233,9 @@ function StateRow({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
   )
 }
 
-// Fixada: o terminal e o composer estão na coluna à esquerda. Repetir a saída e
-// a barra aqui triplicava a entrada da mesma sessão; o cartão só aponta para lá.
+// No painel: o terminal e o composer estão no painel ao lado do mapa. Repetir a
+// saída e a barra aqui triplicava a entrada da mesma sessão; o cartão só aponta
+// para lá.
 function PinnedHere() {
   const overrides = useKeybindingsStore((s) => s.overrides)
   const combo = formatCombo(resolveCombo('mother.focus', overrides))
@@ -249,11 +247,11 @@ function PinnedHere() {
         e.stopPropagation()
         useMotherDockStore.getState().requestFocus()
       }}
-      title={`Focar o terminal da mãe na coluna (${combo})`}
+      title={`Focar o terminal da mãe no painel (${combo})`}
       className="nodrag flex items-center gap-2 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_7%,transparent)] px-3 py-2.5 text-left text-[13px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text)]"
     >
       <Icon as={PanelLeft} size={15} className="shrink-0 text-[var(--color-accent)]" />
-      <span className="min-w-0 flex-1">Terminal e composer na coluna à esquerda</span>
+      <span className="min-w-0 flex-1">Está no painel — terminal e composer à esquerda</span>
       <kbd className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px]">
         {combo}
       </kbd>
@@ -265,14 +263,14 @@ function FullBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
   const { node } = data
   const item = useMapLive().attention.get(node.sessionId)
   const menuInline = !!item && isActionableDetail(item.detail)
-  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 px-3.5 py-3">
       <Header data={data} />
       <StateRow data={data} ind={ind} />
       <PurposeLine sessionId={node.sessionId} purpose={node.purpose} source={node.purposeSource} />
       <CardAttention node={node} />
-      {pinned ? (
+      {inPanel ? (
         <PinnedHere />
       ) : (
         <>
@@ -377,7 +375,7 @@ export function MotherCard({ data, selected }: NodeProps<MapNode>) {
   const zoom = useZoom()
   const ind = useIndicator(node)
   const detail = motherDetail(zoom)
-  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   // A mãe nunca esmaece pelo foco em outra sessão: ela é a referência do card.
   const frame = motherBigFrame(frameStyle(ind.tone, !!selected))
   const measureRef = useReportCardHeight(node.sessionId, detail === 'full')
@@ -388,7 +386,7 @@ export function MotherCard({ data, selected }: NodeProps<MapNode>) {
       data-detail={detail}
       data-mother="true"
       data-variant="mother"
-      data-pinned={pinned ? 'true' : undefined}
+      data-in-panel={inPanel ? 'true' : undefined}
       data-view="open"
       data-tone={ind.tone}
       onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}

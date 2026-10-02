@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DOCK_DEFAULT_W,
-  DOCK_MAX_W,
   DOCK_MIN_W,
-  clampDockWidth,
+  PANEL_MAX_SHARE,
+  PANEL_MIN_SHARE,
+  PANEL_SHARE,
+  clampShare,
+  effectiveMotherId,
+  keepLastMother,
   followBaton,
   motherOfFocus,
-  fitDockToRow,
+  panelWidth,
+  shareOfWidth,
   MAP_MIN_W,
   useMotherDockStore,
 } from './mother-dock'
@@ -31,12 +36,42 @@ describe('followBaton', () => {
   })
 })
 
-describe('clampDockWidth', () => {
-  it('limita e arredonda', () => {
-    expect(clampDockWidth(100)).toBe(DOCK_MIN_W)
-    expect(clampDockWidth(99_999)).toBe(DOCK_MAX_W)
-    expect(clampDockWidth(Number.NaN)).toBe(DOCK_DEFAULT_W)
-    expect(clampDockWidth(512.6)).toBe(513)
+describe('clampShare', () => {
+  it('limita a fração da linha e cai no padrão quando inválida', () => {
+    expect(clampShare(0.05)).toBe(PANEL_MIN_SHARE)
+    expect(clampShare(0.99)).toBe(PANEL_MAX_SHARE)
+    expect(clampShare(Number.NaN)).toBe(PANEL_SHARE)
+    expect(clampShare(0.6)).toBe(0.6)
+  })
+})
+
+// Regressão: clicar num cartão de uma feature sem mãe fechava o painel na hora
+// (e reenquadrava a câmera); voltar à feature com mãe reabria e remontava o xterm.
+describe('keepLastMother', () => {
+  it('a feature em foco sem mãe mantém a última mostrada enquanto ela está em uso', () => {
+    expect(keepLastMother(null, 'm1', new Set(['m1']))).toBe('m1')
+  })
+  it('a última que saiu de uso não volta', () => {
+    expect(keepLastMother(null, 'm1', new Set(['m2']))).toBeNull()
+    expect(keepLastMother(null, null, new Set(['m1']))).toBeNull()
+  })
+  it('uma mãe da feature em foco sempre vence', () => {
+    expect(keepLastMother('m2', 'm1', new Set(['m1', 'm2']))).toBe('m2')
+  })
+})
+
+describe('effectiveMotherId', () => {
+  it('fixada vence a mãe da feature em foco', () => {
+    expect(effectiveMotherId({ pinnedId: 'm1', mode: 'focus', autoId: 'm2' })).toBe('m1')
+  })
+  it('sem fixar, segue a mãe da feature em foco', () => {
+    expect(effectiveMotherId({ pinnedId: null, mode: 'focus', autoId: 'm2' })).toBe('m2')
+    expect(effectiveMotherId({ pinnedId: null, mode: 'focus', autoId: null })).toBeNull()
+  })
+  // Escondido pelo atalho: nem a fixada aparece (a trava fica guardada para quando voltar).
+  it('painel escondido não mostra nenhuma', () => {
+    expect(effectiveMotherId({ pinnedId: 'm1', mode: 'off', autoId: 'm2' })).toBeNull()
+    expect(effectiveMotherId({ pinnedId: null, mode: 'off', autoId: 'm2' })).toBeNull()
   })
 })
 
@@ -82,6 +117,13 @@ describe('motherOfFocus', () => {
   it('sem seleção: a mãe da feature em foco', () => {
     expect(motherOfFocus(nodes, edges, inUse, { featureId: 'f2' })).toBe('m2')
   })
+  // O painel segue a feature em foco: feature sem mãe não empresta a de outra.
+  it('strict: feature em foco sem mãe → null (sem fallback para outra feature)', () => {
+    expect(motherOfFocus(nodes, edges, inUse, { featureId: 'f9' })).toBe('m')
+    expect(motherOfFocus(nodes, edges, inUse, { featureId: 'f9' }, { strict: true })).toBeNull()
+    expect(motherOfFocus(nodes, edges, inUse, { featureId: 'f2' }, { strict: true })).toBe('m2')
+    expect(motherOfFocus(nodes, edges, inUse, {}, { strict: true })).toBe('m')
+  })
   it('sem nada: a mãe mais recente do mapa; sem mãe, null', () => {
     expect(motherOfFocus(nodes, edges, inUse, {})).toBe('m')
     expect(motherOfFocus([n('x')], [], new Set(['x']), {})).toBeNull()
@@ -113,7 +155,7 @@ describe('motherOfFocus', () => {
 
 describe('useMotherDockStore', () => {
   beforeEach(() => {
-    useMotherDockStore.setState({ pinnedId: null, width: DOCK_DEFAULT_W })
+    useMotherDockStore.setState({ pinnedId: null, mode: 'focus', share: PANEL_SHARE })
     useTerminalLease.setState({ leases: {}, stacks: {} })
     localStorage.clear()
   })
@@ -121,10 +163,26 @@ describe('useMotherDockStore', () => {
   it('fixar e desafixar persistem no localStorage', () => {
     useMotherDockStore.getState().pin('m')
     expect(JSON.parse(localStorage.getItem('cm:mother-dock')!)).toMatchObject({ pinnedId: 'm' })
-    useMotherDockStore.getState().setWidth(600)
-    expect(JSON.parse(localStorage.getItem('cm:mother-dock')!)).toMatchObject({ width: 600 })
+    useMotherDockStore.getState().setShare(0.6)
+    expect(JSON.parse(localStorage.getItem('cm:mother-dock')!)).toMatchObject({ share: 0.6 })
     useMotherDockStore.getState().unpin()
     expect(JSON.parse(localStorage.getItem('cm:mother-dock')!)).toMatchObject({ pinnedId: null })
+  })
+
+  it('o atalho alterna o painel e o modo persiste', () => {
+    const s = useMotherDockStore.getState()
+    s.togglePanel()
+    expect(useMotherDockStore.getState().mode).toBe('off')
+    expect(JSON.parse(localStorage.getItem('cm:mother-dock')!)).toMatchObject({ mode: 'off' })
+    useMotherDockStore.getState().togglePanel()
+    expect(useMotherDockStore.getState().mode).toBe('focus')
+  })
+
+  // Fixar com o painel escondido mostra o painel: o clique é "quero ela ali".
+  it('fixar com o painel escondido volta a mostrá-lo', () => {
+    useMotherDockStore.getState().hide()
+    useMotherDockStore.getState().pin('m')
+    expect(useMotherDockStore.getState().mode).toBe('focus')
   })
 
   it('o bastão passa a coluna para a sucessora', () => {
@@ -134,12 +192,12 @@ describe('useMotherDockStore', () => {
   })
 
   // Pedido de foco é de uso único: um remount da coluna (voltar ao mapa) ou a
-  // troca de PTY pelo bastão não podem roubar o foco de novo.
+  // troca de PTY pelo bastão não podem roubar o foco de novo. Fixar não pede
+  // foco: só o atalho (Ctrl+Shift+O) leva o teclado ao painel.
   it('o pedido de foco é consumido uma vez só', () => {
     useMotherDockStore.setState({ focusPending: false })
     expect(useMotherDockStore.getState().takeFocus()).toBe(false)
     useMotherDockStore.getState().pin('m')
-    expect(useMotherDockStore.getState().takeFocus()).toBe(true)
     expect(useMotherDockStore.getState().takeFocus()).toBe(false)
     useMotherDockStore.getState().requestFocus()
     expect(useMotherDockStore.getState().takeFocus()).toBe(true)
@@ -188,24 +246,36 @@ describe('pedido de ir à mãe feito fora do mapa', () => {
   it('fica guardado até o mapa consumir, uma vez só', () => {
     const s = useMotherDockStore.getState()
     s.requestFromOutside('aba-filha')
-    expect(useMotherDockStore.getState().takePendingFromOutside()).toEqual({ sessionId: 'aba-filha' })
+    expect(useMotherDockStore.getState().takePendingFromOutside()).toEqual({
+      sessionId: 'aba-filha',
+    })
     expect(useMotherDockStore.getState().takePendingFromOutside()).toBeNull()
   })
 })
 
-describe('fitDockToRow', () => {
-  it('largura salva num monitor grande não espreme o mapa numa janela menor', () => {
-    // 960 salvos; linha de 1100px (laptop 1366 com sidebar): o mapa fica com o mínimo.
-    expect(fitDockToRow(960, 1100)).toBe(1100 - MAP_MIN_W)
-    expect(1100 - fitDockToRow(960, 1100)).toBeGreaterThanOrEqual(MAP_MIN_W)
+describe('panelWidth', () => {
+  it('padrão: 55% da linha', () => {
+    expect(panelWidth(PANEL_SHARE, 2000)).toBe(1100)
   })
-  it('com espaço sobrando, vale a largura escolhida', () => {
-    expect(fitDockToRow(520, 2400)).toBe(520)
+  it('o mapa ao lado nunca fica abaixo do mínimo', () => {
+    expect(1100 - panelWidth(PANEL_SHARE, 1100)).toBeGreaterThanOrEqual(MAP_MIN_W)
+    expect(panelWidth(0.75, 1400)).toBe(1400 - MAP_MIN_W)
   })
-  it('linha estreita demais para os dois mínimos: a coluna fica com 40%', () => {
-    expect(fitDockToRow(520, 700)).toBe(280)
+  it('linha estreita demais para os dois mínimos: o painel fica com 40%', () => {
+    expect(panelWidth(PANEL_SHARE, 700)).toBe(280)
   })
-  it('linha ainda não medida: a largura escolhida', () => {
-    expect(fitDockToRow(700, null)).toBe(700)
+  it('nunca abaixo do mínimo de leitura quando cabe', () => {
+    expect(panelWidth(0.3, 1000)).toBe(DOCK_MIN_W)
+  })
+  it('linha ainda não medida: a largura padrão', () => {
+    expect(panelWidth(PANEL_SHARE, null)).toBe(DOCK_DEFAULT_W)
+  })
+})
+
+describe('shareOfWidth', () => {
+  it('converte a largura arrastada em fração limitada da linha', () => {
+    expect(shareOfWidth(1200, 2000)).toBe(0.6)
+    expect(shareOfWidth(100, 2000)).toBe(PANEL_MIN_SHARE)
+    expect(shareOfWidth(1200, null)).toBe(PANEL_SHARE)
   })
 })

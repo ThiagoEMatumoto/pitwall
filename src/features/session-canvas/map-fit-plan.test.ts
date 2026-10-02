@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MIN_READABLE_ZOOM,
+  MOTHER_READ_ZOOM,
   OVERVIEW_MIN_ZOOM,
   PRIORITY_MIN_ZOOM,
   offscreenCards,
@@ -418,5 +419,27 @@ describe('planFit com mãe em visão geral', () => {
   it('com poucos cartões a mãe continua com o piso de leitura', () => {
     const plan = planFit({ visible, priority: cards[0], view, cardCount: 4, mother })!
     expect(plan.viewport.zoom).toBeGreaterThanOrEqual(0.88 - 1e-6)
+  })
+})
+
+// Mãe no painel ao lado do mapa: o mapa mede só o que sobra (o painel é um irmão
+// no flex) e o enquadrar não recebe a mãe — o piso de leitura dela (0.88) deixava
+// a feature cortada na faixa estreita que sobra ao lado do painel.
+describe('planFit com a mãe no painel', () => {
+  const row = 2000
+  const panel = Math.round(row * 0.55)
+  const view = { w: row - panel, h: 900 }
+  const feature = { x: 0, y: 0, w: 1600, h: 500 }
+  const mother = { x: 20, y: 40, w: 640, h: 420 }
+
+  it('sem a mãe (ela está no painel), a feature desce até o piso da prioridade', () => {
+    const plan = planFit({ visible: feature, priority: feature, view, cardCount: 4, mother: null })!
+    expect(plan.viewport.zoom).toBeLessThan(MOTHER_READ_ZOOM)
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(PRIORITY_MIN_ZOOM)
+  })
+
+  it('com a mãe no mapa, o piso dela seguraria o zoom', () => {
+    const plan = planFit({ visible: feature, priority: feature, view, cardCount: 4, mother })!
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(MOTHER_READ_ZOOM - 1e-6)
   })
 })

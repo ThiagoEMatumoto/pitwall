@@ -42,8 +42,8 @@ import { modelSupportsXhigh } from './model-context-limits'
 import { clearSharedAtlas, registerTerminal } from './terminal-atlas'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { leaseBlocks, useTerminalLease, type TerminalLeaseHost } from './terminal-lease'
-import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { TERMINAL_FONT_FAMILY } from '@/lib/terminal-font'
 import { useFilesStore } from '@/lib/files-store'
 import { xtermTheme } from '@/lib/themes'
@@ -159,7 +159,7 @@ export function Terminal(props: Props) {
   const owner = useTerminalLease((s) => s.leases[props.session.id])
   const blocked = leaseBlocks(owner, props.leaseHost)
   useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose)
-  if (blocked) return <LeasedPlaceholder owner={owner!} />
+  if (blocked) return <LeasedPlaceholder host={props.leaseHost} owner={owner!} />
   return <TerminalHost {...props} />
 }
 
@@ -177,12 +177,20 @@ function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose:
   }, [sessionId, blocked])
 }
 
-// A aba enquanto a modal do mapa segura a PTY: sem xterm montado, nada disputa o
-// resize. "Trazer para cá" fecha a modal — a lease sai e o xterm remonta aqui,
-// reconstruído pelo replay do backlog.
-// Com a coluna da mãe fixada (owner 'dock'), "Trazer para cá" desafixa.
-function LeasedPlaceholder({ owner }: { owner: TerminalLeaseHost }) {
-  const docked = owner === 'dock'
+// Quem cedeu a PTY: sem xterm montado, nada disputa o resize. Nenhum host puxa a
+// lease para si: o botão só tira da frente quem segura, e o xterm remonta aqui
+// pelo replay do backlog.
+// - Modal segurando (aba ou painel por baixo): "Trazer para cá" fecha a modal.
+// - Painel da mãe segurando (só a aba, escondida atrás do mapa): "Abrir aqui" vai
+//   para Terminais; o mapa desmonta e solta a lease do painel.
+export function LeasedPlaceholder({
+  host,
+  owner,
+}: {
+  host: TerminalLeaseHost | undefined
+  owner: TerminalLeaseHost
+}) {
+  const byDock = owner === 'dock'
   return (
     <div
       data-testid="terminal-leased"
@@ -190,23 +198,26 @@ function LeasedPlaceholder({ owner }: { owner: TerminalLeaseHost }) {
       className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] px-6 text-center"
     >
       <span className="text-sm text-[var(--color-text)]">
-        {docked ? 'Fixada no mapa' : 'Aberto no mapa'}
+        {byDock ? 'Aberta no Mapa' : 'Aberta na janela do mapa'}
       </span>
       <span className="max-w-sm text-xs text-[var(--color-text-dim)]">
-        {docked
-          ? 'O terminal desta sessão está na coluna da mãe, à esquerda do mapa. Ele volta para cá ao desafixar.'
-          : 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'}
+        {byDock
+          ? 'O terminal desta sessão está no painel da mãe, ao lado do mapa.'
+          : host === 'dock'
+            ? 'O terminal desta mãe está na janela grande. Ele volta para o painel quando ela fechar.'
+            : 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'}
       </span>
       <button
         type="button"
+        data-testid={byDock ? 'terminal-leased-open-here' : 'terminal-leased-bring-back'}
         onClick={() =>
-          docked
-            ? useMotherDockStore.getState().unpin()
+          byDock
+            ? useProjectsViewStore.getState().setView('terminals')
             : useCrewDockStore.getState().closePeek({ restoreFocus: false })
         }
         className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
       >
-        Trazer para cá
+        {byDock ? 'Abrir aqui' : 'Trazer para cá'}
       </button>
     </div>
   )
