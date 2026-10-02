@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAP_MAX_VISIBLE,
+  barPillPadding,
   TOAST_COLUMN_W,
   TOAST_EST_H,
   PEEK_HEADER_HEIGHT,
@@ -255,5 +256,83 @@ describe('toastStackPlacement — cartão da mãe e coluna fixada', () => {
     const under = { left: 1500, top: 600, width: 100, height: 300 }
     const p = toastStackPlacement({ ...base, dockWidth: 120, obstacles: [under] })
     expect(p.bottom).toBe(TOAST_MARGIN)
+  })
+})
+
+// Mapa estreito (painel da mãe/da feature aberto): print 03 da rodada 3, os dois
+// avisos de despacho cobriam o cartão da filha enquadrada. Aí os cartões são
+// obstáculos e nada pode ser coberto: sem vão, a pilha vira o "+N avisos" na barra.
+describe('toastStackPlacement — mapa estreito', () => {
+  const vw = 2000
+  const vh = 1286
+  const bar = { left: 1258, top: 106, width: 685, height: 126 }
+  const base = {
+    dockWidth: 0,
+    peek: null,
+    viewportWidth: vw,
+    viewportHeight: vh,
+    onMap: true,
+    narrowMap: true,
+    mapBar: bar,
+  }
+
+  it('com vão para 2 avisos, empilha 2 nele sem cobrir cartão', () => {
+    const card = { left: 1360, top: 240, width: 550, height: 500 }
+    const p = toastStackPlacement({ ...base, obstacles: [card] })
+    expect(p.maxVisible).toBe(MAP_MAX_VISIBLE)
+    expect(overlaps(mapStackBox(p, vw, vh), card)).toBe(false)
+  })
+
+  it('com vão só para 1, mostra 1 (não vai para o lado, onde há outros cartões)', () => {
+    const top = { left: 1360, top: 240, width: 550, height: 860 }
+    const p = toastStackPlacement({ ...base, obstacles: [top] })
+    expect(p.maxVisible).toBe(1)
+    expect(overlaps(mapStackBox(p, vw, vh), top)).toBe(false)
+    expect(p.right).toBe(TOAST_MARGIN)
+  })
+
+  // Com 2+ avisos o "+N" sobe junto, acima do card visível (flex-col): o vão de
+  // 1 tem de comportá-lo, senão ele cai em cima do cartão de cima.
+  it('vão que só cabe 1 toast sem o "+N": vai para a barra, não cobre o cartão', () => {
+    const card = { left: 1360, top: 240, width: 550, height: 894 }
+    const p = toastStackPlacement({ ...base, obstacles: [card] })
+    expect(p.maxVisible).toBe(0)
+    expect(p.expandable).toBe(true)
+  })
+
+  it('sem vão nenhum: colapsa no "+N avisos" na barra do mapa, expansível', () => {
+    const card = { left: 1360, top: 240, width: 580, height: 1040 }
+    const p = toastStackPlacement({ ...base, obstacles: [card] })
+    expect(p.maxVisible).toBe(0)
+    expect(p.expandable).toBe(true)
+    expect(p.hidden).toBeFalsy()
+    // Dentro da faixa da barra, encostado na borda direita dela.
+    expect(p.top!).toBeGreaterThanOrEqual(bar.top)
+    expect(p.top! + 28).toBeLessThanOrEqual(bar.top + bar.height)
+    expect(p.right).toBe(vw - (bar.left + bar.width) + 8)
+  })
+
+  it('fora do mapa estreito, o mesmo obstáculo segue o caminho antigo (ao lado)', () => {
+    const card = { left: 1360, top: 240, width: 580, height: 1040 }
+    const p = toastStackPlacement({ ...base, narrowMap: false, obstacles: [card] })
+    expect(p.maxVisible).not.toBe(0)
+  })
+})
+
+describe('barPillPadding', () => {
+  it('mapa largo: só reserva quando o "+N" está na barra', () => {
+    expect(barPillPadding(false, 0)).toBeUndefined()
+    expect(barPillPadding(false, 80)).toBe(96)
+  })
+
+  it('mapa estreito: a vaga é fixa, com ou sem aviso — a barra não quebra a cada aviso', () => {
+    const empty = barPillPadding(true, 0)
+    expect(empty).toBeGreaterThan(0)
+    expect(barPillPadding(true, 62)).toBe(empty)
+    expect(barPillPadding(true, 80)).toBe(empty)
+  })
+
+  it('mapa estreito com um "+N" maior que a vaga: cresce para não cobrir o último item', () => {
+    expect(barPillPadding(true, 200)).toBe(216)
   })
 })

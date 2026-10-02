@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Bell, X } from 'lucide-react'
 import { notificationsApi } from '@/lib/ipc'
 import { Icon } from '@/components/ui/Icon'
@@ -6,7 +6,7 @@ import { crewCcSessionIds } from '@/features/handoffs/crew'
 import { openSessionByCc } from '@/features/sessions/open-session'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { useToastStore, type LocalToast } from './toast-store'
+import { useBarPillStore, useToastStore, type LocalToast } from './toast-store'
 import type { NotificationEvent } from '../../../shared/types/ipc'
 
 const AUTO_DISMISS_MS = 6000
@@ -54,7 +54,14 @@ function isCrewChild(ccSessionId: string | undefined): boolean {
 // maxVisible: teto vindo do placement (mapa = 2; modal sem respiro = 0). O
 // excedente colapsa num "+N" mas continua montado (escondido): o auto-dismiss
 // de cada card segue correndo e eles somem sozinhos.
-export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) {
+// expandable: o "+N" do teto 0 ainda abre no clique (barra do mapa estreito).
+// pinned: card de fora da fila (o de atualização), contado no teto e no "+N" —
+// solto da pilha, ele ficava à vista em cima dos cartões do mapa estreito.
+export function NotificationToast({
+  maxVisible,
+  expandable = false,
+  pinned,
+}: { maxVisible?: number; expandable?: boolean; pinned?: ReactNode } = {}) {
   const [expanded, setExpanded] = useState(false)
   const [events, setEvents] = useState<QueuedEvent[]>([])
   const nextId = useRef(0)
@@ -81,6 +88,7 @@ export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) 
   }
 
   const cards = [
+    ...(pinned ? [{ key: 'pinned', node: pinned }] : []),
     ...toasts.map((toast) => ({ key: `t${toast.id}`, node: <LocalToastCard toast={toast} /> })),
     ...events.map((event) => ({
       key: `e${event.queueId}`,
@@ -89,7 +97,7 @@ export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) 
   ]
   // Na faixa estreita acima/abaixo da modal (teto 0) não há onde expandir: os
   // cards cresceriam por cima da modal. O "+N" vira só um contador.
-  const canExpand = maxVisible !== 0
+  const canExpand = maxVisible !== 0 || expandable
   const cap =
     (expanded && canExpand) || maxVisible === undefined ? cards.length : Math.max(0, maxVisible)
   const hiddenCount = Math.max(0, cards.length - cap)
@@ -98,15 +106,37 @@ export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) 
     if (cards.length <= (maxVisible ?? cards.length)) setExpanded(false)
   }, [cards.length, maxVisible])
 
+  // No mapa estreito o "+N" fica no canto da barra: ela reserva a largura dele.
+  // Expandido, ele vira "Recolher" e segue lá: sem ele a reserva caía e o 1º card
+  // (a pilha começa no topo da barra) cobria o fim dela.
+  const barMode = expandable && maxVisible === 0
+  const collapsible = barMode && expanded && hiddenCount === 0 && cards.length > 0
+  const inBar = barMode && (hiddenCount > 0 || collapsible)
+  const pillRef = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => {
+    const width = inBar ? (pillRef.current?.offsetWidth ?? 0) : 0
+    if (useBarPillStore.getState().width !== width) useBarPillStore.setState({ width })
+  }, [inBar, hiddenCount, collapsible])
+  useEffect(() => () => useBarPillStore.setState({ width: 0 }), [])
+
   return (
     <>
-      {hiddenCount > 0 && (
+      {(hiddenCount > 0 || collapsible) && (
         <button
+          ref={pillRef}
           type="button"
           data-testid="toast-overflow"
-          onClick={canExpand ? () => setExpanded(true) : undefined}
+          onClick={
+            collapsible ? () => setExpanded(false) : canExpand ? () => setExpanded(true) : undefined
+          }
           aria-disabled={!canExpand}
-          title={canExpand ? 'Mostrar todos os avisos' : 'Feche o terminal para ver os avisos'}
+          title={
+            collapsible
+              ? 'Recolher os avisos'
+              : canExpand
+                ? 'Mostrar todos os avisos'
+                : 'Feche o terminal para ver os avisos'
+          }
           className="pointer-events-auto rounded-full border px-2.5 py-1 text-xs shadow-lg"
           style={{
             borderColor: 'var(--color-border)',
@@ -114,7 +144,7 @@ export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) 
             color: 'var(--color-text-dim)',
           }}
         >
-          +{hiddenCount} {hiddenCount === 1 ? 'aviso' : 'avisos'}
+          {collapsible ? 'Recolher' : `+${hiddenCount} ${hiddenCount === 1 ? 'aviso' : 'avisos'}`}
         </button>
       )}
       {cards.map((c, i) => (

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { compensatedPx } from './card-display'
 import {
+  motherResizable,
   MOTHER_STRIP,
   batonChipPx,
   motherBadgePx,
@@ -50,5 +51,16 @@ describe('MotherBadge', () => {
     expect(
       motherFrame(node({ isMother: true }), { borderColor: 'red', borderWidth: 2 }).borderColor,
     ).toBe('red')
+  })
+})
+
+describe('motherResizable', () => {
+  // Entre 0.55 e 0.75 a mãe ainda desenha o cartão cheio, mas a raia já está no
+  // layout compacto: redimensionar ali fixaria os irmãos em coordenadas compactas.
+  it('só no zoom em que o layout é o de leitura', () => {
+    expect(motherResizable(0.6)).toBe(false)
+    expect(motherResizable(0.7)).toBe(false)
+    expect(motherResizable(0.75)).toBe(true)
+    expect(motherResizable(1)).toBe(true)
   })
 })

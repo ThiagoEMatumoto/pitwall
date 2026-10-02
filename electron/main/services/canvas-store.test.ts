@@ -46,6 +46,15 @@ afterEach(() => {
 })
 
 describe('canvas-store — posições', () => {
+  it('item sem w/h mantém o tamanho salvo; null explícito volta ao padrão', () => {
+    store.setPositions('all', [{ kind: 'session', entityId: 's1', x: 0, y: 0, w: 500, h: 300 }])
+    store.setPositions('all', [{ kind: 'session', entityId: 's1', x: 7, y: 8 }])
+    expect(store.getCanvas('all').positions[0]).toMatchObject({ x: 7, y: 8, w: 500, h: 300 })
+
+    store.setPositions('all', [{ kind: 'session', entityId: 's1', x: 7, y: 8, w: null, h: null }])
+    expect(store.getCanvas('all').positions[0]).toMatchObject({ w: null, h: null })
+  })
+
   it('upsert por (scope, kind, entityId) e leitura só do escopo pedido', () => {
     store.setPositions('all', [{ kind: 'session', entityId: 's1', x: 10, y: 20 }])
     store.setPositions('all', [{ kind: 'session', entityId: 's1', x: 30, y: 40, w: 200, h: 90 }])
@@ -57,6 +66,27 @@ describe('canvas-store — posições', () => {
     expect(store.getCanvas('p1').positions).toEqual([
       { scope: 'p1', kind: 'session', entityId: 's1', x: 1, y: 2, w: null, h: null },
     ])
+  })
+
+  it('trocar de feature esquece x/y mas guarda o tamanho que o usuário deu', () => {
+    store.setPositions('all', [{ kind: 'session', entityId: 'g', x: 3, y: 4, w: 600, h: 500 }])
+    store.forgetSessionPositions('g')
+    let canvas = store.getCanvas('all')
+    expect(canvas.positions).toEqual([])
+    expect(canvas.sizes).toEqual([{ sessionId: 'g', w: 600, h: 500 }])
+
+    // Arrastado no card novo (só x/y): volta a ter posição, com o mesmo tamanho.
+    store.setPositions('all', [{ kind: 'session', entityId: 'g', x: 9, y: 9 }])
+    canvas = store.getCanvas('all')
+    expect(canvas.positions).toEqual([
+      { scope: 'all', kind: 'session', entityId: 'g', x: 9, y: 9, w: 600, h: 500 },
+    ])
+  })
+
+  it('esquecer a posição de quem não tem tamanho nem view_state apaga a linha', () => {
+    store.setPositions('all', [{ kind: 'session', entityId: 'g', x: 3, y: 4 }])
+    store.forgetSessionPositions('g')
+    expect(store.getCanvas('all')).toMatchObject({ positions: [], sizes: [], views: [] })
   })
 
   it('clearPositions apaga só o escopo (o Organizar recomeça do zero)', () => {

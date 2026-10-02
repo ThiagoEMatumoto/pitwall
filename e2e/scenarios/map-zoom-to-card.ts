@@ -173,6 +173,16 @@ const tabPlaceholder = () =>
     return el ? { owner: el.dataset.owner ?? '', text: el.innerText } : null
   })
 // O fim da animação do setViewport (250ms): espera o transform parar de mudar.
+// A câmera acompanha a borda de baixo da barra quando ela muda de altura fora do
+// enquadrar (followBarHeight): "restaurar exato" desconta essa variação.
+const barH = () =>
+  page.evaluate(
+    () => document.querySelector<HTMLElement>('[data-testid="map-top-bar"]')?.offsetHeight ?? 0,
+  )
+async function restoredFrom(base: Vp, baseBar: number, now: Vp): Promise<boolean> {
+  const dBar = (await barH()) - baseBar
+  return sameViewport({ ...base, y: base.y + dBar }, now)
+}
 async function settle(): Promise<Vp> {
   let prev = await viewport()
   for (let i = 0; i < 20; i++) {
@@ -340,6 +350,7 @@ try {
       ?.focus()
   }, c1.id)
   const vp0 = await settle()
+  const bar0 = await barH()
   const resizesBefore = await resizeCount()
   await page.keyboard.press('f')
   const vp1 = await settle()
@@ -403,12 +414,12 @@ try {
   await shot('F-c1-enquadrado')
   await page.keyboard.press('f')
   const vp2 = await settle()
-  check(sameViewport(vp0, vp2), `2º F restaura o viewport exato (${fmt(vp0)} → ${fmt(vp2)})`)
+  check(await restoredFrom(vp0, bar0, vp2), `2º F restaura o viewport exato (${fmt(vp0)} → ${fmt(vp2)}; barra ${bar0}→${await barH()}px)`)
   await page.keyboard.press('f')
   await settle()
   await page.keyboard.press('Escape')
   const vp3 = await settle()
-  check(sameViewport(vp0, vp3), `F + Esc também restaura (${fmt(vp0)} → ${fmt(vp3)})`)
+  check(await restoredFrom(vp0, bar0, vp3), `F + Esc também restaura (${fmt(vp0)} → ${fmt(vp3)}; barra ${bar0}→${await barH()}px)`)
   check(
     (await resizeCount()) === resizesBefore,
     `zero IPC sessions:resize durante o zoom (${(await resizeCount()) - resizesBefore})`,
@@ -429,7 +440,7 @@ try {
     '"f" digitado no xterm do painel chega ao stdin do stub de M',
   )
   const vp4 = await settle()
-  check(sameViewport(vp0, vp4), `"f" no xterm não dá zoom (${fmt(vp0)} → ${fmt(vp4)})`)
+  check(await restoredFrom(vp0, bar0, vp4), `"f" no xterm não dá zoom (${fmt(vp0)} → ${fmt(vp4)}; barra ${bar0}→${await barH()}px)`)
   await shot('f-no-xterm')
 
   // ---------- F4: "Abrir na aba" (botão VISÍVEL do painel) leva a PTY para a aba ----------

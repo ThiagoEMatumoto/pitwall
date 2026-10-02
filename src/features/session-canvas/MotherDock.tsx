@@ -12,7 +12,13 @@ import { TONE_COLOR, indicatorFor, indicatorText } from './card-indicator'
 import { cardTitle } from './card-display'
 import { ChildPills } from './ChildPills'
 import { useMapLive } from './map-live'
-import { effectiveMotherId, panelWidth, shareOfWidth, useMotherDockStore } from './mother-dock'
+import {
+  PANEL_SHARE,
+  effectiveMotherId,
+  panelWidth,
+  shareOfWidth,
+  useMotherDockStore,
+} from './mother-dock'
 
 // O painel da mãe: a mãe da feature em foco (ou a fixada) num painel grande à
 // esquerda do mapa — terminal REAL (o mesmo Terminal da modal, anexado à mesma
@@ -337,6 +343,9 @@ export function MotherDock({
         aria-label="Redimensionar o painel da mãe"
         data-testid="mother-dock-resize"
         onPointerDown={startResize}
+        // Duplo clique: de volta aos 55% da linha.
+        onDoubleClick={() => useMotherDockStore.getState().setShare(PANEL_SHARE)}
+        title="Arraste para redimensionar · duplo clique: 55%"
         className={`absolute inset-y-0 -right-1 w-2 cursor-col-resize transition hover:bg-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] ${
           dragW !== null ? 'z-30 bg-[var(--color-accent)]' : 'z-10'
         }`}

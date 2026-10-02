@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useFeaturePanelStore } from '@/features/session-canvas/feature-panel-store'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/features/notifications/toast-store'
 import { toastStackPlacement, type PeekBox, type ToastPlacement } from './toast-placement'
@@ -143,33 +144,74 @@ function useComposerBoxes(): PeekBox[] {
 const MAP_OBSTACLE_POLL_MS = 500
 const MAP_OBSTACLE_SELECTOR = '[data-variant="mother"], [data-testid="mother-dock"]'
 
-function readMapObstacles(): PeekBox[] {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  return [...document.querySelectorAll<HTMLElement>(MAP_OBSTACLE_SELECTOR)].flatMap((el) => {
+// Mapa estreito (painel da mãe ou da feature aberto): todo cartão de sessão é
+// obstáculo — a pilha cobria a filha que o usuário acabara de enquadrar.
+const MAP_CARD_SELECTOR = '[data-testid="session-map"] .react-flow__node-session'
+const MAP_BAR_SELECTOR = '[data-testid="map-top-bar"]'
+
+interface Clip {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+// Recorta no que está à vista: o cartão meio fora da tela (ou do mapa) só ocupa
+// o pedaço visível.
+function clippedBoxes(selector: string, clip: Clip): PeekBox[] {
+  return [...document.querySelectorAll<HTMLElement>(selector)].flatMap((el) => {
     const r = el.getBoundingClientRect()
-    // Recorta na janela: o cartão meio fora da tela só ocupa o pedaço visível.
-    const left = Math.max(0, r.left)
-    const top = Math.max(0, r.top)
-    const width = Math.min(vw, r.left + r.width) - left
-    const height = Math.min(vh, r.top + r.height) - top
+    const left = Math.max(clip.left, r.left)
+    const top = Math.max(clip.top, r.top)
+    const width = Math.min(clip.right, r.left + r.width) - left
+    const height = Math.min(clip.bottom, r.top + r.height) - top
     return width <= 0 || height <= 0 ? [] : [{ left, top, width, height }]
   })
 }
 
-function useMapObstacles(onMap: boolean): PeekBox[] {
+function readMapObstacles(narrow: boolean): PeekBox[] {
+  const win = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+  const boxes = clippedBoxes(MAP_OBSTACLE_SELECTOR, win)
+  if (!narrow) return boxes
+  const map = document.querySelector('[data-testid="session-map"]')?.getBoundingClientRect()
+  const clip = map
+    ? { left: map.left, top: map.top, right: map.left + map.width, bottom: map.top + map.height }
+    : win
+  return [...boxes, ...clippedBoxes(MAP_CARD_SELECTOR, clip)]
+}
+
+function readMapBar(): PeekBox | null {
+  const r = document.querySelector<HTMLElement>(MAP_BAR_SELECTOR)?.getBoundingClientRect()
+  return r && r.width > 0 && r.height > 0
+    ? { left: r.left, top: r.top, width: r.width, height: r.height }
+    : null
+}
+
+interface MapObstacles {
+  boxes: PeekBox[]
+  bar: PeekBox | null
+}
+
+const NO_OBSTACLES: MapObstacles = { boxes: [], bar: null }
+
+function useMapObstacles(onMap: boolean, narrow: boolean): MapObstacles {
   const toastCount = useToastStore((s) => s.toasts.length)
-  const [boxes, setBoxes] = useState<PeekBox[]>([])
+  const [state, setState] = useState<MapObstacles>(NO_OBSTACLES)
   useEffect(() => {
     if (!onMap) {
-      setBoxes([])
+      setState(NO_OBSTACLES)
       return
     }
     const measure = () => {
       // Avisos do main (IPC) não passam pelo toast-store: o card na pilha conta.
       const showing = toastCount > 0 || document.querySelector('[data-testid="toast-card"]')
-      const next = showing ? readMapObstacles() : []
-      setBoxes((prev) => (sameBoxes(prev, next) ? prev : next))
+      const boxes = showing ? readMapObstacles(narrow) : []
+      const bar = showing && narrow ? readMapBar() : null
+      setState((prev) =>
+        sameBoxes(prev.boxes, boxes) && sameBoxes(prev.bar ? [prev.bar] : [], bar ? [bar] : [])
+          ? prev
+          : { boxes, bar },
+      )
     }
     const raf = requestAnimationFrame(measure)
     const timer = setInterval(measure, MAP_OBSTACLE_POLL_MS)
@@ -179,8 +221,8 @@ function useMapObstacles(onMap: boolean): PeekBox[] {
       clearInterval(timer)
       window.removeEventListener('resize', measure)
     }
-  }, [onMap, toastCount])
-  return onMap ? boxes : []
+  }, [onMap, narrow, toastCount])
+  return onMap ? state : NO_OBSTACLES
 }
 
 export function useToastPlacement(dockWidth: number): ToastPlacement {
@@ -190,7 +232,9 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
   const inProjects = useAppStore((s) => s.area === 'projects')
   const onMap = mapView && inProjects
   const featurePanel = useFeaturePanelBox(onMap, dockWidth)
-  const mapObstacles = useMapObstacles(onMap)
+  const motherPanel = useMotherDockStore((s) => s.shownId !== null)
+  const narrowMap = onMap && (motherPanel || !!featurePanel)
+  const mapObstacles = useMapObstacles(onMap, narrowMap)
   const peekId = useCrewDockStore((s) => s.peekTarget?.id ?? null)
   const [peek, setPeek] = useState<PeekBox | null>(null)
   const [lift, setLift] = useState(false)
@@ -208,10 +252,21 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
       setLift(isLiftOpen())
       setViewportWidth(window.innerWidth)
     }
-    const raf = requestAnimationFrame(measure)
+    // A modal também muda de tamanho sem a janela mudar (alça, duplo clique,
+    // "Tamanho padrão"): observa a caixa dela.
+    let ro: ResizeObserver | null = null
+    const raf = requestAnimationFrame(() => {
+      measure()
+      const el = document.querySelector('[data-peek-mode]')
+      if (el && typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(measure)
+        ro.observe(el)
+      }
+    })
     window.addEventListener('resize', measure)
     return () => {
       cancelAnimationFrame(raf)
+      ro?.disconnect()
       window.removeEventListener('resize', measure)
     }
   }, [peekId])
@@ -221,10 +276,12 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
     peek: peekId ? peek : null,
     viewportWidth,
     minimap: minimap.box,
-    obstacles: [...composers, ...mapObstacles],
+    obstacles: [...composers, ...mapObstacles.boxes],
     viewportHeight: minimap.viewportHeight,
     lift: !!peekId && lift,
     onMap,
     rightPanel: featurePanel,
+    narrowMap,
+    mapBar: mapObstacles.bar,
   })
 }

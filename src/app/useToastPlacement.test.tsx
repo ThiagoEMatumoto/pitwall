@@ -7,8 +7,10 @@ vi.mock('@/lib/ipc', () => {
 })
 
 import { useFeaturePanelStore } from '@/features/session-canvas/feature-panel-store'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useAppStore } from '@/store/appStore'
+import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { showToast, useToastStore } from '@/features/notifications/toast-store'
 import { useToastPlacement } from './useToastPlacement'
 import { TOAST_MARGIN } from './toast-placement'
@@ -112,7 +114,79 @@ describe('useToastPlacement — cartão da mãe e coluna fixada', () => {
     expect(760 - p.right - width).toBeGreaterThanOrEqual(460)
   })
 
+  // Print 03 da rodada 3: painel da mãe aberto, a pilha cobria a filha enquadrada.
+  it('painel da mãe aberto: cartão de sessão é obstáculo; sem vão, "+N" na barra do mapa', () => {
+    useMotherDockStore.setState({ shownId: 'm1' })
+    const map = addBox({ 'data-testid': 'session-map' }, { left: 700, top: 0, width: 700, height: H })
+    const card = document.createElement('div')
+    card.className = 'react-flow__node react-flow__node-session'
+    card.getBoundingClientRect = () => ({ left: 800, top: 120, width: 590, height: 900 }) as DOMRect
+    map.appendChild(card)
+    addBox({ 'data-testid': 'map-top-bar' }, { left: 700, top: 0, width: 700, height: 100 })
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(() => void showToast({ title: 'filha despachada → web' }))
+    settle()
+    expect(result.current).toMatchObject({ maxVisible: 0, expandable: true })
+    expect(result.current.top).toBeLessThan(100)
+    useMotherDockStore.setState({ shownId: null })
+  })
+
+  it('sem painel, o mesmo cartão de sessão não é obstáculo (mapa largo)', () => {
+    const map = addBox({ 'data-testid': 'session-map' }, { left: 0, top: 0, width: W, height: H })
+    const card = document.createElement('div')
+    card.className = 'react-flow__node react-flow__node-session'
+    card.getBoundingClientRect = () => ({ left: 800, top: 120, width: 590, height: 900 }) as DOMRect
+    map.appendChild(card)
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(() => void showToast({ title: 'filha despachada → web' }))
+    settle()
+    expect(result.current.bottom).toBe(TOAST_MARGIN)
+  })
+
   afterEach(() => {
     act(() => useToastStore.setState({ toasts: [] }))
+  })
+})
+
+describe('useToastPlacement — modal do terminal redimensionada', () => {
+  let roCallbacks: Array<() => void> = []
+  beforeEach(() => {
+    roCallbacks = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          roCallbacks.push(cb)
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    useCrewDockStore.setState({ peekTarget: null })
+  })
+
+  it('a modal muda de tamanho sem a janela mudar: a pilha se remede', () => {
+    const modal = document.createElement('div')
+    modal.setAttribute('data-peek-mode', 'lift')
+    modal.setAttribute('data-peek-lift', '')
+    let width = 1000
+    Object.defineProperty(modal, 'offsetLeft', { get: () => 100 })
+    Object.defineProperty(modal, 'offsetTop', { get: () => 50 })
+    Object.defineProperty(modal, 'offsetWidth', { get: () => width })
+    Object.defineProperty(modal, 'offsetHeight', { get: () => 700 })
+    document.body.appendChild(modal)
+    useCrewDockStore.setState({ peekTarget: { kind: 'session', id: 's1' } })
+    const { result } = renderHook(() => useToastPlacement(0))
+    settle()
+    // 1400 - (100 + 1000) = 300 de respiro lateral: a coluna cabe ao lado.
+    expect(result.current.maxWidth).toBeDefined()
+
+    // Arrastou o canto até quase a borda: não sobra respiro; a pilha sai do lado.
+    width = 1280
+    act(() => roCallbacks.forEach((cb) => cb()))
+    expect(result.current.maxWidth).toBeUndefined()
   })
 })

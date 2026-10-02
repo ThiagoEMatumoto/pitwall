@@ -5,7 +5,10 @@ import {
   leavesScope,
   openIndex,
   stepIndex,
+  switcherKeyLabel,
+  switcherKeyNote,
 } from './feature-switcher-model'
+import { setKeyboardLayoutLabels } from '../../lib/keybindings'
 import type {
   SessionGraph,
   SessionGraphLane,
@@ -134,11 +137,62 @@ describe('buildSwitcherEntries', () => {
   it('sessões encerradas não contam nem viram mãe', () => {
     const g: SessionGraph = {
       ...graph,
+      nodes: graph.nodes.map((n) => (n.sessionId === 'm1' ? { ...n, status: 'ended' } : n)),
+    }
+    expect(buildSwitcherEntries(g, new Map())[0]).toMatchObject({ motherId: null, working: 1 })
+  })
+
+  // Mesma regra do mapa: ele só desenha sessões em uso, o seletor só lista o que
+  // dá para enquadrar nele.
+  it('feature sem nenhuma sessão viva não entra na lista', () => {
+    const g: SessionGraph = {
+      ...graph,
       nodes: graph.nodes.map((n) =>
         n.sessionId === 'm1' || n.sessionId === 'c1' ? { ...n, status: 'ended' } : n,
       ),
     }
-    expect(buildSwitcherEntries(g, new Map())[0]).toMatchObject({ motherId: null, working: 0 })
+    expect(buildSwitcherEntries(g, new Map()).map((e) => e.key)).toEqual(['f2', 'p:p1'])
+  })
+
+  it('"Sem feature" só aparece com sessão viva no grupo', () => {
+    const g: SessionGraph = {
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.sessionId === 'loose' ? { ...n, status: 'ended' } : n)),
+    }
+    expect(buildSwitcherEntries(g, new Map()).map((e) => e.key)).toEqual(['f1', 'f2'])
+  })
+
+  it('o conjunto em uso do mapa (inUse) manda: fora dele a feature some', () => {
+    const inUse = new Set(['m2', 'c2'])
+    const entries = buildSwitcherEntries(graph, new Map(), () => null, inUse)
+    expect(entries.map((e) => e.key)).toEqual(['f2'])
+    expect(entries[0]).toMatchObject({ motherId: 'm2', needsYou: 2 })
+  })
+})
+
+describe('switcherKeyLabel', () => {
+  // ABNT2: o Backquote vira "'" no layout e a dica dizia "Ctrl+'" — o atalho é a crase.
+  it('Backquote é sempre a crase', () => {
+    expect(switcherKeyLabel({ mod: true, code: 'Backquote', key: "'" })).toBe('`')
+  })
+  it('outras teclas seguem o rótulo do combo', () => {
+    expect(switcherKeyLabel({ mod: true, key: 'k' })).toBe('K')
+  })
+})
+
+describe('switcherKeyNote', () => {
+  // O atalho casa pela tecla física: no ABNT2 ela é a do ', e o ` de lá não dispara.
+  it("no ABNT2 a crase vem com a tecla física (')", () => {
+    setKeyboardLayoutLabels(new Map([['Backquote', "'"]]))
+    try {
+      expect(switcherKeyNote({ mod: true, code: 'Backquote' })).toBe("tecla '")
+    } finally {
+      setKeyboardLayoutLabels(new Map())
+    }
+  })
+  it('no layout US (ou sem mapa do layout) não há nota', () => {
+    expect(switcherKeyNote({ mod: true, code: 'Backquote' })).toBeNull()
+    expect(switcherKeyNote({ mod: true, key: 'k' })).toBeNull()
   })
 })
 

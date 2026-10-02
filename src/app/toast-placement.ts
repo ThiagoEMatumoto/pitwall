@@ -41,12 +41,32 @@ export interface ToastPlacement {
   maxVisible?: number
   // Nem o "+N" cabe fora da modal: a pilha fica invisível até ela fechar.
   hidden?: boolean
+  // O "+N" com teto 0 ainda expande no clique (na barra do mapa estreito: quem
+  // pediu para ver aceita cobrir o mapa). Na faixa da modal, não.
+  expandable?: boolean
 }
 
 // No mapa a pilha divide a tela com cartões e painéis: no máximo 2 por vez.
 export const MAP_MAX_VISIBLE = 2
 // Altura do "+N" sozinho, quando é só ele que cabe no respiro da modal.
 const COLLAPSED_H = 28
+// Folga do "+N" até a borda direita e a de baixo da barra do mapa.
+const BAR_PILL_INSET = 8
+// Folga do "+N" na barra: o recuo dele da borda (BAR_PILL_INSET) mais o vão até
+// o último item.
+const BAR_PILL_GAP = 16
+// Vaga fixa do "+N" no mapa estreito (cabe "+99 avisos" e "Recolher"): reservada
+// só quando o aviso chegava, a barra quebrava/desquebrava uma linha a cada aviso
+// e a câmera (followBarHeight) pulava junto.
+const BAR_PILL_SLOT = 96
+
+export function barPillPadding(narrow: boolean, pillWidth: number): number | undefined {
+  const w = narrow ? Math.max(pillWidth, BAR_PILL_SLOT) : pillWidth
+  return w > 0 ? w + BAR_PILL_GAP : undefined
+}
+// No mapa estreito nada pode ser coberto: com mais avisos que o teto, o "+N"
+// entra na pilha acima dos cards (flex-col), e o vão tem de comportá-lo também.
+const PILL_ROOM = COLLAPSED_H + STACK_GAP
 
 export function toastStackPlacement(a: {
   dockWidth: number
@@ -63,6 +83,11 @@ export function toastStackPlacement(a: {
   onMap?: boolean
   // Painel lateral encostado à direita (painel da feature): a pilha sai da frente dele.
   rightPanel?: PeekBox | null
+  // Mapa estreito (painel da mãe ou da feature aberto): os cartões estão em
+  // `obstacles` e nenhum pode ser coberto. Sem vão na coluna, o "+N avisos" vai
+  // para a barra do mapa (`mapBar`).
+  narrowMap?: boolean
+  mapBar?: PeekBox | null
 }): ToastPlacement {
   const cap = a.onMap ? { maxVisible: MAP_MAX_VISIBLE } : {}
   if (a.peek && a.lift) {
@@ -73,15 +98,20 @@ export function toastStackPlacement(a: {
     const panelInset = a.rightPanel ? Math.max(0, a.viewportWidth - a.rightPanel.left) : 0
     const right = Math.max(a.dockWidth, panelInset) + TOAST_MARGIN
     const columnRight = a.viewportWidth - right
-    const hits = [a.minimap, ...(a.obstacles ?? [])].filter(
+    // No mapa estreito a barra do topo também é obstáculo: o vão acima do 1º
+    // cartão passava por baixo dela.
+    const barHit = a.narrowMap ? [a.mapBar] : []
+    const hits = [a.minimap, ...barHit, ...(a.obstacles ?? [])].filter(
       (b): b is PeekBox =>
         !!b && b.left + b.width > columnRight - TOAST_COLUMN_W && b.left < columnRight,
     )
     if (hits.length === 0 || !a.viewportHeight)
       return { right, bottom: TOAST_MARGIN, zIndex: BASE_Z, ...cap }
-    const need = (a.onMap ? MAP_MAX_VISIBLE : 1) * (TOAST_EST_H + STACK_GAP)
+    const need =
+      (a.onMap ? MAP_MAX_VISIBLE : 1) * (TOAST_EST_H + STACK_GAP) + (a.narrowMap ? PILL_ROOM : 0)
     const slot = freeSlotBottom(hits, a.viewportHeight, need)
     if (slot !== null) return { right, bottom: a.viewportHeight - slot, zIndex: BASE_Z, ...cap }
+    if (a.narrowMap) return narrowMapPlacement(hits, right, a.viewportWidth, a.viewportHeight, a.mapBar)
     return besideObstacles(hits, right, a.viewportWidth, a.viewportHeight, cap)
   }
   const sideGap = a.viewportWidth - (a.peek.left + a.peek.width)
@@ -98,6 +128,22 @@ export function toastStackPlacement(a: {
     top: a.peek.top + PEEK_HEADER_HEIGHT,
     zIndex: ABOVE_PEEK_Z,
   }
+}
+
+// Mapa estreito sem vão para 2: 1 se couber; senão o "+N avisos" no canto direito
+// da barra do mapa. Nunca ao lado da coluna: ali há outros cartões.
+function narrowMapPlacement(
+  hits: PeekBox[],
+  right: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  bar: PeekBox | null | undefined,
+): ToastPlacement {
+  const one = freeSlotBottom(hits, viewportHeight, TOAST_EST_H + STACK_GAP + PILL_ROOM)
+  if (one !== null) return { right, bottom: viewportHeight - one, zIndex: BASE_Z, maxVisible: 1 }
+  const top = bar ? bar.top + bar.height - COLLAPSED_H - BAR_PILL_INSET : TOAST_MARGIN
+  const barRight = bar ? viewportWidth - (bar.left + bar.width) + BAR_PILL_INSET : right
+  return { right: barRight, top, zIndex: BASE_Z, maxVisible: 0, expandable: true }
 }
 
 // Com a modal do terminal aberta: no respiro lateral se couber a coluna; senão

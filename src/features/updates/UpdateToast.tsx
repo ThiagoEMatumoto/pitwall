@@ -1,23 +1,40 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
+import { create } from 'zustand'
 import { Download, RefreshCw, X } from 'lucide-react'
 import { updatesApi } from '@/lib/ipc'
 import { Icon } from '@/components/ui/Icon'
 import type { UpdateFormat, UpdateStatus } from '../../../shared/types/ipc'
 
-export function UpdateToast() {
-  const [status, setStatus] = useState<UpdateStatus | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+// Fora do componente: a pilha de toasts precisa saber se o card existe para
+// contá-lo no teto e no "+N" (UpdateToast é um card dela, não um vizinho solto).
+const useUpdateToastStore = create<{
+  status: UpdateStatus | null
+  dismissed: boolean
   // Só o estado 'available' carrega o format; guardamos pra exibir a nota de
   // Gatekeeper (mac) também no estado 'awaiting-install', que não tem format.
-  const [format, setFormat] = useState<UpdateFormat | undefined>()
+  format: UpdateFormat | undefined
+}>(() => ({ status: null, dismissed: false, format: undefined }))
 
+// Montado uma vez (AppShell): assina o status do updater.
+export function useUpdateStatusFeed(): void {
   useEffect(() => {
-    return updatesApi.onStatus((s) => {
-      setDismissed(false)
-      setStatus(s)
-      if (s.state === 'available') setFormat(s.format)
-    })
+    return updatesApi.onStatus((s) =>
+      useUpdateToastStore.setState((prev) => ({
+        status: s,
+        dismissed: false,
+        format: s.state === 'available' ? s.format : prev.format,
+      })),
+    )
   }, [])
+}
+
+export function useUpdateToastShown(): boolean {
+  return useUpdateToastStore((s) => !!s.status && !s.dismissed)
+}
+
+export function UpdateToast() {
+  const { status, dismissed, format } = useUpdateToastStore()
+  const setDismissed = (dismissed: boolean) => useUpdateToastStore.setState({ dismissed })
 
   if (!status || dismissed) return null
 

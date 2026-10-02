@@ -2,6 +2,7 @@
 import { indicatorFor, type IndicatorTone } from './card-indicator'
 import { featureLaneId, projectLaneId } from './graph-to-flow'
 import { motherOfFocus } from './mother-dock'
+import { formatCombo, type Combo } from '../../lib/keybindings'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraph } from '../../../shared/types/session-graph'
 
@@ -29,18 +30,23 @@ type LiveBits = Pick<LiveSessionInfo, 'attentionReason' | 'lastText'>
 
 // tailOf: as últimas linhas da tela de cada sessão (card-view-store), para o tom
 // bater com o do mapa e dos contadores (interrompida ≠ precisa de você).
+// inUse: as sessões que o mapa desenha (mapSessionIds). Card sem nenhuma delas
+// não está no mapa e não entra: confirmar nele não teria o que enquadrar.
 export function buildSwitcherEntries(
   graph: SessionGraph,
   live: ReadonlyMap<string, LiveBits>,
   tailOf: (sessionId: string) => string[] | null = () => null,
+  inUse: ReadonlySet<string> = new Set(
+    graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId),
+  ),
 ): SwitcherEntry[] {
   const byId = new Map(graph.nodes.map((n) => [n.sessionId, n]))
-  const inUse = new Set(graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId))
-  return graph.lanes.map((lane) => {
+  return graph.lanes.flatMap((lane): SwitcherEntry[] => {
     const nodes = lane.repos
       .flatMap((r) => r.sessionIds)
       .map((id) => byId.get(id))
       .filter((n): n is NonNullable<typeof n> => !!n && inUse.has(n.sessionId))
+    if (nodes.length === 0) return []
     const tones = new Map(
       nodes.map((n) => [
         n.sessionId,
@@ -63,28 +69,47 @@ export function buildSwitcherEntries(
     }
     if (lane.kind === 'feature') {
       const projectIds = [lane.projectId, ...lane.repos.map((r) => r.projectId)]
-      return {
-        projectIds: [...new Set(projectIds.filter((p): p is string => !!p))],
-        key: lane.featureId,
-        kind: 'feature',
-        featureId: lane.featureId,
-        laneFlowId: featureLaneId(lane.featureId),
-        title: lane.name,
-        pulse: lane.pulse,
+      return [
+        {
+          projectIds: [...new Set(projectIds.filter((p): p is string => !!p))],
+          key: lane.featureId,
+          kind: 'feature',
+          featureId: lane.featureId,
+          laneFlowId: featureLaneId(lane.featureId),
+          title: lane.name,
+          pulse: lane.pulse,
+          ...base,
+        },
+      ]
+    }
+    return [
+      {
+        key: projectKey(lane.projectId),
+        kind: 'project',
+        featureId: null,
+        laneFlowId: projectLaneId(lane.projectId),
+        title: `Sem feature · ${lane.name}`,
+        projectIds: lane.projectId ? [lane.projectId] : [],
+        pulse: null,
         ...base,
-      }
-    }
-    return {
-      key: projectKey(lane.projectId),
-      kind: 'project',
-      featureId: null,
-      laneFlowId: projectLaneId(lane.projectId),
-      title: `Sem feature · ${lane.name}`,
-      projectIds: lane.projectId ? [lane.projectId] : [],
-      pulse: null,
-      ...base,
-    }
+      },
+    ]
   })
+}
+
+// A tecla do atalho na dica: o atalho se chama Ctrl+` (a tecla acima do Tab).
+// Casa pela tecla FÍSICA (matchCombo usa e.code), e no ABNT2 essa tecla é a do
+// ' — o ` de lá (Shift+´) não dispara nada. Por isso a crase vem com a nota da
+// tecla física quando o layout a rotula diferente (switcherKeyNote).
+export function switcherKeyLabel(combo: Combo): string {
+  if (combo.code === 'Backquote') return '`'
+  return formatCombo({ code: combo.code, key: combo.key })
+}
+
+export function switcherKeyNote(combo: Combo): string | null {
+  if (combo.code !== 'Backquote') return null
+  const physical = formatCombo({ code: combo.code })
+  return physical === '`' ? null : `tecla ${physical}`
 }
 
 // Ao abrir, o destino já é a anterior (a 2ª da lista): um toque rápido alterna

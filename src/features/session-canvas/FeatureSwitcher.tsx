@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Crown } from 'lucide-react'
+import { Crown, Layers } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Kbd } from '@/components/ui/ShortcutHints'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -10,8 +10,9 @@ import {
   useSessionGraphStore,
 } from '@/features/sessions/session-graph-store'
 import { attentionKeysBlocked } from '@/features/session-switcher/attention-keys'
+import { mapSessionIds } from '@/features/session-switcher/useGlobalSessions'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
-import { useAppStore } from '@/store/appStore'
+import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { TONE_COLOR } from './card-indicator'
 import { tailText } from './card-tail'
@@ -23,6 +24,8 @@ import {
   leavesScope,
   openIndex,
   stepIndex,
+  switcherKeyLabel,
+  switcherKeyNote,
   type SwitcherEntry,
 } from './feature-switcher-model'
 import { orderByMru, useFeatureMruStore } from './feature-mru-store'
@@ -37,6 +40,9 @@ interface Session {
   keys: string[]
   index: number
   visible: boolean
+  // Aberto pelo botão da barra do mapa: não há modificador segurado, então soltar
+  // tecla não confirma — só Enter ou o clique numa linha.
+  sticky: boolean
 }
 
 // Soltar o modificador do combo confirma (o "Alt" do Alt+Tab). Combo sem
@@ -56,6 +62,9 @@ const isCombo = (e: KeyboardEvent, c: Combo) =>
 // depois dos do mapa montado no boot.
 let onWindowKeyDown: ((e: KeyboardEvent) => void) | null = null
 let onWindowKeyUp: ((e: KeyboardEvent) => void) | null = null
+let openFromButton: (() => void) | null = null
+let confirmKey: ((key: string) => void) | null = null
+let cancelSwitcher: (() => void) | null = null
 if (typeof window !== 'undefined') {
   window.addEventListener('keydown', (e) => onWindowKeyDown?.(e), true)
   window.addEventListener('keyup', (e) => onWindowKeyUp?.(e), true)
@@ -71,7 +80,10 @@ function entriesOf(
     const t = tails[id]
     return t ? tailText(t.lines) : null
   }
-  return new Map(buildSwitcherEntries(graph, live, tailOf).map((e) => [e.key, e]))
+  // A mesma regra do mapa (useMapSessionIds): só lista o card que ele desenha.
+  const graphLive = graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId)
+  const inUse = mapSessionIds(liveSessions, graphLive, pendingEndSessionIds())
+  return new Map(buildSwitcherEntries(graph, live, tailOf, inUse).map((e) => [e.key, e]))
 }
 
 // Fechado, o seletor não assina grafo, sessões nem tails (os tails mudam ~50x/s
@@ -118,6 +130,20 @@ export function FeatureSwitcher() {
       goTo(target)
     }
 
+    // O atual: o grupo "Sem feature" recém-escolhido (ele não muda a feature em
+    // foco), senão a feature em foco.
+    const open = (backward: boolean, sticky: boolean) => {
+      const order = useFeatureMruStore.getState().order
+      const current =
+        order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId
+      const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
+      if (keys.length === 0) return false
+      restoreFocus.current = document.activeElement as HTMLElement | null
+      const index = openIndex(keys.length, backward, !!current && keys[0] === current)
+      update(() => ({ keys, index, visible: sticky, sticky }))
+      return true
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
       const s = sessionRef.current
       if (!s) {
@@ -127,16 +153,7 @@ export function FeatureSwitcher() {
         e.preventDefault()
         e.stopImmediatePropagation()
         if (e.repeat) return
-        // O atual: o grupo "Sem feature" recém-escolhido (ele não muda a feature
-        // em foco), senão a feature em foco.
-        const order = useFeatureMruStore.getState().order
-        const current =
-          order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId
-        const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
-        if (keys.length === 0) return
-        restoreFocus.current = document.activeElement as HTMLElement | null
-        const index = openIndex(keys.length, e.shiftKey, !!current && keys[0] === current)
-        update(() => ({ keys, index, visible: false }))
+        if (!open(e.shiftKey, false)) return
         showTimer = window.setTimeout(
           () => update((cur) => (cur ? { ...cur, visible: true } : cur)),
           SHOW_DELAY_MS,
@@ -159,20 +176,39 @@ export function FeatureSwitcher() {
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (!sessionRef.current) return
+      const s = sessionRef.current
+      if (!s) return
       e.preventDefault()
       e.stopImmediatePropagation()
-      if (!comboHeld(e, combo)) close(true)
+      if (!s.sticky && !comboHeld(e, combo)) close(true)
     }
     const onBlur = () => close(false)
+    const onButton = () => {
+      if (!sessionRef.current) open(false, true)
+    }
+    const onPick = (key: string) => {
+      const s = sessionRef.current
+      if (!s) return
+      const index = s.keys.indexOf(key)
+      if (index < 0) return
+      update(() => ({ ...s, index }))
+      close(true)
+    }
+    const onCancel = () => close(false)
 
     onWindowKeyDown = onKeyDown
     onWindowKeyUp = onKeyUp
+    openFromButton = onButton
+    confirmKey = onPick
+    cancelSwitcher = onCancel
     window.addEventListener('blur', onBlur)
     return () => {
       window.clearTimeout(showTimer)
       if (onWindowKeyDown === onKeyDown) onWindowKeyDown = null
       if (onWindowKeyUp === onKeyUp) onWindowKeyUp = null
+      if (openFromButton === onButton) openFromButton = null
+      if (confirmKey === onPick) confirmKey = null
+      if (cancelSwitcher === onCancel) cancelSwitcher = null
       window.removeEventListener('blur', onBlur)
     }
   }, [overrides])
@@ -182,13 +218,25 @@ export function FeatureSwitcher() {
     <SwitcherOverlay
       keys={session.keys}
       index={session.index}
+      sticky={session.sticky}
       combo={resolveCombo('featureSwitcher.open', overrides)}
     />
   )
 }
 
 // Só montado com o overlay na tela: aí sim acompanha grafo, sessões e tails.
-function SwitcherOverlay({ keys, index, combo }: { keys: string[]; index: number; combo: Combo }) {
+function SwitcherOverlay({
+  keys,
+  index,
+  sticky,
+  combo,
+}: {
+  keys: string[]
+  index: number
+  // Aberto pelo botão da barra: soltar tecla não confirma (só Enter ou clique).
+  sticky: boolean
+  combo: Combo
+}) {
   const graph = useSessionGraph()
   const liveSessions = useAppStore((s) => s.liveSessions)
   const tails = useCardViewStore((s) => s.tails)
@@ -204,11 +252,16 @@ function SwitcherOverlay({ keys, index, combo }: { keys: string[]; index: number
   const activeKey = keys[index]
   // Do combo de verdade (editável) e com o rótulo da tecla no layout de quem usa.
   const modLabel = formatCombo({ mod: combo.mod, alt: combo.alt })
-  const keyLabel = formatCombo({ code: combo.code, key: combo.key })
-  // Teclas em <Kbd>: o ' do Backquote no ABNT2 sumia solto no meio do texto.
+  const keyLabel = switcherKeyLabel(combo)
+  const keyNote = switcherKeyNote(combo)
+  // Teclas em <Kbd>: o ` do Backquote sumia solto no meio do texto.
   const hint = (
     <>
-      {modLabel ? (
+      {sticky ? (
+        <>
+          <Kbd>Enter</Kbd> ou clique abre
+        </>
+      ) : modLabel ? (
         <>
           Solte o <Kbd>{modLabel}</Kbd> para abrir
         </>
@@ -218,22 +271,38 @@ function SwitcherOverlay({ keys, index, combo }: { keys: string[]; index: number
         </>
       )}
       {' · '}
-      <Kbd>{keyLabel}</Kbd> ou <Kbd>Tab</Kbd> avança · <Kbd>Shift</Kbd> volta · <Kbd>Esc</Kbd>{' '}
-      cancela
+      <Kbd>{keyLabel}</Kbd>
+      {keyNote && <span className="text-[var(--color-text-dim)]"> ({keyNote})</span>} ou{' '}
+      <Kbd>Tab</Kbd> avança · <Kbd>Shift</Kbd> volta · <Kbd>Esc</Kbd> cancela
     </>
   )
 
   // Portal + z acima de 1000: por cima dos sashes/overlays do dockview (99/999) e
   // da espiada/composer (z-[1000]); senão ele abriria por baixo engolindo as teclas.
+  // O backdrop escurece o app inteiro e o clique nele cancela.
   return createPortal(
     <div
       data-modal-overlay
-      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/60 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[1100] flex items-center justify-center p-4"
       data-testid="feature-switcher"
     >
+      <div
+        aria-hidden
+        data-testid="feature-switcher-backdrop"
+        className="absolute inset-0 bg-black/60 backdrop-blur-[3px]"
+        // Sem o preventDefault, o default do mousedown leva o foco ao <body> logo
+        // depois de o cancelar devolvê-lo ao xterm/campo de onde o seletor abriu.
+        onMouseDown={(e) => {
+          e.preventDefault()
+          cancelSwitcher?.()
+        }}
+      />
       {/* A dica fica fora da rolagem: com muitas features ela sumia no fim da lista. */}
-      <div className="flex max-h-[70vh] w-[44rem] max-w-[90vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl">
-        <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-2 text-[11px] text-[var(--color-text-dim)]">
+      <div className="relative flex w-[36rem] max-w-full flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl">
+        <div
+          data-testid="feature-switcher-hint"
+          className="shrink-0 border-b border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-dim)]"
+        >
           {hint}
         </div>
         <div
@@ -242,7 +311,9 @@ function SwitcherOverlay({ keys, index, combo }: { keys: string[]; index: number
           aria-label="Trocar de feature"
           aria-activedescendant={activeKey ? optionId(activeKey) : undefined}
           tabIndex={-1}
-          className="flex min-h-0 flex-col gap-1 overflow-y-auto p-2 outline-none"
+          // 8 linhas à vista (estilo Alt+Tab): o resto rola, e a ativa entra na vista.
+          className="flex flex-col gap-0.5 overflow-y-auto p-1.5 outline-none"
+          style={{ maxHeight: `calc(${VISIBLE_ROWS} * ${ROW_REM}rem + 0.75rem)` }}
         >
           {shown.map((entry) => (
             <SwitcherOption key={entry.key} entry={entry} active={entry.key === activeKey} />
@@ -254,13 +325,20 @@ function SwitcherOverlay({ keys, index, combo }: { keys: string[]; index: number
   )
 }
 
+const VISIBLE_ROWS = 8
+const ROW_REM = 2.125
+
 const optionId = (key: string) => `feature-switcher-opt-${key}`
 
+// Uma linha por card: título, pulso truncado, mãe com o tom dela e os contadores.
 function SwitcherOption({ entry, active }: { entry: SwitcherEntry; active: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: 'nearest' })
   }, [active])
+  const tooltip = [entry.title, entry.pulse, entry.motherTitle && `mãe: ${entry.motherTitle}`]
+    .filter(Boolean)
+    .join(' — ')
   return (
     <div
       ref={ref}
@@ -268,49 +346,94 @@ function SwitcherOption({ entry, active }: { entry: SwitcherEntry; active: boole
       role="option"
       aria-selected={active}
       data-key={entry.key}
-      className={`flex flex-col gap-0.5 rounded-md border px-3 py-2 ${
-        active ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15' : 'border-transparent'
+      title={tooltip}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => confirmKey?.(entry.key)}
+      className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-2.5 text-[12px] ${
+        active
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15'
+          : 'border-transparent hover:bg-[var(--color-surface-2)]'
       }`}
+      style={{ height: `${ROW_REM}rem` }}
     >
-      <div className="flex items-center gap-2">
+      <span
+        className={`max-w-[45%] shrink-0 truncate font-medium ${
+          entry.kind === 'project' ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text)]'
+        }`}
+      >
+        {entry.title}
+      </span>
+      <span
+        className="min-w-0 flex-1 truncate text-[11px] text-[var(--color-text-dim)]"
+        data-testid="feature-switcher-pulse"
+      >
+        {entry.pulse}
+      </span>
+      {entry.motherId && (
         <span
-          className={`min-w-0 flex-1 truncate text-sm font-medium ${
-            entry.kind === 'project' ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text)]'
-          }`}
+          className="flex max-w-[30%] shrink-0 items-center gap-1 text-[11px] text-[var(--color-text-dim)]"
+          data-testid="feature-switcher-mother"
         >
-          {entry.title}
+          <Icon as={Crown} size={11} />
+          <span className="truncate">{entry.motherTitle}</span>
+          {entry.motherTone && (
+            <span
+              aria-hidden
+              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: TONE_COLOR[entry.motherTone] }}
+            />
+          )}
         </span>
-        {entry.needsYou > 0 && (
-          <span
-            className="rounded-full px-1.5 text-[10px] font-semibold text-[var(--color-bg)]"
-            style={{ background: TONE_COLOR['needs-you'] }}
-            data-testid="feature-switcher-attention"
-          >
-            precisa de você
-          </span>
-        )}
-      </div>
-      {entry.pulse && (
-        <div className="truncate text-xs text-[var(--color-text-dim)]">{entry.pulse}</div>
       )}
-      <div className="flex items-center gap-3 text-[11px] text-[var(--color-text-dim)]">
-        {entry.motherId && (
-          <span className="flex min-w-0 items-center gap-1" data-testid="feature-switcher-mother">
-            <Icon as={Crown} size={12} />
-            <span className="truncate">{entry.motherTitle}</span>
-            {entry.motherTone && (
-              <span
-                aria-hidden
-                className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ background: TONE_COLOR[entry.motherTone] }}
-              />
-            )}
-          </span>
-        )}
-        {/* Só o que tem: "0 trabalhando · 0 precisa de você" em toda linha era ruído. */}
-        {entry.working > 0 && <span className="ml-auto shrink-0">{entry.working} trabalhando</span>}
-      </div>
+      {/* Só o que tem: "0 trabalhando · 0 precisa de você" em toda linha era ruído. */}
+      {entry.working > 0 && (
+        <span
+          className="shrink-0 tabular-nums text-[11px] text-[var(--color-text-dim)]"
+          title={`${entry.working} trabalhando`}
+          data-testid="feature-switcher-working"
+        >
+          <span style={{ color: TONE_COLOR.working }}>●</span> {entry.working}
+        </span>
+      )}
+      {entry.needsYou > 0 && (
+        <span
+          className="shrink-0 rounded-full px-1.5 text-[10px] font-semibold tabular-nums text-[var(--color-bg)]"
+          style={{ background: TONE_COLOR['needs-you'] }}
+          title={`${entry.needsYou} precisa de você`}
+          data-testid="feature-switcher-attention"
+        >
+          {entry.needsYou} precisa de você
+        </span>
+      )}
     </div>
+  )
+}
+
+// Onde o usuário descobre o atalho: a barra do mapa. Clicar abre o seletor sem
+// modificador segurado (Enter ou clique confirma).
+const BUTTON_CLASS =
+  'pointer-events-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-[12px] text-[var(--color-text-dim)] shadow-lg transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
+
+export function FeatureSwitcherButton({ className = BUTTON_CLASS }: { className?: string }) {
+  const overrides = useKeybindingsStore((s) => s.overrides)
+  const combo = resolveCombo('featureSwitcher.open', overrides)
+  const mod = formatCombo({ mod: combo.mod, alt: combo.alt, shift: combo.shift })
+  const shortcut = [mod, switcherKeyLabel(combo)].filter(Boolean).join('+')
+  const note = switcherKeyNote(combo)
+  const label = `Trocar feature (${shortcut}${note ? `, ${note}` : ''})`
+  return (
+    <button
+      type="button"
+      data-testid="map-feature-switcher"
+      onClick={() => openFromButton?.()}
+      title={label}
+      aria-label={label}
+      className={className}
+    >
+      <Icon as={Layers} size={13} />
+      <span className="@max-3xl:hidden">Trocar feature</span>
+      <Kbd>{shortcut}</Kbd>
+    </button>
   )
 }
 

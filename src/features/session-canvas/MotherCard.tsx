@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   Crown,
@@ -19,6 +19,7 @@ import { isActionableDetail } from '@/features/session-switcher/AttentionPopover
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { MOTHER_MAX_H, type MapNode, type SessionCardData } from './graph-to-flow'
+import { CardResizer } from './CardResizer'
 import { TONE_COLOR, indicatorText, type CardIndicator } from './card-indicator'
 import { quantizeZoom, cardTitle } from './card-display'
 import { useMapActions } from './map-context'
@@ -38,6 +39,7 @@ import {
   MOTHER_TAIL_PX,
   MOTHER_TAIL_WINDOW,
   motherDetail,
+  motherResizable,
 } from './mother-badge'
 import { PurposeLine } from './PurposeLine'
 import { useMotherDockStore } from './mother-dock'
@@ -277,8 +279,8 @@ function FullBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
           {!menuInline && (
             <LiveTail
               node={node}
-              window={MOTHER_TAIL_WINDOW}
-              lines={MOTHER_TAIL_LINES}
+              window={data.tail?.window ?? MOTHER_TAIL_WINDOW}
+              lines={data.tail?.lines ?? MOTHER_TAIL_LINES}
               fontPx={MOTHER_TAIL_PX}
             />
           )}
@@ -311,6 +313,9 @@ function MiniBody({
     .find(Boolean)
   const z = Math.max(zoom, MINI_MIN_ZOOM)
   const n = node.childCount ?? 0
+  // No painel a vaga é a do PinnedHere (curta) e o composer já está ao lado do
+  // mapa: repeti-lo aqui estourava a vaga e saía cortado ao meio.
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   return (
     <div
       data-testid="mother-mini"
@@ -363,7 +368,7 @@ function MiniBody({
           {last}
         </p>
       )}
-      <CardPromptBar node={node} />
+      {!inPanel && <CardPromptBar node={node} />}
     </div>
   )
 }
@@ -378,38 +383,52 @@ export function MotherCard({ data, selected }: NodeProps<MapNode>) {
   const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   // A mãe nunca esmaece pelo foco em outra sessão: ela é a referência do card.
   const frame = motherBigFrame(frameStyle(ind.tone, !!selected))
-  const measureRef = useReportCardHeight(node.sessionId, detail === 'full')
+  // Redimensionada pelo usuário: preenche a vaga em vez de crescer com o conteúdo.
+  const [resizing, setResizing] = useState(false)
+  const fill = card.sized || resizing
+  const measureRef = useReportCardHeight(node.sessionId, detail === 'full' && !fill)
   return (
-    <div
-      data-testid="session-card"
-      data-session-id={node.sessionId}
-      data-detail={detail}
-      data-mother="true"
-      data-variant="mother"
-      data-in-panel={inPanel ? 'true' : undefined}
-      data-view="open"
-      data-tone={ind.tone}
-      onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
-      ref={measureRef}
-      className={`group relative w-full overflow-hidden rounded-xl border bg-[var(--color-surface)] transition ${
-        detail === 'full' ? 'flex flex-col' : 'h-full'
-      } ${ind.tone === 'needs-you' ? 'session-card-alert' : ''}`}
-      style={detail === 'full' ? { ...frame, maxHeight: MOTHER_MAX_H } : frame}
-    >
-      <BorderHandles />
-      <div className={detail === 'full' ? 'flex min-h-0 flex-1 flex-col' : 'h-full'}>
-        {detail === 'full' ? (
-          <FullBody data={card} ind={ind} />
-        ) : (
-          <MiniBody data={card} ind={ind} zoom={zoom} />
-        )}
+    <>
+      <div
+        data-testid="session-card"
+        data-session-id={node.sessionId}
+        data-detail={detail}
+        data-mother="true"
+        data-variant="mother"
+        data-in-panel={inPanel ? 'true' : undefined}
+        data-sized={card.sized ? 'true' : undefined}
+        data-view="open"
+        data-tone={ind.tone}
+        onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
+        ref={measureRef}
+        className={`group relative w-full overflow-hidden rounded-xl border bg-[var(--color-surface)] transition ${
+          detail === 'full' ? `flex flex-col ${fill ? 'h-full' : ''}` : 'h-full'
+        } ${ind.tone === 'needs-you' ? 'session-card-alert' : ''}`}
+        style={detail === 'full' && !fill ? { ...frame, maxHeight: MOTHER_MAX_H } : frame}
+      >
+        <BorderHandles />
+        <div className={detail === 'full' ? 'flex min-h-0 flex-1 flex-col' : 'h-full'}>
+          {detail === 'full' ? (
+            <FullBody data={card} ind={ind} />
+          ) : (
+            <MiniBody data={card} ind={ind} zoom={zoom} />
+          )}
+        </div>
+        <Handle
+          type="source"
+          position={Position.Right}
+          title="Arraste até a lane de outro repo para delegar"
+          className="!h-3 !w-3 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
+        />
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Arraste até a lane de outro repo para delegar"
-        className="!h-3 !w-3 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
-      />
-    </div>
+      {motherResizable(zoom) && !inPanel && (
+        <CardResizer
+          sessionId={node.sessionId}
+          mother
+          sized={card.sized}
+          onResizing={setResizing}
+        />
+      )}
+    </>
   )
 }

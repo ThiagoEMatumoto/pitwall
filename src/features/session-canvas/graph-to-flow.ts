@@ -17,6 +17,7 @@ import type {
 } from '../../../shared/types/session-graph'
 import type {
   CardViewState,
+  CanvasCardSize,
   CanvasEntityKind,
   CanvasNote,
   CanvasPosition,
@@ -89,6 +90,14 @@ export interface MapInput {
   // Zoom baixo (resumo/blocos): o cartão aberto desenha só título + estado, e a
   // raia reserva essa altura em vez da do cartão cheio.
   compact?: boolean
+  // Tamanho do usuário por sessão. Ausente = o w/h salvo em `positions` + `sizes`
+  // (o Organizar passa este à parte: ele zera as posições, não os tamanhos).
+  cardSizes?: Readonly<Record<string, Size>>
+  // Tamanhos guardados sem posição (a sessão trocou de feature).
+  sizes?: readonly CanvasCardSize[]
+  // Mãe aberta no painel ao lado: no mapa ela só mostra o aviso curto, então o
+  // tamanho salvo dela não vale (volta quando ela sai do painel).
+  inPanel?: string | null
 }
 
 export interface PendingAsk {
@@ -122,16 +131,101 @@ export const MOTHER_W = 640
 export const MOTHER_EST_H = 440
 export const MOTHER_MAX_H = 560
 
+// Cartão redimensionado pelo usuário (alça do canto, w/h em canvas_positions):
+// limites por tipo. O mínimo ainda mostra cabeçalho + estado + prompt; o máximo
+// não deixa um cartão sozinho cobrir o card da feature inteiro.
+export const CARD_RESIZE_LIMITS = {
+  card: { minW: 300, minH: 150, maxW: 960, maxH: 720 },
+  mother: { minW: 480, minH: 300, maxW: 1280, maxH: 960 },
+} as const
+
+export function clampCardSize(size: Size, mother: boolean): Size {
+  const l = mother ? CARD_RESIZE_LIMITS.mother : CARD_RESIZE_LIMITS.card
+  return {
+    w: Math.round(Math.min(l.maxW, Math.max(l.minW, size.w))),
+    h: Math.round(Math.min(l.maxH, Math.max(l.minH, size.h))),
+  }
+}
+
+// Tamanho que o usuário deu a cada cartão de sessão (só as linhas com w/h).
+export function cardSizesOf(
+  positions: CanvasPosition[],
+  sizes: readonly CanvasCardSize[] = [],
+): Record<string, Size> {
+  const out: Record<string, Size> = {}
+  for (const s of sizes) out[s.sessionId] = { w: s.w, h: s.h }
+  for (const p of positions)
+    if (p.kind === 'session' && p.w != null && p.h != null) out[p.entityId] = { w: p.w, h: p.h }
+  return out
+}
+
+// Ao redimensionar um cartão, os irmãos ACIMA dele (e na mesma linha) que ainda
+// estão no layout automático ficam onde estão: sem isto, o cartão gravado vira
+// "o mais baixo salvo" e o layout re-empilha os outros abaixo dele, e a mãe que
+// estava em cima pula para baixo do cartão. Os de baixo não são fixados: seguem
+// empilhando abaixo do cartão e fecham o vão quando um deles recolhe.
+export function pinUnsavedSiblings(
+  sessionId: string,
+  nodes: ReadonlyArray<{ id: string; type?: string; parentId?: string; position: Point }>,
+  positions: CanvasPosition[],
+): { kind: 'session'; entityId: string; x: number; y: number }[] {
+  const self = nodes.find((n) => n.id === sessionNodeId(sessionId))
+  const saved = new Set(positions.filter((p) => p.kind === 'session').map((p) => p.entityId))
+  return nodes
+    .filter(
+      (n) =>
+        n.type === 'session' &&
+        n.id !== self?.id &&
+        n.parentId === self?.parentId &&
+        !!self &&
+        n.position.y <= self.position.y &&
+        !saved.has(n.id.slice(2)),
+    )
+    .map((n) => ({
+      kind: 'session' as const,
+      entityId: n.id.slice(2),
+      x: Math.max(0, n.position.x),
+      y: Math.max(30, n.position.y),
+    }))
+}
+
+// Linhas do tail ao vivo num cartão redimensionado: o que cabe abaixo do resto
+// do cartão (cabeçalho, estado, propósito, rodapé, prompt), até as 20 que o main
+// manda (TAIL_LINES em send-prompt.ts). Errar para mais é inofensivo: a caixa do
+// tail alinha pelo fim e corta o topo.
+const TAIL_FEED_LINES = 20
+const TAIL_MIN_LINES = 4
+export function cardTailLines(height: number, mother: boolean): { window: number; lines: number } {
+  const chrome = mother ? 150 : 180
+  const lineH = mother ? 14 * 1.35 : 11 * 1.35
+  const fit = Math.ceil((height - chrome) / lineH)
+  return {
+    window: TAIL_FEED_LINES,
+    lines: Math.min(TAIL_FEED_LINES, Math.max(TAIL_MIN_LINES, fit)),
+  }
+}
+
 export function cardSize(
   view: CardViewState,
   measuredH?: number,
   compact = false,
   mother = false,
+  user?: Size,
 ): Size {
-  if (mother) return { w: MOTHER_W, h: Math.min(MOTHER_MAX_H, measuredH ?? MOTHER_EST_H) }
+  // A mãe não recolhe nem vira o resumo: o tamanho dela vale em todo zoom.
+  if (mother)
+    return user
+      ? clampCardSize(user, true)
+      : { w: MOTHER_W, h: Math.min(MOTHER_MAX_H, measuredH ?? MOTHER_EST_H) }
   if (view === 'collapsed') return { w: CARD_W, h: CARD_H }
   if (compact) return { w: BRIEF_W, h: BRIEF_H }
+  if (user) return clampCardSize(user, false)
   return { w: OPEN_W, h: Math.min(OPEN_H, measuredH ?? OPEN_EST_H) }
+}
+
+// O tamanho do usuário vale neste estado do cartão? (recolhido e resumo têm o seu.)
+function userSizeApplies(view: CardViewState, compact: boolean, mother: boolean): boolean {
+  return mother || (view !== 'collapsed' && !compact)
 }
 
 // Acima disto o mapa fica em "modo cheio": fios repoDep/feature só aparecem ao
@@ -159,6 +253,10 @@ export interface SessionCardData {
   // delegou um neto é mãe também (selo MÃE), mas no cartão comum.
   prominentMother: boolean
   view: CardViewState
+  // Redimensionado pelo usuário (e valendo neste estado): o cartão preenche a vaga
+  // em vez de crescer com o conteúdo, e o tail mostra as linhas que cabem.
+  sized: boolean
+  tail: { window: number; lines: number } | null
   [key: string]: unknown
 }
 
@@ -236,7 +334,8 @@ function laneRepoId(lane: SessionGraphLane, repoId: string | null): string {
 // onde ela volta quando sai do grupo.
 export function homeRepoLaneId(graph: SessionGraph, sessionId: string): string | null {
   for (const lane of graph.lanes) {
-    for (const r of lane.repos) if (r.sessionIds.includes(sessionId)) return laneRepoId(lane, r.repoId)
+    for (const r of lane.repos)
+      if (r.sessionIds.includes(sessionId)) return laneRepoId(lane, r.repoId)
   }
   return null
 }
@@ -281,20 +380,47 @@ function savedIndex(positions: CanvasPosition[]): SavedIndex {
 
 // Filhos de um contêiner: os salvos ficam onde o usuário deixou; os novos
 // empilham numa coluna abaixo do mais baixo deles (nunca por cima).
+// Salvos que se cobrem (um cartão cresceu sobre o de baixo, ao redimensionar):
+// de cima para baixo, quem bate num já posto desce para logo abaixo dele. Lado a
+// lado sem cobrir ninguém, nada mexe.
+export function pushApart(
+  slots: Map<string, Point>,
+  sizeOf: (id: string) => Size,
+  gap: number,
+): void {
+  const order = [...slots.keys()].sort(
+    (a, b) => slots.get(a)!.y - slots.get(b)!.y || slots.get(a)!.x - slots.get(b)!.x,
+  )
+  const placed: Box[] = []
+  for (const id of order) {
+    const s = sizeOf(id)
+    let p = slots.get(id)!
+    for (;;) {
+      const hit = placed.find(
+        (b) => p.x < b.x + b.w && p.x + s.w > b.x && p.y < b.y + b.h && p.y + s.h > b.y,
+      )
+      if (!hit) break
+      p = { x: p.x, y: hit.y + hit.h + gap }
+    }
+    slots.set(id, p)
+    placed.push({ ...p, ...s })
+  }
+}
+
 function stackChildren(
   ids: string[],
   saved: (id: string) => Point | undefined,
-  heightOf: (id: string) => number,
+  sizeOf: (id: string) => Size,
 ): Map<string, Point> {
   const out = new Map<string, Point>()
-  let cursor = HEADER
   for (const id of ids) {
     const p = saved(id)
-    if (p) {
-      out.set(id, { x: p.x, y: p.y })
-      cursor = Math.max(cursor, p.y + heightOf(id) + GAP)
-    }
+    if (p) out.set(id, { x: p.x, y: p.y })
   }
+  pushApart(out, sizeOf, GAP)
+  let cursor = HEADER
+  for (const [id, p] of out) cursor = Math.max(cursor, p.y + sizeOf(id).h + GAP)
+  const heightOf = (id: string) => sizeOf(id).h
   for (const id of ids) {
     if (out.has(id)) continue
     out.set(id, { x: PAD, y: cursor })
@@ -380,7 +506,6 @@ export function sortForLane(sessions: SessionGraphNode[]): SessionGraphNode[] {
   )
 }
 
-
 // 1ª linha com texto, sem a marcação de markdown do começo.
 export function noteExcerpt(body: string): string | null {
   for (const raw of body.split('\n')) {
@@ -398,6 +523,7 @@ function childCounts(edges: SessionGraphEdge[]): Map<string, number> {
 
 interface CardContext {
   sizeOf: (sessionId: string) => Size
+  isSized: (sessionId: string) => boolean
   isMother: (sessionId: string) => boolean
   // Vão entre cartões empilhados na mesma raia (menor no resumo).
   cardGap: number
@@ -429,8 +555,14 @@ function sessionCard(
     fanExpanded: ctx.expandedMothers.has(n.sessionId),
     prominentMother: ctx.isMother(n.sessionId),
     view: ctx.viewOf(n.sessionId),
+    sized: false,
+    tail: null,
   }
   const size = ctx.sizeOf(n.sessionId)
+  if (ctx.isSized(n.sessionId)) {
+    data.sized = true
+    data.tail = cardTailLines(size.h, data.prominentMother)
+  }
   return {
     id: sessionNodeId(n.sessionId),
     type: 'session',
@@ -463,7 +595,10 @@ function generations(sessionIds: string[], mothers: Map<string, string>): Map<st
     const known = out.get(id)
     if (known !== undefined) return known
     const mother = mothers.get(id)
-    const d = mother && inLane.has(mother) && !seen.has(mother) ? depthOf(mother, new Set([...seen, id])) + 1 : 0
+    const d =
+      mother && inLane.has(mother) && !seen.has(mother)
+        ? depthOf(mother, new Set([...seen, id])) + 1
+        : 0
     out.set(id, d)
     return d
   }
@@ -494,13 +629,13 @@ function slotCards(
   const rows = new Map<string, string[][]>()
   for (const repo of repos) {
     const slots = new Map<string, Point>()
-    let c = HEADER
     for (const id of repo.sessionIds) {
       const p = saved(id)
-      if (!p) continue
-      slots.set(id, { x: p.x, y: p.y })
-      c = Math.max(c, p.y + ctx.sizeOf(id).h + ctx.cardGap)
+      if (p) slots.set(id, { x: p.x, y: p.y })
     }
+    pushApart(slots, ctx.sizeOf, ctx.cardGap)
+    let c = HEADER
+    for (const [id, p] of slots) c = Math.max(c, p.y + ctx.sizeOf(id).h + ctx.cardGap)
     out.set(repo.nodeId, slots)
     cursor.set(repo.nodeId, c)
     // Linhas: cada sucessora puxa a cadeia de antecessoras do MESMO repo.
@@ -607,7 +742,8 @@ export function nextLaneSlot(
   if (!rowWidth || cursor.x <= 0) return cursor
   const free = (p: Point) =>
     !placed.some(
-      (b) => p.x < b.x + b.w && p.x + laneW > b.x && p.y < b.y + b.h && p.y + Math.max(laneH, 1) > b.y,
+      (b) =>
+        p.x < b.x + b.w && p.x + laneW > b.x && p.y < b.y + b.h && p.y + Math.max(laneH, 1) > b.y,
     )
   if (cursor.x + laneW <= rowWidth && free(cursor)) return cursor
   const bottom = Math.max(0, ...placed.map((b) => b.y + b.h))
@@ -665,8 +801,7 @@ function layoutLanes(
       .filter((r) => r.sessionIds.length > 0 || lane.kind === 'feature')
     // A coluna da mãe vem primeiro: ela fica no topo à esquerda do card.
     repos.sort(
-      (a, b) =>
-        Number(b.sessionIds.some(ctx.isMother)) - Number(a.sessionIds.some(ctx.isMother)),
+      (a, b) => Number(b.sessionIds.some(ctx.isMother)) - Number(a.sessionIds.some(ctx.isMother)),
     )
     const laneSessions = repos.flatMap((r) => r.sessionIds.map((id) => byId.get(id)!))
     if (laneSessions.length === 0) return []
@@ -707,7 +842,10 @@ function layoutLanes(
     const cards: MapNode[] = []
     // O card da feature tem um cabeçalho mais alto (título + pulso).
     const top = lane.kind === 'feature' ? FEATURE_HEADER : PROJECT_HEADER
-    const cardRepos = repos.map((r) => ({ nodeId: laneRepoId(lane, r.repoId), sessionIds: r.sessionIds }))
+    const cardRepos = repos.map((r) => ({
+      nodeId: laneRepoId(lane, r.repoId),
+      sessionIds: r.sessionIds,
+    }))
     const slotsByRepo = slotCards(
       cardRepos,
       ctx,
@@ -742,7 +880,8 @@ function layoutLanes(
           projectColor: repo.projectColor ?? null,
         } satisfies LaneData,
       })
-      if (repo.repoId) repoLaneIds.set(repo.repoId, [...(repoLaneIds.get(repo.repoId) ?? []), repoId])
+      if (repo.repoId)
+        repoLaneIds.set(repo.repoId, [...(repoLaneIds.get(repo.repoId) ?? []), repoId])
       for (const id of repo.sessionIds)
         cards.push(sessionCard(byId.get(id)!, slots.get(id)!, repoId, ctx))
       repoX += box.w + GAP
@@ -816,7 +955,7 @@ function layoutGroups(
     const slots = stackChildren(
       members.map((m) => m.sessionId),
       (id) => saved.get(`session:${id}`),
-      (id) => ctx.sizeOf(id).h,
+      ctx.sizeOf,
     )
     const box = fit(slots, ctx.sizeOf, { w: GROUP_MIN_W, h: GROUP_MIN_H })
     const s = saved.get(`group:${g.id}`)
@@ -988,6 +1127,10 @@ export function graphToFlow(input: MapInput): FlowResult {
       : n.scope === input.scope,
   )
   const saved = savedIndex(input.positions)
+  const savedSizes = input.cardSizes ?? cardSizesOf(input.positions, input.sizes)
+  const userSizes: Readonly<Record<string, Size>> = input.inPanel
+    ? Object.fromEntries(Object.entries(savedSizes).filter(([id]) => id !== input.inPanel))
+    : savedSizes
   const counts = childCounts(input.graph.edges)
   const expandedMothers = input.expandedMothers ?? new Set<string>()
   // Nota mais recente presa a cada sessão visível: o rodapé do cartão mostra a 1ª linha.
@@ -1011,7 +1154,15 @@ export function graphToFlow(input: MapInput): FlowResult {
     // A mãe é sempre aberta (o chevron dela não existe; "Recolher todos" não a toca).
     viewOf: (id) => (isMother(id) ? 'open' : viewOf(views, id)),
     sizeOf: (id) =>
-      cardSize(viewOf(views, id), input.cardHeights?.[id], input.compact, isMother(id)),
+      cardSize(
+        viewOf(views, id),
+        input.cardHeights?.[id],
+        input.compact,
+        isMother(id),
+        userSizes[id],
+      ),
+    isSized: (id) =>
+      !!userSizes[id] && userSizeApplies(viewOf(views, id), !!input.compact, isMother(id)),
     cardGap: input.compact ? COMPACT_CARD_GAP : CARD_GAP,
     counts,
     notesBySession,
@@ -1023,7 +1174,10 @@ export function graphToFlow(input: MapInput): FlowResult {
   for (const lane of input.graph.lanes)
     for (const r of lane.repos) for (const id of r.sessionIds) topOf.set(id, topLaneId(lane))
   const laneOf = new Map(
-    sessions.map((s) => [s.sessionId, grouped.has(s.sessionId) ? null : (topOf.get(s.sessionId) ?? null)]),
+    sessions.map((s) => [
+      s.sessionId,
+      grouped.has(s.sessionId) ? null : (topOf.get(s.sessionId) ?? null),
+    ]),
   )
   const noteCountByLane = new Map<string, number>()
   for (const n of notes) {

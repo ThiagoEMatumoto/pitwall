@@ -26,6 +26,17 @@ describe('reuseUnchanged', () => {
     expect(out[1].data.title).toBe('novo')
   })
 
+  it('nó sendo redimensionado não volta ao tamanho do layout no meio do gesto', () => {
+    // O NodeResizer escreve width/height com resizing: true; um push (~300ms com
+    // sessão trabalhando) traria a vaga do layout e o cartão pularia de volta.
+    const prev = [{ ...n('a'), width: 560, height: 472, resizing: true }, n('b')]
+    const next = [{ ...n('a', 'novo'), width: 400, height: 212 }, n('b')]
+    const out = reuseUnchanged(next as typeof prev, prev)
+    expect(out[0]).toBe(prev[0])
+    const after = reuseUnchanged(next as typeof prev, [{ ...prev[0], resizing: false }, prev[1]])
+    expect(after[0]).toMatchObject({ width: 400, height: 212 })
+  })
+
   it('a seleção do React Flow sobrevive ao push', () => {
     const prev = [{ ...n('a'), selected: true }]
     expect(reuseUnchanged([n('a', 'x')], prev)[0]).toMatchObject({ selected: true })

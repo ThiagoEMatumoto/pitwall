@@ -5,7 +5,7 @@ vi.mock('@/lib/ipc', () => ({
   sessionGraphApi: { onUpdated: () => () => {}, get: () => new Promise(() => {}) },
 }))
 
-import { FeatureSwitcher } from './FeatureSwitcher'
+import { FeatureSwitcher, FeatureSwitcherButton } from './FeatureSwitcher'
 import { useFeatureMruStore } from './feature-mru-store'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { useMapFocusStore } from './map-focus-store'
@@ -13,8 +13,13 @@ import { useProjectsViewStore } from './projects-view-store'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
 import { setKeyboardLayoutLabels } from '@/lib/keybindings'
-import type { SessionGraphLane } from '../../../shared/types/session-graph'
+import type {
+  SessionGraph,
+  SessionGraphLane,
+  SessionGraphNode,
+} from '../../../shared/types/session-graph'
 
+// Cada card tem uma sessão viva: o seletor só lista o que o mapa desenha.
 const lane = (featureId: string): SessionGraphLane => ({
   kind: 'feature',
   featureId,
@@ -25,7 +30,45 @@ const lane = (featureId: string): SessionGraphLane => ({
   pulse: null,
   status: 'in_progress',
   pinned: false,
-  repos: [],
+  repos: [{ repoId: 'r1', label: 'repo', sessionIds: [`s-${featureId}`] }],
+})
+const looseLane: SessionGraphLane = {
+  kind: 'project',
+  projectId: 'p1',
+  name: 'Proj',
+  color: null,
+  repos: [{ repoId: 'r1', label: 'repo', sessionIds: ['s-loose'] }],
+}
+
+const liveNode = (sessionId: string, featureId: string | null): SessionGraphNode => ({
+  sessionId,
+  ccSessionId: `cc-${sessionId}`,
+  title: sessionId,
+  projectId: 'p1',
+  repoId: 'r1',
+  repoLabel: 'repo',
+  provider: 'claude',
+  status: 'idle',
+  attentionReason: null,
+  lastActivityAt: 1,
+  purposeHint: null,
+  purpose: null,
+  purposeSource: null,
+  groupId: null,
+  lastSummary: null,
+  lastSummaryAt: null,
+  childOfHandoffId: null,
+  featureId,
+})
+
+const graphOf = (lanes: SessionGraphLane[]): SessionGraph => ({
+  lanes,
+  edges: [],
+  nodes: lanes.flatMap((l) =>
+    l.repos.flatMap((r) =>
+      r.sessionIds.map((id) => liveNode(id, l.kind === 'feature' ? l.featureId : null)),
+    ),
+  ),
 })
 
 const ctrlBackquote = (shiftKey = false) =>
@@ -39,7 +82,7 @@ describe('FeatureSwitcher', () => {
     Element.prototype.scrollIntoView = vi.fn()
     localStorage.clear()
     useSessionGraphStore.setState({
-      graph: { nodes: [], edges: [], lanes: [lane('f1'), lane('f2'), lane('f3')] },
+      graph: graphOf([lane('f1'), lane('f2'), lane('f3')]),
     })
     useFeatureMruStore.setState({ order: ['f2', 'f3', 'f1'] })
     useMapFocusStore.setState({ featureId: 'f2', frame: null })
@@ -123,15 +166,7 @@ describe('FeatureSwitcher', () => {
 
   it('"Sem feature": enquadra o grupo sem mudar a feature; o toque seguinte volta à anterior', () => {
     useSessionGraphStore.setState({
-      graph: {
-        nodes: [],
-        edges: [],
-        lanes: [
-          lane('f1'),
-          lane('f2'),
-          { kind: 'project', projectId: 'p1', name: 'Proj', color: null, repos: [] },
-        ],
-      },
+      graph: graphOf([lane('f1'), lane('f2'), looseLane]),
     })
     useFeatureMruStore.setState({ order: ['f2', 'f1'] })
     render(<FeatureSwitcher />)
@@ -205,15 +240,7 @@ describe('FeatureSwitcher', () => {
   // feature" fecham a lista).
   it('"Sem feature" → cartão da feature em foco → toque rápido sai dela', () => {
     useSessionGraphStore.setState({
-      graph: {
-        nodes: [],
-        edges: [],
-        lanes: [
-          lane('f1'),
-          lane('f2'),
-          { kind: 'project', projectId: 'p1', name: 'Proj', color: null, repos: [] },
-        ],
-      },
+      graph: graphOf([lane('f1'), lane('f2'), looseLane]),
     })
     useFeatureMruStore.setState({ order: ['f2', 'f1'] })
     render(<FeatureSwitcher />)
@@ -237,27 +264,92 @@ describe('FeatureSwitcher', () => {
     expect(useMapFocusStore.getState().featureId).toBe('f2')
   })
 
-  it('a dica sai do combo e do layout do teclado', () => {
+  // No ABNT2 o layout rotula o Backquote como "'": a dica mostra a crase (o nome do
+  // atalho) e a tecla física que o dispara.
+  it('a dica sai do combo, com a crase e a tecla física no ABNT2', () => {
     setKeyboardLayoutLabels(new Map([['Backquote', "'"]]))
     try {
       render(<FeatureSwitcher />)
       ctrlBackquote()
       act(() => void vi.advanceTimersByTime(200))
       expect(screen.getByTestId('feature-switcher')).toHaveTextContent(
-        "Solte o Ctrl para abrir · ' ou Tab avança",
+        "Solte o Ctrl para abrir · ` (tecla ') ou Tab avança",
       )
       const keys = [...screen.getByTestId('feature-switcher').querySelectorAll('kbd')]
-      expect(keys.map((k) => k.textContent)).toContain("'")
+      expect(keys.map((k) => k.textContent)).toContain('`')
+      expect(keys.map((k) => k.textContent)).not.toContain("'")
       releaseCtrl()
     } finally {
       setKeyboardLayoutLabels(new Map())
     }
   })
 
+  it('só lista as features com sessão viva (a regra do mapa)', () => {
+    const g = graphOf([lane('f1'), lane('f2'), lane('f3'), looseLane])
+    useSessionGraphStore.setState({
+      graph: {
+        ...g,
+        nodes: g.nodes.map((n) =>
+          n.sessionId === 's-f3' || n.sessionId === 's-loose' ? { ...n, status: 'ended' } : n,
+        ),
+      },
+    })
+    render(<FeatureSwitcher />)
+    ctrlBackquote()
+    act(() => void vi.advanceTimersByTime(200))
+    expect(screen.getAllByRole('option').map((o) => o.getAttribute('data-key'))).toEqual([
+      'f2',
+      'f1',
+    ])
+    expect(screen.getByTestId('feature-switcher-backdrop')).toBeTruthy()
+    releaseCtrl()
+  })
+
+  it('clicar no fundo cancela e o foco volta para onde estava (o mousedown não o rouba)', () => {
+    render(
+      <>
+        <input data-testid="typing" />
+        <FeatureSwitcher />
+      </>,
+    )
+    const typing = screen.getByTestId('typing')
+    typing.focus()
+    ctrlBackquote()
+    act(() => void vi.advanceTimersByTime(200))
+    expect(document.activeElement).not.toBe(typing)
+    // false = preventDefault: sem ele, o default do mousedown leva o foco ao <body>.
+    expect(fireEvent.mouseDown(screen.getByTestId('feature-switcher-backdrop'))).toBe(false)
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(document.activeElement).toBe(typing)
+    releaseCtrl()
+  })
+
+  it('o botão da barra do mapa abre sem modificador; soltar tecla não confirma, o clique sim', () => {
+    render(
+      <>
+        <FeatureSwitcher />
+        <FeatureSwitcherButton />
+      </>,
+    )
+    const btn = screen.getByTestId('map-feature-switcher')
+    expect(btn.getAttribute('title')).toBe('Trocar feature (Ctrl+`)')
+    fireEvent.click(btn)
+    expect(screen.getAllByRole('option')).toHaveLength(3)
+    // Aberto pelo botão, soltar o Ctrl não faz nada: a dica não pode mandar soltá-lo.
+    expect(screen.getByTestId('feature-switcher')).not.toHaveTextContent('Solte o')
+    expect(screen.getByTestId('feature-switcher')).toHaveTextContent('Enter ou clique abre')
+    fireEvent.keyDown(window, { key: 'ArrowDown', code: 'ArrowDown' })
+    fireEvent.keyUp(window, { key: 'ArrowDown', code: 'ArrowDown' })
+    expect(screen.queryByRole('listbox')).not.toBeNull()
+    fireEvent.click(screen.getAllByRole('option')[2])
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(useMapFocusStore.getState().featureId).toBe('f1')
+  })
+
   it('fechado, não reconstrói a lista a cada tail (só ao abrir)', () => {
     const { container } = render(<FeatureSwitcher />)
     useSessionGraphStore.setState({
-      graph: { nodes: [], edges: [], lanes: [lane('f1'), lane('f2'), lane('f3'), lane('f4')] },
+      graph: graphOf([lane('f1'), lane('f2'), lane('f3'), lane('f4')]),
     })
     useFeatureMruStore.setState({ order: ['f2', 'f4', 'f3', 'f1'] })
     expect(container.innerHTML).toBe('')

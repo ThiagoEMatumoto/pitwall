@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
-import { compensatedPx } from './card-display'
+import { cardDetail, compensatedPx } from './card-display'
 
 // Curto: o cartão tem largura fixa e "MÃE · 3 FILHAS" em caixa alta engolia o
 // título. Compacto (zoom brief, cartão recolhido) é só a contagem ao lado da
@@ -39,6 +39,12 @@ export const MOTHER_MINI_BELOW = 0.55
 export type MotherDetail = 'full' | 'mini'
 export function motherDetail(zoom: number): MotherDetail {
   return zoom < MOTHER_MINI_BELOW ? 'mini' : 'full'
+}
+
+// A alça de tamanho segue o degrau dos cartões comuns, não o da mãe: abaixo dele
+// a raia está no layout compacto e o soltar fixaria os irmãos nessas coordenadas.
+export function motherResizable(zoom: number): boolean {
+  return cardDetail(zoom) === 'full'
 }
 
 // Saída ao vivo da mãe: 16 linhas em 14px (>= 12px efetivos no zoom de leitura

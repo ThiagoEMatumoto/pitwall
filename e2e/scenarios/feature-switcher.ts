@@ -10,7 +10,15 @@ import { goToArea, waitReady } from '../driver/nav'
 
 // F5 — seletor rápido de features (Ctrl+`, o "Alt+Tab" do Pitwall), sobre a CÓPIA
 // do perfil real com HOME fake e stubs vivos do `claude`:
-//   3 features (F1, F2, F3), cada uma com mãe Mi + filha Ci (PTYs vivas)
+//   3 features (F1, F2, F3), cada uma com mãe Mi + filha Ci (PTYs vivas); o perfil
+//   real traz várias outras features SEM sessão viva
+//   → o overlay lista SÓ as 3 vivas (a regra do mapa), em MRU, centralizado, com
+//     backdrop, 1 linha por item, e a dica com <kbd> e a crase (`)
+//   → a barra do mapa tem "Trocar feature" com o atalho no tooltip; clicar abre
+//   → com o painel da mãe aberto (mapa estreito), o cabeçalho do card em foco fica
+//     abaixo da barra; avisos de despacho não cobrem cartão nem painel (ou viram
+//     "+N avisos" na barra) e somem em 5s
+//   → F num cartão: o "fora da vista" não cai sobre ele
 //   → depois do reload (nada em foco), o toque rápido vai a F3, a mais recente
 //   → segurar Ctrl + `: overlay com as 3 em ordem MRU, a 2ª pré-selecionada
 //   → soltar o Ctrl confirma a 2ª: o mapa enquadra o card dela e o painel da mãe
@@ -24,7 +32,7 @@ import { goToArea, waitReady } from '../driver/nav'
 
 const SHOTS =
   process.env.SWITCHER_SHOTS ??
-  '/home/thiagoematumoto/projetos/pessoal/claude-manager/.worktrees/feat-mother-panel/.cm-drive/mp/drive/MP-switcher'
+  '/home/thiagoematumoto/projetos/pessoal/claude-manager/.worktrees/feat-mother-panel/.cm-drive/mp2/drive/MP2-polish'
 mkdirSync(SHOTS, { recursive: true })
 const fake = createFakeHome({ parentDir: tmpdir() })
 let shotN = 0
@@ -89,6 +97,10 @@ function check(ok: boolean, label: string): boolean {
 const first = await launchApp()
 await first.app.close()
 const userData = first.userDataCopy
+
+const totalFeatures =
+  (await queryDb<{ n: number }>(userData, 'SELECT COUNT(*) AS n FROM features'))[0]?.n ?? 0
+console.log(`[switcher] features no perfil (antes do cenário): ${totalFeatures}`)
 
 const repo = (
   await queryDb<{ id: string; label: string; path: string; project_id: string }>(
@@ -159,6 +171,19 @@ const optionKeys = () =>
       selected: e.getAttribute('aria-selected') === 'true',
       id: e.id,
     })),
+  )
+type Box = { x: number; y: number; width: number; height: number }
+const intersects = (a: Box, b: Box) =>
+  a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+const visibleBoxes = (selector: string) =>
+  page.locator(selector).evaluateAll((els) =>
+    els
+      .filter((e) => !(e as HTMLElement).closest('[hidden]'))
+      .map((e) => {
+        const r = e.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      })
+      .filter((r) => r.width > 0 && r.height > 0),
   )
 const activeInXterm = () => page.evaluate(() => !!document.activeElement?.closest('.xterm'))
 // O card da feature enquadrado: inteiro (ou pelo menos o topo e o centro) dentro do mapa.
@@ -317,9 +342,44 @@ try {
     (await overlay().locator('[data-testid="feature-switcher-mother"]').count()) >= 3,
     'cada feature mostra a mãe',
   )
+  // Só as vivas: o perfil real tem outras features (sem sessão) que não podem entrar.
+  check(
+    JSON.stringify(all.map((o) => o.key)) === JSON.stringify(mruBefore),
+    `overlay lista SÓ as 3 features vivas (${all.length} opções: ${all.map((o) => o.key).join(',')}; ${totalFeatures} features no perfil)`,
+  )
+  const vp =
+    page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })))
+  const backdrop = await page.getByTestId('feature-switcher-backdrop').boundingBox()
+  const backdropBg = await page
+    .getByTestId('feature-switcher-backdrop')
+    .evaluate((e) => getComputedStyle(e).backgroundColor)
+  check(
+    !!backdrop &&
+      backdrop.width >= vp.width - 1 &&
+      backdrop.height >= vp.height - 1 &&
+      backdropBg !== 'rgba(0, 0, 0, 0)' &&
+      backdropBg !== 'transparent',
+    `backdrop escurece a janela inteira (${backdropBg}, ${backdrop?.width}x${backdrop?.height})`,
+  )
+  const card = await page.locator('[data-testid="feature-switcher"] [role="listbox"]').boundingBox()
+  check(
+    !!card && Math.abs(card.x + card.width / 2 - vp.width / 2) < vp.width * 0.05,
+    `overlay centralizado na horizontal (centro ${card ? card.x + card.width / 2 : '?'} vs ${vp.width / 2})`,
+  )
+  const rowHeights = await page
+    .locator('[data-testid="feature-switcher"] [role="option"]')
+    .evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))
+  check(
+    rowHeights.every((h) => h > 0 && h <= 40),
+    `cada item em 1 linha (alturas ${rowHeights.map((h) => Math.round(h)).join(',')})`,
+  )
+  const kbds = await page.getByTestId('feature-switcher-hint').locator('kbd').allTextContents()
+  check(
+    kbds.includes('`') && !kbds.includes("'"),
+    `dica com <kbd> e a crase (${JSON.stringify(kbds)})`,
+  )
   await shot('overlay-mru')
   const target = all[1].key
-  const previous = all[0].key
 
   // ---------- soltar confirma a 2ª ----------
   await page.keyboard.up('Control')
@@ -343,9 +403,150 @@ try {
     )
   }
   check(!(await activeInXterm()), 'confirmar deixa o foco fora do xterm')
+  // O enquadrar refaz enquanto barra e mapa assentam (até 0,8s).
+  await page.waitForTimeout(1200)
+  const bar = await page.getByTestId('map-top-bar').boundingBox()
+  const lane = await page.locator(`.react-flow__node[data-id="lane:f:${target}"]`).boundingBox()
+  check(
+    !!bar && !!lane && lane.y >= bar.y + bar.height - 1,
+    `cabeçalho do card em foco abaixo da barra do mapa (card y=${lane?.y}, barra até ${bar ? bar.y + bar.height : '?'})`,
+  )
   await shot('confirmou-2a')
 
+  // ---------- avisos com o mapa estreito (painel da mãe aberto) ----------
+  if (ours.has(target)) {
+    const tf = feats.find((f) => f.id === target)!
+    await page.evaluate(
+      async ({ repoId, featureId, motherId }) => {
+        for (const n of [1, 2]) {
+          const c = await window.api.sessions.spawn({
+            repoId,
+            name: `filha-aviso-${n}`,
+            handoffChild: true,
+            featureId,
+          })
+          const { handoff } = await window.api.handoffs.createManual({
+            repoId,
+            motherSessionId: motherId,
+            task: `Aviso ${n}`,
+            featureId,
+          })
+          await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
+        }
+      },
+      { repoId: repo.id, featureId: target, motherId: tf.mother.id },
+    )
+    check(
+      await waitFor(
+        'avisos de despacho',
+        async () =>
+          (await visibleBoxes('[data-testid="toast-card"]')).length > 0 ||
+          (await page.getByTestId('toast-overflow').isVisible()),
+        6000,
+      ),
+      'avisos de despacho apareceram',
+    )
+    // A pilha remede a cada 0,5s com toast à vista.
+    await page.waitForTimeout(900)
+    const toasts = await visibleBoxes('[data-testid="toast-card"]')
+    const cards = await visibleBoxes('[data-testid="session-map"] .react-flow__node-session')
+    const panel = await dock().boundingBox()
+    const mapBox = await page.getByTestId('session-map').boundingBox()
+    const onScreen = cards.filter((c) => !mapBox || intersects(c, mapBox))
+    const overflow = page.getByTestId('toast-overflow')
+    const pill = (await overflow.isVisible()) ? await overflow.boundingBox() : null
+    const barNow = await page.getByTestId('map-top-bar').boundingBox()
+    // O "+N" fora da barra (acima do card no vão) também não pode cobrir cartão.
+    const pillInBar =
+      !!pill &&
+      !!barNow &&
+      pill.y >= barNow.y - 1 &&
+      pill.y + pill.height <= barNow.y + barNow.height + 1
+    const covered = [...toasts, ...(pill && !pillInBar ? [pill] : [])].filter(
+      (t) => onScreen.some((c) => intersects(t, c)) || (!!panel && intersects(t, panel)),
+    )
+    check(
+      covered.length === 0,
+      `nenhum aviso cobre cartão ou painel (${toasts.length} à vista, ${covered.length} cobrindo)`,
+    )
+    if (toasts.length === 0)
+      check(
+        !!pill &&
+          !!barNow &&
+          pill.y >= barNow.y - 1 &&
+          pill.y + pill.height <= barNow.y + barNow.height + 1,
+        `sem vão: "+N avisos" na barra do mapa (${pill ? `${pill.x},${pill.y}` : 'ausente'})`,
+      )
+    await shot('avisos-mapa-estreito')
+    check(
+      await waitFor(
+        'avisos somem',
+        async () =>
+          (await visibleBoxes('[data-testid="toast-card"]')).length === 0 &&
+          !(await overflow.isVisible()),
+        6500,
+      ),
+      'avisos de despacho somem sozinhos (~5s)',
+    )
+  }
+
+  // ---------- F num cartão: o "fora da vista" não cai sobre ele ----------
+  {
+    const childNode = page
+      .locator('[data-testid="session-map"] .react-flow__node-session')
+      .filter({ hasNot: page.locator('[data-variant="mother"]') })
+      .first()
+    const title = childNode.getByTestId('card-title').first()
+    if (await title.count()) {
+      await title.click()
+      await page
+        .getByTestId('session-map')
+        .focus()
+        .catch(() => {})
+      await page.keyboard.press('f')
+      await page.waitForTimeout(700)
+      const sel = await childNode.boundingBox()
+      const off = page.getByTestId('map-offscreen-count')
+      const offBox = (await off.isVisible()) ? await off.boundingBox() : null
+      check(
+        !!sel && (!offBox || !intersects(offBox, sel)),
+        `com F, o "fora da vista" fica fora do cartão enquadrado (${offBox ? 'pill à vista' : 'sem pill'})`,
+      )
+      // A mãe meio à vista acima do F contava como "oculta" e o pill cobria o nome dela.
+      const titles = await visibleBoxes('[data-testid="session-map"] [data-testid="card-title"]')
+      const covered = offBox ? titles.filter((t) => intersects(offBox, t)).length : 0
+      check(
+        covered === 0,
+        `com F, o "fora da vista" não cobre o título de nenhum cartão (${covered} cobertos)`,
+      )
+      await shot('F-enquadrado')
+      await page.keyboard.press('f')
+      await page.waitForTimeout(400)
+    } else check(false, 'cartão de filha para o F')
+  }
+
+  // ---------- botão "Trocar feature" na barra do mapa ----------
+  const btn = page.getByTestId('map-feature-switcher')
+  const btnTitle = (await btn.getAttribute('title')) ?? ''
+  check(
+    btnTitle.includes('Ctrl+`'),
+    `barra do mapa: "Trocar feature" com o atalho no tooltip (${btnTitle})`,
+  )
+  await btn.click()
+  check(
+    await waitFor('overlay (botão)', async () => overlay().isVisible(), 3000),
+    'clicar em "Trocar feature" abre o seletor',
+  )
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(300)
+  check(await overlay().isVisible(), 'aberto pelo botão, soltar tecla não confirma (segue aberto)')
+  await page.keyboard.press('Escape')
+  await waitFor('overlay fecha (botão)', async () => (await overlay().count()) === 0, 3000)
+
   // ---------- toque rápido volta ----------
+  // O F acima seleciona um cartão (de qualquer feature), o que põe a feature dele
+  // em foco: a "anterior" é a 2ª do MRU agora, não a de antes de confirmar.
+  const previous = (await mru())[1]
   await page.keyboard.down('Control')
   await page.keyboard.press('Backquote')
   await page.keyboard.up('Control')
@@ -448,6 +649,26 @@ try {
       'e o card dela enquadrado',
     )
   }
+  // A mãe no painel tem a vaga curta (só o "Está no painel"): no mini ela não
+  // repete o composer, senão ele saía cortado ao meio na borda do cartão.
+  const minis = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-in-panel="true"] [data-testid="mother-mini"]')].map(
+      (el) => {
+        const card = el.closest('[data-testid="session-card"]')!.getBoundingClientRect()
+        const kids = [...el.children].map((c) => c.getBoundingClientRect().bottom)
+        return {
+          prompt: el.querySelector('[data-testid="card-prompt"]') !== null,
+          overflow: Math.round(Math.max(0, ...kids) - card.bottom),
+        }
+      },
+    ),
+  )
+  if (minis.length > 0)
+    check(
+      minis.every((m) => !m.prompt && m.overflow <= 1),
+      `mini da mãe no painel sem composer e sem estourar a vaga (${JSON.stringify(minis)})`,
+    )
+  else console.log('[switcher] (mãe do painel não está no mini neste zoom; check pulado)')
   await shot('fora-do-mapa')
 } catch (err) {
   fatal = err

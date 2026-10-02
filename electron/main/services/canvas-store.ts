@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
 import type {
+  CanvasCardSize,
   CanvasCardView,
   CanvasEntityKind,
   CanvasNote,
@@ -91,10 +92,14 @@ export function getCanvas(scope: CanvasScope): CanvasState {
   const views: CanvasCardView[] = positions
     .filter((r) => r.kind === 'session' && r.view_state && VIEW_STATES.has(r.view_state))
     .map((r) => ({ sessionId: r.entity_id, viewState: r.view_state as CardViewState }))
+  const sizes: CanvasCardSize[] = positions
+    .filter((r) => r.kind === 'session' && !hasPosition(r) && r.w != null && r.h != null)
+    .map((r) => ({ sessionId: r.entity_id, w: r.w as number, h: r.h as number }))
   return {
     scope,
     positions: positions.filter(hasPosition).map(toPosition),
     views,
+    sizes,
     notes: notes.map(toNote),
     groups: groups.map(toGroup),
   }
@@ -106,22 +111,39 @@ export function setPositions(scope: CanvasScope, items: CanvasPositionInput[]): 
     `INSERT INTO canvas_positions (scope, kind, entity_id, x, y, w, h)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(scope, kind, entity_id) DO UPDATE SET x = excluded.x, y = excluded.y,
-       w = excluded.w, h = excluded.h`,
+       w = CASE WHEN ? THEN excluded.w ELSE canvas_positions.w END,
+       h = CASE WHEN ? THEN excluded.h ELSE canvas_positions.h END`,
   )
+  // Sem w/h no item = mantém o tamanho salvo (um arrasto só manda x/y); null
+  // explícito = volta ao padrão.
   db.transaction(() => {
-    for (const p of items) upsert.run(scope, p.kind, p.entityId, p.x, p.y, p.w ?? null, p.h ?? null)
+    for (const p of items) {
+      upsert.run(
+        scope,
+        p.kind,
+        p.entityId,
+        p.x,
+        p.y,
+        p.w ?? null,
+        p.h ?? null,
+        p.w !== undefined ? 1 : 0,
+        p.h !== undefined ? 1 : 0,
+      )
+    }
   })()
 }
 
-// Estado de exibição do cartão não é posição: sobrevive ao Organizar e a sair do
-// grupo. Sem x/y a linha vira só view_state; sem nenhum dos dois, some.
+// Estado de exibição e tamanho do cartão não são posição: sobrevivem ao Organizar,
+// a sair do grupo e a trocar de feature. Sem x/y a linha guarda só view_state e/ou
+// w/h; sem nada disso, some.
 function forgetPositions(where: string, ...params: unknown[]): void {
   const db = getDb()
-  db.prepare(
-    `UPDATE canvas_positions SET x = NULL, y = NULL, w = NULL, h = NULL
-      WHERE view_state IS NOT NULL AND ${where}`,
-  ).run(...params)
-  db.prepare(`DELETE FROM canvas_positions WHERE view_state IS NULL AND ${where}`).run(...params)
+  // Só o tamanho de cartão de sessão: nota/grupo/lane recebem w/h do Organizar.
+  const keep = `(view_state IS NOT NULL OR (kind = 'session' AND w IS NOT NULL AND h IS NOT NULL))`
+  db.prepare(`UPDATE canvas_positions SET x = NULL, y = NULL WHERE ${keep} AND ${where}`).run(
+    ...params,
+  )
+  db.prepare(`DELETE FROM canvas_positions WHERE NOT ${keep} AND ${where}`).run(...params)
 }
 
 export function clearPositions(scope: CanvasScope): void {

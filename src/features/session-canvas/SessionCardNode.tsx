@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   ChevronDown,
@@ -26,6 +26,7 @@ import {
   useReportCardHeight,
 } from './card-parts'
 import { MotherCard } from './MotherCard'
+import { CardResizer } from './CardResizer'
 import { CardAttention, CardPromptBar, LiveTail } from './SessionCardLive'
 import { isActionableDetail } from '@/features/session-switcher/AttentionPopover'
 import { useMapActions } from './map-context'
@@ -355,7 +356,9 @@ function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
         <>
           <Footer data={data} />
           <CardAttention node={node} />
-          {!menuInline && <LiveTail node={node} />}
+          {!menuInline && (
+            <LiveTail node={node} window={data.tail?.window} lines={data.tail?.lines} />
+          )}
           <CardPromptBar node={node} />
         </>
       )}
@@ -450,8 +453,13 @@ function RegularCard({ id, data, selected }: NodeProps<MapNode>) {
   const alertClass = ind.tone === 'needs-you' ? 'session-card-alert' : ''
   // Aberto em detalhe cheio: a caixa cresce com o conteúdo até a vaga máxima e o
   // layout segue a altura medida (a vaga do nó acompanha no frame seguinte).
-  const sizedByContent = detail === 'full' && card.view === 'open'
+  // Redimensionado pelo usuário: a caixa preenche a vaga (o tamanho é dele).
+  const [resizing, setResizing] = useState(false)
+  const sized = card.sized || resizing
+  const sizedByContent = detail === 'full' && card.view === 'open' && !sized
+  const fill = detail === 'full' && card.view !== 'collapsed' && sized
   const measureRef = useReportCardHeight(node.sessionId, sizedByContent)
+  const resizable = detail === 'full' && card.view !== 'collapsed'
 
   if (detail === 'blocks') {
     const color = TONE_COLOR[ind.tone]
@@ -475,49 +483,64 @@ function RegularCard({ id, data, selected }: NodeProps<MapNode>) {
   }
 
   return (
-    <div
-      data-testid="session-card"
-      data-session-id={node.sessionId}
-      data-detail={detail}
-      data-mother={node.isMother ? 'true' : undefined}
-      data-view={card.view}
-      data-tone={ind.tone}
-      onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
-      // O fundo fica SEMPRE opaco: com opacity no cartão inteiro (encerrada, foco)
-      // os fios que passam por baixo apareciam através dele. Esmaece só o conteúdo.
-      // A caixa desenhada só ocupa o que tem (a vaga do layout é o teto): sem
-      // isto sobrava uma caixa alta vazia no aberto e no resumido. relative: as
-      // âncoras dos fios seguem a borda desenhada, não a da vaga.
-      ref={measureRef}
-      className={`group relative w-full rounded-lg border bg-[var(--color-surface)] transition ${
-        card.view === 'collapsed' ? 'h-full overflow-hidden' : sizedByContent ? '' : 'max-h-full'
-      } ${sizedByContent ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
-      data-dimmed={dimmed ? 'true' : undefined}
-      style={sizedByContent ? { ...frame, maxHeight: OPEN_H } : frame}
-    >
-      <BorderHandles />
+    <>
       <div
-        className={`w-full ${dimmed ? 'session-card-dimmed' : ''} ${
-          detail === 'full' && card.view !== 'collapsed'
-            ? 'flex min-h-0 flex-1 flex-col gap-1.5 px-2.5 py-2'
-            : 'h-full'
-        }`}
+        data-testid="session-card"
+        data-session-id={node.sessionId}
+        data-detail={detail}
+        data-mother={node.isMother ? 'true' : undefined}
+        data-view={card.view}
+        data-tone={ind.tone}
+        data-sized={card.sized ? 'true' : undefined}
+        onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
+        // O fundo fica SEMPRE opaco: com opacity no cartão inteiro (encerrada, foco)
+        // os fios que passam por baixo apareciam através dele. Esmaece só o conteúdo.
+        // A caixa desenhada só ocupa o que tem (a vaga do layout é o teto): sem
+        // isto sobrava uma caixa alta vazia no aberto e no resumido. relative: as
+        // âncoras dos fios seguem a borda desenhada, não a da vaga.
+        ref={measureRef}
+        className={`group relative w-full rounded-lg border bg-[var(--color-surface)] transition ${
+          card.view === 'collapsed' || fill
+            ? 'h-full overflow-hidden'
+            : sizedByContent
+              ? ''
+              : 'max-h-full'
+        } ${sizedByContent || fill ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
+        data-dimmed={dimmed ? 'true' : undefined}
+        style={sizedByContent ? { ...frame, maxHeight: OPEN_H } : frame}
       >
-        {detail === 'brief' ? (
-          <BriefBody data={card} zoom={zoom} ind={ind} />
-        ) : card.view === 'collapsed' ? (
-          <CollapsedBody data={card} ind={ind} />
-        ) : (
-          <CardBody data={card} ind={ind} />
-        )}
+        <BorderHandles />
+        <div
+          className={`w-full ${dimmed ? 'session-card-dimmed' : ''} ${
+            detail === 'full' && card.view !== 'collapsed'
+              ? 'flex min-h-0 flex-1 flex-col gap-1.5 px-2.5 py-2'
+              : 'h-full'
+          }`}
+        >
+          {detail === 'brief' ? (
+            <BriefBody data={card} zoom={zoom} ind={ind} />
+          ) : card.view === 'collapsed' ? (
+            <CollapsedBody data={card} ind={ind} />
+          ) : (
+            <CardBody data={card} ind={ind} />
+          )}
+        </div>
+        <Handle
+          type="source"
+          position={Position.Right}
+          title="Arraste até a lane de outro repo para delegar"
+          className="!h-2.5 !w-2.5 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
+        />
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Arraste até a lane de outro repo para delegar"
-        className="!h-2.5 !w-2.5 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
-      />
-    </div>
+      {resizable && (
+        <CardResizer
+          sessionId={node.sessionId}
+          mother={false}
+          sized={card.sized}
+          onResizing={setResizing}
+        />
+      )}
+    </>
   )
 }
 

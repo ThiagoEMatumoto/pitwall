@@ -84,6 +84,7 @@ import {
   OVERVIEW_MIN_CARDS,
   actualSizeViewport,
   boundsOf,
+  followBarHeight,
   noteSlot,
   offscreenCards,
   overflowEdges,
@@ -112,6 +113,7 @@ import { useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { RAIL_WIDTH, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { MapFeatureMovePicker } from './MapChrome'
+import { FeatureSwitcherButton } from './FeatureSwitcher'
 
 const nodeTypes = {
   session: SessionCardNode,
@@ -138,6 +140,7 @@ function sameIds(a: { id: string }[], b: { id: string }[]): boolean {
 // diz onde está o resto.
 const MINIMAP_MIN_CARDS = OVERVIEW_MIN_CARDS
 const INSET_GAP = 8
+const SETTLE_FIT_MS = 800
 
 // O que flutua por cima do mapa, medido no DOM: barra do topo, controles de zoom
 // (coluna da esquerda) e minimapa (faixa da base), relativos ao contêiner.
@@ -198,9 +201,12 @@ const SIDE_ARROW = { left: '←', right: '→', top: '↑', bottom: '↓' } as c
 function MapOverflowHints({
   containerRef,
   onFit,
+  framedId,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>
   onFit: () => void
+  // O cartão enquadrado pelo F (id do nó), enquanto o F vale: o pill não cai nele.
+  framedId: () => string | null
 }) {
   const transform = useStore((s) => s.transform)
   const nodeLookup = useStore((s) => s.nodeLookup)
@@ -226,6 +232,7 @@ function MapOverflowHints({
   if (!el) return null
   const tops: Rect[] = []
   const cards: Rect[] = []
+  const cardIds: string[] = []
   const titles: string[] = []
   const frames: Rect[] = []
   const [tx, ty, tz] = transform
@@ -244,6 +251,7 @@ function MapOverflowHints({
     if (!n.parentId) tops.push(r)
     if (n.type === 'session') {
       cards.push(r)
+      cardIds.push(n.id)
       titles.push(cardTitle((n.data as SessionCardData).node))
     } else frames.push(toScreen(r))
   }
@@ -278,7 +286,8 @@ function MapOverflowHints({
       )
     : null
   const screenCards = cards.map(toScreen)
-  const hiddenIdx = new Set(off.hidden.map((h) => h.index))
+  const framed = framedId()
+  const framedIdx = framed ? cardIds.indexOf(framed) : -1
   const spot = off.side
     ? pillSpot(
         off.side,
@@ -286,10 +295,10 @@ function MapOverflowHints({
         frames,
         pillBox && pillBox.width > 0 ? { w: pillBox.width, h: pillBox.height } : PILL_FALLBACK,
         nearest === null ? null : screenCards[nearest],
-        [
-          ...screenCards.filter((_, i) => !hiddenIdx.has(i)),
-          ...frames.map((f) => frameHeader(f, screenCards, tz)),
-        ],
+        // Todos os cartões, não só os 100% à vista: a mãe meio cortada acima do F
+        // contava como oculta e o pill cobria o nome dela (print MP2-r2 04).
+        [...screenCards, ...frames.map((f) => frameHeader(f, screenCards, tz))],
+        framedIdx >= 0 ? screenCards[framedIdx] : null,
       )
     : null
   const pillLabel =
@@ -384,6 +393,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const asks = usePendingAsks()
   const cardHeights = useCardHeightStore((s) => s.heights)
+  const inPanel = useMotherDockStore((s) => s.shownId)
   // Densidade do zoom (resumo/blocos): a raia reserva a altura que o cartão desenha.
   const compact = useStore((s) => isCompactZoom(s.transform[2]))
   // Largura da área do mapa: os cards quebram em linhas (wrapRowWidth).
@@ -409,6 +419,8 @@ function SessionMapInner() {
       graph,
       scope,
       positions: canvas?.positions ?? [],
+      sizes: canvas?.sizes ?? [],
+      inPanel,
       notes: canvas?.notes ?? [],
       groups: canvas?.groups ?? [],
       inUse,
@@ -419,7 +431,19 @@ function SessionMapInner() {
       rowWidth,
       compact,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, cardHeights, asks, rowWidth, compact],
+    [
+      graph,
+      scope,
+      canvas,
+      inPanel,
+      inUse,
+      expandedMothers,
+      views,
+      cardHeights,
+      asks,
+      rowWidth,
+      compact,
+    ],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -685,11 +709,66 @@ function SessionMapInner() {
     [flowApi, topAncestorOf],
   )
 
+  // O enquadrar automático (montagem, painel da mãe abrindo) mede barra e mapa
+  // num instante em que eles ainda assentam: o painel acerta a largura no frame
+  // seguinte, o mapa estreita e a barra do topo quebra em 2 linhas — o cabeçalho
+  // do card em foco ficava atrás dela. Por SETTLE_FIT_MS, cada mudança de tamanho
+  // do mapa ou da barra refaz o mesmo enquadrar; mexer na câmera cancela.
+  const settleRef = useRef<{ opts: Parameters<typeof fitReadable>[0]; until: number } | null>(null)
+  const settleFit = useCallback(
+    (opts: Parameters<typeof fitReadable>[0]) => {
+      settleRef.current = { opts, until: performance.now() + SETTLE_FIT_MS }
+      fitReadable(opts)
+    },
+    [fitReadable],
+  )
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let outer = 0
+    let inner = 0
+    const bar = el.querySelector<HTMLElement>('[data-testid="map-top-bar"]')
+    let barH = bar?.offsetHeight ?? null
+    const ro = new ResizeObserver(() => {
+      const prevBarH = barH
+      barH = bar?.offsetHeight ?? null
+      const s = settleRef.current
+      if (!s || performance.now() > s.until) {
+        // Fora do enquadrar (o "+N avisos" chegou depois): a câmera fica, e o
+        // conteúdo acompanha a borda de baixo da barra.
+        const next = barH === null ? null : followBarHeight(flowApi.getViewport(), prevBarH, barH)
+        if (next) void flowApi.setViewport(next)
+        // A vista guardada pelo F também é relativa à barra: sem acompanhar, voltar
+        // dele com a barra noutra altura deixava o resíduo quando ela voltava.
+        const saved = zoomSavedRef.current
+        const savedNext = saved && barH !== null ? followBarHeight(saved, prevBarH, barH) : null
+        if (savedNext) zoomSavedRef.current = savedNext
+        return
+      }
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+      // 2 frames: o layout novo (largura das linhas) chega no render seguinte.
+      outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => {
+          if (settleRef.current === s) fitReadable(s.opts)
+        })
+      })
+    })
+    ro.observe(el)
+    if (bar) ro.observe(bar)
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [fitReadable, flowApi])
+
   const actualSize = useCallback(() => {
     const el = containerRef.current
     const viewport = el ? actualSizeViewport(visibleBounds(), overlayInsets(el)) : null
     if (!viewport) return
     zoomSavedRef.current = null
+    settleRef.current = null
     void flowApi.setViewport(viewport, { duration: reducedMotion() ? 0 : 200 })
   }, [flowApi, visibleBounds])
 
@@ -719,6 +798,7 @@ function SessionMapInner() {
       const internal = flowApi.getInternalNode(id)
       const node = flowApi.getNode(id)
       if (!internal || !node) return
+      settleRef.current = null
       const abs = internal.internals.positionAbsolute
       void flowApi.setCenter(abs.x + (node.width ?? 0) / 2, abs.y + (node.height ?? 0) / 2, {
         zoom,
@@ -834,8 +914,8 @@ function SessionMapInner() {
     if (!sameIds(nodes, flow.nodes)) return
     fittedKey.current = fitKey
     // O minimapa entra/sai junto com o conjunto: mede os insets no frame seguinte.
-    requestAnimationFrame(() => fitReadable({ priorityId: framedLaneRef.current }))
-  }, [nodesInitialized, nodes, flow.nodes, fitKey, fitReadable])
+    requestAnimationFrame(() => settleFit({ priorityId: framedLaneRef.current }))
+  }, [nodesInitialized, nodes, flow.nodes, fitKey, settleFit])
 
   // Abrir o painel da feature: reenquadra com ele descontado (2 frames: o painel
   // monta e só então tem largura no DOM).
@@ -1031,6 +1111,8 @@ function SessionMapInner() {
       const frame = full && isCompactZoom(full.zoom) ? (frameOn(true) ?? full) : full
       const { apply, saved } = toggleCardZoom(zoomSavedRef.current, flowApi.getViewport(), frame)
       zoomSavedRef.current = saved
+      // O F é escolha da câmera: um reenquadrar do settle pendente o desfaria.
+      settleRef.current = null
       if (apply) void flowApi.setViewport(apply, { duration: reducedMotion() ? 0 : 250 })
     }
     window.addEventListener('keydown', onKey, true)
@@ -1054,14 +1136,14 @@ function SessionMapInner() {
     let inner = 0
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() =>
-        fitReadable({ keepDock: true, priorityId: framedLaneRef.current }),
+        settleFit({ keepDock: true, priorityId: framedLaneRef.current }),
       )
     })
     return () => {
       cancelAnimationFrame(outer)
       cancelAnimationFrame(inner)
     }
-  }, [panelOpen, fitReadable])
+  }, [panelOpen, settleFit])
 
   // focusFeature/frameLane (seletor de features): enquadra o card pedido. A
   // escolha do seletor vence o que sobrou do mapa: o efeito de montagem acima já
@@ -1080,8 +1162,11 @@ function SessionMapInner() {
     )
     zoomSavedRef.current = null
     framedLaneRef.current = req.flowId
-    fitReadable({ priorityId: req.flowId, keepDock: true })
-  }, [frameRequest, nodesInitialized, fitReadable, setNodes])
+    // settleFit, não fitReadable: troca as opções de um settle pendente (senão o
+    // próximo resize reenquadraria a feature anterior) e reenquadra esta quando a
+    // troca de mãe re-quebrar a barra.
+    settleFit({ priorityId: req.flowId, keepDock: true })
+  }, [frameRequest, nodesInitialized, settleFit, setNodes])
 
   // Alt+A com o mapa visível: centraliza o cartão da sessão que pede atenção.
   const flashNonce = useAttentionStore((s) => s.flash?.nonce)
@@ -1276,6 +1361,7 @@ function SessionMapInner() {
                   if (!e) return
                   zoomSavedRef.current = null
                   framedLaneRef.current = null
+                  settleRef.current = null
                 }}
                 onMoveEnd={resubscribe}
                 onConnect={onConnect}
@@ -1353,6 +1439,7 @@ function SessionMapInner() {
                 // O painel da feature cobre a borda direita: a barra encolhe para a
                 // área útil (antes o painel cortava o pill de status).
                 rightInset={dockOverlay + (panelFeatureId ? FEATURE_PANEL_W : 0)}
+                narrow={!!inPanel || !!panelFeatureId}
                 scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
                 hasProject={!!activeProjectId}
                 onScope={setScopeMode}
@@ -1368,12 +1455,21 @@ function SessionMapInner() {
                   useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
                 }
               >
+                <FeatureSwitcherButton />
                 <MapStatusCounters
                   nodes={sessionNodes}
                   onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
                 />
               </MapTopBar>
-              <MapOverflowHints containerRef={containerRef} onFit={() => fitReadable()} />
+              <MapOverflowHints
+                containerRef={containerRef}
+                onFit={() => fitReadable()}
+                framedId={() =>
+                  zoomSavedRef.current && selectedSessionRef.current
+                    ? sessionNodeId(selectedSessionRef.current)
+                    : null
+                }
+              />
               <FeaturePanel
                 rightInset={dockOverlay}
                 sessions={graph.nodes}
