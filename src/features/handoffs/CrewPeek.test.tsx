@@ -255,7 +255,7 @@ describe('CrewPeek em modo terminal', () => {
   // fora do mapa. Pelo dock, com aba, o terminal dela mora na aba.
   it('pelo dock, filha Codex com aba aberta: não toma a PTY, leva pra aba', () => {
     const focusOrOpenSession = vi.fn()
-    useTerminalLease.setState({ leases: {} })
+    useTerminalLease.setState({ leases: {}, stacks: {} })
     useAppStore.setState({
       focusOrOpenSession,
       panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
@@ -420,7 +420,7 @@ describe('CrewPeek como lift do mapa', () => {
     useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
     useHandoffsStore.setState({ handoffs: [] })
     useAppStore.setState({ panes: [], liveSessions: [a, b] })
-    useTerminalLease.setState({ leases: {} })
+    useTerminalLease.setState({ leases: {}, stacks: {} })
     useProjectsViewStore.setState({ view: 'map' })
     terminalProps.length = 0
   })

@@ -17,7 +17,7 @@ describe('useLeaveMapOnSessionFocus', () => {
     localStorage.clear()
     useProjectsViewStore.setState({ view: 'map', scopeMode: 'all' })
     useAppStore.setState({ focusPaneId: null, panes: [], restoreComplete: true })
-    useTerminalLease.setState({ leases: {} })
+    useTerminalLease.setState({ leases: {}, stacks: {} })
   })
 
   it('com a modal do mapa segurando a PTY, o foco de aba não tira o mapa da frente', () => {

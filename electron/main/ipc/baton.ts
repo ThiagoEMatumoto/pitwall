@@ -319,6 +319,7 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
       handoffs: moved,
       alias: newAlias,
       previousAlias: motherAlias,
+      fromSessionId: session.id,
     })
       .then((deliveries) => {
         const missed = deliveries.flatMap((d) =>

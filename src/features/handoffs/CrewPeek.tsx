@@ -184,9 +184,10 @@ export function CrewPeek() {
 // Fechou a modal: toda PTY que ela segurou (a atual e as visitadas pela faixa)
 // volta pra aba, que remonta e refaz a tela pelo replay.
 function releaseModalLeases() {
-  const { leases, release } = useTerminalLease.getState()
-  for (const [id, host] of Object.entries(leases)) {
-    if (host === 'modal') release(id, 'modal')
+  // Pela pilha, não pelo dono: a modal pode estar sob a coluna da mãe fixada.
+  const { stacks, release } = useTerminalLease.getState()
+  for (const [id, stack] of Object.entries(stacks)) {
+    if (stack.includes('modal')) release(id, 'modal')
   }
 }
 
@@ -427,7 +428,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
         data-peek-lift={lift ? 'true' : undefined}
         tabIndex={-1}
         onKeyDown={trapTab}
-        className={`${animateIn ? 'pw-rise ' : ''}flex outline-none flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl ${
+        className={`${animateIn ? 'pw-rise pw-pop ' : ''}flex outline-none flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl ${
           lift ? 'h-[90vh] w-[min(1400px,94vw)]' : 'h-[88vh] w-[56rem] max-w-[92vw]'
         }`}
       >

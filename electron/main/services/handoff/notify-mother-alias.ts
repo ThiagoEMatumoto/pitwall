@@ -18,6 +18,7 @@ import { ptyManager } from '../pty-manager'
 import * as store from '../handoff-store'
 import { injectIntoSession } from './inject'
 import { injectIntoChildGuarded } from './guarded-inject'
+import { emitSessionLinkPulse } from '../session-link-pulse'
 import type { Handoff } from '../../../../shared/types/ipc'
 
 export interface AliasChangeNotice {
@@ -63,6 +64,8 @@ export function notifyMotherOfAliasChange(args: AliasChangeNotice): AliasChangeD
 
   try {
     injectIntoSession(mother, buildAliasChangeNote(args))
+    // Quem "fala" é a sucessora, já relinkada como filha deste handoff.
+    emitSessionLinkPulse({ fromSessionId: handoff.childSessionId, toSessionId: mother, kind: 'note' })
     return { delivered: true }
   } catch (err) {
     // Corrida com a mãe encerrando entre o isRunning e o write.
@@ -113,6 +116,8 @@ export async function notifyChildrenOfNewMother(args: {
   handoffs: Pick<Handoff, 'id' | 'childSessionId'>[]
   alias: string
   previousAlias?: string | null
+  // sessions.id da nova mãe: no mapa, a nota sai dela.
+  fromSessionId?: string | null
 }): Promise<ChildMotherDelivery[]> {
   const out: ChildMotherDelivery[] = []
   for (const h of args.handoffs) {
@@ -135,6 +140,7 @@ export async function notifyChildrenOfNewMother(args: {
         }),
       )
       out.push({ handoffId: h.id, delivered: true })
+      emitSessionLinkPulse({ fromSessionId: args.fromSessionId, toSessionId: child, kind: 'note' })
     } catch (err) {
       console.error(`[baton] nota da nova mãe não chegou à filha ${child}:`, err)
       out.push({ handoffId: h.id, delivered: false, reason: 'inject-refused' })

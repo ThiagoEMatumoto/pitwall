@@ -28,6 +28,11 @@ export interface MapActions {
   interact: (sessionId: string) => void
   // Pan animado até o cartão de outra sessão (chip "↳ de <mãe>").
   centerOn: (sessionId: string) => void
+  // Ações rápidas do cartão da mãe (MotherCard): as mesmas do menu do cartão.
+  passBaton: (node: SessionGraphNode) => void
+  newChild: (node: SessionGraphNode) => void
+  // Espiar filhas: a modal do mapa na 1ª filha, com a faixa de troca só entre elas.
+  peekChildren: (motherId: string) => void
 }
 
 export const MapActionsContext = createContext<MapActions | null>(null)

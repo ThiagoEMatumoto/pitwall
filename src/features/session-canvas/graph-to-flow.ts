@@ -114,7 +114,21 @@ export const BRIEF_H = 64
 // 3 raias não cabia ao lado do painel nem a 0.6.
 export const BRIEF_W = 320
 
-export function cardSize(view: CardViewState, measuredH?: number, compact = false): Size {
+// A mãe é a peça principal do card da feature: 1.6x a largura do cartão aberto,
+// mais alta (16 linhas de saída ao vivo + barra de prompt grande + ações), e
+// sempre aberta — não recolhe nem vira o resumo com o zoom (o mini dela é do
+// próprio cartão, dentro da mesma vaga, para o layout não mudar a cada passo).
+export const MOTHER_W = 640
+export const MOTHER_EST_H = 440
+export const MOTHER_MAX_H = 560
+
+export function cardSize(
+  view: CardViewState,
+  measuredH?: number,
+  compact = false,
+  mother = false,
+): Size {
+  if (mother) return { w: MOTHER_W, h: Math.min(MOTHER_MAX_H, measuredH ?? MOTHER_EST_H) }
   if (view === 'collapsed') return { w: CARD_W, h: CARD_H }
   if (compact) return { w: BRIEF_W, h: BRIEF_H }
   return { w: OPEN_W, h: Math.min(OPEN_H, measuredH ?? OPEN_EST_H) }
@@ -141,6 +155,9 @@ export interface SessionCardData {
   // Mãe com o leque recolhido (mais de FAN_COLLAPSE_AT filhas) e se está aberto.
   fanCollapsible: boolean
   fanExpanded: boolean
+  // O cartão grande (MotherCard): só a mãe do topo da cadeia no mapa. A filha que
+  // delegou um neto é mãe também (selo MÃE), mas no cartão comum.
+  prominentMother: boolean
   view: CardViewState
   [key: string]: unknown
 }
@@ -381,6 +398,7 @@ function childCounts(edges: SessionGraphEdge[]): Map<string, number> {
 
 interface CardContext {
   sizeOf: (sessionId: string) => Size
+  isMother: (sessionId: string) => boolean
   // Vão entre cartões empilhados na mesma raia (menor no resumo).
   cardGap: number
   viewOf: (sessionId: string) => CardViewState
@@ -409,6 +427,7 @@ function sessionCard(
     noteExcerpt: ctx.notesBySession.get(n.sessionId) ?? null,
     fanCollapsible: childCount > FAN_COLLAPSE_AT,
     fanExpanded: ctx.expandedMothers.has(n.sessionId),
+    prominentMother: ctx.isMother(n.sessionId),
     view: ctx.viewOf(n.sessionId),
   }
   const size = ctx.sizeOf(n.sessionId)
@@ -515,7 +534,12 @@ function slotCards(
     const slots = out.get(repo.nodeId)!
     const ordered = rows
       .get(repo.nodeId)!
-      .map((row, i) => ({ row, i, g: gen.get(row[0]) ?? 0 }))
+      // A mãe abre a coluna dela (antes das outras da mesma geração).
+      .map((row, i) => ({
+        row,
+        i,
+        g: (gen.get(row[0]) ?? 0) - (ctx.isMother(row[0]) ? 0.5 : 0),
+      }))
       .sort((a, b) => a.g - b.g || a.i - b.i)
     for (const { row } of ordered) {
       const y = cursor.get(repo.nodeId)!
@@ -595,6 +619,11 @@ export function nextLaneSlot(
   return candidates[0]?.p ?? { x: 0, y: bottom + ROW_GAP }
 }
 
+// Ordem estável com as mães na frente.
+function mothersFirst(ids: string[], isMother: (id: string) => boolean): string[] {
+  return [...ids.filter(isMother), ...ids.filter((id) => !isMother(id))]
+}
+
 function layoutLanes(
   input: MapInput,
   sessions: SessionGraphNode[],
@@ -626,11 +655,19 @@ function layoutLanes(
     const repos = lane.repos
       .map((r) => ({
         ...r,
-        sessionIds: sortForLane(r.sessionIds.filter(visible).map((id) => byId.get(id)!)).map(
-          (n) => n.sessionId,
+        sessionIds: mothersFirst(
+          sortForLane(r.sessionIds.filter(visible).map((id) => byId.get(id)!)).map(
+            (n) => n.sessionId,
+          ),
+          ctx.isMother,
         ),
       }))
       .filter((r) => r.sessionIds.length > 0 || lane.kind === 'feature')
+    // A coluna da mãe vem primeiro: ela fica no topo à esquerda do card.
+    repos.sort(
+      (a, b) =>
+        Number(b.sessionIds.some(ctx.isMother)) - Number(a.sessionIds.some(ctx.isMother)),
+    )
     const laneSessions = repos.flatMap((r) => r.sessionIds.map((id) => byId.get(id)!))
     if (laneSessions.length === 0) return []
     if (lane.kind === 'project') shownProjects.add(projectLaneId(lane.projectId))
@@ -960,15 +997,27 @@ export function graphToFlow(input: MapInput): FlowResult {
     if (n.attachedSessionId && excerpt) notesBySession.set(n.attachedSessionId, excerpt)
   }
   const views = input.views ?? {}
+  const mothers = mothersOf(input.graph, inUse)
+  // Destaque (tamanho, sempre aberta, primeira na raia) só para a mãe do topo: com
+  // a de cima encerrada, a intermediária passa a ser o topo.
+  const motherIds = new Set(
+    input.graph.nodes
+      .filter((n) => n.isMother && !mothers.get(n.sessionId)?.onMap)
+      .map((n) => n.sessionId),
+  )
+  const isMother = (id: string) => motherIds.has(id)
   const ctx: CardContext = {
-    viewOf: (id) => viewOf(views, id),
-    sizeOf: (id) => cardSize(viewOf(views, id), input.cardHeights?.[id], input.compact),
+    isMother,
+    // A mãe é sempre aberta (o chevron dela não existe; "Recolher todos" não a toca).
+    viewOf: (id) => (isMother(id) ? 'open' : viewOf(views, id)),
+    sizeOf: (id) =>
+      cardSize(viewOf(views, id), input.cardHeights?.[id], input.compact, isMother(id)),
     cardGap: input.compact ? COMPACT_CARD_GAP : CARD_GAP,
     counts,
     notesBySession,
     expandedMothers,
     continuesFrom: continuations(input.graph, inUse),
-    mothers: mothersOf(input.graph, inUse),
+    mothers,
   }
   const topOf = new Map<string, string>()
   for (const lane of input.graph.lanes)

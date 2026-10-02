@@ -15,7 +15,7 @@ import { defaultWhen } from '@/features/quick-composer/target-search'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import type { SendPromptWhen } from '../../../shared/types/send-prompt'
 import { useCardViewStore } from './card-view-store'
-import { cardPreviewLines, cwdFooter, segmentColor } from './card-tail'
+import { CARD_PREVIEW_LINES, cardPreviewLines, cwdFooter, segmentColor } from './card-tail'
 import { bannerOnlyText } from './card-display'
 import { useMapLive } from './map-live'
 
@@ -45,7 +45,20 @@ export function Interactive({
 // altura fixa sobrava 60-70% de preto e o texto colado no fundo.
 export const CARD_TAIL_LINES = 10
 
-export function LiveTail({ node }: { node: SessionGraphNode }) {
+// A mãe (MotherCard) pede mais linhas e uma fonte maior: é a sessão que se lê.
+// `window` = quantas linhas do fim da tela entram; `lines` = quantas preenchidas
+// aparecem (as vazias caem antes do corte).
+export function LiveTail({
+  node,
+  window: windowLines = CARD_TAIL_LINES,
+  lines: visibleLines = CARD_PREVIEW_LINES,
+  fontPx = 11,
+}: {
+  node: SessionGraphNode
+  window?: number
+  lines?: number
+  fontPx?: number
+}) {
   const tail = useCardViewStore((s) => s.tails[node.sessionId])
   if (!tail || tail.lines.length === 0) {
     return (
@@ -58,7 +71,7 @@ export function LiveTail({ node }: { node: SessionGraphNode }) {
       </p>
     )
   }
-  const lines = cardPreviewLines(tail.lines.slice(-CARD_TAIL_LINES))
+  const lines = cardPreviewLines(tail.lines.slice(-windowLines), visibleLines)
   const footer = cwdFooter(node.repoLabel)
   if (!lines) {
     // Só o banner de boot na tela: sessão/cwd/nome não dizem nada. O propósito
@@ -78,7 +91,10 @@ export function LiveTail({ node }: { node: SessionGraphNode }) {
       data-testid="card-live-tail"
       className="nowheel flex min-h-0 shrink flex-col justify-end overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5"
     >
-      <pre className="overflow-hidden whitespace-pre font-mono text-[11px] leading-[1.35] text-[var(--color-text)]">
+      <pre
+        className="overflow-hidden whitespace-pre font-mono leading-[1.35] text-[var(--color-text)]"
+        style={{ fontSize: fontPx }}
+      >
         {lines.map((line, i) => (
           <div key={i}>
             {line.length === 0
@@ -163,7 +179,15 @@ function useCrewHandoffId(node: SessionGraphNode): string | null {
 // decide e recusa — menu aberto, texto não enviado, tela não reconhecida — e o
 // "quando terminar" espera o fim do turno). Filha do dock fala pelo canal do
 // handoff, como no CrewPeek: só ele encerra o needs_input.
-export function CardPromptBar({ node }: { node: SessionGraphNode }) {
+// size 'large': a barra da mãe — 2 linhas, 14px, botões maiores e sempre à vista.
+export function CardPromptBar({
+  node,
+  size = 'normal',
+}: {
+  node: SessionGraphNode
+  size?: 'normal' | 'large'
+}) {
+  const large = size === 'large'
   const targets = useSendTargets()
   const tail = useCardViewStore((s) => s.tails[node.sessionId])
   const live = useAppStore((s) => s.liveSessions.find((x) => x.id === node.sessionId))
@@ -221,7 +245,7 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
       {warning && (
         <p
           data-testid="card-prompt-warning"
-          className="mb-1 flex items-center gap-1 text-[10px] text-[var(--color-warning)]"
+          className={`mb-1 flex items-center gap-1 text-[var(--color-warning)] ${large ? 'text-[12px]' : 'text-[10px]'}`}
         >
           <Icon as={ShieldAlert} size={11} /> {warning}
         </p>
@@ -235,8 +259,9 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
       >
         <textarea
           data-testid="card-prompt"
+          data-size={size}
           value={text}
-          rows={1}
+          rows={large ? 2 : 1}
           disabled={!live}
           onChange={(e) => {
             setText(e.target.value)
@@ -250,7 +275,13 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
             }
           }}
           placeholder={!live ? 'Sessão sem PTY viva' : `Mensagem para ${target.alias}…`}
-          className="min-h-[28px] min-w-0 flex-1 resize-none rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[12px] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+          className={`min-w-0 flex-1 resize-none rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] outline-none transition focus:border-[var(--color-accent)] disabled:opacity-50 ${
+            large
+              ? 'min-h-[52px] rounded-md px-3 py-2 text-[14px] leading-snug focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_22%,transparent)]'
+              : // Estreito (com "agora" ao lado), o placeholder quebrava em 2 linhas
+                // com barra de rolagem: vazio, fica numa linha só, com reticências.
+                `min-h-[28px] px-2 py-1 text-[12px] placeholder:truncate ${text ? '' : 'overflow-hidden'}`
+          }`}
         />
         {!crewHandoffId && (
           <button
@@ -265,13 +296,15 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
                 ? 'Enviar quando ela terminar (ligado): espera o fim do turno, sem menu na tela. Clique para enviar agora'
                 : 'Enviar agora (a TUI enfileira se ela estiver trabalhando). Clique para enviar quando ela terminar'
             }
-            className={`flex shrink-0 items-center gap-1 rounded border px-1.5 py-1 text-[10px] transition ${
+            className={`flex shrink-0 items-center gap-1 rounded border transition ${
+              large ? 'self-stretch px-2.5 text-[12px]' : 'px-1.5 py-1 text-[10px]'
+            } ${
               queued
                 ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
             }`}
           >
-            <Icon as={Clock} size={12} />
+            <Icon as={Clock} size={large ? 14 : 12} />
             {queued ? 'ao terminar' : 'agora'}
           </button>
         )}
@@ -280,15 +313,19 @@ export function CardPromptBar({ node }: { node: SessionGraphNode }) {
           disabled={disabled || text.trim() === ''}
           title="Enviar (Enter)"
           aria-label="Enviar"
-          className="shrink-0 rounded border border-[var(--color-accent)] p-1 text-[var(--color-accent)] transition disabled:opacity-40"
+          className={`shrink-0 rounded border border-[var(--color-accent)] text-[var(--color-accent)] transition disabled:opacity-40 ${
+            large
+              ? 'self-stretch bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] px-3 hover:bg-[color-mix(in_srgb,var(--color-accent)_24%,transparent)]'
+              : 'p-1'
+          }`}
         >
-          <Icon as={CornerDownLeft} size={13} />
+          <Icon as={CornerDownLeft} size={large ? 16 : 13} />
         </button>
       </form>
       {notice && (
         <p
           data-testid="card-prompt-notice"
-          className="mt-0.5 truncate text-[10px] text-[var(--color-text-dim)]"
+          className={`mt-0.5 truncate text-[var(--color-text-dim)] ${large ? 'text-[12px]' : 'text-[10px]'}`}
           title={notice}
         >
           {notice}

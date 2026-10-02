@@ -117,6 +117,10 @@ export const PANEL_COMPACT_MIN_ZOOM = 0.5
 // a 0.9 só 4 de 11 cartões apareciam e o resto não dava nem para saber onde estava.
 export const OVERVIEW_MIN_ZOOM = 0.45
 export const OVERVIEW_MIN_CARDS = 7
+// A mãe do card em foco é a peça que o enquadrar nunca sacrifica: inteira na
+// vista e no zoom em que a saída ao vivo dela (14px) dá >= 12px na tela. Ganha
+// do piso da visão geral e do da prioridade; só cede se nem ela couber na janela.
+export const MOTHER_READ_ZOOM = 0.88
 
 // Zoom em que a visão geral ainda se lê (o resumo dos cartões, a fonte
 // compensada do cabeçalho). O layout quebra os cards em linhas para o conjunto
@@ -175,6 +179,7 @@ function planWith(
   maxZoom = MAX_FIT_ZOOM,
   priorityFloor = PRIORITY_MIN_ZOOM,
   alignTop = false,
+  mother: Rect | null = null,
 ): { viewport: Viewport; priorityFits: boolean; overviewFits: boolean } | null {
   const free = freeView(view, insets)
   if (free.w <= 0 || free.h <= 0) return null
@@ -190,7 +195,23 @@ function planWith(
     if (p < zoom && !needsYou) zoom = Math.max(p, Math.min(priorityFloor, zoom))
     priorityFits = p >= zoom
   }
-  const a = anchored(visible, priority, free, zoom)
+  // A mãe: piso de leitura dela (ou o maior zoom em que ela cabe inteira) e, se
+  // a prioridade não couber junto, a âncora passa a ser só ela — salvo quando a
+  // prioridade é alguém que precisa de você: esse cartão nunca sai da vista.
+  let anchor = priority
+  if (mother) {
+    // Na visão geral (7+ cartões) a mãe é só âncora: subir o zoom pelo piso
+    // dela tirava as outras features da vista.
+    if (!overview) {
+      const motherFloor = Math.min(MOTHER_READ_ZOOM, zoomToFit(mother, free))
+      zoom = Math.min(Math.max(zoom, motherFloor), Math.max(maxZoom, motherFloor))
+    }
+    const both = priority ? boundsOf([priority, mother]) : mother
+    const fallback = needsYou && priority ? priority : mother
+    anchor = both && zoomToFit(both, free) >= zoom ? both : fallback
+    if (priority) priorityFits = zoomToFit(priority, free) >= zoom
+  }
+  const a = anchored(visible, anchor, free, zoom)
   const v = alignTop ? a : centeredWhenShort(visible, free, a)
   return {
     viewport: { ...v, x: v.x + (insets.left ?? 0), y: v.y + (insets.top ?? 0) },
@@ -224,11 +245,18 @@ export function planFit(args: {
   // Encosta no topo mesmo sobrando altura (painel da feature aberto: centralizado,
   // sobravam ~400px vazios acima do card que o painel descreve).
   alignTop?: boolean
+  // O cartão da mãe do card em foco (coordenadas absolutas): sempre inteiro e
+  // legível (MOTHER_READ_ZOOM), com prioridade sobre as filhas.
+  mother?: Rect | null
 }): FitPlan | null {
   const { visible, priority, view, cardCount } = args
   const needsYou = args.needsYou ?? false
   if (!visible) return null
   const insets = args.insets ?? {}
+  // Piso da prioridade explícito = o painel da feature aberto: o card dela (que
+  // contém a mãe) tem de caber inteiro ao lado do painel, e o piso de leitura da
+  // mãe (0.88) segurava o zoom e cortava as filhas atrás dele.
+  const mother = args.priorityFloor !== undefined ? null : (args.mother ?? null)
   const withDock = planWith(
     visible,
     priority,
@@ -239,6 +267,7 @@ export function planFit(args: {
     args.maxZoom,
     args.priorityFloor,
     args.alignTop,
+    mother,
   )
   if (!withDock) return null
   const dock = args.dockInset ?? 0
@@ -264,6 +293,7 @@ export function planFit(args: {
     args.maxZoom,
     args.priorityFloor,
     args.alignTop,
+    mother,
   )
   if (!without) return keep
   if (fits && without.viewport.zoom <= withDock.viewport.zoom) return keep
@@ -392,7 +422,9 @@ export function pillSpot(
     const covers = (p: { x: number; y: number }) => {
       const pill = { l: p.x, t: p.y, r: p.x + size.w, b: p.y + size.h }
       const s = PILL_OBSTACLE_SLOP
-      return obstacles.some((o) =>
+      // O próprio alvo, quando meio à vista, também é obstáculo: o pill na faixa
+      // dele cobria o texto da parte visível.
+      return [...obstacles, target].some((o) =>
         hits(pill, { l: o.x - s, t: o.y - s, r: o.x + o.w + s, b: o.y + o.h + s }),
       )
     }

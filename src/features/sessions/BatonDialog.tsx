@@ -7,6 +7,7 @@ import { Icon } from '@/components/ui/Icon'
 import { Input } from '@/components/ui/Input'
 import { showToast } from '@/features/notifications/toast-store'
 import { batonApi } from '@/lib/ipc'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 
@@ -39,10 +40,14 @@ function messageOf(err: unknown): string {
 // então aqui não há spawn nenhum — só re-attach de pane à sessão viva, o mesmo
 // caminho de quem clica numa sessão no strip. Devolve false quando o snapshot
 // ainda não a trouxe: nesse caso ela existe, mas quem abre é o humano.
+// Com o mapa na frente o bastão fica no mapa: focar a aba tiraria o mapa da
+// frente (useLeaveMapOnSessionFocus) e levaria junto a coluna da mãe fixada, que
+// segue para a sucessora sozinha quando o grafo traz o fio de bastão.
 async function focusSuccessor(sessionId: string): Promise<boolean> {
   await useAppStore.getState().refreshLiveSessions()
   const live = useAppStore.getState().liveSessions.find((s) => s.id === sessionId)
   if (!live) return false
+  if (useProjectsViewStore.getState().view === 'map') return true
   await useAppStore.getState().focusOrOpenSession(live)
   return true
 }

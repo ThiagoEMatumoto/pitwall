@@ -407,9 +407,14 @@ try {
   const bm = await card(idM).boundingBox()
   const b1 = await card(C1).boundingBox()
   const b2 = await card(C2).boundingBox()
+  // Colunas alinham ao topo (graph-to-flow.test: "a hierarquia é o fio, não a
+  // altura"): a filha de outra coluna pode ficar ao lado da mãe, nunca acima
+  // dela nem por cima dela.
+  const overlaps = (a: typeof bm, b: typeof bm) =>
+    !!a && !!b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
   check(
-    !!bm && !!b1 && !!b2 && b1.y >= bm.y + bm.height - 1 && b2.y >= bm.y + bm.height - 1,
-    `mãe acima das filhas (M.bottom=${bm && Math.round(bm.y + bm.height)} C1.top=${b1 && Math.round(b1.y)} C2.top=${b2 && Math.round(b2.y)})`,
+    !!bm && !!b1 && !!b2 && b1.y >= bm.y - 1 && b2.y >= bm.y - 1 && !overlaps(bm, b1) && !overlaps(bm, b2),
+    `mãe no topo, sem filha acima nem por cima (M.top=${bm && Math.round(bm.y)} C1.top=${b1 && Math.round(b1.y)} C2.top=${b2 && Math.round(b2.y)})`,
   )
   check(await cardIn(X.id, noFeature), 'X segue em "Sem feature"')
 
@@ -437,7 +442,10 @@ try {
     const before = await lane.boundingBox()
     const hb = await header.boundingBox()
     if (before && hb) {
-      const sx = hb.x + hb.width * 0.75
+      // O card da feature passa da borda do mapa (mãe 1.6x): pega o header num
+      // ponto visível, à direita do título.
+      const mb = await page.getByTestId('session-map').boundingBox()
+      const sx = Math.min(hb.x + hb.width * 0.75, (mb ? mb.x + mb.width : hb.x + hb.width) - 160)
       const sy = hb.y + hb.height / 2
       await page.mouse.move(sx, sy)
       await page.mouse.down()

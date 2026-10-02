@@ -58,6 +58,7 @@ export type * from './design'
 import type { DesignApi } from './design'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AgentBusSnapshot } from './agent-bus'
+import type { SessionLinkPulse } from './session-link-pulse'
 import type {
   CanvasNote,
   CanvasPositionInput,
@@ -3079,6 +3080,8 @@ export interface Api {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
     onUpdated(handler: (graph: SessionGraph) => void): () => void
+    // Uma sessão mandou algo para outra (session-link-pulse): o mapa anima o fio.
+    onLinkPulse(handler: (pulse: SessionLinkPulse) => void): () => void
   }
   // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
   agentBus: {

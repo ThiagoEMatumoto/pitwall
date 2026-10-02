@@ -57,12 +57,20 @@ import {
   toolbarPositionFor,
 } from './MapChrome'
 import { FEATURE_PANEL_W, FeaturePanel } from './FeaturePanel'
+import { MotherDock } from './MotherDock'
+import { MOTHER_MINI_BELOW } from './mother-badge'
+import { motherOfFocus, useMotherDockStore } from './mother-dock'
+import { openMapPeek } from '@/features/handoffs/open-map-peek'
+import { matchCombo, resolveCombo } from '@/lib/keybindings'
+import { useKeybindingsStore } from '@/lib/keybindings-store'
+import { showToast } from '@/features/notifications/toast-store'
 import { DelegateDialog } from './DelegateDialog'
 import { SessionCardNode } from './SessionCardNode'
 import { LaneGroupNode } from './LaneGroupNode'
 import { UserGroupNode } from './UserGroupNode'
 import { NoteNode } from './NoteNode'
 import { SessionEdge } from './SessionEdge'
+import { PulseLayer } from './EdgePulse'
 import { reuseUnchanged } from './reuse-unchanged'
 import { useCardHeightStore } from './card-height-store'
 import { MapFocusContext, focusFor } from './map-focus'
@@ -570,6 +578,21 @@ function SessionMapInner() {
       const recentCard = recent ? topAncestorOf(sessionNodeId(recent.sessionId)) : null
       // Painel aberto: o card da feature dele (não o da sessão mais recente).
       const focusCard = opts?.priorityId ?? recentCard
+      // A mãe do card em foco: inteira e legível no enquadrar (prioridade sobre as
+      // filhas). Fixada na coluna, ela já está à vista: o mapa fica para o resto.
+      const focusFeature = focusCard?.startsWith('lane:f:') ? focusCard.slice(7) : null
+      const g = inputRef.current.graph
+      const motherId = motherOfFocus(cards, g.edges, new Set(cards.map((n) => n.sessionId)), {
+        featureId: focusFeature ?? recent?.featureId ?? null,
+      })
+      // Só a mãe que mora no card em foco: o fallback de motherOfFocus (qualquer
+      // mãe, útil ao atalho) puxava a vista para outro card e tirava o foco dela.
+      const inFocusCard =
+        !!motherId && (!focusCard || topAncestorOf(sessionNodeId(motherId)) === focusCard)
+      const fitMother =
+        motherId && inFocusCard && motherId !== useMotherDockStore.getState().pinnedId
+          ? motherId
+          : null
       const insets = overlayInsets(el)
       // Planeja sobre o layout de cada densidade (puro), não sobre o DOM: o zoom
       // escolhido decide a densidade, e ela muda o tamanho das raias.
@@ -584,6 +607,7 @@ function SessionMapInner() {
         return planFit({
           visible: boundsOf(tops),
           priority,
+          mother: fitMother ? (rects.get(sessionNodeId(fitMother)) ?? null) : null,
           view: { w: el.clientWidth, h: el.clientHeight },
           insets,
           // keepDock: o enquadrar automático de quando o dock abre não pode fechá-lo.
@@ -708,9 +732,12 @@ function SessionMapInner() {
       if (!internal) continue
       const sessionId = n.id.slice(2)
       const abs = internal.internals.positionAbsolute
+      const mother = (n.data as SessionCardData).prominentMother
       cards.push({
         sessionId,
-        view: viewOf(views, sessionId),
+        // A mãe é sempre aberta e lê a saída até o zoom do mini dela.
+        view: mother ? 'open' : viewOf(views, sessionId),
+        ...(mother ? { minZoom: MOTHER_MINI_BELOW } : {}),
         x: abs.x,
         y: abs.y,
         w: n.width ?? 0,
@@ -845,9 +872,84 @@ function SessionMapInner() {
       toggleView: (sessionId) => useCardViewStore.getState().toggle(sessionId),
       interact: cmd.interact,
       centerOn: (sessionId) => centerOn(sessionId, Math.max(flowApi.getZoom(), MIN_READABLE_ZOOM)),
+      passBaton: cmd.passBatonOf,
+      newChild: cmd.newChildOf,
+      peekChildren: (motherId) => {
+        const { graph: g, inUse: used } = inputRef.current
+        const children = g.edges
+          .filter((e) => e.kind === 'handoff' && e.from === motherId && (used?.has(e.to) ?? true))
+          .map((e) => (e as { to: string }).to)
+        const first = g.nodes.find((n) => n.sessionId === children[0])
+        if (!first) return
+        openMapPeek(first.sessionId, first.provider === 'claude' ? 'chat' : 'terminal', children)
+      },
     }),
     [cmd, centerOn, flowApi],
   )
+
+  // Ctrl+Shift+O (mother.focus): a mãe da sessão selecionada — ou da feature do
+  // painel aberto, ou a mais recente. Fixada, foca o xterm da coluna; senão abre
+  // o terminal dela na modal do mapa.
+  const overrides = useKeybindingsStore((s) => s.overrides)
+  const selectedSessionRef = useRef<string | null>(null)
+  selectedSessionRef.current = selectedCard
+    ? (selectedCard.data as SessionCardData).node.sessionId
+    : null
+  const goToMother = useCallback(
+    (sessionId: string | null) => {
+      const { graph: g, inUse: used } = inputRef.current
+      const target = motherOfFocus(g.nodes, g.edges, used ?? new Set(), {
+        sessionId,
+        featureId: useFeaturePanelStore.getState().openFeatureId,
+      })
+      if (!target) {
+        showToast({
+          title: 'Nenhuma mãe no mapa',
+          body: 'Delegue uma filha para uma sessão virar mãe.',
+        })
+        return
+      }
+      const dock = useMotherDockStore.getState()
+      if (dock.pinnedId === target) dock.requestFocus()
+      else cmd.interact(target)
+    },
+    [cmd],
+  )
+  useEffect(() => {
+    const combo = resolveCombo('mother.focus', overrides)
+    const onKey = (e: KeyboardEvent) => {
+      if (!matchCombo(e, combo)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.repeat) return
+      goToMother(selectedSessionRef.current)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [overrides, goToMother])
+  // Pedido feito fora do mapa (AppShell): espera o grafo chegar para resolver a mãe.
+  const graphReady = graph.nodes.length > 0
+  useEffect(() => {
+    if (!graphReady) return
+    const pending = useMotherDockStore.getState().takePendingFromOutside()
+    if (pending) goToMother(pending.sessionId)
+  }, [graphReady, goToMother])
+
+  // Fixar/desafixar a mãe muda a largura do mapa: reenquadra (sem fechar o dock).
+  const pinnedMother = useMotherDockStore((s) => s.pinnedId)
+  const prevPinned = useRef(pinnedMother)
+  useEffect(() => {
+    if (prevPinned.current === pinnedMother) return
+    prevPinned.current = pinnedMother
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => fitReadable({ keepDock: true }))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [pinnedMother, fitReadable])
 
   // Alt+A com o mapa visível: centraliza o cartão da sessão que pede atenção.
   const flashNonce = useAttentionStore((s) => s.flash?.nonce)
@@ -967,187 +1069,200 @@ function SessionMapInner() {
     <MapActionsContext.Provider value={actions}>
       <MapLiveContext.Provider value={live}>
         <MapFocusContext.Provider value={focus}>
-          <div
-            ref={containerRef}
-            tabIndex={-1}
-            className="session-map relative h-full w-full outline-none"
-            data-testid="session-map"
-            onKeyDown={(e) => {
-              if (e.ctrlKey || e.metaKey || e.altKey) return
-              if (e.repeat || isTyping(e.target)) return
-              const selectedSession = selectedCard
-                ? (selectedCard.data as SessionCardData).node
-                : null
-              // Enter com o cartão selecionado: o terminal na modal.
-              if (e.key === 'Enter' && selectedSession && selectedSession.status !== 'ended') {
-                e.preventDefault()
-                cmd.interact(selectedSession.sessionId)
-                return
-              }
-              // N: nova sessão — no repo do cartão selecionado, se houver. Ctrl+N
-              // (session.new) segue global; aqui é só a letra, com o mapa focado.
-              if (e.key.toLowerCase() !== 'n') return
-              e.preventDefault()
-              cmd.openNewSession(selectedSession?.repoId ?? null)
-            }}
-          >
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              defaultEdgeOptions={defaultEdgeOptions}
-              onNodesChange={onNodesChange}
-              onNodeDragStart={() => {
-                dragging.current = true
-              }}
-              onNodeDragStop={onNodeDragStop}
-              onNodeClick={(_e, n) => {
-                // Cartão aberto já é a vista: o clique só seleciona (Enter → terminal).
-                // Recolhido, o clique espia a conversa como antes.
-                if (n.type !== 'session') return
-                const card = n.data as SessionCardData
-                if (card.view === 'collapsed') cmd.clickCard(card.node)
-              }}
-              onNodeDoubleClick={(e, n) => {
-                if (n.type === 'session' && doubleClickOpensTerminal(e.target)) {
-                  cmd.doubleClickCard((n.data as SessionCardData).node)
+          <div className="flex h-full w-full">
+            <MotherDock
+              graph={graph}
+              inUse={inUse}
+              onOpenModal={cmd.interact}
+              onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), MIN_READABLE_ZOOM))}
+            />
+            <div
+              ref={containerRef}
+              tabIndex={-1}
+              className="session-map relative h-full min-w-0 flex-1 outline-none"
+              data-testid="session-map"
+              onKeyDown={(e) => {
+                if (e.ctrlKey || e.metaKey || e.altKey) return
+                if (e.repeat || isTyping(e.target)) return
+                const selectedSession = selectedCard
+                  ? (selectedCard.data as SessionCardData).node
+                  : null
+                // Enter com o cartão selecionado: o terminal na modal.
+                if (e.key === 'Enter' && selectedSession && selectedSession.status !== 'ended') {
+                  e.preventDefault()
+                  cmd.interact(selectedSession.sessionId)
+                  return
                 }
-                // Área vazia da lane = nova sessão ali. Lane de projeto (entre as
-                // colunas) não sabe qual repo: abre a lista.
-                if (n.type === 'lane') cmd.openNewSession((n.data as LaneData).repoId)
+                // N: nova sessão — no repo do cartão selecionado, se houver. Ctrl+N
+                // (session.new) segue global; aqui é só a letra, com o mapa focado.
+                if (e.key.toLowerCase() !== 'n') return
+                e.preventDefault()
+                cmd.openNewSession(selectedSession?.repoId ?? null)
               }}
-              zoomOnDoubleClick={false}
-              onPaneClick={() => setMenu(null)}
-              onNodeMouseEnter={(_e, n) => {
-                if (n.type === 'session') setHoveredId(n.id)
-              }}
-              onNodeMouseLeave={(_e, n) => setHoveredId((h) => (h === n.id ? null : h))}
-              onMoveEnd={resubscribe}
-              onConnect={onConnect}
-              isValidConnection={isValidConnection}
-              deleteKeyCode={null}
-              // Camadas fixas (graph-to-flow): fio nunca sobe acima de cartão.
-              zIndexMode="manual"
-              minZoom={0.2}
-              proOptions={{ hideAttribution: true }}
             >
-              <Background color="var(--color-border)" gap={24} />
-              <Controls
-                position="bottom-left"
-                className="!border-[var(--color-border)] !bg-[var(--color-surface)] [&_button]:!border-[var(--color-border)] [&_button]:!bg-[var(--color-surface)] [&_button]:!fill-[var(--color-text-dim)] [&_button]:!text-[var(--color-text-dim)] [&_button:hover]:!bg-[var(--color-surface-2)]"
-                showInteractive={false}
-                showFitView={false}
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                defaultEdgeOptions={defaultEdgeOptions}
+                onNodesChange={onNodesChange}
+                onNodeDragStart={() => {
+                  dragging.current = true
+                }}
+                onNodeDragStop={onNodeDragStop}
+                onNodeClick={(_e, n) => {
+                  // Cartão aberto já é a vista: o clique só seleciona (Enter → terminal).
+                  // Recolhido, o clique espia a conversa como antes.
+                  if (n.type !== 'session') return
+                  const card = n.data as SessionCardData
+                  if (card.view === 'collapsed') cmd.clickCard(card.node)
+                }}
+                onNodeDoubleClick={(e, n) => {
+                  if (n.type === 'session' && doubleClickOpensTerminal(e.target)) {
+                    cmd.doubleClickCard((n.data as SessionCardData).node)
+                  }
+                  // Área vazia da lane = nova sessão ali. Lane de projeto (entre as
+                  // colunas) não sabe qual repo: abre a lista.
+                  if (n.type === 'lane') cmd.openNewSession((n.data as LaneData).repoId)
+                }}
+                zoomOnDoubleClick={false}
+                onPaneClick={() => setMenu(null)}
+                onNodeMouseEnter={(_e, n) => {
+                  if (n.type === 'session') setHoveredId(n.id)
+                }}
+                onNodeMouseLeave={(_e, n) => setHoveredId((h) => (h === n.id ? null : h))}
+                onMoveEnd={resubscribe}
+                onConnect={onConnect}
+                isValidConnection={isValidConnection}
+                deleteKeyCode={null}
+                // Camadas fixas (graph-to-flow): fio nunca sobe acima de cartão.
+                zIndexMode="manual"
+                minZoom={0.2}
+                proOptions={{ hideAttribution: true }}
               >
-                {/* Mesma classe do fitView padrão: o "enquadrar" agora é o legível. */}
-                <ControlButton
-                  className="react-flow__controls-fitview"
-                  onClick={() => fitReadable()}
-                  title="Enquadrar (no menor zoom em que dá pra ler)"
-                  aria-label="Enquadrar"
+                <Background color="var(--color-border)" gap={24} />
+                <PulseLayer />
+                <Controls
+                  position="bottom-left"
+                  className="!border-[var(--color-border)] !bg-[var(--color-surface)] [&_button]:!border-[var(--color-border)] [&_button]:!bg-[var(--color-surface)] [&_button]:!fill-[var(--color-text-dim)] [&_button]:!text-[var(--color-text-dim)] [&_button:hover]:!bg-[var(--color-surface-2)]"
+                  showInteractive={false}
+                  showFitView={false}
                 >
-                  <Icon as={Maximize} size={12} />
-                </ControlButton>
-                <ControlButton
-                  data-testid="map-zoom-100"
-                  onClick={actualSize}
-                  title="100% a partir do canto superior esquerdo"
-                  aria-label="Zoom 100%"
-                  className="!text-[10px] !font-semibold"
-                >
-                  1:1
-                </ControlButton>
-                {minimapUseful && (
+                  {/* Mesma classe do fitView padrão: o "enquadrar" agora é o legível. */}
                   <ControlButton
-                    data-testid="map-minimap-toggle"
-                    onClick={() => setMinimapCollapsed((c) => !c)}
-                    title={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
-                    aria-label={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
-                    aria-pressed={!minimapCollapsed}
+                    className="react-flow__controls-fitview"
+                    onClick={() => fitReadable()}
+                    title="Enquadrar (no menor zoom em que dá pra ler)"
+                    aria-label="Enquadrar"
                   >
-                    <Icon as={MapIcon} size={12} />
+                    <Icon as={Maximize} size={12} />
                   </ControlButton>
+                  <ControlButton
+                    data-testid="map-zoom-100"
+                    onClick={actualSize}
+                    title="100% a partir do canto superior esquerdo"
+                    aria-label="Zoom 100%"
+                    className="!text-[10px] !font-semibold"
+                  >
+                    1:1
+                  </ControlButton>
+                  {minimapUseful && (
+                    <ControlButton
+                      data-testid="map-minimap-toggle"
+                      onClick={() => setMinimapCollapsed((c) => !c)}
+                      title={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
+                      aria-label={minimapCollapsed ? 'Mostrar o minimapa' : 'Esconder o minimapa'}
+                      aria-pressed={!minimapCollapsed}
+                    >
+                      <Icon as={MapIcon} size={12} />
+                    </ControlButton>
+                  )}
+                </Controls>
+                {showMinimap && (
+                  <MiniMap
+                    // A Equipe aberta flutua sobre a borda direita: o minimapa desvia dela.
+                    style={{
+                      ...(dockOverlay ? { right: dockOverlay } : {}),
+                      width: minimapSize(contentBounds).w,
+                      height: minimapSize(contentBounds).h,
+                    }}
+                    maskStrokeColor="var(--color-accent)"
+                    maskStrokeWidth={1.5}
+                    offsetScale={10}
+                    className="!border !border-[var(--color-border)] !bg-[var(--color-surface)]"
+                    nodeColor={minimapColor}
+                    maskColor="color-mix(in srgb, var(--color-bg) 70%, transparent)"
+                    pannable
+                    zoomable
+                  />
                 )}
-              </Controls>
-              {showMinimap && (
-                <MiniMap
-                  // A Equipe aberta flutua sobre a borda direita: o minimapa desvia dela.
-                  style={{
-                    ...(dockOverlay ? { right: dockOverlay } : {}),
-                    width: minimapSize(contentBounds).w,
-                    height: minimapSize(contentBounds).h,
-                  }}
-                  maskStrokeColor="var(--color-accent)"
-                  maskStrokeWidth={1.5}
-                  offsetScale={10}
-                  className="!border !border-[var(--color-border)] !bg-[var(--color-surface)]"
-                  nodeColor={minimapColor}
-                  maskColor="color-mix(in srgb, var(--color-bg) 70%, transparent)"
-                  pannable
-                  zoomable
+                <SelectionToolbar
+                  nodeId={selected.length === 1 ? selected[0].id : null}
+                  actions={selectionActions}
+                  position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
+                  onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
+                />
+              </ReactFlow>
+              <MapTopBar
+                // O painel da feature cobre a borda direita: a barra encolhe para a
+                // área útil (antes o painel cortava o pill de status).
+                rightInset={dockOverlay + (panelFeatureId ? FEATURE_PANEL_W : 0)}
+                scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
+                hasProject={!!activeProjectId}
+                onScope={setScopeMode}
+                hiddenEdges={hiddenEdges}
+                onNewSession={() => cmd.openNewSession(null)}
+                onNote={() => cmd.createNote(null, looseNoteSlot())}
+                onGroup={cmd.createGroup}
+                onTidy={() => void cmd.tidy()}
+                onOpenAll={() =>
+                  useCardViewStore.getState().openAll(sessionNodes.map((n) => n.sessionId))
+                }
+                onCollapseAll={() =>
+                  useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
+                }
+              >
+                <MapStatusCounters
+                  nodes={sessionNodes}
+                  onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
+                />
+              </MapTopBar>
+              <MapOverflowHints containerRef={containerRef} onFit={() => fitReadable()} />
+              <FeaturePanel
+                rightInset={dockOverlay}
+                sessions={graph.nodes}
+                actions={panelActions}
+              />
+              <MapFeatureMovePicker />
+              {menu && menuNode && (
+                <MapContextMenu
+                  at={menu}
+                  actions={actionsFor(menuNode, cmd, groups, memberCounts)}
+                  onClose={() => setMenu(null)}
                 />
               )}
-              <SelectionToolbar
-                nodeId={selected.length === 1 ? selected[0].id : null}
-                actions={selectionActions}
-                position={toolbarPositionFor(selected.length === 1 ? selected[0] : undefined)}
-                onMore={(at) => setMenu({ ...at, flowId: selected[0].id })}
+              {sessionCount === 0 && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[var(--color-text-dim)]">
+                  Nenhuma sessão em uso — “Nova sessão” (ou N) abre uma aqui.
+                </div>
+              )}
+              <DelegateDialog target={cmd.delegateTarget} onClose={cmd.closeDelegate} />
+              <NewSessionFlow
+                open={!!cmd.newSession}
+                initialRepoId={cmd.newSession?.repoId ?? null}
+                onClose={cmd.closeNewSession}
               />
-            </ReactFlow>
-            <MapTopBar
-              // O painel da feature cobre a borda direita: a barra encolhe para a
-              // área útil (antes o painel cortava o pill de status).
-              rightInset={dockOverlay + (panelFeatureId ? FEATURE_PANEL_W : 0)}
-              scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
-              hasProject={!!activeProjectId}
-              onScope={setScopeMode}
-              hiddenEdges={hiddenEdges}
-              onNewSession={() => cmd.openNewSession(null)}
-              onNote={() => cmd.createNote(null, looseNoteSlot())}
-              onGroup={cmd.createGroup}
-              onTidy={() => void cmd.tidy()}
-              onOpenAll={() =>
-                useCardViewStore.getState().openAll(sessionNodes.map((n) => n.sessionId))
-              }
-              onCollapseAll={() =>
-                useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
-              }
-            >
-              <MapStatusCounters
-                nodes={sessionNodes}
-                onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
-              />
-            </MapTopBar>
-            <MapOverflowHints containerRef={containerRef} onFit={() => fitReadable()} />
-            <FeaturePanel rightInset={dockOverlay} sessions={graph.nodes} actions={panelActions} />
-            <MapFeatureMovePicker />
-            {menu && menuNode && (
-              <MapContextMenu
-                at={menu}
-                actions={actionsFor(menuNode, cmd, groups, memberCounts)}
-                onClose={() => setMenu(null)}
-              />
-            )}
-            {sessionCount === 0 && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[var(--color-text-dim)]">
-                Nenhuma sessão em uso — “Nova sessão” (ou N) abre uma aqui.
-              </div>
-            )}
-            <DelegateDialog target={cmd.delegateTarget} onClose={cmd.closeDelegate} />
-            <NewSessionFlow
-              open={!!cmd.newSession}
-              initialRepoId={cmd.newSession?.repoId ?? null}
-              onClose={cmd.closeNewSession}
-            />
-            {cmd.batonTarget && (
-              <BatonDialog
-                open
-                onClose={cmd.closeBaton}
-                sessionId={cmd.batonTarget.sessionId}
-                ccSessionId={cmd.batonTarget.ccSessionId}
-                repoLabel={cmd.batonTarget.repoLabel}
-              />
-            )}
+              {cmd.batonTarget && (
+                <BatonDialog
+                  open
+                  onClose={cmd.closeBaton}
+                  sessionId={cmd.batonTarget.sessionId}
+                  ccSessionId={cmd.batonTarget.ccSessionId}
+                  repoLabel={cmd.batonTarget.repoLabel}
+                />
+              )}
+            </div>
           </div>
         </MapFocusContext.Provider>
       </MapLiveContext.Provider>

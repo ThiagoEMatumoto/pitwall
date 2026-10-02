@@ -31,3 +31,20 @@ export function motherFrame(node: SessionGraphNode, base: CSSProperties): CSSPro
     boxShadow: base.boxShadow ? `${MOTHER_STRIP}, ${base.boxShadow}` : MOTHER_STRIP,
   }
 }
+
+// O cartão da mãe é a peça principal do card da feature: fica no cartão cheio
+// (saída ao vivo + barra de prompt) até um zoom bem baixo. Abaixo dele, o mini —
+// nome, selo, status, a última linha e o composer, contra-escalados para a tela.
+export const MOTHER_MINI_BELOW = 0.55
+export type MotherDetail = 'full' | 'mini'
+export function motherDetail(zoom: number): MotherDetail {
+  return zoom < MOTHER_MINI_BELOW ? 'mini' : 'full'
+}
+
+// Saída ao vivo da mãe: 16 linhas em 14px (>= 12px efetivos no zoom de leitura
+// do enquadrar, MOTHER_READ_ZOOM).
+export const MOTHER_TAIL_LINES = 16
+export const MOTHER_TAIL_PX = 14
+// A tela inteira que o main espelha (TAIL_LINES de ipc/send-prompt.ts): as linhas
+// vazias caem antes do corte de 16, então a janela precisa ser maior que 16.
+export const MOTHER_TAIL_WINDOW = 20

@@ -166,6 +166,18 @@ export const COMMANDS: Command[] = [
     defaultCombo: { mod: true, shift: true, code: 'KeyG' },
     editable: true,
   },
+  // Ir direto à mãe da feature em foco (ou da sessão selecionada): foca a coluna
+  // fixada, ou abre a mãe na modal do mapa. Ctrl+Shift+O ("origem"): Alt+M é o
+  // meta+m do Claude Code (2.1.286 usa meta+p/o/t/m e meta+↑/↓), Ctrl+Shift+M é
+  // o ditado e Ctrl+Shift+U é a entrada unicode do GTK. Por code: estável com
+  // Shift em qualquer layout.
+  {
+    id: 'mother.focus',
+    label: 'Ir para a sessão mãe da feature em foco',
+    context: 'Workspace',
+    defaultCombo: { mod: true, shift: true, code: 'KeyO' },
+    editable: true,
+  },
   {
     id: 'files.togglePanel',
     label: 'Alternar painel de arquivos',

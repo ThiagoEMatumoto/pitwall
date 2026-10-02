@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { getDb } from '../services/db'
 import { broadcast, onBroadcast } from '../services/notify'
 import { AgentBus, peersFromGraph, setAgentBus } from '../services/agent-bus'
+import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { createSecretRedactor } from '../services/custom-env'
 import { loadSessionGraph } from './session-graph'
 import { promptQueue } from './send-prompt'
@@ -29,6 +30,7 @@ export function registerAgentBusIpc(): void {
     warn: (event) => console.warn(JSON.stringify(event)),
     // Snapshot por chamada: um segredo cadastrado agora já sai redigido.
     redact: (text) => createSecretRedactor()(text),
+    pulse: emitSessionLinkPulse,
   })
   setAgentBus(bus)
   onBroadcast('prompt-queue:updated', (_channel, payload) =>

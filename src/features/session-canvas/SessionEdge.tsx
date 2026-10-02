@@ -4,6 +4,7 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   useInternalNode,
+  ViewportPortal,
   type EdgeProps,
   type InternalNode,
 } from '@xyflow/react'
@@ -20,6 +21,8 @@ import {
   type Rect,
 } from './edge-anchor'
 import { useMapFocus } from './map-focus'
+import { PULSE_TOP_LAYER_STYLE, PulseTrain } from './EdgePulse'
+import { usePairOwner, usePairPulses } from './edge-pulse-store'
 
 // Cada tipo de fio se lê sem legenda: mãe→filha é a corda sólida com seta (corre
 // quando vivo, pulsa vermelho quando a filha pergunta), bastão é violeta com ⟲,
@@ -87,7 +90,8 @@ function snapToHandle(n: InternalNode<MapNode> | undefined, a: Anchor): Anchor {
 }
 
 // Cartão dentro de uma lane de repo de um card de feature (lane:f:<id>:r:<repo>).
-const isFeatureRepoLane = (id: string | undefined) => !!id && id.startsWith('lane:f:') && id.includes(':r:')
+const isFeatureRepoLane = (id: string | undefined) =>
+  !!id && id.startsWith('lane:f:') && id.includes(':r:')
 
 // Com os dois nós medidos o fio encosta na borda voltada pro outro; antes disso
 // (1º frame) cai nos handles padrão que o xyflow passa. Mãe→filha e bastão no
@@ -143,6 +147,44 @@ function timeline(events: HandoffEvent[]): string {
     .join('\n')
 }
 
+const sessionOf = (nodeId: string) => (nodeId.startsWith('s:') ? nodeId.slice(2) : null)
+
+// Bolinha de informação neste fio (edge-pulse-store). Só fio entre DUAS sessões
+// leva pulso; o dono do par desenha o trem, os demais fios do par ficam quietos.
+function useEdgePulses(props: EdgeProps<MapEdge>, path: string, dimmed: boolean) {
+  const src = sessionOf(props.source)
+  const tgt = sessionOf(props.target)
+  const enabled = !!src && !!tgt
+  const owns = usePairOwner(src ?? '', tgt ?? '', props.id, enabled)
+  const pulses = usePairPulses(src ?? '', tgt ?? '')
+  const srcRect = rectOf(useInternalNode<MapNode>(props.source))
+  const tgtRect = rectOf(useInternalNode<MapNode>(props.target))
+  if (!owns || !src || !tgt || pulses.length === 0) return null
+  const train = {
+    d: path,
+    sourceSessionId: src,
+    pulses,
+    rects: { [src]: srcRect, [tgt]: tgtRect },
+    dimmed,
+  }
+  // O fio aceso fica na camada dos fios; a bolinha e o ping, acima dos cartões
+  // (só existe enquanto há pulso, então nada fica por cima fora do trânsito).
+  return (
+    <>
+      <PulseTrain {...train} parts="wire" />
+      <ViewportPortal>
+        <svg
+          className="edge-pulse-layer"
+          data-edge-pulse-layer={props.id}
+          style={PULSE_TOP_LAYER_STYLE}
+        >
+          <PulseTrain {...train} parts="dots" />
+        </svg>
+      </ViewportPortal>
+    </>
+  )
+}
+
 function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
   const data = props.data as MapEdgeData
   const [tooltip, setTooltip] = useState<string | null>(null)
@@ -153,6 +195,7 @@ function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
   const focus = useMapFocus()
   const lit = focus.edges.has(props.id)
   const dimmed = focus.dimOthers && !lit
+  const train = useEdgePulses(props, path, dimmed)
   // Rótulos ficam acima dos cartões (z do EdgeLabelRenderer em session-map.css).
   // Mapa cheio (busy, > EDGE_BUSY_THRESHOLD fios): só no fio em foco
   // (hover/seleção), senão viram sopa; a pergunta da filha aparece sempre.
@@ -188,6 +231,7 @@ function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
         }
         interactionWidth={16}
       />
+      {train}
       {isAsk && !dimmed && (
         <EdgeLabelRenderer>
           <div

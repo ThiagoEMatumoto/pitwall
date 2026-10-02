@@ -15,6 +15,9 @@ export interface TailCandidate {
   y: number
   w: number
   h: number
+  // Zoom mínimo em que este cartão ainda desenha a saída (padrão BRIEF_BELOW). A
+  // mãe fica no cartão cheio até MOTHER_MINI_BELOW.
+  minZoom?: number
 }
 
 export interface ViewportBox {
@@ -32,7 +35,7 @@ export function tailSubscription(
   vp: ViewportBox,
   cap = TAIL_CAP,
 ): string[] {
-  if (vp.zoom < BRIEF_BELOW || vp.width <= 0 || vp.height <= 0) return []
+  if (vp.width <= 0 || vp.height <= 0) return []
   const left = -vp.x / vp.zoom
   const top = -vp.y / vp.zoom
   const right = left + vp.width / vp.zoom
@@ -40,7 +43,10 @@ export function tailSubscription(
   const cx = (left + right) / 2
   const cy = (top + bottom) / 2
   const visible = cards.filter(
-    (c) => c.view === 'open' && c.x < right && c.x + c.w > left && c.y < bottom && c.y + c.h > top,
+    (c) =>
+      c.view === 'open' &&
+      vp.zoom >= (c.minZoom ?? BRIEF_BELOW) &&
+      c.x < right && c.x + c.w > left && c.y < bottom && c.y + c.h > top,
   )
   const dist = (c: TailCandidate) => Math.hypot(c.x + c.w / 2 - cx, c.y + c.h / 2 - cy)
   return visible

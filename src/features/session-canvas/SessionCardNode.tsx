@@ -1,11 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react'
+import { memo } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
   History,
-  LoaderCircle,
   Pencil,
   Sparkles,
   SquareTerminal,
@@ -15,19 +14,18 @@ import { Icon } from '@/components/ui/Icon'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import type { CardViewState } from '../../../shared/types/canvas'
-import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { OPEN_H, type MapNode, type SessionCardData } from './graph-to-flow'
-import { useCardHeightStore } from './card-height-store'
-import {
-  TONE_COLOR,
-  indicatorFor,
-  indicatorText,
-  type CardIndicator,
-  type IndicatorTone,
-} from './card-indicator'
-import { useCardViewStore } from './card-view-store'
-import { tailText } from './card-tail'
+import { TONE_COLOR, indicatorText, type CardIndicator } from './card-indicator'
 import { useMapLive } from './map-live'
+import {
+  ACTIVE_TONES,
+  BorderHandles,
+  StatusPill,
+  frameStyle,
+  useIndicator,
+  useReportCardHeight,
+} from './card-parts'
+import { MotherCard } from './MotherCard'
 import { CardAttention, CardPromptBar, LiveTail } from './SessionCardLive'
 import { isActionableDetail } from '@/features/session-switcher/AttentionPopover'
 import { useMapActions } from './map-context'
@@ -45,47 +43,6 @@ import { PurposeLine } from './PurposeLine'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { BatonPassedChip, MotherBadge } from './MotherBadge'
 import { motherFrame } from './mother-badge'
-
-// Tons que nunca esmaecem no modo foco.
-const ACTIVE_TONES: ReadonlySet<IndicatorTone> = new Set(['working', 'needs-you', 'starting'])
-
-// O indicador do cartão: status do grafo + motivo da tela + relógio de working +
-// a marca de interrupção no fim da tela (só quando o cartão está aberto).
-function useIndicator(n: SessionGraphNode): CardIndicator {
-  const live = useAppStore((s) => s.liveSessions.find((x) => x.id === n.sessionId))
-  const tail = useCardViewStore((s) => s.tails[n.sessionId])
-  const { workingSince } = useMapLive()
-  const tailLines = useMemo(() => (tail ? tailText(tail.lines) : null), [tail])
-  return indicatorFor(n, live, workingSince.get(n.sessionId) ?? null, tailLines)
-}
-
-function StatusPill({ ind }: { ind: CardIndicator }) {
-  const { now } = useMapLive()
-  const color = TONE_COLOR[ind.tone]
-  const busy = ind.tone === 'working' || ind.tone === 'starting'
-  return (
-    <span
-      data-testid="card-status"
-      data-tone={ind.tone}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[11px] font-medium leading-4"
-      style={{
-        color,
-        borderColor: `color-mix(in srgb, ${color} 45%, transparent)`,
-        background: `color-mix(in srgb, ${color} ${ind.tone === 'ended' ? 6 : 14}%, transparent)`,
-      }}
-    >
-      {busy ? (
-        <Icon as={LoaderCircle} size={11} className="session-card-spin" />
-      ) : (
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${ind.tone === 'needs-you' ? 'pw-pulse' : ''}`}
-          style={{ background: color }}
-        />
-      )}
-      {indicatorText(ind, now)}
-    </span>
-  )
-}
 
 function FanChip({ data }: { data: SessionCardData }) {
   const actions = useMapActions()
@@ -478,68 +435,7 @@ function useZoom(): number {
   return useStore((s) => quantizeZoom(s.transform[2]))
 }
 
-// Um ponto no meio de cada borda: o fio entra/sai pelo da borda voltada pro
-// outro nó (SessionEdge encaixa a ponta nele). Só o da direita é de arrastar
-// (delegar); os outros são só âncoras e nunca aparecem: com o hover viravam
-// pontinhos soltos na borda do cartão em que o ponteiro tinha parado.
-const SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const
-
-function BorderHandles() {
-  return (
-    <>
-      {SIDES.map((side) => (
-        <Handle
-          key={side}
-          id={`in-${side}`}
-          type="target"
-          position={side}
-          isConnectable={false}
-          className="!h-1.5 !w-1.5 !border-0 !bg-transparent opacity-0"
-        />
-      ))}
-    </>
-  )
-}
-
-// Borda e brilho por estado: quem precisa de você pulsa em vermelho (o mesmo
-// token do HUD de atenção), quem trabalha fica azul, quem terminou, verde.
-function frameStyle(tone: IndicatorTone, selected: boolean): CSSProperties {
-  const color = TONE_COLOR[tone]
-  const strong = tone === 'needs-you'
-  const quiet = tone === 'ended' || tone === 'starting'
-  return {
-    borderColor: quiet
-      ? 'var(--color-border)'
-      : `color-mix(in srgb, ${color} ${strong ? 80 : 45}%, transparent)`,
-    borderWidth: strong ? 2 : 1,
-    boxShadow: quiet
-      ? undefined
-      : `0 0 0 1px color-mix(in srgb, ${color} 18%, transparent), 0 0 14px -4px ${color}`,
-    ...(selected ? { outline: '2px dashed var(--color-accent)', outlineOffset: 3 } : {}),
-  }
-}
-
-// Reporta a altura desenhada do cartão aberto pro layout (card-height-store).
-// Só no detalhe 'full': no 'brief'/'blocks' (zoom baixo) o cartão encolhe, e
-// medir ali re-arrumaria o mapa a cada zoom.
-function useReportCardHeight(sessionId: string, enabled: boolean) {
-  const observer = useRef<ResizeObserver | null>(null)
-  useEffect(() => () => observer.current?.disconnect(), [])
-  return useCallback(
-    (el: HTMLDivElement | null) => {
-      observer.current?.disconnect()
-      observer.current = null
-      if (!el || !enabled || typeof ResizeObserver === 'undefined') return
-      const report = () => useCardHeightStore.getState().report(sessionId, el.offsetHeight)
-      observer.current = new ResizeObserver(report)
-      observer.current.observe(el)
-      report()
-    },
-    [sessionId, enabled],
-  )
-}
-
-function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
+function RegularCard({ id, data, selected }: NodeProps<MapNode>) {
   const card = data as SessionCardData
   const { node } = card
   const actions = useMapActions()
@@ -622,6 +518,17 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
         className="!h-2.5 !w-2.5 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
       />
     </div>
+  )
+}
+
+// A mãe tem a própria variante (maior, sempre aberta). Dois componentes, e não um
+// return cedo: a mesma sessão vira mãe ao ganhar a 1ª filha, e os hooks de um
+// não podem mudar de ordem no meio da vida do nó.
+function SessionCardNodeImpl(props: NodeProps<MapNode>) {
+  return (props.data as SessionCardData).prominentMother ? (
+    <MotherCard {...props} />
+  ) : (
+    <RegularCard {...props} />
   )
 }
 

@@ -8,6 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
+import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
   buildSessionsFileIndex,
@@ -30,13 +31,15 @@ import type {
 // escrever mora na prompt-queue.
 
 const PREVIEW_LINES = 6
-// Linhas da saída ao vivo no cartão aberto do mapa.
-const TAIL_LINES = 12
+// Linhas da saída ao vivo no cartão aberto do mapa. A mãe mostra 16 (MotherCard)
+// depois de o renderer tirar a moldura da TUI; os cartões comuns usam as 10 últimas.
+const TAIL_LINES = 20
 
 const sendSchema = z.object({
   sessionId: z.string().min(1),
   text: z.string().trim().min(1).max(100_000),
   when: z.enum(['now', 'on-idle']),
+  fromSessionId: z.string().min(1).optional(),
 })
 const idSchema = z.object({ id: z.string().min(1) })
 const sessionSchema = z.object({ sessionId: z.string().min(1) })
@@ -88,6 +91,12 @@ export const promptQueue = new PromptQueue({
     return h ? handoffAsking(h) : false
   },
   write: (id, text) => injectIntoSession(id, text),
+  // Origem que já morreu não tem cartão vivo no mapa para a bolinha sair.
+  delivered: (to, from) => {
+    if (from && ptyManager.isRunning(from)) {
+      emitSessionLinkPulse({ fromSessionId: from, toSessionId: to, kind: 'message' })
+    }
+  },
   emit: (snapshot) => {
     broadcast('prompt-queue:updated', snapshot)
     noticeLostMessage(snapshot)

@@ -58,6 +58,7 @@ import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { SessionMap } from '@/features/session-canvas/SessionMap'
 import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { focusActiveTerminal } from '@/features/session-canvas/focus-active-terminal'
 import { useLeaveMapOnSessionFocus } from '@/features/session-canvas/useLeaveMapOnSessionFocus'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -612,6 +613,24 @@ export function AppShell() {
         e.preventDefault()
         e.stopPropagation()
         useCrewDockStore.getState().requestFocus()
+        return
+      }
+      // Ctrl+Shift+O fora do mapa: sem isto o xterm recebia ^O (Ctrl+O do claude
+      // alterna o transcript). Abre o mapa e deixa o pedido para ele resolver a mãe
+      // da aba em foco; com o mapa na tela, quem atende é o SessionMap.
+      if (matchCombo(e, resolveCombo('mother.focus', overrides))) {
+        const onMap =
+          useAppStore.getState().area === 'projects' &&
+          useProjectsViewStore.getState().view === 'map'
+        if (onMap) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const activeId = apiRef.current?.activePanel?.id
+        const pane = useAppStore.getState().panes.find((p) => p.paneId === activeId)
+        useMotherDockStore.getState().requestFromOutside(pane?.session.id ?? null)
+        useAppStore.getState().setArea('projects')
+        useProjectsViewStore.getState().setView('map')
         return
       }
       // Ctrl+B: alterna o painel lateral de arquivos.

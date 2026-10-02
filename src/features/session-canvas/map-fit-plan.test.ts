@@ -345,7 +345,11 @@ describe('pillSpot', () => {
     const hidden = { x: 1400, y: 380, w: 300, h: 50 }
     const p = pillSpot('right', box, [{ x: 100, y: 100, w: 1500, h: 480 }], size, hidden)
     expect(p.x).toBe(1490 - 12 - 200)
-    expect(p.y + size.h / 2).toBe(405)
+    // Colado logo acima ou abaixo da parte visível dele, sem cobri-la (rodada 2 do
+    // pulso: o pill na faixa escondia "Inclui os e2e?" da marina, meio à vista).
+    const pill = { t: p.y, b: p.y + size.h }
+    expect(pill.b <= hidden.y || pill.t >= hidden.y + hidden.h).toBe(true)
+    expect(Math.min(Math.abs(pill.b - hidden.y), Math.abs(pill.t - hidden.y - hidden.h))).toBeLessThanOrEqual(12)
   })
   it('com alvo e um cartão à vista na faixa dele: vai para o ponto livre mais perto, sem cobrir o nome', () => {
     // Print 07 da rodada 2: o pill na faixa da marina cobria o título do otavio.
@@ -390,5 +394,29 @@ describe('contentInView', async () => {
   it('sem conteúdo ou sem medida: true', () => {
     expect(contentInView(null, [0, 0, 1], size)).toBe(true)
     expect(contentInView({ x: 0, y: 0, w: 10, h: 10 }, [0, 0, 1], { width: 0, height: 0 })).toBe(true)
+  })
+})
+
+// Visão geral (7+ cartões) com uma mãe: o piso de leitura dela (0.88) não pode
+// vencer o da visão geral, senão o Enquadrar mostra só a feature dela.
+describe('planFit com mãe em visão geral', () => {
+  const view = { w: 1400, h: 900 }
+  const cards = [0, 1, 2, 3].map((i) => ({ x: i * 900, y: 0, w: 860, h: 700 }))
+  const visible = { x: 0, y: 0, w: 4 * 900 - 40, h: 700 }
+  const mother = { x: 20, y: 20, w: 520, h: 420 }
+
+  it('com 7+ cartões mantém o zoom da visão geral e a mãe dentro da vista', () => {
+    const plan = planFit({ visible, priority: cards[0], view, cardCount: 15, mother })!
+    expect(plan.viewport.zoom).toBeLessThan(0.6)
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(OVERVIEW_MIN_ZOOM)
+    const l = mother.x * plan.viewport.zoom + plan.viewport.x
+    const r = (mother.x + mother.w) * plan.viewport.zoom + plan.viewport.x
+    expect(l).toBeGreaterThanOrEqual(0)
+    expect(r).toBeLessThanOrEqual(view.w)
+  })
+
+  it('com poucos cartões a mãe continua com o piso de leitura', () => {
+    const plan = planFit({ visible, priority: cards[0], view, cardCount: 4, mother })!
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(0.88 - 1e-6)
   })
 })

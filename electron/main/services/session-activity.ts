@@ -12,6 +12,7 @@ import {
   read as readCb,
   close as closeCb,
 } from 'node:fs'
+import { stat as statAsync } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import chokidar, { FSWatcher } from 'chokidar'
@@ -31,6 +32,7 @@ import { ptyManager } from './pty-manager'
 import { derivePtyStatus } from './providers/pty-status'
 import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
+import { scanTranscriptForSendMessage } from './session-link-pulse'
 
 // Re-export: findTranscriptPath/PROJECTS_ROOT moraram aqui e são importados daqui
 // por meio mundo (metrics-service, feature-memory, chat-transcript-service, ipc).
@@ -398,6 +400,8 @@ interface WatchEntry {
   subagentsWatched: boolean
 }
 
+const SEND_MESSAGE_POLL_MS = 2_500
+
 class SessionActivityService extends EventEmitter {
   // ccSessionId -> sessões assinadas pelo renderer.
   private watched = new Map<string, WatchEntry>()
@@ -417,6 +421,12 @@ class SessionActivityService extends EventEmitter {
   // sessions.id → último status das PTYs sem índice nativo (Codex).
   private ptyTracked = new Map<string, SessionActivity['status']>()
   private ptyTimer: NodeJS.Timeout | null = null
+  // SendMessage nativo de sessão SEM pane: o dirWatcher só vê sessions/<pid>.json,
+  // que fica parado o turno inteiro; sem isto, o tail só era relido no fim do
+  // turno. Enquanto o modo global está ligado, as sessões busy sem watcher próprio
+  // têm o mtime do JSONL conferido a cada SEND_MESSAGE_POLL_MS.
+  private sendMessagePoll: NodeJS.Timeout | null = null
+  private polledTranscripts = new Map<string, { path: string; mtimeMs: number }>()
 
   constructor() {
     super()
@@ -505,6 +515,11 @@ class SessionActivityService extends EventEmitter {
     if (this.globalWatch) return
     this.globalWatch = true
     this.ensureDirWatcher()
+    this.sendMessagePoll = setInterval(
+      () => void this.pollBusyTranscripts(),
+      SEND_MESSAGE_POLL_MS,
+    )
+    this.sendMessagePoll.unref?.()
     // Snapshot inicial imediato (índice já pode estar populado).
     this.rebuildIndex()
     this.broadcastGlobal()
@@ -512,7 +527,34 @@ class SessionActivityService extends EventEmitter {
 
   unwatchGlobal(): void {
     this.globalWatch = false
+    if (this.sendMessagePoll) clearInterval(this.sendMessagePoll)
+    this.sendMessagePoll = null
+    this.polledTranscripts.clear()
     this.maybeCloseDirWatcher()
+  }
+
+  private async pollBusyTranscripts(): Promise<void> {
+    for (const [ccSessionId, entry] of this.index) {
+      if (entry.status !== 'busy' || this.watched.has(ccSessionId)) continue
+      let known = this.polledTranscripts.get(ccSessionId)
+      if (!known) {
+        const path = findTranscriptPath(ccSessionId)
+        if (!path) continue
+        known = { path, mtimeMs: 0 }
+        this.polledTranscripts.set(ccSessionId, known)
+      }
+      let mtimeMs: number
+      try {
+        mtimeMs = (await statAsync(known.path)).mtimeMs
+      } catch {
+        this.polledTranscripts.delete(ccSessionId)
+        continue
+      }
+      if (mtimeMs === known.mtimeMs) continue
+      known.mtimeMs = mtimeMs
+      const tail = await readTail(known.path)
+      if (tail) scanTranscriptForSendMessage(ccSessionId, tail, this.index)
+    }
   }
 
   // Fecha o dirWatcher só quando nada mais o usa (nenhum watch per-session e
@@ -620,6 +662,7 @@ class SessionActivityService extends EventEmitter {
       if (transcriptPath) {
         const tail = await readTail(transcriptPath)
         if (tail) {
+          scanTranscriptForSendMessage(ccSessionId, tail, this.index)
           const enrichment = deriveEnrichment(tail)
           lastText = enrichment.lastText
           tokens = enrichment.tokens
@@ -737,6 +780,7 @@ class SessionActivityService extends EventEmitter {
     if (entry.transcriptPath) {
       const tail = await readTail(entry.transcriptPath)
       if (tail) {
+        scanTranscriptForSendMessage(ccSessionId, tail, this.index)
         entry.enrichment = deriveEnrichment(tail)
         const metas = readSubagentMetas(dirname(entry.transcriptPath), ccSessionId)
         if (metas.length > 0) subagents = deriveSubagentActivity(metas, tail)

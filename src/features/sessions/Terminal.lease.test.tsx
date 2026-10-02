@@ -50,7 +50,7 @@ function tab(onClose = vi.fn()) {
 
 describe('Terminal × lease da modal', () => {
   beforeEach(() => {
-    useTerminalLease.setState({ leases: {} })
+    useTerminalLease.setState({ leases: {}, stacks: {} })
     resize.mockClear()
     useSession.mockClear()
     exitListeners.clear()

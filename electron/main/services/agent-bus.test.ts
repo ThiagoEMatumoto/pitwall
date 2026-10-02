@@ -99,6 +99,7 @@ interface Harness {
   peers: AgentPeer[]
   snapshots: AgentBusSnapshot[]
   clock: { now: number }
+  pulses: Array<{ fromSessionId: string; toSessionId: string; kind: string }>
 }
 
 function harness(): Harness {
@@ -166,6 +167,7 @@ function harness(): Harness {
   // status vem da PTY — 'idle' também com o overlay de aprovação parado na tela.
   screens.set(CODEX, null)
   const snapshots: AgentBusSnapshot[] = []
+  const pulses: Array<{ fromSessionId: string; toSessionId: string; kind: string }> = []
   let bus: AgentBus | null = null
   const queue = new PromptQueue({
     isRunning: (id) => peers.some((p) => p.sessionId === id),
@@ -187,8 +189,9 @@ function harness(): Harness {
     warn: () => {},
     redact: (t) => t.replaceAll('sk-SEGREDO-123', '[REDACTED]'),
     now: () => clock.now,
+    pulse: (p) => pulses.push(p),
   })
-  return { bus, queue, db, written, status, screens, peers, snapshots, clock }
+  return { bus, queue, db, written, status, screens, peers, snapshots, clock, pulses }
 }
 
 let h: Harness
@@ -441,6 +444,20 @@ describe('AgentBus reply/check', () => {
     const pending = h.bus.check(FRONT, res.askId!, 30)
     h.bus.reply(API, res.askId!, 'pronto')
     await expect(pending).resolves.toMatchObject({ status: 'answered', reply: 'pronto' })
+  })
+
+  it('pulsa no mapa quando a pergunta CHEGA e quando a resposta volta', async () => {
+    h.status.set(API, 'working')
+    const res = await h.bus.ask({ fromSessionId: FRONT, to: API, text: 'contrato?' })
+    expect(res.mode).toBe('queued')
+    // Na fila ainda não chegou: nada anda no fio.
+    expect(h.pulses).toEqual([])
+    h.status.set(API, 'idle')
+    h.queue.onTurnEnded(API)
+    await vi.waitFor(() => expect(h.pulses).toHaveLength(1))
+    expect(h.pulses[0]).toEqual({ fromSessionId: FRONT, toSessionId: API, kind: 'ask' })
+    h.bus.reply(API, res.askId!, 'ok')
+    expect(h.pulses[1]).toEqual({ fromSessionId: API, toSessionId: FRONT, kind: 'reply' })
   })
 
   it('snapshot traz de → para com rótulos e os contadores', async () => {

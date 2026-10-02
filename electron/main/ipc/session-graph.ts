@@ -17,6 +17,7 @@ import {
 } from '../services/session-graph'
 import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
 import { transcriptIndex } from '../services/transcript-index'
+import { onSessionLinkPulse } from '../services/session-link-pulse'
 import { resolveLiveSessionFeatures } from '../services/feature-session-live'
 import type { HandoffEvent, SessionGraph } from '../../../shared/types/session-graph'
 
@@ -114,6 +115,8 @@ const handoffEventsSchema = z.object({ handoffId: z.string().min(1) })
 
 export function registerSessionGraphIpc(): void {
   ipcMain.handle('session-graph:get', (): SessionGraph => loadSessionGraph())
+  // Bolinha no fio do mapa: evento efêmero, direto pra janela (sem grafo novo).
+  onSessionLinkPulse((pulse) => broadcast('session-link:pulse', pulse))
   ipcMain.handle('handoff-events:list', (_e, input: unknown): HandoffEvent[] => {
     const { handoffId } = handoffEventsSchema.parse(input)
     return handoffStore.listEvents(handoffId)

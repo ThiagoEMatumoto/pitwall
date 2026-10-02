@@ -174,3 +174,24 @@ describe('notifyChildrenOfNewMother', () => {
     expect(res.every((r) => !r.delivered && r.reason === 'inject-refused')).toBe(true)
   })
 })
+
+describe('pulso no mapa das notas do bastão', () => {
+  it('nota à mãe sai da sucessora; nota às filhas sai da nova mãe — só as entregues', async () => {
+    const { onSessionLinkPulse } = await import('../session-link-pulse')
+    const seen: string[] = []
+    const off = onSessionLinkPulse((p) => seen.push(`${p.fromSessionId}>${p.toSessionId}:${p.kind}`))
+    notifyMotherOfAliasChange(notice)
+    running = new Set(['k1', 'k2'])
+    guardedError = null
+    await notifyChildrenOfNewMother({
+      handoffs: [
+        { id: 'h-1', childSessionId: 'k1' },
+        { id: 'h-2', childSessionId: 'k-morta' },
+      ] as Handoff[],
+      alias: 'ana-mc-v2',
+      fromSessionId: 'nova-mae',
+    })
+    off()
+    expect(seen).toEqual(['sess-nova>sess-mae:note', 'nova-mae>k1:note'])
+  })
+})

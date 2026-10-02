@@ -43,6 +43,7 @@ import { clearSharedAtlas, registerTerminal } from './terminal-atlas'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { leaseBlocks, useTerminalLease, type TerminalLeaseHost } from './terminal-lease'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { TERMINAL_FONT_FAMILY } from '@/lib/terminal-font'
 import { useFilesStore } from '@/lib/files-store'
 import { xtermTheme } from '@/lib/themes'
@@ -158,7 +159,7 @@ export function Terminal(props: Props) {
   const owner = useTerminalLease((s) => s.leases[props.session.id])
   const blocked = leaseBlocks(owner, props.leaseHost)
   useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose)
-  if (blocked) return <LeasedPlaceholder />
+  if (blocked) return <LeasedPlaceholder owner={owner!} />
   return <TerminalHost {...props} />
 }
 
@@ -179,19 +180,30 @@ function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose:
 // A aba enquanto a modal do mapa segura a PTY: sem xterm montado, nada disputa o
 // resize. "Trazer para cá" fecha a modal — a lease sai e o xterm remonta aqui,
 // reconstruído pelo replay do backlog.
-function LeasedPlaceholder() {
+// Com a coluna da mãe fixada (owner 'dock'), "Trazer para cá" desafixa.
+function LeasedPlaceholder({ owner }: { owner: TerminalLeaseHost }) {
+  const docked = owner === 'dock'
   return (
     <div
       data-testid="terminal-leased"
+      data-owner={owner}
       className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] px-6 text-center"
     >
-      <span className="text-sm text-[var(--color-text)]">Aberto no mapa</span>
+      <span className="text-sm text-[var(--color-text)]">
+        {docked ? 'Fixada no mapa' : 'Aberto no mapa'}
+      </span>
       <span className="max-w-sm text-xs text-[var(--color-text-dim)]">
-        O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.
+        {docked
+          ? 'O terminal desta sessão está na coluna da mãe, à esquerda do mapa. Ele volta para cá ao desafixar.'
+          : 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'}
       </span>
       <button
         type="button"
-        onClick={() => useCrewDockStore.getState().closePeek({ restoreFocus: false })}
+        onClick={() =>
+          docked
+            ? useMotherDockStore.getState().unpin()
+            : useCrewDockStore.getState().closePeek({ restoreFocus: false })
+        }
         className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
       >
         Trazer para cá

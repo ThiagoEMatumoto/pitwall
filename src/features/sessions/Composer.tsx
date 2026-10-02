@@ -380,6 +380,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         sessionId: target.sessionId,
         text: parsed.body,
         when: defaultWhen(target, false),
+        fromSessionId: sessionId,
       })
       if (res.ok) clearDraft(value)
       setRouteNotice(

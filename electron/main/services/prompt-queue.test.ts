@@ -72,6 +72,7 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
     onScan: null as null | (() => void),
   }
   const writes: string[] = []
+  const deliveries: Array<[string, string | undefined]> = []
   const snapshots: PromptQueueSnapshot[] = []
   const deps: PromptQueueDeps = {
     isRunning: () => state.running,
@@ -83,6 +84,7 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
     nativeStatus: () => state.native,
     handoffAsking: () => state.asking,
     write: (id, text) => writes.push(`${id}:${text}`),
+    delivered: (id, from) => deliveries.push([id, from]),
     emit: (s) => snapshots.push(s),
     warn: () => {},
   }
@@ -90,7 +92,7 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
   const show = (screen: Screen) => {
     state.scan = SCANS[screen]
   }
-  return { queue, state, writes, snapshots, show }
+  return { queue, state, writes, deliveries, snapshots, show }
 }
 
 it('as capturas reais dão o shape esperado pelo gate', () => {
@@ -102,6 +104,35 @@ it('as capturas reais dão o shape esperado pelo gate', () => {
   expect(SCANS.idle.inputDirty).toBe(false)
   expect(SCANS.placeholder).toMatchObject({ menu: null, inputPrompt: true, inputDirty: false })
   expect(SCANS.dirty).toMatchObject({ menu: null, inputPrompt: true, inputDirty: true })
+})
+
+describe('PromptQueue — origem da mensagem (bolinha no mapa)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("'now' avisa a entrega com a sessão de origem", async () => {
+    const { queue, deliveries } = setup()
+    await queue.send({ sessionId: SID, text: 'oi', when: 'now', fromSessionId: 'mae' })
+    expect(deliveries).toEqual([[SID, 'mae']])
+  })
+
+  it('na fila só avisa quando a mensagem sai, não ao enfileirar', async () => {
+    const { queue, state, deliveries } = setup({ status: 'working' })
+    await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle', fromSessionId: 'mae' })
+    expect(deliveries).toEqual([])
+    expect(queue.snapshot().items[0]).not.toHaveProperty('fromSessionId')
+
+    state.status = 'idle'
+    queue.onTurnEnded(SID)
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 10)
+    expect(deliveries).toEqual([[SID, 'mae']])
+  })
+
+  it('recusa não avisa entrega', async () => {
+    const { queue, deliveries } = setup({ screen: 'permission', status: 'waiting' })
+    await queue.send({ sessionId: SID, text: 'oi', when: 'now', fromSessionId: 'mae' })
+    expect(deliveries).toEqual([])
+  })
 })
 
 describe('PromptQueue — envio para qualquer sessão', () => {

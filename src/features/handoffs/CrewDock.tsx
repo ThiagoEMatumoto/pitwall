@@ -339,7 +339,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
         </div>
         {attention > 0 && (
           <span
-            className="truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+            className="shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
             style={{
               color: 'var(--color-danger)',
               borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',

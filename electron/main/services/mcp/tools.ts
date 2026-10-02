@@ -40,6 +40,7 @@ import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
 import { getActivityFor, ptyStatusFor } from '../session-activity'
+import { emitSessionLinkPulse } from '../session-link-pulse'
 import { ptyManager } from '../pty-manager'
 import { getDb } from '../db'
 import { getPref } from '../prefs-store'
@@ -921,6 +922,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           })
           const running = handoffStore.markRunning(handoffId, child.id)
           notify.broadcast('handoff:updated', running)
+          emitSessionLinkPulse({ fromSessionId: ctx.motherSessionId, toSessionId: child.id, kind: 'task' })
           return ok({
             handoffId,
             alias,
@@ -1000,10 +1002,16 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           )
         }
         // A mãe não vê a tela da filha: o Enter do paste não pode cair num menu.
-        return injectIntoChildGuarded(handoff.childSessionId, text).then(() => {
+        const childId = handoff.childSessionId
+        return injectIntoChildGuarded(childId, text).then(() => {
           // A mãe respondeu: a filha retoma (needs_input → running, limpa a pergunta).
           const updated = handoffStore.resume(handoffId)
           notify.broadcast('handoff:updated', updated)
+          emitSessionLinkPulse({
+            fromSessionId: ctx.motherSessionId ?? handoff.motherSessionId,
+            toSessionId: childId,
+            kind: handoff.status === 'needs_input' ? 'answer' : 'message',
+          })
           return ok({ status: updated.status, delivered: true })
         })
       },
@@ -1021,6 +1029,11 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_ask')
         const updated = handoffStore.ask(handoffId, question)
         notify.broadcast('handoff:updated', updated)
+        emitSessionLinkPulse({
+          fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+          toSessionId: updated.motherSessionId,
+          kind: 'question',
+        })
         return ok({
           status: updated.status,
           pendingQuestion: updated.pendingQuestion,
@@ -1060,6 +1073,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_progress')
         const updated = handoffStore.progress(handoffId, step)
         notify.broadcast('handoff:updated', updated)
+        // Só passo novo: repetir o mesmo passo não é notícia para a mãe.
+        if (existing.currentStep !== updated.currentStep)
+          emitSessionLinkPulse({
+            fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+            toSessionId: updated.motherSessionId,
+            kind: 'progress',
+          })
         // Progresso não responde pergunta aberta: se a filha segue bloqueada,
         // devolve o bloqueio junto (antes o progresso apagava a pergunta e a mãe
         // nunca chegava a vê-la).
@@ -1087,6 +1107,11 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_report')
         const updated = handoffStore.report(handoffId, summary)
         notify.broadcast('handoff:updated', updated)
+        emitSessionLinkPulse({
+          fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+          toSessionId: updated.motherSessionId,
+          kind: 'report',
+        })
         // Segundo report no mesmo handoff: o store preserva o summary original e
         // guarda este na trilha. Avisa em vez de responder um 'done' que finge
         // sucesso — antes o resultado duplicado sumia silenciosamente.

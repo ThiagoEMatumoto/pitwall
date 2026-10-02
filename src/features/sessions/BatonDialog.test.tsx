@@ -36,6 +36,7 @@ vi.mock('@/store/handoffsStore', () => ({
 }))
 
 const { BatonDialog } = await import('./BatonDialog')
+const { useProjectsViewStore } = await import('@/features/session-canvas/projects-view-store')
 
 const successor = { id: 'sess-nova', ccSessionId: 'cc-nova' } as Session
 
@@ -66,6 +67,7 @@ beforeEach(() => {
   handoffs = []
   refreshLiveSessions.mockResolvedValue(undefined)
   focusOrOpenSession.mockResolvedValue(undefined)
+  useProjectsViewStore.setState({ view: 'terminals' })
 })
 
 describe('BatonDialog', () => {
@@ -168,6 +170,22 @@ describe('BatonDialog', () => {
       fireEvent.click(screen.getByText('Subir a sucessora'))
     })
     expect(focusOrOpenSession).toHaveBeenCalledWith(liveSessions[0])
+  })
+
+  it('com o mapa na frente, NÃO foca a aba da sucessora (o mapa e a coluna da mãe ficam)', async () => {
+    useProjectsViewStore.setState({ view: 'map' })
+    distill.mockResolvedValue('briefing')
+    pass.mockResolvedValue(result())
+    liveSessions = [{ id: 'sess-nova', ccSessionId: 'cc-nova' } as LiveSessionInfo]
+    await setup()
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Subir a sucessora'))
+    })
+    expect(refreshLiveSessions).toHaveBeenCalled()
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(useProjectsViewStore.getState().view).toBe('map')
+    expect(showToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'A sucessora subiu' }))
   })
 
   it('avisa a troca de endereço quando o resultado traz aliasChanged', async () => {

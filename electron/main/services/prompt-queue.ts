@@ -38,6 +38,8 @@ export interface PromptQueueDeps {
   nativeStatus(sessionId: string): boolean
   handoffAsking(sessionId: string): boolean
   write(sessionId: string, text: string): void
+  // Escrita de fato no PTY (agora ou ao sair da fila) — nunca no enfileiramento.
+  delivered?(sessionId: string, fromSessionId: string | undefined): void
   emit(snapshot: PromptQueueSnapshot): void
   warn(event: Record<string, unknown>): void
   now?(): number
@@ -99,6 +101,7 @@ const isHold = (v: Verdict): v is HoldVerdict =>
 
 interface Item extends QueuedPrompt {
   holding: boolean
+  fromSessionId?: string
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
   outcome?: PromptQueueEventKind
 }
@@ -128,19 +131,19 @@ export class PromptQueue {
 
   snapshot(): PromptQueueSnapshot {
     return {
-      items: this.items.map(({ holding: _h, outcome: _o, ...q }) => q),
+      items: this.items.map(({ holding: _h, outcome: _o, fromSessionId: _f, ...q }) => q),
       counters: { ...this.counters },
       lastEvent: this.lastEvent,
     }
   }
 
   async send(input: SendPromptInput): Promise<SendPromptResult> {
-    const { sessionId, text, when } = input
+    const { sessionId, text, when, fromSessionId } = input
     if (!this.deps.isRunning(sessionId)) return { ok: false, error: 'not-running' }
     const scan = await this.deps.screen(sessionId)
-    if (when === 'now') return this.sendNow(sessionId, text, scan)
+    if (when === 'now') return this.sendNow(sessionId, text, scan, fromSessionId)
     if (!scan) return { ok: false, error: 'no-screen' }
-    const item = this.enqueue(sessionId, text)
+    const item = this.enqueue(sessionId, text, fromSessionId)
     const isHead = this.items.find((i) => i.sessionId === sessionId) === item
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
@@ -150,11 +153,16 @@ export class PromptQueue {
     if (item.outcome === 'delivered') return { ok: true, delivered: true }
     if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
     if (item.outcome) return { ok: false, error: 'not-running' }
-    const { holding: _h, outcome: _o, ...rest } = item
+    const { holding: _h, outcome: _o, fromSessionId: _f, ...rest } = item
     return { ok: true, delivered: false, queued: rest }
   }
 
-  private sendNow(sessionId: string, text: string, scan: ScreenScan | null): SendPromptResult {
+  private sendNow(
+    sessionId: string,
+    text: string,
+    scan: ScreenScan | null,
+    fromSessionId: string | undefined,
+  ): SendPromptResult {
     const status = this.deps.status(sessionId)
     const asking = this.deps.handoffAsking(sessionId)
     const verdict = scan
@@ -165,7 +173,7 @@ export class PromptQueue {
       this.countRefusal(sessionId, verdict)
       return { ok: false, error }
     }
-    this.write(sessionId, text)
+    this.write(sessionId, text, fromSessionId)
     return { ok: true, delivered: true }
   }
 
@@ -205,7 +213,7 @@ export class PromptQueue {
     this.settleTimers.clear()
   }
 
-  private enqueue(sessionId: string, text: string): Item {
+  private enqueue(sessionId: string, text: string, fromSessionId?: string): Item {
     const createdAt = this.now()
     const item: Item = {
       id: randomUUID(),
@@ -216,6 +224,7 @@ export class PromptQueue {
       heldByMenu: 0,
       heldReason: null,
       holding: false,
+      fromSessionId,
     }
     this.items = [...this.items, item]
     this.ensurePoll()
@@ -223,9 +232,10 @@ export class PromptQueue {
     return item
   }
 
-  private write(sessionId: string, text: string): void {
+  private write(sessionId: string, text: string, fromSessionId?: string): void {
     this.deps.write(sessionId, text)
     this.awaitingWork.set(sessionId, this.now())
+    this.deps.delivered?.(sessionId, fromSessionId)
   }
 
   // Entrega a PRIMEIRA mensagem da sessão se a tela provar que pode. Uma por turno:
@@ -260,7 +270,7 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
-      this.write(sessionId, head.text)
+      this.write(sessionId, head.text, head.fromSessionId)
       this.finish(head, 'delivered')
       return true
     } finally {

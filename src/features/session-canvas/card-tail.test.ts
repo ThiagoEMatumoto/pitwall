@@ -15,6 +15,13 @@ function card(sessionId: string, x: number, y: number, view: TailCandidate['view
 const VIEW = { x: 0, y: 0, zoom: 1, width: 1000, height: 800 }
 
 describe('tailSubscription', () => {
+  it('no zoom do resumo só a mãe (minZoom próprio) segue assinando', () => {
+    const vp = { ...VIEW, zoom: 0.6 }
+    const ids = tailSubscription([card('filha', 10, 10), { ...card('mae', 500, 10), minZoom: 0.55 }], vp)
+    expect(ids).toEqual(['mae'])
+    expect(tailSubscription([{ ...card('mae', 10, 10), minZoom: 0.55 }], { ...VIEW, zoom: 0.5 })).toEqual([])
+  })
+
   it('só cartões abertos E visíveis no viewport assinam', () => {
     const ids = tailSubscription(
       [
