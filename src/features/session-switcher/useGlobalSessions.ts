@@ -29,6 +29,38 @@ export function useVisibleLiveSessions(): LiveSessionInfo[] {
   )
 }
 
+// Vivas que só aparecem na equipe (filhas no dock): a Home e o seletor contam as
+// DELE, o mapa e o hero contam todas. Sem dizer a diferença, "11 trabalhando" no
+// mapa e "9" no seletor pareciam dois números para o mesmo estado.
+export function crewOnlyCount(all: LiveSessionInfo[], visible: LiveSessionInfo[]): number {
+  const shown = new Set(visible.map((s) => s.id))
+  return all.filter((s) => s.status !== 'ended' && !shown.has(s.id)).length
+}
+
+export function crewOnlyLabel(n: number): string | null {
+  return n > 0 ? `+${n} na equipe` : null
+}
+
+// O seletor com o toggle "+N na equipe" ligado: as vivas visíveis mais as filhas
+// que estão só no dock (marcadas por `crewIds`), na ordem do snapshot.
+export function withCrewSessions(
+  all: LiveSessionInfo[],
+  visible: LiveSessionInfo[],
+  includeCrew: boolean,
+): { items: LiveSessionInfo[]; crewIds: ReadonlySet<string> } {
+  const shown = new Set(visible.map((s) => s.id))
+  const crew = all.filter((s) => s.status !== 'ended' && !shown.has(s.id))
+  const crewIds = new Set(crew.map((s) => s.id))
+  if (!includeCrew || crew.length === 0) return { items: visible, crewIds: new Set() }
+  return { items: all.filter((s) => shown.has(s.id) || crewIds.has(s.id)), crewIds }
+}
+
+export function useCrewOnlyCount(): number {
+  const all = useAppStore((s) => s.liveSessions)
+  const visible = useVisibleLiveSessions()
+  return crewOnlyCount(all, visible)
+}
+
 // Sessões que o mapa desenha: TODA sessão com PTY viva — com aba, sem aba
 // (spawn por API/MCP) ou filha no dock. Duas fontes porque o snapshot do store
 // só entra em refetch nas mutações do próprio renderer: uma sessão subida pelo

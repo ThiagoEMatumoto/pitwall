@@ -1,4 +1,4 @@
-import { memo, useMemo, type CSSProperties } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   ChevronDown,
@@ -16,7 +16,8 @@ import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import type { CardViewState } from '../../../shared/types/canvas'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
-import { type MapNode, type SessionCardData } from './graph-to-flow'
+import { OPEN_H, type MapNode, type SessionCardData } from './graph-to-flow'
+import { useCardHeightStore } from './card-height-store'
 import {
   TONE_COLOR,
   indicatorFor,
@@ -31,7 +32,14 @@ import { CardAttention, CardPromptBar, LiveTail } from './SessionCardLive'
 import { isActionableDetail } from '@/features/session-switcher/AttentionPopover'
 import { useMapActions } from './map-context'
 import { useMapFocus } from './map-focus'
-import { cardDetail, cardFooter, cardTitle, compensatedPx, type CardDetail } from './card-display'
+import {
+  cardDetail,
+  cardFooter,
+  cardTitle,
+  compensatedPx,
+  quantizeZoom,
+  type CardDetail,
+} from './card-display'
 import { PurposeLine } from './PurposeLine'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { BatonPassedChip, MotherBadge } from './MotherBadge'
@@ -466,12 +474,13 @@ function firstLineOf(text: string | null | undefined): string | null {
 // Zoom do viewport quantizado em 0.05: re-renderiza o cartão só quando a faixa
 // ou a fonte compensada mudam de fato, não a cada frame do scroll.
 function useZoom(): number {
-  return useStore((s) => Math.round(s.transform[2] * 20) / 20)
+  return useStore((s) => quantizeZoom(s.transform[2]))
 }
 
 // Um ponto no meio de cada borda: o fio entra/sai pelo da borda voltada pro
 // outro nó (SessionEdge encaixa a ponta nele). Só o da direita é de arrastar
-// (delegar); os outros são âncoras visuais e aparecem com o cartão em hover.
+// (delegar); os outros são só âncoras e nunca aparecem: com o hover viravam
+// pontinhos soltos na borda do cartão em que o ponteiro tinha parado.
 const SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const
 
 function BorderHandles() {
@@ -484,7 +493,7 @@ function BorderHandles() {
           type="target"
           position={side}
           isConnectable={false}
-          className="!h-1.5 !w-1.5 !border-0 !bg-[var(--color-border)] opacity-0 transition group-hover:opacity-100"
+          className="!h-1.5 !w-1.5 !border-0 !bg-transparent opacity-0"
         />
       ))}
     </>
@@ -509,6 +518,26 @@ function frameStyle(tone: IndicatorTone, selected: boolean): CSSProperties {
   }
 }
 
+// Reporta a altura desenhada do cartão aberto pro layout (card-height-store).
+// Só no detalhe 'full': no 'brief'/'blocks' (zoom baixo) o cartão encolhe, e
+// medir ali re-arrumaria o mapa a cada zoom.
+function useReportCardHeight(sessionId: string, enabled: boolean) {
+  const observer = useRef<ResizeObserver | null>(null)
+  useEffect(() => () => observer.current?.disconnect(), [])
+  return useCallback(
+    (el: HTMLDivElement | null) => {
+      observer.current?.disconnect()
+      observer.current = null
+      if (!el || !enabled || typeof ResizeObserver === 'undefined') return
+      const report = () => useCardHeightStore.getState().report(sessionId, el.offsetHeight)
+      observer.current = new ResizeObserver(report)
+      observer.current.observe(el)
+      report()
+    },
+    [sessionId, enabled],
+  )
+}
+
 function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
   const card = data as SessionCardData
   const { node } = card
@@ -522,6 +551,10 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
   const dimmed = focus.dimOthers && !focus.nodes.has(id) && !ACTIVE_TONES.has(ind.tone)
   const frame = motherFrame(node, frameStyle(ind.tone, !!selected))
   const alertClass = ind.tone === 'needs-you' ? 'session-card-alert' : ''
+  // Aberto em detalhe cheio: a caixa cresce com o conteúdo até a vaga máxima e o
+  // layout segue a altura medida (a vaga do nó acompanha no frame seguinte).
+  const sizedByContent = detail === 'full' && card.view === 'open'
+  const measureRef = useReportCardHeight(node.sessionId, sizedByContent)
 
   if (detail === 'blocks') {
     const color = TONE_COLOR[ind.tone]
@@ -558,11 +591,12 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
       // A caixa desenhada só ocupa o que tem (a vaga do layout é o teto): sem
       // isto sobrava uma caixa alta vazia no aberto e no resumido. relative: as
       // âncoras dos fios seguem a borda desenhada, não a da vaga.
+      ref={measureRef}
       className={`group relative w-full rounded-lg border bg-[var(--color-surface)] transition ${
-        card.view === 'collapsed' ? 'h-full overflow-hidden' : 'max-h-full'
-      } ${detail === 'full' && card.view === 'open' ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
+        card.view === 'collapsed' ? 'h-full overflow-hidden' : sizedByContent ? '' : 'max-h-full'
+      } ${sizedByContent ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
       data-dimmed={dimmed ? 'true' : undefined}
-      style={frame}
+      style={sizedByContent ? { ...frame, maxHeight: OPEN_H } : frame}
     >
       <BorderHandles />
       <div

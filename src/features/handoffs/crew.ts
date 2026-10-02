@@ -192,6 +192,22 @@ export function resolveCrewFocus(ids: string[], currentId: string | null): strin
   return ids[0]
 }
 
+// Onde o Ctrl+J pousa. O cursor lembrado vale só se ninguém espera você ou se
+// ele já está numa filha que espera: senão o Espaço espiaria a "pronta" de
+// antes enquanto a que precisa de você está no topo. `attentionIds` é o prefixo
+// de orderCrew que precisa de atenção.
+export function crewEntryFocus(
+  ids: string[],
+  attentionIds: ReadonlySet<string>,
+  currentId: string | null,
+): string | null {
+  if (attentionIds.size > 0 && !(currentId && attentionIds.has(currentId))) {
+    const first = ids.find((id) => attentionIds.has(id))
+    if (first) return first
+  }
+  return resolveCrewFocus(ids, currentId)
+}
+
 // Passo do ↑/↓ dentro do dock, sobre a lista JÁ ordenada (orderCrew). Clampa nas
 // pontas em vez de dar wrap: a lista é curta e voltar ao topo sozinho desorienta
 // mais do que ajuda. Sem foco ainda, entra pela ponta de onde a tecla veio.

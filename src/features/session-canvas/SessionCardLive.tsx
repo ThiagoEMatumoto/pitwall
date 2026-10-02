@@ -15,7 +15,8 @@ import { defaultWhen } from '@/features/quick-composer/target-search'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import type { SendPromptWhen } from '../../../shared/types/send-prompt'
 import { useCardViewStore } from './card-view-store'
-import { segmentColor } from './card-tail'
+import { cardPreviewLines, cwdFooter, segmentColor } from './card-tail'
+import { bannerOnlyText } from './card-display'
 import { useMapLive } from './map-live'
 
 // Tudo que é interativo dentro do cartão fica fora dos gestos do mapa: sem isto
@@ -57,8 +58,22 @@ export function LiveTail({ node }: { node: SessionGraphNode }) {
       </p>
     )
   }
-  const lines = tail.lines.slice(-CARD_TAIL_LINES)
+  const lines = cardPreviewLines(tail.lines.slice(-CARD_TAIL_LINES))
+  const footer = cwdFooter(node.repoLabel)
+  if (!lines) {
+    // Só o banner de boot na tela: sessão/cwd/nome não dizem nada. O propósito
+    // já aparece na linha de cima (PurposeLine); sem ele, a dica do handoff.
+    return (
+      <div data-testid="card-live-tail" data-banner-only className="flex shrink-0 flex-col gap-0.5">
+        <p className="line-clamp-2 text-[11px] text-[var(--color-text-dim)]">
+          {bannerOnlyText(node)}
+        </p>
+        {footer && <CwdFooter text={footer} />}
+      </div>
+    )
+  }
   return (
+    <div className="flex min-h-0 shrink flex-col gap-0.5">
     <div
       data-testid="card-live-tail"
       className="nowheel flex min-h-0 shrink flex-col justify-end overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5"
@@ -84,6 +99,19 @@ export function LiveTail({ node }: { node: SessionGraphNode }) {
         ))}
       </pre>
     </div>
+    {footer && <CwdFooter text={footer} />}
+    </div>
+  )
+}
+
+function CwdFooter({ text }: { text: string }) {
+  return (
+    <span
+      data-testid="card-cwd"
+      className="truncate font-mono text-[10px] text-[var(--color-text-dim)] opacity-70"
+    >
+      {text}
+    </span>
   )
 }
 

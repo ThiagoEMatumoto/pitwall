@@ -46,9 +46,14 @@ export function TasksCard({ pending }: { pending: OverviewPendingTask[] }) {
 
 function TaskRow({ task }: { task: OverviewPendingTask }) {
   return (
-    <li className="flex flex-wrap items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-1.5">
+    // Título numa linha, chips numa segunda menor: na mesma linha eles comiam o
+    // título em ~20 caracteres.
+    <li className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-1.5">
+      <span data-testid="task-row-title" className="min-w-0 truncate text-sm text-[var(--color-text)]" title={task.title}>
+        {task.title}
+      </span>
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
       <TaskStatusBadge status={task.status} />
-      <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text)]">{task.title}</span>
       {task.priority && <PriorityBadge priority={task.priority} />}
       <DueDateBadge task={task} />
       {task.parents.map((p) => (
@@ -63,6 +68,7 @@ function TaskRow({ task }: { task: OverviewPendingTask }) {
           <span className="truncate">{p.title}</span>
         </span>
       ))}
+      </span>
     </li>
   )
 }

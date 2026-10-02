@@ -41,7 +41,7 @@ import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
-import { matchCombo, resolveCombo } from '@/lib/keybindings'
+import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useFilesStore } from '@/lib/files-store'
@@ -567,8 +567,12 @@ export function AppShell() {
         stepSessionLink(linkStep === 'next' ? 1 : -1)
         return
       }
+      // Todos os atalhos abaixo também param a propagação: só preventDefault não
+      // impede o xterm de receber o keydown (Ctrl+K chegava como \x0b e apagava o
+      // rascunho do claude).
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setPaletteOpen((v) => !v)
         return
       }
@@ -586,6 +590,7 @@ export function AppShell() {
       // o split/xterm continuam montados por trás.
       if (matchCombo(e, resolveCombo('switcher.open', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setSwitcherOpen(true)
         return
       }
@@ -594,6 +599,7 @@ export function AppShell() {
       // (menu de aplicação é null, então não há accelerator competindo).
       if (matchCombo(e, resolveCombo('session.new', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setNewSessionOpen(true)
         return
       }
@@ -604,12 +610,14 @@ export function AppShell() {
       if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
         if (!hasCrew) return
         e.preventDefault()
+        e.stopPropagation()
         useCrewDockStore.getState().requestFocus()
         return
       }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         toggleFiles()
       }
     }
@@ -898,7 +906,7 @@ export function AppShell() {
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
           <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
+            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain overrides={overrides} />}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
               <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
@@ -956,7 +964,15 @@ export function AppShell() {
   )
 }
 
-function EmptyMain() {
+function EmptyKbd({ combo }: { combo: Combo }) {
+  return (
+    <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
+      {formatCombo(combo)}
+    </kbd>
+  )
+}
+
+function EmptyMain({ overrides }: { overrides: Parameters<typeof resolveCombo>[1] }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-10 flex h-full items-center justify-center">
       <div className="max-w-sm text-center text-[var(--color-text-dim)]">
@@ -964,16 +980,13 @@ function EmptyMain() {
         <div className="mb-2 text-lg font-medium text-[var(--color-text)]">
           Nenhuma sessão aberta
         </div>
-        <div className="text-sm">Clique num repo na barra lateral pra abrir uma sessão.</div>
+        <div className="text-sm">
+          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou escolha
+          um repo na barra lateral.
+        </div>
         <div className="mt-3 text-xs">
-          ou pressione{' '}
-          <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
-            Ctrl
-          </kbd>{' '}
-          <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
-            K
-          </kbd>{' '}
-          pra buscar
+          <EmptyKbd combo={resolveCombo('palette.toggle', overrides)} /> busca sessões, features e
+          tarefas
         </div>
       </div>
     </div>

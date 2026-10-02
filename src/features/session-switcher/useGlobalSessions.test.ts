@@ -7,7 +7,15 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { mapSessionIds, unknownLiveIds, visibleLiveSessions } = await import('./useGlobalSessions')
+const {
+  crewOnlyCount,
+  crewOnlyLabel,
+  mapSessionIds,
+  unknownLiveIds,
+  visibleLiveSessions,
+  withCrewSessions,
+} =
+  await import('./useGlobalSessions')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -56,5 +64,44 @@ describe('unknownLiveIds — PTYs vivas no grafo que o snapshot do renderer não
 
   it('nada a buscar quando o snapshot já tem todas', () => {
     expect(unknownLiveIds([live({ id: 'mae', ccSessionId: 'cc-mae' })], ['mae'])).toEqual([])
+  })
+})
+
+describe('crewOnlyCount — a diferença entre o mapa e o seletor, dita', () => {
+  it('conta as vivas que só estão na equipe (filha no dock), não as encerradas', () => {
+    const sessions = [
+      live({ id: 'mae', ccSessionId: 'cc-mae', status: 'working' }),
+      live({ id: 'filha', ccSessionId: 'cc-filha', status: 'working' }),
+      live({ id: 'velha', ccSessionId: 'cc-velha', status: 'ended' }),
+    ]
+    const visible = visibleLiveSessions(sessions, [], [
+      hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
+      hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
+    ])
+    expect(crewOnlyCount(sessions, visible)).toBe(1)
+    expect(crewOnlyLabel(1)).toBe('+1 na equipe')
+    expect(crewOnlyLabel(0)).toBeNull()
+  })
+})
+
+describe('withCrewSessions — o toggle "+N na equipe" do seletor', () => {
+  const sessions = [
+    live({ id: 'mae', ccSessionId: 'cc-mae', status: 'working' }),
+    live({ id: 'filha', ccSessionId: 'cc-filha', status: 'working' }),
+    live({ id: 'velha', ccSessionId: 'cc-velha', status: 'ended' }),
+  ]
+  const visible = visibleLiveSessions(sessions, [], [
+    hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
+    hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
+  ])
+  it('desligado: só as visíveis, ninguém marcado', () => {
+    const r = withCrewSessions(sessions, visible, false)
+    expect(r.items.map((s) => s.id)).toEqual(['mae'])
+    expect(r.crewIds.size).toBe(0)
+  })
+  it('ligado: entram as filhas do dock, marcadas; encerrada não', () => {
+    const r = withCrewSessions(sessions, visible, true)
+    expect(r.items.map((s) => s.id)).toEqual(['mae', 'filha'])
+    expect([...r.crewIds]).toEqual(['filha'])
   })
 })

@@ -662,16 +662,12 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
               da pessoa fica em segundo plano na linha de baixo. */}
           {childTitle ?? (alias ? alias.name : `→ ${repoLabel}`)}
         </span>
+        {/* O selo com rótulo vale em toda densidade (no dock só aparecia um
+            ponto, e o mesmo cartão na Home dizia "trabalhando"). */}
         {liveBadgeWins && live ? (
-          tight ? (
             <span
-              className="h-2 w-2 shrink-0 rounded-full"
-              style={{ background: live.color }}
-              title={`Estado ao vivo da sessão-filha: ${live.label}`}
-            />
-          ) : (
-            <span
-              className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
+              data-testid="handoff-live-badge"
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full border font-medium ${tight ? 'px-1 py-px text-[10px]' : 'px-1.5 py-0.5 text-[11px]'}`}
               style={{
                 color: live.color,
                 borderColor: `color-mix(in srgb, ${live.color} 45%, transparent)`,
@@ -682,7 +678,6 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
               <span className="h-1.5 w-1.5 rounded-full" style={{ background: live.color }} />
               {live.label}
             </span>
-          )
         ) : (
           <StatusBadge status={handoff.status} paused={paused} />
         )}
@@ -690,9 +685,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
       {alias && (
         <div
           className="truncate text-[11px] text-[var(--color-text-dim)]"
-          title={`${childTitle ?? alias.name} → ${repoLabel}`}
+          title={`${childTitle ?? alias.name} · ${repoLabel}`}
         >
-          {`${alias.name} · → ${repoLabel}`}
+          {`${alias.name} · ${repoLabel}`}
         </div>
       )}
 

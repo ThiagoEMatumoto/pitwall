@@ -44,3 +44,26 @@ describe('zoom semântico', () => {
     expect(compensatedPx(0.5)).toBe(22)
   })
 })
+
+describe('isCompactZoom — o mesmo degrau dos cartões', async () => {
+  const { isCompactZoom, MAX_COMPACT_ZOOM, cardDetail, quantizeZoom } = await import('./card-display')
+  it('0.74 arredonda para 0.75: cartão cheio, então a raia também não é compacta', () => {
+    expect(cardDetail(quantizeZoom(0.74))).toBe('full')
+    expect(isCompactZoom(0.74)).toBe(false)
+    expect(isCompactZoom(0.72)).toBe(true)
+  })
+  it('o teto do 2º passe no resumo fica no resumo depois do degrau', () => {
+    expect(isCompactZoom(MAX_COMPACT_ZOOM)).toBe(true)
+  })
+})
+
+describe('bannerOnlyText — uma frase para "sem saída"', async () => {
+  const { bannerOnlyText, NO_OUTPUT_TEXT } = await import('./card-display')
+  it('com ou sem propósito, a mesma frase', () => {
+    expect(bannerOnlyText({ purpose: 'Parte C1', purposeHint: null })).toBe(NO_OUTPUT_TEXT)
+    expect(bannerOnlyText({ purpose: null, purposeHint: null })).toBe(NO_OUTPUT_TEXT)
+  })
+  it('sem propósito, a dica do handoff vem primeiro', () => {
+    expect(bannerOnlyText({ purpose: null, purposeHint: 'Revisar o PR' })).toBe('Revisar o PR')
+  })
+})

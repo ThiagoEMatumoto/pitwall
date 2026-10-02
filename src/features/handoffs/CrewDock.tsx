@@ -10,6 +10,7 @@ import { useProjectsViewStore } from '@/features/session-canvas/projects-view-st
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { HandoffCard, crewDotColor, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
 import {
+  crewEntryFocus,
   crewFocusAfterDismiss,
   crewNeedsAttention,
   crewTerminalTarget,
@@ -194,6 +195,12 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // Lido dentro de handlers/efeitos que não devem re-rodar a cada mudança da lista.
   const idsRef = useRef(ids)
   idsRef.current = ids
+  const attentionIdsRef = useRef<ReadonlySet<string>>(new Set())
+  attentionIdsRef.current = new Set(
+    crew
+      .filter((h) => crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined))
+      .map((h) => h.id),
+  )
 
   // Filha entrou/saiu (ou a atenção reordenou): mantém o cursor num card que
   // ainda existe. setFocusedId é no-op quando o valor não muda.
@@ -228,16 +235,24 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
     if (!(active instanceof HTMLElement) || !listRef.current?.contains(active)) {
       originRef.current = active instanceof HTMLElement ? active : null
     }
-    const target = useCrewDockStore.getState().focusedId ?? idsRef.current[0]
+    const target = crewEntryFocus(
+      idsRef.current,
+      attentionIdsRef.current,
+      useCrewDockStore.getState().focusedId,
+    )
     if (!target) return
     // rAF: o expand() do requestFocus pode ter acabado de montar estes cards.
     requestAnimationFrame(() => focusCard(target))
   }, [focusNonce])
 
+  // Sem origem focável (Ctrl+J com o foco no body: body.focus() não faz nada)
+  // o foco ficava no card e o 2º Esc depois do peek não saía do dock.
   function leaveDock(card: HTMLElement) {
     const origin = originRef.current
-    if (origin?.isConnected && !listRef.current?.contains(origin)) origin.focus()
-    else card.blur()
+    if (origin?.isConnected && origin !== document.body && !listRef.current?.contains(origin)) {
+      origin.focus()
+    }
+    if (listRef.current?.contains(document.activeElement)) card.blur()
   }
 
   function onCardKeyDown(e: React.KeyboardEvent<HTMLDivElement>, id: string) {

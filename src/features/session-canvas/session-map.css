@@ -1,7 +1,7 @@
 /* Corda do handoff vivo: o tracejado "corre" da mãe para a filha. */
 @keyframes session-edge-flow {
   to {
-    stroke-dashoffset: -22;
+    stroke-dashoffset: -24; /* múltiplo dos períodos 4+4 e 1+5 */
   }
 }
 

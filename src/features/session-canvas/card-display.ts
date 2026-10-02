@@ -42,6 +42,21 @@ export const BLOCKS_BELOW = 0.45
 const TITLE_PX = 13
 const TITLE_MAX_PX = 22
 
+// O zoom que os cartões leem (useZoom): em degraus de 0.05, senão cada frame de
+// pan/zoom re-renderizaria todos. Quem decide o layout pela densidade tem de
+// usar o MESMO degrau: com o zoom cru, 0.74 dava raia compacta e cartão cheio.
+export function quantizeZoom(zoom: number): number {
+  return Math.round(zoom * 20) / 20
+}
+
+/** Zoom (cru) em que os cartões desenham o resumo ou blocos, não o cartão cheio. */
+export function isCompactZoom(zoom: number): boolean {
+  return cardDetail(quantizeZoom(zoom)) !== 'full'
+}
+
+// Maior zoom cru que ainda cai no resumo depois do degrau (0.72 → 0.70).
+export const MAX_COMPACT_ZOOM = BRIEF_BELOW - 0.03
+
 export function cardDetail(zoom: number): CardDetail {
   if (zoom < BLOCKS_BELOW) return 'blocks'
   if (zoom < BRIEF_BELOW) return 'brief'
@@ -51,4 +66,13 @@ export function cardDetail(zoom: number): CardDetail {
 // Fonte compensada pelo zoom (fica ~13px na tela), com teto pra não estourar o cartão.
 export function compensatedPx(zoom: number, base = TITLE_PX, max = TITLE_MAX_PX): number {
   return Math.min(max, Math.round((base / Math.max(zoom, 0.01)) * 10) / 10)
+}
+
+// Uma frase só para "sessão sem saída": com propósito ou sem, duas frases
+// diferentes faziam o mesmo estado parecer dois.
+export const NO_OUTPUT_TEXT = 'Sem saída ainda.'
+
+/** Texto do cartão quando a tela só tem o banner de boot. */
+export function bannerOnlyText(n: Pick<SessionGraphNode, 'purpose' | 'purposeHint'>): string {
+  return n.purpose ? NO_OUTPUT_TEXT : (n.purposeHint ?? NO_OUTPUT_TEXT)
 }

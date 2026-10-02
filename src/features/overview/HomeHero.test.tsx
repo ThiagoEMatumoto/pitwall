@@ -27,8 +27,8 @@ function live(id: string, status: LiveSessionInfo['status']): LiveSessionInfo {
 
 afterEach(cleanup)
 
-describe('Home — hero e "Sessões agora" contam o mesmo conjunto', () => {
-  it('filha de handoff esperando (vive no Crew Dock) não vira "1 no box" com o card vazio', () => {
+describe('Home — hero conta quem espera você, inclusive a equipe', () => {
+  it('filha de handoff esperando (vive no Crew Dock) conta no box; o card segue só com as sessões soltas', () => {
     useAppStore.setState({ liveSessions: [live('kid', 'waiting')], panes: [] })
     useHandoffsStore.setState({
       handoffs: [
@@ -41,7 +41,8 @@ describe('Home — hero e "Sessões agora" contam o mesmo conjunto', () => {
         <SessionsCard />
       </>,
     )
-    expect(screen.getByText('no box').parentElement?.textContent).toContain('0 no box')
+    expect(screen.getByText('no box').parentElement?.textContent).toContain('1 no box')
+    expect(screen.queryByText(/garagem tranquila/i)).toBeNull()
     expect(screen.getByText('Nenhuma sessão viva.')).toBeInTheDocument()
   })
 
@@ -56,5 +57,16 @@ describe('Home — hero e "Sessões agora" contam o mesmo conjunto', () => {
     )
     expect(screen.getByText('no box').parentElement?.textContent).toContain('1 no box')
     expect(screen.queryByText('Nenhuma sessão viva.')).toBeNull()
+  })
+
+  it('o pill "no box" só ganha destaque com alguém esperando', () => {
+    useAppStore.setState({ liveSessions: [live('a', 'working')], panes: [] })
+    useHandoffsStore.setState({ handoffs: [] })
+    render(<HomeHero counts={{} as OverviewCounts} onRefresh={() => {}} />)
+    expect(screen.getByTestId('home-in-box')).not.toHaveAttribute('data-highlight')
+    cleanup()
+    useAppStore.setState({ liveSessions: [live('a', 'waiting')], panes: [] })
+    render(<HomeHero counts={{} as OverviewCounts} onRefresh={() => {}} />)
+    expect(screen.getByTestId('home-in-box')).toHaveAttribute('data-highlight', 'true')
   })
 })

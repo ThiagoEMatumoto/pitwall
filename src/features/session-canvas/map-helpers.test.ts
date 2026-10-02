@@ -6,6 +6,8 @@ import {
   MIN_READABLE_ZOOM,
   actualSizeViewport,
   boundsOf,
+  noteSlot,
+  overflowEdges,
   readableViewport,
 } from './map-fit'
 
@@ -128,5 +130,40 @@ describe('readableViewport — piso 0.9 e painel da Equipe', () => {
     expect(v.zoom).toBe(0.9)
     const screenRight = v.x + (priority.x + priority.w) * v.zoom
     expect(screenRight).toBeLessThanOrEqual(view.w - right)
+  })
+})
+
+describe('overflowEdges — dica de conteúdo além da borda', () => {
+  const view = { w: 1000, h: 600 }
+  it('nada além: nenhuma borda acende', () => {
+    expect(overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: 24, y: 24, zoom: 1 }, view)).toEqual({
+      top: false,
+      right: false,
+      bottom: false,
+      left: false,
+    })
+  })
+  it('painel aberto à direita: o que está embaixo dele conta como transbordo', () => {
+    const e = overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: 24, y: 24, zoom: 1 }, view, {
+      right: 420,
+    })
+    expect(e.right).toBe(true)
+    expect(e.left).toBe(false)
+  })
+  it('conteúdo deslocado pra cima/esquerda acende essas bordas', () => {
+    const e = overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: -200, y: -100, zoom: 1 }, view)
+    expect(e.left && e.top).toBe(true)
+  })
+})
+
+describe('noteSlot — nota nova ao lado da seleção', () => {
+  const size = { w: 220, h: 132 }
+  const feature = { x: 0, y: 0, w: 900, h: 400 }
+  it('à direita do card quando há espaço', () => {
+    expect(noteSlot(feature, [feature], size)).toEqual({ x: 924, y: 0 })
+  })
+  it('vizinho colado à direita: vai para baixo', () => {
+    const next = { x: 948, y: 0, w: 500, h: 400 }
+    expect(noteSlot(feature, [feature, next], size)).toEqual({ x: 0, y: 424 })
   })
 })

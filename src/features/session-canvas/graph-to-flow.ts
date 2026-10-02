@@ -44,8 +44,15 @@ export const LANE_HEADER_H = HEADER
 const LANE_GAP = 48
 const GROUP_MIN_W = CARD_W + 2 * PAD
 const GROUP_MIN_H = HEADER + 72
-// Cabeçalho do card da feature: título + status/contadores + pulso de 1 linha.
-export const FEATURE_HEADER = 58
+// Cabeçalho do card da feature: título + status/contadores, pulso de 1 linha e
+// a linha dos lembretes.
+// Folga para a fonte compensada abaixo de 100% (o cabeçalho cresce na tela).
+export const FEATURE_HEADER = 80
+// Cabeçalho do grupo "Sem feature · <Projeto>": 1 linha, mas com a fonte
+// compensada da visão geral (até 26px) ela invadia o cabeçalho da 1ª raia.
+export const PROJECT_HEADER = 48
+// Entre linhas de cards quando o mapa quebra (rowWidth).
+const ROW_GAP = 32
 // Camadas (zIndexMode 'manual' no SessionMap: o z de cada nó/fio é exatamente o
 // daqui). No 'basic' o fio somava o z do cartão que toca, e selecionar um cartão
 // (+1000) levava os fios dele POR CIMA de todos os outros cartões, inclusive do
@@ -71,8 +78,17 @@ export interface MapInput {
   expandedMothers?: ReadonlySet<string>
   // Estado de exibição de cada cartão (ausente = 'open').
   views?: ViewMap
+  // Altura desenhada de cada cartão aberto (card-height-store). Sem ela, a estimativa.
+  cardHeights?: Readonly<Record<string, number>>
   // Asks agente↔agente pendentes (P7): fio temporário até a resposta/expiração.
   asks?: readonly PendingAsk[]
+  // Largura (px do fluxo) a partir da qual os cards nascem numa linha nova: a
+  // área do mapa dividida pelo zoom em que o conjunto ainda se lê. Ausente =
+  // uma linha só (todos lado a lado).
+  rowWidth?: number
+  // Zoom baixo (resumo/blocos): o cartão aberto desenha só título + estado, e a
+  // raia reserva essa altura em vez da do cartão cheio.
+  compact?: boolean
 }
 
 export interface PendingAsk {
@@ -82,8 +98,26 @@ export interface PendingAsk {
   text: string
 }
 
-export function cardSize(view: CardViewState): Size {
-  return view === 'collapsed' ? { w: CARD_W, h: CARD_H } : { w: OPEN_W, h: OPEN_H }
+// Aberto antes da 1ª medição: o cartão típico (saída de 4 linhas + prompt). A
+// medição real (cardHeights) substitui no frame seguinte.
+export const OPEN_EST_H = 200
+// Entre cartões empilhados na mesma lane.
+export const CARD_GAP = 24
+// No resumo o cartão tem 64px: com 24 o vão era quase do tamanho dele.
+export const COMPACT_CARD_GAP = 12
+
+// Cartão aberto no resumo (zoom < BRIEF_BELOW): título + estado com a fonte
+// compensada no teto (22px + 18px + padding) — fixo, senão o layout mudaria a
+// cada passo de zoom.
+export const BRIEF_H = 64
+// E mais estreito: só título + estado. Com os 400px do cartão cheio, a feature de
+// 3 raias não cabia ao lado do painel nem a 0.6.
+export const BRIEF_W = 320
+
+export function cardSize(view: CardViewState, measuredH?: number, compact = false): Size {
+  if (view === 'collapsed') return { w: CARD_W, h: CARD_H }
+  if (compact) return { w: BRIEF_W, h: BRIEF_H }
+  return { w: OPEN_W, h: Math.min(OPEN_H, measuredH ?? OPEN_EST_H) }
 }
 
 // Acima disto o mapa fica em "modo cheio": fios repoDep/feature só aparecem ao
@@ -346,6 +380,8 @@ function childCounts(edges: SessionGraphEdge[]): Map<string, number> {
 
 interface CardContext {
   sizeOf: (sessionId: string) => Size
+  // Vão entre cartões empilhados na mesma raia (menor no resumo).
+  cardGap: number
   viewOf: (sessionId: string) => CardViewState
   counts: Map<string, number>
   notesBySession: Map<string, string>
@@ -443,7 +479,7 @@ function slotCards(
       const p = saved(id)
       if (!p) continue
       slots.set(id, { x: p.x, y: p.y })
-      c = Math.max(c, p.y + ctx.sizeOf(id).h + GAP)
+      c = Math.max(c, p.y + ctx.sizeOf(id).h + ctx.cardGap)
     }
     out.set(repo.nodeId, slots)
     cursor.set(repo.nodeId, c)
@@ -470,38 +506,26 @@ function slotCards(
     }
     rows.set(repo.nodeId, repoRows)
   }
-  // Piso de cada linha: o fundo da PRÓPRIA mãe (se ela está neste card, salva ou
-  // já posta — gerações sobem em ordem) e o cursor da coluna. Não a camada da
-  // geração inteira do card: uma pilha alta de sessões sem relação em outra
-  // coluna empurrava a filha para longe da mãe e abria um vão enorme.
-  const posOf = (id: string): Point | undefined => {
-    for (const slots of out.values()) {
-      const p = slots.get(id)
-      if (p) return p
-    }
-    return undefined
-  }
-  const motherFloor = (id: string): number => {
-    const mother = mothers.get(id)
-    const p = mother ? posOf(mother) : undefined
-    return p && mother ? p.y + ctx.sizeOf(mother).h + GAP : HEADER
-  }
-  const maxGen = Math.max(0, ...all.map((id) => gen.get(id) ?? 0))
-  for (let d = 0; d <= maxGen; d++) {
-    for (const repo of repos) {
-      const slots = out.get(repo.nodeId)!
-      for (const row of rows.get(repo.nodeId)!) {
-        if ((gen.get(row[0]) ?? 0) !== d) continue
-        const y = Math.max(motherFloor(row[0]), cursor.get(repo.nodeId)!)
-        let x = PAD
-        let h = 0
-        for (const id of row) {
-          slots.set(id, { x, y })
-          x += ctx.sizeOf(id).w + GAP
-          h = Math.max(h, ctx.sizeOf(id).h)
-        }
-        cursor.set(repo.nodeId, y + h + GAP)
+  // Cada coluna empilha ao topo, mãe primeiro (geração crescente; dentro dela, a
+  // ordem da lane). Sem faixas por geração: elas jogavam a filha de outra coluna
+  // ~uma vaga inteira abaixo da mãe, com um vão vazio no meio. A hierarquia é o
+  // fio, não a altura.
+  for (const repo of repos) {
+    const slots = out.get(repo.nodeId)!
+    const ordered = rows
+      .get(repo.nodeId)!
+      .map((row, i) => ({ row, i, g: gen.get(row[0]) ?? 0 }))
+      .sort((a, b) => a.g - b.g || a.i - b.i)
+    for (const { row } of ordered) {
+      const y = cursor.get(repo.nodeId)!
+      let x = PAD
+      let h = 0
+      for (const id of row) {
+        slots.set(id, { x, y })
+        x += ctx.sizeOf(id).w + GAP
+        h = Math.max(h, ctx.sizeOf(id).h)
       }
+      cursor.set(repo.nodeId, y + h + ctx.cardGap)
     }
   }
   return out
@@ -538,7 +562,23 @@ function laneHeaderData(
     projectId: lane.projectId,
     repoId: null,
     attentionCount,
+    headerH: PROJECT_HEADER,
   }
+}
+
+// Onde nasce o próximo card sem posição salva: à direita do anterior; se ele
+// passaria de `rowWidth`, numa linha nova abaixo de tudo o que já foi posto.
+// Sem isto, 11 sessões em 4 cards viravam uma faixa só e o enquadrar caía a
+// 0.45 com 65% do mapa vazio embaixo.
+export function nextLaneSlot(
+  cursor: Point,
+  laneW: number,
+  placed: ReadonlyArray<Box>,
+  rowWidth: number | undefined,
+): Point {
+  if (!rowWidth || cursor.x <= 0 || cursor.x + laneW <= rowWidth) return cursor
+  const bottom = Math.max(0, ...placed.map((b) => b.y + b.h))
+  return { x: 0, y: bottom + ROW_GAP }
 }
 
 function layoutLanes(
@@ -566,7 +606,7 @@ function layoutLanes(
   // feature daquele projeto quando a lane do projeto não aparece mais.
   const shownProjects = new Set<string>()
   const migrated = new Set<string>()
-  let cursorX = 0
+  let cursor: Point = { x: 0, y: 0 }
 
   const laneLayouts = input.graph.lanes.flatMap((lane) => {
     const repos = lane.repos
@@ -615,7 +655,7 @@ function layoutLanes(
     const repoNodes: MapNode[] = []
     const cards: MapNode[] = []
     // O card da feature tem um cabeçalho mais alto (título + pulso).
-    const top = lane.kind === 'feature' ? FEATURE_HEADER : HEADER
+    const top = lane.kind === 'feature' ? FEATURE_HEADER : PROJECT_HEADER
     const cardRepos = repos.map((r) => ({ nodeId: laneRepoId(lane, r.repoId), sessionIds: r.sessionIds }))
     const slotsByRepo = slotCards(
       cardRepos,
@@ -657,11 +697,9 @@ function layoutLanes(
       laneH = Math.max(laneH, top + box.h + PAD)
     }
     const laneW = repoX - GAP + PAD
-    const lanePos = clearOfPlaced(
-      savedLaneOf.get(lane) ?? { x: cursorX, y: 0 },
-      { w: laneW, h: laneH },
-      laneBoxes,
-    )
+    const savedPos = savedLaneOf.get(lane)
+    if (!savedPos) cursor = nextLaneSlot(cursor, laneW, laneBoxes, input.rowWidth)
+    const lanePos = clearOfPlaced(savedPos ?? cursor, { w: laneW, h: laneH }, laneBoxes)
     nodes[laneNodeIndex] = {
       id: laneId,
       type: 'lane',
@@ -682,7 +720,9 @@ function layoutLanes(
     }
     laneBoxes.push({ ...lanePos, w: laneW, h: laneH })
     const gutter = (noteCountByLane.get(laneId) ?? 0) > 0 ? NOTE_W + LANE_GAP : 0
-    cursorX = Math.max(cursorX, lanePos.x + laneW + gutter + LANE_GAP)
+    // Salvo fora da linha corrente não empurra o cursor dela.
+    if (!savedPos || savedPos.y === cursor.y)
+      cursor = { x: Math.max(cursor.x, lanePos.x + laneW + gutter + LANE_GAP), y: cursor.y }
   }
   return { nodes, sessionAbs, laneBoxes, gutterBySession, repoLaneIds }
 }
@@ -907,7 +947,8 @@ export function graphToFlow(input: MapInput): FlowResult {
   const views = input.views ?? {}
   const ctx: CardContext = {
     viewOf: (id) => viewOf(views, id),
-    sizeOf: (id) => cardSize(viewOf(views, id)),
+    sizeOf: (id) => cardSize(viewOf(views, id), input.cardHeights?.[id], input.compact),
+    cardGap: input.compact ? COMPACT_CARD_GAP : CARD_GAP,
     counts,
     notesBySession,
     expandedMothers,
@@ -974,4 +1015,30 @@ export function graphToFlow(input: MapInput): FlowResult {
     return { ...e, data: { ...e.data!, ...(busy ? { busy: true } : {}), aggregate } }
   })
   return { nodes, edges }
+}
+
+/**
+ * Rect absoluto de cada nó do layout (soma a cadeia de pais) e o bbox dos de
+ * topo. É o que o enquadrar usa para planejar sobre a densidade de DESTINO: o
+ * DOM só tem a atual, e reenquadrar depois do re-layout oscilava entre o cheio
+ * e o compacto.
+ */
+export function layoutRects(nodes: MapNode[]): {
+  rects: Map<string, Box>
+  tops: Box[]
+} {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const rects = new Map<string, Box>()
+  const abs = (n: MapNode): Point => {
+    const parent = n.parentId ? byId.get(n.parentId) : undefined
+    const base = parent ? abs(parent) : { x: 0, y: 0 }
+    return { x: base.x + n.position.x, y: base.y + n.position.y }
+  }
+  const tops: Box[] = []
+  for (const n of nodes) {
+    const box = { ...abs(n), w: n.width ?? 0, h: n.height ?? 0 }
+    rects.set(n.id, box)
+    if (!n.parentId) tops.push(box)
+  }
+  return { rects, tops }
 }

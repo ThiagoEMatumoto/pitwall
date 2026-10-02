@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Background,
   ControlButton,
@@ -10,6 +10,7 @@ import {
   useNodesInitialized,
   useNodesState,
   useReactFlow,
+  useStore,
   type Connection,
   type Edge,
   type Node,
@@ -27,9 +28,13 @@ import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
 import { BatonDialog } from '@/features/sessions/BatonDialog'
 import { GLOBAL_CANVAS_SCOPE, type CanvasPositionInput } from '../../../shared/types/canvas'
 import {
+  featureLaneId,
   graphToFlow,
+  layoutRects,
   homeRepoLaneId,
   lastSeenAt,
+  NOTE_H,
+  NOTE_W,
   noteNodeId,
   positionKey,
   sessionNodeId,
@@ -58,15 +63,25 @@ import { UserGroupNode } from './UserGroupNode'
 import { NoteNode } from './NoteNode'
 import { SessionEdge } from './SessionEdge'
 import { reuseUnchanged } from './reuse-unchanged'
+import { useCardHeightStore } from './card-height-store'
 import { MapFocusContext, focusFor } from './map-focus'
 import {
   MIN_READABLE_ZOOM,
+  OVERVIEW_MIN_CARDS,
   actualSizeViewport,
   boundsOf,
-  readableViewport,
+  noteSlot,
+  offscreenCards,
+  overflowEdges,
+  minimapSize,
+  PANEL_MIN_ZOOM,
+  planFit,
+  wrapRowWidth,
   type Insets,
+  type OverflowEdges,
 } from './map-fit'
 import type { Rect } from './edge-anchor'
+import { isCompactZoom, MAX_COMPACT_ZOOM } from './card-display'
 import { doubleClickOpensTerminal, viewLineage, viewOf } from './card-view'
 import { useCardViewStore } from './card-view-store'
 import { sameIdList, tailSubscription, tailText, type TailCandidate } from './card-tail'
@@ -75,7 +90,8 @@ import { MapLiveContext, useMinuteClock, type MapLive } from './map-live'
 import { MapStatusCounters } from './MapStatusCounters'
 import { usePendingAsks } from '@/features/handoffs/ConversationsTab'
 import { useCrewDockWidth } from '@/features/handoffs/CrewDock'
-import { RAIL_WIDTH } from '@/features/handoffs/crew-dock-store'
+import { RAIL_WIDTH, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useFeaturePanelStore } from './feature-panel-store'
 import { MapFeatureMovePicker } from './MapChrome'
 
 const nodeTypes = {
@@ -98,13 +114,15 @@ function sameIds(a: { id: string }[], b: { id: string }[]): boolean {
   return a.length === b.length && a.every((n, i) => n.id === b[i].id)
 }
 
-// Abaixo disto o minimapa só cobre cartões: o mapa inteiro já cabe na tela.
-const MINIMAP_MIN_CARDS = 20
+// Abaixo disto o mapa inteiro cabe na tela no piso legível e o minimapa só
+// cobriria cartões. Com 7+ o enquadrar desce para a visão geral e o minimapa
+// diz onde está o resto.
+const MINIMAP_MIN_CARDS = OVERVIEW_MIN_CARDS
 const INSET_GAP = 8
 
 // O que flutua por cima do mapa, medido no DOM: barra do topo, controles de zoom
 // (coluna da esquerda) e minimapa (faixa da base), relativos ao contêiner.
-function overlayInsets(container: HTMLElement): Insets {
+function overlayInsets(container: HTMLElement): Insets & { dock: number } {
   const box = container.getBoundingClientRect()
   const rect = (sel: string) => {
     const r = container.querySelector<HTMLElement>(sel)?.getBoundingClientRect()
@@ -118,12 +136,122 @@ function overlayInsets(container: HTMLElement): Insets {
     .querySelector<HTMLElement>('[data-testid="crew-dock"][data-overlay]')
     ?.getBoundingClientRect()
   const dockOver = dock && dock.width > 0 && dock.left < box.right ? box.right - dock.left : 0
+  // Painel da feature (só um dos dois fica aberto, mas mede ambos).
+  const panel = rect('[data-testid="feature-panel"]')
+  const panelOver = panel && panel.left < box.right ? box.right - panel.left : 0
+  const rightOver = Math.max(dockOver, panelOver)
   return {
-    right: dockOver ? dockOver + INSET_GAP : 0,
+    // Quanto do inset direito é do dock (recolhível pelo enquadrar).
+    dock: dockOver > panelOver ? dockOver - panelOver : 0,
+    right: rightOver ? rightOver + INSET_GAP : 0,
     top: bar ? bar.bottom - box.top + INSET_GAP : 0,
     left: controls ? controls.right - box.left + INSET_GAP : 0,
     bottom: minimap ? box.bottom - minimap.top + INSET_GAP : 0,
   }
+}
+
+// Máscara na borda da área livre do lado em que há cartões fora da vista. Neutra
+// (para o fundo, sem matiz): roxa, não se distinguia da sombra residual do dock.
+const EDGE_FADE = (dir: string) =>
+  `linear-gradient(to ${dir}, color-mix(in srgb, var(--color-bg) 85%, transparent), transparent)`
+const HINT_STYLE: Record<keyof OverflowEdges, CSSProperties> = {
+  top: { top: 0, left: 0, right: 0, height: 28, background: EDGE_FADE('bottom') },
+  bottom: { bottom: 0, left: 0, right: 0, height: 28, background: EDGE_FADE('top') },
+  left: { top: 0, bottom: 0, left: 0, width: 28, background: EDGE_FADE('right') },
+  right: { top: 0, bottom: 0, right: 0, width: 28, background: EDGE_FADE('left') },
+}
+
+const SIDE_ARROW = { left: '←', right: '→', top: '↑', bottom: '↓' } as const
+
+function MapOverflowHints({
+  containerRef,
+  onFit,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>
+  onFit: () => void
+}) {
+  const transform = useStore((s) => s.transform)
+  const nodeLookup = useStore((s) => s.nodeLookup)
+  // Os insets vêm do DOM (dock, painel, minimapa). Abrir/recolher o dock não
+  // move a câmera: sem re-medir, a sombra e o "N fora da vista" ficavam com o
+  // dock que já tinha saído (a faixa roxa no meio do mapa e o contador errado).
+  const dockWidth = useCrewDockWidth()
+  const panelId = useFeaturePanelStore((s) => s.openFeatureId)
+  const [, remeasure] = useState(0)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => remeasure((n) => n + 1))
+    return () => cancelAnimationFrame(raf)
+  }, [dockWidth, panelId])
+  useEffect(() => {
+    const target = containerRef.current
+    if (!target || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => remeasure((n) => n + 1))
+    ro.observe(target)
+    return () => ro.disconnect()
+  }, [containerRef])
+  const el = containerRef.current
+  if (!el) return null
+  const tops: Rect[] = []
+  const cards: Rect[] = []
+  for (const n of nodeLookup.values()) {
+    if (n.hidden) continue
+    const w = n.measured.width ?? n.width ?? 0
+    const h = n.measured.height ?? n.height ?? 0
+    if (!w || !h) continue
+    const r = { x: n.internals.positionAbsolute.x, y: n.internals.positionAbsolute.y, w, h }
+    if (!n.parentId) tops.push(r)
+    if (n.type === 'session') cards.push(r)
+  }
+  const insets = overlayInsets(el)
+  const edges = overflowEdges(
+    boundsOf(tops),
+    { x: transform[0], y: transform[1], zoom: transform[2] },
+    { w: el.clientWidth, h: el.clientHeight },
+    insets,
+  )
+  const off = offscreenCards(
+    cards,
+    { x: transform[0], y: transform[1], zoom: transform[2] },
+    { w: el.clientWidth, h: el.clientHeight },
+    insets,
+  )
+  const offset: Record<keyof OverflowEdges, CSSProperties> = {
+    top: { top: Math.max(0, (insets.top ?? 0) - INSET_GAP) },
+    bottom: {},
+    left: {},
+    right: { right: Math.max(0, (insets.right ?? 0) - INSET_GAP) },
+  }
+  return (
+    <>
+      {(Object.keys(HINT_STYLE) as Array<keyof OverflowEdges>)
+        .filter((k) => edges[k] && off.sides[k] > 0)
+        .map((k) => (
+          <div
+            key={k}
+            data-testid={`map-overflow-${k}`}
+            aria-hidden
+            className="pointer-events-none absolute z-20"
+            style={{ ...HINT_STYLE[k], ...offset[k] }}
+          />
+        ))}
+      {off.count > 0 && (
+        <button
+          type="button"
+          data-testid="map-offscreen-count"
+          data-side={off.side}
+          onClick={onFit}
+          title="Enquadrar tudo"
+          className="absolute z-20 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-0.5 text-[11px] text-[var(--color-text-dim)] shadow transition hover:border-[var(--color-accent)] hover:text-[var(--color-text)]"
+          style={{
+            left: `calc(${insets.left ?? 0}px + (100% - ${(insets.left ?? 0) + (insets.right ?? 0)}px) / 2)`,
+            top: (insets.top ?? 0) + 4,
+          }}
+        >
+          {off.count} {off.count === 1 ? 'cartão' : 'cartões'} fora da vista {SIDE_ARROW[off.side ?? 'right']}
+        </button>
+      )}
+    </>
+  )
 }
 
 // Tecla solta (sem modificador) só vale fora de campo de texto: nota, propósito
@@ -161,6 +289,12 @@ function SessionMapInner() {
   const flowApi = useReactFlow<MapNode, MapEdge>()
   const views = useCardViewStore((s) => s.views)
   const asks = usePendingAsks()
+  const cardHeights = useCardHeightStore((s) => s.heights)
+  // Densidade do zoom (resumo/blocos): a raia reserva a altura que o cartão desenha.
+  const compact = useStore((s) => isCompactZoom(s.transform[2]))
+  // Largura da área do mapa: os cards quebram em linhas (wrapRowWidth).
+  const [mapWidth, setMapWidth] = useState(0)
+  const rowWidth = mapWidth > 0 ? wrapRowWidth(mapWidth) : undefined
 
   // Estado de exibição dos cartões: lido do banco uma vez por escopo.
   useEffect(() => {
@@ -186,9 +320,12 @@ function SessionMapInner() {
       inUse,
       expandedMothers,
       views,
+      cardHeights,
       asks,
+      rowWidth,
+      compact,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, asks],
+    [graph, scope, canvas, inUse, expandedMothers, views, cardHeights, asks, rowWidth, compact],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -243,6 +380,14 @@ function SessionMapInner() {
   // O mapa cobre o dockview montado: o foco sai do xterm escondido (Ctrl+Shift+G
   // o deixaria recebendo as teclas às cegas).
   const containerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => setMapWidth(el.clientWidth))
+    ro.observe(el)
+    setMapWidth(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
   useEffect(() => containerRef.current?.focus({ preventScroll: true }), [])
 
   // Relógios do "trabalhando há" e itens da fila de atenção, por sessão.
@@ -267,6 +412,15 @@ function SessionMapInner() {
     [flow.nodes],
   )
   const showMinimap = sessionCount >= MINIMAP_MIN_CARDS && !minimapCollapsed
+  const contentBounds = useMemo(
+    () =>
+      boundsOf(
+        flow.nodes
+          .filter((n) => !n.parentId)
+          .map((n) => ({ x: n.position.x, y: n.position.y, w: n.width ?? 0, h: n.height ?? 0 })),
+      ),
+    [flow.nodes],
+  )
 
   const rectOf = useCallback(
     (id: string): Rect | null => {
@@ -300,7 +454,7 @@ function SessionMapInner() {
 
   // Enquadramento legível (map-fit.ts): o inicial e o botão de enquadrar. O
   // fitView do xyflow encaixava tudo num zoom ~0.3 em que nada se lia.
-  const fitReadable = useCallback(() => {
+  const fitReadable = useCallback((opts?: { priorityId?: string | null; keepDock?: boolean }) => {
     const el = containerRef.current
     if (!el) return
     const cards = flowApi
@@ -319,29 +473,69 @@ function SessionMapInner() {
         'needs-you'
       )
     })
-    // Sem ninguém pedindo você: o card (feature ou projeto) da sessão mais recente.
-    const recent = [...cards].sort((a, b) => lastSeenAt(b) - lastSeenAt(a))[0]
+    // Sem ninguém pedindo você: o card da feature da sessão mais recente (a frente
+    // é a unidade do mapa); sem feature nenhuma, o card do projeto dela.
+    const byRecent = [...cards].sort((a, b) => lastSeenAt(b) - lastSeenAt(a))
+    const recent = byRecent.find((n) => n.featureId) ?? byRecent[0]
     const recentCard = recent ? topAncestorOf(sessionNodeId(recent.sessionId)) : null
-    const priority =
-      boundsOf(
-        needsYou
-          .map((n) => rectOf(sessionNodeId(n.sessionId)))
-          .filter((r): r is Rect => r !== null),
-      ) ?? (recentCard ? rectOf(recentCard) : null)
-    const viewport = readableViewport({
-      visible: visibleBounds(),
-      priority,
-      view: { w: el.clientWidth, h: el.clientHeight },
-      insets: overlayInsets(el),
+    // Painel aberto: o card da feature dele (não o da sessão mais recente).
+    const focusCard = opts?.priorityId ?? recentCard
+    const insets = overlayInsets(el)
+    // Planeja sobre o layout de cada densidade (puro), não sobre o DOM: o zoom
+    // escolhido decide a densidade, e ela muda o tamanho das raias.
+    const planOn = (compact: boolean) => {
+      const { rects, tops } = layoutRects(graphToFlow({ ...inputRef.current, compact }).nodes)
+      const priority =
+        boundsOf(
+          needsYou
+            .map((n) => rects.get(sessionNodeId(n.sessionId)) ?? null)
+            .filter((r): r is Rect => r !== null),
+        ) ?? (focusCard ? (rects.get(focusCard) ?? null) : null)
+      return planFit({
+        visible: boundsOf(tops),
+        priority,
+        view: { w: el.clientWidth, h: el.clientHeight },
+        insets,
+        // keepDock: o enquadrar automático de quando o dock abre não pode fechá-lo.
+        dockInset: opts?.keepDock ? 0 : insets.dock,
+        cardCount: cards.length,
+        needsYou: needsYou.length > 0,
+        // No resumo não passa do degrau que reabriria os cartões.
+        maxZoom: compact ? MAX_COMPACT_ZOOM : undefined,
+        priorityFloor: opts?.priorityId ? PANEL_MIN_ZOOM : undefined,
+      })
+    }
+    const full = planOn(false)
+    const plan = full && !isCompactZoom(full.viewport.zoom) ? full : (planOn(true) ?? full)
+    if (!plan) return
+    if (plan.collapseDock) useCrewDockStore.getState().collapse()
+    void flowApi.setViewport(plan.viewport, {
+      duration: opts?.keepDock && !reducedMotion() ? 200 : 0,
     })
-    if (viewport) void flowApi.setViewport(viewport, { duration: 0 })
-  }, [flowApi, rectOf, visibleBounds, topAncestorOf])
+  }, [flowApi, topAncestorOf])
 
   const actualSize = useCallback(() => {
     const el = containerRef.current
     const viewport = el ? actualSizeViewport(visibleBounds(), overlayInsets(el)) : null
     if (viewport) void flowApi.setViewport(viewport, { duration: reducedMotion() ? 0 : 200 })
   }, [flowApi, visibleBounds])
+
+  // Nota solta do botão "Nota": ao lado da seleção (o card de topo dela) ou, sem
+  // seleção, do 1º card de feature.
+  const looseNoteSlot = useCallback(() => {
+    const all = flowApi.getNodes()
+    const sel = all.find((n) => n.selected)
+    const anchorId = sel
+      ? topAncestorOf(sel.id)
+      : (all.find((n) => !n.parentId && n.id.startsWith('lane:f:')) ?? all.find((n) => !n.parentId))?.id
+    const anchor = anchorId ? rectOf(anchorId) : null
+    if (!anchor) return null
+    const obstacles = all
+      .filter((n) => !n.parentId)
+      .map((n) => rectOf(n.id))
+      .filter((r): r is Rect => r !== null)
+    return noteSlot(anchor, obstacles, { w: NOTE_W, h: NOTE_H })
+  }, [flowApi, rectOf, topAncestorOf])
 
   // Centraliza um cartão pelo tamanho que o layout deu a ele (o medido pode estar
   // um frame atrasado logo depois de o cartão crescer).
@@ -451,7 +645,8 @@ function SessionMapInner() {
   // Refeito ao trocar o escopo.
   const nodesInitialized = useNodesInitialized()
   const fittedKey = useRef<string | null>(null)
-  const fitKey = scope
+  // Cruzar para 7+ cartões troca o piso (visão geral): reenquadra uma vez.
+  const fitKey = `${scope}:${sessionCount >= OVERVIEW_MIN_CARDS ? 'overview' : 'readable'}`
   useEffect(() => {
     if (!nodesInitialized || nodes.length === 0 || fittedKey.current === fitKey) return
     // Trocar o escopo muda o flow num render e os nós do estado no seguinte (o
@@ -459,8 +654,57 @@ function SessionMapInner() {
     if (!sameIds(nodes, flow.nodes)) return
     fittedKey.current = fitKey
     // O minimapa entra/sai junto com o conjunto: mede os insets no frame seguinte.
-    requestAnimationFrame(fitReadable)
+    requestAnimationFrame(() => fitReadable())
   }, [nodesInitialized, nodes, flow.nodes, fitKey, fitReadable])
+
+  // Abrir o painel da feature: reenquadra com ele descontado (2 frames: o painel
+  // monta e só então tem largura no DOM).
+  const panelFeatureId = useFeaturePanelStore((s) => s.openFeatureId)
+  useEffect(() => {
+    if (!panelFeatureId) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => fitReadable({ priorityId: featureLaneId(panelFeatureId) }))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [panelFeatureId, fitReadable])
+
+  // Abrir a Equipe/Conversas sobre o mapa: se o dock passa a cobrir um cartão
+  // (mais de 30% dele), reenquadra sem fechá-lo. Antes o cartão ficava meio
+  // escondido e só o "Enquadrar" manual o trazia de volta.
+  const prevDock = useRef(dockOverlay)
+  useEffect(() => {
+    const opened = dockOverlay > prevDock.current
+    prevDock.current = dockOverlay
+    const el = containerRef.current
+    if (!opened || !el) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        const cards = flowApi
+          .getNodes()
+          .filter((n) => n.type === 'session' && !n.hidden)
+          .map((n) => rectOf(n.id))
+          .filter((r): r is Rect => r !== null)
+        const { x, y, zoom } = flowApi.getViewport()
+        const insets = overlayInsets(el)
+        const view = { w: el.clientWidth, h: el.clientHeight }
+        const covered = offscreenCards(cards, { x, y, zoom }, view, insets).count
+        const before = offscreenCards(cards, { x, y, zoom }, view, {
+          ...insets,
+          right: Math.max(0, (insets.right ?? 0) - insets.dock),
+        }).count
+        if (covered > before) fitReadable({ keepDock: true })
+      })
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [dockOverlay, flowApi, rectOf, fitReadable])
 
   const [menu, setMenu] = useState<{ x: number; y: number; flowId: string } | null>(null)
   const groups = canvas?.groups ?? []
@@ -691,7 +935,7 @@ function SessionMapInner() {
                 {/* Mesma classe do fitView padrão: o "enquadrar" agora é o legível. */}
                 <ControlButton
                   className="react-flow__controls-fitview"
-                  onClick={fitReadable}
+                  onClick={() => fitReadable()}
                   title="Enquadrar (no menor zoom em que dá pra ler)"
                   aria-label="Enquadrar"
                 >
@@ -720,6 +964,15 @@ function SessionMapInner() {
               </Controls>
               {showMinimap && (
                 <MiniMap
+                  // A Equipe aberta flutua sobre a borda direita: o minimapa desvia dela.
+                  style={{
+                    ...(dockOverlay ? { right: dockOverlay } : {}),
+                    width: minimapSize(contentBounds).w,
+                    height: minimapSize(contentBounds).h,
+                  }}
+                  maskStrokeColor="var(--color-accent)"
+                  maskStrokeWidth={1.5}
+                  offsetScale={10}
                   className="!border !border-[var(--color-border)] !bg-[var(--color-surface)]"
                   nodeColor={minimapColor}
                   maskColor="color-mix(in srgb, var(--color-bg) 70%, transparent)"
@@ -741,7 +994,7 @@ function SessionMapInner() {
               onScope={setScopeMode}
               hiddenEdges={hiddenEdges}
               onNewSession={() => cmd.openNewSession(null)}
-              onNote={() => cmd.createNote(null)}
+              onNote={() => cmd.createNote(null, looseNoteSlot())}
               onGroup={cmd.createGroup}
               onTidy={() => void cmd.tidy()}
               onOpenAll={() =>
@@ -756,7 +1009,8 @@ function SessionMapInner() {
                 onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
               />
             </MapTopBar>
-            <FeaturePanel rightInset={dockOverlay} />
+            <MapOverflowHints containerRef={containerRef} onFit={() => fitReadable()} />
+            <FeaturePanel rightInset={dockOverlay} sessions={graph.nodes} />
             <MapFeatureMovePicker />
             {menu && menuNode && (
               <MapContextMenu

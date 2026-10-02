@@ -30,6 +30,7 @@ import { markDuplicateSuspect } from './feature-focus'
 import { list as listObjectives, loadKeyResults } from './objective-store'
 import { findTranscriptPath } from './session-activity'
 import { runClaude } from './claude-cli'
+import { firstCleanPrompt } from './session-purpose'
 import { PULSE_MAX_LENGTH } from '../../../shared/feature-loop'
 import { spliceUserSections, stripUserSections } from '../../../shared/feature-sections'
 import {
@@ -486,7 +487,7 @@ class FeatureMemoryService {
 
     const branch = normalizeBranch(digest.gitBranch)
     const workBranch = branch && !isProtectedBranch(branch) ? branch : null
-    const firstPrompt = digest.userPrompts[0] ?? null
+    const firstPrompt = firstCleanPrompt(digest.userPrompts)
 
     const projectId = getProjectIdForRepo(info.repoId)
     if (!projectId) return null

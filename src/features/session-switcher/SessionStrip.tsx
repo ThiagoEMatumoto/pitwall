@@ -1,6 +1,7 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ChevronDown,
   ChevronRight,
   Circle,
   Loader,
@@ -22,6 +23,7 @@ import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { liveSessionLabel } from './session-label'
+import { clippedCount } from './strip-overflow'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -120,6 +122,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   // indicador discreto que rola até ele — o chip não pula de posição sozinho.
   const scrollRef = useRef<HTMLDivElement>(null)
   const [waitingOffscreen, setWaitingOffscreen] = useState(false)
+  const [clipped, setClipped] = useState({ left: 0, right: 0 })
 
   const findOffscreenWaiting = useCallback((): HTMLElement | null => {
     const el = scrollRef.current
@@ -134,6 +137,13 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
 
   const checkOverflow = useCallback(() => {
     setWaitingOffscreen(findOffscreenWaiting() !== null)
+    const el = scrollRef.current
+    if (!el) return
+    const chips = [...el.querySelectorAll<HTMLElement>('[data-strip-chip]')].map((c) =>
+      c.getBoundingClientRect(),
+    )
+    const next = clippedCount(el.getBoundingClientRect(), chips)
+    setClipped((prev) => (prev.left === next.left && prev.right === next.right ? prev : next))
   }, [findOffscreenWaiting])
 
   useEffect(() => {
@@ -166,7 +176,10 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
         <div
           ref={scrollRef}
           onScroll={checkOverflow}
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          data-testid="session-strip-scroll"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          // Fade na borda que tem chips além dela, no lugar da scrollbar.
+          style={stripMask(clipped)}
         >
           {orderedSessions.map((item) => {
             const paneId = openByCc.get(item.ccSessionId)
@@ -201,6 +214,18 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
         </button>
       )}
 
+      {clipped.left + clipped.right > 0 && (
+        <button
+          type="button"
+          data-testid="session-strip-more"
+          onClick={onOpenSwitcher}
+          title="Sessões fora da barra — abrir o seletor"
+          className="flex h-6 shrink-0 items-center gap-0.5 rounded px-1.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={ChevronDown} size={12} />+{clipped.left + clipped.right}
+        </button>
+      )}
+
       <button
         type="button"
         onClick={onOpenSwitcher}
@@ -209,7 +234,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
             ? `Abrir seletor de sessões · ${waitingCount} aguardando você`
             : 'Abrir seletor de sessões'
         }
-        className="relative ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        className="relative ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
       >
         <Icon as={Maximize2} size={13} />
         {waitingCount > 0 && (
@@ -220,6 +245,16 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
       </button>
     </div>
   )
+}
+
+const FADE_PX = 24
+
+function stripMask(clipped: { left: number; right: number }): CSSProperties | undefined {
+  if (!clipped.left && !clipped.right) return undefined
+  const l = clipped.left ? `transparent, black ${FADE_PX}px` : 'black, black'
+  const r = clipped.right ? `black calc(100% - ${FADE_PX}px), transparent` : 'black'
+  const mask = `linear-gradient(to right, ${l}, ${r})`
+  return { maskImage: mask, WebkitMaskImage: mask }
 }
 
 interface ChipProps {
@@ -243,6 +278,7 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
 
   return (
     <div
+      data-strip-chip
       data-waiting={waiting || undefined}
       className={`group flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition ${
         isFocused

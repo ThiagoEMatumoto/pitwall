@@ -1,6 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { CornerDownLeft, ExternalLink, MessageSquare, SquareTerminal, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { ShortcutHints } from '@/components/ui/ShortcutHints'
+import { hintText, type ShortcutHint } from '@/components/ui/shortcut-hints'
 import { ChatView } from '@/features/sessions/chat/ChatView'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
@@ -92,6 +94,15 @@ function trapTab(e: React.KeyboardEvent<HTMLDivElement>): void {
     e.preventDefault()
     first.focus()
   }
+}
+
+// Camada aberta POR CIMA da modal (paleta Ctrl+K, seletor, compositor): o foco
+// está num campo fora do painel. O Esc é dela — com o listener em captura, a
+// modal fechava e a paleta ficava aberta.
+export function escBelongsToUpperLayer(dialog: HTMLElement | null, active: Element | null): boolean {
+  if (!dialog || !active || active === document.body) return false
+  if (dialog.contains(active)) return false
+  return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.closest('[role="dialog"], [aria-modal="true"]') !== null
 }
 
 export function CrewPeek() {
@@ -291,6 +302,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (escBelongsToUpperLayer(dialogRef.current, document.activeElement)) return
       if (mode === 'terminal' && !e.shiftKey && bodyRef.current?.contains(document.activeElement)) {
         return
       }
@@ -404,9 +416,16 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
           lift ? 'h-[90vh] w-[min(1400px,94vw)]' : 'h-[88vh] w-[56rem] max-w-[92vw]'
         }`}
       >
-        <header className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border)] px-4 py-3">
+        <header
+          data-testid="peek-header"
+          className={`flex shrink-0 gap-3 border-b border-[var(--color-border)] px-4 ${
+            lift ? 'h-10 items-center' : 'items-start py-3'
+          }`}
+        >
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {/* No lift o header é uma linha só (36-40px, como o Maestri): o
+                motivo de abrir a modal é o terminal, não o cabeçalho. */}
+            <div className={`flex items-center gap-x-2 gap-y-1 ${lift ? 'min-w-0 flex-nowrap' : 'flex-wrap'}`}>
               <span id={titleId} className="truncate text-base font-medium text-[var(--color-text)]">
                 {!handoff
                   ? (live?.title ?? live?.name ?? repoLabel)
@@ -431,12 +450,31 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                   {badge.label}
                 </span>
               )}
+              {lift && (
+                <span
+                  data-testid="peek-header-meta"
+                  className="min-w-0 truncate text-[11px] text-[var(--color-text-dim)]"
+                >
+                  {[
+                    !handoff
+                      ? [live?.projectName, repoLabel].filter(Boolean).join('/')
+                      : alias
+                        ? `${alias.name}/${repoLabel}`
+                        : repoLabel,
+                    activityLabel,
+                    ctxLabel,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              )}
             </div>
+            {!lift && (<>
             <div className="truncate text-[11px] text-[var(--color-text-dim)]">
               {!handoff
                 ? [live?.projectName, repoLabel].filter(Boolean).join(' · ')
                 : alias
-                  ? `${alias.name} · → ${repoLabel}`
+                  ? `${alias.name} · ${repoLabel}`
                   : `→ ${repoLabel}`}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
@@ -461,6 +499,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                 {handoff.task}
               </div>
             )}
+            </>)}
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
@@ -553,7 +592,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
               // do banner de espera do ChatView troca pro modo terminal — mesma
               // janela, onde o menu TUI é de fato clicável.
               onToggleMode={live ? showTerminal : undefined}
-              emptyHint="Sem conversa ainda. Abra o terminal para escrever."
+              emptyHint="Sem conversa ainda. Escreva abaixo para mandar a primeira mensagem."
             />
           ) : (
             <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--color-text-dim)]">
@@ -563,18 +602,25 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
         </div>
 
         {strip.length > 1 && (
-          <LiftStrip ids={strip} currentId={currentId} onPick={switchTo} />
+          <LiftStrip
+            ids={strip}
+            currentId={currentId}
+            onPick={switchTo}
+            escHint={mode === 'terminal' ? escHints(!!handoff) : null}
+          />
         )}
 
         {/* Em modo terminal o rodapé encolhe: o input é o composer do próprio
             Terminal, e a pergunta pendente está desenhada na TUI ali em cima.
-            Dois campos de texto empilhados seriam duas verdades competindo. */}
+            Dois campos de texto empilhados seriam duas verdades competindo. Com
+            a faixa de troca, as dicas vão nela (uma linha só). */}
         {mode === 'terminal' ? (
-          <div className="flex shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 py-1.5 text-[10px] text-[var(--color-text-dim)]">
-            <span>esc vai pra {handoff ? 'filha' : 'sessão'}</span>
-            <span>shift+esc fecha</span>
-            {!lift && <PromoteToTabLink live={live} onClick={promoteToTab} />}
-          </div>
+          strip.length > 1 ? null : (
+            <div className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 text-[10px] text-[var(--color-text-dim)]">
+              <ShortcutHints hints={escHints(!!handoff)} />
+              {!lift && <PromoteToTabLink live={live} onClick={promoteToTab} />}
+            </div>
+          )
         ) : !handoff ? (
           <SessionChatFooter
             live={live}
@@ -736,20 +782,38 @@ function PeekModeButton({
 
 // Faixa de troca do lift: as sessões do mesmo agrupamento do mapa, na ordem dele.
 // Trocar remonta o painel no mesmo modo (terminal continua terminal).
+// Em modo terminal o Esc é da TUI (cancelar, sair de menu, interromper): fechar
+// a modal com ele deixaria o terminal pela metade. Daí o Shift+Esc.
+export function escHints(child: boolean): ShortcutHint[] {
+  return [
+    { keys: ['Esc'], label: `vai à ${child ? 'filha' : 'sessão'}` },
+    { keys: ['Shift+Esc'], label: 'fecha' },
+  ]
+}
+
+export function escHintFor(child: boolean): string {
+  return hintText(escHints(child))
+}
+
+const LIFT_SWITCH_HINTS: ShortcutHint[] = [{ keys: ['Alt+,', 'Alt+.'], label: 'trocar' }]
+export const LIFT_SWITCH_HINT = hintText(LIFT_SWITCH_HINTS)
+
 function LiftStrip({
   ids,
   currentId,
   onPick,
+  escHint,
 }: {
   ids: string[]
   currentId: string | null
   onPick: (id: string) => void
+  escHint: ShortcutHint[] | null
 }) {
   const liveSessions = useAppStore((s) => s.liveSessions)
   return (
     <div
       data-testid="peek-lift-strip"
-      className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-[var(--color-border)] px-3 py-1.5"
+      className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-t border-[var(--color-border)] px-3 [scrollbar-width:none]"
     >
       {ids.map((id) => {
         const s = liveSessions.find((x) => x.id === id)
@@ -772,9 +836,11 @@ function LiftStrip({
           </button>
         )
       })}
-      <span className="ml-auto shrink-0 pl-2 text-[10px] text-[var(--color-text-dim)]">
-        alt+, / alt+. troca
-      </span>
+      <ShortcutHints
+        testId="peek-lift-hints"
+        className="ml-auto shrink-0 pl-2"
+        hints={[...LIFT_SWITCH_HINTS, ...(escHint ?? [])]}
+      />
     </div>
   )
 }

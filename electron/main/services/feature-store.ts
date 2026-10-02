@@ -6,6 +6,7 @@ import matter from 'gray-matter'
 import chokidar, { FSWatcher } from 'chokidar'
 import { getDb } from './db'
 import { isDraftFeature } from '../../../shared/feature-visibility'
+import { sanitizeObjective } from './session-purpose'
 import type {
   Feature,
   FeatureLinkTargetType,
@@ -155,7 +156,7 @@ function fromFrontmatter(fm: Partial<Frontmatter>, docPath: string, body: string
     slug: fm.slug,
     title: fm.title,
     status: fm.status,
-    objective: fm.objective ?? null,
+    objective: sanitizeObjective(fm.objective ?? null),
     docPath,
     synthMode: fm.synth_mode ?? 'threshold',
     model: fm.model ?? null,
@@ -235,7 +236,7 @@ function rowToFeature(
     slug: row.slug,
     title: row.title,
     status: row.status as FeatureStatus,
-    objective: row.objective,
+    objective: sanitizeObjective(row.objective),
     docPath: row.doc_path,
     synthMode: row.synth_mode as FeatureSynthMode,
     model: row.model,

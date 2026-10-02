@@ -11,7 +11,14 @@ import { MessageCircle } from 'lucide-react'
 import { sessionGraphApi } from '@/lib/ipc'
 import type { HandoffEvent } from '../../../shared/types/session-graph'
 import type { MapEdge, MapEdgeData, MapEdgeKind, MapNode } from './graph-to-flow'
-import { borderAnchor, type Anchor, type Rect } from './edge-anchor'
+import {
+  borderAnchor,
+  gutterRoute,
+  roundedPath,
+  routeLabelPoint,
+  type Anchor,
+  type Rect,
+} from './edge-anchor'
 import { useMapFocus } from './map-focus'
 
 // Cada tipo de fio se lê sem legenda: mãe→filha é a corda sólida com seta (corre
@@ -43,8 +50,11 @@ function edgeStyle(data: MapEdgeData): CSSProperties {
   if (data.kind !== 'handoff') return base
   if (data.alert) return { ...base, stroke: 'var(--color-danger)', strokeWidth: 2 }
   // Vivo: tracejado que "corre" (session-edge-live) pra mostrar que está trabalhando.
-  if (data.live) return { ...base, stroke: 'var(--color-accent)', strokeDasharray: '6 5' }
-  return { ...base, opacity: 0.7 }
+  // Tracejado curto e meio apagado: o '6 5' pleno se confundia com a borda
+  // tracejada dos grupos (e com uma seleção) quando corria pelo pé do card.
+  if (data.live)
+    return { ...base, stroke: 'var(--color-accent)', strokeDasharray: '4 4', opacity: 0.6 }
+  return { ...base, opacity: 0.6 }
 }
 
 function edgeClass(data: MapEdgeData): string {
@@ -76,17 +86,44 @@ function snapToHandle(n: InternalNode<MapNode> | undefined, a: Anchor): Anchor {
   return { ...a, x: p.x + h.x + h.width / 2, y: p.y + h.y + h.height / 2 }
 }
 
+// Cartão dentro de uma lane de repo de um card de feature (lane:f:<id>:r:<repo>).
+const isFeatureRepoLane = (id: string | undefined) => !!id && id.startsWith('lane:f:') && id.includes(':r:')
+
 // Com os dois nós medidos o fio encosta na borda voltada pro outro; antes disso
-// (1º frame) cai nos handles padrão que o xyflow passa.
-function useFloatingPath(props: EdgeProps<MapEdge>) {
+// (1º frame) cai nos handles padrão que o xyflow passa. Mãe→filha e bastão no
+// MESMO card de feature correm pelas calhas entre as lanes (gutterRoute): a
+// curva livre cortava por baixo dos cartões da lane do meio.
+function useFloatingPath(props: EdgeProps<MapEdge>, routed: boolean): [string, number, number] {
   const sourceNode = useInternalNode<MapNode>(props.source)
   const targetNode = useInternalNode<MapNode>(props.target)
+  const srcLaneNode = useInternalNode<MapNode>(sourceNode?.parentId ?? '')
+  const tgtLaneNode = useInternalNode<MapNode>(targetNode?.parentId ?? '')
+  const cardNode = useInternalNode<MapNode>(srcLaneNode?.parentId ?? '')
   const source = rectOf(sourceNode)
   const target = rectOf(targetNode)
-  if (!source || !target) return getBezierPath(props)
+  if (!source || !target) {
+    const [p, lx, ly] = getBezierPath(props)
+    return [p, lx, ly]
+  }
+  const srcLane = rectOf(srcLaneNode)
+  const tgtLane = rectOf(tgtLaneNode)
+  const card = rectOf(cardNode)
+  if (
+    routed &&
+    srcLane &&
+    tgtLane &&
+    card &&
+    isFeatureRepoLane(sourceNode?.parentId) &&
+    isFeatureRepoLane(targetNode?.parentId) &&
+    srcLaneNode?.parentId === tgtLaneNode?.parentId
+  ) {
+    const pts = gutterRoute(source, srcLane, target, tgtLane, card.y + card.h - 6)
+    const label = routeLabelPoint(pts)
+    return [roundedPath(pts), label.x, label.y]
+  }
   const a = snapToHandle(sourceNode, borderAnchor(source, target))
   const b = snapToHandle(targetNode, borderAnchor(target, source))
-  return getBezierPath({
+  const [p, lx, ly] = getBezierPath({
     sourceX: a.x,
     sourceY: a.y,
     sourcePosition: a.position,
@@ -94,6 +131,7 @@ function useFloatingPath(props: EdgeProps<MapEdge>) {
     targetY: b.y,
     targetPosition: b.position,
   })
+  return [p, lx, ly]
 }
 
 function timeline(events: HandoffEvent[]): string {
@@ -108,7 +146,10 @@ function timeline(events: HandoffEvent[]): string {
 function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
   const data = props.data as MapEdgeData
   const [tooltip, setTooltip] = useState<string | null>(null)
-  const [path, labelX, labelY] = useFloatingPath(props)
+  const [path, labelX, labelY] = useFloatingPath(
+    props,
+    data.kind === 'handoff' || data.kind === 'baton',
+  )
   const focus = useMapFocus()
   const lit = focus.edges.has(props.id)
   const dimmed = focus.dimOthers && !lit

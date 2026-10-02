@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Feature } from '../../../shared/types/ipc'
+import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
 const BODY = `
 ## Visão geral
@@ -122,9 +123,17 @@ describe('FeatureCardReminders', () => {
     expect(items[1]).toHaveTextContent('Segunda nota')
     // Reticências no corte: line-clamp (display -webkit-box) anulava o ellipsis
     // do truncate e o texto era cortado no meio da palavra.
-    expect(items[0].className).toContain('truncate')
-    expect(items[0].className).not.toContain('line-clamp')
+    const text = items[0].querySelector('.truncate')!
+    expect(text).not.toBeNull()
+    expect(text.className).not.toContain('line-clamp')
     expect(items[0].getAttribute('title')).toContain('Primeira nota')
+    // Tom neutro: o laranja (warning) é do status, nos lembretes só no glifo.
+    expect(items[0].className).not.toContain('warning')
+    // 3ª nota + 1 regra de negócio → "+2 regras", que abre Notas & regras.
+    const more = screen.getByTestId('feature-card-reminders-more')
+    expect(more).toHaveTextContent('+2 regras')
+    fireEvent.click(more)
+    expect(useFeaturePanelStore.getState()).toMatchObject({ openFeatureId: 'f1', tab: 'notes' })
   })
 })
 
@@ -139,7 +148,7 @@ describe('FeaturePanel', () => {
     act(() => useFeaturePanelStore.getState().open('f1'))
     render(<FeaturePanel />)
     await screen.findByText('Checkout')
-    fireEvent.click(screen.getByTestId('feature-panel-tab-rules'))
+    fireEvent.click(screen.getByTestId('feature-panel-tab-notes'))
     fireEvent.click(await screen.findByTestId('feature-panel-rules-view'))
     const input = screen.getByTestId('feature-panel-rules-input')
     fireEvent.change(input, { target: { value: '- Desconto máx 5%' } })
@@ -166,7 +175,7 @@ describe('FeaturePanel', () => {
     act(() => useFeaturePanelStore.getState().open('f1'))
     render(<FeaturePanel />)
     await screen.findByText('Checkout')
-    fireEvent.click(screen.getByTestId('feature-panel-tab-rules'))
+    fireEvent.click(screen.getByTestId('feature-panel-tab-notes'))
     fireEvent.click(await screen.findByTestId('feature-panel-rules-view'))
     const input = screen.getByTestId('feature-panel-rules-input')
     fireEvent.change(input, { target: { value: '- Desconto máx 1%' } })
@@ -225,6 +234,7 @@ describe('FeaturePanel', () => {
     act(() => useFeaturePanelStore.getState().open('f1'))
     render(<FeaturePanel />)
     await screen.findByText('Checkout')
+    fireEvent.click(screen.getByTestId('feature-panel-tab-notes'))
     fireEvent.click(await screen.findByTestId('feature-panel-notes-view'))
     fireEvent.change(screen.getByTestId('feature-panel-notes-input'), {
       target: { value: 'nota nova' },
@@ -245,5 +255,34 @@ describe('FeaturePanel', () => {
     expect(await screen.findByText('Sem boleto')).toBeInTheDocument()
     expect(screen.getByText(/Stripe, pelo PIX/)).toBeInTheDocument()
     expect(screen.queryByText('Mudança comum')).toBeNull()
+  })
+
+  it('abre em "Estado" com dados: sessões por estado, regras fixadas e a última mudança', async () => {
+    act(() => useFeaturePanelStore.getState().open('f1'))
+    const sessions = [
+      { featureId: 'f1', status: 'working', attentionReason: null },
+      { featureId: 'f1', status: 'idle', attentionReason: 'handoff-input' },
+      { featureId: 'f2', status: 'working', attentionReason: null },
+    ] as unknown as SessionGraphNode[]
+    render(<FeaturePanel sessions={sessions} />)
+    await screen.findByText('Checkout')
+    expect(screen.getByTestId('feature-panel-tab-state')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('tab')).toHaveLength(4)
+    const counts = await screen.findByTestId('feature-panel-state-counts')
+    expect(counts).toHaveTextContent('1precisam de você')
+    expect(counts).toHaveTextContent('1trabalhando')
+    expect(screen.getByTestId('feature-panel-state-rules').querySelectorAll('li')).toHaveLength(3)
+    expect(screen.getByTestId('feature-panel-state-ledger')).toBeInTheDocument()
+    // O texto explicativo saiu do corpo (fica no (i)).
+    expect(screen.queryByText(/Esta seção é escrita pela síntese/)).toBeNull()
+  })
+
+  it('um status só: o badge do card no cabeçalho; a vitalidade vira ponto ao lado de PULSO', async () => {
+    act(() => useFeaturePanelStore.getState().open('f1'))
+    render(<FeaturePanel />)
+    await screen.findByText('Checkout')
+    expect(screen.getByTestId('feature-panel-status')).toHaveTextContent('em andamento')
+    const dot = await screen.findByTestId('liveness-chip')
+    expect(dot.closest('h3')).toHaveTextContent(/Pulso/)
   })
 })

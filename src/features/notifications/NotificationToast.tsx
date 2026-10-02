@@ -114,7 +114,7 @@ export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) 
             color: 'var(--color-text-dim)',
           }}
         >
-          +{hiddenCount}
+          +{hiddenCount} {hiddenCount === 1 ? 'aviso' : 'avisos'}
         </button>
       )}
       {cards.map((c, i) => (
@@ -144,7 +144,9 @@ function EventToastCard({ event, onDismiss }: { event: QueuedEvent; onDismiss: (
   return (
     <ToastFrame onDismiss={onDismiss} onActivate={activate}>
       <div className="font-medium">{event.title}</div>
-      <div className="text-[var(--color-text-dim)]">{event.body}</div>
+      <div className="line-clamp-2 text-[var(--color-text-dim)]" title={event.body}>
+        {event.body}
+      </div>
     </ToastFrame>
   )
 }
@@ -160,7 +162,12 @@ function LocalToastCard({ toast }: { toast: LocalToast }) {
   return (
     <ToastFrame onDismiss={() => dismiss(toast.id)}>
       <div className="font-medium">{toast.title}</div>
-      {toast.body && <div className="text-[var(--color-text-dim)]">{toast.body}</div>}
+      {/* 2 linhas no máximo (o aviso do bastão ocupava 5); o texto inteiro no title. */}
+      {toast.body && (
+        <div className="line-clamp-2 text-[var(--color-text-dim)]" title={toast.body}>
+          {toast.body}
+        </div>
+      )}
       {toast.actionLabel && (
         <button
           type="button"

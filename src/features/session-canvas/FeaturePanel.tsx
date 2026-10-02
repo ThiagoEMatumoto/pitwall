@@ -1,22 +1,25 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { create } from 'zustand'
-import { X } from 'lucide-react'
+import { Info, Pin, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 import { FeaturePulse } from '@/features/features/FeaturePulse'
 import { FeatureSessions } from '@/features/features/FeatureSessions'
-import { LivenessChip } from '@/features/features/LivenessChip'
+import { LivenessChip, livenessReason } from '@/features/features/LivenessChip'
+import { LIVENESS_META, STATUS_META } from '@/features/features/status'
+import type { FeatureStatus } from '../../../shared/types/ipc'
 import { useLoopSnapshot } from '@/features/features/useLoopSnapshot'
 import { featuresApi, projectsApi } from '@/lib/ipc'
 import {
   BUSINESS_RULES_SECTION,
   FIXED_NOTES_SECTION,
   getSection,
-  splitFixedNotes,
   type FeatureSection,
 } from '../../../shared/feature-sections'
 import type { Feature, Project, Repo } from '../../../shared/types/ipc'
-import { useFeaturePanelStore } from './feature-panel-store'
+import type { SessionGraphNode } from '../../../shared/types/session-graph'
+import { useFeaturePanelStore, type FeaturePanelTab } from './feature-panel-store'
+import { clipAtWord, featureReminders, sessionStatusCounts } from './feature-state-summary'
 
 const AUTOSAVE_MS = 600
 // Quantas notas fixadas o card da feature resume.
@@ -67,33 +70,49 @@ function useFeatureDoc(featureId: string | null): Feature | null {
 // ---- Lembretes no card da feature ----
 
 /**
- * As 2 primeiras notas fixadas no header do card da feature. O header tem altura
- * fixa no layout (FEATURE_HEADER): cada lembrete é um chip de 1 linha ao lado do
- * pulso, com o texto inteiro no title.
+ * Os 2 primeiros lembretes (notas fixadas, depois regras) na 3ª linha do card da
+ * feature, abaixo do pulso. Tom neutro: o laranja é só do status — com a mesma
+ * cor, os lembretes competiam com ele. O resto vira "+N regras", que abre a aba
+ * Notas & regras.
  */
+// Cabe nos 280px do chip na fonte do cabeçalho.
+const CHIP_CHARS = 40
+
 export function FeatureCardReminders({ featureId }: { featureId: string }) {
   const feature = useFeatureDoc(featureId)
-  const notes = useMemo(
-    () =>
-      splitFixedNotes(getSection(feature?.body ?? '', FIXED_NOTES_SECTION)).slice(
-        0,
-        CARD_REMINDERS,
-      ),
-    [feature?.body],
-  )
-  if (notes.length === 0) return null
+  const open = useFeaturePanelStore((s) => s.open)
+  const all = useMemo(() => featureReminders(feature?.body ?? ''), [feature?.body])
+  if (all.length === 0) return null
+  const shown = all.slice(0, CARD_REMINDERS)
+  const more = all.length - shown.length
   return (
-    <span data-testid="feature-card-reminders" className="flex min-w-0 max-w-[60%] shrink gap-1">
-      {notes.map((n, i) => (
+    <span data-testid="feature-card-reminders" className="flex min-w-0 items-center gap-1.5">
+      {shown.map((n, i) => (
         <span
           key={i}
           data-testid="feature-card-reminder"
           title={n}
-          className="min-w-0 truncate rounded border-l-2 border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-1.5 text-[0.8em] text-[var(--color-text)]"
+          className="inline-flex min-w-0 max-w-[280px] items-center gap-1 rounded border border-[var(--color-border)] px-1.5 text-[0.75em] text-[var(--color-text-dim)]"
         >
-          {n.replace(/\s+/g, ' ')}
+          <Icon as={Pin} size={10} className="shrink-0 text-[var(--color-warning)]" />
+          <span className="min-w-0 truncate">{clipAtWord(n, CHIP_CHARS)}</span>
         </span>
       ))}
+      {more > 0 && (
+        <span
+          role="button"
+          tabIndex={-1}
+          data-testid="feature-card-reminders-more"
+          title="Ver todas em Notas & regras"
+          onClick={(e) => {
+            e.stopPropagation()
+            open(featureId, 'notes')
+          }}
+          className="shrink-0 cursor-pointer text-[0.75em] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+        >
+          +{more} {more === 1 ? 'regra' : 'regras'}
+        </span>
+      )}
     </span>
   )
 }
@@ -201,7 +220,7 @@ function SectionEditor({
           {draft.trim() ? (
             <MarkdownViewer content={draft} />
           ) : (
-            <span className="italic text-[var(--color-text-dim)]">{placeholder}</span>
+            <span className="whitespace-pre-line italic text-[var(--color-text-dim)]">{placeholder}</span>
           )}
         </button>
       )}
@@ -219,14 +238,18 @@ function SectionEditor({
 
 // ---- Abas ----
 
-const TABS = [
-  { id: 'notes', label: 'Notas fixadas' },
-  { id: 'rules', label: 'Regras de negócio' },
+// "Estado atual" abre por padrão: é a pergunta de quem chega no painel ("onde
+// esta frente está?"); notas e regras são de quem vai escrever.
+// 4 abas cabem nos 380px sem rolar (6 transbordavam e cortavam "Sessões"). O
+// pulso mora no Estado; regras e notas fixadas, juntas.
+const TABS: { id: FeaturePanelTab; label: string }[] = [
+  { id: 'state', label: 'Estado' },
+  { id: 'notes', label: 'Notas & regras' },
   { id: 'decisions', label: 'Decisões' },
-  { id: 'pulse', label: 'Pulso' },
   { id: 'sessions', label: 'Sessões' },
-] as const
-type TabId = (typeof TABS)[number]['id']
+]
+type TabId = FeaturePanelTab
+const STATE_RULES = 3
 
 function Decisions({
   feature,
@@ -245,9 +268,10 @@ function Decisions({
   const entries = ledger.filter((e) => e.kind === 'decision')
   if (!fromDoc && entries.length === 0) {
     return (
-      <p className="px-1 text-sm italic text-[var(--color-text-dim)]">
-        Nenhuma decisão registrada ainda.
-      </p>
+      <EmptyHint
+        title="Nenhuma decisão registrada ainda."
+        body="As sessões registram decisões no ledger da feature (feature_ledger_append com kind decision) e a síntese as junta aqui. Ex.: «Estorno parcial fica fora do MVP»."
+      />
     )
   }
   return (
@@ -269,6 +293,139 @@ function Decisions({
           ))}
         </ol>
       )}
+    </div>
+  )
+}
+
+function EmptyHint({ title, body, action }: { title: string; body: string; action?: React.ReactNode }) {
+  return (
+    <div data-testid="feature-panel-empty" className="flex flex-col gap-1.5 px-1 text-sm">
+      <p className="text-[var(--color-text)]">{title}</p>
+      <p className="text-xs leading-relaxed text-[var(--color-text-dim)]">{body}</p>
+      {action}
+    </div>
+  )
+}
+
+type LedgerRow = { entryId: string; kind: string | null; title: string; createdAt: number }
+
+// Vitalidade do loop como ponto ao lado de PULSO (o chip disputava com o status).
+function LivenessDot(props: React.ComponentProps<typeof LivenessChip>) {
+  const meta = LIVENESS_META[props.liveness]
+  return (
+    <span
+      data-testid="liveness-chip"
+      data-liveness={props.liveness}
+      title={livenessReason(props.liveness, props.lastActivityAt, props.issues, Date.now())}
+      className="ml-1 inline-flex items-center gap-1 normal-case tracking-normal"
+      style={{ color: meta.color }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
+      {meta.label}
+    </span>
+  )
+}
+
+function Stat({ n, label, color }: { n: number; label: string; color: string }) {
+  return (
+    <span className="flex items-baseline gap-1">
+      <span className="text-base font-semibold tabular-nums" style={{ color: n ? color : 'var(--color-text-dim)' }}>
+        {n}
+      </span>
+      <span className="text-xs text-[var(--color-text-dim)]">{label}</span>
+    </span>
+  )
+}
+
+// Aba "Estado": o resumo da frente (pulso, sessões por estado, as regras que
+// valem, a última mudança) e, abaixo, a seção escrita pela síntese e o pulso
+// editável. Como a seção é gerada fica no (i), não no corpo.
+function CurrentState({
+  feature,
+  sessions,
+  ledger,
+  pulseSlot,
+  liveness = null,
+  onGo,
+}: {
+  feature: Feature
+  sessions: SessionGraphNode[]
+  ledger: LedgerRow[]
+  pulseSlot: React.ReactNode
+  liveness?: React.ReactNode
+  onGo: (tab: TabId) => void
+}) {
+  const body = feature.body ?? ''
+  const state = getSection(body, 'Estado atual')
+  const counts = sessionStatusCounts(sessions, feature.id)
+  const rules = featureReminders(body)
+  const last = [...ledger].sort((a, b) => b.createdAt - a.createdAt)[0]
+  return (
+    <div data-testid="feature-panel-state" className="flex flex-col gap-4 text-sm text-[var(--color-text)]">
+      <section className="flex flex-col gap-1.5">
+        <h3 className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]">
+          Sessões
+        </h3>
+        <div data-testid="feature-panel-state-counts" className="flex gap-4">
+          <Stat n={counts.needsYou} label="precisam de você" color="var(--color-danger)" />
+          <Stat n={counts.working} label="trabalhando" color="var(--color-info)" />
+          <Stat n={counts.idle} label="paradas" color="var(--color-text)" />
+        </div>
+      </section>
+      {rules.length > 0 && (
+        <section className="flex flex-col gap-1">
+          <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]">Regras fixadas</h3>
+          <ul data-testid="feature-panel-state-rules" className="flex flex-col gap-1">
+            {rules.slice(0, STATE_RULES).map((r, i) => (
+              <li key={i} title={r} className="flex min-w-0 items-start gap-1.5 text-xs">
+                <Icon as={Pin} size={10} className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
+                <span className="line-clamp-2">{r}</span>
+              </li>
+            ))}
+          </ul>
+          {rules.length > STATE_RULES && (
+            <button
+              type="button"
+              onClick={() => onGo('notes')}
+              className="self-start text-xs text-[var(--color-text-dim)] hover:text-[var(--color-accent)]"
+            >
+              +{rules.length - STATE_RULES} em Notas & regras
+            </button>
+          )}
+        </section>
+      )}
+      {last && (
+        <section className="flex flex-col gap-0.5">
+          <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]">Última mudança</h3>
+          <p data-testid="feature-panel-state-ledger" className="text-xs">
+            <span className="font-mono text-[10px] tabular-nums text-[var(--color-text-dim)]">
+              {new Date(last.createdAt).toLocaleDateString('pt-BR')}
+            </span>{' '}
+            {last.title}
+          </p>
+        </section>
+      )}
+      {state.trim() && (
+        <section className="flex flex-col gap-1">
+          <h3
+            className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]"
+            title="Escrita pela síntese da feature a partir das sessões ligadas a ela: o que já funciona, o que falta e onde parou."
+          >
+            Estado atual <Icon as={Info} size={10} />
+          </h3>
+          <MarkdownViewer content={state} />
+        </section>
+      )}
+      <section className="flex flex-col gap-1">
+        <h3
+          className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]"
+          title="Como a frente está agora, em uma frase. As sessões atualizam; você também pode."
+        >
+          Pulso <Icon as={Info} size={10} />
+          {liveness}
+        </h3>
+        {pulseSlot}
+      </section>
     </div>
   )
 }
@@ -306,12 +463,19 @@ const PANEL_ESC_OWNERS = [
 /** Painel lateral da feature sobre o mapa (dashboard da frente). Não navega. */
 // `rightInset`: largura da Equipe/Conversas aberta sobre o mapa (a mesma que a
 // MapTopBar desvia) — sem isto o dock, portado depois no DOM, cobre o painel.
-export function FeaturePanel({ rightInset = 0 }: { rightInset?: number }) {
+export function FeaturePanel({
+  rightInset = 0,
+  sessions = [],
+}: {
+  rightInset?: number
+  sessions?: SessionGraphNode[]
+}) {
   const featureId = useFeaturePanelStore((s) => s.openFeatureId)
   const close = useFeaturePanelStore((s) => s.close)
+  const tab = useFeaturePanelStore((s) => s.tab)
+  const setTab = useFeaturePanelStore((s) => s.setTab)
   const feature = useFeatureDoc(featureId)
   const loop = useLoopSnapshot(featureId)
-  const [tab, setTab] = useState<TabId>('notes')
 
   useEffect(() => {
     if (!featureId) return
@@ -346,7 +510,7 @@ export function FeaturePanel({ rightInset = 0 }: { rightInset?: number }) {
       onKeyDown={shieldMap}
       onWheel={(e) => e.stopPropagation()}
       style={{ right: rightInset }}
-      className="nowheel nodrag absolute right-0 top-0 bottom-0 z-30 flex w-[420px] max-w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+      className="nowheel nodrag absolute right-0 top-0 bottom-0 z-30 flex w-[380px] max-w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
     >
       <header className="flex items-start gap-2 border-b border-[var(--color-border)] px-4 py-3">
         <div className="min-w-0 flex-1">
@@ -359,14 +523,19 @@ export function FeaturePanel({ rightInset = 0 }: { rightInset?: number }) {
           >
             {feature?.title ?? 'Carregando…'}
           </h2>
-          {loop.snapshot && (
-            <div className="mt-1">
-              <LivenessChip
-                liveness={loop.snapshot.liveness}
-                lastActivityAt={loop.snapshot.lastActivityAt}
-                issues={loop.snapshot.issues}
-              />
-            </div>
+          {/* O MESMO status do card da feature no mapa; a vitalidade do loop
+              (vivo/quieto/…) mora no Pulso, que é o que ela mede. */}
+          {feature && STATUS_META[feature.status as FeatureStatus] && (
+            <span
+              data-testid="feature-panel-status"
+              className="mt-1 inline-flex rounded-full border px-1.5 text-[11px] font-medium"
+              style={{
+                borderColor: STATUS_META[feature.status as FeatureStatus].color,
+                color: STATUS_META[feature.status as FeatureStatus].color,
+              }}
+            >
+              {STATUS_META[feature.status as FeatureStatus].label}
+            </span>
           )}
         </div>
         <button
@@ -383,7 +552,7 @@ export function FeaturePanel({ rightInset = 0 }: { rightInset?: number }) {
 
       <nav
         role="tablist"
-        className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2"
+        className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--color-border)] px-2 [scrollbar-width:none]"
       >
         {TABS.map((t) => (
           <button
@@ -405,33 +574,53 @@ export function FeaturePanel({ rightInset = 0 }: { rightInset?: number }) {
       </nav>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3">
-        {!feature ? null : tab === 'notes' ? (
+        {!feature ? null : tab === 'state' ? (
+          <CurrentState
+            feature={feature}
+            sessions={sessions}
+            ledger={loop.snapshot?.ledger ?? []}
+            onGo={setTab}
+            liveness={
+              loop.snapshot ? (
+                <LivenessDot
+                  liveness={loop.snapshot.liveness}
+                  lastActivityAt={loop.snapshot.lastActivityAt}
+                  issues={loop.snapshot.issues}
+                />
+              ) : null
+            }
+            pulseSlot={
+              <FeaturePulse
+                featureId={feature.id}
+                pulse={loop.snapshot?.pulse ?? null}
+                loading={loop.loading}
+                onSaved={() => void loop.reload()}
+              />
+            }
+          />
+        ) : tab === 'notes' ? (
+          <div className="flex flex-col gap-3">
+          <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]">Notas fixadas</h3>
           <SectionEditor
             key={`${feature.id}-notes`}
             featureId={feature.id}
             section={FIXED_NOTES_SECTION}
             value={getSection(body, FIXED_NOTES_SECTION)}
-            placeholder="Lembretes desta frente. Separe notas com uma linha ---; as 2 primeiras aparecem no card."
+            placeholder={'Lembretes desta frente: o que não pode ser esquecido ao voltar a ela. Separe notas com uma linha ---; as 2 primeiras aparecem no card.\n\nEx.: "Estorno só via API nova — a antiga duplica o lançamento."'}
             testId="feature-panel-notes"
           />
-        ) : tab === 'rules' ? (
+          <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-text-dim)]">Regras de negócio</h3>
           <SectionEditor
             key={`${feature.id}-rules`}
             featureId={feature.id}
             section={BUSINESS_RULES_SECTION}
             value={getSection(body, BUSINESS_RULES_SECTION)}
-            placeholder="Regras que toda sessão desta feature deve respeitar. Elas entram no prompt das sessões novas."
+            placeholder={'Regras que toda sessão desta feature deve respeitar; elas entram no prompt das sessões novas. Uma por linha.\n\nEx.: "- Valores sempre em centavos (inteiro)."'}
             testId="feature-panel-rules"
           />
+          </div>
         ) : tab === 'decisions' ? (
           <Decisions feature={feature} ledger={loop.snapshot?.ledger ?? []} />
-        ) : tab === 'pulse' ? (
-          <FeaturePulse
-            featureId={feature.id}
-            pulse={loop.snapshot?.pulse ?? null}
-            loading={loop.loading}
-            onSaved={() => void loop.reload()}
-          />
         ) : (
           <SessionsTab featureId={feature.id} />
         )}

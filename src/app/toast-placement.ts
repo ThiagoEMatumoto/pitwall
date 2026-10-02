@@ -112,9 +112,8 @@ function liftPlacement(peek: PeekBox, viewportWidth: number, viewportHeight?: nu
   if (below >= strip) {
     return { right: TOAST_MARGIN, bottom: Math.max(4, (below - COLLAPSED_H) / 2), zIndex: ABOVE_PEEK_Z, maxVisible: 0 }
   }
-  if (peek.top >= strip) {
-    return { right: TOAST_MARGIN, top: Math.max(4, (peek.top - COLLAPSED_H) / 2), zIndex: ABOVE_PEEK_Z, maxVisible: 0 }
-  }
+  // Sem faixa embaixo: escondida. A faixa de cima é a barra de título, e um "+N"
+  // solto ali ficava sobre minimizar/maximizar/fechar e não dizia de onde vinha.
   // Janela pequena: a modal ocupa tudo. Os toasts seguem a vida (somem sozinhos)
   // sem aparecer — a modal já mostra a sessão que importa agora.
   return { right: TOAST_MARGIN, top: 4, zIndex: ABOVE_PEEK_Z, maxVisible: 0, hidden: true }

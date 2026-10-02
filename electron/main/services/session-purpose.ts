@@ -79,6 +79,26 @@ export function cleanPrompt(raw: string): string | null {
   return cleaned.length >= MIN_PROMPT_CHARS ? cleaned : null
 }
 
+// O 1º prompt do digest que serve pra identificar o trabalho (pula kickoff da
+// filha/bastão e limpa colagem crua).
+export function firstCleanPrompt(prompts: readonly string[]): string | null {
+  for (const p of prompts) {
+    const text = cleanPrompt(p)
+    if (text) return text
+  }
+  return null
+}
+
+// Objetivos antigos foram gravados do 1º prompt cru. Só mexe no que a máquina
+// escreveu (kickoff, colagem); o texto que o humano digitou passa intacto.
+export function sanitizeObjective(objective: string | null): string | null {
+  if (!objective) return objective
+  const text = objective.trim()
+  const machine =
+    KICKOFF_RE.test(text) || BATON_KICKOFF_RE.test(text) || /<\/?pasted_content\b/.test(text)
+  return machine ? cleanPrompt(text) : objective
+}
+
 // O parser é fail-safe: só string sem marker de comando/meta/caveat vira 'user'.
 export function firstUserPrompt(messages: ChatMessage[]): string | null {
   for (const m of messages) {

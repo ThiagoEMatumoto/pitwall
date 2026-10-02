@@ -42,6 +42,7 @@ vi.mock('./transcript-index', () => ({
 }))
 vi.mock('./session-purpose', () => ({
   readFirstPrompt: (cc: string) => seam.firstPrompt.get(cc) ?? null,
+  sanitizeObjective: (o: string | null) => o,
 }))
 vi.mock('node:fs', async (orig) => {
   const real = await orig<typeof import('node:fs')>()

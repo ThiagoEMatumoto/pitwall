@@ -1378,7 +1378,12 @@ function TerminalHost({
 
       {/* HUD fino de agentes (statusline): FORA do container relative, entre o
           terminal e o composer — visível nos dois modos (terminal e chat). */}
-      {!exited && composer === 'full' && <AgentHud activity={activity} now={now} status={hudStatus} />}
+      {/* Com hudStatus quem monta (a modal do mapa) já mostra o status no header:
+          o HUD só aparece se houver subagentes — sem eles, era o mesmo
+          "trabalhando há Xs" repetido numa faixa a mais. */}
+      {!exited && composer === 'full' && (!hudStatus || (activity?.subagents?.length ?? 0) > 0) && (
+        <AgentHud activity={activity} now={now} status={hudStatus} />
+      )}
 
       {/* Resumo falado do último turno (modo voz) — faixa acima do composer,
           fora do fluxo de mensagens do chat (transcript é read-only). */}

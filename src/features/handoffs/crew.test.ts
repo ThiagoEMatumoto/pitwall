@@ -20,6 +20,7 @@ const {
   crewTerminalTarget,
   orderCrew,
   resolveCrewFocus,
+  crewEntryFocus,
   stepCrewFocus,
   crewFocusAfterDismiss,
   openPaneKeys,
@@ -549,5 +550,19 @@ describe('childrenMissedToast', () => {
       missed: [{ handoffId: 'h1', childAlias: 'otavio-modal', reason: 'inject-refused' }],
     })
     expect(t.title).toBe('1 filha não recebeu a nota')
+  })
+})
+
+describe('crewEntryFocus — Ctrl+J pousa em quem precisa de você', () => {
+  it('cursor lembrado numa filha pronta cede à que espera', () => {
+    expect(crewEntryFocus(['wait', 'ready'], new Set(['wait']), 'ready')).toBe('wait')
+  })
+  it('cursor já numa filha que espera fica onde está', () => {
+    expect(crewEntryFocus(['w1', 'w2', 'r'], new Set(['w1', 'w2']), 'w2')).toBe('w2')
+  })
+  it('sem ninguém esperando, mantém o cursor (ou cai no primeiro)', () => {
+    expect(crewEntryFocus(['a', 'b'], new Set(), 'b')).toBe('b')
+    expect(crewEntryFocus(['a', 'b'], new Set(), null)).toBe('a')
+    expect(crewEntryFocus([], new Set(), null)).toBeNull()
   })
 })

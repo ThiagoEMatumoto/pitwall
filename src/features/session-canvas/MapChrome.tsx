@@ -372,8 +372,13 @@ export function MapTopBar({
                 ? 'Selecione um projeto na barra lateral'
                 : undefined
             }
-            className={`${pillButton} disabled:opacity-40 ${
-              scopeMode === mode ? '!bg-[var(--color-surface-2)] !text-[var(--color-text)]' : ''
+            // Ativa: superfície elevada com borda e peso 600; inativa só texto
+            // apagado — um branco levemente mais claro não dizia qual valia.
+            data-active={scopeMode === mode || undefined}
+            className={`${pillButton} border disabled:opacity-40 ${
+              scopeMode === mode
+                ? '!border-[var(--color-border)] !bg-[var(--color-surface-2)] !font-semibold !text-[var(--color-text)] shadow-sm'
+                : '!border-transparent !bg-transparent !text-[var(--color-text-dim)]'
             }`}
           >
             {mode === 'all' ? 'Todos os projetos' : 'Projeto selecionado'}

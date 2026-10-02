@@ -166,7 +166,8 @@ async function typeSection(
   tab: 'rules' | 'notes',
   text: string,
 ): Promise<boolean> {
-  await l.page.getByTestId(`feature-panel-tab-${tab}`).click()
+  // Notas fixadas e regras de negócio dividem a aba "Notas & regras".
+  await l.page.getByTestId('feature-panel-tab-notes').click()
   await l.page.getByTestId(`feature-panel-${tab}-view`).click()
   const input = l.page.getByTestId(`feature-panel-${tab}-input`)
   await input.fill(text)
@@ -262,7 +263,7 @@ try {
     'o painel não navega (mapa segue visível)',
   )
   const pbox = await panel(a).boundingBox()
-  check(!!pbox && Math.abs(pbox.width - 420) <= 2, `painel lateral de ~420px (${pbox?.width})`)
+  check(!!pbox && Math.abs(pbox.width - 380) <= 2, `painel lateral de ~380px (${pbox?.width})`)
 
   check(await typeSection(a, 'rules', RULE), 'regra digitada e autosave confirmado')
   check(await typeSection(a, 'notes', NOTE), 'nota fixada digitada e autosave confirmado')
@@ -354,14 +355,16 @@ try {
     !!liftBox && stackRects.every((r) => !intersects(r, liftBox)),
     `toasts não cobrem a modal (${stackRects.length} caixas visíveis)`,
   )
-  const statusSame = await waitFor(a, 'status igual', async () => {
-    const [head, hud] = await Promise.all([
-      lift.getByTestId('peek-live-badge').innerText(),
-      lift.getByTestId('agent-hud-status').innerText(),
-    ])
-    return head.trim() !== '' && head.trim().toLowerCase() === hud.trim().toLowerCase()
+  // O status mora só no selo do header: sem subagentes, a faixa do HUD (que o
+  // repetia) não aparece; com eles, mostra o mesmo selo.
+  const statusSame = await waitFor(a, 'status só no header', async () => {
+    const head = (await lift.getByTestId('peek-live-badge').innerText()).trim()
+    const hud = lift.getByTestId('agent-hud-status')
+    if (head === '') return false
+    if ((await hud.count()) === 0) return true
+    return head.toLowerCase() === (await hud.innerText()).trim().toLowerCase()
   })
-  check(statusSame, 'linha de estado do composer = selo do header da modal')
+  check(statusSame, 'status da modal não se repete: só o selo do header (ou o HUD igual a ele)')
   await shotA('modal-toasts')
   await a.page.keyboard.press('Shift+Escape')
   await shutdown(a)
@@ -427,7 +430,7 @@ try {
   )
   await featureHeader(b, featureId).click()
   await waitFor(b, 'painel (relaunch)', async () => (await panel(b).count()) === 1)
-  await b.page.getByTestId('feature-panel-tab-rules').click()
+  await b.page.getByTestId('feature-panel-tab-notes').click()
   check(
     await waitFor(b, 'regra no painel', async () =>
       (await b.page.getByTestId('feature-panel-rules-view').innerText()).includes(RULE),
@@ -469,7 +472,7 @@ try {
     sentPrompt.length > 0 && !sentPrompt.includes(RULE) && !sentPrompt.includes('PIX só acima'),
     'o prompt da síntese não contém regras nem notas',
   )
-  await b.page.getByTestId('feature-panel-tab-rules').click()
+  await b.page.getByTestId('feature-panel-tab-notes').click()
   check(
     await waitFor(b, 'regra no painel pós-síntese', async () =>
       (await b.page.getByTestId('feature-panel-rules-view').innerText()).includes(RULE),

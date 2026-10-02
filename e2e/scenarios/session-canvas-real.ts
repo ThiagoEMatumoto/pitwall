@@ -37,6 +37,11 @@ page.on('pageerror', (e) => errors.push(e.message))
 page.on('console', (m) => {
   if (m.type() === 'error') errors.push(m.text())
 })
+const failures: string[] = []
+const check = (ok: boolean, what: string) => {
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${what}`)
+  if (!ok) failures.push(what)
+}
 const shot = (n: string) => page.screenshot({ path: join(SHOTS, `${n}.png`) })
 const card = (id: string) => page.locator(`[data-testid="session-card"][data-session-id="${id}"]`)
 
@@ -70,6 +75,24 @@ try {
   await page.getByTestId('projects-view-map').click()
   for (let i = 0; i < 40 && (await page.getByTestId('session-card').count()) < ids.length; i++)
     await page.waitForTimeout(500)
+  check((await page.getByTestId('session-card').count()) >= ids.length, `${ids.length} cartões vivos no mapa`)
+  // Card de feature: a 1ª sessão vai para uma feature real do perfil pelo menu.
+  await card(ids[0]!).click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Mover para feature…' }).click()
+  const picker = page.getByTestId('map-feature-picker')
+  await picker.waitFor({ state: 'visible', timeout: 10_000 })
+  const option = picker.locator('[role="option"][data-feature-id]').first()
+  const featureId = await option.getAttribute('data-feature-id')
+  await option.click()
+  const featureCard = page.locator(`[data-lane-kind="feature"][data-feature-id="${featureId}"]`)
+  for (let i = 0; i < 20 && !(await featureCard.count()); i++) await page.waitForTimeout(500)
+  check((await featureCard.count()) === 1, 'card da feature presente no mapa')
+  const inside = async (id: string) => {
+    const c = await card(id).boundingBox()
+    const f = await featureCard.boundingBox()
+    return !!c && !!f && c.x >= f.x && c.y >= f.y && c.x + c.width <= f.x + f.width + 1
+  }
+  check(await inside(ids[0]!), 'a sessão movida é desenhada dentro do card da feature')
   // Um sessão terminou (pronto), outra segue trabalhando.
   const first = fake.readSessionFiles().find((f) => f.data.name === 'mapa-real-1')
   if (first) fake.setStatus(first.data.pid, 'idle')
@@ -101,8 +124,12 @@ try {
       els.map((e) => `${e.getAttribute('data-view')}/${e.getAttribute('data-tone')}`),
     )
   console.log('[real] cartões (view/tom):', views.join(' '))
-  console.log('[real] stdin no stub:', fake.readCliLog('claude').includes('stdin: ola do mapa'))
-  console.log('[real] erros de console:', errors.length ? errors.join(' | ') : 'nenhum')
+  const tones = views.map((v) => v.split('/')[1])
+  check(tones.includes('done'), 'cartão da sessão ociosa mostra "pronto" (tom done)')
+  check(tones.includes('working'), 'cartão de sessão viva mostra "trabalhando"')
+  check(views.every((v) => v.startsWith('open/') || v.startsWith('collapsed/')), 'todo cartão em open/collapsed')
+  if (ids[1]) check(fake.readCliLog('claude').includes('stdin: ola do mapa'), 'texto digitado na modal chegou ao PTY')
+  check(errors.length === 0, `sem erros de console${errors.length ? `: ${errors.join(' | ')}` : ''}`)
 } finally {
   const proc = app.process()
   await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 15_000))])
@@ -113,3 +140,5 @@ try {
   }
   fake.cleanup()
 }
+console.log(failures.length ? `RESULT FAIL (${failures.length})` : 'RESULT PASS')
+process.exit(failures.length ? 1 : 0)

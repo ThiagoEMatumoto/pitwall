@@ -146,6 +146,19 @@ describe('toastStackPlacement — modal do terminal e mapa', () => {
     expect(p.bottom).toBeGreaterThan(0)
   })
 
+  it('sem faixa embaixo da modal, o "+N" não sobe para a barra de título', () => {
+    const peek = { ...liftAt(1280, 720), top: 60 }
+    peek.height = 720 - peek.top - 2
+    const p = toastStackPlacement({
+      dockWidth: 0,
+      peek,
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      lift: true,
+    })
+    expect(p.hidden).toBe(true)
+  })
+
   it('janela pequena em que nem o "+N" cabe fora da modal: pilha escondida', () => {
     const p = toastStackPlacement({
       dockWidth: 0,

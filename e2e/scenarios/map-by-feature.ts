@@ -505,7 +505,12 @@ try {
   // ---------- Enquadrar com a Equipe aberta ----------
   const overlay = page.locator('[data-testid="crew-dock"][data-overlay]')
   if (!(await overlay.isVisible().catch(() => false)))
-    await page.locator('[data-testid="crew-dock-rail"] button').first().click()
+    // Recolhida, a trilha é o próprio crew-dock (crew-dock-rail só existe com o
+    // painel aberto sobre o mapa). O painel da feature, aberto antes, a recolheu.
+    await page
+      .locator('[data-testid="crew-dock-rail"] button, [data-testid="crew-dock"][data-expanded="false"] button')
+      .first()
+      .click()
   await waitFor('Equipe aberta', async () => overlay.isVisible(), 8000)
   await fit()
   await shot('enquadrar-com-equipe')

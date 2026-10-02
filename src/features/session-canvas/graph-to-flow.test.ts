@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest'
 import {
   CARD_H,
   CARD_W,
+  CARD_GAP,
+  OPEN_EST_H,
   OPEN_H,
   OPEN_W,
   graphToFlow,
   homeRepoLaneId,
+  layoutRects,
   noteExcerpt,
   positionKey,
   type LaneData,
@@ -444,12 +447,24 @@ describe('graphToFlow — hierarquia visual', () => {
     expect(lane.attentionCount).toBe(1)
   })
 
-  it('cartões empilham com a altura cheia (default: aberto)', () => {
+  it('cartões abertos empilham pela altura desenhada (estimativa até a medição)', () => {
     const r = graphToFlow(input({ graph: graph([node('a', { lastActivityAt: 2 }), node('b')]) }))
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
-    expect(byId.get('s:a')!.position.y - byId.get('s:b')!.position.y).toBe(OPEN_H + 16)
-    expect(byId.get('s:a')).toMatchObject({ width: OPEN_W, height: OPEN_H })
+    expect(byId.get('s:a')!.position.y - byId.get('s:b')!.position.y).toBe(OPEN_EST_H + CARD_GAP)
+    expect(byId.get('s:a')).toMatchObject({ width: OPEN_W, height: OPEN_EST_H })
     expect((byId.get('s:a')!.data as SessionCardData).view).toBe('open')
+
+    const measured = graphToFlow(
+      input({ graph: graph([node('a', { lastActivityAt: 2 }), node('b')]), cardHeights: { b: 150, a: 999 } }),
+    )
+    const m = new Map(measured.nodes.map((n) => [n.id, n]))
+    expect(m.get('s:b')!.height).toBe(150)
+    expect(m.get('s:a')!.position.y - m.get('s:b')!.position.y).toBe(150 + CARD_GAP)
+    // Teto: a vaga máxima.
+    expect(m.get('s:a')!.height).toBe(OPEN_H)
+    // Caixa da lane justa ao conteúdo.
+    const lane = measured.nodes.find((n) => n.id === m.get('s:a')!.parentId)!
+    expect(lane.height).toBe(m.get('s:a')!.position.y + OPEN_H + 12)
   })
 
   it('o tamanho do cartão segue o estado de exibição; o empilhamento acompanha', () => {
@@ -466,12 +481,12 @@ describe('graphToFlow — hierarquia visual', () => {
     )
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
     expect(byId.get('s:a')).toMatchObject({ width: CARD_W, height: CARD_H })
-    expect(byId.get('s:b')).toMatchObject({ width: OPEN_W, height: OPEN_H })
+    expect(byId.get('s:b')).toMatchObject({ width: OPEN_W, height: OPEN_EST_H })
     const ya = byId.get('s:a')!.position.y
     const yb = byId.get('s:b')!.position.y
     const yc = byId.get('s:c')!.position.y
-    expect(yb - ya).toBe(CARD_H + 16)
-    expect(yc - yb).toBe(OPEN_H + 16)
+    expect(yb - ya).toBe(CARD_H + CARD_GAP)
+    expect(yc - yb).toBe(OPEN_EST_H + CARD_GAP)
   })
 
   it('mãe com mais de 3 filhas: fios recolhidos (só no foco) até o leque abrir', () => {
@@ -643,7 +658,7 @@ describe('graphToFlow — card da feature', () => {
     )
   })
 
-  it('mãe acima das filhas, mesmo em outra lane; antecessora do bastão ao lado da sucessora', () => {
+  it('mãe primeiro na própria lane; filha de outra lane alinhada ao topo; bastão lado a lado', () => {
     const g = featureGraph(
       [
         f('c1', 'r-api', { lastActivityAt: 9_000 }),
@@ -657,9 +672,10 @@ describe('graphToFlow — card da feature', () => {
     const { nodes } = graphToFlow(input({ graph: g }))
     const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
     const bottom = (id: string) => at(id).position.y + at(id).height!
-    expect(at('c1').position.y).toBeGreaterThanOrEqual(bottom('m'))
-    // c2 está em outra lane, mas começa abaixo da geração da mãe.
-    expect(at('c2').position.y).toBeGreaterThanOrEqual(bottom('m'))
+    // c1 é mais recente, mas a mãe vem primeiro na lane dela.
+    expect(at('c1').position.y).toBe(bottom('m') + CARD_GAP)
+    // c2 está em outra lane: começa no topo dela, sem vão por geração.
+    expect(at('c2').position.y).toBe(at('m').position.y)
     expect(at('pred').position.y).toBe(at('suc').position.y)
     expect(at('pred').position.x).toBeGreaterThanOrEqual(at('suc').position.x + at('suc').width!)
     // Caixa justa: a lane do web cabe as duas lado a lado, sem sobrar coluna.
@@ -667,7 +683,7 @@ describe('graphToFlow — card da feature', () => {
     expect(web.width).toBe(at('pred').position.x + at('pred').width! + 12)
   })
 
-  it('caixa justa: a filha encosta na própria mãe, não abaixo da pilha alta de outra coluna', () => {
+  it('cada coluna alinha ao topo: a pilha alta de outra coluna não empurra ninguém', () => {
     const g = featureGraph(
       [
         f('m', 'r-web'),
@@ -683,12 +699,9 @@ describe('graphToFlow — card da feature', () => {
     const { nodes } = graphToFlow(input({ graph: g }))
     const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
     const bottom = (id: string) => at(id).position.y + at(id).height!
-    for (const c of ['c-web', 'c-api']) {
-      expect(at(c).position.y).toBeGreaterThanOrEqual(bottom('m'))
-      expect(at(c).position.y).toBeLessThanOrEqual(bottom('m') + 24)
-    }
-    // A pilha sem relação segue alta na coluna dela.
-    expect(bottom('x4')).toBeGreaterThan(at('c-web').position.y + 600)
+    expect(at('c-web').position.y).toBe(bottom('m') + CARD_GAP)
+    expect(at('c-api').position.y).toBe(at('m').position.y)
+    expect(at('x1').position.y).toBe(at('m').position.y)
   })
 
   it('tidy determinístico e posição do card persistida por lane:f; migra a de lane:p', () => {
@@ -751,7 +764,7 @@ describe('graphToFlow — card da feature', () => {
     expect(other.find((n) => n.id === 's:m')?.parentId).toBe('lane:f:f1:r:r-api')
   })
 
-  it('mãe com posição salva (v1): a filha de outra lane nasce abaixo dela', () => {
+  it('mãe com posição salva (v1): a filha de outra lane nasce no topo da dela', () => {
     const g = featureGraph([f('m', 'r-api'), f('c1', 'r-data')], [handoff('m', 'c1')])
     const { nodes } = graphToFlow(
       input({
@@ -761,12 +774,98 @@ describe('graphToFlow — card da feature', () => {
     )
     const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
     expect(at('m').position.y).toBe(600)
-    expect(at('c1').position.y).toBeGreaterThanOrEqual(at('m').position.y + at('m').height!)
+    expect(at('c1').position.y).toBe(30)
   })
 
   it('homeRepoLaneId: a lane de repo do card em que a sessão mora', () => {
     const g = featureGraph([f('m', 'r-api'), node('solta')])
     expect(homeRepoLaneId(g, 'm')).toBe('lane:f:f1:r:r-api')
     expect(homeRepoLaneId(g, 'solta')).toBe('lane:r:r-api')
+  })
+})
+
+describe('graphToFlow — quebra em linhas e densidade compacta', () => {
+  const many = () =>
+    graph(
+      ['p1', 'p2', 'p3', 'p4'].flatMap((p) =>
+        [1, 2].map((i) => node(`${p}-${i}`, { projectId: p, repoId: `r-${p}-${i}`, repoLabel: `repo${i}` })),
+      ),
+    )
+  const tops = (nodes: ReturnType<typeof graphToFlow>['nodes']) =>
+    nodes.filter((n) => !n.parentId && n.type === 'lane')
+
+  it('sem rowWidth os cards ficam numa linha só; com ele quebram abaixo de tudo, com 32px', () => {
+    const one = tops(graphToFlow(input({ graph: many() })).nodes)
+    expect(new Set(one.map((n) => n.position.y))).toEqual(new Set([0]))
+    const laneW = one[0].width!
+    const wrapped = tops(graphToFlow(input({ graph: many(), rowWidth: laneW * 2 + 100 })).nodes)
+    const rows = [...new Set(wrapped.map((n) => n.position.y))].sort((a, b) => a - b)
+    expect(rows.length).toBe(2)
+    const firstRowBottom = Math.max(
+      ...wrapped.filter((n) => n.position.y === 0).map((n) => n.position.y + n.height!),
+    )
+    expect(rows[1]).toBe(firstRowBottom + 32)
+    // Cada linha recomeça na borda esquerda e nada se cobre.
+    expect(wrapped.filter((n) => n.position.y === rows[1])[0].position.x).toBe(0)
+    for (const a of wrapped)
+      for (const b of wrapped) {
+        if (a === b) continue
+        const overlap =
+          a.position.x < b.position.x + b.width! &&
+          a.position.x + a.width! > b.position.x &&
+          a.position.y < b.position.y + b.height! &&
+          a.position.y + a.height! > b.position.y
+        expect(overlap).toBe(false)
+      }
+  })
+
+  it('card mais largo que a linha fica sozinho nela (não quebra no 1º)', () => {
+    const t = tops(graphToFlow(input({ graph: many(), rowWidth: 10 })).nodes)
+    expect(t[0].position).toEqual({ x: 0, y: 0 })
+    expect(new Set(t.map((n) => n.position.y)).size).toBe(t.length)
+  })
+
+  it('compacto: o cartão aberto reserva só o resumo e a raia encolhe junto', () => {
+    const g = graph([node('a'), node('b')])
+    const full = graphToFlow(input({ graph: g }))
+    const compact = graphToFlow(input({ graph: g, compact: true }))
+    const card = (r: typeof full) => r.nodes.find((n) => n.id === 's:a')!
+    expect(card(full).height).toBe(OPEN_EST_H)
+    expect(card(compact).height).toBe(64)
+    expect(card(compact).width).toBe(320)
+    const lane = (r: typeof full) => r.nodes.find((n) => n.id === 'lane:r:r-api')!
+    // 2 cartões de 64 + gap + cabeçalho + padding: nada de vaga de cartão cheio.
+    expect(lane(compact).height).toBeLessThan(2 * 64 + 2 * CARD_GAP + 60)
+    expect(lane(compact).height).toBeLessThan(lane(full).height!)
+  })
+
+  it('compacto: cartões da mesma raia com vão de 12px (não 24)', () => {
+    const g = graph([node('a'), node('b')])
+    const ys = graphToFlow(input({ graph: g, compact: true }))
+      .nodes.filter((n) => n.type === 'session')
+      .map((n) => n.position.y)
+      .sort((x, y) => x - y)
+    expect(ys[1] - ys[0]).toBe(64 + 12)
+  })
+
+  it('grupo "Sem feature": as raias começam abaixo do cabeçalho de 48px', () => {
+    const f = graphToFlow(input({ graph: graph([node('a')]) }))
+    expect(f.nodes.find((n) => n.id === 'lane:r:r-api')!.position.y).toBe(48)
+  })
+})
+
+describe('layoutRects', () => {
+  it('posição absoluta = soma da cadeia de pais; tops só os de raiz', () => {
+    const f = graphToFlow(input({ graph: graph([node('a')]) }))
+    const { rects, tops } = layoutRects(f.nodes)
+    const lane = f.nodes.find((n) => n.id === 'lane:p:p1')!
+    const repo = f.nodes.find((n) => n.id === 'lane:r:r-api')!
+    const card = f.nodes.find((n) => n.id === 's:a')!
+    expect(rects.get('s:a')).toMatchObject({
+      x: lane.position.x + repo.position.x + card.position.x,
+      y: lane.position.y + repo.position.y + card.position.y,
+      w: card.width,
+    })
+    expect(tops).toHaveLength(1)
   })
 })

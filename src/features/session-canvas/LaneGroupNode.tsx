@@ -2,9 +2,9 @@ import { memo, useRef } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import { Pin, Plus } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
-import type { LaneData, MapNode } from './graph-to-flow'
+import { PROJECT_HEADER, type LaneData, type MapNode } from './graph-to-flow'
 import { useMapActions } from './map-context'
-import { compensatedPx } from './card-display'
+import { compensatedPx, isCompactZoom } from './card-display'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { FeatureCardReminders } from './FeaturePanel'
 import { STATUS_META } from '@/features/features/status'
@@ -38,11 +38,19 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 // Até onde o ponteiro anda entre o pointerdown e o click e ainda conta como
 // clique (abre o painel) e não como arrasto do card.
 const HEADER_CLICK_SLOP_PX = 4
+// Abaixo disto o prefixo do projeto alheio ("Diligencia ·") sai do cabeçalho da
+// raia (fica no title): ele truncava justo o nome do repo.
+const REPO_PREFIX_MIN_ZOOM = 0.6
+// Abaixo disto a 3ª linha (fonte compensada) não cabe nos 80px do cabeçalho.
+const REMINDERS_MIN_ZOOM = 0.7
 
 function FeatureHeader({ lane, px }: { lane: LaneData; px: number }) {
   const open = useFeaturePanelStore((s) => s.open)
   const status = STATUS_META[lane.status as FeatureStatus]
   const down = useRef<{ x: number; y: number } | null>(null)
+  // Na visão geral a fonte compensada não cabe nas 3 linhas do cabeçalho: os
+  // lembretes saem (o painel continua a um clique).
+  const showReminders = useStore((s) => s.transform[2] >= REMINDERS_MIN_ZOOM)
   // SEM `nodrag`: o cabeçalho é a alça natural do card (as lanes de repo que
   // preenchem o corpo não arrastam). O clique só abre o painel se não houve
   // arrasto entre o pointerdown e o click.
@@ -86,15 +94,14 @@ function FeatureHeader({ lane, px }: { lane: LaneData; px: number }) {
         </span>
         <AttentionBadge count={lane.attentionCount ?? 0} />
       </span>
-      <span className="flex min-w-0 items-center gap-2">
-        <span
-          data-testid="feature-card-pulse"
-          className="block min-w-0 flex-1 truncate text-[0.8em] text-[var(--color-text-dim)]"
-        >
-          {lane.pulse ?? 'sem pulso ainda'}
-        </span>
-        {lane.featureId && <FeatureCardReminders featureId={lane.featureId} />}
+      <span
+        data-testid="feature-card-pulse"
+        className="block min-w-0 truncate text-[0.8em] text-[var(--color-text-dim)]"
+      >
+        {lane.pulse ?? 'sem pulso ainda'}
       </span>
+      {/* 3ª linha: os lembretes não disputam a linha do pulso nem a borda direita (dock). */}
+      {lane.featureId && showReminders && <FeatureCardReminders featureId={lane.featureId} />}
     </button>
   )
 }
@@ -109,6 +116,8 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
   const color = lane.color ?? 'var(--color-accent)'
   const projectPx = useHeaderPx(13, 26)
   const repoPx = useHeaderPx(11, 20)
+  const compact = useStore((s) => isCompactZoom(s.transform[2]))
+  const hidePrefix = useStore((s) => s.transform[2] < REPO_PREFIX_MIN_ZOOM)
   if (lane.level === 'feature') {
     return (
       <div
@@ -136,12 +145,17 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
           background: 'color-mix(in srgb, var(--color-surface) 35%, transparent)',
         }}
       >
+        {/* Mesma linha de título do card da feature, numa faixa de altura fixa
+            (PROJECT_HEADER): com a fonte compensada ela invadia a 1ª raia. A
+            borda tracejada é a única diferença de um card de feature. */}
         <div
-          className="flex items-center gap-1.5 whitespace-nowrap px-3 pt-1.5 font-semibold text-[var(--color-text)]"
-          style={{ fontSize: projectPx }}
+          data-testid="lane-project-header"
+          className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap px-3 pt-1.5 font-semibold text-[var(--color-text)]"
+          style={{ fontSize: projectPx, height: PROJECT_HEADER }}
         >
-          <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-          {lane.label}
+          <span className="min-w-0 truncate" title={lane.label}>
+            {lane.label}
+          </span>
           <AttentionBadge count={lane.attentionCount ?? 0} />
         </div>
       </div>
@@ -163,21 +177,23 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
         className="!h-3 !w-3 !border-0 !bg-transparent"
       />
       <div
-        className="flex items-center gap-1 px-3 pt-2 font-mono uppercase tracking-wide text-[var(--color-text-dim)]"
-        style={{ fontSize: repoPx, lineHeight: 1.1 }}
+        className={`flex items-center gap-1 px-3 text-[var(--color-text-dim)] ${compact ? 'pt-1' : 'pt-2'}`}
+        // No resumo a fonte compensada (até 20px) com pt-2 passava dos 30px do
+        // cabeçalho e o nome do repo encostava no cartão.
+        style={{ fontSize: repoPx, lineHeight: 1.2 }}
       >
-        {/* Projeto alheio no mesmo formato do repo (mono, caixa alta), só mais
-            apagado; o title guarda o rótulo inteiro quando a lane trunca. */}
+        {/* Título normal (a caixa alta mono gritava mais que o card). Projeto
+            alheio vira um prefixo discreto; o title guarda o rótulo inteiro. */}
         <span
-          className="min-w-0 flex-1 truncate"
-          title={lane.projectName ? `${lane.projectName} / ${lane.label}` : lane.label}
+          className="min-w-0 flex-1 truncate font-medium"
+          title={lane.projectName ? `${lane.projectName} · ${lane.label}` : lane.label}
         >
-          {lane.projectName && (
-            <span data-testid="lane-repo-project" className="opacity-70">
-              {lane.projectName} /{' '}
+          {lane.projectName && !hidePrefix && (
+            <span data-testid="lane-repo-project" className="font-normal opacity-70">
+              {lane.projectName} ·{' '}
             </span>
           )}
-          {lane.label}
+          <span className="text-[var(--color-text)]">{lane.label}</span>
         </span>
         {lane.repoId && (
           <button
@@ -190,10 +206,15 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
             onDoubleClick={(e) => e.stopPropagation()}
             title={`Nova sessão em ${lane.label} (ou duplo clique na área vazia da lane)`}
             aria-label={`Nova sessão em ${lane.label}`}
-            className="nodrag flex shrink-0 items-center gap-0.5 rounded px-1 normal-case tracking-normal text-[var(--color-accent)] transition hover:bg-[var(--color-surface-2)]"
+            data-compact={compact || undefined}
+            className={`nodrag flex shrink-0 items-center justify-center rounded normal-case tracking-normal text-[var(--color-accent)] transition hover:bg-[var(--color-surface-2)] ${
+              compact ? 'h-[1.4em] w-[1.4em] border border-[var(--color-border)]' : 'gap-0.5 px-1'
+            }`}
           >
-            <Icon as={Plus} size={11} />
-            Nova sessão
+            {/* No resumo, só o "+": por extenso nas 3 raias ele tomava o espaço
+                do nome do repo, que é o que identifica a raia. */}
+            <Icon as={Plus} size={compact ? repoPx : 11} />
+            {!compact && 'Nova sessão'}
           </button>
         )}
       </div>

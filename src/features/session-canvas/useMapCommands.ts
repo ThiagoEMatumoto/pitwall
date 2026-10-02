@@ -169,10 +169,20 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
   }
   const summarize = (sessionId: string) => void summarizeOne(sessionId)
 
-  const createNote = (attachedSessionId: string | null) => {
+  // `at`: onde a nota solta nasce (ao lado da seleção/feature — noteSlot). A
+  // posição é gravada antes de editar, senão ela pisca no slot padrão.
+  const createNote = (attachedSessionId: string | null, at?: { x: number; y: number } | null) => {
     canvasApi
       .createNote({ scope, bodyMd: '', attachedSessionId })
-      .then((note) => startEdit(`note:${note.id}`, setEditingNoteId, note.id))
+      .then(async (note) => {
+        if (at) {
+          await useCanvasStateStore
+            .getState()
+            .savePositions(scope, [{ kind: 'note', entityId: note.id, x: at.x, y: at.y }])
+            .catch(() => {})
+        }
+        startEdit(`note:${note.id}`, setEditingNoteId, note.id)
+      })
       .catch(fail('Não foi possível criar a nota'))
   }
 

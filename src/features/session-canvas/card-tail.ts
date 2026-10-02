@@ -98,3 +98,26 @@ export function segmentColor(seg: ScreenTailSegment): string | undefined {
 export function tailText(lines: ScreenTailLine[]): string[] {
   return lines.map((l) => l.map((s) => s.t).join(''))
 }
+
+// Prévia do cartão: as últimas linhas NÃO vazias da tela. Com as 10 últimas
+// cruas, o cartão mostrava o cabeçalho de boot (sessão/cwd/nome) em vez do que o
+// agente faz agora, e todos os cartões ficavam iguais.
+export const CARD_PREVIEW_LINES = 4
+// Moldura do banner de boot (╭│╰ do Claude Code, ┌│└ do stub).
+const BANNER_LINE = /^\s*[╭╰│┃┌└├┐┘╮╯]/
+
+/** null = a tela só tem o banner de boot: o cartão mostra o propósito no lugar. */
+export function cardPreviewLines(
+  lines: ScreenTailLine[],
+  max = CARD_PREVIEW_LINES,
+): ScreenTailLine[] | null {
+  const filled = lines.filter((l) => l.some((s) => s.t.trim() !== ''))
+  const text = (l: ScreenTailLine) => l.map((s) => s.t).join('')
+  if (filled.length === 0 || filled.every((l) => BANNER_LINE.test(text(l)))) return null
+  return filled.slice(-max)
+}
+
+/** "~/…/lexter-copilot-api": o cwd discreto no pé do cartão. */
+export function cwdFooter(repoLabel: string | null): string | null {
+  return repoLabel ? `~/…/${repoLabel}` : null
+}

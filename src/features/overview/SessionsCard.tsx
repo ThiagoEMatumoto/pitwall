@@ -2,7 +2,11 @@ import { useMemo } from 'react'
 import { Circle, Loader, Zap } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { relativeTime } from '@/lib/time'
-import { useVisibleLiveSessions } from '@/features/session-switcher/useGlobalSessions'
+import {
+  crewOnlyLabel,
+  useCrewOnlyCount,
+  useVisibleLiveSessions,
+} from '@/features/session-switcher/useGlobalSessions'
 import { useAppStore } from '@/store/appStore'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
@@ -28,11 +32,23 @@ export function SessionsCard() {
     ]
   }, [liveSessions])
 
+  const crew = crewOnlyLabel(useCrewOnlyCount())
   return (
     <HomeCard
       title="Sessões agora"
       count={rows.length}
       dot={<CardDot color="var(--color-accent)" pulse={rows.some((r) => r.kind === 'waiting')} />}
+      action={
+        crew && (
+          <span
+            data-testid="home-sessions-crew"
+            title="Filhas de handoff: ficam na Equipe (Ctrl+J), fora desta lista. O mapa e o topo da Home contam todas."
+            className="text-[10px] text-[var(--color-text-dim)]"
+          >
+            {crew}
+          </span>
+        )
+      }
     >
       {rows.length === 0 ? (
         <CardEmpty>Nenhuma sessão viva.</CardEmpty>

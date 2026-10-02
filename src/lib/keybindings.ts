@@ -56,7 +56,8 @@ export function formatCombo(c: Combo): string {
   else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
   else if (arrow) parts.push(arrow)
   else if (c.key === 'Tab') parts.push('Tab')
-  else if (c.key) parts.push(c.key.toUpperCase())
+  // Tecla nomeada (Enter, Escape) fica como está: "ENTER" gritava na UI.
+  else if (c.key) parts.push(c.key.length === 1 ? c.key.toUpperCase() : c.key)
   return parts.join('+')
 }
 

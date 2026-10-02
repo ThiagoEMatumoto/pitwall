@@ -4,13 +4,14 @@ import { Icon } from '@/components/ui/Icon'
 import { useAppStore } from '@/store/appStore'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { batonChipPx, motherBadgePx, motherBadgeText } from './mother-badge'
+import { quantizeZoom } from './card-display'
 
 // compact: brief e recolhido, onde o badge divide UMA linha com o título num
 // cartão de largura fixa — só coroa + contagem (o resto vai no tooltip).
 
 // Mesmo quantizado do cartão (0,05): re-renderiza só quando a fonte muda.
 function useZoom(): number {
-  return useStore((s) => Math.round(s.transform[2] * 20) / 20)
+  return useStore((s) => quantizeZoom(s.transform[2]))
 }
 
 export function MotherBadge({ node, compact = false }: { node: SessionGraphNode; compact?: boolean }) {

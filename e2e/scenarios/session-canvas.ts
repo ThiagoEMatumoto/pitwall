@@ -808,7 +808,9 @@ try {
 
   // ---------- 8. terminal na modal do mapa ----------
   {
-    await fit()
+    // Com 7+ cartões o enquadrar vai à visão geral (cartões em resumo, sem o
+    // botão Terminal): a 100% o cartão volta a ter as ações.
+    await zoom100()
     const tabsBefore = await page.locator('.dv-tab').count()
     await bringIntoView(card(ids.solta))
     const vpBefore = await page.evaluate(() => {
@@ -847,7 +849,8 @@ try {
 
   // ---------- 9. recolher/abrir persiste (reload e relaunch) ----------
   {
-    await fit()
+    // Visão geral (7+) deixa os cartões em resumo: o chevron só existe a 100%.
+    await zoom100()
     await bringIntoView(card(ids.solta).getByTestId('card-toggle'))
     await card(ids.solta).getByTestId('card-toggle').click()
     const collapsed = await waitFor(

@@ -1,15 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MonitorCheck } from 'lucide-react'
+import { MonitorCheck, Users } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { ShortcutHints } from '@/components/ui/ShortcutHints'
+import { OVERLAY_HINTS, type ShortcutHint } from '@/components/ui/shortcut-hints'
 import { openPaneKeys } from '@/features/handoffs/crew'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
+import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import { matchesSession } from './session-search'
 import { statusView, type LiveStatus } from './status-view'
-import { useEndedSessions, useVisibleLiveSessions } from './useGlobalSessions'
+import {
+  crewOnlyLabel,
+  useCrewOnlyCount,
+  useEndedSessions,
+  useVisibleLiveSessions,
+  withCrewSessions,
+} from './useGlobalSessions'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
+
+const SWITCHER_HINTS: ShortcutHint[] = [
+  ...OVERLAY_HINTS.slice(0, 2),
+  { keys: ['☐'], label: 'multi-seleção pra grade' },
+  ...OVERLAY_HINTS.slice(2),
+]
 
 interface Props {
   open: boolean
@@ -27,7 +42,7 @@ interface GroupDef {
 const GROUPS: GroupDef[] = [
   { id: 'waiting', label: 'Aguardando input', statuses: ['waiting'], accent: true },
   { id: 'working', label: 'Trabalhando', statuses: ['working', 'starting'], accent: false },
-  { id: 'idle', label: 'Idle', statuses: ['idle'], accent: false },
+  { id: 'idle', label: 'Ociosas', statuses: ['idle'], accent: false },
 ]
 
 // Sessões avulsas (repo null) ficam num grupo próprio, fora dos grupos por status.
@@ -45,7 +60,23 @@ export function SessionSwitcher({ open, onClose }: Props) {
   const resumeSession = useAppStore((s) => s.resumeSession)
 
   // Filhas de handoffs ativos ficam fora do seletor (hook compartilhado com o palette).
-  const liveSessions = useVisibleLiveSessions()
+  const visibleSessions = useVisibleLiveSessions()
+  const allLive = useAppStore((s) => s.liveSessions)
+  const crewLabel = crewOnlyLabel(useCrewOnlyCount())
+  // "+N na equipe" é um toggle: ligado, as filhas do dock entram na lista,
+  // marcadas — senão as sessões da mesma feature ficavam escondidas atrás dele.
+  const [showCrew, setShowCrew] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  // A filha herda a feature da mãe no grafo; o índice reverso do chip não a tem.
+  const graph = useSessionGraph()
+  const featureOf = useMemo(
+    () => new Map(graph.nodes.map((n) => [n.sessionId, n.featureId ?? null])),
+    [graph],
+  )
+  const { items: liveSessions, crewIds } = useMemo(
+    () => withCrewSessions(allLive, visibleSessions, showCrew),
+    [allLive, visibleSessions, showCrew],
+  )
 
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -66,6 +97,7 @@ export function SessionSwitcher({ open, onClose }: Props) {
     setSelected(new Set())
     setTab('active')
     setActiveIdx(0)
+    setShowCrew(false)
   }, [open])
 
   useEffect(() => {
@@ -190,6 +222,7 @@ export function SessionSwitcher({ open, onClose }: Props) {
       <div className="flex max-h-[70vh] w-[40rem] max-w-[90vw] flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl">
         <div className="border-b border-[var(--color-border)] px-3">
           <input
+            ref={inputRef}
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -274,6 +307,31 @@ export function SessionSwitcher({ open, onClose }: Props) {
                 <span className="text-[10px] text-[var(--color-text-dim)] opacity-70">
                   {items.length}
                 </span>
+                {def.id === 'working' && crewLabel && (
+                  <button
+                    type="button"
+                    data-testid="switcher-crew-count"
+                    aria-pressed={showCrew}
+                    onClick={() => {
+                      setShowCrew((v) => !v)
+                      // O foco volta à busca: é nela que ↑↓, Enter e Esc funcionam.
+                      inputRef.current?.focus()
+                    }}
+                    title={
+                      showCrew
+                        ? 'Esconder as filhas de handoff (elas ficam na Equipe, Ctrl+J)'
+                        : 'Mostrar aqui as filhas de handoff que estão na Equipe (Ctrl+J)'
+                    }
+                    className={`flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] transition ${
+                      showCrew
+                        ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                        : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    <Icon as={Users} size={10} />
+                    {showCrew ? 'Equipe na lista' : crewLabel}
+                  </button>
+                )}
               </div>
               <ul className="flex flex-col gap-px">
                 {items.map((item) => (
@@ -283,6 +341,8 @@ export function SessionSwitcher({ open, onClose }: Props) {
                     accent={def.accent}
                     selected={selected.has(item.ccSessionId)}
                     onScreen={onScreen.has(item.ccSessionId)}
+                    crew={crewIds.has(item.id)}
+                    featureId={featureOf.get(item.id) ?? null}
                     dataIdx={idxByCc.get(item.ccSessionId) ?? -1}
                     keyboardActive={idxByCc.get(item.ccSessionId) === activeIdx}
                     onToggle={() => toggleSelected(item.ccSessionId)}
@@ -319,11 +379,8 @@ export function SessionSwitcher({ open, onClose }: Props) {
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-3 border-t border-[var(--color-border)] px-3 py-2 text-[10px] text-[var(--color-text-dim)]">
-            <span>↑↓ navegar</span>
-            <span>↵ abrir</span>
-            <span>☐ multi-seleção pra grade</span>
-            <span>esc fechar</span>
+          <div className="border-t border-[var(--color-border)] px-3 py-2">
+            <ShortcutHints hints={SWITCHER_HINTS} />
           </div>
         )}
       </div>
@@ -338,6 +395,9 @@ interface RowProps {
   // Encerradas não entram na multi-seleção de grade (o re-attach exige PTY viva).
   selectable?: boolean
   onScreen: boolean
+  // Filha de handoff que só está na Equipe (entrou pelo toggle "+N na equipe").
+  crew?: boolean
+  featureId?: string | null
   // Posição na lista achatada (âncora do scrollIntoView) + destaque do teclado.
   dataIdx: number
   keyboardActive: boolean
@@ -351,6 +411,8 @@ function SessionRow({
   selected,
   selectable = true,
   onScreen,
+  crew = false,
+  featureId = null,
   dataIdx,
   keyboardActive,
   onToggle,
@@ -384,6 +446,16 @@ function SessionRow({
       <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-[var(--color-text)]">{name}</span>
+          {crew && (
+            <span
+              data-testid="switcher-row-crew"
+              className="flex shrink-0 items-center gap-0.5 rounded bg-[var(--color-surface-2)] px-1 py-0.5 text-[9px] text-[var(--color-text-dim)]"
+              title="Filha de handoff: fica na Equipe (Ctrl+J)"
+            >
+              <Icon as={Users} size={10} />
+              equipe
+            </span>
+          )}
           {onScreen && (
             <span
               className="flex shrink-0 items-center gap-0.5 rounded bg-[var(--color-surface-2)] px-1 py-0.5 text-[9px] text-[var(--color-text-dim)]"
@@ -410,7 +482,7 @@ function SessionRow({
           </span>
           <span className="shrink-0">{relativeTime(item.lastActivityAt)}</span>
           {item.tokens && <span className="shrink-0">{item.tokens.output} tok</span>}
-          <SessionFeatureChip sessionId={item.id} density="chip" />
+          <SessionFeatureChip sessionId={item.id} featureId={featureId} density="chip" />
         </div>
 
         {preview && (
