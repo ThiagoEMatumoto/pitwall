@@ -10,6 +10,7 @@ import type {
   ResumeSessionInput,
   PtyDataEvent,
   PtyExitEvent,
+  SessionFeatureChangedEvent,
   SessionActivity,
   GlobalActivityBatch,
   PaneSnapshot,
@@ -21,6 +22,8 @@ import type {
   Feature,
   CreateFeatureInput,
   UpdateFeatureInput,
+  UpdateFeatureSectionInput,
+  AppendFeatureFixedNoteInput,
   SetFeatureReposInput,
   SetFeatureFocusInput,
   MergeFeatureDuplicateInput,
@@ -40,6 +43,7 @@ import type {
   HandoffOutcome,
   DistillBatonInput,
   PassBatonInput,
+  BatonChildrenMissed,
   HandoffStatus,
   ObjectiveListFilter,
   CreateObjectiveInput,
@@ -113,6 +117,7 @@ import type {
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
+import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
 import type {
   PromptQueueSnapshot,
@@ -159,6 +164,8 @@ const api: Api = {
     list: () => invoke('sessions:list'),
     onData: (handler) => subscribe<PtyDataEvent>('pty:data', handler),
     onExit: (handler) => subscribe<PtyExitEvent>('pty:exit', handler),
+    onFeatureChanged: (handler) =>
+      subscribe<SessionFeatureChangedEvent>('session:feature-changed', handler),
     watchActivity: (ccSessionId) => invoke('session:activity:watch', ccSessionId),
     unwatchActivity: (ccSessionId) => invoke('session:activity:unwatch', ccSessionId),
     onActivity: (handler) => subscribe<SessionActivity>('session:activity', handler),
@@ -332,6 +339,10 @@ const api: Api = {
     dismissDuplicate: (featureId: string) => invoke('features:dismiss-duplicate', featureId),
     mergeDuplicate: (input: MergeFeatureDuplicateInput) =>
       invoke('features:merge-duplicate', input),
+    updateSection: (input: UpdateFeatureSectionInput) => invoke('features:updateSection', input),
+    appendFixedNote: (input: AppendFeatureFixedNoteInput) =>
+      invoke('features:appendFixedNote', input),
+    synthesizeNow: (featureId: string) => invoke('features:synthesizeNow', featureId),
     onUpdated: (handler) => subscribe<Feature>('feature:updated', handler),
     onSynthError: (handler) => subscribe<FeatureSynthError>('feature:synth-error', handler),
   },
@@ -383,11 +394,13 @@ const api: Api = {
   baton: {
     distill: (input: DistillBatonInput) => invoke('baton:distill', input),
     pass: (input: PassBatonInput) => invoke('baton:pass', input),
+    onChildrenMissed: (handler) => subscribe<BatonChildrenMissed>('baton:children-missed', handler),
   },
   sessionGraph: {
     get: () => invoke('session-graph:get'),
     handoffEvents: (input: { handoffId: string }) => invoke('handoff-events:list', input),
     onUpdated: (handler) => subscribe<SessionGraph>('session-graph:updated', handler),
+    onLinkPulse: (handler) => subscribe<SessionLinkPulse>('session-link:pulse', handler),
   },
   agentBus: {
     list: () => invoke('agent-bus:list'),

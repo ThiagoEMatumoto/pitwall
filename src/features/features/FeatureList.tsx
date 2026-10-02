@@ -103,7 +103,11 @@ export function FeatureCard({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-[var(--color-text)]">
+            {/* 2 linhas: na coluna de 288px do Board, truncar cortava em ~12 caracteres. */}
+            <div
+              className="line-clamp-2 break-words text-sm font-medium text-[var(--color-text)]"
+              title={feature.title}
+            >
               {feature.title}
             </div>
             {feature.objective && (
@@ -113,7 +117,14 @@ export function FeatureCard({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <StatusBadge status={feature.status} />
+            {/* Arquivada não é status (vive em archivedAt): o chip "em andamento" ali mentia. */}
+            {feature.archivedAt != null ? (
+              <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text-dim)]">
+                arquivada
+              </span>
+            ) : (
+              <StatusBadge status={feature.status} />
+            )}
             {onTogglePin && (
               /* Pinada: o botão fica sempre visível — é estado, não só ação. */
               <button

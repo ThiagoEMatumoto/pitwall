@@ -1,5 +1,6 @@
 import type { Feature } from '../../../shared/types/ipc'
 import type { Liveness } from '../../../shared/feature-loop'
+import { extractKeySections } from '../../../shared/feature-sections'
 
 // Quantas entradas do ledger entram no bloco. Três é o "índice", não o
 // conteúdo: dá pro modelo saber que existe histórico e o que mudou por último
@@ -10,6 +11,9 @@ const LEDGER_PREVIEW = 3
 // bloco com teto real: sem ele, uma entrada verborrágica inflaria o system
 // prompt de toda sessão da feature.
 const LEDGER_TITLE_MAX = 80
+
+// Teto das regras de negócio no bloco (elas entram inteiras até aqui).
+const RULES_MAX_CHARS = 1500
 
 /** Recorte do loop que o bloco de contexto precisa — o chamador resolve via loopSnapshot. */
 export interface FeatureLoopContext {
@@ -89,6 +93,17 @@ export function buildFeatureContextContent(
     .join('\n')
   // Reforço do auto-tracking (as instructions do MCP server cobrem o resto):
   // aqui a sessão ganha o featureId REAL, sem precisar resolver via feature_list.
+  // Regras de negócio vão inteiras (exceção ao "aponta, não despeja"): são do
+  // usuário, curtas e valem pra qualquer coisa que a sessão fizer na frente.
+  // Com teto: regra que não cabe é cortada com o endereço do doc completo.
+  const rules = extractKeySections(feature.body ?? '')
+  const clipped =
+    rules.length <= RULES_MAX_CHARS
+      ? rules
+      : `${rules.slice(0, RULES_MAX_CHARS - 1)}…\n(continua em ${feature.docPath})`
+  const rulesBlock = rules
+    ? `\n\nRegras de negócio desta feature (definidas pelo usuário — respeite-as):\n\n${clipped}`
+    : ''
   const tracking = `Tracking: this session's feature id is ${feature.id}. Link auto-created tasks to it (parentType "feature") and update its status via feature_update when you finish or get blocked.`
-  return `${header}\n\n${tracking}\n`
+  return `${header}${rulesBlock}\n\n${tracking}\n`
 }

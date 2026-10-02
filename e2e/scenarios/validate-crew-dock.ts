@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
@@ -17,7 +18,9 @@ import { PERMISSION_FIXTURE } from './attention-reason'
 // ~/.claude do usuário real NÃO é tocado.
 
 const require = createRequire(import.meta.url)
-const SCRATCH = process.env.CREW_SCRATCH!
+// Sem CREW_SCRATCH, um diretório temporário (antes: join(undefined) quebrava no boot).
+const SCRATCH = process.env.CREW_SCRATCH ?? mkdtempSync(join(tmpdir(), 'crew-scratch-'))
+mkdirSync(SCRATCH, { recursive: true })
 const fake = createFakeHome({ parentDir: SCRATCH })
 
 // "Esperando você" exige a TELA de um menu (status 'waiting' com o prompt ocioso

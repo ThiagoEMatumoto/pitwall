@@ -8,7 +8,7 @@ import { useCardViewStore } from './card-view-store'
 describe('useCardViewStore', () => {
   beforeEach(() => {
     setViewStates.mockClear()
-    useCardViewStore.setState({ scope: null, views: {}, terminalSizes: {}, tails: {} })
+    useCardViewStore.setState({ scope: null, views: {}, tails: {} })
   })
 
   it('hidrata do banco uma vez por escopo (depois o local é a verdade)', () => {
@@ -24,28 +24,27 @@ describe('useCardViewStore', () => {
 
   it('grava só a diferença, no escopo aberto', () => {
     useCardViewStore.getState().hydrate('all', [])
-    useCardViewStore.getState().enterTerminal('a')
-    useCardViewStore.getState().enterTerminal('b')
+    useCardViewStore.getState().collapseAll(['a', 'b'])
     expect(setViewStates).toHaveBeenLastCalledWith({
       scope: 'all',
       items: [
-        { sessionId: 'a', viewState: 'open' },
-        { sessionId: 'b', viewState: 'terminal' },
+        { sessionId: 'a', viewState: 'collapsed' },
+        { sessionId: 'b', viewState: 'collapsed' },
       ],
     })
     setViewStates.mockClear()
-    useCardViewStore.getState().openAll(['a', 'b'])
+    useCardViewStore.getState().collapseAll(['a', 'b'])
     expect(setViewStates).not.toHaveBeenCalled()
   })
 
-  it('grava a correção da hidratação (dois terminais salvos → um)', () => {
+  it('grava a correção da hidratação (terminal legado no cartão → aberto)', () => {
     useCardViewStore.getState().hydrate('all', [
       { sessionId: 'a', viewState: 'terminal' },
-      { sessionId: 'b', viewState: 'terminal' },
+      { sessionId: 'b', viewState: 'collapsed' },
     ])
     expect(setViewStates).toHaveBeenCalledWith({
       scope: 'all',
-      items: [{ sessionId: 'b', viewState: 'open' }],
+      items: [{ sessionId: 'a', viewState: 'open' }],
     })
   })
 

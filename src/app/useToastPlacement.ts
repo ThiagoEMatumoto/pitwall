@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { useFeaturePanelStore } from '@/features/session-canvas/feature-panel-store'
 import { useAppStore } from '@/store/appStore'
 import { useToastStore } from '@/features/notifications/toast-store'
 import { toastStackPlacement, type PeekBox, type ToastPlacement } from './toast-placement'
@@ -11,6 +12,47 @@ function readPeekBox(): PeekBox | null {
   const el = document.querySelector<HTMLElement>('[data-peek-mode]')
   if (!el || el.offsetHeight === 0) return null
   return { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight }
+}
+
+// Modal grande do terminal do mapa (lift): a pilha não pode entrar nela.
+function isLiftOpen(): boolean {
+  return document.querySelector('[data-peek-lift]') !== null
+}
+
+function readFeaturePanelBox(): PeekBox | null {
+  const el = document.querySelector<HTMLElement>('[data-feature-panel]')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return r.width === 0 ? null : { left: r.left, top: r.top, width: r.width, height: r.height }
+}
+
+// Painel da feature sobre o mapa: mede quando abre/troca, no resize e quando o
+// dock da Equipe/Conversas muda de largura (o painel encosta nele: right =
+// dockOverlay, sem evento de resize). Fora do mapa o painel não está na tela,
+// mesmo com o store ainda "aberto".
+const PANEL_SETTLE_MS = 300
+
+function useFeaturePanelBox(onMap: boolean, dockWidth: number): PeekBox | null {
+  const openId = useFeaturePanelStore((s) => s.openFeatureId)
+  const on = onMap && !!openId
+  const [box, setBox] = useState<PeekBox | null>(null)
+  useEffect(() => {
+    if (!on) {
+      setBox(null)
+      return
+    }
+    const measure = () => setBox(readFeaturePanelBox())
+    const raf = requestAnimationFrame(measure)
+    // A largura do dock anima: mede de novo quando assenta.
+    const late = setTimeout(measure, PANEL_SETTLE_MS)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(late)
+      window.removeEventListener('resize', measure)
+    }
+  }, [on, openId, dockWidth])
+  return on ? box : null
 }
 
 function readMinimapBox(): PeekBox | null {
@@ -94,21 +136,76 @@ function useComposerBoxes(): PeekBox[] {
   return on ? boxes : []
 }
 
+// No mapa, a pilha não cobre o cartão da mãe (composer, "Espiar filhas") nem a
+// coluna da mãe fixada. O cartão anda com o pan/zoom sem evento nenhum: relê a
+// cada meio segundo, mas só enquanto há toast à vista (sem toast a posição da
+// pilha não importa e o AppShell não re-renderiza a cada pan).
+const MAP_OBSTACLE_POLL_MS = 500
+const MAP_OBSTACLE_SELECTOR = '[data-variant="mother"], [data-testid="mother-dock"]'
+
+function readMapObstacles(): PeekBox[] {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  return [...document.querySelectorAll<HTMLElement>(MAP_OBSTACLE_SELECTOR)].flatMap((el) => {
+    const r = el.getBoundingClientRect()
+    // Recorta na janela: o cartão meio fora da tela só ocupa o pedaço visível.
+    const left = Math.max(0, r.left)
+    const top = Math.max(0, r.top)
+    const width = Math.min(vw, r.left + r.width) - left
+    const height = Math.min(vh, r.top + r.height) - top
+    return width <= 0 || height <= 0 ? [] : [{ left, top, width, height }]
+  })
+}
+
+function useMapObstacles(onMap: boolean): PeekBox[] {
+  const toastCount = useToastStore((s) => s.toasts.length)
+  const [boxes, setBoxes] = useState<PeekBox[]>([])
+  useEffect(() => {
+    if (!onMap) {
+      setBoxes([])
+      return
+    }
+    const measure = () => {
+      // Avisos do main (IPC) não passam pelo toast-store: o card na pilha conta.
+      const showing = toastCount > 0 || document.querySelector('[data-testid="toast-card"]')
+      const next = showing ? readMapObstacles() : []
+      setBoxes((prev) => (sameBoxes(prev, next) ? prev : next))
+    }
+    const raf = requestAnimationFrame(measure)
+    const timer = setInterval(measure, MAP_OBSTACLE_POLL_MS)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearInterval(timer)
+      window.removeEventListener('resize', measure)
+    }
+  }, [onMap, toastCount])
+  return onMap ? boxes : []
+}
+
 export function useToastPlacement(dockWidth: number): ToastPlacement {
   const minimap = useMinimapBox()
   const composers = useComposerBoxes()
+  const mapView = useProjectsViewStore((s) => s.view === 'map')
+  const inProjects = useAppStore((s) => s.area === 'projects')
+  const onMap = mapView && inProjects
+  const featurePanel = useFeaturePanelBox(onMap, dockWidth)
+  const mapObstacles = useMapObstacles(onMap)
   const peekId = useCrewDockStore((s) => s.peekTarget?.id ?? null)
   const [peek, setPeek] = useState<PeekBox | null>(null)
+  const [lift, setLift] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
 
   useEffect(() => {
     if (!peekId) {
       setPeek(null)
+      setLift(false)
       return
     }
     // O painel monta no mesmo commit que o peekId muda: mede no frame seguinte.
     const measure = () => {
       setPeek(readPeekBox())
+      setLift(isLiftOpen())
       setViewportWidth(window.innerWidth)
     }
     const raf = requestAnimationFrame(measure)
@@ -124,7 +221,10 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
     peek: peekId ? peek : null,
     viewportWidth,
     minimap: minimap.box,
-    obstacles: composers,
+    obstacles: [...composers, ...mapObstacles],
     viewportHeight: minimap.viewportHeight,
+    lift: !!peekId && lift,
+    onMap,
+    rightPanel: featurePanel,
   })
 }

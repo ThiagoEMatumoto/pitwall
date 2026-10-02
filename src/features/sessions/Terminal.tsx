@@ -41,12 +41,16 @@ import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
 import { clearSharedAtlas, registerTerminal } from './terminal-atlas'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
+import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { leaseBlocks, useTerminalLease, type TerminalLeaseHost } from './terminal-lease'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { TERMINAL_FONT_FAMILY } from '@/lib/terminal-font'
 import { useFilesStore } from '@/lib/files-store'
 import { xtermTheme } from '@/lib/themes'
 import { getCurrentThemeTokens, onThemeChange } from '@/app/useTheme'
 import type { GpuStatus, PermissionMode, Session, SessionActivity } from '../../../shared/types/ipc'
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
+import { stripQueryReplies } from './terminal-replies'
 
 // Cache módulo-level: o status de GPU é imutável durante o processo (decidido no
 // boot do main), então 1 IPC atende todos os panes/remounts.
@@ -91,6 +95,15 @@ interface Props {
   // 'compact' (cartão do mapa): só input + Interromper + Enviar; o resto da barra
   // vai pro "⋯". Nove controles em ~500px espremiam o terminal.
   composer?: 'full' | 'compact'
+  // Quem é este Terminal na disputa pela PTY (terminal-lease). Ausente = a aba.
+  // Com a lease em outro host, o xterm NÃO monta (nem mede, nem manda resize):
+  // fica o placeholder "Aberto no mapa" até a lease voltar.
+  leaseHost?: TerminalLeaseHost
+  // Fonte do xterm fixada por quem monta (o lift do mapa usa 14px). Ausente =
+  // a preferência do usuário (Configurações / zoom do terminal).
+  fontSize?: number
+  // Selo de status de quem monta (modal do mapa): o HUD mostra o mesmo do header.
+  hudStatus?: { label: string; color: string }
   onClose: () => void
   onTitleChange?: (title: string) => void
   onReopen?: () => void
@@ -142,7 +155,64 @@ function readFooterText(term: Xterm): string {
   return readTailText(term, Math.min(term.rows, 10))
 }
 
-export function Terminal({
+export function Terminal(props: Props) {
+  const owner = useTerminalLease((s) => s.leases[props.session.id])
+  const blocked = leaseBlocks(owner, props.leaseHost)
+  useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose)
+  if (blocked) return <LeasedPlaceholder owner={owner!} />
+  return <TerminalHost {...props} />
+}
+
+// Com a lease fora, o useSession desta aba não está montado e perde o exit da
+// PTY; ao remontar nasceria exited=false e ficaria como pane morta. O toast de
+// "Sessão encerrada" é da modal (o Terminal dela viu o exit) — aqui só fecha.
+function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose: () => void) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    if (!blocked) return
+    return sessionsApi.onExit((e) => {
+      if (e.sessionId === sessionId) onCloseRef.current()
+    })
+  }, [sessionId, blocked])
+}
+
+// A aba enquanto a modal do mapa segura a PTY: sem xterm montado, nada disputa o
+// resize. "Trazer para cá" fecha a modal — a lease sai e o xterm remonta aqui,
+// reconstruído pelo replay do backlog.
+// Com a coluna da mãe fixada (owner 'dock'), "Trazer para cá" desafixa.
+function LeasedPlaceholder({ owner }: { owner: TerminalLeaseHost }) {
+  const docked = owner === 'dock'
+  return (
+    <div
+      data-testid="terminal-leased"
+      data-owner={owner}
+      className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] px-6 text-center"
+    >
+      <span className="text-sm text-[var(--color-text)]">
+        {docked ? 'Fixada no mapa' : 'Aberto no mapa'}
+      </span>
+      <span className="max-w-sm text-xs text-[var(--color-text-dim)]">
+        {docked
+          ? 'O terminal desta sessão está na coluna da mãe, à esquerda do mapa. Ele volta para cá ao desafixar.'
+          : 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'}
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          docked
+            ? useMotherDockStore.getState().unpin()
+            : useCrewDockStore.getState().closePeek({ restoreFocus: false })
+        }
+        className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+      >
+        Trazer para cá
+      </button>
+    </div>
+  )
+}
+
+function TerminalHost({
   session,
   repoLabel,
   repoPath,
@@ -154,6 +224,8 @@ export function Terminal({
   chrome = 'full',
   renderer = 'auto',
   composer = 'full',
+  fontSize: fontSizeOverride,
+  hudStatus,
   onClose,
   onTitleChange,
   onReopen,
@@ -169,7 +241,11 @@ export function Terminal({
   const xtermRef = useRef<Xterm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
-  const fontSize = useTerminalPrefsStore((s) => s.fontSize)
+  const prefFontSize = useTerminalPrefsStore((s) => s.fontSize)
+  const fontSize = fontSizeOverride ?? prefFontSize
+  // A criação do xterm lê o tamanho por ref (o mount effect só depende do id).
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
   const scrollback = useTerminalPrefsStore((s) => s.scrollback)
   // Heurístico de "claude não encontrado": registramos se algum byte chegou do PTY.
   // Se o processo saiu rápido com código != 0 e nunca emitiu nada, provavelmente o
@@ -686,7 +762,7 @@ export function Terminal({
       // Tema derivado dos tokens do app (Ember reproduz o antigo hardcoded).
       theme: xtermTheme(getCurrentThemeTokens()),
       fontFamily: TERMINAL_FONT_FAMILY,
-      fontSize: useTerminalPrefsStore.getState().fontSize,
+      fontSize: fontSizeRef.current,
       scrollback: useTerminalPrefsStore.getState().scrollback,
       // Nitidez: sem espaçamento fracionário entre células, glifos de box-drawing
       // desenhados pelo próprio xterm (bordas de TUI contínuas) e re-escala de
@@ -760,7 +836,7 @@ export function Terminal({
     // StrictMode (o cleanup roda antes da promise resolver). Escrever no term
     // antes do open é seguro: o xterm bufferiza e renderiza ao abrir.
     let cancelled = false
-    const fontPx = useTerminalPrefsStore.getState().fontSize
+    const fontPx = fontSizeRef.current
     void Promise.race([
       Promise.all([
         document.fonts.load(`${fontPx}px "JetBrains Mono"`),
@@ -822,25 +898,44 @@ export function Terminal({
       if (flushed) term.write(data)
       else liveTotal += data
     })
-    term.onData((d) => write(d))
-
-    void sessionsApi.getBacklog(session.id).then((backlog) => {
-      if (xtermRef.current !== term) return
-      term.write(backlog)
-      if (liveTotal.length > backlog.length) term.write(liveTotal.slice(backlog.length))
-      liveTotal = ''
-      flushed = true
-      // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
-      // escrito no term). Gate de status: não lê durante 'working'/'starting'.
-      if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-        setCurrentMode(detectFooterMode(readFooterText(term)))
-      }
-      // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
-      // prompt numa pane remontada) não gera data event novo — sem este seed o
-      // card só apareceria no próximo byte do PTY.
-      applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(term), statusRef.current))
-      applyTuiPicker(readTuiPickerFrom(term))
+    // Replay do backlog: o xterm RESPONDE às queries que estão nos bytes antigos
+    // (DA, DSR, DECRQM, OSC 10/11) e essas respostas sairiam pelo onData direto
+    // pro prompt vivo — e o backlog é reproduzido a cada abrir/fechar da modal e a
+    // cada passo do Alt+./Alt+,. Até o xterm terminar de parsear o backlog (o
+    // callback do write), só essas respostas são descartadas: o que o usuário
+    // digita (a modal toma o foco na hora) segue pro PTY.
+    let replaying = true
+    term.onData((d) => {
+      const out = replaying ? stripQueryReplies(d) : d
+      if (out) write(out)
     })
+
+    void sessionsApi
+      .getBacklog(session.id)
+      .catch(() => '')
+      .then((backlog) => {
+        if (xtermRef.current !== term) return
+        if (backlog) {
+          term.write(backlog, () => {
+            replaying = false
+          })
+        } else {
+          replaying = false
+        }
+        if (liveTotal.length > backlog.length) term.write(liveTotal.slice(backlog.length))
+        liveTotal = ''
+        flushed = true
+        // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
+        // escrito no term). Gate de status: não lê durante 'working'/'starting'.
+        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
+          setCurrentMode(detectFooterMode(readFooterText(term)))
+        }
+        // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
+        // prompt numa pane remontada) não gera data event novo — sem este seed o
+        // card só apareceria no próximo byte do PTY.
+        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(term), statusRef.current))
+        applyTuiPicker(readTuiPickerFrom(term))
+      })
 
     // Copy-on-select: copiar automaticamente o que for selecionado.
     term.onSelectionChange(() => {
@@ -1211,6 +1306,7 @@ export function Terminal({
             certo). O PTY e o scrollback seguem vivos por baixo. */}
         <div
           ref={hostRef}
+          data-font-size={fontSize}
           className={`h-full bg-[var(--color-bg)] p-2 ${mode === 'chat' ? 'invisible' : ''}`}
         />
 
@@ -1294,7 +1390,12 @@ export function Terminal({
 
       {/* HUD fino de agentes (statusline): FORA do container relative, entre o
           terminal e o composer — visível nos dois modos (terminal e chat). */}
-      {!exited && composer === 'full' && <AgentHud activity={activity} now={now} />}
+      {/* Com hudStatus quem monta (a modal do mapa) já mostra o status no header:
+          o HUD só aparece se houver subagentes — sem eles, era o mesmo
+          "trabalhando há Xs" repetido numa faixa a mais. */}
+      {!exited && composer === 'full' && (!hudStatus || (activity?.subagents?.length ?? 0) > 0) && (
+        <AgentHud activity={activity} now={now} status={hudStatus} />
+      )}
 
       {/* Resumo falado do último turno (modo voz) — faixa acima do composer,
           fora do fluxo de mensagens do chat (transcript é read-only). */}

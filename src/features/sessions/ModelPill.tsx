@@ -101,7 +101,7 @@ export function ModelPill({
     },
   ]
 
-  // Label do pill: pendência (busy) > troca em voo > alias detectado > id cru > 'modelo…'.
+  // Label do pill: pendência (busy) > troca em voo > alias detectado > id cru > 'modelo padrão'.
   let label: string
   let dim = false
   if (pending.model) {
@@ -113,7 +113,8 @@ export function ModelPill({
   } else if (activity?.model) {
     label = activity.model.replace(/^claude-/, '')
   } else {
-    label = 'modelo…'
+    // Não detectado: o CLI usa o default dele. Reticências liam como carregando.
+    label = 'modelo padrão'
     dim = true
   }
 

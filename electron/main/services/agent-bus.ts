@@ -49,6 +49,8 @@ export interface AgentBusDeps {
   warn(event: Record<string, unknown>): void
   redact?(text: string): string
   now?(): number
+  // Bolinha no mapa (session-link-pulse): a pergunta chegou / a resposta voltou.
+  pulse?(input: { fromSessionId: string; toSessionId: string; kind: 'ask' | 'reply' }): void
 }
 
 export interface AskInput {
@@ -147,7 +149,10 @@ export class AgentBusError extends Error {}
 // do nó é o alias (rename manual > nome vivo do CLI); o `-n` vai em address — só
 // o claude tem SendMessage.
 export function peersFromGraph(graph: SessionGraph): AgentPeer[] {
-  const projectName = new Map(graph.lanes.map((l) => [l.projectId, l.name]))
+  // O topo do mapa é a feature: o nome do projeto mora em cada lane de repo.
+  const projectName = new Map(
+    graph.lanes.flatMap((l) => l.repos.map((r) => [r.projectId ?? null, r.projectName ?? null])),
+  )
   return graph.nodes
     .filter((n) => n.status !== 'ended')
     .map((n) => ({
@@ -431,10 +436,14 @@ export class AgentBus {
   }
 
   private markDelivered(id: string): void {
-    this.deps.db
+    const res = this.deps.db
       .prepare('UPDATE agent_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
       .run(this.now(), id)
     this.counters.delivered++
+    if (res.changes === 0) return
+    const row = this.row(id)
+    if (row.to_session_id)
+      this.deps.pulse?.({ fromSessionId: row.from_session_id, toSessionId: row.to_session_id, kind: 'ask' })
   }
 
   // Evento terminal da PromptQueue: o envelope que esperava o fim do turno saiu
@@ -477,6 +486,7 @@ export class AgentBus {
       )
       .run(reply, this.now(), askId)
     this.counters.answered++
+    this.deps.pulse?.({ fromSessionId: callerId, toSessionId: row.from_session_id, kind: 'reply' })
     // Respondido antes de sair da fila (não deveria, mas a fila não sabe disso).
     const queueId = this.queued.get(askId)
     this.queued.delete(askId)

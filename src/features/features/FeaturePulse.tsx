@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { loopApi } from '@/lib/ipc'
+import { relativeTime } from '@/lib/time'
 import { PULSE_MAX_LENGTH } from '../../../shared/feature-loop'
 import type { FeaturePulse as Pulse, PulseSource } from '../../../shared/types/ipc'
 
@@ -174,7 +175,10 @@ export function FeaturePulse({ featureId, pulse, loading = false, focusSignal, o
           <div className="min-w-0">
             <p className="text-base leading-snug text-[var(--color-text)]">{pulse.body}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[var(--color-text-dim)]">
-              <span className="font-mono tabular-nums">{fmtWhen(pulse.createdAt)}</span>
+              {/* Relativo na voz da UI (sans); a data cheia fica no tooltip. */}
+              <span className="tabular-nums" title={fmtWhen(pulse.createdAt)}>
+                {relativeTime(pulse.createdAt)}
+              </span>
               <SourceChip source={pulse.source} />
             </div>
           </div>

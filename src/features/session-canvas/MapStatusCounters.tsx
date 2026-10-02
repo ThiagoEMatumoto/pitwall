@@ -74,7 +74,7 @@ export function MapStatusCounters({
   return (
     <div
       data-testid="map-status-counters"
-      className="pointer-events-auto flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 text-[12px] shadow-lg"
+      className="pointer-events-auto flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 text-[12px] shadow-lg"
     >
       {shown.map((tone, i) => (
         <span key={tone} className="flex items-center gap-1">

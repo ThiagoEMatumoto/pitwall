@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react'
 import { NodeToolbar, Position, useStore } from '@xyflow/react'
 import {
   ChevronDown,
@@ -14,6 +21,7 @@ import {
   SquareTerminal,
   Sparkles,
   StickyNote,
+  Target,
   Trash2,
   Unlink,
   Users,
@@ -21,11 +29,18 @@ import {
 import type { LucideProps } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
+import { create } from 'zustand'
+import { FeaturePicker } from '@/features/features/FeaturePicker'
+import type { FeatureWithActivity } from '@/features/features/feature-activity'
+import { featuresApi, sessionsApi } from '@/lib/ipc'
+import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import type { SessionGroup } from '../../../shared/types/canvas'
 import type { MapNode, NoteData, SessionCardData, UserGroupData } from './graph-to-flow'
 import { canPassBaton, type MapCommands } from './useMapCommands'
 import type { MapScopeMode } from './projects-view-store'
 import { LANE_HEADER_H, OPEN_H } from './graph-to-flow'
+import { headerBoxes, toolbarSideAtZoom } from './selection-toolbar'
+import { clampMenuPosition } from './menu-position'
 
 export interface MapAction {
   key: string
@@ -66,7 +81,7 @@ export function actionsFor(
               key: 'interact',
               label: 'Terminal',
               primary: 'Terminal',
-              hint: 'o terminal real da sessão no cartão (Enter)',
+              hint: 'o terminal real numa janela sobre o mapa (Enter)',
               icon: SquareTerminal,
               onClick: () => cmd.interact(s.sessionId),
             },
@@ -84,9 +99,11 @@ export function actionsFor(
         ? [
             {
               key: 'baton',
-              label: 'Passar o bastão',
+              label: s.isMother ? 'Passar o bastão da mãe…' : 'Passar o bastão',
               primary: 'Bastão',
-              hint: 'destila o contexto e sobe uma sucessora limpa',
+              hint: s.isMother
+                ? 'a sucessora assume a liderança das filhas, com endereço novo'
+                : 'destila o contexto e sobe uma sucessora limpa',
               icon: Repeat,
               onClick: () => cmd.passBatonOf(s),
             },
@@ -106,6 +123,13 @@ export function actionsFor(
         hint: 'presa a esta sessão; a 1ª linha aparece no cartão',
         icon: StickyNote,
         onClick: () => cmd.createNote(s.sessionId),
+      },
+      {
+        key: 'feature',
+        label: 'Mover para feature…',
+        hint: 'grava a frente desta sessão; vale mais que o palpite por branch/worktree',
+        icon: Target,
+        onClick: () => useFeatureMoveStore.getState().open(s.sessionId, s.featureId ?? null),
       },
       ...groups
         .filter((g) => g.id !== s.groupId)
@@ -229,7 +253,7 @@ function ColorDot(color: string | null): ComponentType<LucideProps> {
 }
 
 const pill =
-  'pointer-events-auto flex items-center gap-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg'
+  'pointer-events-auto flex shrink-0 items-center whitespace-nowrap gap-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg'
 const pillButton =
   'flex items-center gap-1 rounded-full px-2 py-1 text-[12px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
 
@@ -297,8 +321,11 @@ export function MapTopBar({
   onTidy,
   onOpenAll,
   onCollapseAll,
+  rightInset = 0,
   children,
 }: {
+  // Largura do painel Equipe/Conversas sobre o mapa: nada da barra fica embaixo.
+  rightInset?: number
   scopeMode: MapScopeMode
   hasProject: boolean
   onScope: (mode: MapScopeMode) => void
@@ -317,15 +344,21 @@ export function MapTopBar({
     // Faixa opaca: transparente, os cartões apareciam por trás dela entre as pílulas.
     <div
       data-testid="map-top-bar"
-      className="absolute left-0 right-0 top-0 z-10 flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 backdrop-blur-md"
-      style={{ background: 'color-mix(in srgb, var(--color-surface) 90%, transparent)' }}
+      // @container: estreita (painel da feature ou Equipe abertos), os rótulos
+      // encurtam e Nota/Grupo viram ícone — sem isso o contador caía numa 2ª linha
+      // solta. O wrap fica só como último recurso: cortado, o status sumia.
+      className="@container absolute left-0 right-0 top-0 z-10 flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 backdrop-blur-md"
+      style={{
+        background: 'color-mix(in srgb, var(--color-surface) 90%, transparent)',
+        right: rightInset,
+      }}
     >
       <button
         type="button"
         data-testid="map-new-session"
         onClick={onNewSession}
         title="Nova sessão (N com o mapa focado)"
-        className="pointer-events-auto flex items-center gap-1 rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-accent)] shadow-lg transition hover:bg-[var(--color-surface-2)]"
+        className="pointer-events-auto flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-accent)] shadow-lg transition hover:bg-[var(--color-surface-2)]"
       >
         <Icon as={Plus} size={13} /> Nova sessão
       </button>
@@ -335,32 +368,57 @@ export function MapTopBar({
             key={mode}
             type="button"
             aria-pressed={scopeMode === mode}
+            aria-label={mode === 'all' ? 'Todos os projetos' : 'Projeto selecionado'}
             disabled={mode === 'project' && !hasProject}
             onClick={() => onScope(mode)}
             title={
               mode === 'project' && !hasProject
                 ? 'Selecione um projeto na barra lateral'
-                : undefined
+                : mode === 'all'
+                  ? 'Sessões de todos os projetos'
+                  : 'Só as sessões do projeto selecionado na barra lateral'
             }
-            className={`${pillButton} disabled:opacity-40 ${
-              scopeMode === mode ? '!bg-[var(--color-surface-2)] !text-[var(--color-text)]' : ''
+            // Ativa: superfície elevada com borda e peso 600; inativa só texto
+            // apagado — um branco levemente mais claro não dizia qual valia.
+            data-active={scopeMode === mode || undefined}
+            className={`${pillButton} border disabled:opacity-40 ${
+              scopeMode === mode
+                ? '!border-[var(--color-border)] !bg-[var(--color-surface-2)] !font-semibold !text-[var(--color-text)] shadow-sm'
+                : '!border-transparent !bg-transparent !text-[var(--color-text-dim)]'
             }`}
           >
-            {mode === 'all' ? 'Todos os projetos' : 'Projeto selecionado'}
+            {mode === 'all' ? (
+              <>
+                Todos<span className="@max-3xl:hidden"> os projetos</span>
+              </>
+            ) : (
+              <>
+                {/* Estreito: "Este projeto" ("Projeto" sozinho não dizia qual). */}
+                <span className="@max-3xl:hidden">Projeto selecionado</span>
+                <span className="hidden @max-3xl:inline">Este projeto</span>
+              </>
+            )}
           </button>
         ))}
       </div>
       <div className={pill}>
-        <button type="button" onClick={onNote} className={pillButton} title="Nova nota solta">
-          <Icon as={StickyNote} size={13} /> Nota
+        <button
+          type="button"
+          onClick={onNote}
+          className={pillButton}
+          title="Nova nota solta"
+          aria-label="Nova nota solta"
+        >
+          <Icon as={StickyNote} size={13} /> <span className="@max-3xl:hidden">Nota</span>
         </button>
         <button
           type="button"
           onClick={onGroup}
           className={pillButton}
           title="Novo grupo de sessões"
+          aria-label="Novo grupo de sessões"
         >
-          <Icon as={Users} size={13} /> Grupo
+          <Icon as={Users} size={13} /> <span className="@max-3xl:hidden">Grupo</span>
         </button>
         <ViewMenu onTidy={onTidy} onOpenAll={onOpenAll} onCollapseAll={onCollapseAll} />
       </div>
@@ -369,7 +427,7 @@ export function MapTopBar({
         <span
           data-testid="map-hidden-hint"
           title="Fios de mesma frente, dependência entre repos e leques de filhas aparecem ao passar o mouse ou selecionar um cartão"
-          className="rounded-full px-2 py-1 text-[11px] text-[var(--color-text-dim)]"
+          className="whitespace-nowrap rounded-full px-2 py-1 text-[11px] text-[var(--color-text-dim)] @max-3xl:hidden"
         >
           +{hiddenEdges} {plural(hiddenEdges, 'ligação', 'ligações')} no foco
         </span>
@@ -378,7 +436,7 @@ export function MapTopBar({
   )
 }
 
-// Altura da toolbar (≈ pill de 34px + offset) em unidades do fluxo a zoom 1.
+// Altura da toolbar (≈ pill de 34px + offset) em px de tela (= unidades do fluxo a zoom 1).
 const TOOLBAR_CLEARANCE = 44
 // Menor largura útil: abaixo disto os botões empilhariam um por linha.
 const TOOLBAR_MIN_W = 180
@@ -414,6 +472,31 @@ export function SelectionToolbar({
     const w = n?.measured.width ?? n?.width ?? 0
     return Math.round(w * s.transform[2])
   })
+  // Anti-colisão: com o cabeçalho de grupo/lane/feature acima, vira pra baixo.
+  const side = useStore((s) => {
+    const n = nodeId ? s.nodeLookup.get(nodeId) : undefined
+    if (!n) return null
+    const zoom = s.transform[2] || 1
+    const boxOf = (m: typeof n) => ({
+      x: m.internals.positionAbsolute.x,
+      y: m.internals.positionAbsolute.y,
+      w: m.measured.width ?? m.width ?? 0,
+      h: m.measured.height ?? m.height ?? 0,
+    })
+    const headers = headerBoxes(
+      [...s.nodeLookup.values()].map((m) => ({
+        type: m.type,
+        box: boxOf(m),
+        headerH: (m.data as { headerH?: number } | undefined)?.headerH,
+      })),
+      LANE_HEADER_H,
+    )
+    return toolbarSideAtZoom(boxOf(n), headers, zoom, {
+      clearance: TOOLBAR_CLEARANCE,
+      minW: TOOLBAR_MIN_W,
+    })
+  })
+  const finalPosition = side ? (side === 'bottom' ? Position.Bottom : Position.Top) : position
   if (!nodeId || actions.length === 0) return null
   // Só as principais, sempre com rótulo (ícone solto ninguém decifra); o resto
   // mora no "⋯ Mais", que é o mesmo menu do clique direito.
@@ -421,10 +504,10 @@ export function SelectionToolbar({
   const shown = primary.length > 0 ? primary : actions
   const hidden = actions.length > shown.length
   return (
-    <NodeToolbar nodeId={nodeId} isVisible position={position} offset={8}>
+    <NodeToolbar nodeId={nodeId} isVisible position={finalPosition} offset={8}>
       <div
         data-testid="map-selection-toolbar"
-        data-position={position}
+        data-position={finalPosition}
         // Fundo levemente translúcido: virada pra baixo ela pode passar sobre o
         // título do cartão de baixo, que continua legível por trás.
         className={`${pill} flex-wrap justify-center !rounded-[18px] !bg-[color-mix(in_srgb,var(--color-surface)_86%,transparent)]`}
@@ -472,6 +555,18 @@ export function MapContextMenu({
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState(at)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setPos(
+      clampMenuPosition(
+        at,
+        { width: el.offsetWidth, height: el.offsetHeight },
+        { width: window.innerWidth, height: window.innerHeight },
+      ),
+    )
+  }, [at, actions.length])
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose()
@@ -492,7 +587,7 @@ export function MapContextMenu({
       ref={ref}
       role="menu"
       className="fixed z-[900] min-w-[190px] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-1 text-[12px] shadow-xl"
-      style={{ left: at.x, top: at.y }}
+      style={{ left: pos.x, top: pos.y }}
     >
       {actions.map((a) => (
         <button
@@ -511,6 +606,68 @@ export function MapContextMenu({
           {a.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+// "Mover para feature…": o menu/toolbar abre, o picker flutua junto do cartão.
+interface FeatureMoveState {
+  target: { sessionId: string; featureId: string | null } | null
+  open: (sessionId: string, featureId: string | null) => void
+  close: () => void
+}
+
+export const useFeatureMoveStore = create<FeatureMoveState>((set) => ({
+  target: null,
+  open: (sessionId, featureId) => set({ target: { sessionId, featureId } }),
+  close: () => set({ target: null }),
+}))
+
+// Busca no workspace inteiro (sem recorte de repo): a feature junta repos de
+// projetos diferentes. Grava sessions.feature_id pelo mesmo IPC do header.
+export function MapFeatureMovePicker() {
+  const target = useFeatureMoveStore((s) => s.target)
+  const close = useFeatureMoveStore((s) => s.close)
+  const note = useSessionFeatureStore((s) => s.note)
+  const forget = useSessionFeatureStore((s) => s.forget)
+  const [features, setFeatures] = useState<FeatureWithActivity[]>([])
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    if (!target) return
+    void featuresApi.listWithStats().then(setFeatures)
+    const card = document
+      .querySelector(`.react-flow__node[data-id="s:${CSS.escape(target.sessionId)}"]`)
+      ?.getBoundingClientRect()
+    const x = Math.min(card ? card.left : 200, window.innerWidth - 320)
+    const y = Math.min(card ? card.top + 40 : 160, window.innerHeight - 320)
+    setAt({ x: Math.max(8, x), y: Math.max(8, y) })
+  }, [target])
+  if (!target || !at) return null
+  return (
+    <div
+      data-testid="map-feature-move"
+      className="fixed z-[950] w-72"
+      style={{ left: at.x, top: at.y }}
+    >
+      <div className="relative">
+        <FeaturePicker
+          features={features}
+          value={target.featureId}
+          testId="map-feature-picker"
+          allowNone
+          onClose={close}
+          onPick={(featureId) => {
+            close()
+            // Grava mesmo quando é a feature atual: confirmar o que a heurística
+            // pôs torna o vínculo do usuário (a resolução contínua não o move
+            // mais). `null` desfaz e também fica como escolha do usuário.
+            void sessionsApi.setFeature(target.sessionId, featureId).then(() => {
+              if (featureId) note(target.sessionId, featureId)
+              else forget(target.sessionId)
+            })
+          }}
+        />
+      </div>
     </div>
   )
 }

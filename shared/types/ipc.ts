@@ -58,6 +58,7 @@ export type * from './design'
 import type { DesignApi } from './design'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AgentBusSnapshot } from './agent-bus'
+import type { SessionLinkPulse } from './session-link-pulse'
 import type {
   CanvasNote,
   CanvasPositionInput,
@@ -399,6 +400,22 @@ export interface PassBatonResult {
   // true = o apelido da antecessora seguia ocupado (ela continua viva) e a sucessora
   // subiu com OUTRO endereço.
   aliasChanged: boolean
+  // Antecessora era MÃE: quantos handoffs passaram a responder à sucessora (0 =
+  // não era mãe). Com > 0, `alias` é o endereço novo da mãe.
+  relinkedChildren?: number
+}
+
+// Broadcast 'baton:children-missed': filhas que NÃO receberam a nota da nova mãe
+// (guard recusou por menu aberto, ou a filha não estava rodando). Elas seguem
+// escrevendo para a antecessora, que continua viva.
+export interface BatonChildrenMissed {
+  alias: string
+  previousAlias: string | null
+  missed: Array<{
+    handoffId: string
+    childAlias: string | null
+    reason: 'child-not-running' | 'inject-refused'
+  }>
 }
 
 // Criação MANUAL de sessão-filha pelo diálogo de nova sessão — o caminho sem
@@ -712,6 +729,20 @@ export interface UpdateFeatureInput {
   objective?: string | null
   synthMode?: FeatureSynthMode
   model?: string | null
+}
+
+// Painel da feature / MCP feature_update: troca só uma seção do doc `.md`.
+// `section` é um heading de FEATURE_SECTIONS (shared/feature-sections.ts).
+export interface UpdateFeatureSectionInput {
+  featureId: string
+  section: string
+  markdown: string
+}
+
+// "Fixar na feature": anexa o texto às notas fixadas da feature.
+export interface AppendFeatureFixedNoteInput {
+  featureId: string
+  text: string
 }
 
 export interface SetFeatureReposInput {
@@ -1242,6 +1273,8 @@ export interface FeatureSessionSummary {
   endedAt: number | null
   /** true = a PTY desta sessão está viva NESTE app agora. */
   isLive: boolean
+  /** Mãe do handoff mais recente em que esta sessão é a filha (sessions.id). */
+  motherSessionId?: string | null
 }
 
 export interface PaneSnapshot {
@@ -1274,6 +1307,13 @@ export interface PtyExitEvent {
   sessionId: string
   exitCode: number
   signal: number | null
+}
+
+// 'session:feature-changed': o vínculo sessão→feature mudou no main (resolução
+// contínua ou "Mover para feature…"). featureId null = sem feature.
+export interface SessionFeatureChangedEvent {
+  sessionId: string
+  featureId: string | null
 }
 
 // Subagente (Task tool) visível no tail do transcript da sessão. 'running' =
@@ -2760,6 +2800,7 @@ export interface Api {
     list(): Promise<Session[]>
     onData(handler: (event: PtyDataEvent) => void): () => void
     onExit(handler: (event: PtyExitEvent) => void): () => void
+    onFeatureChanged(handler: (event: SessionFeatureChangedEvent) => void): () => void
     watchActivity(ccSessionId: string): Promise<void>
     unwatchActivity(ccSessionId: string): Promise<void>
     onActivity(handler: (event: SessionActivity) => void): () => void
@@ -2945,6 +2986,12 @@ export interface Api {
     dismissDuplicate(featureId: string): Promise<Feature>
     /** Absorve o rascunho no destino e ARQUIVA a origem (nunca apaga). */
     mergeDuplicate(input: MergeFeatureDuplicateInput): Promise<Feature>
+    /** Troca só uma seção do doc (painel da feature: notas fixadas, regras de negócio). */
+    updateSection(input: UpdateFeatureSectionInput): Promise<Feature>
+    /** "Fixar na feature": anexa o texto às notas fixadas. */
+    appendFixedNote(input: AppendFeatureFixedNoteInput): Promise<Feature>
+    /** Roda a síntese holística agora, sem esperar o debounce. */
+    synthesizeNow(featureId: string): Promise<void>
     onUpdated(handler: (feature: Feature) => void): () => void
     onSynthError(handler: (event: FeatureSynthError) => void): () => void
   }
@@ -3025,6 +3072,7 @@ export interface Api {
     // Sobe a sucessora com o briefing APROVADO, no mesmo repo/feature. Herda o papel
     // de filha de handoff quando houver. NÃO encerra a antecessora.
     pass(input: PassBatonInput): Promise<PassBatonResult>
+    onChildrenMissed(handler: (payload: BatonChildrenMissed) => void): () => void
   }
   // Sessões como sistema conectado (mãe→filha, bastão, repos ligados, feature).
   // onUpdated recebe o grafo inteiro já recalculado pelo main.
@@ -3032,6 +3080,8 @@ export interface Api {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
     onUpdated(handler: (graph: SessionGraph) => void): () => void
+    // Uma sessão mandou algo para outra (session-link-pulse): o mapa anima o fio.
+    onLinkPulse(handler: (pulse: SessionLinkPulse) => void): () => void
   }
   // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
   agentBus: {

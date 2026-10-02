@@ -5,7 +5,9 @@ import type { CanvasPositionInput } from '../../../shared/types/canvas'
 import { graphToFlow, positionKey, type MapInput } from './graph-to-flow'
 
 export function tidyPositions(input: MapInput): CanvasPositionInput[] {
-  const { nodes } = graphToFlow({ ...input, positions: [] })
+  // Sempre na densidade cheia: gravado no compacto, cada cartão salvo cobriria o
+  // de baixo ao voltar ao zoom de leitura.
+  const { nodes } = graphToFlow({ ...input, positions: [], compact: false })
   return nodes.flatMap((n) => {
     const key = positionKey(n.id)
     if (!key) return []

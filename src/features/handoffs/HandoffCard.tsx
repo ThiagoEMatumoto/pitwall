@@ -88,6 +88,41 @@ export interface LiveBadge {
   attention: boolean
 }
 
+// Quem o card mostra como filha. Depois do bastão de uma FILHA o handoff já
+// aponta pra sucessora, mas ela pode ainda não ter chegado ao liveSessions: sem
+// isto o card caía em "→ <repo> · filha encerrou" no meio de uma troca que deu
+// certo. Enquanto ela não aparece, vale o apelido que a antecessora carregava
+// (a sucessora herda o mesmo endereço) e o selo diz que o bastão está passando.
+// A troca dura segundos: o relink (markRunning) grava updated_at no bastão. Depois
+// desta janela a sucessora ausente não está "assumindo" — falhou ou encerrou.
+export const SUCCESSOR_PENDING_MS = 60_000
+
+export function childIdentity(
+  handoff: Pick<Handoff, 'childSessionId' | 'predecessorSessionId' | 'updatedAt'>,
+  liveSessions: readonly Pick<LiveSessionInfo, 'id' | 'title' | 'status'>[],
+  now: number = Date.now(),
+): { title: string | null; successorPending: boolean } {
+  const child = handoff.childSessionId
+    ? liveSessions.find((s) => s.id === handoff.childSessionId)
+    : undefined
+  if (child) return { title: child.title ?? null, successorPending: false }
+  if (
+    !handoff.predecessorSessionId ||
+    !handoff.childSessionId ||
+    now - handoff.updatedAt > SUCCESSOR_PENDING_MS
+  ) {
+    return { title: null, successorPending: false }
+  }
+  const predecessor = liveSessions.find((s) => s.id === handoff.predecessorSessionId)
+  return { title: predecessor?.title ?? null, successorPending: true }
+}
+
+export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
+  label: 'assumindo o bastão',
+  color: 'var(--color-info)',
+  attention: false,
+}
+
 export function liveBadgeFor(
   live: Pick<LiveSessionInfo, 'status' | 'attentionReason'> | undefined,
   needsInput = false,
@@ -109,7 +144,58 @@ export function liveBadgeFor(
   }
 }
 
-const STATUS_LABEL: Record<HandoffStatus, string> = {
+// A trilha colapsada é o resumo de 40px do dock: cor = estado. A filha PAUSADA
+// (interrompida mas retomável) fica apagada em vez do âmbar de 'interrupted' —
+// ela não está pedindo nada, só esperando você mandar continuar; âmbar ali seria
+// o mesmo alarme de quem realmente espera resposta. No bastão de uma filha a
+// sucessora pode ainda não estar em liveSessions: vale childIdentity, como no card.
+export function crewDotColor(
+  handoff: Handoff,
+  live: LiveSessionInfo | undefined,
+  liveSessions: readonly LiveSessionInfo[],
+  now: number = Date.now(),
+): string {
+  if (live) return liveBadgeFor(live).color
+  if (childIdentity(handoff, liveSessions, now).successorPending) return SUCCESSOR_PENDING_BADGE.color
+  if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
+  return STATUS_COLOR[handoff.status]
+}
+
+export function crewDotTitle(
+  handoff: Handoff,
+  live: LiveSessionInfo | undefined,
+  liveSessions: readonly LiveSessionInfo[],
+  now: number = Date.now(),
+): string {
+  const identity = childIdentity(handoff, liveSessions, now)
+  const title = live?.title ?? identity.title
+  const alias = splitAlias(title)
+  const who = title ?? handoff.targetRepoLabel ?? handoff.targetRepoId
+  const scope = alias ? ` (${alias.name})` : ''
+  const state = live
+    ? liveBadgeFor(live).label
+    : identity.successorPending
+      ? SUCCESSOR_PENDING_BADGE.label
+      : handoff.status === 'interrupted' && handoff.resumable
+        ? 'pausada, dá pra retomar'
+        : 'despachando'
+  return `${who}${scope} — ${state}`
+}
+
+// Inicial da filha no trilho recolhido da Equipe (o ponto sozinho não dizia quem
+// era): a do apelido ("otavio-parte-c1" → "O"), senão a do título ou do repo.
+export function crewDotInitial(
+  handoff: Handoff,
+  live: LiveSessionInfo | undefined,
+  liveSessions: readonly LiveSessionInfo[],
+  now: number = Date.now(),
+): string {
+  const title = live?.title ?? childIdentity(handoff, liveSessions, now).title
+  const who = splitAlias(title)?.name ?? title ?? handoff.targetRepoLabel ?? handoff.targetRepoId ?? ''
+  return (who.match(/[\p{L}\p{N}]/u)?.[0] ?? '?').toUpperCase()
+}
+
+export const STATUS_LABEL: Record<HandoffStatus, string> = {
   pending: 'Pendente',
   approved: 'Aprovado',
   running: 'Em andamento',
@@ -342,11 +428,17 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
 
   // Identidade endereçável da filha: `sessions.title` carrega o alias fixado no
   // spawn (`<nome>-<escopo>`). Nome em destaque, escopo apagado embaixo.
-  const alias = splitAlias(childSession?.title)
+  const identity = childIdentity(handoff, liveSessions)
+  const childTitle = childSession?.title ?? identity.title
+  const alias = splitAlias(childTitle)
 
   // Sinais vivos da filha. badge.attention (waiting/ended) ou needs_input pedem
   // realce âmbar. needs_input vence: a mãe pediu input explícito.
-  const live = isLiveHandoff ? liveBadgeFor(childLive) : null
+  const live = isLiveHandoff
+    ? identity.successorPending
+      ? SUCCESSOR_PENDING_BADGE
+      : liveBadgeFor(childLive)
+    : null
   // needs_input com progresso posterior à pergunta = ela já foi respondida fora
   // do app e a filha retomou (ver crewResumedAfterQuestion). O registro segue no
   // banco; o card é que para de anunciar um bloqueio que não existe mais.
@@ -581,18 +673,14 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         <span className="truncate text-sm font-medium text-[var(--color-text)]">
           {/* O alias da sessão, o MESMO rótulo do cartão no mapa e da aba; o nome
               da pessoa fica em segundo plano na linha de baixo. */}
-          {childSession?.title ?? (alias ? alias.name : `→ ${repoLabel}`)}
+          {childTitle ?? (alias ? alias.name : `→ ${repoLabel}`)}
         </span>
+        {/* O selo com rótulo vale em toda densidade (no dock só aparecia um
+            ponto, e o mesmo cartão na Home dizia "trabalhando"). */}
         {liveBadgeWins && live ? (
-          tight ? (
             <span
-              className="h-2 w-2 shrink-0 rounded-full"
-              style={{ background: live.color }}
-              title={`Estado ao vivo da sessão-filha: ${live.label}`}
-            />
-          ) : (
-            <span
-              className="inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-medium"
+              data-testid="handoff-live-badge"
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full border font-medium ${tight ? 'px-1 py-px text-[10px]' : 'px-1.5 py-0.5 text-[11px]'}`}
               style={{
                 color: live.color,
                 borderColor: `color-mix(in srgb, ${live.color} 45%, transparent)`,
@@ -603,7 +691,6 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
               <span className="h-1.5 w-1.5 rounded-full" style={{ background: live.color }} />
               {live.label}
             </span>
-          )
         ) : (
           <StatusBadge status={handoff.status} paused={paused} />
         )}
@@ -611,9 +698,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
       {alias && (
         <div
           className="truncate text-[11px] text-[var(--color-text-dim)]"
-          title={`${childSession?.title ?? alias.name} → ${repoLabel}`}
+          title={`${childTitle ?? alias.name} · ${repoLabel}`}
         >
-          {`${alias.name} · → ${repoLabel}`}
+          {`${alias.name} · ${repoLabel}`}
         </div>
       )}
 

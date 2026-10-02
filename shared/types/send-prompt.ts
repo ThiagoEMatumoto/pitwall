@@ -9,6 +9,9 @@ export interface SendPromptInput {
   sessionId: string
   text: string
   when: SendPromptWhen
+  // Sessão de onde a mensagem saiu (o @alias digitado no composer de outra aba).
+  // Só serve para a bolinha no fio do mapa, que sai quando a entrega acontece.
+  fromSessionId?: string
 }
 
 export type SendPromptError =

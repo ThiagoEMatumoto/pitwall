@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Flag } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, Crown, Flag } from 'lucide-react'
 
 import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
@@ -7,10 +7,12 @@ import { Icon } from '@/components/ui/Icon'
 import { Input } from '@/components/ui/Input'
 import { showToast } from '@/features/notifications/toast-store'
 import { batonApi } from '@/lib/ipc'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 
 import type { PassBatonResult } from '../../../shared/types/ipc'
+import { isLedByMother } from '../../../shared/handoff-lead'
 
 // Status de handoff sem volta: filha em done/rejected/failed não tem papel a
 // herdar. Espelha TERMINAL_HANDOFF_STATUSES do main (código do main não é
@@ -18,20 +20,34 @@ import type { PassBatonResult } from '../../../shared/types/ipc'
 // só governa o que a tela PROMETE ao humano antes de ele confirmar.
 const TERMINAL_HANDOFF_STATUSES: ReadonlySet<string> = new Set(['done', 'rejected', 'failed'])
 
-type Phase = 'distilling' | 'error' | 'ready' | 'passing' | 'passed'
+// 'manual': o humano desistiu de esperar a destilação e escreve o briefing à mão.
+type Phase = 'distilling' | 'error' | 'manual' | 'ready' | 'passing' | 'passed'
+
+// Onde o textarea do briefing aparece: sempre que dá pra confirmar. Destilação
+// falhou ou foi pulada não pode trancar o bastão.
+const EDITABLE: ReadonlySet<Phase> = new Set(['error', 'manual', 'ready', 'passing'])
+
+// O ipcRenderer.invoke embrulha o erro do main em "Error invoking remote
+// method '<canal>': Error: <msg>"; só a <msg> interessa a quem lê o diálogo.
+const IPC_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:\w*Error: )?/
 
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(IPC_ERROR_PREFIX, '')
 }
 
 // Foca a sucessora: o PTY dela já subiu no MAIN (baton:pass spawna lá dentro),
 // então aqui não há spawn nenhum — só re-attach de pane à sessão viva, o mesmo
 // caminho de quem clica numa sessão no strip. Devolve false quando o snapshot
 // ainda não a trouxe: nesse caso ela existe, mas quem abre é o humano.
+// Com o mapa na frente o bastão fica no mapa: focar a aba tiraria o mapa da
+// frente (useLeaveMapOnSessionFocus) e levaria junto a coluna da mãe fixada, que
+// segue para a sucessora sozinha quando o grafo traz o fio de bastão.
 async function focusSuccessor(sessionId: string): Promise<boolean> {
   await useAppStore.getState().refreshLiveSessions()
   const live = useAppStore.getState().liveSessions.find((s) => s.id === sessionId)
   if (!live) return false
+  if (useProjectsViewStore.getState().view === 'map') return true
   await useAppStore.getState().focusOrOpenSession(live)
   return true
 }
@@ -68,6 +84,17 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
 
   const liveSessions = useAppStore((s) => s.liveSessions)
   const handoffs = useHandoffsStore((s) => s.handoffs)
+  // Cada destilação ganha um número: a que chega depois de o humano ir pro
+  // manual (ou de outra destilação começar) é descartada, não sobrescreve.
+  const distillRun = useRef(0)
+
+  // Modo mãe: as filhas que a sucessora vai liderar. Mesmo predicado do main
+  // (listRelinkableByMother) e do badge; quem decide o relink é o main, isto é o
+  // que a tela promete antes de confirmar.
+  const children = handoffs.filter((h) => h.motherSessionId === sessionId && isLedByMother(h))
+  const childNames = children.map(
+    (h) => liveSessions.find((s) => s.id === h.childSessionId)?.title ?? h.task.slice(0, 40),
+  )
 
   // Papel herdado: se a antecessora é filha de um handoff vivo, a sucessora
   // assume o lugar dela no Crew Dock e o endereço de peer. Vale dizer isso ANTES
@@ -91,6 +118,7 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
         setPhase('error')
         return
       }
+      const run = ++distillRun.current
       setPhase('distilling')
       setError(null)
       setElapsed(0)
@@ -99,9 +127,12 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
           ccSessionId,
           note: extraNote.trim() || undefined,
         })
+        if (run !== distillRun.current) return
         setBriefing(text)
         setPhase('ready')
       } catch (err) {
+        if (run !== distillRun.current) return
+        console.warn('[baton] destilação falhou:', err)
         setError(messageOf(err))
         setPhase('error')
       }
@@ -149,6 +180,17 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
       // nota é o main (passBaton), por qualquer caminho — este aviso é a segunda
       // linha: a nota só chega se a mãe estiver viva, e mesmo viva ela pode estar
       // no meio de um turno. Por isso o diálogo segura até o humano confirmar.
+      if (result.relinkedChildren) {
+        showToast({
+          title: 'Bastão da mãe passado',
+          body: `${result.relinkedChildren} ${result.relinkedChildren === 1 ? 'filha agora responde' : 'filhas agora respondem'} a "${result.alias}". A anterior fica como "bastão passado".`,
+        })
+        // Mãe que também é filha: o aviso do endereço trocado (para a avó) segue.
+        if (!result.aliasChanged) {
+          onClose()
+          return
+        }
+      }
       if (result.aliasChanged) {
         setPassed(result)
         setPhase('passed')
@@ -161,30 +203,52 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
       onClose()
     } catch (err) {
       setError(messageOf(err))
-      setPhase('ready')
+      setPhase(briefing.trim() ? 'ready' : 'manual')
     }
   }
 
+  // Sai da espera: a destilação em curso, se voltar, é descartada.
+  function writeByHand() {
+    distillRun.current++
+    setError(null)
+    setPhase('manual')
+  }
+
+  const canConfirm =
+    (phase === 'ready' || phase === 'error' || phase === 'manual') && briefing.trim().length > 0
   const busy = phase === 'distilling' || phase === 'passing'
+  const needsBriefing = EDITABLE.has(phase) && !busy && briefing.trim().length === 0
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title="Passar o bastão"
+      title={children.length ? 'Passar o bastão da mãe' : 'Passar o bastão'}
       widthClassName="w-[44rem]"
       footer={
         phase === 'passed' ? (
           <Button onClick={onClose}>Entendi</Button>
         ) : (
           <>
+            {/* O motivo do botão desabilitado mora ao lado dele (solto abaixo do
+                campo, o botão só parecia apagado). */}
+            {needsBriefing && (
+              <span
+                data-testid="baton-briefing-required"
+                className="mr-auto self-center text-xs text-[var(--color-warning)]"
+              >
+                Escreva o briefing para subir a sucessora.
+              </span>
+            )}
             <Button variant="ghost" onClick={onClose}>
               Cancelar
             </Button>
             <Button
               onClick={() => void confirm()}
               loading={phase === 'passing'}
-              disabled={phase !== 'ready' || briefing.trim().length === 0}
+              data-testid="baton-confirm"
+              disabled={!canConfirm}
+              title={needsBriefing ? 'Escreva o briefing para subir a sucessora' : undefined}
             >
               {phase === 'passing' ? 'Subindo a sucessora…' : 'Subir a sucessora'}
             </Button>
@@ -196,8 +260,8 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
         {/* A distinção que o usuário precisa fazer NESTA tela: /compact encolhe
             esta conversa; o bastão começa outra, limpa, herdando só o essencial. */}
         <p className="text-xs leading-relaxed text-[var(--color-text-dim)]">
-          Uma sessão <strong className="text-[var(--color-text)]">nova</strong>, de contexto
-          limpo, assume o trabalho levando o briefing abaixo.{' '}
+          Uma sessão <strong className="text-[var(--color-text)]">nova</strong>, de contexto limpo,
+          assume o trabalho levando o briefing abaixo.{' '}
           <strong className="text-[var(--color-text)]">Não é /compact</strong>: aquele condensa o
           histórico desta mesma conversa. Esta sessão{' '}
           <strong className="text-[var(--color-text)]">continua viva</strong> — encerre quando
@@ -215,6 +279,19 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
             ) : null}{' '}
             e herda a feature vinculada a esta sessão.
           </span>
+          {children.length > 0 && (
+            <span data-testid="baton-mother-mode" className="flex items-start gap-1.5">
+              <Icon as={Crown} size={12} className="mt-px shrink-0 text-[var(--color-accent)]" />
+              <span>
+                Esta sessão é a <span className="text-[var(--color-text)]">mãe</span> de{' '}
+                {children.length} {children.length === 1 ? 'filha' : 'filhas'} (
+                <span className="text-[var(--color-text)]">{childNames.join(', ')}</span>). A
+                sucessora assume a liderança com um endereço novo: os handoffs passam para ela, cada
+                filha viva recebe uma nota no terminal (uma filha parada num menu pode não
+                recebê-la) e esta sessão fica como "bastão passado".
+              </span>
+            </span>
+          )}
           {inherited && (
             <span data-testid="baton-inherits-child">
               Esta sessão é filha de handoff: a sucessora{' '}
@@ -237,12 +314,15 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
             data-testid="baton-loading"
             className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-6 text-center text-xs text-[var(--color-text-dim)]"
           >
-            <span className="text-[var(--color-text)]">
-              Destilando o transcript… ({elapsed}s)
+            <span className="text-[var(--color-text)]">Destilando o transcript… ({elapsed}s)</span>
+            <span>
+              O Claude está relendo a conversa inteira: costuma levar dezenas de segundos e desiste
+              em 90s.
             </span>
             <span>
-              O Claude está relendo a conversa inteira: costuma levar dezenas de segundos e
-              desiste em 90s.
+              <Button variant="ghost" data-testid="baton-write-manual" onClick={writeByHand}>
+                Escrever à mão
+              </Button>
             </span>
           </div>
         )}
@@ -250,21 +330,23 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
         {phase === 'error' && (
           <div
             data-testid="baton-error"
-            className="flex flex-col gap-2 rounded-md border px-3 py-3 text-xs"
+            // Aviso, não erro: o fallback é esperado e recuperável (escrever à mão).
+            // Vermelho fica para a falha que bloqueia; o botão vai na mesma linha.
+            className="flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
             style={{
-              borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
-              color: 'var(--color-danger)',
+              borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',
+              color: 'var(--color-warning)',
             }}
           >
-            <span className="flex items-start gap-1.5">
-              <Icon as={AlertTriangle} size={13} className="mt-px shrink-0" />
-              <span>A destilação falhou: {error}</span>
+            <Icon as={AlertTriangle} size={13} className="shrink-0" />
+            {/* Sem o erro cru (UUID, caminho do transcript): quem lê precisa
+                saber o que fazer, não o que quebrou. O detalhe vai pro console. */}
+            <span className="min-w-0 flex-1">
+              Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo.
             </span>
-            <div className="flex justify-end">
-              <Button variant="ghost" onClick={() => void distill(note)}>
-                Tentar de novo
-              </Button>
-            </div>
+            <Button variant="ghost" className="shrink-0" onClick={() => void distill(note)}>
+              Tentar de novo
+            </Button>
           </div>
         )}
 
@@ -279,18 +361,17 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
           >
             <Icon as={Flag} size={13} className="mt-px shrink-0" />
             <span>
-              O endereço da filha mudou: a sucessora atende por{' '}
-              <strong>{passed.alias}</strong>, porque a anterior segue viva com o apelido
-              antigo. O Pitwall já deixou a nota do endereço novo na sessão-mãe (se ela
-              estiver viva) — confirme que ela leu antes de contar com isso, porque o
-              SendMessage dela ainda aponta pro nome velho.
+              O endereço da filha mudou: a sucessora atende por <strong>{passed.alias}</strong>,
+              porque a anterior segue viva com o apelido antigo. O Pitwall já deixou a nota do
+              endereço novo na sessão-mãe (se ela estiver viva) — confirme que ela leu antes de
+              contar com isso, porque o SendMessage dela ainda aponta pro nome velho.
             </span>
           </div>
         )}
 
-        {(phase === 'ready' || phase === 'passing') && (
+        {EDITABLE.has(phase) && (
           <>
-            {error && (
+            {error && phase !== 'error' && (
               <div
                 data-testid="baton-pass-error"
                 className="rounded-md border px-3 py-2 text-xs"
@@ -304,15 +385,21 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
             )}
             <div className="w-full">
               <label className="mb-1 block text-xs text-[var(--color-text-dim)]">
-                Briefing da sucessora — leia e corrija; é isto que ela vai saber
+                {phase === 'ready' || phase === 'passing'
+                  ? 'Briefing da sucessora — leia e corrija; é isto que ela vai saber'
+                  : 'Briefing da sucessora — escreva o estado atual, as decisões e o próximo passo'}
+                {children.length > 0 &&
+                  ' (os itens da lista de filhas vêm do banco e são regravados ao subir; escreva instruções fora deles)'}
               </label>
               <textarea
                 data-testid="baton-briefing"
                 value={briefing}
                 onChange={(e) => setBriefing(e.target.value)}
-                rows={18}
+                rows={8}
                 spellCheck={false}
-                className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
+                // Cresce com o texto entre 200px e 40vh: fixo em 18 linhas (~460px), empurrava
+                // os campos opcionais para baixo do rodapé, cortados pela metade.
+                className="max-h-[40vh] min-h-[200px] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 font-mono text-xs leading-relaxed outline-none [field-sizing:content] focus:border-[var(--color-accent)]"
               />
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -334,9 +421,13 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
                   placeholder="O que a destilação deixou passar"
                 />
               </div>
-              <Button variant="ghost" disabled={busy} onClick={() => void distill(note)}>
-                Destilar de novo
-              </Button>
+              {/* Com a destilação em erro, a única ação de regerar é o "Tentar de
+                  novo" do aviso (que também usa este contexto extra). */}
+              {phase !== 'error' && (
+                <Button variant="ghost" disabled={busy} onClick={() => void distill(note)}>
+                  Destilar de novo
+                </Button>
+              )}
             </div>
           </>
         )}

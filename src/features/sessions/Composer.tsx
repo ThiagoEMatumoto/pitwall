@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronRight, CornerDownLeft, Image as ImageIcon, X } from 'lucide-react'
+import { ChevronRight, CornerDownLeft, Image as ImageIcon, TextCursorInput, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
 import { sendToApi, sessionsApi } from '@/lib/ipc'
@@ -380,6 +380,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         sessionId: target.sessionId,
         text: parsed.body,
         when: defaultWhen(target, false),
+        fromSessionId: sessionId,
       })
       if (res.ok) clearDraft(value)
       setRouteNotice(
@@ -617,21 +618,24 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                 }}
               />
             </div>
-            <div className="flex shrink-0 flex-col gap-1">
-              <Button variant="primary" size="sm" onClick={submit} title={hint}>
-                <Icon as={CornerDownLeft} size={13} />
-                Enviar
-              </Button>
+            <div className="flex shrink-0 items-center gap-1">
+              {/* Inserir é ação secundária: ícone com tooltip ao lado do Enviar,
+                  não um rótulo solto embaixo dele. */}
               {!compact && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={insertOnly}
-                  title="Insere o texto no prompt do claude sem enviar — você revisa e aperta Enter"
+                  aria-label="Inserir sem enviar"
+                  title="Inserir sem enviar: põe o texto no prompt do claude para você revisar e apertar Enter"
                 >
-                  Inserir
+                  <Icon as={TextCursorInput} size={13} />
                 </Button>
               )}
+              <Button variant="primary" size="sm" onClick={submit} title={hint}>
+                <Icon as={CornerDownLeft} size={13} />
+                Enviar
+              </Button>
             </div>
           </GradientBorder>
         </>

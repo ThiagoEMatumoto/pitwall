@@ -38,8 +38,10 @@ import { UpdateToast } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
-import { projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
-import { matchCombo, resolveCombo } from '@/lib/keybindings'
+import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { showToast } from '@/features/notifications/toast-store'
+import { childrenMissedToast } from '@/features/handoffs/crew'
+import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useFilesStore } from '@/lib/files-store'
@@ -56,6 +58,7 @@ import { CrewPeek } from '@/features/handoffs/CrewPeek'
 import { SessionMap } from '@/features/session-canvas/SessionMap'
 import { ProjectsViewToggle } from '@/features/session-canvas/ProjectsViewToggle'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { useMotherDockStore } from '@/features/session-canvas/mother-dock'
 import { focusActiveTerminal } from '@/features/session-canvas/focus-active-terminal'
 import { useLeaveMapOnSessionFocus } from '@/features/session-canvas/useLeaveMapOnSessionFocus'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -73,6 +76,7 @@ import {
   useAttentionStore,
 } from '@/features/session-switcher/useAttentionQueue'
 import { useSessionMruStore } from '@/store/session-mru-store'
+import { listenSessionFeatureChanges } from '@/store/sessionFeatureStore'
 import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
@@ -198,6 +202,13 @@ export function AppShell() {
   const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
   const toastPlacement = useToastPlacement(crewDockWidth)
+  const toastStyle = {
+    right: toastPlacement.right,
+    top: toastPlacement.top,
+    bottom: toastPlacement.bottom,
+    zIndex: toastPlacement.zIndex,
+    maxWidth: toastPlacement.maxWidth,
+  }
 
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
@@ -275,6 +286,16 @@ export function AppShell() {
     },
     [closePane, syncFilesRepoToActivePane],
   )
+
+  // Bastão da mãe: filha que não recebeu a nota do endereço novo segue escrevendo
+  // para a antecessora. O diálogo já fechou quando a nota termina, então o aviso
+  // mora aqui, assinado uma vez pela vida do app.
+  useEffect(
+    () => batonApi.onChildrenMissed((payload) => showToast(childrenMissedToast(payload))),
+    [],
+  )
+
+  useEffect(() => listenSessionFeatureChanges(), [])
 
   // Restore do layout exato. Quando há pendingLayout, aplicamos api.fromJSON UMA
   // vez — em vez de deixar o effect de reconciliação criar os painéis no arranjo
@@ -530,6 +551,16 @@ export function AppShell() {
       // lado). Mesmo contrato do Alt+A: engole antes do xterm e cede a overlays; em
       // campo de texto do app a tecla fica pro campo (sessionLinkKeyAction).
       const linkStep = sessionLinkKeyAction(e, overrides, useAppStore.getState().area)
+      // Com o lift do mapa aberto, Alt+,/Alt+. trocam de sessão na faixa da modal
+      // (CrewPeek, listener próprio) em vez de navegar até a aba. A tecla é
+      // engolida aqui mesmo assim: com menos de 2 sessões na faixa ninguém a
+      // trata, e o xterm da modal mandaria ESC+'.' à TUI (lido como Esc).
+      const liftOpen = document.querySelector('[data-peek-lift]') !== null
+      if (linkStep && liftOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       if (linkStep && !attentionKeysBlocked()) {
         e.preventDefault()
         e.stopPropagation()
@@ -537,8 +568,12 @@ export function AppShell() {
         stepSessionLink(linkStep === 'next' ? 1 : -1)
         return
       }
+      // Todos os atalhos abaixo também param a propagação: só preventDefault não
+      // impede o xterm de receber o keydown (Ctrl+K chegava como \x0b e apagava o
+      // rascunho do claude).
       if (matchCombo(e, resolveCombo('palette.toggle', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setPaletteOpen((v) => !v)
         return
       }
@@ -556,6 +591,7 @@ export function AppShell() {
       // o split/xterm continuam montados por trás.
       if (matchCombo(e, resolveCombo('switcher.open', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setSwitcherOpen(true)
         return
       }
@@ -564,6 +600,7 @@ export function AppShell() {
       // (menu de aplicação é null, então não há accelerator competindo).
       if (matchCombo(e, resolveCombo('session.new', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         setNewSessionOpen(true)
         return
       }
@@ -574,12 +611,32 @@ export function AppShell() {
       if (matchCombo(e, resolveCombo('crew.focus', overrides))) {
         if (!hasCrew) return
         e.preventDefault()
+        e.stopPropagation()
         useCrewDockStore.getState().requestFocus()
+        return
+      }
+      // Ctrl+Shift+O fora do mapa: sem isto o xterm recebia ^O (Ctrl+O do claude
+      // alterna o transcript). Abre o mapa e deixa o pedido para ele resolver a mãe
+      // da aba em foco; com o mapa na tela, quem atende é o SessionMap.
+      if (matchCombo(e, resolveCombo('mother.focus', overrides))) {
+        const onMap =
+          useAppStore.getState().area === 'projects' &&
+          useProjectsViewStore.getState().view === 'map'
+        if (onMap) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const activeId = apiRef.current?.activePanel?.id
+        const pane = useAppStore.getState().panes.find((p) => p.paneId === activeId)
+        useMotherDockStore.getState().requestFromOutside(pane?.session.id ?? null)
+        useAppStore.getState().setArea('projects')
+        useProjectsViewStore.getState().setView('map')
         return
       }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
+        e.stopPropagation()
         toggleFiles()
       }
     }
@@ -868,7 +925,7 @@ export function AppShell() {
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
           <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain />}
+            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain overrides={overrides} />}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
               <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
@@ -912,16 +969,29 @@ export function AppShell() {
       <div
         data-testid="toast-stack"
         className="pointer-events-none fixed flex flex-col items-end gap-2"
-        style={toastPlacement}
+        style={toastStyle}
+        hidden={toastPlacement.hidden}
       >
-        <UpdateToast />
-        <NotificationToast />
+        {/* Mesmo teto dos avisos: na faixa sobre a modal não cabe o card de update.
+            Escondido, não desmontado, para não perder o "dispensar". */}
+        <div hidden={toastPlacement.maxVisible === 0}>
+          <UpdateToast />
+        </div>
+        <NotificationToast maxVisible={toastPlacement.maxVisible} />
       </div>
     </div>
   )
 }
 
-function EmptyMain() {
+function EmptyKbd({ combo }: { combo: Combo }) {
+  return (
+    <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
+      {formatCombo(combo)}
+    </kbd>
+  )
+}
+
+function EmptyMain({ overrides }: { overrides: Parameters<typeof resolveCombo>[1] }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-10 flex h-full items-center justify-center">
       <div className="max-w-sm text-center text-[var(--color-text-dim)]">
@@ -929,16 +999,13 @@ function EmptyMain() {
         <div className="mb-2 text-lg font-medium text-[var(--color-text)]">
           Nenhuma sessão aberta
         </div>
-        <div className="text-sm">Clique num repo na barra lateral pra abrir uma sessão.</div>
+        <div className="text-sm">
+          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou escolha
+          um repo na barra lateral.
+        </div>
         <div className="mt-3 text-xs">
-          ou pressione{' '}
-          <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
-            Ctrl
-          </kbd>{' '}
-          <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text)]">
-            K
-          </kbd>{' '}
-          pra buscar
+          <EmptyKbd combo={resolveCombo('palette.toggle', overrides)} /> busca sessões, features e
+          tarefas
         </div>
       </div>
     </div>

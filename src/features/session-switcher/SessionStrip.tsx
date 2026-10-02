@@ -1,6 +1,7 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ChevronDown,
   ChevronRight,
   Circle,
   Loader,
@@ -22,6 +23,7 @@ import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { liveSessionLabel } from './session-label'
+import { clippedCount } from './strip-overflow'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -104,7 +106,11 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   // Fixados primeiro (ordem de fixação); resto na ordem original. Sem
   // auto-reorder por status — o sinal de "aguardando" é a cor/badge.
   const orderedSessions = useMemo(
-    () => orderSessions(visibleSessions.filter((item) => item.status !== 'ended'), pinnedIds),
+    () =>
+      orderSessions(
+        visibleSessions.filter((item) => item.status !== 'ended'),
+        pinnedIds,
+      ),
     [visibleSessions, pinnedIds],
   )
 
@@ -120,6 +126,11 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   // indicador discreto que rola até ele — o chip não pula de posição sozinho.
   const scrollRef = useRef<HTMLDivElement>(null)
   const [waitingOffscreen, setWaitingOffscreen] = useState(false)
+  const [clipped, setClipped] = useState<{ left: number; right: number; hidden: number[] }>({
+    left: 0,
+    right: 0,
+    hidden: [],
+  })
 
   const findOffscreenWaiting = useCallback((): HTMLElement | null => {
     const el = scrollRef.current
@@ -134,6 +145,19 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
 
   const checkOverflow = useCallback(() => {
     setWaitingOffscreen(findOffscreenWaiting() !== null)
+    const el = scrollRef.current
+    if (!el) return
+    const chips = [...el.querySelectorAll<HTMLElement>('[data-strip-chip]')].map((c) =>
+      c.getBoundingClientRect(),
+    )
+    const next = clippedCount(el.getBoundingClientRect(), chips)
+    setClipped((prev) =>
+      prev.left === next.left &&
+      prev.right === next.right &&
+      prev.hidden.join() === next.hidden.join()
+        ? prev
+        : next,
+    )
   }, [findOffscreenWaiting])
 
   useEffect(() => {
@@ -155,9 +179,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   }, [findOffscreenWaiting])
 
   return (
-    <div
-      className="flex h-[38px] shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface)_40%,transparent)] px-2"
-    >
+    <div className="flex h-[38px] shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface)_40%,transparent)] px-2">
       {visibleSessions.length === 0 ? (
         <span className="px-1 text-[11px] text-[var(--color-text-dim)]">
           Nenhuma sessão viva — clique num repo.
@@ -166,9 +188,12 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
         <div
           ref={scrollRef}
           onScroll={checkOverflow}
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          data-testid="session-strip-scroll"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          // Fade na borda que tem chips além dela, no lugar da scrollbar.
+          style={stripMask(clipped)}
         >
-          {orderedSessions.map((item) => {
+          {orderedSessions.map((item, index) => {
             const paneId = openByCc.get(item.ccSessionId)
             const isOpen = paneId !== undefined
             const isFocused = isOpen && paneId === focusPaneId
@@ -179,6 +204,9 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                 isOpen={isOpen}
                 isFocused={isFocused}
                 isPinned={pinnedIds.includes(item.id)}
+                // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
+                // lugar (a medição seguinte não oscila).
+                hidden={clipped.hidden.includes(index)}
                 onOpen={() => void focusOrOpenSession(item)}
                 onEnd={() => endSession(item.id)}
                 onTogglePin={() => void togglePin(item.id)}
@@ -201,6 +229,18 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
         </button>
       )}
 
+      {clipped.left + clipped.right > 0 && (
+        <button
+          type="button"
+          data-testid="session-strip-more"
+          onClick={onOpenSwitcher}
+          title="Sessões fora da barra — abrir o seletor"
+          className="flex h-6 shrink-0 items-center gap-0.5 rounded px-1.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={ChevronDown} size={12} />+{clipped.left + clipped.right}
+        </button>
+      )}
+
       <button
         type="button"
         onClick={onOpenSwitcher}
@@ -209,7 +249,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
             ? `Abrir seletor de sessões · ${waitingCount} aguardando você`
             : 'Abrir seletor de sessões'
         }
-        className="relative ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        className="relative ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
       >
         <Icon as={Maximize2} size={13} />
         {waitingCount > 0 && (
@@ -222,17 +262,28 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   )
 }
 
+const FADE_PX = 24
+
+function stripMask(clipped: { left: number; right: number }): CSSProperties | undefined {
+  if (!clipped.left && !clipped.right) return undefined
+  const l = clipped.left ? `transparent, black ${FADE_PX}px` : 'black, black'
+  const r = clipped.right ? `black calc(100% - ${FADE_PX}px), transparent` : 'black'
+  const mask = `linear-gradient(to right, ${l}, ${r})`
+  return { maskImage: mask, WebkitMaskImage: mask }
+}
+
 interface ChipProps {
   item: LiveSessionInfo
   isOpen: boolean
   isFocused: boolean
   isPinned: boolean
+  hidden?: boolean
   onOpen: () => void
   onEnd: () => void
   onTogglePin: () => void
 }
 
-function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }: ChipProps) {
+function Chip({ item, isOpen, isFocused, isPinned, hidden = false, onOpen, onEnd, onTogglePin }: ChipProps) {
   const title = liveSessionLabel(item)
   const preview = item.lastText?.replace(/\s+/g, ' ').trim()
   const tooltip = `${statusLabel(item.status)} · ${relativeTime(item.lastActivityAt)}${
@@ -243,22 +294,26 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
 
   return (
     <div
+      data-strip-chip
       data-waiting={waiting || undefined}
-      className={`group flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition ${
+      data-clipped-hidden={hidden || undefined}
+      aria-hidden={hidden || undefined}
+      className={`group relative flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition ${
         isFocused
           ? 'border-[color-mix(in_srgb,var(--color-accent)_55%,transparent)] text-[var(--color-text)]'
           : isOpen
             ? 'border-[var(--color-border)] bg-[var(--color-surface-2)]/60 text-[var(--color-text)]'
             : 'border-transparent text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)]'
       }`}
-      style={
-        isFocused
+      style={{
+        ...(isFocused
           ? {
               background:
                 'linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 16%, transparent), color-mix(in srgb, var(--color-accent2) 6%, transparent))',
             }
-          : undefined
-      }
+          : {}),
+        ...(hidden ? { visibility: 'hidden' as const } : {}),
+      }}
       title={tooltip}
     >
       <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2">
@@ -271,7 +326,19 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
             as={icon}
             size={12}
             className={spin ? 'shrink-0 animate-spin' : 'shrink-0'}
-            style={{ color: item.projectColor ?? 'var(--color-border)' }}
+            // Girando, a cor é a do status (a mesma do ponto do cartão): na cor do
+            // projeto, as abas do Pessoal giravam em vermelho e liam como erro.
+            style={{
+              color: spin ? 'var(--color-info)' : (item.projectColor ?? 'var(--color-border)'),
+            }}
+          />
+        )}
+        {spin && item.projectColor && (
+          <span
+            data-testid="tab-project-dot"
+            aria-hidden
+            className="h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{ background: item.projectColor }}
           />
         )}
         <span className="max-w-40 truncate">{title}</span>
@@ -279,35 +346,47 @@ function Chip({ item, isOpen, isFocused, isPinned, onOpen, onEnd, onTogglePin }:
       </button>
       <SessionFeatureChip sessionId={item.id} density="dot" />
       {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onTogglePin()
-        }}
-        title={isPinned ? 'Desafixar do início da barra' : 'Fixar no início da barra'}
-        aria-label={isPinned ? 'Desafixar do início da barra' : 'Fixar no início da barra'}
-        aria-pressed={isPinned}
-        className={`shrink-0 leading-none transition focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
-          isPinned
-            ? 'text-[var(--color-accent)] opacity-100'
-            : 'text-[var(--color-text-dim)] opacity-0 hover:text-[var(--color-text)] group-hover:opacity-100'
-        }`}
-      >
-        <Icon as={Pin} size={11} className={isPinned ? 'fill-current' : undefined} />
-      </button>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onEnd()
-        }}
-        title="Encerrar o processo desta sessão"
-        aria-label="Encerrar o processo desta sessão"
-        className="shrink-0 leading-none text-[var(--color-text-dim)] opacity-0 transition hover:text-[var(--color-danger)] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-danger)] group-hover:opacity-100"
-      >
-        <Icon as={Power} size={12} />
-      </button>
+      {isPinned && <PinButton isPinned onTogglePin={onTogglePin} />}
+      {/* Ações do hover sobrepostas à ponta da aba: invisíveis com largura, eram
+          ~40px de vão morto à direita do nome em cada aba; inline no hover, a
+          aba crescia e empurrava as vizinhas. */}
+      <span className="absolute inset-y-0 right-0 hidden items-center gap-1.5 rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 group-focus-within:flex group-hover:flex">
+        {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onEnd()
+          }}
+          title="Encerrar o processo desta sessão"
+          aria-label="Encerrar o processo desta sessão"
+          className="shrink-0 leading-none text-[var(--color-text-dim)] transition hover:text-[var(--color-danger)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-danger)]"
+        >
+          <Icon as={Power} size={12} />
+        </button>
+      </span>
     </div>
+  )
+}
+
+function PinButton({ isPinned, onTogglePin }: { isPinned: boolean; onTogglePin: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onTogglePin()
+      }}
+      title={isPinned ? 'Desafixar do início da barra' : 'Fixar no início da barra'}
+      aria-label={isPinned ? 'Desafixar do início da barra' : 'Fixar no início da barra'}
+      aria-pressed={isPinned}
+      className={`shrink-0 leading-none transition focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
+        isPinned
+          ? 'text-[var(--color-accent)]'
+          : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+      }`}
+    >
+      <Icon as={Pin} size={11} className={isPinned ? 'fill-current' : undefined} />
+    </button>
   )
 }

@@ -19,6 +19,7 @@ import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
 import * as taskStore from '../task-store'
 import * as featureStore from '../feature-store'
+import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
 import * as repoPullStore from '../repo-pull-store'
@@ -39,6 +40,7 @@ import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
 import { getActivityFor, ptyStatusFor } from '../session-activity'
+import { emitSessionLinkPulse } from '../session-link-pulse'
 import { ptyManager } from '../pty-manager'
 import { getDb } from '../db'
 import { getPref } from '../prefs-store'
@@ -393,9 +395,16 @@ const featureCreateSchema = z.object({
   repos: z.array(featureRepoLinkSchema).optional(),
   origin: featureOrigin.optional(),
   overview: z.string().optional(),
-  businessRules: z.string().optional(),
   approach: z.string().optional(),
 })
+
+// Regras de negócio e notas fixadas são do USUÁRIO e só ele as escreve, pelo
+// painel da feature. As regras entram no system prompt de toda sessão futura da
+// feature rotuladas "definidas pelo usuário"; aceitá-las de um agente (que pode
+// ter lido um PR/issue/página hostil) abriria um canal persistente de prompt
+// injection entre sessões — a restrição na descrição da tool não é enforcement.
+const USER_OWNED_REFUSAL =
+  'Regras de negócio e notas fixadas são do usuário: peça a ele para editá-las no painel da feature.'
 
 // Espelha UpdateFeatureInput.
 const featureUpdateSchema = z.object({
@@ -405,6 +414,10 @@ const featureUpdateSchema = z.object({
   objective: z.string().nullish(),
   synthMode: featureSynthMode.optional(),
   model: z.string().nullish(),
+  // Troca só UMA seção do doc. Regras de negócio e notas fixadas são recusadas
+  // no handler (USER_OWNED_REFUSAL).
+  section: z.enum(FEATURE_SECTIONS).optional(),
+  markdown: z.string().max(100_000).optional(),
 })
 
 const featureObjectiveLinkSchema = z.object({
@@ -445,9 +458,12 @@ function featureTools(notify: McpNotify): ToolDef[] {
       name: 'feature_create',
       title: 'Create feature',
       description:
-        'Create a feature in a project (writes its markdown doc). Optional seed sections: overview, businessRules, approach.',
+        'Create a feature in a project (writes its markdown doc). Optional seed sections: overview, approach. Business rules are written only by the user, in the feature panel.',
       inputSchema: featureCreateSchema,
       handler: (args) => {
+        if ((args as { businessRules?: unknown } | null)?.businessRules !== undefined) {
+          throw new Error(USER_OWNED_REFUSAL)
+        }
         const input = featureCreateSchema.parse(args)
         const feature = featureStore.create(input)
         notify.broadcast('feature:updated', feature)
@@ -458,10 +474,19 @@ function featureTools(notify: McpNotify): ToolDef[] {
       name: 'feature_update',
       title: 'Update feature',
       description:
-        'Update index fields of an existing feature by id (title, status, objective, synthMode, model).',
+        'Update index fields of an existing feature by id (title, status, objective, synthMode, model). Pass section + markdown to replace ONE section of the feature doc (only that section changes). "Regras de negócio" and "Notas fixadas" belong to the user and are refused here: the user edits them in the feature panel.',
       inputSchema: featureUpdateSchema,
       handler: (args) => {
-        const input = featureUpdateSchema.parse(args)
+        const { section, markdown, ...input } = featureUpdateSchema.parse(args)
+        if ((section === undefined) !== (markdown === undefined)) {
+          throw new Error('section and markdown must be passed together')
+        }
+        if (section !== undefined && USER_OWNED_SECTIONS.includes(section)) {
+          throw new Error(USER_OWNED_REFUSAL)
+        }
+        if (section !== undefined && markdown !== undefined) {
+          featureStore.updateSection(input.id, section, markdown)
+        }
         const feature = featureStore.update(input)
         notify.broadcast('feature:updated', feature)
         return ok({ feature })
@@ -889,6 +914,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             repoId: target.id,
             name: alias,
             featureId: input.featureId ?? null,
+            motherSessionId: ctx.motherSessionId,
             initialPrompt: kickoff,
             systemPromptText: composed,
             permissionMode: permissionModeForHandoffMode(mode),
@@ -896,6 +922,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           })
           const running = handoffStore.markRunning(handoffId, child.id)
           notify.broadcast('handoff:updated', running)
+          emitSessionLinkPulse({ fromSessionId: ctx.motherSessionId, toSessionId: child.id, kind: 'task' })
           return ok({
             handoffId,
             alias,
@@ -975,10 +1002,16 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           )
         }
         // A mãe não vê a tela da filha: o Enter do paste não pode cair num menu.
-        return injectIntoChildGuarded(handoff.childSessionId, text).then(() => {
+        const childId = handoff.childSessionId
+        return injectIntoChildGuarded(childId, text).then(() => {
           // A mãe respondeu: a filha retoma (needs_input → running, limpa a pergunta).
           const updated = handoffStore.resume(handoffId)
           notify.broadcast('handoff:updated', updated)
+          emitSessionLinkPulse({
+            fromSessionId: ctx.motherSessionId ?? handoff.motherSessionId,
+            toSessionId: childId,
+            kind: handoff.status === 'needs_input' ? 'answer' : 'message',
+          })
           return ok({ status: updated.status, delivered: true })
         })
       },
@@ -996,6 +1029,11 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_ask')
         const updated = handoffStore.ask(handoffId, question)
         notify.broadcast('handoff:updated', updated)
+        emitSessionLinkPulse({
+          fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+          toSessionId: updated.motherSessionId,
+          kind: 'question',
+        })
         return ok({
           status: updated.status,
           pendingQuestion: updated.pendingQuestion,
@@ -1035,6 +1073,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_progress')
         const updated = handoffStore.progress(handoffId, step)
         notify.broadcast('handoff:updated', updated)
+        // Só passo novo: repetir o mesmo passo não é notícia para a mãe.
+        if (existing.currentStep !== updated.currentStep)
+          emitSessionLinkPulse({
+            fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+            toSessionId: updated.motherSessionId,
+            kind: 'progress',
+          })
         // Progresso não responde pergunta aberta: se a filha segue bloqueada,
         // devolve o bloqueio junto (antes o progresso apagava a pergunta e a mãe
         // nunca chegava a vê-la).
@@ -1062,6 +1107,11 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         assertCurrentChild(existing, ctx, 'handoff_report')
         const updated = handoffStore.report(handoffId, summary)
         notify.broadcast('handoff:updated', updated)
+        emitSessionLinkPulse({
+          fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
+          toSessionId: updated.motherSessionId,
+          kind: 'report',
+        })
         // Segundo report no mesmo handoff: o store preserva o summary original e
         // guarda este na trilha. Avisa em vez de responder um 'done' que finge
         // sucesso — antes o resultado duplicado sumia silenciosamente.

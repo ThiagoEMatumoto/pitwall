@@ -9,7 +9,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor } = await import(
+const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial } = await import(
   './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -163,5 +163,75 @@ describe('staleLabel', () => {
     expect(
       staleLabel(mk({ stepUpdatedAt: now - 5 * HOUR, updatedAt: now - 99 * HOUR }), now),
     ).toBe('sem progresso há 5h')
+  })
+})
+
+describe('childIdentity (bastão de filha)', () => {
+  const pred = { id: 'pred', title: 'ana-checkout', status: 'working' as const }
+  const succ = { id: 'succ', title: 'ana-checkout', status: 'working' as const }
+
+  it('sucessora no liveSessions: o apelido dela, sem pendência', () => {
+    expect(
+      childIdentity({ childSessionId: 'succ', predecessorSessionId: 'pred', updatedAt: 1_000 }, [pred, succ], 2_000),
+    ).toEqual({
+      title: 'ana-checkout',
+      successorPending: false,
+    })
+  })
+
+  it('sucessora ainda não chegou: apelido herdado da antecessora, nunca "filha encerrou"', () => {
+    expect(
+      childIdentity({ childSessionId: 'succ', predecessorSessionId: 'pred', updatedAt: 1_000 }, [pred], 2_000),
+    ).toEqual({
+      title: 'ana-checkout',
+      successorPending: true,
+    })
+  })
+
+  it('sucessora que não chega em 1 min não fica "assumindo" para sempre', () => {
+    expect(
+      childIdentity({ childSessionId: 'succ', predecessorSessionId: 'pred', updatedAt: 0 }, [pred], 61_000),
+    ).toEqual({ title: null, successorPending: false })
+  })
+
+  it('sem bastão e sem filha viva: nada a herdar (o card segue "filha encerrou")', () => {
+    expect(childIdentity({ childSessionId: 'x', predecessorSessionId: null, updatedAt: 0 }, [pred], 0)).toEqual({
+      title: null,
+      successorPending: false,
+    })
+  })
+})
+
+describe('trilha do dock no bastão de filha (crewDotTitle/crewDotColor)', () => {
+  const pred = { id: 'pred', title: 'ana-checkout', status: 'running' } as never
+  const handoff = {
+    id: 'h1',
+    status: 'running',
+    resumable: false,
+    childSessionId: 'succ',
+    predecessorSessionId: 'pred',
+    updatedAt: 1_000,
+    targetRepoLabel: 'api',
+    targetRepoId: 'r-api',
+  } as never
+
+  it('sucessora ainda fora de liveSessions: apelido da antecessora e "assumindo o bastão", não "despachando"', () => {
+    const title = crewDotTitle(handoff, undefined, [pred], 2_000)
+    expect(title).toContain('ana-checkout')
+    expect(title).toContain('assumindo o bastão')
+    expect(crewDotColor(handoff, undefined, [pred], 2_000)).toBe('var(--color-info)')
+  })
+
+  it('passada a janela, volta ao estado do handoff', () => {
+    expect(crewDotTitle(handoff, undefined, [pred], 120_000)).toBe('api — despachando')
+  })
+})
+
+describe('crewDotInitial — a inicial da filha no trilho recolhido', () => {
+  const h = (over: Partial<Handoff>) => ({ id: 'h', targetRepoLabel: 'lexter-api', ...over }) as Handoff
+  it('do apelido vivo, senão do repo', () => {
+    const live = { title: 'otavio-parte-c1-checkout' } as import('../../../shared/types/ipc').LiveSessionInfo
+    expect(crewDotInitial(h({}), live, [])).toBe('O')
+    expect(crewDotInitial(h({}), undefined, [])).toBe('L')
   })
 })

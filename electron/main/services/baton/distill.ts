@@ -6,7 +6,7 @@
 import { buildDigest, stripCodeFence } from '../feature-digest'
 import { findTranscriptPath } from '../session-activity'
 import { runClaude } from '../claude-cli'
-import { composeBatonPrompt } from './compose-baton-prompt'
+import { composeBatonPrompt, type BatonChild } from './compose-baton-prompt'
 
 // Igual ao SYNTH_TIMEOUT_MS da síntese de features: destilar um transcript grande
 // leva dezenas de segundos e um timeout curto só produziria falha intermitente.
@@ -16,6 +16,7 @@ export interface DistillBatonOpts {
   repoLabel?: string | null
   featureTitle?: string | null
   note?: string | null
+  children?: BatonChild[]
   // Modelo do claude -p. null/ausente = default da CLI.
   model?: string | null
 }
@@ -48,6 +49,7 @@ export async function distillBaton(
     repoLabel: opts.repoLabel,
     featureTitle: opts.featureTitle,
     note: opts.note,
+    children: opts.children,
   })
   const args = ['-p', prompt, '--output-format', 'text']
   if (opts.model) args.push('--model', opts.model)

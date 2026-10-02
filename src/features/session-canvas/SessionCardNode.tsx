@@ -1,12 +1,10 @@
-import { memo, useMemo, type CSSProperties } from 'react'
-import { Handle, NodeResizeControl, Position, useStore, type NodeProps } from '@xyflow/react'
+import { memo } from 'react'
+import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
   History,
-  LoaderCircle,
-  PanelTop,
   Pencil,
   Sparkles,
   SquareTerminal,
@@ -16,70 +14,35 @@ import { Icon } from '@/components/ui/Icon'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import type { CardViewState } from '../../../shared/types/canvas'
-import type { SessionGraphNode } from '../../../shared/types/session-graph'
-import { type MapNode, type SessionCardData } from './graph-to-flow'
-import {
-  TONE_COLOR,
-  indicatorFor,
-  indicatorText,
-  type CardIndicator,
-  type IndicatorTone,
-} from './card-indicator'
-import { useCardViewStore } from './card-view-store'
-import { tailText } from './card-tail'
+import { OPEN_H, type MapNode, type SessionCardData } from './graph-to-flow'
+import { TONE_COLOR, indicatorText, type CardIndicator } from './card-indicator'
 import { useMapLive } from './map-live'
-import { CardAttention, CardPromptBar, CardTerminal, LiveTail } from './SessionCardLive'
+import {
+  ACTIVE_TONES,
+  BorderHandles,
+  StatusPill,
+  frameStyle,
+  useIndicator,
+  useReportCardHeight,
+} from './card-parts'
+import { MotherCard } from './MotherCard'
+import { CardAttention, CardPromptBar, LiveTail } from './SessionCardLive'
 import { isActionableDetail } from '@/features/session-switcher/AttentionPopover'
 import { useMapActions } from './map-context'
 import { useMapFocus } from './map-focus'
-import { cardDetail, cardFooter, cardTitle, compensatedPx, type CardDetail } from './card-display'
+import {
+  briefSay,
+  cardDetail,
+  cardFooter,
+  cardTitle,
+  compensatedPx,
+  quantizeZoom,
+  type CardDetail,
+} from './card-display'
 import { PurposeLine } from './PurposeLine'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
-
-// Tons que nunca esmaecem no modo foco.
-const ACTIVE_TONES: ReadonlySet<IndicatorTone> = new Set(['working', 'needs-you', 'starting'])
-
-// Menor terminal no cartão: abaixo disso a TUI quebra o layout da caixa de input.
-const TERMINAL_MIN_W = 520
-const TERMINAL_MIN_H = 340
-
-// O indicador do cartão: status do grafo + motivo da tela + relógio de working +
-// a marca de interrupção no fim da tela (só quando o cartão está aberto).
-function useIndicator(n: SessionGraphNode): CardIndicator {
-  const live = useAppStore((s) => s.liveSessions.find((x) => x.id === n.sessionId))
-  const tail = useCardViewStore((s) => s.tails[n.sessionId])
-  const { workingSince } = useMapLive()
-  const tailLines = useMemo(() => (tail ? tailText(tail.lines) : null), [tail])
-  return indicatorFor(n, live, workingSince.get(n.sessionId) ?? null, tailLines)
-}
-
-function StatusPill({ ind }: { ind: CardIndicator }) {
-  const { now } = useMapLive()
-  const color = TONE_COLOR[ind.tone]
-  const busy = ind.tone === 'working' || ind.tone === 'starting'
-  return (
-    <span
-      data-testid="card-status"
-      data-tone={ind.tone}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[11px] font-medium leading-4"
-      style={{
-        color,
-        borderColor: `color-mix(in srgb, ${color} 45%, transparent)`,
-        background: `color-mix(in srgb, ${color} ${ind.tone === 'ended' ? 6 : 14}%, transparent)`,
-      }}
-    >
-      {busy ? (
-        <Icon as={LoaderCircle} size={11} className="session-card-spin" />
-      ) : (
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${ind.tone === 'needs-you' ? 'pw-pulse' : ''}`}
-          style={{ background: color }}
-        />
-      )}
-      {indicatorText(ind, now)}
-    </span>
-  )
-}
+import { BatonPassedChip, MotherBadge } from './MotherBadge'
+import { motherFrame } from './mother-badge'
 
 function FanChip({ data }: { data: SessionCardData }) {
   const actions = useMapActions()
@@ -87,6 +50,8 @@ function FanChip({ data }: { data: SessionCardData }) {
   if (n === 0) return null
   const label = `${n} ${n === 1 ? 'filha' : 'filhas'}`
   if (!data.fanCollapsible) {
+    // O badge "MÃE · n filhas" já diz a contagem; repetir só come o nome.
+    if (data.node.isMother) return null
     return (
       <span
         data-testid="card-children"
@@ -107,8 +72,10 @@ function FanChip({ data }: { data: SessionCardData }) {
       }}
       title={data.fanExpanded ? 'Recolher os fios das filhas' : 'Mostrar os fios até cada filha'}
       className="nodrag flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--color-border)] px-1.5 text-[11px] text-[var(--color-text-dim)] transition hover:text-[var(--color-text)]"
+      aria-label={data.node.isMother ? label : undefined}
     >
-      {label}
+      {/* Na mãe o badge já mostra a contagem: aqui fica só o chevron. */}
+      {!data.node.isMother && label}
       <Icon as={data.fanExpanded ? ChevronUp : ChevronDown} size={11} />
     </button>
   )
@@ -200,6 +167,7 @@ function StateLine({ data, ind }: { data: SessionCardData; ind: CardIndicator })
           {ind.step}
         </span>
       )}
+      <BatonPassedChip node={node} />
       {data.continuesFrom && (
         <span
           data-testid="card-continues-from"
@@ -268,27 +236,11 @@ function ViewToggle({ data, view }: { data: SessionCardData; view: CardViewState
   )
 }
 
-// Botão da direita: entra no terminal real ou volta ao cartão (nunca "Recolher",
+// Botão da direita: abre o terminal real na modal do mapa (nunca "Recolher",
 // que é o chevron da esquerda).
-function TerminalToggle({ data, view }: { data: SessionCardData; view: CardViewState }) {
+function TerminalToggle({ data }: { data: SessionCardData }) {
   const { node } = data
   const actions = useMapActions()
-  if (view === 'terminal') {
-    return (
-      <button
-        type="button"
-        data-testid="card-leave-terminal"
-        onClick={(e) => {
-          e.stopPropagation()
-          actions.leaveTerminal(node.sessionId)
-        }}
-        title="Voltar ao cartão (Esc fora do terminal, ou afaste o zoom)"
-        className="nodrag flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:text-[var(--color-text)]"
-      >
-        <Icon as={PanelTop} size={11} /> Voltar ao cartão
-      </button>
-    )
-  }
   if (node.status === 'ended') return null
   return (
     <button
@@ -298,7 +250,7 @@ function TerminalToggle({ data, view }: { data: SessionCardData; view: CardViewS
         e.stopPropagation()
         actions.interact(node.sessionId)
       }}
-      title="Terminal: o terminal real da sessão aqui no cartão (Enter com o cartão selecionado)"
+      title="Terminal: o terminal real da sessão numa janela grande sobre o mapa (Enter ou duplo clique)"
       className="nodrag flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
     >
       <Icon as={SquareTerminal} size={11} /> Terminal
@@ -317,12 +269,8 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
     <div
       data-testid="card-header"
       className="flex min-w-0 items-center gap-1"
-      // Duplo clique no cabeçalho alterna recolhido ⇄ aberto (no resto do cartão
-      // continua abrindo a aba).
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        actions.toggleView(node.sessionId)
-      }}
+      // O duplo clique (aqui ou no resto do cartão) abre o terminal na modal: é o
+      // onNodeDoubleClick do mapa. Recolher é o chevron.
     >
       <ViewToggle data={data} view={view} />
       <span
@@ -332,6 +280,7 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
       >
         {cardTitle(node)}
       </span>
+      <MotherBadge node={node} />
       <MotherChip data={data} />
       {canWritePurpose && (
         <button
@@ -350,7 +299,7 @@ function Header({ data, view }: { data: SessionCardData; view: CardViewState }) 
       )}
       <span className="flex-1" />
       <FanChip data={data} />
-      <TerminalToggle data={data} view={view} />
+      <TerminalToggle data={data} />
     </div>
   )
 }
@@ -377,6 +326,8 @@ function CollapsedBody({ data, ind }: { data: SessionCardData; ind: CardIndicato
       >
         {cardTitle(node)}
       </span>
+      <MotherBadge node={node} compact />
+      <BatonPassedChip node={node} compact />
       <span
         className="min-w-0 flex-1 truncate text-[11px]"
         style={{
@@ -392,7 +343,6 @@ function CollapsedBody({ data, ind }: { data: SessionCardData; ind: CardIndicato
 
 function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) {
   const { node, view } = data
-  const actions = useMapActions()
   // Menu inline na tela: o tail repetiria o comando que o painel já mostra.
   const item = useMapLive().attention.get(node.sessionId)
   const menuInline = !!item && isActionableDetail(item.detail)
@@ -400,13 +350,7 @@ function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
     <>
       <Header data={data} view={view} />
       <StateLine data={data} ind={ind} />
-      {view !== 'terminal' && (
-        <PurposeLine
-          sessionId={node.sessionId}
-          purpose={node.purpose}
-          source={node.purposeSource}
-        />
-      )}
+      <PurposeLine sessionId={node.sessionId} purpose={node.purpose} source={node.purposeSource} />
       {view === 'open' && (
         <>
           <Footer data={data} />
@@ -414,9 +358,6 @@ function CardBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
           {!menuInline && <LiveTail node={node} />}
           <CardPromptBar node={node} />
         </>
-      )}
-      {view === 'terminal' && (
-        <CardTerminal node={node} onLeave={() => actions.leaveTerminal(node.sessionId)} />
       )}
     </>
   )
@@ -436,7 +377,7 @@ function BriefBody({
   const { node } = data
   const { now } = useMapLive()
   const lastText = useAppStore((s) => s.liveSessions.find((x) => x.id === node.sessionId)?.lastText)
-  const say = ind.reason ?? ind.step ?? firstLineOf(lastText)
+  const say = briefSay(ind, firstLineOf(lastText), node)
   const small = compensatedPx(zoom, 11, 18)
   return (
     <div className="flex min-w-0 flex-col gap-0.5 px-2.5 py-1.5">
@@ -459,6 +400,8 @@ function BriefBody({
         >
           {cardTitle(node)}
         </span>
+        <MotherBadge node={node} compact />
+        {data.view === 'collapsed' && <BatonPassedChip node={node} compact />}
       </div>
       {data.view !== 'collapsed' && (
         <div
@@ -469,6 +412,8 @@ function BriefBody({
             {indicatorText(ind, now)}
           </span>
           {say && <span className="min-w-0 truncate text-[var(--color-text-dim)]">· {say}</span>}
+          <span className="flex-1" />
+          <BatonPassedChip node={node} compact />
         </div>
       )}
     </div>
@@ -487,68 +432,26 @@ function firstLineOf(text: string | null | undefined): string | null {
 // Zoom do viewport quantizado em 0.05: re-renderiza o cartão só quando a faixa
 // ou a fonte compensada mudam de fato, não a cada frame do scroll.
 function useZoom(): number {
-  return useStore((s) => Math.round(s.transform[2] * 20) / 20)
+  return useStore((s) => quantizeZoom(s.transform[2]))
 }
 
-// Um ponto no meio de cada borda: o fio entra/sai pelo da borda voltada pro
-// outro nó (SessionEdge encaixa a ponta nele). Só o da direita é de arrastar
-// (delegar); os outros são âncoras visuais e aparecem com o cartão em hover.
-const SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const
-
-function BorderHandles() {
-  return (
-    <>
-      {SIDES.map((side) => (
-        <Handle
-          key={side}
-          id={`in-${side}`}
-          type="target"
-          position={side}
-          isConnectable={false}
-          className="!h-1.5 !w-1.5 !border-0 !bg-[var(--color-border)] opacity-0 transition group-hover:opacity-100"
-        />
-      ))}
-    </>
-  )
-}
-
-// Borda e brilho por estado: quem precisa de você pulsa em vermelho (o mesmo
-// token do HUD de atenção), quem trabalha fica azul, quem terminou, verde.
-function frameStyle(tone: IndicatorTone, selected: boolean): CSSProperties {
-  const color = TONE_COLOR[tone]
-  const strong = tone === 'needs-you'
-  const quiet = tone === 'ended' || tone === 'starting'
-  return {
-    borderColor: quiet
-      ? 'var(--color-border)'
-      : `color-mix(in srgb, ${color} ${strong ? 80 : 45}%, transparent)`,
-    borderWidth: strong ? 2 : 1,
-    boxShadow: quiet
-      ? undefined
-      : `0 0 0 1px color-mix(in srgb, ${color} 18%, transparent), 0 0 14px -4px ${color}`,
-    ...(selected ? { outline: '2px dashed var(--color-accent)', outlineOffset: 3 } : {}),
-  }
-}
-
-function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
+function RegularCard({ id, data, selected }: NodeProps<MapNode>) {
   const card = data as SessionCardData
   const { node } = card
   const actions = useMapActions()
   const focus = useMapFocus()
   const zoom = useZoom()
   const ind = useIndicator(node)
-  // Terminal no cartão é sempre o corpo inteiro: o zoom semântico não o encolhe.
-  const detail: CardDetail = card.view === 'terminal' ? 'full' : cardDetail(zoom)
-  // Só esmaece quem não pede nada: o terminal em uso (o clique no xterm não
-  // seleciona o nó), quem trabalha e quem precisa de você ficam legíveis — "ver
-  // as sessões trabalhando" não pode depender de onde está a seleção.
-  const dimmed =
-    focus.dimOthers &&
-    !focus.nodes.has(id) &&
-    card.view !== 'terminal' &&
-    !ACTIVE_TONES.has(ind.tone)
-  const frame = frameStyle(ind.tone, !!selected)
+  const detail: CardDetail = cardDetail(zoom)
+  // Só esmaece quem não pede nada: quem trabalha e quem precisa de você ficam
+  // legíveis — "ver as sessões trabalhando" não pode depender da seleção.
+  const dimmed = focus.dimOthers && !focus.nodes.has(id) && !ACTIVE_TONES.has(ind.tone)
+  const frame = motherFrame(node, frameStyle(ind.tone, !!selected))
   const alertClass = ind.tone === 'needs-you' ? 'session-card-alert' : ''
+  // Aberto em detalhe cheio: a caixa cresce com o conteúdo até a vaga máxima e o
+  // layout segue a altura medida (a vaga do nó acompanha no frame seguinte).
+  const sizedByContent = detail === 'full' && card.view === 'open'
+  const measureRef = useReportCardHeight(node.sessionId, sizedByContent)
 
   if (detail === 'blocks') {
     const color = TONE_COLOR[ind.tone]
@@ -557,6 +460,7 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
         data-testid="session-card"
         data-session-id={node.sessionId}
         data-detail="blocks"
+        data-mother={node.isMother ? 'true' : undefined}
         data-view={card.view}
         data-tone={ind.tone}
         title={cardTitle(node)}
@@ -575,6 +479,7 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
       data-testid="session-card"
       data-session-id={node.sessionId}
       data-detail={detail}
+      data-mother={node.isMother ? 'true' : undefined}
       data-view={card.view}
       data-tone={ind.tone}
       onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
@@ -583,40 +488,20 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
       // A caixa desenhada só ocupa o que tem (a vaga do layout é o teto): sem
       // isto sobrava uma caixa alta vazia no aberto e no resumido. relative: as
       // âncoras dos fios seguem a borda desenhada, não a da vaga.
+      ref={measureRef}
       className={`group relative w-full rounded-lg border bg-[var(--color-surface)] transition ${
-        card.view === 'terminal'
-          ? 'h-full'
-          : card.view === 'collapsed'
-            ? 'h-full overflow-hidden'
-            : 'max-h-full'
-      } ${detail === 'full' && card.view === 'open' ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
+        card.view === 'collapsed' ? 'h-full overflow-hidden' : sizedByContent ? '' : 'max-h-full'
+      } ${sizedByContent ? 'flex flex-col overflow-hidden' : ''} ${alertClass}`}
       data-dimmed={dimmed ? 'true' : undefined}
-      style={frame}
+      style={sizedByContent ? { ...frame, maxHeight: OPEN_H } : frame}
     >
       <BorderHandles />
-      {card.view === 'terminal' && (
-        <NodeResizeControl
-          minWidth={TERMINAL_MIN_W}
-          minHeight={TERMINAL_MIN_H}
-          position="bottom-right"
-          onResizeEnd={(_e, p) =>
-            actions.resizeTerminal(node.sessionId, { w: p.width, h: p.height })
-          }
-          style={{ background: 'transparent', border: 'none' }}
-        >
-          <span
-            data-testid="card-resize"
-            title="Redimensionar o terminal"
-            className="absolute bottom-0.5 right-0.5 h-3 w-3 cursor-nwse-resize border-b-2 border-r-2 border-[var(--color-text-dim)]"
-          />
-        </NodeResizeControl>
-      )}
       <div
         className={`w-full ${dimmed ? 'session-card-dimmed' : ''} ${
           detail === 'full' && card.view !== 'collapsed'
             ? 'flex min-h-0 flex-1 flex-col gap-1.5 px-2.5 py-2'
             : 'h-full'
-        } ${card.view === 'terminal' ? 'h-full' : ''}`}
+        }`}
       >
         {detail === 'brief' ? (
           <BriefBody data={card} zoom={zoom} ind={ind} />
@@ -633,6 +518,17 @@ function SessionCardNodeImpl({ id, data, selected }: NodeProps<MapNode>) {
         className="!h-2.5 !w-2.5 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
       />
     </div>
+  )
+}
+
+// A mãe tem a própria variante (maior, sempre aberta). Dois componentes, e não um
+// return cedo: a mesma sessão vira mãe ao ganhar a 1ª filha, e os hooks de um
+// não podem mudar de ordem no meio da vida do nó.
+function SessionCardNodeImpl(props: NodeProps<MapNode>) {
+  return (props.data as SessionCardData).prominentMother ? (
+    <MotherCard {...props} />
+  ) : (
+    <RegularCard {...props} />
   )
 }
 

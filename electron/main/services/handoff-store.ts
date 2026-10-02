@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
 import { findTranscriptPath } from './transcript-path'
+import { isLedByMother } from '../../../shared/handoff-lead'
 import type {
   CreateHandoffInput,
   Handoff,
@@ -90,10 +91,16 @@ function hasTranscript(ccSessionId: string): boolean {
 // o resto (a esmagadora maioria: running, done, pending) sai false sem nenhum
 // syscall — o short-circuit vem antes da query de cc_session_id.
 function isResumable(row: HandoffRow): boolean {
-  if (row.status !== 'interrupted' || !row.child_session_id) return false
+  return isResumableChild(row.status, row.child_session_id)
+}
+
+// O mesmo gate, exposto pro grafo (que lê handoffs por SQL próprio): o badge da
+// mãe e o bastão precisam concordar sobre quem é filha retomável.
+export function isResumableChild(status: string, childSessionId: string | null): boolean {
+  if (status !== 'interrupted' || !childSessionId) return false
   const child = getDb()
     .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-    .get(row.child_session_id) as { cc_session_id: string | null } | undefined
+    .get(childSessionId) as { cc_session_id: string | null } | undefined
   const ccSessionId = child?.cc_session_id
   if (!ccSessionId || !UUID_RE.test(ccSessionId)) return false
   return hasTranscript(ccSessionId)
@@ -648,6 +655,41 @@ export function findActiveByTarget(
           .get(targetRepoId)
   ) as HandoffRow | undefined
   return row ? toEntity(row) : null
+}
+
+// O que o bastão da MÃE carrega: as filhas que ela lidera (isLedByMother) — o
+// mesmo recorte do badge do mapa, do diálogo e do Crew Dock. Os terminais, as
+// dispensadas e as interrompidas sem retomada ficam: são histórico da mãe antiga.
+export function listRelinkableByMother(motherSessionId: string): Handoff[] {
+  const rows = getDb()
+    .prepare(`${SELECT_HANDOFF} WHERE h.mother_session_id = ? ORDER BY h.created_at`)
+    .all(motherSessionId) as HandoffRow[]
+  return rows.map(toEntity).filter(isLedByMother)
+}
+
+// Passa a liderança: os handoffs vivos da antecessora passam a responder à
+// sucessora. Só mother_session_id muda — handoff_report/handoff_ask/progress leem
+// a mãe do handoff, então chegam à sucessora sem tocar nas tools. Transação: um
+// relink pela metade deixaria filhas da mesma mãe divididas entre duas sessões.
+// A trilha guarda {from,to} (predecessor_session_id é da linhagem da FILHA, não
+// daqui).
+export function transferMother(fromSessionId: string, toSessionId: string): Handoff[] {
+  if (fromSessionId === toSessionId) return []
+  const db = getDb()
+  const ids = db.transaction(() => {
+    const rows = listRelinkableByMother(fromSessionId)
+    const now = Date.now()
+    const update = db.prepare(
+      'UPDATE handoffs SET mother_session_id = ?, updated_at = ? WHERE id = ?',
+    )
+    const detail = JSON.stringify({ from: fromSessionId, to: toSessionId })
+    for (const r of rows) {
+      update.run(toSessionId, now, r.id)
+      logEvent(r.id, 'mother_transferred', r.status, r.status, detail)
+    }
+    return rows.map((r) => r.id)
+  })()
+  return ids.map(fresh)
 }
 
 interface HandoffEventRow {

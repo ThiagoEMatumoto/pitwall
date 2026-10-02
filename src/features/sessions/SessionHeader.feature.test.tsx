@@ -177,6 +177,16 @@ describe('SessionHeader — vincular sessão em curso', () => {
     )
   })
 
+  it('confirmar a frente atual também grava (vira escolha do usuário, a heurística para)', async () => {
+    listWithStats.mockResolvedValue([makeFeature({ id: 'f-42', title: 'Atual' })])
+    renderHeader({ feature, sessionId: 's-1', repoId: 'r1' })
+
+    fireEvent.click(screen.getByTestId('header-feature-change'))
+    fireEvent.click(await screen.findByRole('option'))
+
+    await waitFor(() => expect(setFeature).toHaveBeenCalledWith('s-1', 'f-42'))
+  })
+
   it('sem sessionId (leitura pura) não oferece vincular', () => {
     renderHeader({ feature })
     expect(screen.queryByTestId('header-feature-change')).not.toBeInTheDocument()

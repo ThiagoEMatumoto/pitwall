@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { canvasApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
-import { dockCrew, paneShowsLive } from '@/features/handoffs/crew'
-import { peekedSessionId, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useCrewDockStore, type CrewPeekMode } from '@/features/handoffs/crew-dock-store'
+import { dockCrew } from '@/features/handoffs/crew'
+import { openMapPeek } from '@/features/handoffs/open-map-peek'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
@@ -10,8 +11,7 @@ import type { CanvasScope, SessionGroup } from '../../../shared/types/canvas'
 import { useCanvasStateStore } from './canvas-state-store'
 import { useProjectsViewStore } from './projects-view-store'
 import { tidyPositions } from './tidy'
-import { terminalHostFor } from './card-view'
-import { useCardViewStore } from './card-view-store'
+import { liftGroup, terminalHostFor } from './card-view'
 import type { MapInput } from './graph-to-flow'
 import type { DelegateTarget } from './DelegateDialog'
 
@@ -78,27 +78,35 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
     return true
   }
 
-  const peek = useCallback((node: SessionGraphNode) => {
-    const { liveSessions, panes, focusOrOpenSession } = useAppStore.getState()
-    const dock = useCrewDockStore.getState()
-    const handoffId = node.childOfHandoffId
-    if (
-      handoffId &&
-      dockCrew(useHandoffsStore.getState().handoffs).some((h) => h.id === handoffId)
-    ) {
-      dock.openPeek(handoffId)
-      return
-    }
-    const live = liveSessions.find((s) => s.id === node.sessionId)
-    if (!live) return
-    if (panes.some((p) => paneShowsLive(p, live))) {
-      useProjectsViewStore.getState().setView('terminals')
-      void focusOrOpenSession(live)
-      return
-    }
-    dock.openSessionPeek(node.sessionId, node.provider === 'claude' ? 'chat' : 'terminal')
-  }, [])
+  // A modal do mapa (lift): nenhuma destas navega — a vista segue 'map' e a
+  // câmera fica onde está. A faixa de troca leva as irmãs do mesmo agrupamento.
+  const openLift = useCallback(
+    (sessionId: string, mode: CrewPeekMode) => {
+      const { graph, inUse } = input()
+      openMapPeek(sessionId, mode, liftGroup(graph.nodes, sessionId, inUse ?? new Set([sessionId])))
+    },
+    // input lê um ref: estável o bastante pra memoizar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
+  // Espiar: a conversa (ou o terminal, sem Chat View) na modal. Filha do dock
+  // abre o peek do handoff (openMapPeek) mesmo sem PTY viva: a pergunta pendente
+  // e a resposta pelo canal do handoff não dependem dela.
+  const peek = useCallback(
+    (node: SessionGraphNode) => {
+      const mode = node.provider === 'claude' ? 'chat' : 'terminal'
+      const isLive = useAppStore.getState().liveSessions.some((s) => s.id === node.sessionId)
+      const inDock = dockCrew(useHandoffsStore.getState().handoffs).some(
+        (h) => h.childSessionId === node.sessionId,
+      )
+      if (!isLive && !inDock) return
+      openLift(node.sessionId, mode)
+    },
+    [openLift],
+  )
+
+  // "Abrir na aba": a ÚNICA ação do mapa que navega.
   const openTab = useCallback((node: SessionGraphNode) => {
     const { liveSessions, focusOrOpenSession } = useAppStore.getState()
     const live = liveSessions.find((s) => s.id === node.sessionId)
@@ -109,37 +117,23 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
     void focusOrOpenSession(live)
   }, [])
 
-  // "Interagir": o terminal real no lugar do cartão. A regra aba × cartão é a do
-  // CrewPeek — com aba aberta, leva até ela; o peek da mesma sessão fecha antes.
+  // "Terminal" (botão, Enter, duplo clique): o terminal real na modal, em 14px,
+  // sobre o mapa. Com aba aberta a modal assume a PTY (terminal-lease).
   const interact = useCallback(
     (sessionId: string) => {
       cancelPendingClick()
-      const { liveSessions, panes, focusOrOpenSession } = useAppStore.getState()
-      const live = liveSessions.find((s) => s.id === sessionId)
-      const hasPane = !!live && panes.some((p) => paneShowsLive(p, live))
-      const host = terminalHostFor({ live: !!live, hasPane })
-      if (host === 'none' || !live) {
+      const live = useAppStore.getState().liveSessions.find((s) => s.id === sessionId)
+      if (terminalHostFor(live) === 'none') {
         showToast({ title: 'Sem terminal vivo', body: 'Esta sessão não tem PTY aberta no app.' })
         return
       }
-      if (host === 'tab') {
-        useProjectsViewStore.getState().setView('terminals')
-        void focusOrOpenSession(live)
-        return
-      }
-      const dock = useCrewDockStore.getState()
-      const handoff = dock.peekId
-        ? useHandoffsStore.getState().handoffs.find((h) => h.id === dock.peekId)
-        : undefined
-      const peeked = peekedSessionId(dock.peekTarget) ?? handoff?.childSessionId ?? null
-      if (peeked === sessionId) dock.closePeek({ restoreFocus: false })
-      useCardViewStore.getState().enterTerminal(sessionId)
+      openLift(sessionId, 'terminal')
     },
-    [cancelPendingClick],
+    [cancelPendingClick, openLift],
   )
 
-  // Clique abre o peek; duplo clique abre a aba. O clique espera o intervalo do
-  // duplo, senão o peek cobriria o mapa antes do 2º clique chegar.
+  // Clique abre o peek; duplo clique abre o terminal na modal. O clique espera o
+  // intervalo do duplo, senão o peek cobriria o mapa antes do 2º clique chegar.
   const clickCard = useCallback(
     (node: SessionGraphNode) => {
       cancelPendingClick()
@@ -150,9 +144,9 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
   const doubleClickCard = useCallback(
     (node: SessionGraphNode) => {
       cancelPendingClick()
-      openTab(node)
+      interact(node.sessionId)
     },
-    [cancelPendingClick, openTab],
+    [cancelPendingClick, interact],
   )
 
   const savePurpose = (sessionId: string, purpose: string | null) => {
@@ -175,10 +169,20 @@ export function useMapCommands(scope: CanvasScope, input: () => MapInput) {
   }
   const summarize = (sessionId: string) => void summarizeOne(sessionId)
 
-  const createNote = (attachedSessionId: string | null) => {
+  // `at`: onde a nota solta nasce (ao lado da seleção/feature — noteSlot). A
+  // posição é gravada antes de editar, senão ela pisca no slot padrão.
+  const createNote = (attachedSessionId: string | null, at?: { x: number; y: number } | null) => {
     canvasApi
       .createNote({ scope, bodyMd: '', attachedSessionId })
-      .then((note) => startEdit(`note:${note.id}`, setEditingNoteId, note.id))
+      .then(async (note) => {
+        if (at) {
+          await useCanvasStateStore
+            .getState()
+            .savePositions(scope, [{ kind: 'note', entityId: note.id, x: at.x, y: at.y }])
+            .catch(() => {})
+        }
+        startEdit(`note:${note.id}`, setEditingNoteId, note.id)
+      })
       .catch(fail('Não foi possível criar a nota'))
   }
 

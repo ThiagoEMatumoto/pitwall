@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', async () => {
   const { mkdtempSync } = await import('node:fs')
@@ -46,6 +46,9 @@ import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import { tuiMenuWatch } from '../tui-menu-watch'
+import { onSessionLinkPulse } from '../session-link-pulse'
+import { setSpawnHandoffChild } from '../handoff/spawn-child'
+import type { SessionLinkPulse } from '../../../../shared/types/session-link-pulse'
 import {
   buildTools,
   type McpNotify,
@@ -378,5 +381,93 @@ describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () 
       summary: 'feito',
     })
     expect(res.status).toBe('done')
+  })
+})
+
+// Bolinha no mapa: cada handler que leva algo de uma sessão a outra avisa o
+// barramento com from/to certos. Chamando os handlers reais, com o banco real.
+describe('pulsos de link entre sessões (session-link-pulse)', () => {
+  const pulses: SessionLinkPulse[] = []
+  let clock = Date.now()
+  let off: () => void = () => {}
+  beforeEach(() => {
+    pulses.length = 0
+    // O barramento limita pulsos por par por segundo; cada caso começa numa janela nova.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    clock += 60_000
+    vi.setSystemTime(clock)
+    off()
+    off = onSessionLinkPulse((p) => pulses.push(p))
+  })
+  afterEach(() => vi.useRealTimers())
+  afterAll(() => off())
+
+  // Mãe e filha com nome (o rótulo do pulso sai de sessions.title).
+  function seedFamily(): string {
+    const id = seedRunningHandoff('s-filha')
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, title, status, started_at) VALUES ('s-mae', 'r1', 'cc-s-mae', 'mae', 'running', ?)`,
+    ).run(Date.now())
+    db.prepare(`UPDATE sessions SET title = 'otavio' WHERE id = 's-filha'`).run()
+    db.prepare(`UPDATE handoffs SET mother_session_id = 's-mae' WHERE id = ?`).run(id)
+    return id
+  }
+  const shape = (p: SessionLinkPulse) => [p.fromSessionId, p.toSessionId, p.kind]
+
+  it('session_handoff: mãe → filha recém-criada, tipo task', () => {
+    getDb()
+      .prepare(
+        `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',?,?)`,
+      )
+      .run(Date.now(), Date.now())
+    getDb()
+      .prepare(
+        `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at) VALUES ('r1','p1','R1','/tmp/r1',0,?)`,
+      )
+      .run(Date.now())
+    setSpawnHandoffChild(() => {
+      getDb()
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, title, status, started_at) VALUES ('s-nova', 'r1', 'nova', 'running', ?)`,
+        )
+        .run(Date.now())
+      return { id: 's-nova' } as never
+    })
+    callAs('s-mae', 'session_handoff', { targetRepo: 'R1', task: 'investigar' })
+    expect(pulses.map(shape)).toEqual([['s-mae', 's-nova', 'task']])
+  })
+
+  it('handoff_message: mãe → filha (message) e, com pergunta aberta, answer', async () => {
+    const id = seedFamily()
+    await callAsync('handoff_message', { handoffId: id, text: 'status?' })
+    handoffStore.ask(id, 'qual lib?')
+    await callAsync('handoff_message', { handoffId: id, text: 'zod' })
+    expect(pulses.map(shape)).toEqual([
+      ['s-mae', 's-filha', 'message'],
+      ['s-mae', 's-filha', 'answer'],
+    ])
+    expect(pulses[0].label).toBe('mae → otavio: mensagem')
+  })
+
+  it('mensagem recusada pelo guard não pulsa (nada chegou)', async () => {
+    const id = seedFamily()
+    showScreen('s-filha', PERMISSION_SCREEN)
+    await expect(callAsync('handoff_message', { handoffId: id, text: 'x' })).rejects.toThrow()
+    expect(pulses).toEqual([])
+  })
+
+  it('handoff_ask / progress / report: filha → mãe', () => {
+    const id = seedFamily()
+    callAs('s-filha', 'handoff_ask', { handoffId: id, question: 'qual lib?' })
+    callAs('s-filha', 'handoff_progress', { handoffId: id, step: 'lendo o código' })
+    // Mesmo passo de novo não é notícia.
+    callAs('s-filha', 'handoff_progress', { handoffId: id, step: 'lendo o código' })
+    callAs('s-filha', 'handoff_report', { handoffId: id, summary: 'feito' })
+    expect(pulses.map(shape)).toEqual([
+      ['s-filha', 's-mae', 'question'],
+      ['s-filha', 's-mae', 'progress'],
+      ['s-filha', 's-mae', 'report'],
+    ])
   })
 })

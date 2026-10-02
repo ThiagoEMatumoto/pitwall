@@ -6,6 +6,8 @@ import {
   MIN_READABLE_ZOOM,
   actualSizeViewport,
   boundsOf,
+  noteSlot,
+  overflowEdges,
   readableViewport,
 } from './map-fit'
 
@@ -83,7 +85,7 @@ describe('readableViewport', () => {
   })
 
   it('desconta controles (esquerda) e minimapa (base): o enquadramento cabe no que sobra', () => {
-    const all = { x: 0, y: 0, w: 1000, h: 600 }
+    const all = { x: 0, y: 0, w: 1000, h: 560 }
     const v = readableViewport({
       visible: all,
       priority: null,
@@ -91,9 +93,9 @@ describe('readableViewport', () => {
       insets: { top: 60, left: 50, bottom: 170 },
     })
     // Zoom limitado pela altura livre (800 - 60 - 170 - 2*24), não pela janela inteira.
-    expect(v!.zoom).toBeCloseTo((800 - 60 - 170 - 48) / 600)
+    expect(v!.zoom).toBeCloseTo((800 - 60 - 170 - 48) / 560)
     expect(v!.x).toBeGreaterThanOrEqual(50)
-    expect(v!.y + 600 * v!.zoom).toBeLessThanOrEqual(800 - 170)
+    expect(v!.y + 560 * v!.zoom).toBeLessThanOrEqual(800 - 170)
   })
 
   it('100%: canto superior esquerdo do conteúdo no canto livre do mapa', () => {
@@ -112,3 +114,56 @@ describe('readableViewport', () => {
   })
 })
 
+
+describe('readableViewport — piso 0.9 e painel da Equipe', () => {
+  it('nunca abaixo de 0.9; a prioridade cabe inteira à esquerda do painel', () => {
+    const view = { w: 1400, h: 800 }
+    const right = 360
+    const priority = { x: 2000, y: 0, w: 600, h: 300 }
+    const v = readableViewport({
+      visible: { x: 0, y: 0, w: 3000, h: 600 },
+      priority,
+      view,
+      insets: { right },
+    })!
+    expect(MIN_READABLE_ZOOM).toBe(0.9)
+    expect(v.zoom).toBe(0.9)
+    const screenRight = v.x + (priority.x + priority.w) * v.zoom
+    expect(screenRight).toBeLessThanOrEqual(view.w - right)
+  })
+})
+
+describe('overflowEdges — dica de conteúdo além da borda', () => {
+  const view = { w: 1000, h: 600 }
+  it('nada além: nenhuma borda acende', () => {
+    expect(overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: 24, y: 24, zoom: 1 }, view)).toEqual({
+      top: false,
+      right: false,
+      bottom: false,
+      left: false,
+    })
+  })
+  it('painel aberto à direita: o que está embaixo dele conta como transbordo', () => {
+    const e = overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: 24, y: 24, zoom: 1 }, view, {
+      right: 420,
+    })
+    expect(e.right).toBe(true)
+    expect(e.left).toBe(false)
+  })
+  it('conteúdo deslocado pra cima/esquerda acende essas bordas', () => {
+    const e = overflowEdges({ x: 0, y: 0, w: 800, h: 400 }, { x: -200, y: -100, zoom: 1 }, view)
+    expect(e.left && e.top).toBe(true)
+  })
+})
+
+describe('noteSlot — nota nova ao lado da seleção', () => {
+  const size = { w: 220, h: 132 }
+  const feature = { x: 0, y: 0, w: 900, h: 400 }
+  it('à direita do card quando há espaço', () => {
+    expect(noteSlot(feature, [feature], size)).toEqual({ x: 924, y: 0 })
+  })
+  it('vizinho colado à direita: vai para baixo', () => {
+    const next = { x: 948, y: 0, w: 500, h: 400 }
+    expect(noteSlot(feature, [feature, next], size)).toEqual({ x: 0, y: 424 })
+  })
+})

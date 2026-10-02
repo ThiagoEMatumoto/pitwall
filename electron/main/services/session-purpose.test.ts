@@ -18,6 +18,8 @@ import {
   PURPOSE_MAX_CHARS,
   WHERE_LEFT_OFF_INSTRUCTION,
   cleanPrompt,
+  firstCleanPrompt,
+  sanitizeObjective,
   firstUserPrompt,
   forgetFirstPrompt,
   lastUserPrompt,
@@ -145,6 +147,27 @@ describe('firstUserPrompt', () => {
     expect(
       firstUserPrompt(parseChatMessages(REAL_SHAPES.split('\n').slice(0, 5).join('\n'))),
     ).toBeNull()
+  })
+})
+
+describe('objetivo de feature a partir do 1º prompt', () => {
+  const kickoff =
+    'Comece a tarefa do handoff descrita no seu contexto de sistema. Ao terminar, chame a MCP tool handoff_report com handoffId="h-1".'
+
+  it('firstCleanPrompt pula o kickoff e limpa a colagem', () => {
+    expect(firstCleanPrompt([kickoff, 'Agora rode a migração'])).toBe('Agora rode a migração')
+    expect(firstCleanPrompt(['<pasted_content id="1">x</pasted_content> resume isso'])).toBe('resume isso')
+    expect(firstCleanPrompt([kickoff])).toBeNull()
+  })
+
+  it('sanitizeObjective some com o kickoff gravado e preserva o texto humano', () => {
+    expect(sanitizeObjective(kickoff)).toBeNull()
+    expect(sanitizeObjective('<pasted_content id="1">log</pasted_content> por que quebra?')).toBe(
+      'por que quebra?',
+    )
+    const human = 'Mapa por feature\n\nver https://x.slack.com/a/b'
+    expect(sanitizeObjective(human)).toBe(human)
+    expect(sanitizeObjective(null)).toBeNull()
   })
 })
 

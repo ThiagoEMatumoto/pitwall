@@ -29,6 +29,8 @@ import { CrewPeek } from './CrewPeek'
 import { useCrewDockStore } from './crew-dock-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
+import { useTerminalLease } from '@/features/sessions/terminal-lease'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 
 const handoff: Handoff = {
   id: 'h1',
@@ -179,7 +181,11 @@ describe('CrewPeek em modo terminal', () => {
   function mountTerminal() {
     useHandoffsStore.setState({ handoffs: [handoff] })
     useAppStore.setState({ liveSessions: [live] })
-    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1', peekMode: 'terminal' })
+    useCrewDockStore.setState({
+      peekTarget: { kind: 'handoff', id: 'h1' },
+      peekId: 'h1',
+      peekMode: 'terminal',
+    })
     return render(<CrewPeek />)
   }
 
@@ -229,17 +235,54 @@ describe('CrewPeek em modo terminal', () => {
     expect(document.activeElement).toBe(first)
   })
 
-  // Dois xterms na mesma PTY brigariam pelo sessionsApi.resize.
-  it('com aba já aberta pra esta filha, o Terminal leva pra aba em vez de duplicar', () => {
+  // Pelo dock a aba pode estar visível ao lado: tomar a PTY a esvaziaria.
+  it('pelo dock, com aba já aberta pra esta filha, o Terminal leva pra aba', () => {
     const focusOrOpenSession = vi.fn()
     useAppStore.setState({
       focusOrOpenSession,
       panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
     })
     mount()
+    useCrewDockStore.setState({ peekOrigin: 'dock' })
     fireEvent.click(screen.getByText('Terminal'))
     expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
     expect(useCrewDockStore.getState().peekId).toBeNull()
+    expect(useTerminalLease.getState().leases['s-child']).toBeUndefined()
+  })
+
+  // Regressão: o provider sem Chat View força o modo terminal, e a lease era
+  // tomada sem olhar a origem — a aba aberta da filha virava "Aberto no mapa"
+  // fora do mapa. Pelo dock, com aba, o terminal dela mora na aba.
+  it('pelo dock, filha Codex com aba aberta: não toma a PTY, leva pra aba', () => {
+    const focusOrOpenSession = vi.fn()
+    useTerminalLease.setState({ leases: {}, stacks: {} })
+    useAppStore.setState({
+      focusOrOpenSession,
+      panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
+    })
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({ liveSessions: [{ ...live, provider: 'codex' }] })
+    act(() => useCrewDockStore.getState().openPeek('h1'))
+    render(<CrewPeek />)
+    expect(useTerminalLease.getState().leases['s-child']).toBeUndefined()
+    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-child' }))
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
+  })
+
+  // Pelo mapa a modal assume a PTY (terminal-lease): a aba cede, não o contrário.
+  it('pelo mapa, com aba já aberta, o Terminal abre aqui e não navega', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({
+      focusOrOpenSession,
+      panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
+    })
+    mount()
+    act(() => useCrewDockStore.setState({ peekOrigin: 'map' }))
+    fireEvent.click(screen.getByText('Terminal'))
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(useCrewDockStore.getState().peekMode).toBe('terminal')
+    expect(useTerminalLease.getState().leases['s-child']).toBe('modal')
+    act(() => useCrewDockStore.setState({ peekOrigin: 'dock' }))
   })
 
   it('promover a aba é ação explícita do rodapé', () => {
@@ -356,7 +399,7 @@ describe('CrewPeek com peekTarget de sessão', () => {
     expect(useCrewDockStore.getState().peekTarget).toBeNull()
   })
 
-  it('peek e aba da mesma sessão não coexistem: com aba aberta, leva pra aba', () => {
+  it('sessão com aba aberta também abre no peek (não leva pra aba)', () => {
     const focusOrOpenSession = vi.fn()
     useAppStore.setState({
       focusOrOpenSession,
@@ -364,7 +407,135 @@ describe('CrewPeek com peekTarget de sessão', () => {
     })
     act(() => useCrewDockStore.getState().openSessionPeek('s-solo'))
     render(<CrewPeek />)
-    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-solo' }))
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('CrewPeek como lift do mapa', () => {
+  const a: LiveSessionInfo = { ...live, id: 's-a', ccSessionId: 'cc-a', title: 'mae-web' }
+  const b: LiveSessionInfo = { ...live, id: 's-b', ccSessionId: 'cc-b', title: 'filha-api' }
+
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    useHandoffsStore.setState({ handoffs: [] })
+    useAppStore.setState({ panes: [], liveSessions: [a, b] })
+    useTerminalLease.setState({ leases: {}, stacks: {} })
+    useProjectsViewStore.setState({ view: 'map' })
+    terminalProps.length = 0
+  })
+
+  function openLift(id = 's-a') {
+    act(() =>
+      useCrewDockStore
+        .getState()
+        .openSessionPeek(id, 'terminal', { origin: 'map', siblings: ['s-a', 's-b'] }),
+    )
+    return render(<CrewPeek />)
+  }
+
+  it('painel grande, xterm em 14px, assumindo a PTY enquanto aberto', () => {
+    openLift()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveAttribute('data-peek-lift', 'true')
+    expect(dialog.className).toContain('w-[min(1400px,94vw)]')
+    expect(dialog.className).toContain('h-[90vh]')
+    expect(terminalProps.at(-1)).toMatchObject({ leaseHost: 'modal', chrome: 'bare' })
+    expect(terminalProps.at(-1)!.fontSize).toBeGreaterThanOrEqual(14)
+    expect(useTerminalLease.getState().leases['s-a']).toBe('modal')
+    act(() => useCrewDockStore.getState().closePeek())
+    expect(useTerminalLease.getState().leases['s-a']).toBeUndefined()
+  })
+
+  it('a faixa troca de sessão no mesmo modo, e Alt+. anda por ela com volta', () => {
+    openLift()
+    fireEvent.click(screen.getByText('filha-api'))
+    expect(useCrewDockStore.getState()).toMatchObject({
+      peekTarget: { kind: 'session', id: 's-b' },
+      peekMode: 'terminal',
+      peekOrigin: 'map',
+    })
+    // A lease da anterior só volta pra aba quando a modal fecha: devolver a cada
+    // passo remontaria o xterm (replay, fit, WebGL) de uma aba que ninguém vê.
+    expect(useTerminalLease.getState().leases).toEqual({ 's-a': 'modal', 's-b': 'modal' })
+    fireEvent.keyDown(window, { key: '.', code: 'Period', altKey: true })
+    expect(useCrewDockStore.getState().peekTarget).toEqual({ kind: 'session', id: 's-a' })
+    act(() => useCrewDockStore.getState().closePeek())
+    expect(useTerminalLease.getState().leases).toEqual({})
+  })
+
+  // Regressão: a faixa abria toda irmã como sessão avulsa, e a filha do dock
+  // perdia a pergunta pendente e a resposta pelo canal do handoff.
+  it('Alt+. até uma filha do dock em needs_input abre o peek do handoff, com a resposta', () => {
+    useHandoffsStore.setState({
+      handoffs: [
+        {
+          ...handoff,
+          childSessionId: 's-b',
+          status: 'needs_input',
+          pendingQuestion: 'qual branch?',
+        },
+      ],
+    })
+    act(() =>
+      useCrewDockStore
+        .getState()
+        .openSessionPeek('s-a', 'chat', { origin: 'map', siblings: ['s-a', 's-b'] }),
+    )
+    render(<CrewPeek />)
+    fireEvent.keyDown(window, { key: '.', code: 'Period', altKey: true })
+    expect(useCrewDockStore.getState()).toMatchObject({
+      peekTarget: { kind: 'handoff', id: 'h1' },
+      peekOrigin: 'map',
+    })
+    expect(screen.getByText('qual branch?')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Responder à filha…')).toBeInTheDocument()
+  })
+
+  it('trocar em terminal para a filha do dock mantém a PTY anterior na modal', () => {
+    useHandoffsStore.setState({ handoffs: [{ ...handoff, childSessionId: 's-b' }] })
+    openLift()
+    fireEvent.click(screen.getByText('filha-api'))
+    expect(useCrewDockStore.getState().peekTarget).toEqual({ kind: 'handoff', id: 'h1' })
+    expect(useTerminalLease.getState().leases).toEqual({ 's-a': 'modal', 's-b': 'modal' })
+  })
+
+  it('voltar pra conversa no mesmo painel devolve a PTY', () => {
+    openLift()
+    expect(useTerminalLease.getState().leases).toEqual({ 's-a': 'modal' })
+    act(() => useCrewDockStore.getState().setPeekMode('chat'))
+    expect(useTerminalLease.getState().leases).toEqual({})
+  })
+
+  it('a entrada anima só na abertura: trocar pela faixa não pisca o painel', () => {
+    openLift()
+    expect(screen.getByRole('dialog').className).toContain('pw-rise')
+    fireEvent.click(screen.getByText('filha-api'))
+    expect(screen.getByRole('dialog').className).not.toContain('pw-rise')
+    act(() => useCrewDockStore.getState().closePeek())
+    act(() =>
+      useCrewDockStore
+        .getState()
+        .openSessionPeek('s-b', 'terminal', { origin: 'map', siblings: ['s-a', 's-b'] }),
+    )
+    expect(screen.getByRole('dialog').className).toContain('pw-rise')
+  })
+
+  it('"Abrir na aba" é a única saída que navega: solta a PTY e troca a vista', () => {
+    const focusOrOpenSession = vi.fn()
+    useAppStore.setState({ focusOrOpenSession })
+    openLift()
+    fireEvent.click(screen.getByTestId('peek-open-tab'))
+    expect(useTerminalLease.getState().leases).toEqual({})
+    expect(useProjectsViewStore.getState().view).toBe('terminals')
+    expect(focusOrOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's-a' }))
     expect(useCrewDockStore.getState().peekTarget).toBeNull()
+  })
+
+  it('fechar não muda a vista do mapa', () => {
+    openLift()
+    fireEvent.click(screen.getByLabelText('Fechar'))
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
+    expect(useProjectsViewStore.getState().view).toBe('map')
   })
 })

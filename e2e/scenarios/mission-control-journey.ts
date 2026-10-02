@@ -387,7 +387,11 @@ try {
   const beforeB = new Set(files().map((f) => f.data.pid))
   const idB = await page.evaluate(
     async ({ repoId, mother }) => {
-      const b = await window.api.sessions.spawn({ repoId, name: 'perm-jornada', handoffChild: true })
+      const b = await window.api.sessions.spawn({
+        repoId,
+        name: 'perm-jornada',
+        handoffChild: true,
+      })
       const { handoff } = await window.api.handoffs.createManual({
         repoId,
         motherSessionId: mother,
@@ -414,6 +418,17 @@ try {
     60_000,
   )
   check(waiting, 'B espera com motivo "permissão" (fixture real do 2.1.286)')
+  // live() lê o main; o Alt+A lê a fila do store do renderer, que chega depois.
+  // Sem esperar o renderer, o Alt+A cai numa fila ainda vazia (flaky).
+  await waitFor(
+    'renderer vê B esperando',
+    async () =>
+      (await page
+        .locator('[data-crew-card]', { hasText: 'perm-jornada' })
+        .getByText('precisa de você')
+        .count()) > 0,
+    15_000,
+  )
   const tabsBefore = await page.locator('.dv-tab').count()
   await page.keyboard.press('Alt+a')
   const pinned = page.locator('[data-testid="attention-popover"][role="dialog"]')
@@ -557,6 +572,16 @@ try {
       (await card(idA).count()) + (await card(idB).count()) + (await card(idC).count()) === 3,
   )
   check(cardsOk, 'cartões das 3 sessões no mapa')
+  // A → C → B: só a raiz A é o cartão grande; C (filha que delegou B) é mãe no
+  // cartão comum, com o selo e sem o 1.6x.
+  const variants = await Promise.all([idA, idC].map((id) => card(id).getAttribute('data-variant')))
+  const cMother = await card(idC).getAttribute('data-mother')
+  const cBadge = await card(idC).getByTestId('card-mother-badge').count()
+  const [wA, wC] = await Promise.all([idA, idC].map(async (id) => (await card(id).boundingBox())?.width ?? 0))
+  check(
+    variants[0] === 'mother' && variants[1] !== 'mother' && cMother === 'true' && cBadge > 0 && wA > wC * 1.4,
+    `raiz A no cartão grande, intermediária C no comum com selo (variant ${variants.join('/')}, larguras ${Math.round(wA)}/${Math.round(wC)})`,
+  )
   const views = await Promise.all([idA, idB, idC].map((id) => card(id).getAttribute('data-view')))
   check(
     views.every((v) => v === 'open'),
@@ -613,13 +638,10 @@ try {
   await fit()
   await bringIntoView(card(idC).getByTestId('card-interact'))
   await card(idC).getByTestId('card-interact').click()
-  const inTerm = await waitFor(
-    'C em terminal',
-    async () => (await card(idC).getAttribute('data-view')) === 'terminal',
-    10_000,
-  )
-  check(inTerm, 'abrir C em modo terminal no cartão')
-  const cx = card(idC).locator('.xterm')
+  const liftC = page.locator('[role="dialog"][data-peek-lift][data-peek-mode="terminal"]')
+  const inTerm = await waitFor('C na modal', async () => (await liftC.count()) === 1, 10_000)
+  check(inTerm, 'abrir o terminal de C na modal do mapa')
+  const cx = liftC.locator('.xterm')
   await waitFor('xterm de C', async () => (await cx.count()) === 1, 10_000)
   await page.waitForTimeout(800)
   await cx.click().catch(() => {})
@@ -630,17 +652,10 @@ try {
     async () => stdinOf(fileC?.data.pid).includes('stdin: ola da jornada'),
     10_000,
   )
-  check(typed, 'digitar no terminal do cartão chega ao stdin de C')
+  check(typed, 'digitar no terminal da modal chega ao stdin de C')
   await shot('card-terminal-typed')
-  await card(idC)
-    .getByTestId('card-leave-terminal')
-    .click()
-    .catch(() => {})
-  await waitFor(
-    'C volta a aberto',
-    async () => (await card(idC).getAttribute('data-view')) === 'open',
-    5000,
-  )
+  await page.keyboard.press('Shift+Escape')
+  await waitFor('modal de C fecha', async () => (await liftC.count()) === 0, 5000)
 
   // ---------- nota e grupo ----------
   await fit()

@@ -16,10 +16,21 @@ import { broadcast } from '../services/notify'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { permissionModeForHandoffMode } from '../services/spawn-flags'
 import { distillBaton } from '../services/baton/distill'
+import { buildSessionsFileIndex } from '../services/session-activity'
 import { spawnSession, TERMINAL_HANDOFF_STATUSES } from './sessions'
-import { notifyMotherOfAliasChange } from '../services/handoff/notify-mother-alias'
+import {
+  notifyChildrenOfNewMother,
+  notifyMotherOfAliasChange,
+} from '../services/handoff/notify-mother-alias'
+import {
+  ACTIVE_CHILDREN_HEADING,
+  renderActiveChildrenSection,
+  type BatonChild,
+} from '../services/baton/compose-baton-prompt'
 import type {
+  BatonChildrenMissed,
   DistillBatonInput,
+  Handoff,
   HandoffMode,
   HandoffStatus,
   PassBatonInput,
@@ -71,6 +82,57 @@ function inheritedHandoff(predecessorSessionId: string): InheritedHandoffRow | n
   if (!row) return null
   if (TERMINAL_HANDOFF_STATUSES.has(row.status as HandoffStatus)) return null
   return row
+}
+
+// Filhas que a sucessora vai liderar quando a antecessora é MÃE: os handoffs
+// dela que ainda podem falar com uma mãe (o mesmo recorte do transferMother).
+function motherChildren(handoffs: Handoff[]): BatonChild[] {
+  return handoffs.map((h) => ({
+    handoffId: h.id,
+    alias: handoffStore.childAlias(h.childSessionId),
+    task: h.task,
+    status: h.status,
+    lastProgress: h.currentStep,
+  }))
+}
+
+// O briefing da mãe SEMPRE leva a lista das filhas, inclusive quando o humano o
+// escreveu à mão (destilação indisponível): sem ela a sucessora não sabe quem lidera.
+// A lista do banco sempre vence: uma seção já presente (copiada pelo LLM do
+// prompt, ou editada à mão) é removida e a determinística vai no fim.
+export function withActiveChildren(
+  briefing: string,
+  children: BatonChild[],
+  featureTitle?: string | null,
+): string {
+  if (children.length === 0) return briefing
+  const rest = withoutSection(briefing, ACTIVE_CHILDREN_HEADING)
+  const section = renderActiveChildrenSection(children, featureTitle)
+  return rest ? `${rest}\n\n${section}` : section
+}
+
+// Remove só o bloco GERADO da seção (título, linha da feature, a frase de abertura
+// e os itens "- "): termina na primeira linha que não é dele — linha em branco,
+// parágrafo ou título. O que o humano escreveu abaixo da lista no diálogo é
+// contrato e vai pra sucessora.
+const GENERATED_SECTION_LINE = /^(Feature: |Você passa a ser a MÃE |- )/
+
+function withoutSection(markdown: string, heading: string): string {
+  const out: string[] = []
+  let skipping = false
+  for (const line of markdown.split('\n')) {
+    if (line.trim() === heading) {
+      skipping = true
+      continue
+    }
+    if (skipping && GENERATED_SECTION_LINE.test(line)) continue
+    skipping = false
+    out.push(line)
+  }
+  return out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 // Escopo do apelido (`mauricio-auth-refactor` → `auth-refactor`). É o que a
@@ -125,6 +187,7 @@ function buildKickoff(args: {
   handoffId: string | null
   alias: string | null
   aliasChanged: boolean
+  children?: BatonChild[]
 }): string {
   const parts = [
     'Você está assumindo o trabalho de uma sessão anterior cujo contexto encheu.',
@@ -147,6 +210,18 @@ function buildKickoff(args: {
       `Seu endereço de peer agora é "${args.alias}" — a sessão anterior continua viva com o apelido antigo. Se falar com a sessão-mãe, avise a troca.`,
     )
   }
+  // Mãe: o relink no banco já foi feito e cada filha recebeu a nota do endereço
+  // novo; o que falta é o canal peer — a filha responde a quem escreveu primeiro.
+  if (args.children?.length) {
+    const list = args.children
+      .map((c) => `${c.alias ? `"${c.alias}"` : '(sem endereço)'} (handoffId ${c.handoffId})`)
+      .join(', ')
+    parts.push(
+      `Você também assume o papel de MÃE de ${args.children.length} filha${args.children.length === 1 ? '' : 's'}: ${list}.`,
+      `O Pitwall já passou os handoffs para você${args.alias ? ` e tentou avisar cada filha de que a mãe agora é "${args.alias}" (uma filha parada num menu pode não ter recebido)` : ''}.`,
+      'Mande agora um SendMessage curto a cada filha se apresentando como a nova mãe — é essa primeira mensagem que abre o canal de volta — e acompanhe por handoff_list.',
+    )
+  }
   return parts.join(' ')
 }
 
@@ -160,17 +235,37 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
 
   const predecessor = predecessorRow(input.ccSessionId)
   const handoffRow = inheritedHandoff(predecessor.id)
+  const children = motherChildren(handoffStore.listRelinkableByMother(predecessor.id))
+  const isMother = children.length > 0
 
-  // Só a filha de handoff carrega apelido fixo e `--settings` (o endereço de peer).
-  // Sessão comum herda só repo/feature/briefing e nasce com o nome default do repo.
-  const resolved = handoffRow
-    ? resolveSuccessorAlias({
-        predecessorAlias: predecessor.title,
-        mode: handoffRow.mode as HandoffMode,
-        task: handoffRow.task,
-        takenNames: handoffStore.activeSessionNames(),
-      })
+  // Só a filha de handoff carrega `--settings`; o apelido fixo é dela e da MÃE
+  // (o endereço de peer que as filhas usam). Sessão comum herda só
+  // repo/feature/briefing e nasce com o nome default do repo.
+  //
+  // Mãe: o endereço SEMPRE muda, mesmo que o nome antigo pareça livre — duas
+  // sessões atendendo pelo mesmo nome fariam a filha escrever pra "alguma das
+  // duas". Por isso o nome da antecessora entra como ocupado.
+  //
+  // A mãe comum (Ctrl+N) não tem sessions.title: o endereço pelo qual as filhas a
+  // chamam é o nome vivo do CLI, no session file.
+  const motherAlias = isMother
+    ? (predecessor.title ??
+      (predecessor.cc_session_id
+        ? buildSessionsFileIndex().get(predecessor.cc_session_id)?.name
+        : null) ??
+      null)
     : null
+  const takenNames = [...handoffStore.activeSessionNames()]
+  if (motherAlias) takenNames.push(motherAlias)
+  const resolved =
+    handoffRow || isMother
+      ? resolveSuccessorAlias({
+          predecessorAlias: predecessor.title,
+          mode: (handoffRow?.mode as HandoffMode | undefined) ?? null,
+          task: handoffRow?.task ?? predecessor.title ?? 'mae',
+          takenNames,
+        })
+      : null
 
   const session = spawnSession({
     repoId: predecessor.repo_id,
@@ -178,12 +273,15 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
     name: resolved?.alias,
     // Cai no --append-system-prompt-file: o briefing é multi-linha e injetá-lo no
     // REPL viraria uma sequência de Enter.
-    systemPromptText: briefing,
+    systemPromptText: isMother
+      ? withActiveChildren(briefing, children, featureTitleOf(predecessor.feature_id))
+      : briefing,
     initialPrompt: buildKickoff({
       task: input.task,
       handoffId: handoffRow?.id ?? null,
       alias: resolved?.alias ?? null,
       aliasChanged: resolved?.changed ?? false,
+      children,
     }),
     // Herda o papel de filha: `--settings` (sem ele a mensagem da mãe fica `held`
     // em silêncio) + apelido espelhado em sessions.title como 'manual'.
@@ -198,8 +296,61 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
     rows: input.rows,
   })
 
+  let successor = session
+  let relinkedChildren = 0
+  if (isMother && resolved) {
+    // O apelido é o endereço que as filhas vão usar: fixado como 'manual' pra o
+    // rename automático do Claude Code não trocá-lo (a filha já faz isso no spawn).
+    if (!handoffRow) {
+      getDb()
+        .prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?")
+        .run(resolved.alias, session.id)
+      successor = { ...session, title: resolved.alias, titleSource: 'manual' }
+    }
+    const moved = handoffStore.transferMother(predecessor.id, session.id)
+    relinkedChildren = moved.length
+    for (const h of moved) broadcast('handoff:updated', h)
+    // Nota às filhas: assíncrona (o guard relê a tela de cada uma) e best-effort —
+    // o relink já vale no banco; uma nota recusada não desfaz o bastão. Mas a
+    // recusa não pode sumir: a filha não avisada segue escrevendo para a
+    // antecessora (viva), então o humano fica sabendo QUAIS foram.
+    const newAlias = resolved.alias
+    void notifyChildrenOfNewMother({
+      handoffs: moved,
+      alias: newAlias,
+      previousAlias: motherAlias,
+      fromSessionId: session.id,
+    })
+      .then((deliveries) => {
+        const missed = deliveries.flatMap((d) =>
+          !d.delivered && (d.reason === 'inject-refused' || d.reason === 'child-not-running')
+            ? [{ handoffId: d.handoffId, reason: d.reason }]
+            : [],
+        )
+        if (missed.length === 0) return
+        const byId = new Map(moved.map((h) => [h.id, h]))
+        const payload: BatonChildrenMissed = {
+          alias: newAlias,
+          previousAlias: motherAlias,
+          missed: missed.map((d) => ({
+            handoffId: d.handoffId,
+            childAlias: handoffStore.childAlias(byId.get(d.handoffId)?.childSessionId ?? null),
+            reason: d.reason,
+          })),
+        }
+        broadcast('baton:children-missed', payload)
+      })
+      .catch((err) => console.error('[baton] nota às filhas falhou:', err))
+  }
+
   if (!handoffRow) {
-    return { session, handoff: null, alias: null, aliasChanged: false }
+    return {
+      session: successor,
+      handoff: null,
+      alias: isMother ? (resolved?.alias ?? null) : null,
+      aliasChanged: false,
+      relinkedChildren,
+    }
   }
 
   // Linhagem ANTES do relink: markRunning sobrescreve child_session_id, e é este
@@ -235,11 +386,19 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
   }
 
   return {
-    session,
+    session: successor,
     handoff: updated,
     alias: resolved?.alias ?? null,
     aliasChanged: resolved?.changed ?? false,
+    relinkedChildren,
   }
+}
+
+function featureTitleOf(featureId: string | null): string | null {
+  if (!featureId) return null
+  const row = getDb().prepare('SELECT title FROM features WHERE id = ?').get(featureId) as
+    { title: string | null } | undefined
+  return row?.title ?? null
 }
 
 // Destilação sob demanda: enriquece o prompt com repo/feature da sessão (a
@@ -247,12 +406,13 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
 // não impede destilar — os rótulos são contexto, não requisito.
 export async function distillForBaton(input: DistillBatonInput): Promise<string> {
   interface LabelsRow {
+    session_id: string
     repo_label: string | null
     feature_title: string | null
   }
   const row = getDb()
     .prepare(
-      `SELECT r.label AS repo_label, f.title AS feature_title
+      `SELECT s.id AS session_id, r.label AS repo_label, f.title AS feature_title
          FROM sessions s
          LEFT JOIN repos r ON r.id = s.repo_id
          LEFT JOIN features f ON f.id = s.feature_id
@@ -261,11 +421,15 @@ export async function distillForBaton(input: DistillBatonInput): Promise<string>
     )
     .get(input.ccSessionId) as LabelsRow | undefined
 
-  return distillBaton(input.ccSessionId, {
+  const children = row ? motherChildren(handoffStore.listRelinkableByMother(row.session_id)) : []
+  const featureTitle = row?.feature_title ?? null
+  const briefing = await distillBaton(input.ccSessionId, {
     repoLabel: row?.repo_label ?? null,
-    featureTitle: row?.feature_title ?? null,
+    featureTitle,
     note: input.note ?? null,
+    children,
   })
+  return withActiveChildren(briefing, children, featureTitle)
 }
 
 export function registerBatonIpc(): void {

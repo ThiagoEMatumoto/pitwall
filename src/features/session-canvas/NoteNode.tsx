@@ -1,7 +1,14 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { BookmarkPlus } from 'lucide-react'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
-import type { MapNode, NoteData } from './graph-to-flow'
+import { Icon } from '@/components/ui/Icon'
+import { FeaturePicker } from '@/features/features/FeaturePicker'
+import type { FeatureWithActivity } from '@/features/features/feature-activity'
+import { showToast } from '@/features/notifications/toast-store'
+import { canvasApi, featuresApi } from '@/lib/ipc'
+import { featureLaneId, type MapNode, type NoteData } from './graph-to-flow'
+import { MIN_READABLE_ZOOM } from './map-fit'
 import { useMapActions } from './map-context'
 
 // Post-it em markdown. Duplo clique edita; Ctrl+Enter ou sair do campo salva,
@@ -54,6 +61,7 @@ function NoteNodeImpl({ data, selected }: NodeProps<MapNode>) {
             sessão encerrada
           </span>
         )}
+        {!editing && note.bodyMd.trim() && <FixToFeature noteId={note.id} text={note.bodyMd} />}
       </div>
       {editing ? (
         <textarea
@@ -79,6 +87,91 @@ function NoteNodeImpl({ data, selected }: NodeProps<MapNode>) {
             </span>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// "Fixar na feature": o texto vai para as notas fixadas da feature escolhida
+// (doc .md da feature) e a nota sai do canvas — ela mudou de casa, não duplicou.
+function FixToFeature({ noteId, text }: { noteId: string; text: string }) {
+  const [open, setOpen] = useState(false)
+  const [features, setFeatures] = useState<FeatureWithActivity[]>([])
+  const flow = useReactFlow()
+
+  // Depois de fixar, a câmera vai até o card da feature: a nota sumiu do mapa e
+  // sem isso o usuário fica olhando para o vazio onde ela estava.
+  function revealFeature(featureId: string) {
+    const lane = flow.getInternalNode(featureLaneId(featureId))
+    if (!lane) return
+    const p = lane.internals.positionAbsolute
+    const w = lane.measured.width ?? lane.width ?? 0
+    const h = lane.measured.height ?? lane.height ?? 0
+    void flow.setCenter(p.x + w / 2, p.y + Math.min(h, 400) / 2, {
+      zoom: Math.max(flow.getZoom(), MIN_READABLE_ZOOM),
+      duration: 300,
+    })
+  }
+
+  function toggle() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    setOpen(true)
+    void featuresApi.listWithStats().then(setFeatures)
+  }
+
+  async function pick(featureId: string | null) {
+    setOpen(false)
+    if (!featureId) return
+    let feature: Awaited<ReturnType<typeof featuresApi.appendFixedNote>>
+    try {
+      feature = await featuresApi.appendFixedNote({ featureId, text })
+    } catch {
+      showToast({ title: 'Não deu para fixar a nota', body: 'A nota continua no mapa.' })
+      return
+    }
+    // Já está na feature: falhar aqui não pode convidar a tentar de novo (duplicaria).
+    try {
+      await canvasApi.deleteNote({ id: noteId })
+    } catch {
+      showToast({
+        title: 'Nota fixada, mas continua no mapa',
+        body: `Já está em «${feature.title}». Apague a nota do mapa à mão.`,
+      })
+      return
+    }
+    showToast({ title: 'Nota fixada na feature', body: `Agora está em «${feature.title}».` })
+    revealFeature(featureId)
+  }
+
+  return (
+    <div className="nodrag relative ml-auto">
+      <button
+        type="button"
+        data-testid="note-fix-to-feature"
+        onClick={(e) => {
+          e.stopPropagation()
+          toggle()
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+        title="Fixar na feature"
+        aria-label="Fixar na feature"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+      >
+        <Icon as={BookmarkPlus} size={11} />
+        <span>Fixar na feature</span>
+      </button>
+      {open && (
+        <FeaturePicker
+          features={features}
+          value={null}
+          onPick={(id) => void pick(id)}
+          onClose={() => setOpen(false)}
+          align="right"
+          testId="note-feature-picker"
+        />
       )}
     </div>
   )

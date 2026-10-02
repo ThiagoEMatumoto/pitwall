@@ -56,7 +56,8 @@ export function formatCombo(c: Combo): string {
   else if (c.code?.startsWith('Key')) parts.push(c.code.slice(3))
   else if (arrow) parts.push(arrow)
   else if (c.key === 'Tab') parts.push('Tab')
-  else if (c.key) parts.push(c.key.toUpperCase())
+  // Tecla nomeada (Enter, Escape) fica como está: "ENTER" gritava na UI.
+  else if (c.key) parts.push(c.key.length === 1 ? c.key.toUpperCase() : c.key)
   return parts.join('+')
 }
 
@@ -163,6 +164,18 @@ export const COMMANDS: Command[] = [
     label: 'Alternar Mapa de sessões ⇄ Terminais',
     context: 'Workspace',
     defaultCombo: { mod: true, shift: true, code: 'KeyG' },
+    editable: true,
+  },
+  // Ir direto à mãe da feature em foco (ou da sessão selecionada): foca a coluna
+  // fixada, ou abre a mãe na modal do mapa. Ctrl+Shift+O ("origem"): Alt+M é o
+  // meta+m do Claude Code (2.1.286 usa meta+p/o/t/m e meta+↑/↓), Ctrl+Shift+M é
+  // o ditado e Ctrl+Shift+U é a entrada unicode do GTK. Por code: estável com
+  // Shift em qualquer layout.
+  {
+    id: 'mother.focus',
+    label: 'Ir para a sessão mãe da feature em foco',
+    context: 'Workspace',
+    defaultCombo: { mod: true, shift: true, code: 'KeyO' },
     editable: true,
   },
   {

@@ -169,6 +169,14 @@ html, body, #root {
 .pw-pulse { animation: pw-pulse 2.4s ease-in-out infinite; }
 .pw-ring { animation: pw-ring 2.4s ease-out infinite; }
 .pw-rise { animation: pw-rise 0.4s ease-out both; }
+/* Janela sobre terminal (pw-rise pw-pop: pw-pop vem depois e vence): o fade longo
+   do pw-rise deixava o xterm translúcido
+   (mapa aparecendo através do texto). Entrada curta, quase opaca desde o 1º quadro. */
+@keyframes pw-pop {
+  from { opacity: 0.9; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.pw-pop { animation: pw-pop 0.16s ease-out both; }
 .pw-cursor { animation: pw-cursor 1s step-end infinite; }
 
 /* Equalizer d'"A Régua" (estado "em pista / agente pensando"): barras oscilando.
@@ -229,6 +237,7 @@ html, body, #root {
   .pw-pulse,
   .pw-ring,
   .pw-rise,
+  .pw-pop,
   .pw-cursor,
   .pw-eq-bar,
   .pw-agent-veil,

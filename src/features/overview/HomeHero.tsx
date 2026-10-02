@@ -1,7 +1,7 @@
 import { RefreshCw } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot, GradientBorder } from '@/features/brand'
-import { useVisibleLiveSessions } from '@/features/session-switcher/useGlobalSessions'
+import { useAppStore } from '@/store/appStore'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { OverviewCounts } from '../../../shared/types/ipc'
 
@@ -10,9 +10,10 @@ import type { OverviewCounts } from '../../../shared/types/ipc'
 // contexto de decisão, pills de estado (no box / em pista) e chips-stat dos
 // contadores do agregado. Voz de engenheiro de pista.
 export function HomeHero({ counts, onRefresh }: { counts: OverviewCounts; onRefresh: () => void }) {
-  // Mesmo conjunto do card "Sessões agora": filha de handoff mora no Crew Dock
-  // (com badge próprio). Contar ela aqui dava "1 no box" com o card dizendo 0.
-  const liveSessions = useVisibleLiveSessions()
+  // TODA sessão viva, inclusive a filha no Crew Dock: o hero responde "alguém
+  // precisa de mim?". Com a equipe de fora, uma filha esperando permissão virava
+  // "garagem tranquila · 0 no box" enquanto o dock dizia "1 esperando".
+  const liveSessions = useAppStore((s) => s.liveSessions)
   const groups = groupLiveSessions(liveSessions)
   const inBox = groups.waiting.length
   const onTrack = groups.working.length
@@ -47,13 +48,23 @@ export function HomeHero({ counts, onRefresh }: { counts: OverviewCounts; onRefr
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Destaque só com alguém no box: com 0 era o elemento mais vistoso
+                do header dizendo que não há nada. */}
             <span
-              className="inline-flex items-center gap-[7px] rounded-full px-3.5 py-1.5 text-xs font-medium"
-              style={{
-                border: '1px solid color-mix(in srgb, var(--color-accent) 45%, transparent)',
-                background:
-                  'linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 20%, transparent), color-mix(in srgb, var(--color-accent2) 10%, transparent))',
-              }}
+              data-testid="home-in-box"
+              data-highlight={inBox > 0 || undefined}
+              className={`inline-flex items-center gap-[7px] rounded-full px-3.5 py-1.5 text-xs font-medium ${
+                inBox > 0 ? '' : 'border border-[var(--color-border)] text-[var(--color-text-dim)]'
+              }`}
+              style={
+                inBox > 0
+                  ? {
+                      border: '1px solid color-mix(in srgb, var(--color-accent) 45%, transparent)',
+                      background:
+                        'linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 20%, transparent), color-mix(in srgb, var(--color-accent2) 10%, transparent))',
+                    }
+                  : undefined
+              }
             >
               <ApexDot size={7} active={inBox > 0} />
               <span className="tabular-nums">{inBox}</span> no box

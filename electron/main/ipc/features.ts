@@ -1,4 +1,6 @@
 import { ipcMain } from 'electron'
+import { z } from 'zod'
+import { FEATURE_SECTIONS } from '../../../shared/feature-sections'
 import * as featureStore from '../services/feature-store'
 import * as featureFocus from '../services/feature-focus'
 import { getDb } from '../services/db'
@@ -20,6 +22,16 @@ import type {
   MergeFeatureDuplicateInput,
   SetFeatureFocusInput,
 } from '../../../shared/types/ipc'
+
+const updateSectionSchema = z.object({
+  featureId: z.string().min(1),
+  section: z.enum(FEATURE_SECTIONS),
+  markdown: z.string().max(100_000),
+})
+const appendFixedNoteSchema = z.object({
+  featureId: z.string().min(1),
+  text: z.string().trim().min(1).max(20_000),
+})
 
 export function registerFeaturesIpc(): void {
   ipcMain.handle('features:list', (_e, projectId?: string): Feature[] => {
@@ -110,8 +122,28 @@ export function registerFeaturesIpc(): void {
   // broadcast sai pelos dois porque as duas rows mudaram na lista.
   ipcMain.handle('features:merge-duplicate', (_e, input: MergeFeatureDuplicateInput): Feature => {
     featureFocus.mergeDuplicate(input.sourceId, input.targetId)
+    featureStore.absorbUserSections(input.sourceId, input.targetId)
     broadcast('feature:updated', { id: input.sourceId, archived: true })
     return updated(input.targetId)
+  })
+
+  // Painel da feature: autosave de UMA seção (notas fixadas / regras de negócio).
+  ipcMain.handle('features:updateSection', (_e, raw: unknown): Feature => {
+    const input = updateSectionSchema.parse(raw)
+    const feature = featureStore.updateSection(input.featureId, input.section, input.markdown)
+    broadcast('feature:updated', feature)
+    return feature
+  })
+
+  ipcMain.handle('features:appendFixedNote', (_e, raw: unknown): Feature => {
+    const input = appendFixedNoteSchema.parse(raw)
+    const feature = featureStore.appendFixedNote(input.featureId, input.text)
+    broadcast('feature:updated', feature)
+    return feature
+  })
+
+  ipcMain.handle('features:synthesizeNow', (_e, featureId: unknown): Promise<void> => {
+    return featureMemory.synthesizeNow(z.string().min(1).parse(featureId))
   })
 
   // Backfill retroativo: reprocessa sessões já encerradas e ainda não vinculadas,

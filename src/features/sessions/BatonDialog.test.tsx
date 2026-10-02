@@ -36,6 +36,7 @@ vi.mock('@/store/handoffsStore', () => ({
 }))
 
 const { BatonDialog } = await import('./BatonDialog')
+const { useProjectsViewStore } = await import('@/features/session-canvas/projects-view-store')
 
 const successor = { id: 'sess-nova', ccSessionId: 'cc-nova' } as Session
 
@@ -66,6 +67,7 @@ beforeEach(() => {
   handoffs = []
   refreshLiveSessions.mockResolvedValue(undefined)
   focusOrOpenSession.mockResolvedValue(undefined)
+  useProjectsViewStore.setState({ view: 'terminals' })
 })
 
 describe('BatonDialog', () => {
@@ -93,8 +95,12 @@ describe('BatonDialog', () => {
     distill.mockRejectedValueOnce(new Error('timeout de 90s'))
     await setup()
 
-    expect(screen.getByTestId('baton-error')).toHaveTextContent('timeout de 90s')
-    expect(screen.queryByTestId('baton-briefing')).toBeNull()
+    expect(screen.getByTestId('baton-error')).toHaveTextContent(
+      'Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo',
+    )
+    expect(screen.getByTestId('baton-error')).not.toHaveTextContent('timeout de 90s')
+    // O campo segue disponível: a falha da destilação não tranca o bastão.
+    expect(screen.getByTestId('baton-briefing')).toHaveValue('')
 
     distill.mockResolvedValueOnce('briefing na segunda tentativa')
     await act(async () => {
@@ -102,6 +108,33 @@ describe('BatonDialog', () => {
     })
     expect(screen.queryByTestId('baton-error')).toBeNull()
     expect(screen.getByTestId('baton-briefing')).toHaveValue('briefing na segunda tentativa')
+  })
+
+  it('erro da destilação não mostra erro cru (prefixo do IPC, UUID, caminho)', async () => {
+    distill.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'baton:distill': Error: Transcript não encontrado: /home/u/.claude/projects/x/3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f.jsonl",
+      ),
+    )
+    await setup()
+
+    const box = screen.getByTestId('baton-error')
+    expect(box).toHaveTextContent('escreva o briefing abaixo')
+    expect(box).not.toHaveTextContent('remote method')
+    expect(box).not.toHaveTextContent('Error:')
+    expect(box).not.toHaveTextContent('3f2a9c1e')
+    expect(box).not.toHaveTextContent('/home/u')
+  })
+
+  it('fallback da destilação é aviso (amber), com "Tentar de novo" na mesma linha', async () => {
+    distill.mockRejectedValueOnce(new Error('timeout'))
+    await setup()
+    const box = screen.getByTestId('baton-error')
+    expect(box.getAttribute('style')).toContain('--color-warning')
+    expect(box.getAttribute('style')).not.toContain('--color-danger')
+    expect(box.className).toContain('items-center')
+    expect(box.className).not.toContain('flex-col')
+    expect(box).toContainElement(screen.getByRole('button', { name: 'Tentar de novo' }))
   })
 
   it('leva o briefing EDITADO pro baton.pass (não o destilado original)', async () => {
@@ -137,6 +170,22 @@ describe('BatonDialog', () => {
       fireEvent.click(screen.getByText('Subir a sucessora'))
     })
     expect(focusOrOpenSession).toHaveBeenCalledWith(liveSessions[0])
+  })
+
+  it('com o mapa na frente, NÃO foca a aba da sucessora (o mapa e a coluna da mãe ficam)', async () => {
+    useProjectsViewStore.setState({ view: 'map' })
+    distill.mockResolvedValue('briefing')
+    pass.mockResolvedValue(result())
+    liveSessions = [{ id: 'sess-nova', ccSessionId: 'cc-nova' } as LiveSessionInfo]
+    await setup()
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Subir a sucessora'))
+    })
+    expect(refreshLiveSessions).toHaveBeenCalled()
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(useProjectsViewStore.getState().view).toBe('map')
+    expect(showToast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'A sucessora subiu' }))
   })
 
   it('avisa a troca de endereço quando o resultado traz aliasChanged', async () => {
@@ -205,5 +254,136 @@ describe('BatonDialog', () => {
     await setup()
 
     expect(screen.queryByTestId('baton-inherits-child')).toBeNull()
+  })
+
+  it('destilação falhou: o briefing escrito à mão sobe a sucessora', async () => {
+    distill.mockRejectedValue(new Error('Transcript não encontrado'))
+    pass.mockResolvedValue(result())
+    await setup()
+
+    expect(screen.getByTestId('baton-confirm')).toBeDisabled()
+    // Botão desabilitado diz por quê (no print 09 ele só parecia apagado).
+    expect(screen.getByTestId('baton-briefing-required')).toBeInTheDocument()
+    // Uma ação de regerar só: o "Tentar de novo" do aviso.
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Destilar de novo' })).toBeNull()
+    fireEvent.change(screen.getByTestId('baton-briefing'), {
+      target: { value: 'escrito à mão' },
+    })
+    expect(screen.getByTestId('baton-confirm')).toBeEnabled()
+    expect(screen.queryByTestId('baton-briefing-required')).toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('baton-confirm'))
+    })
+    expect(pass).toHaveBeenCalledWith(expect.objectContaining({ briefing: 'escrito à mão' }))
+    expect(screen.queryByTestId('baton-pass-error')).toBeNull()
+  })
+
+  it('"Escrever à mão" sai da espera e a destilação atrasada não sobrescreve', async () => {
+    let resolveDistill: (text: string) => void = () => {}
+    distill.mockReturnValue(
+      new Promise<string>((res) => {
+        resolveDistill = res
+      }),
+    )
+    await setup()
+    fireEvent.click(screen.getByTestId('baton-write-manual'))
+    fireEvent.change(screen.getByTestId('baton-briefing'), { target: { value: 'meu texto' } })
+    await act(async () => {
+      resolveDistill('destilado atrasado')
+    })
+    expect(screen.getByTestId('baton-briefing')).toHaveValue('meu texto')
+  })
+
+  it('modo mãe: lista as filhas e avisa da liderança', async () => {
+    distill.mockResolvedValue('briefing')
+    handoffs = [
+      {
+        id: 'h1',
+        motherSessionId: 'sess-velha',
+        childSessionId: 'c1',
+        status: 'running',
+        task: 'Mapa',
+      },
+      {
+        id: 'h2',
+        motherSessionId: 'sess-velha',
+        childSessionId: 'c2',
+        status: 'needs_input',
+        task: 'Modal',
+      },
+      {
+        id: 'h3',
+        motherSessionId: 'sess-velha',
+        childSessionId: 'c3',
+        status: 'done',
+        task: 'Velha',
+      },
+      // Mesmo recorte do bastão (isLedByMother): interrompida sem retomada e
+      // dispensada não são filhas.
+      {
+        id: 'h4',
+        motherSessionId: 'sess-velha',
+        childSessionId: 'c4',
+        status: 'interrupted',
+        resumable: false,
+        task: 'Morta',
+      },
+      {
+        id: 'h5',
+        motherSessionId: 'sess-velha',
+        childSessionId: 'c5',
+        status: 'running',
+        dismissedAt: 1,
+        task: 'Dispensada',
+      },
+    ] as Handoff[]
+    liveSessions = [
+      { id: 'c1', title: 'mauricio-mapa' },
+      { id: 'c2', title: 'otavio-modal' },
+    ] as LiveSessionInfo[]
+    await setup()
+
+    const box = screen.getByTestId('baton-mother-mode')
+    expect(box).toHaveTextContent('2 filhas')
+    expect(box).toHaveTextContent('mauricio-mapa')
+    expect(box).toHaveTextContent('otavio-modal')
+    expect(box).not.toHaveTextContent('Velha')
+    expect(box).not.toHaveTextContent('Morta')
+    expect(box).not.toHaveTextContent('Dispensada')
+    expect(screen.getByText('Passar o bastão da mãe')).toBeInTheDocument()
+  })
+
+  it('bastão da mãe passado: toast com quantas filhas e o alias novo', async () => {
+    distill.mockResolvedValue('briefing')
+    pass.mockResolvedValue(result({ alias: 'ana-mc', relinkedChildren: 2 }))
+    const { onClose } = await setup()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('baton-confirm'))
+    })
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Bastão da mãe passado',
+        body: expect.stringContaining('ana-mc'),
+      }),
+    )
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  // Mãe que também é filha de um handoff: o endereço muda para a avó também, e o
+  // aviso 'passed' (o SendMessage da avó ainda aponta para o nome antigo) não
+  // pode sumir atrás do toast das filhas.
+  it('mãe que também é filha: toast das filhas E aviso de endereço trocado', async () => {
+    distill.mockResolvedValue('briefing')
+    pass.mockResolvedValue(result({ alias: 'ana-mc', aliasChanged: true, relinkedChildren: 2 }))
+    const { onClose } = await setup()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('baton-confirm'))
+    })
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Bastão da mãe passado' }),
+    )
+    expect(screen.getByTestId('baton-alias-changed')).toHaveTextContent('ana-mc')
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

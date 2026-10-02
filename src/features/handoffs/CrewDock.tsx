@@ -8,15 +8,15 @@ import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { HandoffCard, STATUS_COLOR, liveBadgeFor, useHeartbeatTtl } from './HandoffCard'
+import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
 import {
+  crewEntryFocus,
   crewFocusAfterDismiss,
   crewNeedsAttention,
   crewTerminalTarget,
   dockCrew,
   orderCrew,
   resolveCrewFocus,
-  splitAlias,
   stepCrewFocus,
 } from './crew'
 import { RAIL_WIDTH, clampWidth, useCrewDockStore } from './crew-dock-store'
@@ -69,28 +69,6 @@ export function useHasCrew(): boolean {
 function useHasDockConversations(): boolean {
   const snapshot = useAgentBusSnapshot()
   return hasDockConversations(snapshot, Date.now())
-}
-
-// A trilha colapsada é o resumo de 40px do dock: cor = estado. A filha PAUSADA
-// (interrompida mas retomável) fica apagada em vez do âmbar de 'interrupted' —
-// ela não está pedindo nada, só esperando você mandar continuar; âmbar ali seria
-// o mesmo alarme de quem realmente espera resposta.
-function crewDotColor(handoff: Handoff, live: LiveSessionInfo | undefined): string {
-  if (live) return liveBadgeFor(live).color
-  if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
-  return STATUS_COLOR[handoff.status]
-}
-
-function crewDotTitle(handoff: Handoff, live: LiveSessionInfo | undefined): string {
-  const alias = splitAlias(live?.title)
-  const who = live?.title ?? handoff.targetRepoLabel ?? handoff.targetRepoId
-  const scope = alias ? ` (${alias.name})` : ''
-  const state = live
-    ? liveBadgeFor(live).label
-    : handoff.status === 'interrupted' && handoff.resumable
-      ? 'pausada, dá pra retomar'
-      : 'despachando'
-  return `${who}${scope} — ${state}`
 }
 
 // Gate: o painel abaixo só monta quando há equipe — o que também garante que o
@@ -162,6 +140,7 @@ function DockTabButton(props: {
 }
 
 function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
+  const liveList = useMemo(() => [...liveById.values()], [liveById])
   const [tab, setTab] = useState<DockTab>(crew.length > 0 ? 'crew' : 'conversations')
   const shownTab: DockTab = crew.length === 0 ? 'conversations' : tab
   // Filha nova (0 → n) com Conversas aberta: a equipe aparece, não fica escondida.
@@ -216,6 +195,12 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // Lido dentro de handlers/efeitos que não devem re-rodar a cada mudança da lista.
   const idsRef = useRef(ids)
   idsRef.current = ids
+  const attentionIdsRef = useRef<ReadonlySet<string>>(new Set())
+  attentionIdsRef.current = new Set(
+    crew
+      .filter((h) => crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined))
+      .map((h) => h.id),
+  )
 
   // Filha entrou/saiu (ou a atenção reordenou): mantém o cursor num card que
   // ainda existe. setFocusedId é no-op quando o valor não muda.
@@ -230,11 +215,10 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // "Abrir terminal" no card: abre o peek JÁ em modo terminal — em janela, sem
   // promover a filha a pane e sem o header de sessão (leia-se: sem o botão de
   // encerrar ao alcance de quem só foi dar uma olhada). Se ela já tem aba, o
-  // terminal dela mora lá; duplicar o xterm na mesma PTY faria os dois brigarem
-  // pelo resize. Ver crewTerminalTarget.
+  // terminal dela mora lá. Ver crewTerminalTarget.
   function openTerminal(handoff: Handoff) {
     const live = handoff.childSessionId ? liveById.get(handoff.childSessionId) : undefined
-    const target = crewTerminalTarget(live, useAppStore.getState().panes)
+    const target = crewTerminalTarget(live, useAppStore.getState().panes, 'dock')
     if (target === 'none') return
     if (target === 'pane') void useAppStore.getState().focusOrOpenSession(live!)
     else openPeek(handoff.id, 'terminal')
@@ -251,16 +235,24 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
     if (!(active instanceof HTMLElement) || !listRef.current?.contains(active)) {
       originRef.current = active instanceof HTMLElement ? active : null
     }
-    const target = useCrewDockStore.getState().focusedId ?? idsRef.current[0]
+    const target = crewEntryFocus(
+      idsRef.current,
+      attentionIdsRef.current,
+      useCrewDockStore.getState().focusedId,
+    )
     if (!target) return
     // rAF: o expand() do requestFocus pode ter acabado de montar estes cards.
     requestAnimationFrame(() => focusCard(target))
   }, [focusNonce])
 
+  // Sem origem focável (Ctrl+J com o foco no body: body.focus() não faz nada)
+  // o foco ficava no card e o 2º Esc depois do peek não saía do dock.
   function leaveDock(card: HTMLElement) {
     const origin = originRef.current
-    if (origin?.isConnected && !listRef.current?.contains(origin)) origin.focus()
-    else card.blur()
+    if (origin?.isConnected && origin !== document.body && !listRef.current?.contains(origin)) {
+      origin.focus()
+    }
+    if (listRef.current?.contains(document.activeElement)) card.blur()
   }
 
   function onCardKeyDown(e: React.KeyboardEvent<HTMLDivElement>, id: string) {
@@ -347,7 +339,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
         </div>
         {attention > 0 && (
           <span
-            className="truncate rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+            className="shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
             style={{
               color: 'var(--color-danger)',
               borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
@@ -423,6 +415,10 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
     </>
   )
 
+  const railLabel =
+    attention > 0
+      ? `Equipe · ${attention} ${attention === 1 ? 'filha esperando' : 'filhas esperando'} você`
+      : `Equipe · ${crew.length} ${crew.length === 1 ? 'filha ativa' : 'filhas ativas'}`
   const railContent = (
     <div className="flex min-h-0 flex-1 flex-col items-center gap-2 py-2">
       {/* Aviso de espera cabe nos 40px: O Ápice pulsa na filha que espera
@@ -437,18 +433,18 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
             ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
             : `Equipe: ${crew.length} sessão(ões) delegada(s) — clique ou Ctrl+J para abrir`
         }
-        className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        aria-label={railLabel}
+        className="flex flex-col items-center gap-0.5 rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
       >
         <Icon as={Users} size={16} />
+        {/* Rótulo: sem ele o ícone, o número e os pontos não diziam o que contavam. */}
+        <span className="text-[9px] leading-none">Equipe</span>
       </button>
       <button
         type="button"
         onClick={openCrew}
-        title={
-          attention > 0
-            ? `${attention} filha(s) esperando você`
-            : `${crew.length} sessão(ões) delegada(s)`
-        }
+        title={railLabel}
+        aria-label={railLabel}
         className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
         style={{ color: attention > 0 ? 'var(--color-danger)' : 'var(--color-text-dim)' }}
       >
@@ -473,19 +469,24 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
-          const color = crewDotColor(h, live)
+          const color = crewDotColor(h, live, liveList)
           return (
             <button
               key={h.id}
               type="button"
+              data-testid="crew-rail-child"
               onClick={openCrew}
-              title={crewDotTitle(h, live)}
-              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--color-surface-2)]"
+              title={crewDotTitle(h, live, liveList)}
+              aria-label={crewDotTitle(h, live, liveList)}
+              className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 bg-[var(--color-bg)] text-[10px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
+              // Inicial da filha com o status no anel: o ponto sozinho não dizia quem era.
+              style={{ borderColor: color }}
             >
-              {h.id === apexId ? (
-                <ApexDot size={9} color="var(--color-warning)" />
-              ) : (
-                <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+              {crewDotInitial(h, live, liveList)}
+              {h.id === apexId && (
+                <span className="absolute -right-1 -top-1">
+                  <ApexDot size={8} color="var(--color-warning)" />
+                </span>
               )}
             </button>
           )

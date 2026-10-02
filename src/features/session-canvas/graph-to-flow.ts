@@ -1,7 +1,9 @@
 // PURO: grafo de sessões + estado do canvas → nós/arestas do @xyflow/react.
 //
-// Hierarquia: lane de projeto → lane de repo → cartão de sessão (parentId,
-// posições relativas ao pai). Sessão num grupo do usuário sai da lane e vira
+// Hierarquia: card da feature (ou "Sem feature · <Projeto>") → lane de repo →
+// cartão de sessão (parentId, posições relativas ao pai). Dentro do card a mãe
+// fica acima das filhas (faixas por geração) e a antecessora do bastão ao lado
+// da sucessora. Sessão num grupo do usuário sai da lane e vira
 // filha do grupo. Notas ficam na raiz: soltas numa faixa acima das lanes, presas
 // numa calha à direita da lane da sessão. Sem posição salva, cada peça cai num
 // slot determinístico (é o mesmo layout que o Organizar grava — tidy.ts).
@@ -10,6 +12,7 @@ import type {
   SessionGraph,
   SessionGraphAttention,
   SessionGraphEdge,
+  SessionGraphLane,
   SessionGraphNode,
 } from '../../../shared/types/session-graph'
 import type {
@@ -23,16 +26,14 @@ import type {
 import { GLOBAL_CANVAS_SCOPE } from '../../../shared/types/canvas'
 import { viewOf, type ViewMap } from './card-view'
 
-// Cartão recolhido (identidade + estado). Aberto e terminal crescem: a saída ao
-// vivo precisa de ~55 colunas legíveis, e o terminal de um xterm de verdade.
+// Cartão recolhido (identidade + estado). Aberto cresce: a saída ao vivo precisa
+// de ~55 colunas legíveis.
 // Recolhido é UMA linha (ponto + alias + motivo); aberto é a vaga máxima — o
 // cartão desenhado só ocupa o que tem (saída ao vivo sem caixa vazia).
 export const CARD_W = 248
 export const CARD_H = 40
 export const OPEN_W = 400
 export const OPEN_H = 300
-export const TERMINAL_W = 780
-export const TERMINAL_H = 540
 export const NOTE_W = 220
 export const NOTE_H = 132
 const GAP = 16
@@ -43,6 +44,15 @@ export const LANE_HEADER_H = HEADER
 const LANE_GAP = 48
 const GROUP_MIN_W = CARD_W + 2 * PAD
 const GROUP_MIN_H = HEADER + 72
+// Cabeçalho do card da feature: título + status/contadores, pulso de 1 linha e
+// a linha dos lembretes.
+// Folga para a fonte compensada abaixo de 100% (o cabeçalho cresce na tela).
+export const FEATURE_HEADER = 80
+// Cabeçalho do grupo "Sem feature · <Projeto>": 1 linha, mas com a fonte
+// compensada da visão geral (até 26px) ela invadia o cabeçalho da 1ª raia.
+export const PROJECT_HEADER = 48
+// Entre linhas de cards quando o mapa quebra (rowWidth).
+const ROW_GAP = 32
 // Camadas (zIndexMode 'manual' no SessionMap: o z de cada nó/fio é exatamente o
 // daqui). No 'basic' o fio somava o z do cartão que toca, e selecionar um cartão
 // (+1000) levava os fios dele POR CIMA de todos os outros cartões, inclusive do
@@ -66,11 +76,19 @@ export interface MapInput {
   // Mães com o leque de filhas aberto (sessionId). Sem isto, mãe com mais de
   // FAN_COLLAPSE_AT filhas só mostra os fios dela no foco.
   expandedMothers?: ReadonlySet<string>
-  // Estado de exibição de cada cartão (ausente = 'open') e o tamanho do terminal.
+  // Estado de exibição de cada cartão (ausente = 'open').
   views?: ViewMap
-  terminalSizes?: Readonly<Record<string, { w: number; h: number }>>
+  // Altura desenhada de cada cartão aberto (card-height-store). Sem ela, a estimativa.
+  cardHeights?: Readonly<Record<string, number>>
   // Asks agente↔agente pendentes (P7): fio temporário até a resposta/expiração.
   asks?: readonly PendingAsk[]
+  // Largura (px do fluxo) a partir da qual os cards nascem numa linha nova: a
+  // área do mapa dividida pelo zoom em que o conjunto ainda se lê. Ausente =
+  // uma linha só (todos lado a lado).
+  rowWidth?: number
+  // Zoom baixo (resumo/blocos): o cartão aberto desenha só título + estado, e a
+  // raia reserva essa altura em vez da do cartão cheio.
+  compact?: boolean
 }
 
 export interface PendingAsk {
@@ -80,10 +98,40 @@ export interface PendingAsk {
   text: string
 }
 
-export function cardSize(view: CardViewState, terminal?: { w: number; h: number }): Size {
+// Aberto antes da 1ª medição: o cartão típico (saída de 4 linhas + prompt). A
+// medição real (cardHeights) substitui no frame seguinte.
+export const OPEN_EST_H = 200
+// Entre cartões empilhados na mesma lane.
+export const CARD_GAP = 24
+// No resumo o cartão tem 64px: com 24 o vão era quase do tamanho dele.
+export const COMPACT_CARD_GAP = 12
+
+// Cartão aberto no resumo (zoom < BRIEF_BELOW): título + estado com a fonte
+// compensada no teto (22px + 18px + padding) — fixo, senão o layout mudaria a
+// cada passo de zoom.
+export const BRIEF_H = 64
+// E mais estreito: só título + estado. Com os 400px do cartão cheio, a feature de
+// 3 raias não cabia ao lado do painel nem a 0.6.
+export const BRIEF_W = 320
+
+// A mãe é a peça principal do card da feature: 1.6x a largura do cartão aberto,
+// mais alta (16 linhas de saída ao vivo + barra de prompt grande + ações), e
+// sempre aberta — não recolhe nem vira o resumo com o zoom (o mini dela é do
+// próprio cartão, dentro da mesma vaga, para o layout não mudar a cada passo).
+export const MOTHER_W = 640
+export const MOTHER_EST_H = 440
+export const MOTHER_MAX_H = 560
+
+export function cardSize(
+  view: CardViewState,
+  measuredH?: number,
+  compact = false,
+  mother = false,
+): Size {
+  if (mother) return { w: MOTHER_W, h: Math.min(MOTHER_MAX_H, measuredH ?? MOTHER_EST_H) }
   if (view === 'collapsed') return { w: CARD_W, h: CARD_H }
-  if (view === 'open') return { w: OPEN_W, h: OPEN_H }
-  return terminal ?? { w: TERMINAL_W, h: TERMINAL_H }
+  if (compact) return { w: BRIEF_W, h: BRIEF_H }
+  return { w: OPEN_W, h: Math.min(OPEN_H, measuredH ?? OPEN_EST_H) }
 }
 
 // Acima disto o mapa fica em "modo cheio": fios repoDep/feature só aparecem ao
@@ -107,18 +155,32 @@ export interface SessionCardData {
   // Mãe com o leque recolhido (mais de FAN_COLLAPSE_AT filhas) e se está aberto.
   fanCollapsible: boolean
   fanExpanded: boolean
+  // O cartão grande (MotherCard): só a mãe do topo da cadeia no mapa. A filha que
+  // delegou um neto é mãe também (selo MÃE), mas no cartão comum.
+  prominentMother: boolean
   view: CardViewState
   [key: string]: unknown
 }
 
 export interface LaneData {
-  level: 'project' | 'repo'
+  // 'feature' = card da feature; 'project' = "Sem feature · <Projeto>"/avulsas.
+  level: 'feature' | 'project' | 'repo'
   label: string
   color: string | null
   projectId: string | null
   repoId: string | null
-  // Só na lane de projeto: quantas sessões dela pedem você agora.
+  // Só no topo (feature/projeto): quantas sessões dele pedem você agora.
   attentionCount?: number
+  // Só no card da feature.
+  featureId?: string
+  pulse?: string | null
+  status?: string
+  pinned?: boolean
+  sessionCount?: number
+  repoCount?: number
+  // Lane de repo dentro do card da feature: projeto quando não é o "home".
+  projectName?: string | null
+  projectColor?: string | null
   [key: string]: unknown
 }
 
@@ -135,7 +197,7 @@ export interface NoteData {
   [key: string]: unknown
 }
 
-export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'feature' | 'note' | 'ask'
+export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'note' | 'ask'
 
 export interface MapEdgeData {
   kind: MapEdgeKind
@@ -158,6 +220,26 @@ export type MapEdge = Edge<MapEdgeData>
 export const sessionNodeId = (id: string) => `s:${id}`
 export const repoLaneId = (repoId: string | null) => `lane:r:${repoId ?? 'loose'}`
 export const projectLaneId = (projectId: string | null) => `lane:p:${projectId ?? 'loose'}`
+export const featureLaneId = (featureId: string) => `lane:f:${featureId}`
+export const featureRepoLaneId = (featureId: string, repoId: string | null) =>
+  `lane:f:${featureId}:r:${repoId ?? 'loose'}`
+
+function topLaneId(lane: SessionGraphLane): string {
+  return lane.kind === 'feature' ? featureLaneId(lane.featureId) : projectLaneId(lane.projectId)
+}
+
+function laneRepoId(lane: SessionGraphLane, repoId: string | null): string {
+  return lane.kind === 'feature' ? featureRepoLaneId(lane.featureId, repoId) : repoLaneId(repoId)
+}
+
+// Lane de repo onde a sessão mora (mesmo estando num grupo do usuário): é pra
+// onde ela volta quando sai do grupo.
+export function homeRepoLaneId(graph: SessionGraph, sessionId: string): string | null {
+  for (const lane of graph.lanes) {
+    for (const r of lane.repos) if (r.sessionIds.includes(sessionId)) return laneRepoId(lane, r.repoId)
+  }
+  return null
+}
 export const groupNodeId = (id: string) => `g:${id}`
 export const noteNodeId = (id: string) => `n:${id}`
 
@@ -168,6 +250,9 @@ export function positionKey(flowId: string): { kind: CanvasEntityKind; entityId:
   if (flowId.startsWith('n:')) return { kind: 'note', entityId: flowId.slice(2) }
   if (flowId.startsWith('g:')) return { kind: 'group', entityId: flowId.slice(2) }
   if (flowId.startsWith('lane:p:')) return { kind: 'lane', entityId: flowId.slice(5) }
+  // O card da feature é arrastável; as lanes de repo dentro dele não.
+  if (flowId.startsWith('lane:f:') && !flowId.includes(':r:'))
+    return { kind: 'lane', entityId: flowId.slice(5) }
   return null
 }
 
@@ -240,10 +325,23 @@ function inUseIds(input: MapInput): Set<string> {
   )
 }
 
+// No escopo de um projeto, o card de uma feature que o toca (home ou algum repo
+// registrado) entra INTEIRO: inclusive as sessões dos repos de outros projetos,
+// senão a lane delas aparece vazia e o contador do card mente.
 function scopedSessions(input: MapInput, inUse: Set<string>): SessionGraphNode[] {
+  const global = input.scope === GLOBAL_CANVAS_SCOPE
+  const touching = new Set(
+    input.graph.lanes.flatMap((l) =>
+      l.kind === 'feature' &&
+      (l.projectId === input.scope || l.repos.some((r) => r.projectId === input.scope))
+        ? [l.featureId]
+        : [],
+    ),
+  )
   return input.graph.nodes.filter(
     (n) =>
-      inUse.has(n.sessionId) && (input.scope === GLOBAL_CANVAS_SCOPE || n.projectId === input.scope),
+      inUse.has(n.sessionId) &&
+      (global || n.projectId === input.scope || (!!n.featureId && touching.has(n.featureId))),
   )
 }
 
@@ -300,6 +398,9 @@ function childCounts(edges: SessionGraphEdge[]): Map<string, number> {
 
 interface CardContext {
   sizeOf: (sessionId: string) => Size
+  isMother: (sessionId: string) => boolean
+  // Vão entre cartões empilhados na mesma raia (menor no resumo).
+  cardGap: number
   viewOf: (sessionId: string) => CardViewState
   counts: Map<string, number>
   notesBySession: Map<string, string>
@@ -326,6 +427,7 @@ function sessionCard(
     noteExcerpt: ctx.notesBySession.get(n.sessionId) ?? null,
     fanCollapsible: childCount > FAN_COLLAPSE_AT,
     fanExpanded: ctx.expandedMothers.has(n.sessionId),
+    prominentMother: ctx.isMother(n.sessionId),
     view: ctx.viewOf(n.sessionId),
   }
   const size = ctx.sizeOf(n.sessionId)
@@ -346,8 +448,180 @@ interface Layout {
   // Posição absoluta de cada sessão (pra ancorar notas presas).
   sessionAbs: Map<string, Point>
   laneBoxes: Box[]
-  // Borda direita de cada lane de projeto, indexada pela sessão que ela contém.
+  // Borda direita de cada lane de topo, indexada pela sessão que ela contém.
   gutterBySession: Map<string, number>
+  // Lanes de repo desenhadas por repo (o mesmo repo pode estar em vários cards).
+  repoLaneIds: Map<string, string[]>
+}
+
+// Geração de cada sessão dentro do card: filha = mãe + 1, só contando mães do
+// MESMO card (a mãe de outro card não empurra ninguém pra baixo).
+function generations(sessionIds: string[], mothers: Map<string, string>): Map<string, number> {
+  const inLane = new Set(sessionIds)
+  const out = new Map<string, number>()
+  const depthOf = (id: string, seen: Set<string>): number => {
+    const known = out.get(id)
+    if (known !== undefined) return known
+    const mother = mothers.get(id)
+    const d = mother && inLane.has(mother) && !seen.has(mother) ? depthOf(mother, new Set([...seen, id])) + 1 : 0
+    out.set(id, d)
+    return d
+  }
+  for (const id of sessionIds) depthOf(id, new Set())
+  return out
+}
+
+interface LaneRepoCards {
+  nodeId: string
+  sessionIds: string[]
+}
+
+// Slots dos cartões de um card: cada repo é uma coluna; as gerações viram faixas
+// horizontais (a filha começa abaixo de toda a geração da mãe, em qualquer
+// coluna). A antecessora do bastão vai na mesma linha, à direita da sucessora.
+// Posições salvas ficam onde o usuário deixou.
+function slotCards(
+  repos: LaneRepoCards[],
+  ctx: CardContext,
+  saved: (id: string) => Point | undefined,
+  mothers: Map<string, string>,
+  batonPrev: Map<string, string>,
+): Map<string, Map<string, Point>> {
+  const all = repos.flatMap((r) => r.sessionIds)
+  const gen = generations(all, mothers)
+  const out = new Map<string, Map<string, Point>>()
+  const cursor = new Map<string, number>()
+  const rows = new Map<string, string[][]>()
+  for (const repo of repos) {
+    const slots = new Map<string, Point>()
+    let c = HEADER
+    for (const id of repo.sessionIds) {
+      const p = saved(id)
+      if (!p) continue
+      slots.set(id, { x: p.x, y: p.y })
+      c = Math.max(c, p.y + ctx.sizeOf(id).h + ctx.cardGap)
+    }
+    out.set(repo.nodeId, slots)
+    cursor.set(repo.nodeId, c)
+    // Linhas: cada sucessora puxa a cadeia de antecessoras do MESMO repo.
+    const here = new Set(repo.sessionIds.filter((id) => !slots.has(id)))
+    const sidecar = new Set<string>()
+    for (const id of here) {
+      let prev = batonPrev.get(id)
+      while (prev && here.has(prev) && !sidecar.has(prev) && prev !== id) {
+        sidecar.add(prev)
+        prev = batonPrev.get(prev)
+      }
+    }
+    const repoRows: string[][] = []
+    for (const id of repo.sessionIds) {
+      if (!here.has(id) || sidecar.has(id)) continue
+      const row = [id]
+      let prev = batonPrev.get(id)
+      while (prev && sidecar.has(prev) && !row.includes(prev)) {
+        row.push(prev)
+        prev = batonPrev.get(prev)
+      }
+      repoRows.push(row)
+    }
+    rows.set(repo.nodeId, repoRows)
+  }
+  // Cada coluna empilha ao topo, mãe primeiro (geração crescente; dentro dela, a
+  // ordem da lane). Sem faixas por geração: elas jogavam a filha de outra coluna
+  // ~uma vaga inteira abaixo da mãe, com um vão vazio no meio. A hierarquia é o
+  // fio, não a altura.
+  for (const repo of repos) {
+    const slots = out.get(repo.nodeId)!
+    const ordered = rows
+      .get(repo.nodeId)!
+      // A mãe abre a coluna dela (antes das outras da mesma geração).
+      .map((row, i) => ({
+        row,
+        i,
+        g: (gen.get(row[0]) ?? 0) - (ctx.isMother(row[0]) ? 0.5 : 0),
+      }))
+      .sort((a, b) => a.g - b.g || a.i - b.i)
+    for (const { row } of ordered) {
+      const y = cursor.get(repo.nodeId)!
+      let x = PAD
+      let h = 0
+      for (const id of row) {
+        slots.set(id, { x, y })
+        x += ctx.sizeOf(id).w + GAP
+        h = Math.max(h, ctx.sizeOf(id).h)
+      }
+      cursor.set(repo.nodeId, y + h + ctx.cardGap)
+    }
+  }
+  return out
+}
+
+function laneHeaderData(
+  lane: SessionGraphLane,
+  laneSessions: SessionGraphNode[],
+  repoCount: number,
+): LaneData {
+  const attentionCount = laneSessions.filter((n) => n.attentionReason).length
+  if (lane.kind === 'feature') {
+    return {
+      level: 'feature',
+      label: lane.name,
+      color: lane.color,
+      projectId: lane.projectId,
+      repoId: null,
+      attentionCount,
+      featureId: lane.featureId,
+      pulse: lane.pulse,
+      status: lane.status,
+      pinned: lane.pinned,
+      sessionCount: laneSessions.length,
+      repoCount,
+      // A toolbar contextual desvia deste cabeçalho (selection-toolbar).
+      headerH: FEATURE_HEADER,
+    }
+  }
+  return {
+    level: 'project',
+    label: lane.name,
+    color: lane.color,
+    projectId: lane.projectId,
+    repoId: null,
+    attentionCount,
+    headerH: PROJECT_HEADER,
+  }
+}
+
+// Onde nasce o próximo card sem posição salva: à direita do anterior; se ele
+// passaria de `rowWidth`, embaixo de um card já posto (empacotamento por coluna:
+// a vaga mais alta que não cobre ninguém, preferindo a coluna de largura mais
+// parecida). Sem isto, 11 sessões em 4 cards viravam uma faixa só e o enquadrar
+// caía a 0.45; e quebrar sempre "abaixo de tudo" deixava um card de 1 raia
+// sozinho numa 3ª linha com um vão à direita.
+export function nextLaneSlot(
+  cursor: Point,
+  laneW: number,
+  placed: ReadonlyArray<Box>,
+  rowWidth: number | undefined,
+  laneH = 0,
+): Point {
+  if (!rowWidth || cursor.x <= 0) return cursor
+  const free = (p: Point) =>
+    !placed.some(
+      (b) => p.x < b.x + b.w && p.x + laneW > b.x && p.y < b.y + b.h && p.y + Math.max(laneH, 1) > b.y,
+    )
+  if (cursor.x + laneW <= rowWidth && free(cursor)) return cursor
+  const bottom = Math.max(0, ...placed.map((b) => b.y + b.h))
+  const candidates = placed
+    .filter((b) => b.x === 0 || b.x + laneW <= rowWidth)
+    .map((b) => ({ p: { x: b.x, y: b.y + b.h + ROW_GAP }, fit: Math.abs(b.w - laneW) }))
+    .filter((c) => free(c.p))
+    .sort((a, b) => a.p.y - b.p.y || a.fit - b.fit || a.p.x - b.p.x)
+  return candidates[0]?.p ?? { x: 0, y: bottom + ROW_GAP }
+}
+
+// Ordem estável com as mães na frente.
+function mothersFirst(ids: string[], isMother: (id: string) => boolean): string[] {
+  return [...ids.filter(isMother), ...ids.filter((id) => !isMother(id))]
 }
 
 function layoutLanes(
@@ -363,38 +637,94 @@ function layoutLanes(
   const sessionAbs = new Map<string, Point>()
   const laneBoxes: Box[] = []
   const gutterBySession = new Map<string, number>()
-  let cursorX = 0
+  const repoLaneIds = new Map<string, string[]>()
+  const visible = (id: string) => byId.has(id) && !grouped.has(id)
+  const mothers = new Map<string, string>()
+  const batonPrev = new Map<string, string>()
+  for (const e of input.graph.edges) {
+    if (e.kind === 'handoff' && visible(e.from) && visible(e.to)) mothers.set(e.to, e.from)
+    if (e.kind === 'baton' && visible(e.from) && visible(e.to)) batonPrev.set(e.to, e.from)
+  }
+  // Migração: a posição salva da lane de projeto antiga vai pro 1º card de
+  // feature daquele projeto quando a lane do projeto não aparece mais.
+  const shownProjects = new Set<string>()
+  const migrated = new Set<string>()
+  let cursor: Point = { x: 0, y: 0 }
 
-  for (const lane of input.graph.lanes) {
+  const laneLayouts = input.graph.lanes.flatMap((lane) => {
     const repos = lane.repos
       .map((r) => ({
         ...r,
-        sessionIds: sortForLane(
-          r.sessionIds.filter((id) => byId.has(id) && !grouped.has(id)).map((id) => byId.get(id)!),
-        ).map((n) => n.sessionId),
+        sessionIds: mothersFirst(
+          sortForLane(r.sessionIds.filter(visible).map((id) => byId.get(id)!)).map(
+            (n) => n.sessionId,
+          ),
+          ctx.isMother,
+        ),
       }))
-      .filter((r) => r.sessionIds.length > 0)
+      .filter((r) => r.sessionIds.length > 0 || lane.kind === 'feature')
+    // A coluna da mãe vem primeiro: ela fica no topo à esquerda do card.
+    repos.sort(
+      (a, b) =>
+        Number(b.sessionIds.some(ctx.isMother)) - Number(a.sessionIds.some(ctx.isMother)),
+    )
     const laneSessions = repos.flatMap((r) => r.sessionIds.map((id) => byId.get(id)!))
-    if (repos.length === 0) continue
+    if (laneSessions.length === 0) return []
+    if (lane.kind === 'project') shownProjects.add(projectLaneId(lane.projectId))
+    return [{ lane, repos, laneSessions }]
+  })
 
-    const laneId = projectLaneId(lane.projectId)
+  // Posição salva de cada card (a própria ou a migrada da lane de projeto), na
+  // ordem do grafo para a migração ir pro 1º card do projeto.
+  const savedLaneOf = new Map<SessionGraphLane, Point>()
+  for (const { lane } of laneLayouts) {
+    const laneId = topLaneId(lane)
+    let savedLane: Point | undefined = saved.get(`lane:${laneId.slice(5)}`)
+    if (!savedLane && lane.kind === 'feature') {
+      const old = projectLaneId(lane.projectId)
+      if (!shownProjects.has(old) && !migrated.has(old)) {
+        savedLane = saved.get(`lane:${old.slice(5)}`)
+        if (savedLane) migrated.add(old)
+      }
+    }
+    if (savedLane) savedLaneOf.set(lane, { x: savedLane.x, y: savedLane.y })
+  }
+  // Os cards com posição salva saem primeiro: o cursor dos que nascem agora
+  // começa à direita deles (senão o card novo cai em cima da "Sem feature"
+  // que o usuário arrumou no v1).
+  const ordered = [
+    ...laneLayouts.filter((l) => savedLaneOf.has(l.lane)),
+    ...laneLayouts.filter((l) => !savedLaneOf.has(l.lane)),
+  ]
+
+  for (const { lane, repos, laneSessions } of ordered) {
+    const laneId = topLaneId(lane)
     const laneNodeIndex = nodes.length
     nodes.push({} as MapNode)
     let repoX = PAD
     let laneH = HEADER + CARD_H + 2 * PAD
     const repoNodes: MapNode[] = []
     const cards: MapNode[] = []
+    // O card da feature tem um cabeçalho mais alto (título + pulso).
+    const top = lane.kind === 'feature' ? FEATURE_HEADER : PROJECT_HEADER
+    const cardRepos = repos.map((r) => ({ nodeId: laneRepoId(lane, r.repoId), sessionIds: r.sessionIds }))
+    const slotsByRepo = slotCards(
+      cardRepos,
+      ctx,
+      (id) => saved.get(`session:${id}`),
+      mothers,
+      batonPrev,
+    )
+    const home = lane.kind === 'feature' ? lane.projectId : null
     for (const repo of repos) {
-      const heightOf = (id: string) => ctx.sizeOf(id).h
-      const slots = stackChildren(repo.sessionIds, (id) => saved.get(`session:${id}`), heightOf)
+      const repoId = laneRepoId(lane, repo.repoId)
+      const slots = slotsByRepo.get(repoId)!
       const box = fit(slots, ctx.sizeOf, { w: GROUP_MIN_W, h: GROUP_MIN_H })
-      const repoPos = { x: repoX, y: HEADER }
-      const repoId = repoLaneId(repo.repoId)
       repoNodes.push({
         id: repoId,
         type: 'lane',
         parentId: laneId,
-        position: repoPos,
+        position: { x: repoX, y: top },
         width: box.w,
         height: box.h,
         draggable: false,
@@ -403,32 +733,32 @@ function layoutLanes(
           level: 'repo',
           label: repo.label,
           color: lane.color,
-          projectId: lane.projectId,
+          projectId: repo.projectId ?? lane.projectId,
           repoId: repo.repoId,
+          projectName:
+            lane.kind === 'feature' && repo.projectId && repo.projectId !== home
+              ? (repo.projectName ?? null)
+              : null,
+          projectColor: repo.projectColor ?? null,
         } satisfies LaneData,
       })
+      if (repo.repoId) repoLaneIds.set(repo.repoId, [...(repoLaneIds.get(repo.repoId) ?? []), repoId])
       for (const id of repo.sessionIds)
         cards.push(sessionCard(byId.get(id)!, slots.get(id)!, repoId, ctx))
       repoX += box.w + GAP
-      laneH = Math.max(laneH, HEADER + box.h + PAD)
+      laneH = Math.max(laneH, top + box.h + PAD)
     }
     const laneW = repoX - GAP + PAD
-    const savedLane = saved.get(`lane:${laneId.slice(5)}`)
-    const lanePos = savedLane ? { x: savedLane.x, y: savedLane.y } : { x: cursorX, y: 0 }
+    const savedPos = savedLaneOf.get(lane)
+    if (!savedPos) cursor = nextLaneSlot(cursor, laneW, laneBoxes, input.rowWidth, laneH)
+    const lanePos = clearOfPlaced(savedPos ?? cursor, { w: laneW, h: laneH }, laneBoxes)
     nodes[laneNodeIndex] = {
       id: laneId,
       type: 'lane',
       position: lanePos,
       width: laneW,
       height: laneH,
-      data: {
-        level: 'project',
-        label: lane.name,
-        color: lane.color,
-        projectId: lane.projectId,
-        repoId: null,
-        attentionCount: laneSessions.filter((n) => n.attentionReason).length,
-      } satisfies LaneData,
+      data: laneHeaderData(lane, laneSessions, repos.length),
     }
     nodes.push(...repoNodes, ...cards)
     for (const card of cards) {
@@ -442,9 +772,27 @@ function layoutLanes(
     }
     laneBoxes.push({ ...lanePos, w: laneW, h: laneH })
     const gutter = (noteCountByLane.get(laneId) ?? 0) > 0 ? NOTE_W + LANE_GAP : 0
-    cursorX = Math.max(cursorX, lanePos.x + laneW + gutter + LANE_GAP)
+    // Salvo fora da linha corrente não empurra o cursor dela.
+    if (!savedPos || savedPos.y === cursor.y)
+      cursor = { x: Math.max(cursor.x, lanePos.x + laneW + gutter + LANE_GAP), y: cursor.y }
   }
-  return { nodes, sessionAbs, laneBoxes, gutterBySession }
+  return { nodes, sessionAbs, laneBoxes, gutterBySession, repoLaneIds }
+}
+
+// Card salvo (Organizar grava todos) muda de tamanho sozinho quando a resolução
+// contínua move sessões entre cards: ganha lane de repo ou linha e cobriria o
+// vizinho, também salvo. Empurra para a direita de quem ele cobriria, sem
+// persistir — o lugar salvo volta a valer quando o card encolher.
+function clearOfPlaced(pos: Point, size: { w: number; h: number }, placed: Box[]): Point {
+  let x = pos.x
+  for (let guard = 0; guard <= placed.length; guard++) {
+    const hit = placed.find(
+      (b) => x < b.x + b.w && x + size.w > b.x && pos.y < b.y + b.h && pos.y + size.h > b.y,
+    )
+    if (!hit) break
+    x = hit.x + hit.w + LANE_GAP
+  }
+  return x === pos.x ? pos : { x, y: pos.y }
 }
 
 function visibleGroups(input: MapInput, sessions: SessionGraphNode[]): SessionGroup[] {
@@ -549,10 +897,23 @@ function edge(
   }
 }
 
+// O mesmo repo pode aparecer em vários cards: o fio liga as duas lanes do
+// mesmo card quando existe esse par; senão, as primeiras de cada lado.
+function repoDepPair(from: string[], to: string[]): [string, string] | null {
+  if (!from.length || !to.length) return null
+  const card = (id: string) => id.slice(0, id.lastIndexOf(':r:'))
+  for (const f of from) {
+    const t = to.find((x) => card(x) === card(f))
+    if (t) return [f, t]
+  }
+  return [from[0], to[0]]
+}
+
 function graphEdges(
   edges: SessionGraphEdge[],
   has: (id: string) => boolean,
   isFanned: (motherId: string) => boolean,
+  repoLaneIds: (repoId: string) => string[],
 ): MapEdge[] {
   const out: MapEdge[] = []
   for (const e of edges) {
@@ -569,31 +930,22 @@ function graphEdges(
       )
     } else if (e.kind === 'baton') {
       out.push(
-        edge(`e:b:${e.handoffId}`, sessionNodeId(e.from), sessionNodeId(e.to), {
+        // Por par, não por handoff: o bastão da mãe carrega o id de um handoff
+        // movido, que pode ser o mesmo do bastão da filha desse handoff.
+        edge(`e:b:${e.from}:${e.to}`, sessionNodeId(e.from), sessionNodeId(e.to), {
           kind: 'baton',
           label: '⟲',
           handoffId: e.handoffId,
         }),
       )
-    } else if (e.kind === 'repoDep') {
-      out.push(
-        edge(
-          `e:r:${e.fromRepoId}:${e.toRepoId}`,
-          repoLaneId(e.fromRepoId),
-          repoLaneId(e.toRepoId),
-          {
-            kind: 'repoDep',
-          },
-        ),
-      )
     } else {
-      e.sessionIds.slice(1).forEach((to, i) => {
+      const pair = repoDepPair(repoLaneIds(e.fromRepoId), repoLaneIds(e.toRepoId))
+      if (pair)
         out.push(
-          edge(`e:f:${e.featureId}:${i}`, sessionNodeId(e.sessionIds[i]), sessionNodeId(to), {
-            kind: 'feature',
+          edge(`e:r:${e.fromRepoId}:${e.toRepoId}`, pair[0], pair[1], {
+            kind: 'repoDep',
           }),
         )
-      })
     }
   }
   return out.filter((e) => has(e.source) && has(e.target))
@@ -645,20 +997,33 @@ export function graphToFlow(input: MapInput): FlowResult {
     if (n.attachedSessionId && excerpt) notesBySession.set(n.attachedSessionId, excerpt)
   }
   const views = input.views ?? {}
+  const mothers = mothersOf(input.graph, inUse)
+  // Destaque (tamanho, sempre aberta, primeira na raia) só para a mãe do topo: com
+  // a de cima encerrada, a intermediária passa a ser o topo.
+  const motherIds = new Set(
+    input.graph.nodes
+      .filter((n) => n.isMother && !mothers.get(n.sessionId)?.onMap)
+      .map((n) => n.sessionId),
+  )
+  const isMother = (id: string) => motherIds.has(id)
   const ctx: CardContext = {
-    viewOf: (id) => viewOf(views, id),
-    sizeOf: (id) => cardSize(viewOf(views, id), input.terminalSizes?.[id]),
+    isMother,
+    // A mãe é sempre aberta (o chevron dela não existe; "Recolher todos" não a toca).
+    viewOf: (id) => (isMother(id) ? 'open' : viewOf(views, id)),
+    sizeOf: (id) =>
+      cardSize(viewOf(views, id), input.cardHeights?.[id], input.compact, isMother(id)),
+    cardGap: input.compact ? COMPACT_CARD_GAP : CARD_GAP,
     counts,
     notesBySession,
     expandedMothers,
     continuesFrom: continuations(input.graph, inUse),
-    mothers: mothersOf(input.graph, inUse),
+    mothers,
   }
+  const topOf = new Map<string, string>()
+  for (const lane of input.graph.lanes)
+    for (const r of lane.repos) for (const id of r.sessionIds) topOf.set(id, topLaneId(lane))
   const laneOf = new Map(
-    sessions.map((s) => [
-      s.sessionId,
-      grouped.has(s.sessionId) ? null : projectLaneId(s.projectId),
-    ]),
+    sessions.map((s) => [s.sessionId, grouped.has(s.sessionId) ? null : (topOf.get(s.sessionId) ?? null)]),
   )
   const noteCountByLane = new Map<string, number>()
   for (const n of notes) {
@@ -693,6 +1058,7 @@ export function graphToFlow(input: MapInput): FlowResult {
       input.graph.edges,
       (id) => ids.has(id),
       (mother) => (counts.get(mother) ?? 0) > FAN_COLLAPSE_AT && !expandedMothers.has(mother),
+      (repoId) => lanes.repoLaneIds.get(repoId) ?? [],
     ),
     ...notes
       .filter((n) => n.attachedSessionId && !isOrphan(n))
@@ -703,14 +1069,40 @@ export function graphToFlow(input: MapInput): FlowResult {
       ),
     ...askEdges(input.asks ?? [], (id) => ids.has(id)),
   ]
-  // feature (mesma frente) só aparece no foco, sempre; repoDep só com o mapa cheio.
+  // repoDep só aparece no foco com o mapa cheio.
   // O fio de ask é temporário e não conta: senão cada pergunta piscaria o mapa.
   const busy = raw.filter((e) => e.data!.kind !== 'ask').length > EDGE_BUSY_THRESHOLD
   const edges = raw.map((e) => {
     const kind = e.data!.kind
-    const aggregate = kind === 'feature' || (busy && kind === 'repoDep')
+    const aggregate = busy && kind === 'repoDep'
     if (!busy && !aggregate) return e
     return { ...e, data: { ...e.data!, ...(busy ? { busy: true } : {}), aggregate } }
   })
   return { nodes, edges }
+}
+
+/**
+ * Rect absoluto de cada nó do layout (soma a cadeia de pais) e o bbox dos de
+ * topo. É o que o enquadrar usa para planejar sobre a densidade de DESTINO: o
+ * DOM só tem a atual, e reenquadrar depois do re-layout oscilava entre o cheio
+ * e o compacto.
+ */
+export function layoutRects(nodes: MapNode[]): {
+  rects: Map<string, Box>
+  tops: Box[]
+} {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const rects = new Map<string, Box>()
+  const abs = (n: MapNode): Point => {
+    const parent = n.parentId ? byId.get(n.parentId) : undefined
+    const base = parent ? abs(parent) : { x: 0, y: 0 }
+    return { x: base.x + n.position.x, y: base.y + n.position.y }
+  }
+  const tops: Box[] = []
+  for (const n of nodes) {
+    const box = { ...abs(n), w: n.width ?? 0, h: n.height ?? 0 }
+    rects.set(n.id, box)
+    if (!n.parentId) tops.push(box)
+  }
+  return { rects, tops }
 }

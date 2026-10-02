@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { paletteColor, segmentColor, tailSubscription, type TailCandidate } from './card-tail'
+import {
+  cardPreviewLines,
+  cwdFooter,
+  paletteColor,
+  segmentColor,
+  tailSubscription,
+  type TailCandidate,
+} from './card-tail'
 
 function card(sessionId: string, x: number, y: number, view: TailCandidate['view'] = 'open') {
   return { sessionId, view, x, y, w: 400, h: 368 }
@@ -8,6 +15,13 @@ function card(sessionId: string, x: number, y: number, view: TailCandidate['view
 const VIEW = { x: 0, y: 0, zoom: 1, width: 1000, height: 800 }
 
 describe('tailSubscription', () => {
+  it('no zoom do resumo só a mãe (minZoom próprio) segue assinando', () => {
+    const vp = { ...VIEW, zoom: 0.6 }
+    const ids = tailSubscription([card('filha', 10, 10), { ...card('mae', 500, 10), minZoom: 0.55 }], vp)
+    expect(ids).toEqual(['mae'])
+    expect(tailSubscription([{ ...card('mae', 10, 10), minZoom: 0.55 }], { ...VIEW, zoom: 0.5 })).toEqual([])
+  })
+
   it('só cartões abertos E visíveis no viewport assinam', () => {
     const ids = tailSubscription(
       [
@@ -53,5 +67,26 @@ describe('cores da saída ao vivo', () => {
     expect(paletteColor(232)).toBe('#080808')
     expect(segmentColor({ t: 'x', fg: '#ff8000' })).toBe('#ff8000')
     expect(segmentColor({ t: 'x' })).toBeUndefined()
+  })
+})
+
+describe('cardPreviewLines', () => {
+  const line = (t: string) => [{ t }]
+  it('as 4 últimas linhas não vazias, não as primeiras', () => {
+    const lines = ['a', '', 'b', '   ', 'c', 'd', 'e', ''].map(line)
+    expect(cardPreviewLines(lines)!.map((l) => l[0].t)).toEqual(['b', 'c', 'd', 'e'])
+  })
+  it('só o banner de boot: null (o cartão mostra o propósito)', () => {
+    const banner = ['┌─ Fake Claude Code', '│ sessao: x', '│ cwd: /a', '└─', ''].map(line)
+    expect(cardPreviewLines(banner)).toBeNull()
+    expect(cardPreviewLines([])).toBeNull()
+  })
+  it('banner seguido de saída: mostra a saída', () => {
+    const lines = ['╭─ Claude Code', '│ cwd: /a', '╰─', 'recebido: oi'].map(line)
+    expect(cardPreviewLines(lines)!.at(-1)![0].t).toBe('recebido: oi')
+  })
+  it('cwdFooter', () => {
+    expect(cwdFooter('lexter-copilot-api')).toBe('~/…/lexter-copilot-api')
+    expect(cwdFooter(null)).toBeNull()
   })
 })

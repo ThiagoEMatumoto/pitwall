@@ -4,6 +4,7 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   useInternalNode,
+  ViewportPortal,
   type EdgeProps,
   type InternalNode,
 } from '@xyflow/react'
@@ -11,13 +12,22 @@ import { MessageCircle } from 'lucide-react'
 import { sessionGraphApi } from '@/lib/ipc'
 import type { HandoffEvent } from '../../../shared/types/session-graph'
 import type { MapEdge, MapEdgeData, MapEdgeKind, MapNode } from './graph-to-flow'
-import { borderAnchor, type Anchor, type Rect } from './edge-anchor'
+import {
+  borderAnchor,
+  gutterRoute,
+  roundedPath,
+  routeLabelPoint,
+  type Anchor,
+  type Rect,
+} from './edge-anchor'
 import { useMapFocus } from './map-focus'
+import { PULSE_TOP_LAYER_STYLE, PulseTrain } from './EdgePulse'
+import { usePairOwner, usePairPulses } from './edge-pulse-store'
 
 // Cada tipo de fio se lê sem legenda: mãe→filha é a corda sólida com seta (corre
 // quando vivo, pulsa vermelho quando a filha pergunta), bastão é violeta com ⟲,
-// dependência entre repos é pontilhada e discreta, feature (mesma frente) só
-// aparece no foco. Animações desligam em prefers-reduced-motion (session-map.css).
+// dependência entre repos é pontilhada e discreta (a mesma frente agora é o card
+// da feature, não um fio). Animações desligam em prefers-reduced-motion (session-map.css).
 const BASE: Record<MapEdgeKind, CSSProperties> = {
   handoff: { stroke: 'var(--color-text-dim)', strokeWidth: 1.5 },
   baton: { stroke: 'var(--color-violet)', strokeWidth: 1.5 },
@@ -27,12 +37,6 @@ const BASE: Record<MapEdgeKind, CSSProperties> = {
     strokeDasharray: '1 4',
     strokeLinecap: 'round',
     opacity: 0.9,
-  },
-  feature: {
-    stroke: 'var(--color-info)',
-    strokeWidth: 1.5,
-    strokeDasharray: '1 5',
-    strokeLinecap: 'round',
   },
   note: { stroke: 'var(--color-text-dim)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 },
   // Pergunta agente↔agente esperando resposta: pontilhado que corre, some na resposta.
@@ -49,8 +53,11 @@ function edgeStyle(data: MapEdgeData): CSSProperties {
   if (data.kind !== 'handoff') return base
   if (data.alert) return { ...base, stroke: 'var(--color-danger)', strokeWidth: 2 }
   // Vivo: tracejado que "corre" (session-edge-live) pra mostrar que está trabalhando.
-  if (data.live) return { ...base, stroke: 'var(--color-accent)', strokeDasharray: '6 5' }
-  return { ...base, opacity: 0.7 }
+  // Tracejado curto e meio apagado: o '6 5' pleno se confundia com a borda
+  // tracejada dos grupos (e com uma seleção) quando corria pelo pé do card.
+  if (data.live)
+    return { ...base, stroke: 'var(--color-accent)', strokeDasharray: '4 4', opacity: 0.6 }
+  return { ...base, opacity: 0.6 }
 }
 
 function edgeClass(data: MapEdgeData): string {
@@ -82,17 +89,45 @@ function snapToHandle(n: InternalNode<MapNode> | undefined, a: Anchor): Anchor {
   return { ...a, x: p.x + h.x + h.width / 2, y: p.y + h.y + h.height / 2 }
 }
 
+// Cartão dentro de uma lane de repo de um card de feature (lane:f:<id>:r:<repo>).
+const isFeatureRepoLane = (id: string | undefined) =>
+  !!id && id.startsWith('lane:f:') && id.includes(':r:')
+
 // Com os dois nós medidos o fio encosta na borda voltada pro outro; antes disso
-// (1º frame) cai nos handles padrão que o xyflow passa.
-function useFloatingPath(props: EdgeProps<MapEdge>) {
+// (1º frame) cai nos handles padrão que o xyflow passa. Mãe→filha e bastão no
+// MESMO card de feature correm pelas calhas entre as lanes (gutterRoute): a
+// curva livre cortava por baixo dos cartões da lane do meio.
+function useFloatingPath(props: EdgeProps<MapEdge>, routed: boolean): [string, number, number] {
   const sourceNode = useInternalNode<MapNode>(props.source)
   const targetNode = useInternalNode<MapNode>(props.target)
+  const srcLaneNode = useInternalNode<MapNode>(sourceNode?.parentId ?? '')
+  const tgtLaneNode = useInternalNode<MapNode>(targetNode?.parentId ?? '')
+  const cardNode = useInternalNode<MapNode>(srcLaneNode?.parentId ?? '')
   const source = rectOf(sourceNode)
   const target = rectOf(targetNode)
-  if (!source || !target) return getBezierPath(props)
+  if (!source || !target) {
+    const [p, lx, ly] = getBezierPath(props)
+    return [p, lx, ly]
+  }
+  const srcLane = rectOf(srcLaneNode)
+  const tgtLane = rectOf(tgtLaneNode)
+  const card = rectOf(cardNode)
+  if (
+    routed &&
+    srcLane &&
+    tgtLane &&
+    card &&
+    isFeatureRepoLane(sourceNode?.parentId) &&
+    isFeatureRepoLane(targetNode?.parentId) &&
+    srcLaneNode?.parentId === tgtLaneNode?.parentId
+  ) {
+    const pts = gutterRoute(source, srcLane, target, tgtLane, card.y + card.h - 6)
+    const label = routeLabelPoint(pts)
+    return [roundedPath(pts), label.x, label.y]
+  }
   const a = snapToHandle(sourceNode, borderAnchor(source, target))
   const b = snapToHandle(targetNode, borderAnchor(target, source))
-  return getBezierPath({
+  const [p, lx, ly] = getBezierPath({
     sourceX: a.x,
     sourceY: a.y,
     sourcePosition: a.position,
@@ -100,6 +135,7 @@ function useFloatingPath(props: EdgeProps<MapEdge>) {
     targetY: b.y,
     targetPosition: b.position,
   })
+  return [p, lx, ly]
 }
 
 function timeline(events: HandoffEvent[]): string {
@@ -111,13 +147,55 @@ function timeline(events: HandoffEvent[]): string {
     .join('\n')
 }
 
+const sessionOf = (nodeId: string) => (nodeId.startsWith('s:') ? nodeId.slice(2) : null)
+
+// Bolinha de informação neste fio (edge-pulse-store). Só fio entre DUAS sessões
+// leva pulso; o dono do par desenha o trem, os demais fios do par ficam quietos.
+function useEdgePulses(props: EdgeProps<MapEdge>, path: string, dimmed: boolean) {
+  const src = sessionOf(props.source)
+  const tgt = sessionOf(props.target)
+  const enabled = !!src && !!tgt
+  const owns = usePairOwner(src ?? '', tgt ?? '', props.id, enabled)
+  const pulses = usePairPulses(src ?? '', tgt ?? '')
+  const srcRect = rectOf(useInternalNode<MapNode>(props.source))
+  const tgtRect = rectOf(useInternalNode<MapNode>(props.target))
+  if (!owns || !src || !tgt || pulses.length === 0) return null
+  const train = {
+    d: path,
+    sourceSessionId: src,
+    pulses,
+    rects: { [src]: srcRect, [tgt]: tgtRect },
+    dimmed,
+  }
+  // O fio aceso fica na camada dos fios; a bolinha e o ping, acima dos cartões
+  // (só existe enquanto há pulso, então nada fica por cima fora do trânsito).
+  return (
+    <>
+      <PulseTrain {...train} parts="wire" />
+      <ViewportPortal>
+        <svg
+          className="edge-pulse-layer"
+          data-edge-pulse-layer={props.id}
+          style={PULSE_TOP_LAYER_STYLE}
+        >
+          <PulseTrain {...train} parts="dots" />
+        </svg>
+      </ViewportPortal>
+    </>
+  )
+}
+
 function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
   const data = props.data as MapEdgeData
   const [tooltip, setTooltip] = useState<string | null>(null)
-  const [path, labelX, labelY] = useFloatingPath(props)
+  const [path, labelX, labelY] = useFloatingPath(
+    props,
+    data.kind === 'handoff' || data.kind === 'baton',
+  )
   const focus = useMapFocus()
   const lit = focus.edges.has(props.id)
   const dimmed = focus.dimOthers && !lit
+  const train = useEdgePulses(props, path, dimmed)
   // Rótulos ficam acima dos cartões (z do EdgeLabelRenderer em session-map.css).
   // Mapa cheio (busy, > EDGE_BUSY_THRESHOLD fios): só no fio em foco
   // (hover/seleção), senão viram sopa; a pergunta da filha aparece sempre.
@@ -153,6 +231,7 @@ function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
         }
         interactionWidth={16}
       />
+      {train}
       {isAsk && !dimmed && (
         <EdgeLabelRenderer>
           <div

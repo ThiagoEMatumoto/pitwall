@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest'
 import {
   CARD_H,
   CARD_W,
+  CARD_GAP,
+  OPEN_EST_H,
   OPEN_H,
   OPEN_W,
-  TERMINAL_H,
-  TERMINAL_W,
   graphToFlow,
+  homeRepoLaneId,
+  layoutRects,
+  nextLaneSlot,
   noteExcerpt,
+  positionKey,
   type LaneData,
   type MapInput,
   type SessionCardData,
@@ -261,7 +265,7 @@ describe('graphToFlow — arestas', () => {
     expect(asking.data).toMatchObject({ live: false, alert: true })
   })
 
-  it('bastão, repoDep entre lanes e feature pontilhada entre as sessões', () => {
+  it('bastão e repoDep entre lanes', () => {
     const { edges, nodes } = graphToFlow(
       input({
         graph: graph(base, [
@@ -274,17 +278,14 @@ describe('graphToFlow — arestas', () => {
             fromSessionIds: ['mae'],
             toSessionIds: ['filha'],
           },
-          { kind: 'feature', featureId: 'f1', sessionIds: ['mae', 'filha', 'suc'] },
         ]),
       }),
     )
     const kinds = edges.map((e) => [e.id, e.source, e.target, e.data?.kind])
     expect(kinds).toEqual(
       expect.arrayContaining([
-        ['e:b:h1', 's:filha', 's:suc', 'baton'],
+        ['e:b:filha:suc', 's:filha', 's:suc', 'baton'],
         ['e:r:r-api:r-web', 'lane:r:r-api', 'lane:r:r-web', 'repoDep'],
-        ['e:f:f1:0', 's:mae', 's:filha', 'feature'],
-        ['e:f:f1:1', 's:filha', 's:suc', 'feature'],
       ]),
     )
     // A mãe mostra quantas filhas tem.
@@ -403,30 +404,27 @@ describe('graphToFlow — escopo: só as sessões em uso', () => {
     )
   })
 
-  it('mais de 8 fios: repoDep/feature viram agregados e todos os rótulos ficam "busy"', () => {
+  const chain = (ids: string[]): SessionGraph['edges'] =>
+    ids.slice(1).map((to, i) => ({ kind: 'baton', from: ids[i], to, handoffId: `b${i}` }))
+
+  it('mais de 8 fios: todos os rótulos ficam "busy"', () => {
     const many = Array.from({ length: 10 }, (_, i) => node(`s${i}`))
-    const edges: SessionGraph['edges'] = [
-      { kind: 'feature', featureId: 'f1', sessionIds: many.map((n) => n.sessionId) },
-    ]
-    const r = graphToFlow(input({ graph: graph(many, edges) }))
+    const r = graphToFlow(input({ graph: graph(many, chain(many.map((n) => n.sessionId))) }))
     expect(r.edges.length).toBe(9)
-    expect(r.edges.every((e) => e.data?.aggregate && e.data.busy)).toBe(true)
-    const few = graphToFlow(
-      input({ graph: graph(many.slice(0, 3), [{ ...edges[0], sessionIds: ['s0', 's1', 's2'] }]) }),
-    )
-    // feature só no foco, sempre; mas sem mapa cheio nenhum rótulo fica "busy".
-    expect(few.edges.every((e) => e.data?.aggregate && !e.data?.busy)).toBe(true)
+    expect(r.edges.every((e) => e.data?.busy)).toBe(true)
+    const few = graphToFlow(input({ graph: graph(many.slice(0, 3), chain(['s0', 's1', 's2'])) }))
+    expect(few.edges.some((e) => e.data?.busy)).toBe(false)
   })
 
   // Fio de ask é temporário: um pendente não pode virar o mapa inteiro pra "busy"
   // (rótulos somem, repoDep esconde) e desvirar quando respondem.
   it('8 fios + 1 ask pendente: o ask não conta pro mapa cheio', () => {
     const nine = Array.from({ length: 9 }, (_, i) => node(`s${i}`))
-    const edges: SessionGraph['edges'] = [
-      { kind: 'feature', featureId: 'f1', sessionIds: nine.map((n) => n.sessionId) },
-    ]
     const r = graphToFlow(
-      input({ graph: graph(nine, edges), asks: [{ id: 'q', from: 's0', to: 's1', text: 'oi' }] }),
+      input({
+        graph: graph(nine, chain(nine.map((n) => n.sessionId))),
+        asks: [{ id: 'q', from: 's0', to: 's1', text: 'oi' }],
+      }),
     )
     expect(r.edges).toHaveLength(9)
     expect(r.edges.some((e) => e.data?.busy)).toBe(false)
@@ -450,12 +448,24 @@ describe('graphToFlow — hierarquia visual', () => {
     expect(lane.attentionCount).toBe(1)
   })
 
-  it('cartões empilham com a altura cheia (default: aberto)', () => {
+  it('cartões abertos empilham pela altura desenhada (estimativa até a medição)', () => {
     const r = graphToFlow(input({ graph: graph([node('a', { lastActivityAt: 2 }), node('b')]) }))
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
-    expect(byId.get('s:a')!.position.y - byId.get('s:b')!.position.y).toBe(OPEN_H + 16)
-    expect(byId.get('s:a')).toMatchObject({ width: OPEN_W, height: OPEN_H })
+    expect(byId.get('s:a')!.position.y - byId.get('s:b')!.position.y).toBe(OPEN_EST_H + CARD_GAP)
+    expect(byId.get('s:a')).toMatchObject({ width: OPEN_W, height: OPEN_EST_H })
     expect((byId.get('s:a')!.data as SessionCardData).view).toBe('open')
+
+    const measured = graphToFlow(
+      input({ graph: graph([node('a', { lastActivityAt: 2 }), node('b')]), cardHeights: { b: 150, a: 999 } }),
+    )
+    const m = new Map(measured.nodes.map((n) => [n.id, n]))
+    expect(m.get('s:b')!.height).toBe(150)
+    expect(m.get('s:a')!.position.y - m.get('s:b')!.position.y).toBe(150 + CARD_GAP)
+    // Teto: a vaga máxima.
+    expect(m.get('s:a')!.height).toBe(OPEN_H)
+    // Caixa da lane justa ao conteúdo.
+    const lane = measured.nodes.find((n) => n.id === m.get('s:a')!.parentId)!
+    expect(lane.height).toBe(m.get('s:a')!.position.y + OPEN_H + 12)
   })
 
   it('o tamanho do cartão segue o estado de exibição; o empilhamento acompanha', () => {
@@ -466,31 +476,18 @@ describe('graphToFlow — hierarquia visual', () => {
           node('b', { lastActivityAt: 2 }),
           node('c', { lastActivityAt: 1 }),
         ]),
+        // 'terminal' legado (do banco antigo) ocupa a vaga de um cartão aberto.
         views: { a: 'collapsed', b: 'terminal' },
       }),
     )
     const byId = new Map(r.nodes.map((n) => [n.id, n]))
     expect(byId.get('s:a')).toMatchObject({ width: CARD_W, height: CARD_H })
-    expect(byId.get('s:b')).toMatchObject({ width: TERMINAL_W, height: TERMINAL_H })
+    expect(byId.get('s:b')).toMatchObject({ width: OPEN_W, height: OPEN_EST_H })
     const ya = byId.get('s:a')!.position.y
     const yb = byId.get('s:b')!.position.y
     const yc = byId.get('s:c')!.position.y
-    expect(yb - ya).toBe(CARD_H + 16)
-    expect(yc - yb).toBe(TERMINAL_H + 16)
-    // A lane do repo alarga pro terminal caber.
-    const repoLane = r.nodes.find((n) => n.id === byId.get('s:b')!.parentId)!
-    expect(repoLane.width).toBeGreaterThanOrEqual(TERMINAL_W)
-  })
-
-  it('o terminal usa o tamanho redimensionado pelo usuário', () => {
-    const r = graphToFlow(
-      input({
-        graph: graph([node('a')]),
-        views: { a: 'terminal' },
-        terminalSizes: { a: { w: 900, h: 600 } },
-      }),
-    )
-    expect(r.nodes.find((n) => n.id === 's:a')).toMatchObject({ width: 900, height: 600 })
+    expect(yb - ya).toBe(CARD_H + CARD_GAP)
+    expect(yc - yb).toBe(OPEN_EST_H + CARD_GAP)
   })
 
   it('mãe com mais de 3 filhas: fios recolhidos (só no foco) até o leque abrir', () => {
@@ -582,5 +579,323 @@ describe('graphToFlow — ask agente↔agente pendente', () => {
       input({ graph: g, asks: [{ id: 'q2', from: 'a', to: 'fora', text: 'oi' }] }),
     )
     expect(flow.edges.some((e) => e.data?.kind === 'ask')).toBe(false)
+  })
+})
+
+describe('graphToFlow — card da feature', () => {
+  // Mesmo shape do buildSessionGraph: um card 'feature' com 3 repos de 2 projetos.
+  function featureGraph(nodes: SessionGraphNode[], edges: SessionGraph['edges'] = []): SessionGraph {
+    const inRepo = (repoId: string) => nodes.filter((n) => n.repoId === repoId && n.featureId === 'f1')
+    return {
+      nodes,
+      edges,
+      lanes: [
+        {
+          kind: 'feature',
+          featureId: 'f1',
+          projectId: 'p1',
+          projectName: 'Loja',
+          name: 'Checkout E2E',
+          color: null,
+          pulse: 'Pagamento integrado',
+          status: 'in-progress',
+          pinned: false,
+          repos: [
+            { repoId: 'r-api', label: 'api', projectId: 'p1', projectName: 'Loja', sessionIds: inRepo('r-api').map((n) => n.sessionId) },
+            { repoId: 'r-web', label: 'web', projectId: 'p1', projectName: 'Loja', sessionIds: inRepo('r-web').map((n) => n.sessionId) },
+            { repoId: 'r-data', label: 'data', projectId: 'p2', projectName: 'Dados', sessionIds: inRepo('r-data').map((n) => n.sessionId) },
+          ],
+        },
+        {
+          kind: 'project',
+          projectId: 'p1',
+          name: 'Sem feature · Loja',
+          color: null,
+          repos: [
+            {
+              repoId: 'r-api',
+              label: 'api',
+              sessionIds: nodes.filter((n) => !n.featureId).map((n) => n.sessionId),
+            },
+          ],
+        },
+      ],
+    }
+  }
+  const f = (id: string, repoId: string, patch: Partial<SessionGraphNode> = {}) =>
+    node(id, { repoId, featureId: 'f1', featureTitle: 'Checkout E2E', ...patch })
+  const handoff = (from: string, to: string): SessionGraph['edges'][number] => ({
+    kind: 'handoff',
+    from,
+    to,
+    handoffId: `h-${to}`,
+    handoffStatus: 'running',
+    currentStep: null,
+    createdAt: 1,
+  })
+
+  it('1 card com 3 lanes de repo (inclusive vazias), projeto alheio marcado; sem feature à parte', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data'), node('solta')])
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    expect(card.data).toMatchObject({
+      level: 'feature',
+      label: 'Checkout E2E',
+      pulse: 'Pagamento integrado',
+      sessionCount: 2,
+      repoCount: 3,
+    })
+    const lanes = nodes.filter((n) => n.parentId === 'lane:f:f1')
+    expect(lanes.map((n) => [n.id, (n.data as LaneData).projectName])).toEqual([
+      ['lane:f:f1:r:r-api', null],
+      ['lane:f:f1:r:r-web', null],
+      ['lane:f:f1:r:r-data', 'Dados'],
+    ])
+    expect(nodes.find((n) => n.id === 's:c')?.parentId).toBe('lane:f:f1:r:r-data')
+    // O mesmo repo no card e em "Sem feature": ids distintos.
+    expect(nodes.find((n) => n.id === 's:solta')?.parentId).toBe('lane:r:r-api')
+    expect((nodes.find((n) => n.id === 'lane:p:p1')!.data as LaneData).label).toBe(
+      'Sem feature · Loja',
+    )
+  })
+
+  it('mãe primeiro na própria lane; filha de outra lane alinhada ao topo; bastão lado a lado', () => {
+    const g = featureGraph(
+      [
+        f('c1', 'r-api', { lastActivityAt: 9_000 }),
+        f('m', 'r-api'),
+        f('c2', 'r-data'),
+        f('suc', 'r-web'),
+        f('pred', 'r-web', { lastActivityAt: 9_999 }),
+      ],
+      [handoff('m', 'c1'), handoff('m', 'c2'), { kind: 'baton', from: 'pred', to: 'suc', handoffId: 'b' }],
+    )
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    const bottom = (id: string) => at(id).position.y + at(id).height!
+    // c1 é mais recente, mas a mãe vem primeiro na lane dela.
+    expect(at('c1').position.y).toBe(bottom('m') + CARD_GAP)
+    // c2 está em outra lane: começa no topo dela, sem vão por geração.
+    expect(at('c2').position.y).toBe(at('m').position.y)
+    expect(at('pred').position.y).toBe(at('suc').position.y)
+    expect(at('pred').position.x).toBeGreaterThanOrEqual(at('suc').position.x + at('suc').width!)
+    // Caixa justa: a lane do web cabe as duas lado a lado, sem sobrar coluna.
+    const web = nodes.find((n) => n.id === 'lane:f:f1:r:r-web')!
+    expect(web.width).toBe(at('pred').position.x + at('pred').width! + 12)
+  })
+
+  it('cada coluna alinha ao topo: a pilha alta de outra coluna não empurra ninguém', () => {
+    const g = featureGraph(
+      [
+        f('m', 'r-web'),
+        f('x1', 'r-data'),
+        f('x2', 'r-data'),
+        f('x3', 'r-data'),
+        f('x4', 'r-data'),
+        f('c-web', 'r-web'),
+        f('c-api', 'r-api'),
+      ],
+      [handoff('m', 'c-web'), handoff('m', 'c-api')],
+    )
+    const { nodes } = graphToFlow(input({ graph: g }))
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    const bottom = (id: string) => at(id).position.y + at(id).height!
+    expect(at('c-web').position.y).toBe(bottom('m') + CARD_GAP)
+    expect(at('c-api').position.y).toBe(at('m').position.y)
+    expect(at('x1').position.y).toBe(at('m').position.y)
+  })
+
+  it('tidy determinístico e posição do card persistida por lane:f; migra a de lane:p', () => {
+    const g = featureGraph([f('m', 'r-api')])
+    expect(positionKey('lane:f:f1')).toEqual({ kind: 'lane', entityId: 'f:f1' })
+    expect(positionKey('lane:f:f1:r:r-api')).toBeNull()
+    const migrated = graphToFlow(
+      input({ graph: g, positions: [{ scope: 'all', kind: 'lane', entityId: 'p:p1', x: 500, y: 70, w: null, h: null }] }),
+    )
+    expect(migrated.nodes.find((n) => n.id === 'lane:f:f1')?.position).toEqual({ x: 500, y: 70 })
+    const own = graphToFlow(
+      input({
+        graph: g,
+        positions: [
+          { scope: 'all', kind: 'lane', entityId: 'p:p1', x: 500, y: 70, w: null, h: null },
+          { scope: 'all', kind: 'lane', entityId: 'f:f1', x: 10, y: 20, w: null, h: null },
+        ],
+      }),
+    )
+    expect(own.nodes.find((n) => n.id === 'lane:f:f1')?.position).toEqual({ x: 10, y: 20 })
+    const a = graphToFlow(input({ graph: g })).nodes.map((n) => [n.id, n.position])
+    const b = graphToFlow(input({ graph: g })).nodes.map((n) => [n.id, n.position])
+    expect(a).toEqual(b)
+  })
+
+  it('card salvo que cresceu (resolvedor moveu sessões) não cobre o vizinho salvo; nada é persistido', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data'), node('solta')])
+    const positions = [
+      { scope: 'all', kind: 'lane', entityId: 'f:f1', x: 0, y: 0, w: null, h: null },
+      // Salvo por "Organizar" quando o card tinha 1 lane: agora ele tem 3.
+      { scope: 'all', kind: 'lane', entityId: 'p:p1', x: 320, y: 0, w: null, h: null },
+    ] as MapInput['positions']
+    const { nodes } = graphToFlow(input({ graph: g, positions }))
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    const loose = nodes.find((n) => n.id === 'lane:p:p1')!
+    expect(card.position).toEqual({ x: 0, y: 0 })
+    expect(card.width!).toBeGreaterThan(320)
+    expect(loose.position.x).toBeGreaterThanOrEqual(card.position.x + card.width!)
+    expect(loose.position.y).toBe(0)
+  })
+
+  it('card novo não nasce em cima da lane "Sem feature" salva no v1 (lane:p ainda exibida)', () => {
+    const g = featureGraph([f('m', 'r-api'), node('solta')])
+    const { nodes } = graphToFlow(
+      input({ graph: g, positions: [{ scope: 'all', kind: 'lane', entityId: 'p:p1', x: 0, y: 0, w: null, h: null }] }),
+    )
+    const card = nodes.find((n) => n.id === 'lane:f:f1')!
+    const loose = nodes.find((n) => n.id === 'lane:p:p1')!
+    expect(loose.position).toEqual({ x: 0, y: 0 })
+    expect(card.position.x).toBeGreaterThanOrEqual(loose.position.x + loose.width!)
+  })
+
+  it('escopo de projeto: o card cross-project mostra a sessão do repo do outro projeto', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c', 'r-data', { projectId: 'p2' })])
+    const { nodes } = graphToFlow(input({ graph: g, scope: 'p1' }))
+    expect(nodes.find((n) => n.id === 's:c')?.parentId).toBe('lane:f:f1:r:r-data')
+    expect((nodes.find((n) => n.id === 'lane:f:f1')!.data as LaneData).sessionCount).toBe(2)
+    // E o escopo do outro projeto também vê o card inteiro (ele tem repo lá).
+    const other = graphToFlow(input({ graph: g, scope: 'p2' })).nodes
+    expect(other.find((n) => n.id === 's:m')?.parentId).toBe('lane:f:f1:r:r-api')
+  })
+
+  it('mãe com posição salva (v1): a filha de outra lane nasce no topo da dela', () => {
+    const g = featureGraph([f('m', 'r-api'), f('c1', 'r-data')], [handoff('m', 'c1')])
+    const { nodes } = graphToFlow(
+      input({
+        graph: g,
+        positions: [{ scope: 'all', kind: 'session', entityId: 'm', x: 12, y: 600, w: null, h: null }],
+      }),
+    )
+    const at = (id: string) => nodes.find((n) => n.id === `s:${id}`)!
+    expect(at('m').position.y).toBe(600)
+    expect(at('c1').position.y).toBe(30)
+  })
+
+  it('homeRepoLaneId: a lane de repo do card em que a sessão mora', () => {
+    const g = featureGraph([f('m', 'r-api'), node('solta')])
+    expect(homeRepoLaneId(g, 'm')).toBe('lane:f:f1:r:r-api')
+    expect(homeRepoLaneId(g, 'solta')).toBe('lane:r:r-api')
+  })
+})
+
+describe('graphToFlow — quebra em linhas e densidade compacta', () => {
+  const many = () =>
+    graph(
+      ['p1', 'p2', 'p3', 'p4'].flatMap((p) =>
+        [1, 2].map((i) => node(`${p}-${i}`, { projectId: p, repoId: `r-${p}-${i}`, repoLabel: `repo${i}` })),
+      ),
+    )
+  const tops = (nodes: ReturnType<typeof graphToFlow>['nodes']) =>
+    nodes.filter((n) => !n.parentId && n.type === 'lane')
+
+  it('sem rowWidth os cards ficam numa linha só; com ele quebram abaixo de tudo, com 32px', () => {
+    const one = tops(graphToFlow(input({ graph: many() })).nodes)
+    expect(new Set(one.map((n) => n.position.y))).toEqual(new Set([0]))
+    const laneW = one[0].width!
+    const wrapped = tops(graphToFlow(input({ graph: many(), rowWidth: laneW * 2 + 100 })).nodes)
+    const rows = [...new Set(wrapped.map((n) => n.position.y))].sort((a, b) => a - b)
+    expect(rows.length).toBe(2)
+    const firstRowBottom = Math.max(
+      ...wrapped.filter((n) => n.position.y === 0).map((n) => n.position.y + n.height!),
+    )
+    expect(rows[1]).toBe(firstRowBottom + 32)
+    // Cada linha recomeça na borda esquerda e nada se cobre.
+    expect(wrapped.filter((n) => n.position.y === rows[1])[0].position.x).toBe(0)
+    for (const a of wrapped)
+      for (const b of wrapped) {
+        if (a === b) continue
+        const overlap =
+          a.position.x < b.position.x + b.width! &&
+          a.position.x + a.width! > b.position.x &&
+          a.position.y < b.position.y + b.height! &&
+          a.position.y + a.height! > b.position.y
+        expect(overlap).toBe(false)
+      }
+  })
+
+  it('card mais largo que a linha fica sozinho nela (não quebra no 1º)', () => {
+    const t = tops(graphToFlow(input({ graph: many(), rowWidth: 10 })).nodes)
+    expect(t[0].position).toEqual({ x: 0, y: 0 })
+    expect(new Set(t.map((n) => n.position.y)).size).toBe(t.length)
+  })
+
+  it('compacto: o cartão aberto reserva só o resumo e a raia encolhe junto', () => {
+    const g = graph([node('a'), node('b')])
+    const full = graphToFlow(input({ graph: g }))
+    const compact = graphToFlow(input({ graph: g, compact: true }))
+    const card = (r: typeof full) => r.nodes.find((n) => n.id === 's:a')!
+    expect(card(full).height).toBe(OPEN_EST_H)
+    expect(card(compact).height).toBe(64)
+    expect(card(compact).width).toBe(320)
+    const lane = (r: typeof full) => r.nodes.find((n) => n.id === 'lane:r:r-api')!
+    // 2 cartões de 64 + gap + cabeçalho + padding: nada de vaga de cartão cheio.
+    expect(lane(compact).height).toBeLessThan(2 * 64 + 2 * CARD_GAP + 60)
+    expect(lane(compact).height).toBeLessThan(lane(full).height!)
+  })
+
+  it('compacto: cartões da mesma raia com vão de 12px (não 24)', () => {
+    const g = graph([node('a'), node('b')])
+    const ys = graphToFlow(input({ graph: g, compact: true }))
+      .nodes.filter((n) => n.type === 'session')
+      .map((n) => n.position.y)
+      .sort((x, y) => x - y)
+    expect(ys[1] - ys[0]).toBe(64 + 12)
+  })
+
+  it('grupo "Sem feature": as raias começam abaixo do cabeçalho de 48px', () => {
+    const f = graphToFlow(input({ graph: graph([node('a')]) }))
+    expect(f.nodes.find((n) => n.id === 'lane:r:r-api')!.position.y).toBe(48)
+  })
+})
+
+describe('layoutRects', () => {
+  it('posição absoluta = soma da cadeia de pais; tops só os de raiz', () => {
+    const f = graphToFlow(input({ graph: graph([node('a')]) }))
+    const { rects, tops } = layoutRects(f.nodes)
+    const lane = f.nodes.find((n) => n.id === 'lane:p:p1')!
+    const repo = f.nodes.find((n) => n.id === 'lane:r:r-api')!
+    const card = f.nodes.find((n) => n.id === 's:a')!
+    expect(rects.get('s:a')).toMatchObject({
+      x: lane.position.x + repo.position.x + card.position.x,
+      y: lane.position.y + repo.position.y + card.position.y,
+      w: card.width,
+    })
+    expect(tops).toHaveLength(1)
+  })
+})
+
+describe('nextLaneSlot — empacotamento por coluna', () => {
+  // A cena do print 10: feature larga em cima; Assistente (2 raias) e Diligencia
+  // (1 raia) na 2ª linha; Pessoal (1 raia) não cabe à direita.
+  const feature = { x: 0, y: 0, w: 1100, h: 200 }
+  const assistente = { x: 0, y: 232, w: 740, h: 250 }
+  const diligencia = { x: 788, y: 232, w: 370, h: 250 }
+
+  it('vai para baixo da coluna de largura parecida, não para o canto esquerdo', () => {
+    const p = nextLaneSlot({ x: 1206, y: 232 }, 370, [feature, assistente, diligencia], 1200, 250)
+    expect(p).toEqual({ x: 788, y: 232 + 250 + 32 })
+  })
+
+  it('a vaga mais alta ganha da largura parecida', () => {
+    const tall = { x: 0, y: 0, w: 370, h: 600 }
+    const short = { x: 418, y: 0, w: 740, h: 200 }
+    expect(nextLaneSlot({ x: 1206, y: 0 }, 370, [tall, short], 1200, 100)).toEqual({ x: 418, y: 232 })
+  })
+
+  it('sem vaga livre embaixo de ninguém, cai abaixo de tudo', () => {
+    const p = nextLaneSlot({ x: 1206, y: 0 }, 1150, [feature, { x: 0, y: 232, w: 370, h: 100 }, { x: 418, y: 232, w: 370, h: 300 }], 1200, 100)
+    expect(p).toEqual({ x: 0, y: 232 + 300 + 32 })
+  })
+
+  it('cursor que cabe na linha mas cobriria um card posto não é usado', () => {
+    const p = nextLaneSlot({ x: 400, y: 0 }, 300, [{ x: 0, y: 0, w: 352, h: 200 }, { x: 500, y: 0, w: 300, h: 200 }], 1200, 100)
+    expect(p.y).toBe(232)
   })
 })

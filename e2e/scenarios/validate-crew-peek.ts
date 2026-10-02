@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
@@ -16,7 +17,9 @@ import { queryDb } from '../driver/inspect'
 // levanta um bloqueio — e não por escrita direta no banco.
 
 const require = createRequire(import.meta.url)
-const SCRATCH = process.env.CREW_SCRATCH!
+// Sem CREW_SCRATCH, um diretório temporário (antes: join(undefined) quebrava no boot).
+const SCRATCH = process.env.CREW_SCRATCH ?? mkdtempSync(join(tmpdir(), 'crew-scratch-'))
+mkdirSync(SCRATCH, { recursive: true })
 const fake = createFakeHome({ parentDir: SCRATCH })
 
 const SEEDS = [
@@ -434,6 +437,9 @@ try {
   await page.waitForTimeout(800)
   const focusAfterEsc2 = await activeElement()
   console.log('[peek] FOCO após 2º Esc (saída do dock):', focusAfterEsc2)
+  if (focusAfterEsc2.includes('data-crew-card')) {
+    throw new Error(`2º Esc não saiu do dock — foco segue em ${focusAfterEsc2}`)
+  }
 
   console.log('[peek] ===== RESUMO =====')
   console.log(

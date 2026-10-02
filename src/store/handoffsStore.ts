@@ -3,7 +3,7 @@ import { handoffsApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { dispatchHandoffChild, permissionModeFor } from '@/features/handoffs/spawn-child'
 import { useAppStore } from './appStore'
-import type { Handoff } from '../../shared/types/ipc'
+import type { Handoff, LiveSessionInfo } from '../../shared/types/ipc'
 
 // permissionModeFor mudou de casa (spawn-child.ts, junto do resto do nascimento
 // da filha) e continua exportado daqui — é o import que o resto do renderer já usa.
@@ -40,14 +40,22 @@ function notifyTerminal(h: Handoff): void {
 async function notifyDispatched(h: Handoff): Promise<void> {
   await useAppStore.getState().refreshLiveSessions()
   const child = useAppStore.getState().liveSessions.find((s) => s.id === h.childSessionId)
-  const alias = child?.title?.trim() || null
+  showToast(dispatchedToast(h, child?.title?.trim() || null, child ?? null))
+}
+
+// O despacho é um aviso de passagem: a filha já aparece no mapa e no dock. Some
+// antes do padrão (6s) para não ficar por cima da mãe enquanto ela segue delegando.
+export const DISPATCH_TOAST_MS = 5000
+
+export function dispatchedToast(h: Handoff, alias: string | null, child: LiveSessionInfo | null) {
   const repo = h.targetRepoLabel ?? h.targetRepoId
-  showToast({
+  return {
     title: alias ? `${alias} despachada → ${repo}` : `Handoff despachado → ${repo}`,
     body: h.task,
     actionLabel: child ? 'Abrir' : undefined,
     onAction: child ? () => void useAppStore.getState().focusOrOpenSession(child) : undefined,
-  })
+    durationMs: DISPATCH_TOAST_MS,
+  }
 }
 
 // Janela em que o "Desfazer" da dispensa fica à vista (mesmo tempo do Encerrar).

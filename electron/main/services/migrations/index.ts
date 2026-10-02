@@ -51,6 +51,7 @@ import * as normalizeRelativePaths from './049_normalize_relative_paths'
 import * as sessionsProvider from './050_sessions_provider'
 import * as sessionCanvas from './051_session_canvas'
 import * as agentMessages from './052_agent_messages'
+import * as sessionsFeatureSource from './053_sessions_feature_source'
 
 interface Migration {
   version: number
@@ -117,6 +118,7 @@ export const migrations: Migration[] = [
   sessionsProvider,
   sessionCanvas,
   agentMessages,
+  sessionsFeatureSource,
 ]
 
 export function runMigrations(db: Database.Database): void {

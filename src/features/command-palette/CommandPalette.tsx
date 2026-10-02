@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import {
   Blocks,
+  CheckSquare,
   Folder,
   MessageSquareText,
   Mic,
@@ -15,10 +17,13 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '@/store/appStore'
 import { Icon } from '@/components/ui/Icon'
+import { ShortcutHints } from '@/components/ui/ShortcutHints'
+import { OVERLAY_HINTS } from '@/components/ui/shortcut-hints'
 import { GradientBorder } from '@/features/brand'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
-import { projectsApi, voiceApi } from '@/lib/ipc'
+import { featuresApi, projectsApi, tasksApi, voiceApi } from '@/lib/ipc'
+import { navigateToFeature, navigateToTask } from '@/lib/nav'
 import { matchesQuery } from '@/lib/text-match'
 import { sessionSearchText, sortByUrgency } from '../session-switcher/session-search'
 import { statusView } from '../session-switcher/status-view'
@@ -32,7 +37,17 @@ import {
   WAITING_GROUP,
   WORKING_GROUP,
 } from './session-results'
-import type { LauncherItem, LiveSessionInfo, Project, Repo } from '../../../shared/types/ipc'
+import {
+  ENTITY_GROUP_CAPS,
+  FEATURE_GROUP,
+  featureHint,
+  featureSearchText,
+  searchableTasks,
+  showEntityResults,
+  TASK_GROUP,
+  taskSearchText,
+} from './entity-results'
+import type { Feature, LauncherItem, LiveSessionInfo, Project, Repo, Task } from '../../../shared/types/ipc'
 
 interface Props {
   open: boolean
@@ -101,6 +116,12 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
 
   // Mesma fonte de dados do SessionSwitcher (hooks compartilhados).
   const liveSessions = useVisibleLiveSessions()
+  // Sessões vivas por feature (o grafo é carregado por quem mostra o mapa/dock).
+  const graphNodes = useSessionGraphStore((s) => s.graph.nodes)
+  const sessionFeatureIds = useMemo(
+    () => graphNodes.filter((n) => n.status !== 'ended').map((n) => n.featureId),
+    [graphNodes],
+  )
   const endedSessions = useEndedSessions(open)
 
   const [query, setQuery] = useState('')
@@ -112,6 +133,8 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
   // 'pick-repo' = escolher o repo onde lançar o item já escolhido.
   const [mode, setMode] = useState<'root' | 'pick-item' | 'pick-repo'>('root')
   const [launcherItems, setLauncherItems] = useState<LauncherItem[]>([])
+  const [features, setFeatures] = useState<Feature[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
   const [chosenItem, setChosenItem] = useState<LauncherItem | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -125,6 +148,16 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     inputRef.current?.focus()
 
     let cancelled = false
+    // Features e tarefas em paralelo, sem bloquear projetos/launcher: falha aqui
+    // só deixa a busca sem esses grupos.
+    void featuresApi
+      .list()
+      .then((fs) => !cancelled && setFeatures(fs))
+      .catch(() => {})
+    void tasksApi
+      .list()
+      .then((ts) => !cancelled && setTasks(searchableTasks(ts)))
+      .catch(() => {})
     void (async () => {
       const ps = await projectsApi.list()
       if (cancelled) return
@@ -322,6 +355,31 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
       }
     }
 
+    if (showEntityResults(query)) {
+      const projectName = new Map(projects.map((p) => [p.id, p.name]))
+      for (const f of features) {
+        list.push({
+          id: `feature-${f.id}`,
+          label: f.title,
+          searchText: featureSearchText(f),
+          icon: <Icon as={Target} />,
+          hint: featureHint(f, projectName, sessionFeatureIds),
+          group: FEATURE_GROUP,
+          run: () => navigateToFeature(f.id),
+        })
+      }
+      for (const t of tasks) {
+        list.push({
+          id: `task-${t.id}`,
+          label: t.title,
+          searchText: taskSearchText(t),
+          icon: <Icon as={CheckSquare} />,
+          group: TASK_GROUP,
+          run: () => navigateToTask(t.id),
+        })
+      }
+    }
+
     const activePaneId = useAppStore.getState().panes[0]?.paneId
     if (activePaneId) {
       const panes = useAppStore.getState().panes
@@ -341,7 +399,11 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     chosenItem,
     projects,
     reposByProject,
+    features,
+    tasks,
+    query,
     liveSessions,
+    sessionFeatureIds,
     endedSessions,
     activeCcSessionId,
     setArea,
@@ -357,7 +419,7 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     () =>
       capByGroup(
         commands.filter((c) => matchesQuery(query, c.searchText ?? c.label)),
-        SESSION_GROUP_CAPS,
+        { ...SESSION_GROUP_CAPS, ...ENTITY_GROUP_CAPS },
       ),
     [commands, query],
   )
@@ -500,10 +562,8 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
           ))}
         </div>
 
-        <div className="flex items-center gap-4 border-t border-[var(--color-border)] px-4 py-2.5 font-mono text-[10px] text-[var(--color-text-dim)]">
-          <span>↑↓ navegar</span>
-          <span>↵ abrir</span>
-          <span>esc fechar</span>
+        <div className="border-t border-[var(--color-border)] px-4 py-2.5">
+          <ShortcutHints hints={OVERLAY_HINTS} />
         </div>
       </GradientBorder>
     </div>

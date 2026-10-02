@@ -5,6 +5,7 @@ import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
 import { injectIntoChildGuarded } from '../services/handoff/guarded-inject'
+import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { prepareHandoff } from '../services/handoff/prepare'
 import { adoptSession } from '../services/handoff/adopt'
@@ -175,6 +176,12 @@ export function registerHandoffsIpc(): void {
     // no overlay de aprovação do Codex (sem espelho) — recusa com o motivo.
     await injectIntoChildGuarded(handoff.childSessionId, text)
     broadcast('handoff:updated', store.resume(id))
+    // O humano escreve pelo canal da mãe: no mapa, é o fio mãe→filha que leva.
+    emitSessionLinkPulse({
+      fromSessionId: handoff.motherSessionId,
+      toSessionId: handoff.childSessionId,
+      kind: handoff.status === 'needs_input' ? 'answer' : 'message',
+    })
   })
 
   // Feedback humano (👍/👎/parcial) sobre a utilidade de um handoff concluído.

@@ -1,6 +1,6 @@
 // Grafo de sessões: quem delegou pra quem (handoff), quem herdou o bastão de quem,
-// quais repos ligados têm sessões vivas ao mesmo tempo e quais sessões trabalham
-// na mesma feature. buildSessionGraph é PURA; readSessionGraphInput só lê o banco
+// quais repos ligados têm sessões vivas ao mesmo tempo e, no topo, o card de cada
+// feature (sessões agrupadas por sessions.feature_id). buildSessionGraph é PURA; readSessionGraphInput só lê o banco
 // (recebe o db por parâmetro, sem electron) — o wrapper vivo mora no ipc.
 import type Database from 'better-sqlite3'
 import type { AgentProviderId, HandoffStatus } from '../../../shared/types/ipc'
@@ -9,10 +9,13 @@ import type {
   SessionGraphAttention,
   SessionGraphEdge,
   SessionGraphLane,
+  SessionGraphLaneRepo,
   SessionGraphNode,
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
 import { resolvePurpose } from './session-purpose'
+import { isResumableChild } from './handoff-store'
+import { isLedByMother } from '../../../shared/handoff-lead'
 
 // Estado vivo por sessions.id (PTY + ~/.claude/sessions/<pid>.json). Ausente = ended.
 export interface LiveSessionState {
@@ -47,6 +50,9 @@ export interface GraphHandoffRow {
   status: HandoffStatus
   current_step: string | null
   created_at: number
+  // Só 'interrupted' com transcript da filha no disco (isResumableChild). O
+  // readGraphHandoffs já tira os dispensados.
+  resumable?: boolean
 }
 
 export interface GraphRepoRow {
@@ -69,9 +75,28 @@ export interface GraphRepoDepRow {
   kind: string
 }
 
-export interface GraphFeatureRecordRow {
-  session_id: string
+// Features não-arquivadas citadas pelas sessões do grafo, com o pulso vigente.
+export interface GraphFeatureRow {
+  id: string
+  project_id: string
+  title: string
+  status: string
+  pinned: number
+  pulse: string | null
+}
+
+export interface GraphFeatureRepoRow {
   feature_id: string
+  repo_id: string
+}
+
+// handoff_events 'mother_transferred' (handoffStore.transferMother): de quem
+// para quem a liderança de um handoff passou.
+export interface GraphMotherTransfer {
+  handoff_id: string
+  from: string
+  to: string
+  at: number
 }
 
 export interface SessionGraphInput {
@@ -81,7 +106,8 @@ export interface SessionGraphInput {
   repos: GraphRepoRow[]
   projects: GraphProjectRow[]
   repoDependencies: GraphRepoDepRow[]
-  featureRecords: GraphFeatureRecordRow[]
+  features?: GraphFeatureRow[]
+  featureRepos?: GraphFeatureRepoRow[]
   live: Map<string, LiveSessionState>
   // 1º prompt humano por sessions.id — só pra quem não tem propósito melhor.
   firstPrompts?: Map<string, string | null>
@@ -90,9 +116,11 @@ export interface SessionGraphInput {
   pastTasks?: Map<string, string>
   // Última mensagem humana por sessions.id (fallback do "Onde parei").
   lastPrompts?: Map<string, string | null>
+  motherTransfers?: GraphMotherTransfer[]
 }
 
 const LOOSE_LABEL = 'Avulsas'
+export const NO_FEATURE_PREFIX = 'Sem feature · '
 
 // Espelha o displayTitle do Terminal.tsx: rename manual > nome vivo do CLI >
 // título salvo > label do repo.
@@ -129,9 +157,35 @@ function predecessorHandoffIndex(handoffs: GraphHandoffRow[]): Map<string, Graph
   return out
 }
 
+// Filhas por mãe, no recorte do bastão (isLedByMother): o badge promete
+// exatamente quem o bastão vai relinkar. Com filha atrelada, só o handoff que ela
+// adota (childHandoffIndex), pra uma sessão readotada não contar pras duas mães;
+// pending/approved ainda sem filha contam — o bastão também os move.
+function childCountByMother(
+  handoffs: GraphHandoffRow[],
+  childHandoff: Map<string, GraphHandoffRow>,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const h of handoffs) {
+    const mother = h.mother_session_id
+    const child = h.child_session_id
+    if (!mother || mother === child) continue
+    if (!isLedByMother({ status: h.status, dismissedAt: null, resumable: h.resumable ?? false }))
+      continue
+    if (child && childHandoff.get(child)?.id !== h.id) continue
+    out.set(mother, (out.get(mother) ?? 0) + 1)
+  }
+  return out
+}
+
 function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHandoffRow>) {
   const passedBaton = predecessorHandoffIndex(input.handoffs)
+  const children = childCountByMother(input.handoffs, childHandoff)
+  const gaveMotherBaton = new Set(
+    (input.motherTransfers ?? []).filter((t) => t.from !== t.to).map((t) => t.from),
+  )
   const repoById = new Map(input.repos.map((r) => [r.id, r]))
+  const featureById = new Map((input.features ?? []).map((f) => [f.id, f]))
   const sorted = [...input.sessions].sort(
     (a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id),
   )
@@ -169,12 +223,36 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       purpose: purpose?.text ?? null,
       purposeSource: purpose?.source ?? null,
       groupId: s.group_id ?? null,
+      featureId: (s.feature_id && featureById.get(s.feature_id)?.id) ?? null,
+      featureTitle: (s.feature_id && featureById.get(s.feature_id)?.title) ?? null,
       lastSummary: s.last_summary ?? null,
       lastSummaryAt: s.last_summary_at ?? null,
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
+      isMother: (children.get(s.id) ?? 0) > 0,
+      childCount: children.get(s.id) ?? 0,
+      batonPassed: gaveMotherBaton.has(s.id) && !children.has(s.id),
     }
   })
+}
+
+// Bastão da mãe: um fio por par antecessora→sucessora (não um por handoff movido).
+// `drawn`: pares já desenhados pela linhagem — a mãe que também é filha passa um
+// bastão só, que aparece nos dois registros.
+function motherBatonEdges(
+  transfers: GraphMotherTransfer[],
+  ids: Set<string>,
+  drawn: SessionGraphEdge[],
+): SessionGraphEdge[] {
+  const seen = new Set(drawn.filter((e) => e.kind === 'baton').map((e) => `${e.from}\u0000${e.to}`))
+  const out: SessionGraphEdge[] = []
+  for (const t of [...transfers].sort((a, b) => a.at - b.at)) {
+    const key = `${t.from}\u0000${t.to}`
+    if (t.from === t.to || seen.has(key) || !ids.has(t.from) || !ids.has(t.to)) continue
+    seen.add(key)
+    out.push({ kind: 'baton', from: t.from, to: t.to, handoffId: t.handoff_id })
+  }
+  return out
 }
 
 // Um handoff por filha: o mais recente vence (a mesma sessão pode ter sido filha
@@ -215,10 +293,20 @@ function lineageEdges(
       })
     }
   }
+  const batonPairs = new Set<string>()
   for (const h of byCreation) {
     const pred = h.predecessor_session_id
     const child = h.child_session_id
-    if (pred && child && pred !== child && ids.has(pred) && ids.has(child)) {
+    const key = `${pred}\u0000${child}`
+    if (
+      pred &&
+      child &&
+      pred !== child &&
+      ids.has(pred) &&
+      ids.has(child) &&
+      !batonPairs.has(key)
+    ) {
+      batonPairs.add(key)
       out.push({ kind: 'baton', from: pred, to: child, handoffId: h.id })
     }
   }
@@ -253,46 +341,107 @@ function repoDepEdges(deps: GraphRepoDepRow[], nodes: SessionGraphNode[]): Sessi
   }))
 }
 
-function featureEdges(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphEdge[] {
-  const featuresBySession = new Map<string, Set<string>>()
-  const add = (sessionId: string, featureId: string | null) => {
-    if (!featureId) return
-    featuresBySession.set(
-      sessionId,
-      new Set([...(featuresBySession.get(sessionId) ?? []), featureId]),
-    )
-  }
-  for (const s of input.sessions) add(s.id, s.feature_id)
-  for (const r of input.featureRecords) add(r.session_id, r.feature_id)
+const byPosition = <T extends { position: number }>(a: T, b: T) => a.position - b.position
 
-  const sessionsByFeature = new Map<string, string[]>()
-  for (const n of nodes) {
-    for (const f of featuresBySession.get(n.sessionId) ?? []) {
-      sessionsByFeature.set(f, [...(sessionsByFeature.get(f) ?? []), n.sessionId])
-    }
-  }
-  return [...sessionsByFeature.entries()]
-    .filter(([, ids]) => ids.length >= 2)
-    .map(([featureId, sessionIds]) => ({ kind: 'feature', featureId, sessionIds }))
+// Repos de uma lane na ordem do usuário: projeto (home primeiro) → posição do repo.
+function laneRepos(
+  repoIds: Set<string>,
+  sessionsByRepo: Map<string, string[]>,
+  input: SessionGraphInput,
+  homeProjectId: string | null,
+): SessionGraphLaneRepo[] {
+  const project = new Map(input.projects.map((p) => [p.id, p]))
+  const rank = (projectId: string) =>
+    projectId === homeProjectId ? -1 : (project.get(projectId)?.position ?? Infinity)
+  return input.repos
+    .filter((r) => repoIds.has(r.id))
+    .sort((a, b) => rank(a.project_id) - rank(b.project_id) || byPosition(a, b))
+    .map((r) => ({
+      repoId: r.id,
+      label: r.label,
+      projectId: r.project_id,
+      projectName: project.get(r.project_id)?.name ?? null,
+      projectColor: project.get(r.project_id)?.color ?? null,
+      sessionIds: sessionsByRepo.get(r.id) ?? [],
+    }))
 }
 
+function featureLanes(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphLane[] {
+  const byFeature = new Map<string, SessionGraphNode[]>()
+  for (const n of nodes) {
+    if (n.featureId) byFeature.set(n.featureId, [...(byFeature.get(n.featureId) ?? []), n])
+  }
+  const projects = new Map(input.projects.map((p) => [p.id, p]))
+  const registered = new Map<string, Set<string>>()
+  for (const fr of input.featureRepos ?? []) {
+    registered.set(fr.feature_id, new Set([...(registered.get(fr.feature_id) ?? []), fr.repo_id]))
+  }
+  // Ordem estável (a atividade muda a cada tick e faria os cards pularem): o foco
+  // do usuário primeiro, depois a feature cuja 1ª sessão nasceu antes.
+  const firstStart = (members: SessionGraphNode[]) =>
+    Math.min(...members.map((m) => m.startedAt ?? 0))
+  return (input.features ?? [])
+    .filter((f) => byFeature.has(f.id))
+    .sort(
+      (a, b) =>
+        b.pinned - a.pinned ||
+        firstStart(byFeature.get(a.id)!) - firstStart(byFeature.get(b.id)!) ||
+        a.id.localeCompare(b.id),
+    )
+    .map((f): SessionGraphLane => {
+      const members = byFeature.get(f.id)!
+      const sessionsByRepo = new Map<string, string[]>()
+      const loose: string[] = []
+      for (const n of members) {
+        if (n.repoId)
+          sessionsByRepo.set(n.repoId, [...(sessionsByRepo.get(n.repoId) ?? []), n.sessionId])
+        else loose.push(n.sessionId)
+      }
+      const repoIds = new Set([...(registered.get(f.id) ?? []), ...sessionsByRepo.keys()])
+      const repos = laneRepos(repoIds, sessionsByRepo, input, f.project_id)
+      if (loose.length) repos.push({ repoId: null, label: LOOSE_LABEL, sessionIds: loose })
+      const home = projects.get(f.project_id)
+      return {
+        kind: 'feature',
+        featureId: f.id,
+        projectId: f.project_id,
+        projectName: home?.name ?? null,
+        name: f.title,
+        color: home?.color ?? null,
+        pulse: f.pulse,
+        status: f.status,
+        pinned: !!f.pinned,
+        repos,
+      }
+    })
+}
+
+// Topo do mapa: um card por feature (lanes de repo de qualquer projeto) e, pra
+// quem não tem feature, "Sem feature · <Projeto>"; avulsas sem feature por último.
 function buildLanes(input: SessionGraphInput, nodes: SessionGraphNode[]): SessionGraphLane[] {
   const byRepo = new Map<string, string[]>()
   const loose: string[] = []
   for (const n of nodes) {
+    if (n.featureId) continue
     if (n.repoId) byRepo.set(n.repoId, [...(byRepo.get(n.repoId) ?? []), n.sessionId])
     else loose.push(n.sessionId)
   }
-  const byPosition = <T extends { position: number }>(a: T, b: T) => a.position - b.position
-  const lanes: SessionGraphLane[] = [...input.projects].sort(byPosition).flatMap((p) => {
-    const repos = input.repos
-      .filter((r) => r.project_id === p.id && byRepo.has(r.id))
-      .sort(byPosition)
-      .map((r) => ({ repoId: r.id, label: r.label, sessionIds: byRepo.get(r.id) ?? [] }))
-    return repos.length ? [{ projectId: p.id, name: p.name, color: p.color, repos }] : []
-  })
+  const lanes: SessionGraphLane[] = featureLanes(input, nodes)
+  for (const p of [...input.projects].sort(byPosition)) {
+    const repoIds = new Set(input.repos.filter((r) => r.project_id === p.id && byRepo.has(r.id)).map((r) => r.id))
+    const repos = laneRepos(repoIds, byRepo, input, p.id)
+    if (repos.length)
+      lanes.push({
+        kind: 'project',
+        projectId: p.id,
+        name: `${NO_FEATURE_PREFIX}${p.name}`,
+        color: p.color,
+        repos,
+      })
+  }
   if (loose.length) {
     lanes.push({
+      kind: 'project',
       projectId: null,
       name: LOOSE_LABEL,
       color: null,
@@ -306,13 +455,14 @@ export function buildSessionGraph(input: SessionGraphInput): SessionGraph {
   const childHandoff = childHandoffIndex(input.handoffs)
   const nodes = buildNodes(input, childHandoff)
   const ids = new Set(nodes.map((n) => n.sessionId))
+  const lineage = lineageEdges(input.handoffs, ids, childHandoff)
   return {
     nodes,
     lanes: buildLanes(input, nodes),
     edges: [
-      ...lineageEdges(input.handoffs, ids, childHandoff),
+      ...lineage,
+      ...motherBatonEdges(input.motherTransfers ?? [], ids, lineage),
       ...repoDepEdges(input.repoDependencies, nodes),
-      ...featureEdges(input, nodes),
     ],
   }
 }
@@ -329,7 +479,7 @@ const HANDOFF_COLUMNS = `id, mother_session_id, child_session_id, predecessor_se
 
 function readGraphHandoffs(db: Database.Database, now: number): GraphHandoffRow[] {
   const terminal = JSON.stringify(TERMINAL_GRAPH_STATUSES)
-  return db
+  const rows = db
     .prepare(
       `SELECT ${HANDOFF_COLUMNS} FROM handoffs
         WHERE dismissed_at IS NULL AND status NOT IN (SELECT value FROM json_each(?))
@@ -349,6 +499,39 @@ function readGraphHandoffs(db: Database.Database, now: number): GraphHandoffRow[
       now - TERMINAL_HANDOFF_WINDOW_MS,
       TERMINAL_HANDOFFS_PER_MOTHER,
     ) as GraphHandoffRow[]
+  return rows.map((h) =>
+    h.status === 'interrupted'
+      ? { ...h, resumable: isResumableChild(h.status, h.child_session_id) }
+      : h,
+  )
+}
+
+function readMotherTransfers(
+  db: Database.Database,
+  handoffs: GraphHandoffRow[],
+): GraphMotherTransfer[] {
+  if (handoffs.length === 0) return []
+  const rows = db
+    .prepare(
+      `SELECT handoff_id, detail, at FROM handoff_events
+        WHERE event = 'mother_transferred'
+          AND handoff_id IN (SELECT value FROM json_each(?))
+        ORDER BY at, rowid`,
+    )
+    .all(JSON.stringify(handoffs.map((h) => h.id))) as Array<{
+    handoff_id: string
+    detail: string | null
+    at: number
+  }>
+  return rows.flatMap((r) => {
+    try {
+      const d = JSON.parse(r.detail ?? '') as { from?: unknown; to?: unknown }
+      if (typeof d.from !== 'string' || typeof d.to !== 'string') return []
+      return [{ handoff_id: r.handoff_id, from: d.from, to: d.to, at: r.at }]
+    } catch {
+      return []
+    }
+  })
 }
 
 function readPastTasks(db: Database.Database, sessionIds: string[]): Map<string, string> {
@@ -400,9 +583,7 @@ export function readSessionGraphInput(
     )
     .all(ids) as GraphSessionRow[]
   // Filha e antecessora do bastão têm a tarefa do handoff: o transcript não é lido.
-  const children = new Set(
-    handoffs.flatMap((h) => [h.child_session_id, h.predecessor_session_id]),
-  )
+  const children = new Set(handoffs.flatMap((h) => [h.child_session_id, h.predecessor_session_id]))
   const pastTasks = readPastTasks(
     db,
     sessions.filter((s) => !s.purpose?.trim() && !children.has(s.id)).map((s) => s.id),
@@ -418,10 +599,7 @@ export function readSessionGraphInput(
           !pastTasks.has(s.id) &&
           s.cc_session_id,
       )
-      .map(
-        (s) =>
-          [s.id, firstPrompt(s.cc_session_id!, live.has(s.id))] as const,
-      ),
+      .map((s) => [s.id, firstPrompt(s.cc_session_id!, live.has(s.id))] as const),
   )
   // "Onde parei" sem resumo: só quem não tem um ganha a leitura do fim do transcript.
   const lastPrompts = new Map(
@@ -429,17 +607,32 @@ export function readSessionGraphInput(
       .filter((s) => s.provider === 'claude' && !s.last_summary && s.cc_session_id)
       .map((s) => [s.id, lastPrompt(s.cc_session_id!, live.has(s.id))] as const),
   )
-  const featureRecords = db
+  const featureIds = JSON.stringify([
+    ...new Set(sessions.map((s) => s.feature_id).filter((id): id is string => !!id)),
+  ])
+  // Pulso vigente = o mais recente (mesma ordem do loop-store.currentPulse).
+  const features = db
     .prepare(
-      `SELECT session_id, feature_id FROM feature_session_records
-        WHERE session_id IN (SELECT value FROM json_each(?))`,
+      `SELECT f.id, f.project_id, f.title, f.status, f.pinned,
+              (SELECT body FROM feature_pulses p WHERE p.feature_id = f.id
+                ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1) AS pulse
+         FROM features f
+        WHERE f.id IN (SELECT value FROM json_each(?)) AND f.archived_at IS NULL`,
     )
-    .all(ids) as GraphFeatureRecordRow[]
+    .all(featureIds) as GraphFeatureRow[]
+  const featureRepos = db
+    .prepare(
+      `SELECT feature_id, repo_id FROM feature_repos
+        WHERE feature_id IN (SELECT value FROM json_each(?))`,
+    )
+    .all(featureIds) as GraphFeatureRepoRow[]
 
   return {
     sessions,
     handoffs,
-    featureRecords,
+    motherTransfers: readMotherTransfers(db, handoffs),
+    features,
+    featureRepos,
     firstPrompts,
     pastTasks,
     lastPrompts,

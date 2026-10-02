@@ -6,6 +6,7 @@ import matter from 'gray-matter'
 import chokidar, { FSWatcher } from 'chokidar'
 import { getDb } from './db'
 import { isDraftFeature } from '../../../shared/feature-visibility'
+import { sanitizeObjective } from './session-purpose'
 import type {
   Feature,
   FeatureLinkTargetType,
@@ -18,6 +19,17 @@ import type {
   CreateFeatureInput,
   UpdateFeatureInput,
 } from '../../../shared/types/ipc'
+import {
+  BUSINESS_RULES_SECTION,
+  FEATURE_SECTIONS,
+  FIXED_NOTES_SECTION,
+  USER_OWNED_SECTIONS,
+  absorbUserSections as absorbUserSectionsMarkdown,
+  appendFixedNote as appendNoteMarkdown,
+  getSection,
+  replaceSection,
+  type FeatureSection,
+} from '../../../shared/feature-sections'
 
 // Paths próprios escritos pela síntese/CRUD são registrados aqui ANTES da escrita
 // para que o watcher os ignore (evita loop watcher↔re-index). A síntese autônoma
@@ -84,24 +96,20 @@ interface Frontmatter {
   model: string | null
 }
 
-// Estrutura enxuta: 5 seções coesas, TODAS editáveis pela síntese holística
-// (Stage 2). Acaba com os headers sempre-vazios e o "preserve freeze" do design
-// antigo (8 seções, metade nunca preenchida).
-export const SECTIONS = [
-  'Visão geral',
-  'Estado atual',
-  'Decisões',
-  'Pontos em aberto',
-  'Linha do tempo',
-] as const
+// Estrutura do corpo: as seções da síntese holística (Stage 2) mais as duas
+// do USUÁRIO ("Regras de negócio" e "Notas fixadas"), que a síntese nunca
+// reescreve (ver shared/feature-sections.ts).
+export const SECTIONS = FEATURE_SECTIONS
+export { USER_OWNED_SECTIONS }
 
 function skeletonBody(seed: { overview?: string; businessRules?: string; approach?: string }): string {
-  // Os seeds opcionais do create (objetivo/regras/abordagem) entram todos na
-  // "Visão geral"; a síntese holística reescreve o corpo depois.
-  const overviewParts = [seed.overview?.trim(), seed.businessRules?.trim(), seed.approach?.trim()]
-    .filter(Boolean)
-    .join('\n\n')
-  const map: Record<string, string> = { 'Visão geral': overviewParts }
+  // Objetivo e abordagem entram na "Visão geral"; as regras de negócio têm seção
+  // própria (do usuário — a síntese não as toca).
+  const overviewParts = [seed.overview?.trim(), seed.approach?.trim()].filter(Boolean).join('\n\n')
+  const map: Record<string, string> = {
+    'Visão geral': overviewParts,
+    [BUSINESS_RULES_SECTION]: seed.businessRules?.trim() ?? '',
+  }
   return (
     SECTIONS.map((h) => {
       const content = map[h] ?? ''
@@ -148,7 +156,7 @@ function fromFrontmatter(fm: Partial<Frontmatter>, docPath: string, body: string
     slug: fm.slug,
     title: fm.title,
     status: fm.status,
-    objective: fm.objective ?? null,
+    objective: sanitizeObjective(fm.objective ?? null),
     docPath,
     synthMode: fm.synth_mode ?? 'threshold',
     model: fm.model ?? null,
@@ -228,7 +236,7 @@ function rowToFeature(
     slug: row.slug,
     title: row.title,
     status: row.status as FeatureStatus,
-    objective: row.objective,
+    objective: sanitizeObjective(row.objective),
     docPath: row.doc_path,
     synthMode: row.synth_mode as FeatureSynthMode,
     model: row.model,
@@ -634,6 +642,38 @@ export function update(input: UpdateFeatureInput): Feature {
   writeDoc(next, current.body ?? '')
   upsertIndex(next)
   return next
+}
+
+// Substitui só a seção alvo do corpo, relendo o `.md` do disco na hora (é a
+// fonte de verdade; o autosave do painel e a síntese escrevem nele).
+export function updateSection(featureId: string, section: FeatureSection, markdown: string): Feature {
+  const current = get(featureId)
+  if (!current) throw new Error(`feature not found: ${featureId}`)
+  const next: Feature = { ...current, updatedAt: Date.now() }
+  const body = replaceSection(current.body ?? '', section, markdown)
+  writeDoc(next, body)
+  upsertIndex(next)
+  return { ...next, body }
+}
+
+// Merge de duplicata: regras e notas fixadas da origem vão para o destino.
+export function absorbUserSections(sourceId: string, targetId: string): void {
+  const source = get(sourceId)
+  const target = get(targetId)
+  if (!source || !target) return
+  const body = absorbUserSectionsMarkdown(target.body ?? '', source.body ?? '')
+  if (body === (target.body ?? '')) return
+  const next: Feature = { ...target, updatedAt: Date.now() }
+  writeDoc(next, body)
+  upsertIndex(next)
+}
+
+// "Fixar na feature": anexa o texto ao fim das notas fixadas.
+export function appendFixedNote(featureId: string, text: string): Feature {
+  const current = get(featureId)
+  if (!current) throw new Error(`feature not found: ${featureId}`)
+  const notes = appendNoteMarkdown(getSection(current.body ?? '', FIXED_NOTES_SECTION), text)
+  return updateSection(featureId, FIXED_NOTES_SECTION, notes)
 }
 
 export function archive(id: string): void {

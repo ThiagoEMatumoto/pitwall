@@ -51,7 +51,11 @@ function isCrewChild(ccSessionId: string | undefined): boolean {
   return crewCcSessionIds(handoffs, liveSessions).has(ccSessionId)
 }
 
-export function NotificationToast() {
+// maxVisible: teto vindo do placement (mapa = 2; modal sem respiro = 0). O
+// excedente colapsa num "+N" mas continua montado (escondido): o auto-dismiss
+// de cada card segue correndo e eles somem sozinhos.
+export function NotificationToast({ maxVisible }: { maxVisible?: number } = {}) {
+  const [expanded, setExpanded] = useState(false)
   const [events, setEvents] = useState<QueuedEvent[]>([])
   const nextId = useRef(0)
   const toasts = useToastStore((s) => s.toasts)
@@ -76,17 +80,47 @@ export function NotificationToast() {
     setEvents((prev) => prev.filter((e) => e.queueId !== queueId))
   }
 
+  const cards = [
+    ...toasts.map((toast) => ({ key: `t${toast.id}`, node: <LocalToastCard toast={toast} /> })),
+    ...events.map((event) => ({
+      key: `e${event.queueId}`,
+      node: <EventToastCard event={event} onDismiss={() => dismissEvent(event.queueId)} />,
+    })),
+  ]
+  // Na faixa estreita acima/abaixo da modal (teto 0) não há onde expandir: os
+  // cards cresceriam por cima da modal. O "+N" vira só um contador.
+  const canExpand = maxVisible !== 0
+  const cap =
+    (expanded && canExpand) || maxVisible === undefined ? cards.length : Math.max(0, maxVisible)
+  const hiddenCount = Math.max(0, cards.length - cap)
+  // Some o "+N" → volta ao teto na próxima rajada.
+  useEffect(() => {
+    if (cards.length <= (maxVisible ?? cards.length)) setExpanded(false)
+  }, [cards.length, maxVisible])
+
   return (
     <>
-      {toasts.map((toast) => (
-        <LocalToastCard key={toast.id} toast={toast} />
-      ))}
-      {events.map((event) => (
-        <EventToastCard
-          key={event.queueId}
-          event={event}
-          onDismiss={() => dismissEvent(event.queueId)}
-        />
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          data-testid="toast-overflow"
+          onClick={canExpand ? () => setExpanded(true) : undefined}
+          aria-disabled={!canExpand}
+          title={canExpand ? 'Mostrar todos os avisos' : 'Feche o terminal para ver os avisos'}
+          className="pointer-events-auto rounded-full border px-2.5 py-1 text-xs shadow-lg"
+          style={{
+            borderColor: 'var(--color-border)',
+            background: 'var(--color-bg-elevated, var(--color-surface))',
+            color: 'var(--color-text-dim)',
+          }}
+        >
+          +{hiddenCount} {hiddenCount === 1 ? 'aviso' : 'avisos'}
+        </button>
+      )}
+      {cards.map((c, i) => (
+        <div key={c.key} hidden={i < hiddenCount} data-testid="toast-card">
+          {c.node}
+        </div>
       ))}
     </>
   )
@@ -110,7 +144,9 @@ function EventToastCard({ event, onDismiss }: { event: QueuedEvent; onDismiss: (
   return (
     <ToastFrame onDismiss={onDismiss} onActivate={activate}>
       <div className="font-medium">{event.title}</div>
-      <div className="text-[var(--color-text-dim)]">{event.body}</div>
+      <div className="line-clamp-2 text-[var(--color-text-dim)]" title={event.body}>
+        {event.body}
+      </div>
     </ToastFrame>
   )
 }
@@ -126,7 +162,12 @@ function LocalToastCard({ toast }: { toast: LocalToast }) {
   return (
     <ToastFrame onDismiss={() => dismiss(toast.id)}>
       <div className="font-medium">{toast.title}</div>
-      {toast.body && <div className="text-[var(--color-text-dim)]">{toast.body}</div>}
+      {/* 2 linhas no máximo (o aviso do bastão ocupava 5); o texto inteiro no title. */}
+      {toast.body && (
+        <div className="line-clamp-2 text-[var(--color-text-dim)]" title={toast.body}>
+          {toast.body}
+        </div>
+      )}
       {toast.actionLabel && (
         <button
           type="button"

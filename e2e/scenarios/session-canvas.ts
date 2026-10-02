@@ -250,10 +250,6 @@ const mapCardIds = async () =>
   page
     .getByTestId('session-card')
     .evaluateAll((els) => els.map((e) => e.getAttribute('data-session-id') ?? ''))
-const viewportScale = () =>
-  page
-    .locator('.react-flow__viewport')
-    .evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).a)
 const pidOf = (cc: string) => fake.readSessionFiles().find((f) => f.data.sessionId === cc)?.data.pid
 const stdinLog = () => fake.readCliLog('claude')
 const permLog = () =>
@@ -284,12 +280,18 @@ async function bringIntoView(target: ReturnType<typeof page.locator>): Promise<v
     const mapBox = await page.getByTestId('session-map').boundingBox()
     const bar = await page.getByTestId('map-top-bar').boundingBox()
     if (!box || !mapBox) return
-    // O mapa corre por baixo da sidebar: a área útil começa na borda direita dela.
-    const asideRight = await page.evaluate(
-      () => document.querySelector('aside')?.getBoundingClientRect().right ?? 0,
-    )
-    const left = Math.max(mapBox.x, asideRight) + 12
-    const right = mapBox.x + mapBox.width - 12
+    // O mapa corre por baixo da sidebar (à esquerda) e da Equipe (à direita, também
+    // um <aside>): a área útil fica entre as duas.
+    const asides = await page.evaluate(() => {
+      const mid = window.innerWidth / 2
+      const rects = [...document.querySelectorAll('aside')].map((a) => a.getBoundingClientRect())
+      return {
+        leftEdge: Math.max(0, ...rects.filter((r) => r.left < mid).map((r) => r.right)),
+        rightEdge: Math.min(window.innerWidth, ...rects.filter((r) => r.left >= mid && r.width > 0).map((r) => r.left)),
+      }
+    })
+    const left = Math.max(mapBox.x, asides.leftEdge) + 12
+    const right = Math.min(mapBox.x + mapBox.width, asides.rightEdge) - 12
     const top = (bar ? bar.y + bar.height : mapBox.y) + 12
     const bottom = mapBox.y + mapBox.height - 12
     const inside =
@@ -490,7 +492,7 @@ try {
         )?.sessionId,
       )
     }
-    // Com o mapa na frente a sessão nasce SEM aba e vira cartão em modo terminal
+    // Com o mapa na frente a sessão nasce SEM aba e abre na modal de terminal
     // ali mesmo: o usuário não sai do mapa.
     const onMap = newId
       ? await waitFor('cartão aparece', async () => (await card(newId!).count()) === 1, 15_000)
@@ -500,18 +502,11 @@ try {
       (await page.getByTestId('session-map').count()) === 1,
       'criar pela lane não tira o usuário do mapa',
     )
+    const newLift = page.locator('[role="dialog"][data-peek-lift][data-peek-mode="terminal"]')
     const inTerminal = newId
-      ? await waitFor(
-          'cartão novo em modo terminal',
-          async () => (await card(newId!).getAttribute('data-view')) === 'terminal',
-          15_000,
-        )
+      ? await waitFor('sessão nova na modal', async () => (await newLift.count()) === 1, 15_000)
       : false
-    check(inTerminal, 'sessão nova abre como cartão em modo terminal')
-    check(
-      (await page.locator('[data-testid="session-card"][data-view="terminal"]').count()) === 1,
-      'um terminal por vez no mapa',
-    )
+    check(inTerminal, 'sessão nova abre na modal de terminal do mapa')
     const alive = await page.evaluate(
       (id) =>
         (window as unknown as { api: Api }).api.sessions
@@ -522,17 +517,13 @@ try {
     check(alive, 'a sessão nova está viva')
     check(
       (await page.locator('.dv-tab').count()) === laneTabsBefore,
-      'nenhuma aba nasceu (o terminal mora no cartão)',
+      'nenhuma aba nasceu (o terminal mora na modal)',
     )
     await page.screenshot({ path: shot('02b-lane-new-session-terminal') })
-    // Os passos seguintes partem do cartão aberto, não do terminal.
+    // Os passos seguintes partem do mapa, sem a modal.
     if (inTerminal) {
-      await card(newId!).getByTestId('card-leave-terminal').click()
-      await waitFor(
-        'cartão novo sai do terminal',
-        async () => (await card(newId!).getAttribute('data-view')) === 'open',
-        10_000,
-      )
+      await page.keyboard.press('Shift+Escape')
+      await waitFor('modal da sessão nova fecha', async () => (await newLift.count()) === 0, 10_000)
     }
   }
 
@@ -815,35 +806,27 @@ try {
     await page.screenshot({ path: shot('08-indicators-fit') })
   }
 
-  // ---------- 8. modo terminal ----------
+  // ---------- 8. terminal na modal do mapa ----------
   {
-    await fit()
+    // Com 7+ cartões o enquadrar vai à visão geral (cartões em resumo, sem o
+    // botão Terminal): a 100% o cartão volta a ter as ações.
+    await zoom100()
     const tabsBefore = await page.locator('.dv-tab').count()
     await bringIntoView(card(ids.solta))
+    const vpBefore = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('.react-flow__viewport')
+      return el?.style.transform ?? ''
+    })
     await card(ids.solta).getByTestId('card-interact').click()
-    const inTerm = await waitFor(
-      'solta em terminal',
-      async () => (await card(ids.solta).getAttribute('data-view')) === 'terminal',
-      10_000,
-    )
-    const samples: string[] = []
-    for (let i = 0; i < 12; i++) {
-      samples.push((await viewportScale()).toFixed(2))
-      await page.waitForTimeout(150)
-    }
-    console.log('[map] zoom após Interagir (150ms):', samples.join(' '))
-    const scale = await viewportScale()
-    check(inTerm, 'Interagir põe o cartão em modo terminal')
-    check(
-      (await card(ids.solta).getAttribute('data-dimmed')) == null,
-      'cartão em terminal não esmaece pelo foco de outra seleção',
-    )
-    check(Math.abs(scale - 1) < 0.03, `zoom vai a 1.0 ao interagir (veio ${scale.toFixed(2)})`)
-    check((await page.locator('.dv-tab').count()) === tabsBefore, 'terminal no cartão não cria aba')
-    const xterm = card(ids.solta).locator('.xterm')
+    const lift = page.locator('[role="dialog"][data-peek-lift][data-peek-mode="terminal"]')
+    const inTerm = await waitFor('solta na modal', async () => (await lift.count()) === 1, 10_000)
+    check(inTerm, 'Terminal abre a modal sobre o mapa')
+    check((await page.getByTestId('session-map').count()) === 1, 'a vista continua o mapa')
+    check((await page.locator('.dv-tab').count()) === tabsBefore, 'a modal não cria aba')
+    const xterm = lift.locator('.xterm')
     await waitFor('xterm montado', async () => (await xterm.count()) === 1, 10_000)
     await page.waitForTimeout(800)
-    await card(ids.solta).screenshot({ path: shot('09-card-terminal') })
+    await page.screenshot({ path: shot('09-card-terminal') })
     await xterm.click()
     await page.keyboard.type('ola do terminal do cartao')
     await page.keyboard.press('Enter')
@@ -852,40 +835,22 @@ try {
       async () => stdinLog().includes('stdin: ola do terminal do cartao'),
       10_000,
     )
-    check(typed, 'digitar no xterm do cartão chega ao stdin')
+    check(typed, 'digitar no xterm da modal chega ao stdin')
     await page.waitForTimeout(500)
-    await card(ids.solta).screenshot({ path: shot('10-card-terminal-typed') })
-
-    // Um terminal por vez: Interagir em outro devolve o anterior a 'aberto'.
-    // Em 1.0 o terminal cobre o mapa; o enquadrar é programático e não o derruba.
-    await fit()
-    check(
-      (await card(ids.solta).getAttribute('data-view')) === 'terminal',
-      'enquadrar (sem gesto) mantém o terminal do cartão',
-    )
-    await bringIntoView(card(ids.mae).getByTestId('card-interact'))
-    await card(ids.mae).getByTestId('card-interact').click()
-    const swapped = await waitFor(
-      'troca de terminal',
-      async () =>
-        (await card(ids.mae).getAttribute('data-view')) === 'terminal' &&
-        (await card(ids.solta).getAttribute('data-view')) === 'open',
-      10_000,
-    )
-    const terms = await page.locator('[data-testid="session-card"][data-view="terminal"]').count()
-    check(swapped && terms === 1, `só um terminal por vez (${terms} em terminal)`)
-    await page.screenshot({ path: shot('11-one-terminal') })
-    await card(ids.mae).getByTestId('card-leave-terminal').click()
-    await waitFor(
-      'mãe volta a aberto',
-      async () => (await card(ids.mae).getAttribute('data-view')) === 'open',
-      5000,
-    )
+    await page.screenshot({ path: shot('10-card-terminal-typed') })
+    await page.keyboard.press('Shift+Escape')
+    await waitFor('modal fecha', async () => (await lift.count()) === 0, 5000)
+    const vpAfter = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('.react-flow__viewport')
+      return el?.style.transform ?? ''
+    })
+    check(vpAfter === vpBefore, `câmera intacta ao fechar (${vpBefore} → ${vpAfter})`)
   }
 
   // ---------- 9. recolher/abrir persiste (reload e relaunch) ----------
   {
-    await fit()
+    // Visão geral (7+) deixa os cartões em resumo: o chevron só existe a 100%.
+    await zoom100()
     await bringIntoView(card(ids.solta).getByTestId('card-toggle'))
     await card(ids.solta).getByTestId('card-toggle').click()
     const collapsed = await waitFor(

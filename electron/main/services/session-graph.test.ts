@@ -6,7 +6,10 @@ import type { SessionGraphEdge } from '../../../shared/types/session-graph'
 // Os handoffs saem do handoff-store REAL (o produtor de produção), que usa getDb.
 let testDb: Database.Database
 vi.mock('./db', () => ({ getDb: () => testDb }))
-vi.mock('./transcript-path', () => ({ findTranscriptPath: () => null }))
+const transcripts = vi.hoisted(() => new Set<string>())
+vi.mock('./transcript-path', () => ({
+  findTranscriptPath: (cc: string) => (transcripts.has(cc) ? `/t/${cc}.jsonl` : null),
+}))
 
 import * as handoffStore from './handoff-store'
 import {
@@ -252,27 +255,57 @@ describe('session-graph', () => {
     expect(g.nodes.map((n) => n.sessionId)).toEqual(['w1', 'w2', 'a1'])
   })
 
-  it('feature: sessões da mesma feature (sessions.feature_id ou registro sintetizado)', () => {
+  it('feature: 1 card com 3 repos de 2 projetos; sem feature cai em "Sem feature · <Projeto>"', () => {
+    // Mesmos INSERTs do feature-store.createFeature/upsert (features + feature_repos).
     testDb
       .prepare(
         `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
-         VALUES ('f1','p1','auth','Auth','active','/tmp/f1.md',1,1)`,
+         VALUES ('f1','p1','checkout','Checkout E2E','in-progress','/tmp/f1.md',1,1),
+                ('f-arch','p1','old','Velha','done','/tmp/f2.md',1,1)`,
       )
       .run()
-    addSession('x', 'r-web', { featureId: 'f1' })
-    addSession('y', 'r-api')
-    addSession('z', 'r-site')
+    testDb.prepare(`UPDATE features SET archived_at = 5 WHERE id = 'f-arch'`).run()
     testDb
       .prepare(
-        `INSERT INTO feature_session_records (session_id, feature_id, summary, session_at, created_at)
-         VALUES ('y','f1','resumo',1,1)`,
+        `INSERT INTO feature_repos (feature_id, repo_id, branch, worktree_path) VALUES
+           ('f1','r-api','feat/checkout',NULL), ('f1','r-web','feat/checkout',NULL),
+           ('f1','r-site','feat/checkout',NULL)`,
       )
       .run()
+    testDb
+      .prepare(
+        `INSERT INTO feature_pulses (id, feature_id, body, source, created_at)
+         VALUES ('pu1','f1','antigo','human',1), ('pu2','f1','Pagamento integrado','human',2)`,
+      )
+      .run()
+    addSession('m', 'r-api', { featureId: 'f1' })
+    addSession('c', 'r-site', { featureId: 'f1' })
+    addSession('solta', 'r-web')
+    addSession('arq', 'r-web', { featureId: 'f-arch' })
 
-    const g = graphFor(live({ x: {}, y: {}, z: {} }))
-    expect(edgesOf(g.edges, 'feature')).toEqual([
-      { kind: 'feature', featureId: 'f1', sessionIds: ['x', 'y'] },
+    const g = graphFor(live({ m: {}, c: {}, solta: {}, arq: {} }))
+    const feature = g.lanes.find((l) => l.kind === 'feature')
+    expect(g.lanes.filter((l) => l.kind === 'feature')).toHaveLength(1)
+    expect(feature).toMatchObject({
+      featureId: 'f1',
+      name: 'Checkout E2E',
+      pulse: 'Pagamento integrado',
+      projectName: 'Plataforma',
+    })
+    expect(feature!.repos.map((r) => [r.label, r.projectName, r.sessionIds])).toEqual([
+      ['api-core', 'Plataforma', ['m']],
+      ['web', 'Plataforma', []],
+      ['site', 'Site', ['c']],
     ])
+    expect(g.nodes.find((n) => n.sessionId === 'm')).toMatchObject({
+      featureId: 'f1',
+      featureTitle: 'Checkout E2E',
+    })
+    // Arquivada = sem feature no mapa.
+    expect(g.nodes.find((n) => n.sessionId === 'arq')?.featureId).toBeNull()
+    expect(
+      g.lanes.filter((l) => l.kind === 'project').map((l) => [l.name, l.repos.map((r) => r.sessionIds)]),
+    ).toEqual([['Sem feature · Plataforma', [['solta', 'arq']]]])
   })
 
   it('encerrados: só os últimos 7 dias e até 20 por mãe; ativo e needs_input sempre entram', () => {
@@ -366,13 +399,13 @@ describe('session-graph', () => {
     ).toEqual([
       [
         'p1',
-        'Plataforma',
+        'Sem feature · Plataforma',
         [
           ['api-core', ['a']],
           ['web', ['w']],
         ],
       ],
-      ['p2', 'Site', [['site', ['s']]]],
+      ['p2', 'Sem feature · Site', [['site', ['s']]]],
       [null, 'Avulsas', [['Avulsas', ['loose']]]],
     ])
   })
@@ -461,5 +494,107 @@ describe('session graph — memória de trabalho (P8)', () => {
       .run()
     const n = graphFor(live({ s1: {} })).nodes[0]
     expect(n).toMatchObject({ groupId: 'g1', lastSummary: 'Parou no webhook.', lastSummaryAt: 42 })
+  })
+})
+
+// Bastão da MÃE pelo produtor real (handoffStore.transferMother): o nó diz quem
+// lidera, quantas filhas, e quem passou o bastão.
+describe('session graph — mãe transferível (F3)', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedBase(testDb)
+    addSession('m', 'r-web', { title: 'ana-mc', titleSource: 'manual' })
+    addSession('c1', 'r-api')
+    addSession('c2', 'r-api')
+  })
+
+  afterEach(() => {
+    testDb.close()
+  })
+
+  const nodeOf = (g: ReturnType<typeof graphFor>, id: string) =>
+    g.nodes.find((n) => n.sessionId === id)!
+
+  it('mãe com 2 filhas vivas: isMother e childCount; filha não é mãe', () => {
+    dispatch('m', 'c1', 'Mapa')
+    dispatch('m', 'c2', 'Modal')
+    const g = graphFor(live({ m: {}, c1: {}, c2: {} }))
+    expect(nodeOf(g, 'm')).toMatchObject({ isMother: true, childCount: 2, batonPassed: false })
+    expect(nodeOf(g, 'c1')).toMatchObject({ isMother: false, childCount: 0 })
+  })
+
+  // Regressão: o badge e o bastão usavam recortes diferentes. Interrompida sem
+  // transcript ou dispensada não é filha; interrompida retomável é (o bastão a
+  // relinka, e retomada ela reporta à mãe do handoff).
+  it('conta filha no recorte do bastão: interrompida só se retomável, dispensada nunca', () => {
+    addSession('c3', 'r-api')
+    dispatch('m', 'c1', 'Mapa')
+    const dead = dispatch('m', 'c2', 'Modal')
+    handoffStore.failIfRunning(dead, 'pty morreu')
+    const gone = dispatch('m', 'c3', 'Outra')
+    handoffStore.dismiss(gone)
+    const g = live({ m: {}, c1: {}, c2: {}, c3: {} })
+    expect(nodeOf(graphFor(g), 'm').childCount).toBe(1)
+    expect(handoffStore.listRelinkableByMother('m')).toHaveLength(1)
+
+    const uuid = '11111111-2222-4333-8444-555555555555'
+    testDb.prepare('UPDATE sessions SET cc_session_id = ? WHERE id = ?').run(uuid, 'c2')
+    transcripts.add(uuid)
+    try {
+      expect(nodeOf(graphFor(g), 'm').childCount).toBe(2)
+      expect(handoffStore.listRelinkableByMother('m')).toHaveLength(2)
+    } finally {
+      transcripts.delete(uuid)
+    }
+  })
+
+  it('handoff encerrado não conta como filha', () => {
+    dispatch('m', 'c1', 'Mapa')
+    const done = dispatch('m', 'c2', 'Modal')
+    handoffStore.report(done, 'ok')
+    expect(nodeOf(graphFor(live({ m: {}, c1: {}, c2: {} })), 'm').childCount).toBe(1)
+  })
+
+  it('depois do transferMother: a sucessora é mãe, a antecessora "bastão passado", fios e baton mudam', () => {
+    addSession('m2', 'r-web', { title: 'bruno-mc', titleSource: 'manual' })
+    dispatch('m', 'c1', 'Mapa')
+    dispatch('m', 'c2', 'Modal')
+    handoffStore.transferMother('m', 'm2')
+
+    const g = graphFor(live({ m: {}, m2: {}, c1: {}, c2: {} }))
+    expect(nodeOf(g, 'm2')).toMatchObject({ isMother: true, childCount: 2, batonPassed: false })
+    expect(nodeOf(g, 'm')).toMatchObject({ isMother: false, childCount: 0, batonPassed: true })
+
+    const wires = edgesOf(g.edges, 'handoff')
+    expect(wires.map((e) => e.from)).toEqual(['m2', 'm2'])
+    const baton = edgesOf(g.edges, 'baton')
+    expect(baton).toHaveLength(1)
+    expect(baton[0]).toMatchObject({ from: 'm', to: 'm2' })
+  })
+
+  it('mãe antiga que ganha filha nova de novo deixa de ser "bastão passado"', () => {
+    addSession('m2', 'r-web')
+    addSession('c3', 'r-site')
+    dispatch('m', 'c1', 'Mapa')
+    handoffStore.transferMother('m', 'm2')
+    dispatch('m', 'c3', 'Outra', 'r-site')
+    const n = nodeOf(graphFor(live({ m: {}, m2: {}, c1: {}, c3: {} })), 'm')
+    expect(n).toMatchObject({ isMother: true, childCount: 1, batonPassed: false })
+  })
+
+  // Mãe que também é filha (da avó g): o baton:pass grava predecessor_session_id
+  // no handoff dela E o transferMother das filhas. É um bastão só, uma seta só.
+  it('mãe que também é filha passa o bastão: um único ⟲ m→m2', () => {
+    addSession('g', 'r-web')
+    addSession('m2', 'r-web')
+    const own = dispatch('g', 'm', 'Liderar')
+    dispatch('m', 'c1', 'Mapa')
+    passBaton(own, 'm', 'm2')
+    handoffStore.transferMother('m', 'm2')
+    const baton = edgesOf(graphFor(live({ g: {}, m: {}, m2: {}, c1: {} })).edges, 'baton')
+    expect(baton).toHaveLength(1)
+    expect(baton[0]).toMatchObject({ from: 'm', to: 'm2' })
   })
 })

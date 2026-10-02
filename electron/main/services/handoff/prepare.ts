@@ -16,6 +16,7 @@ import * as store from '../handoff-store'
 import * as repoDepStore from '../repo-dependency-store'
 import { buildHandoffAlias, roleForHandoffMode } from './alias'
 import { composeHandoffPrompt, type HandoffEdge } from './compose-prompt'
+import { inheritFeatureId } from '../feature-session-resolver'
 import type { Handoff, HandoffMode } from '../../../../shared/types/ipc'
 
 export interface PrepareHandoffInput {
@@ -51,9 +52,11 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
   // Repo da mãe: orienta o briefing ("de onde vem o trabalho") e a
   // instrumentação cross-repo. Sessão avulsa (sem repo) ou mãe no MESMO repo →
   // null, e o compose cai no rótulo genérico 'origem'.
-  const motherRow = db.prepare('SELECT repo_id FROM sessions WHERE id = ?').get(
+  const motherRow = db.prepare('SELECT repo_id, feature_id FROM sessions WHERE id = ?').get(
     input.motherSessionId,
-  ) as { repo_id: string | null } | undefined
+  ) as { repo_id: string | null; feature_id: string | null } | undefined
+  // A filha trabalha na frente da mãe, salvo escolha explícita de quem a cria.
+  const featureId = inheritFeatureId(input.featureId, motherRow?.feature_id)
   const fromRepoId = motherRow?.repo_id ?? null
   const crossRepo = fromRepoId !== null && fromRepoId !== target.id
   const fromRepo = crossRepo
@@ -76,9 +79,9 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
         }))
     : []
 
-  const featureTitle = input.featureId
+  const featureTitle = featureId
     ? ((
-        db.prepare('SELECT title FROM features WHERE id = ?').get(input.featureId) as
+        db.prepare('SELECT title FROM features WHERE id = ?').get(featureId) as
           | { title: string }
           | undefined
       )?.title ?? null)
@@ -112,7 +115,7 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     motherSessionId: input.motherSessionId,
     targetRepoId: target.id,
     fromRepoId,
-    featureId: input.featureId ?? null,
+    featureId,
     task: input.task,
     contextJson: input.context ? JSON.stringify(input.context) : null,
     composedPrompt,

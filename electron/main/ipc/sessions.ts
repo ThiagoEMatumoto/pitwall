@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
-import { inheritSessionCanvasFields } from '../services/canvas-store'
+import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
@@ -53,6 +53,7 @@ import {
   resolveCodexModel,
 } from '../services/spawn-flags'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
 import type { AgentProvider, LaunchOpts } from '../services/providers/types'
 import {
@@ -415,6 +416,9 @@ function startSession(opts: {
   cwd: string
   innerCmd: string
   featureId?: string | null
+  // Quem pôs o vínculo (sessions.feature_source). Só o resume passa: sem ele a
+  // linha nova perdia o 'manual' do usuário e a posse do resolvedor contínuo.
+  featureSource?: string | null
   initialCommand?: string
   cols?: number
   rows?: number
@@ -438,8 +442,8 @@ function startSession(opts: {
   }
   db.prepare(
     `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.repo_id,
@@ -451,6 +455,7 @@ function startSession(opts: {
     row.ended_at,
     opts.featureId ?? null,
     row.provider,
+    opts.featureSource ?? null,
   )
   if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
@@ -856,13 +861,24 @@ export function registerSessionIpc(): void {
       // sintetiza — com guarda de atividade própria. featureId null => auto-resolver.
       try {
         const link = db
-          .prepare('SELECT feature_id, cc_session_id, repo_id FROM sessions WHERE id = ?')
+          .prepare(
+            'SELECT feature_id, feature_source, cc_session_id, repo_id FROM sessions WHERE id = ?',
+          )
           .get(e.sessionId) as
-          | { feature_id: string | null; cc_session_id: string | null; repo_id: string | null }
+          | {
+              feature_id: string | null
+              feature_source: string | null
+              cc_session_id: string | null
+              repo_id: string | null
+            }
           | undefined
+        // "Sem feature" escolhido pelo usuário (manual + NULL) vence a heurística
+        // do exit: sem isso o auto-registro revincularia por branch/fuzzy ou
+        // criaria um rascunho para a frente que ele recusou.
+        const declined = link?.feature_source === MANUAL_FEATURE_SOURCE && !link.feature_id
         // Sessão avulsa (repo_id null) fica fora da síntese de features — a
         // assinatura de onSessionExit exige repoId string (resolve por repo/branch).
-        if (link && link.repo_id) {
+        if (link && link.repo_id && !declined) {
           featureMemory.onSessionExit({
             sessionId: e.sessionId,
             ccSessionId: link.cc_session_id,
@@ -926,15 +942,21 @@ export function registerSessionIpc(): void {
     // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
     // de contexto — e como retomar é o gesto mais comum, o loop nunca chegava.
     // Pega a linha mais recente com vínculo: retomas anteriores deixam linhas
-    // antigas com o mesmo cc_session_id.
+    // antigas com o mesmo cc_session_id. "Sem feature" escolhido pelo usuário
+    // (feature_id NULL + manual) também é vínculo: pular essa linha reabria a
+    // feature antiga. A origem vem junto — sem ela o 'manual' virava NULL e o
+    // resolvedor contínuo voltava a mexer, e o vínculo dele virava permanente.
     const featureRow = db
       .prepare(
-        `SELECT feature_id FROM sessions
-          WHERE cc_session_id = ? AND feature_id IS NOT NULL
+        `SELECT feature_id, feature_source FROM sessions
+          WHERE cc_session_id = ? AND (feature_id IS NOT NULL OR feature_source = ?)
           ORDER BY started_at DESC LIMIT 1`,
       )
-      .get(input.ccSessionId) as { feature_id: string | null } | undefined
+      .get(input.ccSessionId, MANUAL_FEATURE_SOURCE) as
+      | { feature_id: string | null; feature_source: string | null }
+      | undefined
     const featureId = featureRow?.feature_id ?? null
+    const featureSource = featureRow?.feature_source ?? null
 
     let cwd: string
     let defaultName: string
@@ -999,6 +1021,7 @@ export function registerSessionIpc(): void {
       cwd,
       innerCmd,
       featureId,
+      featureSource,
       cols: input.cols,
       rows: input.rows,
     })
@@ -1121,7 +1144,25 @@ export function registerSessionIpc(): void {
         .all(featureId) as Omit<SessionRow, 'pane_id'>[]
 
       const live = new Set(ptyManager.runningIds())
+      // Mãe de cada filha: o handoff mais recente em que ela é a filha atual
+      // (o bastão da mãe reescreve mother_session_id, então é a mãe de agora).
+      const mothers = new Map(
+        (
+          getDb()
+            .prepare(
+              `SELECT child_session_id, mother_session_id FROM handoffs
+                WHERE child_session_id IN (SELECT value FROM json_each(?))
+                  AND mother_session_id IS NOT NULL
+                ORDER BY created_at`,
+            )
+            .all(JSON.stringify(rows.map((r) => r.id))) as Array<{
+            child_session_id: string
+            mother_session_id: string
+          }>
+        ).map((h) => [h.child_session_id, h.mother_session_id]),
+      )
       return rows.map((row) => ({
+        motherSessionId: mothers.get(row.id) ?? null,
         id: row.id,
         ccSessionId: row.cc_session_id,
         repoId: row.repo_id,
@@ -1360,10 +1401,23 @@ export function registerSessionIpc(): void {
   // pessoa percebe a qual frente o trabalho pertence é no meio dele, não antes
   // (diálogo de spawn) nem depois (heurística de fim de sessão). `null` desfaz.
   ipcMain.handle('sessions:set-feature', (_e, sessionId: string, featureId: string | null) => {
-    getDb()
-      .prepare('UPDATE sessions SET feature_id = ? WHERE id = ?')
-      .run(featureId, sessionId)
+    // Escolha do usuário (inclusive "sem feature" e confirmar a mesma): gravada
+    // como manual, a resolução contínua não mexe mais nesta sessão — nem após
+    // reiniciar o app.
+    const db = getDb()
+    const before = db.prepare('SELECT feature_id FROM sessions WHERE id = ?').get(sessionId) as
+      | { feature_id: string | null }
+      | undefined
+    db.prepare('UPDATE sessions SET feature_id = ?, feature_source = ? WHERE id = ?').run(
+      featureId,
+      MANUAL_FEATURE_SOURCE,
+      sessionId,
+    )
     broadcast('session:feature-changed', { sessionId, featureId })
+    if ((before?.feature_id ?? null) !== featureId) {
+      forgetSessionPositions(sessionId)
+      broadcast('canvas:updated', { scope: null })
+    }
   })
 
   ipcMain.handle('sessions:list', () => {
