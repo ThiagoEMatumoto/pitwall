@@ -261,6 +261,25 @@ function paneFromLiveSession(item: LiveSessionInfo, paneId: string): ActivePane 
   }
 }
 
+// Recarregar o renderer (ErrorBoundary, reload da janela) roda o restore de novo
+// com as PTYs do main ainda vivas: a aba salva cuja sessão segue rodando
+// re-attacha (mesmo paneId, pro layout bater); só as demais sobem processo.
+// Sem isto, cada reload subia mais um claude e deixava o anterior órfão.
+function splitLiveSnapshots(
+  snapshots: PaneSnapshot[],
+  live: LiveSessionInfo[],
+): { attached: ActivePane[]; rest: PaneSnapshot[] } {
+  const attached: ActivePane[] = []
+  const rest: PaneSnapshot[] = []
+  for (const snap of snapshots) {
+    const item = live.find((l) => l.ccSessionId === snap.ccSessionId)
+    if (item)
+      attached.push(paneFromLiveSession(item, snap.paneId ?? `pane-${Date.now()}-${item.id}`))
+    else rest.push(snap)
+  }
+  return { attached, rest }
+}
+
 interface AppState {
   area: Area
   activeProjectId: string | null
@@ -293,6 +312,8 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void
   initActiveProject: () => Promise<void>
   restoreWorkspace: () => Promise<void>
+  // Re-attacha às PTYs vivas e só sobe processo pras abas sem sessão viva.
+  restoreSnapshots: (snapshots: PaneSnapshot[]) => Promise<void>
   retryRestore: () => Promise<void>
   clearPendingLayout: () => void
   clearFocusPane: () => void
@@ -440,7 +461,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
     // esta feature). Snapshots antigos caem no addPanel padrão.
     if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
-    await restoreFromSnapshots(openPanes, get().resumeSession, get().openSession)
+    await get().restoreSnapshots(openPanes)
     await workspaceApi.resetRestoreAttempts()
     set({ restoreComplete: true })
   },
@@ -449,8 +470,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { openPanes, dockLayout } = await workspaceApi.getBootState()
     set({ restoreBlocked: false })
     if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
-    await restoreFromSnapshots(openPanes, get().resumeSession, get().openSession)
+    await get().restoreSnapshots(openPanes)
     await workspaceApi.resetRestoreAttempts()
+  },
+
+  restoreSnapshots: async (snapshots) => {
+    const live = await sessionsApi.listLiveGlobal().catch(() => [])
+    const { attached, rest } = splitLiveSnapshots(snapshots, live)
+    const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
+    if (fresh.length) {
+      set((s) => ({ panes: [...s.panes, ...fresh] }))
+      schedulePersist(get().panes)
+    }
+    await restoreFromSnapshots(rest, get().resumeSession, get().openSession)
   },
 
   clearPendingLayout: () => set({ pendingLayout: null }),
