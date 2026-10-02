@@ -9,13 +9,16 @@ vi.stubGlobal('window', {
 
 const {
   crewOnlyCount,
+  countWithCrew,
+  listsCrew,
   crewOnlyLabel,
+  showRowStatus,
   mapSessionIds,
   unknownLiveIds,
   visibleLiveSessions,
   withCrewSessions,
-} =
-  await import('./useGlobalSessions')
+  orderByFeature,
+} = await import('./useGlobalSessions')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -74,12 +77,16 @@ describe('crewOnlyCount — a diferença entre o mapa e o seletor, dita', () => 
       live({ id: 'filha', ccSessionId: 'cc-filha', status: 'working' }),
       live({ id: 'velha', ccSessionId: 'cc-velha', status: 'ended' }),
     ]
-    const visible = visibleLiveSessions(sessions, [], [
-      hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
-      hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
-    ])
+    const visible = visibleLiveSessions(
+      sessions,
+      [],
+      [
+        hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
+        hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
+      ],
+    )
     expect(crewOnlyCount(sessions, visible)).toBe(1)
-    expect(crewOnlyLabel(1)).toBe('+1 na equipe')
+    expect(crewOnlyLabel(1)).toBe('1 na equipe')
     expect(crewOnlyLabel(0)).toBeNull()
   })
 })
@@ -90,10 +97,14 @@ describe('withCrewSessions — o toggle "+N na equipe" do seletor', () => {
     live({ id: 'filha', ccSessionId: 'cc-filha', status: 'working' }),
     live({ id: 'velha', ccSessionId: 'cc-velha', status: 'ended' }),
   ]
-  const visible = visibleLiveSessions(sessions, [], [
-    hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
-    hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
-  ])
+  const visible = visibleLiveSessions(
+    sessions,
+    [],
+    [
+      hf({ id: 'h1', status: 'running', childSessionId: 'filha' }),
+      hf({ id: 'h2', status: 'running', childSessionId: 'velha' }),
+    ],
+  )
   it('desligado: só as visíveis, ninguém marcado', () => {
     const r = withCrewSessions(sessions, visible, false)
     expect(r.items.map((s) => s.id)).toEqual(['mae'])
@@ -103,5 +114,83 @@ describe('withCrewSessions — o toggle "+N na equipe" do seletor', () => {
     const r = withCrewSessions(sessions, visible, true)
     expect(r.items.map((s) => s.id)).toEqual(['mae', 'filha'])
     expect([...r.crewIds]).toEqual(['filha'])
+  })
+})
+
+describe('countWithCrew', () => {
+  it('o número é o total: soma as filhas só da Equipe, a não ser que já estejam na lista', () => {
+    expect(countWithCrew(9, 2, false)).toBe(11)
+    expect(countWithCrew(11, 2, true)).toBe(11)
+    expect(countWithCrew(4, 0, false)).toBe(4)
+  })
+})
+
+describe('showRowStatus — badge só quando difere do grupo', () => {
+  it('sob "Trabalhando" some o "trabalhando" e fica o "iniciando"', () => {
+    expect(showRowStatus('working', ['working', 'starting'])).toBe(false)
+    expect(showRowStatus('starting', ['working', 'starting'])).toBe(true)
+  })
+  it('grupo sem status (encerradas/avulsas) mostra sempre', () => {
+    expect(showRowStatus('idle', [])).toBe(true)
+  })
+})
+
+describe('listsCrew', () => {
+  it('filhas entram com o toggle ligado ou durante uma busca (quem digita o nome dela quer achá-la)', () => {
+    expect(listsCrew(false, '')).toBe(false)
+    expect(listsCrew(false, '   ')).toBe(false)
+    expect(listsCrew(true, '')).toBe(true)
+    expect(listsCrew(false, 'marina')).toBe(true)
+  })
+  it('o número do grupo é o das linhas listadas: sem o toggle, as filhas ficam só no chip', async () => {
+    const { withCrewSessions } = await import('./useGlobalSessions')
+    const s = (id: string) => ({ id, status: 'working' }) as LiveSessionInfo
+    const all = ['a', 'b', 'c', 'marina', 'otavio'].map(s)
+    const visible = all.slice(0, 3)
+    expect(withCrewSessions(all, visible, listsCrew(false, '')).items).toHaveLength(3)
+    expect(withCrewSessions(all, visible, listsCrew(false, 'mar')).items).toHaveLength(5)
+  })
+})
+
+describe('orderByFeature', () => {
+  const s = (id: string) => ({ id })
+  // Ordem de recência do print 13: 8 soltas e a mãe da feature por último.
+  const recency = ['extra-6', 'extra-5', 'extra-4', 'solta-x', 'mae', 'otavio', 'marina'].map(s)
+  const featureOf = new Map<string, string | null>([
+    ['mae', 'checkout'],
+    ['otavio', 'checkout'],
+    ['marina', null],
+  ])
+  const motherOfChild = new Map([
+    ['otavio', 'mae'],
+    ['marina', 'mae'],
+  ])
+
+  it('feature no topo: mãe primeiro e as filhas logo abaixo; depois as soltas por recência', () => {
+    const r = orderByFeature(recency, featureOf, motherOfChild)
+    expect(r.items.map((x) => x.id)).toEqual([
+      'mae',
+      'otavio',
+      'marina',
+      'extra-6',
+      'extra-5',
+      'extra-4',
+      'solta-x',
+    ])
+    expect([...r.childOf.entries()]).toEqual([
+      ['otavio', 'mae'],
+      ['marina', 'mae'],
+    ])
+  })
+
+  it('filha sem a mãe na lista (toggle da equipe desligado) não vira ↳', () => {
+    const r = orderByFeature([s('a'), s('otavio')], featureOf, motherOfChild)
+    expect(r.items.map((x) => x.id)).toEqual(['otavio', 'a'])
+    expect(r.childOf.size).toBe(0)
+  })
+
+  it('sem feature nenhuma, a ordem fica', () => {
+    const items = [s('a'), s('b'), s('c')]
+    expect(orderByFeature(items, new Map(), new Map()).items).toEqual(items)
   })
 })

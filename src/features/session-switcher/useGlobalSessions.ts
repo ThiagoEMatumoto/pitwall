@@ -37,8 +37,35 @@ export function crewOnlyCount(all: LiveSessionInfo[], visible: LiveSessionInfo[]
   return all.filter((s) => s.status !== 'ended' && !shown.has(s.id)).length
 }
 
+// Regra única de contagem: o número é SEMPRE o total (com as filhas da Equipe),
+// igual ao mapa e ao hero; "N na equipe" diz quantas delas estão só no dock. O
+// "+2" ao lado de "9" lia como soma a fazer, e cada tela mostrava um número.
 export function crewOnlyLabel(n: number): string | null {
-  return n > 0 ? `+${n} na equipe` : null
+  return n > 0 ? `${n} na equipe` : null
+}
+
+/**
+ * A linha do seletor só repete o status quando ele difere do grupo em que está
+ * (o 1º status do grupo é o dele): sob "Trabalhando", 11 linhas com "⚡ trabalhando"
+ * eram ruído e tiravam peso de projeto, tempo e feature. Grupo sem status
+ * (as encerradas/avulsas) mostra sempre.
+ */
+export function showRowStatus(
+  status: LiveSessionInfo['status'],
+  groupStatuses: readonly string[],
+): boolean {
+  return groupStatuses.length === 0 || status !== groupStatuses[0]
+}
+
+/** O total que as listas mostram: as visíveis + as que estão só na Equipe. */
+export function countWithCrew(listed: number, crewOnly: number, crewListed: boolean): number {
+  return crewListed ? listed : listed + crewOnly
+}
+
+// As filhas da Equipe entram no seletor com o toggle ligado OU durante uma busca:
+// quem digita o nome de uma filha espera achá-la, não um "nada encontrado".
+export function listsCrew(toggle: boolean, query: string): boolean {
+  return toggle || query.trim().length > 0
 }
 
 // O seletor com o toggle "+N na equipe" ligado: as vivas visíveis mais as filhas
@@ -79,7 +106,10 @@ export function mapSessionIds(
 
 // O cartão desenha pelo grafo, mas composer, terminal e status leem o snapshot:
 // sem ele a sessão aparece como "sem PTY viva" e o Terminal não abre.
-export function unknownLiveIds(allLiveSessions: LiveSessionInfo[], graphLive: Iterable<string>): string[] {
+export function unknownLiveIds(
+  allLiveSessions: LiveSessionInfo[],
+  graphLive: Iterable<string>,
+): string[] {
   const known = new Set(allLiveSessions.map((s) => s.id))
   return [...new Set(graphLive)].filter((id) => !known.has(id)).sort()
 }
@@ -124,4 +154,41 @@ export function useEndedSessions(enabled: boolean): LiveSessionInfo[] | null {
     }
   }, [enabled])
   return ended
+}
+
+/**
+ * Ordem dentro de um grupo do seletor: primeiro as sessões com feature,
+ * agrupadas por feature (a feature da sessão mais recente primeiro), com a mãe
+ * à frente e as filhas logo abaixo dela; depois as soltas, por recência. Só por
+ * recência, a mãe da única feature ativa caía na última linha, abaixo de 8
+ * sessões soltas. `childOf` marca as filhas postas sob a mãe (o "↳").
+ */
+export function orderByFeature<T extends { id: string }>(
+  items: T[],
+  featureOf: ReadonlyMap<string, string | null>,
+  motherOfChild: ReadonlyMap<string, string>,
+): { items: T[]; childOf: ReadonlyMap<string, string> } {
+  const present = new Set(items.map((s) => s.id))
+  const childOf = new Map<string, string>()
+  for (const s of items) {
+    const mother = motherOfChild.get(s.id)
+    if (mother && mother !== s.id && present.has(mother)) childOf.set(s.id, mother)
+  }
+  const out: T[] = []
+  const placed = new Set<string>()
+  const place = (s: T) => {
+    if (placed.has(s.id)) return
+    placed.add(s.id)
+    out.push(s)
+    for (const c of items) if (childOf.get(c.id) === s.id) place(c)
+  }
+  const keyOf = (s: T): string | null => {
+    const mother = childOf.get(s.id)
+    return featureOf.get(s.id) ?? (mother ? (featureOf.get(mother) ?? null) : null)
+  }
+  const features = [...new Set(items.map(keyOf).filter((f): f is string => !!f))]
+  for (const f of features)
+    for (const s of items) if (keyOf(s) === f && !childOf.has(s.id)) place(s)
+  for (const s of items) if (!childOf.has(s.id) || !placed.has(childOf.get(s.id)!)) place(s)
+  return { items: out, childOf }
 }

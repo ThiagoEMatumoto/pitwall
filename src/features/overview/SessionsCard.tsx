@@ -3,6 +3,7 @@ import { Circle, Loader, Zap } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { relativeTime } from '@/lib/time'
 import {
+  countWithCrew,
   crewOnlyLabel,
   useCrewOnlyCount,
   useVisibleLiveSessions,
@@ -32,17 +33,18 @@ export function SessionsCard() {
     ]
   }, [liveSessions])
 
-  const crew = crewOnlyLabel(useCrewOnlyCount())
+  const crewCount = useCrewOnlyCount()
+  const crew = crewOnlyLabel(crewCount)
   return (
     <HomeCard
       title="Sessões agora"
-      count={rows.length}
+      count={countWithCrew(rows.length, crewCount, false)}
       dot={<CardDot color="var(--color-accent)" pulse={rows.some((r) => r.kind === 'waiting')} />}
       action={
         crew && (
           <span
             data-testid="home-sessions-crew"
-            title="Filhas de handoff: ficam na Equipe (Ctrl+J), fora desta lista. O mapa e o topo da Home contam todas."
+            title="Filhas de handoff: entram no total, mas ficam na Equipe (Ctrl+J), fora desta lista."
             className="text-[10px] text-[var(--color-text-dim)]"
           >
             {crew}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clipAtWord, featureReminders, sessionStatusCounts } from './feature-state-summary'
+import { clipAtWord, featureCrew, featureReminders, sessionStatusCounts } from './feature-state-summary'
 
 describe('sessionStatusCounts', () => {
   it('conta só as sessões vivas da feature, por estado', () => {
@@ -40,5 +40,42 @@ describe('clipAtWord', () => {
   })
   it('palavra única gigante: corta no limite', () => {
     expect(clipAtWord('a'.repeat(50), 10)).toBe(`${'a'.repeat(10)}…`)
+  })
+})
+
+describe('featureCrew', () => {
+  const n = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    featureId: 'f',
+    status: 'working' as const,
+    attentionReason: null,
+    isMother: false,
+    childCount: 0,
+    childOfHandoffId: null as string | null,
+    ...over,
+  })
+  it('mãe primeiro, depois as filhas, depois as demais vivas da feature', () => {
+    const nodes = [
+      n('solta-f'),
+      n('otavio', { childOfHandoffId: 'h1', status: 'waiting' }),
+      n('mae', { isMother: true, childCount: 2 }),
+      n('marina', { childOfHandoffId: 'h2', status: 'idle' }),
+      n('fim', { status: 'ended' }),
+      n('outra', { featureId: 'g' }),
+    ]
+    const c = featureCrew(nodes, 'f')
+    expect(c.mother?.id).toBe('mae')
+    expect(c.childCount).toBe(2)
+    expect(c.rows.map((r) => [r.node.id, r.state, r.isChild])).toEqual([
+      ['mae', 'working', false],
+      ['otavio', 'needsYou', true],
+      ['marina', 'idle', true],
+      ['solta-f', 'working', false],
+    ])
+  })
+  it('sem mãe: ninguém é filha, a lista fica na ordem do grafo', () => {
+    const c = featureCrew([n('a'), n('b', { childOfHandoffId: 'h' })], 'f')
+    expect(c.mother).toBeNull()
+    expect(c.rows.map((r) => r.isChild)).toEqual([false, false])
   })
 })

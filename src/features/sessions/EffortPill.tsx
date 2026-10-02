@@ -95,7 +95,7 @@ export function EffortPill({
       ? effortStyle(shown)
       : null
 
-  const label = ultracodeActive ? 'ultracode' : (shown ?? 'esforço…')
+  const label = ultracodeActive ? 'ultracode' : (shown ?? 'esforço padrão')
   const textClass = activeStyle?.text ?? 'text-[var(--color-text-dim)]'
   const iconClass = hasPending ? 'text-[var(--color-accent)]' : textClass
   const LeadingIcon = hasPending ? Clock : (activeStyle?.icon ?? Gauge)

@@ -212,6 +212,7 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
   const canConfirm =
     (phase === 'ready' || phase === 'error' || phase === 'manual') && briefing.trim().length > 0
   const busy = phase === 'distilling' || phase === 'passing'
+  const needsBriefing = EDITABLE.has(phase) && !busy && briefing.trim().length === 0
 
   return (
     <Dialog
@@ -224,6 +225,16 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
           <Button onClick={onClose}>Entendi</Button>
         ) : (
           <>
+            {/* O motivo do botão desabilitado mora ao lado dele (solto abaixo do
+                campo, o botão só parecia apagado). */}
+            {needsBriefing && (
+              <span
+                data-testid="baton-briefing-required"
+                className="mr-auto self-center text-xs text-[var(--color-warning)]"
+              >
+                Escreva o briefing para subir a sucessora.
+              </span>
+            )}
             <Button variant="ghost" onClick={onClose}>
               Cancelar
             </Button>
@@ -232,6 +243,7 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
               loading={phase === 'passing'}
               data-testid="baton-confirm"
               disabled={!canConfirm}
+              title={needsBriefing ? 'Escreva o briefing para subir a sucessora' : undefined}
             >
               {phase === 'passing' ? 'Subindo a sucessora…' : 'Subir a sucessora'}
             </Button>
@@ -313,23 +325,23 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
         {phase === 'error' && (
           <div
             data-testid="baton-error"
-            className="flex flex-col gap-2 rounded-md border px-3 py-3 text-xs"
+            // Aviso, não erro: o fallback é esperado e recuperável (escrever à mão).
+            // Vermelho fica para a falha que bloqueia; o botão vai na mesma linha.
+            className="flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
             style={{
-              borderColor: 'color-mix(in srgb, var(--color-danger) 45%, transparent)',
-              color: 'var(--color-danger)',
+              borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',
+              color: 'var(--color-warning)',
             }}
           >
-            <span className="flex items-start gap-1.5">
-              <Icon as={AlertTriangle} size={13} className="mt-px shrink-0" />
-              {/* Sem o erro cru (UUID, caminho do transcript): quem lê precisa
-                  saber o que fazer, não o que quebrou. O detalhe vai pro console. */}
-              <span>Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo.</span>
+            <Icon as={AlertTriangle} size={13} className="shrink-0" />
+            {/* Sem o erro cru (UUID, caminho do transcript): quem lê precisa
+                saber o que fazer, não o que quebrou. O detalhe vai pro console. */}
+            <span className="min-w-0 flex-1">
+              Não deu para resumir esta sessão automaticamente — escreva o briefing abaixo.
             </span>
-            <div className="flex justify-end">
-              <Button variant="ghost" onClick={() => void distill(note)}>
-                Tentar de novo
-              </Button>
-            </div>
+            <Button variant="ghost" className="shrink-0" onClick={() => void distill(note)}>
+              Tentar de novo
+            </Button>
           </div>
         )}
 
@@ -378,9 +390,11 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
                 data-testid="baton-briefing"
                 value={briefing}
                 onChange={(e) => setBriefing(e.target.value)}
-                rows={18}
+                rows={8}
                 spellCheck={false}
-                className="w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
+                // Cresce com o texto entre 200px e 40vh: fixo em 18 linhas (~460px), empurrava
+                // os campos opcionais para baixo do rodapé, cortados pela metade.
+                className="max-h-[40vh] min-h-[200px] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 font-mono text-xs leading-relaxed outline-none [field-sizing:content] focus:border-[var(--color-accent)]"
               />
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -402,9 +416,13 @@ export function BatonDialog({ open, onClose, sessionId, ccSessionId, repoLabel }
                   placeholder="O que a destilação deixou passar"
                 />
               </div>
-              <Button variant="ghost" disabled={busy} onClick={() => void distill(note)}>
-                Destilar de novo
-              </Button>
+              {/* Com a destilação em erro, a única ação de regerar é o "Tentar de
+                  novo" do aviso (que também usa este contexto extra). */}
+              {phase !== 'error' && (
+                <Button variant="ghost" disabled={busy} onClick={() => void distill(note)}>
+                  Destilar de novo
+                </Button>
+              )}
             </div>
           </>
         )}

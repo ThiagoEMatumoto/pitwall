@@ -4,7 +4,7 @@ import { Pin, Plus } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { PROJECT_HEADER, type LaneData, type MapNode } from './graph-to-flow'
 import { useMapActions } from './map-context'
-import { compensatedPx, isCompactZoom } from './card-display'
+import { compensatedPx, isCompactZoom, quantizeZoom, repoPrefixText } from './card-display'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { FeatureCardReminders } from './FeaturePanel'
 import { STATUS_META } from '@/features/features/status'
@@ -38,19 +38,13 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 // Até onde o ponteiro anda entre o pointerdown e o click e ainda conta como
 // clique (abre o painel) e não como arrasto do card.
 const HEADER_CLICK_SLOP_PX = 4
-// Abaixo disto o prefixo do projeto alheio ("Diligencia ·") sai do cabeçalho da
-// raia (fica no title): ele truncava justo o nome do repo.
-const REPO_PREFIX_MIN_ZOOM = 0.6
-// Abaixo disto a 3ª linha (fonte compensada) não cabe nos 80px do cabeçalho.
-const REMINDERS_MIN_ZOOM = 0.7
 
 function FeatureHeader({ lane, px }: { lane: LaneData; px: number }) {
   const open = useFeaturePanelStore((s) => s.open)
   const status = STATUS_META[lane.status as FeatureStatus]
   const down = useRef<{ x: number; y: number } | null>(null)
-  // Na visão geral a fonte compensada não cabe nas 3 linhas do cabeçalho: os
-  // lembretes saem (o painel continua a um clique).
-  const showReminders = useStore((s) => s.transform[2] >= REMINDERS_MIN_ZOOM)
+  // Onde os lembretes moram depende do zoom (reminderDisplay, card-display.ts).
+  const zoom = useStore((s) => Math.round(s.transform[2] * 20) / 20)
   // SEM `nodrag`: o cabeçalho é a alça natural do card (as lanes de repo que
   // preenchem o corpo não arrastam). O clique só abre o painel se não houve
   // arrasto entre o pointerdown e o click.
@@ -93,6 +87,9 @@ function FeatureHeader({ lane, px }: { lane: LaneData; px: number }) {
           {plural(lane.sessionCount ?? 0, 'sessão', 'sessões')} · {plural(lane.repoCount ?? 0, 'repo', 'repos')}
         </span>
         <AttentionBadge count={lane.attentionCount ?? 0} />
+        {lane.featureId && (
+          <FeatureCardReminders featureId={lane.featureId} zoom={zoom} placement="chip" headerPx={px} />
+        )}
       </span>
       <span
         data-testid="feature-card-pulse"
@@ -101,7 +98,9 @@ function FeatureHeader({ lane, px }: { lane: LaneData; px: number }) {
         {lane.pulse ?? 'sem pulso ainda'}
       </span>
       {/* 3ª linha: os lembretes não disputam a linha do pulso nem a borda direita (dock). */}
-      {lane.featureId && showReminders && <FeatureCardReminders featureId={lane.featureId} />}
+      {lane.featureId && (
+        <FeatureCardReminders featureId={lane.featureId} zoom={zoom} placement="line" />
+      )}
     </button>
   )
 }
@@ -117,7 +116,8 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
   const projectPx = useHeaderPx(13, 26)
   const repoPx = useHeaderPx(11, 20)
   const compact = useStore((s) => isCompactZoom(s.transform[2]))
-  const hidePrefix = useStore((s) => s.transform[2] < REPO_PREFIX_MIN_ZOOM)
+  const zoomStep = useStore((s) => quantizeZoom(s.transform[2]))
+  const prefix = lane.projectName ? repoPrefixText(lane.projectName, zoomStep) : null
   if (lane.level === 'feature') {
     return (
       <div
@@ -140,8 +140,10 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
         data-testid="lane-project"
         data-lane-kind="project"
         className="h-full w-full rounded-xl border border-dashed"
+        // Borda neutra: na cor do projeto (Pessoal é vermelho) o tracejado lia
+        // como erro. A cor fica só no ponto antes do nome.
         style={{
-          borderColor: `color-mix(in srgb, ${color} 40%, var(--color-border))`,
+          borderColor: 'color-mix(in srgb, var(--color-text-dim) 30%, var(--color-border))',
           background: 'color-mix(in srgb, var(--color-surface) 35%, transparent)',
         }}
       >
@@ -153,6 +155,12 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
           className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap px-3 pt-1.5 font-semibold text-[var(--color-text)]"
           style={{ fontSize: projectPx, height: PROJECT_HEADER }}
         >
+          <span
+            data-testid="lane-project-dot"
+            aria-hidden
+            className="h-[0.5em] w-[0.5em] shrink-0 rounded-full"
+            style={{ background: color }}
+          />
           <span className="min-w-0 truncate" title={lane.label}>
             {lane.label}
           </span>
@@ -183,17 +191,30 @@ function LaneGroupNodeImpl({ data }: NodeProps<MapNode>) {
         style={{ fontSize: repoPx, lineHeight: 1.2 }}
       >
         {/* Título normal (a caixa alta mono gritava mais que o card). Projeto
-            alheio vira um prefixo discreto; o title guarda o rótulo inteiro. */}
+            alheio vira um prefixo discreto que NUNCA some (é o sinal de que a
+            feature cruza projetos): quem trunca é o nome do repo; no zoom baixo
+            o prefixo encolhe para ponto na cor do projeto + nome abreviado. */}
         <span
-          className="min-w-0 flex-1 truncate font-medium"
+          className="flex min-w-0 flex-1 items-center gap-1 font-medium"
           title={lane.projectName ? `${lane.projectName} · ${lane.label}` : lane.label}
         >
-          {lane.projectName && !hidePrefix && (
-            <span data-testid="lane-repo-project" className="font-normal opacity-70">
-              {lane.projectName} ·{' '}
+          {prefix && (
+            <span
+              data-testid="lane-repo-project"
+              data-short={prefix.short || undefined}
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap font-normal"
+            >
+              {prefix.short && (
+                <span
+                  aria-hidden
+                  className="h-[0.5em] w-[0.5em] shrink-0 rounded-full"
+                  style={{ background: lane.projectColor ?? 'var(--color-text-dim)' }}
+                />
+              )}
+              <span className="opacity-70">{prefix.text} ·</span>
             </span>
           )}
-          <span className="text-[var(--color-text)]">{lane.label}</span>
+          <span className="min-w-0 truncate text-[var(--color-text)]">{lane.label}</span>
         </span>
         {lane.repoId && (
           <button

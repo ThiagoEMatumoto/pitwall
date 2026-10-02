@@ -9,7 +9,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle } = await import(
+const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial } = await import(
   './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -224,5 +224,14 @@ describe('trilha do dock no bastão de filha (crewDotTitle/crewDotColor)', () =>
 
   it('passada a janela, volta ao estado do handoff', () => {
     expect(crewDotTitle(handoff, undefined, [pred], 120_000)).toBe('api — despachando')
+  })
+})
+
+describe('crewDotInitial — a inicial da filha no trilho recolhido', () => {
+  const h = (over: Partial<Handoff>) => ({ id: 'h', targetRepoLabel: 'lexter-api', ...over }) as Handoff
+  it('do apelido vivo, senão do repo', () => {
+    const live = { title: 'otavio-parte-c1-checkout' } as import('../../../shared/types/ipc').LiveSessionInfo
+    expect(crewDotInitial(h({}), live, [])).toBe('O')
+    expect(crewDotInitial(h({}), undefined, [])).toBe('L')
   })
 })

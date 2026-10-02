@@ -54,3 +54,58 @@ export function clipAtWord(text: string, max: number): string {
   const head = space > max * 0.5 ? cut.slice(0, space) : cut
   return `${head.replace(/[\s,;:.\-–—]+$/, '')}…`
 }
+export type CrewRowState = "needsYou" | "working" | "idle";
+
+export interface FeatureCrew<N> {
+  mother: N | null;
+  childCount: number;
+  // Mãe, as filhas dela, depois as demais da feature (só as vivas).
+  rows: { node: N; state: CrewRowState; isChild: boolean }[];
+}
+
+type CrewNode = Pick<
+  SessionGraphNode,
+  | "featureId"
+  | "status"
+  | "attentionReason"
+  | "isMother"
+  | "childCount"
+  | "childOfHandoffId"
+>;
+
+const rowState = (n: CrewNode): CrewRowState =>
+  n.attentionReason || n.status === "waiting"
+    ? "needsYou"
+    : n.status === "working" || n.status === "starting"
+      ? "working"
+      : "idle";
+
+/**
+ * Quem está na frente, para a aba Estado: a mãe (com quantas filhas) e uma lista
+ * compacta das sessões com o estado de cada uma. Sem isto o painel mostrava só
+ * números e não dizia quem lidera nem dava o bastão.
+ */
+export function featureCrew<N extends CrewNode>(
+  nodes: N[],
+  featureId: string,
+): FeatureCrew<N> {
+  const live = nodes.filter(
+    (n) => n.featureId === featureId && n.status !== "ended",
+  );
+  const mother = live.find((n) => n.isMother) ?? null;
+  const isChild = (n: N) => !!mother && n !== mother && !!n.childOfHandoffId;
+  const ordered = [
+    ...(mother ? [mother] : []),
+    ...live.filter((n) => isChild(n)),
+    ...live.filter((n) => n !== mother && !isChild(n)),
+  ];
+  return {
+    mother,
+    childCount: mother?.childCount ?? 0,
+    rows: ordered.map((node) => ({
+      node,
+      state: rowState(node),
+      isChild: isChild(node),
+    })),
+  };
+}

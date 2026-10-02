@@ -20,14 +20,14 @@ export function batonChipPx(zoom: number): number {
   return compensatedPx(zoom, 11.5, BADGE_MAX_PX)
 }
 
-// Moldura da mãe: borda dupla, mais grossa que qualquer estado, pra ela ser
-// achada de longe. Quem precisa de você mantém o vermelho do estado.
+// Identidade da mãe: uma faixa de 3px no topo, na cor da coroa. Não é contorno:
+// a borda dupla (rodada 2) ainda lia como foco/seleção no resumo e na visão geral.
+// Contorno fica só para o foco; a borda e o glow seguem sendo do estado.
+export const MOTHER_STRIP = 'inset 0 3px 0 0 var(--color-accent)'
 export function motherFrame(node: SessionGraphNode, base: CSSProperties): CSSProperties {
   if (!node.isMother) return base
   return {
     ...base,
-    borderStyle: 'double',
-    borderWidth: 4,
-    borderColor: base.borderWidth === 2 ? base.borderColor : 'var(--color-accent)',
+    boxShadow: base.boxShadow ? `${MOTHER_STRIP}, ${base.boxShadow}` : MOTHER_STRIP,
   }
 }

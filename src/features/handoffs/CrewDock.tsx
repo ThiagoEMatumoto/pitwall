@@ -8,7 +8,7 @@ import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { HandoffCard, crewDotColor, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
+import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
@@ -415,6 +415,10 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
     </>
   )
 
+  const railLabel =
+    attention > 0
+      ? `Equipe · ${attention} ${attention === 1 ? 'filha esperando' : 'filhas esperando'} você`
+      : `Equipe · ${crew.length} ${crew.length === 1 ? 'filha ativa' : 'filhas ativas'}`
   const railContent = (
     <div className="flex min-h-0 flex-1 flex-col items-center gap-2 py-2">
       {/* Aviso de espera cabe nos 40px: O Ápice pulsa na filha que espera
@@ -429,18 +433,18 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
             ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
             : `Equipe: ${crew.length} sessão(ões) delegada(s) — clique ou Ctrl+J para abrir`
         }
-        className="rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        aria-label={railLabel}
+        className="flex flex-col items-center gap-0.5 rounded p-1 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
       >
         <Icon as={Users} size={16} />
+        {/* Rótulo: sem ele o ícone, o número e os pontos não diziam o que contavam. */}
+        <span className="text-[9px] leading-none">Equipe</span>
       </button>
       <button
         type="button"
         onClick={openCrew}
-        title={
-          attention > 0
-            ? `${attention} filha(s) esperando você`
-            : `${crew.length} sessão(ões) delegada(s)`
-        }
+        title={railLabel}
+        aria-label={railLabel}
         className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
         style={{ color: attention > 0 ? 'var(--color-danger)' : 'var(--color-text-dim)' }}
       >
@@ -470,14 +474,19 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
             <button
               key={h.id}
               type="button"
+              data-testid="crew-rail-child"
               onClick={openCrew}
               title={crewDotTitle(h, live, liveList)}
-              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition hover:bg-[var(--color-surface-2)]"
+              aria-label={crewDotTitle(h, live, liveList)}
+              className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 bg-[var(--color-bg)] text-[10px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
+              // Inicial da filha com o status no anel: o ponto sozinho não dizia quem era.
+              style={{ borderColor: color }}
             >
-              {h.id === apexId ? (
-                <ApexDot size={9} color="var(--color-warning)" />
-              ) : (
-                <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+              {crewDotInitial(h, live, liveList)}
+              {h.id === apexId && (
+                <span className="absolute -right-1 -top-1">
+                  <ApexDot size={8} color="var(--color-warning)" />
+                </span>
               )}
             </button>
           )

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { create } from 'zustand'
-import { Info, Pin, X } from 'lucide-react'
+import { Crown, Info, Pin, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 import { FeaturePulse } from '@/features/features/FeaturePulse'
@@ -19,7 +19,14 @@ import {
 import type { Feature, Project, Repo } from '../../../shared/types/ipc'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { useFeaturePanelStore, type FeaturePanelTab } from './feature-panel-store'
-import { clipAtWord, featureReminders, sessionStatusCounts } from './feature-state-summary'
+import {
+  clipAtWord,
+  featureCrew,
+  featureReminders,
+  sessionStatusCounts,
+  type CrewRowState,
+} from './feature-state-summary'
+import { reminderDisplay, remindersChipPx, remindersChipText } from './card-display'
 
 const AUTOSAVE_MS = 600
 // Quantas notas fixadas o card da feature resume.
@@ -78,21 +85,55 @@ function useFeatureDoc(featureId: string | null): Feature | null {
 // Cabe nos 280px do chip na fonte do cabeçalho.
 const CHIP_CHARS = 40
 
-export function FeatureCardReminders({ featureId }: { featureId: string }) {
+// `zoom` decide onde os lembretes moram (reminderDisplay): na própria linha ou
+// num chip na linha do título. O cabeçalho monta os dois lugares; só um desenha.
+export function FeatureCardReminders({
+  featureId,
+  zoom,
+  placement,
+  headerPx = 13,
+}: {
+  featureId: string
+  zoom: number
+  placement: 'line' | 'chip'
+  // Fonte do cabeçalho do frame (px do fluxo): o teto da contra-escala do chip.
+  headerPx?: number
+}) {
   const feature = useFeatureDoc(featureId)
   const open = useFeaturePanelStore((s) => s.open)
   const all = useMemo(() => featureReminders(feature?.body ?? ''), [feature?.body])
-  if (all.length === 0) return null
+  if (reminderDisplay(zoom, all.length) !== placement) return null
+  if (placement === 'chip') {
+    const chipPx = remindersChipPx(zoom, headerPx)
+    return (
+      <span
+        role="button"
+        tabIndex={-1}
+        data-testid="feature-card-reminders-chip"
+        title={all.map((n) => `• ${n}`).join('\n')}
+        onClick={(e) => {
+          e.stopPropagation()
+          open(featureId, 'notes')
+        }}
+        // Na cor de aviso, como os lembretes na linha: cinza sobre borda cinza sumia.
+        className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border border-[color-mix(in_srgb,var(--color-warning)_45%,transparent)] px-1.5 font-normal text-[var(--color-warning)] hover:brightness-125"
+        style={{ fontSize: chipPx }}
+      >
+        <Icon as={Pin} size={Math.round(chipPx * 0.9)} className="shrink-0" />
+        {remindersChipText(all.length)}
+      </span>
+    )
+  }
   const shown = all.slice(0, CARD_REMINDERS)
   const more = all.length - shown.length
   return (
-    <span data-testid="feature-card-reminders" className="flex min-w-0 items-center gap-1.5">
+    <span data-testid="feature-card-reminders" className="flex min-w-0 items-center gap-1.5 pb-1">
       {shown.map((n, i) => (
         <span
           key={i}
           data-testid="feature-card-reminder"
           title={n}
-          className="inline-flex min-w-0 max-w-[280px] items-center gap-1 rounded border border-[var(--color-border)] px-1.5 text-[0.75em] text-[var(--color-text-dim)]"
+          className="inline-flex min-w-0 max-w-[340px] items-center gap-1 rounded border border-[var(--color-border)] px-1.5 text-[0.75em] text-[var(--color-text-dim)]"
         >
           <Icon as={Pin} size={10} className="shrink-0 text-[var(--color-warning)]" />
           <span className="min-w-0 truncate">{clipAtWord(n, CHIP_CHARS)}</span>
@@ -337,6 +378,114 @@ function Stat({ n, label, color }: { n: number; label: string; color: string }) 
   )
 }
 
+// O que o painel pode fazer com uma sessão da frente (vem dos comandos do mapa).
+export interface SessionActions {
+  open: (node: SessionGraphNode) => void
+  passBaton: (node: SessionGraphNode) => void
+  canPassBaton: (node: SessionGraphNode) => boolean
+}
+
+const CREW_STATE: Record<CrewRowState, { label: string; color: string }> = {
+  needsYou: { label: 'precisa de você', color: 'var(--color-danger)' },
+  working: { label: 'trabalhando', color: 'var(--color-info)' },
+  idle: { label: 'parada', color: 'var(--color-text-dim)' },
+}
+
+const linkButton =
+  'shrink-0 rounded px-1.5 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40'
+
+// Quem lidera a frente (com o bastão) e a lista compacta das sessões dela.
+function CrewSummary({
+  sessions,
+  featureId,
+  actions,
+}: {
+  sessions: SessionGraphNode[]
+  featureId: string
+  actions?: SessionActions
+}) {
+  const crew = featureCrew(sessions, featureId)
+  if (crew.rows.length === 0) return null
+  const mother = crew.mother
+  return (
+    <div className="mt-1 flex flex-col gap-1.5">
+      {mother && (
+        <div
+          data-testid="feature-panel-mother"
+          className="flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs"
+        >
+          <span className="shrink-0 text-[var(--color-text-dim)]">Mãe:</span>
+          <span className="min-w-0 truncate font-medium" title={mother.title}>
+            {mother.title}
+          </span>
+          <Icon as={Crown} size={11} className="shrink-0 text-[var(--color-accent)]" />
+          <span className="shrink-0 text-[var(--color-text-dim)]">
+            · {crew.childCount} {crew.childCount === 1 ? 'filha' : 'filhas'}
+          </span>
+          <span className="flex-1" />
+          {actions && (
+            <>
+              <button
+                type="button"
+                data-testid="feature-panel-mother-open"
+                onClick={() => actions.open(mother)}
+                title="Abrir a conversa da mãe sobre o mapa"
+                className={linkButton}
+              >
+                Abrir
+              </button>
+              <button
+                type="button"
+                data-testid="feature-panel-mother-baton"
+                disabled={!actions.canPassBaton(mother)}
+                onClick={() => actions.passBaton(mother)}
+                title={
+                  actions.canPassBaton(mother)
+                    ? 'Subir a sucessora da mãe com o briefing destilado'
+                    : 'Só uma sessão Claude viva pode passar o bastão'
+                }
+                className={linkButton}
+              >
+                Passar o bastão
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      <ul data-testid="feature-panel-crew" className="flex flex-col">
+        {crew.rows.map(({ node, state, isChild }) => (
+          <li key={node.sessionId}>
+            <button
+              type="button"
+              disabled={!actions}
+              onClick={() => actions?.open(node)}
+              title={actions ? `Abrir ${node.title}` : node.title}
+              className="flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs transition hover:bg-[var(--color-surface-2)] disabled:hover:bg-transparent"
+              style={isChild ? { paddingLeft: 16 } : undefined}
+            >
+              {isChild && (
+                <span aria-hidden className="shrink-0 text-[var(--color-text-dim)]">
+                  ↳
+                </span>
+              )}
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: CREW_STATE[state].color }}
+              />
+              <span className="min-w-0 truncate">{node.title}</span>
+              {node.isMother && <Icon as={Crown} size={10} className="shrink-0 text-[var(--color-accent)]" />}
+              <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-dim)]">
+                {CREW_STATE[state].label}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 // Aba "Estado": o resumo da frente (pulso, sessões por estado, as regras que
 // valem, a última mudança) e, abaixo, a seção escrita pela síntese e o pulso
 // editável. Como a seção é gerada fica no (i), não no corpo.
@@ -347,6 +496,7 @@ function CurrentState({
   pulseSlot,
   liveness = null,
   onGo,
+  actions,
 }: {
   feature: Feature
   sessions: SessionGraphNode[]
@@ -354,6 +504,7 @@ function CurrentState({
   pulseSlot: React.ReactNode
   liveness?: React.ReactNode
   onGo: (tab: TabId) => void
+  actions?: SessionActions
 }) {
   const body = feature.body ?? ''
   const state = getSection(body, 'Estado atual')
@@ -371,6 +522,7 @@ function CurrentState({
           <Stat n={counts.working} label="trabalhando" color="var(--color-info)" />
           <Stat n={counts.idle} label="paradas" color="var(--color-text)" />
         </div>
+        <CrewSummary sessions={sessions} featureId={feature.id} actions={actions} />
       </section>
       {rules.length > 0 && (
         <section className="flex flex-col gap-1">
@@ -460,15 +612,20 @@ const PANEL_ESC_OWNERS = [
   '[role="menu"]',
 ].join(', ')
 
+// A barra do topo do mapa encolhe por esta largura quando o painel abre.
+export const FEATURE_PANEL_W = 380
+
 /** Painel lateral da feature sobre o mapa (dashboard da frente). Não navega. */
 // `rightInset`: largura da Equipe/Conversas aberta sobre o mapa (a mesma que a
 // MapTopBar desvia) — sem isto o dock, portado depois no DOM, cobre o painel.
 export function FeaturePanel({
   rightInset = 0,
   sessions = [],
+  actions,
 }: {
   rightInset?: number
   sessions?: SessionGraphNode[]
+  actions?: SessionActions
 }) {
   const featureId = useFeaturePanelStore((s) => s.openFeatureId)
   const close = useFeaturePanelStore((s) => s.close)
@@ -509,8 +666,8 @@ export function FeaturePanel({
       aria-label={feature ? `Painel da feature ${feature.title}` : 'Painel da feature'}
       onKeyDown={shieldMap}
       onWheel={(e) => e.stopPropagation()}
-      style={{ right: rightInset }}
-      className="nowheel nodrag absolute right-0 top-0 bottom-0 z-30 flex w-[380px] max-w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
+      style={{ right: rightInset, width: FEATURE_PANEL_W }}
+      className="nowheel nodrag absolute right-0 top-0 bottom-0 z-30 flex max-w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl"
     >
       <header className="flex items-start gap-2 border-b border-[var(--color-border)] px-4 py-3">
         <div className="min-w-0 flex-1">
@@ -580,6 +737,7 @@ export function FeaturePanel({
             sessions={sessions}
             ledger={loop.snapshot?.ledger ?? []}
             onGo={setTab}
+            actions={actions}
             liveness={
               loop.snapshot ? (
                 <LivenessDot

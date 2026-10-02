@@ -253,7 +253,7 @@ function ColorDot(color: string | null): ComponentType<LucideProps> {
 }
 
 const pill =
-  'pointer-events-auto flex items-center gap-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg'
+  'pointer-events-auto flex shrink-0 items-center whitespace-nowrap gap-0.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-lg'
 const pillButton =
   'flex items-center gap-1 rounded-full px-2 py-1 text-[12px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]'
 
@@ -344,7 +344,10 @@ export function MapTopBar({
     // Faixa opaca: transparente, os cartões apareciam por trás dela entre as pílulas.
     <div
       data-testid="map-top-bar"
-      className="absolute left-0 right-0 top-0 z-10 flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 backdrop-blur-md"
+      // @container: estreita (painel da feature ou Equipe abertos), os rótulos
+      // encurtam e Nota/Grupo viram ícone — sem isso o contador caía numa 2ª linha
+      // solta. O wrap fica só como último recurso: cortado, o status sumia.
+      className="@container absolute left-0 right-0 top-0 z-10 flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 backdrop-blur-md"
       style={{
         background: 'color-mix(in srgb, var(--color-surface) 90%, transparent)',
         right: rightInset,
@@ -355,7 +358,7 @@ export function MapTopBar({
         data-testid="map-new-session"
         onClick={onNewSession}
         title="Nova sessão (N com o mapa focado)"
-        className="pointer-events-auto flex items-center gap-1 rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-accent)] shadow-lg transition hover:bg-[var(--color-surface-2)]"
+        className="pointer-events-auto flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-accent)] shadow-lg transition hover:bg-[var(--color-surface-2)]"
       >
         <Icon as={Plus} size={13} /> Nova sessão
       </button>
@@ -365,12 +368,15 @@ export function MapTopBar({
             key={mode}
             type="button"
             aria-pressed={scopeMode === mode}
+            aria-label={mode === 'all' ? 'Todos os projetos' : 'Projeto selecionado'}
             disabled={mode === 'project' && !hasProject}
             onClick={() => onScope(mode)}
             title={
               mode === 'project' && !hasProject
                 ? 'Selecione um projeto na barra lateral'
-                : undefined
+                : mode === 'all'
+                  ? 'Sessões de todos os projetos'
+                  : 'Só as sessões do projeto selecionado na barra lateral'
             }
             // Ativa: superfície elevada com borda e peso 600; inativa só texto
             // apagado — um branco levemente mais claro não dizia qual valia.
@@ -381,21 +387,38 @@ export function MapTopBar({
                 : '!border-transparent !bg-transparent !text-[var(--color-text-dim)]'
             }`}
           >
-            {mode === 'all' ? 'Todos os projetos' : 'Projeto selecionado'}
+            {mode === 'all' ? (
+              <>
+                Todos<span className="@max-3xl:hidden"> os projetos</span>
+              </>
+            ) : (
+              <>
+                {/* Estreito: "Este projeto" ("Projeto" sozinho não dizia qual). */}
+                <span className="@max-3xl:hidden">Projeto selecionado</span>
+                <span className="hidden @max-3xl:inline">Este projeto</span>
+              </>
+            )}
           </button>
         ))}
       </div>
       <div className={pill}>
-        <button type="button" onClick={onNote} className={pillButton} title="Nova nota solta">
-          <Icon as={StickyNote} size={13} /> Nota
+        <button
+          type="button"
+          onClick={onNote}
+          className={pillButton}
+          title="Nova nota solta"
+          aria-label="Nova nota solta"
+        >
+          <Icon as={StickyNote} size={13} /> <span className="@max-3xl:hidden">Nota</span>
         </button>
         <button
           type="button"
           onClick={onGroup}
           className={pillButton}
           title="Novo grupo de sessões"
+          aria-label="Novo grupo de sessões"
         >
-          <Icon as={Users} size={13} /> Grupo
+          <Icon as={Users} size={13} /> <span className="@max-3xl:hidden">Grupo</span>
         </button>
         <ViewMenu onTidy={onTidy} onOpenAll={onOpenAll} onCollapseAll={onCollapseAll} />
       </div>
@@ -404,7 +427,7 @@ export function MapTopBar({
         <span
           data-testid="map-hidden-hint"
           title="Fios de mesma frente, dependência entre repos e leques de filhas aparecem ao passar o mouse ou selecionar um cartão"
-          className="rounded-full px-2 py-1 text-[11px] text-[var(--color-text-dim)]"
+          className="whitespace-nowrap rounded-full px-2 py-1 text-[11px] text-[var(--color-text-dim)] @max-3xl:hidden"
         >
           +{hiddenEdges} {plural(hiddenEdges, 'ligação', 'ligações')} no foco
         </span>

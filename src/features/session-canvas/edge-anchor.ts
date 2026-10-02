@@ -43,6 +43,13 @@ export interface Pt {
 const ADJACENT_MAX = 24
 // Altura (do topo do cartão) por onde o fio entra e sai.
 export const TITLE_BAND = 28
+// Folga entre o pé do último cartão e o pé da raia (o PAD do layout é 12).
+const LAST_IN_LANE_SLACK = 24
+
+// Nada abaixo do cartão na raia: o fio pode descer direto até o canal do card.
+function lastInLane(card: Rect, lane: Rect): boolean {
+  return lane.y + lane.h - (card.y + card.h) <= LAST_IN_LANE_SLACK
+}
 
 // Rota ortogonal mãe→filha (ou bastão) entre cartões do MESMO card de feature:
 // sai pela lateral do cartão, corre na calha entre as lanes e entra pela lateral
@@ -51,7 +58,8 @@ export const TITLE_BAND = 28
 // - mesma lane: pela calha à esquerda dela;
 // - lanes vizinhas: pela calha entre as duas;
 // - lanes não vizinhas: desce a calha da origem até o canal no pé do card,
-//   cruza por ele e sobe a calha do destino.
+//   cruza por ele e sobe a calha do destino;
+// - cartão que é o último da raia: pela borda inferior até o canal (leque).
 export function gutterRoute(
   src: Rect,
   srcLane: Rect,
@@ -78,6 +86,37 @@ export function gutterRoute(
   const tx = right ? tgt.x : tgt.x + tgt.w
   const srcEdge = right ? srcLane.x + srcLane.w : srcLane.x
   const tgtEdge = right ? tgtLane.x : tgtLane.x + tgtLane.w
+  const g1 = srcEdge + (right ? 1 : -1) * 8
+  const g2 = tgtEdge - (right ? 1 : -1) * 8
+  // Leque pelo barramento do pé do card: o cartão que é o último da raia desce
+  // (ou sobe) pelo meio da borda inferior até o canal. Mãe com 2 filhas vira um
+  // tronco + uma descida por filha; pela lateral, o fio da 2ª filha passava sob
+  // a 1ª e lia como a cadeia mãe→filha→neta.
+  const srcDown = lastInLane(src, srcLane)
+  const tgtUp = lastInLane(tgt, tgtLane)
+  if (srcDown || tgtUp) {
+    const head = srcDown
+      ? [
+          { x: src.x + src.w / 2, y: src.y + src.h },
+          { x: src.x + src.w / 2, y: channelY },
+        ]
+      : [
+          { x: sx, y: sy },
+          { x: g1, y: sy },
+          { x: g1, y: channelY },
+        ]
+    const tail = tgtUp
+      ? [
+          { x: tgt.x + tgt.w / 2, y: channelY },
+          { x: tgt.x + tgt.w / 2, y: tgt.y + tgt.h },
+        ]
+      : [
+          { x: g2, y: channelY },
+          { x: g2, y: ty },
+          { x: tx, y: ty },
+        ]
+    return [...head, ...tail]
+  }
   if (Math.abs(tgtEdge - srcEdge) <= ADJACENT_MAX) {
     const gx = (srcEdge + tgtEdge) / 2
     return [
@@ -87,8 +126,6 @@ export function gutterRoute(
       { x: tx, y: ty },
     ]
   }
-  const g1 = srcEdge + (right ? 1 : -1) * 8
-  const g2 = tgtEdge - (right ? 1 : -1) * 8
   return [
     { x: sx, y: sy },
     { x: g1, y: sy },

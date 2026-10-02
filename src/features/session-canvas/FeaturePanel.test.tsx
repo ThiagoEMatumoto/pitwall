@@ -116,7 +116,7 @@ beforeEach(() => {
 
 describe('FeatureCardReminders', () => {
   it('as 2 primeiras notas fixadas, em 1 linha cada com o texto inteiro no title', async () => {
-    render(<FeatureCardReminders featureId="f1" />)
+    render(<FeatureCardReminders featureId="f1" zoom={1} placement="line" />)
     const items = await screen.findAllByTestId('feature-card-reminder')
     expect(items).toHaveLength(2)
     expect(items[0]).toHaveTextContent('Primeira nota')
@@ -134,6 +134,19 @@ describe('FeatureCardReminders', () => {
     expect(more).toHaveTextContent('+2 regras')
     fireEvent.click(more)
     expect(useFeaturePanelStore.getState()).toMatchObject({ openFeatureId: 'f1', tab: 'notes' })
+  })
+  it('abaixo do zoom base: só o chip "N lembretes" (tooltip com todos), sem a linha', async () => {
+    render(
+      <>
+        <FeatureCardReminders featureId="f1" zoom={0.8} placement="chip" />
+        <FeatureCardReminders featureId="f1" zoom={0.8} placement="line" />
+      </>,
+    )
+    const chip = await screen.findByTestId('feature-card-reminders-chip')
+    expect(chip).toHaveTextContent('4 lembretes')
+    expect(chip.getAttribute('title')).toContain('Primeira nota')
+    expect(chip.getAttribute('title')).toContain('Segunda nota')
+    expect(screen.queryByTestId('feature-card-reminders')).toBeNull()
   })
 })
 
@@ -260,9 +273,9 @@ describe('FeaturePanel', () => {
   it('abre em "Estado" com dados: sessões por estado, regras fixadas e a última mudança', async () => {
     act(() => useFeaturePanelStore.getState().open('f1'))
     const sessions = [
-      { featureId: 'f1', status: 'working', attentionReason: null },
-      { featureId: 'f1', status: 'idle', attentionReason: 'handoff-input' },
-      { featureId: 'f2', status: 'working', attentionReason: null },
+      { sessionId: 'a', title: 'a', featureId: 'f1', status: 'working', attentionReason: null },
+      { sessionId: 'b', title: 'b', featureId: 'f1', status: 'idle', attentionReason: 'handoff-input' },
+      { sessionId: 'c', title: 'c', featureId: 'f2', status: 'working', attentionReason: null },
     ] as unknown as SessionGraphNode[]
     render(<FeaturePanel sessions={sessions} />)
     await screen.findByText('Checkout')
@@ -275,6 +288,31 @@ describe('FeaturePanel', () => {
     expect(screen.getByTestId('feature-panel-state-ledger')).toBeInTheDocument()
     // O texto explicativo saiu do corpo (fica no (i)).
     expect(screen.queryByText(/Esta seção é escrita pela síntese/)).toBeNull()
+  })
+
+  it('Estado mostra a mãe com as filhas e o bastão, e a lista das sessões com status', async () => {
+    act(() => useFeaturePanelStore.getState().open('f1'))
+    const base = { featureId: 'f1', attentionReason: null, provider: 'claude', childOfHandoffId: null }
+    const sessions = [
+      { ...base, sessionId: 'm', title: 'mae-checkout', status: 'working', isMother: true, childCount: 2, ccSessionId: 'cc-m' },
+      { ...base, sessionId: 'o', title: 'otavio', status: 'waiting', childOfHandoffId: 'h1' },
+      { ...base, sessionId: 'r', title: 'marina', status: 'idle', childOfHandoffId: 'h2' },
+    ] as unknown as SessionGraphNode[]
+    const actions = { open: vi.fn(), passBaton: vi.fn(), canPassBaton: () => true }
+    render(<FeaturePanel sessions={sessions} actions={actions} />)
+    const mother = await screen.findByTestId('feature-panel-mother')
+    expect(mother).toHaveTextContent('mae-checkout')
+    expect(mother).toHaveTextContent('2 filhas')
+    fireEvent.click(screen.getByTestId('feature-panel-mother-baton'))
+    expect(actions.passBaton).toHaveBeenCalledWith(sessions[0])
+    fireEvent.click(screen.getByTestId('feature-panel-mother-open'))
+    expect(actions.open).toHaveBeenCalledWith(sessions[0])
+    const rows = screen.getByTestId('feature-panel-crew').querySelectorAll('li')
+    expect([...rows].map((r) => r.textContent)).toEqual([
+      'mae-checkouttrabalhando',
+      '↳otavioprecisa de você',
+      '↳marinaparada',
+    ])
   })
 
   it('um status só: o badge do card no cabeçalho; a vitalidade vira ponto ao lado de PULSO', async () => {

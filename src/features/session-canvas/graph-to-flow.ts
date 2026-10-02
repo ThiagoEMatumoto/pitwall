@@ -163,6 +163,7 @@ export interface LaneData {
   repoCount?: number
   // Lane de repo dentro do card da feature: projeto quando não é o "home".
   projectName?: string | null
+  projectColor?: string | null
   [key: string]: unknown
 }
 
@@ -567,18 +568,31 @@ function laneHeaderData(
 }
 
 // Onde nasce o próximo card sem posição salva: à direita do anterior; se ele
-// passaria de `rowWidth`, numa linha nova abaixo de tudo o que já foi posto.
-// Sem isto, 11 sessões em 4 cards viravam uma faixa só e o enquadrar caía a
-// 0.45 com 65% do mapa vazio embaixo.
+// passaria de `rowWidth`, embaixo de um card já posto (empacotamento por coluna:
+// a vaga mais alta que não cobre ninguém, preferindo a coluna de largura mais
+// parecida). Sem isto, 11 sessões em 4 cards viravam uma faixa só e o enquadrar
+// caía a 0.45; e quebrar sempre "abaixo de tudo" deixava um card de 1 raia
+// sozinho numa 3ª linha com um vão à direita.
 export function nextLaneSlot(
   cursor: Point,
   laneW: number,
   placed: ReadonlyArray<Box>,
   rowWidth: number | undefined,
+  laneH = 0,
 ): Point {
-  if (!rowWidth || cursor.x <= 0 || cursor.x + laneW <= rowWidth) return cursor
+  if (!rowWidth || cursor.x <= 0) return cursor
+  const free = (p: Point) =>
+    !placed.some(
+      (b) => p.x < b.x + b.w && p.x + laneW > b.x && p.y < b.y + b.h && p.y + Math.max(laneH, 1) > b.y,
+    )
+  if (cursor.x + laneW <= rowWidth && free(cursor)) return cursor
   const bottom = Math.max(0, ...placed.map((b) => b.y + b.h))
-  return { x: 0, y: bottom + ROW_GAP }
+  const candidates = placed
+    .filter((b) => b.x === 0 || b.x + laneW <= rowWidth)
+    .map((b) => ({ p: { x: b.x, y: b.y + b.h + ROW_GAP }, fit: Math.abs(b.w - laneW) }))
+    .filter((c) => free(c.p))
+    .sort((a, b) => a.p.y - b.p.y || a.fit - b.fit || a.p.x - b.p.x)
+  return candidates[0]?.p ?? { x: 0, y: bottom + ROW_GAP }
 }
 
 function layoutLanes(
@@ -688,6 +702,7 @@ function layoutLanes(
             lane.kind === 'feature' && repo.projectId && repo.projectId !== home
               ? (repo.projectName ?? null)
               : null,
+          projectColor: repo.projectColor ?? null,
         } satisfies LaneData,
       })
       if (repo.repoId) repoLaneIds.set(repo.repoId, [...(repoLaneIds.get(repo.repoId) ?? []), repoId])
@@ -698,7 +713,7 @@ function layoutLanes(
     }
     const laneW = repoX - GAP + PAD
     const savedPos = savedLaneOf.get(lane)
-    if (!savedPos) cursor = nextLaneSlot(cursor, laneW, laneBoxes, input.rowWidth)
+    if (!savedPos) cursor = nextLaneSlot(cursor, laneW, laneBoxes, input.rowWidth, laneH)
     const lanePos = clearOfPlaced(savedPos ?? cursor, { w: laneW, h: laneH }, laneBoxes)
     nodes[laneNodeIndex] = {
       id: laneId,

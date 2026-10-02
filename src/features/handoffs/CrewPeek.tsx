@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { CornerDownLeft, ExternalLink, MessageSquare, SquareTerminal, X } from 'lucide-react'
+import { CornerDownLeft, Crown, CornerDownRight, ExternalLink, MessageSquare, Repeat, SquareTerminal, Target, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ShortcutHints } from '@/components/ui/ShortcutHints'
 import { hintText, type ShortcutHint } from '@/components/ui/shortcut-hints'
@@ -12,6 +12,10 @@ import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { stepLift } from '@/features/session-canvas/card-view'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { canPassBaton } from '@/features/session-canvas/useMapCommands'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
+import { BatonDialog } from '@/features/sessions/BatonDialog'
+import { peekRole, peekRoleLabel, stripOrder, type PeekRole } from './peek-identity'
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import {
@@ -263,9 +267,18 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
 
   // Faixa de troca do lift: só as irmãs ainda vivas. Alt+, / Alt+. andam por ela
   // (os mesmos atalhos das relações; o AppShell cede a tecla com o lift aberto).
+  const graphNodes = useSessionGraphStore((s) => s.graph.nodes)
+  const roleOf = (id: string): PeekRole => peekRole(graphNodes.find((n) => n.sessionId === id))
   const strip = lift
-    ? siblings.filter((id) => liveSessions.some((s) => s.id === id && s.status !== 'ended'))
+    ? stripOrder(
+        siblings.filter((id) => liveSessions.some((s) => s.id === id && s.status !== 'ended')),
+        roleOf,
+      )
     : []
+  const graphNode = live ? graphNodes.find((n) => n.sessionId === live.id) : undefined
+  const role = peekRole(graphNode)
+  const roleLabel = peekRoleLabel(role)
+  const [batonOpen, setBatonOpen] = useState(false)
   const currentId = live?.id ?? null
   useEffect(() => {
     if (strip.length < 2 || !currentId) return
@@ -302,6 +315,8 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // O diálogo do bastão é montado dentro do painel: o Esc é dele.
+      if (batonOpen) return
       if (escBelongsToUpperLayer(dialogRef.current, document.activeElement)) return
       if (mode === 'terminal' && !e.shiftKey && bodyRef.current?.contains(document.activeElement)) {
         return
@@ -312,7 +327,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose, mode])
+  }, [onClose, mode, batonOpen])
 
   const titleId = useId()
   // Bastão de uma filha: a sucessora pode ainda não estar em liveSessions.
@@ -431,6 +446,36 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                   ? (live?.title ?? live?.name ?? repoLabel)
                   : (live?.title ?? (alias ? alias.name : `→ ${repoLabel}`))}
               </span>
+              {roleLabel && (
+                <span
+                  data-testid="peek-role"
+                  data-role={role?.kind}
+                  title={
+                    role?.kind === 'mother'
+                      ? `Mãe: lidera ${role.children} ${role.children === 1 ? 'filha' : 'filhas'} de handoff`
+                      : 'Filha de handoff'
+                  }
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                  style={
+                    role?.kind === 'mother'
+                      ? { color: 'var(--color-bg)', background: 'var(--color-accent)' }
+                      : { color: 'var(--color-text-dim)', background: 'var(--color-surface-2)' }
+                  }
+                >
+                  <Icon as={role?.kind === 'mother' ? Crown : CornerDownRight} size={11} />
+                  {roleLabel}
+                </span>
+              )}
+              {graphNode?.featureTitle && (
+                <span
+                  data-testid="peek-feature"
+                  title={`Feature: ${graphNode.featureTitle}`}
+                  className="inline-flex min-w-0 max-w-[16rem] shrink items-center gap-1 rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)]"
+                >
+                  <Icon as={Target} size={11} className="shrink-0" />
+                  <span className="truncate">{graphNode.featureTitle}</span>
+                </span>
+              )}
               {blocked && handoff ? (
                 <span className="shrink-0" title="A filha está bloqueada esperando sua resposta">
                   <StatusBadge status={handoff.status} />
@@ -533,6 +578,22 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                 />
               </div>
             )}
+            {lift && graphNode && canPassBaton(graphNode) && (
+              <button
+                type="button"
+                data-testid="peek-baton"
+                onClick={() => setBatonOpen(true)}
+                title={
+                  role?.kind === 'mother'
+                    ? 'A sucessora assume a liderança das filhas, com endereço novo'
+                    : 'Destila o contexto e sobe uma sucessora limpa'
+                }
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+              >
+                <Icon as={Repeat} size={12} />
+                Passar o bastão
+              </button>
+            )}
             {lift && live && (
               <button
                 type="button"
@@ -601,9 +662,19 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
           )}
         </div>
 
+        {batonOpen && graphNode?.ccSessionId && (
+          <BatonDialog
+            open
+            onClose={() => setBatonOpen(false)}
+            sessionId={graphNode.sessionId}
+            ccSessionId={graphNode.ccSessionId}
+            repoLabel={graphNode.repoLabel ?? undefined}
+          />
+        )}
         {strip.length > 1 && (
           <LiftStrip
             ids={strip}
+            roleOf={roleOf}
             currentId={currentId}
             onPick={switchTo}
             escHint={mode === 'terminal' ? escHints(!!handoff) : null}
@@ -800,11 +871,13 @@ export const LIFT_SWITCH_HINT = hintText(LIFT_SWITCH_HINTS)
 
 function LiftStrip({
   ids,
+  roleOf,
   currentId,
   onPick,
   escHint,
 }: {
   ids: string[]
+  roleOf: (id: string) => PeekRole
   currentId: string | null
   onPick: (id: string) => void
   escHint: ShortcutHint[] | null
@@ -818,21 +891,30 @@ function LiftStrip({
       {ids.map((id) => {
         const s = liveSessions.find((x) => x.id === id)
         const active = id === currentId
+        const r = roleOf(id)
         return (
           <button
             key={id}
             type="button"
             data-lift-session={id}
+            data-role={r?.kind}
             aria-pressed={active}
             onClick={() => onPick(id)}
             title={s?.title ?? s?.name ?? id}
-            className={`max-w-[14rem] shrink-0 truncate rounded px-2 py-0.5 text-[11px] transition ${
+            className={`flex max-w-[14rem] shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[11px] transition ${
               active
                 ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
             }`}
           >
-            {s?.title ?? s?.name ?? s?.repo?.label ?? 'Sessão'}
+            {r && (
+              <Icon
+                as={r.kind === 'mother' ? Crown : CornerDownRight}
+                size={11}
+                className={`shrink-0 ${r.kind === 'mother' ? 'text-[var(--color-accent)]' : ''}`}
+              />
+            )}
+            <span className="truncate">{s?.title ?? s?.name ?? s?.repo?.label ?? 'Sessão'}</span>
           </button>
         )
       })}

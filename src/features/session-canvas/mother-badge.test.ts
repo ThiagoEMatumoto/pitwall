@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { compensatedPx } from './card-display'
-import { batonChipPx, motherBadgePx, motherBadgeText, motherFrame } from './mother-badge'
+import {
+  MOTHER_STRIP,
+  batonChipPx,
+  motherBadgePx,
+  motherBadgeText,
+  motherFrame,
+} from './mother-badge'
 
 const node = (over: Partial<SessionGraphNode>) => over as SessionGraphNode
 
@@ -30,14 +36,17 @@ describe('MotherBadge', () => {
     }
   })
 
-  it('moldura dupla só na mãe; needs-you mantém a cor do estado', () => {
+  it('mãe: faixa no topo, sem mexer no contorno (borda e outline são do estado e do foco)', () => {
     const base = { borderColor: 'x', borderWidth: 1 }
     expect(motherFrame(node({ isMother: false }), base)).toBe(base)
-    expect(motherFrame(node({ isMother: true }), base)).toMatchObject({
-      borderStyle: 'double',
-      borderWidth: 4,
-      borderColor: 'var(--color-accent)',
-    })
+    const glow = { ...base, boxShadow: '0 0 14px -4px var(--color-accent)' }
+    const frame = motherFrame(node({ isMother: true }), glow)
+    expect(frame).toMatchObject({ borderColor: 'x', borderWidth: 1 })
+    expect(frame.borderStyle).toBeUndefined()
+    expect(frame.outline).toBeUndefined()
+    expect(frame.boxShadow).toBe(`${MOTHER_STRIP}, ${glow.boxShadow}`)
+    expect(motherFrame(node({ isMother: true }), base).boxShadow).toBe(MOTHER_STRIP)
+    // Quem precisa de você mantém a cor do estado.
     expect(
       motherFrame(node({ isMother: true }), { borderColor: 'red', borderWidth: 2 }).borderColor,
     ).toBe('red')

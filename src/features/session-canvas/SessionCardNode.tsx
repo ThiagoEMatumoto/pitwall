@@ -33,6 +33,7 @@ import { isActionableDetail } from '@/features/session-switcher/AttentionPopover
 import { useMapActions } from './map-context'
 import { useMapFocus } from './map-focus'
 import {
+  briefSay,
   cardDetail,
   cardFooter,
   cardTitle,
@@ -419,7 +420,7 @@ function BriefBody({
   const { node } = data
   const { now } = useMapLive()
   const lastText = useAppStore((s) => s.liveSessions.find((x) => x.id === node.sessionId)?.lastText)
-  const say = ind.reason ?? ind.step ?? firstLineOf(lastText)
+  const say = briefSay(ind, firstLineOf(lastText), node)
   const small = compensatedPx(zoom, 11, 18)
   return (
     <div className="flex min-w-0 flex-col gap-0.5 px-2.5 py-1.5">

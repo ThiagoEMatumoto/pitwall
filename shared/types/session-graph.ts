@@ -66,6 +66,8 @@ export interface SessionGraphLaneRepo {
   // o nome do projeto quando ele não é o "home" da feature.
   projectId?: string | null
   projectName?: string | null
+  // Cor do projeto: o ponto do prefixo encurtado no cabeçalho da raia.
+  projectColor?: string | null
   sessionIds: string[]
 }
 

@@ -124,6 +124,17 @@ describe('BatonDialog', () => {
     expect(box).not.toHaveTextContent('/home/u')
   })
 
+  it('fallback da destilação é aviso (amber), com "Tentar de novo" na mesma linha', async () => {
+    distill.mockRejectedValueOnce(new Error('timeout'))
+    await setup()
+    const box = screen.getByTestId('baton-error')
+    expect(box.getAttribute('style')).toContain('--color-warning')
+    expect(box.getAttribute('style')).not.toContain('--color-danger')
+    expect(box.className).toContain('items-center')
+    expect(box.className).not.toContain('flex-col')
+    expect(box).toContainElement(screen.getByRole('button', { name: 'Tentar de novo' }))
+  })
+
   it('leva o briefing EDITADO pro baton.pass (não o destilado original)', async () => {
     distill.mockResolvedValue('briefing cru da destilação')
     pass.mockResolvedValue(result())
@@ -233,10 +244,16 @@ describe('BatonDialog', () => {
     await setup()
 
     expect(screen.getByTestId('baton-confirm')).toBeDisabled()
+    // Botão desabilitado diz por quê (no print 09 ele só parecia apagado).
+    expect(screen.getByTestId('baton-briefing-required')).toBeInTheDocument()
+    // Uma ação de regerar só: o "Tentar de novo" do aviso.
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Destilar de novo' })).toBeNull()
     fireEvent.change(screen.getByTestId('baton-briefing'), {
       target: { value: 'escrito à mão' },
     })
     expect(screen.getByTestId('baton-confirm')).toBeEnabled()
+    expect(screen.queryByTestId('baton-briefing-required')).toBeNull()
     await act(async () => {
       fireEvent.click(screen.getByTestId('baton-confirm'))
     })

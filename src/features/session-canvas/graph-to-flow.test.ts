@@ -10,6 +10,7 @@ import {
   graphToFlow,
   homeRepoLaneId,
   layoutRects,
+  nextLaneSlot,
   noteExcerpt,
   positionKey,
   type LaneData,
@@ -867,5 +868,34 @@ describe('layoutRects', () => {
       w: card.width,
     })
     expect(tops).toHaveLength(1)
+  })
+})
+
+describe('nextLaneSlot — empacotamento por coluna', () => {
+  // A cena do print 10: feature larga em cima; Assistente (2 raias) e Diligencia
+  // (1 raia) na 2ª linha; Pessoal (1 raia) não cabe à direita.
+  const feature = { x: 0, y: 0, w: 1100, h: 200 }
+  const assistente = { x: 0, y: 232, w: 740, h: 250 }
+  const diligencia = { x: 788, y: 232, w: 370, h: 250 }
+
+  it('vai para baixo da coluna de largura parecida, não para o canto esquerdo', () => {
+    const p = nextLaneSlot({ x: 1206, y: 232 }, 370, [feature, assistente, diligencia], 1200, 250)
+    expect(p).toEqual({ x: 788, y: 232 + 250 + 32 })
+  })
+
+  it('a vaga mais alta ganha da largura parecida', () => {
+    const tall = { x: 0, y: 0, w: 370, h: 600 }
+    const short = { x: 418, y: 0, w: 740, h: 200 }
+    expect(nextLaneSlot({ x: 1206, y: 0 }, 370, [tall, short], 1200, 100)).toEqual({ x: 418, y: 232 })
+  })
+
+  it('sem vaga livre embaixo de ninguém, cai abaixo de tudo', () => {
+    const p = nextLaneSlot({ x: 1206, y: 0 }, 1150, [feature, { x: 0, y: 232, w: 370, h: 100 }, { x: 418, y: 232, w: 370, h: 300 }], 1200, 100)
+    expect(p).toEqual({ x: 0, y: 232 + 300 + 32 })
+  })
+
+  it('cursor que cabe na linha mas cobriria um card posto não é usado', () => {
+    const p = nextLaneSlot({ x: 400, y: 0 }, 300, [{ x: 0, y: 0, w: 352, h: 200 }, { x: 500, y: 0, w: 300, h: 200 }], 1200, 100)
+    expect(p.y).toBe(232)
   })
 })

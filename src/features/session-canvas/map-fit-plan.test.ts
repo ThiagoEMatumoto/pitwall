@@ -4,6 +4,7 @@ import {
   OVERVIEW_MIN_ZOOM,
   PRIORITY_MIN_ZOOM,
   offscreenCards,
+  pillSpot,
   planFit,
 } from './map-fit'
 
@@ -101,7 +102,12 @@ describe('planFit', () => {
   })
 
   it('6 cartões ou menos mantêm o piso legível de 0.9', () => {
-    const plan = planFit({ visible: { x: 0, y: 0, w: 9000, h: 900 }, priority: null, view, cardCount: 6 })!
+    const plan = planFit({
+      visible: { x: 0, y: 0, w: 9000, h: 900 },
+      priority: null,
+      view,
+      cardCount: 6,
+    })!
     expect(plan.viewport.zoom).toBe(MIN_READABLE_ZOOM)
     expect(plan.collapseDock).toBe(false)
   })
@@ -124,6 +130,11 @@ describe('offscreenCards', () => {
       count: 3,
       side: 'left',
       sides: { left: 2, right: 1, top: 0, bottom: 0 },
+      hidden: [
+        { index: 1, side: 'left' },
+        { index: 2, side: 'left' },
+        { index: 3, side: 'right' },
+      ],
     })
   })
   it('cartão embaixo do dock conta como fora', () => {
@@ -147,8 +158,20 @@ describe('offscreenCards', () => {
     const near = { x: free - 0.8 * 300, y: 0, w: 300, h: 100 }
     expect(offscreenCards([near], v, view, { right }).count).toBe(0)
   })
+  it('minimapa é obstáculo de canto, não faixa: cartão ao lado dele, à vista, não conta', () => {
+    const v = { x: 0, y: 0, zoom: 1 }
+    // Print 08 da rodada 4: o cartão da base à esquerda, minimapa no canto direito.
+    const minimap = { x: 1250, y: 940, w: 220, h: 150 }
+    const beside = { x: 100, y: 960, w: 330, h: 80 }
+    expect(offscreenCards([beside], v, view, {}, [minimap]).count).toBe(0)
+    // O mesmo cartão embaixo do minimapa conta.
+    const under = { x: 1200, y: 960, w: 260, h: 80 }
+    expect(offscreenCards([under], v, view, {}, [minimap])).toMatchObject({ count: 1 })
+  })
   it('tudo à vista: zero', () => {
-    expect(offscreenCards([{ x: 0, y: 0, w: 10, h: 10 }], { x: 0, y: 0, zoom: 1 }, view)).toMatchObject({
+    expect(
+      offscreenCards([{ x: 0, y: 0, w: 10, h: 10 }], { x: 0, y: 0, zoom: 1 }, view),
+    ).toMatchObject({
       count: 0,
       side: null,
     })
@@ -179,6 +202,24 @@ describe('quebra e minimapa', async () => {
 })
 
 describe('piso do painel', () => {
+  it('com o piso do painel (0.7) o card não desce ao zoom ilegível nem centraliza', async () => {
+    const { planFit, PANEL_MIN_ZOOM } = await import('./map-fit')
+    expect(PANEL_MIN_ZOOM).toBe(0.7)
+    const plan = planFit({
+      visible: { x: 0, y: 0, w: 1800, h: 400 },
+      priority: { x: 0, y: 0, w: 1800, h: 200 },
+      view: { w: 1500, h: 1000 },
+      insets: { top: 60, left: 70, right: 400 },
+      cardCount: 5,
+      priorityFloor: PANEL_MIN_ZOOM,
+      alignTop: true,
+    })!
+    expect(plan.viewport.zoom).toBe(0.7)
+    // Encostado no topo (60 da barra + 24 de respiro), não no meio da altura.
+    expect(plan.viewport.y).toBe(84)
+    // O canto do card da feature no canto livre (a esquerda dele à vista).
+    expect(plan.viewport.x).toBe(70 + 24)
+  })
   it('com priorityFloor 0.5 o card da feature desce até caber ao lado do painel', async () => {
     const { planFit } = await import('./map-fit')
     const args = {
@@ -191,6 +232,24 @@ describe('piso do painel', () => {
     expect(planFit(args)!.viewport.zoom).toBe(0.6)
     // Cabe a (1500-470-48)/1800 ≈ 0.546: o piso do painel deixa chegar lá.
     expect(planFit({ ...args, priorityFloor: 0.5 })!.viewport.zoom).toBeCloseTo(982 / 1800, 5)
+  })
+  it('priorityFits diz se a feature coube: falso no piso 0.7, verdadeiro no piso do resumo', async () => {
+    const { planFit, PANEL_MIN_ZOOM, PANEL_COMPACT_MIN_ZOOM } = await import('./map-fit')
+    // Print 07 da rodada 2: a feature em resumo tem ~1090px e sobram ~600px ao lado do painel.
+    const args = {
+      visible: { x: 0, y: 0, w: 1090, h: 500 },
+      priority: { x: 0, y: 0, w: 1090, h: 250 },
+      view: { w: 667, h: 1100 },
+      insets: { top: 60, left: 55, right: 8 },
+      cardCount: 5,
+      maxZoom: 0.72,
+      alignTop: true,
+    }
+    expect(planFit({ ...args, priorityFloor: PANEL_MIN_ZOOM })!.priorityFits).toBe(false)
+    const low = planFit({ ...args, priorityFloor: PANEL_COMPACT_MIN_ZOOM })!
+    expect(low.priorityFits).toBe(true)
+    expect(low.viewport.zoom).toBeGreaterThanOrEqual(PANEL_COMPACT_MIN_ZOOM)
+    expect(low.viewport.zoom).toBeLessThan(PANEL_MIN_ZOOM)
   })
 })
 
@@ -208,6 +267,50 @@ describe('enquadrar com poucas sessões', () => {
     const h = 300 * plan.viewport.zoom
     expect(plan.viewport.y).toBeCloseTo(60 + (free - h) / 2, 5)
   })
+  // Rodada 2 (prints 05/06): a feature larga de 3 raias, limitada pela largura,
+  // nascia no meio da altura com ~385px vazios em cima. A barra termina em
+  // insets.top - 8 (INSET_GAP do SessionMap): o conteúdo tem de começar 32px abaixo.
+  const INSET_GAP = 8
+  const wideFeature = { x: 0, y: 0, w: 1900, h: 440 }
+  const toolbarBottom = 52
+  const contentTop = (v: { y: number; zoom: number }) => wideFeature.y * v.zoom + v.y
+  it('limitado pela largura (Enquadrar): encosta 32px abaixo da barra, sem centralizar', async () => {
+    const { planFit } = await import('./map-fit')
+    const plan = planFit({
+      visible: wideFeature,
+      priority: wideFeature,
+      view: { w: 1700, h: 1100 },
+      insets: { top: toolbarBottom + INSET_GAP, left: 70 },
+      cardCount: 5,
+    })!
+    expect(contentTop(plan.viewport) - toolbarBottom).toBe(32)
+  })
+  it('limitado pela largura com a Equipe aberta (enquadrar automático): também no topo', async () => {
+    const { planFit } = await import('./map-fit')
+    const plan = planFit({
+      visible: wideFeature,
+      priority: wideFeature,
+      view: { w: 1700, h: 1100 },
+      insets: { top: toolbarBottom + INSET_GAP, left: 70, right: 400 },
+      dockInset: 0,
+      cardCount: 5,
+    })!
+    expect(plan.collapseDock).toBe(false)
+    expect(contentTop(plan.viewport) - toolbarBottom).toBe(32)
+  })
+  it('no teto do resumo (maxZoom 0.72) também encosta no topo', async () => {
+    const { planFit } = await import('./map-fit')
+    const plan = planFit({
+      visible: { x: 0, y: 0, w: 1000, h: 300 },
+      priority: null,
+      view: { w: 1600, h: 1000 },
+      insets: { top: toolbarBottom + INSET_GAP },
+      cardCount: 5,
+      maxZoom: 0.72,
+    })!
+    expect(plan.viewport.zoom).toBe(0.72)
+    expect(plan.viewport.y - toolbarBottom).toBe(32)
+  })
   it('conteúdo alto: continua encostado no topo', async () => {
     const { planFit } = await import('./map-fit')
     const plan = planFit({
@@ -217,5 +320,75 @@ describe('enquadrar com poucas sessões', () => {
       cardCount: 5,
     })!
     expect(plan.viewport.y).toBe(24)
+  })
+})
+
+describe('pillSpot', () => {
+  const box = { l: 70, t: 60, r: 1490, b: 1100 }
+  const size = { w: 200, h: 24 }
+  it('colado na borda do lado, no meio dela quando não cruza nenhum frame', () => {
+    const p = pillSpot('right', box, [], size)
+    expect(p.x).toBe(1490 - 12 - 200)
+    expect(p.y).toBe(60 + 0.5 * 1040 - 12)
+  })
+  it('desvia da borda de um frame (print 01 da rodada 4: a borda da feature no meio)', () => {
+    // Frame cuja borda de baixo passa no meio da altura livre.
+    const feature = { x: 100, y: 100, w: 1500, h: 480 }
+    const p = pillSpot('right', box, [feature], size)
+    const pill = { t: p.y, b: p.y + size.h }
+    // Nem encosta na borda de baixo (580) nem na de cima (100).
+    expect(pill.b < 100 - 8 || pill.t > 580 + 8 || (pill.t > 108 && pill.b < 572)).toBe(true)
+    expect(p.y).not.toBe(60 + 0.5 * 1040 - 12)
+  })
+  it('com alvo: na faixa do cartão oculto, colado à borda livre a 12px', () => {
+    // Print 07: o cartão cortado sob o painel em y~405; o pill flutuava em y~765.
+    const hidden = { x: 1400, y: 380, w: 300, h: 50 }
+    const p = pillSpot('right', box, [{ x: 100, y: 100, w: 1500, h: 480 }], size, hidden)
+    expect(p.x).toBe(1490 - 12 - 200)
+    expect(p.y + size.h / 2).toBe(405)
+  })
+  it('com alvo e um cartão à vista na faixa dele: vai para o ponto livre mais perto, sem cobrir o nome', () => {
+    // Print 07 da rodada 2: o pill na faixa da marina cobria o título do otavio.
+    const hidden = { x: 1400, y: 380, w: 300, h: 50 }
+    const otavio = { x: 1100, y: 380, w: 300, h: 50 }
+    const header = { x: 100, y: 330, w: 1500, h: 40 }
+    const p = pillSpot('right', box, [], size, hidden, [otavio, header])
+    const pill = { l: p.x, t: p.y, r: p.x + size.w, b: p.y + size.h }
+    for (const o of [otavio, header])
+      expect(pill.l < o.x + o.w && pill.r > o.x && pill.t < o.y + o.h && pill.b > o.y).toBe(false)
+    expect(p.x).toBe(1490 - 12 - 200)
+    // A faixa livre logo abaixo do cartão (430 + 4 de folga), não o fim da tela.
+    expect(p.y).toBeGreaterThanOrEqual(434)
+    expect(p.y).toBeLessThan(450)
+  })
+  it('com alvo e nenhum ponto livre na borda: fica na faixa do alvo', () => {
+    const hidden = { x: 1400, y: 380, w: 300, h: 50 }
+    const wall = { x: 1200, y: 0, w: 300, h: 2000 }
+    const p = pillSpot('right', box, [], size, hidden, [wall])
+    expect(p.y + size.h / 2).toBe(405)
+  })
+  it('com alvo fora da faixa útil: preso à área livre', () => {
+    const p = pillSpot('right', box, [], size, { x: 1600, y: -300, w: 300, h: 100 })
+    expect(p.y).toBe(60 + 12)
+  })
+  it('topo: centrado na horizontal, logo abaixo da barra', () => {
+    expect(pillSpot('top', box, [], size)).toEqual({ x: 70 + 0.5 * 1420 - 100, y: 72 })
+  })
+})
+
+describe('contentInView', async () => {
+  const { contentInView } = await import('./map-fit')
+  const size = { width: 1400, height: 1000 }
+  it('tudo dentro da tela: true (o minimapa some)', () => {
+    expect(contentInView({ x: 0, y: 0, w: 1000, h: 700 }, [100, 50, 1], size)).toBe(true)
+    expect(contentInView({ x: 0, y: 0, w: 2000, h: 1400 }, [0, 0, 0.6], size)).toBe(true)
+  })
+  it('algo fora (zoom maior ou pan): false', () => {
+    expect(contentInView({ x: 0, y: 0, w: 2000, h: 1400 }, [0, 0, 1], size)).toBe(false)
+    expect(contentInView({ x: 0, y: 0, w: 1000, h: 700 }, [-50, 0, 1], size)).toBe(false)
+  })
+  it('sem conteúdo ou sem medida: true', () => {
+    expect(contentInView(null, [0, 0, 1], size)).toBe(true)
+    expect(contentInView({ x: 0, y: 0, w: 10, h: 10 }, [0, 0, 1], { width: 0, height: 0 })).toBe(true)
   })
 })

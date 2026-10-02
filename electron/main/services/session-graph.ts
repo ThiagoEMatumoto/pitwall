@@ -361,6 +361,7 @@ function laneRepos(
       label: r.label,
       projectId: r.project_id,
       projectName: project.get(r.project_id)?.name ?? null,
+      projectColor: project.get(r.project_id)?.color ?? null,
       sessionIds: sessionsByRepo.get(r.id) ?? [],
     }))
 }

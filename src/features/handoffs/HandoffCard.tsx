@@ -182,6 +182,19 @@ export function crewDotTitle(
   return `${who}${scope} — ${state}`
 }
 
+// Inicial da filha no trilho recolhido da Equipe (o ponto sozinho não dizia quem
+// era): a do apelido ("otavio-parte-c1" → "O"), senão a do título ou do repo.
+export function crewDotInitial(
+  handoff: Handoff,
+  live: LiveSessionInfo | undefined,
+  liveSessions: readonly LiveSessionInfo[],
+  now: number = Date.now(),
+): string {
+  const title = live?.title ?? childIdentity(handoff, liveSessions, now).title
+  const who = splitAlias(title)?.name ?? title ?? handoff.targetRepoLabel ?? handoff.targetRepoId ?? ''
+  return (who.match(/[\p{L}\p{N}]/u)?.[0] ?? '?').toUpperCase()
+}
+
 export const STATUS_LABEL: Record<HandoffStatus, string> = {
   pending: 'Pendente',
   approved: 'Aprovado',
