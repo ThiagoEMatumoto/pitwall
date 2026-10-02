@@ -9,6 +9,7 @@ vi.mock('@/lib/ipc', () => {
 import { useFeaturePanelStore } from '@/features/session-canvas/feature-panel-store'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useAppStore } from '@/store/appStore'
+import { showToast, useToastStore } from '@/features/notifications/toast-store'
 import { useToastPlacement } from './useToastPlacement'
 import { TOAST_MARGIN } from './toast-placement'
 
@@ -59,5 +60,59 @@ describe('useToastPlacement — painel da feature', () => {
     act(() => useProjectsViewStore.setState({ view: 'terminals' }))
     settle()
     expect(result.current.right).toBe(TOAST_MARGIN)
+  })
+})
+
+describe('useToastPlacement — cartão da mãe e coluna fixada', () => {
+  const H = 900
+  function addBox(
+    attrs: Record<string, string>,
+    box: { left: number; top: number; width: number; height: number },
+  ) {
+    const el = document.createElement('div')
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v)
+    el.getBoundingClientRect = () => box as DOMRect
+    document.body.appendChild(el)
+    return el
+  }
+
+  beforeEach(() => {
+    useFeaturePanelStore.setState({ openFeatureId: null })
+    Object.defineProperty(window, 'innerHeight', { value: H, configurable: true })
+  })
+
+  it('com um toast à vista, a pilha sobe para cima do cartão da mãe', () => {
+    addBox({ 'data-variant': 'mother' }, { left: W - 600, top: 400, width: 580, height: 420 })
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(() => void showToast({ title: 'filha despachada → web' }))
+    settle()
+    expect(result.current.bottom).toBe(H - 400 + TOAST_MARGIN)
+  })
+
+  it('o cartão da mãe anda com o pan: a pilha acompanha na releitura seguinte', () => {
+    let top = 400
+    const el = addBox({ 'data-variant': 'mother' }, { left: W - 600, top, width: 580, height: 420 })
+    el.getBoundingClientRect = () => ({ left: W - 600, top, width: 580, height: 420 }) as DOMRect
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(() => void showToast({ title: 'filha despachada → web' }))
+    settle()
+    top = 300
+    settle()
+    expect(result.current.bottom).toBe(H - 300 + TOAST_MARGIN)
+  })
+
+  it('a coluna da mãe fixada também é obstáculo', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 760, configurable: true })
+    addBox({ 'data-testid': 'mother-dock' }, { left: 0, top: 40, width: 460, height: H - 40 })
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(() => void showToast({ title: 'filha despachada → web' }))
+    settle()
+    const p = result.current
+    const width = p.maxWidth ?? 320
+    expect(760 - p.right - width).toBeGreaterThanOrEqual(460)
+  })
+
+  afterEach(() => {
+    act(() => useToastStore.setState({ toasts: [] }))
   })
 })

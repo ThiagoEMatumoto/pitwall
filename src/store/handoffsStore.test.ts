@@ -8,7 +8,8 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { childSessionIds, pendingHandoffs, permissionModeFor } = await import('./handoffsStore')
+const { childSessionIds, dispatchedToast, DISPATCH_TOAST_MS, pendingHandoffs, permissionModeFor } =
+  await import('./handoffsStore')
 type Handoff = import('../../shared/types/ipc').Handoff
 type HandoffMode = import('../../shared/types/ipc').HandoffMode
 type HandoffStatus = import('../../shared/types/ipc').HandoffStatus
@@ -103,5 +104,21 @@ describe('pendingHandoffs', () => {
       makeHandoff({ id: 'b', status: 'running' }),
     ]
     expect(pendingHandoffs(list).map((h) => h.id)).toEqual(['a'])
+  })
+})
+
+describe('dispatchedToast', () => {
+  it('"X despachada → repo" some sozinho em ~5s (não fica sobre o mapa)', () => {
+    const t = dispatchedToast(makeHandoff({ status: 'running' }), 'filha-web', null)
+    expect(t.title).toBe('filha-web despachada → repo-label')
+    expect(t.durationMs).toBe(DISPATCH_TOAST_MS)
+    expect(DISPATCH_TOAST_MS).toBeGreaterThanOrEqual(4000)
+    expect(DISPATCH_TOAST_MS).toBeLessThanOrEqual(5000)
+  })
+
+  it('sem alias cai no repo; sem filha no snapshot, sem ação', () => {
+    const t = dispatchedToast(makeHandoff(), null, null)
+    expect(t.title).toBe('Handoff despachado → repo-label')
+    expect(t.actionLabel).toBeUndefined()
   })
 })

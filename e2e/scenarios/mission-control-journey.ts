@@ -572,6 +572,16 @@ try {
       (await card(idA).count()) + (await card(idB).count()) + (await card(idC).count()) === 3,
   )
   check(cardsOk, 'cartões das 3 sessões no mapa')
+  // A → C → B: só a raiz A é o cartão grande; C (filha que delegou B) é mãe no
+  // cartão comum, com o selo e sem o 1.6x.
+  const variants = await Promise.all([idA, idC].map((id) => card(id).getAttribute('data-variant')))
+  const cMother = await card(idC).getAttribute('data-mother')
+  const cBadge = await card(idC).getByTestId('card-mother-badge').count()
+  const [wA, wC] = await Promise.all([idA, idC].map(async (id) => (await card(id).boundingBox())?.width ?? 0))
+  check(
+    variants[0] === 'mother' && variants[1] !== 'mother' && cMother === 'true' && cBadge > 0 && wA > wC * 1.4,
+    `raiz A no cartão grande, intermediária C no comum com selo (variant ${variants.join('/')}, larguras ${Math.round(wA)}/${Math.round(wC)})`,
+  )
   const views = await Promise.all([idA, idB, idC].map((id) => card(id).getAttribute('data-view')))
   check(
     views.every((v) => v === 'open'),

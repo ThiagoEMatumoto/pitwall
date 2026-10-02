@@ -136,6 +136,53 @@ function useComposerBoxes(): PeekBox[] {
   return on ? boxes : []
 }
 
+// No mapa, a pilha não cobre o cartão da mãe (composer, "Espiar filhas") nem a
+// coluna da mãe fixada. O cartão anda com o pan/zoom sem evento nenhum: relê a
+// cada meio segundo, mas só enquanto há toast à vista (sem toast a posição da
+// pilha não importa e o AppShell não re-renderiza a cada pan).
+const MAP_OBSTACLE_POLL_MS = 500
+const MAP_OBSTACLE_SELECTOR = '[data-variant="mother"], [data-testid="mother-dock"]'
+
+function readMapObstacles(): PeekBox[] {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  return [...document.querySelectorAll<HTMLElement>(MAP_OBSTACLE_SELECTOR)].flatMap((el) => {
+    const r = el.getBoundingClientRect()
+    // Recorta na janela: o cartão meio fora da tela só ocupa o pedaço visível.
+    const left = Math.max(0, r.left)
+    const top = Math.max(0, r.top)
+    const width = Math.min(vw, r.left + r.width) - left
+    const height = Math.min(vh, r.top + r.height) - top
+    return width <= 0 || height <= 0 ? [] : [{ left, top, width, height }]
+  })
+}
+
+function useMapObstacles(onMap: boolean): PeekBox[] {
+  const toastCount = useToastStore((s) => s.toasts.length)
+  const [boxes, setBoxes] = useState<PeekBox[]>([])
+  useEffect(() => {
+    if (!onMap) {
+      setBoxes([])
+      return
+    }
+    const measure = () => {
+      // Avisos do main (IPC) não passam pelo toast-store: o card na pilha conta.
+      const showing = toastCount > 0 || document.querySelector('[data-testid="toast-card"]')
+      const next = showing ? readMapObstacles() : []
+      setBoxes((prev) => (sameBoxes(prev, next) ? prev : next))
+    }
+    const raf = requestAnimationFrame(measure)
+    const timer = setInterval(measure, MAP_OBSTACLE_POLL_MS)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearInterval(timer)
+      window.removeEventListener('resize', measure)
+    }
+  }, [onMap, toastCount])
+  return onMap ? boxes : []
+}
+
 export function useToastPlacement(dockWidth: number): ToastPlacement {
   const minimap = useMinimapBox()
   const composers = useComposerBoxes()
@@ -143,6 +190,7 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
   const inProjects = useAppStore((s) => s.area === 'projects')
   const onMap = mapView && inProjects
   const featurePanel = useFeaturePanelBox(onMap, dockWidth)
+  const mapObstacles = useMapObstacles(onMap)
   const peekId = useCrewDockStore((s) => s.peekTarget?.id ?? null)
   const [peek, setPeek] = useState<PeekBox | null>(null)
   const [lift, setLift] = useState(false)
@@ -173,7 +221,7 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
     peek: peekId ? peek : null,
     viewportWidth,
     minimap: minimap.box,
-    obstacles: composers,
+    obstacles: [...composers, ...mapObstacles],
     viewportHeight: minimap.viewportHeight,
     lift: !!peekId && lift,
     onMap,

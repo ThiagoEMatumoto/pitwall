@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAP_MAX_VISIBLE,
+  TOAST_COLUMN_W,
+  TOAST_EST_H,
   PEEK_HEADER_HEIGHT,
   TOAST_MARGIN,
   toastStackPlacement,
@@ -185,5 +187,73 @@ describe('toastStackPlacement — modal do terminal e mapa', () => {
       rightPanel: panel,
     })
     expect(p.right).toBe(420 + TOAST_MARGIN)
+  })
+})
+
+// Coluna real da pilha (max-w-xs) e altura de 2 toasts do mapa: a caixa que não
+// pode encostar no cartão da mãe nem na coluna fixada.
+function mapStackBox(p: ToastPlacement, vw: number, vh: number): PeekBox {
+  const width = p.maxWidth ?? TOAST_COLUMN_W
+  const height = p.maxVisible === 1 ? TOAST_EST_H : MAP_MAX_VISIBLE * TOAST_EST_H
+  const left = vw - p.right - width
+  const top = p.top !== undefined ? p.top : vh - (p.bottom ?? 0) - height
+  return { left, top, width, height }
+}
+
+describe('toastStackPlacement — cartão da mãe e coluna fixada', () => {
+  const vw = 1600
+  const vh = 925
+  const base = { dockWidth: 0, peek: null, viewportWidth: vw, viewportHeight: vh, onMap: true }
+
+  it('mãe embaixo à direita: a pilha sobe para cima do cartão', () => {
+    const mother = { left: 1000, top: 420, width: 576, height: 400 }
+    const p = toastStackPlacement({ ...base, obstacles: [mother] })
+    expect(overlaps(mapStackBox(p, vw, vh), mother)).toBe(false)
+    expect(p.bottom).toBe(vh - mother.top + TOAST_MARGIN)
+  })
+
+  it('mãe no alto à direita: a pilha fica no canto, embaixo dela (subir sairia da tela)', () => {
+    const mother = { left: 1000, top: 40, width: 576, height: 420 }
+    const p = toastStackPlacement({ ...base, obstacles: [mother] })
+    expect(p.bottom).toBe(TOAST_MARGIN)
+    expect(overlaps(mapStackBox(p, vw, vh), mother)).toBe(false)
+  })
+
+  it('mãe no meio e minimapa no canto: a pilha cabe no vão entre os dois', () => {
+    const mother = { left: 1100, top: 60, width: 480, height: 380 }
+    const minimap = { left: 1380, top: 760, width: 200, height: 150 }
+    const p = toastStackPlacement({ ...base, obstacles: [mother], minimap })
+    const box = mapStackBox(p, vw, vh)
+    expect(overlaps(box, mother)).toBe(false)
+    expect(overlaps(box, minimap)).toBe(false)
+    expect(p.bottom).toBe(vh - minimap.top + TOAST_MARGIN)
+  })
+
+  it('mãe ocupa a coluna de cima a baixo: a pilha vai para a esquerda dela', () => {
+    const mother = { left: 900, top: 10, width: 680, height: 900 }
+    const p = toastStackPlacement({ ...base, obstacles: [mother] })
+    const box = mapStackBox(p, vw, vh)
+    expect(overlaps(box, mother)).toBe(false)
+    expect(box.left).toBeGreaterThanOrEqual(0)
+  })
+
+  it('a pilha não cobre a barra de ações nem o composer da mãe (o cartão inteiro é obstáculo)', () => {
+    // Cartão da mãe que encosta só pela borda esquerda na coluna da pilha.
+    const mother = { left: vw - 16 - 330, top: 500, width: 700, height: 420 }
+    const p = toastStackPlacement({ ...base, obstacles: [mother] })
+    expect(overlaps(mapStackBox(p, vw, vh), mother)).toBe(false)
+  })
+
+  it('coluna da mãe fixada (janela estreita, dock até a coluna da pilha): a pilha sai de cima', () => {
+    const narrow = 760
+    const dock = { left: 0, top: 40, width: 460, height: vh - 40 }
+    const p = toastStackPlacement({ ...base, viewportWidth: narrow, obstacles: [dock] })
+    expect(overlaps(mapStackBox(p, narrow, vh), dock)).toBe(false)
+  })
+
+  it('obstáculo à direita da coluna (sob o Crew Dock) não empurra a pilha', () => {
+    const under = { left: 1500, top: 600, width: 100, height: 300 }
+    const p = toastStackPlacement({ ...base, dockWidth: 120, obstacles: [under] })
+    expect(p.bottom).toBe(TOAST_MARGIN)
   })
 })

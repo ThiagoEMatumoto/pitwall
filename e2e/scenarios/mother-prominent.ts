@@ -342,6 +342,61 @@ try {
   )
   await shot('mae-fixada')
 
+  // ---------- C1 despacha uma neta: mãe intermediária + toast fora da mãe ----------
+  const neta = await page.evaluate(
+    async ({ repoId, featureId, mother }) => {
+      const c = await window.api.sessions.spawn({ repoId, name: 'neta-e2e', handoffChild: true, featureId })
+      const { handoff } = await window.api.handoffs.createManual({
+        repoId,
+        motherSessionId: mother,
+        task: 'Conferir o recibo',
+        featureId,
+      })
+      await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
+      return { id: c.id }
+    },
+    { repoId: repo.id, featureId: feature.id, mother: c1.id },
+  )
+  const toastCard = page.locator('[data-testid="toast-card"]:visible', { hasText: 'neta-e2e' })
+  const toastAt = Date.now()
+  check(
+    await waitFor('toast de despacho', async () => (await toastCard.count()) > 0, 10_000),
+    'toast "neta-e2e despachada → …" apareceu',
+  )
+  check(
+    await waitFor('C1 vira mãe', async () => (await card(c1.id).getAttribute('data-mother')) === 'true', 10_000),
+    'C1 (filha que delegou) marcada como mãe',
+  )
+  check(
+    (await card(c1.id).getAttribute('data-variant')) !== 'mother' &&
+      (await card(c1.id).getByTestId('card-mother-badge').count()) > 0,
+    `mãe intermediária C1 no cartão comum com o selo MÃE (variant=${await card(c1.id).getAttribute('data-variant')})`,
+  )
+  check(
+    (await card(idM).getAttribute('data-variant')) === 'mother',
+    'a raiz M segue no cartão grande',
+  )
+  // A pilha relê os obstáculos a cada 500ms: espera assentar antes de medir.
+  await page.waitForTimeout(900)
+  await shot('toast-fora-da-mae')
+  const overlapsBox = (
+    a: { x: number; y: number; width: number; height: number } | null,
+    b: { x: number; y: number; width: number; height: number } | null,
+  ) => !!a && !!b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+  // Toda a pilha visível (o "+N" esconde os excedentes com hidden).
+  const stack = page.locator('[data-testid="toast-card"]:visible, [data-testid="toast-overflow"]')
+  const tbs = await Promise.all((await stack.all()).map((l) => l.boundingBox()))
+  const mb = await card(idM).boundingBox()
+  const db = await dock().boundingBox()
+  check(
+    tbs.length > 0 && tbs.every((tb) => !!tb && !overlapsBox(tb, mb) && !overlapsBox(tb, db)),
+    `pilha de toasts fora do cartão da mãe e da coluna fixada (${tbs.length} itens · mãe ${JSON.stringify(mb)} · coluna ${JSON.stringify(db)})`,
+  )
+  const gone = await waitFor('toast some', async () => (await toastCard.count()) === 0, 8_000)
+  const lived = Date.now() - toastAt
+  check(gone && lived <= 6_500, `toast de despacho sumiu sozinho em ${lived}ms (~5s)`)
+  check(!!neta.id, `neta subiu (${neta.id})`)
+
   // O mapa segue navegável ao lado: arrastar o fundo move a câmera.
   const before = await viewportNow()
   const pane = page.locator('.react-flow__pane')
