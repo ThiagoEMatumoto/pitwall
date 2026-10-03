@@ -26,7 +26,7 @@ function sameItem(next: object, prev: object): boolean {
   return true
 }
 
-export function reuseUnchanged<T extends { id: string; selected?: boolean }>(
+export function reuseUnchanged<T extends { id: string; selected?: boolean; resizing?: boolean }>(
   next: T[],
   prev: T[],
 ): T[] {
@@ -34,7 +34,10 @@ export function reuseUnchanged<T extends { id: string; selected?: boolean }>(
   let changed = next.length !== prev.length
   const out = next.map((n, i) => {
     const p = byId.get(n.id)
-    if (p && sameItem(n, p)) {
+    // No meio de um redimensionar, width/height são do gesto (o NodeResizer os
+    // escreve): o nó do layout traria a vaga antiga e o cartão pularia de volta.
+    // Fica congelado até soltar; o soltar grava o tamanho e o próximo push já o traz.
+    if (p?.resizing || (p && sameItem(n, p))) {
       if (prev[i] !== p) changed = true
       return p
     }

@@ -159,3 +159,22 @@
     opacity: 0;
   }
 }
+
+/* Alça de redimensionar o cartão (CardResizer): dentro do canto, visível só no
+   hover/seleção do nó. Por cima da caixa do cartão, e sem o quadradinho do xyflow. */
+.react-flow__resize-control.handle.session-card-resizer {
+  width: 18px;
+  height: 18px;
+  translate: -100% -100%;
+  border: 0;
+  border-radius: 0 0 8px 0;
+  background: transparent;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.react-flow__node:hover .session-card-resizer,
+.react-flow__node.selected .session-card-resizer,
+.react-flow__node.resizing .session-card-resizer {
+  opacity: 1;
+}

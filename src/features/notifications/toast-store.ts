@@ -48,3 +48,8 @@ export function showToast(
 export function dismissToast(id: number): void {
   useToastStore.getState().dismiss(id)
 }
+
+// Largura do "+N" quando ele mora no canto da barra do mapa estreito (0 = não
+// está lá). A barra é flex-wrap alinhada à esquerda: sem reservar esse canto, o
+// "+N" (fixo, acima dela) cobria o último item e engolia o clique nele.
+export const useBarPillStore = create<{ width: number }>(() => ({ width: 0 }))

@@ -19,6 +19,14 @@ export interface Viewport {
   zoom: number
 }
 
+// A barra do topo mudou de altura fora de um enquadrar (o "+N avisos" entrou
+// nela e ela quebrou linha): o conteúdo segue a borda de baixo dela, senão o
+// cabeçalho do cartão logo abaixo some atrás.
+export function followBarHeight(vp: Viewport, prev: number | null, next: number): Viewport | null {
+  if (prev === null || prev === next) return null
+  return { ...vp, y: vp.y + (next - prev) }
+}
+
 export function boundsOf(rects: Rect[]): Rect | null {
   if (rects.length === 0) return null
   const x = Math.min(...rects.map((r) => r.x))
@@ -416,15 +424,43 @@ export function pillSpot(
   // Px do contêiner: os cartões À VISTA e os cabeçalhos dos frames. Na faixa do
   // alvo o pill cobria o nome do cartão vizinho (print 07: "otavio-pa… c1-checkout").
   obstacles: Rect[] = [],
-): { x: number; y: number } {
+  // O cartão enquadrado pelo F (px do contêiner): obstáculo duro. Sem ponto fora
+  // dele na borda, vai para outra borda da área livre; sem nenhum, não há pill
+  // (null) — por cima, ele cobria o cartão em foco.
+  avoid: Rect | null = null,
+): { x: number; y: number } | null {
   const vertical = side === 'left' || side === 'right'
+  const clearOfAvoid = (p: { x: number; y: number }) =>
+    !avoid ||
+    !hits(
+      { l: p.x, t: p.y, r: p.x + size.w, b: p.y + size.h },
+      { l: avoid.x, t: avoid.y, r: avoid.x + avoid.w, b: avoid.y + avoid.h },
+    )
+  // Nada fora do cartão na borda do lado: as outras bordas da área livre (o F
+  // costuma encher um eixo e deixar o outro). Só sem lugar nenhum não há pill.
+  const anywhereOutside = (): { x: number; y: number } | null => {
+    const xs = { lo: box.l + PILL_MARGIN, hi: box.r - PILL_MARGIN - size.w }
+    const ys = { lo: box.t + PILL_MARGIN, hi: box.b - PILL_MARGIN - size.h }
+    const edges: Array<(v: number) => { x: number; y: number }> = [
+      (x) => ({ x, y: ys.lo }),
+      (x) => ({ x, y: ys.hi }),
+      (y) => ({ x: xs.lo, y }),
+      (y) => ({ x: xs.hi, y }),
+    ]
+    for (const [i, at] of edges.entries()) {
+      const r = i < 2 ? xs : ys
+      const v = scanFree(r.hi, r.lo, r.hi, (u) => clearOfAvoid(at(u)))
+      if (v !== null) return at(v)
+    }
+    return null
+  }
   if (target) {
     const covers = (p: { x: number; y: number }) => {
       const pill = { l: p.x, t: p.y, r: p.x + size.w, b: p.y + size.h }
       const s = PILL_OBSTACLE_SLOP
       // O próprio alvo, quando meio à vista, também é obstáculo: o pill na faixa
       // dele cobria o texto da parte visível.
-      return [...obstacles, target].some((o) =>
+      return [...obstacles, target, ...(avoid ? [avoid] : [])].some((o) =>
         hits(pill, { l: o.x - s, t: o.y - s, r: o.x + o.w + s, b: o.y + o.h + s }),
       )
     }
@@ -436,14 +472,20 @@ export function pillSpot(
       const hi = box.b - PILL_MARGIN - size.h
       const want = clamp(target.y + target.h / 2 - size.h / 2, lo, hi)
       const free = scanFree(want, lo, hi, (y) => !covers({ x, y }))
-      return { x, y: free ?? want }
+      if (free !== null) return { x, y: free }
+      if (!avoid) return { x, y: want }
+      const outside = scanFree(want, lo, hi, (y) => clearOfAvoid({ x, y }))
+      return outside === null ? anywhereOutside() : { x, y: outside }
     }
     const y = side === 'top' ? box.t + PILL_MARGIN : box.b - PILL_MARGIN - size.h
     const lo = box.l + PILL_MARGIN
     const hi = box.r - PILL_MARGIN - size.w
     const want = clamp(target.x + target.w / 2 - size.w / 2, lo, hi)
     const free = scanFree(want, lo, hi, (x) => !covers({ x, y }))
-    return { x: free ?? want, y }
+    if (free !== null) return { x: free, y }
+    if (!avoid) return { x: want, y }
+    const outside = scanFree(want, lo, hi, (x) => clearOfAvoid({ x, y }))
+    return outside === null ? anywhereOutside() : { x: outside, y }
   }
   const spots = PILL_SPOTS.map((f) => {
     if (vertical) {
@@ -464,7 +506,16 @@ export function pillSpot(
       return hits(pill, outer) && !inside
     })
   }
-  return spots.find((p) => !crossesBorder(p)) ?? spots[0]
+  if (!avoid) return spots.find((p) => !crossesBorder(p)) ?? spots[0]
+  const clear = spots.filter(clearOfAvoid)
+  if (clear.length > 0) return clear.find((p) => !crossesBorder(p)) ?? clear[0]
+  // Os pontos fixos caem todos no cartão: o mais perto do meio da borda fora dele.
+  const lo = vertical ? box.t + PILL_MARGIN : box.l + PILL_MARGIN
+  const hi = vertical ? box.b - PILL_MARGIN - size.h : box.r - PILL_MARGIN - size.w
+  const at = (v: number) => (vertical ? { x: spots[0].x, y: v } : { x: v, y: spots[0].y })
+  const mid = vertical ? spots[0].y : spots[0].x
+  const v = scanFree(clamp(mid, lo, hi), lo, hi, (u) => clearOfAvoid(at(u)))
+  return v === null ? anywhereOutside() : at(v)
 }
 
 export interface OverflowEdges {

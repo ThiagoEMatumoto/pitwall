@@ -59,7 +59,12 @@ import {
 import { FEATURE_PANEL_W, FeaturePanel } from './FeaturePanel'
 import { MotherDock } from './MotherDock'
 import { MOTHER_MINI_BELOW } from './mother-badge'
-import { motherOfFocus, useMotherDockStore } from './mother-dock'
+import { keepLastMother, motherOfFocus, useMotherDockStore } from './mother-dock'
+import { useMapFocusStore } from './map-focus-store'
+import { useFeatureMruStore } from './feature-mru-store'
+import { groupKeyOf } from './feature-switcher-model'
+import { isTypingTarget, mapKeysOwnedElsewhere } from './typing-target'
+import { cardZoomViewport, toggleCardZoom } from './map-zoom-toggle'
 import { openMapPeek } from '@/features/handoffs/open-map-peek'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -79,6 +84,7 @@ import {
   OVERVIEW_MIN_CARDS,
   actualSizeViewport,
   boundsOf,
+  followBarHeight,
   noteSlot,
   offscreenCards,
   overflowEdges,
@@ -92,6 +98,7 @@ import {
   type Insets,
   type MapSide,
   type OverflowEdges,
+  type Viewport,
 } from './map-fit'
 import type { Rect } from './edge-anchor'
 import { cardTitle, isCompactZoom, MAX_COMPACT_ZOOM } from './card-display'
@@ -106,6 +113,7 @@ import { useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { RAIL_WIDTH, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { MapFeatureMovePicker } from './MapChrome'
+import { FeatureSwitcherButton } from './FeatureSwitcher'
 
 const nodeTypes = {
   session: SessionCardNode,
@@ -132,6 +140,7 @@ function sameIds(a: { id: string }[], b: { id: string }[]): boolean {
 // diz onde está o resto.
 const MINIMAP_MIN_CARDS = OVERVIEW_MIN_CARDS
 const INSET_GAP = 8
+const SETTLE_FIT_MS = 800
 
 // O que flutua por cima do mapa, medido no DOM: barra do topo, controles de zoom
 // (coluna da esquerda) e minimapa (faixa da base), relativos ao contêiner.
@@ -192,9 +201,12 @@ const SIDE_ARROW = { left: '←', right: '→', top: '↑', bottom: '↓' } as c
 function MapOverflowHints({
   containerRef,
   onFit,
+  framedId,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>
   onFit: () => void
+  // O cartão enquadrado pelo F (id do nó), enquanto o F vale: o pill não cai nele.
+  framedId: () => string | null
 }) {
   const transform = useStore((s) => s.transform)
   const nodeLookup = useStore((s) => s.nodeLookup)
@@ -220,6 +232,7 @@ function MapOverflowHints({
   if (!el) return null
   const tops: Rect[] = []
   const cards: Rect[] = []
+  const cardIds: string[] = []
   const titles: string[] = []
   const frames: Rect[] = []
   const [tx, ty, tz] = transform
@@ -238,6 +251,7 @@ function MapOverflowHints({
     if (!n.parentId) tops.push(r)
     if (n.type === 'session') {
       cards.push(r)
+      cardIds.push(n.id)
       titles.push(cardTitle((n.data as SessionCardData).node))
     } else frames.push(toScreen(r))
   }
@@ -272,7 +286,8 @@ function MapOverflowHints({
       )
     : null
   const screenCards = cards.map(toScreen)
-  const hiddenIdx = new Set(off.hidden.map((h) => h.index))
+  const framed = framedId()
+  const framedIdx = framed ? cardIds.indexOf(framed) : -1
   const spot = off.side
     ? pillSpot(
         off.side,
@@ -280,10 +295,10 @@ function MapOverflowHints({
         frames,
         pillBox && pillBox.width > 0 ? { w: pillBox.width, h: pillBox.height } : PILL_FALLBACK,
         nearest === null ? null : screenCards[nearest],
-        [
-          ...screenCards.filter((_, i) => !hiddenIdx.has(i)),
-          ...frames.map((f) => frameHeader(f, screenCards, tz)),
-        ],
+        // Todos os cartões, não só os 100% à vista: a mãe meio cortada acima do F
+        // contava como oculta e o pill cobria o nome dela (print MP2-r2 04).
+        [...screenCards, ...frames.map((f) => frameHeader(f, screenCards, tz))],
+        framedIdx >= 0 ? screenCards[framedIdx] : null,
       )
     : null
   const pillLabel =
@@ -349,11 +364,6 @@ function nearestHidden(indices: number[], screen: Rect[], side: MapSide): number
 
 // Tecla solta (sem modificador) só vale fora de campo de texto: nota, propósito
 // e nome de grupo editam dentro do mapa.
-function isTyping(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
-}
-
 function toggled(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   const next = new Set(set)
   if (next.has(id)) next.delete(id)
@@ -383,6 +393,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const asks = usePendingAsks()
   const cardHeights = useCardHeightStore((s) => s.heights)
+  const inPanel = useMotherDockStore((s) => s.shownId)
   // Densidade do zoom (resumo/blocos): a raia reserva a altura que o cartão desenha.
   const compact = useStore((s) => isCompactZoom(s.transform[2]))
   // Largura da área do mapa: os cards quebram em linhas (wrapRowWidth).
@@ -408,6 +419,8 @@ function SessionMapInner() {
       graph,
       scope,
       positions: canvas?.positions ?? [],
+      sizes: canvas?.sizes ?? [],
+      inPanel,
       notes: canvas?.notes ?? [],
       groups: canvas?.groups ?? [],
       inUse,
@@ -418,7 +431,19 @@ function SessionMapInner() {
       rowWidth,
       compact,
     }),
-    [graph, scope, canvas, inUse, expandedMothers, views, cardHeights, asks, rowWidth, compact],
+    [
+      graph,
+      scope,
+      canvas,
+      inPanel,
+      inUse,
+      expandedMothers,
+      views,
+      cardHeights,
+      asks,
+      rowWidth,
+      compact,
+    ],
   )
   const inputRef = useRef(input)
   inputRef.current = input
@@ -448,6 +473,48 @@ function SessionMapInner() {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const selected = nodes.filter((n) => n.selected)
   const selectedCard = selected.length === 1 && selected[0].type === 'session' ? selected[0] : null
+  // A feature em foco (map-focus-store): a do cartão selecionado (sessão ou card
+  // da feature), senão a do painel da feature aberto; sem nenhum dos dois, fica a
+  // última usada. É ela que decide qual mãe o painel ao lado do mapa mostra.
+  const selectedFeature = selectedCard
+    ? ((selectedCard.data as SessionCardData).node.featureId ?? null)
+    : selected.length === 1 && selected[0].id.startsWith('lane:f:')
+      ? selected[0].id.slice(7)
+      : null
+  // Grupo "Sem feature" selecionado (o card dele ou uma sessão sem feature): não
+  // muda a feature em foco, mas é onde o usuário está para o seletor (Ctrl+`).
+  const selectedGroupKey = selectedCard
+    ? groupKeyOf(graph, (selectedCard.data as SessionCardData).node.sessionId)
+    : selected.length === 1 && selected[0].id.startsWith('lane:p:')
+      ? `p:${selected[0].id.slice(7)}`
+      : null
+  const openPanelFeature = useFeaturePanelStore((s) => s.openFeatureId)
+  useEffect(() => {
+    const f = selectedFeature ?? openPanelFeature
+    if (f) useMapFocusStore.getState().setFeature(f)
+  }, [selectedFeature, openPanelFeature])
+  useEffect(() => {
+    if (selectedGroupKey) useFeatureMruStore.getState().touch(selectedGroupKey)
+  }, [selectedGroupKey])
+  const focusedFeature = useMapFocusStore((s) => s.featureId)
+  const dockMode = useMotherDockStore((s) => s.mode)
+  const focusMotherId = useMemo(
+    () =>
+      dockMode === 'focus'
+        ? motherOfFocus(
+            graph.nodes,
+            graph.edges,
+            inUse,
+            { featureId: focusedFeature },
+            { strict: true },
+          )
+        : null,
+    [dockMode, graph, inUse, focusedFeature],
+  )
+  const lastAutoRef = useRef<string | null>(null)
+  const autoMotherId =
+    dockMode === 'focus' ? keepLastMother(focusMotherId, lastAutoRef.current, inUse) : null
+  if (autoMotherId) lastAutoRef.current = autoMotherId
   const focusNode =
     selectedCard ??
     (hoveredId ? nodes.find((n) => n.id === hoveredId && n.type === 'session') : undefined)
@@ -549,6 +616,10 @@ function SessionMapInner() {
     return boundsOf(top.filter((r): r is Rect => r !== null))
   }, [flowApi, rectOf])
 
+  // O viewport de antes do F (zoom-to-card). Todo reenquadramento programático o
+  // invalida: a vista guardada foi calculada para outra largura do mapa (o painel
+  // da mãe abrir/fechar muda ela) e o 2º F/Esc cairia deslocado.
+  const zoomSavedRef = useRef<Viewport | null>(null)
   // Enquadramento legível (map-fit.ts): o inicial e o botão de enquadrar. O
   // fitView do xyflow encaixava tudo num zoom ~0.3 em que nada se lia.
   const fitReadable = useCallback(
@@ -590,7 +661,7 @@ function SessionMapInner() {
       const inFocusCard =
         !!motherId && (!focusCard || topAncestorOf(sessionNodeId(motherId)) === focusCard)
       const fitMother =
-        motherId && inFocusCard && motherId !== useMotherDockStore.getState().pinnedId
+        motherId && inFocusCard && motherId !== useMotherDockStore.getState().shownId
           ? motherId
           : null
       const insets = overlayInsets(el)
@@ -630,6 +701,7 @@ function SessionMapInner() {
       }
       if (!plan) return
       if (plan.collapseDock) useCrewDockStore.getState().collapse()
+      zoomSavedRef.current = null
       void flowApi.setViewport(plan.viewport, {
         duration: opts?.keepDock && !reducedMotion() ? 200 : 0,
       })
@@ -637,10 +709,67 @@ function SessionMapInner() {
     [flowApi, topAncestorOf],
   )
 
+  // O enquadrar automático (montagem, painel da mãe abrindo) mede barra e mapa
+  // num instante em que eles ainda assentam: o painel acerta a largura no frame
+  // seguinte, o mapa estreita e a barra do topo quebra em 2 linhas — o cabeçalho
+  // do card em foco ficava atrás dela. Por SETTLE_FIT_MS, cada mudança de tamanho
+  // do mapa ou da barra refaz o mesmo enquadrar; mexer na câmera cancela.
+  const settleRef = useRef<{ opts: Parameters<typeof fitReadable>[0]; until: number } | null>(null)
+  const settleFit = useCallback(
+    (opts: Parameters<typeof fitReadable>[0]) => {
+      settleRef.current = { opts, until: performance.now() + SETTLE_FIT_MS }
+      fitReadable(opts)
+    },
+    [fitReadable],
+  )
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let outer = 0
+    let inner = 0
+    const bar = el.querySelector<HTMLElement>('[data-testid="map-top-bar"]')
+    let barH = bar?.offsetHeight ?? null
+    const ro = new ResizeObserver(() => {
+      const prevBarH = barH
+      barH = bar?.offsetHeight ?? null
+      const s = settleRef.current
+      if (!s || performance.now() > s.until) {
+        // Fora do enquadrar (o "+N avisos" chegou depois): a câmera fica, e o
+        // conteúdo acompanha a borda de baixo da barra.
+        const next = barH === null ? null : followBarHeight(flowApi.getViewport(), prevBarH, barH)
+        if (next) void flowApi.setViewport(next)
+        // A vista guardada pelo F também é relativa à barra: sem acompanhar, voltar
+        // dele com a barra noutra altura deixava o resíduo quando ela voltava.
+        const saved = zoomSavedRef.current
+        const savedNext = saved && barH !== null ? followBarHeight(saved, prevBarH, barH) : null
+        if (savedNext) zoomSavedRef.current = savedNext
+        return
+      }
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+      // 2 frames: o layout novo (largura das linhas) chega no render seguinte.
+      outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => {
+          if (settleRef.current === s) fitReadable(s.opts)
+        })
+      })
+    })
+    ro.observe(el)
+    if (bar) ro.observe(bar)
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [fitReadable, flowApi])
+
   const actualSize = useCallback(() => {
     const el = containerRef.current
     const viewport = el ? actualSizeViewport(visibleBounds(), overlayInsets(el)) : null
-    if (viewport) void flowApi.setViewport(viewport, { duration: reducedMotion() ? 0 : 200 })
+    if (!viewport) return
+    zoomSavedRef.current = null
+    settleRef.current = null
+    void flowApi.setViewport(viewport, { duration: reducedMotion() ? 0 : 200 })
   }, [flowApi, visibleBounds])
 
   // Nota solta do botão "Nota": ao lado da seleção (o card de topo dela) ou, sem
@@ -669,6 +798,7 @@ function SessionMapInner() {
       const internal = flowApi.getInternalNode(id)
       const node = flowApi.getNode(id)
       if (!internal || !node) return
+      settleRef.current = null
       const abs = internal.internals.positionAbsolute
       void flowApi.setCenter(abs.x + (node.width ?? 0) / 2, abs.y + (node.height ?? 0) / 2, {
         zoom,
@@ -771,6 +901,10 @@ function SessionMapInner() {
   // Refeito ao trocar o escopo.
   const nodesInitialized = useNodesInitialized()
   const fittedKey = useRef<string | null>(null)
+  // O card que o seletor pediu (focusFeature/frameLane): vindo de Terminais, o fit
+  // de montagem e o de o painel abrir rodam DEPOIS do pedido e, sem prioridade,
+  // jogavam a câmera para outra feature. Vale até o usuário mexer na câmera ou na seleção.
+  const framedLaneRef = useRef<string | null>(null)
   // Cruzar para 7+ cartões troca o piso (visão geral): reenquadra uma vez.
   const fitKey = `${scope}:${sessionCount >= OVERVIEW_MIN_CARDS ? 'overview' : 'readable'}`
   useEffect(() => {
@@ -780,8 +914,8 @@ function SessionMapInner() {
     if (!sameIds(nodes, flow.nodes)) return
     fittedKey.current = fitKey
     // O minimapa entra/sai junto com o conjunto: mede os insets no frame seguinte.
-    requestAnimationFrame(() => fitReadable())
-  }, [nodesInitialized, nodes, flow.nodes, fitKey, fitReadable])
+    requestAnimationFrame(() => settleFit({ priorityId: framedLaneRef.current }))
+  }, [nodesInitialized, nodes, flow.nodes, fitKey, settleFit])
 
   // Abrir o painel da feature: reenquadra com ele descontado (2 frames: o painel
   // monta e só então tem largura no DOM).
@@ -898,9 +1032,16 @@ function SessionMapInner() {
   const goToMother = useCallback(
     (sessionId: string | null) => {
       const { graph: g, inUse: used } = inputRef.current
+      // Sem seleção, a mesma regra do painel: o que ele mostra é a mãe a focar.
+      const dock = useMotherDockStore.getState()
+      if (!sessionId && dock.shownId) {
+        dock.requestFocus()
+        return
+      }
       const target = motherOfFocus(g.nodes, g.edges, used ?? new Set(), {
         sessionId,
-        featureId: useFeaturePanelStore.getState().openFeatureId,
+        featureId:
+          useMapFocusStore.getState().featureId ?? useFeaturePanelStore.getState().openFeatureId,
       })
       if (!target) {
         showToast({
@@ -909,8 +1050,7 @@ function SessionMapInner() {
         })
         return
       }
-      const dock = useMotherDockStore.getState()
-      if (dock.pinnedId === target) dock.requestFocus()
+      if (dock.shownId === target) dock.requestFocus()
       else cmd.interact(target)
     },
     [cmd],
@@ -927,6 +1067,57 @@ function SessionMapInner() {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [overrides, goToMother])
+  // F (zoom-to-card): enquadra o cartão selecionado em min(fit, 1) e guarda o
+  // viewport; o 2º F (ou Esc) volta a ele exato. Só com o foco no mapa (ou em
+  // lugar nenhum): de um xterm ou campo é texto (isTypingTarget), e de outra
+  // superfície (dialog, painel de fora) não é com o mapa.
+  // Outro cartão selecionado: o F seguinte enquadra ele, não volta à vista antiga.
+  const selectedSessionId = selectedSessionRef.current
+  useEffect(() => {
+    zoomSavedRef.current = null
+    if (selectedSessionId) framedLaneRef.current = null
+  }, [selectedSessionId])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+      const isF = e.key === 'f' || e.key === 'F'
+      // Esc só volta do F se ninguém mais quer o Esc (o painel da feature fecha com ele).
+      const escBack =
+        e.key === 'Escape' &&
+        !!zoomSavedRef.current &&
+        !useFeaturePanelStore.getState().openFeatureId
+      if (!isF && !escBack) return
+      const el = containerRef.current
+      const target = e.target instanceof Element ? e.target : null
+      if (!el || !target || isTypingTarget(target)) return
+      if (target !== document.body && !el.contains(target)) return
+      if (mapKeysOwnedElsewhere(target)) return
+      if (useCrewDockStore.getState().peekTarget) return
+      e.preventDefault()
+      if (e.repeat) return
+      const insets = overlayInsets(el)
+      const view = { w: el.clientWidth, h: el.clientHeight }
+      // O zoom escolhido decide a densidade, e ela muda o tamanho e a posição dos
+      // cartões: planeja sobre o layout que esse zoom vai mostrar (como o fitReadable),
+      // não sobre o DOM de agora (num 0.6 compacto o cartão a 1.0 sai do quadro).
+      const id = selectedSessionRef.current
+      const frameOn = (compact: boolean) => {
+        if (!id) return null
+        const { rects } = layoutRects(graphToFlow({ ...inputRef.current, compact }).nodes)
+        const rect = rects.get(sessionNodeId(id))
+        return rect ? cardZoomViewport(rect, view, insets) : null
+      }
+      const full = isF ? frameOn(false) : null
+      const frame = full && isCompactZoom(full.zoom) ? (frameOn(true) ?? full) : full
+      const { apply, saved } = toggleCardZoom(zoomSavedRef.current, flowApi.getViewport(), frame)
+      zoomSavedRef.current = saved
+      // O F é escolha da câmera: um reenquadrar do settle pendente o desfaria.
+      settleRef.current = null
+      if (apply) void flowApi.setViewport(apply, { duration: reducedMotion() ? 0 : 250 })
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [flowApi])
   // Pedido feito fora do mapa (AppShell): espera o grafo chegar para resolver a mãe.
   const graphReady = graph.nodes.length > 0
   useEffect(() => {
@@ -935,21 +1126,47 @@ function SessionMapInner() {
     if (pending) goToMother(pending.sessionId)
   }, [graphReady, goToMother])
 
-  // Fixar/desafixar a mãe muda a largura do mapa: reenquadra (sem fechar o dock).
-  const pinnedMother = useMotherDockStore((s) => s.pinnedId)
-  const prevPinned = useRef(pinnedMother)
+  // O painel da mãe abrir/fechar muda a largura do mapa: reenquadra (sem fechar
+  // o dock). Trocar a mãe dentro dele não muda a largura: não mexe na câmera.
+  const panelOpen = useMotherDockStore((s) => s.shownId !== null)
+  const prevPanelOpen = useRef(panelOpen)
   useEffect(() => {
-    if (prevPinned.current === pinnedMother) return
-    prevPinned.current = pinnedMother
+    if (prevPanelOpen.current === panelOpen) return
+    prevPanelOpen.current = panelOpen
     let inner = 0
     const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => fitReadable({ keepDock: true }))
+      inner = requestAnimationFrame(() =>
+        settleFit({ keepDock: true, priorityId: framedLaneRef.current }),
+      )
     })
     return () => {
       cancelAnimationFrame(outer)
       cancelAnimationFrame(inner)
     }
-  }, [pinnedMother, fitReadable])
+  }, [panelOpen, settleFit])
+
+  // focusFeature/frameLane (seletor de features): enquadra o card pedido. A
+  // escolha do seletor vence o que sobrou do mapa: o efeito de montagem acima já
+  // pode ter posto a feature do painel da feature deixado aberto, e o cartão de A
+  // ainda selecionado esmaeceria o de B (e travaria a feature em foco nele).
+  const frameRequest = useMapFocusStore((s) => s.frame)
+  useEffect(() => {
+    if (!frameRequest || !nodesInitialized) return
+    const req = useMapFocusStore.getState().takeFrame()
+    if (!req) return
+    if (req.featureId) useMapFocusStore.getState().setFeature(req.featureId)
+    const panel = useFeaturePanelStore.getState()
+    if (panel.openFeatureId && panel.openFeatureId !== req.featureId) panel.close()
+    setNodes((ns) =>
+      ns.some((n) => n.selected) ? ns.map((n) => (n.selected ? { ...n, selected: false } : n)) : ns,
+    )
+    zoomSavedRef.current = null
+    framedLaneRef.current = req.flowId
+    // settleFit, não fitReadable: troca as opções de um settle pendente (senão o
+    // próximo resize reenquadraria a feature anterior) e reenquadra esta quando a
+    // troca de mãe re-quebrar a barra.
+    settleFit({ priorityId: req.flowId, keepDock: true })
+  }, [frameRequest, nodesInitialized, settleFit, setNodes])
 
   // Alt+A com o mapa visível: centraliza o cartão da sessão que pede atenção.
   const flashNonce = useAttentionStore((s) => s.flash?.nonce)
@@ -1073,7 +1290,12 @@ function SessionMapInner() {
             <MotherDock
               graph={graph}
               inUse={inUse}
+              autoId={autoMotherId}
               onOpenModal={cmd.interact}
+              onOpenTab={(id) => {
+                const node = graph.nodes.find((n) => n.sessionId === id)
+                if (node) cmd.openTab(node)
+              }}
               onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), MIN_READABLE_ZOOM))}
             />
             <div
@@ -1083,7 +1305,7 @@ function SessionMapInner() {
               data-testid="session-map"
               onKeyDown={(e) => {
                 if (e.ctrlKey || e.metaKey || e.altKey) return
-                if (e.repeat || isTyping(e.target)) return
+                if (e.repeat || isTypingTarget(e.target)) return
                 const selectedSession = selectedCard
                   ? (selectedCard.data as SessionCardData).node
                   : null
@@ -1132,6 +1354,15 @@ function SessionMapInner() {
                   if (n.type === 'session') setHoveredId(n.id)
                 }}
                 onNodeMouseLeave={(_e, n) => setHoveredId((h) => (h === n.id ? null : h))}
+                // Pan/zoom à mão invalida o viewport guardado pelo F: o 2º F (ou Esc)
+                // não pode teleportar a câmera para uma vista de minutos atrás. Os
+                // movimentos programáticos (setViewport) chegam sem evento.
+                onMoveStart={(e) => {
+                  if (!e) return
+                  zoomSavedRef.current = null
+                  framedLaneRef.current = null
+                  settleRef.current = null
+                }}
                 onMoveEnd={resubscribe}
                 onConnect={onConnect}
                 isValidConnection={isValidConnection}
@@ -1208,6 +1439,7 @@ function SessionMapInner() {
                 // O painel da feature cobre a borda direita: a barra encolhe para a
                 // área útil (antes o painel cortava o pill de status).
                 rightInset={dockOverlay + (panelFeatureId ? FEATURE_PANEL_W : 0)}
+                narrow={!!inPanel || !!panelFeatureId}
                 scopeMode={scope === GLOBAL_CANVAS_SCOPE ? 'all' : 'project'}
                 hasProject={!!activeProjectId}
                 onScope={setScopeMode}
@@ -1223,12 +1455,21 @@ function SessionMapInner() {
                   useCardViewStore.getState().collapseAll(sessionNodes.map((n) => n.sessionId))
                 }
               >
+                <FeatureSwitcherButton />
                 <MapStatusCounters
                   nodes={sessionNodes}
                   onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
                 />
               </MapTopBar>
-              <MapOverflowHints containerRef={containerRef} onFit={() => fitReadable()} />
+              <MapOverflowHints
+                containerRef={containerRef}
+                onFit={() => fitReadable()}
+                framedId={() =>
+                  zoomSavedRef.current && selectedSessionRef.current
+                    ? sessionNodeId(selectedSessionRef.current)
+                    : null
+                }
+              />
               <FeaturePanel
                 rightInset={dockOverlay}
                 sessions={graph.nodes}

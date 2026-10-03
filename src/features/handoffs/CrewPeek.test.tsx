@@ -31,6 +31,11 @@ import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import {
+  defaultLiftSize,
+  readLiftSizes,
+  rememberLiftSize,
+} from '@/features/sessions/lift-size-store'
 
 const handoff: Handoff = {
   id: 'h1',
@@ -438,13 +443,69 @@ describe('CrewPeek como lift do mapa', () => {
     openLift()
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveAttribute('data-peek-lift', 'true')
-    expect(dialog.className).toContain('w-[min(1400px,94vw)]')
-    expect(dialog.className).toContain('h-[90vh]')
+    // Sem tamanho salvo: o padrão de sempre (até 1400px, 94vw × 90vh), em px.
+    const def = defaultLiftSize({ w: window.innerWidth, h: window.innerHeight })
+    expect(dialog.style.width).toBe(`${def.w}px`)
+    expect(dialog.style.height).toBe(`${def.h}px`)
     expect(terminalProps.at(-1)).toMatchObject({ leaseHost: 'modal', chrome: 'bare' })
     expect(terminalProps.at(-1)!.fontSize).toBeGreaterThanOrEqual(14)
     expect(useTerminalLease.getState().leases['s-a']).toBe('modal')
     act(() => useCrewDockStore.getState().closePeek())
     expect(useTerminalLease.getState().leases['s-a']).toBeUndefined()
+  })
+
+  it('no Chat, a alça da borda direita não cobre a barra de rolagem do chat', () => {
+    openLift()
+    act(() => useCrewDockStore.getState().setPeekMode('chat'))
+    // ChatView rola em absolute inset-0 sem padding: a faixa 'e' (w-1.5, z-20)
+    // ficava em cima de 6 dos 10px da barra de rolagem.
+    expect(screen.getByTestId('chat-view').parentElement!.className).toContain('mx-1.5')
+    expect(screen.getByTestId('peek-resize-e').className).toContain('w-1.5')
+  })
+
+  it('redimensionar: arrastar só mexe a moldura; soltar aplica e lembra por sessão', () => {
+    localStorage.clear()
+    const view = { w: window.innerWidth, h: window.innerHeight }
+    const def = defaultLiftSize(view)
+    const { unmount } = openLift()
+    const dialog = screen.getByRole('dialog')
+    const handle = screen.getByTestId('peek-resize-se')
+    // jsdom não tem PointerEvent (o fireEvent cairia num Event sem clientX/button)
+    // nem pointer capture.
+    if (!('PointerEvent' in window)) {
+      ;(window as unknown as { PointerEvent: typeof MouseEvent }).PointerEvent = class extends (
+        MouseEvent
+      ) {}
+    }
+    handle.setPointerCapture = () => {}
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500, clientY: 500, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 450, clientY: 470, pointerId: 1 })
+    expect(screen.getByTestId('peek-resize-ghost').style.width).toBe(`${def.w - 100}px`)
+    expect(dialog.style.width).toBe(`${def.w}px`)
+    fireEvent.pointerUp(handle, { clientX: 450, clientY: 470, pointerId: 1 })
+    expect(screen.queryByTestId('peek-resize-ghost')).toBeNull()
+    expect(dialog.style.width).toBe(`${def.w - 100}px`)
+    expect(dialog.style.height).toBe(`${def.h - 60}px`)
+    expect(readLiftSizes()['s-a']).toEqual({ w: def.w - 100, h: def.h - 60 })
+    unmount()
+    act(() => useCrewDockStore.getState().closePeek())
+    // Outra sessão abre no padrão; "Tamanho padrão" só aparece com tamanho salvo.
+    openLift('s-b')
+    expect(screen.getByRole('dialog').style.width).toBe(`${def.w}px`)
+    expect(screen.queryByTestId('peek-size-reset')).toBeNull()
+    act(() => useCrewDockStore.getState().closePeek())
+  })
+
+  it('"Tamanho padrão" esquece o tamanho da sessão', () => {
+    localStorage.clear()
+    rememberLiftSize('s-a', { w: 700, h: 400 })
+    openLift()
+    expect(screen.getByRole('dialog').style.width).toBe('700px')
+    fireEvent.click(screen.getByTestId('peek-size-reset'))
+    const def = defaultLiftSize({ w: window.innerWidth, h: window.innerHeight })
+    expect(screen.getByRole('dialog').style.width).toBe(`${def.w}px`)
+    expect(readLiftSizes()['s-a']).toBeUndefined()
+    act(() => useCrewDockStore.getState().closePeek())
   })
 
   it('a faixa troca de sessão no mesmo modo, e Alt+. anda por ela com volta', () => {

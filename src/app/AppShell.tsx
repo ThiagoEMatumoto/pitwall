@@ -31,10 +31,15 @@ import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
 import { SessionStrip } from '@/features/session-switcher/SessionStrip'
 import { SessionSwitcher } from '@/features/session-switcher/SessionSwitcher'
+import { FeatureSwitcher } from '@/features/session-canvas/FeatureSwitcher'
 import { QuickComposer } from '@/features/quick-composer/QuickComposer'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { NewSessionFlow } from '@/features/sessions/NewSessionFlow'
-import { UpdateToast } from '@/features/updates/UpdateToast'
+import {
+  UpdateToast,
+  useUpdateStatusFeed,
+  useUpdateToastShown,
+} from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
@@ -202,6 +207,8 @@ export function AppShell() {
   const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
   const toastPlacement = useToastPlacement(crewDockWidth)
+  useUpdateStatusFeed()
+  const updateShown = useUpdateToastShown()
   const toastStyle = {
     right: toastPlacement.right,
     top: toastPlacement.top,
@@ -633,6 +640,23 @@ export function AppShell() {
         useProjectsViewStore.getState().setView('map')
         return
       }
+      // Ctrl+Shift+P fora do mapa: idem (o xterm recebia ^P). Lá o painel não está
+      // na tela, então o atalho leva ao mapa com ele aberto; no mapa, o MotherDock
+      // alterna.
+      if (matchCombo(e, resolveCombo('mother.togglePanel', overrides))) {
+        const onMap =
+          useAppStore.getState().area === 'projects' &&
+          useProjectsViewStore.getState().view === 'map'
+        if (onMap) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const dock = useMotherDockStore.getState()
+        if (dock.mode === 'off') dock.togglePanel()
+        useAppStore.getState().setArea('projects')
+        useProjectsViewStore.getState().setView('map')
+        return
+      }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
@@ -964,6 +988,7 @@ export function AppShell() {
         activeCcSessionId={activeCcSessionId}
       />
       <SessionSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <FeatureSwitcher />
       <QuickComposer />
       <NewSessionFlow open={newSessionOpen} onClose={() => setNewSessionOpen(false)} />
       <div
@@ -972,12 +997,13 @@ export function AppShell() {
         style={toastStyle}
         hidden={toastPlacement.hidden}
       >
-        {/* Mesmo teto dos avisos: na faixa sobre a modal não cabe o card de update.
-            Escondido, não desmontado, para não perder o "dispensar". */}
-        <div hidden={toastPlacement.maxVisible === 0}>
-          <UpdateToast />
-        </div>
-        <NotificationToast maxVisible={toastPlacement.maxVisible} />
+        {/* O card de update é um card da pilha: conta no teto e no "+N" (no mapa
+            estreito, solto, ficava à vista em cima dos cartões). */}
+        <NotificationToast
+          maxVisible={toastPlacement.maxVisible}
+          expandable={toastPlacement.expandable}
+          pinned={updateShown ? <UpdateToast /> : undefined}
+        />
       </div>
     </div>
   )

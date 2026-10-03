@@ -47,11 +47,20 @@ export interface CanvasCardView {
 
 export type CanvasViewStateInput = CanvasCardView
 
+// Tamanho que o usuário deu a um cartão cuja posição foi esquecida (trocou de
+// feature): x/y são relativos à lane, o tamanho não.
+export interface CanvasCardSize {
+  sessionId: string
+  w: number
+  h: number
+}
+
 export interface CanvasState {
   scope: CanvasScope
   positions: CanvasPosition[]
   // Só os cartões que o usuário mudou; ausente = 'open'.
   views: CanvasCardView[]
+  sizes: CanvasCardSize[]
   notes: CanvasNote[]
   groups: SessionGroup[]
 }

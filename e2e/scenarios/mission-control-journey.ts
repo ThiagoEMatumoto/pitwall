@@ -559,6 +559,12 @@ try {
     10_000,
   )
   check(mapUp, 'Ctrl+Shift+G abre o mapa')
+  // O painel da mãe abre sozinho (mother-focus-panel.ts); este cenário mede os
+  // cartões do mapa com a largura toda, então ele fica escondido (Ctrl+Shift+P).
+  if (await waitFor('painel automático', async () => (await page.getByTestId('mother-dock').count()) > 0, 5000)) {
+    await page.keyboard.press('Control+Shift+KeyP')
+    await waitFor('painel escondido', async () => (await page.getByTestId('mother-dock').count()) === 0, 5000)
+  }
   await fit()
   const lanes = await page.getByTestId('lane-repo').allInnerTexts()
   check(

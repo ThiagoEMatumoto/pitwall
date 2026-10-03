@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { CornerDownLeft, Crown, CornerDownRight, ExternalLink, MessageSquare, Repeat, SquareTerminal, Target, X } from 'lucide-react'
+import { CornerDownLeft, Crown, CornerDownRight, ExternalLink, Maximize2, MessageSquare, Repeat, SquareTerminal, Target, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ShortcutHints } from '@/components/ui/ShortcutHints'
 import { hintText, type ShortcutHint } from '@/components/ui/shortcut-hints'
@@ -11,6 +11,7 @@ import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { stepLift } from '@/features/session-canvas/card-view'
+import { LiftGhost, LiftHandles, useLiftFrame } from './LiftResize'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { canPassBaton } from '@/features/session-canvas/useMapCommands'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
@@ -281,6 +282,8 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   const roleLabel = peekRoleLabel(role)
   const [batonOpen, setBatonOpen] = useState(false)
   const currentId = live?.id ?? null
+  // Tamanho da modal por sessão (só no lift; o peek do dock segue fixo).
+  const frame = useLiftFrame(lift ? (live?.id ?? handoff?.childSessionId ?? null) : null)
   useEffect(() => {
     if (strip.length < 2 || !currentId) return
     const onKey = (e: KeyboardEvent) => {
@@ -417,6 +420,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
         if (e.target === e.currentTarget) onClose()
       }}
     >
+      {lift && frame.ghost && <LiftGhost size={frame.ghost} />}
       {/* role/aria-modal no painel, não no backdrop (padrão do Dialog e do APG):
           o backdrop é área de clique-pra-fechar, não conteúdo do diálogo. */}
       <div
@@ -429,9 +433,13 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
         tabIndex={-1}
         onKeyDown={trapTab}
         className={`${animateIn ? 'pw-rise pw-pop ' : ''}flex outline-none flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-2xl ${
-          lift ? 'h-[90vh] w-[min(1400px,94vw)]' : 'h-[88vh] w-[56rem] max-w-[92vw]'
+          lift ? 'group/lift relative shrink-0' : 'h-[88vh] w-[56rem] max-w-[92vw]'
         }`}
+        style={lift ? { width: frame.size.w, height: frame.size.h } : undefined}
+        data-lift-w={lift ? frame.size.w : undefined}
+        data-lift-h={lift ? frame.size.h : undefined}
       >
+        {lift && <LiftHandles onStart={frame.startResize} onReset={frame.reset} />}
         <header
           data-testid="peek-header"
           className={`flex shrink-0 gap-3 border-b border-[var(--color-border)] px-4 ${
@@ -595,6 +603,18 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
                 Passar o bastão
               </button>
             )}
+            {lift && frame.custom && (
+              <button
+                type="button"
+                data-testid="peek-size-reset"
+                onClick={frame.reset}
+                title="Volta a modal ao tamanho padrão (ou duplo clique numa borda)"
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+              >
+                <Icon as={Maximize2} size={12} />
+                Tamanho padrão
+              </button>
+            )}
             {lift && live && (
               <button
                 type="button"
@@ -619,8 +639,13 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
           </div>
         </header>
 
-        {/* relative + min-h-0: ChatView e Terminal se posicionam com absolute inset-0. */}
-        <div ref={bodyRef} className="relative min-h-0 flex-1">
+        {/* relative + min-h-0: ChatView e Terminal se posicionam com absolute inset-0.
+            No lift em Chat, mx-1.5 tira a barra de rolagem de baixo das alças das
+            bordas (o Terminal já tem p-2). */}
+        <div
+          ref={bodyRef}
+          className={`relative min-h-0 flex-1 ${lift && !(mode === 'terminal' && live) ? 'mx-1.5' : ''}`}
+        >
           {mode === 'terminal' && live ? (
             <div className="absolute inset-0">
               {/* chrome="bare": o header de sessão (com ENCERRAR) fica de fora —

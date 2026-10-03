@@ -6,6 +6,7 @@ import { create } from 'zustand'
 // segura a lease, a aba da mesma sessão desmonta o xterm e mostra "Aberto no
 // mapa"; ao soltar, a aba remonta e o replay do backlog reconstrói a tela.
 // 'dock' = a coluna "Fixar mãe" do mapa (MotherDock).
+// A aba (Terminal sem leaseHost) é dona implícita: não tem lease própria.
 export type TerminalLeaseHost = 'modal' | 'dock'
 
 interface TerminalLeaseState {

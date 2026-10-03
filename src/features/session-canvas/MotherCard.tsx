@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Handle, Position, useStore, type NodeProps } from '@xyflow/react'
 import {
   Crown,
@@ -19,6 +19,7 @@ import { isActionableDetail } from '@/features/session-switcher/AttentionPopover
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { MOTHER_MAX_H, type MapNode, type SessionCardData } from './graph-to-flow'
+import { CardResizer } from './CardResizer'
 import { TONE_COLOR, indicatorText, type CardIndicator } from './card-indicator'
 import { quantizeZoom, cardTitle } from './card-display'
 import { useMapActions } from './map-context'
@@ -38,6 +39,7 @@ import {
   MOTHER_TAIL_PX,
   MOTHER_TAIL_WINDOW,
   motherDetail,
+  motherResizable,
 } from './mother-badge'
 import { PurposeLine } from './PurposeLine'
 import { useMotherDockStore } from './mother-dock'
@@ -64,10 +66,7 @@ function motherBigFrame(base: CSSProperties): CSSProperties {
 }
 
 function PinButton({ node }: { node: SessionGraphNode }) {
-  const pinnedId = useMotherDockStore((s) => s.pinnedId)
-  const overrides = useKeybindingsStore((s) => s.overrides)
-  const pinned = pinnedId === node.sessionId
-  const combo = formatCombo(resolveCombo('mother.focus', overrides))
+  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
   return (
     <button
       type="button"
@@ -81,8 +80,8 @@ function PinButton({ node }: { node: SessionGraphNode }) {
       }}
       title={
         pinned
-          ? `Desafixar: o terminal volta para o cartão (${combo} foca a mãe)`
-          : `Fixar a mãe numa coluna à esquerda do mapa, com o terminal interativo (${combo})`
+          ? 'Soltar: o painel volta a seguir a feature em foco'
+          : 'Fixar esta: o painel ao lado do mapa fica nesta mãe ao trocar de feature'
       }
       className={`nodrag flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[12px] font-medium transition ${
         pinned
@@ -91,7 +90,7 @@ function PinButton({ node }: { node: SessionGraphNode }) {
       }`}
     >
       <Icon as={pinned ? PinOff : Pin} size={13} />
-      {pinned ? 'Fixada' : 'Fixar'}
+      {pinned ? 'Soltar' : 'Fixar esta'}
     </button>
   )
 }
@@ -236,8 +235,9 @@ function StateRow({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
   )
 }
 
-// Fixada: o terminal e o composer estão na coluna à esquerda. Repetir a saída e
-// a barra aqui triplicava a entrada da mesma sessão; o cartão só aponta para lá.
+// No painel: o terminal e o composer estão no painel ao lado do mapa. Repetir a
+// saída e a barra aqui triplicava a entrada da mesma sessão; o cartão só aponta
+// para lá.
 function PinnedHere() {
   const overrides = useKeybindingsStore((s) => s.overrides)
   const combo = formatCombo(resolveCombo('mother.focus', overrides))
@@ -249,11 +249,11 @@ function PinnedHere() {
         e.stopPropagation()
         useMotherDockStore.getState().requestFocus()
       }}
-      title={`Focar o terminal da mãe na coluna (${combo})`}
+      title={`Focar o terminal da mãe no painel (${combo})`}
       className="nodrag flex items-center gap-2 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_7%,transparent)] px-3 py-2.5 text-left text-[13px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text)]"
     >
       <Icon as={PanelLeft} size={15} className="shrink-0 text-[var(--color-accent)]" />
-      <span className="min-w-0 flex-1">Terminal e composer na coluna à esquerda</span>
+      <span className="min-w-0 flex-1">Está no painel — terminal e composer à esquerda</span>
       <kbd className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[11px]">
         {combo}
       </kbd>
@@ -265,22 +265,22 @@ function FullBody({ data, ind }: { data: SessionCardData; ind: CardIndicator }) 
   const { node } = data
   const item = useMapLive().attention.get(node.sessionId)
   const menuInline = !!item && isActionableDetail(item.detail)
-  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 px-3.5 py-3">
       <Header data={data} />
       <StateRow data={data} ind={ind} />
       <PurposeLine sessionId={node.sessionId} purpose={node.purpose} source={node.purposeSource} />
       <CardAttention node={node} />
-      {pinned ? (
+      {inPanel ? (
         <PinnedHere />
       ) : (
         <>
           {!menuInline && (
             <LiveTail
               node={node}
-              window={MOTHER_TAIL_WINDOW}
-              lines={MOTHER_TAIL_LINES}
+              window={data.tail?.window ?? MOTHER_TAIL_WINDOW}
+              lines={data.tail?.lines ?? MOTHER_TAIL_LINES}
               fontPx={MOTHER_TAIL_PX}
             />
           )}
@@ -313,6 +313,9 @@ function MiniBody({
     .find(Boolean)
   const z = Math.max(zoom, MINI_MIN_ZOOM)
   const n = node.childCount ?? 0
+  // No painel a vaga é a do PinnedHere (curta) e o composer já está ao lado do
+  // mapa: repeti-lo aqui estourava a vaga e saía cortado ao meio.
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   return (
     <div
       data-testid="mother-mini"
@@ -365,7 +368,7 @@ function MiniBody({
           {last}
         </p>
       )}
-      <CardPromptBar node={node} />
+      {!inPanel && <CardPromptBar node={node} />}
     </div>
   )
 }
@@ -377,41 +380,55 @@ export function MotherCard({ data, selected }: NodeProps<MapNode>) {
   const zoom = useZoom()
   const ind = useIndicator(node)
   const detail = motherDetail(zoom)
-  const pinned = useMotherDockStore((s) => s.pinnedId === node.sessionId)
+  const inPanel = useMotherDockStore((s) => s.shownId === node.sessionId)
   // A mãe nunca esmaece pelo foco em outra sessão: ela é a referência do card.
   const frame = motherBigFrame(frameStyle(ind.tone, !!selected))
-  const measureRef = useReportCardHeight(node.sessionId, detail === 'full')
+  // Redimensionada pelo usuário: preenche a vaga em vez de crescer com o conteúdo.
+  const [resizing, setResizing] = useState(false)
+  const fill = card.sized || resizing
+  const measureRef = useReportCardHeight(node.sessionId, detail === 'full' && !fill)
   return (
-    <div
-      data-testid="session-card"
-      data-session-id={node.sessionId}
-      data-detail={detail}
-      data-mother="true"
-      data-variant="mother"
-      data-pinned={pinned ? 'true' : undefined}
-      data-view="open"
-      data-tone={ind.tone}
-      onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
-      ref={measureRef}
-      className={`group relative w-full overflow-hidden rounded-xl border bg-[var(--color-surface)] transition ${
-        detail === 'full' ? 'flex flex-col' : 'h-full'
-      } ${ind.tone === 'needs-you' ? 'session-card-alert' : ''}`}
-      style={detail === 'full' ? { ...frame, maxHeight: MOTHER_MAX_H } : frame}
-    >
-      <BorderHandles />
-      <div className={detail === 'full' ? 'flex min-h-0 flex-1 flex-col' : 'h-full'}>
-        {detail === 'full' ? (
-          <FullBody data={card} ind={ind} />
-        ) : (
-          <MiniBody data={card} ind={ind} zoom={zoom} />
-        )}
+    <>
+      <div
+        data-testid="session-card"
+        data-session-id={node.sessionId}
+        data-detail={detail}
+        data-mother="true"
+        data-variant="mother"
+        data-in-panel={inPanel ? 'true' : undefined}
+        data-sized={card.sized ? 'true' : undefined}
+        data-view="open"
+        data-tone={ind.tone}
+        onContextMenu={(e) => actions.openContextMenu(e, `s:${node.sessionId}`)}
+        ref={measureRef}
+        className={`group relative w-full overflow-hidden rounded-xl border bg-[var(--color-surface)] transition ${
+          detail === 'full' ? `flex flex-col ${fill ? 'h-full' : ''}` : 'h-full'
+        } ${ind.tone === 'needs-you' ? 'session-card-alert' : ''}`}
+        style={detail === 'full' && !fill ? { ...frame, maxHeight: MOTHER_MAX_H } : frame}
+      >
+        <BorderHandles />
+        <div className={detail === 'full' ? 'flex min-h-0 flex-1 flex-col' : 'h-full'}>
+          {detail === 'full' ? (
+            <FullBody data={card} ind={ind} />
+          ) : (
+            <MiniBody data={card} ind={ind} zoom={zoom} />
+          )}
+        </div>
+        <Handle
+          type="source"
+          position={Position.Right}
+          title="Arraste até a lane de outro repo para delegar"
+          className="!h-3 !w-3 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
+        />
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Arraste até a lane de outro repo para delegar"
-        className="!h-3 !w-3 !border !border-[var(--color-accent)] !bg-[var(--color-surface)] opacity-0 transition group-hover:opacity-100"
-      />
-    </div>
+      {motherResizable(zoom) && !inPanel && (
+        <CardResizer
+          sessionId={node.sessionId}
+          mother
+          sized={card.sized}
+          onResizing={setResizing}
+        />
+      )}
+    </>
   )
 }

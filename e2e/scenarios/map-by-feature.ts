@@ -286,6 +286,21 @@ try {
   // ---------- Mapa ----------
   await page.keyboard.press('Control+Shift+KeyG')
   await waitFor('mapa', async () => page.getByTestId('session-map').isVisible())
+  // O painel da mãe abre sozinho quando surge uma mãe (mother-focus-panel.ts);
+  // este cenário mede os cartões do mapa com a largura toda. Ctrl+Shift+P troca o
+  // modo mesmo sem painel à vista: 'off' vale para quando a mãe aparecer.
+  await waitFor('painel automático', async () => (await page.getByTestId('mother-dock').count()) > 0, 3000)
+  await page.keyboard.press('Control+Shift+KeyP')
+  check(
+    await waitFor(
+      'painel desligado',
+      async () =>
+        (await page.getByTestId('mother-dock').count()) === 0 &&
+        (await page.evaluate(() => JSON.parse(localStorage.getItem('cm:mother-dock') ?? '{}').mode)) === 'off',
+      5000,
+    ),
+    'Ctrl+Shift+P desliga o painel da mãe (mode off)',
+  )
   await page
     .getByRole('button', { name: 'Todos os projetos' })
     .click()

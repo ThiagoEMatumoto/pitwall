@@ -28,6 +28,8 @@ import {
 } from 'lucide-react'
 import type { LucideProps } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { useBarPillStore } from '@/features/notifications/toast-store'
+import { barPillPadding } from '@/app/toast-placement'
 import { Menu } from '@/components/ui/Menu'
 import { create } from 'zustand'
 import { FeaturePicker } from '@/features/features/FeaturePicker'
@@ -322,10 +324,14 @@ export function MapTopBar({
   onOpenAll,
   onCollapseAll,
   rightInset = 0,
+  narrow = false,
   children,
 }: {
   // Largura do painel Equipe/Conversas sobre o mapa: nada da barra fica embaixo.
   rightInset?: number
+  // Mapa estreito (painel da mãe ou da feature aberto): o "+N" dos avisos pode
+  // morar no canto da barra, que reserva a vaga dele sempre.
+  narrow?: boolean
   scopeMode: MapScopeMode
   hasProject: boolean
   onScope: (mode: MapScopeMode) => void
@@ -340,6 +346,7 @@ export function MapTopBar({
   // Contadores de estado (MapStatusCounters): assinam os stores sozinhos.
   children?: ReactNode
 }) {
+  const barPill = useBarPillStore((s) => s.width)
   return (
     // Faixa opaca: transparente, os cartões apareciam por trás dela entre as pílulas.
     <div
@@ -351,6 +358,8 @@ export function MapTopBar({
       style={{
         background: 'color-mix(in srgb, var(--color-surface) 90%, transparent)',
         right: rightInset,
+        // O "+N" dos avisos (mapa estreito) mora no canto direito: fica de fora.
+        paddingRight: barPillPadding(narrow, barPill),
       }}
     >
       <button

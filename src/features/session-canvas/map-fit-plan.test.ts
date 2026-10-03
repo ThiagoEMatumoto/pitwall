@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   MIN_READABLE_ZOOM,
+  MOTHER_READ_ZOOM,
   OVERVIEW_MIN_ZOOM,
   PRIORITY_MIN_ZOOM,
+  followBarHeight,
   offscreenCards,
   pillSpot,
   planFit,
@@ -327,14 +329,14 @@ describe('pillSpot', () => {
   const box = { l: 70, t: 60, r: 1490, b: 1100 }
   const size = { w: 200, h: 24 }
   it('colado na borda do lado, no meio dela quando não cruza nenhum frame', () => {
-    const p = pillSpot('right', box, [], size)
+    const p = pillSpot('right', box, [], size)!
     expect(p.x).toBe(1490 - 12 - 200)
     expect(p.y).toBe(60 + 0.5 * 1040 - 12)
   })
   it('desvia da borda de um frame (print 01 da rodada 4: a borda da feature no meio)', () => {
     // Frame cuja borda de baixo passa no meio da altura livre.
     const feature = { x: 100, y: 100, w: 1500, h: 480 }
-    const p = pillSpot('right', box, [feature], size)
+    const p = pillSpot('right', box, [feature], size)!
     const pill = { t: p.y, b: p.y + size.h }
     // Nem encosta na borda de baixo (580) nem na de cima (100).
     expect(pill.b < 100 - 8 || pill.t > 580 + 8 || (pill.t > 108 && pill.b < 572)).toBe(true)
@@ -343,7 +345,7 @@ describe('pillSpot', () => {
   it('com alvo: na faixa do cartão oculto, colado à borda livre a 12px', () => {
     // Print 07: o cartão cortado sob o painel em y~405; o pill flutuava em y~765.
     const hidden = { x: 1400, y: 380, w: 300, h: 50 }
-    const p = pillSpot('right', box, [{ x: 100, y: 100, w: 1500, h: 480 }], size, hidden)
+    const p = pillSpot('right', box, [{ x: 100, y: 100, w: 1500, h: 480 }], size, hidden)!
     expect(p.x).toBe(1490 - 12 - 200)
     // Colado logo acima ou abaixo da parte visível dele, sem cobri-la (rodada 2 do
     // pulso: o pill na faixa escondia "Inclui os e2e?" da marina, meio à vista).
@@ -356,7 +358,7 @@ describe('pillSpot', () => {
     const hidden = { x: 1400, y: 380, w: 300, h: 50 }
     const otavio = { x: 1100, y: 380, w: 300, h: 50 }
     const header = { x: 100, y: 330, w: 1500, h: 40 }
-    const p = pillSpot('right', box, [], size, hidden, [otavio, header])
+    const p = pillSpot('right', box, [], size, hidden, [otavio, header])!
     const pill = { l: p.x, t: p.y, r: p.x + size.w, b: p.y + size.h }
     for (const o of [otavio, header])
       expect(pill.l < o.x + o.w && pill.r > o.x && pill.t < o.y + o.h && pill.b > o.y).toBe(false)
@@ -368,15 +370,56 @@ describe('pillSpot', () => {
   it('com alvo e nenhum ponto livre na borda: fica na faixa do alvo', () => {
     const hidden = { x: 1400, y: 380, w: 300, h: 50 }
     const wall = { x: 1200, y: 0, w: 300, h: 2000 }
-    const p = pillSpot('right', box, [], size, hidden, [wall])
+    const p = pillSpot('right', box, [], size, hidden, [wall])!
     expect(p.y + size.h / 2).toBe(405)
   })
   it('com alvo fora da faixa útil: preso à área livre', () => {
-    const p = pillSpot('right', box, [], size, { x: 1600, y: -300, w: 300, h: 100 })
+    const p = pillSpot('right', box, [], size, { x: 1600, y: -300, w: 300, h: 100 })!
     expect(p.y).toBe(60 + 12)
   })
   it('topo: centrado na horizontal, logo abaixo da barra', () => {
     expect(pillSpot('top', box, [], size)).toEqual({ x: 70 + 0.5 * 1420 - 100, y: 72 })
+  })
+
+  // Print 03 do F (rodada 3): sem ponto livre na borda, o pill caía em cima do
+  // cartão que o F acabara de enquadrar.
+  const framed = { x: 300, y: 100, w: 1170, h: 900 }
+  const overlapsFramed = (p: { x: number; y: number }) =>
+    p.x < framed.x + framed.w &&
+    p.x + size.w > framed.x &&
+    p.y < framed.y + framed.h &&
+    p.y + size.h > framed.y
+  it('cartão enquadrado pelo F: com alvo, o pill sai do retângulo dele', () => {
+    const hidden = { x: 1400, y: 380, w: 300, h: 50 }
+    const p = pillSpot('right', box, [], size, hidden, [framed], framed)!
+    expect(overlapsFramed(p)).toBe(false)
+    expect(p.x).toBe(1490 - 12 - 200)
+  })
+  it('cartão enquadrado pelo F: sem alvo, idem', () => {
+    const p = pillSpot('right', box, [], size, null, [], framed)!
+    expect(overlapsFramed(p)).toBe(false)
+  })
+  it('o cartão enquadrado toma a borda inteira do lado, mas sobra área livre: o pill vai para ela', () => {
+    // O F enche a altura do mapa: a borda direita inteira é cartão. Sem cair fora
+    // dela, o aviso de "fora da vista" sumia justo com o zoom no cartão.
+    const tall = { x: 400, y: 0, w: 1200, h: 1200 }
+    for (const target of [{ x: 1600, y: 380, w: 300, h: 50 }, null]) {
+      const p = pillSpot('right', box, [], size, target, [], tall)!
+      expect(p).not.toBeNull()
+      expect(
+        p.x < tall.x + tall.w &&
+          p.x + size.w > tall.x &&
+          p.y < tall.y + tall.h &&
+          p.y + size.h > tall.y,
+      ).toBe(false)
+      expect(p.x + size.w).toBeLessThanOrEqual(box.r)
+      expect(p.y + size.h).toBeLessThanOrEqual(box.b)
+    }
+  })
+  it('o cartão enquadrado cobre a área livre inteira: sem pill (null), nunca por cima', () => {
+    const wall = { x: 100, y: 0, w: 1500, h: 1200 }
+    expect(pillSpot('right', box, [], size, { x: 1600, y: 380, w: 300, h: 50 }, [], wall)).toBeNull()
+    expect(pillSpot('right', box, [], size, null, [], wall)).toBeNull()
   })
 })
 
@@ -418,5 +461,61 @@ describe('planFit com mãe em visão geral', () => {
   it('com poucos cartões a mãe continua com o piso de leitura', () => {
     const plan = planFit({ visible, priority: cards[0], view, cardCount: 4, mother })!
     expect(plan.viewport.zoom).toBeGreaterThanOrEqual(0.88 - 1e-6)
+  })
+})
+
+// Mãe no painel ao lado do mapa: o mapa mede só o que sobra (o painel é um irmão
+// no flex) e o enquadrar não recebe a mãe — o piso de leitura dela (0.88) deixava
+// a feature cortada na faixa estreita que sobra ao lado do painel.
+describe('planFit com a mãe no painel', () => {
+  const row = 2000
+  const panel = Math.round(row * 0.55)
+  const view = { w: row - panel, h: 900 }
+  const feature = { x: 0, y: 0, w: 1600, h: 500 }
+  const mother = { x: 20, y: 40, w: 640, h: 420 }
+
+  it('sem a mãe (ela está no painel), a feature desce até o piso da prioridade', () => {
+    const plan = planFit({ visible: feature, priority: feature, view, cardCount: 4, mother: null })!
+    expect(plan.viewport.zoom).toBeLessThan(MOTHER_READ_ZOOM)
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(PRIORITY_MIN_ZOOM)
+  })
+
+  it('com a mãe no mapa, o piso dela seguraria o zoom', () => {
+    const plan = planFit({ visible: feature, priority: feature, view, cardCount: 4, mother })!
+    expect(plan.viewport.zoom).toBeGreaterThanOrEqual(MOTHER_READ_ZOOM - 1e-6)
+  })
+})
+
+// Com outra feature acima do card em foco, o enquadrar que desce até a mãe dele
+// não pode deixar o cabeçalho do card (nome da feature) atrás da barra do topo.
+describe('planFit com a mãe no card em foco: o cabeçalho do card fica à vista', () => {
+  // Outra feature acima do card em foco: o enquadrar desce até a mãe dele.
+  const view = { w: 760, h: 1000 }
+  const insets = { top: 120, left: 50 }
+  const visible = { x: 0, y: 0, w: 1400, h: 2600 }
+  const card = { x: 0, y: 900, w: 1400, h: 1600 }
+  const mother = { x: 20, y: 970, w: 640, h: 420 }
+
+  it('a borda de cima do card fica abaixo do inset superior', () => {
+    const plan = planFit({ visible, priority: card, view, insets, cardCount: 4, mother })!
+    const { y, zoom } = plan.viewport
+    expect(card.y * zoom + y).toBeGreaterThanOrEqual(insets.top)
+    // A mãe segue inteira na vista.
+    expect((mother.y + mother.h) * zoom + y).toBeLessThanOrEqual(view.h)
+  })
+})
+
+// O "+N avisos" entra na barra segundos depois do enquadrar: ela quebra em 2
+// linhas e cobria o cabeçalho do cartão enquadrado. O conteúdo acompanha a borda
+// de baixo da barra.
+describe('followBarHeight', () => {
+  const vp = { x: 10, y: 50, zoom: 0.8 }
+  it('barra cresce/encolhe: desloca o y pelo mesmo tanto', () => {
+    expect(followBarHeight(vp, 44, 84)).toEqual({ x: 10, y: 90, zoom: 0.8 })
+    expect(followBarHeight(vp, 84, 44)).toEqual({ x: 10, y: 10, zoom: 0.8 })
+  })
+  it('sem altura anterior ou sem mudança, não mexe', () => {
+    expect(followBarHeight(vp, null, 84)).toBeNull()
+    expect(followBarHeight(vp, 44, 44)).toBeNull()
   })
 })

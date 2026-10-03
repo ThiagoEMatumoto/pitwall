@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // O xterm real precisa de canvas; aqui só importa QUEM monta. Se o host montasse
@@ -35,16 +35,23 @@ vi.mock('@/lib/ipc', () => ({
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
 }))
 
-import { Terminal } from './Terminal'
+import { LeasedPlaceholder, Terminal } from './Terminal'
 import { useTerminalLease } from './terminal-lease'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import type { Session } from '../../../shared/types/ipc'
 
 const session = { id: 's1', repoId: 'r1', ccSessionId: 'cc1', provider: 'claude' } as Session
 
 function tab(onClose = vi.fn()) {
   return render(
-    <Terminal session={session} repoLabel="web" repoPath="/tmp" projectName="p" onClose={onClose} />,
+    <Terminal
+      session={session}
+      repoLabel="web"
+      repoPath="/tmp"
+      projectName="p"
+      onClose={onClose}
+    />,
   )
 }
 
@@ -59,17 +66,56 @@ describe('Terminal × lease da modal', () => {
   it('com a lease na modal, a aba não monta o xterm nem manda resize', () => {
     useTerminalLease.getState().acquire('s1', 'modal')
     tab()
-    expect(screen.getByTestId('terminal-leased')).toHaveTextContent('Aberto no mapa')
+    expect(screen.getByTestId('terminal-leased')).toHaveTextContent('Aberta na janela do mapa')
     expect(useSession).not.toHaveBeenCalled()
     expect(resize).not.toHaveBeenCalled()
   })
 
-  it('"Trazer para cá" fecha a modal (que solta a lease)', () => {
+  it('"Trazer para cá" com a modal: só fecha a modal, nenhuma lease nova', () => {
     useTerminalLease.getState().acquire('s1', 'modal')
     useCrewDockStore.setState({ peekTarget: { kind: 'session', id: 's1' } })
-    tab()
-    screen.getByText('Trazer para cá').click()
+    render(<LeasedPlaceholder host={undefined} owner="modal" />)
+    act(() => screen.getByText('Trazer para cá').click())
     expect(useCrewDockStore.getState().peekTarget).toBeNull()
+    expect(useTerminalLease.getState().stacks.s1).toEqual(['modal'])
+  })
+
+  it('aba com o painel da mãe segurando: "Abrir aqui" vai para Terminais sem pegar lease', () => {
+    useTerminalLease.getState().acquire('s1', 'dock')
+    useProjectsViewStore.setState({ view: 'map' })
+    tab()
+    const ph = screen.getByTestId('terminal-leased')
+    expect(ph).toHaveAttribute('data-owner', 'dock')
+    expect(ph).toHaveTextContent('Aberta no Mapa')
+    act(() => screen.getByText('Abrir aqui').click())
+    // Sair do mapa desmonta o painel, que solta a lease (MotherDock.lease.test).
+    expect(useProjectsViewStore.getState().view).toBe('terminals')
+    expect(useTerminalLease.getState().stacks.s1).toEqual(['dock'])
+  })
+
+  // Regressão: o painel bloqueado pela modal mostrava o texto e o botão da aba
+  // ("Abrir aqui"), e o clique criava uma lease da aba que prendia o painel.
+  it('painel da mãe com a modal por cima: texto do painel e "Trazer para cá" fecha a modal', () => {
+    useTerminalLease.getState().acquire('s1', 'dock')
+    useTerminalLease.getState().acquire('s1', 'modal')
+    useCrewDockStore.setState({ peekTarget: { kind: 'session', id: 's1' } })
+    render(
+      <Terminal
+        session={session}
+        repoLabel="web"
+        repoPath="/tmp"
+        projectName="p"
+        leaseHost="dock"
+        onClose={vi.fn()}
+      />,
+    )
+    const ph = screen.getByTestId('terminal-leased')
+    expect(ph).toHaveTextContent('Ele volta para o painel')
+    expect(screen.queryByText('Abrir aqui')).toBeNull()
+    expect(useSession).not.toHaveBeenCalled()
+    act(() => screen.getByText('Trazer para cá').click())
+    expect(useCrewDockStore.getState().peekTarget).toBeNull()
+    expect(useTerminalLease.getState().stacks.s1).toEqual(['dock', 'modal'])
   })
 
   // Sem xterm montado a aba não ouve o exit; ao remontar nasceria exited=false e
