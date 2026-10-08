@@ -284,6 +284,15 @@ export const HANDOFF_CHILD_ASK = [
   'Bash(git push *--force-with-lease*)',
   'Bash(git push *--tags*)',
   'Bash(git push *--no-verify*)',
+  // Qualquer token DEPOIS da branch de trabalho pergunta. Sem isto o `*` do
+  // allow engole refspecs extras que publicam a protegida sem nomeá-la
+  // (`feat/x :` = matching, `feat/x 'refs/heads/*:refs/heads/*'`, `feat/x HEAD`
+  // estando na main) e flags curtas/abreviadas (`-uf`, `--delet`, `--tag`,
+  // `--receive-pack=`) — todos verificados contra git real. Nome de branch não
+  // tem espaço, então o push legítimo de uma branch nunca cai aqui.
+  'Bash(git push origin * *)',
+  'Bash(git push -u origin * *)',
+  'Bash(git push --set-upstream origin * *)',
   // delete de arquivo simples pergunta; recursivo é deny.
   'Bash(rm:*)',
 ]
@@ -297,7 +306,8 @@ export const HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE = ['Bash(rm:*)', 'Bash(git p
 export const PROTECTED_BRANCHES = ['main', 'master', 'staging', 'develop'] as const
 
 // Push para branch protegida, em qualquer forma: `origin main`, `-u origin main`,
-// `feat/x main` (dois refspecs), `HEAD:main`, `feat/x:main`, `refs/heads/main`.
+// `feat/x main` (dois refspecs), `HEAD:main`, `feat/x:main`, `refs/heads/main`,
+// `feat/x:heads/main`.
 // Os espaços/`:` em volta do nome são literais, então `feat/main` e
 // `maintenance` NÃO casam. Gerado por branch para as 4 ficarem idênticas.
 const CHILD_DENY_PROTECTED_PUSH = PROTECTED_BRANCHES.flatMap((b) => [
@@ -305,8 +315,9 @@ const CHILD_DENY_PROTECTED_PUSH = PROTECTED_BRANCHES.flatMap((b) => [
   `Bash(git push * ${b} *)`,
   `Bash(git push *:${b})`,
   `Bash(git push *:${b} *)`,
-  `Bash(git push *refs/heads/${b})`,
-  `Bash(git push *refs/heads/${b} *)`,
+  // `heads/<b>` sem `refs/` também resolve pra refs/heads/<b> no remoto.
+  `Bash(git push *heads/${b})`,
+  `Bash(git push *heads/${b} *)`,
 ])
 
 // `deny` = bloqueado, nem pergunta. Mescla o DESTRUCTIVE_DENYLIST canônico menos
