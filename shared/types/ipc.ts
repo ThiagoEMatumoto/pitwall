@@ -430,8 +430,9 @@ export interface CreateManualHandoffInput {
   task: string
   featureId?: string
   mode?: HandoffMode
-  // Presente = SUBSTITUI o handoff ativo do repo (um só por repo, migration 054);
-  // o motivo vai pra trilha. Ausente: repo ocupado recusa com erro.
+  // Presente = SUBSTITUI a filha que escreve no mesmo diretório de trabalho (uma
+  // só por diretório, migration 057); o motivo vai pra trilha. Ausente: diretório
+  // ocupado recusa com erro. Filha em mode 'plan' não disputa a posse.
   forceReason?: string
 }
 

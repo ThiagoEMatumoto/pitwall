@@ -29,7 +29,7 @@ export function applyAllMigrations(db: Database.Database): void {
   }
 }
 
-// Um projeto e N repos: o índice da 054 permite um handoff ativo por repo.
+// Um projeto e N repos: o índice da 057 permite uma filha que escreve por diretório.
 export function seedRepos(db: Database.Database, count = 6): void {
   const now = Date.now()
   db.prepare(`INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',?,?)`).run(

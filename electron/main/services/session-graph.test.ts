@@ -86,8 +86,8 @@ function addSession(
 let repoSeq = 0
 
 // Sem repoId explícito, cada filha ganha um clone do api-core: o índice da
-// migration 054 permite UM handoff ativo por repo, e estes cenários têm várias
-// filhas vivas ao mesmo tempo.
+// migration 057 permite UMA filha que escreve por diretório, e estes cenários
+// têm várias filhas vivas ao mesmo tempo.
 function dispatch(motherId: string, childId: string, task: string, repoId?: string): string {
   const targetRepoId = repoId ?? `r-api-${childId}-${(repoSeq += 1)}`
   if (!repoId) {

@@ -682,9 +682,10 @@ const sessionHandoffSchema = z.object({
   // (edita, com denylist destrutivo) p/ implementação; 'interactive' = pergunta
   // tudo (legado). Default: 'plan' (seguro). O humano confirma no gate.
   mode: handoffMode.optional(),
-  // Substitui o handoff ativo do mesmo repo-alvo (default: recusa com erro, sem
-  // entregar o handle da filha que já está lá). Exige forceReason, gravado em
-  // handoff_events: só existe UM handoff ativo por repo (índice da migration 054).
+  // Substitui a filha que escreve no mesmo diretório de trabalho (default: recusa
+  // com erro, sem entregar o handle da filha que já está lá). Exige forceReason,
+  // gravado em handoff_events: só existe UMA filha que escreve por diretório
+  // (índice da migration 057).
   force: z.boolean().optional(),
   forceReason: z.string().trim().min(1).max(500).optional(),
   // CLI da filha. Default 'claude'. 'codex' (experimental) só sobe em mode
@@ -908,8 +909,8 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           provider: input.provider,
         })
 
-        // Dedup por alvo: a posse do repo é decidida DENTRO do create, numa
-        // transação (o índice UNIQUE da 054 é a garantia por baixo). Nunca devolve
+        // Posse do diretório de trabalho decidida DENTRO do create, numa
+        // transação (o índice UNIQUE da 057 é a garantia por baixo). Nunca devolve
         // o handle do handoff encontrado: entregar { handoffId, alias, status }
         // fazia uma mãe adotar a filha de OUTRA e passar a conversar com ela.
         let handoff: Handoff

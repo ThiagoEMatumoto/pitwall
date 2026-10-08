@@ -128,8 +128,8 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 let handoff: Handoff | null = null
-// Dono atual do repo-alvo (findActiveByTarget): o handoff que o índice da 054
-// deixaria ativo. null = repo livre.
+// Dona atual do diretório (findActiveWriterByWorkDir): a filha que escreve e que o
+// índice da 057 deixaria ativa. null = diretório livre.
 let activeOwner: Handoff | null = null
 let workDir: string | null = '/tmp/repo'
 vi.mock('../services/handoff-store', () => ({
