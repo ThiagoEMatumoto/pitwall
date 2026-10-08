@@ -374,12 +374,13 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
     // sucessora JÁ subiu e já foi relinkada, então uma exceção daqui rejeitaria
     // um baton:pass que funcionou — e o humano veria "não deu pra subir a
     // sucessora" com a sucessora rodando na tela.
+    // Sem await: a nota pode ficar segurada na fila da mãe até o fim do turno dela.
     try {
       notifyMotherOfAliasChange({
         handoffId: handoffRow.id,
         alias: resolved.alias,
         previousAlias: predecessor.title,
-      })
+      }).catch((err) => console.error('[baton] aviso de troca de apelido falhou:', err))
     } catch (err) {
       console.error('[baton] aviso de troca de apelido falhou:', err)
     }

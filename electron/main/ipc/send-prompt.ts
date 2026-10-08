@@ -20,6 +20,7 @@ import {
 } from '../services/session-activity'
 import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
+import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
@@ -126,6 +127,7 @@ export function registerSendPromptIpc(): void {
     if (ptyId) promptQueue.onTurnEnded(ptyId)
   })
   ptyManager.on('exit', (e) => promptQueue.onSessionExit(e.sessionId))
+  setMotherNoteSender((input) => promptQueue.send(input))
   ptyManager.on('data', (e) => tailFeed.onData(e.sessionId))
   ptyManager.on('exit', (e) => tailFeed.onExit(e.sessionId))
 

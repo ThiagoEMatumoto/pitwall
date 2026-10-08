@@ -137,7 +137,7 @@ vi.mock('../services/baton/distill', () => ({
 // quê), sem depender de PTY. O comportamento interno dele (mãe viva, ausente,
 // PTY que morre no meio) está coberto em services/handoff/notify-mother-alias.
 const notifyMotherOfAliasChange = vi.fn(
-  (_args: { handoffId: string; alias: string; previousAlias?: string | null }) =>
+  async (_args: { handoffId: string; alias: string; previousAlias?: string | null }) =>
     ({ delivered: true }) as { delivered: boolean },
 )
 type Delivery = { handoffId: string; delivered: boolean; reason?: 'inject-refused' }
@@ -201,7 +201,7 @@ function resetSeams(): void {
   handlers.clear()
   markRunning.mockClear()
   notifyMotherOfAliasChange.mockClear()
-  notifyMotherOfAliasChange.mockReturnValue({ delivered: true })
+  notifyMotherOfAliasChange.mockResolvedValue({ delivered: true })
   distillMock.mockClear()
   killed.length = 0
   spawns.length = 0
@@ -430,13 +430,26 @@ describe('baton:pass — conflito de apelido com a antecessora viva', () => {
 
   it('mãe encerrada: o aviso não chega e o bastão segue de pé', () => {
     activeNames = ['mauricio-auth-refactor']
-    notifyMotherOfAliasChange.mockReturnValue({ delivered: false })
+    notifyMotherOfAliasChange.mockResolvedValue({ delivered: false })
     const result = pass()
 
     expect(result.handoff).not.toBeNull()
     expect(result.aliasChanged).toBe(true)
     expect(spawns).toHaveLength(1)
     expect(markRunning).toHaveBeenCalled()
+  })
+
+  it('aviso que rejeita (assíncrono) também não derruba o bastão', async () => {
+    activeNames = ['mauricio-auth-refactor']
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    notifyMotherOfAliasChange.mockRejectedValue(new Error('fila caiu'))
+    const result = pass()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(result.handoff).not.toBeNull()
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
   })
 
   it('falha do aviso NÃO derruba um bastão que já deu certo', () => {

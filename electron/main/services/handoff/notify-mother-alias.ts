@@ -6,20 +6,31 @@
 // entregue à ANTECESSORA. Não é uma falha visível: a mensagem chega, na sessão
 // errada, e a mãe segue supervisionando um endereço morto.
 //
-// Até aqui a única mitigação era um aviso na UI pedindo que o HUMANO avisasse a
-// mãe. O app já tem o mecanismo pra se resolver sozinho: o mesmo seam de PTY que
-// o handoff_message usa pra falar com uma filha. Então a nota vai direto pro REPL
-// da mãe. O aviso da UI continua — ele deixa de ser a única linha de defesa.
+// A nota vai pro REPL da mãe pela fila on-idle (a mesma do agent-bus), não por
+// write cru no PTY: a nota termina em Enter, e escrita direta sobre um menu de
+// permissão aberto o aprovaria — ou enviaria junto o rascunho que a mãe digitava.
+// A fila segura a nota (menu, rascunho, tela não reconhecida) e entrega no fim do
+// turno. O aviso da UI continua — ele deixa de ser a única linha de defesa.
 //
-// Degrada em SILÊNCIO: mãe inexistente, encerrada ou PTY que morreu no meio não é
-// erro nenhum (o bastão já foi passado com sucesso; isto é notificação).
+// Degrada em SILÊNCIO: mãe inexistente, encerrada ou fila recusando não é erro
+// nenhum (o bastão já foi passado com sucesso; isto é notificação).
 
 import { ptyManager } from '../pty-manager'
 import * as store from '../handoff-store'
-import { injectIntoSession } from './inject'
+import { sanitizeBody } from '../agent-bus'
 import { injectIntoChildGuarded } from './guarded-inject'
 import { emitSessionLinkPulse } from '../session-link-pulse'
 import type { Handoff } from '../../../../shared/types/ipc'
+import type { SendPromptInput, SendPromptResult } from '../../../../shared/types/send-prompt'
+
+// Setter em vez de import: a fila vive em ipc/send-prompt (que puxa electron), e
+// este serviço é carregado por quem não deve depender da camada de IPC.
+type MotherNoteSender = (input: SendPromptInput) => Promise<SendPromptResult>
+let sendToMother: MotherNoteSender | null = null
+
+export function setMotherNoteSender(fn: MotherNoteSender | null): void {
+  sendToMother = fn
+}
 
 export interface AliasChangeNotice {
   handoffId: string
@@ -32,8 +43,16 @@ export interface AliasChangeNotice {
 
 export interface AliasChangeDelivery {
   delivered: boolean
+  // Segurada na fila da mãe (menu/rascunho/turno em curso): sai no fim do turno.
+  queued?: boolean
   // Por que não entregou — só pra log/teste; ninguém trata isto como falha.
-  reason?: 'handoff-not-found' | 'no-mother' | 'mother-not-running' | 'inject-failed'
+  reason?:
+    | 'handoff-not-found'
+    | 'no-mother'
+    | 'mother-not-running'
+    | 'no-queue'
+    | 'send-refused'
+    | 'send-failed'
 }
 
 // Texto da nota. PURO (testável sem PTY): é o que a mãe lê no próprio REPL.
@@ -53,24 +72,35 @@ export function buildAliasChangeNote(args: AliasChangeNotice): string {
   ].join('\n')
 }
 
-// Entrega a nota no PTY da mãe do handoff. Best-effort por contrato.
-export function notifyMotherOfAliasChange(args: AliasChangeNotice): AliasChangeDelivery {
+// Entrega a nota à mãe do handoff pela fila on-idle. Best-effort por contrato.
+export async function notifyMotherOfAliasChange(
+  args: AliasChangeNotice,
+): Promise<AliasChangeDelivery> {
   const handoff = store.get(args.handoffId)
   if (!handoff) return { delivered: false, reason: 'handoff-not-found' }
 
   const mother = handoff.motherSessionId
   if (!mother) return { delivered: false, reason: 'no-mother' }
   if (!ptyManager.isRunning(mother)) return { delivered: false, reason: 'mother-not-running' }
+  if (!sendToMother) return { delivered: false, reason: 'no-queue' }
 
   try {
-    injectIntoSession(mother, buildAliasChangeNote(args))
-    // Quem "fala" é a sucessora, já relinkada como filha deste handoff.
-    emitSessionLinkPulse({ fromSessionId: handoff.childSessionId, toSessionId: mother, kind: 'note' })
-    return { delivered: true }
+    const sent = await sendToMother({
+      sessionId: mother,
+      // Os apelidos vêm de nome de sessão: um ESC[201~ ali fecharia o paste.
+      text: sanitizeBody(buildAliasChangeNote(args)),
+      when: 'on-idle',
+      // Quem "fala" é a sucessora, já relinkada: a fila pulsa o mapa na escrita real.
+      fromSessionId: handoff.childSessionId ?? undefined,
+    })
+    if (!sent.ok) {
+      console.warn(`[baton] fila recusou o aviso de troca de apelido à mãe: ${sent.error}`)
+      return { delivered: false, reason: 'send-refused' }
+    }
+    return sent.delivered ? { delivered: true } : { delivered: false, queued: true }
   } catch (err) {
-    // Corrida com a mãe encerrando entre o isRunning e o write.
     console.error('[baton] aviso de troca de apelido não chegou à mãe:', err)
-    return { delivered: false, reason: 'inject-failed' }
+    return { delivered: false, reason: 'send-failed' }
   }
 }
 

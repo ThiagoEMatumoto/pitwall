@@ -123,7 +123,7 @@ function attr(value: string): string {
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f]/g
 
-function sanitizeBody(text: string): string {
+export function sanitizeBody(text: string): string {
   return text.replace(CONTROL_CHARS, '').replace(/<\/pitwall-ask/gi, '<\\/pitwall-ask')
 }
 
