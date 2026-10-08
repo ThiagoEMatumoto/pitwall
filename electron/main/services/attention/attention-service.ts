@@ -5,7 +5,7 @@ import { buildSessionsFileIndex } from '../session-activity'
 import { liveSessionStates, type SessionsFileIndex } from '../live-session-states'
 import type { LiveSessionState } from '../session-graph'
 import { tuiMenuWatch } from '../tui-menu-watch'
-import { projectAttention } from '../../../../shared/attention/project-attention'
+import { liveNeedsYou, projectAttention } from '../../../../shared/attention/project-attention'
 import { deriveAttentionReason, type ScreenScan } from '../../../../shared/tui/attention-reason'
 import {
   PRODUCED_ATTENTION_KINDS,
@@ -127,9 +127,7 @@ export function projectAndCount(input: AttentionInput): AttentionItem[] {
   counters = {
     computedAt: Date.now(),
     byKind,
-    liveWaitingNotTurnEnd: input.live.filter(
-      (s) => s.status === 'waiting' && s.screenReason !== 'turn-end',
-    ).length,
+    liveWaitingNotTurnEnd: input.live.filter(liveNeedsYou).length,
     sessionMenuItems: byKind.session_menu,
   }
   return items

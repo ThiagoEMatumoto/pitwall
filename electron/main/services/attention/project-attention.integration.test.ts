@@ -130,6 +130,17 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
     expect(items[0].actions.map((a) => a.kind)).toEqual(['open_session'])
   })
 
+  it('5c) idle com menu de permissão na tela → session_menu permission', async () => {
+    const scan = await scanFixture('permission-bash')
+    const items = project([liveOf('m', 'idle', scan)])
+    expect(items.map((i) => [i.kind, i.menuReason])).toEqual([['session_menu', 'permission']])
+  })
+
+  it('5d) starting/working sem menu na tela → 0 itens', async () => {
+    expect(project([liveOf('m', 'starting', null)])).toEqual([])
+    expect(project([liveOf('m', 'working', await scanFixture('idle-prompt'))])).toEqual([])
+  })
+
   it('6) filha com ask E menu de permissão na tela → 1 item só (session_menu do handoff)', async () => {
     const h = runningChild('r1', 'c1')
     store.ask(h.id, 'Posso apagar?')

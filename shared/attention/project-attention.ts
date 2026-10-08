@@ -26,6 +26,16 @@ const clip = (text: string, max: number): string =>
 
 type LiveById = Map<string, AttentionLiveSession>
 
+// Tela não reconhecida entra ('unrecognized'): suprimir em silêncio é pior que
+// contar a mais. Só o fim de turno reconhecido fica de fora. Fora de 'waiting',
+// vale o menu que gateMenuByStatus já aceitou (permissão/trust com o session file
+// ainda em 'starting'/'idle'). O trust do 2.1.286+ não tem numeração e o parser
+// não o reconhece — continua fora da fila (pendência conhecida).
+export function liveNeedsYou(s: AttentionLiveSession): boolean {
+  if (s.status === 'waiting') return s.screenReason !== 'turn-end'
+  return s.screenReason === 'trust' || s.screenReason === 'permission'
+}
+
 export function projectAttention(input: AttentionInput): AttentionItem[] {
   const live: LiveById = new Map(input.live.map((s) => [s.sessionId, s]))
   // Handoff de que a sessão é filha HOJE e que o dock mostra (isLedByMother).
@@ -38,9 +48,7 @@ export function projectAttention(input: AttentionInput): AttentionItem[] {
   // e vence a pergunta registrada (no máximo 1 item não-info por sujeito).
   const menuSubjects = new Set<string>()
   for (const s of input.live) {
-    // Tela não reconhecida entra ('unrecognized'): suprimir em silêncio é pior
-    // que contar a mais. Só o fim de turno reconhecido fica de fora.
-    if (s.status !== 'waiting' || s.screenReason === 'turn-end') continue
+    if (!liveNeedsYou(s)) continue
     const h = ledByChild.get(s.sessionId)
     if (h) menuSubjects.add(h.id)
     items.push(sessionMenuItem(s, h))
