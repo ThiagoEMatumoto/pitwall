@@ -70,3 +70,36 @@ export function relTime(t: number, now: number): string {
   const h = Math.floor(m / 60)
   return `${h} h${m % 60 ? ` ${m % 60} min` : ''}`
 }
+
+// Título do item aberto: quem + o que aconteceu (o whyNow da projeção vem embaixo).
+export const ITEM_TITLE: Record<ProducedAttentionKind, (who: string) => string> = {
+  child_question: (who) => `${who} perguntou`,
+  session_menu: (who) => `${who} parou num menu`,
+  child_failed: (who) => `${who} falhou`,
+  child_interrupted: (who) => `${who} foi interrompida`,
+  pty_orphan: (who) => `${who}: terminal sem sessão`,
+  result_unconsumed: (who) => `${who} entregou um resultado que ninguém leu`,
+}
+
+// Forma + cor dos glifos (protótipo C): forma diz o tipo, cor vem dos tons do app.
+export type GlyphShape = 'needs' | 'run' | 'ok' | 'warn' | 'stop' | 'dim'
+
+const EVENT_GLYPH: Record<string, GlyphShape> = {
+  ask: 'needs',
+  create: 'run',
+  approve: 'run',
+  markRunning: 'run',
+  progress: 'run',
+  resume: 'run',
+  child_direct_message: 'run',
+  mother_transferred: 'run',
+  report: 'ok',
+  consume: 'ok',
+  fail: 'warn',
+  interrupt: 'stop',
+  reconcileStuck: 'stop',
+}
+
+export function eventGlyph(event: string): GlyphShape {
+  return EVENT_GLYPH[event] ?? 'dim'
+}
