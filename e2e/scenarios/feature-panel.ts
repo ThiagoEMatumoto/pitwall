@@ -181,6 +181,19 @@ async function typeSection(
   )
 }
 
+// Enquadrar o mapa é pré-condição dos passos seguintes: se o botão não clica, a
+// falha tem que aparecer aqui, não três passos depois como "card fora da tela".
+async function fitView(l: LaunchResult, label: string): Promise<boolean> {
+  const ok = await l.page
+    .locator('.react-flow__controls-fitview')
+    .click({ timeout: 5000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  return check(ok, `enquadrar o mapa (${label})`)
+}
+
 type Box = { x: number; y: number; width: number; height: number }
 const intersects = (a: Box, b: Box) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
@@ -212,10 +225,7 @@ try {
   )
   check(!!s1?.id, `sessão S1 da feature subiu (${s1?.id})`)
   check(await openMap(a), 'mapa aberto')
-  await a.page
-    .locator('.react-flow__controls-fitview')
-    .click()
-    .catch(() => {})
+  await fitView(a, 'subida 1')
   check(
     await waitFor(
       a,
@@ -396,10 +406,7 @@ try {
   const b = await boot()
   const shotB = shotOf(b)
   check(await openMap(b), 'mapa aberto após relaunch')
-  await b.page
-    .locator('.react-flow__controls-fitview')
-    .click()
-    .catch(() => {})
+  await fitView(b, 'relaunch')
   // S1 não sobrevive ao relaunch (abas não restauradas): sessão nova da feature
   // traz o card de volta e prova a injeção da regra no system prompt.
   const s2 = await b.page.evaluate(
@@ -432,10 +439,7 @@ try {
   )
   // O enquadrar lá em cima rodou ANTES de S2 existir, e o mapa não enquadra nó
   // novo sozinho: sem enquadrar de novo o card pode nascer fora da tela.
-  await b.page
-    .locator('.react-flow__controls-fitview')
-    .click()
-    .catch(() => {})
+  await fitView(b, 'após S2')
   await featureHeader(b, featureId).click()
   await waitFor(b, 'painel (relaunch)', async () => (await panel(b).count()) === 1)
   await b.page.getByTestId('feature-panel-tab-notes').click()

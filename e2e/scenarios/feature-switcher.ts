@@ -244,7 +244,8 @@ try {
   const mcp = await connectMcp(userData)
   const feats: Array<{
     id: string
-    mother: { id: string; cc: string | null }
+    title: string
+    mother: { id: string; cc: string | null; name: string }
     childCc: string | null
   }> = []
   for (const n of [1, 2, 3]) {
@@ -278,11 +279,14 @@ try {
           featureId,
         })
         await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
-        return { mother: { id: m.id, cc: m.ccSessionId }, childCc: c.ccSessionId }
+        return {
+          mother: { id: m.id, cc: m.ccSessionId, name: `mae-seletor-${n}` },
+          childCc: c.ccSessionId,
+        }
       },
       { repoId: repo.id, featureId: feature.id, n },
     )
-    feats.push({ id: feature.id, ...spawned })
+    feats.push({ id: feature.id, title: `Seletor E2E ${n}`, ...spawned })
   }
   check(feats.length === 3, `3 features criadas (${feats.map((f) => f.id).join(', ')})`)
   check(
@@ -396,10 +400,37 @@ try {
     'soltar o Ctrl fecha o overlay',
   )
   check((await mru())[0] === target, `MRU agora começa pela escolhida (${target})`)
+  // Decisão do produto: soltar abre a Room da feature escolhida. O enquadramento
+  // no mapa continua coberto, agora pelo "Ver no mapa" da Room.
   if (ours.has(target)) {
+    const tf = feats.find((f) => f.id === target)!
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor(
+        'Room aberta',
+        async () =>
+          (await room.count()) === 1 &&
+          (await room.getAttribute('aria-label')) === `Room da feature ${tf.title}`,
+        5000,
+      ),
+      `soltar abre a Room da escolhida (${await room.getAttribute('aria-label').catch(() => null)})`,
+    )
+    const roomMother = room.getByTestId('room-mother')
+    check(
+      await waitFor(
+        'Room mostra a mãe',
+        async () =>
+          (await roomMother.count()) === 1 &&
+          ((await roomMother.textContent()) ?? '').includes(tf.mother.name),
+        8000,
+      ),
+      `a Room mostra a mãe da escolhida (${tf.mother.name})`,
+    )
+    await shot('room-da-escolhida')
+    await room.getByTestId('room-see-map').click()
     check(
       await waitFor('card enquadrado', async () => framed(target), 5000),
-      'o mapa enquadra o card da feature escolhida',
+      '"Ver no mapa" na Room enquadra o card da feature escolhida',
     )
     check(
       await waitFor(
