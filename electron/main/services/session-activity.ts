@@ -735,7 +735,8 @@ class SessionActivityService extends EventEmitter {
     if (!prefs.enabled || !prefs.sessionWaiting) return
     // Filha do Crew Dock não notifica: o dock já sinaliza a espera dela (dot
     // pulsando na trilha + contador âmbar). Mesmo filtro que o toast do renderer
-    // aplica — sem isto, a MESMA espera chega por duas superfícies.
+    // aplica — sem isto, a MESMA espera chega por duas superfícies. Pedido de
+    // permissão da filha é exceção, avisado por crew-permission-notify.
     if (isActiveCrewChild(ccSessionId)) return
     // Suprime só quando o usuário já está olhando ESTA sessão (janela focada +
     // pane ativo nela). Janela focada em outra sessão continua notificando.

@@ -33,6 +33,7 @@ import { livePtySessionInfo } from './live-session-pty'
 import { buildSessionEndpoint } from '../services/mcp/session-identity'
 import { tuiMenuWatch, type AttentionRespondedEvent } from '../services/tui-menu-watch'
 import { recordAttentionResponse } from '../services/attention-response-store'
+import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
 import { getMcpRuntime } from '../services/mcp/server'
@@ -837,6 +838,7 @@ export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
     tuiMenuWatch.on('responded', recordResponded)
+    tuiMenuWatch.on('change', (sessionId: string) => notifyCrewPermission(sessionId))
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()

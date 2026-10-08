@@ -162,6 +162,12 @@ export class TuiMenuWatch extends EventEmitter {
     return this.entries.has(sessionId)
   }
 
+  // Aparição do menu atual (null = sem espelho ou sem menu na tela).
+  currentMenuSeq(sessionId: string): number | null {
+    const entry = this.entries.get(sessionId)
+    return entry?.scan.menu ? entry.menuSeq : null
+  }
+
   current(sessionId: string): ScreenScan | null {
     return this.entries.get(sessionId)?.scan ?? null
   }
