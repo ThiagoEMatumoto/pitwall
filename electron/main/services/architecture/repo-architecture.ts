@@ -50,7 +50,7 @@ export function buildRepoArchitectureContent(
   }
   lines.push(
     '→ Para trabalho que toque esses repos, prefira a MCP tool `session_handoff` ' +
-      '(gate humano aprova) em vez de pesquisar/editar neles direto; use ' +
+      '(a filha nasce direto no repo, sem aprovação) em vez de pesquisar/editar neles direto; use ' +
       '`repo_connections_get` para detalhes das conexões.',
   )
   return lines.join('\n')
