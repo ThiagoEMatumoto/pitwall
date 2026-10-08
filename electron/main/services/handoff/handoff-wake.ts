@@ -35,6 +35,7 @@ export type WakeOutcome =
   | 'not_running' // mãe sem PTY viva, sem mãe (config legada) ou sessão morreu com o item na fila
   | 'capped' // teto anti-loop estourado, não foi enfileirado
   | 'cancelled' // humano tirou da fila pela UI
+  | 'fetched' // a mãe puxou por handoff_wait antes de a fila entregar; o item saiu da fila
 
 export const WAKE_TEXT_CAP = 1500
 export const WAKE_MAX_BLOCKS = 10
@@ -43,10 +44,12 @@ export const WAKE_CAP_PER_HANDOFF_PER_HOUR = 6
 export const WAKE_STALE_TRANSIENT_MS = 10 * 60_000
 const HOUR_MS = 60 * 60_000
 const ACTIVE: HandoffStatus[] = ['pending', 'approved', 'running', 'needs_input']
+const TRANSIENT_SQL = "('queued','held','attention')"
 
 export interface WakeQueue {
   send(input: SendPromptInput): Promise<SendPromptResult>
   replaceText(queueId: string, text: string): boolean
+  cancel(queueId: string): boolean
 }
 
 export interface WakeBlock {
@@ -186,7 +189,8 @@ function wakesInLastHour(handoffId: string): number {
 function siblingState(wakeId: string): { outcome: WakeOutcome; heldAt: number | null } | null {
   const row = getDb()
     .prepare(
-      'SELECT outcome, held_at FROM handoff_wake_deliveries WHERE wake_id = ? ORDER BY created_at LIMIT 1',
+      `SELECT outcome, held_at FROM handoff_wake_deliveries
+        WHERE wake_id = ? AND outcome IN ${TRANSIENT_SQL} ORDER BY created_at LIMIT 1`,
     )
     .get(wakeId) as { outcome: WakeOutcome; held_at: number | null } | undefined
   return row ? { outcome: row.outcome, heldAt: row.held_at } : null
@@ -362,12 +366,7 @@ async function wakeNow(
     }
     if (sent.ok) {
       const q = sent.queued
-      const asMother = handoffStore.getByChildSession(mother)
-      const outcome: WakeOutcome = q.heldReason
-        ? 'held'
-        : asMother && handoffAsking(asMother)
-          ? 'attention'
-          : 'queued'
+      const outcome: WakeOutcome = q.heldReason ? 'held' : unheldOutcome(mother)
       pending.set(mother, { queueId: q.id, blocks: fresh.blocks })
       insertRow({
         wakeId: q.id,
@@ -395,17 +394,32 @@ async function wakeNow(
   }
 }
 
-// Snapshot da fila (cada publish): marca held e o desfecho terminal dos envelopes.
+// Na fila e sem hold: a mãe que é filha em needs_input só sai pelo handoff_wait.
+function unheldOutcome(mother: string): WakeOutcome {
+  const asMother = handoffStore.getByChildSession(mother)
+  return asMother && handoffAsking(asMother) ? 'attention' : 'queued'
+}
+
+// Snapshot da fila (cada publish): marca held (e a soltura dele) e o desfecho
+// terminal dos envelopes.
 export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
   const db = getDb()
   const now = Date.now()
-  for (const p of pending.values()) {
+  for (const [mother, p] of pending) {
     const item = snapshot.items.find((i) => i.id === p.queueId)
-    if (!item?.heldReason) continue
-    db.prepare(
-      `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = ?
-        WHERE wake_id = ? AND outcome IN ('queued','attention')`,
-    ).run(now, item.heldReason, p.queueId)
+    if (!item) continue
+    if (item.heldReason) {
+      db.prepare(
+        `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = ?
+          WHERE wake_id = ? AND outcome IN ('queued','attention')`,
+      ).run(now, item.heldReason, p.queueId)
+    } else {
+      // held_at fica: é o histórico de que segurou, não o estado atual.
+      db.prepare(
+        `UPDATE handoff_wake_deliveries SET outcome = ?, detail = NULL
+          WHERE wake_id = ? AND outcome = 'held'`,
+      ).run(unheldOutcome(mother), p.queueId)
+    }
   }
   const ev = snapshot.lastEvent
   if (!ev || ev.id === lastEventId) return
@@ -436,8 +450,11 @@ export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
 
 // ---- handoff_wait (pull, para quem a fila não alcança) ----
 
+// O que já entrou no REPL da mãe não é novidade para o wait.
+
 interface LedgerRow {
   id: string
+  wake_id: string
   handoff_id: string
   reason: WakeReason
   created_at: number
@@ -449,11 +466,41 @@ function unfetched(mother: string, handoffIds?: string[]): LedgerRow[] {
     : ''
   return getDb()
     .prepare(
-      `SELECT id, handoff_id, reason, created_at FROM handoff_wake_deliveries
-        WHERE mother_session_id = ? AND fetched_at IS NULL${filter}
+      `SELECT id, wake_id, handoff_id, reason, created_at FROM handoff_wake_deliveries
+        WHERE mother_session_id = ? AND fetched_at IS NULL AND outcome <> 'delivered'${filter}
         ORDER BY created_at`,
     )
     .all(mother, ...(handoffIds ?? [])) as LedgerRow[]
+}
+
+// O que o wait devolveu não pode sair de novo pela fila: o item na fila (ex.: mãe
+// que é filha em needs_input) seria digitado depois — entrega dupla — ou expiraria
+// e notificaria "Mensagem não entregue" de algo que a mãe já leu.
+function markFetched(mother: string, rows: LedgerRow[]): void {
+  if (rows.length === 0) return
+  const now = Date.now()
+  const db = getDb()
+  const mark = db.prepare(
+    `UPDATE handoff_wake_deliveries
+        SET fetched_at = ?,
+            outcome = CASE WHEN outcome IN ${TRANSIENT_SQL} THEN 'fetched' ELSE outcome END,
+            finished_at = COALESCE(finished_at, ?)
+      WHERE id = ?`,
+  )
+  for (const r of rows) mark.run(now, now, r.id)
+
+  const p = pending.get(mother)
+  if (!p || !queue) return
+  const fetched = new Set(rows.filter((r) => r.wake_id === p.queueId).map((r) => r.handoff_id))
+  if (fetched.size === 0) return
+  const remaining = p.blocks.filter((b) => !fetched.has(b.handoffId))
+  if (remaining.length === 0) {
+    pending.delete(mother)
+    queue.cancel(p.queueId)
+    return
+  }
+  p.blocks = remaining
+  if (!queue.replaceText(p.queueId, renderPending(p))) pending.delete(mother)
 }
 
 export async function waitForUpdates(
@@ -468,9 +515,7 @@ export async function waitForUpdates(
     rows = unfetched(motherSessionId, opts.handoffIds)
     timedOut = rows.length === 0
   }
-  const now = Date.now()
-  const mark = getDb().prepare('UPDATE handoff_wake_deliveries SET fetched_at = ? WHERE id = ?')
-  for (const r of rows) mark.run(now, r.id)
+  markFetched(motherSessionId, rows)
 
   const updates: HandoffWaitResult['updates'] = []
   for (const r of rows) {
@@ -486,7 +531,9 @@ export async function waitForUpdates(
     })
   }
   const current = opts.handoffIds?.length
-    ? opts.handoffIds.map((id) => handoffStore.get(id)).filter((h): h is Handoff => h !== null)
+    ? opts.handoffIds
+        .map((id) => handoffStore.get(id))
+        .filter((h): h is Handoff => h !== null && h.motherSessionId === motherSessionId)
     : handoffStore.list({ status: ACTIVE, motherSessionId })
   return {
     updates,
@@ -517,9 +564,25 @@ const TRANSIENT = new Set<WakeOutcome>(['queued', 'held', 'attention'])
 // distinguir do spawn_failed do renderer pela trilha.
 const WAKING_EVENTS = "('ask','report','fail','interrupt','reconcileStuck')"
 
+// Eventos de antes da 055 nunca tiveram onde gravar o wake: contá-los como missing
+// acenderia warn falso nas 24h seguintes ao upgrade. Banco migrado sem o runner
+// (specs que aplicam os up() direto) não tem _migrations: sem limite, como antes.
+function ledgerStartedAt(): number | null {
+  const db = getDb()
+  const hasRunner = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+    .get()
+  if (!hasRunner) return null
+  const row = db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as
+    | { applied_at: number }
+    | undefined
+  return row?.applied_at ?? null
+}
+
 export function wakeHealth(scope: { featureId?: string }, now = Date.now()): WakeHealth {
   const db = getDb()
   const since = now - DAY_MS
+  const eventsSince = Math.max(since, ledgerStartedAt() ?? since)
   const feature = scope.featureId ? ' AND h.feature_id = ?' : ''
   const params = scope.featureId ? [since, scope.featureId] : [since]
   const rows = db
@@ -555,7 +618,7 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
       .prepare(
         `SELECT COUNT(*) AS n FROM handoff_events e
            JOIN handoffs h ON h.id = e.handoff_id
-          WHERE e.at > ?${feature}
+          WHERE e.at >= ?${feature}
             AND h.mother_session_id IS NOT NULL
             AND e.event IN ${WAKING_EVENTS}
             AND NOT (e.event = 'fail' AND e.from_status IN ('pending','approved'))
@@ -564,7 +627,7 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
                WHERE d.handoff_id = e.handoff_id
                  AND d.created_at BETWEEN e.at - 5000 AND e.at + 60000)`,
       )
-      .get(...params) as { n: number }
+      .get(...(scope.featureId ? [eventsSince, scope.featureId] : [eventsSince])) as { n: number }
   ).n
   return {
     windowHours: 24,

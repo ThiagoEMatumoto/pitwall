@@ -1097,12 +1097,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_list',
       title: 'List handoffs',
       description:
-        'Lists YOUR handoffs (the ones this session dispatched) by default — pass scope "all" to see every handoff — optionally filtered by status, most recent first, up to limit (default 20, max 100). Returns { handoffId, alias, targetRepo, status, mode, currentStep, pendingQuestion, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
+        'Lists YOUR handoffs (the ones this session dispatched) by default — pass scope "all" to see every handoff — optionally filtered by status, most recent first, up to limit (default 20, max 100). When more match than limit, truncated is true and total says how many exist — raise limit or filter by status to see the rest. Returns { items, truncated, total }, each item { handoffId, alias, targetRepo, status, mode, currentStep, pendingQuestion, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
       inputSchema: handoffListSchema,
       handler: (args) => {
         const { status, limit = 20, scope = 'mine' } = handoffListSchema.parse(args)
         // Sem carimbo (config legada) não há identidade para filtrar: todos, como antes.
         const mine = scope === 'mine' && ctx.motherSessionId ? ctx.motherSessionId : undefined
+        const total = handoffStore.count({ status, motherSessionId: mine })
         const items = handoffStore
           .list({ status, motherSessionId: mine, limit })
           .map((h) => ({
@@ -1115,7 +1116,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             pendingQuestion: h.pendingQuestion,
             task: h.task,
           }))
-        return ok({ items })
+        return ok({ items, truncated: total > items.length, total })
       },
     },
     {

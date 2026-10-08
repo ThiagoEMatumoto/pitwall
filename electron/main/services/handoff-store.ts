@@ -324,12 +324,13 @@ export function childAlias(childSessionId: string | null): string | null {
   return row?.title ?? null
 }
 
-export function list(opts?: {
+interface ListFilter {
   status?: HandoffStatus | HandoffStatus[]
   // Só os handoffs que esta sessão despachou.
   motherSessionId?: string
-  limit?: number
-}): Handoff[] {
+}
+
+function listWhere(opts?: ListFilter): { whereSql: string; params: Array<string | number> } {
   const where: string[] = []
   const params: Array<string | number> = []
   if (opts?.status !== undefined) {
@@ -341,7 +342,19 @@ export function list(opts?: {
     where.push('h.mother_session_id = ?')
     params.push(opts.motherSessionId)
   }
-  const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  return { whereSql: where.length ? ` WHERE ${where.join(' AND ')}` : '', params }
+}
+
+export function count(opts?: ListFilter): number {
+  const { whereSql, params } = listWhere(opts)
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM handoffs h${whereSql}`)
+    .get(...params) as { n: number }
+  return row.n
+}
+
+export function list(opts?: ListFilter & { limit?: number }): Handoff[] {
+  const { whereSql, params } = listWhere(opts)
   const limitSql = opts?.limit !== undefined ? ' LIMIT ?' : ''
   if (opts?.limit !== undefined) params.push(opts.limit)
   const rows = getDb()

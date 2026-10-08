@@ -24,7 +24,7 @@ import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import { setPref } from '../prefs-store'
-import { PromptQueue, SETTLE_MS } from '../prompt-queue'
+import { POLL_MS, PROMPT_TTL_MS, PromptQueue, SETTLE_MS } from '../prompt-queue'
 import { setSpawnHandoffChild } from '../handoff/spawn-child'
 import { __resetForTests, onQueueSnapshot, setHandoffWakeQueue } from '../handoff/handoff-wake'
 import { fixture, scanOf } from '../test-support/screen-scans'
@@ -169,6 +169,7 @@ beforeEach(() => {
   setHandoffWakeQueue({
     send: (i) => queue.send(i),
     replaceText: (id, t) => queue.replaceText(id, t),
+    cancel: (id) => queue.cancel(id),
   })
   // Timers falsos só depois dos scans (o xterm headless precisa dos reais).
   vi.useFakeTimers()
@@ -310,8 +311,14 @@ describe('handoff_list por mãe', () => {
     const mine = await callAs<{ items: Array<{ handoffId: string }> }>(MOTHER, 'handoff_list', {})
     expect(mine.items).toHaveLength(2)
     expect(mine.items.map((i) => i.handoffId)).not.toContain(other.handoffId)
-    const one = await callAs<{ items: unknown[] }>(MOTHER, 'handoff_list', { limit: 1 })
+    expect(mine).toMatchObject({ truncated: false, total: 2 })
+    const one = await callAs<{ items: unknown[]; truncated: boolean; total: number }>(
+      MOTHER,
+      'handoff_list',
+      { limit: 1 },
+    )
     expect(one.items).toHaveLength(1)
+    expect(one).toMatchObject({ truncated: true, total: 2 })
     const all = await callAs<{ items: unknown[] }>(MOTHER, 'handoff_list', { scope: 'all' })
     expect(all.items).toHaveLength(3)
   })
@@ -345,6 +352,69 @@ describe('handoff_wait (fallback pull)', () => {
     const res = await pending
     expect(res.timedOut).toBe(false)
     expect(res.updates).toMatchObject([{ handoffId, reason: 'asked' }])
+  })
+
+  it('wake já entregue no REPL não volta pelo wait', async () => {
+    const { handoffId, child } = await dispatch('api')
+    await callAs(child, 'handoff_ask', { handoffId, question: 'qual lib?' })
+    await settle()
+    expect(rows()).toMatchObject([{ outcome: 'delivered' }])
+    const res = await callAs<Wait>(MOTHER, 'handoff_wait', {})
+    expect(res.updates).toEqual([])
+  })
+
+  // Regressão: a mãe que é filha em needs_input busca pelo wait; o item seguia na
+  // fila, era digitado quando ela destravava (entrega dupla) ou expirava e
+  // disparava "Mensagem não entregue" de algo que ela já tinha lido.
+  it('mãe em needs_input: o wait consome o item da fila — sem digitar depois, sem expirar', async () => {
+    seedRepo('avo')
+    const outer = handoffStore.create({
+      targetRepoId: 'repo-avo',
+      task: 't',
+      composedPrompt: 'p',
+      motherSessionId: 'grandma',
+    })
+    handoffStore.approve(outer.id, {})
+    handoffStore.markRunning(outer.id, MOTHER)
+    handoffStore.ask(outer.id, 'avó, e agora?')
+
+    const { handoffId, child } = await dispatch('api')
+    await callAs(child, 'handoff_report', { handoffId, summary: 'pronto' })
+    await settle()
+    expect(rows()).toMatchObject([{ outcome: 'attention' }])
+    expect(queue.snapshot().items.filter((i) => i.sessionId === MOTHER)).toHaveLength(1)
+
+    const res = await callAs<Wait>(MOTHER, 'handoff_wait', {})
+    expect(res.updates).toMatchObject([{ handoffId, reason: 'reported', body: 'pronto' }])
+    expect(queue.snapshot().items.filter((i) => i.sessionId === MOTHER)).toEqual([])
+    expect(rows()).toMatchObject([{ outcome: 'fetched' }])
+    expect(rows()[0].fetched_at).toEqual(expect.any(Number))
+
+    // A avó responde e a mãe destrava: nada é digitado.
+    handoffStore.resume(outer.id)
+    await endMotherTurn()
+    expect(writes.filter((w) => w.id === MOTHER)).toEqual([])
+
+    await vi.advanceTimersByTimeAsync(PROMPT_TTL_MS + POLL_MS)
+    await settle()
+    const snap = queue.snapshot()
+    expect(snap.counters.expired).toBe(0)
+    expect(snap.lastEvent?.kind).not.toBe('expired')
+    expect(rows()[0].outcome).toBe('fetched')
+  })
+
+  it('handoffIds de outra mãe não aparecem em handoffs', async () => {
+    const mineH = await dispatch('api')
+    seedRepo('outro')
+    const other = await callAs<{ handoffId: string }>('mother-2', 'session_handoff', {
+      targetRepo: 'outro',
+      task: 'da outra mãe',
+      mode: 'plan',
+    })
+    const res = await callAs<{ handoffs: Array<{ handoffId: string }> }>(MOTHER, 'handoff_wait', {
+      handoffIds: [mineH.handoffId, other.handoffId],
+    })
+    expect(res.handoffs.map((h) => h.handoffId)).toEqual([mineH.handoffId])
   })
 
   it('sem carimbo: erro legível', async () => {

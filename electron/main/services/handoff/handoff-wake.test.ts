@@ -91,8 +91,9 @@ function rows(): Row[] {
 function fakeQueue(result: (input: SendPromptInput) => SendPromptResult) {
   const send = vi.fn(async (input: SendPromptInput) => result(input))
   const replaceText = vi.fn((_id: string, _text: string) => true)
-  setHandoffWakeQueue({ send, replaceText })
-  return { send, replaceText }
+  const cancel = vi.fn((_id: string) => true)
+  setHandoffWakeQueue({ send, replaceText, cancel })
+  return { send, replaceText, cancel }
 }
 
 function queued(id: string, heldReason: QueuedPrompt['heldReason'] = null): SendPromptResult {
@@ -296,6 +297,19 @@ describe('onQueueSnapshot', () => {
     expect(rows()[0].outcome).toBe('queued')
   })
 
+  it('hold que solta volta para queued (o ledger não fica held para sempre)', async () => {
+    fakeQueue(() => queued('q-unhold', 'menu-open'))
+    const id = seedHandoff()
+    handoffStore.report(id, 'pronto')
+    await wakeMotherFor(id, 'reported')
+    expect(rows()[0]).toMatchObject({ outcome: 'held', detail: 'menu-open' })
+    const heldAt = rows()[0].held_at
+
+    const item = (queued('q-unhold') as { queued: QueuedPrompt }).queued
+    onQueueSnapshot(snapshot({ items: [item] }))
+    expect(rows()[0]).toMatchObject({ outcome: 'queued', detail: null, held_at: heldAt })
+  })
+
   it('session-gone vira not_running', async () => {
     fakeQueue(() => queued('q2'))
     const id = seedHandoff()
@@ -386,6 +400,27 @@ describe('exposição: wakeHealth → feature_health_get / overview_get', () => 
     handoffStore.ask(id, 'ninguém avisou a mãe')
     expect(wakeHealth({ featureId: FEATURE }).missing).toBe(1)
     expect(loopSnapshot(FEATURE).issues.map((i) => i.code)).toContain('handoff_wake_missing')
+  })
+
+  it('evento de antes da migration 055 não conta como missing (upgrade sem warn falso)', () => {
+    seedFeature()
+    const id = seedHandoff({ featureId: FEATURE })
+    handoffStore.ask(id, 'pergunta de antes do upgrade')
+    const db = getDb()
+    const original = (
+      db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as {
+        applied_at: number
+      }
+    ).applied_at
+    db.prepare('UPDATE _migrations SET applied_at = ? WHERE version = 55').run(Date.now() + 1000)
+    try {
+      expect(wakeHealth({ featureId: FEATURE }).missing).toBe(0)
+      expect(loopSnapshot(FEATURE).issues.map((i) => i.code)).not.toContain(
+        'handoff_wake_missing',
+      )
+    } finally {
+      db.prepare('UPDATE _migrations SET applied_at = ? WHERE version = 55').run(original)
+    }
   })
 
   it('o eco do spawn_failed (fail de pending) não conta como missing', () => {
