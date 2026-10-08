@@ -328,7 +328,9 @@ try {
   )
   await waitFor(
     'B: <pitwall-answer> do 1º no stdin da filha',
-    () => logOf(pidC).includes(`<pitwall-answer request-id="${r1.requestId}"`),
+    () =>
+      logOf(pidC).includes(`<pitwall-answer request-id="${r1.requestId}"`) &&
+      logOf(pidC).includes('</pitwall-answer>'),
     40_000,
   )
   check(
@@ -485,6 +487,75 @@ try {
       at('request_escalate') < events.lastIndexOf('resume'),
     events.join(','),
   )
+
+  // ---------- H1) handoff_message sem requestId com só human_only aberto → recusado ----------
+  const r4 = (await asC.call('handoff_ask', {
+    handoffId: H,
+    kind: 'decision',
+    question: 'Apago a tabela jobs_old em produção?',
+    options: [
+      { key: 'A', label: 'Sim', detail: 'libera espaço' },
+      { key: 'B', label: 'Não', detail: 'mantém histórico' },
+    ],
+    recommendation: 'B',
+    costOfError: 'perda de histórico; irreversível',
+    risk: 'destructive_data',
+  })) as any
+  check('H1: ask destructive_data → human_only', r4.resolver === 'human_only', JSON.stringify(r4))
+  check(
+    'H1: só o human_only aberto',
+    openRows().length === 1 && openRows()[0].resolver === 'human_only',
+    JSON.stringify(openRows()),
+  )
+  const MARK_H1 = 'tr-h1-libera-sem-requestid'
+  const refusedMsg = await errorOf(asM.call('handoff_message', { handoffId: H, text: MARK_H1 }))
+  check(
+    'H1: handoff_message recusado (cita human_only e handoff_escalate)',
+    refusedMsg.includes('human_only') && refusedMsg.includes('handoff_escalate'),
+    refusedMsg.slice(0, 300),
+  )
+  await page.waitForTimeout(3000)
+  check('H1: nada injetado no stdin da filha', !logOf(pidC).includes(MARK_H1))
+  check(
+    'H1: pedido human_only segue aberto',
+    live(`SELECT status FROM handoff_requests WHERE id='${r4.requestId}'`)[0]?.status === 'open',
+  )
+  check('H1: handoff segue needs_input', statusOf() === 'needs_input', statusOf())
+
+  // ---------- H2) handoff_message com requestId fecha o pedido ----------
+  const r5 = (await asC.call('handoff_ask', {
+    handoffId: H,
+    question: 'Posso adicionar índice em jobs.created_at?',
+  })) as any
+  check('H2: ask comum → não human_only', !!r5.requestId && r5.resolver !== 'human_only')
+  const viaMsg = (await asM.call('handoff_message', {
+    handoffId: H,
+    requestId: r5.requestId,
+    text: 'pode criar o índice',
+  })) as any
+  console.log('[typed-requests] H2 retorno:', JSON.stringify(viaMsg).slice(0, 300))
+  const r5row = () =>
+    live(
+      `SELECT status, answered_by, answer_note FROM handoff_requests WHERE id='${r5.requestId}'`,
+    )[0]
+  check(
+    'H2: pedido fechado (answered by mother)',
+    r5row()?.status === 'answered' && r5row()?.answered_by === 'mother',
+    JSON.stringify(r5row()),
+  )
+  check(
+    'H2: sai da fila de abertos (só sobra o human_only)',
+    openRows().length === 1 && openRows()[0].id === r4.requestId,
+    JSON.stringify(openRows()),
+  )
+  const tag5 = `<pitwall-answer request-id="${r5.requestId}"`
+  await waitFor('H2: envelope do r5 no stdin da filha', () => logOf(pidC).includes(tag5), 40_000)
+  check(
+    'H2: envelope entregue uma vez',
+    logOf(pidC).split(tag5).length - 1 === 1,
+    String(logOf(pidC).split(tag5).length - 1),
+  )
+  check('H2: handoff segue needs_input (human_only aberto)', statusOf() === 'needs_input')
 
   // ---------- G) ----------
   check('G: zero erros de console', pageErrors.length === 0, pageErrors.join(' | ').slice(0, 500))
