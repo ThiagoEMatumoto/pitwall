@@ -795,6 +795,7 @@ const handoffAnswerSchema = z.object({
   choice: z.string().min(1).max(8).optional(),
   text: z.string().max(4096).optional(),
   reject: z.boolean().optional(),
+  idempotencyKey: z.string().min(1).max(120).optional(),
 })
 
 // Escalação da MÃE ao humano: de um pedido existente (requestId) ou de um novo.
@@ -860,23 +861,37 @@ function assertCurrentChild(
   )
 }
 
-// Simétrica a assertCurrentChild, para as tools da MÃE. strict=true
-// (handoff_escalate, tool nova, sem legado a proteger): sem carimbo recusa.
+// Simétrica a assertCurrentChild, para as tools da MÃE. Só a mãe real do handoff
+// responde ou escala:
+//   - a filha nunca responde nem escala o próprio pedido;
+//   - handoff sem mãe identificada (motherSessionId nulo) só o humano resolve, pela Room;
+//   - carimbo divergente da mãe é recusado.
+// strict=true (handoff_escalate, sem legado a proteger): sem carimbo recusa.
 // strict=false (handoff_answer, handoff_message{requestId}): sem carimbo passa,
-// como assertCurrentChild. A trava human_only NÃO depende daqui: ela está no
-// resolver do pedido (answerRequest by 'mother' recusa para qualquer chamador MCP).
+// como assertCurrentChild (config MCP legada não tem identidade). A trava
+// human_only NÃO depende daqui: ela está no resolver do pedido.
 function assertCurrentMother(
-  handoff: { id: string; motherSessionId: string | null },
+  handoff: { id: string; motherSessionId: string | null; childSessionId: string | null },
   ctx: McpRequestContext,
   action: string,
   opts: { strict: boolean },
 ): void {
   const caller = ctx.motherSessionId
+  const verb = action === 'handoff_escalate' ? 'escalar' : 'responder'
+  if (caller && handoff.childSessionId && caller === handoff.childSessionId) {
+    throw new Error(
+      `${action} recusado: só a mãe deste handoff (${handoff.id}) pode ${verb} — você é a filha, e a filha nunca resolve o próprio pedido. Use handoff_ask e espere a resposta.`,
+    )
+  }
+  if (!handoff.motherSessionId) {
+    throw new Error(
+      `${action} recusado: o handoff ${handoff.id} não tem sessão-mãe identificada — só o humano resolve os pedidos dele, pela Room.`,
+    )
+  }
+  if (caller === handoff.motherSessionId) return
   if (!caller && !opts.strict) return
-  if (caller && handoff.motherSessionId && caller === handoff.motherSessionId) return
-  if (caller && !handoff.motherSessionId && !opts.strict) return
   throw new Error(
-    `${action} recusado: só a mãe deste handoff (${handoff.id}) pode ${action === 'handoff_escalate' ? 'escalar' : 'responder'} — ${caller ? 'você não é ela' : 'esta sessão não tem carimbo de identidade'}. Se você é a filha, use handoff_ask.`,
+    `${action} recusado: só a mãe deste handoff (${handoff.id}) pode ${verb} — ${caller ? 'você não é ela' : 'esta sessão não tem carimbo de identidade'}. Se você é a filha, use handoff_ask.`,
   )
 }
 
@@ -885,7 +900,14 @@ function assertCurrentMother(
 function answerAsMother(
   notify: McpNotify,
   ctx: McpRequestContext,
-  args: { handoffId: string; requestId: string; choice?: string; text?: string; reject?: boolean },
+  args: {
+    handoffId: string
+    requestId: string
+    choice?: string
+    text?: string
+    reject?: boolean
+    idempotencyKey?: string
+  },
   action: string,
 ) {
   const handoff = handoffStore.get(args.handoffId)
@@ -898,19 +920,22 @@ function answerAsMother(
   if (!args.reject && args.choice === undefined && !args.text?.trim()) {
     throw new Error(`${action}: informe choice (key de uma option) ou text.`)
   }
-  let answered: HandoffRequest
+  let resolved: requestStore.ResolveResult
   try {
-    answered = requestStore.answerRequest(args.requestId, {
+    resolved = requestStore.resolveRequest(args.requestId, {
       choice: args.choice,
       text: args.text,
       reject: args.reject,
+      idempotencyKey: args.idempotencyKey,
       by: 'mother',
     })
   } catch (err) {
     if (err instanceof HumanOnlyError) throw new Error(`${action} recusado: ${err.message}`)
     throw err
   }
-  void deliverAnswer(answered)
+  // Retry da mesma resposta: devolve o gravado sem entregar de novo à filha.
+  const answered = resolved.request
+  if (!resolved.replayed) void deliverAnswer(answered)
   const updated = handoffStore.get(args.handoffId)!
   notify.broadcast('handoff:updated', updated)
   if (updated.childSessionId) {
@@ -1191,7 +1216,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_message',
       title: 'Message the child session',
       description:
-        'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). Read the pending blocker with handoff_result first.',
+        'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). Read the pending blocker with handoff_result first. ANSWERING A REQUEST = handoff_answer(requestId) or handoff_message with requestId (also SendMessage to the child citing the requestId): that closes exactly that request and takes it off the queue. Without requestId the text only closes a request when exactly one non-human_only request is open; it is REFUSED when every open request is human_only (only the human resolves those — use handoff_escalate), and otherwise the return lists the requests still open.',
       inputSchema: handoffMessageSchema,
       handler: (args) => {
         const { handoffId, text, requestId } = handoffMessageSchema.parse(args)
@@ -1213,6 +1238,14 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             `a sessão-filha do handoff ${handoffId} não está mais viva (PTY encerrada) — não dá pra entregar a mensagem.`,
           )
         }
+        // Só pedidos human_only abertos: o texto da mãe seria lido pela filha como a
+        // resposta que ela espera, e essa resposta só o humano pode dar.
+        const openBefore = requestStore.listOpen({ handoffId })
+        if (openBefore.length > 0 && openBefore.every((r) => r.resolver === 'human_only')) {
+          throw new Error(
+            `handoff_message recusado: todos os pedidos abertos deste handoff (${openBefore.map((r) => r.id).join(', ')}) são human_only — só o humano resolve, pela Room. A mensagem não foi entregue. Se o humano ainda não está vendo, use handoff_escalate.`,
+          )
+        }
         // A mãe não vê a tela da filha: o Enter do paste não pode cair num menu.
         const childId = handoff.childSessionId
         return injectIntoChildGuarded(childId, text).then(() => {
@@ -1228,7 +1261,14 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             toSessionId: childId,
             kind: handoff.status === 'needs_input' ? 'answer' : 'message',
           })
-          return ok({ status: updated.status, delivered: true, openRequestIds })
+          return ok({
+            status: updated.status,
+            delivered: true,
+            openRequestIds,
+            ...(openRequestIds.length > 0 && {
+              warning: `A mensagem foi entregue, mas não respondeu ${openRequestIds.length === 1 ? 'o pedido' : 'os pedidos'} ${openRequestIds.join(', ')}: ${openRequestIds.length === 1 ? 'ele continua aberto' : 'eles continuam abertos'}. Responda cada um com handoff_answer(requestId) ou handoff_message com requestId.`,
+            }),
+          })
         })
       },
     },
@@ -1271,7 +1311,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_answer',
       title: 'Answer a child request',
       description:
-        'Called by the MOTHER to answer ONE typed request of a child, by requestId (read them in handoff_result.requests). choice = the option key; text = free answer or a note. reject: true declines the request (the child is told). The answer reaches the child as <pitwall-answer> at the end of its turn; the handoff only resumes when no request is left open. human_only requests (risk destructive_data / deploy_infra_spend, or escalated) are REFUSED here: only the human resolves them in the Room. If you think a request needs the human, call handoff_escalate.',
+        'Called by the MOTHER to answer ONE typed request of a child, by requestId (read them in handoff_result.requests). Equivalent: handoff_message with requestId, or SendMessage to the child citing the requestId. choice = the option key; text = free answer or a note. reject: true declines the request (the child is told). Repeating the same answer (or the same idempotencyKey) on an already answered request returns the recorded answer instead of an error. The answer reaches the child as <pitwall-answer> at the end of its turn; the handoff only resumes when no request is left open. human_only requests (risk destructive_data / deploy_infra_spend, or escalated) are REFUSED here: only the human resolves them in the Room. If you think a request needs the human, call handoff_escalate.',
       inputSchema: handoffAnswerSchema,
       handler: (args) => answerAsMother(notify, ctx, handoffAnswerSchema.parse(args), 'handoff_answer'),
     },

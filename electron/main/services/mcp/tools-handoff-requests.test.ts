@@ -217,7 +217,7 @@ describe('handoff_answer por requestId', () => {
 })
 
 describe('human_only', () => {
-  it('risk destructive_data: nem handoff_answer nem handoff_message fecham', async () => {
+  it('risk destructive_data: handoff_answer recusa e handoff_message sem requestId nem é entregue', async () => {
     const { handoffId, child } = await dispatch('api')
     const a = await callAs<{ requestId: string; resolver: string }>(child, 'handoff_ask', {
       handoffId,
@@ -230,13 +230,33 @@ describe('human_only', () => {
       callAs(MOTHER, 'handoff_answer', { handoffId, requestId: a.requestId, text: 'pode' }),
     ).rejects.toThrow(/human_only/)
 
-    const msg = await callAs<{ status: string; openRequestIds: string[] }>(MOTHER, 'handoff_message', {
-      handoffId,
-      text: 'pode dropar',
-    })
-    expect(msg.status).toBe('needs_input')
-    expect(msg.openRequestIds).toEqual([a.requestId])
+    await expect(
+      callAs(MOTHER, 'handoff_message', { handoffId, text: 'pode dropar' }),
+    ).rejects.toThrow(/só o humano resolve[\s\S]*handoff_escalate/)
+    expect(injectIntoChild).not.toHaveBeenCalled()
     expect(requestStore.get(a.requestId)!.status).toBe('open')
+    expect(handoffStore.get(handoffId)!.status).toBe('needs_input')
+  })
+
+  it('com pedido não-human_only aberto ao lado, handoff_message segue e avisa os abertos', async () => {
+    const { handoffId, child } = await dispatch('api')
+    const h = await callAs<{ requestId: string }>(child, 'handoff_ask', {
+      handoffId,
+      question: 'deploy?',
+      risk: 'deploy_infra_spend',
+    })
+    const m1 = await callAs<{ requestId: string }>(child, 'handoff_ask', { handoffId, question: 'q1' })
+    const m2 = await callAs<{ requestId: string }>(child, 'handoff_ask', { handoffId, question: 'q2' })
+
+    const res = await callAs<{ delivered: boolean; openRequestIds: string[]; warning: string }>(
+      MOTHER,
+      'handoff_message',
+      { handoffId, text: 'orientação geral' },
+    )
+    expect(res.delivered).toBe(true)
+    expect(res.openRequestIds).toEqual([h.requestId, m1.requestId, m2.requestId])
+    expect(res.warning).toContain(m1.requestId)
+    expect(res.warning).toContain(h.requestId)
   })
 
   it('a trava não depende de carimbo: caller=null também é recusado', async () => {
@@ -253,6 +273,76 @@ describe('human_only', () => {
       callAs(null, 'handoff_message', { handoffId, requestId: a.requestId, text: 'vai' }),
     ).rejects.toThrow(/human_only/)
     expect(requestStore.get(a.requestId)!.status).toBe('open')
+  })
+})
+
+describe('handoff_message com requestId', () => {
+  it('pedido aberto → mãe responde por handoff_message com requestId → fecha e sai da fila', async () => {
+    const { handoffId, child } = await dispatch('api')
+    const a = await callAs<{ requestId: string }>(child, 'handoff_ask', decision(handoffId))
+    expect(requestStore.listOpen().map((r) => r.id)).toEqual([a.requestId])
+
+    const res = await callAs<{ status: string; requestStatus: string; openRequestIds: string[] }>(
+      MOTHER,
+      'handoff_message',
+      { handoffId, requestId: a.requestId, text: 'vai de zod' },
+    )
+    expect(res).toMatchObject({ status: 'running', requestStatus: 'answered', openRequestIds: [] })
+    expect(requestStore.get(a.requestId)).toMatchObject({
+      status: 'answered',
+      answer: 'vai de zod',
+      answeredBy: 'mother',
+    })
+    expect(requestStore.listOpen()).toEqual([])
+    const view = await callAs<ResultView>(MOTHER, 'handoff_result', { handoffId })
+    expect(view.status).toBe('running')
+  })
+})
+
+describe('posse da resposta', () => {
+  it('a filha não responde o próprio pedido', async () => {
+    const { handoffId, child } = await dispatch('api')
+    const a = await callAs<{ requestId: string }>(child, 'handoff_ask', { handoffId, question: 'q' })
+    await expect(
+      callAs(child, 'handoff_answer', { handoffId, requestId: a.requestId, text: 'eu mesma' }),
+    ).rejects.toThrow(/filha/)
+    await expect(
+      callAs(child, 'handoff_message', { handoffId, requestId: a.requestId, text: 'eu mesma' }),
+    ).rejects.toThrow(/filha/)
+    expect(requestStore.get(a.requestId)!.status).toBe('open')
+  })
+
+  it('handoff sem mãe identificada: só o humano responde', async () => {
+    const { handoffId, child } = await dispatch('api')
+    const a = await callAs<{ requestId: string }>(child, 'handoff_ask', { handoffId, question: 'q' })
+    getDb().prepare('UPDATE handoffs SET mother_session_id = NULL WHERE id = ?').run(handoffId)
+    for (const caller of [null, MOTHER, 'outra-sessao']) {
+      await expect(
+        callAs(caller, 'handoff_answer', { handoffId, requestId: a.requestId, text: 'x' }),
+      ).rejects.toThrow(/só o humano/)
+    }
+    expect(requestStore.answerRequest(a.requestId, { text: 'ok', by: 'human' }).status).toBe(
+      'answered',
+    )
+  })
+
+  it('repetir a mesma resposta devolve a gravada, sem reentregar', async () => {
+    const { handoffId, child } = await dispatch('api')
+    const a = await callAs<{ requestId: string }>(child, 'handoff_ask', decision(handoffId))
+    const first = await callAs<{ requestStatus: string }>(MOTHER, 'handoff_answer', {
+      handoffId,
+      requestId: a.requestId,
+      choice: 'A',
+    })
+    const again = await callAs<{ requestStatus: string }>(MOTHER, 'handoff_answer', {
+      handoffId,
+      requestId: a.requestId,
+      choice: 'A',
+    })
+    expect(again).toEqual(first)
+    await expect(
+      callAs(MOTHER, 'handoff_answer', { handoffId, requestId: a.requestId, choice: 'B' }),
+    ).rejects.toThrow(/já está answered/)
   })
 })
 
