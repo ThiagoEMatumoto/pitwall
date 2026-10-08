@@ -24,10 +24,14 @@ export function startMotherErrorText(err: unknown): string {
   return stripUnsafeDisplay(mcp ? mcp[1] : msg)
 }
 
+// O xterm fica montado (invisible) por baixo do chat e vem antes no DOM: sem o
+// :not, o 1º textarea é o helper dele, e o foco iria (ou tentaria ir) direto à PTY.
 export function focusMotherComposer(): boolean {
-  const el = document.querySelector<HTMLTextAreaElement>('[data-testid="room-mother"] textarea')
+  const el = document.querySelector<HTMLTextAreaElement>(
+    '[data-testid="room-mother"] textarea:not(.xterm-helper-textarea)',
+  )
   el?.focus()
-  return !!el
+  return !!el && document.activeElement === el
 }
 
 // Avança os passos 2 e 3 de "Iniciar sessão-mãe": a sessão aparece em
@@ -38,10 +42,19 @@ export function usePendingMotherProgress(): void {
   const pending = useFeatureRoomStore((s) => s.pendingMother)
   const sessionId = pending?.sessionId ?? null
   const step = pending?.step ?? null
-  const isLive = useAppStore((s) =>
-    sessionId ? s.liveSessions.some((l) => l.id === sessionId) : false,
+  const liveStatus = useAppStore((s) =>
+    sessionId ? (s.liveSessions.find((l) => l.id === sessionId)?.status ?? null) : null,
   )
+  const isLive = liveStatus !== null && liveStatus !== 'ended'
   const gotUpdate = useRef(false)
+
+  // A mãe morreu no boot (ou sumiu depois de aparecer): sem isto o card ficaria
+  // por cima do centro com o form travado em "Iniciando…", sem saída.
+  useEffect(() => {
+    if ((step === 'terminal' && liveStatus === 'ended') || (step === 'chat' && !isLive)) {
+      useFeatureRoomStore.getState().setPendingMother(null)
+    }
+  }, [step, liveStatus, isLive])
 
   useEffect(() => {
     if (step === 'terminal' && isLive) {

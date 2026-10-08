@@ -414,6 +414,37 @@ describe('FeatureRoom', () => {
     expect(screen.getByTestId('room-mother-mode-terminal')).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('/ foca o composer da mãe, não o helper do xterm que vem antes no DOM', async () => {
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    await mount([{ id: 'M', status: 'idle' }])
+    const pane = screen.getByTestId('room-mother')
+    const xterm = document.createElement('div')
+    xterm.innerHTML = '<textarea class="xterm-helper-textarea"></textarea>'
+    const composer = document.createElement('textarea')
+    pane.append(xterm, composer)
+    room().focus()
+    fireEvent.keyDown(room(), { key: '/' })
+    expect(document.activeElement).toBe(composer)
+  })
+
+  it('mãe encerrada durante o boot: o card de passos sai do centro', async () => {
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    await mount([{ id: 'M', status: 'idle' }])
+    act(() =>
+      useFeatureRoomStore
+        .getState()
+        .setPendingMother({ featureId: F, sessionId: 'M', step: 'chat' }),
+    )
+    expect(screen.getByTestId('start-mother-steps')).toBeInTheDocument()
+    act(() =>
+      useAppStore.setState((s) => ({
+        liveSessions: s.liveSessions.map((l) => (l.id === 'M' ? { ...l, status: 'ended' } : l)),
+      })),
+    )
+    expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
+    expect(screen.queryByTestId('start-mother-steps')).not.toBeInTheDocument()
+  })
+
   it('J vindo do xterm não move a fila', async () => {
     harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
     store.ask(child('r1', 'A').id, 'qual branch?')
