@@ -223,17 +223,53 @@ export interface AnswerInput {
   text?: string
   by: 'mother' | 'human'
   reject?: boolean
+  // Mesmo key num pedido já resolvido = a mesma resposta (retry, duplo clique).
+  idempotencyKey?: string
 }
 
-export function answerRequest(requestId: string, input: AnswerInput): HandoffRequest {
+export interface ResolveResult {
+  request: HandoffRequest
+  // true: o pedido já estava resolvido com esta resposta; nada foi gravado e
+  // quem chamou não deve entregar a resposta de novo.
+  replayed: boolean
+}
+
+function normalizedAnswer(input: AnswerInput): {
+  status: 'answered' | 'rejected'
+  answer: string | null
+  note: string | null
+} {
+  const text = input.text?.trim() ? input.text : null
+  return {
+    status: input.reject ? 'rejected' : 'answered',
+    answer: input.choice ?? text,
+    note: input.choice !== undefined ? text : null,
+  }
+}
+
+function answerIdempotencyKey(requestId: string): string | null {
+  const row = getDb()
+    .prepare('SELECT answer_idempotency_key FROM handoff_requests WHERE id = ?')
+    .get(requestId) as { answer_idempotency_key: string | null } | undefined
+  return row?.answer_idempotency_key ?? null
+}
+
+function isReplay(r: HandoffRequest, input: AnswerInput): boolean {
+  if (input.idempotencyKey && answerIdempotencyKey(r.id) === input.idempotencyKey) return true
+  const n = normalizedAnswer(input)
+  return r.status === n.status && r.answer === n.answer && r.answerNote === n.note
+}
+
+export function resolveRequest(requestId: string, input: AnswerInput): ResolveResult {
   const db = getDb()
   return db.transaction(() => {
     const r = get(requestId)
     if (!r) throw new RequestResolveError(`Pedido não encontrado: ${requestId}`)
+    if (input.by === 'mother' && r.resolver === 'human_only') throw new HumanOnlyError(r)
     if (r.status !== 'open') {
+      if (r.status !== 'cancelled' && isReplay(r, input)) return { request: r, replayed: true }
       throw new RequestResolveError(`O pedido ${requestId} já está ${r.status}.`)
     }
-    if (input.by === 'mother' && r.resolver === 'human_only') throw new HumanOnlyError(r)
     if (
       !input.reject &&
       input.choice !== undefined &&
@@ -244,23 +280,25 @@ export function answerRequest(requestId: string, input: AnswerInput): HandoffReq
         `Opção "${input.choice}" inválida para ${requestId}. Válidas: ${r.options.map((o) => o.key).join(', ')}.`,
       )
     }
-    const text = input.text?.trim() ? input.text : null
-    const answer = input.choice ?? text
-    const note = input.choice !== undefined ? text : null
-    const status = input.reject ? 'rejected' : 'answered'
+    const { status, answer, note } = normalizedAnswer(input)
     db.prepare(
       `UPDATE handoff_requests
-         SET status = ?, answer = ?, answer_note = ?, answered_by = ?, resolved_at = ?
+         SET status = ?, answer = ?, answer_note = ?, answered_by = ?, resolved_at = ?,
+             answer_idempotency_key = ?
        WHERE id = ?`,
-    ).run(status, answer, note, input.by, Date.now(), requestId)
+    ).run(status, answer, note, input.by, Date.now(), input.idempotencyKey ?? null, requestId)
     recordRequestEvent(
       r.handoffId,
       input.reject ? 'request_reject' : 'request_answer',
       `${requestId} by=${input.by}`,
     )
     syncHandoffMirror(r.handoffId)
-    return get(requestId)!
+    return { request: get(requestId)!, replayed: false }
   })()
+}
+
+export function answerRequest(requestId: string, input: AnswerInput): HandoffRequest {
+  return resolveRequest(requestId, input).request
 }
 
 // A mãe passa o pedido da filha para o humano. Idempotente se já é human_only.

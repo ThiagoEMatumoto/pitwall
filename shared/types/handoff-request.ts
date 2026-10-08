@@ -61,4 +61,5 @@ export interface AnswerHandoffRequestInput {
   choice?: string
   text?: string
   reject?: boolean
+  idempotencyKey?: string
 }

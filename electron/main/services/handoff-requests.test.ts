@@ -122,6 +122,48 @@ describe('handoff-requests (pelo produtor real)', () => {
     expect(store.get(h.id)!.status).toBe('running')
   })
 
+  it('resposta repetida (mesma resposta ou mesmo idempotencyKey) devolve a gravada', () => {
+    const h = runningHandoff()
+    const { request } = store.ask(h.id, {
+      kind: 'decision',
+      question: 'q',
+      options: [
+        { key: 'A', label: 'a' },
+        { key: 'B', label: 'b' },
+      ],
+    })
+    const id = request!.id
+    const first = requests.resolveRequest(id, {
+      choice: 'A',
+      text: 'nota',
+      by: 'human',
+      idempotencyKey: 'k1',
+    })
+    expect(first.replayed).toBe(false)
+
+    const same = requests.resolveRequest(id, { choice: 'A', text: 'nota', by: 'human' })
+    expect(same).toEqual({ request: first.request, replayed: true })
+    const byKey = requests.resolveRequest(id, { choice: 'B', by: 'human', idempotencyKey: 'k1' })
+    expect(byKey).toEqual({ request: first.request, replayed: true })
+
+    expect(() => requests.answerRequest(id, { choice: 'B', by: 'human' })).toThrow(
+      /já está answered/,
+    )
+    expect(() => requests.answerRequest(id, { reject: true, by: 'human' })).toThrow(
+      /já está answered/,
+    )
+    expect(events(h.id).filter((e) => e === 'request_answer')).toHaveLength(1)
+  })
+
+  it('pedido cancelado não vira replay', () => {
+    const h = runningHandoff()
+    const { request } = store.ask(h.id, 'q')
+    requests.cancelOpen(h.id, 'fail')
+    expect(() => requests.answerRequest(request!.id, { text: 'x', by: 'human' })).toThrow(
+      /cancelled/,
+    )
+  })
+
   it('resume fecha só com exatamente 1 aberto', () => {
     const h = runningHandoff()
     store.ask(h.id, 'q1')

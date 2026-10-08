@@ -100,6 +100,7 @@ const answerRequestSchema = z.object({
   choice: z.string().min(1).max(8).optional(),
   text: z.string().max(4096).optional(),
   reject: z.boolean().optional(),
+  idempotencyKey: z.string().min(1).max(120).optional(),
 })
 
 const dismissAttentionSchema = z.object({
@@ -221,8 +222,13 @@ export function registerHandoffsIpc(): void {
   // by='human': o que resolve human_only. A resposta chega a quem perguntou (e a
   // quem escalou) pela fila on-idle.
   ipcMain.handle('handoffs:answer-request', (_e, raw: unknown): HandoffRequest => {
-    const { requestId, choice, text, reject } = answerRequestSchema.parse(raw)
-    const answered = requestStore.answerRequest(requestId, { choice, text, reject, by: 'human' })
+    const { requestId, ...input } = answerRequestSchema.parse(raw)
+    // Duplo clique: a 2ª chamada devolve a resposta gravada, sem entregar de novo.
+    const { request: answered, replayed } = requestStore.resolveRequest(requestId, {
+      ...input,
+      by: 'human',
+    })
+    if (replayed) return answered
     void deliverAnswer(answered)
     const handoff = store.get(answered.handoffId)
     if (handoff) {
