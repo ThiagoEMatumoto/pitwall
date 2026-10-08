@@ -383,6 +383,11 @@ export const HANDOFF_CHILD_DENY = [
 // handoffs.mode, e a filha passaria a editar como se fosse implementer. O deny
 // do settings é do processo e vale em qualquer modo (deny > ask > allow) —
 // leitura, testes e MCP continuam no allow comum.
+// LIMITE (verificado com claude -p em acceptEdits): o deny tira Edit/Write e
+// commit/push, mas NÃO é sandbox. Após o ExitPlanMode, `cp`, `mv`, `sed -i`,
+// `echo > f` e `sort -o` rodam sem perguntar (allow de echo/sort + auto-accept
+// de comandos de arquivo do acceptEdits). Por isso a filha plan não disputa a
+// posse e o contrato da tool diz isso explicitamente.
 export const HANDOFF_CHILD_PLAN_DENY = [
   'Edit',
   'Write',
