@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
+import { markRoomHintSeen, roomHintText, roomHintSeen } from '@/features/feature-room/room-hint'
 import { createPortal } from 'react-dom'
 import { Crown, Layers } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
@@ -50,6 +51,8 @@ interface Session {
   // Quem abriu: pelo botão do mapa, confirmar uma feature fica no mapa (o mapa
   // não muda de comportamento); pelo combo ou pela Room, vai para a Room.
   origin: SwitcherOrigin
+  // Primeira abertura pelo combo depois do update: avisa que ele leva à Room.
+  roomHint: boolean
 }
 
 export type SwitcherOrigin = 'keyboard' | 'map-button' | 'room'
@@ -176,7 +179,8 @@ export function FeatureSwitcher() {
       if (features.features.length === 0 && !features.loading) void features.load()
       restoreFocus.current = document.activeElement as HTMLElement | null
       const index = openIndex(keys.length, backward, !!current && keys[0] === current)
-      update(() => ({ keys, index, visible: sticky, sticky, origin }))
+      const roomHint = origin === 'keyboard' && !roomHintSeen()
+      update(() => ({ keys, index, visible: sticky, sticky, origin, roomHint }))
       return true
     }
 
@@ -255,6 +259,7 @@ export function FeatureSwitcher() {
       keys={session.keys}
       index={session.index}
       sticky={session.sticky}
+      roomHint={session.roomHint}
       combo={resolveCombo('featureSwitcher.open', overrides)}
     />
   )
@@ -265,12 +270,14 @@ function SwitcherOverlay({
   keys,
   index,
   sticky,
+  roomHint,
   combo,
 }: {
   keys: string[]
   index: number
   // Aberto pelo botão da barra: soltar tecla não confirma (só Enter ou clique).
   sticky: boolean
+  roomHint: boolean
   combo: Combo
 }) {
   const graph = useSessionGraph()
@@ -288,6 +295,11 @@ function SwitcherOverlay({
   useEffect(() => {
     listRef.current?.focus()
   }, [])
+
+  // Visto = mostrado: o toque rápido (overlay nem aparece) não gasta a dica.
+  useEffect(() => {
+    if (roomHint) markRoomHintSeen()
+  }, [roomHint])
 
   const shown = keys.map((k) => entries.get(k)).filter((e): e is SwitcherEntry => !!e)
   const activeKey = keys[index]
@@ -346,6 +358,14 @@ function SwitcherOverlay({
         >
           {hint}
         </div>
+        {roomHint && (
+          <div
+            data-testid="feature-switcher-room-hint"
+            className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-accent)]/10 px-3 py-1.5 text-[11px] text-[var(--color-text)]"
+          >
+            {roomHintText([modLabel, keyLabel].filter(Boolean).join('+'))}
+          </div>
+        )}
         <div
           ref={listRef}
           role="listbox"

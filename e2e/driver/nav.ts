@@ -1,9 +1,10 @@
 import { type Page } from 'playwright'
 
-export type Area = 'projects' | 'features' | 'cc-configs' | 'metrics' | 'diagrams' | 'meetings' | 'tasks' | 'design'
+export type Area = 'overview' | 'projects' | 'features' | 'cc-configs' | 'metrics' | 'diagrams' | 'meetings' | 'tasks' | 'design'
 
 // Labels reais do IconRail (atributo title de cada botão) — ver src/app/IconRail.tsx.
 const AREA_TITLE: Record<Area, string> = {
+  overview: 'Home',
   projects: 'Projetos',
   features: 'Features',
   'cc-configs': 'Configs do CC',

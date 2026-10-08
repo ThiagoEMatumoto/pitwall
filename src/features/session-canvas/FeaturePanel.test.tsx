@@ -333,3 +333,17 @@ describe('FeaturePanel', () => {
     expect(dot.closest('h3')).toHaveTextContent(/Pulso/)
   })
 })
+
+describe('FeaturePanel → Room', () => {
+  it('"Abrir Room" no cabeçalho abre a Room da feature do painel', async () => {
+    const { useFeatureRoomStore } = await import('@/features/feature-room/feature-room-store')
+    const { useAppStore } = await import('@/store/appStore')
+    useAppStore.setState({ area: 'projects' })
+    useFeatureRoomStore.setState({ featureId: null })
+    act(() => useFeaturePanelStore.getState().open('f1'))
+    render(<FeaturePanel />)
+    fireEvent.click(await screen.findByTestId('feature-panel-open-room'))
+    expect(useAppStore.getState().area).toBe('room')
+    expect(useFeatureRoomStore.getState().featureId).toBe('f1')
+  })
+})
