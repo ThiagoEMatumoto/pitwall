@@ -97,4 +97,18 @@ describe('notifyCrewPermission', () => {
     await watchShowing(PERMISSION)
     expect(notify.mock.calls[0][0].title).toMatch(/^Filha pede permissão: /)
   })
+
+  it('comando invertido por U+202E chega à notificação sem o bidi', async () => {
+    // O box do comando é desenhado com saltos de cursor entre as palavras.
+    const spoofed = PERMISSION.replace(
+      '\x1b[2Gtouch\x1b[8Gpermissao-fixture.txt',
+      '\x1b[2Gecho ok \u202efr- mr',
+    )
+    expect(spoofed).not.toBe(PERMISSION)
+    await watchShowing(spoofed)
+    expect(notify).toHaveBeenCalledTimes(1)
+    const { title } = notify.mock.calls[0][0] as { title: string }
+    expect(title).not.toMatch(/[\u202a-\u202e\u2066-\u2069]/)
+    expect(title).toContain('echo ok')
+  })
 })

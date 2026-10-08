@@ -219,6 +219,26 @@ describe('AttentionPopover', () => {
     expect(ctx).toHaveTextContent('touch permissao-fixture.txt')
   })
 
+  it('comando invertido por U+202E aparece sem o bidi (não disfarça o que se aprova)', async () => {
+    const real = await realPermissionMenu()
+    const menu = {
+      ...real,
+      question: `${real.question}\u202e`,
+      context: real.context!.replace('touch permissao-fixture.txt', 'echo ok \u202efr- mr\u202c\x07'),
+    }
+    attentionMenu.mockResolvedValue({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 1,
+      menu,
+    })
+    render(<AttentionPopover item={item} />)
+    const ctx = await screen.findByTestId('attention-context')
+    expect(ctx.textContent).not.toMatch(/[\u202a-\u202e\u2066-\u2069\x00-\x08]/)
+    expect(ctx).toHaveTextContent('echo ok fr- mr')
+    expect(screen.getByTestId('attention-popover').textContent).not.toContain('\u202e')
+  })
+
   it('fixado: é diálogo rotulado, e o Esc fecha sem vazar pro terminal', async () => {
     const menu = await realPermissionMenu()
     attentionMenu.mockResolvedValue({

@@ -3,17 +3,24 @@ import type { TuiMenu } from './tui-menu-parser'
 
 export const COMMAND_SUMMARY_MAX = 80
 
-// O texto vem da tela de outra sessão e vai pra notificação do SO e pro banco:
-// sem controle/ANSI, uma linha só, com teto. Bidi/zero-width também saem: um
-// U+202E no comando inverteria o texto exibido e disfarçaria o que se aprova.
+// Texto da tela de outra sessão exibido pra quem aprova: sem ANSI, sem controle
+// (fora \n e \t) e sem bidi/zero-width — um U+202E no comando inverteria o texto
+// exibido e disfarçaria o que se aprova. Mantém as linhas.
+export function stripUnsafeDisplay(text: string): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+      .replace(/[\u2028\u2029]/g, '\n')
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' ')
+  )
+}
+
+// Vai pra notificação do SO e pro banco: além do acima, uma linha só, com teto.
 export function sanitizeSummary(text: string, max = COMMAND_SUMMARY_MAX): string {
-  const flat = text
-    // eslint-disable-next-line no-control-regex
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, ' ')
-  const clean = flat.replace(/\s+/g, ' ').trim()
+  const clean = stripUnsafeDisplay(text).replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean
 }
 

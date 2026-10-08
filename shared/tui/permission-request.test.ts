@@ -3,7 +3,12 @@ import { join } from 'node:path'
 import xtermHeadless from '@xterm/headless'
 import { describe, expect, it } from 'vitest'
 import { scanScreen } from './attention-reason'
-import { classifyChoice, permissionSummary, sanitizeSummary } from './permission-request'
+import {
+  classifyChoice,
+  permissionSummary,
+  sanitizeSummary,
+  stripUnsafeDisplay,
+} from './permission-request'
 import { parseTuiMenu, type TuiMenu } from './tui-menu-parser'
 
 const { Terminal } = xtermHeadless as unknown as {
@@ -85,5 +90,13 @@ describe('sanitizeSummary', () => {
     expect(sanitizeSummary('echo ok\u202e fr- mr\u202c')).toBe('echo ok fr- mr')
     expect(sanitizeSummary('r\u200bm\u2066 -rf\u2069')).toBe('rm -rf')
     expect(sanitizeSummary('a\u2028b\u0085c')).toBe('a b c')
+  })
+})
+
+describe('stripUnsafeDisplay', () => {
+  it('tira bidi e controle mas mantém as linhas do contexto', () => {
+    expect(stripUnsafeDisplay('Bash command\n  echo ok\u202e fr- mr\u2069\x1b[31m\x07\n')).toBe(
+      'Bash command\n  echo ok fr- mr \n',
+    )
   })
 })
