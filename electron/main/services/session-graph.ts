@@ -140,11 +140,12 @@ export function sessionNodeTitle(args: {
 
 // O "precisa de você" do nó é o da fila única (attention:list), nunca uma regra
 // própria: needs_input retomado e fim de turno já ficaram de fora lá.
+// Qualquer item humano da sessão acende o nó (child_failed/interrupted/pty_orphan
+// também): a raia conta esses sujeitos, então o card e os contadores do mapa têm de contar.
 function graphAttentionFor(items: AttentionItem[] | undefined): SessionGraphAttention | null {
-  if (!items) return null
+  if (!items?.length) return null
   if (items.some((i) => i.kind === 'child_question')) return 'handoff-input'
-  if (items.some((i) => i.kind === 'session_menu')) return 'waiting'
-  return null
+  return 'waiting'
 }
 
 function attentionBySession(items: AttentionItem[] | undefined): Map<string, AttentionItem[]> {

@@ -433,6 +433,18 @@ describe('session-graph', () => {
       expect(g.nodes.find((n) => n.sessionId === 'kid')?.attentionReason).toBeNull()
     })
 
+    // Toda superfície == projeção: a raia conta child_failed pela sessão da filha,
+    // então o nó (tom do card, MapStatusCounters, FeaturePanel) também tem de contar.
+    it('filha com PTY viva num handoff que falhou → waiting (item child_failed)', () => {
+      addSession('mother', 'r-web')
+      addSession('kid', 'r-api')
+      const h = dispatch('mother', 'kid', 't')
+      handoffStore.fail(h, 'boom')
+
+      const g = graphFor(live({ mother: { status: 'idle' }, kid: { status: 'idle' } }))
+      expect(g.nodes.find((n) => n.sessionId === 'kid')?.attentionReason).toBe('waiting')
+    })
+
     it('waiting com a tela de fim de turno → null', async () => {
       addSession('mother', 'r-web')
       await showScreen('mother', 'idle-prompt')
