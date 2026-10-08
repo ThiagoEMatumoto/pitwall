@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { chatApi } from '@/lib/ipc'
+import { acquireChatWatch, releaseChatWatch } from './chat-watch-refs'
 import type { ChatMessage } from '../../../../shared/types/ipc'
 
 // Assina o transcript de uma sessão enquanto montado: read inicial + watch do
 // JSONL. O broadcast manda a LISTA completa reparseada, então só substituímos o
-// estado. unwatch no unmount (toggle pro terminal desmonta o ChatView).
+// estado. Libera o watch no unmount (toggle pro terminal desmonta o ChatView);
+// o refcount em chat-watch-refs só faz unwatch quando o último consumidor sai.
 export function useChatTranscript(sessionId: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
@@ -25,7 +27,7 @@ export function useChatTranscript(sessionId: string) {
     setLoading(true)
 
     // Assina ANTES do read pra não perder updates emitidos nessa janela.
-    chatApi.watch(sessionId)
+    acquireChatWatch(sessionId)
     const off = chatApi.onTranscriptUpdate((u) => {
       if (u.sessionId !== sessionId) return
       gotUpdate = true
@@ -54,7 +56,7 @@ export function useChatTranscript(sessionId: string) {
     return () => {
       cancelled = true
       off()
-      chatApi.unwatch(sessionId)
+      releaseChatWatch(sessionId)
     }
   }, [sessionId])
 
