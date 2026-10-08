@@ -87,10 +87,10 @@ export function SectionHead({
   children?: ReactNode
 }) {
   return (
-    <div className="mb-2.5 flex items-baseline gap-2.5">
+    <div className="mb-2.5 flex min-w-0 items-baseline gap-2.5 [&>span]:min-w-0 [&>span]:truncate">
       <h2
         id={id}
-        className="m-0 text-[13px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-dim)]"
+        className="m-0 shrink-0 whitespace-nowrap text-[13px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-dim)]"
       >
         {title}
       </h2>

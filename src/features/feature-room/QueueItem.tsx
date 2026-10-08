@@ -13,7 +13,7 @@ import type {
   ProducedAttentionKind,
 } from '../../../shared/types/attention'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
-import { ITEM_TITLE, KIND_LABEL, relTime } from './room-labels'
+import { ITEM_TITLE, KIND_LABEL, sinceText } from './room-labels'
 import type { RoomQueueRow } from './room-model'
 import { COMPACT } from './room-ui'
 
@@ -85,7 +85,7 @@ export function CollapsedItem({
         </span>
         {item.createdAt != null && (
           <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-text-dim)]">
-            há {relTime(item.createdAt, now)}
+            {sinceText(item.createdAt, now)}
           </span>
         )}
         <span aria-hidden className="text-[12px] text-[var(--color-text-dim)]">
@@ -143,7 +143,7 @@ export const OpenItem = forwardRef<HTMLDivElement, OpenProps>(function OpenItem(
           </span>
           {item.createdAt != null && (
             <span className="ml-auto text-[12px] tabular-nums text-[var(--color-text-dim)]">
-              há {relTime(item.createdAt, now)}
+              {sinceText(item.createdAt, now)}
             </span>
           )}
           {hasNext && (

@@ -1,5 +1,5 @@
 import type { RoomTimelineEvent } from '../../../shared/types/feature-room'
-import { eventGlyph, relTime, timelineVerb } from './room-labels'
+import { eventGlyph, sinceText, timelineVerb } from './room-labels'
 import { Glyph, SectionHead } from './room-ui'
 
 interface Props {
@@ -70,7 +70,7 @@ export function RoomTimeline({
                 <b className="font-mono text-[12px] font-semibold">{nameOf(e)}</b> {timelineVerb(e)}
               </span>
               <span className="shrink-0 tabular-nums text-[11.5px] text-[var(--color-text-dim)]">
-                {relTime(e.at, now) === 'agora' ? 'agora' : `há ${relTime(e.at, now)}`}
+                {sinceText(e.at, now)}
               </span>
             </li>
           ))

@@ -103,3 +103,9 @@ const EVENT_GLYPH: Record<string, GlyphShape> = {
 export function eventGlyph(event: string): GlyphShape {
   return EVENT_GLYPH[event] ?? 'dim'
 }
+
+// "agora" sozinho; senão "há X" (o "há agora" lia errado).
+export function sinceText(t: number, now: number): string {
+  const r = relTime(t, now)
+  return r === 'agora' ? r : `há ${r}`
+}
