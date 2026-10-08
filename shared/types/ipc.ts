@@ -7,6 +7,7 @@ export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } 
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
+import type { RoomSnapshot } from './feature-room'
 import type { TuiMenu } from '../tui/tui-menu-parser'
 import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
@@ -3107,6 +3108,12 @@ export interface Api {
     list(): Promise<AttentionItem[]>
     debug(): Promise<AttentionCounters>
     onChanged(handler: (items: AttentionItem[]) => void): () => void
+  }
+  // Room da feature: só o que o renderer não tem (timeline, OKR, loop, wakes).
+  // null = feature inexistente ou arquivada. onChanged só avisa; o renderer refaz o get.
+  room: {
+    get(featureId: string): Promise<RoomSnapshot | null>
+    onChanged(handler: (e: { featureId: string | null }) => void): () => void
   }
   // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
   agentBus: {
