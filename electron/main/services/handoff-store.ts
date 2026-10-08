@@ -316,20 +316,29 @@ export function childAlias(childSessionId: string | null): string | null {
   return row?.title ?? null
 }
 
-export function list(opts?: { status?: HandoffStatus | HandoffStatus[] }): Handoff[] {
-  const db = getDb()
-  let rows: HandoffRow[]
+export function list(opts?: {
+  status?: HandoffStatus | HandoffStatus[]
+  // Só os handoffs que esta sessão despachou.
+  motherSessionId?: string
+  limit?: number
+}): Handoff[] {
+  const where: string[] = []
+  const params: Array<string | number> = []
   if (opts?.status !== undefined) {
     const statuses = Array.isArray(opts.status) ? opts.status : [opts.status]
-    const placeholders = statuses.map(() => '?').join(', ')
-    rows = db
-      .prepare(
-        `${SELECT_HANDOFF} WHERE h.status IN (${placeholders}) ORDER BY h.created_at DESC`,
-      )
-      .all(...statuses) as HandoffRow[]
-  } else {
-    rows = db.prepare(`${SELECT_HANDOFF} ORDER BY h.created_at DESC`).all() as HandoffRow[]
+    where.push(`h.status IN (${statuses.map(() => '?').join(', ')})`)
+    params.push(...statuses)
   }
+  if (opts?.motherSessionId !== undefined) {
+    where.push('h.mother_session_id = ?')
+    params.push(opts.motherSessionId)
+  }
+  const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  const limitSql = opts?.limit !== undefined ? ' LIMIT ?' : ''
+  if (opts?.limit !== undefined) params.push(opts.limit)
+  const rows = getDb()
+    .prepare(`${SELECT_HANDOFF}${whereSql} ORDER BY h.created_at DESC${limitSql}`)
+    .all(...params) as HandoffRow[]
   return rows.map(toEntity)
 }
 

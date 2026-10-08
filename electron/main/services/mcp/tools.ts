@@ -22,7 +22,8 @@ import * as featureStore from '../feature-store'
 import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
-import { wakeMotherFor } from '../handoff/handoff-wake'
+import { waitForUpdates, wakeMotherFor } from '../handoff/handoff-wake'
+import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
@@ -704,6 +705,13 @@ const handoffStatusEnum = z.enum([
 
 const handoffListSchema = z.object({
   status: z.union([handoffStatusEnum, z.array(handoffStatusEnum)]).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  scope: z.enum(['mine', 'all']).optional(),
+})
+
+const handoffWaitSchema = z.object({
+  handoffIds: z.array(z.string().min(1)).max(50).optional(),
+  waitSeconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
 })
 
 const handoffReportSchema = z.object({
@@ -1085,20 +1093,41 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_list',
       title: 'List handoffs',
       description:
-        'List handoffs (optionally filtered by status), most recent first. Returns { handoffId, alias, targetRepo, status, mode, currentStep, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
+        'Lists YOUR handoffs (the ones this session dispatched) by default — pass scope "all" to see every handoff — optionally filtered by status, most recent first, up to limit (default 20, max 100). Returns { handoffId, alias, targetRepo, status, mode, currentStep, pendingQuestion, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
       inputSchema: handoffListSchema,
       handler: (args) => {
-        const { status } = handoffListSchema.parse(args)
-        const items = handoffStore.list(status ? { status } : undefined).map((h) => ({
-          handoffId: h.id,
-          alias: handoffStore.childAlias(h.childSessionId),
-          targetRepo: h.targetRepoLabel,
-          status: h.status,
-          mode: h.mode,
-          currentStep: h.currentStep,
-          task: h.task,
-        }))
+        const { status, limit = 20, scope = 'mine' } = handoffListSchema.parse(args)
+        // Sem carimbo (config legada) não há identidade para filtrar: todos, como antes.
+        const mine = scope === 'mine' && ctx.motherSessionId ? ctx.motherSessionId : undefined
+        const items = handoffStore
+          .list({ status, motherSessionId: mine, limit })
+          .map((h) => ({
+            handoffId: h.id,
+            alias: handoffStore.childAlias(h.childSessionId),
+            targetRepo: h.targetRepoLabel,
+            status: h.status,
+            mode: h.mode,
+            currentStep: h.currentStep,
+            pendingQuestion: h.pendingQuestion,
+            task: h.task,
+          }))
         return ok({ items })
+      },
+    },
+    {
+      name: 'handoff_wait',
+      title: 'Wait for updates from your children',
+      description:
+        'Fallback when Pitwall cannot type the <pitwall-handoff-update> into your REPL: you are a Codex session (no screen mirror) or you are yourself a child blocked in needs_input. Returns the child updates (asked/reported/failed/interrupted) not yet fetched, waiting up to waitSeconds (max 60) for the next one. Claude mothers are woken automatically at the end of their turn and do NOT need this. Never call it in a loop: one call per stretch of work.',
+      inputSchema: handoffWaitSchema,
+      handler: async (args) => {
+        const { handoffIds, waitSeconds = 0 } = handoffWaitSchema.parse(args)
+        if (!ctx.motherSessionId)
+          throw new Error(
+            'handoff_wait exige a identidade da sessão (config MCP por sessão do Pitwall).',
+          )
+        const res = await waitForUpdates(ctx.motherSessionId, { handoffIds, waitSeconds })
+        return ok(res as unknown as Record<string, unknown>)
       },
     },
     {

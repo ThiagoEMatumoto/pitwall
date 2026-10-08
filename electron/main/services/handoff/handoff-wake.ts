@@ -484,7 +484,7 @@ export async function waitForUpdates(
   }
   const current = opts.handoffIds?.length
     ? opts.handoffIds.map((id) => handoffStore.get(id)).filter((h): h is Handoff => h !== null)
-    : handoffStore.list({ status: ACTIVE }).filter((h) => h.motherSessionId === motherSessionId)
+    : handoffStore.list({ status: ACTIVE, motherSessionId })
   return {
     updates,
     handoffs: current.map((h) => ({
