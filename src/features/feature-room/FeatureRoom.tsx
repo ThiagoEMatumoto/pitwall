@@ -53,7 +53,7 @@ export function FeatureRoom() {
   const featureId = useFeatureRoomStore((s) => s.featureId)
   const timelineFilter = useFeatureRoomStore((s) => s.timelineFilter)
   const openId = useFeatureRoomStore((s) => s.openId)
-  const { snapshot } = useFeatureRoom(featureId)
+  const { snapshot, failed, retry } = useFeatureRoom(featureId)
   const graph = useSessionGraph()
   const liveSessions = useAppStore((s) => s.liveSessions)
   const handoffs = useHandoffsStore((s) => s.handoffs)
@@ -100,6 +100,36 @@ export function FeatureRoom() {
       view ? [...(view.mother ? [view.mother] : []), ...view.repos.flatMap((r) => r.rows)] : [],
     [view],
   )
+  const byHandoff = useMemo(
+    () => new Map(rows.flatMap((r) => (r.handoffId ? [[r.handoffId, r] as const] : []))),
+    [rows],
+  )
+  const bySession = useMemo(
+    () => new Map(rows.flatMap((r) => (r.sessionId ? [[r.sessionId, r] as const] : []))),
+    [rows],
+  )
+  const subjectOf = useCallback(
+    (row: RoomQueueRow): QueueSubject => {
+      const item = row.head
+      const handoff = item.handoffId
+        ? (handoffs.find((h) => h.id === item.handoffId) ?? null)
+        : null
+      const live = item.sessionId
+        ? (liveSessions.find((s) => s.id === item.sessionId) ?? null)
+        : null
+      const r =
+        (item.handoffId && byHandoff.get(item.handoffId)) ||
+        (item.sessionId && bySession.get(item.sessionId)) ||
+        null
+      return {
+        who: r?.title ?? stripUnsafeDisplay(handoff?.task ?? live?.title ?? live?.name ?? 'Sessão'),
+        repo: r?.repoLabel ?? handoff?.targetRepoLabel ?? '',
+        handoff,
+        live,
+      }
+    },
+    [handoffs, liveSessions, byHandoff, bySession],
+  )
   const queue = view?.queue ?? []
   const openKey = queue.some((r) => r.subjectKey === openId)
     ? openId
@@ -145,6 +175,20 @@ export function FeatureRoom() {
       </main>
     )
   }
+  if (failed) {
+    return (
+      <main
+        data-testid="feature-room"
+        role="alert"
+        className="flex flex-1 flex-col items-center justify-center gap-3 text-[13px] text-[var(--color-text-dim)]"
+      >
+        <p className="m-0">Não foi possível carregar a Room.</p>
+        <Button variant="ghost" className={COMPACT} onClick={retry} data-testid="room-retry">
+          Tentar de novo
+        </Button>
+      </main>
+    )
+  }
   if (!view || snapshot === undefined) {
     return (
       <main
@@ -157,28 +201,11 @@ export function FeatureRoom() {
     )
   }
 
-  const byHandoff = new Map(rows.flatMap((r) => (r.handoffId ? [[r.handoffId, r] as const] : [])))
-  const bySession = new Map(rows.flatMap((r) => (r.sessionId ? [[r.sessionId, r] as const] : [])))
   const lane = graph.lanes.find((l) => l.kind === 'feature' && l.featureId === featureId)
   const motherNode = view.mother
     ? graph.nodes.find((n) => n.sessionId === view.mother!.sessionId)
     : null
 
-  const subjectOf = (row: RoomQueueRow): QueueSubject => {
-    const item = row.head
-    const handoff = item.handoffId ? (handoffs.find((h) => h.id === item.handoffId) ?? null) : null
-    const live = item.sessionId ? (liveSessions.find((s) => s.id === item.sessionId) ?? null) : null
-    const r =
-      (item.handoffId && byHandoff.get(item.handoffId)) ||
-      (item.sessionId && bySession.get(item.sessionId)) ||
-      null
-    return {
-      who: r?.title ?? stripUnsafeDisplay(handoff?.task ?? live?.title ?? live?.name ?? 'Sessão'),
-      repo: r?.repoLabel ?? handoff?.targetRepoLabel ?? '',
-      handoff,
-      live,
-    }
-  }
   const nameOf = (e: RoomTimelineEvent) =>
     (e.childSessionId && bySession.get(e.childSessionId)?.title) ||
     byHandoff.get(e.handoffId)?.title ||

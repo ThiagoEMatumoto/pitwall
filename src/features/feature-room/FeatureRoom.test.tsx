@@ -174,6 +174,32 @@ describe('FeatureRoom', () => {
     expect(screen.getByTestId('room-gone-switch')).toHaveTextContent('Trocar de feature')
   })
 
+  it('room:get rejeitado: mostra o erro e "Tentar de novo" recarrega', async () => {
+    const realGet = special.room.get
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    special.room.get = () => Promise.reject(new Error('ipc down'))
+    try {
+      const w = roomWorld(testDb, [])
+      useSessionGraphStore.setState({ graph: w.graph })
+      useHandoffsStore.setState({ handoffs: w.handoffs, loading: false })
+      useAttentionListStore.setState({ items: w.attention })
+      useAppStore.setState({ area: 'room', liveSessions: w.live })
+      useFeatureRoomStore.setState({ featureId: F, timelineFilter: null, openId: null })
+      render(<FeatureRoom />)
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Não foi possível carregar a Room.',
+      )
+      expect(screen.queryByText('Carregando a Room…')).not.toBeInTheDocument()
+      special.room.get = realGet
+      fireEvent.click(screen.getByTestId('room-retry'))
+      expect(await screen.findByTestId('room-needs-count')).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    } finally {
+      special.room.get = realGet
+      errSpy.mockRestore()
+    }
+  })
+
   it('só 1 item aberto; J vai ao próximo e foca, K volta; J no textarea não navega', async () => {
     harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
     store.ask(child('r1', 'A').id, 'qual branch?')
