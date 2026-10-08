@@ -135,6 +135,35 @@ describe('PromptQueue — origem da mensagem (bolinha no mapa)', () => {
   })
 })
 
+describe('PromptQueue.replaceText (coalescing)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('troca o texto do item na fila e a entrega sai UMA vez com o texto novo', async () => {
+    const { queue, state, writes } = setup({ status: 'working' })
+    const res = await queue.send({ sessionId: SID, text: 'velho', when: 'on-idle' })
+    if (!res.ok || res.delivered) throw new Error('esperava enfileirar')
+    expect(queue.replaceText(res.queued.id, 'novo')).toBe(true)
+    expect(queue.snapshot().items[0].text).toBe('novo')
+
+    state.status = 'idle'
+    queue.onTurnEnded(SID)
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 10)
+    expect(writes).toEqual([`${SID}:novo`])
+  })
+
+  it('devolve false para um item que já saiu da fila', async () => {
+    const { queue, state } = setup({ status: 'working' })
+    const res = await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle' })
+    if (!res.ok || res.delivered) throw new Error('esperava enfileirar')
+    state.status = 'idle'
+    queue.onTurnEnded(SID)
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 10)
+    expect(queue.snapshot().lastEvent?.kind).toBe('delivered')
+    expect(queue.replaceText(res.queued.id, 'tarde')).toBe(false)
+  })
+})
+
 describe('PromptQueue — envio para qualquer sessão', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
