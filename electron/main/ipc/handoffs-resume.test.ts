@@ -125,8 +125,18 @@ vi.mock('../services/session-activity', () => ({
 }))
 
 let handoff: Handoff | null = null
+// Dono atual do repo-alvo (findActiveByTarget): o handoff que o índice da 054
+// deixaria ativo. null = repo livre.
+let activeOwner: Handoff | null = null
 vi.mock('../services/handoff-store', () => ({
   get: () => handoff,
+  findActiveByTarget: () => activeOwner,
+  HandoffDuplicateError: class extends Error {
+    readonly code = 'HANDOFF_DUPLICATE'
+    constructor(readonly existing: Handoff) {
+      super(`Repo-alvo já tem um handoff ativo (${existing.id})`)
+    }
+  },
   markRunning: vi.fn((_id: string, childSessionId: string) => ({
     ...(handoff as Handoff),
     status: 'running',
@@ -185,6 +195,7 @@ function resetSeams(): void {
   titleUpdates.length = 0
   liveSessionIds = []
   handoff = null
+  activeOwner = null
   ccRow = undefined
   repoRow = undefined
   linkedHandoffRow = undefined
@@ -219,6 +230,20 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
       handoff = baseHandoff({ status })
       expect(() => resume()).toThrow(/cc_session_id/)
     }
+  })
+
+  // Substituído por force (ou repo ocupado por outro): o índice recusaria o
+  // markRunning. A recusa tem que vir ANTES do spawn — senão sobe uma PTY editando
+  // o repo sem vínculo com handoff nenhum.
+  it('repo ocupado por OUTRO handoff: recusa sem spawnar PTY', () => {
+    handoff = baseHandoff()
+    activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+    ccRow = { cc_session_id: VALID_CC }
+    transcriptPath = '/tmp/t.jsonl'
+    repoRow = { path: '/tmp/repo', label: 'Repo 1' }
+    expect(() => resume()).toThrow(/handoff ativo \(h2\)/)
+    expect(spawns).toHaveLength(0)
+    expect(markRunning).not.toHaveBeenCalled()
   })
 
   it('rejeita resume quando não há cc_session_id válido', () => {

@@ -686,6 +686,13 @@ export function resumeHandoffChild(
     return { handoff, session: toSession(childRow), alreadyRunning: true }
   }
 
+  // Posse do repo ANTES do spawn: o markRunning lá embaixo reativa o handoff e o
+  // índice da 054 o recusa se outro handoff já ocupa o repo (ex.: este foi
+  // substituído por force). Recusado depois do startSession, a PTY já estaria no
+  // ar editando o repo sem vínculo — o acidente que o dedup existe pra evitar.
+  const owner = handoffStore.findActiveByTarget(handoff.targetRepoId)
+  if (owner && owner.id !== handoff.id) throw new handoffStore.HandoffDuplicateError(owner)
+
   const ccSessionId = childRow?.cc_session_id
   if (!ccSessionId || !UUID_RE.test(ccSessionId)) {
     throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
