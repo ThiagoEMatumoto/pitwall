@@ -119,7 +119,7 @@ const CHILD_ALLOW_READ_TOOLS = [
 ]
 
 // git de LEITURA. Nada que reescreva histórico ou publique — merge/rebase caem
-// no ask e push/reset --hard/clean no deny. `fetch` entra porque só atualiza
+// no ask, reset --hard/clean no deny e push segue CHILD_ALLOW_PUBLISH + deny. `fetch` entra porque só atualiza
 // refs remotas (não mexe em working tree) e é pré-requisito de qualquer
 // diagnóstico honesto de "estou atrás da main?".
 const CHILD_ALLOW_GIT_READ = [
@@ -212,12 +212,32 @@ const CHILD_ALLOW_CLOUD_READ = [
 // handoff, e o que mais interrompia a filha.
 const CHILD_ALLOW_MCP = ['mcp__pitwall']
 
+// Publicação de branch de trabalho: a filha termina o próprio ciclo (push + PR)
+// sem o humano virar gargalo. Só `origin` e só os prefixos de branch de trabalho
+// — o resto do push cai no default (pergunta). O `*` casa QUALQUER texto,
+// inclusive espaços (`feat/x main`, `feat/x:main`, `feat/x --force`), então o
+// allow é largo de propósito e quem fecha os buracos é o deny/ask abaixo
+// (deny > ask > allow — docs: code.claude.com/docs/en/permissions).
+const CHILD_ALLOW_PUBLISH = [
+  'Bash(git push -u origin feat/*)',
+  'Bash(git push -u origin fix/*)',
+  'Bash(git push -u origin chore/*)',
+  'Bash(git push --set-upstream origin feat/*)',
+  'Bash(git push --set-upstream origin fix/*)',
+  'Bash(git push --set-upstream origin chore/*)',
+  'Bash(git push origin feat/*)',
+  'Bash(git push origin fix/*)',
+  'Bash(git push origin chore/*)',
+  'Bash(gh pr create:*)',
+]
+
 export const HANDOFF_CHILD_ALLOW = [
   ...CHILD_ALLOW_READ_TOOLS,
   ...CHILD_ALLOW_GIT_READ,
   ...CHILD_ALLOW_PROJECT_INSPECTION,
   ...CHILD_ALLOW_CLOUD_READ,
   ...CHILD_ALLOW_MCP,
+  ...CHILD_ALLOW_PUBLISH,
 ]
 
 // `ask` = continua pedindo confirmação (é o "NÃO PODE" reversível da regra: o
@@ -238,6 +258,8 @@ export const HANDOFF_CHILD_ASK = [
   'Bash(mongosh:*)',
   'Bash(redis-cli:*)',
   'Bash(bq query:*)',
+  // flags globais vêm ANTES do subcomando (`bq --project_id=p query ...`)
+  'Bash(bq * query*)',
   // migrations
   'Bash(npx prisma migrate:*)',
   'Bash(npm run migrate:*)',
@@ -246,15 +268,85 @@ export const HANDOFF_CHILD_ASK = [
   // publicação
   'Bash(npm publish:*)',
   'Bash(gh release create:*)',
+  // push sem branch explícita: o destino depende da branch atual/upstream, que
+  // pode ser uma protegida — o humano confirma. (Regra sem `*` = match exato.)
+  'Bash(git push)',
+  'Bash(git push -u)',
+  'Bash(git push origin)',
+  'Bash(git push -u origin)',
+  'Bash(git push --set-upstream origin)',
+  'Bash(git push origin HEAD)',
+  'Bash(git push -u origin HEAD)',
+  'Bash(git push --set-upstream origin HEAD)',
+  // variantes que o allow de feat/* casaria mas que não são "publicar a branch":
+  // force-with-lease em branch de trabalho (em protegida o deny já pega), todas
+  // as tags, pular hooks.
+  'Bash(git push *--force-with-lease*)',
+  'Bash(git push *--tags*)',
+  'Bash(git push *--no-verify*)',
+  // delete de arquivo simples pergunta; recursivo é deny.
+  'Bash(rm:*)',
 ]
 
-// `deny` = bloqueado, nem pergunta. Mescla o DESTRUCTIVE_DENYLIST canônico —
-// SEGUNDA camada, não substituição: ele continua indo pro `--disallowedTools`
-// em modo autônomo (ver resolveDisallowedTools). Reusar a constante garante que
-// as duas camadas não drifem. Extras: o delete que a regra proíbe, o buraco do
-// `find` (que é allow mas sabe deletar/executar) e escalonamento de IAM.
+// O que a filha herda do DESTRUCTIVE_DENYLIST e NÃO fica em deny: `rm` simples
+// vira ask e `git push` para branch de trabalho vira allow. Precisam sair do deny
+// porque deny > allow — um `Bash(git push:*)` no deny anularia o allow de feat/*.
+// O que é destrutivo de verdade nesses dois volta como deny preciso abaixo.
+export const HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE = ['Bash(rm:*)', 'Bash(git push:*)']
+
+export const PROTECTED_BRANCHES = ['main', 'master', 'staging', 'develop'] as const
+
+// Push para branch protegida, em qualquer forma: `origin main`, `-u origin main`,
+// `feat/x main` (dois refspecs), `HEAD:main`, `feat/x:main`, `refs/heads/main`.
+// Os espaços/`:` em volta do nome são literais, então `feat/main` e
+// `maintenance` NÃO casam. Gerado por branch para as 4 ficarem idênticas.
+const CHILD_DENY_PROTECTED_PUSH = PROTECTED_BRANCHES.flatMap((b) => [
+  `Bash(git push * ${b})`,
+  `Bash(git push * ${b} *)`,
+  `Bash(git push *:${b})`,
+  `Bash(git push *:${b} *)`,
+  `Bash(git push *refs/heads/${b})`,
+  `Bash(git push *refs/heads/${b} *)`,
+])
+
+// `deny` = bloqueado, nem pergunta. Mescla o DESTRUCTIVE_DENYLIST canônico menos
+// o relaxado acima — SEGUNDA camada, não substituição: esta MESMA lista vai pro
+// `--disallowedTools` da filha em modo autônomo (resolveDisallowedTools com
+// handoffChild), que bloqueia antes do settings. Extras: o delete que a regra
+// proíbe, o buraco do `find` (que é allow mas sabe deletar/executar),
+// escalonamento de IAM, e as formas destrutivas de push/rm que o allow/ask
+// casariam (o `*` do allow engole `--force`, `:branch`, `main` no fim).
 export const HANDOFF_CHILD_DENY = [
-  ...DESTRUCTIVE_DENYLIST,
+  ...DESTRUCTIVE_DENYLIST.filter((t) => !HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE.includes(t)),
+  ...CHILD_DENY_PROTECTED_PUSH,
+  // force push (o DESTRUCTIVE só pega a flag logo após `push`)
+  'Bash(git push * --force)',
+  'Bash(git push * --force *)',
+  'Bash(git push * -f)',
+  'Bash(git push * -f *)',
+  'Bash(git push * +*)',
+  // push que publica/apaga tudo ou apaga branch remota
+  'Bash(git push *--all*)',
+  'Bash(git push *--mirror*)',
+  'Bash(git push *--delete*)',
+  'Bash(git push -d *)',
+  'Bash(git push * -d *)',
+  // refspec `:branch` apaga a branch remota. Não dá pra escrever `* :*`: regra
+  // terminada em `:*` é o sufixo de curinga (== ` *`) e não casaria `:x`. Fica
+  // de fora `feat/x :nome-sem-barra` no FIM — o --delete/-d cobrem o caso usual.
+  'Bash(git push * :*/*)',
+  'Bash(git push * :* *)',
+  // rm recursivo, com a flag em qualquer posição (`rm -rf x`, `rm -f -r x`).
+  // Combinações exóticas (`rm -vrf`) não casam aqui e caem no ask de `rm:*`.
+  'Bash(rm -r*)',
+  'Bash(rm -R*)',
+  'Bash(rm -fr*)',
+  'Bash(rm -fR*)',
+  'Bash(rm * -r*)',
+  'Bash(rm * -R*)',
+  'Bash(rm * -fr*)',
+  'Bash(rm * -fR*)',
+  'Bash(rm *--recursive*)',
   'Bash(rmdir:*)',
   'Bash(shred:*)',
   'Bash(find * -delete*)',
@@ -262,6 +354,7 @@ export const HANDOFF_CHILD_DENY = [
   'Bash(gcloud * delete*)',
   'Bash(aws * delete-*)',
   'Bash(bq rm*)',
+  'Bash(bq * rm *)',
   'Bash(terraform destroy*)',
   'Bash(gcloud * add-iam-policy-binding*)',
   'Bash(gcloud * set-iam-policy*)',
@@ -289,18 +382,24 @@ export function resolvePermissionMode(value: string | null | undefined): string 
   return value && SPAWN_PERMISSION_MODE_WHITELIST.has(value) ? value : null
 }
 
-// Monta o denylist final do spawn. Mescla o denylist destrutivo canônico quando o
-// modo é autônomo (o renderer não pode enfraquecê-lo); senão devolve só o
-// denylist do renderer (ou null se vazio). Filtra specs não-string/vazios.
+// Monta o denylist final do spawn. Em modo autônomo mescla um denylist canônico
+// (o renderer não pode enfraquecê-lo); senão devolve só o denylist do renderer
+// (ou null se vazio). Filtra specs não-string/vazios.
+// Qual canônico: a filha de handoff recebe HANDOFF_CHILD_DENY — o mesmo deny do
+// seu --settings. `--disallowedTools` bloqueia antes do settings, então mandar o
+// DESTRUCTIVE_DENYLIST (com `git push:*`/`rm:*`) anularia o allow/ask da filha.
+// Sessões normais seguem com o DESTRUCTIVE_DENYLIST inalterado.
 export function resolveDisallowedTools(
   permissionMode: string | null,
   rendererDeny: readonly unknown[] | null | undefined,
+  opts: { handoffChild?: boolean } = {},
 ): string[] | null {
   const deny = (rendererDeny ?? []).filter(
     (t): t is string => typeof t === 'string' && t.length > 0,
   )
   if (permissionMode && AUTONOMOUS_PERMISSION_MODES.has(permissionMode)) {
-    return Array.from(new Set([...deny, ...DESTRUCTIVE_DENYLIST]))
+    const canonical = opts.handoffChild ? HANDOFF_CHILD_DENY : DESTRUCTIVE_DENYLIST
+    return Array.from(new Set([...deny, ...canonical]))
   }
   return deny.length > 0 ? deny : null
 }

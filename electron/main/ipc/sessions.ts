@@ -532,7 +532,9 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // de handoff num provider sem trava equivalente é recusada antes do spawn.
   const permissionMode = resolvePermissionMode(input.permissionMode)
   assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
-  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
+  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools, {
+    handoffChild: Boolean(input.handoffChild),
+  })
 
   // Defesa em profundidade: só passa adiante o valor que estiver na whitelist.
   const model =
@@ -722,9 +724,9 @@ export function resumeHandoffChild(
   // Permissão NÃO pode se perder no relance: sem `--permission-mode`, uma filha
   // que estava em `plan` (read-only) voltaria podendo editar, e uma autônoma
   // voltaria sem o denylist destrutivo. Resolvido pelas MESMAS funções do
-  // spawnSession (whitelist + merge do DESTRUCTIVE_DENYLIST em modo autônomo).
+  // spawnSession (whitelist + merge do HANDOFF_CHILD_DENY em modo autônomo).
   const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
-  const disallowedTools = resolveDisallowedTools(permissionMode, null)
+  const disallowedTools = resolveDisallowedTools(permissionMode, null, { handoffChild: true })
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
