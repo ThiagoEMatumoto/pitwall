@@ -98,6 +98,8 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     task: input.task,
     taken: store.activeSessionNames(),
   })
+  // input.context NÃO vai pro briefing: aqui é metadado de procedência (adoção),
+  // não instrução da mãe — diferente do context texto-livre do session_handoff.
   const composedPrompt = composeHandoffPrompt({
     targetRepoLabel: target.label,
     targetRepoPath: target.path,
