@@ -597,7 +597,22 @@ try {
     await waitFor('volta à anterior', async () => (await mru())[0] === previous, 3000),
     `toque rápido volta à anterior (${previous})`,
   )
+  // Toque rápido também confirma: abre a Room da anterior (39eaaac). Para seguir
+  // com o painel da mãe e a barra de Projetos, volta ao mapa pelo "Ver no mapa".
   if (ours.has(previous)) {
+    const pf = feats.find((f) => f.id === previous)!
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor(
+        'Room da anterior',
+        async () =>
+          (await room.getAttribute('aria-label').catch(() => null)) === `Room da feature ${pf.title}` &&
+          ((await room.getByTestId('room-mother').textContent()) ?? '').includes(pf.mother.name),
+        8000,
+      ),
+      `toque rápido abre a Room da anterior com a mãe dela (${pf.mother.name})`,
+    )
+    await room.getByTestId('room-see-map').click()
     check(
       await waitFor(
         'painel volta',
@@ -673,6 +688,15 @@ try {
   const fromTerminals = (await optionKeys()).find((o) => o.selected)?.key ?? ''
   await shot('overlay-nos-terminais')
   await page.keyboard.up('Control')
+  // Fora do mapa, confirmar também abre a Room; o mapa vem pelo "Ver no mapa".
+  if (ours.has(fromTerminals)) {
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor('Room (terminais)', async () => (await room.count()) === 1, 8000),
+      'confirmar fora do mapa abre a Room da escolhida',
+    )
+    await room.getByTestId('room-see-map').click()
+  }
   check(
     await waitFor('mapa de volta', async () => page.getByTestId('session-map').isVisible(), 8000),
     'confirmar fora do mapa leva ao mapa',
