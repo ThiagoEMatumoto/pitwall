@@ -371,7 +371,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   async function forceFail() {
     if (failing) return
     const ok = window.confirm(
-      `Forçar falha deste handoff para "${repoLabel}"? A sessão-filha não será encerrada automaticamente; use isto quando ela travou ou já morreu.`,
+      `Forçar falha deste handoff para "${repoLabel}"? A sessão-filha, se ainda estiver rodando, será encerrada.`,
     )
     if (!ok) return
     setFailing(true)

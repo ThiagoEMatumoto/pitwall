@@ -116,6 +116,10 @@ const setOutcomeSchema = z.object({
   outcome: z.enum(['useful', 'wrong', 'partial']),
 })
 
+export function killChildIfRunning(childSessionId: string | null): void {
+  if (childSessionId && ptyManager.isRunning(childSessionId)) ptyManager.kill(childSessionId)
+}
+
 export function registerHandoffsIpc(): void {
   ipcMain.handle('handoffs:list', (_e, raw: unknown): Handoff[] => {
     const opts = listSchema.parse(raw)
@@ -146,10 +150,13 @@ export function registerHandoffsIpc(): void {
     return handoff
   })
 
-  // Falha de spawn/aprovação: marca o handoff como failed com o erro visível no inbox.
+  // Falha de spawn/aprovação ou "Forçar falha" do card: marca failed com o erro
+  // visível no inbox e ENCERRA a filha, se viva. Ordem importa: o status vira
+  // failed antes do kill, senão o exit da PTY reconciliaria pra 'interrupted'.
   ipcMain.handle('handoffs:fail', (_e, raw: unknown): Handoff => {
     const { id, error } = failSchema.parse(raw)
     const handoff = store.fail(id, error)
+    killChildIfRunning(handoff.childSessionId)
     broadcast('handoff:updated', handoff)
     return handoff
   })
