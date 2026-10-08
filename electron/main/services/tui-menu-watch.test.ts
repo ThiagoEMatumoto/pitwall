@@ -195,6 +195,45 @@ describe('TuiMenuWatch.respond — checagem de menu-mudou', () => {
     expect(pty.writes).toEqual(['4'])
   })
 
+  it('resposta digitada emite responded com o menu fresco e a aparição dele', async () => {
+    const { watch } = setup(PERMISSION)
+    const responded = vi.fn()
+    watch.on('responded', responded)
+    const snap = await watch.snapshot('s1')
+    const shown = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(shown + 4000)
+    try {
+      await watch.respond({
+        sessionId: 's1',
+        fingerprint: snap!.fingerprint,
+        menuSeq: snap!.menuSeq,
+        action: { kind: 'select', optionIndex: 0 },
+      })
+    } finally {
+      clock.mockRestore()
+    }
+    expect(responded).toHaveBeenCalledTimes(1)
+    const ev = responded.mock.calls[0][0]
+    expect(ev.sessionId).toBe('s1')
+    expect(ev.menu.request).toEqual({ tool: 'Bash', command: 'touch permissao-fixture.txt' })
+    expect(ev.menuSince).toBeLessThanOrEqual(shown)
+    expect(ev.at - ev.menuSince).toBeGreaterThanOrEqual(4000)
+  })
+
+  it('resposta recusada não emite responded', async () => {
+    const { watch } = setup(PERMISSION)
+    const responded = vi.fn()
+    watch.on('responded', responded)
+    const snap = await watch.snapshot('s1')
+    await watch.respond({
+      sessionId: 's1',
+      fingerprint: 'outro',
+      menuSeq: snap!.menuSeq,
+      action: { kind: 'select', optionIndex: 0 },
+    })
+    expect(responded).not.toHaveBeenCalled()
+  })
+
   it('menu mudou desde o snapshot: recusa, devolve o menu novo e não digita nada', async () => {
     const { pty, watch } = setup(PERMISSION)
     const snap = await watch.snapshot('s1')

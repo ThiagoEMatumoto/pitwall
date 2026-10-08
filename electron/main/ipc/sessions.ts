@@ -31,7 +31,8 @@ import {
 } from '../services/session-activity'
 import { livePtySessionInfo } from './live-session-pty'
 import { buildSessionEndpoint } from '../services/mcp/session-identity'
-import { tuiMenuWatch } from '../services/tui-menu-watch'
+import { tuiMenuWatch, type AttentionRespondedEvent } from '../services/tui-menu-watch'
+import { recordAttentionResponse } from '../services/attention-response-store'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
 import { getMcpRuntime } from '../services/mcp/server'
@@ -816,9 +817,26 @@ function screenWatchTarget(ptyId: string): { ccSessionId: string } | null {
   return { ccSessionId: row.cc_session_id }
 }
 
+// A medição não pode derrubar a resposta: as teclas já foram pra PTY.
+function recordResponded(e: AttentionRespondedEvent): void {
+  try {
+    recordAttentionResponse({
+      sessionId: e.sessionId,
+      handoffId: handoffStore.getByChildSession(e.sessionId)?.id ?? null,
+      menu: e.menu,
+      action: e.action,
+      waitedMs: e.menuSince != null ? e.at - e.menuSince : null,
+      at: e.at,
+    })
+  } catch (err) {
+    console.error('[attention] failed to record response', err)
+  }
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
+    tuiMenuWatch.on('responded', recordResponded)
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
