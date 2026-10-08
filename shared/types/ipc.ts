@@ -1222,6 +1222,19 @@ export interface OverviewFeatureActivity {
 
 // Payload agregado do dashboard: a árvore inteira numa chamada IPC (evita N+1
 // de get/listByParent a partir do renderer).
+// Saúde do acordador da mãe (handoff_wake_deliveries) numa janela de 24h.
+// undelivered = não chegou e ninguém buscou por handoff_wait; missing = evento de
+// handoff que deveria acordar a mãe e não deixou linha nenhuma no ledger.
+export interface HandoffWakeHealth {
+  windowHours: 24
+  attempted: number
+  delivered: number
+  undelivered: number
+  missing: number
+  byOutcome: Partial<Record<string, number>>
+  lastUndeliveredAt: number | null
+}
+
 export interface OverviewData {
   // Raízes (parent null) com status active|paused|done — archived fica fora.
   objectives: OverviewObjectiveNode[]
@@ -1232,6 +1245,7 @@ export interface OverviewData {
   // Features ativas (in-progress|blocked|paused, não-arquivadas) com atividade
   // de sessões, ordenadas pela última sessão (fallback updated_at) desc.
   features: OverviewFeatureActivity[]
+  handoffWake: HandoffWakeHealth
 }
 
 export interface ResumeSessionInput {

@@ -17,7 +17,7 @@ import * as handoffStore from '../handoff-store'
 import { MAX_WAIT_SECONDS, attr, sanitizeBody } from '../agent-bus'
 import { handoffAsking } from '../../../../shared/tui/attention-reason'
 import { HANDOFF_WAKE_TAG } from '../../../../shared/handoff-wake-envelope'
-import type { Handoff, HandoffStatus } from '../../../../shared/types/ipc'
+import type { Handoff, HandoffStatus, HandoffWakeHealth } from '../../../../shared/types/ipc'
 import type {
   PromptQueueSnapshot,
   SendPromptInput,
@@ -493,5 +493,79 @@ export async function waitForUpdates(
       status: h.status,
     })),
     timedOut,
+  }
+}
+
+// ---- exposição (feature_health / overview) ----
+
+export type WakeHealth = HandoffWakeHealth
+
+const DAY_MS = 24 * HOUR_MS
+const UNDELIVERED_TERMINAL = new Set<WakeOutcome>([
+  'expired',
+  'not_running',
+  'no_screen',
+  'capped',
+  'cancelled',
+])
+const TRANSIENT = new Set<WakeOutcome>(['queued', 'held', 'attention'])
+// Eventos que acordam a mãe. `fail` de pending/approved fica de fora: no
+// session_handoff é o eco filtrado (a mãe vê o erro no retorno) e não dá pra
+// distinguir do spawn_failed do renderer pela trilha.
+const WAKING_EVENTS = "('ask','report','fail','interrupt','reconcileStuck')"
+
+export function wakeHealth(scope: { featureId?: string }, now = Date.now()): WakeHealth {
+  const db = getDb()
+  const since = now - DAY_MS
+  const feature = scope.featureId ? ' AND h.feature_id = ?' : ''
+  const params = scope.featureId ? [since, scope.featureId] : [since]
+  const rows = db
+    .prepare(
+      `SELECT d.outcome, d.created_at, d.fetched_at FROM handoff_wake_deliveries d
+         JOIN handoffs h ON h.id = d.handoff_id
+        WHERE d.created_at > ?${feature}`,
+    )
+    .all(...params) as Array<{ outcome: WakeOutcome; created_at: number; fetched_at: number | null }>
+  const byOutcome: Partial<Record<WakeOutcome, number>> = {}
+  let delivered = 0
+  let undelivered = 0
+  let lastUndeliveredAt: number | null = null
+  const staleBefore = now - WAKE_STALE_TRANSIENT_MS
+  for (const r of rows) {
+    byOutcome[r.outcome] = (byOutcome[r.outcome] ?? 0) + 1
+    if (r.outcome === 'delivered') delivered++
+    const lost =
+      r.fetched_at === null &&
+      (UNDELIVERED_TERMINAL.has(r.outcome) ||
+        (TRANSIENT.has(r.outcome) && r.created_at < staleBefore))
+    if (lost) {
+      undelivered++
+      lastUndeliveredAt = Math.max(lastUndeliveredAt ?? 0, r.created_at)
+    }
+  }
+  const missing = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM handoff_events e
+           JOIN handoffs h ON h.id = e.handoff_id
+          WHERE e.at > ?${feature}
+            AND h.mother_session_id IS NOT NULL
+            AND e.event IN ${WAKING_EVENTS}
+            AND NOT (e.event = 'fail' AND e.from_status IN ('pending','approved'))
+            AND NOT EXISTS (
+              SELECT 1 FROM handoff_wake_deliveries d
+               WHERE d.handoff_id = e.handoff_id
+                 AND d.created_at BETWEEN e.at - 5000 AND e.at + 60000)`,
+      )
+      .get(...params) as { n: number }
+  ).n
+  return {
+    windowHours: 24,
+    attempted: rows.length,
+    delivered,
+    undelivered,
+    missing,
+    byOutcome,
+    lastUndeliveredAt,
   }
 }

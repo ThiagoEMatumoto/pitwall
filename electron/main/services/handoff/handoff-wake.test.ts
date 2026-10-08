@@ -20,8 +20,11 @@ vi.mock('electron', async () => {
 import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
+import { loopSnapshot } from '../loop-snapshot'
+import { buildTools, type McpNotify, type ToolResult } from '../mcp/tools'
 import {
   WAKE_CAP_PER_HANDOFF_PER_HOUR,
+  WAKE_STALE_TRANSIENT_MS,
   WAKE_MAX_BLOCKS,
   WAKE_TEXT_CAP,
   __resetForTests,
@@ -29,6 +32,7 @@ import {
   onQueueSnapshot,
   setHandoffWakeQueue,
   sweepOrphansOnBoot,
+  wakeHealth,
   wakeMotherFor,
   type WakeBlock,
 } from './handoff-wake'
@@ -41,7 +45,9 @@ import type {
 
 const MOTHER = 'mother-1'
 
-function seedHandoff(opts: { mother?: string | null; child?: string; repo?: string } = {}): string {
+function seedHandoff(
+  opts: { mother?: string | null; child?: string; repo?: string; featureId?: string } = {},
+): string {
   const db = getDb()
   const repo = opts.repo ?? 'r1'
   const child = opts.child ?? `child-${repo}`
@@ -59,6 +65,7 @@ function seedHandoff(opts: { mother?: string | null; child?: string; repo?: stri
     task: 't',
     composedPrompt: 'p',
     motherSessionId: opts.mother === undefined ? MOTHER : opts.mother,
+    featureId: opts.featureId ?? null,
   })
   handoffStore.approve(h.id, {})
   handoffStore.markRunning(h.id, child)
@@ -127,6 +134,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM handoff_events').run()
   db.prepare('DELETE FROM handoffs').run()
   db.prepare('DELETE FROM sessions').run()
+  db.prepare('DELETE FROM features').run()
 })
 
 afterAll(() => {
@@ -303,3 +311,89 @@ describe('sweepOrphansOnBoot', () => {
     expect(rows()[0].finished_at).toEqual(expect.any(Number))
   })
 })
+
+describe('exposição: wakeHealth → feature_health_get / overview_get', () => {
+  const FEATURE = 'feat-wake'
+  const notify: McpNotify = {
+    broadcast: () => {},
+    affectedObjectives: () => {},
+    affectedObjectivesForFeatureLinks: () => {},
+  }
+  function seedFeature(): void {
+    getDb()
+      .prepare(
+        `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',1,1)`,
+      )
+      .run()
+    getDb()
+      .prepare(
+        `INSERT INTO features (id, project_id, slug, title, status, objective, doc_path, synth_mode, origin, created_at, updated_at)
+         VALUES (?, 'p1', 'wake', 'Wake', 'in-progress', 'obj', '/tmp/wake.md', 'threshold', 'manual', ?, ?)`,
+      )
+      .run(FEATURE, Date.now(), Date.now())
+  }
+  function tool<T>(name: string, args: unknown): T {
+    const def = buildTools(notify).find((t) => t.name === name)!
+    return (def.handler(args) as ToolResult).structuredContent as T
+  }
+
+  it('mãe que nunca recebe: handoff_wake_suppressed no snapshot e no handler real', async () => {
+    seedFeature()
+    fakeQueue(() => ({ ok: false, error: 'not-running' }))
+    const id = seedHandoff({ featureId: FEATURE })
+    handoffStore.ask(id, 'oi?')
+    await wakeMotherFor(id, 'asked')
+    expect(loopSnapshot(FEATURE).issues.map((i) => i.code)).toContain('handoff_wake_suppressed')
+    const health = tool<{ issues: Array<{ code: string; level: string }> }>('feature_health_get', {
+      featureId: FEATURE,
+    })
+    expect(health.issues).toContainEqual(
+      expect.objectContaining({ code: 'handoff_wake_suppressed', level: 'error' }),
+    )
+    const overview = tool<{ overview: { handoffWake: { undelivered: number } } }>('overview_get', {})
+    expect(overview.overview.handoffWake.undelivered).toBe(1)
+  })
+
+  it('held recente não conta; held velho conta', async () => {
+    seedFeature()
+    fakeQueue(() => queued('q-held', 'menu-open'))
+    const id = seedHandoff({ featureId: FEATURE })
+    handoffStore.report(id, 'pronto')
+    await wakeMotherFor(id, 'reported')
+    expect(rows()[0].outcome).toBe('held')
+    expect(wakeHealth({ featureId: FEATURE }, Date.now() + 2 * 60_000).undelivered).toBe(0)
+    expect(
+      wakeHealth({ featureId: FEATURE }, Date.now() + WAKE_STALE_TRANSIENT_MS + 60_000).undelivered,
+    ).toBe(1)
+  })
+
+  it('transição sem gancho (store direto, sem handler) vira handoff_wake_missing', () => {
+    seedFeature()
+    const id = seedHandoff({ featureId: FEATURE })
+    handoffStore.ask(id, 'ninguém avisou a mãe')
+    expect(wakeHealth({ featureId: FEATURE }).missing).toBe(1)
+    expect(loopSnapshot(FEATURE).issues.map((i) => i.code)).toContain('handoff_wake_missing')
+  })
+
+  it('o eco do spawn_failed (fail de pending) não conta como missing', () => {
+    seedFeature()
+    seedRepoOnly('rx')
+    const h = handoffStore.create({
+      targetRepoId: 'rx',
+      task: 't',
+      composedPrompt: 'p',
+      motherSessionId: MOTHER,
+      featureId: FEATURE,
+    })
+    handoffStore.fail(h.id, 'spawn quebrou')
+    expect(wakeHealth({ featureId: FEATURE }).missing).toBe(0)
+  })
+})
+
+function seedRepoOnly(repo: string): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at) VALUES (?, 'p1', ?, ?, 0, 1)`,
+    )
+    .run(repo, repo, `/tmp/${repo}`)
+}
