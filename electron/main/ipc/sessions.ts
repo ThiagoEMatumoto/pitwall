@@ -838,7 +838,15 @@ export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
     tuiMenuWatch.on('responded', recordResponded)
-    tuiMenuWatch.on('change', (sessionId: string) => notifyCrewPermission(sessionId))
+    // Roda síncrono dentro do rescan: um throw aqui sairia pelo respond() com a
+    // trava inflight armada e deixaria a sessão em 'busy' pra sempre.
+    tuiMenuWatch.on('change', (sessionId: string) => {
+      try {
+        notifyCrewPermission(sessionId)
+      } catch (err) {
+        console.error('[attention] crew permission notify failed', err)
+      }
+    })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
