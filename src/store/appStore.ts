@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { sessionsApi, workspaceApi } from '@/lib/ipc'
+import { roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
@@ -13,6 +13,7 @@ import type {
   Repo,
   Session,
 } from '../../shared/types/ipc'
+import type { StartMotherInput, StartMotherResult } from '../../shared/types/feature-room'
 
 export type Area =
   | 'projects'
@@ -404,6 +405,10 @@ interface AppState {
   // Re-busca o snapshot de sessões vivas (entrada/saída de sessão). Preserva o
   // status mais fresco já recebido pelo stream pra entradas que persistem.
   refreshLiveSessions: () => Promise<void>
+  // Inicia a mãe da Room (room:start-mother). O main só avisa room:changed, então
+  // o snapshot vivo é refeito aqui antes de voltar — sem isso o Peek abria sobre
+  // uma sessão ausente de liveSessions e fechava na hora.
+  startMother: (input: StartMotherInput) => Promise<StartMotherResult>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -805,5 +810,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }),
     })
+  },
+
+  startMother: async (input) => {
+    const res = await roomApi.startMother(input)
+    useSessionFeatureStore.getState().note(res.sessionId, input.featureId)
+    await get().refreshLiveSessions()
+    return res
   },
 }))
