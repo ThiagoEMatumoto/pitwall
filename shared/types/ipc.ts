@@ -7,7 +7,12 @@ export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } 
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
-import type { RoomSnapshot } from './feature-room'
+import type {
+  MotherPreflight,
+  RoomSnapshot,
+  StartMotherInput,
+  StartMotherResult,
+} from './feature-room'
 import type { TuiMenu } from '../tui/tui-menu-parser'
 import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
@@ -3118,6 +3123,10 @@ export interface Api {
   room: {
     get(featureId: string): Promise<RoomSnapshot | null>
     onChanged(handler: (e: { featureId: string | null }) => void): () => void
+    // Pode o humano iniciar a mãe? MCP, repos da feature, worktree, purpose sugerido.
+    motherPreflight(featureId: string, repoId?: string | null): Promise<MotherPreflight>
+    // Rejeita com "MCP_NOT_READY: …" quando o MCP não subiu, sem criar sessão.
+    startMother(input: StartMotherInput): Promise<StartMotherResult>
   }
   // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
   agentBus: {
