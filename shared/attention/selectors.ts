@@ -37,3 +37,19 @@ export function countForLane(
   }
   return subjects.size
 }
+
+// Recorte de uma feature: o MESMO predicado do card do Ctrl+` (buildSwitcherEntries).
+// Item cuja sessão o mapa desenha pertence à lane pela sessão; senão, pela feature.
+// laneSessionIds = sessões da lane que estão em inUse.
+export function itemsForFeature(
+  queue: AttentionItem[],
+  laneSessionIds: ReadonlySet<string>,
+  inUse: ReadonlySet<string>,
+  featureId: string,
+): AttentionItem[] {
+  return queue.filter((i) =>
+    i.sessionId && inUse.has(i.sessionId)
+      ? laneSessionIds.has(i.sessionId)
+      : i.featureId === featureId,
+  )
+}
