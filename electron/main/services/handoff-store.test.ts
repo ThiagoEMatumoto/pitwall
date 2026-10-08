@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations } from './migrations/index'
@@ -45,8 +48,8 @@ function seed(db: Database.Database): void {
   ).run(Date.now(), Date.now())
 }
 
-// Repo extra sob demanda: o índice da migration 054 permite UM handoff ativo por
-// repo, então cenários com várias filhas vivas precisam de repos distintos.
+// Repo extra sob demanda: a posse (migration 057) permite UMA filha que escreve
+// por diretório, então cenários com várias filhas vivas usam repos distintos.
 function ensureRepo(id: string): string {
   testDb
     .prepare(
@@ -1220,7 +1223,8 @@ describe('handoff-store', () => {
   })
 })
 
-// Posse do repo-alvo dentro do create (transação + índice UNIQUE parcial da 054).
+// Posse dentro do create (transação + índice UNIQUE parcial da 057). newHandoff é
+// 'interactive' = escreve, e sem feature o diretório é a raiz do repo.
 describe('handoff-store — posse atômica do repo-alvo', () => {
   beforeEach(() => {
     testDb = new Database(':memory:')
@@ -1300,5 +1304,100 @@ describe('handoff-store — posse atômica do repo-alvo', () => {
     store.dismiss(first.id)
     newHandoff('r1')
     expect(() => store.undismiss(first.id)).toThrow(store.HandoffDuplicateError)
+  })
+})
+
+// Posse por DIRETÓRIO de trabalho (migration 057): só filhas que escrevem contam,
+// e o diretório é o worktree da feature no repo (se existe no disco) ou a raiz.
+describe('handoff-store — posse por diretório de trabalho', () => {
+  const dirs: string[] = []
+
+  function worktreeFor(featureId: string, repoId: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `wt-${featureId}-`))
+    dirs.push(dir)
+    const now = Date.now()
+    testDb
+      .prepare(
+        `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
+         VALUES (?, 'p1', ?, ?, 'in-progress', ?, ?, ?)`,
+      )
+      .run(featureId, featureId, featureId, `/tmp/${featureId}.md`, now, now)
+    testDb
+      .prepare('INSERT INTO feature_repos (feature_id, repo_id, worktree_path) VALUES (?, ?, ?)')
+      .run(featureId, repoId, dir)
+    return dir
+  }
+
+  function writer(featureId?: string) {
+    return store.create({
+      targetRepoId: 'r1',
+      featureId,
+      task: 't',
+      composedPrompt: 'p',
+      mode: 'auto-edits',
+    })
+  }
+
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seed(testDb)
+  })
+
+  afterEach(() => {
+    testDb.close()
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+
+  it('duas writers em worktrees diferentes do mesmo repo: ambas nascem', () => {
+    const wtA = worktreeFor('fa', 'r1')
+    const wtB = worktreeFor('fb', 'r1')
+    const a = writer('fa')
+    const b = writer('fb')
+    expect(store.workDirOf(a.id)).toBe(wtA)
+    expect(store.workDirOf(b.id)).toBe(wtB)
+    expect(store.findActiveWriterByWorkDir(wtA)?.id).toBe(a.id)
+    expect(store.findActiveWriterByWorkDir(wtB)?.id).toBe(b.id)
+  })
+
+  it('duas writers no mesmo diretório: duplicate, e force exige motivo', () => {
+    const first = writer()
+    expect(store.workDirOf(first.id)).toBe('/tmp/r1')
+    expect(() => writer()).toThrow(store.HandoffDuplicateError)
+    expect(() =>
+      store.create(
+        { targetRepoId: 'r1', task: 't', composedPrompt: 'p', mode: 'auto-edits' },
+        { force: { reason: ' ' } },
+      ),
+    ).toThrow(/motivo/)
+    const forced = store.create(
+      { targetRepoId: 'r1', task: 't', composedPrompt: 'p', mode: 'auto-edits' },
+      { force: { reason: 'revisão substitui' } },
+    )
+    expect(store.get(first.id)?.status).toBe('interrupted')
+    expect(store.listEvents(forced.id).some((e) => e.event === 'force')).toBe(true)
+  })
+
+  it('worktree registrado mas removido do disco cai na raiz do repo e disputa com ela', () => {
+    const wt = worktreeFor('gone', 'r1')
+    rmSync(wt, { recursive: true, force: true })
+    writer()
+    expect(() => writer('gone')).toThrow(store.HandoffDuplicateError)
+  })
+
+  it('writer + filha plan no mesmo checkout: ambas nascem, nos dois sentidos', () => {
+    const impl = writer()
+    const review = store.create({ targetRepoId: 'r1', task: 'rev', composedPrompt: 'p', mode: 'plan' })
+    expect(store.workDirOf(review.id)).toBe(store.workDirOf(impl.id))
+    expect(store.findActiveWriterByWorkDir('/tmp/r1')?.id).toBe(impl.id)
+    store.markRunning(review.id, 's-review')
+    expect(store.get(review.id)?.status).toBe('running')
+
+    // plan antes da writer também não trava a writer.
+    const reader = store.create({ targetRepoId: 'r2', task: 'ler', composedPrompt: 'p', mode: 'plan' })
+    const w2 = store.create({ targetRepoId: 'r2', task: 'w', composedPrompt: 'p', mode: 'auto-edits' })
+    expect(reader.status).toBe('pending')
+    expect(w2.status).toBe('pending')
   })
 })

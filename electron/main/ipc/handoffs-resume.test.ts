@@ -3,6 +3,9 @@
 // de órfãos) + RELINK no 'sessions:resume' (etapa A — permanência da crew).
 // Não exercita o claude real: captura os callbacks que registerSessionIpc passa a
 // ipcMain.handle e o que o ptyManager receberia, e valida GATES e innerCmd.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Handoff } from '../../../shared/types/ipc'
 
@@ -77,7 +80,7 @@ vi.mock('../services/db', () => ({
   }),
 }))
 
-const spawns: Array<{ sessionId: string; innerCmd: string }> = []
+const spawns: Array<{ sessionId: string; innerCmd: string; cwd: string }> = []
 let liveSessionIds: string[] = []
 // Listeners de 'data' e writes ficam capturados: é por eles que o kickoff do
 // relance é observável (injectInitialCommandOnFirstData injeta no 1º byte).
@@ -96,8 +99,8 @@ vi.mock('../services/pty-manager', () => ({
     },
     isRunning: (sessionId: string) => liveSessionIds.includes(sessionId),
     runningIds: () => [],
-    spawn: (opts: { sessionId: string; args: string[] }) => {
-      spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
+    spawn: (opts: { sessionId: string; args: string[]; cwd: string }) => {
+      spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' '), cwd: opts.cwd })
     },
   },
 }))
@@ -128,9 +131,11 @@ let handoff: Handoff | null = null
 // Dono atual do repo-alvo (findActiveByTarget): o handoff que o índice da 054
 // deixaria ativo. null = repo livre.
 let activeOwner: Handoff | null = null
+let workDir: string | null = '/tmp/repo'
 vi.mock('../services/handoff-store', () => ({
   get: () => handoff,
-  findActiveByTarget: () => activeOwner,
+  workDirOf: () => workDir,
+  findActiveWriterByWorkDir: () => activeOwner,
   HandoffDuplicateError: class extends Error {
     readonly code = 'HANDOFF_DUPLICATE'
     constructor(readonly existing: Handoff) {
@@ -196,6 +201,7 @@ function resetSeams(): void {
   liveSessionIds = []
   handoff = null
   activeOwner = null
+  workDir = '/tmp/repo'
   ccRow = undefined
   repoRow = undefined
   linkedHandoffRow = undefined
@@ -244,6 +250,34 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
     expect(() => resume()).toThrow(/handoff ativo \(h2\)/)
     expect(spawns).toHaveLength(0)
     expect(markRunning).not.toHaveBeenCalled()
+  })
+
+  // Revisora em plan não disputa a posse: retoma mesmo com a writer no checkout.
+  it('filha plan retoma com outra filha escrevendo no mesmo diretório', () => {
+    handoff = baseHandoff({ mode: 'plan' })
+    activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+    ccRow = { cc_session_id: VALID_CC }
+    transcriptPath = '/tmp/t.jsonl'
+    repoRow = { path: '/tmp/repo', label: 'Repo 1' }
+    expect(() => resume()).not.toThrow()
+    expect(spawns).toHaveLength(1)
+  })
+
+  // O relance volta pro diretório que a filha ocupava (a chave da posse), não pra
+  // raiz do repo.
+  it('retoma no work_dir gravado quando ele existe no disco', () => {
+    const wt = mkdtempSync(join(tmpdir(), 'wt-resume-'))
+    try {
+      handoff = baseHandoff()
+      workDir = wt
+      ccRow = { cc_session_id: VALID_CC }
+      transcriptPath = '/tmp/t.jsonl'
+      repoRow = { path: '/tmp/repo', label: 'Repo 1' }
+      resume()
+      expect(spawns[0].cwd).toBe(wt)
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
   })
 
   it('rejeita resume quando não há cc_session_id válido', () => {

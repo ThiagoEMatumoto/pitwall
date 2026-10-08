@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { getDb } from '../services/db'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
+import { resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
@@ -155,12 +156,16 @@ const QUICK_SESSION_NAME = 'Sessão rápida'
 // Guard antes de lançar o PTY: se o diretório do repo não existe, o spawn falha
 // tarde com erro opaco. statSync (não existsSync) segue symlinks e lança em link
 // quebrado — assim detectamos também repos apontando pra symlink morto.
-function assertRepoDirExists(path: string): void {
+function isDirectory(path: string): boolean {
   try {
-    if (statSync(path).isDirectory()) return
+    return statSync(path).isDirectory()
   } catch {
-    // cai no throw abaixo
+    return false
   }
+}
+
+function assertRepoDirExists(path: string): void {
+  if (isDirectory(path)) return
   throw new Error(
     `Repositório não existe no disco: ${path}. Restaure o diretório (ou ative o auto-clone) antes de abrir uma sessão.`,
   )
@@ -329,27 +334,6 @@ function writeSessionSystemPromptFile(opts: {
     return writeTempPromptFile(opts.featureId ? `feat-${opts.featureId}` : 'handoff', content)
   } catch (err) {
     console.error('[sessions] system-prompt injection failed:', err)
-    return null
-  }
-}
-
-// Worktree registrado em feature_repos para o par (feature, repo). Quando existe
-// no disco, é ele o cwd da sessão — não a raiz do repo. Nada de checkout/troca
-// de branch aqui: só respeitamos o worktree que o usuário já registrou. Worktree
-// removido do disco cai pro repo (o usuário apaga worktree o tempo todo).
-function resolveFeatureWorktree(featureId: string | null, repoId: string | null): string | null {
-  if (!featureId || !repoId) return null
-  try {
-    const row = getDb()
-      .prepare('SELECT worktree_path FROM feature_repos WHERE feature_id = ? AND repo_id = ?')
-      .get(featureId, repoId) as { worktree_path: string | null } | undefined
-    const path = row?.worktree_path?.trim()
-    if (!path) return null
-    // worktree_path legado pode ser RELATIVO (bug do importer do sync antigo):
-    // resolve contra o vault root antes de olhar o disco.
-    const abs = resolveRepoPath(path)
-    return statSync(abs).isDirectory() ? abs : null
-  } catch {
     return null
   }
 }
@@ -691,12 +675,16 @@ export function resumeHandoffChild(
     return { handoff, session: toSession(childRow), alreadyRunning: true }
   }
 
-  // Posse do repo ANTES do spawn: o markRunning lá embaixo reativa o handoff e o
-  // índice da 054 o recusa se outro handoff já ocupa o repo (ex.: este foi
-  // substituído por force). Recusado depois do startSession, a PTY já estaria no
-  // ar editando o repo sem vínculo — o acidente que o dedup existe pra evitar.
-  const owner = handoffStore.findActiveByTarget(handoff.targetRepoId)
-  if (owner && owner.id !== handoff.id) throw new handoffStore.HandoffDuplicateError(owner)
+  // Posse do diretório ANTES do spawn: o markRunning lá embaixo reativa o handoff
+  // e o índice da 057 o recusa se outra filha que escreve já ocupa o mesmo
+  // diretório (ex.: este foi substituído por force). Recusado depois do
+  // startSession, a PTY já estaria no ar editando sem vínculo — o acidente que a
+  // posse existe pra evitar. Filha em 'plan' não disputa a posse.
+  const workDir = handoffStore.workDirOf(handoff.id)
+  if (workDir && handoff.mode !== 'plan') {
+    const owner = handoffStore.findActiveWriterByWorkDir(workDir)
+    if (owner && owner.id !== handoff.id) throw new handoffStore.HandoffDuplicateError(owner)
+  }
 
   const ccSessionId = childRow?.cc_session_id
   if (!ccSessionId || !UUID_RE.test(ccSessionId)) {
@@ -750,7 +738,9 @@ export function resumeHandoffChild(
     id: internalSessionId,
     ccSessionId,
     repoId,
-    cwd: repoPath,
+    // Volta pro diretório que ela ocupava (é a chave da posse); se o worktree
+    // sumiu do disco, cai na raiz do repo como o spawn faria.
+    cwd: workDir && isDirectory(workDir) ? workDir : repoPath,
     innerCmd,
     featureId: handoff.featureId,
     initialCommand: opts.kickoff,

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
 import { findTranscriptPath } from './transcript-path'
+import { resolveHandoffWorkDir } from './work-dir'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import type {
   CreateHandoffInput,
@@ -39,6 +40,8 @@ interface HandoffRow {
   dismissed_at: number | null
   // Antecessora no bastão (migration 037): quem a filha atual substituiu.
   predecessor_session_id: string | null
+  // Diretório de trabalho da filha (migration 057): chave da posse.
+  work_dir: string | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
 }
@@ -175,20 +178,30 @@ function logEvent(
     .run(randomUUID(), handoffId, fromStatus, toStatus, event, detail ?? null, Date.now())
 }
 
-// Predicado de "ativo" do dedup por repo-alvo. É o MESMO do índice UNIQUE parcial
-// da migration 054 (idx_handoffs_active_target) — mudar um sem o outro faz o
-// banco recusar o que o store acha permitido, ou o contrário.
+// Predicado de "ativo": status vivo e não dispensado. Informativo por repo
+// (findActiveByTarget); a POSSE usa o recorte de quem escreve, abaixo.
 const ACTIVE_TARGET_PREDICATE =
   "h.dismissed_at IS NULL AND h.status IN ('pending','approved','running','needs_input')"
 
-// Recusa tipada do dedup por repo-alvo: já existe um handoff ativo no repo. Leva o
-// existente pra quem chama montar a mensagem (de quem é, alias, status) sem
+// Posse por diretório de trabalho: só filhas que ESCREVEM disputam o checkout —
+// mode 'plan' é read-only (permissionModeForHandoffMode → --permission-mode plan)
+// e pode ler o mesmo diretório da implementer. É o MESMO predicado do índice
+// UNIQUE parcial da migration 057 (idx_handoffs_active_work_dir) — mudar um sem o
+// outro faz o banco recusar o que o store acha permitido, ou o contrário.
+const ACTIVE_WRITER_PREDICATE = `${ACTIVE_TARGET_PREDICATE} AND h.mode <> 'plan'`
+
+function isWriterMode(mode: string | null | undefined): boolean {
+  return (mode ?? 'interactive') !== 'plan'
+}
+
+// Recusa tipada da posse: já existe uma filha que escreve no mesmo diretório. Leva
+// o existente pra quem chama montar a mensagem (de quem é, alias, status) sem
 // consultar de novo fora da transação.
 export class HandoffDuplicateError extends Error {
   readonly code = 'HANDOFF_DUPLICATE' as const
   constructor(readonly existing: Handoff) {
     super(
-      `Repo-alvo ${existing.targetRepoLabel ?? existing.targetRepoId} já tem um handoff ativo (${existing.id}, status: ${existing.status}).`,
+      `O diretório de trabalho em ${existing.targetRepoLabel ?? existing.targetRepoId} já tem uma filha que escreve (${existing.id}, status: ${existing.status}).`,
     )
     this.name = 'HandoffDuplicateError'
   }
@@ -198,43 +211,48 @@ export function isHandoffDuplicateError(err: unknown): err is HandoffDuplicateEr
   return err instanceof HandoffDuplicateError
 }
 
-// Violação do índice idx_handoffs_active_target: o backstop do banco para os
+// Violação do índice idx_handoffs_active_work_dir: o backstop do banco para os
 // caminhos que tornam um handoff ativo de novo (markRunning de um interrupted,
 // undismiss) sem passar pelo create.
-function isActiveTargetViolation(err: unknown): boolean {
+function isActiveWorkDirViolation(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const code = (err as { code?: unknown }).code
-  return code === 'SQLITE_CONSTRAINT_UNIQUE' && err.message.includes('handoffs.target_repo_id')
+  return code === 'SQLITE_CONSTRAINT_UNIQUE' && err.message.includes('handoffs.work_dir')
 }
 
-function rethrowAsDuplicate(err: unknown, targetRepoId: string, selfId: string): never {
-  if (isActiveTargetViolation(err)) {
-    const other = findActiveByTarget(targetRepoId)
+function rethrowAsDuplicate(err: unknown, selfId: string): never {
+  const workDir = getRow(selfId)?.work_dir
+  if (isActiveWorkDirViolation(err) && workDir) {
+    const other = findActiveWriterByWorkDir(workDir)
     if (other && other.id !== selfId) throw new HandoffDuplicateError(other)
   }
   throw err
 }
 
 export interface CreateHandoffOptions {
-  // force: o handoff ativo do repo-alvo é SUBSTITUÍDO (vira 'interrupted') e o
-  // novo nasce no lugar. Exige motivo, gravado em handoff_events nas duas pontas.
-  // Não mata a PTY da filha substituída — quem força assume esse risco.
+  // force: a filha que escreve no mesmo diretório é SUBSTITUÍDA (vira
+  // 'interrupted') e a nova nasce no lugar. Exige motivo, gravado em
+  // handoff_events nas duas pontas. Não mata a PTY da filha substituída — quem
+  // força assume esse risco.
   force?: { reason: string }
 }
 
-// Posse do repo-alvo: checagem e INSERT na MESMA transação, então dois creates no
-// mesmo repo nunca passam ambos (o índice UNIQUE parcial da 054 é a garantia de
-// banco por baixo). Todos os caminhos que criam handoff passam aqui: MCP
-// (session_handoff), prepareHandoff (create-manual) e adoção.
+// Posse do diretório de trabalho: checagem e INSERT na MESMA transação, então
+// dois creates que escrevem no mesmo checkout nunca passam ambos (o índice UNIQUE
+// parcial da 057 é a garantia de banco por baixo). Filha em 'plan' não disputa a
+// posse. Todos os caminhos que criam handoff passam aqui: MCP (session_handoff),
+// prepareHandoff (create-manual) e adoção.
 export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {}): Handoff {
   const forceReason = opts.force?.reason.trim()
   if (opts.force && !forceReason) throw new Error('force exige um motivo (forceReason).')
   const now = Date.now()
   const id = input.id ?? randomUUID()
   const status = input.status ?? 'pending'
+  const mode = input.mode ?? 'interactive'
   const db = getDb()
   db.transaction(() => {
-    const existing = findActiveByTarget(input.targetRepoId)
+    const workDir = resolveHandoffWorkDir(input.targetRepoId, input.featureId ?? null, db)
+    const existing = workDir && isWriterMode(mode) ? findActiveWriterByWorkDir(workDir) : null
     if (existing && !forceReason) throw new HandoffDuplicateError(existing)
     if (existing && forceReason) {
       db.prepare(
@@ -252,10 +270,10 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
       `INSERT INTO handoffs
          (id, mother_session_id, target_repo_id, from_repo_id, child_session_id, feature_id, task,
           context_json, composed_prompt, status, mode, current_step, step_updated_at,
-          summary, error, created_at, updated_at)
+          summary, error, created_at, updated_at, work_dir)
        VALUES (@id, @mother_session_id, @target_repo_id, @from_repo_id, @child_session_id, @feature_id, @task,
                @context_json, @composed_prompt, @status, @mode, @current_step, @step_updated_at,
-               @summary, @error, @created_at, @updated_at)`,
+               @summary, @error, @created_at, @updated_at, @work_dir)`,
     ).run({
       id,
       mother_session_id: input.motherSessionId ?? null,
@@ -267,13 +285,14 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
       context_json: input.contextJson ?? null,
       composed_prompt: input.composedPrompt,
       status,
-      mode: input.mode ?? 'interactive',
+      mode,
       current_step: null,
       step_updated_at: null,
       summary: null,
       error: null,
       created_at: now,
       updated_at: now,
+      work_dir: workDir,
     })
     // Nascimento do handoff: from_status null (não existia antes).
     logEvent(id, 'create', status, null)
@@ -411,7 +430,7 @@ export function markRunning(id: string, childSessionId: string): Handoff {
       )
       .run('running', childSessionId, Date.now(), id)
   } catch (err) {
-    rethrowAsDuplicate(err, getRow(id)?.target_repo_id ?? '', id)
+    rethrowAsDuplicate(err, id)
   }
   logEvent(id, 'markRunning', 'running', from)
   return fresh(id)
@@ -698,7 +717,7 @@ export function undismiss(id: string): Handoff {
       )
       .run(Date.now(), id).changes
   } catch (err) {
-    rethrowAsDuplicate(err, getRow(id)?.target_repo_id ?? '', id)
+    rethrowAsDuplicate(err, id)
   }
   if (changes > 0) logEvent(id, 'undismiss', status, status)
   return fresh(id)
@@ -799,20 +818,34 @@ export function isActiveCrewChild(ccSessionId: string): boolean {
   return row !== undefined
 }
 
-// Dedup por alvo: handoff ativo (pending/approved/running/needs_input) pro mesmo
-// repo-alvo. Usado pra evitar dois agentes mutando o mesmo repo em paralelo.
+// Dono da posse: a filha que ESCREVE no diretório dado (mesmo predicado do índice
+// da 057), ou null.
 //
-// motherSessionId opcional ESTREITA a busca à mãe dada ("eu já despachei uma
-// filha aqui?"). Omitido/null mantém o escopo GLOBAL por repo — que é o
-// comportamento legado e o mais ESTRITO, usado quando a identidade da mãe é
-// desconhecida (config global antiga, sem carimbo).
-//
-// Dispensado NÃO bloqueia: o dedup existe pra evitar dois agentes mutando o mesmo
-// repo, e quem foi dispensado saiu do dock — recusar a delegação em nome de um
-// card que o usuário não vê deixa a MCP tool respondendo "já existe um handoff
-// ativo aqui" sobre algo que ele não tem como achar, abrir nem encerrar. Dispensar
-// só é permitido sem filha viva (e markRunning limpa o carimbo ao adquirir uma),
-// então nenhum handoff com PTY viva escapa por esta cláusula.
+// Dispensado NÃO bloqueia: quem foi dispensado saiu do dock — recusar a delegação
+// em nome de um card que o usuário não vê deixa a MCP tool respondendo "já existe
+// um handoff ativo aqui" sobre algo que ele não tem como achar, abrir nem
+// encerrar. Dispensar só é permitido sem filha viva (e markRunning limpa o
+// carimbo ao adquirir uma), então nenhum handoff com PTY viva escapa por esta
+// cláusula.
+export function findActiveWriterByWorkDir(workDir: string): Handoff | null {
+  const row = getDb()
+    .prepare(
+      `${SELECT_HANDOFF} WHERE h.work_dir = ? AND ${ACTIVE_WRITER_PREDICATE} ORDER BY h.created_at DESC LIMIT 1`,
+    )
+    .get(workDir) as HandoffRow | undefined
+  return row ? toEntity(row) : null
+}
+
+// Diretório de trabalho gravado no create (null em linha anterior à 057 que não
+// achou o repo no backfill).
+export function workDirOf(id: string): string | null {
+  return getRow(id)?.work_dir ?? null
+}
+
+// Handoff ativo (pending/approved/running/needs_input) no repo-alvo, qualquer que
+// seja o diretório ou o modo. Informativo: a posse é por diretório
+// (findActiveWriterByWorkDir). motherSessionId opcional ESTREITA a busca à mãe
+// dada ("eu já despachei uma filha aqui?").
 export function findActiveByTarget(
   targetRepoId: string,
   motherSessionId?: string | null,

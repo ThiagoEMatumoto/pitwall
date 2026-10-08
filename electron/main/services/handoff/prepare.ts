@@ -43,8 +43,9 @@ export interface PreparedHandoff {
 }
 
 // Cria o handoff (status approved) e devolve o apelido resolvido. Não spawna nada
-// e não mata nada — só toca a tabela handoffs e emite o broadcast de UI. Repo-alvo
-// com handoff ativo → HandoffDuplicateError (a posse é decidida no store.create).
+// e não mata nada — só toca a tabela handoffs e emite o broadcast de UI. Outra
+// filha que escreve no mesmo diretório → HandoffDuplicateError (a posse é
+// decidida no store.create).
 export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
   const db = getDb()
   const target = db.prepare('SELECT id, label, path FROM repos WHERE id = ?').get(

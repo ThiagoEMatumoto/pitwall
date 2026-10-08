@@ -647,14 +647,14 @@ function duplicateMessage(
   const who = alias ? `a filha "${alias}"` : 'uma filha (ainda sem alias)'
   const status = `(status: ${existing.status})`
   const tail =
-    'Se este trabalho é seu e precisa substituir a atual, chame de novo com force: true e forceReason explicando o motivo (a atual vira interrupted); senão aguarde a atual concluir.'
+    'Para trabalhar em paralelo no mesmo repo, use outro worktree (featureId com worktree registrado) ou mode "plan" se a filha só lê. Se este trabalho precisa substituir a atual, chame de novo com force: true e forceReason explicando o motivo (a atual vira interrupted); senão aguarde a atual concluir.'
   if (mother && existing.motherSessionId === mother) {
     return `Você JÁ despachou ${who} para ${targetLabel} ${status} — ela é sua. Fale com ela por SendMessage({ to: "${alias ?? ''}" }) ou acompanhe por handoff_result em vez de despachar outra. ${tail}`
   }
   if (mother) {
     return `${targetLabel} já tem ${who} ativa ${status} e ela NÃO é sua — foi despachada por outra sessão-mãe. Não assuma o controle de uma filha que você não despachou. ${tail}`
   }
-  return `${targetLabel} já tem ${who} ativa ${status} — e ela pode NÃO ser sua: sem identidade da sessão-mãe, o dedup é por repo-alvo. Não assuma o controle de uma filha que você não despachou. ${tail}`
+  return `${targetLabel} já tem ${who} ativa ${status} — e ela pode NÃO ser sua: sem identidade da sessão-mãe, a posse é por diretório de trabalho. Não assuma o controle de uma filha que você não despachou. ${tail}`
 }
 
 function repoBrief(id: string): {
@@ -808,7 +808,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it. A repo has at most ONE active handoff: force=true together with forceReason (required, recorded in the handoff trail) REPLACES the active one (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
+        'Delegate end-to-end work to another repo — any registered repo, connected or not (repo connections only enrich the briefing). Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). Ownership is per WORKING DIRECTORY (the feature worktree of the target repo, else the repo root), and only children that WRITE count: several children may share a repo in different worktrees, and a "plan" child may read the same checkout as a writer. If another writing child is already active in the same directory the call is REFUSED with an error — either because you already dispatched it, or because it belongs to another mother session and you do not inherit it. force=true together with forceReason (required, recorded in the handoff trail) REPLACES that writer (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -842,7 +842,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         if (input.force && !input.forceReason) {
           return ok({
             error:
-              'force: true exige forceReason (por que substituir o handoff ativo deste repo). Ele fica gravado na trilha do handoff.',
+              'force: true exige forceReason (por que substituir a filha que escreve neste diretório). Ele fica gravado na trilha do handoff.',
           })
         }
 
