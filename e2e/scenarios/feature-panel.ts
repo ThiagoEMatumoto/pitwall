@@ -308,9 +308,11 @@ try {
       a,
       'lembrete no card',
       async () =>
+        // Abaixo de REMINDER_LINE_MIN_ZOOM o card mostra só o chip "N lembretes"
+        // (card-display.ts); no zoom de enquadrar é ele que aparece.
         (await a.page
           .locator(
-            `[data-testid="lane-feature"][data-feature-id="${featureId}"] [data-testid="feature-card-reminder"]`,
+            `[data-testid="lane-feature"][data-feature-id="${featureId}"] :is([data-testid="feature-card-reminder"], [data-testid="feature-card-reminders-chip"])`,
           )
           .count()) >= 1,
       8000,
@@ -428,6 +430,12 @@ try {
     ),
     `card da feature no mapa após relaunch (S2 ${s2?.id})`,
   )
+  // O enquadrar lá em cima rodou ANTES de S2 existir, e o mapa não enquadra nó
+  // novo sozinho: sem enquadrar de novo o card pode nascer fora da tela.
+  await b.page
+    .locator('.react-flow__controls-fitview')
+    .click()
+    .catch(() => {})
   await featureHeader(b, featureId).click()
   await waitFor(b, 'painel (relaunch)', async () => (await panel(b).count()) === 1)
   await b.page.getByTestId('feature-panel-tab-notes').click()
