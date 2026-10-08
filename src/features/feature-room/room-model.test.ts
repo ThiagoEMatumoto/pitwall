@@ -28,6 +28,7 @@ const { projectAttention } = await import('../../../shared/attention/project-att
 const { countAttentionSubjects, humanQueue, itemsForFeature } =
   await import('../../../shared/attention/selectors')
 const { buildRoomView } = await import('./room-model')
+const { buildSwitcherEntries } = await import('../session-canvas/feature-switcher-model')
 
 type LiveStatus = import('../../../shared/tui/attention-reason').LiveStatus
 type ScreenScan = import('../../../shared/tui/attention-reason').ScreenScan
@@ -101,7 +102,10 @@ function world(
     (lane?.repos ?? []).flatMap((r) => r.sessionIds).filter((id) => inUse.has(id)),
   )
   const slice = itemsForFeature(humanQueue(attention), laneIds, inUse, F)
-  return { view, slice, attention }
+  const card = buildSwitcherEntries(graph, new Map(), undefined, inUse, attention).find(
+    (e) => e.featureId === F,
+  )
+  return { view, slice, attention, card }
 }
 
 const rowsOf = (v: ReturnType<typeof world>['view']) => v.repos.flatMap((r) => r.rows)
@@ -249,7 +253,7 @@ describe('buildRoomView', () => {
     expect(ev.detail).toBe('rm -rf /txt.exe')
   })
 
-  it('kind fora de PRODUCED_ATTENTION_KINDS nunca chega à fila', () => {
+  it('kind fora de PRODUCED_ATTENTION_KINDS: Room e card do Ctrl+` contam igual', () => {
     store.ask(child('r1', 'A').id, 'qual branch?')
     const lives: Live[] = [
       { id: 'M', status: 'idle' },
@@ -263,8 +267,9 @@ describe('buildRoomView', () => {
       sessionId: 'M',
       handoffId: null,
     }
-    const { view } = world(lives, { extra: [review] })
+    const { view, card } = world(lives, { extra: [review] })
     expect(view.queue.map((r) => r.head.kind)).toEqual(['child_question'])
     expect(view.queue.flatMap((r) => r.also)).toEqual([])
+    expect(card?.needsYou).toBe(view.needsYou)
   })
 })

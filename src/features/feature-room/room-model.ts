@@ -6,7 +6,7 @@ import {
   humanQueue,
   itemsForFeature,
 } from '../../../shared/attention/selectors'
-import { PRODUCED_ATTENTION_KINDS, type AttentionItem } from '../../../shared/types/attention'
+import type { AttentionItem } from '../../../shared/types/attention'
 import type { RoomTimelineEvent } from '../../../shared/types/feature-room'
 import type { Handoff, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 import type {
@@ -76,7 +76,6 @@ export interface RoomView {
   state: RoomState
 }
 
-const PRODUCED: ReadonlySet<string> = new Set(PRODUCED_ATTENTION_KINDS)
 const RUNNING: ReadonlySet<HandoffStatus> = new Set(['pending', 'approved', 'running'])
 const STOPPED: ReadonlySet<HandoffStatus> = new Set(['failed', 'interrupted'])
 
@@ -113,7 +112,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
   const laneSessionIds = new Set(laneNodes.map((n) => n.sessionId))
 
   const items = itemsForFeature(humanQueue(input.attention), laneSessionIds, inUse, featureId)
-  const queue = groupBySubject(items.filter((i) => PRODUCED.has(i.kind)))
+  const queue = groupBySubject(items)
 
   const handoffs = input.handoffs.filter((h) => h.featureId === featureId && h.dismissedAt == null)
   // Sessão única que ainda não delegou: é a mãe da feature (estado "1 sessão só"),
