@@ -1,6 +1,6 @@
 /** @vitest-environment node */
-// prepareHandoff é o caminho comum de create-manual e adoção. A posse do repo-alvo
-// é decidida dentro do store.create (migration 054): aqui se trava que esse
+// prepareHandoff é o caminho comum de create-manual e adoção. A posse do diretório
+// é decidida dentro do store.create (migration 057): aqui se trava que esse
 // caminho também é recusado — antes dele só o MCP tinha dedup.
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

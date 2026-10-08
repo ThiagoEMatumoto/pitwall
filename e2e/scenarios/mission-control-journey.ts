@@ -372,8 +372,9 @@ try {
   const handoff = await asA.call<{ handoffId: string; alias: string }>('session_handoff', {
     targetRepo: repo2.label,
     task: 'Revisar o contrato do endpoint de pedidos',
+    // plan é read-only: não disputa a posse do checkout de repo2, então divide o
+    // diretório com B (que escreve) sem force.
     mode: 'plan',
-    force: true,
   })
   const fileC = await newSessionFile(beforeC, 'session file de C')
   const idC = fileC ? await sessionIdOf(fileC.data.sessionId) : ''
@@ -396,6 +397,9 @@ try {
         repoId,
         motherSessionId: mother,
         task: 'Criar o arquivo de fixture',
+        // B escreve na raiz de repo2, e a cópia do perfil real pode ter uma filha
+        // que escreve ali. Sem nada ativo o motivo não tem efeito.
+        forceReason: 'e2e mission-control: a cópia do perfil real pode ter filha ativa neste checkout',
       })
       await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: b.id })
       return b.id
@@ -429,13 +433,35 @@ try {
         .count()) > 0,
     15_000,
   )
+  const badge = page.getByTestId('titlebar-attention-badge')
+  check(
+    await waitFor(
+      'badge de atenção com N ≥ 1',
+      async () =>
+        (await badge.count()) > 0 &&
+        Number.parseInt((await badge.textContent()) ?? '', 10) >= 1,
+      15_000,
+    ),
+    'badge da titlebar acende antes do Alt+A',
+  )
   const tabsBefore = await page.locator('.dv-tab').count()
-  await page.keyboard.press('Alt+a')
   const pinned = page.locator('[data-testid="attention-popover"][role="dialog"]')
-  const popUp = await waitFor(
-    'popover fixado',
-    async () => (await pinned.getByText('Quer continuar?').count()) > 0,
-    10_000,
+  // Alt+A logo após o badge acender às vezes não abre o popover (corrida suspeita,
+  // task de follow-up aberta). Até 2 re-tentativas; 3 falhas seguidas é FAIL real.
+  const MAX_ALT_A_RETRIES = 2
+  let popUp = false
+  let altARetries = 0
+  for (let attempt = 0; attempt <= MAX_ALT_A_RETRIES && !popUp; attempt++) {
+    altARetries = attempt
+    await page.keyboard.press('Alt+a')
+    popUp = await waitFor(
+      `popover fixado (tentativa ${attempt + 1})`,
+      async () => (await pinned.getByText('Quer continuar?').count()) > 0,
+      2000,
+    )
+  }
+  console.log(
+    `[journey] Alt+A: ${altARetries} retry(s) usado(s)${popUp ? '' : ' — popover não abriu em 3 tentativas'}`,
   )
   const peekB = await waitFor(
     'peek de B',

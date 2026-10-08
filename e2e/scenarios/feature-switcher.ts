@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { launchApp, writeCopyPrefs } from '../driver/launch'
@@ -244,7 +244,8 @@ try {
   const mcp = await connectMcp(userData)
   const feats: Array<{
     id: string
-    mother: { id: string; cc: string | null }
+    title: string
+    mother: { id: string; cc: string | null; name: string }
     childCc: string | null
   }> = []
   for (const n of [1, 2, 3]) {
@@ -252,7 +253,15 @@ try {
       projectId: repo.project_id,
       title: `Seletor E2E ${n}`,
       status: 'in-progress',
-      repos: [{ repoId: repo.id, branch: `feat/seletor-e2e-${n}` }],
+      // Um worktree por feature: as três filhas escrevem no mesmo repo, e a posse
+      // é por diretório de trabalho. Só o diretório basta (o app não faz checkout).
+      repos: [
+        {
+          repoId: repo.id,
+          branch: `feat/seletor-e2e-${n}`,
+          worktreePath: mkdtempSync(join(tmpdir(), `seletor-e2e-${n}-`)),
+        },
+      ],
     })
     const spawned = await page.evaluate(
       async ({ repoId, featureId, n }) => {
@@ -270,11 +279,14 @@ try {
           featureId,
         })
         await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
-        return { mother: { id: m.id, cc: m.ccSessionId }, childCc: c.ccSessionId }
+        return {
+          mother: { id: m.id, cc: m.ccSessionId, name: `mae-seletor-${n}` },
+          childCc: c.ccSessionId,
+        }
       },
       { repoId: repo.id, featureId: feature.id, n },
     )
-    feats.push({ id: feature.id, ...spawned })
+    feats.push({ id: feature.id, title: `Seletor E2E ${n}`, ...spawned })
   }
   check(feats.length === 3, `3 features criadas (${feats.map((f) => f.id).join(', ')})`)
   check(
@@ -388,10 +400,37 @@ try {
     'soltar o Ctrl fecha o overlay',
   )
   check((await mru())[0] === target, `MRU agora começa pela escolhida (${target})`)
+  // Decisão do produto: soltar abre a Room da feature escolhida. O enquadramento
+  // no mapa continua coberto, agora pelo "Ver no mapa" da Room.
   if (ours.has(target)) {
+    const tf = feats.find((f) => f.id === target)!
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor(
+        'Room aberta',
+        async () =>
+          (await room.count()) === 1 &&
+          (await room.getAttribute('aria-label')) === `Room da feature ${tf.title}`,
+        5000,
+      ),
+      `soltar abre a Room da escolhida (${await room.getAttribute('aria-label').catch(() => null)})`,
+    )
+    const roomMother = room.getByTestId('room-mother')
+    check(
+      await waitFor(
+        'Room mostra a mãe',
+        async () =>
+          (await roomMother.count()) === 1 &&
+          ((await roomMother.textContent()) ?? '').includes(tf.mother.name),
+        8000,
+      ),
+      `a Room mostra a mãe da escolhida (${tf.mother.name})`,
+    )
+    await shot('room-da-escolhida')
+    await room.getByTestId('room-see-map').click()
     check(
       await waitFor('card enquadrado', async () => framed(target), 5000),
-      'o mapa enquadra o card da feature escolhida',
+      '"Ver no mapa" na Room enquadra o card da feature escolhida',
     )
     check(
       await waitFor(
@@ -425,11 +464,14 @@ try {
             handoffChild: true,
             featureId,
           })
+          // Mesmo worktree da filha que escreve nessa feature: em plan não
+          // disputam a posse do diretório.
           const { handoff } = await window.api.handoffs.createManual({
             repoId,
             motherSessionId: motherId,
             task: `Aviso ${n}`,
             featureId,
+            mode: 'plan',
           })
           await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
         }
@@ -555,7 +597,22 @@ try {
     await waitFor('volta à anterior', async () => (await mru())[0] === previous, 3000),
     `toque rápido volta à anterior (${previous})`,
   )
+  // Toque rápido também confirma: abre a Room da anterior (39eaaac). Para seguir
+  // com o painel da mãe e a barra de Projetos, volta ao mapa pelo "Ver no mapa".
   if (ours.has(previous)) {
+    const pf = feats.find((f) => f.id === previous)!
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor(
+        'Room da anterior',
+        async () =>
+          (await room.getAttribute('aria-label').catch(() => null)) === `Room da feature ${pf.title}` &&
+          ((await room.getByTestId('room-mother').textContent()) ?? '').includes(pf.mother.name),
+        8000,
+      ),
+      `toque rápido abre a Room da anterior com a mãe dela (${pf.mother.name})`,
+    )
+    await room.getByTestId('room-see-map').click()
     check(
       await waitFor(
         'painel volta',
@@ -631,6 +688,15 @@ try {
   const fromTerminals = (await optionKeys()).find((o) => o.selected)?.key ?? ''
   await shot('overlay-nos-terminais')
   await page.keyboard.up('Control')
+  // Fora do mapa, confirmar também abre a Room; o mapa vem pelo "Ver no mapa".
+  if (ours.has(fromTerminals)) {
+    const room = page.getByTestId('feature-room')
+    check(
+      await waitFor('Room (terminais)', async () => (await room.count()) === 1, 8000),
+      'confirmar fora do mapa abre a Room da escolhida',
+    )
+    await room.getByTestId('room-see-map').click()
+  }
   check(
     await waitFor('mapa de volta', async () => page.getByTestId('session-map').isVisible(), 8000),
     'confirmar fora do mapa leva ao mapa',

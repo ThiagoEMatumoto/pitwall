@@ -184,10 +184,13 @@ try {
       ['otavio-modal-e2e', 'Terminal em modal'],
     ] as const) {
       const c = await window.api.sessions.spawn({ repoId, name, handoffChild: true })
+      // As duas filhas dividem o checkout do repo: em plan (read-only) não
+      // disputam a posse do diretório, nem com filhas ativas da cópia do perfil.
       const { handoff } = await window.api.handoffs.createManual({
         repoId,
         motherSessionId: m.id,
         task,
+        mode: 'plan',
       })
       await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
       kids.push({ id: c.id, cc: c.ccSessionId, handoffId: handoff.id })

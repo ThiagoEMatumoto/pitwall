@@ -55,6 +55,7 @@ import * as sessionsFeatureSource from './053_sessions_feature_source'
 import * as handoffActiveTargetIdx from './054_handoff_active_target_idx'
 import * as handoffWakeDeliveries from './055_handoff_wake_deliveries'
 import * as attentionResponses from './056_attention_responses'
+import * as handoffWorkDir from './057_handoff_work_dir'
 
 interface Migration {
   version: number
@@ -125,6 +126,7 @@ export const migrations: Migration[] = [
   handoffActiveTargetIdx,
   handoffWakeDeliveries,
   attentionResponses,
+  handoffWorkDir,
 ]
 
 export function runMigrations(db: Database.Database): void {

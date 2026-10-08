@@ -49,6 +49,8 @@ describe('dispatchHandoffChild — caminho feliz', () => {
       systemPromptText: 'briefing completo',
       permissionMode: 'plan',
       handoffChild: true,
+      // O main tira o cwd do work_dir deste handoff.
+      handoffId: 'h1',
     })
     expect(markRunning).toHaveBeenCalledWith({ id: 'h1', childSessionId: 'sess-child' })
     expect(fail).not.toHaveBeenCalled()

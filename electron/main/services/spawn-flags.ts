@@ -378,14 +378,44 @@ export const HANDOFF_CHILD_DENY = [
 // o canal peer parece funcionar sem funcionar. Global afetaria todas as sessões
 // do usuário, inclusive as que ele não quer expostas — e o mesmo vale pra
 // política de permissões acima: ela vale pra filha, não pro usuário.
-export const HANDOFF_CHILD_SETTINGS_JSON = JSON.stringify({
-  crossSessionInbound: 'accept',
-  permissions: {
-    allow: HANDOFF_CHILD_ALLOW,
-    ask: HANDOFF_CHILD_ASK,
-    deny: HANDOFF_CHILD_DENY,
-  },
-})
+// Filha em `plan` é read-only. O `--permission-mode plan` sozinho não garante
+// isso: aprovar o ExitPlanMode no TUI troca o modo do PROCESSO sem tocar
+// handoffs.mode, e a filha passaria a editar como se fosse implementer. O deny
+// do settings é do processo e vale em qualquer modo (deny > ask > allow) —
+// leitura, testes e MCP continuam no allow comum.
+// LIMITE (verificado com claude -p em acceptEdits): o deny tira Edit/Write e
+// commit/push, mas NÃO é sandbox. Após o ExitPlanMode, `cp`, `mv`, `sed -i`,
+// `echo > f` e `sort -o` rodam sem perguntar (allow de echo/sort + auto-accept
+// de comandos de arquivo do acceptEdits). Por isso a filha plan não disputa a
+// posse e o contrato da tool diz isso explicitamente.
+export const HANDOFF_CHILD_PLAN_DENY = [
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Bash(git commit:*)',
+  'Bash(git push:*)',
+  'Bash(git add:*)',
+  'Bash(rm:*)',
+]
+
+// Settings da filha a partir do --permission-mode resolvido. Só 'plan' muda a
+// política; o resto recebe a política comum.
+export function handoffChildSettingsJson(permissionMode: string | null): string {
+  const deny =
+    permissionMode === 'plan'
+      ? Array.from(new Set([...HANDOFF_CHILD_DENY, ...HANDOFF_CHILD_PLAN_DENY]))
+      : HANDOFF_CHILD_DENY
+  return JSON.stringify({
+    crossSessionInbound: 'accept',
+    permissions: {
+      allow: HANDOFF_CHILD_ALLOW,
+      ask: HANDOFF_CHILD_ASK,
+      deny,
+    },
+  })
+}
+
+export const HANDOFF_CHILD_SETTINGS_JSON = handoffChildSettingsJson(null)
 
 // Valida o modo de permissão contra a whitelist. Retorna o modo se válido, senão
 // null (= sem flag = default do claude).

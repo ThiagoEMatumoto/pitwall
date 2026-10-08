@@ -60,7 +60,7 @@ type WorldLive = import('../../../electron/main/services/attention/room-world').
 
 const F = 'F'
 
-function child(repo: string, sid: string, task = `task ${sid}`) {
+function child(repo: string, sid: string, task = `task ${sid}`, mode?: 'plan') {
   harness.seedSession(testDb, sid, { repoId: repo, featureId: F })
   const h = store.create({
     targetRepoId: repo,
@@ -68,6 +68,7 @@ function child(repo: string, sid: string, task = `task ${sid}`) {
     featureId: F,
     task,
     composedPrompt: 'p',
+    mode,
   })
   return store.markRunning(h.id, sid)
 }
@@ -149,6 +150,28 @@ describe('FeatureRoom', () => {
     const row = screen.getAllByTestId('room-child-row')[0]
     expect(row).toHaveTextContent('Em andamento')
     expect(row).toHaveTextContent('trabalhando')
+  })
+
+  it("filha plan: rótulo 'leitura' com o aviso de que escreve pelo shell após aprovar", async () => {
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    child('r1', 'P', 'task P', 'plan')
+    child('r2', 'W', 'task W')
+    await mount([
+      { id: 'M', status: 'idle' },
+      { id: 'P', status: 'working', lastText: 'lendo o plano' },
+      { id: 'W', status: 'working', lastText: 'editando arquivos' },
+    ])
+    const rows = screen.getAllByTestId('room-child-row')
+    const plan = rows.find((r) => r.textContent?.includes('lendo o plano'))!
+    const writer = rows.find((r) => r.textContent?.includes('editando arquivos'))!
+    const tag = within(plan).getByTestId('room-readonly')
+    expect(tag).toHaveTextContent('leitura')
+    expect(tag).toHaveAttribute(
+      'title',
+      'Não conta para a trava do diretório. Se você aprovar o plano dela, ela pode escrever pelo shell.',
+    )
+    expect(within(writer).queryByTestId('room-readonly')).toBeNull()
+    expect(within(screen.getByTestId('room-mother')).queryByTestId('room-readonly')).toBeNull()
   })
 
   it('normal: contador e badge do botão Features mostram o mesmo N', async () => {

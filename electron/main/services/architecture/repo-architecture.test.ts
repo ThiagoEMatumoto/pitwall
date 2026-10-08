@@ -47,6 +47,9 @@ describe('buildRepoArchitectureContent', () => {
   it('inclui a instrução de preferir session_handoff', () => {
     expect(block).toContain('session_handoff')
     expect(block).toContain('repo_connections_get')
+    // O gate humano saiu na v0.53: o texto não pode prometer aprovação que não existe.
+    expect(block).not.toContain('gate humano')
+    expect(block).toContain('sem aprovação')
   })
 
   it('retorna null quando não há arestas', () => {

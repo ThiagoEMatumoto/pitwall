@@ -669,8 +669,8 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(spawned).toHaveLength(0)
   })
 
-  // REGRESSÃO: o dedup é por REPO-alvo, não por sessão-mãe (mother_session_id nem
-  // é gravado). Devolver { handoffId, alias, status } fazia uma segunda mãe adotar
+  // REGRESSÃO: a posse é por diretório de trabalho (filhas que escrevem), não por
+  // sessão-mãe. Devolver { handoffId, alias, status } fazia uma segunda mãe adotar
   // a filha de OUTRA mãe e passar a conversar com ela.
   it('dedup por repo-alvo RECUSA com erro em vez de entregar o handle da filha alheia', () => {
     seedRepo('search', '/repos/search')
@@ -682,6 +682,7 @@ describe('mcp tools — session_handoff sem gate', () => {
     const dup = call<HandoffResult>('session_handoff', {
       targetRepo: 'search',
       task: 'Outra coisa qualquer',
+      mode: 'auto-edits',
     })
 
     expect(dup.duplicate).toBe(true)
@@ -695,17 +696,19 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(spawned).toHaveLength(1)
   })
 
-  // Um handoff ativo por repo (índice da 054): force SUBSTITUI o atual em vez de
-  // abrir um segundo, e o motivo fica na trilha das duas pontas.
+  // Uma filha que escreve por diretório (índice da 057): force SUBSTITUI a atual em
+  // vez de abrir uma segunda, e o motivo fica na trilha das duas pontas.
   it('force: true + forceReason substitui a filha ativa e grava o motivo na trilha', () => {
     seedRepo('payments', '/repos/payments')
     const first = call<HandoffResult>('session_handoff', {
       targetRepo: 'payments',
       task: 'Primeira tarefa',
+      mode: 'auto-edits',
     })
     const second = call<HandoffResult>('session_handoff', {
       targetRepo: 'payments',
       task: 'Segunda tarefa',
+      mode: 'auto-edits',
       force: true,
       forceReason: 'a primeira travou num rebase',
     })
@@ -728,6 +731,55 @@ describe('mcp tools — session_handoff sem gate', () => {
       [first.handoffId, 'force_superseded'],
     ])
     expect(JSON.parse(events[0].detail).reason).toBe('a primeira travou num rebase')
+  })
+
+  // Conexão entre repos (repo_dependencies) só enriquece o briefing: delegar para
+  // um repo de OUTRO projeto, sem nenhuma aresta com a origem, despacha normalmente.
+  it('filha para repo sem conexão com o repo da mãe: despacha', () => {
+    seedRepo('origem-solta', '/repos/origem-solta')
+    const db = getDb()
+    db.prepare(
+      'INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('proj-outro', 'Outro projeto', Date.now(), Date.now())
+    db.prepare(
+      'INSERT OR IGNORE INTO repos (id, project_id, label, path, role, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('repo-ilha', 'proj-outro', 'ilha', '/repos/ilha', null, 0, Date.now())
+    const edges = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM repo_dependencies WHERE from_repo_id IN ('repo-ilha','repo-origem-solta') OR to_repo_id IN ('repo-ilha','repo-origem-solta')",
+      )
+      .get() as { n: number }
+    expect(edges.n).toBe(0)
+
+    const res = call<HandoffResult>('session_handoff', {
+      fromRepo: 'origem-solta',
+      targetRepo: 'ilha',
+      task: 'Trabalho sem aresta',
+      mode: 'auto-edits',
+    })
+    expect(res.error).toBeUndefined()
+    expect(res.status).toBe('running')
+    expect(spawned).toHaveLength(1)
+  })
+
+  // Papéis no mesmo checkout: a implementer escreve, a revisora (plan, read-only)
+  // lê o mesmo diretório sem disputar a posse.
+  it('writer + filha plan no mesmo repo: as duas despacham', () => {
+    seedRepo('dupla', '/repos/dupla')
+    const impl = call<HandoffResult>('session_handoff', {
+      targetRepo: 'dupla',
+      task: 'Implementar',
+      mode: 'auto-edits',
+    })
+    const review = call<HandoffResult>('session_handoff', {
+      targetRepo: 'dupla',
+      task: 'Revisar',
+      mode: 'plan',
+    })
+    expect(impl.status).toBe('running')
+    expect(review.status).toBe('running')
+    expect(review.duplicate).toBeUndefined()
+    expect(spawned).toHaveLength(2)
   })
 
   it('force: true sem forceReason é recusado sem criar nem spawnar', () => {
@@ -884,10 +936,12 @@ describe('mcp tools — session_handoff sem gate', () => {
       callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'mesma',
         task: 'Primeira',
+        mode: 'auto-edits',
       })
       const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'mesma',
         task: 'Segunda',
+        mode: 'auto-edits',
       })
       expect(dup.duplicate).toBe(true)
       expect(dup.handoffId).toBeUndefined()
@@ -902,10 +956,12 @@ describe('mcp tools — session_handoff sem gate', () => {
       callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'alheia',
         task: 'Da mãe A',
+        mode: 'auto-edits',
       })
       const dup = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
         targetRepo: 'alheia',
         task: 'Da mãe B',
+        mode: 'auto-edits',
       })
       expect(dup.duplicate).toBe(true)
       expect(dup.error).toMatch(/NÃO é sua/)
@@ -920,10 +976,12 @@ describe('mcp tools — session_handoff sem gate', () => {
       call<HandoffResult>('session_handoff', {
         targetRepo: 'misto',
         task: 'Legada',
+        mode: 'auto-edits',
       })
       const dup = callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'misto',
         task: 'Com carimbo',
+        mode: 'auto-edits',
       })
       // Escopar SÓ pela mãe reabriria duas mães mutando o mesmo repo.
       expect(dup.duplicate).toBe(true)
@@ -935,10 +993,12 @@ describe('mcp tools — session_handoff sem gate', () => {
       callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'anonimo',
         task: 'Da mãe A',
+        mode: 'auto-edits',
       })
       const dup = call<HandoffResult>('session_handoff', {
         targetRepo: 'anonimo',
         task: 'Sem carimbo',
+        mode: 'auto-edits',
       })
       expect(dup.duplicate).toBe(true)
       expect(dup.error).toMatch(/pode NÃO ser sua/)
@@ -966,10 +1026,12 @@ describe('mcp tools — session_handoff sem gate', () => {
       callAs<HandoffResult>(MOTHER_A, 'session_handoff', {
         targetRepo: 'forcado',
         task: 'A',
+        mode: 'auto-edits',
       })
       const forced = callAs<HandoffResult>(MOTHER_B, 'session_handoff', {
         targetRepo: 'forcado',
         task: 'B',
+        mode: 'auto-edits',
         force: true,
         forceReason: 'a mãe A foi encerrada',
       })

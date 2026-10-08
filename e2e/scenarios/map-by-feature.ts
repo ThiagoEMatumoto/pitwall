@@ -342,11 +342,12 @@ try {
     ['C2', front],
   ] as const) {
     const before = new Set(files().map((f) => f.data.pid))
+    // plan é read-only e não disputa a posse do diretório: dispensa o force (que
+    // agora exige forceReason) mesmo com filhas ativas da cópia do perfil real.
     await asM.call('session_handoff', {
       targetRepo: repo.label,
       task: `Parte ${k} do checkout`,
       mode: 'plan',
-      force: true,
     })
     const f = await newSessionFile(before, `session file de ${k}`)
     children[k] = f ? await sessionIdOf(f.data.sessionId) : ''

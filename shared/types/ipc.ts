@@ -430,8 +430,9 @@ export interface CreateManualHandoffInput {
   task: string
   featureId?: string
   mode?: HandoffMode
-  // Presente = SUBSTITUI o handoff ativo do repo (um só por repo, migration 054);
-  // o motivo vai pra trilha. Ausente: repo ocupado recusa com erro.
+  // Presente = SUBSTITUI a filha que escreve no mesmo diretório de trabalho (uma
+  // só por diretório, migration 057); o motivo vai pra trilha. Ausente: diretório
+  // ocupado recusa com erro. Filha em mode 'plan' não disputa a posse.
   forceReason?: string
 }
 
@@ -605,6 +606,9 @@ export interface SpawnSessionInput {
   //  2. `name` espelhado em sessions.title com title_source='manual' — o alias é o
   //     ENDEREÇO do peer e o rename automático do Claude Code não pode sobrescrevê-lo.
   handoffChild?: boolean
+  // Handoff da filha: o cwd vem do work_dir gravado no create (a chave da posse),
+  // não do worktree recalculado no spawn.
+  handoffId?: string
   cols?: number
   rows?: number
 }

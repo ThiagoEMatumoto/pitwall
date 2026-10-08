@@ -5,7 +5,11 @@ import {
   HANDOFF_CHILD_ASK,
   HANDOFF_CHILD_DENY,
   HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE,
+  HANDOFF_CHILD_PLAN_DENY,
   HANDOFF_CHILD_SETTINGS_JSON,
+  handoffChildSettingsJson,
+  permissionModeForHandoffMode,
+  resolvePermissionMode,
   resolveModel,
 } from './spawn-flags'
 
@@ -121,5 +125,56 @@ describe('HANDOFF_CHILD permissions', () => {
 
   it('o JSON inline sobrevive ao shquote (sem aspas simples nos specs)', () => {
     expect(HANDOFF_CHILD_SETTINGS_JSON).not.toContain("'")
+  })
+})
+
+// Filha plan: o deny de escrita mora no settings do PROCESSO, então sobrevive ao
+// ExitPlanMode aprovado no TUI (que troca o modo sem tocar handoffs.mode).
+describe('handoffChildSettingsJson', () => {
+  type Settings = {
+    crossSessionInbound: string
+    permissions: { allow: string[]; ask: string[]; deny: string[] }
+  }
+  const planSettings = JSON.parse(
+    handoffChildSettingsJson(resolvePermissionMode(permissionModeForHandoffMode('plan'))),
+  ) as Settings
+
+  it('nega edição, commit, add, push e rm à filha plan', () => {
+    for (const rule of [
+      'Edit',
+      'Write',
+      'NotebookEdit',
+      'Bash(git commit:*)',
+      'Bash(git push:*)',
+      'Bash(git add:*)',
+      'Bash(rm:*)',
+    ]) {
+      expect(planSettings.permissions.deny).toContain(rule)
+    }
+    expect(planSettings.permissions.deny).toEqual(expect.arrayContaining(HANDOFF_CHILD_DENY))
+  })
+
+  it('mantém leitura, testes e o canal peer na filha plan', () => {
+    expect(planSettings.crossSessionInbound).toBe('accept')
+    expect(planSettings.permissions.allow).toEqual(HANDOFF_CHILD_ALLOW)
+    expect(planSettings.permissions.allow).toContain('Bash(rg:*)')
+    expect(planSettings.permissions.allow).toContain('Bash(npm run test:*)')
+    expect(planSettings.permissions.allow).toContain('mcp__pitwall')
+    expect(planSettings.permissions.ask).toEqual(HANDOFF_CHILD_ASK)
+  })
+
+  it('não muda a política das filhas que escrevem', () => {
+    for (const mode of ['auto-edits', 'interactive']) {
+      const pm = resolvePermissionMode(permissionModeForHandoffMode(mode))
+      expect(handoffChildSettingsJson(pm)).toBe(HANDOFF_CHILD_SETTINGS_JSON)
+    }
+    const common = JSON.parse(HANDOFF_CHILD_SETTINGS_JSON) as Settings
+    for (const rule of HANDOFF_CHILD_PLAN_DENY.filter((r) => !r.startsWith('Bash('))) {
+      expect(common.permissions.deny).not.toContain(rule)
+    }
+  })
+
+  it('não leva aspa simples (vai inline num argumento shell-quoted)', () => {
+    expect(handoffChildSettingsJson('plan')).not.toContain("'")
   })
 })

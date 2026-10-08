@@ -74,8 +74,9 @@ vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: (
 vi.mock('../services/handoff-store', () => ({
   get: () => seam.handoff,
   markRunning: (id: string, childSessionId: string) => ({ id, childSessionId, status: 'running' }),
-  // Repo livre: o resume checa a posse (findActiveByTarget) antes de spawnar.
-  findActiveByTarget: () => null,
+  // Diretório livre: o resume checa a posse (por work_dir) antes de spawnar.
+  workDirOf: () => null,
+  findActiveWriterByWorkDir: () => null,
   getByChildSession: () => null,
   failIfRunning: () => null,
 }))

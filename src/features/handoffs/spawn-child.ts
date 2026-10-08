@@ -85,6 +85,7 @@ export async function dispatchHandoffChild(
       systemPromptText: plan.systemPromptText,
       permissionMode: plan.permissionMode,
       handoffChild: true,
+      handoffId,
     })
     await handoffsApi.markRunning({ id: handoffId, childSessionId })
     return childSessionId
