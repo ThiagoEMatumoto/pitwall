@@ -196,4 +196,27 @@ describe('FeatureSwitcher → Room', () => {
     releaseCtrl()
     expect(useFeatureRoomStore.getState().featureId).toBe('f2')
   })
+  it('dica "Ctrl+` agora abre a Room" só na primeira abertura visível pelo combo', () => {
+    render(both())
+    // Pelo botão do mapa (não leva à Room): sem dica, e ela não é gasta.
+    fireEvent.click(screen.getByTestId('map-feature-switcher'))
+    expect(screen.queryByTestId('feature-switcher-room-hint')).toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    // Toque rápido: o overlay nem aparece, a dica continua guardada.
+    ctrlBackquote()
+    releaseCtrl()
+    expect(screen.queryByTestId('feature-switcher-room-hint')).toBeNull()
+
+    ctrlBackquote()
+    act(() => void vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('feature-switcher-room-hint')).toHaveTextContent(
+      'Ctrl+` agora abre a Room da feature',
+    )
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    ctrlBackquote()
+    act(() => void vi.advanceTimersByTime(200))
+    expect(screen.getByTestId('feature-switcher')).toBeInTheDocument()
+    expect(screen.queryByTestId('feature-switcher-room-hint')).toBeNull()
+  })
 })
