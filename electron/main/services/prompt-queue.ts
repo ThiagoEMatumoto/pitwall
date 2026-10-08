@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
-import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import type {
   PromptQueueCounters,
   PromptQueueEvent,
@@ -103,6 +102,7 @@ const isHold = (v: Verdict): v is HoldVerdict =>
 interface Item extends QueuedPrompt {
   holding: boolean
   fromSessionId?: string
+  bypassAttention?: boolean
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
   outcome?: PromptQueueEventKind
 }
@@ -130,28 +130,31 @@ export class PromptQueue {
     return this.deps.now?.() ?? Date.now()
   }
 
-  // A filha em needs_input espera a resposta da mãe: a <pitwall-answer> é
+  // A filha em needs_input espera a resposta da mãe: a resposta a um pedido é
   // justamente o que ela aguarda, então não pode ficar presa no gate 'attention'
-  // (com outro pedido aberto ela segue needs_input depois desta resposta).
-  private askingFor(sessionId: string, text: string): boolean {
-    return !isHandoffAnswerEnvelope(text) && this.deps.handoffAsking(sessionId)
+  // (com outro pedido aberto ela segue needs_input depois desta resposta). Decidido
+  // pela flag de quem enfileira, não pelo texto: qualquer um digita '<pitwall-answer'.
+  private askingFor(sessionId: string, bypassAttention: boolean | undefined): boolean {
+    return !bypassAttention && this.deps.handoffAsking(sessionId)
   }
 
   snapshot(): PromptQueueSnapshot {
     return {
-      items: this.items.map(({ holding: _h, outcome: _o, fromSessionId: _f, ...q }) => q),
+      items: this.items.map(
+        ({ holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...q }) => q,
+      ),
       counters: { ...this.counters },
       lastEvent: this.lastEvent,
     }
   }
 
   async send(input: SendPromptInput): Promise<SendPromptResult> {
-    const { sessionId, text, when, fromSessionId } = input
+    const { sessionId, text, when, fromSessionId, bypassAttention } = input
     if (!this.deps.isRunning(sessionId)) return { ok: false, error: 'not-running' }
     const scan = await this.deps.screen(sessionId)
-    if (when === 'now') return this.sendNow(sessionId, text, scan, fromSessionId)
+    if (when === 'now') return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
     if (!scan) return { ok: false, error: 'no-screen' }
-    const item = this.enqueue(sessionId, text, fromSessionId)
+    const item = this.enqueue(sessionId, text, fromSessionId, bypassAttention)
     const isHead = this.items.find((i) => i.sessionId === sessionId) === item
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
@@ -161,7 +164,7 @@ export class PromptQueue {
     if (item.outcome === 'delivered') return { ok: true, delivered: true }
     if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
     if (item.outcome) return { ok: false, error: 'not-running' }
-    const { holding: _h, outcome: _o, fromSessionId: _f, ...rest } = item
+    const { holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...rest } = item
     return { ok: true, delivered: false, queued: rest }
   }
 
@@ -170,9 +173,10 @@ export class PromptQueue {
     text: string,
     scan: ScreenScan | null,
     fromSessionId: string | undefined,
+    bypassAttention: boolean | undefined,
   ): SendPromptResult {
     const status = this.deps.status(sessionId)
-    const asking = this.askingFor(sessionId, text)
+    const asking = this.askingFor(sessionId, bypassAttention)
     const verdict = scan
       ? deliveryVerdict(status, scan, asking, 'now')
       : blindVerdict(status, asking, this.deps.nativeStatus(sessionId))
@@ -232,7 +236,12 @@ export class PromptQueue {
     this.settleTimers.clear()
   }
 
-  private enqueue(sessionId: string, text: string, fromSessionId?: string): Item {
+  private enqueue(
+    sessionId: string,
+    text: string,
+    fromSessionId?: string,
+    bypassAttention?: boolean,
+  ): Item {
     const createdAt = this.now()
     const item: Item = {
       id: randomUUID(),
@@ -244,6 +253,7 @@ export class PromptQueue {
       heldReason: null,
       holding: false,
       fromSessionId,
+      bypassAttention,
     }
     this.items = [...this.items, item]
     this.ensurePoll()
@@ -275,7 +285,7 @@ export class PromptQueue {
       const verdict = deliveryVerdict(
         this.deps.status(sessionId),
         scan,
-        this.askingFor(sessionId, head.text),
+        this.askingFor(sessionId, head.bypassAttention),
       )
       // A mensagem pode ter sido cancelada enquanto a tela era relida.
       if (!this.items.includes(head)) return false

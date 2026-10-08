@@ -79,7 +79,7 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
     })
     return
   }
-  const sent = await queue.send({ sessionId: target, text, when: 'on-idle' })
+  const sent = await queue.send({ sessionId: target, text, when: 'on-idle', bypassAttention: true })
   if (sent.ok && sent.delivered) {
     insertRow({
       wakeId: randomUUID(),
