@@ -195,7 +195,10 @@ export function stepIndex(index: number, dir: 1 | -1, size: number): number {
 
 // O mapa no escopo de um projeto (scopeProjectId) não mostra este card: confirmar
 // nele precisa abrir o escopo, senão não há o que enquadrar.
-export function leavesScope(entry: SwitcherEntry, scopeProjectId: string | null): boolean {
+export function leavesScope(
+  entry: Pick<SwitcherEntry, 'projectIds'>,
+  scopeProjectId: string | null,
+): boolean {
   return !!scopeProjectId && !entry.projectIds.includes(scopeProjectId)
 }
 
