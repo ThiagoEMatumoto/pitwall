@@ -3,6 +3,7 @@ import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import { useFeaturesStore } from '@/store/featuresStore'
 import { LivenessChip } from '@/features/features/LivenessChip'
+import { OpenRoomButton } from '@/features/feature-room/OpenRoomButton'
 import { STATUS_META as FEATURE_STATUS_META } from '@/features/features/status'
 import { useLoopSnapshots } from '@/features/features/useLoopSnapshots'
 import { isStalledFeature, selectFeaturesWithoutObjective } from '../../../shared/home-selectors'
@@ -99,6 +100,7 @@ function FeatureRow({ feature, now }: { feature: OverviewFeatureActivity; now: n
           {relativeTime(feature.lastSessionAt)}
         </span>
       )}
+      <OpenRoomButton featureId={feature.id} testId="home-feature-open-room" />
     </li>
   )
 }
@@ -116,7 +118,7 @@ function PinnedRow({
   const meta = FEATURE_STATUS_META[feature.status]
   const setArea = useAppStore((s) => s.setArea)
   return (
-    <li>
+    <li className="flex items-center gap-1.5">
       <button
         type="button"
         data-testid="home-pinned-feature"
@@ -125,7 +127,7 @@ function PinnedRow({
           void useFeaturesStore.getState().select(feature.id)
           setArea('features')
         }}
-        className="flex w-full items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-1.5 text-left transition hover:bg-[var(--color-surface-2)]/60"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-2.5 py-1.5 text-left transition hover:bg-[var(--color-surface-2)]/60"
       >
         <CardDot color={meta.color} />
         <span className="min-w-0 flex-1">
@@ -142,6 +144,7 @@ function PinnedRow({
           />
         )}
       </button>
+      <OpenRoomButton featureId={feature.id} testId="home-feature-open-room" />
     </li>
   )
 }
