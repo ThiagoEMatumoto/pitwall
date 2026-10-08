@@ -14,6 +14,8 @@ import { mapSessionIds } from '@/features/session-switcher/useGlobalSessions'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useAttentionListStore } from '@/store/attentionStore'
+import { useFeaturesStore } from '@/store/featuresStore'
+import { openSessionByCc } from '@/features/sessions/open-session'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { TONE_COLOR } from './card-indicator'
 import { tailText } from './card-tail'
@@ -76,6 +78,7 @@ function entriesOf(
   liveSessions: ReturnType<typeof useAppStore.getState>['liveSessions'],
   tails: ReturnType<typeof useCardViewStore.getState>['tails'],
   attention: ReturnType<typeof useAttentionListStore.getState>['items'],
+  features: ReturnType<typeof useFeaturesStore.getState>['features'],
 ): Map<string, SwitcherEntry> {
   const live = new Map(liveSessions.map((s) => [s.id, s]))
   const tailOf = (id: string) => {
@@ -85,8 +88,11 @@ function entriesOf(
   // A mesma regra do mapa (useMapSessionIds): só lista o card que ele desenha.
   const graphLive = graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId)
   const inUse = mapSessionIds(liveSessions, graphLive, pendingEndSessionIds())
+  const titles = new Map(features.map((f) => [f.id, f.title]))
   return new Map(
-    buildSwitcherEntries(graph, live, tailOf, inUse, attention).map((e) => [e.key, e]),
+    buildSwitcherEntries(graph, live, tailOf, inUse, attention, (id) => titles.get(id) ?? null).map(
+      (e) => [e.key, e],
+    ),
   )
 }
 
@@ -98,6 +104,7 @@ const entriesNow = () =>
     useAppStore.getState().liveSessions,
     useCardViewStore.getState().tails,
     useAttentionListStore.getState().items,
+    useFeaturesStore.getState().features,
   )
 
 // Seletor rápido de features estilo Alt+Tab (Ctrl+`): um cartão por feature em
@@ -246,9 +253,10 @@ function SwitcherOverlay({
   const liveSessions = useAppStore((s) => s.liveSessions)
   const tails = useCardViewStore((s) => s.tails)
   const attention = useAttentionListStore((s) => s.items)
+  const features = useFeaturesStore((s) => s.features)
   const entries = useMemo(
-    () => entriesOf(graph, liveSessions, tails, attention),
-    [graph, liveSessions, tails, attention],
+    () => entriesOf(graph, liveSessions, tails, attention, features),
+    [graph, liveSessions, tails, attention, features],
   )
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -355,6 +363,7 @@ function SwitcherOption({ entry, active }: { entry: SwitcherEntry; active: boole
       role="option"
       aria-selected={active}
       data-key={entry.key}
+      data-kind={entry.kind}
       title={tooltip}
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => confirmKey?.(entry.key)}
@@ -452,8 +461,22 @@ export function FeatureSwitcherButton({ className = BUTTON_CLASS }: { className?
 // nunca no xterm. O que estava na frente de outra feature sai: a espiada, e o
 // painel da feature (ao montar, o mapa poria a feature dele em foco).
 function goTo(target: SwitcherEntry) {
-  useFeatureMruStore.getState().touch(target.key)
   const dock = useCrewDockStore.getState()
+  // Card de atenção não tem card no mapa para enquadrar: abre o sujeito direto,
+  // como o HUD (quick look da filha, senão a aba da sessão).
+  if (target.kind === 'attention') {
+    if (target.handoffId) {
+      dock.openPeek(target.handoffId)
+      return
+    }
+    const live = useAppStore.getState().liveSessions.find((s) => s.id === target.sessionId)
+    if (live?.ccSessionId) {
+      openSessionByCc(live.ccSessionId)
+      return
+    }
+    if (!target.featureId) return
+  }
+  useFeatureMruStore.getState().touch(target.key)
   if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
   const panel = useFeaturePanelStore.getState()
   if (panel.openFeatureId && panel.openFeatureId !== target.featureId) panel.close()

@@ -5,13 +5,15 @@ import { motherOfFocus } from './mother-dock'
 import { formatCombo, type Combo } from '../../lib/keybindings'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraph } from '../../../shared/types/session-graph'
-import { countForLane, humanQueue } from '../../../shared/attention/selectors'
+import { attentionSubjectKey, humanQueue } from '../../../shared/attention/selectors'
 import type { AttentionItem } from '../../../shared/types/attention'
 
 export interface SwitcherEntry {
   // Chave do MRU: o featureId, ou `p:<projeto>` para o grupo "Sem feature".
   key: string
-  kind: 'feature' | 'project'
+  // 'attention': itens da fila sem card no mapa (filha interrompida sem sessão
+  // desenhada, feature sem lane). Sem ele o HUD contaria e o seletor não.
+  kind: 'feature' | 'project' | 'attention'
   featureId: string | null
   laneFlowId: string
   title: string
@@ -23,10 +25,14 @@ export interface SwitcherEntry {
   needsYou: number
   // Projetos que o card toca (home + repos): no escopo de um deles o mapa o mostra.
   projectIds: string[]
+  // Só no 'attention': o que confirmar abre (quick look da filha, senão o mapa).
+  handoffId?: string | null
+  sessionId?: string | null
 }
 
 export const projectKey = (projectId: string | null) => `p:${projectId ?? 'loose'}`
 export const isProjectKey = (key: string) => key.startsWith('p:')
+export const attentionKey = (featureId: string | null) => `a:${featureId ?? 'loose'}`
 
 type LiveBits = Pick<LiveSessionInfo, 'attentionReason' | 'lastText'>
 
@@ -44,14 +50,14 @@ export function buildSwitcherEntries(
     graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId),
   ),
   attention: AttentionItem[] = [],
+  featureTitleOf: (featureId: string) => string | null = () => null,
 ): SwitcherEntry[] {
   const byId = new Map(graph.nodes.map((n) => [n.sessionId, n]))
-  // Item cuja sessão o mapa não desenha (filha interrompida, sem PTY) pertence ao
-  // card pela feature — senão o HUD contaria e nenhum card.
-  const queue = humanQueue(attention).map((i) =>
-    i.sessionId && !inUse.has(i.sessionId) ? { ...i, sessionId: null } : i,
-  )
-  return graph.lanes.flatMap((lane): SwitcherEntry[] => {
+  const queue = humanQueue(attention)
+  // Sujeitos já contados por algum card: o resto vira card de atenção, para a
+  // soma do seletor ser sempre o length da projeção (o número do HUD).
+  const claimed = new Set<string>()
+  const laneEntries = graph.lanes.flatMap((lane): SwitcherEntry[] => {
     const nodes = lane.repos
       .flatMap((r) => r.sessionIds)
       .map((id) => byId.get(id))
@@ -64,22 +70,30 @@ export function buildSwitcherEntries(
       ]),
     )
     const count = (pred: (t: IndicatorTone) => boolean) => [...tones.values()].filter(pred).length
+    const laneFeature = lane.kind === 'feature' ? lane.featureId : null
+    const laneSessions = new Set(nodes.map((n) => n.sessionId))
+    // Item cuja sessão o mapa não desenha (filha interrompida, sem PTY) pertence
+    // ao card pela feature.
+    const subjects = new Set(
+      queue
+        .filter((i) =>
+          i.sessionId && inUse.has(i.sessionId)
+            ? laneSessions.has(i.sessionId)
+            : laneFeature != null && i.featureId === laneFeature,
+        )
+        .map(attentionSubjectKey),
+    )
+    for (const k of subjects) claimed.add(k)
     // Só as sessões do cartão entram: o fallback de motherOfFocus ("a mais recente
     // do mapa") não pode emprestar a mãe de outra feature.
-    const motherId = motherOfFocus(nodes, graph.edges, inUse, {
-      featureId: lane.kind === 'feature' ? lane.featureId : null,
-    })
+    const motherId = motherOfFocus(nodes, graph.edges, inUse, { featureId: laneFeature })
     const mother = motherId ? byId.get(motherId) : undefined
     const base = {
       motherId: motherId ?? null,
       motherTitle: mother ? (mother.cliName ?? mother.title) : null,
       motherTone: motherId ? (tones.get(motherId) ?? null) : null,
       working: count((t) => t === 'working' || t === 'starting'),
-      needsYou: countForLane(
-        queue,
-        new Set(nodes.map((n) => n.sessionId)),
-        lane.kind === 'feature' ? lane.featureId : null,
-      ),
+      needsYou: subjects.size,
     }
     if (lane.kind === 'feature') {
       const projectIds = [lane.projectId, ...lane.repos.map((r) => r.projectId)]
@@ -108,6 +122,45 @@ export function buildSwitcherEntries(
         ...base,
       },
     ]
+  })
+  return [...orphanEntries(queue, claimed, featureTitleOf), ...laneEntries]
+}
+
+// Um card por feature (ou "loose") para os itens que nenhum card do mapa contou.
+// Vêm primeiro: são exatamente os que o mapa não mostra.
+function orphanEntries(
+  queue: AttentionItem[],
+  claimed: ReadonlySet<string>,
+  featureTitleOf: (featureId: string) => string | null,
+): SwitcherEntry[] {
+  const groups = new Map<string, AttentionItem[]>()
+  for (const i of queue) {
+    if (claimed.has(attentionSubjectKey(i))) continue
+    const key = attentionKey(i.featureId)
+    groups.set(key, [...(groups.get(key) ?? []), i])
+  }
+  return [...groups].map(([key, items]) => {
+    const first = items[0]
+    const featureId = first.featureId
+    const title = featureId
+      ? `${featureTitleOf(featureId) ?? 'Feature'} · fora do mapa`
+      : 'Precisa de você · fora do mapa'
+    return {
+      key,
+      kind: 'attention',
+      featureId,
+      laneFlowId: featureId ? featureLaneId(featureId) : '',
+      title,
+      pulse: first.whyNow,
+      motherId: null,
+      motherTitle: null,
+      motherTone: null,
+      working: 0,
+      needsYou: new Set(items.map(attentionSubjectKey)).size,
+      projectIds: [],
+      handoffId: items.find((i) => i.handoffId)?.handoffId ?? null,
+      sessionId: items.find((i) => i.sessionId)?.sessionId ?? null,
+    }
   })
 }
 
