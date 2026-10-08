@@ -153,7 +153,12 @@ const resuming = new Set<string>()
 // `liveWatchStarted` guarda contra o duplo-mount do StrictMode.
 let offGlobalActivity: (() => void) | null = null
 let offPtyExit: (() => void) | null = null
+let offRoomChanged: (() => void) | null = null
+let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
+// room:changed chega em rajada (handoffs/loop coalescidos a 300ms no main);
+// um refetch por janela basta.
+export const ROOM_REFRESH_DEBOUNCE_MS = 150
 
 // Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
 // pra não gravar a cada teclada de spawn/close em sequência.
@@ -768,6 +773,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     offPtyExit = sessionsApi.onExit(() => {
       void get().refreshLiveSessions()
     })
+    // Sessão criada pela Room (mãe via room:start-mother, ou outro caminho) não
+    // emite evento de sessão nova: o main só avisa room:changed. Sem refetch aqui,
+    // a mãe não entrava em liveSessions e o Peek fechava na hora.
+    offRoomChanged = roomApi.onChanged(() => {
+      if (roomRefreshTimer) clearTimeout(roomRefreshTimer)
+      roomRefreshTimer = setTimeout(() => {
+        roomRefreshTimer = null
+        void get().refreshLiveSessions()
+      }, ROOM_REFRESH_DEBOUNCE_MS)
+    })
   },
 
   stopLiveWatch: () => {
@@ -778,6 +793,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offPtyExit) {
       offPtyExit()
       offPtyExit = null
+    }
+    if (offRoomChanged) {
+      offRoomChanged()
+      offRoomChanged = null
+    }
+    if (roomRefreshTimer) {
+      clearTimeout(roomRefreshTimer)
+      roomRefreshTimer = null
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
