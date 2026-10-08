@@ -5,6 +5,8 @@ import { motherOfFocus } from './mother-dock'
 import { formatCombo, type Combo } from '../../lib/keybindings'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraph } from '../../../shared/types/session-graph'
+import { countForLane, humanQueue } from '../../../shared/attention/selectors'
+import type { AttentionItem } from '../../../shared/types/attention'
 
 export interface SwitcherEntry {
   // Chave do MRU: o featureId, ou `p:<projeto>` para o grupo "Sem feature".
@@ -32,6 +34,8 @@ type LiveBits = Pick<LiveSessionInfo, 'attentionReason' | 'lastText'>
 // bater com o do mapa e dos contadores (interrompida ≠ precisa de você).
 // inUse: as sessões que o mapa desenha (mapSessionIds). Card sem nenhuma delas
 // não está no mapa e não entra: confirmar nele não teria o que enquadrar.
+// attention: a fila única (attention:list). needsYou é o recorte dela por card —
+// o mesmo número que o HUD soma, nunca uma regra própria pelo tom.
 export function buildSwitcherEntries(
   graph: SessionGraph,
   live: ReadonlyMap<string, LiveBits>,
@@ -39,8 +43,14 @@ export function buildSwitcherEntries(
   inUse: ReadonlySet<string> = new Set(
     graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId),
   ),
+  attention: AttentionItem[] = [],
 ): SwitcherEntry[] {
   const byId = new Map(graph.nodes.map((n) => [n.sessionId, n]))
+  // Item cuja sessão o mapa não desenha (filha interrompida, sem PTY) pertence ao
+  // card pela feature — senão o HUD contaria e nenhum card.
+  const queue = humanQueue(attention).map((i) =>
+    i.sessionId && !inUse.has(i.sessionId) ? { ...i, sessionId: null } : i,
+  )
   return graph.lanes.flatMap((lane): SwitcherEntry[] => {
     const nodes = lane.repos
       .flatMap((r) => r.sessionIds)
@@ -65,7 +75,11 @@ export function buildSwitcherEntries(
       motherTitle: mother ? (mother.cliName ?? mother.title) : null,
       motherTone: motherId ? (tones.get(motherId) ?? null) : null,
       working: count((t) => t === 'working' || t === 'starting'),
-      needsYou: count((t) => t === 'needs-you'),
+      needsYou: countForLane(
+        queue,
+        new Set(nodes.map((n) => n.sessionId)),
+        lane.kind === 'feature' ? lane.featureId : null,
+      ),
     }
     if (lane.kind === 'feature') {
       const projectIds = [lane.projectId, ...lane.repos.map((r) => r.projectId)]

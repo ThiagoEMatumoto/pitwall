@@ -96,8 +96,9 @@ describe('buildSwitcherEntries', () => {
       working: 1,
       needsYou: 0,
     })
-    // m2 está 'waiting' sem tela reconhecida e c2 tem pergunta pendente.
-    expect(entries[1]).toMatchObject({ motherId: 'm2', motherTone: 'needs-you', needsYou: 2 })
+    // m2 está 'waiting' sem tela reconhecida: o TOM vem do indicador. A contagem
+    // needsYou vem só da fila única (attention-unified.test): sem lista, zero.
+    expect(entries[1]).toMatchObject({ motherId: 'm2', motherTone: 'needs-you', needsYou: 0 })
     expect(entries[2]).toMatchObject({
       kind: 'project',
       featureId: null,
@@ -119,18 +120,14 @@ describe('buildSwitcherEntries', () => {
 
   // O mesmo tom do mapa e dos contadores: waiting com "Interrupted" no tail da
   // tela é interrompida, não "precisa de você".
-  it('com o tail da tela, a interrompida não conta como precisa de você', () => {
+  it('com o tail da tela, a interrompida não fica com o tom de precisa de você', () => {
     const g: SessionGraph = {
       ...graph,
       nodes: graph.nodes.map((n) => (n.sessionId === 'c2' ? { ...n, attentionReason: null } : n)),
     }
     const tail = ['  ⎿  Interrupted · What should Claude do instead?', '> ']
-    expect(buildSwitcherEntries(g, new Map())[1]).toMatchObject({
-      needsYou: 1,
-      motherTone: 'needs-you',
-    })
+    expect(buildSwitcherEntries(g, new Map())[1].motherTone).toBe('needs-you')
     const entry = buildSwitcherEntries(g, new Map(), (id) => (id === 'm2' ? tail : null))[1]
-    expect(entry.needsYou).toBe(0)
     expect(entry.motherTone).not.toBe('needs-you')
   })
 
@@ -166,7 +163,7 @@ describe('buildSwitcherEntries', () => {
     const inUse = new Set(['m2', 'c2'])
     const entries = buildSwitcherEntries(graph, new Map(), () => null, inUse)
     expect(entries.map((e) => e.key)).toEqual(['f2'])
-    expect(entries[0]).toMatchObject({ motherId: 'm2', needsYou: 2 })
+    expect(entries[0]).toMatchObject({ motherId: 'm2' })
   })
 })
 

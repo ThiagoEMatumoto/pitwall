@@ -13,6 +13,7 @@ import { attentionKeysBlocked } from '@/features/session-switcher/attention-keys
 import { mapSessionIds } from '@/features/session-switcher/useGlobalSessions'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { TONE_COLOR } from './card-indicator'
 import { tailText } from './card-tail'
@@ -74,6 +75,7 @@ function entriesOf(
   graph: Parameters<typeof buildSwitcherEntries>[0],
   liveSessions: ReturnType<typeof useAppStore.getState>['liveSessions'],
   tails: ReturnType<typeof useCardViewStore.getState>['tails'],
+  attention: ReturnType<typeof useAttentionListStore.getState>['items'],
 ): Map<string, SwitcherEntry> {
   const live = new Map(liveSessions.map((s) => [s.id, s]))
   const tailOf = (id: string) => {
@@ -83,7 +85,9 @@ function entriesOf(
   // A mesma regra do mapa (useMapSessionIds): só lista o card que ele desenha.
   const graphLive = graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId)
   const inUse = mapSessionIds(liveSessions, graphLive, pendingEndSessionIds())
-  return new Map(buildSwitcherEntries(graph, live, tailOf, inUse).map((e) => [e.key, e]))
+  return new Map(
+    buildSwitcherEntries(graph, live, tailOf, inUse, attention).map((e) => [e.key, e]),
+  )
 }
 
 // Fechado, o seletor não assina grafo, sessões nem tails (os tails mudam ~50x/s
@@ -93,6 +97,7 @@ const entriesNow = () =>
     useSessionGraphStore.getState().graph,
     useAppStore.getState().liveSessions,
     useCardViewStore.getState().tails,
+    useAttentionListStore.getState().items,
   )
 
 // Seletor rápido de features estilo Alt+Tab (Ctrl+`): um cartão por feature em
@@ -240,7 +245,11 @@ function SwitcherOverlay({
   const graph = useSessionGraph()
   const liveSessions = useAppStore((s) => s.liveSessions)
   const tails = useCardViewStore((s) => s.tails)
-  const entries = useMemo(() => entriesOf(graph, liveSessions, tails), [graph, liveSessions, tails])
+  const attention = useAttentionListStore((s) => s.items)
+  const entries = useMemo(
+    () => entriesOf(graph, liveSessions, tails, attention),
+    [graph, liveSessions, tails, attention],
+  )
   const listRef = useRef<HTMLDivElement>(null)
 
   // O overlay visível tira o foco do xterm: nada digitado vaza pra PTY.

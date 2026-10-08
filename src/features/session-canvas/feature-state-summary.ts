@@ -22,7 +22,9 @@ export function sessionStatusCounts(
   const out = { needsYou: 0, working: 0, idle: 0 }
   for (const n of nodes) {
     if (n.featureId !== featureId || n.status === 'ended') continue
-    if (n.attentionReason || n.status === 'waiting') out.needsYou++
+    // attentionReason já é a fila única (o grafo lê a projeção): waiting em fim de
+    // turno não é "precisa de você".
+    if (n.attentionReason) out.needsYou++
     else if (n.status === 'working' || n.status === 'starting') out.working++
     else out.idle++
   }
@@ -74,7 +76,7 @@ type CrewNode = Pick<
 >;
 
 const rowState = (n: CrewNode): CrewRowState =>
-  n.attentionReason || n.status === "waiting"
+  n.attentionReason
     ? "needsYou"
     : n.status === "working" || n.status === "starting"
       ? "working"

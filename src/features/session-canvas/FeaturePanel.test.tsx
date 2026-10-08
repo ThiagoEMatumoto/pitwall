@@ -295,7 +295,7 @@ describe('FeaturePanel', () => {
     const base = { featureId: 'f1', attentionReason: null, provider: 'claude', childOfHandoffId: null }
     const sessions = [
       { ...base, sessionId: 'm', title: 'mae-checkout', status: 'working', isMother: true, childCount: 2, ccSessionId: 'cc-m' },
-      { ...base, sessionId: 'o', title: 'otavio', status: 'waiting', childOfHandoffId: 'h1' },
+      { ...base, sessionId: 'o', title: 'otavio', status: 'waiting', attentionReason: 'waiting', childOfHandoffId: 'h1' },
       { ...base, sessionId: 'r', title: 'marina', status: 'idle', childOfHandoffId: 'h2' },
     ] as unknown as SessionGraphNode[]
     const actions = { open: vi.fn(), passBaton: vi.fn(), canPassBaton: () => true }
