@@ -15,6 +15,7 @@ import { sessionsApi } from '@/lib/ipc'
 import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import type { AttentionDetail, AttentionItem } from './attention-queue'
 import {
   claimAttentionPopover,
@@ -130,7 +131,7 @@ const TOOL_HEADER_RE = /^(Bash command|Edit file|Create file|Write file|Read fil
 export function contextLines(context: string): string[] {
   const out: string[] = []
   let afterTip = false
-  for (const raw of context.split('\n')) {
+  for (const raw of stripUnsafeDisplay(context).split('\n')) {
     const line = raw.trim()
     if (TIP_LINE_RE.test(line)) {
       afterTip = !/[.!?]$/.test(line)
@@ -330,7 +331,7 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
     <>
       {menu?.question && (
         <p className="text-[13px] leading-snug" title={menu.question}>
-          {questionPt(menu.question)}
+          {questionPt(stripUnsafeDisplay(menu.question))}
         </p>
       )}
       {menu && <MenuContext menu={menu} />}

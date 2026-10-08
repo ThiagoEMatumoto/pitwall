@@ -78,6 +78,8 @@ interface Entry {
   // menu voltando depois de sumir), já que o fingerprint de um comando
   // retentado é idêntico ao do anterior.
   menuSeq: number
+  // Quando o menu atual entrou na tela (null = sem menu): base do waited_ms.
+  menuSince: number | null
   // Resposta em voo: key do menu respondido (null enquanto confere a tela).
   inflight: { key: string | null; timer: NodeJS.Timeout | null } | null
 }
@@ -129,6 +131,15 @@ function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
   return opt.sentinel === 'other' ? [] : buildSelectKeys(menu, opt.index)
 }
 
+// Emitido a cada resposta digitada na PTY pela UI — a medição durável escuta aqui.
+export interface AttentionRespondedEvent {
+  sessionId: string
+  menu: TuiMenu
+  action: AttentionAction
+  menuSince: number | null
+  at: number
+}
+
 export class TuiMenuWatch extends EventEmitter {
   private entries = new Map<string, Entry>()
   private byCc = new Map<string, string>()
@@ -149,6 +160,12 @@ export class TuiMenuWatch extends EventEmitter {
 
   has(sessionId: string): boolean {
     return this.entries.has(sessionId)
+  }
+
+  // Aparição do menu atual (null = sem espelho ou sem menu na tela).
+  currentMenuSeq(sessionId: string): number | null {
+    const entry = this.entries.get(sessionId)
+    return entry?.scan.menu ? entry.menuSeq : null
   }
 
   current(sessionId: string): ScreenScan | null {
@@ -176,6 +193,7 @@ export class TuiMenuWatch extends EventEmitter {
       unparsedTimer: null,
       unparsedCounted: false,
       menuSeq: 0,
+      menuSince: null,
       inflight: null,
     })
     if (target.ccSessionId) this.byCc.set(target.ccSessionId, sessionId)
@@ -227,6 +245,7 @@ export class TuiMenuWatch extends EventEmitter {
     if (key !== entry.key) {
       entry.key = key
       if (scan.menu) entry.menuSeq++
+      entry.menuSince = scan.menu ? Date.now() : null
       if (entry.inflight?.key != null) this.releaseInflight(entry)
       entry.unparsedCounted = false
       this.cancelUnparsed(entry)
@@ -349,7 +368,16 @@ export class TuiMenuWatch extends EventEmitter {
     }
     const keys = keysFor(snapshot.menu, input.action)
     if (keys.length === 0) return { ok: false, error: 'invalid-action', snapshot }
+    const menuSince = this.entries.get(input.sessionId)?.menuSince ?? null
     await playKeys(keys, (seq) => source.write(input.sessionId, seq))
+    const event: AttentionRespondedEvent = {
+      sessionId: input.sessionId,
+      menu: snapshot.menu,
+      action: input.action,
+      menuSince,
+      at: Date.now(),
+    }
+    this.emit('responded', event)
     return { ok: true }
   }
 
