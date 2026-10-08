@@ -80,4 +80,10 @@ describe('sanitizeSummary', () => {
     expect(long).toHaveLength(80)
     expect(long.endsWith('…')).toBe(true)
   })
+
+  it('tira bidi/zero-width/C1 e quebra Unicode (disfarce do comando)', () => {
+    expect(sanitizeSummary('echo ok\u202e fr- mr\u202c')).toBe('echo ok fr- mr')
+    expect(sanitizeSummary('r\u200bm\u2066 -rf\u2069')).toBe('rm -rf')
+    expect(sanitizeSummary('a\u2028b\u0085c')).toBe('a b c')
+  })
 })

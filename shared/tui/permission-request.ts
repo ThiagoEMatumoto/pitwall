@@ -4,10 +4,15 @@ import type { TuiMenu } from './tui-menu-parser'
 export const COMMAND_SUMMARY_MAX = 80
 
 // O texto vem da tela de outra sessão e vai pra notificação do SO e pro banco:
-// sem controle/ANSI, uma linha só, com teto.
+// sem controle/ANSI, uma linha só, com teto. Bidi/zero-width também saem: um
+// U+202E no comando inverteria o texto exibido e disfarçaria o que se aprova.
 export function sanitizeSummary(text: string, max = COMMAND_SUMMARY_MAX): string {
-  // eslint-disable-next-line no-control-regex
-  const flat = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[\x00-\x1f\x7f]+/g, ' ')
+  const flat = text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g, ' ')
   const clean = flat.replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean
 }
