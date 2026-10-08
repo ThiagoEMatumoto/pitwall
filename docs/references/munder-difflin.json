@@ -1,0 +1,524 @@
+{
+  "name": "Munder Difflin",
+  "urls": [
+    "https://munderdiffl.in/",
+    "https://munderdiffl.in/pro/",
+    "https://github.com/HarnessMD/munder-difflin",
+    "https://news.ycombinator.com/item?id=49398152",
+    "https://discuss.pytorch.kr/t/munder-difflin/11677"
+  ],
+  "sources_read": [
+    "README.md",
+    "HIVE.md",
+    "DESIGN.md",
+    "CHANGELOG.md (Unreleased até 0.2.6)",
+    "docs/ARCHITECTURE.md",
+    "docs/message-queue.md",
+    "docs/pro/index.html",
+    "hive/docs/integration-templates.md",
+    "prototypes/vde/index.html",
+    "blog/src/posts/ (índice) + what-reddit-told-us-about-munder-difflin.md",
+    "src/main/hooks.ts",
+    "src/main/hive.ts",
+    "src/main/workerWake.ts",
+    "src/renderer/src/store/store.ts",
+    "src/renderer/src/components/AskMeTab.tsx",
+    "src/renderer/src/components/askMeOrder.ts",
+    "src/renderer/src/components/TasksKanban.tsx",
+    "GitHub issues #264 #265 #288 #303 #441 #604 #676 (+ lista de ~60 issues via gh)",
+    "https://munderdiffl.in/ (landing)",
+    "HN item 49398152",
+    "busca web (diretórios: everydev.ai, aitoolly.com)"
+  ],
+  "how_it_works": {
+    "model": "Cada agente é um CLI real (claude, codex, agy, gemini, copilot, crush, opencode…) rodando em PTY node-pty, com avatar e mesa num andar Pixi.js. Um 'Floor' por pasta/projeto em janela própria. Existe um orquestrador único (Michael/GOD) que recebe a frase do humano, quebra em tasks (tasks.json com ids tipo acm-4), atribui a workers e escala ao humano. Dois skins: Classic (andar pixel + cards) e PRO (sidebar: Tasks, Inbox, Automations, Memory, agentes agrupados por repo).",
+    "execution_loop": "Humano fala com Michael -> Michael escreve tasks e mensagens no outbox -> router (setInterval ~1,5s, hive.routeOnce) move outbox->inbox -> worker é acordado por nudge enfileirado (watchdog de inbox ocioso no main) -> trabalha -> hook Stop drena inbox e o worker responde via outbox. Toda escrita automática no terminal passa por UM único drain loop (useHive efeito #4) que só entrega se: status idle, delivery não pausado (ou 'send now' manual), passou boot grace, sem rascunho do usuário no prompt, 4,5s desde última entrega.",
+    "status_detection": "Hooks do Claude Code (shim cth-hook via --settings -> servidor local) e bridges equivalentes por provider (agy-hook, Codex lifecycle bridge). PreToolUse/PostToolUse definem ação/estação; Notification classifica needsHuman vs idle por notification_type e, em fallback, por substring da mensagem (workerWake.ts:72-87). Providers sem hooks recebem 'WORK ORDER FROM HIVE' digitado no terminal. Rascunho do usuário é lido do buffer renderizado do xterm (só pode limpar, nunca inventar rascunho). Circuit breaker observa tokens/progresso.",
+    "coordination": "Hive em disco (git): registry.json, board.md, tasks.json, log.jsonl e por agente identity/memory/inbox/outbox. Mensagens FIPA-lite (act, hops, needs_human). Tasks com dependsOn e humanQA (histórico de perguntas/respostas no próprio card). ASK ME = tasks.filter(waitsOnHuman) ordenadas pela pergunta aberta mais recente; responder grava no card E manda mail ao GOD para desbloquear. Hold 1:1 diz ao Michael para deixar um agente em paz; 'Deliveries paused' segura todas as filas.",
+    "shared_knowledge": "memory.md por agente + MemPalace (memória semântica via CLI, chroma) + MemoryReflector para condensar; board.md compartilhado; standing goal injetado como <goal> em SessionStart/UserPromptSubmit; PROTOCOL.md reescrito no boot instrui formato (pergunta com lead em negrito, paths em backticks, bullets para opções).",
+    "claude_code_integration": "Spawn do claude com --settings apontando hooks HTTP para o app e --append-system-prompt com identidade/protocolo do hive; lê transcripts JSONL de ~/.claude/projects para custo real; /compact agendado entra pela mesma fila; resume por session id (com bugs: #651, #642). Auto-mode = bypassPermissions.",
+    "ui": "Classic: andar Pixi + AgentCard (status, engine, modelo, gauge de contexto, ticket, ação atual, faixa de crash, badge 'your draft'). PRO: sidebar com Tasks (kanban com dependências e id), Inbox (Ask me primeiro, depois 'Everyone' = mensagens roteadas, 'Outside' = Slack/webhooks com Approve/Reject), Automations/Triggers, Memory (grafo como aba calma), agentes agrupados por repositório com dot ao vivo e 'Asked you' na linha. Command Center do Michael com abas Terminal/Floor/Memory/Activity/Tasks/Triggers."
+  },
+  "strengths": [
+    {
+      "point": "Um único gate para tudo que digita no terminal do agente; elimina corridas entre nudge e texto do usuário",
+      "evidence": "docs/message-queue.md:20-55",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Sem agente autenticado nenhuma entrega automática chega ao prompt; o gate não foi observado."
+    },
+    {
+      "point": "Fila mostra por que está travada: badge 'your draft' derivado da mesma checagem do gate, 'send now' manual quando a entrega está pausada",
+      "evidence": "CHANGELOG.md:660; CHANGELOG.md:571",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Não digitei rascunho no prompt de agente vivo; o badge não apareceu em nenhum momento."
+    },
+    {
+      "point": "ASK ME como fila de decisões humanas ancorada na task: resposta gravada no card (humanQA) e repassada ao orquestrador; mostra a cascata de tasks travadas atrás da pergunta",
+      "evidence": "src/renderer/src/components/AskMeTab.tsx:12-27",
+      "validation": "observed",
+      "validation_note": "A resposta gravou a/answeredAt no humanQA de acm-1 e criou agents/god/inbox/*.json 'HUMAN ANSWER on task…'. O card mostrou 'BLOCKING 2 DOWNSTREAM TASKS'. O status continua blocked até o god agir."
+    },
+    {
+      "point": "Ordenação explícita da fila humana (pergunta mais nova primeiro, timestamp inválido vai pro fim sem quebrar) com comparador isolado e testável",
+      "evidence": "src/renderer/src/components/askMeOrder.ts:36-52",
+      "validation": "observed",
+      "validation_note": "Com 2 itens, acm-2 (askedAt 'not-a-date') ficou atrás de acm-1, sem quebrar. A amostra é pequena."
+    },
+    {
+      "point": "Dismiss sem resposta preserva histórico e permite re-perguntar, sem inventar resposta",
+      "evidence": "src/renderer/src/components/AskMeTab.tsx:136-140",
+      "validation": "observed",
+      "validation_note": "✕ gravou dismissedAt, manteve q e não gerou mensagem ao god. A re-pergunta não foi testada."
+    },
+    {
+      "point": "Sidebar agrupa agentes por repositório real (resolve worktree até o checkout principal), notas visíveis na linha",
+      "evidence": "CHANGELOG.md:659",
+      "validation": "observed",
+      "validation_note": "Observado no roster rail do focus mode (OSS): linha com repo 'sandbox-repo' e 'no note'. Com 1 repo só, não vi o agrupamento por cabeçalho nem a resolução de worktree."
+    },
+    {
+      "point": "Inbox PRO separa 'para você' de 'todo mundo' e 'de fora'; sino só aparece quando há pergunta esperando",
+      "evidence": "docs/pro/index.html:590-600",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: O skin PRO não existe no repo open-source v0.4.6 (é o produto pago). No classic, a aba 'ask me' tem ícone de sino fixo, sem contador, mesmo com 2 perguntas abertas."
+    },
+    {
+      "point": "Card classic é enxuto (nome, BOSS, status, projeto, talk); modelo só aparece no roster rail; gauge de contexto e ação atual ficam vazios sem atividade; após crash real do orquestrador não apareceu faixa de crash, só re-spawn como idle",
+      "evidence": "README.md:187-197",
+      "validation": "contradicted",
+      "validation_note": "Parcial. O card classic mostra nome, BOSS, status, projeto e talk. O modelo aparece no rail. O gauge de contexto e a ação ficaram vazios sem atividade. A faixa de crash não apareceu após o crash do Michael, que só re-spawnou.",
+      "original_point": "Card de agente denso e acionável: status, engine, modelo, gauge de contexto, ticket, ação atual, faixa de crash; no sidebar PRO, 'Asked you' na linha do agente"
+    },
+    {
+      "point": "Protocolo pede perguntas formatadas (lead em negrito, opções em bullets) e a UI renderiza markdown com HTML cru desativado",
+      "evidence": "CHANGELOG.md:49-61",
+      "validation": "observed",
+      "validation_note": "**bold**, bullets e `code` renderizados; `<img onerror>` e `<b>` aparecem como texto literal; 0 img no DOM; title intacto."
+    },
+    {
+      "point": "Coordenação inspecionável em arquivos (inbox/outbox JSON) foi o ponto mais elogiado tecnicamente no lançamento",
+      "evidence": "blog/src/posts/what-reddit-told-us-about-munder-difflin.md:50-60",
+      "validation": "observed",
+      "validation_note": "Hive em sandbox-repo/hive com registry/tasks/log/fleet/inbox/outbox/crashes em JSON legível; o crash grava tail do PTY."
+    },
+    {
+      "point": "Mail para id sem inbox é devolvido e logado em vez de descartado; watchdog no main acorda worker ocioso com inbox pendente",
+      "evidence": "CHANGELOG.md:155-160",
+      "validation": "observed",
+      "validation_note": "Parcial. No boot, log.jsonl registrou {kind:drop, reason:no-inbox, scheduler→god} e message delivered:[] em vez de perda silenciosa. O watchdog não foi exercitado."
+    },
+    {
+      "point": "Forense de crash em disco: hive/crashes/<ts>-<id>.log com exitCode e últimos 8KB do PTY, além de agent-exit abnormal no log",
+      "evidence": "shots/12-relaunch-after-crash.png",
+      "validation": "observed",
+      "validation_note": "Observado matando o processo do claude; o forense não aparece na UI."
+    },
+    {
+      "point": "Onboarding honesto: lista 12 CLIs com estado (INSTALLED/INSTALLS ON FIRST RUN/WORKERS ONLY), telemetria como toggle visível e auto mode descrito como 'foot-gun'; nenhum passo pede login",
+      "evidence": "shots/05-onb-4.png; shots/09-onb-perms-off.png",
+      "validation": "observed",
+      "validation_note": "Telemetria também respeita DO_NOT_TRACK=1."
+    },
+    {
+      "point": "Estados vazios didáticos: Ask Me explica quando itens aparecem; Tasks aponta 'dispatch it to Michael'",
+      "evidence": "shots/14-askme-empty.png; shots/15-tasks-empty.png",
+      "validation": "observed"
+    },
+    {
+      "point": "Painel do agente com controles de intervenção explícitos: block tools, stop after this step, 1:1, steer, e abas Terminal/Git/Messages/Traces; wizard de add agent com worktree, resume session id e import hire",
+      "evidence": "shots/24-add-agent-dialog.png; shots/27-jim-40s.png",
+      "validation": "observed"
+    },
+    {
+      "point": "Resposta no Ask Me vira registro no card (a/answeredAt no humanQA) e mensagem 'HUMAN ANSWER on task…' no inbox do orquestrador; dismiss não notifica",
+      "evidence": "shots/20-askme-after-answer.png; shots/21-askme-after-dismiss.png",
+      "validation": "observed",
+      "validation_note": "Status continua blocked até o god agir; desbloqueio não testado."
+    }
+  ],
+  "weaknesses": [
+    {
+      "point": "Perguntas feitas no terminal não chegam ao Ask Me nem geram alerta; agentes (inclusive o orquestrador) ficam travados até alguém notar",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/265",
+      "validation": "observed",
+      "validation_note": "Michael (tela de login OAuth) e Jim (seletor de tema) ficaram esperando input no terminal com status 'idle' e Ask Me vazio. A task 'doing' com pergunta aberta (acm-3) também não aparece no Ask Me. Ressalva: hooks não bindaram neste ambiente."
+    },
+    {
+      "point": "Notificações disparam a cada rodada de agente e ficam mudas quando há pergunta humana esperando; Ask Me sem indicador",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/264",
+      "validation": "observed",
+      "validation_note": "Com 2 perguntas abertas, o botão 'ask me' não mostrou contagem nem destaque; o card do Michael não mostrou 'asked you'. Desktop notifications estavam desligadas por mim, então o lado das notificações não foi testado."
+    },
+    {
+      "point": "Orquestrador único não escala: com 6 agentes tudo colide numa conversa só, sem thread por agente nem back pressure; usuário quer voltar a uma conversa por tarefa",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/303",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Exige agentes reais."
+    },
+    {
+      "point": "Falhas de normalização/roteamento no outbox caem num catch externo que renomeia para bad-*.json sem log nem contador (JSON malformado, ao contrário, é logado como drop)",
+      "evidence": "src/main/hive.ts:1885-1888",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Não injetei mensagem malformada no outbox."
+    },
+    {
+      "point": "Classificador needsHuman vs idle por substring: mensagem mista 'Permission required — waiting for your input' vira idle",
+      "evidence": "src/main/workerWake.ts:79-87",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: O socket de hooks não bindou (path de 170 chars), então nenhum evento Notification chegou."
+    },
+    {
+      "point": "Status 'idle' enquanto o contador de tokens seguia subindo (10M+ acima do limite); a issue não estabelece se status e contador vêm da mesma fonte",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/288",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Sem consumo de tokens. Correlato: status 'idle' com o CLI travado em login/onboarding."
+    },
+    {
+      "point": "Circuit breaker mede progresso por tráfego de coordenação, não pelo trabalho; falsos positivos em agentes trabalhando",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/441",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Exige agentes trabalhando."
+    },
+    {
+      "point": "Andar Pixi ainda alimentado parcialmente por eventos mock; avatares param no meio do andar",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/197",
+      "validation": "observed",
+      "validation_note": "Jim ficou parado no corredor (fora de mesa) por 40s+ nos shots 26/27. O mock loop só roda com o andar sem agente vivo, e o Michael sempre re-spawna, então não vi o mock animar."
+    },
+    {
+      "point": "Crítica recorrente de 'teatro': personas fofas em vez de pipelines/papéis; camadas extras custam tempo e tokens",
+      "evidence": "https://news.ycombinator.com/item?id=49398152",
+      "validation": "observed",
+      "validation_note": "Subjetivo. Personagens de The Office escolhidos no wizard, andar pixel com 24 mesas vazias, bolha 'awaiting', escritório decorativo. As informações úteis estão no painel lateral."
+    },
+    {
+      "point": "Falhas de entrega ao vivo: router congelava após sleep do macOS e mensagens do GOD paravam de sair (sobrevivendo a restarts)",
+      "evidence": "https://github.com/HarnessMD/munder-difflin/issues/507",
+      "validation": "inferred",
+      "validation_note": "Não exercitado na UI sem agentes reais: Não simulado."
+    },
+    {
+      "point": "Agente preso na tela de login OAuth ou no seletor de tema do primeiro uso do CLI aparece como 'idle' com bolha 'awaiting'; nenhum banner, badge ou item no Ask Me",
+      "evidence": "shots/11-after-27s.png; shots/27-jim-40s.png",
+      "validation": "observed",
+      "validation_note": "Hooks não bindaram neste ambiente (socket de 170 chars), o que pode ter piorado a detecção."
+    },
+    {
+      "point": "Ask Me só enxerga status=blocked com humanQA aberto: task 'doing' com pergunta aberta não aparece",
+      "evidence": "shots/18-askme-with-questions.png",
+      "validation": "observed",
+      "validation_note": "acm-3 (doing + pergunta) e acm-5 (blocked sem pergunta) ficaram fora."
+    },
+    {
+      "point": "Falha de infraestrutura (bind do socket de hooks) só aparece como JSON cru na aba Activity, sem alerta",
+      "evidence": "shots/16-activity.png",
+      "validation": "observed",
+      "validation_note": "Path longo do ambiente de teste; o ponto é a falta de superfície do erro."
+    },
+    {
+      "point": "Crash do agente não é exibido na UI: após relaunch o orquestrador só re-spawna como idle",
+      "evidence": "shots/13-floor-after-crash.png",
+      "validation": "observed"
+    },
+    {
+      "point": "Andar pixel ocupa ~70% da tela com 24 mesas vazias; a informação útil fica no Command Center lateral",
+      "evidence": "shots/11-after-27s.png",
+      "validation": "observed",
+      "validation_note": "Impressão subjetiva."
+    }
+  ],
+  "bring_to_pitwall": [
+    {
+      "idea": "Fila 'Precisa de você' ancorada no item de trabalho: cada pergunta aberta vira linha com agente, feature, horário, e a resposta é gravada no registro (não só enviada ao PTY)",
+      "problem_it_solves": "Perguntas perdidas no terminal e decisões sem histórico",
+      "pitwall_mapping": "Derivar de handoffs com status blocked + handoff_events do tipo question/answer; resposta grava handoff_event 'answer' e entrega via agent_messages à sessão; histórico visível na timeline da feature e appendado em feature_ledger",
+      "priority": "now"
+    },
+    {
+      "idea": "Detectar 'esperando humano' por sinal estruturado, não por texto: needsHuman ganha de idle quando ambos aparecem; toda sessão em espera entra na fila mesmo que não tenha chamado handoff_progress",
+      "problem_it_solves": "Issues #265 e #676: agente travado sem aparecer na fila",
+      "pitwall_mapping": "Status vindo de ~/.claude/sessions/<pid>.json (waiting/permission) cruzado com sessions.feature_id; criar entrada sintética na fila 'Precisa de você' quando a sessão está em espera sem handoff aberto",
+      "priority": "now"
+    },
+    {
+      "idea": "Badge/sino só quando há algo esperando humano; nada de notificar fim de rodada",
+      "problem_it_solves": "Ruído no trivial + silêncio no essencial ensina o usuário a ignorar o app (#264)",
+      "pitwall_mapping": "Contador no header da Feature Room e no seletor Ctrl+` = número de itens da fila 'Precisa de você'; notificação desktop só para transição para blocked/needs_human",
+      "priority": "now"
+    },
+    {
+      "idea": "Cascata: mostrar o que está travado atrás de cada pergunta",
+      "problem_it_solves": "'Por que X não andou?' vira 'porque eu devo uma resposta aqui'",
+      "pitwall_mapping": "Na fila, listar handoffs/objetivos dependentes (objectives filhos e handoffs da mesma feature aguardando a sessão bloqueada)",
+      "priority": "later"
+    },
+    {
+      "idea": "Sala por repo com card de sessão denso: status, modelo, contexto, item/objetivo atual, ação atual, crash strip, 'perguntou a você'",
+      "problem_it_solves": "Saber o estado de N sessões sem abrir N terminais",
+      "pitwall_mapping": "Cards agrupados por repo raiz (resolver worktree -> checkout principal como no mainRepoRoot) a partir de sessions; ação atual do JSON de sessão; mãe em destaque",
+      "priority": "now"
+    },
+    {
+      "idea": "Inbox em três camadas: para você / mensagens entre sessões / externas",
+      "problem_it_solves": "Separar o que exige o humano do tráfego entre agentes (#303)",
+      "pitwall_mapping": "'Precisa de você' = handoffs blocked; timeline tipada = agent_messages + handoff_events filtráveis por sessão; evita misturar tudo na conversa da mãe",
+      "priority": "now"
+    },
+    {
+      "idea": "Gate único de escrita no PTY com motivo visível (rascunho do usuário, sessão ocupada, entrega pausada) e 'enviar agora'",
+      "problem_it_solves": "Mensagens que parecem perdidas quando só estão retidas",
+      "pitwall_mapping": "Já existe injetor com guarda no Mission Control; expor o estado da fila de agent_messages pendentes por sessão no card com o motivo da retenção",
+      "priority": "later"
+    },
+    {
+      "idea": "Falha de entrega nunca silenciosa: mensagem inválida/sem destino vira evento visível e contador",
+      "problem_it_solves": "Issue #604: remetente acha que avisou, destinatário nunca recebe",
+      "pitwall_mapping": "handoff_event 'delivery_failed' na timeline + contagem na fila 'Precisa de você' da feature",
+      "priority": "now"
+    },
+    {
+      "idea": "Perguntas formatadas por protocolo (lead em negrito + opções em bullets) e renderizadas como markdown seguro",
+      "problem_it_solves": "Decidir rápido sem abrir o terminal",
+      "pitwall_mapping": "Instrução no prompt de handoff para handoff_progress/pergunta; renderizar markdown sem HTML cru no card da fila",
+      "priority": "later"
+    },
+    {
+      "idea": "Orquestrador único que funde todas as conversas num thread só",
+      "problem_it_solves": "N/A — causa o problema #303 (6 agentes = uma conversa ingerenciável) e vira ponto único de falha",
+      "pitwall_mapping": "Manter mãe como coordenadora, mas threads por sessão e fila humana independentes da conversa da mãe",
+      "priority": "avoid"
+    },
+    {
+      "idea": "Andar/avatares animados como visão principal",
+      "problem_it_solves": "N/A — percebido como teatro (HN, Reddit), depende de eventos mock e não comunica estado melhor que cards; o próprio produto criou o skin PRO com sidebar",
+      "pitwall_mapping": "Confirma a decisão de rebaixar o mapa para aba secundária",
+      "priority": "avoid"
+    },
+    {
+      "idea": "Classificar espera humana por substring da mensagem de Notification",
+      "problem_it_solves": "N/A — frágil e mascarou needsHuman como idle (#676)",
+      "pitwall_mapping": "Usar campos estruturados do sessions/<pid>.json; texto só como fallback com precedência para needsHuman",
+      "priority": "avoid"
+    }
+  ],
+  "public_reception": [
+    {
+      "claim": "joshstrange: Ask Me é a tela mais importante, mas 'there is zero indication that anything is waiting for you'; notificações disparam por qualquer coisa",
+      "url": "https://news.ycombinator.com/item?id=49398152"
+    },
+    {
+      "claim": "joshstrange/internet101010: preferem 'pipelines/roles, not agents' com personalidade; camadas extras desperdiçam tempo e tokens",
+      "url": "https://news.ycombinator.com/item?id=49398152"
+    },
+    {
+      "claim": "Aurornis: gosta do tema, mas diz que a metáfora captura a disfunção dos enxames de agentes que já viu (agentes competindo e colapsando)",
+      "url": "https://news.ycombinator.com/item?id=49398152"
+    },
+    {
+      "claim": "CodeWithLeo: gates de aprovação humana funcionam quando aparecem proativamente, não enterrados",
+      "url": "https://news.ycombinator.com/item?id=49398152"
+    },
+    {
+      "claim": "Usuário no Discord: com 6 agentes o Michael 'vomita' tudo na mesma conversa; tentação de voltar a uma conversa por tarefa",
+      "url": "https://github.com/HarnessMD/munder-difflin/issues/303"
+    },
+    {
+      "claim": "Retrospectiva Reddit do autor: elogio a visibilidade e mailbox inspecionável; críticas a 'teatro', custo de tokens e fadiga da categoria",
+      "url": "https://github.com/HarnessMD/munder-difflin/blob/main/blog/src/posts/what-reddit-told-us-about-munder-difflin.md"
+    },
+    {
+      "claim": "Site declara 6.7K estrelas, 100K+ downloads, #5 Product Hunt (GitHub mostra ~8.5K estrelas em out/2026)",
+      "url": "https://munderdiffl.in/"
+    },
+    {
+      "claim": "Comunidade coreana trata como protótipo com telemetria ligada por padrão",
+      "url": "https://discuss.pytorch.kr/t/munder-difflin/11677"
+    },
+    {
+      "claim": "Diretórios descrevem Michael como roteador que escala só gasto, operações destrutivas e mudança de escopo ao humano",
+      "url": "https://www.everydev.ai/tools/munder-difflin"
+    }
+  ],
+  "hands_on": {
+    "ran": true,
+    "date": "2026-10-07",
+    "mode": "ui-only, sem credenciais Claude",
+    "setup_notes": "Repo /home/thiagoematumoto/projetos/referencias/munder-difflin (v0.4.6, HEAD 7d383351). `npm ci` local (870 pacotes, electron-rebuild ok) + `npm run build`; app lançado de out/main via playwright _electron (playwright do node_modules do claude-manager, nada global). Env limpo: só PATH/DISPLAY/XAUTHORITY/etc., HOME e XDG_CONFIG_HOME = .../scratchpad/handson/munder-difflin/home (vazio), sem ANTHROPIC_API_KEY/CLAUDE_CODE_OAUTH_TOKEN, BROWSER=/bin/true (a partir do 2º spawn). Telemetria: DO_NOT_TRACK=1 (TELEMETRY.md 'Opting out', lido em src/main/analytics.ts:158) + toggle 'Share anonymous usage stats' desmarcado no onboarding; o updater só roda com app.isPackaged (src/main/updater.ts), então dev/build local não consulta. Harness home e repo = sandbox-repo (git init + README). Diálogo nativo 'add a repo' mockado via electron.dialog.showOpenDialog. Problemas do ambiente: (1) o 1º spawn do Michael ainda não tinha BROWSER=/bin/true; o CLI claude tentou abrir o OAuth e iniciou o crashpad do Chrome com o HOME isolado. Login não foi feito e os processos foram mortos. (2) o socket de hooks do app (hive/hooks.sock) tem 170 chars, acima do limite de ~108 de unix socket; o app logou 'bind-failed EADDRINUSE' a cada tentativa, então a detecção de status por hooks ficou desligada aqui. Isso vem do path longo do scratchpad, não necessariamente do produto. PRO skin: não existe no repo open-source v0.4.6 (docs/pro/index.html é a página de marketing do produto pago 0.5.5); não deu para exercitar. Screenshots em .../handson/munder-difflin/shots/ (01..27).",
+    "flows": [
+      {
+        "flow": "Onboarding (4 passos)",
+        "what_happened": "Perguntas em sequência: Technical/Non-technical → 'Meet your office' → Harness home (input de path) → Engine do Michael (lista de 12 CLIs com INSTALLED/INSTALLS ON FIRST RUN/WORKERS ONLY, default Claude Code Opus 1M) → Repos (add a repo) → Permissions (auto mode, keep-awake, notifications, open at login, usage stats). Desmarquei todos os toggles e cliquei finish.",
+        "verdict": "Funciona e é claro; nenhum passo pede login. A auth só é checada quando o CLI sobe.",
+        "screenshot": "shots/05-onb-4.png, shots/09-onb-perms-off.png"
+      },
+      {
+        "flow": "Michael sem auth (andar classic)",
+        "what_happened": "Após finish o andar Pixi abre com Michael na mesa, bolha 'awaiting', status 'idle' no card e no Command Center. O terminal embutido mostra a tela de login do Claude Code com URL OAuth ('Paste code here if prompted'). Nenhum banner, badge ou entrada no Ask Me avisa que o agente está travado em login. Os únicos sinais de problema são as linhas JSON cruas 'hooks bind-failed' na aba Activity.",
+        "verdict": "Agente não autenticado aparece como 'idle'. O usuário só descobre abrindo o terminal.",
+        "screenshot": "shots/11-after-27s.png, shots/16-activity.png"
+      },
+      {
+        "flow": "Agente crashado",
+        "what_happened": "Ao matar o processo do claude, o app gravou hive/crashes/<ts>-god.log com exitCode 143 e os últimos 8KB do PTY, e logou agent-exit abnormal + archive. No relaunch apareceu o seletor 'Select a harness config', e ao abrir, Michael simplesmente re-spawnou como idle. Não vi faixa de crash no card.",
+        "verdict": "O forense em disco é bom. A faixa de crash não apareceu na UI neste fluxo.",
+        "screenshot": "shots/12-relaunch-after-crash.png, shots/13-floor-after-crash.png"
+      },
+      {
+        "flow": "Estados vazios Ask Me / Tasks",
+        "what_happened": "Ask Me: 'Nothing needs you right now. 🌿' com uma explicação de quando os itens aparecem. Tasks: '0 tasks · new work? dispatch it to Michael (monitor tab)' e 4 colunas vazias TODO/DOING/BLOCKED/DONE.",
+        "verdict": "Estados vazios bons e didáticos.",
+        "screenshot": "shots/14-askme-empty.png, shots/15-tasks-empty.png"
+      },
+      {
+        "flow": "Pergunta humana injetada no tasks.json",
+        "what_happened": "Escrevi 5 cards à mão. O app relê o arquivo por poll de 5s. Resultado no Ask Me: acm-1 (blocked, askedAt válido) primeiro e acm-2 (blocked, askedAt 'not-a-date') por último. acm-3 (status doing + pergunta aberta) e acm-5 (blocked sem pergunta) não aparecem. Bold e bullets renderizados; `<img onerror>` e `<b>` aparecem como texto literal (0 img no DOM, document.title intacto). O card mostra 'BLOCKING 2 DOWNSTREAM TASKS' (acm-2, acm-4). No kanban: ids acm-N e '?' nos blocked com pergunta.",
+        "verdict": "Ask Me funciona como descrito, mas só para blocked com pergunta.",
+        "screenshot": "shots/18-askme-with-questions.png, shots/19-tasks-kanban.png"
+      },
+      {
+        "flow": "Responder e dispensar",
+        "what_happened": "'respond & unblock' em acm-1 gravou a/answeredAt no humanQA e deixou status=blocked (quem desbloqueia é o god). Também criou agents/god/inbox/<id>.json (from human, 'HUMAN ANSWER on task…', com Q e A) e logou message delivered:[god]. O ✕ em acm-2 gravou dismissedAt, manteve a pergunta e não gerou mensagem ao god. A fila voltou ao estado vazio.",
+        "verdict": "Observado. Fluxo de resposta ancorado no card, com repasse ao orquestrador.",
+        "screenshot": "shots/20-askme-after-answer.png, shots/21-askme-after-dismiss.png"
+      },
+      {
+        "flow": "Focus mode / roster rail",
+        "what_happened": "O toggle abre 'MUNDER DIFFLIN · FOCUS MODE' com um rail à esquerda: 'add agent' no topo e a linha do Michael com status, modelo ('opus 4 8 1m'), repo 'sandbox-repo' e 'no note'. O modo ficou persistido entre launches.",
+        "verdict": "Rail por repo existe no OSS (com 1 repo só não dá para ver agrupamento múltiplo).",
+        "screenshot": "shots/22-focus-mode-roster.png"
+      },
+      {
+        "flow": "Add agent (worker Jim) sem auth",
+        "what_happened": "O wizard tem 4 seções: Identity, Workspace (projeto, git isolation, resume session id), Engine, Briefing, além de 'generate one with AI…' e 'import hire…'. Ao fazer spawn, Jim entra no registry.json, o card mostra 'idle' e o painel tem block tools, stop after this step, 1:1, steer e as abas Terminal/Git/Messages/Traces. O terminal ficou parado no seletor de tema do primeiro uso do Claude Code (esperando input humano) por 40s+. O status continuou 'idle' e o avatar de Jim ficou parado no corredor, não em uma mesa.",
+        "verdict": "Agente esperando input no terminal é mostrado como idle, sem alerta.",
+        "screenshot": "shots/24-add-agent-dialog.png, shots/27-jim-40s.png"
+      },
+      {
+        "flow": "Hive em disco",
+        "what_happened": "Criado em sandbox-repo/hive (repo git próprio): registry.json, tasks.json, board.md, log.jsonl, fleet.json, PROTOCOL.md, COMMANDS.md, crashes/, spawn-requests/, bin/(cth-hook.cjs, hive-proxy.cjs, runtime/node), agents/god/{identity.md, memory.md, settings.json, cursor.json, inbox/.done, outbox/.sent}; e roster.json na raiz do sandbox. O system prompt do Michael (visível no ps) traz o protocolo inteiro, incluindo humanQA e o formato markdown.",
+        "verdict": "Coordenação 100% inspecionável em arquivos.",
+        "screenshot": ""
+      }
+    ],
+    "blocked_without_agents": [
+      "Gate único de digitação no terminal e badge 'your draft' / 'send now'",
+      "Michael decompondo pedido em tasks e escrevendo humanQA sozinho (só testei com tasks.json escrito à mão)",
+      "Roteamento outbox→inbox entre agentes e o hook Stop drenando inbox",
+      "Classificação needsHuman vs idle via hooks/Notification (hooks também não bindaram por path longo)",
+      "Gauge de contexto, custo/tokens no fleet.json, circuit breaker steer/constrain/stop",
+      "Movimento real dos avatares por PreToolUse/PostToolUse e handoff de envelopes",
+      "God desbloqueando o card após receber HUMAN ANSWER",
+      "Faixa de crash após falha de um agente rodando de verdade",
+      "Skin PRO (Inbox Everyone/Outside, sidebar PRO), que não está no repo OSS"
+    ],
+    "ux_impressions": "O onboarding é polido e honesto: avisa o que cada engine é, deixa a telemetria como toggle visível e explica auto mode como 'foot-gun'. O andar pixel tem charme, mas ocupa ~70% da tela com 24 mesas vazias. A informação útil fica no Command Center à direita.\n\nO ponto fraco mais visível sem agentes: o estado do agente não reflete a realidade do terminal. Michael preso na tela de login OAuth e Jim preso no seletor de tema apareciam ambos como 'idle', com bolha 'awaiting' e Ask Me dizendo 'Nothing needs you right now'. Para saber que algo esperava por mim tive que abrir o terminal. A falha de bind dos hooks só aparecia como JSON cru na aba Activity.\n\nO Ask Me, quando alimentado, é o melhor pedaço:\n- card com pergunta formatada e HTML cru escapado;\n- campo de resposta inline e cascata 'BLOCKING 2 DOWNSTREAM TASKS';\n- a resposta vira registro no card e mensagem no inbox do god;\n- o dismiss preserva histórico.\n\nMas ele só enxerga status=blocked com humanQA aberto, e a aba não tem contador. O kanban mostra ids e '?' em cards com pergunta, o que é bom.\n\nO wizard de add agent é completo (worktree, resume id, import hire). O painel do agente tem controles de intervenção claros: block tools, stop after this step, 1:1, steer. O forense de crash em disco (tail do PTY) é exemplar, mas não aparece na UI."
+  },
+  "internals": {
+    "runtime": [
+      {
+        "name": "Spawn com append-system-prompt + --settings por agente",
+        "how_it_works": "ensureAgent grava identity/memory/inbox/outbox e passa --append-system-prompt (sem dados voláteis, por prompt cache) e --settings com hooks via shim para todos os eventos, sandbox de escrita no agentDir/hiveRoot.",
+        "evidence": "src/main/hive.ts:740-1006,1245-1307,1509-1518"
+      },
+      {
+        "name": "Shim cth-hook + HookServer em socket Unix",
+        "how_it_works": "Hooks respondem síncrono (deny, continue:false, additionalContext); fail-open com socket morto (timeout 5s → allow).",
+        "evidence": "src/main/hive.ts:3111-3158; src/main/hooks.ts:381-597"
+      },
+      {
+        "name": "Router outbox→inbox por poll",
+        "how_it_works": "setInterval 1,5s; from forçado pelo diretório; quarentena de JSON inválido; bounce ao god com hops+1; destinatário arquivado avisa o remetente; commit git por rodada.",
+        "evidence": "src/main/hive.ts:1620-1895"
+      },
+      {
+        "name": "Entrega por digitação idle-gated (renderer)",
+        "how_it_works": "Poll do inbox a cada 4s enfileira nudge com precondição inbox-nonempty; dispatch só com agente idle, sem rascunho/picker, fora do boot grace 35s e cooldown 4,5s.",
+        "evidence": "src/renderer/src/hooks/useHive.ts:690-960; queueDelivery.ts:48-140"
+      },
+      {
+        "name": "WorkerWakeWatchdog no main",
+        "how_it_works": "Beat 15s; acorda worker com mail novo e PTY quieto ≥12s, fora de HITL (5min) e cooldown 60s; regra de stall: mail >90s sem turno provado; escreve direto no PTY sem o gate de rascunho do renderer.",
+        "evidence": "src/main/workerWake.ts:36-309; src/main/index.ts:5171-5273"
+      },
+      {
+        "name": "Stop hook não drena mais o inbox",
+        "how_it_works": "Stop/SubagentStop retorna {} para não furar HITL; drainForStop é código morto para Claude.",
+        "evidence": "src/main/hooks.ts:490-500; src/main/hive.ts:1467-1491"
+      },
+      {
+        "name": "Heartbeat do god (opt-in)",
+        "how_it_works": "Desligado por padrão; quando o andar está quieto ou há mail acionável, envia digest via inbox (nunca digita direto); backoff ×2,5 ou base/4 se worker parece preso.",
+        "evidence": "src/main/config.ts:88-111; src/main/index.ts:1026-1185,1336-1363"
+      },
+      {
+        "name": "Circuit breaker steer→constrain→stop",
+        "how_it_works": "Política pura por beat de 30s; steer/constrain são mail do 'breaker'; sem enforcement de read-only no PreToolUse; stop só com hardStop.",
+        "evidence": "src/main/breaker.ts:1-25,257-416; src/main/index.ts:1197-1283; src/main/control.ts:107-113"
+      },
+      {
+        "name": "Workers efêmeros + settleInbox",
+        "how_it_works": "spawn-requests/ (gated por orchestratorMaySpawn, máx 4); done = act:'done' no outbox; settleInbox arquiva e avisa o god de requests não respondidos; worktree com trabalho é preservado e o god recebe path/branch sem diff.",
+        "evidence": "src/main/index.ts:528-552,4581-4985; src/main/hive.ts:1078-1115"
+      }
+    ],
+    "coordinator_brain": [
+      {
+        "name": "godLine no system prompt",
+        "how_it_works": "Orquestra, não implementa; checar roster antes de spawnar; possui só decomposição/dispatch/sign-off/integração/final QA; escriba único de board.md/tasks.json; dispatch em contrato OBJECTIVE/OUTPUT/TOOLS/BOUNDARIES por referência.",
+        "evidence": "src/main/hive.ts:1533-1615 (godLine 1586-1587)"
+      },
+      {
+        "name": "LIVE ROSTER injetado por hook",
+        "how_it_works": "Em SessionStart/UserPromptSubmit do god, additionalContext com até 24 agentes (role, atividade, tokens, inbox, breaker, ctx%, ON HOLD) e 'SUPERSEDES any roster earlier'.",
+        "evidence": "src/main/hooks.ts:510-578; src/main/hive.ts:2588-2662"
+      },
+      {
+        "name": "AUTONOMOUS REQUEST PROTOCOL",
+        "how_it_works": "Preâmbulo por mensagem Slack só para o god: route fast, delegar com reply handle, pausar só em push/gasto/deleção, perguntas com opções numeradas.",
+        "evidence": "src/main/index.ts:1403-1412"
+      },
+      {
+        "name": "Contrato de conclusão do worker",
+        "how_it_works": "Sufixo [WORKER COMPLETION]: uma mensagem act:'done' com resumo curto ao god, sem push; não pede diff nem evidência.",
+        "evidence": "src/main/index.ts:4815-4819"
+      },
+      {
+        "name": "Escalação humana via humanQA",
+        "how_it_works": "God marca card blocked + humanQA {q, askedAt} curto em markdown; ASK ME grava a resposta e envia inform 'HUMAN ANSWER' ao god.",
+        "evidence": "src/main/hive.ts:1587,1924-1967; src/renderer/src/components/AskMeTab.tsx:100-133"
+      }
+    ],
+    "protocol": [
+      {
+        "name": "Envelope FIPA-lite normalizado",
+        "how_it_works": "Agente escreve {to, act, subject, body}; normalize completa id/conversation/from/requires_reply (request/query/propose); inform/done são terminais por convenção.",
+        "evidence": "src/main/hive.ts:53,72-85,1619-1641,2973-3000"
+      },
+      {
+        "name": "hops é fusível de bounce",
+        "how_it_works": "Valor do agente é clamped 0..12; só bounceToGod incrementa; ping-pong entre agentes vivos não dispara.",
+        "evidence": "src/main/hive.ts:206,1630-1668"
+      },
+      {
+        "name": "needs_human cosmético",
+        "how_it_works": "'human' resolve para o god; o envelope só muda de cor; não há fila de aprovação no protocolo.",
+        "evidence": "src/main/hive.ts:1678-1683,1798-1813"
+      },
+      {
+        "name": "tasks.json com merge por id",
+        "how_it_works": "Ledger com status/assignee/dependsOn/humanQA/result; merge preserva campos desconhecidos; dependsOn não é aplicado por nenhum scheduler.",
+        "evidence": "src/main/hive.ts:118-143,1910-1967; src/shared/taskLedger.ts:1-40"
+      },
+      {
+        "name": "Closing time com ACK verificado",
+        "how_it_works": "Broadcast → CLOSING-TIME-ACK de cada worker conferido por regex no routedObserver → COMPLETE ao human; COMPLETE prematuro rejeitado.",
+        "evidence": "src/main/closingTime.ts:10-16,117-123; src/main/hive.ts:1779-1789"
+      },
+      {
+        "name": "Aprovação só na fronteira externa",
+        "how_it_works": "Webhook/Slack com TriggerMode strict|allow-all|communication-only; mensagem segurada recebe 202 e decisão idempotente no TriggerHistory.",
+        "evidence": "src/main/webhook.ts:330-370; src/shared/triggers.ts:28-50; src/main/index.ts:4283-4320"
+      }
+    ]
+  }
+}
