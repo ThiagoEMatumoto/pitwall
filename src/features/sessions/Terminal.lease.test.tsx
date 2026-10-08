@@ -129,4 +129,14 @@ describe('Terminal × lease da modal', () => {
     for (const cb of exitListeners) cb({ sessionId: 's1', exitCode: 0 })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('aba com a Room segurando: "Aberta na Room", sem botão nem xterm', () => {
+    useTerminalLease.getState().acquire('s1', 'room')
+    tab()
+    const ph = screen.getByTestId('terminal-leased')
+    expect(ph).toHaveAttribute('data-owner', 'room')
+    expect(ph).toHaveTextContent('Aberta na Room')
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(useSession).not.toHaveBeenCalled()
+  })
 })

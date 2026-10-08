@@ -6,8 +6,9 @@ import { create } from 'zustand'
 // segura a lease, a aba da mesma sessão desmonta o xterm e mostra "Aberto no
 // mapa"; ao soltar, a aba remonta e o replay do backlog reconstrói a tela.
 // 'dock' = a coluna "Fixar mãe" do mapa (MotherDock).
+// 'room' = o centro da Feature Room (RoomMotherPane).
 // A aba (Terminal sem leaseHost) é dona implícita: não tem lease própria.
-export type TerminalLeaseHost = 'modal' | 'dock'
+export type TerminalLeaseHost = 'modal' | 'dock' | 'room'
 
 interface TerminalLeaseState {
   // O dono atual (o topo da pilha) de cada PTY: o que os Terminals leem.
@@ -35,8 +36,9 @@ function withStack(
 
 // Ordem fixa da pilha, de baixo para cima: a modal é o que o usuário acabou de
 // abrir na frente de tudo, então fica por cima mesmo que a coluna adquira depois
-// (o bastão move a coluna para a sessão que já está aberta na modal).
-const HOST_ORDER: readonly TerminalLeaseHost[] = ['dock', 'modal']
+// (o bastão move a coluna para a sessão que já está aberta na modal). A Room fica
+// sobre a coluna: é a área que o usuário abriu por último.
+const HOST_ORDER: readonly TerminalLeaseHost[] = ['dock', 'room', 'modal']
 
 export const useTerminalLease = create<TerminalLeaseState>((set, get) => ({
   leases: {},

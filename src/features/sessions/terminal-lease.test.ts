@@ -32,4 +32,29 @@ describe('terminal-lease', () => {
     useTerminalLease.getState().release('s1', 'modal')
     expect(useTerminalLease.getState().leases.s1).toBe('dock')
   })
+
+  it("'room' fica por cima do dock, mesmo adquirindo antes", () => {
+    const lease = useTerminalLease.getState()
+    lease.acquire('s1', 'room')
+    lease.acquire('s1', 'dock')
+    expect(useTerminalLease.getState().leases.s1).toBe('room')
+    expect(useTerminalLease.getState().stacks.s1).toEqual(['dock', 'room'])
+  })
+
+  it("a modal fica por cima da 'room' e, ao soltar, a PTY volta para a Room", () => {
+    const lease = useTerminalLease.getState()
+    lease.acquire('s1', 'room')
+    lease.acquire('s1', 'modal')
+    expect(useTerminalLease.getState().leases.s1).toBe('modal')
+    useTerminalLease.getState().release('s1', 'modal')
+    expect(useTerminalLease.getState().leases.s1).toBe('room')
+  })
+
+  it("soltar a 'room' com o dock na pilha devolve a PTY ao dock", () => {
+    const lease = useTerminalLease.getState()
+    lease.acquire('s1', 'dock')
+    lease.acquire('s1', 'room')
+    useTerminalLease.getState().release('s1', 'room')
+    expect(useTerminalLease.getState().leases.s1).toBe('dock')
+  })
 })
