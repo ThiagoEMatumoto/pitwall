@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { runMigrations } from '../../electron/main/services/migrations/index'
 import type { PaneSnapshot } from '../../shared/types/ipc'
 import { queryDb } from './inspect'
-import { copyRealUserData } from './launch'
+import { copyRealUserData, inheritedEnv } from './launch'
 
 const PANES: PaneSnapshot[] = [
   { ccSessionId: 'real-cc-1', repo: null, projectName: null, projectIcon: null, paneId: 'pane-1' },
@@ -124,5 +124,12 @@ describe('copyRealUserData — gatilhos de spawn no boot', () => {
     expect(JSON.parse(ws.open_panes)).toEqual(PANES)
     const h = writer.prepare("SELECT status FROM handoffs WHERE id = 'h-pending'").get()
     expect(h).toEqual({ status: 'pending' })
+  })
+})
+
+describe('inheritedEnv', () => {
+  it('tira os marcadores de sessão Claude Code do env do Electron', () => {
+    const env = inheritedEnv({ CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', PATH: '/bin' })
+    expect(env).toEqual({ PATH: '/bin' })
   })
 })
