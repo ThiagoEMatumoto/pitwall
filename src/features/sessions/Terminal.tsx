@@ -1338,6 +1338,7 @@ function TerminalHost({
           <ChatView
             ref={chatViewRef}
             sessionId={session.id}
+            ccSessionId={ccSessionId}
             status={activity?.status}
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
