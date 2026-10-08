@@ -177,6 +177,17 @@ export class PromptQueue {
     return { ok: true, delivered: true }
   }
 
+  // Coalescing: troca o texto de um item que ainda não saiu. Seguro contra a
+  // entrega em curso: tryDeliver lê head.text DEPOIS do await da tela, e write+finish
+  // são síncronos — ou o texto novo sai, ou o item já saiu e isto devolve false.
+  replaceText(id: string, text: string): boolean {
+    const item = this.items.find((i) => i.id === id)
+    if (!item) return false
+    item.text = text
+    this.publish()
+    return true
+  }
+
   cancel(id: string): boolean {
     const item = this.items.find((i) => i.id === id)
     if (!item) return false
