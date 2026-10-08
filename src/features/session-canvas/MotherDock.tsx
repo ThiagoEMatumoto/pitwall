@@ -30,10 +30,10 @@ const DOCK_FONT_PX = 14
 // Trocar de feature troca a mãe: espera assentar (setas no seletor, cliques
 // seguidos) antes de soltar a lease de A e pegar a de B — cada troca remonta o
 // xterm e manda um resize para a PTY nova.
-const SWITCH_DEBOUNCE_MS = 300
+export const SWITCH_DEBOUNCE_MS = 300
 
 // Abrir e fechar são imediatos; só a troca A→B espera o valor assentar.
-function useSettled(value: string | null, ms: number): string | null {
+export function useSettled(value: string | null, ms: number): string | null {
   const [settled, setSettled] = useState(value)
   useEffect(() => {
     if (value === settled) return

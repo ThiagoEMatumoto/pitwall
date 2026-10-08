@@ -1,7 +1,5 @@
 import type { ReactNode } from 'react'
-import { Crown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Icon } from '@/components/ui/Icon'
 import { StatusBadge } from '@/features/handoffs/HandoffCard'
 import { TONE_COLOR } from '@/features/session-canvas/card-indicator'
 import { EXEC_LABEL } from './room-labels'
@@ -9,38 +7,43 @@ import type { RoomProgress, RoomRepo, RoomSessionRow } from './room-model'
 import { COMPACT, ExecDot, Glyph, SectionHead, rowGlyph } from './room-ui'
 
 interface Props {
-  mother: RoomSessionRow | null
+  hasMother: boolean
   repos: RoomRepo[]
   progress: RoomProgress
   filter: string | null
-  canDelegate: boolean
   onFilter: (sessionId: string | null) => void
   onPeek: (row: RoomSessionRow) => void
-  onTerminal: (row: RoomSessionRow) => void
-  onNewChild: () => void
   onSeeMap: () => void
 }
 
+// A lateral: só as filhas, por repo. A mãe está no centro (RoomMotherPane).
 export function RoomSessions(props: Props) {
-  const { mother, repos } = props
+  const { repos, progress } = props
   const rows = repos.flatMap((r) => r.rows)
-  const total = rows.length + (mother ? 1 : 0)
-  const repoCount = new Set([...repos.map((r) => r.label), ...(mother ? [mother.repoLabel] : [])])
-    .size
+  const total = rows.length
   return (
     <section aria-labelledby="room-sessions-h" className="min-h-0 overflow-auto p-4">
-      <SectionHead id="room-sessions-h" title="Sessões">
-        {total > 0 && (
-          <span className="ml-auto text-[12px] text-[var(--color-text-dim)]">
-            {total} em {repoCount} repo(s)
-          </span>
-        )}
+      <SectionHead id="room-sessions-h" title="Filhas por repo">
+        <button
+          type="button"
+          onClick={props.onSeeMap}
+          className="ml-auto text-[12px] text-[var(--color-text-dim)] underline hover:text-[var(--color-text)]"
+        >
+          Ver no mapa
+        </button>
       </SectionHead>
       {total === 0 ? (
-        <SessionsEmpty onSeeMap={props.onSeeMap} />
+        <p
+          data-testid="room-children-empty"
+          className="m-0 text-[13px] text-[var(--color-text-dim)]"
+        >
+          {props.hasMother
+            ? 'A mãe ainda não abriu filhas.'
+            : 'As filhas aparecem aqui quando a mãe delegar.'}
+        </p>
       ) : (
         <>
-          {mother && <MotherCard {...props} mother={mother} />}
+          {progress.total > 0 && <Progress progress={progress} />}
           {repos.map((repo) => (
             <div key={repo.repoId ?? repo.label} className="mt-3.5">
               <div className="mb-1.5 flex items-baseline justify-between px-1">
@@ -71,25 +74,6 @@ export function RoomSessions(props: Props) {
   )
 }
 
-function SessionsEmpty({ onSeeMap }: { onSeeMap: () => void }) {
-  return (
-    <div className="rounded-[10px] border border-dashed border-[var(--color-border)] p-[22px] text-center text-[13px] text-[var(--color-text-dim)]">
-      <p className="mb-1 mt-0 font-semibold text-[var(--color-text)]">
-        Nenhuma sessão nesta feature
-      </p>
-      <p className="mb-3 mt-0">Comece pela mãe: ela decompõe e delega as filhas.</p>
-      <div className="flex justify-center gap-2">
-        <Button variant="ghost" className={COMPACT} onClick={onSeeMap}>
-          Ver no mapa
-        </Button>
-        <Button variant="ghost" className={COMPACT} disabled title="Uma filha precisa de uma mãe">
-          + Filha
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 function ExecLine({ row }: { row: RoomSessionRow }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--color-text-dim)]">
@@ -103,67 +87,6 @@ function ExecLine({ row }: { row: RoomSessionRow }) {
         </span>
       )}
     </span>
-  )
-}
-
-function MotherCard({
-  mother,
-  progress,
-  canDelegate,
-  onPeek,
-  onTerminal,
-  onNewChild,
-}: Props & { mother: RoomSessionRow }) {
-  const kids = progress.total
-  return (
-    <div
-      data-testid="room-mother"
-      className="rounded-[10px] border p-3"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--color-accent) 45%, var(--color-border))',
-        background: 'color-mix(in srgb, var(--color-accent) 5%, var(--color-surface))',
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <Icon as={Crown} size={13} className="text-[var(--color-accent)]" />
-        <span className="min-w-0 truncate text-[14px] font-semibold">{mother.title}</span>
-        {kids > 0 && (
-          <span
-            className="shrink-0 rounded-full border px-2 py-px text-[11.5px]"
-            style={{
-              color: 'var(--color-accent)',
-              borderColor: 'color-mix(in srgb, var(--color-accent) 50%, transparent)',
-              background: 'color-mix(in srgb, var(--color-accent) 9%, transparent)',
-            }}
-          >
-            Coordenando {kids} {kids === 1 ? 'filha' : 'filhas'}
-          </span>
-        )}
-        <span className="ml-auto shrink-0 font-mono text-[11.5px] text-[var(--color-text-dim)]">
-          {mother.repoLabel}
-        </span>
-      </div>
-      <div className="mt-1">
-        <ExecLine row={mother} />
-      </div>
-      {mother.purpose && (
-        <div className="mt-0.5 truncate text-[12.5px]" title={mother.purpose}>
-          {mother.purpose}
-        </div>
-      )}
-      {kids > 0 && <Progress progress={progress} />}
-      <div className="mt-2.5 flex flex-wrap gap-2">
-        <Button variant="ghost" className={COMPACT} onClick={() => onPeek(mother)}>
-          Peek
-        </Button>
-        <Button variant="ghost" className={COMPACT} onClick={() => onTerminal(mother)}>
-          Abrir terminal
-        </Button>
-        <Button variant="ghost" className={COMPACT} disabled={!canDelegate} onClick={onNewChild}>
-          + Filha
-        </Button>
-      </div>
-    </div>
   )
 }
 
@@ -291,6 +214,14 @@ function ChildRow({
             </span>
             {row.readOnly && <ReadOnlyTag />}
           </span>
+          {row.motherTitle && (
+            <span
+              className="truncate text-[11.5px] text-[var(--color-text-dim)]"
+              data-testid="room-child-mother"
+            >
+              de {row.motherTitle}
+            </span>
+          )}
           <ExecLine row={row} />
         </span>
         <WorkPillView row={row} />
