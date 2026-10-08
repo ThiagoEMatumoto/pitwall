@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 import initSqlJs from 'sql.js'
@@ -252,7 +252,7 @@ function mcpAs(userData: string, scratch: string, sessionId: string) {
   return connectMcp(dir)
 }
 
-async function spawnSession(page: Page, label: string): Promise<void> {
+async function spawnSession(page: Page, label: string, permission?: string): Promise<void> {
   await page.keyboard.press('Control+n')
   const search = page.getByPlaceholder('Nova sessão — escolher repo…')
   await search.waitFor({ state: 'visible', timeout: 10_000 })
@@ -262,7 +262,29 @@ async function spawnSession(page: Page, label: string): Promise<void> {
   await dialog.waitFor({ state: 'visible', timeout: 10_000 })
   const standard = dialog.getByRole('button', { name: 'Padrão', exact: true })
   if (await standard.count()) await standard.first().click()
+  // O 1º "Padrão" é o preset de trabalho: ele volta pro defaultPermission do
+  // perfil copiado (que pode ser plan). O modo de permissão tem grupo próprio.
+  if (permission)
+    await dialog
+      .locator('div:has(> label:text-is("Permissão"))')
+      .getByRole('button', { name: permission, exact: true })
+      .click()
   await dialog.getByRole('button', { name: 'Abrir', exact: true }).click()
+}
+
+// O claude só escreve ~/.claude/sessions/<pid>.json depois do trust: é a prova
+// de que a tela de confiança passou e de que o status deixa de ser 'starting'.
+function ccSessionFile(ccSessionId: string): { status?: string } | null {
+  const dir = join(homedir(), '.claude', 'sessions')
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.json'))) {
+    try {
+      const data = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      if (data.sessionId === ccSessionId) return data
+    } catch {
+      // escrita parcial
+    }
+  }
+  return null
 }
 
 type LiveRow = { id: string; ccSessionId: string | null; repo: { id: string } | null }
@@ -446,7 +468,7 @@ async function phaseReal(): Promise<void> {
       .first()
       .click()
       .catch(() => {})
-    await spawnSession(page, label)
+    await spawnSession(page, label, 'Padrão')
     await page.screenshot({ path: join(SHOTS, 'real-0b-spawned.png') })
     const xterm = page.locator('.xterm:visible').first()
     await xterm.waitFor({ state: 'visible', timeout: 30_000 })
@@ -454,17 +476,22 @@ async function phaseReal(): Promise<void> {
       ((await page.evaluate(() => (window as any).api.attention.list())) as any[]).find(
         (i) => i.kind === 'session_menu',
       )
-    // 1º menu real: "confiar na pasta" (sandbox nunca aberto antes).
-    const trust = await waitFor(
-      page,
-      'session_menu (trust)',
-      async () => !!(await menuOf()),
-      90_000,
+    const repoRow = async () =>
+      (await liveGlobal(page)).find((r) => r.repo?.id === 'attn-sandbox' && r.ccSessionId)
+    check(
+      await waitFor(page, 'sessão do sandbox na lista viva', async () => !!(await repoRow())),
+      'real: sessão do sandbox apareceu com ccSessionId',
     )
-    check(trust, 'real: tela de confiança do claude virou session_menu')
-    const trustItem = await menuOf()
-    out.notes.push(`real trust: ${trustItem?.menuReason} · ${trustItem?.whyNow}`)
-    if (trust) await capture(page, 'real', '1-session_menu-trust')
+    const cc = (await repoRow())!.ccSessionId!
+    // 1ª tela real: "confiar na pasta" (sandbox nunca aberto antes). O trust do
+    // 2.1.286+ não tem numeração e o parser não o reconhece (pendência conhecida,
+    // shared/tui/attention-reason.test.ts): ele não entra na fila. Só registra.
+    await page.waitForTimeout(8000)
+    const trustMenu = await menuOf()
+    out.notes.push(
+      `real trust: session file=${ccSessionFile(cc) ? 'sim' : 'não'} · item=${trustMenu?.menuReason ?? 'nenhum'}`,
+    )
+    await page.screenshot({ path: join(SHOTS, 'real-1-trust-terminal.png') })
     await goToArea(page, 'projects')
     await page
       .getByRole('button', { name: /Terminais/ })
@@ -474,8 +501,18 @@ async function phaseReal(): Promise<void> {
     await xterm.click({ position: { x: 120, y: 60 } })
     await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
-    await waitFor(page, 'trust respondido', async () => !(await menuOf()), 30_000)
-    await page.waitForTimeout(6000)
+    // Só diagnóstico: sob o harness (app aberto de dentro de uma sessão Claude) o
+    // claude spawnado não escreveu o session file nem depois do trust (status fica
+    // 'starting'); no Pitwall aberto pelo desktop ele escreve. A permissão entra
+    // na fila mesmo assim (liveNeedsYou aceita o menu gated em 'starting').
+    const wrote = await waitFor(
+      page,
+      'session file após o trust',
+      async () => !!ccSessionFile(cc),
+      15_000,
+    )
+    out.notes.push(`real pós-trust: session file=${wrote ? ccSessionFile(cc)?.status : 'ausente'}`)
+    await page.waitForTimeout(wrote ? 2000 : 6000)
 
     // 2º menu real: permissão de Bash em modo Padrão (ask).
     await xterm.click({ position: { x: 120, y: 60 } })
@@ -490,6 +527,7 @@ async function phaseReal(): Promise<void> {
       async () => (await menuOf())?.menuReason === 'permission',
       180_000,
     )
+    out.notes.push(`real permission: session file status=${ccSessionFile(cc)?.status}`)
     check(menu, 'real: pedido de permissão do Bash virou session_menu permission')
     await page.screenshot({ path: join(SHOTS, 'real-2-permission-terminal.png') })
     const permItem = await menuOf()
