@@ -109,7 +109,12 @@ export function buildRoomView(input: RoomViewInput): RoomView {
   const items = itemsForFeature(humanQueue(input.attention), laneSessionIds, inUse, featureId)
   const queue = groupBySubject(items.filter((i) => PRODUCED.has(i.kind)))
 
-  const motherId = motherOfFocus(laneNodes, graph.edges, inUse, { featureId })
+  const handoffs = input.handoffs.filter((h) => h.featureId === featureId && h.dismissedAt == null)
+  // Sessão única que ainda não delegou: é a mãe da feature (estado "1 sessão só"),
+  // mesmo sem isMother no grafo.
+  const motherId =
+    motherOfFocus(laneNodes, graph.edges, inUse, { featureId }) ??
+    (laneNodes.length === 1 && handoffs.length === 0 ? laneNodes[0].sessionId : null)
   const motherNode = motherId ? byId.get(motherId) : undefined
   const mother: RoomSessionRow | null = motherNode
     ? {
@@ -125,7 +130,6 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       }
     : null
 
-  const handoffs = input.handoffs.filter((h) => h.featureId === featureId && h.dismissedAt == null)
   const childIds = new Set(handoffs.flatMap((h) => (h.childSessionId ? [h.childSessionId] : [])))
   const handoffRow = (h: Handoff): RoomSessionRow & { repoId: string | null } => {
     const node = h.childSessionId ? byId.get(h.childSessionId) : undefined

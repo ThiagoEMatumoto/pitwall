@@ -16,6 +16,7 @@ import { Icon } from '@/components/ui/Icon'
 import { ProjectsSidebar } from '@/features/projects/ProjectsSidebar'
 import { CcConfigsArea } from '@/features/cc-configs/CcConfigsArea'
 import { MetricsArea } from '@/features/metrics/MetricsArea'
+import { FeatureRoom } from '@/features/feature-room/FeatureRoom'
 import { FeaturesArea } from '@/features/features/FeaturesArea'
 import { ObjectivesArea } from '@/features/objectives/ObjectivesArea'
 import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
@@ -893,6 +894,8 @@ export function AppShell() {
       {area === 'cc-configs' && <CcConfigsArea />}
 
       {area === 'metrics' && <MetricsArea />}
+
+      {area === 'room' && <FeatureRoom />}
 
       {/* O bloco de projetos fica sempre montado (dockview/xterm vivo), apenas
           escondido quando outra área está ativa. Colapsado: a sidebar some e um

@@ -202,7 +202,10 @@ describe('buildRoomView', () => {
 
   it('estados: empty → solo → green → normal', () => {
     expect(world([]).view.state).toBe('empty')
-    expect(world([{ id: 'M', status: 'idle' }]).view.state).toBe('solo')
+    const solo = world([{ id: 'M', status: 'idle' }]).view
+    expect(solo.state).toBe('solo')
+    expect(solo.mother?.sessionId).toBe('M')
+    expect(rowsOf(solo)).toHaveLength(0)
     const a = child('r1', 'A')
     const lives: Live[] = [
       { id: 'M', status: 'idle' },
