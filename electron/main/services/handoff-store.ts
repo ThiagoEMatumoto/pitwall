@@ -554,7 +554,10 @@ export function failIfRunning(id: string, error: string): Handoff | null {
 // Fica de fora a sessão que entretanto virou filha de OUTRO handoff ativo (bastão,
 // adoção): ela não é mais deste desfecho.
 // Retorna o nº de handoffs reconciliados (interrompidos + filhas falhadas mortas).
-export function reconcileStuck(killChildPty?: (childSessionId: string) => void): number {
+export function reconcileStuck(
+  killChildPty?: (childSessionId: string) => void,
+  onInterrupted?: (handoffId: string) => void,
+): number {
   const db = getDb()
   const error = 'Sessão-filha encerrada sem reportar conclusão'
   // UPDATE em lote: SELECionar os ids + status ANTES, pra capturar o from_status
@@ -578,6 +581,7 @@ export function reconcileStuck(killChildPty?: (childSessionId: string) => void):
     .run(error, Date.now())
   for (const h of stuck) {
     logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
+    onInterrupted?.(h.id)
   }
   return res.changes + (killChildPty ? killFailedChildren(killChildPty) : 0)
 }

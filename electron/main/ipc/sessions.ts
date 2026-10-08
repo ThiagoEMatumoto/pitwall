@@ -11,6 +11,7 @@ import { resolveRepoPath } from '../services/repo-path'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
+import { wakeMotherFor } from '../services/handoff/handoff-wake'
 // formatPtyInjection vive em services/handoff/inject.ts (fonte canônica, sem
 // dependência de electron). Reexportado abaixo para não quebrar quem importa
 // de './sessions' (ex.: sessions.test.ts).
@@ -853,7 +854,10 @@ export function registerSessionIpc(): void {
             linkedHandoff.id,
             `Sessão-filha encerrou (${e.exitCode === 0 ? 'exit' : 'crash'}) sem chamar handoff_report.`,
           )
-          if (reconciled) broadcast('handoff:updated', reconciled)
+          if (reconciled) {
+            broadcast('handoff:updated', reconciled)
+            void wakeMotherFor(reconciled.id, 'interrupted')
+          }
         }
       } catch (err) {
         console.error('[sessions] handoff reconciliation on exit failed:', err)

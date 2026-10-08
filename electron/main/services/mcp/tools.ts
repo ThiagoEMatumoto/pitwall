@@ -22,6 +22,7 @@ import * as featureStore from '../feature-store'
 import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
+import { wakeMotherFor } from '../handoff/handoff-wake'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
@@ -817,7 +818,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
 
         // Reconcilia órfãos ANTES do dedup: filha morta/crashada não pode barrar
         // um despacho novo pro mesmo repo-alvo como falso-ativo.
-        handoffStore.reconcileStuck()
+        // A mãe chamadora pode ter filhas de outros repos entre as órfãs: elas
+        // ficam sabendo pelo wake (o filtro de eco não vale, ela não foi a autora).
+        handoffStore.reconcileStuck(undefined, (id) => void wakeMotherFor(id, 'interrupted'))
 
         const target = resolveRepo(input.targetRepo)
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
@@ -967,6 +970,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           const msg = err instanceof Error ? err.message : String(err)
           const failed = handoffStore.fail(handoffId, msg)
           notify.broadcast('handoff:updated', failed)
+          // Eco no caso normal (a mãe recebe o erro neste retorno): o filtro decide.
+          // Sem carimbo (config legada) vira linha not_running no ledger.
+          void wakeMotherFor(handoffId, 'spawn_failed', { actorSessionId: ctx.motherSessionId })
           return ok({
             handoffId,
             alias: null,
@@ -1066,6 +1072,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           toSessionId: updated.motherSessionId,
           kind: 'question',
         })
+        // Toda pergunta acorda (inclusive a empilhada); o coalescing junta.
+        if (updated.status === 'needs_input')
+          void wakeMotherFor(handoffId, 'asked', { actorSessionId: ctx.motherSessionId })
         return ok({
           status: updated.status,
           pendingQuestion: updated.pendingQuestion,
@@ -1144,6 +1153,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           toSessionId: updated.motherSessionId,
           kind: 'report',
         })
+        // Só a 1ª transição para done acorda: o report duplicado não é notícia.
+        if (existing.status !== 'done' && updated.status === 'done')
+          void wakeMotherFor(handoffId, 'reported', { actorSessionId: ctx.motherSessionId })
         // Segundo report no mesmo handoff: o store preserva o summary original e
         // guarda este na trilha. Avisa em vez de responder um 'done' que finge
         // sucesso — antes o resultado duplicado sumia silenciosamente.

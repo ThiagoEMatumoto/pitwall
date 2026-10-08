@@ -14,6 +14,7 @@ import { broadcast } from '../notify'
 import { ptyManager } from '../pty-manager'
 import { findTranscriptPath } from '../transcript-path'
 import * as store from '../handoff-store'
+import { wakeMotherFor } from './handoff-wake'
 import { prepareHandoff } from './prepare'
 import { resumeHandoffChild } from '../../ipc/sessions'
 import type { AdoptedSession, AdoptSessionInput, HandoffStatus } from '../../../../shared/types/ipc'
@@ -172,7 +173,10 @@ export async function adoptSession(input: AdoptSessionInput): Promise<AdoptedSes
       // transcript no disco o card fica retomável no Crew Dock e o humano refaz
       // o relance com um clique.
       const interrupted = store.failIfRunning(created.id, `Adoção não conseguiu relançar: ${msg}`)
-      if (interrupted) broadcast('handoff:updated', interrupted)
+      if (interrupted) {
+        broadcast('handoff:updated', interrupted)
+        void wakeMotherFor(created.id, 'interrupted')
+      }
       throw err
     }
     rollbackAdoption({ handoffId: created.id, row, reason: msg })
@@ -197,6 +201,7 @@ function rollbackAdoption(args: { handoffId: string; row: SessionRow; reason: st
   }
   try {
     store.fail(args.handoffId, `Adoção abortada antes de vincular a filha: ${args.reason}`)
+    void wakeMotherFor(args.handoffId, 'failed')
     const dismissed = store.dismiss(args.handoffId)
     broadcast('handoff:updated', dismissed)
   } catch (err) {
