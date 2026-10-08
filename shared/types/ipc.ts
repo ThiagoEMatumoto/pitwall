@@ -3,8 +3,14 @@
 
 // Tipos do Chat View (Fase 5) moram em ./chat e são re-exportados aqui pra que os
 // consumidores sigam importando tudo de '@shared/types/ipc'.
-export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
-import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
+export type {
+  ChatMessage,
+  ChatQuestion,
+  ChatTranscript,
+  ChatTranscriptTail,
+  ChatTranscriptUpdate,
+} from './chat'
+import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
 import type {
@@ -2870,6 +2876,10 @@ export interface Api {
     /** Para o watcher (também é chamado automaticamente no pty:exit). */
     unwatch(sessionId: string): void
     onTranscriptUpdate(handler: (event: ChatTranscriptUpdate) => void): () => void
+    /** Cauda do tile: observa só os últimos bytes do JSONL; emite chat:transcript-tail. */
+    watchTail(sessionId: string): void
+    unwatchTail(sessionId: string): void
+    onTranscriptTail(handler: (event: ChatTranscriptTail) => void): () => void
   }
   shell: {
     openPath(path: string): Promise<void>

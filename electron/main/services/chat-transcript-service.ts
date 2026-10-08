@@ -1,14 +1,61 @@
 import { BrowserWindow } from 'electron'
-import { readFile, stat } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import chokidar, { FSWatcher } from 'chokidar'
 import { findTranscriptPath } from './session-activity'
 import { lastPlanFilePath, parseChatMessages } from './chat-transcript'
 import { readSubagentInfos } from './subagent-turns'
-import type { ChatMessage, ChatTranscriptUpdate } from '../../../shared/types/chat'
+import type {
+  ChatMessage,
+  ChatTranscriptTail,
+  ChatTranscriptUpdate,
+} from '../../../shared/types/chat'
 
 const POLL_MS = 1000 // espera o JSONL nascer (sessão recém-spawnada)
 const DEBOUNCE_MS = 150 // coalesce de bursts de append durante o streaming
+
+// Cauda (tile da Room): só os últimos bytes do JSONL. As mães são as sessões
+// longas (p99 ~18MB), e reler o arquivo inteiro a cada append por 8 tiles seria
+// o caminho caro. 400ms porque o tile mostra a cauda, não o streaming.
+export const TAIL_BYTES = 256 * 1024
+export const TAIL_MAX_BYTES = 2 * 1024 * 1024
+export const TAIL_MESSAGES = 5
+const TAIL_DEBOUNCE_MS = 400
+
+// Lê só a janela final do arquivo e devolve as últimas TAIL_MESSAGES mensagens,
+// pelo MESMO parser do caminho completo. A primeira linha da janela é descartada
+// (pode estar cortada), e exigimos uma mensagem a mais que o necessário: a
+// primeira da janela pode ser um turno de assistant pela metade (o merge de
+// blocos por message.id começou antes da janela). Se não couber, dobra a janela
+// até TAIL_MAX_BYTES e devolve o que coube.
+export async function readTail(
+  path: string,
+  ccSessionId: string | null = null,
+): Promise<ChatMessage[]> {
+  const subagents = ccSessionId ? readSubagentInfos(dirname(path), ccSessionId) : undefined
+  const fh = await open(path, 'r')
+  try {
+    const { size } = await fh.stat()
+    let windowBytes = TAIL_BYTES
+    for (;;) {
+      const start = Math.max(0, size - windowBytes)
+      const buf = Buffer.alloc(size - start)
+      await fh.read(buf, 0, buf.length, start)
+      let text = buf.toString('utf8')
+      if (start > 0) {
+        const nl = text.indexOf('\n')
+        text = nl === -1 ? '' : text.slice(nl + 1)
+      }
+      const messages = parseChatMessages(text, subagents)
+      if (start === 0 || messages.length > TAIL_MESSAGES || windowBytes >= TAIL_MAX_BYTES) {
+        return messages.slice(-TAIL_MESSAGES)
+      }
+      windowBytes = Math.min(windowBytes * 2, TAIL_MAX_BYTES)
+    }
+  } finally {
+    await fh.close()
+  }
+}
 
 interface WatchEntry {
   ccSessionId: string
@@ -43,6 +90,8 @@ export interface ChatTranscriptRead {
 class ChatTranscriptService {
   // chave = sessionId INTERNO (sessions.id); pty:exit também usa essa chave.
   private watches = new Map<string, WatchEntry>()
+  // Caudas dos tiles: watcher próprio, coexiste com o watch completo da mesma sessão.
+  private tailWatches = new Map<string, WatchEntry>()
 
   // Leitura pontual (chat:get-transcript). Lê o arquivo INTEIRO — o chat precisa do
   // histórico completo, ao contrário do tail de 64KB do session-activity.
@@ -102,6 +151,76 @@ class ChatTranscriptService {
 
   closeAll(): void {
     for (const id of [...this.watches.keys()]) this.unwatch(id)
+    for (const id of [...this.tailWatches.keys()]) this.unwatchTail(id)
+  }
+
+  watchTail(sessionId: string, ccSessionId: string | null): void {
+    if (this.tailWatches.has(sessionId)) return
+    if (!ccSessionId) return
+    const entry: WatchEntry = { ccSessionId, path: null, watcher: null, poll: null, debounce: null }
+    this.tailWatches.set(sessionId, entry)
+    const path = findTranscriptPath(ccSessionId)
+    if (path) this.attachTail(sessionId, entry, path)
+    else this.startTailPoll(sessionId, entry)
+  }
+
+  unwatchTail(sessionId: string): void {
+    const entry = this.tailWatches.get(sessionId)
+    if (!entry) return
+    if (entry.poll) clearInterval(entry.poll)
+    if (entry.debounce) clearTimeout(entry.debounce)
+    if (entry.watcher) void entry.watcher.close()
+    this.tailWatches.delete(sessionId)
+  }
+
+  private startTailPoll(sessionId: string, entry: WatchEntry): void {
+    broadcast('chat:transcript-tail', {
+      sessionId,
+      transcriptExists: false,
+      messages: [],
+    } satisfies ChatTranscriptTail)
+    entry.poll = setInterval(() => {
+      const path = findTranscriptPath(entry.ccSessionId)
+      if (!path) return
+      if (entry.poll) {
+        clearInterval(entry.poll)
+        entry.poll = null
+      }
+      this.attachTail(sessionId, entry, path)
+    }, POLL_MS)
+  }
+
+  private attachTail(sessionId: string, entry: WatchEntry, path: string): void {
+    entry.path = path
+    void this.emitTail(sessionId, entry, path)
+    entry.watcher = chokidar.watch(path, { ignoreInitial: true })
+    const schedule = () => {
+      if (entry.debounce) clearTimeout(entry.debounce)
+      entry.debounce = setTimeout(
+        () => void this.emitTail(sessionId, entry, path),
+        TAIL_DEBOUNCE_MS,
+      )
+    }
+    entry.watcher.on('change', schedule)
+    entry.watcher.on('add', schedule)
+  }
+
+  private async emitTail(sessionId: string, entry: WatchEntry, path: string): Promise<void> {
+    // Compara a entrada, não só a chave: um unwatch+watch durante a leitura não
+    // deve receber o emit do watcher velho.
+    if (this.tailWatches.get(sessionId) !== entry) return
+    let messages: ChatMessage[]
+    try {
+      messages = await readTail(path, entry.ccSessionId)
+    } catch {
+      return // arquivo sumiu / corrida: o próximo change reemite.
+    }
+    if (this.tailWatches.get(sessionId) !== entry) return
+    broadcast('chat:transcript-tail', {
+      sessionId,
+      transcriptExists: true,
+      messages,
+    } satisfies ChatTranscriptTail)
   }
 
   // Transcript ainda inexistente (sessão recém-spawnada): poll barato até o JSONL
