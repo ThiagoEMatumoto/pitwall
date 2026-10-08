@@ -1,6 +1,7 @@
 import { childSessionIds } from '@/store/handoffsStore'
 import type { BatonChildrenMissed, Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { isLedByMother } from '../../../shared/handoff-lead'
+import { handoffAsking } from '../../../shared/tui/attention-reason'
 
 // Domínio da "equipe": as sessões-filhas de handoffs ativos. Elas ficam FORA da
 // strip/switcher (ver useGlobalSessions) e vivem no Crew Dock. Tudo aqui é puro —
@@ -108,11 +109,7 @@ export function crewCcSessionIds(
 // 12 perguntas se perdiam). O que muda é só o ALARME, que passa a respeitar a
 // evidência de retomada.
 export function crewResumedAfterQuestion(handoff: Handoff): boolean {
-  if (handoff.status !== 'needs_input') return false
-  const asked = handoff.questionAskedAt
-  const stepped = handoff.stepUpdatedAt
-  if (asked == null || stepped == null) return false
-  return stepped > asked
+  return handoff.status === 'needs_input' && !handoffAsking(handoff)
 }
 
 // A filha está esperando a mãe? Duas fontes: o status vivo do PTY ('waiting') e o
@@ -259,7 +256,9 @@ export function childrenMissedToast(p: BatonChildrenMissed): { title: string; bo
     return parts.scope ? `${parts.name} (${parts.scope})` : parts.name
   })
   const n = p.missed.length
-  const from = p.previousAlias ? ` e ainda escreve${n === 1 ? '' : 'm'} para "${p.previousAlias}"` : ''
+  const from = p.previousAlias
+    ? ` e ainda escreve${n === 1 ? '' : 'm'} para "${p.previousAlias}"`
+    : ''
   return {
     title: n === 1 ? '1 filha não recebeu a nota' : `${n} filhas não receberam a nota`,
     body: `${names.join(', ')} não ${n === 1 ? 'soube' : 'souberam'} que a mãe agora é "${p.alias}"${from}. A nova mãe se apresenta por SendMessage; confira no Crew Dock.`,
