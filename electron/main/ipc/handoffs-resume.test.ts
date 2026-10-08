@@ -135,7 +135,8 @@ let workDir: string | null = '/tmp/repo'
 vi.mock('../services/handoff-store', () => ({
   get: () => handoff,
   workDirOf: () => workDir,
-  findActiveWriterByWorkDir: () => activeOwner,
+  findActiveWriterByWorkDir: vi.fn(() => activeOwner),
+  setWorkDir: vi.fn(),
   HandoffDuplicateError: class extends Error {
     readonly code = 'HANDOFF_DUPLICATE'
     constructor(readonly existing: Handoff) {
@@ -155,6 +156,8 @@ import { registerSessionIpc, resumeHandoffChild } from './sessions'
 import { HANDOFF_CHILD_DENY } from '../services/spawn-flags'
 import * as handoffStore from '../services/handoff-store'
 const markRunning = vi.mocked(handoffStore.markRunning)
+const setWorkDir = vi.mocked(handoffStore.setWorkDir)
+const findActiveWriterByWorkDir = vi.mocked(handoffStore.findActiveWriterByWorkDir)
 
 function baseHandoff(over: Partial<Handoff> = {}): Handoff {
   return {
@@ -192,6 +195,8 @@ const VALID_CC = '11111111-2222-3333-4444-555555555555'
 function resetSeams(): void {
   handlers.clear()
   markRunning.mockClear()
+  setWorkDir.mockClear()
+  findActiveWriterByWorkDir.mockClear()
   spawns.length = 0
   writes.length = 0
   dataListeners.clear()
@@ -242,14 +247,67 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
   // markRunning. A recusa tem que vir ANTES do spawn — senão sobe uma PTY editando
   // o repo sem vínculo com handoff nenhum.
   it('repo ocupado por OUTRO handoff: recusa sem spawnar PTY', () => {
-    handoff = baseHandoff()
-    activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
-    ccRow = { cc_session_id: VALID_CC }
-    transcriptPath = '/tmp/t.jsonl'
-    repoRow = { path: '/tmp/repo', label: 'Repo 1' }
-    expect(() => resume()).toThrow(/handoff ativo \(h2\)/)
-    expect(spawns).toHaveLength(0)
-    expect(markRunning).not.toHaveBeenCalled()
+    const wt = mkdtempSync(join(tmpdir(), 'wt-owned-'))
+    try {
+      handoff = baseHandoff()
+      workDir = wt
+      activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+      ccRow = { cc_session_id: VALID_CC }
+      transcriptPath = '/tmp/t.jsonl'
+      repoRow = { path: '/tmp/repo', label: 'Repo 1' }
+      expect(() => resume()).toThrow(/handoff ativo \(h2\)/)
+      expect(spawns).toHaveLength(0)
+      expect(markRunning).not.toHaveBeenCalled()
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
+  // Worktree removido do disco: a filha cai na raiz do repo, que é OUTRO
+  // diretório e portanto outra posse. A checagem tem que ser contra a raiz.
+  describe('worktree sumiu do disco', () => {
+    let repoDir: string
+    beforeEach(() => {
+      repoDir = mkdtempSync(join(tmpdir(), 'repo-root-'))
+      workDir = join(repoDir, '.worktrees', 'gone')
+      ccRow = { cc_session_id: VALID_CC }
+      transcriptPath = '/tmp/t.jsonl'
+      repoRow = { path: repoDir, label: 'Repo 1' }
+    })
+    afterEach(() => rmSync(repoDir, { recursive: true, force: true }))
+
+    it('raiz livre: sobe na raiz e transfere a posse pra ela', () => {
+      handoff = baseHandoff()
+      resume()
+      expect(findActiveWriterByWorkDir).toHaveBeenCalledWith(repoDir)
+      expect(setWorkDir).toHaveBeenCalledWith('h1', repoDir)
+      expect(spawns[0].cwd).toBe(repoDir)
+      expect(markRunning).toHaveBeenCalled()
+    })
+
+    it('raiz com outra filha que escreve: recusa com mensagem clara, sem PTY', () => {
+      handoff = baseHandoff({ mode: 'auto-edits' })
+      activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+      expect(() => resume()).toThrow(/não existe mais.*outra filha que escreve \(h2/)
+      expect(spawns).toHaveLength(0)
+      expect(setWorkDir).not.toHaveBeenCalled()
+      expect(markRunning).not.toHaveBeenCalled()
+    })
+
+    it('a própria filha como dona da raiz não conta como conflito', () => {
+      handoff = baseHandoff()
+      activeOwner = baseHandoff()
+      resume()
+      expect(spawns[0].cwd).toBe(repoDir)
+    })
+
+    it('filha plan sobe na raiz sem disputar posse', () => {
+      handoff = baseHandoff({ mode: 'plan' })
+      activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+      resume()
+      expect(spawns[0].cwd).toBe(repoDir)
+      expect(setWorkDir).not.toHaveBeenCalled()
+    })
   })
 
   // Revisora em plan não disputa a posse: retoma mesmo com a writer no checkout.
@@ -546,6 +604,8 @@ describe('resumeHandoffChild — permissões preservadas no relance', () => {
     handoff = baseHandoff({ mode: 'plan' })
     resumeHandoffChild('h1')
     expect(spawns[0].innerCmd).toContain("--permission-mode 'plan'")
+    // Read-only no settings do processo: sobrevive ao ExitPlanMode aprovado.
+    expect(spawns[0].innerCmd).toContain('"Edit","Write","NotebookEdit"')
   })
 
   it('modo auto-edits volta com acceptEdits + denylist da filha', () => {

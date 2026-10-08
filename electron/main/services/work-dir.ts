@@ -43,7 +43,7 @@ export function resolveFeatureWorktree(
 // symlink pra ele seriam três donos diferentes do mesmo checkout (dois repos
 // cadastrados no mesmo path, ou worktree registrado = raiz do repo). Só a chave é
 // canônica; o cwd do spawn continua o path registrado.
-function canonicalDir(p: string): string {
+export function canonicalDir(p: string): string {
   try {
     return realpathSync(p)
   } catch {

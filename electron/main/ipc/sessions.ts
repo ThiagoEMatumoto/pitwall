@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { getDb } from '../services/db'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
-import { resolveFeatureWorktree } from '../services/work-dir'
+import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
@@ -52,7 +52,7 @@ import {
   resolveEffort,
   resolveAdvisor,
   permissionModeForHandoffMode,
-  HANDOFF_CHILD_SETTINGS_JSON,
+  handoffChildSettingsJson,
   assertAutonomousSpawnGuarded,
   resolveCodexModel,
 } from '../services/spawn-flags'
@@ -169,6 +169,33 @@ function assertRepoDirExists(path: string): void {
   throw new Error(
     `Repositório não existe no disco: ${path}. Restaure o diretório (ou ative o auto-clone) antes de abrir uma sessão.`,
   )
+}
+
+// cwd da filha de handoff = o work_dir gravado no create, que é a chave da posse.
+// Recalcular (feature_repos pode mudar entre o create e o spawn) poria a filha
+// escrevendo num checkout diferente do que ela possui. Se o diretório sumiu do
+// disco ela cai na raiz do repo — outro checkout, outra posse: rechecada contra
+// o diretório novo e transferida, ou RECUSADA se outra filha que escreve já está
+// lá. Filha plan não disputa posse. null = handoff sem work_dir (linha anterior à
+// 057): o chamador segue a regra antiga.
+function resolveHandoffChildCwd(
+  handoff: Pick<Handoff, 'id' | 'mode'>,
+  repoPath: string,
+): string | null {
+  const workDir = handoffStore.workDirOf(handoff.id)
+  if (!workDir) return null
+  if (isDirectory(workDir)) return workDir
+  if (handoff.mode !== 'plan') {
+    const fallback = canonicalDir(repoPath)
+    const owner = handoffStore.findActiveWriterByWorkDir(fallback)
+    if (owner && owner.id !== handoff.id) {
+      throw new Error(
+        `O diretório de trabalho da filha (${workDir}) não existe mais, e a raiz do repo (${repoPath}) já tem outra filha que escreve (${owner.id}, status: ${owner.status}). A filha não sobe como writer ali: recrie o worktree, encerre a outra filha ou delegue de novo em modo plan.`,
+      )
+    }
+    handoffStore.setWorkDir(handoff.id, fallback)
+  }
+  return repoPath
 }
 
 // Sessão avulsa (sem repo) roda numa pasta scratch dedicada — configurável via
@@ -497,9 +524,14 @@ export function spawnSession(input: SpawnSessionInput): Session {
     // resolve contra o vault root antes do guard e do cwd do spawn.
     const repoPath = resolveRepoPath(repo.path)
     assertRepoDirExists(repoPath)
-    // Feature com worktree registrado pra ESTE repo manda no cwd; sem worktree
-    // (ou com o diretório já removido) a sessão nasce na raiz do repo.
-    cwd = resolveFeatureWorktree(input.featureId ?? null, repoId) ?? repoPath
+    // Filha de handoff: o diretório gravado no create (a posse), sem recalcular.
+    // Senão, feature com worktree registrado pra ESTE repo manda no cwd; sem
+    // worktree (ou com o diretório já removido) a sessão nasce na raiz do repo.
+    const handoff = input.handoffId ? handoffStore.get(input.handoffId) : null
+    cwd =
+      (handoff ? resolveHandoffChildCwd(handoff, repoPath) : null) ??
+      resolveFeatureWorktree(input.featureId ?? null, repoId) ??
+      repoPath
     defaultName = repo.label
   } else {
     cwd = resolveScratchDir()
@@ -565,7 +597,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
     disallowedTools,
     // Só a filha de handoff recebe --settings; o valor é a constante canônica do
     // main (o renderer não escolhe settings — só sinaliza que é filha).
-    settingsJson: input.handoffChild ? HANDOFF_CHILD_SETTINGS_JSON : null,
+    settingsJson: input.handoffChild ? handoffChildSettingsJson(permissionMode) : null,
     initialPrompt: input.initialPrompt,
     systemPromptText,
   })
@@ -680,8 +712,10 @@ export function resumeHandoffChild(
   // diretório (ex.: este foi substituído por force). Recusado depois do
   // startSession, a PTY já estaria no ar editando sem vínculo — o acidente que a
   // posse existe pra evitar. Filha em 'plan' não disputa a posse.
+  // Se o diretório sumiu, a recheck contra o novo é do resolveHandoffChildCwd,
+  // mais abaixo e ainda antes do spawn.
   const workDir = handoffStore.workDirOf(handoff.id)
-  if (workDir && handoff.mode !== 'plan') {
+  if (workDir && isDirectory(workDir) && handoff.mode !== 'plan') {
     const owner = handoffStore.findActiveWriterByWorkDir(workDir)
     if (owner && owner.id !== handoff.id) throw new handoffStore.HandoffDuplicateError(owner)
   }
@@ -704,6 +738,9 @@ export function resumeHandoffChild(
   if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
   // repos.path legado pode ser RELATIVO (bug do importer do sync antigo).
   const repoPath = resolveRepoPath(repo.path)
+  // Volta pro diretório que ela ocupava; se o worktree sumiu, cai na raiz do
+  // repo com a posse rechecada (recusa antes de qualquer PTY).
+  const cwd = resolveHandoffChildCwd(handoff, repoPath) ?? repoPath
 
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
@@ -731,16 +768,14 @@ export function resumeHandoffChild(
     systemPromptFilePath: null,
     permissionMode,
     disallowedTools,
-    settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
+    settingsJson: handoffChildSettingsJson(permissionMode),
   })
 
   const session = startSession({
     id: internalSessionId,
     ccSessionId,
     repoId,
-    // Volta pro diretório que ela ocupava (é a chave da posse); se o worktree
-    // sumiu do disco, cai na raiz do repo como o spawn faria.
-    cwd: workDir && isDirectory(workDir) ? workDir : repoPath,
+    cwd,
     innerCmd,
     featureId: handoff.featureId,
     initialCommand: opts.kickoff,
@@ -961,6 +996,7 @@ export function registerSessionIpc(): void {
       systemPromptText: input.systemPromptText,
       permissionMode: (input.permissionMode ?? undefined) as SpawnSessionInput['permissionMode'],
       handoffChild: true,
+      handoffId: input.handoffId,
       provider: input.provider,
     }),
   )

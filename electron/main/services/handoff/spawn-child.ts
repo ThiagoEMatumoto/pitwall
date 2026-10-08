@@ -22,6 +22,8 @@ export interface SpawnHandoffChildInput {
   permissionMode?: string | null
   // CLI da filha. Ausente = claude.
   provider?: AgentProviderId
+  // O cwd da filha é o work_dir deste handoff.
+  handoffId: string
 }
 
 type SpawnHandoffChildFn = (input: SpawnHandoffChildInput) => Session

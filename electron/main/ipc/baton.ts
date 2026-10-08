@@ -286,6 +286,7 @@ export function passBaton(input: PassBatonInput): PassBatonResult {
     // Herda o papel de filha: `--settings` (sem ele a mensagem da mãe fica `held`
     // em silêncio) + apelido espelhado em sessions.title como 'manual'.
     handoffChild: handoffRow != null,
+    handoffId: handoffRow?.id,
     // Herda também as PERMISSÕES do modo do handoff. Sem isto a sucessora do
     // bastão subiria sem `--permission-mode` — uma filha em `plan` voltaria
     // podendo editar, e uma autônoma perderia o DESTRUCTIVE_DENYLIST (que o

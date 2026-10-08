@@ -842,6 +842,23 @@ export function workDirOf(id: string): string | null {
   return getRow(id)?.work_dir ?? null
 }
 
+// Muda a chave da posse quando a filha passa a trabalhar em outro diretório (o
+// worktree sumiu e ela cai na raiz do repo). O índice da 057 é o backstop: se
+// outra filha que escreve já ocupa o diretório novo, vira HandoffDuplicateError.
+export function setWorkDir(id: string, workDir: string): void {
+  try {
+    getDb()
+      .prepare('UPDATE handoffs SET work_dir = ?, updated_at = ? WHERE id = ?')
+      .run(workDir, Date.now(), id)
+  } catch (err) {
+    if (isActiveWorkDirViolation(err)) {
+      const other = findActiveWriterByWorkDir(workDir)
+      if (other && other.id !== id) throw new HandoffDuplicateError(other)
+    }
+    throw err
+  }
+}
+
 // Handoff ativo (pending/approved/running/needs_input) no repo-alvo, qualquer que
 // seja o diretório ou o modo. Informativo: a posse é por diretório
 // (findActiveWriterByWorkDir). motherSessionId opcional ESTREITA a busca à mãe

@@ -364,6 +364,7 @@ interface AppState {
     // Filha de handoff: o main fixa o título (alias = endereço do peer) e passa
     // `--settings crossSessionInbound=accept` só nessa sessão.
     handoffChild?: boolean
+    handoffId?: string
     // Controles do diálogo de spawn (sessão criada no mapa, sem aba).
     model?: string
     effort?: EffortLevel
@@ -564,6 +565,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       permissionMode: input.permissionMode,
       disallowedTools: input.disallowedTools,
       handoffChild: input.handoffChild,
+      handoffId: input.handoffId,
       model: input.model,
       effort: input.effort,
       advisorModel: input.advisorModel,
