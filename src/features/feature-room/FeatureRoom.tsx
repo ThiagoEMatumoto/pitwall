@@ -22,6 +22,7 @@ import { RoomHealth } from './RoomHealth'
 import { RoomSessions } from './RoomSessions'
 import { RoomTimeline } from './RoomTimeline'
 import { useFeatureRoom } from './useFeatureRoom'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
 const CLOCK_MS = 30_000
 
@@ -162,7 +163,7 @@ export function FeatureRoom() {
       (item.sessionId && bySession.get(item.sessionId)) ||
       null
     return {
-      who: r?.title ?? handoff?.task ?? live?.title ?? live?.name ?? 'Sessão',
+      who: r?.title ?? stripUnsafeDisplay(handoff?.task ?? live?.title ?? live?.name ?? 'Sessão'),
       repo: r?.repoLabel ?? handoff?.targetRepoLabel ?? '',
       handoff,
       live,

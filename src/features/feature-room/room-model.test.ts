@@ -236,6 +236,19 @@ describe('buildRoomView', () => {
     expect(onlyA.some((e) => e.childSessionId === 'B')).toBe(false)
   })
 
+  it('texto de tela e de agente chega sem ANSI nem bidi', () => {
+    const a = child('r1', 'A')
+    store.progress(a.id, 'rm -rf /\u202Etxt.exe')
+    const { view } = world([
+      { id: 'M', status: 'idle' },
+      { id: 'A', status: 'working', lastText: '\x1b[31mok\x1b[0m\u202Eabc' },
+    ])
+    const row = rowsOf(view).find((r) => r.sessionId === 'A')!
+    expect(row.lastText).toBe('okabc')
+    const ev = view.timeline.find((e) => e.event === 'progress')!
+    expect(ev.detail).toBe('rm -rf /txt.exe')
+  })
+
   it('kind fora de PRODUCED_ATTENTION_KINDS nunca chega à fila', () => {
     store.ask(child('r1', 'A').id, 'qual branch?')
     const lives: Live[] = [

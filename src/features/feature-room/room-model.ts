@@ -14,6 +14,7 @@ import type {
   SessionGraphNode,
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { HIDDEN_TIMELINE_EVENTS } from './room-labels'
 
 export interface RoomViewInput {
@@ -92,13 +93,18 @@ function groupBySubject(items: AttentionItem[]): RoomQueueRow[] {
 }
 
 function nodeTitle(n: SessionGraphNode): string {
-  return n.cliName ?? n.title
+  return stripUnsafeDisplay(n.cliName ?? n.title)
 }
+
+// Tela/transcript e texto de agente (task, purpose, detail) não são confiáveis: um
+// U+202E ou ANSI disfarçaria o que a Room mostra ao lado de um botão de resposta.
+const safe = (t: string | null | undefined): string | null =>
+  t == null ? null : stripUnsafeDisplay(t)
 
 export function buildRoomView(input: RoomViewInput): RoomView {
   const { featureId, graph, inUse } = input
   const byId = new Map(graph.nodes.map((n) => [n.sessionId, n]))
-  const lastTextOf = new Map(input.live.map((l) => [l.id, l.lastText ?? null]))
+  const lastTextOf = new Map(input.live.map((l) => [l.id, safe(l.lastText)]))
   const lane = graph.lanes.find((l) => l.kind === 'feature' && l.featureId === featureId)
   const laneNodes = (lane?.repos ?? [])
     .flatMap((r) => r.sessionIds)
@@ -126,7 +132,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
         work: null,
         exec: motherNode.status,
         lastText: lastTextOf.get(motherNode.sessionId) ?? null,
-        purpose: motherNode.purpose,
+        purpose: safe(motherNode.purpose),
       }
     : null
 
@@ -136,7 +142,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
     return {
       sessionId: h.childSessionId,
       handoffId: h.id,
-      title: node ? nodeTitle(node) : h.task,
+      title: node ? nodeTitle(node) : stripUnsafeDisplay(h.task),
       repoId: node?.repoId ?? h.targetRepoId,
       repoLabel: node?.repoLabel ?? h.targetRepoLabel ?? '',
       // Neta: a mãe dela é filha de outro handoff desta feature.
@@ -148,7 +154,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       },
       exec: node ? node.status : 'gone',
       lastText: h.childSessionId ? (lastTextOf.get(h.childSessionId) ?? null) : null,
-      purpose: node?.purpose ?? h.task,
+      purpose: safe(node?.purpose ?? h.task),
     }
   }
   const handoffRows = handoffs.filter((h) => h.childSessionId !== motherId).map(handoffRow)
@@ -165,7 +171,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       work: null,
       exec: n.status,
       lastText: lastTextOf.get(n.sessionId) ?? null,
-      purpose: n.purpose,
+      purpose: safe(n.purpose),
     }))
 
   const repos = groupByRepo(handoffRows, looseRows, handoffs)
@@ -179,11 +185,13 @@ export function buildRoomView(input: RoomViewInput): RoomView {
   }
 
   const f = input.timelineFilter
-  const timeline = input.timeline.filter(
-    (e) =>
-      !HIDDEN_TIMELINE_EVENTS.has(e.event) &&
-      (f == null || e.childSessionId === f || e.motherSessionId === f),
-  )
+  const timeline = input.timeline
+    .filter(
+      (e) =>
+        !HIDDEN_TIMELINE_EVENTS.has(e.event) &&
+        (f == null || e.childSessionId === f || e.motherSessionId === f),
+    )
+    .map((e) => ({ ...e, task: stripUnsafeDisplay(e.task), detail: safe(e.detail) }))
 
   const state: RoomState =
     laneNodes.length === 0 && handoffs.length === 0

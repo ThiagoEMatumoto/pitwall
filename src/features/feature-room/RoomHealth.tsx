@@ -1,5 +1,6 @@
 import { LivenessChip } from '@/features/features/LivenessChip'
 import type { RoomSnapshot } from '../../../shared/types/feature-room'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
 // Texto do chip de wakes. Sem tentativa em 24h não há % a mostrar.
 export function wakesText(w: RoomSnapshot['wakeHealth']): string {
@@ -12,16 +13,17 @@ export function wakesText(w: RoomSnapshot['wakeHealth']): string {
 // Faixa de saúde: liveness da frente, pulso atual e entregas de wake à mãe.
 export function RoomHealth({ snapshot }: { snapshot: RoomSnapshot }) {
   const { loop, wakeHealth } = snapshot
+  const pulse = loop.pulse ? stripUnsafeDisplay(loop.pulse.body) : null
   return (
     <div className="flex min-h-[34px] items-center gap-3.5 border-b border-[var(--color-border)] px-4 py-[7px] text-[12.5px] text-[var(--color-text-dim)]">
       <LivenessChip liveness={loop.liveness} issues={loop.issues} />
       <span
         className="min-w-0 flex-1 truncate text-[var(--color-text)]"
         data-testid="room-pulse"
-        title={loop.pulse?.body}
+        title={pulse ?? undefined}
       >
-        {loop.pulse ? (
-          loop.pulse.body
+        {pulse != null ? (
+          pulse
         ) : (
           <span className="text-[var(--color-text-dim)]">
             Sem pulso ainda. A mãe escreve o primeiro ao pegar a feature.

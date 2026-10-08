@@ -16,6 +16,7 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { ITEM_TITLE, KIND_LABEL, sinceText } from './room-labels'
 import type { RoomQueueRow } from './room-model'
 import { COMPACT } from './room-ui'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
 const SEV_COLOR = {
   blocking: 'var(--color-danger)',
@@ -160,7 +161,9 @@ export const OpenItem = forwardRef<HTMLDivElement, OpenProps>(function OpenItem(
         <h3 className="mb-0.5 mt-1.5 text-[15px] font-semibold leading-snug">
           {ITEM_TITLE[item.kind as ProducedAttentionKind](subject.who)}
         </h3>
-        <p className="m-0 text-[13px] leading-[1.45] text-[var(--color-text-dim)]">{item.whyNow}</p>
+        <p className="m-0 text-[13px] leading-[1.45] text-[var(--color-text-dim)]">
+          {stripUnsafeDisplay(item.whyNow)}
+        </p>
         <ItemBody item={item} subject={subject} />
         {row.also.length > 0 && (
           <p className="mb-0 mt-2 text-[12px] text-[var(--color-text-dim)]">
@@ -237,7 +240,7 @@ function QuestionBody({ item, handoff }: { item: AttentionItem; handoff: Handoff
     <>
       {question && (
         <div className="mt-2.5 whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 font-mono text-[12px] leading-relaxed">
-          {question}
+          {stripUnsafeDisplay(question)}
         </div>
       )}
       <textarea
