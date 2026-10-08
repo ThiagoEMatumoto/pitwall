@@ -20,7 +20,7 @@ const { buildAttentionQueue, attentionCount, stepAttention, planAttentionStep, p
   await import('./attention-queue')
 
 const store = await import('../../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const { projectAttention } = await import('../../../shared/attention/project-attention')
 const harness = await import('../../../electron/main/services/attention/attention-test-harness')
@@ -100,6 +100,7 @@ function queueFor(
   const attention = projectAttention({
     handoffs,
     transitions: readTransitions(testDb, handoffs),
+    ...readRequestInput(),
     live: states,
   })
   const infos = states.map((s) => harness.toLiveInfo(testDb, s, over[s.sessionId]))
@@ -146,7 +147,7 @@ describe('buildAttentionQueue — mapeia a projeção', () => {
     expect(q).toHaveLength(1)
     expect(q[0]).toMatchObject({ kind: 'session', handoffId: a.id, reason: 'handoff-input' })
     expect(q[0].since).toBe(store.get(a.id)!.questionAskedAt)
-    expect(q[0].projectedKind).toBe('child_question')
+    expect(q[0].projectedKind).toBe('request')
   })
 
   it('fim de turno na tela e needs_input retomado ficam fora', async () => {
@@ -154,7 +155,8 @@ describe('buildAttentionQueue — mapeia a projeção', () => {
     try {
       vi.setSystemTime(10_000)
       const a = child('r1', 'a')
-      store.ask(a.id, 'q')
+      // Regra legada (timestamp): só vale pra needs_input sem pedido.
+      harness.legacyAsk(testDb, a.id, 'q')
       vi.setSystemTime(20_000)
       store.progress(a.id, 'segui')
     } finally {
@@ -204,7 +206,12 @@ describe('buildAttentionQueue — mapeia a projeção', () => {
     const a = child('r1', 'a')
     store.ask(a.id, 'q')
     const handoffs = store.list()
-    const attention = projectAttention({ handoffs, transitions: new Map(), live: [] })
+    const attention = projectAttention({
+      handoffs,
+      transitions: new Map(),
+      live: [],
+      ...readRequestInput(),
+    })
     expect(attention).toHaveLength(1)
     expect(
       buildAttentionQueue({ visibleSessions: [], liveSessions: [], handoffs: [], attention }),

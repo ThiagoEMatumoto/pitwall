@@ -14,6 +14,11 @@ export function humanQueue(
   )
 }
 
+// A filha está parada esperando resposta: pergunta legada ou pedido tipado.
+export function isAskItem(i: Pick<AttentionItem, 'kind'>): boolean {
+  return i.kind === 'child_question' || i.kind === 'request'
+}
+
 export function attentionHandoffIds(items: AttentionItem[]): Set<string> {
   return new Set(items.flatMap((i) => (i.handoffId ? [i.handoffId] : [])))
 }

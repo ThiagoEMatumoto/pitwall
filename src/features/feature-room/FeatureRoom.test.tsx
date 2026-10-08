@@ -260,7 +260,7 @@ describe('FeatureRoom', () => {
       { id: 'M', status: 'idle' },
       { id: 'A', status: 'working' },
     ])
-    const item = world.attention.find((i) => i.kind === 'child_question')!
+    const item = world.attention.find((i) => i.kind === 'request')!
     const open = screen.getByTestId('room-queue-open')
     expect(within(open).getByText('Por que está aqui?')).toBeInTheDocument()
     expect(within(open).getByText(item.entryRule)).toBeInTheDocument()

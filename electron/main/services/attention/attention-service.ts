@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { getDb } from '../db'
 import * as handoffStore from '../handoff-store'
+import * as requestStore from '../handoff-requests'
 import { buildSessionsFileIndex } from '../session-activity'
 import { liveSessionStates, type SessionsFileIndex } from '../live-session-states'
 import type { LiveSessionState } from '../session-graph'
@@ -64,6 +65,13 @@ export function toAttentionLive(
   }
 }
 
+// Pedidos abertos + triagem ativa. O relógio fica aqui no main: a projeção continua pura.
+export function readRequestInput(
+  now = Date.now(),
+): Pick<AttentionInput, 'requests' | 'dismissals'> {
+  return { requests: requestStore.listOpen(), dismissals: requestStore.activeDismissals(now) }
+}
+
 // Monta o input a partir de estados vivos já lidos (o grafo e os testes passam
 // os seus; o caminho do app usa liveSessionStates).
 export function readAttentionInputFrom(
@@ -83,6 +91,7 @@ export function readAttentionInputFrom(
   return {
     handoffs,
     transitions: readTransitions(db, handoffs),
+    ...readRequestInput(),
     live: rows.map((r) =>
       toAttentionLive(
         r,
@@ -124,8 +133,14 @@ export function projectAndCount(input: AttentionInput): AttentionItem[] {
   const items = projectAttention(input)
   const byKind = emptyByKind()
   for (const i of items) if (i.kind in byKind) byKind[i.kind as ProducedAttentionKind]++
+  const computedAt = Date.now()
+  // Pedidos que esta fila mostrou: requestHealth compara com o banco.
+  requestStore.recordProjection({
+    ids: new Set(items.flatMap((i) => (i.request ? [i.request.requestId] : []))),
+    computedAt,
+  })
   counters = {
-    computedAt: Date.now(),
+    computedAt,
     byKind,
     liveWaitingNotTurnEnd: input.live.filter(liveNeedsYou).length,
     sessionMenuItems: byKind.session_menu,

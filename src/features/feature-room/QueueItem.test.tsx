@@ -107,8 +107,10 @@ describe('QueueItem — ações inline', () => {
   })
   afterEach(() => testDb.close())
 
+  // child_question só sai para needs_input legado (sem pedido tipado).
   it('child_question: sem texto o botão fica desabilitado; responder chama sendMessage({id,text})', async () => {
-    const h = store.ask(child('r1', 'A').id, 'qual branch?').handoff
+    const h = child('r1', 'A')
+    harness.legacyAsk(testDb, h.id, 'qual branch?')
     sendMessage.mockResolvedValue(undefined)
     await mount([
       { id: 'M', status: 'idle' },
@@ -126,7 +128,7 @@ describe('QueueItem — ações inline', () => {
   })
 
   it('child_question: erro do envio aparece em role=status', async () => {
-    store.ask(child('r1', 'A').id, 'qual branch?')
+    harness.legacyAsk(testDb, child('r1', 'A').id, 'qual branch?')
     sendMessage.mockRejectedValue(new Error('A sessão-filha não está mais viva'))
     await mount([
       { id: 'M', status: 'idle' },
@@ -140,6 +142,18 @@ describe('QueueItem — ações inline', () => {
         void fireEvent.click(within(open()).getByRole('button', { name: 'Responder e retomar' })),
     )
     expect(within(open()).getByRole('status')).toHaveTextContent('não está mais viva')
+  })
+
+  it('request: o pedido tipado despacha para o RequestBody', async () => {
+    store.ask(child('r1', 'A').id, 'qual branch?')
+    await mount([
+      { id: 'M', status: 'idle' },
+      { id: 'A', status: 'working' },
+    ])
+    expect(screen.getByTestId('room-queue-row')).toHaveAttribute('data-kind', 'request')
+    expect(within(open()).getByText('Pergunta')).toBeInTheDocument()
+    expect(within(open()).queryByRole('button', { name: 'Responder e retomar' })).toBeNull()
+    expect(within(open()).getByRole('button', { name: 'Responder' })).toBeDisabled()
   })
 
   it('child_interrupted: "Retomar" chama handoffs.resume(id)', async () => {

@@ -138,12 +138,23 @@ describe('composeHandoffPrompt', () => {
     expect(prompt).toMatch(/Parece pronto/i)
   })
 
-  it('traz circuit breaker de 3 tentativas e o formato de BLOQUEIO', () => {
+  it('traz circuit breaker de 3 tentativas', () => {
     expect(prompt).toMatch(/3 tentativas/i)
-    expect(prompt).toContain('BLOQUEIO:')
-    expect(prompt).toContain('OPÇÕES:')
-    expect(prompt).toContain('RECOMENDO:')
-    expect(prompt).toContain('CUSTO DE ERRAR:')
+  })
+
+  it('pede o handoff_ask por campos estruturados, não pelo formato em linha', () => {
+    for (const field of ['`kind`', '`options`', '`recommendation`', '`costOfError`', '`risk`'])
+      expect(prompt).toContain(field)
+    expect(prompt).toContain('decision | confirmation | human_action | question')
+    expect(prompt).toContain('"destructive_data"')
+    expect(prompt).toContain('"deploy_infra_spend"')
+    expect(prompt).toContain('NUNCA pergunte só no terminal')
+    expect(prompt).toContain('<pitwall-answer')
+    expect(prompt).toMatch(/Uma pergunta por chamada/)
+    expect(prompt).not.toContain('BLOQUEIO: <1 linha> | OPÇÕES')
+    expect(prompt).not.toContain('CUSTO DE ERRAR:')
+    // Claude com canal peer: avisa o orquestrador.
+    expect(prompt).toContain('(e avise o orquestrador por SendMessage)')
   })
 
   it('plan mode injeta restrição read-only; auto-edits avisa do denylist', () => {
@@ -182,6 +193,12 @@ describe('composeHandoffPrompt — filha Codex', () => {
     alias: 'leitor-fila',
     mode: 'plan',
     provider: 'codex',
+  })
+
+  it('o bloco de decisão também é estruturado para o Codex, sem SendMessage', () => {
+    expect(codex).toContain('`costOfError`')
+    expect(codex).toContain('<pitwall-answer')
+    expect(codex).not.toContain('avise o orquestrador')
   })
 
   it('não manda responder por SendMessage nem cita <cross-session-message>', () => {

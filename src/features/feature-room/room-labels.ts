@@ -1,4 +1,5 @@
 import type { ProducedAttentionKind } from '../../../shared/types/attention'
+import type { RequestKind } from '../../../shared/types/handoff-request'
 import type { RoomTimelineEvent } from '../../../shared/types/feature-room'
 import type { ExecState } from './room-model'
 
@@ -10,6 +11,15 @@ export const KIND_LABEL: Record<ProducedAttentionKind, string> = {
   child_interrupted: 'Filha interrompida',
   pty_orphan: 'Terminal órfão',
   result_unconsumed: 'Resultado não lido',
+  request: 'Pedido',
+}
+
+// Rótulos do chip de kind do pedido (protótipo C).
+export const REQUEST_KIND_LABEL: Record<RequestKind, string> = {
+  decision: 'Decisão',
+  confirmation: 'Confirmação',
+  human_action: 'Ação sua',
+  question: 'Pergunta',
 }
 
 const EVENT_VERB: Record<string, string> = {
@@ -27,6 +37,10 @@ const EVENT_VERB: Record<string, string> = {
   release: 'solta do painel',
   mother_transferred: 'bastão passado',
   child_direct_message: 'mandou mensagem à mãe',
+  request_answer: 'pedido respondido',
+  request_reject: 'pedido rejeitado',
+  request_escalate: 'pedido escalado ao humano',
+  request_cancel: 'pedido cancelado',
 }
 
 // Ruído e rejeições: escritos pelo store, mas não contam a história da feature.
@@ -38,6 +52,8 @@ export const HIDDEN_TIMELINE_EVENTS: ReadonlySet<string> = new Set([
   'fail_rejected',
   'reconcileFailedChild',
   'reject',
+  // Duplica o 'ask' (perguntou) que o store grava junto.
+  'request_open',
 ])
 
 const PROGRESS_DETAIL_MAX = 80
@@ -79,6 +95,7 @@ export const ITEM_TITLE: Record<ProducedAttentionKind, (who: string) => string> 
   child_interrupted: (who) => `${who} foi interrompida`,
   pty_orphan: (who) => `${who}: terminal sem sessão`,
   result_unconsumed: (who) => `${who} entregou um resultado que ninguém leu`,
+  request: (who) => `${who} fez um pedido`,
 }
 
 // Forma + cor dos glifos (protótipo C): forma diz o tipo, cor vem dos tons do app.

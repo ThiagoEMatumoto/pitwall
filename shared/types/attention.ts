@@ -1,5 +1,12 @@
 import type { LiveStatus } from '../tui/attention-reason'
 import type { Handoff } from './ipc'
+import type {
+  HandoffRequest,
+  RequestKind,
+  RequestOption,
+  RequestResolver,
+  RequestRisk,
+} from './handoff-request'
 
 // A fila única de "precisa de você". HUD, Crew Dock, switcher e mapa leem a
 // MESMA lista (attention:list); cada contagem é o length de um recorte dela.
@@ -10,10 +17,10 @@ export type AttentionKind =
   | 'child_interrupted'
   | 'pty_orphan'
   | 'result_unconsumed'
+  | 'request' // F3: pedido tipado (handoff_requests)
   // Declarados pelo contrato, SEM produtor até a fase indicada. A UI não renderiza.
   | 'wake_held'
   | 'wake_expired' // F1
-  | 'request' // F3
   | 'review'
   | 'repair_exhausted' // F4
   | 'subtree_stalled' // F5
@@ -25,6 +32,7 @@ export const PRODUCED_ATTENTION_KINDS = [
   'child_interrupted',
   'pty_orphan',
   'result_unconsumed',
+  'request',
 ] as const satisfies readonly AttentionKind[]
 
 export type ProducedAttentionKind = (typeof PRODUCED_ATTENTION_KINDS)[number]
@@ -43,6 +51,23 @@ export type AttentionItemAction =
   | { kind: 'reopen_child'; handoffId: string } // mesmo handler do "Retomar" do card do dock
   | { kind: 'open_session'; sessionId: string } // renderer: aba ou quick look
   | { kind: 'kill_session'; sessionId: string } // sessions:kill
+  | { kind: 'answer_request'; requestId: string } // handoffs:answer-request
+  // Triagem: só esconde o item (attention_dismissals); não toca o handoff nem o pedido.
+  | { kind: 'triage_dismiss'; dedupKey: string; requestId: string } // handoffs:dismiss-attention
+  | { kind: 'triage_snooze'; dedupKey: string; requestId: string } // handoffs:snooze-attention
+
+// O pedido como a Room o mostra (só kind 'request'). Fonte: handoff_requests.
+export interface AttentionRequestView {
+  requestId: string
+  kind: RequestKind
+  question: string
+  options: RequestOption[]
+  recommendation: string | null
+  costOfError: string | null
+  resolver: RequestResolver
+  risk: RequestRisk | null
+  escalated: boolean
+}
 
 export type SessionMenuReason = 'permission' | 'trust' | 'question' | 'unrecognized'
 
@@ -61,6 +86,7 @@ export interface AttentionItem {
   createdAt: number | null // nunca updated_at; null = sem relógio confiável
   actions: AttentionItemAction[]
   menuReason?: SessionMenuReason // só session_menu
+  request?: AttentionRequestView // só request
 }
 
 // Uma PTY viva deste app, como o main a vê. Montada SÓ por toAttentionLive (main).
@@ -85,6 +111,14 @@ export interface AttentionInput {
   handoffs: Handoff[] // handoffStore.list()
   transitions: ReadonlyMap<string, HandoffTransition>
   live: AttentionLiveSession[]
+  requests: HandoffRequest[] // requestStore.listOpen()
+  // attention_dismissals ativos (requestStore.activeDismissals(now)): snooze vencido não vem.
+  dismissals: ReadonlyMap<string, AttentionDismissal>
+}
+
+export interface AttentionDismissal {
+  action: 'dismiss' | 'snooze'
+  snoozedUntil: number | null
 }
 
 // Contador consumível (attention:debug). liveWaitingNotTurnEnd e sessionMenuItems

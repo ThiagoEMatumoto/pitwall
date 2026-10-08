@@ -16,6 +16,7 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { ITEM_TITLE, KIND_LABEL, sinceText } from './room-labels'
 import type { RoomQueueRow } from './room-model'
 import { COMPACT } from './room-ui'
+import { RequestBody } from './RequestBody'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
 const SEV_COLOR = {
@@ -143,7 +144,10 @@ export const OpenItem = forwardRef<HTMLDivElement, OpenProps>(function OpenItem(
             )}
           </span>
           {item.createdAt != null && (
-            <span className="ml-auto text-[12px] tabular-nums text-[var(--color-text-dim)]">
+            <span
+              data-src={item.kind === 'request' ? 'handoff_requests.created_at' : undefined}
+              className="ml-auto text-[12px] tabular-nums text-[var(--color-text-dim)]"
+            >
               {sinceText(item.createdAt, now)}
             </span>
           )}
@@ -193,6 +197,8 @@ function ItemBody({ item, subject }: { item: AttentionItem; subject: QueueSubjec
       return <QuestionBody key={item.dedupKey} item={item} handoff={subject.handoff} />
     case 'session_menu':
       return <MenuBody key={item.dedupKey} item={item} subject={subject} />
+    case 'request':
+      return <RequestBody key={item.dedupKey} item={item} />
     default:
       return <ActionsBody key={item.dedupKey} item={item} subject={subject} />
   }

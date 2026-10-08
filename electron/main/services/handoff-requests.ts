@@ -11,6 +11,7 @@ import {
   type RequestRisk,
   type RequestStatus,
 } from '../../../shared/types/handoff-request'
+import type { HandoffRequestHealth } from '../../../shared/types/ipc'
 
 // Store dos pedidos tipados (migration 058). Não importa handoff-store: grava a
 // própria linha em handoff_events, pra não fechar ciclo de import (handoff-store
@@ -340,4 +341,61 @@ export function activeDismissals(now: number): Map<string, ActiveDismissal> {
       { action: r.action as 'dismiss' | 'snooze', snoozedUntil: r.snoozed_until },
     ]),
   )
+}
+
+export interface RequestProjection {
+  ids: ReadonlySet<string>
+  computedAt: number
+}
+
+// Gravado por attention-service a cada cálculo da fila (fica aqui pra loop-snapshot
+// e overview não importarem o serviço de atenção e seus watchers de PTY).
+let lastProjection: RequestProjection | null = null
+
+export function recordProjection(p: RequestProjection): void {
+  lastProjection = p
+}
+
+// human_only aberto que nenhuma projeção mostra e ninguém triou é pedido sumido:
+// só o humano resolve, e ele não está vendo. Pedido mais novo que a última
+// projeção ainda não teve chance de aparecer e não conta.
+export function requestHealth(
+  scope: { featureId?: string },
+  projection: RequestProjection | null = lastProjection,
+  now = Date.now(),
+): HandoffRequestHealth {
+  const rows = (
+    scope.featureId
+      ? getDb()
+          .prepare(
+            `SELECT r.id, r.created_at, r.escalated_at FROM handoff_requests r
+               JOIN handoffs h ON h.id = r.handoff_id
+              WHERE r.status = 'open' AND r.resolver = 'human_only' AND h.feature_id = ?`,
+          )
+          .all(scope.featureId)
+      : getDb()
+          .prepare(
+            `SELECT id, created_at, escalated_at FROM handoff_requests
+              WHERE status = 'open' AND resolver = 'human_only'`,
+          )
+          .all()
+  ) as Array<{ id: string; created_at: number; escalated_at: number | null }>
+  const triaged = activeDismissals(now)
+  let visible = 0
+  let triagedCount = 0
+  const hidden: number[] = []
+  for (const r of rows) {
+    const since = r.escalated_at ?? r.created_at
+    if (projection?.ids.has(r.id)) visible++
+    else if (triaged.has(`request:${r.id}`)) triagedCount++
+    else if (projection && since <= projection.computedAt) hidden.push(since)
+  }
+  return {
+    openHumanOnly: rows.length,
+    visibleHumanOnly: visible,
+    triagedHumanOnly: triagedCount,
+    hiddenHumanOnly: hidden.length,
+    oldestHiddenAt: hidden.length > 0 ? Math.min(...hidden) : null,
+    projectedAt: projection?.computedAt ?? null,
+  }
 }

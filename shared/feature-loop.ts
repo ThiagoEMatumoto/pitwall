@@ -137,6 +137,11 @@ export interface LoopInput extends LoopActivityInput {
    * disparou). Ausente/null = projeção não carregou.
    */
   handoffWake?: { attempted: number; delivered: number; undelivered: number; missing?: number } | null
+  /**
+   * Pedidos human_only (handoff_requests). hiddenHumanOnly = abertos que a fila
+   * não mostra e ninguém triou. Ausente/null = projeção não carregou.
+   */
+  handoffRequests?: { hiddenHumanOnly: number } | null
 }
 
 // ---- Atividade ----
@@ -288,6 +293,15 @@ export function issuesOf(input: LoopInput): LoopIssue[] {
       level: 'warn',
       code: 'handoff_wake_missing',
       message: `${wake.missing} eventos de handoff das últimas 24h não tentaram avisar a mãe.`,
+    })
+  }
+  // Só o humano resolve human_only: fora da fila sem triagem, ninguém vai resolver.
+  const hidden = input.handoffRequests?.hiddenHumanOnly ?? 0
+  if (hidden > 0) {
+    issues.push({
+      level: 'error',
+      code: 'human_only_hidden',
+      message: `${hidden} pedido(s) que só você resolve (human_only) estão abertos e fora da fila.`,
     })
   }
 

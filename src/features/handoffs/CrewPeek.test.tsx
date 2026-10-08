@@ -105,7 +105,16 @@ async function realPermissionMenu() {
   }
   const { scanScreen } = await import('../../../shared/tui/attention-reason')
   const raw = readFileSync(
-    join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__', 'claude-2.1.286-permission-bash.ansi'),
+    join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'shared',
+      'tui',
+      '__fixtures__',
+      'claude-2.1.286-permission-bash.ansi',
+    ),
     'utf8',
   )
   const term = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true })
@@ -186,6 +195,8 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
       items: projectAttention({
         handoffs: [handoff],
         transitions: new Map(),
+        requests: [],
+        dismissals: new Map(),
         live: [
           {
             sessionId: 's-child',
@@ -677,6 +688,8 @@ describe('CrewPeek como lift do mapa', () => {
       items: projectAttention({
         handoffs: useHandoffsStore.getState().handoffs,
         transitions: new Map(),
+        requests: [],
+        dismissals: new Map(),
         live: [],
       }),
     })

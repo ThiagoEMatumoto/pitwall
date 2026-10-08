@@ -1242,6 +1242,18 @@ export interface HandoffWakeHealth {
   lastUndeliveredAt: number | null
 }
 
+// Contador consumível dos pedidos human_only (lei do fail-closed). hidden = aberto
+// no banco, já visto por uma projeção, e fora da fila sem ninguém ter triado.
+export interface HandoffRequestHealth {
+  openHumanOnly: number
+  visibleHumanOnly: number
+  triagedHumanOnly: number
+  hiddenHumanOnly: number
+  oldestHiddenAt: number | null
+  // Quando a fila foi calculada pela última vez (null = ainda não foi).
+  projectedAt: number | null
+}
+
 export interface OverviewData {
   // Raízes (parent null) com status active|paused|done — archived fica fora.
   objectives: OverviewObjectiveNode[]
@@ -1253,6 +1265,7 @@ export interface OverviewData {
   // de sessões, ordenadas pela última sessão (fallback updated_at) desc.
   features: OverviewFeatureActivity[]
   handoffWake: HandoffWakeHealth
+  handoffRequests: HandoffRequestHealth
 }
 
 export interface ResumeSessionInput {

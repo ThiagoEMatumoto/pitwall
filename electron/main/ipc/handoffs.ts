@@ -248,6 +248,12 @@ export function registerHandoffsIpc(): void {
     const { dedupKey, requestId, until } = snoozeAttentionSchema.parse(raw)
     requestStore.snoozeAttention(dedupKey, requestId ?? null, until)
     broadcast('handoff:attention-triage', { dedupKey })
+    // A fila só recalcula por evento: sem este aviso, o item adiado só voltaria
+    // quando outra coisa mexesse num handoff.
+    setTimeout(
+      () => broadcast('handoff:attention-triage', { dedupKey }),
+      Math.max(0, until - Date.now()) + 50,
+    ).unref?.()
   })
 
   // Feedback humano (👍/👎/parcial) sobre a utilidade de um handoff concluído.

@@ -24,7 +24,8 @@ vi.stubGlobal('window', {
 })
 
 const store = await import('../../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const requests = await import('../../../electron/main/services/handoff-requests')
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const { buildSessionGraph, readSessionGraphInput } =
   await import('../../../electron/main/services/session-graph')
@@ -81,7 +82,12 @@ function surfaces(lives: Live[]) {
     return toAttentionLive(r, states.get(r.id)!, scan, scan?.menu ? 1 : null)
   })
   const handoffs = store.list()
-  const items = projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live })
+  const items = projectAttention({
+    handoffs,
+    transitions: readTransitions(testDb, handoffs),
+    live,
+    ...readRequestInput(),
+  })
 
   // Lado do renderer: a LiveSessionInfo é o único shape sintético (toLiveInfo).
   const infos = live.map((s) => harness.toLiveInfo(testDb, s))
@@ -107,7 +113,8 @@ function surfaces(lives: Live[]) {
       .reduce((sum, e) => sum + e.needsYou, 0),
     // Faixa "N precisa de você" do mapa (escopo global) e aba Estado do FeaturePanel.
     mapStrip: scopeAttentionCount(graph, GLOBAL_CANVAS_SCOPE, items),
-    featurePanel: (featureId: string) => sessionStatusCounts(graph.nodes, featureId, items).needsYou,
+    featurePanel: (featureId: string) =>
+      sessionStatusCounts(graph.nodes, featureId, items).needsYou,
     // Badges das raias de topo do mapa (card da feature / "Sem feature").
     laneBadges: graphToFlow({
       graph,
@@ -137,14 +144,14 @@ describe('HUD = Crew Dock = Ctrl+` (a mesma lista)', () => {
     permission = await harness.scanFixture('permission-bash')
     idle = await harness.scanFixture('idle-prompt')
 
-    // A: pergunta aberta. B: perguntou e retomou (progress posterior).
+    // A: pedido aberto. B: needs_input legado (sem pedido) que retomou (progress posterior).
     // C: fim de turno na tela. D: menu de permissão na tela.
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       vi.setSystemTime(10_000)
       store.ask(child('r1', 'A').id, 'qual branch?')
       const b = child('r2', 'B')
-      store.ask(b.id, 'posso apagar?')
+      harness.legacyAsk(testDb, b.id, 'posso apagar?')
       vi.setSystemTime(20_000)
       store.progress(b.id, 'segui sem apagar')
       child('r3', 'C')
@@ -234,7 +241,7 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
       name: 'feature G sem lane: pergunta de filha sem PTY',
       seed: () => store.ask(child('r2', 'B', G).id, 'qual branch?'),
       lives: () => [{ id: 'M', status: 'idle', scan: null }],
-      kinds: ['child_question'],
+      kinds: ['request'],
     },
     {
       name: 'child_failed (mãe viva) + result_unconsumed (info, fora da fila humana)',
@@ -273,7 +280,7 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
         { id: 'X', status: 'waiting', scan: permission },
         { id: 'E', status: 'waiting', scan: permission },
       ],
-      kinds: ['child_interrupted', 'child_question', 'session_menu'],
+      kinds: ['child_interrupted', 'request', 'session_menu'],
     },
   ]
 
@@ -299,7 +306,7 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
       { id: 'A', status: 'working', scan: null },
     ])
     expect(s.items.map((i) => i.kind).sort()).toEqual(
-      ['child_failed', 'child_interrupted', 'child_question', 'result_unconsumed'].sort(),
+      ['child_failed', 'child_interrupted', 'request', 'result_unconsumed'].sort(),
     )
     expect(s.projection).toBe(3)
     expect(s.mapStrip).toBe(s.projection)
@@ -310,7 +317,7 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
 
   it('a aresta do handoff só fica em alerta enquanto a fila tem a pergunta', () => {
     const b = child('r1', 'B', F)
-    store.ask(b.id, 'posso apagar?')
+    harness.legacyAsk(testDb, b.id, 'posso apagar?')
     const edgeAlert = () => {
       const s = surfaces([
         { id: 'M', status: 'idle', scan: null },
@@ -338,11 +345,41 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
     expect(edgeAlert()).toBe(false)
   })
 
+  it('pedido tipado: a aresta fica em alerta até a resposta, não até o progress', () => {
+    const b = child('r1', 'B', F)
+    const { request } = store.ask(b.id, 'posso apagar?')
+    const edgeAlert = () => {
+      const s = surfaces([
+        { id: 'M', status: 'idle', scan: null },
+        { id: 'B', status: 'working', scan: null },
+      ])
+      const flow = graphToFlow({
+        graph: s.graph,
+        scope: 'all',
+        positions: [],
+        notes: [],
+        groups: [],
+        attention: s.items,
+      })
+      return flow.edges.find((e) => e.id === `e:h:${b.id}`)?.data?.alert
+    }
+    expect(edgeAlert()).toBe(true)
+    store.progress(b.id, 'adiantando outra parte')
+    expect(edgeAlert()).toBe(true)
+    requests.answerRequest(request!.id, { text: 'pode', by: 'mother' })
+    expect(edgeAlert()).toBe(false)
+  })
+
   it('o card de atenção abre a filha: carrega o handoff e o título da feature', () => {
     const h = interrupted('r1', 'A', G)
     const s = surfaces([{ id: 'M', status: 'idle', scan: null }])
-    const entries = buildSwitcherEntries(s.graph, new Map(), () => null, undefined, s.items, (id) =>
-      id === G ? 'Feature G' : null,
+    const entries = buildSwitcherEntries(
+      s.graph,
+      new Map(),
+      () => null,
+      undefined,
+      s.items,
+      (id) => (id === G ? 'Feature G' : null),
     )
     const card = entries.find((e) => e.kind === 'attention')
     expect(card).toMatchObject({ key: 'a:G', handoffId: h.id, needsYou: 1 })
