@@ -114,13 +114,24 @@ describe('SendMessage nativo no transcript', () => {
         toolUseId: 'toolu_01Fyug6k2b6p9nxpnb8gSWYx',
         to: 'otavio-fazer-lia-responder',
         at: ALIAS_AT,
+        message: '[redigido]',
       },
       {
         toolUseId: 'toolu_01FTNqXLJMTBGdwHFoMjeEpA',
         to: 'uds:/run/user/1000/cc-socks/914134.sock',
         at: UDS_AT,
+        message: '[redigido]',
       },
     ])
+  })
+
+  it('message ausente no input fica undefined', () => {
+    const line = FIXTURE.split('\n')
+      .find((l) => l.includes('otavio-fazer-lia-responder'))!
+      .replace(/"message":"\[redigido\]",?/, '')
+    const [call] = extractSendMessages(line)
+    expect(call.toolUseId).toBe('toolu_01Fyug6k2b6p9nxpnb8gSWYx')
+    expect(call.message).toBeUndefined()
   })
 
   const deps: SendMessageResolveDeps = {

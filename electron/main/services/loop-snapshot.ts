@@ -1,4 +1,5 @@
 import { getDb } from './db'
+import { wakeHealth } from './handoff/handoff-wake'
 import {
   issuesOf,
   lastActivityAt,
@@ -115,6 +116,7 @@ export function loopSnapshot(featureId: string, now: number = Date.now()): Featu
     duplicateSuspect: suspect
       ? { featureId: suspect.candidateId, title: suspect.title, score: suspect.score }
       : null,
+    handoffWake: wakeHealth({ featureId }, now),
   }
 
   return {

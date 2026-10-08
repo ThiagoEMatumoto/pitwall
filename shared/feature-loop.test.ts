@@ -181,6 +181,34 @@ describe('issuesOf', () => {
     expect(issuesOf(input())).toEqual([])
   })
 
+  describe('handoff wake (24h)', () => {
+    const levelOf = (w: LoopInput['handoffWake']) =>
+      issuesOf(input({ handoffWake: w })).filter((i) => i.code.startsWith('handoff_wake'))
+
+    it('nada chegou → handoff_wake_suppressed (error)', () => {
+      expect(levelOf({ attempted: 3, delivered: 0, undelivered: 3 })).toMatchObject([
+        { level: 'error', code: 'handoff_wake_suppressed' },
+      ])
+    })
+
+    it('parte não chegou → handoff_wake_undelivered (warn)', () => {
+      expect(levelOf({ attempted: 3, delivered: 2, undelivered: 1 })).toMatchObject([
+        { level: 'warn', code: 'handoff_wake_undelivered' },
+      ])
+    })
+
+    it('tudo entregue ou sem dado → nenhuma issue', () => {
+      expect(levelOf({ attempted: 3, delivered: 3, undelivered: 0 })).toEqual([])
+      expect(levelOf(undefined)).toEqual([])
+    })
+
+    it('evento sem tentativa de wake → handoff_wake_missing (warn)', () => {
+      expect(levelOf({ attempted: 0, delivered: 0, undelivered: 0, missing: 2 })).toMatchObject([
+        { level: 'warn', code: 'handoff_wake_missing' },
+      ])
+    })
+  })
+
   it.each([
     ['plain', 'abc'],
     ['dots, dashes, underscores', 'a.b-c_d1'],

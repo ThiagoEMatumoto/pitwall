@@ -8,7 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
-import { emitSessionLinkPulse } from '../services/session-link-pulse'
+import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
   buildSessionsFileIndex,
@@ -21,6 +21,13 @@ import {
 import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
+import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
+import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
+import {
+  onQueueSnapshot,
+  setHandoffWakeQueue,
+  sweepOrphansOnBoot,
+} from '../services/handoff/handoff-wake'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
@@ -70,6 +77,15 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
   // Pergunta de agente: quem perguntou fica sabendo pelo agent_check, não o usuário.
   if (isAgentAskEnvelope(ev.text)) return
   lastNotifiedEventId = ev.id
+  // Aviso de handoff à mãe: o texto é o envelope inteiro, que não diz nada em 80
+  // chars. Continua notificando — é o alarme fora do app quando o wake se perde.
+  if (isHandoffWakeEnvelope(ev.text)) {
+    notify({
+      title: 'Mensagem não entregue',
+      body: `A mãe não recebeu a atualização de handoff (${ev.kind === 'expired' ? '30 min na fila' : 'sessão encerrada'}).`,
+    })
+    return
+  }
   notify({
     title: 'Mensagem não entregue',
     body:
@@ -101,6 +117,11 @@ export const promptQueue = new PromptQueue({
   emit: (snapshot) => {
     broadcast('prompt-queue:updated', snapshot)
     noticeLostMessage(snapshot)
+    try {
+      onQueueSnapshot(snapshot)
+    } catch (err) {
+      console.error('[handoff-wake] snapshot da fila não atualizou o ledger:', err)
+    }
   },
   warn: (event) => console.warn(JSON.stringify(event)),
 })
@@ -128,6 +149,13 @@ export function registerSendPromptIpc(): void {
   })
   ptyManager.on('exit', (e) => promptQueue.onSessionExit(e.sessionId))
   setMotherNoteSender((input) => promptQueue.send(input))
+  setHandoffWakeQueue({
+    send: (input) => promptQueue.send(input),
+    replaceText: (id, text) => promptQueue.replaceText(id, text),
+    cancel: (id) => promptQueue.cancel(id),
+  })
+  sweepOrphansOnBoot()
+  setSendMessageObserver(recordChildDirectMessage)
   ptyManager.on('data', (e) => tailFeed.onData(e.sessionId))
   ptyManager.on('exit', (e) => tailFeed.onExit(e.sessionId))
 

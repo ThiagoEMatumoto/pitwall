@@ -14,6 +14,7 @@ import { broadcast } from '../notify'
 import { ptyManager } from '../pty-manager'
 import { findTranscriptPath } from '../transcript-path'
 import * as store from '../handoff-store'
+import { wakeMotherFor } from './handoff-wake'
 import { prepareHandoff } from './prepare'
 import { resumeHandoffChild } from '../../ipc/sessions'
 import type { AdoptedSession, AdoptSessionInput, HandoffStatus } from '../../../../shared/types/ipc'
@@ -172,10 +173,18 @@ export async function adoptSession(input: AdoptSessionInput): Promise<AdoptedSes
       // transcript no disco o card fica retomável no Crew Dock e o humano refaz
       // o relance com um clique.
       const interrupted = store.failIfRunning(created.id, `Adoção não conseguiu relançar: ${msg}`)
-      if (interrupted) broadcast('handoff:updated', interrupted)
+      if (interrupted) {
+        broadcast('handoff:updated', interrupted)
+        void wakeMotherFor(created.id, 'interrupted')
+      }
       throw err
     }
-    rollbackAdoption({ handoffId: created.id, row, reason: msg })
+    rollbackAdoption({
+      handoffId: created.id,
+      row,
+      reason: msg,
+      motherSessionId: input.motherSessionId,
+    })
     throw err
   }
 }
@@ -187,7 +196,12 @@ export async function adoptSession(input: AdoptSessionInput): Promise<AdoptedSes
 // Encerrado (failed) E dispensado, porque não houve trabalho nenhum a mostrar.
 // Best-effort: um erro aqui não pode mascarar o erro ORIGINAL, que é o que o
 // diálogo mostra ao humano.
-function rollbackAdoption(args: { handoffId: string; row: SessionRow; reason: string }): void {
+function rollbackAdoption(args: {
+  handoffId: string
+  row: SessionRow
+  reason: string
+  motherSessionId: string
+}): void {
   try {
     getDb()
       .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
@@ -197,6 +211,9 @@ function rollbackAdoption(args: { handoffId: string; row: SessionRow; reason: st
   }
   try {
     store.fail(args.handoffId, `Adoção abortada antes de vincular a filha: ${args.reason}`)
+    // Eco: o handoff morreu antes de existir filha — a mãe nunca soube dele, e o
+    // humano vê o erro no diálogo da adoção.
+    void wakeMotherFor(args.handoffId, 'failed', { actorSessionId: args.motherSessionId })
     const dismissed = store.dismiss(args.handoffId)
     broadcast('handoff:updated', dismissed)
   } catch (err) {

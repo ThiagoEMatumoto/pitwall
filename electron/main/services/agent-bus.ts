@@ -114,7 +114,7 @@ const UNDELIVERABLE: Record<SendPromptError, string> = {
 
 // Atributo do envelope: sem aspas, sinais de tag nem quebra — um alias forjado não
 // injeta atributo nem fecha a tag.
-function attr(value: string): string {
+export function attr(value: string): string {
   return value.replace(/["<>\r\n]/g, '').trim()
 }
 
@@ -124,7 +124,7 @@ function attr(value: string): string {
 const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f]/g
 
 export function sanitizeBody(text: string): string {
-  return text.replace(CONTROL_CHARS, '').replace(/<\/pitwall-ask/gi, '<\\/pitwall-ask')
+  return text.replace(CONTROL_CHARS, '').replace(/<\/pitwall-/gi, '<\\/pitwall-')
 }
 
 export function formatAskEnvelope(args: {
