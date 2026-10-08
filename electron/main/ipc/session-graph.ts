@@ -4,6 +4,7 @@ import { getDb } from '../services/db'
 import { broadcast, onBroadcast } from '../services/notify'
 import { buildSessionsFileIndex } from '../services/session-activity'
 import { liveSessionStates } from '../services/live-session-states'
+import { projectAndCount, readAttentionInputFrom } from '../services/attention/attention-service'
 import * as handoffStore from '../services/handoff-store'
 import { buildSessionGraph, readSessionGraphInput } from '../services/session-graph'
 import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
@@ -48,15 +49,12 @@ export function loadSessionGraph(
   index: SessionsFileIndex = buildSessionsFileIndex(),
 ): SessionGraph {
   const db = getDb()
-  return buildSessionGraph(
-    readSessionGraphInput(
-      db,
-      liveSessionStates(index),
-      Date.now(),
-      readFirstPrompt,
-      readLastPrompt,
-    ),
-  )
+  const states = liveSessionStates(index)
+  return buildSessionGraph({
+    ...readSessionGraphInput(db, states, Date.now(), readFirstPrompt, readLastPrompt),
+    // Mesmos estados vivos da fila única: o nó e o HUD não podem discordar.
+    attention: projectAndCount(readAttentionInputFrom(db, states)),
+  })
 }
 
 // Coalesce em vez de debounce puro: o 1º evento arma o timer e os seguintes na
