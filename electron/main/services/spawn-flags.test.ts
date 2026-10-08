@@ -4,6 +4,7 @@ import {
   HANDOFF_CHILD_ALLOW,
   HANDOFF_CHILD_ASK,
   HANDOFF_CHILD_DENY,
+  HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE,
   HANDOFF_CHILD_SETTINGS_JSON,
   resolveModel,
 } from './spawn-flags'
@@ -83,20 +84,26 @@ describe('HANDOFF_CHILD permissions', () => {
     for (const spec of forbidden) {
       expect(HANDOFF_CHILD_ALLOW).not.toContain(spec)
     }
-    // merge e escrita em banco continuam PEDINDO (reversível com o humano no loop);
-    // delete é bloqueado de vez.
+    // merge, escrita em banco e delete simples continuam PEDINDO (o humano
+    // autoriza na hora); delete recursivo/cloud é bloqueado de vez.
     expect(HANDOFF_CHILD_ASK).toContain('Bash(git merge:*)')
     expect(HANDOFF_CHILD_ASK).toContain('Bash(gh pr merge:*)')
     expect(HANDOFF_CHILD_ASK).toContain('Bash(psql:*)')
     expect(HANDOFF_CHILD_ASK).toContain('Bash(bq query:*)')
-    expect(HANDOFF_CHILD_DENY).toContain('Bash(rm:*)')
+    expect(HANDOFF_CHILD_ASK).toContain('Bash(rm:*)')
+    expect(HANDOFF_CHILD_DENY).toContain('Bash(rm -r*)')
     expect(HANDOFF_CHILD_DENY).toContain('Bash(gcloud * delete*)')
   })
 
-  it('preserva o denylist destrutivo canônico como segunda camada', () => {
+  it('preserva o denylist destrutivo canônico, menos o relaxado (rm simples, push de feat/*)', () => {
     for (const spec of DESTRUCTIVE_DENYLIST) {
-      expect(HANDOFF_CHILD_DENY).toContain(spec)
+      if (HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE.includes(spec)) {
+        expect(HANDOFF_CHILD_DENY).not.toContain(spec)
+      } else {
+        expect(HANDOFF_CHILD_DENY).toContain(spec)
+      }
     }
+    expect(HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE).toEqual(['Bash(rm:*)', 'Bash(git push:*)'])
   })
 
   it('fecha o buraco do allow de find (delete/exec caem no deny)', () => {

@@ -147,7 +147,7 @@ vi.mock('../services/handoff-store', () => ({
 }))
 
 import { registerSessionIpc, resumeHandoffChild } from './sessions'
-import { DESTRUCTIVE_DENYLIST } from '../services/spawn-flags'
+import { HANDOFF_CHILD_DENY } from '../services/spawn-flags'
 import * as handoffStore from '../services/handoff-store'
 const markRunning = vi.mocked(handoffStore.markRunning)
 
@@ -514,14 +514,18 @@ describe('resumeHandoffChild — permissões preservadas no relance', () => {
     expect(spawns[0].innerCmd).toContain("--permission-mode 'plan'")
   })
 
-  it('modo auto-edits volta com acceptEdits + denylist destrutivo', () => {
+  it('modo auto-edits volta com acceptEdits + denylist da filha', () => {
     handoff = baseHandoff({ mode: 'auto-edits' })
     resumeHandoffChild('h1')
     expect(spawns[0].innerCmd).toContain("--permission-mode 'acceptEdits'")
     expect(spawns[0].innerCmd).toContain('--disallowedTools')
-    for (const spec of DESTRUCTIVE_DENYLIST) {
-      expect(spawns[0].innerCmd).toContain(spec)
+    // Filha recebe o deny PRÓPRIO (coerente com o --settings): sem `git push:*`
+    // nem `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
+    for (const spec of HANDOFF_CHILD_DENY) {
+      expect(spawns[0].innerCmd).toContain(`'${spec}'`)
     }
+    expect(spawns[0].innerCmd).not.toContain("'Bash(git push:*)'")
+    expect(spawns[0].innerCmd).not.toContain("'Bash(rm:*)'")
   })
 
   it('modo interactive fica sem flag (default do claude) e sem denylist', () => {
