@@ -9,6 +9,7 @@ import { buildMotherRolePrompt } from '../services/mother-role-prompt'
 import { broadcast } from '../services/notify'
 import { resolveRepoPath } from '../services/repo-path'
 import { resolveFeatureWorktree } from '../services/work-dir'
+import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { spawnSession } from './sessions'
 import type {
   MotherPreflight,
@@ -36,6 +37,20 @@ const preflightSchema = z.object({
   featureId: z.string().min(1),
   repoId: z.string().min(1).nullable().optional(),
 })
+
+// O purpose vai inteiro pro system prompt; o nome da sessão é uma linha de UI
+// (aba, dock, mapa), então nada de quebra de linha, controle ou bidi.
+export const MOTHER_NAME_PURPOSE_MAX = 40
+
+export function motherSessionName(purpose: string): string {
+  const flat = stripUnsafeDisplay(purpose).replace(/\s+/g, ' ').trim()
+  const chars = [...flat]
+  const short =
+    chars.length > MOTHER_NAME_PURPOSE_MAX
+      ? `${chars.slice(0, MOTHER_NAME_PURPOSE_MAX - 1).join('').trimEnd()}…`
+      : flat
+  return `mãe · ${short}`
+}
 
 function isDir(path: string): boolean {
   try {
@@ -81,7 +96,13 @@ export function startMother(raw: unknown): StartMotherResult {
   // Recusa antes de qualquer efeito: sem MCP a sessão não tem as tools de
   // delegação, e uma "mãe" que não delega não é mãe.
   if (!getMcpRuntime()) throw new Error(`${MCP_NOT_READY}: ${MCP_BLOCK_REASON}`)
-  if (!getFeature(input.featureId)) throw new Error(`feature not found: ${input.featureId}`)
+  const feature = getFeature(input.featureId)
+  if (!feature) throw new Error(`feature not found: ${input.featureId}`)
+  if (!feature.repos.some((r) => r.repoId === input.repoId)) {
+    throw new Error(
+      `repo ${input.repoId} não está ligado à feature ${input.featureId}: vincule o repo à feature antes de iniciar a mãe nele`,
+    )
+  }
   // Mesma regra do spawnSession (worktree da feature > raiz do repo); o Session
   // devolvido não carrega o cwd.
   const { cwd } = repoPreflight(input.featureId, input.repoId)
@@ -89,7 +110,7 @@ export function startMother(raw: unknown): StartMotherResult {
   const session = spawnSession({
     repoId: input.repoId,
     featureId: input.featureId,
-    name: `mãe · ${input.purpose.slice(0, 40)}`,
+    name: motherSessionName(input.purpose),
     systemPromptText: buildMotherRolePrompt({ purpose: input.purpose }),
     model: input.model ?? undefined,
     effort: (input.effort as EffortLevel | null | undefined) ?? undefined,

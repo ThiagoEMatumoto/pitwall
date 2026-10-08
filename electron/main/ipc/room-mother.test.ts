@@ -52,7 +52,7 @@ vi.mock('../services/notify', () => ({
 }))
 
 import { buildSessionGraph, readSessionGraphInput } from '../services/session-graph'
-import { MCP_NOT_READY, motherPreflight, startMother } from './room-mother'
+import { MCP_NOT_READY, motherPreflight, motherSessionName, startMother } from './room-mother'
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -170,6 +170,54 @@ describe('room:start-mother', () => {
     expect(() => startMother({ ...input, purpose: '   ' })).toThrow()
     expect(sessionCount()).toBe(0)
     expect(spawns).toHaveLength(0)
+  })
+
+  it('repo existente mas fora da feature: erro claro, sem sessão nem PTY', () => {
+    testDb
+      .prepare(
+        `INSERT INTO repos (id, project_id, label, path, position, created_at)
+         VALUES ('r9','p1','Alheio',?,1,?)`,
+      )
+      .run(repoDir, Date.now())
+    expect(() => startMother({ ...input, repoId: 'r9' })).toThrow(
+      /repo r9 não está ligado à feature f1/,
+    )
+    expect(sessionCount()).toBe(0)
+    expect(spawns).toHaveLength(0)
+  })
+
+  it('nome da sessão: purpose multilinha vira uma linha limpa e curta', () => {
+    const purpose = 'Fechar\no PR\r\n\x1b[31mA\x07 da Room\u202e e depois revisar tudo com calma'
+    const res = startMother({ ...input, purpose })
+    const row = testDb
+      .prepare('SELECT purpose FROM sessions WHERE id = ?')
+      .get(res.sessionId) as { purpose: string }
+    // Claude recebe o nome por `-n` no comando de spawn: é o rótulo da lista viva.
+    const name = motherSessionName(purpose)
+    expect(name).toBe('mãe · Fechar o PR A da Room e depois revisar…')
+    expect(spawns[0].innerCmd).toContain(name)
+    // eslint-disable-next-line no-control-regex
+    expect(spawns[0].innerCmd).not.toMatch(/[\n\r\x07\x1b\u202e]/)
+    // O purpose em si não é truncado: vai inteiro pro grafo e pro prompt.
+    expect(row.purpose).toBe(purpose)
+  })
+})
+
+describe('motherSessionName', () => {
+  it('remove quebras, controle, ANSI e bidi', () => {
+    const name = motherSessionName('a\nb\r\nc\x1b[31md\x07e\u202ef\u2028g')
+    expect(name).toBe('mãe · a b cd ef g')
+    // eslint-disable-next-line no-control-regex
+    expect(name).not.toMatch(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2028\u2029]/)
+  })
+
+  it('limita o tamanho com reticências sem cortar surrogate', () => {
+    const name = motherSessionName('😀'.repeat(60))
+    const short = name.slice('mãe · '.length)
+    expect([...short]).toHaveLength(40)
+    expect(short.endsWith('…')).toBe(true)
+    expect(short).not.toMatch(/[\ud800-\udbff]…$/)
+    expect(motherSessionName('curto')).toBe('mãe · curto')
   })
 })
 
