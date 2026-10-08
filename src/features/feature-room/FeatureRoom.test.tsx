@@ -162,12 +162,16 @@ describe('FeatureRoom', () => {
     ])
     expect(room().dataset.state).toBe('normal')
     expect(screen.getByTestId('room-needs-count')).toHaveTextContent('2')
-    expect(screen.getByTestId('room-needs-count')).toHaveAttribute(
-      'aria-label',
-      '2 precisa de você',
-    )
+    expect(screen.getByText('2 precisa de você')).toHaveClass('sr-only')
     expect(screen.getByTestId('room-features-badge')).toHaveTextContent('2')
     expect(screen.getAllByTestId('room-queue-row')).toHaveLength(2)
+  })
+
+  it('feature inexistente oferece a saída para o seletor', async () => {
+    useFeatureRoomStore.setState({ featureId: 'NOPE', timelineFilter: null, openId: null })
+    render(<FeatureRoom />)
+    expect(await screen.findByText(/não existe mais/)).toBeInTheDocument()
+    expect(screen.getByTestId('room-gone-switch')).toHaveTextContent('Trocar de feature')
   })
 
   it('só 1 item aberto; J vai ao próximo e foca, K volta; J no textarea não navega', async () => {
@@ -192,6 +196,9 @@ describe('FeatureRoom', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key: 'j' })
     expect(screen.getByTestId('room-queue-open').textContent).toBe(firstOpen)
+    // Esc no textarea devolve o foco à Room, e J volta a navegar.
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(document.activeElement).toBe(room())
     // Ctrl+J tem outro dono.
     fireEvent.keyDown(room(), { key: 'j', ctrlKey: true })
     expect(screen.getByTestId('room-queue-open').textContent).toBe(firstOpen)

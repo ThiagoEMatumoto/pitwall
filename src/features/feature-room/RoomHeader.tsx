@@ -58,7 +58,7 @@ export function RoomHeader({
         className={COMPACT}
         onClick={onFeatures}
         aria-haspopup="dialog"
-        aria-label={`Trocar de feature (Ctrl+\`) · ${needsYou} precisa de você`}
+        aria-label={`Features (Ctrl+\`), ${needsYou} precisa de você`}
         title="Trocar de feature (Ctrl+`)"
         data-testid="room-features"
       >

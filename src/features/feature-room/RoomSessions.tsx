@@ -259,11 +259,14 @@ function ChildRow({
         title={`Filtrar a linha do tempo por ${row.title}`}
         className={`grid min-w-0 flex-1 grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-2 py-[9px] pr-2 text-left hover:bg-[var(--color-surface-2)] ${
           row.depth === 2 ? 'pl-7' : 'pl-2.5'
-        } ${ended ? 'opacity-[0.62]' : ''} ${
+        } ${
           pressed ? 'bg-[var(--color-surface-2)] shadow-[inset_2px_0_0_var(--color-accent)]' : ''
         }`}
       >
-        <Glyph shape={rowGlyph(row)} />
+        {/* Encerrada esmaece só o glifo: opacidade no texto derrubava o contraste a ~3,6:1. */}
+        <span className={`inline-flex ${ended ? 'opacity-[0.62]' : ''}`}>
+          <Glyph shape={rowGlyph(row)} />
+        </span>
         <span className="flex min-w-0 flex-col gap-px">
           <span className="truncate text-[13.5px] font-semibold">
             {row.depth === 2 ? '↳ ' : ''}

@@ -16,7 +16,8 @@ import { AttentionQueue } from './AttentionQueue'
 import { useFeatureRoomStore } from './feature-room-store'
 import type { QueueSubject } from './QueueItem'
 import { buildRoomView, type RoomQueueRow, type RoomSessionRow } from './room-model'
-import { ROOM_FOCUS } from './room-ui'
+import { COMPACT, ROOM_FOCUS } from './room-ui'
+import { Button } from '@/components/ui/Button'
 import { RoomHeader } from './RoomHeader'
 import { RoomHealth } from './RoomHealth'
 import { RoomSessions } from './RoomSessions'
@@ -129,9 +130,18 @@ export function FeatureRoom() {
     return (
       <main
         data-testid="feature-room"
-        className="flex flex-1 items-center justify-center text-[13px] text-[var(--color-text-dim)]"
+        className="flex flex-1 flex-col items-center justify-center gap-3 text-[13px] text-[var(--color-text-dim)]"
       >
-        Esta feature não existe mais ou foi arquivada.
+        <p className="m-0">Esta feature não existe mais ou foi arquivada.</p>
+        <Button
+          variant="ghost"
+          className={COMPACT}
+          onClick={openFeatureSwitcher}
+          aria-haspopup="dialog"
+          data-testid="room-gone-switch"
+        >
+          Trocar de feature
+        </Button>
       </main>
     )
   }
@@ -210,6 +220,13 @@ export function FeatureRoom() {
   }
 
   const onKeyDown = (e: KeyboardEvent) => {
+    // Eventos de portais (DelegateDialog, menus) borbulham pela árvore React mas não são da Room.
+    if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return
+    if (e.key === 'Escape' && isTyping(e.target)) {
+      e.preventDefault()
+      rootRef.current.focus({ preventScroll: true })
+      return
+    }
     if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return
     const k = e.key.toLowerCase()
     if (k !== 'j' && k !== 'k') return

@@ -32,11 +32,12 @@ export function AttentionQueue({
       <SectionHead id="room-queue-h" title="Precisa de você">
         <span
           data-testid="room-needs-count"
-          aria-label={`${n} precisa de você`}
+          aria-hidden
           className="text-[22px] font-bold tabular-nums text-[var(--color-text)]"
         >
           {n}
         </span>
+        <span className="sr-only">{`${n} precisa de você`}</span>
         <span className="ml-auto text-[12px] text-[var(--color-text-dim)]">
           mais bloqueante, depois mais antigo · <Kbd>J</Kbd> <Kbd>K</Kbd> navega
         </span>
