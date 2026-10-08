@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyAllMigrations, scanFixture, seedRepos, seedSession } from './attention-test-harness'
 import { projectAttention } from '../../../../shared/attention/project-attention'
-import { humanQueue } from '../../../../shared/attention/selectors'
+import { countForLane, humanQueue } from '../../../../shared/attention/selectors'
 import type { LiveStatus, ScreenScan } from '../../../../shared/tui/attention-reason'
 import type { AttentionItem, AttentionLiveSession } from '../../../../shared/types/attention'
 
@@ -213,6 +213,26 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
     vi.setSystemTime(T0 + 60_000)
     transcriptPath = null
     expect(project([])).toEqual([])
+  })
+
+  it('7d) interrupted retomável com a PTY viva num menu → 1 item só (session_menu do handoff)', async () => {
+    const h = runningChild('r1', 'c1')
+    store.failIfRunning(h.id, 'PTY morreu')
+    transcriptPath = '/tmp/t.jsonl'
+    const scan = await scanFixture('permission-bash')
+    const items = project([liveOf('c1', 'waiting', scan)])
+    expect(items.map((i) => [i.kind, i.handoffId])).toEqual([['session_menu', h.id]])
+    // Menu respondido: a interrupção volta a ser o item do handoff.
+    expect(project([liveOf('c1', 'idle', null)]).map((i) => i.kind)).toEqual(['child_interrupted'])
+  })
+
+  it('7e) failed com a PTY da filha num menu → 2 itens, mas a lane conta 1 sessão', async () => {
+    const h = runningChild('r1', 'c1')
+    store.fail(h.id, 'x')
+    const scan = await scanFixture('permission-bash')
+    const items = humanQueue(project([liveOf('c1', 'waiting', scan)]))
+    expect(items.map((i) => i.kind)).toEqual(['session_menu', 'child_failed'])
+    expect(countForLane(items, new Set(['c1']), null)).toBe(1)
   })
 
   it('8) report sem markConsumed com a mãe viva → result_unconsumed info/mother; depois de markConsumed → 0', () => {

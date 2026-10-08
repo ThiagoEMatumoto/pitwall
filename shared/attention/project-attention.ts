@@ -57,6 +57,7 @@ export function projectAttention(input: AttentionInput): AttentionItem[] {
   }
 
   for (const h of input.handoffs) {
+    if (menuSubjects.has(h.id)) continue
     const orphan = ptyOrphan(h, input.transitions.get(h.id), live, ledByChild, byHandoff)
     if (orphan) items.push(orphan)
   }
@@ -70,7 +71,9 @@ function handoffItem(
   live: LiveById,
   menuSubjects: ReadonlySet<string>,
 ): AttentionItem | null {
-  if (isLedByMother(h) && handoffAsking(h) && !menuSubjects.has(h.id)) return childQuestionItem(h)
+  // Menu na tela da filha já é o item do handoff (pergunta ou interrupção retomável).
+  if (menuSubjects.has(h.id)) return null
+  if (isLedByMother(h) && handoffAsking(h)) return childQuestionItem(h)
   if (h.status === 'failed' && h.dismissedAt == null && inScope(h, live))
     return childFailedItem(h, t, live)
   if (h.status === 'interrupted' && isLedByMother(h)) return childInterruptedItem(h, t, live)
