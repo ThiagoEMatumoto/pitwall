@@ -253,15 +253,87 @@ describe('handoff-store', () => {
       })
     })
 
-    it('report a partir de interrupted ainda conclui (retomada legítima)', () => {
+    // REGRESSÃO: report tardio de filha interrompida virava done por cima do
+    // desfecho. A retomada legítima passa por markRunning (resumeHandoffChild).
+    it('report a partir de interrupted é recusado e grava report_rejected', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
       store.failIfRunning(h.id, 'filha morreu')
-      const after = store.report(h.id, 'terminei depois de retomar')
-      expect(after.status).toBe('done')
-      expect(after.summary).toBe('terminei depois de retomar')
+      expect(() => store.report(h.id, 'terminei tarde')).toThrow(store.HandoffTransitionError)
+      const after = store.get(h.id)!
+      expect(after.status).toBe('interrupted')
+      expect(after.summary).toBeNull()
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'report_rejected',
+        from_status: 'interrupted',
+        to_status: 'interrupted',
+        detail: 'terminei tarde',
+      })
     })
+
+    it('report após retomada (interrupted → markRunning → report) conclui', () => {
+      const h = newHandoff()
+      store.approve(h.id, {})
+      store.markRunning(h.id, 's-child')
+      store.failIfRunning(h.id, 'filha morreu')
+      store.markRunning(h.id, 's-child-2')
+      expect(store.report(h.id, 'terminei depois de retomar').status).toBe('done')
+    })
+
+    it('report de running e de needs_input concluem', () => {
+      const a = newHandoff('r1')
+      store.markRunning(a.id, 's-a')
+      expect(store.report(a.id, 'ok').status).toBe('done')
+      const b = newHandoff('r2')
+      store.markRunning(b.id, 's-b')
+      store.ask(b.id, 'qual caminho?')
+      expect(store.report(b.id, 'ok').status).toBe('done')
+      expect(events(a.id).at(-1)).toMatchObject({ event: 'report', from_status: 'running' })
+    })
+
+    it.each(['pending', 'failed', 'rejected'] as const)('report a partir de %s é recusado', (st) => {
+      const h = newHandoff()
+      if (st === 'failed') store.fail(h.id, 'erro')
+      if (st === 'rejected') store.reject(h.id)
+      expect(() => store.report(h.id, 'x')).toThrow(/report recusado/)
+      expect(store.get(h.id)!.status).toBe(st)
+      expect(events(h.id).at(-1)?.event).toBe('report_rejected')
+    })
+  })
+
+  describe('fail (guarda de origem)', () => {
+    it('falha de spawn: pending/approved → failed (sem filha ainda)', () => {
+      const a = newHandoff('r1')
+      expect(store.fail(a.id, 'spawn falhou').status).toBe('failed')
+      const b = newHandoff('r2')
+      store.approve(b.id, {})
+      expect(store.fail(b.id, 'spawn falhou').status).toBe('failed')
+    })
+
+    it.each(['done', 'interrupted', 'failed', 'rejected'] as const)(
+      'fail a partir de %s é recusado, preserva o desfecho e grava fail_rejected',
+      (st) => {
+        const h = newHandoff()
+        store.markRunning(h.id, 's-child')
+        if (st === 'done') store.report(h.id, 'ok')
+        if (st === 'interrupted') store.failIfRunning(h.id, 'morreu')
+        if (st === 'failed') store.fail(h.id, 'erro original')
+        if (st === 'rejected') {
+          const r = newHandoff('r2')
+          store.reject(r.id)
+          expect(() => store.fail(r.id, 'tarde')).toThrow(store.HandoffTransitionError)
+          return
+        }
+        expect(() => store.fail(h.id, 'tarde')).toThrow(store.HandoffTransitionError)
+        expect(store.get(h.id)!.status).toBe(st)
+        expect(events(h.id).at(-1)).toMatchObject({
+          event: 'fail_rejected',
+          from_status: st,
+          detail: 'tarde',
+        })
+      },
+    )
   })
 
   describe('failIfRunning (reconciliação de morte da filha → interrupted)', () => {
@@ -450,6 +522,43 @@ describe('handoff-store', () => {
       // 2ª passada: interrupted não está em ('running','needs_input') → ignorado.
       expect(store.reconcileStuck()).toBe(0)
       expect(store.get(h.id)?.status).toBe('interrupted')
+    })
+  })
+
+  describe('reconcileStuck com killer (failed com PTY viva)', () => {
+    it('mata a filha viva de handoff failed e loga reconcileFailedChild', () => {
+      const h = newHandoff('r1')
+      spawnChild(h.id, 's-zombie', 'running')
+      store.fail(h.id, 'falha forçada')
+      const killed: string[] = []
+      expect(store.reconcileStuck((id) => killed.push(id))).toBe(1)
+      expect(killed).toEqual(['s-zombie'])
+      expect(store.get(h.id)!.status).toBe('failed')
+      expect(events(h.id).at(-1)).toMatchObject({
+        event: 'reconcileFailedChild',
+        detail: 's-zombie',
+      })
+    })
+
+    it('não mata filha já morta, nem filha que virou de outro handoff ativo', () => {
+      const dead = newHandoff('r1')
+      spawnChild(dead.id, 's-dead', 'exited')
+      store.fail(dead.id, 'erro')
+      const old = newHandoff('r2')
+      spawnChild(old.id, 's-shared', 'running')
+      store.fail(old.id, 'erro')
+      const successor = newHandoff('r2')
+      store.markRunning(successor.id, 's-shared')
+      const killed: string[] = []
+      expect(store.reconcileStuck((id) => killed.push(id))).toBe(0)
+      expect(killed).toEqual([])
+    })
+
+    it('sem killer, failed com PTY viva fica intocado (caminho do MCP)', () => {
+      const h = newHandoff('r1')
+      spawnChild(h.id, 's-zombie', 'running')
+      store.fail(h.id, 'erro')
+      expect(store.reconcileStuck()).toBe(0)
     })
   })
 
@@ -952,7 +1061,9 @@ describe('handoff-store', () => {
       transcriptPath = '/tmp/t.jsonl'
       const running = newHandoff()
       expect(store.get(running.id)!.resumable).toBe(false)
-      const done = store.report(newHandoff().id, 'ok')
+      const live = newHandoff()
+      store.markRunning(live.id, 's-live')
+      const done = store.report(live.id, 'ok')
       expect(done.resumable).toBe(false)
     })
 
