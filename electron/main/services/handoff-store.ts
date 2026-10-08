@@ -3,6 +3,8 @@ import { getDb } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
 import { isLedByMother } from '../../../shared/handoff-lead'
+import * as requests from './handoff-requests'
+import type { CreateRequestInput, HandoffRequest } from '../../../shared/types/handoff-request'
 import type {
   CreateHandoffInput,
   Handoff,
@@ -258,6 +260,7 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
       db.prepare(
         `UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE id = ?`,
       ).run(`Substituído por ${id} (force): ${forceReason}`, now, existing.id)
+      requests.cancelOpen(existing.id, 'force_superseded')
       logEvent(
         existing.id,
         'force_superseded',
@@ -474,10 +477,13 @@ export function report(id: string, summary: string): Handoff {
     logEvent(id, 'report_rejected', from, from, summary)
     throw new HandoffTransitionError(id, 'report', from)
   }
-  getDb()
-    .prepare('UPDATE handoffs SET status = ?, summary = ?, updated_at = ? WHERE id = ?')
-    .run('done', summary, Date.now(), id)
-  logEvent(id, 'report', 'done', from)
+  getDb().transaction(() => {
+    getDb()
+      .prepare('UPDATE handoffs SET status = ?, summary = ?, updated_at = ? WHERE id = ?')
+      .run('done', summary, Date.now(), id)
+    requests.cancelOpen(id, 'report')
+    logEvent(id, 'report', 'done', from)
+  })()
   return fresh(id)
 }
 
@@ -503,54 +509,65 @@ export function progress(id: string, step: string): Handoff {
   return fresh(id)
 }
 
-// A filha levanta uma pergunta (handoff_ask) e passa pra needs_input, gravando a
-// pergunta + timestamp. Aceita running E needs_input: uma segunda pergunta antes
-// da resposta é EMPILHADA no mesmo campo (separada por linha em branco) em vez de
-// virar no-op invisível — a mãe precisa ver todos os bloqueios abertos, e
-// question_asked_at guarda o instante do PRIMEIRO (é o "bloqueada desde"). Empilha
-// só a partir de needs_input: em running a pergunta pendente pode ser resíduo de
-// um ciclo anterior (ex.: handoff interrompido e retomado). Fora do estado vivo
-// (pending/done/...) segue no-op.
-export function ask(id: string, question: string): Handoff {
-  const now = Date.now()
-  const row = getDb()
-    .prepare('SELECT status, pending_question, question_asked_at FROM handoffs WHERE id = ?')
-    .get(id) as
-    | { status: string; pending_question: string | null; question_asked_at: number | null }
-    | undefined
-  if (!row || (row.status !== 'running' && row.status !== 'needs_input')) return fresh(id)
-
-  const stacked = row.status === 'needs_input' && !!row.pending_question
-  getDb()
-    .prepare(
-      `UPDATE handoffs
-         SET status = 'needs_input', pending_question = ?, question_asked_at = ?, updated_at = ?
-       WHERE id = ?`,
-    )
-    .run(
-      stacked ? `${row.pending_question}\n\n${question}` : question,
-      stacked ? row.question_asked_at : now,
-      now,
-      id,
-    )
-  logEvent(id, 'ask', 'needs_input', row.status, question)
-  return fresh(id)
+// A filha levanta um pedido (handoff_ask). Cada pergunta é uma linha em
+// handoff_requests, resolvida por id; needs_input e o espelho pending_question
+// saem de syncHandoffMirror (regra única). Uma 2ª pergunta antes da resposta é
+// um 2º pedido, não um no-op: a mãe precisa ver todos os bloqueios abertos.
+// Fora do estado vivo (pending/done/...) segue no-op, sem pedido.
+export function ask(
+  id: string,
+  input: CreateRequestInput | string,
+  askerSessionId: string | null = null,
+): { handoff: Handoff; request: HandoffRequest | null; created: boolean } {
+  const req: CreateRequestInput = typeof input === 'string' ? { question: input } : input
+  const db = getDb()
+  return db.transaction(() => {
+    const from = currentStatus(id)
+    if (from !== 'running' && from !== 'needs_input') {
+      return { handoff: fresh(id), request: null, created: false }
+    }
+    const { request, created } = requests.createRequest(id, req, askerSessionId)
+    // 'ask' segue na trilha: o wake da mãe (WAKING_EVENTS) lê este evento.
+    if (created) logEvent(id, 'ask', 'needs_input', from, req.question)
+    return { handoff: fresh(id), request, created }
+  })()
 }
 
-// A mãe respondeu (handoff_message) e a filha deve retomar: needs_input → running,
-// limpa a pergunta pendente. Só age se estava needs_input (idempotente fora dele).
-export function resume(id: string): Handoff {
-  const now = Date.now()
-  const from = currentStatus(id)
-  const res = getDb()
-    .prepare(
-      `UPDATE handoffs
-         SET status = 'running', pending_question = NULL, question_asked_at = NULL, updated_at = ?
-       WHERE id = ? AND status = 'needs_input'`,
-    )
-    .run(now, id)
-  if (res.changes > 0) logEvent(id, 'resume', 'running', from)
-  return fresh(id)
+export interface ResumeResult {
+  handoff: Handoff
+  closedRequestId: string | null
+  openRequestIds: string[]
+}
+
+// Resposta em texto livre (handoff_message / inbox) sem requestId. Só fecha um
+// pedido quando não há ambiguidade: exatamente 1 aberto e ele não é human_only.
+// Com 0 ou ≥2 abertos o status não muda e quem chama recebe os ids abertos.
+// needs_input SEM pedido (dado legado, app antigo) volta a running como antes.
+export function resume(
+  id: string,
+  opts: { text?: string; by?: 'mother' | 'human' } = {},
+): ResumeResult {
+  const open = requests.listOpen({ handoffId: id })
+  let closedRequestId: string | null = null
+  if (open.length === 1 && open[0].resolver !== 'human_only') {
+    requests.answerRequest(open[0].id, { text: opts.text, by: opts.by ?? 'mother' })
+    closedRequestId = open[0].id
+  } else if (open.length === 0) {
+    const from = currentStatus(id)
+    const res = getDb()
+      .prepare(
+        `UPDATE handoffs
+           SET status = 'running', pending_question = NULL, question_asked_at = NULL, updated_at = ?
+         WHERE id = ? AND status = 'needs_input'`,
+      )
+      .run(Date.now(), id)
+    if (res.changes > 0) logEvent(id, 'resume', 'running', from)
+  }
+  return {
+    handoff: fresh(id),
+    closedRequestId,
+    openRequestIds: requests.listOpen({ handoffId: id }).map((r) => r.id),
+  }
 }
 
 export function fail(id: string, error: string): Handoff {
@@ -560,10 +577,13 @@ export function fail(id: string, error: string): Handoff {
     logEvent(id, 'fail_rejected', from, from, error)
     throw new HandoffTransitionError(id, 'fail', from)
   }
-  getDb()
-    .prepare('UPDATE handoffs SET status = ?, error = ?, updated_at = ? WHERE id = ?')
-    .run('failed', error, Date.now(), id)
-  logEvent(id, 'fail', 'failed', from, error)
+  getDb().transaction(() => {
+    getDb()
+      .prepare('UPDATE handoffs SET status = ?, error = ?, updated_at = ? WHERE id = ?')
+      .run('failed', error, Date.now(), id)
+    requests.cancelOpen(id, 'fail')
+    logEvent(id, 'fail', 'failed', from, error)
+  })()
   return fresh(id)
 }
 
@@ -577,13 +597,18 @@ export function fail(id: string, error: string): Handoff {
 // Retorna o handoff atualizado, ou null se nada foi alterado (não estava vivo).
 export function failIfRunning(id: string, error: string): Handoff | null {
   const from = currentStatus(id)
-  const res = getDb()
-    .prepare(
-      "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE id = ? AND status IN ('running','needs_input')",
-    )
-    .run(error, Date.now(), id)
-  if (res.changes === 0) return null
-  logEvent(id, 'interrupt', 'interrupted', from, error)
+  const changed = getDb().transaction(() => {
+    const res = getDb()
+      .prepare(
+        "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE id = ? AND status IN ('running','needs_input')",
+      )
+      .run(error, Date.now(), id)
+    if (res.changes === 0) return false
+    requests.cancelOpen(id, 'interrupt')
+    logEvent(id, 'interrupt', 'interrupted', from, error)
+    return true
+  })()
+  if (!changed) return null
   return fresh(id)
 }
 
@@ -629,6 +654,7 @@ export function reconcileStuck(
     )
     .run(error, Date.now())
   for (const h of stuck) {
+    requests.cancelOpen(h.id, 'reconcileStuck')
     logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
     onInterrupted?.(h.id)
   }
@@ -764,12 +790,15 @@ export function release(id: string): Handoff {
   // COALESCE: se já tinha sido dispensado antes, preserva o instante original da
   // saída do painel — soltar não é uma segunda dispensa.
   if (live) {
-    db.prepare(
-      `UPDATE handoffs
-         SET child_session_id = NULL, dismissed_at = COALESCE(dismissed_at, ?),
-             status = 'interrupted', error = ?, updated_at = ?
-       WHERE id = ?`,
-    ).run(now, RELEASE_ERROR, now, id)
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE handoffs
+           SET child_session_id = NULL, dismissed_at = COALESCE(dismissed_at, ?),
+               status = 'interrupted', error = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(now, RELEASE_ERROR, now, id)
+      requests.cancelOpen(id, 'release')
+    })()
   } else {
     db.prepare(
       `UPDATE handoffs

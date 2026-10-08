@@ -108,7 +108,7 @@ describe('QueueItem — ações inline', () => {
   afterEach(() => testDb.close())
 
   it('child_question: sem texto o botão fica desabilitado; responder chama sendMessage({id,text})', async () => {
-    const h = store.ask(child('r1', 'A').id, 'qual branch?')
+    const h = store.ask(child('r1', 'A').id, 'qual branch?').handoff
     sendMessage.mockResolvedValue(undefined)
     await mount([
       { id: 'M', status: 'idle' },

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
+import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import type {
   PromptQueueCounters,
   PromptQueueEvent,
@@ -129,6 +130,13 @@ export class PromptQueue {
     return this.deps.now?.() ?? Date.now()
   }
 
+  // A filha em needs_input espera a resposta da mãe: a <pitwall-answer> é
+  // justamente o que ela aguarda, então não pode ficar presa no gate 'attention'
+  // (com outro pedido aberto ela segue needs_input depois desta resposta).
+  private askingFor(sessionId: string, text: string): boolean {
+    return !isHandoffAnswerEnvelope(text) && this.deps.handoffAsking(sessionId)
+  }
+
   snapshot(): PromptQueueSnapshot {
     return {
       items: this.items.map(({ holding: _h, outcome: _o, fromSessionId: _f, ...q }) => q),
@@ -164,7 +172,7 @@ export class PromptQueue {
     fromSessionId: string | undefined,
   ): SendPromptResult {
     const status = this.deps.status(sessionId)
-    const asking = this.deps.handoffAsking(sessionId)
+    const asking = this.askingFor(sessionId, text)
     const verdict = scan
       ? deliveryVerdict(status, scan, asking, 'now')
       : blindVerdict(status, asking, this.deps.nativeStatus(sessionId))
@@ -267,7 +275,7 @@ export class PromptQueue {
       const verdict = deliveryVerdict(
         this.deps.status(sessionId),
         scan,
-        this.deps.handoffAsking(sessionId),
+        this.askingFor(sessionId, head.text),
       )
       // A mensagem pode ter sido cancelada enquanto a tela era relida.
       if (!this.items.includes(head)) return false

@@ -24,6 +24,10 @@ import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/featur
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
 import { waitForUpdates, wakeMotherFor } from '../handoff/handoff-wake'
+import * as requestStore from '../handoff-requests'
+import { HumanOnlyError } from '../handoff-requests'
+import { deliverAnswer } from '../handoff/answer-delivery'
+import type { HandoffRequest } from '../../../../shared/types/handoff-request'
 import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
@@ -734,13 +738,98 @@ const handoffProgressSchema = z.object({
 const handoffMessageSchema = z.object({
   handoffId: z.string().min(1),
   text: z.string().min(1).max(4096),
+  // Com requestId a mensagem é a resposta àquele pedido (mesmo caminho de handoff_answer).
+  requestId: z.string().min(1).optional(),
 })
 
-// Pergunta levantada PELA FILHA → mãe (decisão/bloqueio). question não-vazio.
-const handoffAskSchema = z.object({
-  handoffId: z.string().min(1),
-  question: z.string().min(1).max(4096),
+const requestOptionSchema = z.object({
+  key: z.string().min(1).max(8),
+  label: z.string().min(1).max(300),
+  detail: z.string().max(600).optional(),
 })
+const requestKindEnum = z.enum(['decision', 'confirmation', 'human_action', 'question'])
+const requestRiskEnum = z.enum(['destructive_data', 'deploy_infra_spend'])
+
+// Campos estruturados comuns ao ask e ao escalate. decision exige 2+ opções, e a
+// recomendação, quando há opções, tem de ser uma key delas.
+function refineRequestFields(
+  v: { kind?: string; options?: Array<{ key: string }>; recommendation?: string },
+  c: z.RefinementCtx,
+): void {
+  const options = v.options ?? []
+  if (v.kind === 'decision' && options.length < 2) {
+    c.addIssue({ code: 'custom', path: ['options'], message: 'kind "decision" exige de 2 a 6 options.' })
+  }
+  if (v.recommendation && options.length > 0 && !options.some((o) => o.key === v.recommendation)) {
+    c.addIssue({
+      code: 'custom',
+      path: ['recommendation'],
+      message: 'recommendation tem de ser a key de uma das options.',
+    })
+  }
+  if (new Set(options.map((o) => o.key)).size !== options.length) {
+    c.addIssue({ code: 'custom', path: ['options'], message: 'keys de options repetidas.' })
+  }
+}
+
+// Pergunta levantada PELA FILHA → mãe (decisão/bloqueio). Só handoffId+question
+// é o formato antigo (briefings velhos, Codex): continua valendo, vira kind question.
+const handoffAskSchema = z
+  .object({
+    handoffId: z.string().min(1),
+    question: z.string().min(1).max(4096),
+    kind: requestKindEnum.optional(),
+    options: z.array(requestOptionSchema).max(6).optional(),
+    recommendation: z.string().max(600).optional(),
+    costOfError: z.string().max(600).optional(),
+    risk: requestRiskEnum.optional(),
+    resolver: z.enum(['mother', 'human_only']).optional(),
+    idempotencyKey: z.string().max(120).optional(),
+  })
+  .superRefine(refineRequestFields)
+
+// Resposta da MÃE a um pedido da filha, por id.
+const handoffAnswerSchema = z.object({
+  handoffId: z.string().min(1),
+  requestId: z.string().min(1),
+  choice: z.string().min(1).max(8).optional(),
+  text: z.string().max(4096).optional(),
+  reject: z.boolean().optional(),
+})
+
+// Escalação da MÃE ao humano: de um pedido existente (requestId) ou de um novo.
+const handoffEscalateSchema = z
+  .object({
+    handoffId: z.string().min(1),
+    requestId: z.string().min(1).optional(),
+    kind: requestKindEnum.optional(),
+    question: z.string().min(1).max(4096).optional(),
+    options: z.array(requestOptionSchema).max(6).optional(),
+    recommendation: z.string().max(600).optional(),
+    costOfError: z.string().max(600).optional(),
+    risk: requestRiskEnum.optional(),
+  })
+  .superRefine((v, c) => {
+    if (!v.requestId && !v.question) {
+      c.addIssue({ code: 'custom', path: ['question'], message: 'sem requestId, question é obrigatório.' })
+    }
+    refineRequestFields(v, c)
+  })
+
+function requestView(r: HandoffRequest) {
+  return {
+    id: r.id,
+    kind: r.kind,
+    question: r.question,
+    options: r.options,
+    recommendation: r.recommendation,
+    costOfError: r.costOfError,
+    resolver: r.resolver,
+    status: r.status,
+    answer: r.answer,
+    answerNote: r.answerNote,
+  }
+}
 
 // GUARD DE POSSE das tools de filha (report/progress/ask). O carimbo de sessão do
 // MCP identifica QUEM chamou — para a filha, é o mesmo `sessions.id` que mora em
@@ -769,6 +858,73 @@ function assertCurrentChild(
   throw new Error(
     `${action} recusado: este handoff (${handoff.id}) já não é seu. Você passou o bastão — quem responde por ele agora é ${nowAlias ? `a sessão "${nowAlias}"` : 'a sessão sucessora'}, e fechar/atualizar o card daqui apagaria o trabalho dela. Se tem algo a dizer sobre esse trabalho, mande por SendMessage; encerre o SEU turno sem tocar no handoff.`,
   )
+}
+
+// Simétrica a assertCurrentChild, para as tools da MÃE. strict=true
+// (handoff_escalate, tool nova, sem legado a proteger): sem carimbo recusa.
+// strict=false (handoff_answer, handoff_message{requestId}): sem carimbo passa,
+// como assertCurrentChild. A trava human_only NÃO depende daqui: ela está no
+// resolver do pedido (answerRequest by 'mother' recusa para qualquer chamador MCP).
+function assertCurrentMother(
+  handoff: { id: string; motherSessionId: string | null },
+  ctx: McpRequestContext,
+  action: string,
+  opts: { strict: boolean },
+): void {
+  const caller = ctx.motherSessionId
+  if (!caller && !opts.strict) return
+  if (caller && handoff.motherSessionId && caller === handoff.motherSessionId) return
+  if (caller && !handoff.motherSessionId && !opts.strict) return
+  throw new Error(
+    `${action} recusado: só a mãe deste handoff (${handoff.id}) pode ${action === 'handoff_escalate' ? 'escalar' : 'responder'} — ${caller ? 'você não é ela' : 'esta sessão não tem carimbo de identidade'}. Se você é a filha, use handoff_ask.`,
+  )
+}
+
+// Caminho comum de handoff_answer e handoff_message{requestId}: resolve como mãe,
+// entrega a resposta a quem perguntou e devolve o que segue aberto.
+function answerAsMother(
+  notify: McpNotify,
+  ctx: McpRequestContext,
+  args: { handoffId: string; requestId: string; choice?: string; text?: string; reject?: boolean },
+  action: string,
+) {
+  const handoff = handoffStore.get(args.handoffId)
+  if (!handoff) throw new Error(`handoff não encontrado: ${args.handoffId}`)
+  assertCurrentMother(handoff, ctx, action, { strict: false })
+  const req = requestStore.get(args.requestId)
+  if (!req || req.handoffId !== args.handoffId) {
+    throw new Error(`pedido ${args.requestId} não pertence ao handoff ${args.handoffId}.`)
+  }
+  if (!args.reject && args.choice === undefined && !args.text?.trim()) {
+    throw new Error(`${action}: informe choice (key de uma option) ou text.`)
+  }
+  let answered: HandoffRequest
+  try {
+    answered = requestStore.answerRequest(args.requestId, {
+      choice: args.choice,
+      text: args.text,
+      reject: args.reject,
+      by: 'mother',
+    })
+  } catch (err) {
+    if (err instanceof HumanOnlyError) throw new Error(`${action} recusado: ${err.message}`)
+    throw err
+  }
+  void deliverAnswer(answered)
+  const updated = handoffStore.get(args.handoffId)!
+  notify.broadcast('handoff:updated', updated)
+  if (updated.childSessionId) {
+    emitSessionLinkPulse({
+      fromSessionId: ctx.motherSessionId ?? updated.motherSessionId,
+      toSessionId: updated.childSessionId,
+      kind: 'answer',
+    })
+  }
+  return ok({
+    status: updated.status,
+    requestStatus: answered.status,
+    openRequestIds: requestStore.listOpen({ handoffId: args.handoffId }).map((r) => r.id),
+  })
 }
 
 function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
@@ -1027,6 +1183,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           lastActivityAt: activity?.lastActivityAt ?? null,
           lastText: activity?.lastText ?? null,
           tokens: activity?.tokens ?? null,
+          requests: requestStore.listFor(handoffId).map(requestView),
         })
       },
     },
@@ -1037,7 +1194,10 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). Read the pending blocker with handoff_result first.',
       inputSchema: handoffMessageSchema,
       handler: (args) => {
-        const { handoffId, text } = handoffMessageSchema.parse(args)
+        const { handoffId, text, requestId } = handoffMessageSchema.parse(args)
+        if (requestId) {
+          return answerAsMother(notify, ctx, { handoffId, requestId, text }, 'handoff_message')
+        }
         const handoff = handoffStore.get(handoffId)
         if (!handoff) throw new Error(`handoff não encontrado: ${handoffId}`)
         if (handoff.status !== 'running' && handoff.status !== 'needs_input') {
@@ -1056,15 +1216,19 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         // A mãe não vê a tela da filha: o Enter do paste não pode cair num menu.
         const childId = handoff.childSessionId
         return injectIntoChildGuarded(childId, text).then(() => {
-          // A mãe respondeu: a filha retoma (needs_input → running, limpa a pergunta).
-          const updated = handoffStore.resume(handoffId)
+          // Sem requestId: fecha o pedido só se houver exatamente 1 aberto e ele
+          // não for human_only. Com 0 ou ≥2, o status fica e a mãe recebe os ids.
+          const { handoff: updated, openRequestIds } = handoffStore.resume(handoffId, {
+            text,
+            by: 'mother',
+          })
           notify.broadcast('handoff:updated', updated)
           emitSessionLinkPulse({
             fromSessionId: ctx.motherSessionId ?? handoff.motherSessionId,
             toSessionId: childId,
             kind: handoff.status === 'needs_input' ? 'answer' : 'message',
           })
-          return ok({ status: updated.status, delivered: true })
+          return ok({ status: updated.status, delivered: true, openRequestIds })
         })
       },
     },
@@ -1072,27 +1236,85 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_ask',
       title: 'Ask the mother a question',
       description:
-        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Asking again before the mother answers STACKS the new question onto the pending one (nothing is dropped). Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. The mother is woken automatically at the end of her turn. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
+        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records ONE typed request and moves the handoff to needs_input. Structured fields (all optional except question): kind (decision | confirmation | human_action | question), options [{ key, label, detail? }] (decision needs 2 to 6), recommendation (the option key you recommend), costOfError (what breaks if wrong, and whether it is reversible), risk ("destructive_data" for destructive migration/data, "deploy_infra_spend" for deploy/infra/spend) — risk makes the request human_only: only the human resolves it, never the mother. Pushing to a protected branch and scope changes are NOT risk values. One question per call; two doubts = two calls, each answered separately by requestId. Never ask only in the terminal: a question outside handoff_ask does not exist for the mother or the human. The answer arrives as <pitwall-answer request-id="...">. Send the same blocker to your orchestrator over SendMessage too, then STOP and wait. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
       inputSchema: handoffAskSchema,
       handler: (args) => {
-        const { handoffId, question } = handoffAskSchema.parse(args)
+        const { handoffId, ...input } = handoffAskSchema.parse(args)
         const existing = handoffStore.get(handoffId)
         if (!existing) throw new Error(`handoff não encontrado: ${handoffId}`)
         assertCurrentChild(existing, ctx, 'handoff_ask')
-        const updated = handoffStore.ask(handoffId, question)
+        // Filha sem carimbo (Codex/config legada) ainda tem destinatário para a resposta.
+        const asker = ctx.motherSessionId ?? existing.childSessionId
+        const { handoff: updated, request, created } = handoffStore.ask(
+          handoffId,
+          { ...input, kind: input.kind ?? 'question' },
+          asker,
+        )
         notify.broadcast('handoff:updated', updated)
         emitSessionLinkPulse({
           fromSessionId: existing.childSessionId ?? ctx.motherSessionId,
           toSessionId: updated.motherSessionId,
           kind: 'question',
         })
-        // Toda pergunta acorda (inclusive a empilhada); o coalescing junta.
-        if (updated.status === 'needs_input')
+        // Toda pergunta nova acorda; a repetida por idempotencyKey não.
+        if (created && updated.status === 'needs_input')
           void wakeMotherFor(handoffId, 'asked', { actorSessionId: ctx.motherSessionId })
         return ok({
           status: updated.status,
+          requestId: request?.id ?? null,
+          resolver: request?.resolver ?? null,
           pendingQuestion: updated.pendingQuestion,
         })
+      },
+    },
+    {
+      name: 'handoff_answer',
+      title: 'Answer a child request',
+      description:
+        'Called by the MOTHER to answer ONE typed request of a child, by requestId (read them in handoff_result.requests). choice = the option key; text = free answer or a note. reject: true declines the request (the child is told). The answer reaches the child as <pitwall-answer> at the end of its turn; the handoff only resumes when no request is left open. human_only requests (risk destructive_data / deploy_infra_spend, or escalated) are REFUSED here: only the human resolves them in the Room. If you think a request needs the human, call handoff_escalate.',
+      inputSchema: handoffAnswerSchema,
+      handler: (args) => answerAsMother(notify, ctx, handoffAnswerSchema.parse(args), 'handoff_answer'),
+    },
+    {
+      name: 'handoff_escalate',
+      title: 'Escalate a request to the human',
+      description:
+        'Called by the MOTHER of the handoff (only her) to put a decision in front of the human. With requestId: the child request becomes human_only and goes to the human queue (the answer reaches the child AND you). Without requestId: opens a new human_only request from you (kind, question, options, recommendation, costOfError, risk). You never decide a human_only request yourself. Use it for destructive migration/data or deploy/infra/spend, or anything you are not authorised to decide.',
+      inputSchema: handoffEscalateSchema,
+      handler: (args) => {
+        const { handoffId, requestId, ...input } = handoffEscalateSchema.parse(args)
+        const handoff = handoffStore.get(handoffId)
+        if (!handoff) throw new Error(`handoff não encontrado: ${handoffId}`)
+        assertCurrentMother(handoff, ctx, 'handoff_escalate', { strict: true })
+        const mother = ctx.motherSessionId!
+        let request: HandoffRequest
+        if (requestId) {
+          const existing = requestStore.get(requestId)
+          if (!existing || existing.handoffId !== handoffId) {
+            throw new Error(`pedido ${requestId} não pertence ao handoff ${handoffId}.`)
+          }
+          request = requestStore.escalateRequest(requestId, mother)
+        } else {
+          if (handoff.status !== 'running' && handoff.status !== 'needs_input') {
+            throw new Error(
+              `handoff ${handoffId} não está em andamento (status: ${handoff.status}); não há o que escalar.`,
+            )
+          }
+          request = requestStore.createRequest(
+            handoffId,
+            {
+              ...input,
+              question: input.question!,
+              kind: input.kind ?? 'question',
+              resolver: 'human_only',
+              escalatedBy: mother,
+            },
+            mother,
+          ).request
+        }
+        // Escalar não acorda a mãe: ela é a autora.
+        notify.broadcast('handoff:updated', handoffStore.get(handoffId))
+        return ok({ requestId: request.id, resolver: request.resolver })
       },
     },
     {
@@ -1116,6 +1338,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             mode: h.mode,
             currentStep: h.currentStep,
             pendingQuestion: h.pendingQuestion,
+            openRequests: requestStore.listOpen({ handoffId: h.id }).length,
             task: h.task,
           }))
         return ok({ items, truncated: total > items.length, total })

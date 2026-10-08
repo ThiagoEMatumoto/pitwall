@@ -2,6 +2,9 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import * as store from '../services/handoff-store'
 import { wakeMotherFor } from '../services/handoff/handoff-wake'
+import * as requestStore from '../services/handoff-requests'
+import { deliverAnswer } from '../services/handoff/answer-delivery'
+import type { HandoffRequest } from '../../../shared/types/handoff-request'
 import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
@@ -90,6 +93,22 @@ const failSchema = z.object({
 const sendMessageSchema = z.object({
   id: z.string().min(1),
   text: z.string().min(1),
+})
+
+const answerRequestSchema = z.object({
+  requestId: z.string().min(1),
+  choice: z.string().min(1).max(8).optional(),
+  text: z.string().max(4096).optional(),
+  reject: z.boolean().optional(),
+})
+
+const dismissAttentionSchema = z.object({
+  dedupKey: z.string().min(1),
+  requestId: z.string().min(1).optional(),
+})
+
+const snoozeAttentionSchema = dismissAttentionSchema.extend({
+  until: z.number().int().positive(),
 })
 
 const createManualSchema = z.object({
@@ -187,13 +206,48 @@ export function registerHandoffsIpc(): void {
     // Mesma prova da fila: o Enter do paste não pode cair num menu de permissão nem
     // no overlay de aprovação do Codex (sem espelho) — recusa com o motivo.
     await injectIntoChildGuarded(handoff.childSessionId, text)
-    broadcast('handoff:updated', store.resume(id))
+    // Sem requestId: fecha só com exatamente 1 pedido aberto não-human_only (a
+    // resposta por pedido sai pelo handoffs:answer-request).
+    broadcast('handoff:updated', store.resume(id, { text, by: 'human' }).handoff)
     // O humano escreve pelo canal da mãe: no mapa, é o fio mãe→filha que leva.
     emitSessionLinkPulse({
       fromSessionId: handoff.motherSessionId,
       toSessionId: handoff.childSessionId,
       kind: handoff.status === 'needs_input' ? 'answer' : 'message',
     })
+  })
+
+  // Resposta do humano a UM pedido tipado, pela Room. É o único caminho com
+  // by='human': o que resolve human_only. A resposta chega a quem perguntou (e a
+  // quem escalou) pela fila on-idle.
+  ipcMain.handle('handoffs:answer-request', (_e, raw: unknown): HandoffRequest => {
+    const { requestId, choice, text, reject } = answerRequestSchema.parse(raw)
+    const answered = requestStore.answerRequest(requestId, { choice, text, reject, by: 'human' })
+    void deliverAnswer(answered)
+    const handoff = store.get(answered.handoffId)
+    if (handoff) {
+      broadcast('handoff:updated', handoff)
+      emitSessionLinkPulse({
+        fromSessionId: handoff.motherSessionId,
+        toSessionId: handoff.childSessionId,
+        kind: 'answer',
+      })
+    }
+    return answered
+  })
+
+  // Triagem da fila humana (dispensar / adiar): só exibição, não toca o handoff
+  // nem o pedido. O prefixo handoff: já recalcula a fila de atenção.
+  ipcMain.handle('handoffs:dismiss-attention', (_e, raw: unknown): void => {
+    const { dedupKey, requestId } = dismissAttentionSchema.parse(raw)
+    requestStore.dismissAttention(dedupKey, requestId ?? null)
+    broadcast('handoff:attention-triage', { dedupKey })
+  })
+
+  ipcMain.handle('handoffs:snooze-attention', (_e, raw: unknown): void => {
+    const { dedupKey, requestId, until } = snoozeAttentionSchema.parse(raw)
+    requestStore.snoozeAttention(dedupKey, requestId ?? null, until)
+    broadcast('handoff:attention-triage', { dedupKey })
   })
 
   // Feedback humano (👍/👎/parcial) sobre a utilidade de um handoff concluído.
