@@ -7,6 +7,8 @@ import type Database from 'better-sqlite3'
 import xtermHeadless from '@xterm/headless'
 import { migrations } from '../migrations/index'
 import { scanScreen, type ScreenScan } from '../../../../shared/tui/attention-reason'
+import type { AttentionLiveSession } from '../../../../shared/types/attention'
+import type { LiveSessionInfo } from '../../../../shared/types/ipc'
 
 const { Terminal } = xtermHeadless as unknown as {
   Terminal: typeof import('@xterm/headless').Terminal
@@ -79,4 +81,32 @@ export async function scanFixture(name: ScreenFixture): Promise<ScreenScan> {
     return text
   }
   return scanScreen(readTail, 1000)
+}
+
+// O ÚNICO shape sintético dos testes de superfície: a LiveSessionInfo que o
+// renderer recebe de sessions:list-live-global. Copia só o que o mapeamento lê
+// (id, ccSessionId do banco, status e o motivo da tela); o resto é do teste.
+export function toLiveInfo(
+  db: Database.Database,
+  s: AttentionLiveSession,
+  over: Partial<LiveSessionInfo> = {},
+): LiveSessionInfo {
+  const row = db.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(s.sessionId) as {
+    cc_session_id: string
+  }
+  return {
+    id: s.sessionId,
+    ccSessionId: row.cc_session_id,
+    status: s.status,
+    attentionReason: s.screenReason,
+    name: null,
+    title: null,
+    repo: null,
+    projectName: 'proj',
+    projectIcon: null,
+    projectColor: null,
+    lastActivityAt: s.lastActivityAt,
+    lastText: null,
+    ...over,
+  }
 }

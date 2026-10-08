@@ -25,6 +25,8 @@ const { AttentionQueueButton } = await import('./AttentionPopover')
 const { useAttentionStore } = await import('./useAttentionQueue')
 const { useAppStore } = await import('@/store/appStore')
 const { useHandoffsStore } = await import('@/store/handoffsStore')
+const { useAttentionListStore } = await import('@/store/attentionStore')
+const { projectAttention } = await import('../../../shared/attention/project-attention')
 const { useCrewDockStore } = await import('@/features/handoffs/crew-dock-store')
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -48,6 +50,7 @@ afterEach(() => {
   useAttentionStore.setState({ flash: null, cursor: null, activeCc: null })
   useAppStore.setState({ liveSessions: [] })
   useHandoffsStore.setState({ handoffs: [] })
+  useAttentionListStore.setState({ items: [] })
   useCrewDockStore.setState({ peekId: null })
 })
 
@@ -78,6 +81,24 @@ function seedCrewChild(status: LiveSessionInfo['status'] = 'waiting') {
         lastActivityAt: 1,
       } as unknown as LiveSessionInfo,
     ],
+  })
+  // A fila vem da projeção do main; aqui a mesma função sobre o mesmo estado.
+  useAttentionListStore.setState({
+    items: projectAttention({
+      handoffs: useHandoffsStore.getState().handoffs,
+      transitions: new Map(),
+      live: [
+        {
+          sessionId: 'child',
+          status,
+          screenReason: status === 'waiting' ? 'permission' : undefined,
+          menuSeq: status === 'waiting' ? 1 : null,
+          lastActivityAt: 1,
+          featureId: null,
+          repoId: null,
+        },
+      ],
+    }),
   })
 }
 

@@ -1,11 +1,16 @@
-import { crewNeedsAttention, crewResumedAfterQuestion, dockCrew } from '@/features/handoffs/crew'
+import { dockCrew } from '@/features/handoffs/crew'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+import { humanQueue } from '../../../shared/attention/selectors'
+import type {
+  AttentionKind,
+  AttentionItem as ProjectedAttentionItem,
+} from '../../../shared/types/attention'
 import { mruBackTarget } from '@/store/session-mru-store'
 import { liveSessionLabel } from './session-label'
 
-// Fila de atenção: "quem precisa de você, em que ordem". Pura — o hook
-// (useAttentionQueue) só a alimenta dos stores. É a MESMA fonte do badge "N no
-// box" da TitleBar, então badge e ciclo do Alt+A nunca discordam.
+// Fila de atenção: "quem precisa de você, em que ordem". QUEM entra e em que ordem
+// vem da projeção do main (attention:list); aqui só se decide ONDE cada item abre
+// (aba ou quick look). É a MESMA lista do badge "N no box", do Crew Dock e do Ctrl+`.
 
 export type AttentionReason = 'handoff-input' | 'waiting' | 'crew'
 
@@ -28,9 +33,11 @@ export interface AttentionItem {
   // Desde quando espera (ms epoch); null quando não há relógio confiável.
   since: number | null
   liveStatus: LiveSessionInfo['status'] | null
+  // Kind da projeção (o HUD pode distinguir failed/interrupted; por ora só carrega).
+  projectedKind?: AttentionKind
 }
 
-export interface AttentionQueueInput {
+export interface SessionSurfacesInput {
   // Sessões que o usuário vê na barra/switcher (useVisibleLiveSessions): filha do
   // dock sem aba aberta NÃO está aqui — ela entra pela crew.
   visibleSessions: LiveSessionInfo[]
@@ -38,36 +45,45 @@ export interface AttentionQueueInput {
   handoffs: Handoff[]
 }
 
-// Mais antiga primeiro; sem relógio vai pro fim (não dá pra dizer que espera há mais tempo).
-function bySinceAsc(a: AttentionItem, b: AttentionItem): number {
-  if (a.since == null) return b.since == null ? 0 : 1
-  if (b.since == null) return -1
-  return a.since - b.since
+export interface AttentionQueueInput extends SessionSurfacesInput {
+  attention: ProjectedAttentionItem[]
 }
 
-function sessionItem(
-  s: LiveSessionInfo,
-  reason: AttentionReason,
-  since: number | null,
-  handoffId?: string,
-): AttentionItem {
+function reasonOf(kind: AttentionKind): AttentionReason {
+  if (kind === 'child_question') return 'handoff-input'
+  if (kind === 'session_menu') return 'waiting'
+  return 'crew'
+}
+
+// O porquê vem do mesmo item: o menu reconhecido na tela ou a pergunta do handoff.
+function detailOf(item: ProjectedAttentionItem): AttentionDetail | undefined {
+  if (item.kind === 'child_question') return 'handoff-input'
+  if (item.menuReason && item.menuReason !== 'unrecognized') return item.menuReason
+  return undefined
+}
+
+function sessionItem(s: LiveSessionInfo, item: ProjectedAttentionItem): AttentionItem {
   return {
     key: `session:${s.id}`,
     kind: 'session',
     sessionId: s.id,
     ccSessionId: s.ccSessionId,
-    ...(handoffId ? { handoffId } : {}),
+    ...(item.handoffId ? { handoffId: item.handoffId } : {}),
     projectName: s.projectName,
     title: liveSessionLabel(s),
-    reason,
-    detail: reason === 'handoff-input' ? 'handoff-input' : s.attentionReason,
-    since,
+    reason: reasonOf(item.kind),
+    detail: detailOf(item),
+    since: item.createdAt,
     liveStatus: s.status,
+    projectedKind: item.kind,
   }
 }
 
-function crewItem(h: Handoff, liveChild: LiveSessionInfo | undefined): AttentionItem {
-  const asking = h.status === 'needs_input' && !crewResumedAfterQuestion(h)
+function crewItem(
+  h: Handoff,
+  liveChild: LiveSessionInfo | undefined,
+  item: ProjectedAttentionItem,
+): AttentionItem {
   return {
     key: `crew:${h.id}`,
     kind: 'crew',
@@ -76,48 +92,42 @@ function crewItem(h: Handoff, liveChild: LiveSessionInfo | undefined): Attention
     handoffId: h.id,
     projectName: liveChild?.projectName ?? h.targetRepoLabel,
     title: liveChild?.title ?? liveChild?.name ?? h.task,
-    reason: asking ? 'handoff-input' : 'crew',
-    detail: asking ? 'handoff-input' : liveChild?.attentionReason,
-    since: asking ? h.questionAskedAt : (liveChild?.lastActivityAt ?? null),
+    reason: reasonOf(item.kind),
+    detail: detailOf(item),
+    since: item.createdAt,
     liveStatus: liveChild?.status ?? null,
+    projectedKind: item.kind,
   }
 }
 
-// Ordem: (1) filha com aba aberta e pergunta pendente, (2) sessões visíveis em
-// waiting, (3) filhas do dock que esperam você. Dedup por sessionId: a filha com
-// aba aberta é sessão de primeira classe e nunca aparece de novo como crew.
+// Mapeia humanQueue(attention) mantendo a ordem da projeção. Sessão visível abre
+// aba; filha do dock (sem aba) abre o quick look. Item sem sessão visível e sem
+// handoff carregado é a corrida entre attention:changed e handoff:updated: sai
+// agora e volta no próximo push. Dedup pela chave: o primeiro (mais grave) vence.
 export function buildAttentionQueue(input: AttentionQueueInput): AttentionItem[] {
   const visibleById = new Map(input.visibleSessions.map((s) => [s.id, s]))
   const liveById = new Map(input.liveSessions.map((s) => [s.id, s]))
-  const crew = dockCrew(input.handoffs)
+  const handoffById = new Map(input.handoffs.map((h) => [h.id, h]))
+  const out: AttentionItem[] = []
   const taken = new Set<string>()
-
-  const asking: AttentionItem[] = []
-  for (const h of crew) {
-    const child = h.childSessionId ? visibleById.get(h.childSessionId) : undefined
-    if (!child || h.status !== 'needs_input' || crewResumedAfterQuestion(h)) continue
-    asking.push(sessionItem(child, 'handoff-input', h.questionAskedAt, h.id))
-    taken.add(child.id)
+  for (const item of humanQueue(input.attention)) {
+    const visible = item.sessionId ? visibleById.get(item.sessionId) : undefined
+    const h = item.handoffId ? handoffById.get(item.handoffId) : undefined
+    const entry = visible
+      ? sessionItem(visible, item)
+      : h
+        ? crewItem(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined, item)
+        : null
+    if (!entry || taken.has(entry.key)) continue
+    taken.add(entry.key)
+    out.push(entry)
   }
-
-  const waiting = input.visibleSessions
-    .filter((s) => s.status === 'waiting' && !taken.has(s.id))
-    .map((s) => sessionItem(s, 'waiting', s.lastActivityAt))
-  for (const item of waiting) taken.add(item.sessionId!)
-
-  const crewItems = crew
-    .filter((h) => !(h.childSessionId && taken.has(h.childSessionId)))
-    .filter((h) =>
-      crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined),
-    )
-    .map((h) => crewItem(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined))
-
-  return [...asking.sort(bySinceAsc), ...waiting.sort(bySinceAsc), ...crewItems.sort(bySinceAsc)]
+  return out
 }
 
-// O número do badge "N no box": sessões da fila, crew fora (tem badge próprio no dock).
-export function attentionSessionCount(queue: AttentionItem[]): number {
-  return queue.filter((i) => i.kind === 'session').length
+// O número do badge "N no box": a fila inteira (sessões, filhas, falhas).
+export function attentionCount(queue: AttentionItem[]): number {
+  return queue.length
 }
 
 // Índice do próximo item a partir do cursor, com wrap. Sem cursor (ou cursor que
@@ -182,7 +192,8 @@ export function planAttentionStep(
   }
 }
 
-export type BackTarget = { kind: 'session'; ccSessionId: string } | { kind: 'crew'; handoffId: string }
+export type BackTarget =
+  { kind: 'session'; ccSessionId: string } | { kind: 'crew'; handoffId: string }
 
 // Alt+Q: a sessão focada antes da atual, entre as que o usuário VÊ. Filha do dock
 // sem aba volta pelo quick look — abrir pane pra ela a tiraria do dock sem ele
@@ -190,7 +201,7 @@ export type BackTarget = { kind: 'session'; ccSessionId: string } | { kind: 'cre
 export function planBackTarget(
   order: string[],
   activeCc: string | null,
-  input: AttentionQueueInput,
+  input: SessionSurfacesInput,
 ): BackTarget | null {
   const visible = new Set(input.visibleSessions.map((s) => s.ccSessionId))
   const liveById = new Map(input.liveSessions.map((s) => [s.id, s]))

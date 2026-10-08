@@ -68,6 +68,7 @@ import { focusActiveTerminal } from '@/features/session-canvas/focus-active-term
 import { useLeaveMapOnSessionFocus } from '@/features/session-canvas/useLeaveMapOnSessionFocus'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useToastPlacement } from './useToastPlacement'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useHandoffs } from '@/features/handoffs/useHandoffs'
 import { AttentionHud } from '@/features/session-switcher/AttentionHud'
 import {
@@ -220,6 +221,10 @@ export function AppShell() {
   // Handoffs cross-repo: assina pendentes + aplica auto-approve (gate humano via
   // <HandoffApprovalDialog/> quando o auto-approve está desligado).
   useHandoffs()
+  // Fila única de atenção (attention:list + attention:changed): HUD, dock e Ctrl+`.
+  useEffect(() => {
+    void useAttentionListStore.getState().load()
+  }, [])
 
   const apiRef = useRef<DockviewApi | null>(null)
   const [ready, setReady] = useState(false)
