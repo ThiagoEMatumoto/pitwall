@@ -20,9 +20,13 @@ vi.mock('@/features/sessions/Terminal', () => ({
     )
   },
 }))
+const { sessionsApiMock } = vi.hoisted(() => ({
+  sessionsApiMock: { attentionMenu: vi.fn(), attentionRespond: vi.fn() },
+}))
 vi.mock('@/lib/ipc', () => ({
   handoffsApi: { sendMessage: vi.fn().mockResolvedValue(undefined) },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
+  sessionsApi: sessionsApiMock,
 }))
 
 import { CrewPeek } from './CrewPeek'
@@ -84,6 +88,79 @@ function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status
   useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
   return render(<CrewPeek />)
 }
+
+// Menu do produtor real: a captura do claude 2.1.286 renderizada no xterm
+// headless e parseada como o tui-menu-watch faz no main.
+async function realPermissionMenu() {
+  const { readFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const xtermHeadless = (await import('@xterm/headless')).default as unknown as {
+    Terminal: typeof import('@xterm/headless').Terminal
+  }
+  const { scanScreen } = await import('../../../shared/tui/attention-reason')
+  const raw = readFileSync(
+    join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__', 'claude-2.1.286-permission-bash.ansi'),
+    'utf8',
+  )
+  const term = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+  await new Promise<void>((resolve) => term.write(raw, resolve))
+  return scanScreen((n) => {
+    const buf = term.buffer.active
+    let text = ''
+    for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
+      text += (buf.getLine(y)?.translateToString(true) ?? '') + '\n'
+    }
+    return text
+  }, 1000).menu!
+}
+
+describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    useAppStore.setState({ panes: [] })
+    sessionsApiMock.attentionMenu.mockReset()
+    sessionsApiMock.attentionRespond.mockReset()
+  })
+
+  it('no chat, pedido de permissão vira botões que respondem pelo main', async () => {
+    const menu = await realPermissionMenu()
+    sessionsApiMock.attentionMenu.mockResolvedValue({
+      sessionId: 's-child',
+      fingerprint: 'fp',
+      menuSeq: 3,
+      menu,
+    })
+    sessionsApiMock.attentionRespond.mockResolvedValue({ ok: true })
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({
+      liveSessions: [{ ...live, status: 'waiting', attentionReason: 'permission' }],
+    })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(sessionsApiMock.attentionMenu).toHaveBeenCalledWith('s-child')
+    fireEvent.click(await screen.findByTestId('attention-action-approve'))
+    await waitFor(() =>
+      expect(sessionsApiMock.attentionRespond).toHaveBeenCalledWith({
+        sessionId: 's-child',
+        fingerprint: 'fp',
+        menuSeq: 3,
+        action: { kind: 'select', optionIndex: 0 },
+      }),
+    )
+  })
+
+  it('sem menu na tela (fim de turno) não mostra o painel', () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({
+      liveSessions: [{ ...live, status: 'waiting', attentionReason: 'turn-end' }],
+    })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+    expect(screen.queryByTestId('crew-peek-menu')).toBeNull()
+    expect(sessionsApiMock.attentionMenu).not.toHaveBeenCalled()
+  })
+})
 
 describe('CrewPeek', () => {
   beforeEach(() => {

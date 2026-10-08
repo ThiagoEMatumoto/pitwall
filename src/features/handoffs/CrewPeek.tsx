@@ -4,6 +4,8 @@ import { Icon } from '@/components/ui/Icon'
 import { ShortcutHints } from '@/components/ui/ShortcutHints'
 import { hintText, type ShortcutHint } from '@/components/ui/shortcut-hints'
 import { ChatView } from '@/features/sessions/chat/ChatView'
+import { AttentionMenuPanel } from '@/features/session-switcher/AttentionPopover'
+import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
@@ -242,6 +244,9 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   const terminalHere = mode === 'terminal' && crewTerminalTarget(live, panes, origin) === 'modal'
   const leaseId = terminalHere ? live?.id : undefined
   const sendToTab = mode === 'terminal' && crewTerminalTarget(live, panes, origin) === 'pane'
+  // Fora do terminal (chat ou terminal aberto na aba) o menu da filha é
+  // respondido aqui mesmo, sem entrar nela.
+  const menuItem = mode === 'terminal' && live ? null : peekAttentionItem(live, handoff)
   useEffect(() => {
     if (sendToTab) promoteToTab()
     // Só na abertura: depois disso a aba já é a dona.
@@ -642,6 +647,15 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
         {/* relative + min-h-0: ChatView e Terminal se posicionam com absolute inset-0.
             No lift em Chat, mx-1.5 tira a barra de rolagem de baixo das alças das
             bordas (o Terminal já tem p-2). */}
+        {menuItem && (
+          <div
+            data-testid="crew-peek-menu"
+            className="mx-3 my-2 flex flex-col gap-2 rounded-lg border p-2.5 text-xs"
+            style={{ borderColor: 'var(--color-warning)', background: 'var(--color-surface-2)' }}
+          >
+            <AttentionMenuPanel item={menuItem} />
+          </div>
+        )}
         <div
           ref={bodyRef}
           className={`relative min-h-0 flex-1 ${lift && !(mode === 'terminal' && live) ? 'mx-1.5' : ''}`}
@@ -674,10 +688,9 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
             <ChatView
               sessionId={(live?.id ?? handoff?.childSessionId)!}
               status={live?.status}
-              // Sem onRespond: os cards interativos ficam read-only aqui (o
-              // clique deles digita no xterm, que o modo chat não monta). O botão
-              // do banner de espera do ChatView troca pro modo terminal — mesma
-              // janela, onde o menu TUI é de fato clicável.
+              // Sem onRespond: os cards do ChatView digitam no xterm, que o modo
+              // chat não monta. O menu da filha é respondido pelo painel acima
+              // (menuItem), pelo caminho do main com checagem de menu-mudou.
               onToggleMode={live ? showTerminal : undefined}
               emptyHint="Sem conversa ainda. Escreva abaixo para mandar a primeira mensagem."
             />
