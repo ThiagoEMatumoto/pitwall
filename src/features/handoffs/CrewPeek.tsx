@@ -32,12 +32,13 @@ import {
   liveBadgeFor,
 } from './HandoffCard'
 import {
-  crewNeedsAttention,
   crewResumedAfterQuestion,
   crewTerminalTarget,
   splitAlias,
 } from './crew'
 import { useCrewDockStore, type CrewPeekMode, type PeekOrigin } from './crew-dock-store'
+import { useAttentionListStore } from '@/store/attentionStore'
+import { humanQueue } from '../../../shared/attention/selectors'
 import { openMapPeek } from './open-map-peek'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
@@ -209,6 +210,7 @@ interface PanelProps {
 function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animateIn }: PanelProps) {
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
   const liveSessions = useAppStore((s) => s.liveSessions)
+  const attention = useAttentionListStore((s) => s.items)
   const prefFontSize = useTerminalPrefsStore((s) => s.fontSize)
   const setPeekMode = useCrewDockStore((s) => s.setPeekMode)
   const lift = origin === 'map'
@@ -353,9 +355,11 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
 
   // A filha está bloqueada esperando a mãe. É o único momento em que pode haver
   // um menu TUI aberto na tela dela — e o único em que o aviso de read-only
-  // (abaixo) tem serventia. Mesma pergunta que o dock faz pra ordenar e acender
-  // o âmbar: uma função só, senão as duas superfícies divergem.
-  const answering = handoff ? crewNeedsAttention(handoff, live ?? undefined) : false
+  // (abaixo) tem serventia. Sai da fila única (attention:list), a mesma do dock;
+  // só os itens bloqueantes (pergunta/menu): falha e interrupção não se respondem.
+  const answering = handoff
+    ? humanQueue(attention).some((i) => i.handoffId === handoff.id && i.severity === 'blocking')
+    : false
   // A pergunta ficou pendente no banco mas a filha já seguiu (respondida fora do
   // app). O registro continua visível abaixo, em tom neutro — o que ele não pode
   // mais fazer é comandar o selo.

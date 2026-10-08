@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { crewAttentionCount } from '@/features/handoffs/crew'
-import { useAppStore } from '@/store/appStore'
+import { attentionHandoffIds, humanQueue } from '../../../shared/attention/selectors'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { useVisibleLiveSessions } from './useGlobalSessions'
 
@@ -14,15 +15,17 @@ export function useWaitingCount(): number {
   return useMemo(() => visible.filter((s) => s.status === 'waiting').length, [visible])
 }
 
-// A outra metade da conta: filhas de handoff esperando você (status vivo
-// 'waiting' OU needs_input). É o badge do Crew Dock e o gatilho do auto-reveal —
-// conta toda a equipe, inclusive a filha que ele abriu, porque o card dela
-// continua no dock.
+// A outra metade da conta: filhas do dock na fila única (attention:list). É o
+// badge do Crew Dock e o gatilho do auto-reveal — conta toda a equipe, inclusive
+// a filha que ele abriu, porque o card dela continua no dock.
 export function useCrewWaitingCount(): number {
-  const liveSessions = useAppStore((s) => s.liveSessions)
   const handoffs = useHandoffsStore((s) => s.handoffs)
-  return useMemo(
-    () => crewAttentionCount(handoffs, liveSessions),
-    [liveSessions, handoffs],
-  )
+  const attention = useAttentionListStore((s) => s.items)
+  return useMemo(() => crewAttentionCount(attention, handoffs), [attention, handoffs])
+}
+
+// Handoffs com item na fila humana: promove o card no dock e acende o âmbar.
+export function useCrewAttentionIds(): ReadonlySet<string> {
+  const attention = useAttentionListStore((s) => s.items)
+  return useMemo(() => attentionHandoffIds(humanQueue(attention)), [attention])
 }

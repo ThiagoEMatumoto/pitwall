@@ -2,6 +2,8 @@ import { childSessionIds } from '@/store/handoffsStore'
 import type { BatonChildrenMissed, Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import { handoffAsking } from '../../../shared/tui/attention-reason'
+import { humanQueue } from '../../../shared/attention/selectors'
+import type { AttentionItem as ProjectedAttentionItem } from '../../../shared/types/attention'
 
 // Domínio da "equipe": as sessões-filhas de handoffs ativos. Elas ficam FORA da
 // strip/switcher (ver useGlobalSessions) e vivem no Crew Dock. Tudo aqui é puro —
@@ -112,35 +114,19 @@ export function crewResumedAfterQuestion(handoff: Handoff): boolean {
   return handoff.status === 'needs_input' && !handoffAsking(handoff)
 }
 
-// A filha está esperando a mãe? Duas fontes: o status vivo do PTY ('waiting') e o
-// needs_input do handoff (pergunta aberta via handoff_ask).
+// Quantas filhas do dock esperam você: os itens da fila humana (a MESMA lista do
+// HUD, attention:list) cujo card o dock MOSTRA. É o gatilho do auto-reveal e o
+// número do badge.
 //
-// O PTY vem primeiro porque é testemunha de primeira mão: parado num prompt, ela
-// espera — mesmo com progresso registrado depois. O needs_input é registro, e
-// registro vence só enquanto não há evidência de retomada.
-export function crewNeedsAttention(handoff: Handoff, live: LiveSessionInfo | undefined): boolean {
-  // Fim de turno reconhecido na tela ('turn-end') é "pronto", não "esperando":
-  // a mesma regra do cardIndicator do mapa, senão dock e cartão divergem.
-  if (live?.status === 'waiting' && live.attentionReason !== 'turn-end') return true
-  if (handoff.status === 'needs_input') return !crewResumedAfterQuestion(handoff)
-  return false
-}
-
-// Quantas filhas estão esperando você. É o gatilho do auto-reveal do dock e o
-// número do badge — filhas ficam fora do useWaitingCount (que serve strip/rail).
-//
-// Itera dockCrew, a MESMA lista que o painel renderiza (e não o conjunto dos
-// vivos): um badge que conta quem o dock não mostra vira um "1!" que o usuário
-// não consegue zerar clicando em nada — não há card onde responder. Badge e lista
-// têm que concordar sempre, então a fonte é uma só.
-export function crewAttentionCount(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): number {
-  const byId = new Map(liveSessions.map((s) => [s.id, s]))
-  let count = 0
-  for (const h of dockCrew(handoffs)) {
-    const live = h.childSessionId ? byId.get(h.childSessionId) : undefined
-    if (crewNeedsAttention(h, live)) count++
-  }
-  return count
+// O recorte é dockCrew, a lista que o painel renderiza: um badge que conta quem o
+// dock não mostra vira um "1!" que o usuário não consegue zerar clicando em nada —
+// não há card onde responder. A falha (fora do dock) fica só no HUD.
+export function crewAttentionCount(
+  attention: ProjectedAttentionItem[],
+  handoffs: Handoff[],
+): number {
+  const dock = new Set(dockCrew(handoffs).map((h) => h.id))
+  return humanQueue(attention).filter((i) => i.handoffId != null && dock.has(i.handoffId)).length
 }
 
 // Referência mínima de pane aberta (estrutural, pra não importar o appStore aqui).
@@ -231,19 +217,14 @@ export function crewFocusAfterDismiss(ids: string[], id: string): string | null 
   return prev && prev !== id ? prev : null
 }
 
-// Ordem do dock: quem espera você primeiro; o resto mantém a ordem do store
-// (created_at DESC). Sem reordenar por status vivo — só a atenção promove.
-export function orderCrew(handoffs: Handoff[], liveSessions: LiveSessionInfo[]): Handoff[] {
-  const byId = new Map(liveSessions.map((s) => [s.id, s]))
+// Ordem do dock: quem espera você primeiro (attentionIds, da fila única); o resto
+// mantém a ordem do store (created_at DESC). Sem reordenar por status vivo.
+export function orderCrew(handoffs: Handoff[], attentionIds: ReadonlySet<string>): Handoff[] {
   const crew = dockCrew(handoffs)
-  const attention: Handoff[] = []
-  const rest: Handoff[] = []
-  for (const h of crew) {
-    const live = h.childSessionId ? byId.get(h.childSessionId) : undefined
-    if (crewNeedsAttention(h, live)) attention.push(h)
-    else rest.push(h)
-  }
-  return [...attention, ...rest]
+  return [
+    ...crew.filter((h) => attentionIds.has(h.id)),
+    ...crew.filter((h) => !attentionIds.has(h.id)),
+  ]
 }
 
 // Aviso do bastão da mãe quando a nota do endereço novo não chegou a alguma filha

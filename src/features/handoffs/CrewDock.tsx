@@ -4,7 +4,10 @@ import { ChevronRight, MessageCircle, Users } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { usePanelTier } from '@/features/sessions/use-panel-tier'
-import { useCrewWaitingCount } from '@/features/session-switcher/useWaitingCount'
+import {
+  useCrewAttentionIds,
+  useCrewWaitingCount,
+} from '@/features/session-switcher/useWaitingCount'
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -12,7 +15,6 @@ import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTt
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
-  crewNeedsAttention,
   crewTerminalTarget,
   dockCrew,
   orderCrew,
@@ -81,7 +83,8 @@ export function CrewDock() {
   const hasConversations = useHasDockConversations()
   const pendingAsks = conversations.filter((m) => m.status === 'pending').length
 
-  const crew = useMemo(() => orderCrew(handoffs, liveSessions), [handoffs, liveSessions])
+  const attentionIds = useCrewAttentionIds()
+  const crew = useMemo(() => orderCrew(handoffs, attentionIds), [handoffs, attentionIds])
   const liveById = useMemo(() => new Map(liveSessions.map((s) => [s.id, s])), [liveSessions])
 
   // Nada delegado nem conversado entre agentes, nenhum pixel gasto.
@@ -195,12 +198,9 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // Lido dentro de handlers/efeitos que não devem re-rodar a cada mudança da lista.
   const idsRef = useRef(ids)
   idsRef.current = ids
-  const attentionIdsRef = useRef<ReadonlySet<string>>(new Set())
-  attentionIdsRef.current = new Set(
-    crew
-      .filter((h) => crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined))
-      .map((h) => h.id),
-  )
+  const attentionIds = useCrewAttentionIds()
+  const attentionIdsRef = useRef<ReadonlySet<string>>(attentionIds)
+  attentionIdsRef.current = attentionIds
 
   // Filha entrou/saiu (ou a atenção reordenou): mantém o cursor num card que
   // ainda existe. setFocusedId é no-op quando o valor não muda.
@@ -284,9 +284,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   }
 
   // Só o primeiro "esperando" ganha O Ápice (regra da casa: um pulso por vista).
-  const apexId = crew.find((h) =>
-    crewNeedsAttention(h, h.childSessionId ? liveById.get(h.childSessionId) : undefined),
-  )?.id
+  const apexId = crew.find((h) => attentionIds.has(h.id))?.id
 
   const expandedContent = (
     <>
