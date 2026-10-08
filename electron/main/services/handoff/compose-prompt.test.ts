@@ -195,3 +195,24 @@ describe('composeHandoffPrompt — filha Codex', () => {
     expect(codex).toContain('handoff_report')
   })
 })
+
+describe('composeHandoffPrompt — context da mãe', () => {
+  const base = {
+    targetRepoLabel: 'backend',
+    targetRepoPath: '/repos/backend',
+    task: 'Implementar endpoint',
+    edges: [],
+    handoffId: 'h-ctx',
+    alias: 'mauricio-endpoint',
+  }
+
+  it('renderiza o context numa seção própria, antes da Tarefa', () => {
+    const prompt = composeHandoffPrompt({ ...base, context: '  Já decidido: usar zod.  ' })
+    expect(prompt).toContain('## Contexto da mãe\nJá decidido: usar zod.\n\n## Tarefa')
+  })
+
+  it('omite a seção quando o context é ausente ou só espaço', () => {
+    expect(composeHandoffPrompt(base)).not.toContain('## Contexto da mãe')
+    expect(composeHandoffPrompt({ ...base, context: '   ' })).not.toContain('## Contexto da mãe')
+  })
+})

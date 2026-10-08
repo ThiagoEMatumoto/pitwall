@@ -19,6 +19,9 @@ export interface ComposeHandoffArgs {
   task: string
   edges: HandoffEdge[]
   featureTitle?: string | null
+  // Texto livre que a mãe passou em session_handoff({ context }). Sem esta seção
+  // ele era gravado em context_json e nunca chegava à filha.
+  context?: string | null
   handoffId: string
   // Apelido endereçável da filha (`<nome>-<escopo>`). É o `-n <name>` do spawn e
   // o `to` do SendMessage — a filha precisa saber o próprio, senão não consegue
@@ -110,6 +113,7 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   return [
     identidade.join('\n'),
     contextLines.join('\n'),
+    ...(args.context?.trim() ? [['## Contexto da mãe', args.context.trim()].join('\n')] : []),
     ['## Tarefa', args.task].join('\n'),
     restricoes.join('\n'),
     reporte.join('\n'),

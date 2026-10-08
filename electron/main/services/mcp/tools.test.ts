@@ -931,6 +931,90 @@ describe('mcp tools — session_handoff sem gate', () => {
       expect(spawned).toHaveLength(2)
     })
   })
+
+  // Regressão: context era gravado em context_json e nunca entrava no briefing;
+  // sem featureId a filha não herdava a feature da mãe no registro/briefing.
+  describe('briefing: context da mãe e feature herdada', () => {
+    const MOTHER = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'
+
+    function callAs<T>(motherSessionId: string | null, name: string, args: unknown): T {
+      const def = buildTools(notify, { motherSessionId }).find((t) => t.name === name)
+      if (!def) throw new Error(`tool not registered: ${name}`)
+      return (def.handler(args) as ToolResult).structuredContent as T
+    }
+
+    function seedMotherOnFeature(title: string): string {
+      getDb()
+        .prepare(
+          `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+        )
+        .run('proj-handoff', 'Projeto handoff', Date.now(), Date.now())
+      const { feature } = call<{ feature: Feature }>('feature_create', {
+        projectId: 'proj-handoff',
+        title,
+      })
+      seedRepo('mae-repo', '/repos/mae-repo')
+      getDb()
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, title, title_source, pane_id, status, started_at, ended_at, feature_id)
+           VALUES (?, ?, ?, ?, 'manual', NULL, 'running', ?, NULL, ?)`,
+        )
+        .run(MOTHER, 'repo-mae-repo', `cc-${MOTHER}`, 'mae', Date.now(), feature.id)
+      return feature.id
+    }
+
+    const handoffRow = (id: string) =>
+      getDb()
+        .prepare('SELECT feature_id, context_json, composed_prompt FROM handoffs WHERE id = ?')
+        .get(id) as { feature_id: string | null; context_json: string | null; composed_prompt: string }
+
+    it('o context passado pela mãe aparece no briefing da filha', () => {
+      seedRepo('ctx-alvo', '/repos/ctx-alvo')
+      const context = 'Decisão já tomada: usar a tabela handoffs_v2; NÃO mexer em migrations.'
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'ctx-alvo',
+        task: 'Implementar endpoint',
+        context,
+      })
+      expect(res.status).toBe('running')
+      const prompt = spawned[0].systemPromptText
+      expect(prompt).toContain(`## Contexto da mãe\n${context}`)
+      // Fica antes da Tarefa: é insumo pra ler a tarefa, não rodapé.
+      expect(prompt.indexOf('## Contexto da mãe')).toBeLessThan(prompt.indexOf('## Tarefa'))
+      const row = handoffRow(res.handoffId as string)
+      expect(row.context_json).toBe(context)
+      expect(row.composed_prompt).toBe(prompt)
+    })
+
+    it('sem featureId, herda a feature da mãe no registro, no briefing e no spawn', () => {
+      const featureId = seedMotherOnFeature('Room no Pitwall')
+      seedRepo('feat-alvo', '/repos/feat-alvo')
+      const res = callAs<HandoffResult>(MOTHER, 'session_handoff', {
+        targetRepo: 'feat-alvo',
+        task: 'Ler o código da room',
+      })
+      expect(res.status).toBe('running')
+      expect(spawned[0].featureId).toBe(featureId)
+      expect(spawned[0].systemPromptText).toContain('- Feature relacionada: Room no Pitwall')
+      expect(handoffRow(res.handoffId as string).feature_id).toBe(featureId)
+    })
+
+    it('featureId explícito vence o da mãe', () => {
+      seedMotherOnFeature('Feature da mãe')
+      const { feature: other } = call<{ feature: Feature }>('feature_create', {
+        projectId: 'proj-handoff',
+        title: 'Feature explícita',
+      })
+      seedRepo('feat-expl', '/repos/feat-expl')
+      const res = callAs<HandoffResult>(MOTHER, 'session_handoff', {
+        targetRepo: 'feat-expl',
+        task: 'Outra frente',
+        featureId: other.id,
+      })
+      expect(handoffRow(res.handoffId as string).feature_id).toBe(other.id)
+      expect(spawned[0].systemPromptText).toContain('- Feature relacionada: Feature explícita')
+    })
+  })
 })
 describe('mcp tools — diagrams', () => {
   interface DiagramMetaOut {

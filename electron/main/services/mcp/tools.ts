@@ -32,6 +32,7 @@ import {
   skeletonToElements,
 } from '../../../../shared/diagram-skeleton'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
+import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
 // evita arrastar electron/ipcMain pros handlers e permite mockar nos testes).
 import { injectIntoChildGuarded } from '../handoff/guarded-inject'
@@ -847,9 +848,20 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
               .map(toCompose)
           : allEdges.map(toCompose)
 
-        const featureTitle = input.featureId
+        // Sem featureId explícito a filha trabalha na frente da mãe — mesma regra
+        // do prepareHandoff e do spawn-child. Resolvido aqui (e não só no spawn)
+        // pra que o registro do handoff e o briefing falem da mesma feature.
+        const motherFeatureId = ctx.motherSessionId
           ? ((
-              getDb().prepare('SELECT title FROM features WHERE id = ?').get(input.featureId) as
+              getDb().prepare('SELECT feature_id FROM sessions WHERE id = ?').get(
+                ctx.motherSessionId,
+              ) as { feature_id: string | null } | undefined
+            )?.feature_id ?? null)
+          : null
+        const featureId = inheritFeatureId(input.featureId, motherFeatureId)
+        const featureTitle = featureId
+          ? ((
+              getDb().prepare('SELECT title FROM features WHERE id = ?').get(featureId) as
                 { title: string } | undefined
             )?.title ?? null)
           : null
@@ -871,6 +883,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           task: input.task,
           edges,
           featureTitle,
+          context: input.context,
           handoffId,
           alias,
           mode,
@@ -885,7 +898,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           // Origem da delegação (a mãe), pra instrumentação cross-repo. Null se a
           // MCP não passou fromRepo.
           fromRepoId: from?.id ?? null,
-          featureId: input.featureId ?? null,
+          featureId,
           task: input.task,
           contextJson: input.context ?? null,
           composedPrompt: composed,
@@ -913,7 +926,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           const child = spawnHandoffChild({
             repoId: target.id,
             name: alias,
-            featureId: input.featureId ?? null,
+            featureId,
             motherSessionId: ctx.motherSessionId,
             initialPrompt: kickoff,
             systemPromptText: composed,
