@@ -1,8 +1,5 @@
-import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TuiMenuWatch } from './tui-menu-watch'
+import { fixture, scanOf } from './test-support/screen-scans'
 import {
   AWAIT_WORK_MS,
   POLL_MS,
@@ -14,40 +11,16 @@ import {
 import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
 import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
 
-// Telas REAIS do claude 2.1.286 passadas pelo mesmo espelho headless que o app usa
-// em produção (TuiMenuWatch): o gate lê o ScreenScan que o produtor real devolve.
-const FIXTURES = join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__')
-const PERMISSION = readFileSync(join(FIXTURES, 'claude-2.1.286-permission-bash.ansi'), 'utf8')
-const IDLE_PROMPT = readFileSync(join(FIXTURES, 'claude-2.1.286-idle-prompt.ansi'), 'utf8')
+const PERMISSION = fixture('claude-2.1.286-permission-bash.ansi')
+const IDLE_PROMPT = fixture('claude-2.1.286-idle-prompt.ansi')
 // Menu real que o parser NÃO reconhece (trust sem numeração): sem menu e sem a
 // caixa de input — o caso de drift da CLI em que o \r responderia às cegas.
-const UNPARSED = readFileSync(join(FIXTURES, 'claude-2.1.286-trust-unnumbered.ansi'), 'utf8')
+const UNPARSED = fixture('claude-2.1.286-trust-unnumbered.ansi')
 // Caixa de input vazia (placeholder esmaecido) × com rascunho digitado sem Enter:
 // o texto puro das duas é "❯ <algo>"; só o atributo dim das células separa.
-const PLACEHOLDER = readFileSync(
-  join(FIXTURES, 'claude-2.1.286-input-placeholder.ansi'),
-  'utf8',
-)
-const DIRTY = readFileSync(join(FIXTURES, 'claude-2.1.286-input-dirty.ansi'), 'utf8')
+const PLACEHOLDER = fixture('claude-2.1.286-input-placeholder.ansi')
+const DIRTY = fixture('claude-2.1.286-input-dirty.ansi')
 const SID = 's1'
-
-class FakePty extends EventEmitter {
-  write(): void {}
-}
-
-// O scan sai do TuiMenuWatch real com timers reais (o write do xterm headless é
-// assíncrono); os testes da fila rodam com timers falsos em cima desse shape.
-async function scanOf(raw: string): Promise<ScreenScan> {
-  const pty = new FakePty()
-  const watch = new TuiMenuWatch()
-  watch.attach(pty)
-  pty.emit('spawn', { sessionId: 'probe', cols: 80, rows: 24 })
-  pty.emit('data', { sessionId: 'probe', data: raw })
-  const scan = await watch.rescan('probe')
-  pty.emit('exit', { sessionId: 'probe', exitCode: 0 })
-  if (!scan) throw new Error('sem scan')
-  return scan
-}
 
 const SCANS: Record<'permission' | 'idle' | 'unparsed' | 'placeholder' | 'dirty', ScreenScan> =
   {} as never
