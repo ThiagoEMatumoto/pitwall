@@ -32,7 +32,9 @@ import {
 } from '../services/session-activity'
 import { livePtySessionInfo } from './live-session-pty'
 import { buildSessionEndpoint } from '../services/mcp/session-identity'
-import { tuiMenuWatch } from '../services/tui-menu-watch'
+import { tuiMenuWatch, type AttentionRespondedEvent } from '../services/tui-menu-watch'
+import { recordAttentionResponse } from '../services/attention-response-store'
+import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
 import { getMcpRuntime } from '../services/mcp/server'
@@ -533,7 +535,9 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // de handoff num provider sem trava equivalente é recusada antes do spawn.
   const permissionMode = resolvePermissionMode(input.permissionMode)
   assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
-  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools)
+  const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools, {
+    handoffChild: Boolean(input.handoffChild),
+  })
 
   // Defesa em profundidade: só passa adiante o valor que estiver na whitelist.
   const model =
@@ -723,9 +727,9 @@ export function resumeHandoffChild(
   // Permissão NÃO pode se perder no relance: sem `--permission-mode`, uma filha
   // que estava em `plan` (read-only) voltaria podendo editar, e uma autônoma
   // voltaria sem o denylist destrutivo. Resolvido pelas MESMAS funções do
-  // spawnSession (whitelist + merge do DESTRUCTIVE_DENYLIST em modo autônomo).
+  // spawnSession (whitelist + merge do HANDOFF_CHILD_DENY em modo autônomo).
   const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
-  const disallowedTools = resolveDisallowedTools(permissionMode, null)
+  const disallowedTools = resolveDisallowedTools(permissionMode, null, { handoffChild: true })
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -815,9 +819,35 @@ function screenWatchTarget(ptyId: string): { ccSessionId: string } | null {
   return { ccSessionId: row.cc_session_id }
 }
 
+// A medição não pode derrubar a resposta: as teclas já foram pra PTY.
+function recordResponded(e: AttentionRespondedEvent): void {
+  try {
+    recordAttentionResponse({
+      sessionId: e.sessionId,
+      handoffId: handoffStore.getByChildSession(e.sessionId)?.id ?? null,
+      menu: e.menu,
+      action: e.action,
+      waitedMs: e.menuSince != null ? e.at - e.menuSince : null,
+      at: e.at,
+    })
+  } catch (err) {
+    console.error('[attention] failed to record response', err)
+  }
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
+    tuiMenuWatch.on('responded', recordResponded)
+    // Roda síncrono dentro do rescan: um throw aqui sairia pelo respond() com a
+    // trava inflight armada e deixaria a sessão em 'busy' pra sempre.
+    tuiMenuWatch.on('change', (sessionId: string) => {
+      try {
+        notifyCrewPermission(sessionId)
+      } catch (err) {
+        console.error('[attention] crew permission notify failed', err)
+      }
+    })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()

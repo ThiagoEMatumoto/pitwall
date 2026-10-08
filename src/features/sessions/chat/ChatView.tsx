@@ -96,6 +96,8 @@ interface Props {
   reparsePicker?: () => TuiPicker | null
   // Estado vazio de quem só LÊ (peek): "digite abaixo" mentiria, não há campo.
   emptyHint?: string
+  // O menu pendente é respondido por um painel fora do chat (quick look da filha).
+  menuAnsweredElsewhere?: boolean
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
@@ -121,7 +123,7 @@ function TranscriptPlanCard({
   return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
 }
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere }, ref) {
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -577,7 +579,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // y/n / menu TTY): status 'waiting' sem card conhecido — nem do transcript,
   // nem sintetizado do menu TUI (que tem precedência sobre o banner).
   const waitInTerminal =
-    showTerminalWaitBanner({ status, pending: pendingPrompt }) && !showTuiCard
+    showTerminalWaitBanner({
+      status,
+      pending: pendingPrompt,
+      answeredElsewhere: menuAnsweredElsewhere,
+    }) && !showTuiCard
 
   const viewState = resolveChatViewState({
     loading,

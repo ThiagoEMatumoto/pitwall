@@ -244,7 +244,10 @@ describe('buildSpawnInnerCmd', () => {
     expect(parsed.permissions.allow).toContain('Bash(git status:*)')
     expect(parsed.permissions.allow).toContain('mcp__pitwall')
     expect(parsed.permissions.ask).toContain('Bash(git merge:*)')
-    expect(parsed.permissions.deny).toContain('Bash(rm:*)')
+    expect(parsed.permissions.ask).toContain('Bash(rm:*)')
+    expect(parsed.permissions.deny).toContain('Bash(rm -r*)')
+    expect(parsed.permissions.deny).toContain('Bash(git push * main)')
+    expect(parsed.permissions.allow).toContain('Bash(git push -u origin feat/*)')
     // Nada de merge/delete escapando pelo allow.
     expect(parsed.permissions.allow).not.toContain('Bash(git merge:*)')
     expect(parsed.permissions.allow).not.toContain('Bash(rm:*)')

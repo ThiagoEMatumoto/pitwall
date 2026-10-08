@@ -53,6 +53,13 @@ export interface TuiMenuTab {
   done: boolean
 }
 
+export interface PermissionRequest {
+  // "Bash command" → Bash; "Edit file" → Edit (cabeçalho da caixa da TUI).
+  tool?: string
+  // Conteúdo entre as réguas ╌ (2.1.286) ou o alvo de "make this edit to X".
+  command?: string
+}
+
 export interface TuiMenu {
   kind: 'question' | 'plan' | 'permission' | 'trust' | 'question_review'
   question?: string
@@ -60,6 +67,9 @@ export interface TuiMenu {
   // question_review: resumo "pergunta → resposta" da tela de revisão.
   // Aparadas de bordas de box-drawing. Fail-soft: se nada legível sobrar, ausente.
   context?: string
+  // permission: o pedido estruturado (ferramenta + comando) lido do mesmo box do
+  // context. Ausente quando nada foi reconhecido — quem consome cai no context.
+  request?: PermissionRequest
   options: TuiMenuOption[]
   // Multi-select: dígito faz TOGGLE (marca/desmarca), nunca submete — a UI
   // precisa dos controles de aba/revisão em vez de clique direto.
@@ -155,6 +165,42 @@ function extractContext(lines: string[], questionLine: number, max = 15): string
     if (PROMPT_TOP_RULE_RE.test(raw.trim())) break
   }
   return parts.length > 0 ? parts.join('\n') : undefined
+}
+
+// Cabeçalho da caixa no 2.1.286 ("Bash command") e nos prompts de arquivo ("Edit file").
+const TOOL_HEADER_RE = /^(\S+) (command|file)$/i
+const DASHED_RULE_RE = /^╌{10,}$/
+const EDIT_TARGET_RE = /^Do you want to make this edit to (.+)\?$/i
+
+// Mesma janela do extractContext, mas lendo a estrutura que ele descarta: no
+// 2.1.286 (captura real em __fixtures__/…permission-bash) o comando fica entre
+// duas réguas ╌, abaixo do cabeçalho e da descrição.
+function extractRequest(
+  lines: string[],
+  questionLine: number,
+  question: string | undefined,
+  max = 15,
+): PermissionRequest | undefined {
+  let tool: string | undefined
+  const rules: number[] = []
+  for (let i = questionLine - 1; i >= 0 && i >= questionLine - max; i--) {
+    const t = lines[i].trim()
+    if (DASHED_RULE_RE.test(t)) rules.unshift(i)
+    const header = TOOL_HEADER_RE.exec(t.replace(BOX_EDGE_RE, ''))
+    if (header && !tool) tool = header[1]
+    if (lines[i].includes('╭') || PROMPT_TOP_RULE_RE.test(t)) break
+  }
+  let command: string | undefined
+  if (rules.length >= 2) {
+    const body = lines
+      .slice(rules[rules.length - 2] + 1, rules[rules.length - 1])
+      .map((l) => l.trim())
+      .filter((l) => l !== '')
+    if (body.length > 0) command = body.join(' ')
+  }
+  if (!command && question) command = EDIT_TARGET_RE.exec(question)?.[1]
+  if (!tool && !command) return undefined
+  return { ...(tool ? { tool } : {}), ...(command ? { command } : {}) }
 }
 
 const SENTINELS: [RegExp, 'other' | 'chat'][] = [
@@ -404,6 +450,8 @@ export function parseTuiMenu(text: string): TuiMenu | null {
         ? extractReviewSummary(lines, questionLine)
         : undefined
 
+  const request =
+    kind === 'permission' ? extractRequest(lines, questionLine, question ?? undefined) : undefined
   const tabs = kind === 'question' ? extractTabBar(lines, questionLine) : undefined
   const multiSelect = MULTI_SELECT_RE.test(text) || options.some((o) => o.checked != null)
   // Preview/notas presente → dígito só navega/toggla, precisa de Enter
@@ -414,6 +462,7 @@ export function parseTuiMenu(text: string): TuiMenu | null {
     kind,
     ...(kind === 'question_review' ? { question: 'Review your answers' } : question != null ? { question } : {}),
     ...(context != null ? { context } : {}),
+    ...(request != null ? { request } : {}),
     options,
     multiSelect,
     ...(tabs != null ? { tabs } : {}),

@@ -182,6 +182,15 @@ describe('showTerminalWaitBanner', () => {
     )
   })
 
+  it('hides when the host already shows a panel that answers the menu', () => {
+    expect(
+      showTerminalWaitBanner({ status: 'waiting', pending: null, answeredElsewhere: true }),
+    ).toBe(false)
+    expect(
+      showTerminalWaitBanner({ status: 'waiting', pending: null, answeredElsewhere: false }),
+    ).toBe(true)
+  })
+
   it('does not show for non-waiting statuses', () => {
     expect(showTerminalWaitBanner({ status: 'working', pending: null })).toBe(false)
     expect(showTerminalWaitBanner({ status: 'idle', pending: null })).toBe(false)

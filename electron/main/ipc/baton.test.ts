@@ -162,7 +162,7 @@ vi.mock('../services/handoff/notify-mother-alias', () => ({
 }))
 
 import { registerBatonIpc, withActiveChildren } from './baton'
-import { DESTRUCTIVE_DENYLIST } from '../services/spawn-flags'
+import { HANDOFF_CHILD_DENY } from '../services/spawn-flags'
 import { registerSessionIpc } from './sessions'
 import * as handoffStore from '../services/handoff-store'
 import { distillBaton } from '../services/baton/distill'
@@ -327,14 +327,18 @@ describe('baton:pass — herança do papel de filha de handoff', () => {
 
   // Herdar o papel de filha sem herdar as permissões é afrouxamento silencioso:
   // a sucessora de uma filha `plan` nasceria podendo editar, e a de uma autônoma
-  // sem o DESTRUCTIVE_DENYLIST que o spawnSession aplica a partir do modo.
-  it('herda as permissões do modo: acceptEdits + denylist destrutivo', () => {
+  // sem o HANDOFF_CHILD_DENY que o spawnSession aplica a partir do modo.
+  it('herda as permissões do modo: acceptEdits + denylist da filha', () => {
     pass()
     expect(spawns[0].innerCmd).toContain("--permission-mode 'acceptEdits'")
     expect(spawns[0].innerCmd).toContain('--disallowedTools')
-    for (const spec of DESTRUCTIVE_DENYLIST) {
-      expect(spawns[0].innerCmd).toContain(spec)
+    // Filha recebe o deny PRÓPRIO (coerente com o --settings): sem `git push:*`
+    // nem `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
+    for (const spec of HANDOFF_CHILD_DENY) {
+      expect(spawns[0].innerCmd).toContain(`'${spec}'`)
     }
+    expect(spawns[0].innerCmd).not.toContain("'Bash(git push:*)'")
+    expect(spawns[0].innerCmd).not.toContain("'Bash(rm:*)'")
   })
 
   it('modo plan: a sucessora volta read-only, sem denylist (nada a negar)', () => {

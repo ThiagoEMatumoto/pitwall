@@ -17,6 +17,7 @@ import { agentTools } from './agent-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
+import { attentionResponseStats } from '../attention-response-store'
 import * as taskStore from '../task-store'
 import * as featureStore from '../feature-store'
 import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
@@ -538,11 +539,14 @@ function overviewTools(): ToolDef[] {
       name: 'overview_get',
       title: 'Get overview',
       description:
-        'Aggregated dashboard snapshot: objective tree with progress, pending tasks (sorted), counts, and active features with session activity.',
+        'Aggregated dashboard snapshot: objective tree with progress, pending tasks (sorted), counts, and active features with session activity. attentionResponses: TUI menu answers given from the UI in the last windowDays (count, median wait in ms since the menu appeared, crew-child subset, by choice).',
       inputSchema: emptySchema,
       handler: (args) => {
         emptySchema.parse(args ?? {})
-        return ok({ overview: overviewStore.getOverview() })
+        return ok({
+          overview: overviewStore.getOverview(),
+          attentionResponses: attentionResponseStats(),
+        })
       },
     },
   ]

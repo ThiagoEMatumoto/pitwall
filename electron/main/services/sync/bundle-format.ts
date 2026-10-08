@@ -51,6 +51,7 @@ export function featuresDir(bundleDir: string): string {
 //   canvas_positions, canvas_notes, session_groups  (mapa de sessões, migration 051).
 //   agent_messages  (asks agente↔agente entre sessões DESTA máquina, migration 052).
 //   handoff_wake_deliveries  (ledger do wake da mãe, sessions.id DESTA máquina, migration 055).
+//   attention_responses  (respostas a menus da TUI desta máquina, migration 056).
 // Por isso a 050 (sessions.provider/launch_json) não muda o conteúdo do bundle;
 // só sobe o schemaVersion (MAX(_migrations)), e o importer de um app < 050
 // recusa bundle exportado por um app >= 050 — como em toda migration.

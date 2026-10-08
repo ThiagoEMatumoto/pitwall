@@ -538,6 +538,18 @@ describe('mcp tools — overview', () => {
     expect(Array.isArray(overview.pending)).toBe(true)
     expect(Array.isArray(overview.features)).toBe(true)
   })
+
+  it('overview_get expõe a medição de respostas a menus (vazia sem respostas)', () => {
+    const { attentionResponses } = call<{ attentionResponses: unknown }>('overview_get', {})
+    expect(attentionResponses).toEqual({
+      windowDays: 7,
+      count: 0,
+      crewCount: 0,
+      medianWaitMs: null,
+      crewMedianWaitMs: null,
+      byChoice: {},
+    })
+  })
 })
 
 describe('mcp tools — session_handoff sem gate', () => {

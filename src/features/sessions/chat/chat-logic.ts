@@ -93,8 +93,11 @@ export function pendingInteractive(messages: ChatMessage[]): PendingInteractive 
 export function showTerminalWaitBanner(input: {
   status: SessionActivity['status'] | undefined
   pending: PendingInteractive | null
+  // Quem hospeda o chat já mostra um painel que responde o menu (quick look da
+  // filha): mandar abrir o terminal contradiria os botões ao lado.
+  answeredElsewhere?: boolean
 }): boolean {
-  return input.status === 'waiting' && input.pending === null
+  return input.status === 'waiting' && input.pending === null && !input.answeredElsewhere
 }
 
 // resolveAt de um eco novo: resolve quando a contagem de usuário no disco chega a

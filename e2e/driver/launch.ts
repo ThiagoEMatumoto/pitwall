@@ -86,6 +86,17 @@ export interface LaunchOptions {
 // Lança o app BUILDADO (out/main/index.js) contra uma CÓPIA do userData real.
 // --user-data-dir redireciona o SQLite e todo o app.getPath('userData') pra cópia,
 // então nada que eu fizer toca os dados reais.
+// Marcadores de "estou dentro de uma sessão Claude Code" herdados de quem roda o
+// harness: com eles a filha spawnada pelo app se trata como sessão aninhada e não
+// grava transcript, e o cenário valida um chat vazio.
+const INHERITED_CLAUDE_VARS = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION']
+
+export function inheritedEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out = { ...env }
+  for (const key of INHERITED_CLAUDE_VARS) delete out[key]
+  return out
+}
+
 export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResult> {
   if (!existsSync(MAIN_ENTRY)) {
     throw new Error(
@@ -108,7 +119,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
   const app = await electron.launch({
     args: [MAIN_ENTRY, '--no-sandbox', `--user-data-dir=${copy}`, ...(options.extraArgs ?? [])],
     env: {
-      ...process.env,
+      ...inheritedEnv(),
       CM_SCRUB_SECRETS: keepSecrets ? '0' : '1',
       CM_MCP_EPHEMERAL_PORT: '1',
       // A cópia protege o banco, não o filesystem nem o microfone: sem isto o
