@@ -150,6 +150,10 @@ export function FeatureSwitcher() {
         order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId
       const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
       if (keys.length === 0) return false
+      // Título da linha de atenção (feature sem card no mapa): o índice de features
+      // só é carregado pela área Features; o overlay assina e re-renderiza.
+      const features = useFeaturesStore.getState()
+      if (features.features.length === 0 && !features.loading) void features.load()
       restoreFocus.current = document.activeElement as HTMLElement | null
       const index = openIndex(keys.length, backward, !!current && keys[0] === current)
       update(() => ({ keys, index, visible: sticky, sticky }))
