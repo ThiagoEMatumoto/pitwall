@@ -35,7 +35,8 @@ const { attentionCount, buildAttentionQueue } = await import('./attention-queue'
 const { crewAttentionCount } = await import('@/features/handoffs/crew')
 const { buildSwitcherEntries } = await import('@/features/session-canvas/feature-switcher-model')
 const { sessionStatusCounts } = await import('@/features/session-canvas/feature-state-summary')
-const { graphToFlow } = await import('@/features/session-canvas/graph-to-flow')
+const { graphToFlow, scopeAttentionCount } = await import('@/features/session-canvas/graph-to-flow')
+const { GLOBAL_CANVAS_SCOPE } = await import('../../../shared/types/canvas')
 
 type LiveStatus = import('../../../shared/tui/attention-reason').LiveStatus
 type ScreenScan = import('../../../shared/tui/attention-reason').ScreenScan
@@ -104,6 +105,9 @@ function surfaces(lives: Live[]) {
     switcherOnMap: buildSwitcherEntries(graph, liveBits, () => null, undefined, items)
       .filter((e) => e.kind !== 'attention')
       .reduce((sum, e) => sum + e.needsYou, 0),
+    // Faixa "N precisa de você" do mapa (escopo global) e aba Estado do FeaturePanel.
+    mapStrip: scopeAttentionCount(graph, GLOBAL_CANVAS_SCOPE, items),
+    featurePanel: (featureId: string) => sessionStatusCounts(graph.nodes, featureId, items).needsYou,
     // Badges das raias de topo do mapa (card da feature / "Sem feature").
     laneBadges: graphToFlow({
       graph,
@@ -281,6 +285,57 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
     expect(s.switcher).toBe(s.projection)
     expect(s.hud).toBe(s.projection)
     expect(s.laneBadges).toBe(s.switcherOnMap)
+    expect(s.mapStrip).toBe(s.projection)
+  })
+
+  it('pergunta viva + falhada + interrompida + resultado na mesma feature: faixa e painel = projeção', () => {
+    const q = child('r1', 'A', F)
+    store.ask(q.id, 'qual branch?')
+    store.fail(child('r2', 'B', F).id, 'boom') // handoffs:fail mata a PTY da filha
+    store.report(child('r3', 'C', F).id, 'feito')
+    interrupted('r4', 'D', F)
+    const s = surfaces([
+      { id: 'M', status: 'idle', scan: null },
+      { id: 'A', status: 'working', scan: null },
+    ])
+    expect(s.items.map((i) => i.kind).sort()).toEqual(
+      ['child_failed', 'child_interrupted', 'child_question', 'result_unconsumed'].sort(),
+    )
+    expect(s.projection).toBe(3)
+    expect(s.mapStrip).toBe(s.projection)
+    expect(s.featurePanel(F)).toBe(s.projection)
+    expect(s.hud).toBe(s.projection)
+    expect(s.switcher).toBe(s.projection)
+  })
+
+  it('a aresta do handoff só fica em alerta enquanto a fila tem a pergunta', () => {
+    const b = child('r1', 'B', F)
+    store.ask(b.id, 'posso apagar?')
+    const edgeAlert = () => {
+      const s = surfaces([
+        { id: 'M', status: 'idle', scan: null },
+        { id: 'B', status: 'working', scan: null },
+      ])
+      const flow = graphToFlow({
+        graph: s.graph,
+        scope: 'all',
+        positions: [],
+        notes: [],
+        groups: [],
+        attention: s.items,
+      })
+      return flow.edges.find((e) => e.id === `e:h:${b.id}`)?.data?.alert
+    }
+    expect(edgeAlert()).toBe(true)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 10_000)
+      store.progress(b.id, 'segui sem apagar')
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(store.list().find((h) => h.id === b.id)?.status).toBe('needs_input')
+    expect(edgeAlert()).toBe(false)
   })
 
   it('o card de atenção abre a filha: carrega o handoff e o título da feature', () => {

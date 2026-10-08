@@ -31,6 +31,7 @@ import { GLOBAL_CANVAS_SCOPE, type CanvasPositionInput } from '../../../shared/t
 import {
   featureLaneId,
   graphToFlow,
+  scopeAttentionCount,
   layoutRects,
   homeRepoLaneId,
   lastSeenAt,
@@ -569,6 +570,10 @@ function SessionMapInner() {
   }, [now, workingSince, queue])
 
   const sessionCount = flow.nodes.filter((n) => n.type === 'session').length
+  const needsYou = useMemo(
+    () => scopeAttentionCount(graph, scope, attention),
+    [graph, scope, attention],
+  )
   const sessionNodes = useMemo(
     () =>
       flow.nodes.filter((n) => n.type === 'session').map((n) => (n.data as SessionCardData).node),
@@ -1462,6 +1467,8 @@ function SessionMapInner() {
                 <FeatureSwitcherButton />
                 <MapStatusCounters
                   nodes={sessionNodes}
+                  needsYou={needsYou}
+                  projectScope={scope !== GLOBAL_CANVAS_SCOPE}
                   onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
                 />
               </MapTopBar>

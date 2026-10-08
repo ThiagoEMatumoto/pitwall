@@ -25,11 +25,17 @@ const ORDER: CountedTone[] = ['needs-you', 'working', 'done']
 // à parte porque assina a saída ao vivo (tails) — no SessionMap, cada tela nova
 // re-renderizaria o mapa inteiro. Clique: "precisa de você" anda pela fila de
 // atenção (o SessionMap centraliza pelo flash); os outros, pelos cartões.
+// needsYou vem da fila única recortada pelo escopo (scopeAttentionCount), não dos
+// cartões: a filha falhada/interrompida não tem PTY e não desenha cartão.
 export function MapStatusCounters({
   nodes,
+  needsYou,
+  projectScope,
   onCenter,
 }: {
   nodes: SessionGraphNode[]
+  needsYou: number
+  projectScope: boolean
   onCenter: (sessionId: string) => void
 }) {
   const liveSessions = useAppStore((s) => s.liveSessions)
@@ -53,7 +59,7 @@ export function MapStatusCounters({
   const counters = mapCounters(byTone.map((t) => t.tone))
   const count: Record<CountedTone, number> = {
     working: counters.working,
-    'needs-you': counters.needsYou,
+    'needs-you': needsYou,
     done: counters.done,
   }
 
@@ -85,7 +91,9 @@ export function MapStatusCounters({
             onClick={() => pick(tone)}
             title={
               tone === 'needs-you'
-                ? 'Ir para a próxima que espera você (Alt+A)'
+                ? projectScope
+                  ? 'Conta só este projeto. Ir para a próxima que espera você (Alt+A)'
+                  : 'Conta todas as features. Ir para a próxima que espera você (Alt+A)'
                 : 'Centralizar a próxima'
             }
             className="flex items-center gap-1 rounded-full px-2 py-0.5 transition hover:bg-[var(--color-surface-2)]"
