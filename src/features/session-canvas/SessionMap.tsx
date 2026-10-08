@@ -20,6 +20,7 @@ import { Map as MapIcon, Maximize } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import './session-map.css'
 import { useAppStore } from '@/store/appStore'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAttentionQueue, useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
 import { sendToApi } from '@/lib/ipc'
@@ -393,6 +394,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const asks = usePendingAsks()
   const cardHeights = useCardHeightStore((s) => s.heights)
+  const attention = useAttentionListStore((s) => s.items)
   const inPanel = useMotherDockStore((s) => s.shownId)
   // Densidade do zoom (resumo/blocos): a raia reserva a altura que o cartão desenha.
   const compact = useStore((s) => isCompactZoom(s.transform[2]))
@@ -430,8 +432,10 @@ function SessionMapInner() {
       asks,
       rowWidth,
       compact,
+      attention,
     }),
     [
+      attention,
       graph,
       scope,
       canvas,

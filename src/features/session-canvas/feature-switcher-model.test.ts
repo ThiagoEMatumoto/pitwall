@@ -64,7 +64,13 @@ describe('buildSwitcherEntries', () => {
     nodes: [
       node('m1', { featureId: 'f1', isMother: true, childCount: 1, title: 'Mãe um' }),
       node('c1', { featureId: 'f1', status: 'working' }),
-      node('m2', { featureId: 'f2', isMother: true, childCount: 1, status: 'waiting' }),
+      node('m2', {
+        featureId: 'f2',
+        isMother: true,
+        childCount: 1,
+        status: 'waiting',
+        attentionReason: 'waiting',
+      }),
       node('c2', { featureId: 'f2', attentionReason: 'handoff-input' }),
       node('loose', { featureId: null, status: 'working' }),
     ],
@@ -96,7 +102,7 @@ describe('buildSwitcherEntries', () => {
       working: 1,
       needsYou: 0,
     })
-    // m2 está 'waiting' sem tela reconhecida: o TOM vem do indicador. A contagem
+    // m2 está na fila ('waiting' no nó): o TOM vem do indicador. A contagem
     // needsYou vem só da fila única (attention-unified.test): sem lista, zero.
     expect(entries[1]).toMatchObject({ motherId: 'm2', motherTone: 'needs-you', needsYou: 0 })
     expect(entries[2]).toMatchObject({
@@ -118,17 +124,17 @@ describe('buildSwitcherEntries', () => {
     expect(buildSwitcherEntries(g, new Map())[0].motherId).toBeNull()
   })
 
-  // O mesmo tom do mapa e dos contadores: waiting com "Interrupted" no tail da
-  // tela é interrompida, não "precisa de você".
-  it('com o tail da tela, a interrompida não fica com o tom de precisa de você', () => {
+  // O tom segue o nó da fila única, como o HUD: a tela "Interrupted" não o muda.
+  // Fora da fila, a mesma tela é interrompida.
+  it('tail "Interrupted": o tom é o da fila; fora dela, interrompida', () => {
+    const tail = ['  ⎿  Interrupted · What should Claude do instead?', '> ']
+    const tailOf = (id: string) => (id === 'm2' ? tail : null)
+    expect(buildSwitcherEntries(graph, new Map(), tailOf)[1].motherTone).toBe('needs-you')
     const g: SessionGraph = {
       ...graph,
-      nodes: graph.nodes.map((n) => (n.sessionId === 'c2' ? { ...n, attentionReason: null } : n)),
+      nodes: graph.nodes.map((n) => (n.sessionId === 'm2' ? { ...n, attentionReason: null } : n)),
     }
-    const tail = ['  ⎿  Interrupted · What should Claude do instead?', '> ']
-    expect(buildSwitcherEntries(g, new Map())[1].motherTone).toBe('needs-you')
-    const entry = buildSwitcherEntries(g, new Map(), (id) => (id === 'm2' ? tail : null))[1]
-    expect(entry.motherTone).not.toBe('needs-you')
+    expect(buildSwitcherEntries(g, new Map(), tailOf)[1].motherTone).toBe('interrupted')
   })
 
   it('sessões encerradas não contam nem viram mãe', () => {

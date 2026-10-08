@@ -35,6 +35,7 @@ const { attentionCount, buildAttentionQueue } = await import('./attention-queue'
 const { crewAttentionCount } = await import('@/features/handoffs/crew')
 const { buildSwitcherEntries } = await import('@/features/session-canvas/feature-switcher-model')
 const { sessionStatusCounts } = await import('@/features/session-canvas/feature-state-summary')
+const { graphToFlow } = await import('@/features/session-canvas/graph-to-flow')
 
 type LiveStatus = import('../../../shared/tui/attention-reason').LiveStatus
 type ScreenScan = import('../../../shared/tui/attention-reason').ScreenScan
@@ -100,6 +101,20 @@ function surfaces(lives: Live[]) {
       (sum, e) => sum + e.needsYou,
       0,
     ),
+    switcherOnMap: buildSwitcherEntries(graph, liveBits, () => null, undefined, items)
+      .filter((e) => e.kind !== 'attention')
+      .reduce((sum, e) => sum + e.needsYou, 0),
+    // Badges das raias de topo do mapa (card da feature / "Sem feature").
+    laneBadges: graphToFlow({
+      graph,
+      scope: 'all',
+      positions: [],
+      notes: [],
+      groups: [],
+      attention: items,
+    })
+      .nodes.filter((n) => n.type === 'lane' && !n.parentId)
+      .reduce((sum, n) => sum + ((n.data as { attentionCount?: number }).attentionCount ?? 0), 0),
   }
 }
 
@@ -265,6 +280,7 @@ describe('soma do Ctrl+` == length da projeção (tabela de estados do store)', 
     expect(s.projection).toBeGreaterThan(0)
     expect(s.switcher).toBe(s.projection)
     expect(s.hud).toBe(s.projection)
+    expect(s.laneBadges).toBe(s.switcherOnMap)
   })
 
   it('o card de atenção abre a filha: carrega o handoff e o título da feature', () => {

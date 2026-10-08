@@ -45,7 +45,7 @@ describe('cardIndicator', () => {
       ['trust', 'Confiar'],
     ]
     for (const [detail, reason] of cases) {
-      const ind = cardIndicator(input({ status: 'waiting', detail }))
+      const ind = cardIndicator(input({ status: 'waiting', graphAttention: 'waiting', detail }))
       expect(ind.tone).toBe('needs-you')
       expect(ind.reason).toBe(reason)
     }
@@ -64,11 +64,22 @@ describe('cardIndicator', () => {
     expect(cardIndicator(input({ status: 'idle' })).tone).toBe('done')
   })
 
-  it('waiting sem tela reconhecida não é dado como pronto', () => {
-    expect(cardIndicator(input({ status: 'waiting' }))).toMatchObject({
+  it('waiting sem tela reconhecida: o nó da fila manda (não há regra própria aqui)', () => {
+    expect(cardIndicator(input({ status: 'waiting', graphAttention: 'waiting' }))).toMatchObject({
       tone: 'needs-you',
       reason: 'Esperando você',
     })
+    // Menu na tela sem item na fila: o card não inventa "precisa de você".
+    expect(cardIndicator(input({ status: 'waiting', detail: 'permission' })).tone).not.toBe(
+      'needs-you',
+    )
+  })
+
+  it('tela "Interrupted" na fila: precisa de você, com o motivo interrompida', () => {
+    const tail = ['  ⎿  Interrupted · What should Claude do instead?', '> ']
+    expect(
+      cardIndicator(input({ status: 'waiting', graphAttention: 'waiting', tail })),
+    ).toMatchObject({ tone: 'needs-you', reason: 'Interrompida' })
   })
 
   it('subindo e interrompida', () => {

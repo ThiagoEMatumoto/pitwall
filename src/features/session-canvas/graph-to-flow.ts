@@ -8,6 +8,8 @@
 // numa calha à direita da lane da sessão. Sem posição salva, cada peça cai num
 // slot determinístico (é o mesmo layout que o Organizar grava — tidy.ts).
 import type { Edge, Node } from '@xyflow/react'
+import { attentionSubjectKey, humanQueue } from '../../../shared/attention/selectors'
+import type { AttentionItem } from '../../../shared/types/attention'
 import type {
   SessionGraph,
   SessionGraphAttention,
@@ -98,6 +100,9 @@ export interface MapInput {
   // Mãe aberta no painel ao lado: no mapa ela só mostra o aviso curto, então o
   // tamanho salvo dela não vale (volta quando ela sai do painel).
   inPanel?: string | null
+  // A fila única (attention:list): o badge da raia é o recorte dela, o mesmo número
+  // da linha do Ctrl+`. Ausente = o attentionReason dos nós (também da fila).
+  attention?: AttentionItem[]
 }
 
 export interface PendingAsk {
@@ -691,12 +696,33 @@ function slotCards(
   return out
 }
 
+// Item cuja sessão o mapa não desenha (filha interrompida, sem PTY) conta na raia
+// pela feature — a mesma regra do seletor (buildSwitcherEntries).
+function laneAttention(
+  lane: SessionGraphLane,
+  laneSessions: SessionGraphNode[],
+  attention: AttentionItem[] | undefined,
+  inUse: ReadonlySet<string>,
+): number {
+  if (!attention) return laneSessions.filter((n) => n.attentionReason).length
+  const ids = new Set(laneSessions.map((n) => n.sessionId))
+  const featureId = lane.kind === 'feature' ? lane.featureId : null
+  const subjects = humanQueue(attention)
+    .filter((i) =>
+      i.sessionId && inUse.has(i.sessionId)
+        ? ids.has(i.sessionId)
+        : featureId != null && i.featureId === featureId,
+    )
+    .map(attentionSubjectKey)
+  return new Set(subjects).size
+}
+
 function laneHeaderData(
   lane: SessionGraphLane,
   laneSessions: SessionGraphNode[],
   repoCount: number,
+  attentionCount: number,
 ): LaneData {
-  const attentionCount = laneSessions.filter((n) => n.attentionReason).length
   if (lane.kind === 'feature') {
     return {
       level: 'feature',
@@ -769,6 +795,7 @@ function layoutLanes(
   noteCountByLane: Map<string, number>,
 ): Layout {
   const byId = new Map(sessions.map((s) => [s.sessionId, s]))
+  const inUse = inUseIds(input)
   const nodes: MapNode[] = []
   const sessionAbs = new Map<string, Point>()
   const laneBoxes: Box[] = []
@@ -897,7 +924,12 @@ function layoutLanes(
       position: lanePos,
       width: laneW,
       height: laneH,
-      data: laneHeaderData(lane, laneSessions, repos.length),
+      data: laneHeaderData(
+        lane,
+        laneSessions,
+        repos.length,
+        laneAttention(lane, laneSessions, input.attention, inUse),
+      ),
     }
     nodes.push(...repoNodes, ...cards)
     for (const card of cards) {
