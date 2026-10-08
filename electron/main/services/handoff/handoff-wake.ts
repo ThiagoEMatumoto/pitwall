@@ -228,7 +228,15 @@ export function wakeMotherFor(
   reason: WakeReason,
   opts: { actorSessionId?: string | null } = {},
 ): Promise<void> {
-  const mother = handoffStore.get(handoffId)?.motherSessionId ?? null
+  // Nunca lança, nem síncrono: o chamador está no meio de outra transição (ex.: o
+  // erro original da adoção) e um throw aqui o mascararia.
+  let mother: string | null = null
+  try {
+    mother = handoffStore.get(handoffId)?.motherSessionId ?? null
+  } catch (err) {
+    console.error('[handoff-wake] wake da mãe falhou:', err)
+    return Promise.resolve()
+  }
   const key = mother ?? `no-mother:${handoffId}`
   const prev = chains.get(key) ?? Promise.resolve()
   const next = prev
