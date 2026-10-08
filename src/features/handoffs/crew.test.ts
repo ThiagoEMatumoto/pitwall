@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import Database from 'better-sqlite3'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Badge e ordem do dock leem a fila única; o estado sai do handoffStore REAL.
+let testDb: Database.Database
+vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
+let transcriptPath: string | null = null
+vi.mock('../../../electron/main/services/transcript-path', () => ({
+  findTranscriptPath: () => transcriptPath,
+}))
 
 // crew.ts importa @/store/handoffsStore, que importa @/lib/ipc e lê window.api no
 // module-eval. As funções puras testadas aqui não tocam a API, mas o import
@@ -14,7 +23,6 @@ const {
   dockCrew,
   hiddenCrewSessionIds,
   crewCcSessionIds,
-  crewNeedsAttention,
   crewResumedAfterQuestion,
   crewAttentionCount,
   crewTerminalTarget,
@@ -27,6 +35,12 @@ const {
   paneShowsLive,
   childrenMissedToast,
 } = await import('./crew')
+const store = await import('../../../electron/main/services/handoff-store')
+const { readTransitions, toAttentionLive } =
+  await import('../../../electron/main/services/attention/attention-service')
+const { projectAttention } = await import('../../../shared/attention/project-attention')
+const { attentionHandoffIds, humanQueue } = await import('../../../shared/attention/selectors')
+const harness = await import('../../../electron/main/services/attention/attention-test-harness')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -144,10 +158,19 @@ describe('dockCrew', () => {
   // das superfícies normais (é o ponto da operação).
   it('liberado (solto do painel) sai do dock e a sessão volta às superfícies normais', () => {
     const handoffs = [
-      hf({ id: 'solta', status: 'interrupted', resumable: false, childSessionId: null, dismissedAt: 123 }),
+      hf({
+        id: 'solta',
+        status: 'interrupted',
+        resumable: false,
+        childSessionId: null,
+        dismissedAt: 123,
+      }),
       hf({ id: 'viva', status: 'running', childSessionId: 's2' }),
     ]
-    const sessions = [live({ id: 's1', ccSessionId: 'cc1' }), live({ id: 's2', ccSessionId: 'cc2' })]
+    const sessions = [
+      live({ id: 's1', ccSessionId: 'cc1' }),
+      live({ id: 's2', ccSessionId: 'cc2' }),
+    ]
     expect(dockCrew(handoffs).map((h) => h.id)).toEqual(['viva'])
     // s1 (a sessão que foi solta) reaparece na strip/switcher: sem vínculo, ela
     // não é mais filha de ninguém.
@@ -216,7 +239,10 @@ describe('crewCcSessionIds', () => {
       hf({ status: 'running', childSessionId: 's1' }),
       hf({ status: 'done', childSessionId: 's2' }),
     ]
-    const sessions = [live({ id: 's1', ccSessionId: 'cc1' }), live({ id: 's2', ccSessionId: 'cc2' })]
+    const sessions = [
+      live({ id: 's1', ccSessionId: 'cc1' }),
+      live({ id: 's2', ccSessionId: 'cc2' }),
+    ]
     expect(crewCcSessionIds(handoffs, sessions)).toEqual(new Set(['cc1']))
   })
 
@@ -253,157 +279,151 @@ describe('crewResumedAfterQuestion', () => {
 
   it('sem um dos carimbos não há evidência (handoff legado, filha que nunca reportou)', () => {
     expect(
-      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: null, stepUpdatedAt: 2000 })),
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: null, stepUpdatedAt: 2000 }),
+      ),
     ).toBe(false)
     expect(
-      crewResumedAfterQuestion(hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: null })),
+      crewResumedAfterQuestion(
+        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: null }),
+      ),
     ).toBe(false)
   })
 
   it('só faz sentido em needs_input', () => {
     expect(
-      crewResumedAfterQuestion(hf({ status: 'running', questionAskedAt: 1000, stepUpdatedAt: 2000 })),
-    ).toBe(false)
-  })
-})
-
-describe('crewNeedsAttention', () => {
-  it('needs_input basta, mesmo com o PTY trabalhando', () => {
-    expect(crewNeedsAttention(hf({ status: 'needs_input' }), live({ status: 'working' }))).toBe(true)
-  })
-
-  // O caso do relato: a mãe respondeu por mensagem peer (fora do app), a filha
-  // retomou e reportou passo, mas o needs_input segue no banco. Alarmar aqui é
-  // mentir sobre o estado — e o dado continua lá pra auditoria.
-  it('needs_input com progresso posterior à pergunta NÃO alarma', () => {
-    expect(
-      crewNeedsAttention(
-        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
-        live({ status: 'working' }),
+      crewResumedAfterQuestion(
+        hf({ status: 'running', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
       ),
     ).toBe(false)
   })
-
-  it('mas o PTY parado num prompt vence a evidência de retomada', () => {
-    expect(
-      crewNeedsAttention(
-        hf({ status: 'needs_input', questionAskedAt: 1000, stepUpdatedAt: 2000 }),
-        live({ status: 'waiting' }),
-      ),
-    ).toBe(true)
-  })
-
-  it('PTY waiting basta, mesmo com o handoff running', () => {
-    expect(crewNeedsAttention(hf({ status: 'running' }), live({ status: 'waiting' }))).toBe(true)
-  })
-
-  it('running + PTY working → false', () => {
-    expect(crewNeedsAttention(hf({ status: 'running' }), live({ status: 'working' }))).toBe(false)
-  })
-
-  it('sem sessão viva e sem needs_input → false', () => {
-    expect(crewNeedsAttention(hf({ status: 'running' }), undefined)).toBe(false)
-  })
 })
 
-describe('crewAttentionCount', () => {
-  it('conta as duas fontes de atenção e ignora handoff terminal', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'needs_input', childSessionId: 's1' }),
-      hf({ id: 'b', status: 'running', childSessionId: 's2' }),
-      hf({ id: 'c', status: 'running', childSessionId: 's3' }),
-      hf({ id: 'd', status: 'done', childSessionId: 's4' }),
-    ]
-    const sessions = [
-      live({ id: 's1', status: 'working' }),
-      live({ id: 's2', status: 'waiting' }),
-      live({ id: 's3', status: 'working' }),
-      live({ id: 's4', status: 'waiting' }),
-    ]
-    // s1 (needs_input) + s2 (waiting). s3 trabalha; s4 é de handoff done.
-    expect(crewAttentionCount(handoffs, sessions)).toBe(2)
+type Status = import('../../../shared/tui/attention-reason').LiveStatus
+type Scan = import('../../../shared/tui/attention-reason').ScreenScan
+
+function liveOf(id: string, status: Status, scan: Scan | null) {
+  const row = testDb
+    .prepare('SELECT id, feature_id, repo_id FROM sessions WHERE id = ?')
+    .get(id) as {
+    id: string
+    feature_id: string | null
+    repo_id: string | null
+  }
+  return toAttentionLive(
+    row,
+    { status, lastActivityAt: 1, name: null },
+    scan,
+    scan?.menu ? 1 : null,
+  )
+}
+
+function child(repo: string, sid: string) {
+  harness.seedSession(testDb, sid, { repoId: repo })
+  const h = store.create({
+    targetRepoId: repo,
+    motherSessionId: 'm',
+    task: sid,
+    composedPrompt: 'p',
+  })
+  return store.markRunning(h.id, sid)
+}
+
+function projected(live: ReturnType<typeof liveOf>[]) {
+  const handoffs = store.list()
+  return {
+    handoffs,
+    attention: projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live }),
+  }
+}
+
+describe('crewAttentionCount / orderCrew — fila única', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => testDb.close())
+
+  it('conta pergunta aberta e menu na tela da filha; a falha (fora do dock) fica só no HUD', async () => {
+    const a = child('r1', 'a')
+    store.ask(a.id, 'q')
+    child('r2', 'b')
+    const f = child('r3', 'f')
+    store.fail(f.id, 'x')
+    const { handoffs, attention } = projected([
+      liveOf('m', 'idle', null),
+      liveOf('b', 'waiting', await harness.scanFixture('permission-bash')),
+    ])
+    expect(humanQueue(attention)).toHaveLength(3)
+    expect(crewAttentionCount(attention, handoffs)).toBe(2)
   })
 
-  it('ninguém esperando → 0', () => {
-    expect(crewAttentionCount([hf({ status: 'running', childSessionId: 's1' })], [])).toBe(0)
+  it('filha em fim de turno e filha que já retomou depois da pergunta não contam', async () => {
+    child('r1', 'c')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(10_000)
+      const r = child('r2', 'r')
+      store.ask(r.id, 'q')
+      vi.setSystemTime(20_000)
+      store.progress(r.id, 'segui')
+    } finally {
+      vi.useRealTimers()
+    }
+    const { handoffs, attention } = projected([
+      liveOf('c', 'waiting', await harness.scanFixture('idle-prompt')),
+      liveOf('r', 'working', null),
+    ])
+    expect(crewAttentionCount(attention, handoffs)).toBe(0)
   })
 
-  // O badge tem que contar EXATAMENTE quem o dock lista: um handoff pedindo
-  // atenção fora do painel vira um "1!" que o usuário não consegue zerar clicando
-  // em nada — não existe card onde responder.
-  it('handoff dispensado não conta (badge e lista do dock concordam)', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'needs_input', childSessionId: 's1', dismissedAt: 123 }),
-      hf({ id: 'b', status: 'running', childSessionId: 's2', dismissedAt: 123 }),
-    ]
-    const sessions = [live({ id: 's1', status: 'working' }), live({ id: 's2', status: 'waiting' })]
-    expect(dockCrew(handoffs)).toEqual([])
-    expect(crewAttentionCount(handoffs, sessions)).toBe(0)
+  it('dispensada não conta (badge e lista do dock concordam)', () => {
+    const a = child('r1', 'a')
+    store.ask(a.id, 'q')
+    store.dismiss(a.id)
+    const { handoffs, attention } = projected([])
+    expect(crewAttentionCount(attention, handoffs)).toBe(0)
   })
 
-  it('interrompida retomável entra na conta se pedir atenção (é o que o dock lista)', () => {
-    const handoffs = [hf({ id: 'a', status: 'interrupted', resumable: true, childSessionId: 's1' })]
-    // Sem PTY viva e sem needs_input, a pausada não pede nada — só confirma que
-    // iterar dockCrew não inventa atenção pra quem está parado.
-    expect(crewAttentionCount(handoffs, [])).toBe(0)
+  it('interrompida retomável conta: está no dock e dá pra retomar', () => {
+    const a = child('r1', 'a')
+    store.failIfRunning(a.id, 'PTY morreu')
+    transcriptPath = '/tmp/t.jsonl'
+    const { handoffs, attention } = projected([])
+    expect(crewAttentionCount(attention, handoffs)).toBe(1)
   })
 
-  it('filha que já retomou sai da conta (o badge não conta pergunta velha)', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'needs_input', childSessionId: 's1', questionAskedAt: 1, stepUpdatedAt: 2 }),
-      hf({ id: 'b', status: 'needs_input', childSessionId: 's2', questionAskedAt: 2, stepUpdatedAt: 1 }),
-    ]
-    const sessions = [live({ id: 's1', status: 'working' }), live({ id: 's2', status: 'working' })]
-    expect(crewAttentionCount(handoffs, sessions)).toBe(1)
-  })
-})
-
-describe('orderCrew', () => {
-  it('promove quem espera você e preserva a ordem do store dentro de cada grupo', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'running', childSessionId: 's1' }),
-      hf({ id: 'b', status: 'needs_input', childSessionId: 's2' }),
-      hf({ id: 'c', status: 'running', childSessionId: 's3' }),
-      hf({ id: 'd', status: 'running', childSessionId: 's4' }),
-    ]
-    const sessions = [
-      live({ id: 's1', status: 'working' }),
-      live({ id: 's2', status: 'working' }),
-      live({ id: 's3', status: 'waiting' }),
-      live({ id: 's4', status: 'working' }),
-    ]
-    // Atenção: b (needs_input) e c (waiting), na ordem original. Resto: a, d.
-    expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b', 'c', 'a', 'd'])
+  it('orderCrew promove quem está na fila e preserva a ordem do store no resto', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const ids: string[] = []
+      for (const [n, sid] of ['a', 'b', 'c', 'd'].entries()) {
+        vi.setSystemTime(1_000 * (n + 1))
+        ids.push(child(`r${n + 1}`, sid).id)
+      }
+      store.ask(ids[1], 'q')
+      store.ask(ids[3], 'q')
+      const { handoffs, attention } = projected([])
+      const order = orderCrew(handoffs, attentionHandoffIds(humanQueue(attention))).map(
+        (h) => h.childSessionId,
+      )
+      // store: created_at DESC → d, c, b, a; atenção (d, b) na frente.
+      expect(order).toEqual(['d', 'b', 'c', 'a'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('não reordena por status vivo quando ninguém precisa de atenção', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'running', childSessionId: 's1' }),
-      hf({ id: 'b', status: 'running', childSessionId: 's2' }),
-    ]
-    const sessions = [live({ id: 's1', status: 'idle' }), live({ id: 's2', status: 'working' })]
-    expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['a', 'b'])
-  })
-
-  it('descarta handoffs terminais junto com o dockCrew', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'done', childSessionId: 's1' }),
-      hf({ id: 'b', status: 'running', childSessionId: 's2' }),
-    ]
-    const sessions = [live({ id: 's2', status: 'working' })]
-    expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['b'])
-  })
-
-  // A pausada não espera nada (sem PTY, sem needs_input), então cai no grupo de
-  // baixo — quem pede atenção continua no topo.
-  it('a filha pausada entra na lista, depois de quem espera você', () => {
-    const handoffs = [
-      hf({ id: 'a', status: 'interrupted', resumable: true, childSessionId: 's1' }),
-      hf({ id: 'b', status: 'running', childSessionId: 's2' }),
-      hf({ id: 'c', status: 'needs_input', childSessionId: 's3' }),
-    ]
-    const sessions = [live({ id: 's2', status: 'working' }), live({ id: 's3', status: 'working' })]
-    expect(orderCrew(handoffs, sessions).map((h) => h.id)).toEqual(['c', 'a', 'b'])
+  it('orderCrew descarta handoffs terminais junto com o dockCrew', () => {
+    const a = child('r1', 'a')
+    store.report(a.id, 'ok')
+    child('r2', 'b')
+    const { handoffs } = projected([])
+    expect(orderCrew(handoffs, new Set()).map((h) => h.childSessionId)).toEqual(['b'])
   })
 })
 

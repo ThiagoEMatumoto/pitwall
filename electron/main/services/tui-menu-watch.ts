@@ -172,6 +172,12 @@ export class TuiMenuWatch extends EventEmitter {
     return this.entries.get(sessionId)?.scan ?? null
   }
 
+  // Aparição do menu atual (sobe a cada menu que entra); null sem menu na tela.
+  menuSeqOf(sessionId: string): number | null {
+    const entry = this.entries.get(sessionId)
+    return entry?.scan.menu ? entry.menuSeq : null
+  }
+
   // PTY espelhada desta sessão do agente (um ccSessionId tem várias linhas em
   // sessions quando retomado; vale a PTY viva mais recente).
   ptyForCc(ccSessionId: string): string | undefined {

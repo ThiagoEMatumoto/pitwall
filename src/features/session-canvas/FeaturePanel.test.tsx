@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAttentionListStore } from '@/store/attentionStore'
+import type { AttentionItem } from '../../../shared/types/attention'
 import type { Feature } from '../../../shared/types/ipc'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
@@ -107,6 +109,7 @@ const updateMock = featuresApi.updateSection as unknown as ReturnType<typeof vi.
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useAttentionListStore.setState({ items: [] })
   getMock.mockResolvedValue(feature())
   updateMock.mockImplementation(async ({ markdown }: { markdown: string }) =>
     feature(BODY.replace('- Desconto máx 10%', markdown)),
@@ -277,6 +280,12 @@ describe('FeaturePanel', () => {
       { sessionId: 'b', title: 'b', featureId: 'f1', status: 'idle', attentionReason: 'handoff-input' },
       { sessionId: 'c', title: 'c', featureId: 'f2', status: 'working', attentionReason: null },
     ] as unknown as SessionGraphNode[]
+    // O 'precisam de você' é o recorte da fila única (a mesma que deu o attentionReason de b).
+    useAttentionListStore.setState({
+      items: [
+        { kind: 'child_question', severity: 'blocking', sessionId: 'b', handoffId: 'h', featureId: 'f1', dedupKey: 'q:h' },
+      ] as unknown as AttentionItem[],
+    })
     render(<FeaturePanel sessions={sessions} />)
     await screen.findByText('Checkout')
     expect(screen.getByTestId('feature-panel-tab-state')).toHaveAttribute('aria-selected', 'true')
@@ -295,7 +304,7 @@ describe('FeaturePanel', () => {
     const base = { featureId: 'f1', attentionReason: null, provider: 'claude', childOfHandoffId: null }
     const sessions = [
       { ...base, sessionId: 'm', title: 'mae-checkout', status: 'working', isMother: true, childCount: 2, ccSessionId: 'cc-m' },
-      { ...base, sessionId: 'o', title: 'otavio', status: 'waiting', childOfHandoffId: 'h1' },
+      { ...base, sessionId: 'o', title: 'otavio', status: 'waiting', attentionReason: 'waiting', childOfHandoffId: 'h1' },
       { ...base, sessionId: 'r', title: 'marina', status: 'idle', childOfHandoffId: 'h2' },
     ] as unknown as SessionGraphNode[]
     const actions = { open: vi.fn(), passBaton: vi.fn(), canPassBaton: () => true }

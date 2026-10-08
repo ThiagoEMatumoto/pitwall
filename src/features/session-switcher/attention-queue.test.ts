@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import Database from 'better-sqlite3'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// A fila mapeia a projeção; o estado que a alimenta sai do handoffStore REAL sobre
+// um banco migrado (nada de Handoff montado à mão no caminho da atenção).
+let testDb: Database.Database
+vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
+vi.mock('../../../electron/main/services/transcript-path', () => ({
+  findTranscriptPath: () => null,
+}))
 
 // attention-queue importa crew.ts → handoffsStore → @/lib/ipc, que lê window.api
 // no module-eval. Mesmo stub de crew.test.ts, antes do import dinâmico.
@@ -7,13 +16,14 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const {
-  buildAttentionQueue,
-  attentionSessionCount,
-  stepAttention,
-  planAttentionStep,
-  planBackTarget,
-} = await import('./attention-queue')
+const { buildAttentionQueue, attentionCount, stepAttention, planAttentionStep, planBackTarget } =
+  await import('./attention-queue')
+
+const store = await import('../../../electron/main/services/handoff-store')
+const { readTransitions, toAttentionLive } =
+  await import('../../../electron/main/services/attention/attention-service')
+const { projectAttention } = await import('../../../shared/attention/project-attention')
+const harness = await import('../../../electron/main/services/attention/attention-test-harness')
 
 type Handoff = import('../../../shared/types/ipc').Handoff
 type LiveSessionInfo = import('../../../shared/types/ipc').LiveSessionInfo
@@ -53,168 +63,152 @@ const hf = (over: Partial<Handoff> & { id: string }): Handoff =>
     ...over,
   }) as Handoff
 
-describe('buildAttentionQueue — motivo (attentionReason)', () => {
-  it('carrega o motivo da sessão sem mudar quem entra na fila', () => {
-    const perm = live({ id: 'p', status: 'waiting', attentionReason: 'permission', lastActivityAt: 1 })
-    const plain = live({ id: 'q', status: 'waiting', lastActivityAt: 2 })
-    const busyWithStale = live({ id: 'b', status: 'working', attentionReason: 'permission' })
-    const all = [perm, plain, busyWithStale]
-    const q = buildAttentionQueue({ visibleSessions: all, liveSessions: all, handoffs: [] })
-    expect(q.map((i) => [i.sessionId, i.detail])).toEqual([
-      ['p', 'permission'],
-      ['q', undefined],
-    ])
-  })
+// Cenário pelos produtores reais: sessões no banco, handoffs pelo store, telas
+// capturadas do claude, projeção pelo mesmo mapper do main.
+type Status = import('../../../shared/tui/attention-reason').LiveStatus
+type Scan = import('../../../shared/tui/attention-reason').ScreenScan
+type AttentionLive = import('../../../shared/types/attention').AttentionLiveSession
 
-  it('filha com pergunta de handoff: detail handoff-input mesmo com menu na tela', () => {
-    const child = live({ id: 'c', status: 'waiting', attentionReason: 'permission' })
-    const h = hf({ id: 'h', childSessionId: 'c', status: 'needs_input', questionAskedAt: 5 })
-    const q = buildAttentionQueue({ visibleSessions: [child], liveSessions: [child], handoffs: [h] })
-    expect(q[0]).toMatchObject({ sessionId: 'c', detail: 'handoff-input' })
-  })
+function liveOf(id: string, status: Status, scan: Scan | null, at = 1_000): AttentionLive {
+  const row = testDb
+    .prepare('SELECT id, feature_id, repo_id FROM sessions WHERE id = ?')
+    .get(id) as {
+    id: string
+    feature_id: string | null
+    repo_id: string | null
+  }
+  return toAttentionLive(
+    row,
+    { status, lastActivityAt: at, name: null },
+    scan,
+    scan?.menu ? 1 : null,
+  )
+}
 
-  it('filha no dock (sem aba) herda o motivo da sessão viva', () => {
-    const child = live({ id: 'c', status: 'waiting', attentionReason: 'permission' })
-    const h = hf({ id: 'h', childSessionId: 'c', status: 'running' })
-    const q = buildAttentionQueue({ visibleSessions: [], liveSessions: [child], handoffs: [h] })
-    expect(q[0]).toMatchObject({ kind: 'crew', sessionId: 'c', detail: 'permission' })
-  })
-})
+function child(repo: string, sid: string, task = `task ${sid}`): Handoff {
+  harness.seedSession(testDb, sid, { repoId: repo })
+  const h = store.create({ targetRepoId: repo, motherSessionId: 'm', task, composedPrompt: 'p' })
+  return store.markRunning(h.id, sid)
+}
 
-describe('buildAttentionQueue', () => {
-  it('fila vazia quando ninguém espera', () => {
-    const s = live({ id: 'a', status: 'working' })
-    expect(buildAttentionQueue({ visibleSessions: [s], liveSessions: [s], handoffs: [] })).toEqual(
-      [],
+function queueFor(
+  states: AttentionLive[],
+  visibleIds: string[],
+  over: Record<string, Partial<LiveSessionInfo>> = {},
+) {
+  const handoffs = store.list()
+  const attention = projectAttention({
+    handoffs,
+    transitions: readTransitions(testDb, handoffs),
+    live: states,
+  })
+  const infos = states.map((s) => harness.toLiveInfo(testDb, s, over[s.sessionId]))
+  return buildAttentionQueue({
+    visibleSessions: infos.filter((i) => visibleIds.includes(i.id)),
+    liveSessions: infos,
+    handoffs,
+    attention,
+  })
+}
+
+describe('buildAttentionQueue — mapeia a projeção', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedSession(testDb, 'm')
+  })
+  afterEach(() => testDb.close())
+
+  it('pergunta de filha sem aba + menu numa sessão visível → 2 entradas (crew + session)', async () => {
+    const a = child('r1', 'a')
+    store.ask(a.id, 'qual branch?')
+    harness.seedSession(testDb, 's')
+    const q = queueFor(
+      [
+        liveOf('a', 'working', null),
+        liveOf('s', 'waiting', await harness.scanFixture('permission-bash')),
+      ],
+      ['s'],
     )
+    expect(q.map((i) => [i.key, i.reason, i.detail])).toEqual([
+      ['session:s', 'waiting', 'permission'],
+      [`crew:${a.id}`, 'handoff-input', 'handoff-input'],
+    ])
+    expect(attentionCount(q)).toBe(2)
   })
 
-  it('sessões waiting da mais antiga para a mais recente; sem lastActivityAt vai pro fim', () => {
-    const recent = live({ id: 'recent', status: 'waiting', lastActivityAt: 300 })
-    const old = live({ id: 'old', status: 'waiting', lastActivityAt: 100 })
-    const unknown = live({ id: 'unknown', status: 'waiting', lastActivityAt: null })
-    const busy = live({ id: 'busy', status: 'working', lastActivityAt: 50 })
-    const all = [recent, unknown, busy, old]
-    const q = buildAttentionQueue({ visibleSessions: all, liveSessions: all, handoffs: [] })
-    expect(q.map((i) => i.sessionId)).toEqual(['old', 'recent', 'unknown'])
-    expect(q.every((i) => i.kind === 'session' && i.reason === 'waiting')).toBe(true)
-    expect(q[0]).toMatchObject({ ccSessionId: 'cc-old', projectName: 'proj', since: 100 })
+  it('filha com aba aberta e pergunta pendente vira sessão com o handoff e o relógio da pergunta', () => {
+    const a = child('r1', 'a')
+    store.ask(a.id, 'q')
+    const q = queueFor([liveOf('a', 'working', null)], ['a'])
+    expect(q).toHaveLength(1)
+    expect(q[0]).toMatchObject({ kind: 'session', handoffId: a.id, reason: 'handoff-input' })
+    expect(q[0].since).toBe(store.get(a.id)!.questionAskedAt)
+    expect(q[0].projectedKind).toBe('child_question')
+  })
+
+  it('fim de turno na tela e needs_input retomado ficam fora', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(10_000)
+      const a = child('r1', 'a')
+      store.ask(a.id, 'q')
+      vi.setSystemTime(20_000)
+      store.progress(a.id, 'segui')
+    } finally {
+      vi.useRealTimers()
+    }
+    harness.seedSession(testDb, 's')
+    const q = queueFor(
+      [
+        liveOf('a', 'working', null),
+        liveOf('s', 'waiting', await harness.scanFixture('idle-prompt')),
+      ],
+      ['s'],
+    )
+    expect(q).toEqual([])
+  })
+
+  it('falha com a mãe viva entra como crew (action), depois do menu (blocking)', () => {
+    const f = child('r1', 'f')
+    store.fail(f.id, 'build quebrou')
+    harness.seedSession(testDb, 's')
+    const q = queueFor([liveOf('m', 'idle', null), liveOf('s', 'waiting', null)], ['m', 's'])
+    expect(q.map((i) => [i.key, i.projectedKind])).toEqual([
+      ['session:s', 'session_menu'],
+      [`crew:${f.id}`, 'child_failed'],
+    ])
+    expect(q[1].reason).toBe('crew')
+  })
+
+  it('resultado não lido pela mãe (info) não entra na fila humana', () => {
+    const d = child('r1', 'd')
+    store.report(d.id, 'ok')
+    expect(queueFor([liveOf('m', 'idle', null)], ['m'])).toEqual([])
   })
 
   it('título: o mesmo da barra — title > name > repo > Avulsa', () => {
-    const a = live({ id: 'a', status: 'waiting', title: 'Refactor', name: 'x', lastActivityAt: 1 })
-    const b = live({ id: 'b', status: 'waiting', name: 'nome-b', lastActivityAt: 2 })
+    for (const id of ['a', 'b', 'c', 'd']) harness.seedSession(testDb, id)
     const repo = { label: 'Kakei' } as LiveSessionInfo['repo']
-    const c = live({ id: 'c', status: 'waiting', repo, lastActivityAt: 3 })
-    const d = live({ id: 'd', status: 'waiting', lastActivityAt: 4 })
-    const q = buildAttentionQueue({
-      visibleSessions: [a, b, c, d],
-      liveSessions: [a, b, c, d],
-      handoffs: [],
-    })
+    const q = queueFor(
+      ['a', 'b', 'c', 'd'].map((id, n) => liveOf(id, 'waiting', null, n + 1)),
+      ['a', 'b', 'c', 'd'],
+      { a: { title: 'Refactor', name: 'x' }, b: { name: 'nome-b' }, c: { repo } },
+    )
     expect(q.map((i) => i.title)).toEqual(['Refactor', 'nome-b', 'Kakei', 'Avulsa'])
   })
 
-  it('ordem: pergunta de handoff (filha com aba aberta) → waiting → crew do dock', () => {
-    const waiting = live({ id: 'w', status: 'waiting', lastActivityAt: 10 })
-    const openChild = live({ id: 'open-child', status: 'working', lastActivityAt: 5 })
-    const dockChild = live({ id: 'dock-child', status: 'working' })
-    const handoffs = [
-      hf({ id: 'h-dock', childSessionId: 'dock-child', status: 'needs_input', questionAskedAt: 1 }),
-      hf({ id: 'h-open', childSessionId: 'open-child', status: 'needs_input', questionAskedAt: 2 }),
-    ]
-    const q = buildAttentionQueue({
-      // dock-child está escondida (sem aba) — é assim que useVisibleLiveSessions a entrega.
-      visibleSessions: [waiting, openChild],
-      liveSessions: [waiting, openChild, dockChild],
-      handoffs,
-    })
-    expect(q.map((i) => [i.kind, i.reason, i.sessionId, i.handoffId ?? null])).toEqual([
-      ['session', 'handoff-input', 'open-child', 'h-open'],
-      ['session', 'waiting', 'w', null],
-      ['crew', 'handoff-input', 'dock-child', 'h-dock'],
-    ])
-    expect(q[0].since).toBe(2)
-  })
-
-  it('dedup: filha com aba aberta em waiting aparece uma vez só (como sessão)', () => {
-    const child = live({ id: 'child', status: 'waiting', lastActivityAt: 7 })
-    const handoffs = [hf({ id: 'h', childSessionId: 'child', status: 'running' })]
-    const q = buildAttentionQueue({ visibleSessions: [child], liveSessions: [child], handoffs })
-    expect(q).toHaveLength(1)
-    expect(q[0]).toMatchObject({ kind: 'session', reason: 'waiting', sessionId: 'child' })
-  })
-
-  it('dedup: filha com aba aberta, needs_input E PTY waiting → só handoff-input', () => {
-    const child = live({ id: 'child', status: 'waiting', lastActivityAt: 7 })
-    const handoffs = [
-      hf({ id: 'h', childSessionId: 'child', status: 'needs_input', questionAskedAt: 3 }),
-    ]
-    const q = buildAttentionQueue({ visibleSessions: [child], liveSessions: [child], handoffs })
-    expect(q.map((i) => i.reason)).toEqual(['handoff-input'])
-  })
-
-  it('filha do dock em waiting (PTY) entra como crew, não como sessão', () => {
-    const child = live({ id: 'child', status: 'waiting', name: 'mauricio-auth', lastActivityAt: 9 })
-    const handoffs = [hf({ id: 'h', childSessionId: 'child', status: 'running', task: 'Auth' })]
-    const q = buildAttentionQueue({ visibleSessions: [], liveSessions: [child], handoffs })
-    expect(q).toEqual([
-      expect.objectContaining({
-        kind: 'crew',
-        reason: 'crew',
-        sessionId: 'child',
-        ccSessionId: 'cc-child',
-        handoffId: 'h',
-        title: 'mauricio-auth',
-        since: 9,
-      }),
-    ])
-  })
-
-  it('crew sem sessão viva usa task e label do repo; pergunta respondida fora do app não entra', () => {
-    const handoffs = [
-      hf({ id: 'asking', status: 'needs_input', questionAskedAt: 5, task: 'Migrar export' }),
-      hf({
-        id: 'resumed',
-        status: 'needs_input',
-        questionAskedAt: 5,
-        stepUpdatedAt: 6,
-      }),
-      hf({ id: 'dismissed', status: 'needs_input', questionAskedAt: 5, dismissedAt: 7 }),
-    ]
-    const q = buildAttentionQueue({ visibleSessions: [], liveSessions: [], handoffs })
-    expect(q).toEqual([
-      expect.objectContaining({
-        kind: 'crew',
-        sessionId: null,
-        ccSessionId: null,
-        handoffId: 'asking',
-        title: 'Migrar export',
-        projectName: 'repo-alvo',
-        since: 5,
-      }),
-    ])
-  })
-
-  it('badge == fila de sessões: conta sessões (inclui pergunta de handoff), nunca crew', () => {
-    const w1 = live({ id: 'w1', status: 'waiting', lastActivityAt: 1 })
-    const w2 = live({ id: 'w2', status: 'waiting', lastActivityAt: 2 })
-    const openChild = live({ id: 'oc', status: 'working' })
-    const dockChild = live({ id: 'dc', status: 'waiting' })
-    const handoffs = [
-      hf({ id: 'h1', childSessionId: 'oc', status: 'needs_input', questionAskedAt: 1 }),
-      hf({ id: 'h2', childSessionId: 'dc', status: 'running' }),
-    ]
-    const visible = [w1, w2, openChild]
-    const q = buildAttentionQueue({
-      visibleSessions: visible,
-      liveSessions: [...visible, dockChild],
-      handoffs,
-    })
-    expect(q).toHaveLength(4)
-    expect(attentionSessionCount(q)).toBe(3)
-    expect(attentionSessionCount(q)).toBe(q.filter((i) => i.kind === 'session').length)
-    expect(attentionSessionCount([])).toBe(0)
+  it('item sem sessão visível e sem handoff carregado (corrida de push) é descartado', () => {
+    const a = child('r1', 'a')
+    store.ask(a.id, 'q')
+    const handoffs = store.list()
+    const attention = projectAttention({ handoffs, transitions: new Map(), live: [] })
+    expect(attention).toHaveLength(1)
+    expect(
+      buildAttentionQueue({ visibleSessions: [], liveSessions: [], handoffs: [], attention }),
+    ).toEqual([])
   })
 })
 

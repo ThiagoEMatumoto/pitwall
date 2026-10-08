@@ -7,12 +7,14 @@ describe('sessionStatusCounts', () => {
       { featureId: 'f', status: 'working', attentionReason: null },
       { featureId: 'f', status: 'starting', attentionReason: null },
       { featureId: 'f', status: 'idle', attentionReason: 'handoff-input' },
+      { featureId: 'f', status: 'waiting', attentionReason: 'waiting' },
+      // waiting sem motivo da fila única = fim de turno: não é "precisa de você".
       { featureId: 'f', status: 'waiting', attentionReason: null },
       { featureId: 'f', status: 'idle', attentionReason: null },
       { featureId: 'f', status: 'ended', attentionReason: null },
       { featureId: 'g', status: 'working', attentionReason: null },
     ] as const
-    expect(sessionStatusCounts([...nodes], 'f')).toEqual({ needsYou: 2, working: 2, idle: 1 })
+    expect(sessionStatusCounts([...nodes], 'f')).toEqual({ needsYou: 2, working: 2, idle: 2 })
   })
 })
 
@@ -57,7 +59,7 @@ describe('featureCrew', () => {
   it('mãe primeiro, depois as filhas, depois as demais vivas da feature', () => {
     const nodes = [
       n('solta-f'),
-      n('otavio', { childOfHandoffId: 'h1', status: 'waiting' }),
+      n('otavio', { childOfHandoffId: 'h1', status: 'waiting', attentionReason: 'waiting' }),
       n('mae', { isMother: true, childCount: 2 }),
       n('marina', { childOfHandoffId: 'h2', status: 'idle' }),
       n('fim', { status: 'ended' }),

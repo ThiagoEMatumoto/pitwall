@@ -71,18 +71,18 @@ export function looksInterrupted(tail: string[] | null | undefined): boolean {
 export function cardIndicator(input: IndicatorInput): CardIndicator {
   const base = { reason: null, step: null }
   if (input.status === 'ended') return { tone: 'ended', ...base, sinceAt: null }
-  // Precisa de você vence o status: a filha com pergunta aberta pode estar com a
-  // PTY "trabalhando", e quem espera você não está trabalhando.
-  if (input.graphAttention === 'handoff-input') {
-    return {
-      tone: 'needs-you',
-      ...base,
-      reason: REASON['handoff-input'],
-      sinceAt: input.lastActivityAt,
-    }
+  // Precisa de você vence o status, e vem SÓ do nó (a fila única, attention:list):
+  // a tela parseada aqui (detail, tail) só dá o rótulo. Uma regra própria daqui
+  // fazia os contadores do mapa divergirem do HUD (a projeção conta a tela
+  // "Interrupted" como esperando você: não reconhecida não é suprimida).
+  if (input.graphAttention) {
+    const reason =
+      input.graphAttention === 'handoff-input'
+        ? REASON['handoff-input']
+        : ((input.detail && REASON[input.detail]) ??
+          (looksInterrupted(input.tail) ? 'Interrompida' : 'Esperando você'))
+    return { tone: 'needs-you', ...base, reason, sinceAt: input.lastActivityAt }
   }
-  const menu = input.detail && input.detail !== 'turn-end' ? REASON[input.detail] : undefined
-  if (menu) return { tone: 'needs-you', ...base, reason: menu, sinceAt: input.lastActivityAt }
   if (input.status === 'starting') return { tone: 'starting', ...base, sinceAt: null }
   if (input.status === 'working') {
     return {
@@ -94,10 +94,6 @@ export function cardIndicator(input: IndicatorInput): CardIndicator {
   }
   if (looksInterrupted(input.tail)) {
     return { tone: 'interrupted', ...base, sinceAt: input.lastActivityAt }
-  }
-  // 'waiting' sem tela reconhecida: não dá pra provar que é só fim de turno.
-  if (input.status === 'waiting' && input.detail !== 'turn-end') {
-    return { tone: 'needs-you', ...base, reason: 'Esperando você', sinceAt: input.lastActivityAt }
   }
   return { tone: 'done', ...base, sinceAt: input.lastActivityAt }
 }

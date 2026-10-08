@@ -37,6 +37,8 @@ import { CrewPeek } from './CrewPeek'
 import { useCrewDockStore } from './crew-dock-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
+import { useAttentionListStore } from '@/store/attentionStore'
+import { projectAttention } from '../../../shared/attention/project-attention'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import {
@@ -125,6 +127,7 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
     sessionsApiMock.attentionMenu.mockReset()
     sessionsApiMock.attentionRespond.mockReset()
     chatViewProps.length = 0
+    useAttentionListStore.setState({ items: [] })
   })
 
   it('no chat, pedido de permissão vira botões que respondem pelo main', async () => {
@@ -178,6 +181,24 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
   it('esperando sem menu respondível, o aviso de terminal continua', () => {
     useHandoffsStore.setState({ handoffs: [handoff] })
     useAppStore.setState({ liveSessions: [{ ...live, status: 'waiting' }] })
+    // "Esperando" chega pela fila única: a projeção do main sobre a filha em waiting.
+    useAttentionListStore.setState({
+      items: projectAttention({
+        handoffs: [handoff],
+        transitions: new Map(),
+        live: [
+          {
+            sessionId: 's-child',
+            status: 'waiting',
+            screenReason: undefined,
+            menuSeq: null,
+            lastActivityAt: null,
+            featureId: null,
+            repoId: null,
+          },
+        ],
+      }),
+    })
     useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
     render(<CrewPeek />)
 
@@ -651,6 +672,14 @@ describe('CrewPeek como lift do mapa', () => {
         },
       ],
     })
+    // "Responder" acende pela fila única: a mesma projeção sobre o mesmo estado.
+    useAttentionListStore.setState({
+      items: projectAttention({
+        handoffs: useHandoffsStore.getState().handoffs,
+        transitions: new Map(),
+        live: [],
+      }),
+    })
     act(() =>
       useCrewDockStore
         .getState()
@@ -664,6 +693,7 @@ describe('CrewPeek como lift do mapa', () => {
     })
     expect(screen.getByText('qual branch?')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Responder à filha…')).toBeInTheDocument()
+    useAttentionListStore.setState({ items: [] })
   })
 
   it('trocar em terminal para a filha do dock mantém a PTY anterior na modal', () => {

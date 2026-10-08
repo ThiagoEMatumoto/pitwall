@@ -7,6 +7,8 @@ import {
   getSection,
   splitFixedNotes,
 } from '../../../shared/feature-sections'
+import { countForLane, humanQueue } from '../../../shared/attention/selectors'
+import type { AttentionItem } from '../../../shared/types/attention'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
 export interface SessionStatusCounts {
@@ -16,16 +18,24 @@ export interface SessionStatusCounts {
 }
 
 export function sessionStatusCounts(
-  nodes: Pick<SessionGraphNode, 'featureId' | 'status' | 'attentionReason'>[],
+  nodes: Pick<SessionGraphNode, 'sessionId' | 'featureId' | 'status' | 'attentionReason'>[],
   featureId: string,
+  attention?: AttentionItem[],
 ): SessionStatusCounts {
   const out = { needsYou: 0, working: 0, idle: 0 }
-  for (const n of nodes) {
-    if (n.featureId !== featureId || n.status === 'ended') continue
-    if (n.attentionReason || n.status === 'waiting') out.needsYou++
+  const mine = nodes.filter((n) => n.featureId === featureId)
+  for (const n of mine) {
+    if (n.status === 'ended') continue
+    // attentionReason já é a fila única (o grafo lê a projeção): waiting em fim de
+    // turno não é "precisa de você".
+    if (n.attentionReason) out.needsYou++
     else if (n.status === 'working' || n.status === 'starting') out.working++
     else out.idle++
   }
+  // Com a fila em mãos, "precisa de você" é o recorte dela: entra também a filha
+  // falhada/interrompida, cujo nó está ended (sem PTY) ou nem existe.
+  if (attention)
+    out.needsYou = countForLane(humanQueue(attention), new Set(mine.map((n) => n.sessionId)), featureId)
   return out
 }
 
@@ -74,7 +84,7 @@ type CrewNode = Pick<
 >;
 
 const rowState = (n: CrewNode): CrewRowState =>
-  n.attentionReason || n.status === "waiting"
+  n.attentionReason
     ? "needsYou"
     : n.status === "working" || n.status === "starting"
       ? "working"

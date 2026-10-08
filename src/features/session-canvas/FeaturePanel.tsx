@@ -19,6 +19,7 @@ import {
 import type { Feature, Project, Repo } from '../../../shared/types/ipc'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { useFeaturePanelStore, type FeaturePanelTab } from './feature-panel-store'
+import { useAttentionListStore } from '@/store/attentionStore'
 import {
   clipAtWord,
   featureCrew,
@@ -508,7 +509,8 @@ function CurrentState({
 }) {
   const body = feature.body ?? ''
   const state = getSection(body, 'Estado atual')
-  const counts = sessionStatusCounts(sessions, feature.id)
+  const attention = useAttentionListStore((s) => s.items)
+  const counts = sessionStatusCounts(sessions, feature.id, attention)
   const rules = featureReminders(body)
   const last = [...ledger].sort((a, b) => b.createdAt - a.createdAt)[0]
   return (

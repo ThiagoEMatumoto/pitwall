@@ -130,9 +130,12 @@ export function liveBadgeFor(
   if (!live || live.status === 'ended') {
     return { label: 'filha encerrou', color: 'var(--color-danger)', attention: true }
   }
+  // Rótulo da tela da filha, não contagem: o badge/ordem do dock já saem da fila
+  // única. TODO(attention-projection): ler o item da fila em vez da tela.
+  const screenWaiting = live.status === 'waiting' && live.attentionReason !== 'turn-end'
   const ind = cardIndicator({
     status: live.status,
-    graphAttention: needsInput ? 'handoff-input' : null,
+    graphAttention: needsInput ? 'handoff-input' : screenWaiting ? 'waiting' : null,
     detail: live.attentionReason,
     lastActivityAt: null,
     workingSince: null,

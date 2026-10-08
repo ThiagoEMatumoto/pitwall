@@ -1,28 +1,40 @@
 import { useMemo } from 'react'
 import { crewAttentionCount } from '@/features/handoffs/crew'
-import { useAppStore } from '@/store/appStore'
+import { attentionHandoffIds, humanQueue } from '../../../shared/attention/selectors'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { useVisibleLiveSessions } from './useGlobalSessions'
 
-// Sessões aguardando input do usuário entre as VISÍVEIS (mesma regra da barra e
-// do switcher). Alimenta os badges da IconRail e do botão do switcher — que
-// espelham a barra, então contam exatamente os chips que ela marca. A TitleBar
-// não usa este número: o "N no box" dela é a fila do Alt+A (attentionSessionCount),
-// que inclui a filha com aba aberta e pergunta pendente mesmo com a PTY trabalhando.
+// Itens da fila única (attention:list) cujas sessões são VISÍVEIS (mesma regra da
+// barra e do switcher). Alimenta os badges da IconRail e do botão do switcher —
+// fim de turno não conta, como no HUD. A TitleBar não usa este número: o "N no
+// box" dela é a fila do Alt+A inteira (attentionCount), que inclui as filhas do dock.
 export function useWaitingCount(): number {
   const visible = useVisibleLiveSessions()
-  return useMemo(() => visible.filter((s) => s.status === 'waiting').length, [visible])
+  const attention = useAttentionListStore((s) => s.items)
+  return useMemo(() => {
+    const visibleIds = new Set(visible.map((s) => s.id))
+    // Sessões, não itens: menu + falha da mesma sessão é um chip só, como no HUD.
+    const waiting = new Set(
+      humanQueue(attention).flatMap((i) =>
+        i.sessionId != null && visibleIds.has(i.sessionId) ? [i.sessionId] : [],
+      ),
+    )
+    return waiting.size
+  }, [visible, attention])
 }
 
-// A outra metade da conta: filhas de handoff esperando você (status vivo
-// 'waiting' OU needs_input). É o badge do Crew Dock e o gatilho do auto-reveal —
-// conta toda a equipe, inclusive a filha que ele abriu, porque o card dela
-// continua no dock.
+// A outra metade da conta: filhas do dock na fila única (attention:list). É o
+// badge do Crew Dock e o gatilho do auto-reveal — conta toda a equipe, inclusive
+// a filha que ele abriu, porque o card dela continua no dock.
 export function useCrewWaitingCount(): number {
-  const liveSessions = useAppStore((s) => s.liveSessions)
   const handoffs = useHandoffsStore((s) => s.handoffs)
-  return useMemo(
-    () => crewAttentionCount(handoffs, liveSessions),
-    [liveSessions, handoffs],
-  )
+  const attention = useAttentionListStore((s) => s.items)
+  return useMemo(() => crewAttentionCount(attention, handoffs), [attention, handoffs])
+}
+
+// Handoffs com item na fila humana: promove o card no dock e acende o âmbar.
+export function useCrewAttentionIds(): ReadonlySet<string> {
+  const attention = useAttentionListStore((s) => s.items)
+  return useMemo(() => attentionHandoffIds(humanQueue(attention)), [attention])
 }

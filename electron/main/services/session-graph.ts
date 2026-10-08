@@ -16,6 +16,8 @@ import type {
 import { resolvePurpose } from './session-purpose'
 import { isResumableChild } from './handoff-store'
 import { isLedByMother } from '../../../shared/handoff-lead'
+import { humanQueue } from '../../../shared/attention/selectors'
+import type { AttentionItem } from '../../../shared/types/attention'
 
 // Estado vivo por sessions.id (PTY + ~/.claude/sessions/<pid>.json). Ausente = ended.
 export interface LiveSessionState {
@@ -117,6 +119,8 @@ export interface SessionGraphInput {
   // Última mensagem humana por sessions.id (fallback do "Onde parei").
   lastPrompts?: Map<string, string | null>
   motherTransfers?: GraphMotherTransfer[]
+  // A fila única (projectAttention). Ausente = nenhum nó precisa de você.
+  attention?: AttentionItem[]
 }
 
 const LOOSE_LABEL = 'Avulsas'
@@ -134,13 +138,23 @@ export function sessionNodeTitle(args: {
   return manual || args.liveName || args.title || args.repoLabel || 'Avulsa'
 }
 
-function attentionFor(
-  handoff: GraphHandoffRow | undefined,
-  status: SessionGraphStatus,
-): SessionGraphAttention | null {
-  if (handoff?.status === 'needs_input') return 'handoff-input'
-  if (status === 'waiting') return 'waiting'
-  return null
+// O "precisa de você" do nó é o da fila única (attention:list), nunca uma regra
+// própria: needs_input retomado e fim de turno já ficaram de fora lá.
+// Qualquer item humano da sessão acende o nó (child_failed/interrupted/pty_orphan
+// também): a raia conta esses sujeitos, então o card e os contadores do mapa têm de contar.
+function graphAttentionFor(items: AttentionItem[] | undefined): SessionGraphAttention | null {
+  if (!items?.length) return null
+  if (items.some((i) => i.kind === 'child_question')) return 'handoff-input'
+  return 'waiting'
+}
+
+function attentionBySession(items: AttentionItem[] | undefined): Map<string, AttentionItem[]> {
+  const out = new Map<string, AttentionItem[]>()
+  for (const i of humanQueue(items ?? [])) {
+    if (!i.sessionId) continue
+    out.set(i.sessionId, [...(out.get(i.sessionId) ?? []), i])
+  }
+  return out
 }
 
 // Quem passou o bastão deixa de ser filha (o handoff aponta pra sucessora), mas a
@@ -186,6 +200,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
   )
   const repoById = new Map(input.repos.map((r) => [r.id, r]))
   const featureById = new Map((input.features ?? []).map((f) => [f.id, f]))
+  const attention = attentionBySession(input.attention)
   const sorted = [...input.sessions].sort(
     (a, b) => a.started_at - b.started_at || a.id.localeCompare(b.id),
   )
@@ -215,7 +230,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       repoLabel: repo?.label ?? null,
       provider: s.provider,
       status,
-      attentionReason: attentionFor(handoff, status),
+      attentionReason: graphAttentionFor(attention.get(s.id)),
       lastActivityAt: live?.lastActivityAt ?? null,
       startedAt: s.started_at,
       endedAt: live ? null : (s.ended_at ?? null),
@@ -428,7 +443,9 @@ function buildLanes(input: SessionGraphInput, nodes: SessionGraphNode[]): Sessio
   }
   const lanes: SessionGraphLane[] = featureLanes(input, nodes)
   for (const p of [...input.projects].sort(byPosition)) {
-    const repoIds = new Set(input.repos.filter((r) => r.project_id === p.id && byRepo.has(r.id)).map((r) => r.id))
+    const repoIds = new Set(
+      input.repos.filter((r) => r.project_id === p.id && byRepo.has(r.id)).map((r) => r.id),
+    )
     const repos = laneRepos(repoIds, byRepo, input, p.id)
     if (repos.length)
       lanes.push({

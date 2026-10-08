@@ -109,9 +109,9 @@ export function isUnparsedWaiting(status: LiveStatus, scan: ScreenScan): boolean
   )
 }
 
-// Mesma regra de crewResumedAfterQuestion (src/features/handoffs/crew.ts): o
-// needs_input vale até a filha registrar progresso depois da pergunta. O main
-// não importa de src/, por isso a cópia.
+// Fonte única da regra de retomada: o needs_input vale até a filha registrar
+// progresso depois da pergunta. A projeção de atenção (shared/attention) e o
+// crewResumedAfterQuestion do renderer leem daqui.
 export function handoffAsking(h: {
   status: string
   questionAskedAt: number | null

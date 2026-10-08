@@ -4,6 +4,7 @@ import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { openSessionByCc } from '@/features/sessions/open-session'
 import { useAppStore } from '@/store/appStore'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { useSessionMruStore } from '@/store/session-mru-store'
 import {
@@ -19,9 +20,10 @@ export function useAttentionQueue(): AttentionItem[] {
   const visibleSessions = useVisibleLiveSessions()
   const liveSessions = useAppStore((s) => s.liveSessions)
   const handoffs = useHandoffsStore((s) => s.handoffs)
+  const attention = useAttentionListStore((s) => s.items)
   return useMemo(
-    () => buildAttentionQueue({ visibleSessions, liveSessions, handoffs }),
-    [visibleSessions, liveSessions, handoffs],
+    () => buildAttentionQueue({ visibleSessions, liveSessions, handoffs, attention }),
+    [visibleSessions, liveSessions, handoffs, attention],
   )
 }
 
@@ -34,6 +36,7 @@ export function getAttentionQueue(): AttentionItem[] {
     visibleSessions: visibleLiveSessions(liveSessions, panes, handoffs),
     liveSessions,
     handoffs,
+    attention: useAttentionListStore.getState().items,
   })
 }
 

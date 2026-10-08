@@ -1,5 +1,8 @@
+import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations } from './migrations/index'
 import type { SessionGraphEdge } from '../../../shared/types/session-graph'
 
@@ -11,7 +14,15 @@ vi.mock('./transcript-path', () => ({
   findTranscriptPath: (cc: string) => (transcripts.has(cc) ? `/t/${cc}.jsonl` : null),
 }))
 
+// A fila de atenção entra pelo serviço real; só o caminho do app (PTYs e session
+// files) fica de fora — os estados vivos vêm do teste.
+vi.mock('./session-activity', () => ({ buildSessionsFileIndex: () => new Map() }))
+vi.mock('./live-session-states', () => ({ liveSessionStates: () => new Map() }))
+
 import * as handoffStore from './handoff-store'
+import { readAttentionInputFrom } from './attention/attention-service'
+import { projectAttention } from '../../../shared/attention/project-attention'
+import { tuiMenuWatch } from './tui-menu-watch'
 import {
   buildSessionGraph,
   readSessionGraphInput,
@@ -116,7 +127,21 @@ function live(entries: Record<string, Partial<LiveSessionState>>): Map<string, L
 }
 
 function graphFor(liveMap: Map<string, LiveSessionState>) {
-  return buildSessionGraph(readSessionGraphInput(testDb, liveMap))
+  return buildSessionGraph({
+    ...readSessionGraphInput(testDb, liveMap),
+    attention: projectAttention(readAttentionInputFrom(testDb, liveMap)),
+  })
+}
+
+// Tela real na PTY: o tuiMenuWatch de produção espelha e escaneia a captura.
+const FIXTURES = join(__dirname, '../../../shared/tui/__fixtures__')
+const fakePty = new EventEmitter() as EventEmitter & { write: () => void }
+fakePty.write = () => {}
+async function showScreen(sessionId: string, capture: string): Promise<void> {
+  const raw = readFileSync(join(FIXTURES, `claude-2.1.286-${capture}.ansi`), 'utf8')
+  fakePty.emit('spawn', { sessionId, cols: 80, rows: 24 })
+  fakePty.emit('data', { sessionId, data: raw })
+  await tuiMenuWatch.snapshot(sessionId)
 }
 
 function edgesOf<K extends SessionGraphEdge['kind']>(
@@ -318,7 +343,9 @@ describe('session-graph', () => {
     // Arquivada = sem feature no mapa.
     expect(g.nodes.find((n) => n.sessionId === 'arq')?.featureId).toBeNull()
     expect(
-      g.lanes.filter((l) => l.kind === 'project').map((l) => [l.name, l.repos.map((r) => r.sessionIds)]),
+      g.lanes
+        .filter((l) => l.kind === 'project')
+        .map((l) => [l.name, l.repos.map((r) => r.sessionIds)]),
     ).toEqual([['Sem feature · Plataforma', [['solta', 'arq']]]])
   })
 
@@ -368,16 +395,62 @@ describe('session-graph', () => {
     expect(g.nodes.find((n) => n.sessionId === 'kid')?.childOfHandoffId).toBeNull()
   })
 
-  it('atenção: pergunta aberta da filha vence; senão waiting do CLI', () => {
-    addSession('mother', 'r-web')
-    addSession('kid', 'r-api')
-    const h = dispatch('mother', 'kid', 't')
-    handoffStore.ask(h, 'posso apagar?')
+  describe('atenção vem da fila única', () => {
+    beforeAll(() => tuiMenuWatch.attach(fakePty as never))
+    afterEach(() => {
+      for (const id of ['mother', 'kid']) fakePty.emit('exit', { sessionId: id })
+    })
 
-    const g = graphFor(live({ mother: { status: 'waiting' }, kid: { status: 'working' } }))
-    const byId = new Map(g.nodes.map((n) => [n.sessionId, n]))
-    expect(byId.get('kid')?.attentionReason).toBe('handoff-input')
-    expect(byId.get('mother')?.attentionReason).toBe('waiting')
+    it('pergunta aberta da filha vence; menu de permissão na tela da mãe é waiting', async () => {
+      addSession('mother', 'r-web')
+      addSession('kid', 'r-api')
+      const h = dispatch('mother', 'kid', 't')
+      handoffStore.ask(h, 'posso apagar?')
+      await showScreen('mother', 'permission-bash')
+
+      const g = graphFor(live({ mother: { status: 'waiting' }, kid: { status: 'working' } }))
+      const byId = new Map(g.nodes.map((n) => [n.sessionId, n]))
+      expect(byId.get('kid')?.attentionReason).toBe('handoff-input')
+      expect(byId.get('mother')?.attentionReason).toBe('waiting')
+    })
+
+    it('needs_input com progress posterior à pergunta → null', () => {
+      addSession('mother', 'r-web')
+      addSession('kid', 'r-api')
+      const h = dispatch('mother', 'kid', 't')
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(1_000_000)
+        handoffStore.ask(h, 'qual branch?')
+        vi.setSystemTime(1_005_000)
+        handoffStore.progress(h, 'segui com main')
+      } finally {
+        vi.useRealTimers()
+      }
+      expect(handoffStore.get(h)?.status).toBe('needs_input')
+
+      const g = graphFor(live({ mother: {}, kid: { status: 'working' } }))
+      expect(g.nodes.find((n) => n.sessionId === 'kid')?.attentionReason).toBeNull()
+    })
+
+    // Toda superfície == projeção: a raia conta child_failed pela sessão da filha,
+    // então o nó (tom do card, MapStatusCounters, FeaturePanel) também tem de contar.
+    it('filha com PTY viva num handoff que falhou → waiting (item child_failed)', () => {
+      addSession('mother', 'r-web')
+      addSession('kid', 'r-api')
+      const h = dispatch('mother', 'kid', 't')
+      handoffStore.fail(h, 'boom')
+
+      const g = graphFor(live({ mother: { status: 'idle' }, kid: { status: 'idle' } }))
+      expect(g.nodes.find((n) => n.sessionId === 'kid')?.attentionReason).toBe('waiting')
+    })
+
+    it('waiting com a tela de fim de turno → null', async () => {
+      addSession('mother', 'r-web')
+      await showScreen('mother', 'idle-prompt')
+      const g = graphFor(live({ mother: { status: 'waiting' } }))
+      expect(g.nodes.find((n) => n.sessionId === 'mother')?.attentionReason).toBeNull()
+    })
   })
 
   it('título segue a precedência da aba: manual > nome vivo > título salvo > repo', () => {
@@ -441,7 +514,9 @@ describe('session graph — memória de trabalho (P8)', () => {
     addSession('editada', 'r-site')
     dispatch('mae', 'filha', 'Refatorar o auth')
     // Mesmo UPDATE do canvas-store.setSessionPurpose (o escritor real).
-    testDb.prepare(`UPDATE sessions SET purpose = 'Frente de pagamentos' WHERE id = 'editada'`).run()
+    testDb
+      .prepare(`UPDATE sessions SET purpose = 'Frente de pagamentos' WHERE id = 'editada'`)
+      .run()
 
     const asked: string[] = []
     const firstPrompt = (cc: string) => {
@@ -449,12 +524,26 @@ describe('session graph — memória de trabalho (P8)', () => {
       return cc === 'cc-solta' ? 'Migrar o checkout' : null
     }
     const g = buildSessionGraph(
-      readSessionGraphInput(testDb, live({ mae: {}, filha: {}, solta: {}, editada: {} }), Date.now(), firstPrompt),
+      readSessionGraphInput(
+        testDb,
+        live({ mae: {}, filha: {}, solta: {}, editada: {} }),
+        Date.now(),
+        firstPrompt,
+      ),
     )
     const node = (id: string) => g.nodes.find((n) => n.sessionId === id)!
-    expect([node('editada').purpose, node('editada').purposeSource]).toEqual(['Frente de pagamentos', 'user'])
-    expect([node('filha').purpose, node('filha').purposeSource]).toEqual(['Refatorar o auth', 'handoff'])
-    expect([node('solta').purpose, node('solta').purposeSource]).toEqual(['Migrar o checkout', 'transcript'])
+    expect([node('editada').purpose, node('editada').purposeSource]).toEqual([
+      'Frente de pagamentos',
+      'user',
+    ])
+    expect([node('filha').purpose, node('filha').purposeSource]).toEqual([
+      'Refatorar o auth',
+      'handoff',
+    ])
+    expect([node('solta').purpose, node('solta').purposeSource]).toEqual([
+      'Migrar o checkout',
+      'transcript',
+    ])
     expect([node('mae').purpose, node('mae').purposeSource]).toEqual([null, null])
     // Transcript só é lido pra quem não tem propósito melhor (custo por rebuild).
     expect(asked.sort()).toEqual(['cc-mae', 'cc-solta'])
@@ -496,7 +585,10 @@ describe('session graph — memória de trabalho (P8)', () => {
       ),
     )
     const mae = g.nodes.find((n) => n.sessionId === 'mae')!
-    expect([mae.purpose, mae.purposeSource]).toEqual(['Combinar o início da perícia com o app', 'handoff'])
+    expect([mae.purpose, mae.purposeSource]).toEqual([
+      'Combinar o início da perícia com o app',
+      'handoff',
+    ])
     expect(mae.lastPrompt).toBe('agora abre o PR')
     expect(asked).not.toContain('cc-mae')
   })
@@ -504,7 +596,9 @@ describe('session graph — memória de trabalho (P8)', () => {
   it('grupo e "onde parei" vêm das colunas que o canvas-store grava', () => {
     addSession('s1', 'r-web')
     testDb
-      .prepare(`UPDATE sessions SET group_id = 'g1', last_summary = 'Parou no webhook.', last_summary_at = 42 WHERE id = 's1'`)
+      .prepare(
+        `UPDATE sessions SET group_id = 'g1', last_summary = 'Parou no webhook.', last_summary_at = 42 WHERE id = 's1'`,
+      )
       .run()
     const n = graphFor(live({ s1: {} })).nodes[0]
     expect(n).toMatchObject({ groupId: 'g1', lastSummary: 'Parou no webhook.', lastSummaryAt: 42 })

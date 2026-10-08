@@ -8,6 +8,12 @@
 // numa calha à direita da lane da sessão. Sem posição salva, cada peça cai num
 // slot determinístico (é o mesmo layout que o Organizar grava — tidy.ts).
 import type { Edge, Node } from '@xyflow/react'
+import {
+  attentionSubjectKey,
+  countAttentionSubjects,
+  humanQueue,
+} from '../../../shared/attention/selectors'
+import type { AttentionItem } from '../../../shared/types/attention'
 import type {
   SessionGraph,
   SessionGraphAttention,
@@ -98,6 +104,9 @@ export interface MapInput {
   // Mãe aberta no painel ao lado: no mapa ela só mostra o aviso curto, então o
   // tamanho salvo dela não vale (volta quando ela sai do painel).
   inPanel?: string | null
+  // A fila única (attention:list): o badge da raia é o recorte dela, o mesmo número
+  // da linha do Ctrl+`. Ausente = o attentionReason dos nós (também da fila).
+  attention?: AttentionItem[]
 }
 
 export interface PendingAsk {
@@ -454,20 +463,52 @@ function inUseIds(input: MapInput): Set<string> {
 // No escopo de um projeto, o card de uma feature que o toca (home ou algum repo
 // registrado) entra INTEIRO: inclusive as sessões dos repos de outros projetos,
 // senão a lane delas aparece vazia e o contador do card mente.
-function scopedSessions(input: MapInput, inUse: Set<string>): SessionGraphNode[] {
-  const global = input.scope === GLOBAL_CANVAS_SCOPE
-  const touching = new Set(
-    input.graph.lanes.flatMap((l) =>
+function featuresTouching(graph: SessionGraph, scope: string): Set<string> {
+  return new Set(
+    graph.lanes.flatMap((l) =>
       l.kind === 'feature' &&
-      (l.projectId === input.scope || l.repos.some((r) => r.projectId === input.scope))
+      (l.projectId === scope || l.repos.some((r) => r.projectId === scope))
         ? [l.featureId]
         : [],
     ),
   )
+}
+
+function scopedSessions(input: MapInput, inUse: Set<string>): SessionGraphNode[] {
+  const global = input.scope === GLOBAL_CANVAS_SCOPE
+  const touching = featuresTouching(input.graph, input.scope)
   return input.graph.nodes.filter(
     (n) =>
       inUse.has(n.sessionId) &&
       (global || n.projectId === input.scope || (!!n.featureId && touching.has(n.featureId))),
+  )
+}
+
+// "N precisa de você" da barra do mapa: o recorte do escopo na fila única, não os
+// cartões desenhados (filha falhada/interrompida não tem PTY e não vira cartão).
+// No escopo de projeto, o item entra pela sessão, pela feature que toca o projeto
+// ou pelo repo do projeto.
+export function scopeAttentionCount(
+  graph: SessionGraph,
+  scope: string,
+  attention: AttentionItem[],
+): number {
+  const queue = humanQueue(attention)
+  if (scope === GLOBAL_CANVAS_SCOPE) return countAttentionSubjects(queue)
+  const touching = featuresTouching(graph, scope)
+  const node = new Map(graph.nodes.map((n) => [n.sessionId, n]))
+  const repoProject = new Map(
+    graph.lanes.flatMap((l) =>
+      l.repos.flatMap((r) => (r.repoId ? [[r.repoId, r.projectId ?? null] as const] : [])),
+    ),
+  )
+  return countAttentionSubjects(
+    queue.filter((i) => {
+      const n = i.sessionId ? node.get(i.sessionId) : undefined
+      if (n) return n.projectId === scope || (!!n.featureId && touching.has(n.featureId))
+      if (i.featureId) return touching.has(i.featureId)
+      return !!i.repoId && repoProject.get(i.repoId) === scope
+    }),
   )
 }
 
@@ -691,12 +732,33 @@ function slotCards(
   return out
 }
 
+// Item cuja sessão o mapa não desenha (filha interrompida, sem PTY) conta na raia
+// pela feature — a mesma regra do seletor (buildSwitcherEntries).
+function laneAttention(
+  lane: SessionGraphLane,
+  laneSessions: SessionGraphNode[],
+  attention: AttentionItem[] | undefined,
+  inUse: ReadonlySet<string>,
+): number {
+  if (!attention) return laneSessions.filter((n) => n.attentionReason).length
+  const ids = new Set(laneSessions.map((n) => n.sessionId))
+  const featureId = lane.kind === 'feature' ? lane.featureId : null
+  const subjects = humanQueue(attention)
+    .filter((i) =>
+      i.sessionId && inUse.has(i.sessionId)
+        ? ids.has(i.sessionId)
+        : featureId != null && i.featureId === featureId,
+    )
+    .map(attentionSubjectKey)
+  return new Set(subjects).size
+}
+
 function laneHeaderData(
   lane: SessionGraphLane,
   laneSessions: SessionGraphNode[],
   repoCount: number,
+  attentionCount: number,
 ): LaneData {
-  const attentionCount = laneSessions.filter((n) => n.attentionReason).length
   if (lane.kind === 'feature') {
     return {
       level: 'feature',
@@ -769,6 +831,7 @@ function layoutLanes(
   noteCountByLane: Map<string, number>,
 ): Layout {
   const byId = new Map(sessions.map((s) => [s.sessionId, s]))
+  const inUse = inUseIds(input)
   const nodes: MapNode[] = []
   const sessionAbs = new Map<string, Point>()
   const laneBoxes: Box[] = []
@@ -897,7 +960,12 @@ function layoutLanes(
       position: lanePos,
       width: laneW,
       height: laneH,
-      data: laneHeaderData(lane, laneSessions, repos.length),
+      data: laneHeaderData(
+        lane,
+        laneSessions,
+        repos.length,
+        laneAttention(lane, laneSessions, input.attention, inUse),
+      ),
     }
     nodes.push(...repoNodes, ...cards)
     for (const card of cards) {
@@ -1053,7 +1121,15 @@ function graphEdges(
   has: (id: string) => boolean,
   isFanned: (motherId: string) => boolean,
   repoLaneIds: (repoId: string) => string[],
+  attention: AttentionItem[] | undefined,
 ): MapEdge[] {
+  // needs_input fica no status depois que a filha retomou (progress após a
+  // pergunta); a fila única já tirou a pergunta, a aresta segue a fila.
+  const asking = attention
+    ? new Set(
+        attention.flatMap((i) => (i.kind === 'child_question' && i.handoffId ? [i.handoffId] : [])),
+      )
+    : null
   const out: MapEdge[] = []
   for (const e of edges) {
     if (e.kind === 'handoff') {
@@ -1061,7 +1137,7 @@ function graphEdges(
         edge(`e:h:${e.handoffId}`, sessionNodeId(e.from), sessionNodeId(e.to), {
           kind: 'handoff',
           live: e.handoffStatus === 'running',
-          alert: e.handoffStatus === 'needs_input',
+          alert: asking ? asking.has(e.handoffId) : e.handoffStatus === 'needs_input',
           label: e.currentStep,
           handoffId: e.handoffId,
           ...(isFanned(e.from) ? { fanned: true } : {}),
@@ -1213,6 +1289,7 @@ export function graphToFlow(input: MapInput): FlowResult {
       (id) => ids.has(id),
       (mother) => (counts.get(mother) ?? 0) > FAN_COLLAPSE_AT && !expandedMothers.has(mother),
       (repoId) => lanes.repoLaneIds.get(repoId) ?? [],
+      input.attention,
     ),
     ...notes
       .filter((n) => n.attachedSessionId && !isOrphan(n))

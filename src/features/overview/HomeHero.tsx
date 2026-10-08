@@ -1,6 +1,8 @@
 import { RefreshCw } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot, GradientBorder } from '@/features/brand'
+import { attentionCount } from '@/features/session-switcher/attention-queue'
+import { useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
 import { useAppStore } from '@/store/appStore'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { OverviewCounts } from '../../../shared/types/ipc'
@@ -10,13 +12,11 @@ import type { OverviewCounts } from '../../../shared/types/ipc'
 // contexto de decisão, pills de estado (no box / em pista) e chips-stat dos
 // contadores do agregado. Voz de engenheiro de pista.
 export function HomeHero({ counts, onRefresh }: { counts: OverviewCounts; onRefresh: () => void }) {
-  // TODA sessão viva, inclusive a filha no Crew Dock: o hero responde "alguém
-  // precisa de mim?". Com a equipe de fora, uma filha esperando permissão virava
-  // "garagem tranquila · 0 no box" enquanto o dock dizia "1 esperando".
+  // "No box" é a fila única (attention:list), o mesmo número da TitleBar: contar
+  // status 'waiting' daqui deixava de fora a filha interrompida e contava fim de turno.
+  const inBox = attentionCount(useAttentionQueue())
   const liveSessions = useAppStore((s) => s.liveSessions)
-  const groups = groupLiveSessions(liveSessions)
-  const inBox = groups.waiting.length
-  const onTrack = groups.working.length
+  const onTrack = groupLiveSessions(liveSessions).working.length
   const now = new Date()
 
   return (

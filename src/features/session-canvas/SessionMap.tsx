@@ -20,6 +20,7 @@ import { Map as MapIcon, Maximize } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import './session-map.css'
 import { useAppStore } from '@/store/appStore'
+import { useAttentionListStore } from '@/store/attentionStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAttentionQueue, useAttentionStore } from '@/features/session-switcher/useAttentionQueue'
 import { sendToApi } from '@/lib/ipc'
@@ -30,6 +31,7 @@ import { GLOBAL_CANVAS_SCOPE, type CanvasPositionInput } from '../../../shared/t
 import {
   featureLaneId,
   graphToFlow,
+  scopeAttentionCount,
   layoutRects,
   homeRepoLaneId,
   lastSeenAt,
@@ -393,6 +395,7 @@ function SessionMapInner() {
   const views = useCardViewStore((s) => s.views)
   const asks = usePendingAsks()
   const cardHeights = useCardHeightStore((s) => s.heights)
+  const attention = useAttentionListStore((s) => s.items)
   const inPanel = useMotherDockStore((s) => s.shownId)
   // Densidade do zoom (resumo/blocos): a raia reserva a altura que o cartão desenha.
   const compact = useStore((s) => isCompactZoom(s.transform[2]))
@@ -430,8 +433,10 @@ function SessionMapInner() {
       asks,
       rowWidth,
       compact,
+      attention,
     }),
     [
+      attention,
       graph,
       scope,
       canvas,
@@ -565,6 +570,10 @@ function SessionMapInner() {
   }, [now, workingSince, queue])
 
   const sessionCount = flow.nodes.filter((n) => n.type === 'session').length
+  const needsYou = useMemo(
+    () => scopeAttentionCount(graph, scope, attention),
+    [graph, scope, attention],
+  )
   const sessionNodes = useMemo(
     () =>
       flow.nodes.filter((n) => n.type === 'session').map((n) => (n.data as SessionCardData).node),
@@ -1458,6 +1467,8 @@ function SessionMapInner() {
                 <FeatureSwitcherButton />
                 <MapStatusCounters
                   nodes={sessionNodes}
+                  needsYou={needsYou}
+                  projectScope={scope !== GLOBAL_CANVAS_SCOPE}
                   onCenter={(id) => centerOn(id, Math.max(flowApi.getZoom(), 0.9))}
                 />
               </MapTopBar>
