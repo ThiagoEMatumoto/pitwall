@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { launchApp, writeCopyPrefs } from '../driver/launch'
@@ -252,7 +252,15 @@ try {
       projectId: repo.project_id,
       title: `Seletor E2E ${n}`,
       status: 'in-progress',
-      repos: [{ repoId: repo.id, branch: `feat/seletor-e2e-${n}` }],
+      // Um worktree por feature: as três filhas escrevem no mesmo repo, e a posse
+      // é por diretório de trabalho. Só o diretório basta (o app não faz checkout).
+      repos: [
+        {
+          repoId: repo.id,
+          branch: `feat/seletor-e2e-${n}`,
+          worktreePath: mkdtempSync(join(tmpdir(), `seletor-e2e-${n}-`)),
+        },
+      ],
     })
     const spawned = await page.evaluate(
       async ({ repoId, featureId, n }) => {
@@ -425,11 +433,14 @@ try {
             handoffChild: true,
             featureId,
           })
+          // Mesmo worktree da filha que escreve nessa feature: em plan não
+          // disputam a posse do diretório.
           const { handoff } = await window.api.handoffs.createManual({
             repoId,
             motherSessionId: motherId,
             task: `Aviso ${n}`,
             featureId,
+            mode: 'plan',
           })
           await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: c.id })
         }

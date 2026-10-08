@@ -372,8 +372,9 @@ try {
   const handoff = await asA.call<{ handoffId: string; alias: string }>('session_handoff', {
     targetRepo: repo2.label,
     task: 'Revisar o contrato do endpoint de pedidos',
+    // plan é read-only: não disputa a posse do checkout de repo2, então divide o
+    // diretório com B (que escreve) sem force.
     mode: 'plan',
-    force: true,
   })
   const fileC = await newSessionFile(beforeC, 'session file de C')
   const idC = fileC ? await sessionIdOf(fileC.data.sessionId) : ''
@@ -396,6 +397,9 @@ try {
         repoId,
         motherSessionId: mother,
         task: 'Criar o arquivo de fixture',
+        // B escreve na raiz de repo2, e a cópia do perfil real pode ter uma filha
+        // que escreve ali. Sem nada ativo o motivo não tem efeito.
+        forceReason: 'e2e mission-control: a cópia do perfil real pode ter filha ativa neste checkout',
       })
       await window.api.handoffs.markRunning({ id: handoff.id, childSessionId: b.id })
       return b.id
