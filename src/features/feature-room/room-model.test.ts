@@ -27,7 +27,7 @@ const { listFeatureEvents } = await import('../../../electron/main/services/feat
 const { projectAttention } = await import('../../../shared/attention/project-attention')
 const { countAttentionSubjects, humanQueue, itemsForFeature } =
   await import('../../../shared/attention/selectors')
-const { buildRoomView } = await import('./room-model')
+const { buildRoomView, roomMothers } = await import('./room-model')
 const { buildSwitcherEntries } = await import('../session-canvas/feature-switcher-model')
 
 type LiveStatus = import('../../../shared/tui/attention-reason').LiveStatus
@@ -59,10 +59,18 @@ function child(repo: string, sid: string, mother = 'M', mode?: 'plan') {
 
 function world(
   lives: Live[],
-  opts: { timelineFilter?: string | null; extra?: AttentionItem[] } = {},
+  opts: {
+    timelineFilter?: string | null
+    extra?: AttentionItem[]
+    selectedMotherId?: string | null
+    activity?: Record<string, number>
+  } = {},
 ) {
   const states = new Map<string, LiveSessionState>(
-    lives.map((l) => [l.id, { status: l.status, lastActivityAt: 1_000, name: null }]),
+    lives.map((l) => [
+      l.id,
+      { status: l.status, lastActivityAt: opts.activity?.[l.id] ?? 1_000, name: null },
+    ]),
   )
   const rows = testDb
     .prepare(
@@ -102,6 +110,7 @@ function world(
     inUse,
     timeline: listFeatureEvents(testDb, F),
     timelineFilter: opts.timelineFilter ?? null,
+    selectedMotherId: opts.selectedMotherId ?? null,
   })
   const lane = graph.lanes.find((l) => l.kind === 'feature' && l.featureId === F)
   const laneIds = new Set(
@@ -111,7 +120,7 @@ function world(
   const card = buildSwitcherEntries(graph, new Map(), undefined, inUse, attention).find(
     (e) => e.featureId === F,
   )
-  return { view, slice, attention, card }
+  return { view, slice, attention, card, graph, inUse }
 }
 
 const rowsOf = (v: ReturnType<typeof world>['view']) => v.repos.flatMap((r) => r.rows)
@@ -291,5 +300,78 @@ describe('buildRoomView', () => {
     expect(view.queue.map((r) => r.head.kind)).toEqual(['request'])
     expect(view.queue.flatMap((r) => r.also)).toEqual([])
     expect(card?.needsYou).toBe(view.needsYou)
+  })
+})
+
+describe('roomMothers (nós do buildSessionGraph real)', () => {
+  let permission: ScreenScan
+
+  beforeEach(async () => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedFeature(testDb, F)
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    transcriptPath = null
+    permission = await harness.scanFixture('permission-bash')
+  })
+  afterEach(() => testDb.close())
+
+  it('a mãe recém-criada (0 filhas, isMother false) é mãe da Room', () => {
+    harness.seedSession(testDb, 'M2', { repoId: 'r1', featureId: F })
+    const { graph, inUse, view } = world([
+      { id: 'M', status: 'idle' },
+      { id: 'M2', status: 'idle' },
+    ])
+    expect(graph.nodes.find((n) => n.sessionId === 'M2')?.isMother).toBeFalsy()
+    const ids = roomMothers(graph.nodes, graph.edges, inUse, F).map((n) => n.sessionId)
+    expect(ids.sort()).toEqual(['M', 'M2'])
+    expect(view.mothers.map((m) => m.sessionId).sort()).toEqual(['M', 'M2'])
+  })
+
+  it('filha de handoff (aresta vinda de mãe em uso) não é mãe', () => {
+    child('r1', 'A')
+    const { graph, inUse, view } = world([
+      { id: 'M', status: 'idle' },
+      { id: 'A', status: 'working' },
+    ])
+    expect(roomMothers(graph.nodes, graph.edges, inUse, F).map((n) => n.sessionId)).toEqual(['M'])
+    expect(view.repos.flatMap((r) => r.rows).map((r) => r.sessionId)).toEqual(['A'])
+  })
+
+  it('a mãe com filhas vem primeiro; selectedMotherId escolhe o centro', () => {
+    harness.seedSession(testDb, 'M2', { repoId: 'r1', featureId: F })
+    child('r2', 'A')
+    // M2 mais recente: sem a regra de filhas, ela viria antes.
+    const lives: Live[] = [
+      { id: 'M', status: 'idle' },
+      { id: 'M2', status: 'idle' },
+      { id: 'A', status: 'working' },
+    ]
+    const activity = { M: 1_000, M2: 9_000, A: 1_000 }
+    const first = world(lives, { activity }).view
+    expect(first.mothers.map((m) => m.sessionId)).toEqual(['M', 'M2'])
+    expect(first.mother?.sessionId).toBe('M')
+    const picked = world(lives, { activity, selectedMotherId: 'M2' }).view
+    expect(picked.mother?.sessionId).toBe('M2')
+    // 2 mães: a filha diz de quem é.
+    expect(picked.repos.flatMap((r) => r.rows)[0]).toMatchObject({ sessionId: 'A' })
+    expect(picked.repos.flatMap((r) => r.rows)[0].motherTitle).toBe(
+      first.mothers.find((m) => m.sessionId === 'M')?.title,
+    )
+    // id fora da lista cai na 1ª.
+    expect(world(lives, { activity, selectedMotherId: 'zz' }).view.mother?.sessionId).toBe('M')
+  })
+
+  it('waitingOnHuman: menu de permissão da própria mãe', () => {
+    harness.seedSession(testDb, 'M2', { repoId: 'r1', featureId: F })
+    const { view } = world([
+      { id: 'M', status: 'waiting', scan: permission },
+      { id: 'M2', status: 'idle' },
+    ])
+    const by = new Map(view.mothers.map((m) => [m.sessionId, m.waitingOnHuman]))
+    expect(by.get('M')).toBe(true)
+    expect(by.get('M2')).toBe(false)
   })
 })
