@@ -57,6 +57,7 @@ import type {
   DiagramLibraryItem,
   DiagramScene,
   FeatureObjectiveLink,
+  Handoff,
   RepoDependency,
   TaskLink,
 } from '../../../../shared/types/ipc'
@@ -629,6 +630,27 @@ function handoffDispatchMessage(
 }
 
 // Resolve label+role de um repo por id (pra descrever a ponta oposta de uma aresta).
+// Recusa do dedup por repo-alvo, montada a partir do handoff que o create achou
+// dentro da transação. Diz de quem é a filha (sem entregar o handle) e como forçar.
+function duplicateMessage(
+  existing: Handoff,
+  targetLabel: string,
+  mother: string | null,
+): string {
+  const alias = handoffStore.childAlias(existing.childSessionId)
+  const who = alias ? `a filha "${alias}"` : 'uma filha (ainda sem alias)'
+  const status = `(status: ${existing.status})`
+  const tail =
+    'Se este trabalho é seu e precisa substituir a atual, chame de novo com force: true e forceReason explicando o motivo (a atual vira interrupted); senão aguarde a atual concluir.'
+  if (mother && existing.motherSessionId === mother) {
+    return `Você JÁ despachou ${who} para ${targetLabel} ${status} — ela é sua. Fale com ela por SendMessage({ to: "${alias ?? ''}" }) ou acompanhe por handoff_result em vez de despachar outra. ${tail}`
+  }
+  if (mother) {
+    return `${targetLabel} já tem ${who} ativa ${status} e ela NÃO é sua — foi despachada por outra sessão-mãe. Não assuma o controle de uma filha que você não despachou. ${tail}`
+  }
+  return `${targetLabel} já tem ${who} ativa ${status} — e ela pode NÃO ser sua: sem identidade da sessão-mãe, o dedup é por repo-alvo. Não assuma o controle de uma filha que você não despachou. ${tail}`
+}
+
 function repoBrief(id: string): {
   id: string
   label: string
@@ -654,9 +676,11 @@ const sessionHandoffSchema = z.object({
   // (edita, com denylist destrutivo) p/ implementação; 'interactive' = pergunta
   // tudo (legado). Default: 'plan' (seguro). O humano confirma no gate.
   mode: handoffMode.optional(),
-  // Despacha mesmo havendo um handoff ativo pro mesmo repo-alvo (default: recusa
-  // com erro, sem entregar o handle da filha que já está lá).
+  // Substitui o handoff ativo do mesmo repo-alvo (default: recusa com erro, sem
+  // entregar o handle da filha que já está lá). Exige forceReason, gravado em
+  // handoff_events: só existe UM handoff ativo por repo (índice da migration 054).
   force: z.boolean().optional(),
+  forceReason: z.string().trim().min(1).max(500).optional(),
   // CLI da filha. Default 'claude'. 'codex' (experimental) só sobe em mode
   // 'plan': sem denylist destrutivo, auto-edits autônomo é recusado no spawn.
   provider: z.enum(['claude', 'codex']).optional(),
@@ -771,7 +795,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it; pass force=true to dispatch a second one anyway. Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
+        'Delegate end-to-end work to a connected repo. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (child is read-only — for investigation), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). If the target repo already has an active handoff the call is REFUSED with an error — either because you already dispatched a child there, or because the child belongs to another mother session and you do not inherit it. A repo has at most ONE active handoff: force=true together with forceReason (required, recorded in the handoff trail) REPLACES the active one (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -798,34 +822,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         const target = resolveRepo(input.targetRepo)
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
 
-        // Dedup por alvo em TRÊS níveis (evita dois agentes mutando o mesmo repo
-        // em paralelo, causa-raiz de quase-acidente). Nunca devolve o handle do
-        // handoff encontrado: entregar { handoffId, alias, status } fazia uma mãe
-        // adotar a filha de OUTRA e passar a conversar com ela. Sempre recusa com
-        // erro informativo; force=true segue despachando uma segunda.
-        if (!input.force) {
-          const mother = ctx.motherSessionId
-          // Nível 1: handoff ativo despachado por MIM neste repo. Só existe
-          // quando o app carimbou a identidade (mcp-config por sessão).
-          const mine = mother ? handoffStore.findActiveByTarget(target.id, mother) : null
-          // Níveis 2 e 3: qualquer handoff ativo no repo-alvo. Escopar SÓ pela
-          // mãe reabriria duas mães mutando o mesmo repo — o acidente que este
-          // dedup existe pra evitar. Sem identidade (nível 3) este é o único
-          // predicado, e é o mais estrito: mantém o comportamento legado.
-          const anyActive = mine ?? handoffStore.findActiveByTarget(target.id)
-          if (anyActive) {
-            const alias = handoffStore.childAlias(anyActive.childSessionId)
-            const who = alias ? `a filha "${alias}"` : 'uma filha (ainda sem alias)'
-            const status = `(status: ${anyActive.status})`
-            const tail =
-              'Se este trabalho é seu e precisa rodar mesmo assim, chame de novo com force: true; senão aguarde a atual concluir.'
-            const error = mine
-              ? `Você JÁ despachou ${who} para ${target.label} ${status} — ela é sua. Fale com ela por SendMessage({ to: "${alias ?? ''}" }) ou acompanhe por handoff_result em vez de despachar outra. ${tail}`
-              : mother
-                ? `${target.label} já tem ${who} ativa ${status} e ela NÃO é sua — foi despachada por outra sessão-mãe. Não assuma o controle de uma filha que você não despachou. ${tail}`
-                : `${target.label} já tem ${who} ativa ${status} — e ela pode NÃO ser sua: sem identidade da sessão-mãe, o dedup é por repo-alvo. Não assuma o controle de uma filha que você não despachou. ${tail}`
-            return ok({ duplicate: true, error })
-          }
+        // force sem motivo é recusado antes de qualquer efeito: o motivo é o que
+        // fica na trilha quando um handoff ativo é substituído.
+        if (input.force && !input.forceReason) {
+          return ok({
+            error:
+              'force: true exige forceReason (por que substituir o handoff ativo deste repo). Ele fica gravado na trilha do handoff.',
+          })
         }
 
         // Arestas do target → shape do compose, orientadas pela MÃE (fromRepo).
@@ -890,20 +893,36 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           provider: input.provider,
         })
 
-        const handoff = handoffStore.create({
-          id: handoffId,
-          // Carimbo do app (null quando a sessão veio da config global legada).
-          motherSessionId: ctx.motherSessionId,
-          targetRepoId: target.id,
-          // Origem da delegação (a mãe), pra instrumentação cross-repo. Null se a
-          // MCP não passou fromRepo.
-          fromRepoId: from?.id ?? null,
-          featureId,
-          task: input.task,
-          contextJson: input.context ?? null,
-          composedPrompt: composed,
-          mode,
-        })
+        // Dedup por alvo: a posse do repo é decidida DENTRO do create, numa
+        // transação (o índice UNIQUE da 054 é a garantia por baixo). Nunca devolve
+        // o handle do handoff encontrado: entregar { handoffId, alias, status }
+        // fazia uma mãe adotar a filha de OUTRA e passar a conversar com ela.
+        let handoff: Handoff
+        try {
+          handoff = handoffStore.create(
+            {
+              id: handoffId,
+              // Carimbo do app (null quando a sessão veio da config global legada).
+              motherSessionId: ctx.motherSessionId,
+              targetRepoId: target.id,
+              // Origem da delegação (a mãe), pra instrumentação cross-repo. Null se
+              // a MCP não passou fromRepo.
+              fromRepoId: from?.id ?? null,
+              featureId,
+              task: input.task,
+              contextJson: input.context ?? null,
+              composedPrompt: composed,
+              mode,
+            },
+            input.force && input.forceReason ? { force: { reason: input.forceReason } } : {},
+          )
+        } catch (err) {
+          if (!handoffStore.isHandoffDuplicateError(err)) throw err
+          return ok({
+            duplicate: true,
+            error: duplicateMessage(err.existing, target.label, ctx.motherSessionId),
+          })
+        }
 
         // Kill-switch: com handoffs.requireApproval ligado o handoff nasce pending
         // e o gate humano da UI decide (e spawna pelo renderer). Default false —

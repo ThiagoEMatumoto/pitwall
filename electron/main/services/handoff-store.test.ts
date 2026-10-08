@@ -45,6 +45,18 @@ function seed(db: Database.Database): void {
   ).run(Date.now(), Date.now())
 }
 
+// Repo extra sob demanda: o índice da migration 054 permite UM handoff ativo por
+// repo, então cenários com várias filhas vivas precisam de repos distintos.
+function ensureRepo(id: string): string {
+  testDb
+    .prepare(
+      `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at)
+       VALUES (?, 'p1', ?, ?, 0, ?)`,
+    )
+    .run(id, id, `/tmp/${id}`, Date.now())
+  return id
+}
+
 function newHandoff(targetRepoId = 'r1') {
   return store.create({
     targetRepoId,
@@ -86,7 +98,7 @@ describe('handoff-store', () => {
     it('nasce pending por padrão e approved quando um humano já decidiu', () => {
       expect(newHandoff().status).toBe('pending')
       const h = store.create({
-        targetRepoId: 'r1',
+        targetRepoId: 'r2',
         task: 't',
         composedPrompt: 'p',
         status: 'approved',
@@ -415,7 +427,7 @@ describe('handoff-store', () => {
       store.markRunning(running.id, 's-run')
 
       // needs_input também é órfão no boot (a filha que perguntou morreu junto).
-      const asking = newHandoff('r1')
+      const asking = newHandoff(ensureRepo('r3'))
       store.approve(asking.id, {})
       store.markRunning(asking.id, 's-ask')
       store.ask(asking.id, 'pergunta órfã')
@@ -425,10 +437,10 @@ describe('handoff-store', () => {
       store.markRunning(done.id, 's-done')
       store.report(done.id, 'ok')
 
-      const rejected = newHandoff('r1')
+      const rejected = newHandoff(ensureRepo('r4'))
       store.reject(rejected.id)
 
-      const failed = newHandoff('r2')
+      const failed = newHandoff(ensureRepo('r5'))
       store.fail(failed.id, 'erro original')
 
       bootSweep()
@@ -862,10 +874,10 @@ describe('handoff-store', () => {
         expect(store.findActiveByTarget('r1', MOTHER_B)?.id).toBe(b.id)
       })
 
-      it('acha o próprio handoff mesmo com outra mãe ativa no mesmo repo', () => {
-        handoffOf(MOTHER_B)
+      it('acha o próprio handoff e não o de outra mãe', () => {
         const a = handoffOf(MOTHER_A)
         expect(store.findActiveByTarget('r1', MOTHER_A)?.id).toBe(a.id)
+        expect(store.findActiveByTarget('r1', MOTHER_B)).toBeNull()
       })
 
       it('sem mãe (null/omitido) volta ao escopo GLOBAL por repo — o mais estrito', () => {
@@ -1061,7 +1073,7 @@ describe('handoff-store', () => {
       transcriptPath = '/tmp/t.jsonl'
       const running = newHandoff()
       expect(store.get(running.id)!.resumable).toBe(false)
-      const live = newHandoff()
+      const live = newHandoff('r2')
       store.markRunning(live.id, 's-live')
       const done = store.report(live.id, 'ok')
       expect(done.resumable).toBe(false)
@@ -1125,7 +1137,7 @@ describe('handoff-store', () => {
   describe('transferMother (bastão da mãe)', () => {
     function childOf(mother: string, child: string) {
       const h = store.create({
-        targetRepoId: 'r1',
+        targetRepoId: ensureRepo(`repo-${child}`),
         task: `tarefa de ${child}`,
         composedPrompt: 'p',
         motherSessionId: mother,
@@ -1205,5 +1217,88 @@ describe('handoff-store', () => {
       store.report(done.id, 'feito')
       expect(store.listRelinkableByMother('m-old').map((h) => h.id)).toEqual([c1.id])
     })
+  })
+})
+
+// Posse do repo-alvo dentro do create (transação + índice UNIQUE parcial da 054).
+describe('handoff-store — posse atômica do repo-alvo', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seed(testDb)
+  })
+
+  afterEach(() => {
+    testDb.close()
+  })
+
+  it('2 creates no mesmo repo: 1 ok + 1 HandoffDuplicateError tipado', () => {
+    const ok = newHandoff('r1')
+    let err: unknown
+    try {
+      newHandoff('r1')
+    } catch (e) {
+      err = e
+    }
+    expect(store.isHandoffDuplicateError(err)).toBe(true)
+    expect((err as store.HandoffDuplicateError).code).toBe('HANDOFF_DUPLICATE')
+    expect((err as store.HandoffDuplicateError).existing.id).toBe(ok.id)
+    const n = testDb.prepare('SELECT COUNT(*) AS n FROM handoffs').get() as { n: number }
+    expect(n.n).toBe(1)
+  })
+
+  it('repo com handoff encerrado ou dispensado não bloqueia', () => {
+    const done = newHandoff('r1')
+    store.markRunning(done.id, 's1')
+    store.report(done.id, 'ok')
+    const dismissed = newHandoff('r1')
+    store.dismiss(dismissed.id)
+    expect(newHandoff('r1').status).toBe('pending')
+  })
+
+  it('force sem motivo é recusado sem tocar o ativo', () => {
+    const active = newHandoff('r1')
+    expect(() =>
+      store.create(
+        { targetRepoId: 'r1', task: 't', composedPrompt: 'p' },
+        { force: { reason: '   ' } },
+      ),
+    ).toThrow(/motivo/)
+    expect(store.get(active.id)?.status).toBe('pending')
+  })
+
+  it('force com motivo: o ativo vira interrupted e as duas pontas ganham evento', () => {
+    const active = newHandoff('r1')
+    store.markRunning(active.id, 's1')
+    const next = store.create(
+      { targetRepoId: 'r1', task: 't', composedPrompt: 'p' },
+      { force: { reason: 'filha travada' } },
+    )
+    const old = store.get(active.id)!
+    expect(old.status).toBe('interrupted')
+    expect(old.error).toContain('filha travada')
+    const sup = store.listEvents(active.id).find((e) => e.event === 'force_superseded')!
+    expect(sup.fromStatus).toBe('running')
+    expect(JSON.parse(sup.detail!)).toEqual({ by: next.id, reason: 'filha travada' })
+    const forced = store.listEvents(next.id).find((e) => e.event === 'force')!
+    expect(JSON.parse(forced.detail!)).toEqual({ superseded: active.id, reason: 'filha travada' })
+  })
+
+  it('reativar um interrupted com outro ativo no repo vira HandoffDuplicateError (índice)', () => {
+    const first = newHandoff('r1')
+    store.markRunning(first.id, 's1')
+    store.failIfRunning(first.id, 'pty morreu')
+    const second = newHandoff('r1')
+    expect(() => store.markRunning(first.id, 's1-retomada')).toThrow(store.HandoffDuplicateError)
+    expect(store.get(first.id)?.status).toBe('interrupted')
+    expect(store.get(second.id)?.status).toBe('pending')
+  })
+
+  it('undismiss com outro ativo no repo vira HandoffDuplicateError (índice)', () => {
+    const first = newHandoff('r1')
+    store.dismiss(first.id)
+    newHandoff('r1')
+    expect(() => store.undismiss(first.id)).toThrow(store.HandoffDuplicateError)
   })
 })

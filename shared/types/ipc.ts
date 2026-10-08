@@ -428,6 +428,9 @@ export interface CreateManualHandoffInput {
   task: string
   featureId?: string
   mode?: HandoffMode
+  // Presente = SUBSTITUI o handoff ativo do repo (um só por repo, migration 054);
+  // o motivo vai pra trilha. Ausente: repo ocupado recusa com erro.
+  forceReason?: string
 }
 
 // Handoff recém-criado + apelido já resolvido. O alias NÃO vive no registro do

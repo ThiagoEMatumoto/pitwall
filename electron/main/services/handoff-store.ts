@@ -175,12 +175,80 @@ function logEvent(
     .run(randomUUID(), handoffId, fromStatus, toStatus, event, detail ?? null, Date.now())
 }
 
-export function create(input: CreateHandoffInput): Handoff {
+// Predicado de "ativo" do dedup por repo-alvo. É o MESMO do índice UNIQUE parcial
+// da migration 054 (idx_handoffs_active_target) — mudar um sem o outro faz o
+// banco recusar o que o store acha permitido, ou o contrário.
+const ACTIVE_TARGET_PREDICATE =
+  "h.dismissed_at IS NULL AND h.status IN ('pending','approved','running','needs_input')"
+
+// Recusa tipada do dedup por repo-alvo: já existe um handoff ativo no repo. Leva o
+// existente pra quem chama montar a mensagem (de quem é, alias, status) sem
+// consultar de novo fora da transação.
+export class HandoffDuplicateError extends Error {
+  readonly code = 'HANDOFF_DUPLICATE' as const
+  constructor(readonly existing: Handoff) {
+    super(
+      `Repo-alvo ${existing.targetRepoLabel ?? existing.targetRepoId} já tem um handoff ativo (${existing.id}, status: ${existing.status}).`,
+    )
+    this.name = 'HandoffDuplicateError'
+  }
+}
+
+export function isHandoffDuplicateError(err: unknown): err is HandoffDuplicateError {
+  return err instanceof HandoffDuplicateError
+}
+
+// Violação do índice idx_handoffs_active_target: o backstop do banco para os
+// caminhos que tornam um handoff ativo de novo (markRunning de um interrupted,
+// undismiss) sem passar pelo create.
+function isActiveTargetViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as { code?: unknown }).code
+  return code === 'SQLITE_CONSTRAINT_UNIQUE' && err.message.includes('handoffs.target_repo_id')
+}
+
+function rethrowAsDuplicate(err: unknown, targetRepoId: string, selfId: string): never {
+  if (isActiveTargetViolation(err)) {
+    const other = findActiveByTarget(targetRepoId)
+    if (other && other.id !== selfId) throw new HandoffDuplicateError(other)
+  }
+  throw err
+}
+
+export interface CreateHandoffOptions {
+  // force: o handoff ativo do repo-alvo é SUBSTITUÍDO (vira 'interrupted') e o
+  // novo nasce no lugar. Exige motivo, gravado em handoff_events nas duas pontas.
+  // Não mata a PTY da filha substituída — quem força assume esse risco.
+  force?: { reason: string }
+}
+
+// Posse do repo-alvo: checagem e INSERT na MESMA transação, então dois creates no
+// mesmo repo nunca passam ambos (o índice UNIQUE parcial da 054 é a garantia de
+// banco por baixo). Todos os caminhos que criam handoff passam aqui: MCP
+// (session_handoff), prepareHandoff (create-manual) e adoção.
+export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {}): Handoff {
+  const forceReason = opts.force?.reason.trim()
+  if (opts.force && !forceReason) throw new Error('force exige um motivo (forceReason).')
   const now = Date.now()
   const id = input.id ?? randomUUID()
   const status = input.status ?? 'pending'
-  getDb()
-    .prepare(
+  const db = getDb()
+  db.transaction(() => {
+    const existing = findActiveByTarget(input.targetRepoId)
+    if (existing && !forceReason) throw new HandoffDuplicateError(existing)
+    if (existing && forceReason) {
+      db.prepare(
+        `UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE id = ?`,
+      ).run(`Substituído por ${id} (force): ${forceReason}`, now, existing.id)
+      logEvent(
+        existing.id,
+        'force_superseded',
+        'interrupted',
+        existing.status,
+        JSON.stringify({ by: id, reason: forceReason }),
+      )
+    }
+    db.prepare(
       `INSERT INTO handoffs
          (id, mother_session_id, target_repo_id, from_repo_id, child_session_id, feature_id, task,
           context_json, composed_prompt, status, mode, current_step, step_updated_at,
@@ -188,8 +256,7 @@ export function create(input: CreateHandoffInput): Handoff {
        VALUES (@id, @mother_session_id, @target_repo_id, @from_repo_id, @child_session_id, @feature_id, @task,
                @context_json, @composed_prompt, @status, @mode, @current_step, @step_updated_at,
                @summary, @error, @created_at, @updated_at)`,
-    )
-    .run({
+    ).run({
       id,
       mother_session_id: input.motherSessionId ?? null,
       target_repo_id: input.targetRepoId,
@@ -208,8 +275,18 @@ export function create(input: CreateHandoffInput): Handoff {
       created_at: now,
       updated_at: now,
     })
-  // Nascimento do handoff: from_status null (não existia antes).
-  logEvent(id, 'create', status, null)
+    // Nascimento do handoff: from_status null (não existia antes).
+    logEvent(id, 'create', status, null)
+    if (existing && forceReason) {
+      logEvent(
+        id,
+        'force',
+        status,
+        status,
+        JSON.stringify({ superseded: existing.id, reason: forceReason }),
+      )
+    }
+  })()
   // Re-lê via JOIN pra preencher target_repo_label.
   return fresh(id)
 }
@@ -297,11 +374,15 @@ export function reject(id: string): Handoff {
 // Adquirir filha viva é, portanto, voltar a ser visível.
 export function markRunning(id: string, childSessionId: string): Handoff {
   const from = currentStatus(id)
-  getDb()
-    .prepare(
-      'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, updated_at = ? WHERE id = ?',
-    )
-    .run('running', childSessionId, Date.now(), id)
+  try {
+    getDb()
+      .prepare(
+        'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, updated_at = ? WHERE id = ?',
+      )
+      .run('running', childSessionId, Date.now(), id)
+  } catch (err) {
+    rethrowAsDuplicate(err, getRow(id)?.target_repo_id ?? '', id)
+  }
   logEvent(id, 'markRunning', 'running', from)
   return fresh(id)
 }
@@ -575,12 +656,17 @@ export function dismiss(id: string): Handoff {
 export function undismiss(id: string): Handoff {
   const status = currentStatus(id)
   if (status === null) throw new Error(`handoff not found: ${id}`)
-  const res = getDb()
-    .prepare(
-      'UPDATE handoffs SET dismissed_at = NULL, updated_at = ? WHERE id = ? AND dismissed_at IS NOT NULL',
-    )
-    .run(Date.now(), id)
-  if (res.changes > 0) logEvent(id, 'undismiss', status, status)
+  let changes = 0
+  try {
+    changes = getDb()
+      .prepare(
+        'UPDATE handoffs SET dismissed_at = NULL, updated_at = ? WHERE id = ? AND dismissed_at IS NOT NULL',
+      )
+      .run(Date.now(), id).changes
+  } catch (err) {
+    rethrowAsDuplicate(err, getRow(id)?.target_repo_id ?? '', id)
+  }
+  if (changes > 0) logEvent(id, 'undismiss', status, status)
   return fresh(id)
 }
 
@@ -697,8 +783,7 @@ export function findActiveByTarget(
   targetRepoId: string,
   motherSessionId?: string | null,
 ): Handoff | null {
-  const active =
-    "h.dismissed_at IS NULL AND h.status IN ('pending','approved','running','needs_input')"
+  const active = ACTIVE_TARGET_PREDICATE
   const db = getDb()
   const row = (
     motherSessionId

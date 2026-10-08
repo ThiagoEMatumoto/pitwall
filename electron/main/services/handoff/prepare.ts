@@ -31,6 +31,8 @@ export interface PrepareHandoffInput {
   // registrar de qual sessão veio a filha (a origem some do resto do modelo:
   // child_session_id passa a apontar pra sessão RELANÇADA).
   context?: Record<string, unknown> | null
+  // Substitui o handoff ativo do repo-alvo em vez de recusar (ver store.create).
+  forceReason?: string
 }
 
 export interface PreparedHandoff {
@@ -41,7 +43,8 @@ export interface PreparedHandoff {
 }
 
 // Cria o handoff (status approved) e devolve o apelido resolvido. Não spawna nada
-// e não mata nada — só toca a tabela handoffs e emite o broadcast de UI.
+// e não mata nada — só toca a tabela handoffs e emite o broadcast de UI. Repo-alvo
+// com handoff ativo → HandoffDuplicateError (a posse é decidida no store.create).
 export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
   const db = getDb()
   const target = db.prepare('SELECT id, label, path FROM repos WHERE id = ?').get(
@@ -112,21 +115,24 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     mode,
   })
 
-  const handoff = store.create({
-    id,
-    motherSessionId: input.motherSessionId,
-    targetRepoId: target.id,
-    fromRepoId,
-    featureId,
-    task: input.task,
-    contextJson: input.context ? JSON.stringify(input.context) : null,
-    composedPrompt,
-    mode,
-    // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
-    // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
-    // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.
-    status: 'approved',
-  })
+  const handoff = store.create(
+    {
+      id,
+      motherSessionId: input.motherSessionId,
+      targetRepoId: target.id,
+      fromRepoId,
+      featureId,
+      task: input.task,
+      contextJson: input.context ? JSON.stringify(input.context) : null,
+      composedPrompt,
+      mode,
+      // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
+      // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
+      // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.
+      status: 'approved',
+    },
+    input.forceReason ? { force: { reason: input.forceReason } } : {},
+  )
   broadcast('handoff:updated', handoff)
   return { handoff, alias }
 }

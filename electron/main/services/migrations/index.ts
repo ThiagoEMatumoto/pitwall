@@ -52,6 +52,7 @@ import * as sessionsProvider from './050_sessions_provider'
 import * as sessionCanvas from './051_session_canvas'
 import * as agentMessages from './052_agent_messages'
 import * as sessionsFeatureSource from './053_sessions_feature_source'
+import * as handoffActiveTargetIdx from './054_handoff_active_target_idx'
 
 interface Migration {
   version: number
@@ -119,6 +120,7 @@ export const migrations: Migration[] = [
   sessionCanvas,
   agentMessages,
   sessionsFeatureSource,
+  handoffActiveTargetIdx,
 ]
 
 export function runMigrations(db: Database.Database): void {

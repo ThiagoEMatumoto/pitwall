@@ -72,10 +72,24 @@ function addSession(
     )
 }
 
-function dispatch(motherId: string, childId: string, task: string, repoId = 'r-api'): string {
+let repoSeq = 0
+
+// Sem repoId explícito, cada filha ganha um clone do api-core: o índice da
+// migration 054 permite UM handoff ativo por repo, e estes cenários têm várias
+// filhas vivas ao mesmo tempo.
+function dispatch(motherId: string, childId: string, task: string, repoId?: string): string {
+  const targetRepoId = repoId ?? `r-api-${childId}-${(repoSeq += 1)}`
+  if (!repoId) {
+    testDb
+      .prepare(
+        `INSERT INTO repos (id, project_id, label, path, position, created_at)
+         VALUES (?, 'p1', 'api-core', ?, 0, 1)`,
+      )
+      .run(targetRepoId, `/tmp/${targetRepoId}`)
+  }
   const h = handoffStore.create({
     motherSessionId: motherId,
-    targetRepoId: repoId,
+    targetRepoId,
     task,
     composedPrompt: task,
   })
