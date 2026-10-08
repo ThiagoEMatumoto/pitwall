@@ -99,9 +99,12 @@ export function __resetForTests(): void {
 
 // ---- envelope (puro) ----
 
-// `</update` no texto da filha fecharia o bloco e abriria espaço pra forjar outro.
+// `</update` no texto da filha fecharia o bloco; `<update ...>` ou
+// `<pitwall-handoff-update` abririam um bloco forjado em nome de OUTRA filha.
 function sanitizeBlockBody(text: string): string {
-  return sanitizeBody(text).replace(/<\/update/gi, '<\\/update')
+  return sanitizeBody(text)
+    .replace(/<\/update/gi, '<\\/update')
+    .replace(/<(update|pitwall-)/gi, '<\\$1')
 }
 
 export function formatWakeEnvelope(blocks: WakeBlock[], overflow: number): string {
@@ -525,7 +528,11 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
          JOIN handoffs h ON h.id = d.handoff_id
         WHERE d.created_at > ?${feature}`,
     )
-    .all(...params) as Array<{ outcome: WakeOutcome; created_at: number; fetched_at: number | null }>
+    .all(...params) as Array<{
+    outcome: WakeOutcome
+    created_at: number
+    fetched_at: number | null
+  }>
   const byOutcome: Partial<Record<WakeOutcome, number>> = {}
   let delivered = 0
   let undelivered = 0
