@@ -34,6 +34,7 @@ import {
   type ScreenScan,
 } from '../../../../shared/tui/attention-reason'
 import { buildTools, type McpNotify, type McpRequestContext, type ToolResult } from './tools'
+import { SERVER_INSTRUCTIONS } from './instructions'
 
 const MOTHER = 'mother-1'
 
@@ -348,5 +349,14 @@ describe('handoff_wait (fallback pull)', () => {
 
   it('sem carimbo: erro legível', async () => {
     await expect(callAs(null, 'handoff_wait', {})).rejects.toThrow(/identidade da sessão/)
+  })
+})
+
+describe('SERVER_INSTRUCTIONS descrevem o wake, sem poll', () => {
+  it('manda encerrar o turno e aponta o fallback', () => {
+    for (const s of ['pitwall-handoff-update', 'handoff_wait', 'END YOUR TURN', 'fallback']) {
+      expect(SERVER_INSTRUCTIONS).toContain(s)
+    }
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/with backoff|Keep polling|a human approves/)
   })
 })
