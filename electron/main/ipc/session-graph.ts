@@ -2,19 +2,10 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { getDb } from '../services/db'
 import { broadcast, onBroadcast } from '../services/notify'
-import { ptyManager } from '../services/pty-manager'
-import {
-  buildSessionsFileIndex,
-  isPidAlive,
-  mapStatus,
-  ptyStatusFor,
-} from '../services/session-activity'
+import { buildSessionsFileIndex } from '../services/session-activity'
+import { liveSessionStates } from '../services/live-session-states'
 import * as handoffStore from '../services/handoff-store'
-import {
-  buildSessionGraph,
-  readSessionGraphInput,
-  type LiveSessionState,
-} from '../services/session-graph'
+import { buildSessionGraph, readSessionGraphInput } from '../services/session-graph'
 import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
 import { transcriptIndex } from '../services/transcript-index'
 import { onSessionLinkPulse } from '../services/session-link-pulse'
@@ -53,39 +44,18 @@ function resolveFeaturesSafely(index?: SessionsFileIndex): void {
   }
 }
 
-// PTY viva neste app = sessão viva; o status vem do session file do CLI. PTY sem
-// session file ainda é uma sessão que está subindo.
-function liveSessionStates(index: SessionsFileIndex): Map<string, LiveSessionState> {
-  const running = ptyManager.runningIds()
-  const rows = getDb()
-    .prepare(`SELECT id, cc_session_id FROM sessions WHERE id IN (SELECT value FROM json_each(?))`)
-    .all(JSON.stringify(running)) as Array<{ id: string; cc_session_id: string | null }>
-  const out = new Map<string, LiveSessionState>()
-  for (const row of rows) {
-    // Sem id nativo (Codex): não há session file — o status é o da própria PTY.
-    if (!row.cc_session_id) {
-      out.set(row.id, {
-        status: ptyStatusFor(row.id),
-        lastActivityAt: ptyManager.getActivitySample(row.id)?.lastByteAt ?? null,
-        name: null,
-      })
-      continue
-    }
-    const entry = index.get(row.cc_session_id)
-    const alive = entry ? isPidAlive(entry.pid) : false
-    out.set(row.id, {
-      status: entry && alive ? mapStatus(entry.status) : 'starting',
-      lastActivityAt: entry?.updatedAt ?? null,
-      name: entry?.name ?? null,
-    })
-  }
-  return out
-}
-
-export function loadSessionGraph(index: SessionsFileIndex = buildSessionsFileIndex()): SessionGraph {
+export function loadSessionGraph(
+  index: SessionsFileIndex = buildSessionsFileIndex(),
+): SessionGraph {
   const db = getDb()
   return buildSessionGraph(
-    readSessionGraphInput(db, liveSessionStates(index), Date.now(), readFirstPrompt, readLastPrompt),
+    readSessionGraphInput(
+      db,
+      liveSessionStates(index),
+      Date.now(),
+      readFirstPrompt,
+      readLastPrompt,
+    ),
   )
 }
 

@@ -1,5 +1,6 @@
 // Apoio dos testes da projeção: banco migrado de verdade e telas capturadas do
 // claude real. Nada aqui monta Handoff/estado à mão — quem escreve é o store.
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type Database from 'better-sqlite3'
@@ -39,6 +40,8 @@ export function seedRepos(db: Database.Database, count = 6): void {
   for (let i = 1; i <= count; i++) insert.run(`r${i}`, `Repo ${i}`, `/tmp/r${i}`, i, now)
 }
 
+// cc_session_id é UUID de verdade: o resumable do store só reconhece transcript
+// de id nativo válido.
 export function seedSession(
   db: Database.Database,
   id: string,
@@ -47,7 +50,7 @@ export function seedSession(
   db.prepare(
     `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at, feature_id)
      VALUES (?, ?, ?, 'running', ?, ?)`,
-  ).run(id, opts.repoId ?? 'r1', `cc-${id}`, Date.now(), opts.featureId ?? null)
+  ).run(id, opts.repoId ?? 'r1', randomUUID(), Date.now(), opts.featureId ?? null)
 }
 
 export function seedFeature(db: Database.Database, id: string): void {

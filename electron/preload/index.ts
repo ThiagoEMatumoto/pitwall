@@ -116,6 +116,7 @@ import type {
   DesignAskInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
+import type { AttentionItem } from '../../shared/types/attention'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
@@ -401,6 +402,11 @@ const api: Api = {
     handoffEvents: (input: { handoffId: string }) => invoke('handoff-events:list', input),
     onUpdated: (handler) => subscribe<SessionGraph>('session-graph:updated', handler),
     onLinkPulse: (handler) => subscribe<SessionLinkPulse>('session-link:pulse', handler),
+  },
+  attention: {
+    list: () => invoke('attention:list'),
+    debug: () => invoke('attention:debug'),
+    onChanged: (handler) => subscribe<AttentionItem[]>('attention:changed', handler),
   },
   agentBus: {
     list: () => invoke('agent-bus:list'),

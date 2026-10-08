@@ -3,37 +3,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyAllMigrations, scanFixture, seedRepos, seedSession } from './attention-test-harness'
 import { projectAttention } from '../../../../shared/attention/project-attention'
 import { humanQueue } from '../../../../shared/attention/selectors'
-import {
-  deriveAttentionReason,
-  type LiveStatus,
-  type ScreenScan,
-} from '../../../../shared/tui/attention-reason'
+import type { LiveStatus, ScreenScan } from '../../../../shared/tui/attention-reason'
 import type { AttentionItem, AttentionLiveSession } from '../../../../shared/types/attention'
 
 let testDb: Database.Database
 vi.mock('../db', () => ({ getDb: () => testDb }))
 let transcriptPath: string | null = null
 vi.mock('../transcript-path', () => ({ findTranscriptPath: () => transcriptPath }))
+// O serviço lê PTYs e session files só no caminho do app (readAttentionInput);
+// aqui o estado vivo entra por toAttentionLive, o mesmo mapper.
+vi.mock('../session-activity', () => ({ buildSessionsFileIndex: () => new Map() }))
+vi.mock('../live-session-states', () => ({ liveSessionStates: () => new Map() }))
 
 import * as store from '../handoff-store'
+import {
+  attentionCounters,
+  projectAndCount,
+  readTransitions,
+  toAttentionLive,
+} from './attention-service'
 
-// Mesmo derivador que o main usa para a tela (handoffAsking fica de fora: a regra
-// de retomada é da projeção).
+// O MESMO mapper do main: linha real de sessions + estado vivo + tela capturada.
 function liveOf(
   sessionId: string,
   status: LiveStatus,
   scan: ScreenScan | null,
 ): AttentionLiveSession {
-  const reason = deriveAttentionReason({ status, scan, handoffAsking: false })
-  return {
-    sessionId,
-    status,
-    screenReason: reason === 'handoff-input' ? undefined : reason,
-    menuSeq: scan?.menu ? 1 : null,
-    lastActivityAt: 1_000,
-    featureId: null,
-    repoId: 'r1',
-  }
+  const row = testDb
+    .prepare('SELECT id, feature_id, repo_id FROM sessions WHERE id = ?')
+    .get(sessionId) as { id: string; feature_id: string | null; repo_id: string | null }
+  return toAttentionLive(
+    row,
+    { status, lastActivityAt: 1_000, name: null },
+    scan,
+    scan?.menu ? 1 : null,
+  )
 }
 
 const T0 = 1_700_000_000_000
@@ -51,7 +55,15 @@ function runningChild(repo: string, childSid: string) {
 }
 
 function project(live: AttentionLiveSession[]): AttentionItem[] {
-  return projectAttention({ handoffs: store.list(), transitions: new Map(), live })
+  const handoffs = store.list()
+  return projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live })
+}
+
+function eventAt(handoffId: string, event: string): number {
+  const row = testDb
+    .prepare('SELECT at FROM handoff_events WHERE handoff_id = ? AND event = ? ORDER BY at DESC')
+    .get(handoffId, event) as { at: number }
+  return row.at
 }
 
 describe('projectAttention — estado produzido pelo handoffStore real', () => {
@@ -147,6 +159,137 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
     // lastActivityAt 1_000 < questionAskedAt: o menu vem primeiro.
     const items = project([liveOf('m', 'waiting', scan)])
     expect(items.map((i) => i.kind)).toEqual(['session_menu', 'child_question'])
+  })
+})
+
+describe('projectAttention — desfechos com handoff_events reais', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedRepos(testDb)
+    seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => {
+    testDb.close()
+    vi.useRealTimers()
+  })
+
+  it('7) fail com a mãe viva → child_failed com o relógio do evento; mãe e filha mortas → 0', () => {
+    const h = runningChild('r1', 'c1')
+    vi.setSystemTime(T0 + 3_000)
+    store.fail(h.id, 'quebrou o build')
+    const items = project([liveOf('m', 'idle', null)])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'child_failed', severity: 'action', handoffId: h.id })
+    expect(items[0].createdAt).toBe(eventAt(h.id, 'fail'))
+    expect(items[0].dedupKey).toBe(`child_failed:${h.id}:${eventAt(h.id, 'fail')}`)
+    expect(items[0].whyNow).toBe('Falhou: quebrou o build')
+    expect(project([])).toEqual([])
+  })
+
+  it('7b) failed com a PTY da filha viva → 1 item só, com kill_session (absorve o pty_orphan)', () => {
+    const h = runningChild('r1', 'c1')
+    store.fail(h.id, 'x')
+    const items = project([liveOf('c1', 'idle', null)])
+    expect(items.map((i) => i.kind)).toEqual(['child_failed'])
+    expect(items[0].actions.map((a) => a.kind)).toEqual(['dismiss', 'open_session', 'kill_session'])
+  })
+
+  it('7c) interrupted retomável → child_interrupted; sem transcript → 0', () => {
+    const h = runningChild('r1', 'c1')
+    vi.setSystemTime(T0 + 4_000)
+    store.failIfRunning(h.id, 'PTY morreu')
+    transcriptPath = '/tmp/t.jsonl'
+    const items = project([])
+    expect(items.map((i) => [i.kind, i.createdAt])).toEqual([
+      ['child_interrupted', eventAt(h.id, 'interrupt')],
+    ])
+    expect(items[0].actions[0]).toEqual({ kind: 'reopen_child', handoffId: h.id })
+    // Fora da janela do memo de transcript (30s), o sumiço do disco vale.
+    vi.setSystemTime(T0 + 60_000)
+    transcriptPath = null
+    expect(project([])).toEqual([])
+  })
+
+  it('8) report sem markConsumed com a mãe viva → result_unconsumed info/mother; depois de markConsumed → 0', () => {
+    const h = runningChild('r1', 'c1')
+    vi.setSystemTime(T0 + 5_000)
+    store.report(h.id, 'feito')
+    const items = project([liveOf('m', 'working', null)])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: 'result_unconsumed',
+      severity: 'info',
+      audience: 'mother',
+      createdAt: eventAt(h.id, 'report'),
+    })
+    expect(items[0].actions).toEqual([{ kind: 'open_session', sessionId: 'm' }])
+    store.markConsumed(h.id)
+    expect(project([liveOf('m', 'working', null)])).toEqual([])
+  })
+
+  it('9) report com a PTY da filha viva → pty_orphan info; release → nenhum pty_orphan', () => {
+    const h = runningChild('r1', 'c1')
+    store.report(h.id, 'feito')
+    store.markConsumed(h.id)
+    const before = project([liveOf('c1', 'idle', null)])
+    expect(before.map((i) => [i.kind, i.severity])).toEqual([['pty_orphan', 'info']])
+    store.release(h.id)
+    expect(project([liveOf('c1', 'idle', null)]).filter((i) => i.kind === 'pty_orphan')).toEqual([])
+  })
+
+  it('10) dismiss tira child_question, child_failed e result_unconsumed', () => {
+    const q = runningChild('r1', 'c1')
+    store.ask(q.id, 'q')
+    const f = runningChild('r2', 'c2')
+    store.fail(f.id, 'x')
+    const d = runningChild('r3', 'c3')
+    store.report(d.id, 'ok')
+    const live = [liveOf('m', 'idle', null)]
+    expect(
+      project(live)
+        .map((i) => i.kind)
+        .sort(),
+    ).toEqual(['child_failed', 'child_question', 'result_unconsumed'])
+    for (const id of [q.id, f.id, d.id]) store.dismiss(id)
+    expect(project(live)).toEqual([])
+  })
+
+  it('a dispensa (X→X) não mexe no relógio do desfecho', () => {
+    const h = runningChild('r1', 'c1')
+    vi.setSystemTime(T0 + 1_000)
+    store.fail(h.id, 'x')
+    vi.setSystemTime(T0 + 9_000)
+    store.dismiss(h.id)
+    store.undismiss(h.id)
+    const [item] = project([liveOf('m', 'idle', null)])
+    expect(item.createdAt).toBe(T0 + 1_000)
+  })
+
+  it('contadores: liveWaitingNotTurnEnd === sessionMenuItems (1 permissão, 1 sem scan, 1 turn-end)', async () => {
+    seedSession(testDb, 's1')
+    seedSession(testDb, 's2')
+    seedSession(testDb, 's3')
+    const handoffs = store.list()
+    const items = projectAndCount({
+      handoffs,
+      transitions: readTransitions(testDb, handoffs),
+      live: [
+        liveOf('s1', 'waiting', await scanFixture('permission-bash')),
+        liveOf('s2', 'waiting', null),
+        liveOf('s3', 'waiting', await scanFixture('idle-prompt')),
+      ],
+    })
+    const c = attentionCounters()
+    expect(items).toHaveLength(2)
+    expect(c.liveWaitingNotTurnEnd).toBe(2)
+    expect(c.sessionMenuItems).toBe(2)
+    expect(c.byKind.session_menu).toBe(2)
+    expect(c.computedAt).toBe(T0)
   })
 })
 

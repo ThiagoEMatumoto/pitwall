@@ -180,6 +180,18 @@ describe('TuiMenuWatch — contador attention_reason_unparsed', () => {
   })
 })
 
+describe('TuiMenuWatch.menuSeqOf', () => {
+  it('é o menuSeq do snapshot com menu na tela, e null sem menu ou PTY desconhecida', async () => {
+    const { watch } = setup(PERMISSION)
+    const snap = await watch.snapshot('s1')
+    expect(watch.menuSeqOf('s1')).toBe(snap!.menuSeq)
+    expect(watch.menuSeqOf('nope')).toBeNull()
+    const idle = setup(IDLE_PROMPT)
+    await idle.watch.snapshot('s1')
+    expect(idle.watch.menuSeqOf('s1')).toBeNull()
+  })
+})
+
 describe('TuiMenuWatch.respond — checagem de menu-mudou', () => {
   it('menu igual: digita a tecla da opção escolhida (dígito, sem Enter)', async () => {
     const { pty, watch } = setup(PERMISSION)

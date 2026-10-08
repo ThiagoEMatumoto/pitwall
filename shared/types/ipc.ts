@@ -6,6 +6,7 @@
 export type { ChatMessage, ChatQuestion, ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { ChatTranscript, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
+import type { AttentionCounters, AttentionItem } from './attention'
 import type { TuiMenu } from '../tui/tui-menu-parser'
 import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
@@ -3085,6 +3086,13 @@ export interface Api {
     onUpdated(handler: (graph: SessionGraph) => void): () => void
     // Uma sessão mandou algo para outra (session-link-pulse): o mapa anima o fio.
     onLinkPulse(handler: (pulse: SessionLinkPulse) => void): () => void
+  }
+  // Fila única de "precisa de você" (projeção do main). onChanged recebe a lista
+  // inteira, coalescida e só quando mudou.
+  attention: {
+    list(): Promise<AttentionItem[]>
+    debug(): Promise<AttentionCounters>
+    onChanged(handler: (items: AttentionItem[]) => void): () => void
   }
   // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
   agentBus: {
