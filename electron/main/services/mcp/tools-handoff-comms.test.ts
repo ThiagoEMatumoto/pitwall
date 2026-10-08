@@ -369,18 +369,23 @@ describe('posse do handoff (antecessora do bastão não fala pelo handoff)', () 
     expect(res.status).toBe('done')
   })
 
-  it('handoff SEM filha atrelada aceita de qualquer sessão carimbada', () => {
+  // Sem filha atrelada a posse não recusa ninguém; quem recusa é a guarda de
+  // transição do store (approved não admite done).
+  it('handoff SEM filha atrelada passa pela posse e cai na guarda de transição', () => {
     const h = handoffStore.create({
       targetRepoId: 'r1',
       task: 't',
       composedPrompt: 'p',
     })
     handoffStore.approve(h.id, {})
-    const res = callAs<{ status: string }>('s-qualquer', 'handoff_report', {
-      handoffId: h.id,
-      summary: 'feito',
-    })
-    expect(res.status).toBe('done')
+    const call = () =>
+      callAs<{ status: string }>('s-qualquer', 'handoff_report', {
+        handoffId: h.id,
+        summary: 'feito',
+      })
+    expect(call).toThrow(/report recusado/)
+    expect(call).not.toThrow(/já não é seu/)
+    expect(handoffStore.listEvents(h.id).at(-1)?.event).toBe('report_rejected')
   })
 })
 

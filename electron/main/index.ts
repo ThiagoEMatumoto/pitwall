@@ -52,7 +52,7 @@ import { registerMetricsIpc } from './ipc/metrics'
 import { registerFeaturesIpc } from './ipc/features'
 import { registerLoopIpc } from './ipc/loop'
 import { registerRepoDependenciesIpc } from './ipc/repo-dependencies'
-import { registerHandoffsIpc } from './ipc/handoffs'
+import { killChildIfRunning, registerHandoffsIpc } from './ipc/handoffs'
 import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
@@ -377,7 +377,7 @@ app.whenReady().then(async () => {
   // runtime (PTY exit pode não ter disparado a reconciliação). Não bloqueia o
   // boot e é idempotente — a query só toca handoffs órfãos.
   handoffReconcileTimer = setInterval(
-    () => handoffStore.reconcileStuck(),
+    () => handoffStore.reconcileStuck(killChildIfRunning),
     HANDOFF_RECONCILE_INTERVAL_MS,
   )
 

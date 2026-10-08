@@ -306,8 +306,32 @@ export function markRunning(id: string, childSessionId: string): Handoff {
   return fresh(id)
 }
 
+// Recusa tipada de transição: report()/fail() chamados a partir de um estado que
+// não admite o desfecho. O chamador distingue isto de "handoff não existe" pelo
+// tipo, e a recusa fica na trilha (handoff_events) com o texto que foi descartado.
+export class HandoffTransitionError extends Error {
+  constructor(
+    readonly handoffId: string,
+    readonly op: 'report' | 'fail',
+    readonly fromStatus: string,
+  ) {
+    super(`${op} recusado: o handoff ${handoffId} está ${fromStatus}`)
+    this.name = 'HandoffTransitionError'
+  }
+}
+
+// done só nasce de trabalho VIVO. Antes, um report tardio de uma filha
+// interrompida/falhada virava done por cima do desfecho já gravado — e a retomada
+// legítima não precisa disso: resumeHandoffChild passa por markRunning antes.
+const REPORTABLE_FROM = new Set(['running', 'needs_input'])
+// failed vale pra todo estado ainda não encerrado. pending/approved entram porque
+// os caminhos de falha de spawn (session_handoff, dispatchHandoffChild, rollback da
+// adoção) chamam fail() ANTES de haver filha — sem eles o handoff ficaria preso.
+const FAILABLE_FROM = new Set(['pending', 'approved', 'running', 'needs_input'])
+
 export function report(id: string, summary: string): Handoff {
   const from = currentStatus(id)
+  if (from === null) throw new Error(`handoff not found: ${id}`)
   // Report duplicado: o handoff já está done. NÃO sobrescreve o summary original
   // (o primeiro resultado é o autoritativo, e é o que a mãe pode já ter consumido)
   // e registra um evento próprio — antes o segundo report passava como sucesso e
@@ -315,6 +339,10 @@ export function report(id: string, summary: string): Handoff {
   if (from === 'done') {
     logEvent(id, 'reportDuplicate', 'done', 'done', summary)
     return fresh(id)
+  }
+  if (!REPORTABLE_FROM.has(from)) {
+    logEvent(id, 'report_rejected', from, from, summary)
+    throw new HandoffTransitionError(id, 'report', from)
   }
   getDb()
     .prepare('UPDATE handoffs SET status = ?, summary = ?, updated_at = ? WHERE id = ?')
@@ -397,6 +425,11 @@ export function resume(id: string): Handoff {
 
 export function fail(id: string, error: string): Handoff {
   const from = currentStatus(id)
+  if (from === null) throw new Error(`handoff not found: ${id}`)
+  if (!FAILABLE_FROM.has(from)) {
+    logEvent(id, 'fail_rejected', from, from, error)
+    throw new HandoffTransitionError(id, 'fail', from)
+  }
   getDb()
     .prepare('UPDATE handoffs SET status = ?, error = ?, updated_at = ? WHERE id = ?')
     .run('failed', error, Date.now(), id)
@@ -433,8 +466,14 @@ export function failIfRunning(id: string, error: string): Handoff | null {
 // a filha morreu sem reportar erro real, então o handoff sai do ativo (libera o
 // dedup) mas fica retomável. Como 'interrupted' não entra no predicado
 // ('running','needs_input'), passadas seguintes NÃO o re-reconciliam.
-// Retorna o nº de handoffs reconciliados.
-export function reconcileStuck(): number {
+//
+// Segunda metade (só com killChildPty): handoff 'failed' cuja filha segue com a
+// sessão 'running' é uma PTY queimando token num trabalho já encerrado — o
+// "Forçar falha" antigo não matava a filha, e um fail() pelo store também não.
+// Fica de fora a sessão que entretanto virou filha de OUTRO handoff ativo (bastão,
+// adoção): ela não é mais deste desfecho.
+// Retorna o nº de handoffs reconciliados (interrompidos + filhas falhadas mortas).
+export function reconcileStuck(killChildPty?: (childSessionId: string) => void): number {
   const db = getDb()
   const error = 'Sessão-filha encerrada sem reportar conclusão'
   // UPDATE em lote: SELECionar os ids + status ANTES, pra capturar o from_status
@@ -459,7 +498,27 @@ export function reconcileStuck(): number {
   for (const h of stuck) {
     logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
   }
-  return res.changes
+  return res.changes + (killChildPty ? killFailedChildren(killChildPty) : 0)
+}
+
+function killFailedChildren(killChildPty: (childSessionId: string) => void): number {
+  const rows = getDb()
+    .prepare(
+      `SELECT h.id, h.child_session_id FROM handoffs h
+       WHERE h.status = 'failed'
+         AND h.child_session_id IN (SELECT id FROM sessions WHERE status = 'running')
+         AND NOT EXISTS (
+           SELECT 1 FROM handoffs o
+            WHERE o.child_session_id = h.child_session_id
+              AND o.id <> h.id
+              AND o.status IN ('pending','approved','running','needs_input'))`,
+    )
+    .all() as Array<{ id: string; child_session_id: string }>
+  for (const r of rows) {
+    killChildPty(r.child_session_id)
+    logEvent(r.id, 'reconcileFailedChild', 'failed', 'failed', r.child_session_id)
+  }
+  return rows.length
 }
 
 // Busca o handoff cuja filha é esta sessão (pra reconciliar no PTY exit). NULL se
