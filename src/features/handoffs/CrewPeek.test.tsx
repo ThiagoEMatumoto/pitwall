@@ -127,6 +127,7 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
     sessionsApiMock.attentionMenu.mockReset()
     sessionsApiMock.attentionRespond.mockReset()
     chatViewProps.length = 0
+    useAttentionListStore.setState({ items: [] })
   })
 
   it('no chat, pedido de permissão vira botões que respondem pelo main', async () => {
@@ -180,6 +181,24 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
   it('esperando sem menu respondível, o aviso de terminal continua', () => {
     useHandoffsStore.setState({ handoffs: [handoff] })
     useAppStore.setState({ liveSessions: [{ ...live, status: 'waiting' }] })
+    // "Esperando" chega pela fila única: a projeção do main sobre a filha em waiting.
+    useAttentionListStore.setState({
+      items: projectAttention({
+        handoffs: [handoff],
+        transitions: new Map(),
+        live: [
+          {
+            sessionId: 's-child',
+            status: 'waiting',
+            screenReason: undefined,
+            menuSeq: null,
+            lastActivityAt: null,
+            featureId: null,
+            repoId: null,
+          },
+        ],
+      }),
+    })
     useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
     render(<CrewPeek />)
 
