@@ -50,6 +50,7 @@ export function featuresDir(bundleDir: string): string {
 //   workspace_state, layouts, app_prefs,
 //   canvas_positions, canvas_notes, session_groups  (mapa de sessões, migration 051).
 //   agent_messages  (asks agente↔agente entre sessões DESTA máquina, migration 052).
+//   handoff_wake_deliveries  (ledger do wake da mãe, sessions.id DESTA máquina, migration 055).
 // Por isso a 050 (sessions.provider/launch_json) não muda o conteúdo do bundle;
 // só sobe o schemaVersion (MAX(_migrations)), e o importer de um app < 050
 // recusa bundle exportado por um app >= 050 — como em toda migration.
@@ -58,6 +59,7 @@ export function featuresDir(bundleDir: string): string {
 // Idem a 052: agent_messages referencia sessions.id locais e o Q&A cru não sai
 // da máquina (no feature ledger entram só decisões).
 // Idem a 053: sessions.feature_source (origem do vínculo) mora em `sessions`.
+// Idem a 055: handoff_wake_deliveries fala de sessions.id locais (machine-local).
 //
 // Nota sobre objectives self-FK (parent_objective_id REFERENCES objectives
 // ON DELETE SET NULL): no INSERT em massa o import roda com foreign_keys=OFF,
