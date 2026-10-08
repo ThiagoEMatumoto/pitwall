@@ -16,7 +16,7 @@ import type {
 import { resolvePurpose } from './session-purpose'
 import { isResumableChild } from './handoff-store'
 import { isLedByMother } from '../../../shared/handoff-lead'
-import { humanQueue } from '../../../shared/attention/selectors'
+import { humanQueue, isAskItem } from '../../../shared/attention/selectors'
 import type { AttentionItem } from '../../../shared/types/attention'
 
 // Estado vivo por sessions.id (PTY + ~/.claude/sessions/<pid>.json). Ausente = ended.
@@ -144,7 +144,7 @@ export function sessionNodeTitle(args: {
 // também): a raia conta esses sujeitos, então o card e os contadores do mapa têm de contar.
 function graphAttentionFor(items: AttentionItem[] | undefined): SessionGraphAttention | null {
   if (!items?.length) return null
-  if (items.some((i) => i.kind === 'child_question')) return 'handoff-input'
+  if (items.some(isAskItem)) return 'handoff-input'
   return 'waiting'
 }
 

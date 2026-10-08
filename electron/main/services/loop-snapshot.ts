@@ -1,5 +1,6 @@
 import { getDb } from './db'
 import { wakeHealth } from './handoff/handoff-wake'
+import { requestHealth } from './handoff-requests'
 import {
   issuesOf,
   lastActivityAt,
@@ -117,6 +118,7 @@ export function loopSnapshot(featureId: string, now: number = Date.now()): Featu
       ? { featureId: suspect.candidateId, title: suspect.title, score: suspect.score }
       : null,
     handoffWake: wakeHealth({ featureId }, now),
+    handoffRequests: requestHealth({ featureId }, undefined, now),
   }
 
   return {

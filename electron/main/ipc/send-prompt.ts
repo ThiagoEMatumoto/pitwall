@@ -22,7 +22,10 @@ import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-re
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
 import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
+import { answerCitedRequests } from '../services/handoff/cited-answer'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
+import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
+import { onAnswerQueueSnapshot } from '../services/handoff/answer-delivery'
 import {
   onQueueSnapshot,
   setHandoffWakeQueue,
@@ -86,6 +89,13 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
     })
     return
   }
+  if (isHandoffAnswerEnvelope(ev.text)) {
+    notify({
+      title: 'Resposta não entregue',
+      body: `A resposta ao pedido de handoff não chegou (${ev.kind === 'expired' ? '30 min na fila' : 'sessão encerrada'}).`,
+    })
+    return
+  }
   notify({
     title: 'Mensagem não entregue',
     body:
@@ -119,6 +129,7 @@ export const promptQueue = new PromptQueue({
     noticeLostMessage(snapshot)
     try {
       onQueueSnapshot(snapshot)
+      onAnswerQueueSnapshot(snapshot)
     } catch (err) {
       console.error('[handoff-wake] snapshot da fila não atualizou o ledger:', err)
     }
@@ -155,7 +166,11 @@ export function registerSendPromptIpc(): void {
     cancel: (id) => promptQueue.cancel(id),
   })
   sweepOrphansOnBoot()
-  setSendMessageObserver(recordChildDirectMessage)
+  setSendMessageObserver((e) => {
+    recordChildDirectMessage(e)
+    const answered = answerCitedRequests(e)
+    if (answered) broadcast('handoff:updated', answered)
+  })
   ptyManager.on('data', (e) => tailFeed.onData(e.sessionId))
   ptyManager.on('exit', (e) => tailFeed.onExit(e.sessionId))
 

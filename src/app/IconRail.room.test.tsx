@@ -23,7 +23,7 @@ vi.mock('@/features/titlebar/UsageWidget', () => ({ UsageWidget: () => null }))
 vi.mock('@/features/meetings/RecordingPill', () => ({ RecordingPill: () => null }))
 
 const store = await import('../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../electron/main/services/attention/attention-service')
 const harness = await import('../../electron/main/services/attention/attention-test-harness')
 const { projectAttention } = await import('../../shared/attention/project-attention')
@@ -107,7 +107,12 @@ function seedFailures() {
     ),
   ]
   const handoffs = store.list()
-  return projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live })
+  return projectAttention({
+    handoffs,
+    transitions: readTransitions(testDb, handoffs),
+    ...readRequestInput(),
+    live,
+  })
 }
 
 const titleBarCount = () =>

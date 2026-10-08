@@ -3,6 +3,7 @@ import { getDb } from './db'
 import * as featureStore from './feature-store'
 import { loopSnapshot } from './loop-snapshot'
 import { wakeHealth } from './handoff/handoff-wake'
+import { requestHealth } from './handoff-requests'
 import {
   ROOM_TIMELINE_LIMIT,
   type RoomObjectiveLink,
@@ -92,5 +93,6 @@ export function roomSnapshot(featureId: string, now = Date.now()): RoomSnapshot 
     timeline: listFeatureEvents(db, featureId),
     loop: { pulse: loop.pulse, liveness: loop.liveness, issues: loop.issues },
     wakeHealth: wakeHealth({ featureId }, now),
+    requestHealth: requestHealth({ featureId }, undefined, now),
   }
 }

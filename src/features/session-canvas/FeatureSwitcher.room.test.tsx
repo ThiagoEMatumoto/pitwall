@@ -14,7 +14,7 @@ vi.mock('@/lib/ipc', () => ({
 }))
 
 const store = await import('../../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const harness = await import('../../../electron/main/services/attention/attention-test-harness')
 const { projectAttention } = await import('../../../shared/attention/project-attention')
@@ -173,6 +173,7 @@ describe('FeatureSwitcher → Room', () => {
       items: projectAttention({
         handoffs,
         transitions: readTransitions(testDb, handoffs),
+        ...readRequestInput(),
         live,
       }),
     })

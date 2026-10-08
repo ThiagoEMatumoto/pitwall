@@ -125,9 +125,17 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const decisao = [
     '## Quando precisar de decisão',
     '- Dentro do seu escopo: decida você e registre no summary.',
-    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}"${peerChannel ? ' e mande um SendMessage ao orquestrador' : ''}, no formato:`,
-    '  "BLOQUEIO: <1 linha> | OPÇÕES: A) … B) … | RECOMENDO: <A|B> porque <1 linha> | CUSTO DE ERRAR: <reversível|irreversível>"',
-    '- Depois PARE e espere. Não escolha sozinho e não invente requisito.',
+    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}" e os campos estruturados${peerChannel ? ' (e avise o orquestrador por SendMessage)' : ''}:`,
+    '  - `kind`: decision | confirmation | human_action | question',
+    '  - `question`: o BLOQUEIO em 1 linha',
+    '  - `options`: [{ key: "A", label: "…" }, { key: "B", label: "…" }] (obrigatório em decision, 2 a 6)',
+    '  - `recommendation`: a key que você recomenda, e o porquê em 1 linha no detail da option',
+    '  - `costOfError`: o que acontece se errar e se é reversível',
+    '  - `risk`: "destructive_data" (migration destrutiva/dados) ou "deploy_infra_spend" (deploy/infra/gasto) quando for o caso; isso torna o pedido human_only e só o humano resolve',
+    '- Uma pergunta por chamada. Duas dúvidas = duas chamadas; cada uma é respondida separadamente.',
+    '- NUNCA pergunte só no terminal: pergunta fora do handoff_ask não existe para a mãe nem para o humano.',
+    '- A resposta chega como <pitwall-answer request-id="…">. Só retome o que ela libera; com outras pendentes, continue esperando.',
+    '- Depois de perguntar, PARE e espere. Não escolha sozinho e não invente requisito.',
   ]
 
   return [

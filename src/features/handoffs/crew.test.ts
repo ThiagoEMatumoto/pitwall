@@ -36,7 +36,7 @@ const {
   childrenMissedToast,
 } = await import('./crew')
 const store = await import('../../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const { projectAttention } = await import('../../../shared/attention/project-attention')
 const { attentionHandoffIds, humanQueue } = await import('../../../shared/attention/selectors')
@@ -333,7 +333,12 @@ function projected(live: ReturnType<typeof liveOf>[]) {
   const handoffs = store.list()
   return {
     handoffs,
-    attention: projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live }),
+    attention: projectAttention({
+      handoffs,
+      transitions: readTransitions(testDb, handoffs),
+      live,
+      ...readRequestInput(),
+    }),
   }
 }
 
@@ -368,7 +373,8 @@ describe('crewAttentionCount / orderCrew — fila única', () => {
     try {
       vi.setSystemTime(10_000)
       const r = child('r2', 'r')
-      store.ask(r.id, 'q')
+      // Retomada por progress é regra do needs_input legado (sem pedido tipado).
+      harness.legacyAsk(testDb, r.id, 'q')
       vi.setSystemTime(20_000)
       store.progress(r.id, 'segui')
     } finally {

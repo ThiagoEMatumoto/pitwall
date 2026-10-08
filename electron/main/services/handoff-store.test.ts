@@ -133,7 +133,7 @@ describe('handoff-store', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
-      const after = store.ask(h.id, 'qual versão do node?')
+      const after = store.ask(h.id, 'qual versão do node?').handoff
       expect(after.status).toBe('needs_input')
       expect(after.pendingQuestion).toBe('qual versão do node?')
       expect(after.questionAskedAt).not.toBeNull()
@@ -141,7 +141,7 @@ describe('handoff-store', () => {
 
     it('ask: NÃO transiciona fora do estado vivo (ex.: pending)', () => {
       const h = newHandoff() // pending
-      const after = store.ask(h.id, 'cedo demais')
+      const after = store.ask(h.id, 'cedo demais').handoff
       expect(after.status).toBe('pending')
       expect(after.pendingQuestion).toBeNull()
       expect(events(h.id).map((e) => e.event)).toEqual(['create'])
@@ -153,8 +153,8 @@ describe('handoff-store', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
-      const first = store.ask(h.id, 'qual lib de validação?')
-      const after = store.ask(h.id, 'e posso mexer no schema?')
+      const first = store.ask(h.id, 'qual lib de validação?').handoff
+      const after = store.ask(h.id, 'e posso mexer no schema?').handoff
 
       expect(after.status).toBe('needs_input')
       expect(after.pendingQuestion).toBe('qual lib de validação?\n\ne posso mexer no schema?')
@@ -166,6 +166,14 @@ describe('handoff-store', () => {
         'e posso mexer no schema?',
       ])
       expect(asks[1]).toMatchObject({ from_status: 'needs_input', to_status: 'needs_input' })
+      // Cada pergunta é um pedido próprio; pending_question é o espelho dos abertos.
+      const rows = testDb
+        .prepare("SELECT question, status FROM handoff_requests WHERE handoff_id = ? ORDER BY rowid")
+        .all(h.id)
+      expect(rows).toEqual([
+        { question: 'qual lib de validação?', status: 'open' },
+        { question: 'e posso mexer no schema?', status: 'open' },
+      ])
     })
 
     it('ask após resume começa uma pergunta NOVA (não empilha na já respondida)', () => {
@@ -174,7 +182,7 @@ describe('handoff-store', () => {
       store.markRunning(h.id, 's-child')
       store.ask(h.id, 'primeira')
       store.resume(h.id)
-      const after = store.ask(h.id, 'segunda')
+      const after = store.ask(h.id, 'segunda').handoff
       expect(after.pendingQuestion).toBe('segunda')
     })
 
@@ -183,7 +191,7 @@ describe('handoff-store', () => {
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
       store.ask(h.id, 'pergunta')
-      const after = store.resume(h.id)
+      const after = store.resume(h.id).handoff
       expect(after.status).toBe('running')
       expect(after.pendingQuestion).toBeNull()
       expect(after.questionAskedAt).toBeNull()
@@ -193,7 +201,7 @@ describe('handoff-store', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
-      const after = store.resume(h.id)
+      const after = store.resume(h.id).handoff
       expect(after.status).toBe('running')
     })
 
@@ -205,7 +213,7 @@ describe('handoff-store', () => {
       const h = newHandoff()
       store.approve(h.id, {})
       store.markRunning(h.id, 's-child')
-      const asked = store.ask(h.id, 'qual lib de validação?')
+      const asked = store.ask(h.id, 'qual lib de validação?').handoff
       const after = store.progress(h.id, 'segui pelo caminho A enquanto espero')
 
       expect(after.status).toBe('needs_input')
@@ -239,7 +247,7 @@ describe('handoff-store', () => {
       store.progress(h.id, 'passo 2')
       expect(store.get(h.id)?.pendingQuestion).toBe('pergunta')
 
-      const after = store.resume(h.id)
+      const after = store.resume(h.id).handoff
       expect(after.status).toBe('running')
       expect(after.pendingQuestion).toBeNull()
       expect(after.questionAskedAt).toBeNull()
@@ -613,7 +621,9 @@ describe('handoff-store', () => {
       store.resume(h.id) // needs_input → running
       store.report(h.id, 'feito') // running → done
 
-      const ev = events(h.id)
+      // Os eventos de pedido (request_*) são trilha do store de requests; aqui
+      // conferimos só as transições do handoff.
+      const ev = events(h.id).filter((e) => !e.event.startsWith('request_'))
       expect(ev.map((e) => e.event)).toEqual([
         'create',
         'approve',

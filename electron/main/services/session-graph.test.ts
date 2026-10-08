@@ -21,6 +21,7 @@ vi.mock('./live-session-states', () => ({ liveSessionStates: () => new Map() }))
 
 import * as handoffStore from './handoff-store'
 import { readAttentionInputFrom } from './attention/attention-service'
+import { legacyAsk } from './attention/attention-test-harness'
 import { projectAttention } from '../../../shared/attention/project-attention'
 import { tuiMenuWatch } from './tui-menu-watch'
 import {
@@ -421,7 +422,8 @@ describe('session-graph', () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       try {
         vi.setSystemTime(1_000_000)
-        handoffStore.ask(h, 'qual branch?')
+        // Retomada por progress é regra do needs_input legado (sem pedido tipado).
+        legacyAsk(testDb, h, 'qual branch?')
         vi.setSystemTime(1_005_000)
         handoffStore.progress(h, 'segui com main')
       } finally {
