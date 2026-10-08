@@ -692,6 +692,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
               // chat não monta. O menu da filha é respondido pelo painel acima
               // (menuItem), pelo caminho do main com checagem de menu-mudou.
               onToggleMode={live ? showTerminal : undefined}
+              menuAnsweredElsewhere={menuItem != null}
               emptyHint="Sem conversa ainda. Escreva abaixo para mandar a primeira mensagem."
             />
           ) : (
@@ -743,8 +744,9 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
               no xterm e parseado do buffer dele — sem xterm, o card é só leitura.
               Dizer isso na cara, com a saída ao lado, em vez de deixar o usuário
               clicando em algo inerte. */}
-          {answering && (
+          {answering && !menuItem && (
             <div
+              data-testid="crew-peek-terminal-only"
               className="mb-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
               style={{
                 borderColor: 'color-mix(in srgb, var(--color-warning) 45%, transparent)',

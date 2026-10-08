@@ -4,8 +4,12 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // O peek renderiza o ChatView, que puxa transcript por IPC — aqui só interessa a
 // moldura do overlay (camada, semântica de modal, teclado, selo).
+const { chatViewProps } = vi.hoisted(() => ({ chatViewProps: [] as Record<string, unknown>[] }))
 vi.mock('@/features/sessions/chat/ChatView', () => ({
-  ChatView: () => <div data-testid="chat-view" />,
+  ChatView: (props: Record<string, unknown>) => {
+    chatViewProps.push(props)
+    return <div data-testid="chat-view" />
+  },
 }))
 // O Terminal real monta xterm/WebGL (canvas, que o jsdom não tem). O que estes
 // testes travam é o CONTRATO do overlay com ele: que modo/chrome ele recebe.
@@ -120,6 +124,7 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
     useAppStore.setState({ panes: [] })
     sessionsApiMock.attentionMenu.mockReset()
     sessionsApiMock.attentionRespond.mockReset()
+    chatViewProps.length = 0
   })
 
   it('no chat, pedido de permissão vira botões que respondem pelo main', async () => {
@@ -148,6 +153,37 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
         action: { kind: 'select', optionIndex: 0 },
       }),
     )
+  })
+
+  it('com o painel Aprovar/Negar, nada manda responder só no terminal', async () => {
+    const menu = await realPermissionMenu()
+    sessionsApiMock.attentionMenu.mockResolvedValue({
+      sessionId: 's-child',
+      fingerprint: 'fp',
+      menuSeq: 3,
+      menu,
+    })
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({
+      liveSessions: [{ ...live, status: 'waiting', attentionReason: 'permission' }],
+    })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    await screen.findByTestId('attention-action-approve')
+    expect(screen.queryByTestId('crew-peek-terminal-only')).toBeNull()
+    expect(chatViewProps.at(-1)?.menuAnsweredElsewhere).toBe(true)
+  })
+
+  it('esperando sem menu respondível, o aviso de terminal continua', () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({ liveSessions: [{ ...live, status: 'waiting' }] })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(screen.queryByTestId('crew-peek-menu')).toBeNull()
+    expect(screen.getByTestId('crew-peek-terminal-only')).toHaveTextContent('só no terminal')
+    expect(chatViewProps.at(-1)?.menuAnsweredElsewhere).toBe(false)
   })
 
   it('sem menu na tela (fim de turno) não mostra o painel', () => {
