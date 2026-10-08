@@ -73,19 +73,21 @@ export function IconRail({ onOpenSettings }: Props) {
       <ul className="flex flex-col items-center gap-1">
         {AREAS.map((a) => {
           const active = a.id === area
+          const label =
+            a.id === 'projects' && waitingCount > 0
+              ? `${a.label} · ${waitingCount} aguardando você`
+              : a.id === 'room' && needsYou > 0
+                ? `${a.label} · ${needsYou} precisa de você`
+                : a.label
           return (
             <li key={a.id}>
               <button
                 type="button"
                 data-testid={`rail-${a.id}`}
                 onClick={() => (a.id === 'room' ? openRoomFromNav() : setArea(a.id))}
-                title={
-                  a.id === 'projects' && waitingCount > 0
-                    ? `${a.label} · ${waitingCount} aguardando você`
-                    : a.id === 'room' && needsYou > 0
-                      ? `${a.label} · ${needsYou} precisa de você`
-                      : a.label
-                }
+                title={label}
+                // Sem isto, o texto do badge vira o nome do botão e o "Room" some.
+                aria-label={label}
                 className={`relative flex h-[38px] w-[38px] items-center justify-center rounded-[11px] transition ${
                   active
                     ? 'text-[var(--color-text)]'
@@ -106,7 +108,7 @@ export function IconRail({ onOpenSettings }: Props) {
                 {a.id === 'room' && needsYou > 0 && (
                   <span
                     data-testid="rail-room-badge"
-                    aria-label={`${needsYou} precisa de você`}
+                    aria-hidden="true"
                     className="absolute right-[1px] top-[1px] min-w-[15px] rounded-full bg-[var(--color-accent)] px-1 text-center text-[9px] font-semibold leading-[15px] text-[var(--color-bg)] tabular-nums"
                   >
                     {needsYou}

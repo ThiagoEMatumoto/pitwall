@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { computeAccessibleName } from 'dom-accessibility-api'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -190,6 +191,9 @@ describe('IconRail → Room', () => {
     })
     expect(titleBarCount()).toBe('2')
     expect(railCount()).toBe(titleBarCount())
+    // O badge não pode virar o nome do botão: "Room" continua no nome acessível.
+    const roomButton = screen.getByTestId('rail-room')
+    expect(computeAccessibleName(roomButton)).toBe('Room · 2 precisa de você')
 
     // Corrida attention:changed antes do handoff:updated: a TitleBar some com o
     // item, e a rail junto (mesma fonte, não uma regra própria).
