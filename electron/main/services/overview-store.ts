@@ -1,5 +1,6 @@
 import { getDb } from './db'
 import { wakeHealth } from './handoff/handoff-wake'
+import { requestHealth } from './handoff-requests'
 import * as objectiveStore from './objective-store'
 import * as taskStore from './task-store'
 import { classifyDue, isPendingStatus, sortPendingTasks } from '../../../shared/pending'
@@ -184,5 +185,6 @@ export function getOverview(): OverviewData {
     counts,
     features: featureActivity(),
     handoffWake: wakeHealth({}, now),
+    handoffRequests: requestHealth({}, undefined, now),
   }
 }

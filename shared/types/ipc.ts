@@ -64,6 +64,7 @@ import type {
 export type * from './design'
 import type { DesignApi } from './design'
 import type { HandoffEvent, SessionGraph } from './session-graph'
+import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
 import type { AgentBusSnapshot } from './agent-bus'
 import type { SessionLinkPulse } from './session-link-pulse'
 import type {
@@ -1246,6 +1247,18 @@ export interface HandoffWakeHealth {
   lastUndeliveredAt: number | null
 }
 
+// Contador consumível dos pedidos human_only (lei do fail-closed). hidden = aberto
+// no banco, já visto por uma projeção, e fora da fila sem ninguém ter triado.
+export interface HandoffRequestHealth {
+  openHumanOnly: number
+  visibleHumanOnly: number
+  triagedHumanOnly: number
+  hiddenHumanOnly: number
+  oldestHiddenAt: number | null
+  // Quando a fila foi calculada pela última vez (null = ainda não foi).
+  projectedAt: number | null
+}
+
 export interface OverviewData {
   // Raízes (parent null) com status active|paused|done — archived fica fora.
   objectives: OverviewObjectiveNode[]
@@ -1257,6 +1270,7 @@ export interface OverviewData {
   // de sessões, ordenadas pela última sessão (fallback updated_at) desc.
   features: OverviewFeatureActivity[]
   handoffWake: HandoffWakeHealth
+  handoffRequests: HandoffRequestHealth
 }
 
 export interface ResumeSessionInput {
@@ -3070,6 +3084,11 @@ export interface Api {
     // handoff_ask). Resolve o childSessionId pelo handoffId; rejeita se a filha não
     // estiver viva. Injeta via bracketed-paste (com submit), não write cru.
     sendMessage(input: { id: string; text: string }): Promise<void>
+    // Resposta do humano a UM pedido tipado (Room). Resolve human_only.
+    answerRequest(input: AnswerHandoffRequestInput): Promise<HandoffRequest>
+    // Triagem da fila humana: só exibição (não muda handoff nem pedido).
+    dismissAttention(input: { dedupKey: string; requestId?: string }): Promise<void>
+    snoozeAttention(input: { dedupKey: string; requestId?: string; until: number }): Promise<void>
     spawnContext(id: string): Promise<HandoffSpawnContext>
     // Feedback humano sobre a utilidade de um handoff concluído (instrumentação).
     setOutcome(input: { id: string; outcome: HandoffOutcome }): Promise<Handoff>

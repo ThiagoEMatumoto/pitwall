@@ -8,6 +8,7 @@ import type {
   HandoffTransition,
   SessionMenuReason,
 } from '../types/attention'
+import type { HandoffRequest, RequestKind } from '../types/handoff-request'
 import type { Handoff } from '../types/ipc'
 
 // A ÚNICA regra de "precisa de você". Pura: sem relógio, sem I/O — o mesmo input
@@ -17,6 +18,7 @@ import type { Handoff } from '../types/ipc'
 
 const SEVERITY_RANK = { blocking: 0, action: 1, info: 2 } as const
 const TERMINAL = new Set(['done', 'failed', 'interrupted'])
+const ASKING_STATUS = new Set(['running', 'needs_input'])
 
 const alive = (s: AttentionLiveSession | undefined): s is AttentionLiveSession =>
   !!s && s.status !== 'ended'
@@ -54,14 +56,25 @@ export function projectAttention(input: AttentionInput): AttentionItem[] {
     items.push(sessionMenuItem(s, h))
   }
 
+  const withOpenRequest = new Set(input.requests.map((r) => r.handoffId))
   const byHandoff = new Map<string, AttentionItem>()
   for (const h of input.handoffs) {
     const t = input.transitions.get(h.id)
-    const item = handoffItem(h, t, live, menuSubjects)
+    const item = handoffItem(h, t, live, menuSubjects, withOpenRequest)
     if (item) {
       items.push(item)
       byHandoff.set(h.id, item)
     }
+  }
+
+  const handoffById = new Map(input.handoffs.map((h) => [h.id, h]))
+  for (const r of input.requests) {
+    const h = handoffById.get(r.handoffId)
+    if (!h || !ASKING_STATUS.has(h.status)) continue
+    // human_only não cede ao menu: só o humano resolve, e ele precisa ver os dois.
+    if (r.resolver !== 'human_only' && (menuSubjects.has(h.id) || !isLedByMother(h))) continue
+    const item = requestItem(r, h)
+    if (!input.dismissals.has(item.dedupKey)) items.push(item)
   }
 
   for (const h of input.handoffs) {
@@ -78,10 +91,14 @@ function handoffItem(
   t: HandoffTransition | undefined,
   live: LiveById,
   menuSubjects: ReadonlySet<string>,
+  withOpenRequest: ReadonlySet<string>,
 ): AttentionItem | null {
   // Menu na tela da filha já é o item do handoff (pergunta ou interrupção retomável).
   if (menuSubjects.has(h.id)) return null
-  if (isLedByMother(h) && handoffAsking(h)) return childQuestionItem(h)
+  // Com pedido aberto, o item é o request (um por pedido). child_question fica de
+  // rede de segurança para needs_input sem pedido (app antigo): nunca some calado.
+  if (isLedByMother(h) && handoffAsking(h))
+    return withOpenRequest.has(h.id) ? null : childQuestionItem(h)
   if (h.status === 'failed' && h.dismissedAt == null && inScope(h, live))
     return childFailedItem(h, t, live)
   if (h.status === 'interrupted' && isLedByMother(h)) return childInterruptedItem(h, t, live)
@@ -96,9 +113,14 @@ function inScope(h: Handoff, live: LiveById): boolean {
   return alive(live.get(h.motherSessionId ?? '')) || alive(live.get(h.childSessionId ?? ''))
 }
 
+// human_only vem antes dentro da mesma severidade: ninguém além do humano resolve,
+// e a Room abre o 1º item de cada sujeito.
+const humanOnlyRank = (i: AttentionItem): number => (i.request?.resolver === 'human_only' ? 0 : 1)
+
 function compareItems(a: AttentionItem, b: AttentionItem): number {
   return (
     SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+    humanOnlyRank(a) - humanOnlyRank(b) ||
     (a.createdAt ?? Infinity) - (b.createdAt ?? Infinity) ||
     a.dedupKey.localeCompare(b.dedupKey)
   )
@@ -164,6 +186,53 @@ function childQuestionItem(h: Handoff): AttentionItem {
     ...handoffBase(h),
     createdAt: h.questionAskedAt,
     actions,
+  }
+}
+
+const REQUEST_VERB: Record<RequestKind, string> = {
+  decision: 'precisa de uma decisão',
+  confirmation: 'pede confirmação',
+  human_action: 'precisa que você faça',
+  question: 'perguntou',
+}
+
+const REQUEST_EXIT =
+  'answer/reject por requestId (handoffs:answer-request ou handoff_answer), cancel no fim do handoff, dismiss/snooze (attention_dismissals)'
+
+function requestItem(r: HandoffRequest, h: Handoff): AttentionItem {
+  const dedupKey = `request:${r.id}`
+  const actions: AttentionItemAction[] = [{ kind: 'answer_request', requestId: r.id }]
+  if (h.childSessionId) actions.push({ kind: 'open_session', sessionId: h.childSessionId })
+  actions.push(
+    { kind: 'triage_dismiss', dedupKey, requestId: r.id },
+    { kind: 'triage_snooze', dedupKey, requestId: r.id },
+  )
+  const humanOnly = r.resolver === 'human_only'
+  return {
+    kind: 'request',
+    dedupKey,
+    whyNow: `${clip(h.task, 60)} ${REQUEST_VERB[r.kind]}: ${clip(r.question, 140)}${humanOnly ? ' — só você resolve' : ''}`,
+    entryRule: `handoff_requests.status='open' kind='${r.kind}'${r.kind === 'question' ? ' (inclui o backfill da 058)' : ''}`,
+    exitRule:
+      r.kind === 'human_action'
+        ? 'resposta registrada (feito/não feito) por requestId; cancel no fim do handoff; dismiss/snooze (attention_dismissals)'
+        : REQUEST_EXIT,
+    severity: 'blocking',
+    audience: 'human',
+    ...handoffBase(h),
+    createdAt: r.createdAt,
+    actions,
+    request: {
+      requestId: r.id,
+      kind: r.kind,
+      question: r.question,
+      options: r.options,
+      recommendation: r.recommendation,
+      costOfError: r.costOfError,
+      resolver: r.resolver,
+      risk: r.risk,
+      escalated: r.escalatedBy != null,
+    },
   }
 }
 

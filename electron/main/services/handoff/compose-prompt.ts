@@ -6,6 +6,7 @@
 
 import { describeEdge, type KindEdge } from '../architecture/kind-phrase'
 import type { AgentProviderId, HandoffMode } from '../../../../shared/types/ipc'
+import { HANDOFF_CHILD_ALLOW, PROTECTED_BRANCHES } from '../spawn-flags'
 
 // HandoffEdge é a aresta orientada ao repo-mãe (ver KindEdge no módulo compartilhado).
 //   'from-mother': a aresta sai do repo-mãe (mãe → este repo).
@@ -46,9 +47,26 @@ const TERMINAL_CHANNELS = [
   '- Você NÃO fala com outras sessões filhas. Coordenação cruzada é do orquestrador.',
 ]
 
+// Derivado do allow real da filha para o briefing não divergir da política: o
+// texto antigo proibia push/PR que o settings libera, e a filha travava no conflito.
+const PUSHABLE_BRANCH_PREFIXES = HANDOFF_CHILD_ALLOW.flatMap((rule) => {
+  const m = /^Bash\(git push origin ([\w-]+)\/\*\)$/.exec(rule)
+  return m ? [`${m[1]}/*`] : []
+})
+
+const PUBLISH_ALLOWED = `- [ ] Publicar é livre: \`git push -u origin <branch>\` com a branch EXPLÍCITA (${PUSHABLE_BRANCH_PREFIXES.join(', ')}) e \`gh pr create\`. \`git push\` sem nomear a branch pede confirmação.`
+
+const PUBLISH_FORBIDDEN = `- [ ] Proibido: push em branch protegida (${PROTECTED_BRANCHES.join(', ')}), force push, merge de PR (é da mãe/humano), deploy, migration destrutiva, alterar config global.`
+
+// plan é read-only (deny de commit/push no settings) e o Codex só sobe autônomo
+// em read-only (assertAutonomousSpawnGuarded): nada para publicar.
+const READ_ONLY_FORBIDDEN =
+  '- [ ] Proibido: commit, git push, criar PR, deploy, migration destrutiva, alterar config global.'
+
 export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const motherLabel = args.motherRepoLabel ?? 'origem'
-  const peerChannel = (args.provider ?? 'claude') === 'claude'
+  const provider = args.provider ?? 'claude'
+  const peerChannel = provider === 'claude'
 
   // O canal de volta NÃO depende de a filha saber quem é a mãe de antemão: ela
   // responde a quem escreveu primeiro (o `from` da <cross-session-message>).
@@ -79,7 +97,9 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
     '## Restrições',
     `- [ ] Investigar/implementar SOMENTE neste repo (${args.targetRepoLabel}, ${args.targetRepoPath}). Precisou de outro repo → BLOQUEIO para o orquestrador, não vá lá.`,
     '- [ ] Se algo não está no código real, diga "não encontrado" em vez de inferir.',
-    '- [ ] Proibido: git push, criar PR, deploy, migration destrutiva, alterar config global.',
+    ...(args.mode === 'plan' || provider !== 'claude'
+      ? [READ_ONLY_FORBIDDEN]
+      : [PUBLISH_ALLOWED, PUBLISH_FORBIDDEN]),
     '- [ ] Circuit breaker: 3 tentativas com abordagens DIFERENTES → BLOQUEIO, não a 4ª.',
   ]
   if (args.mode === 'plan') {
@@ -88,7 +108,7 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
     )
   } else if (args.mode === 'auto-edits') {
     restricoes.push(
-      '- [ ] Modo auto-edits: edições são aplicadas automaticamente; comandos destrutivos (rm, git push/reset --hard, force push) estão bloqueados.',
+      '- [ ] Modo auto-edits: edições são aplicadas automaticamente; `rm` pede confirmação; `rm -r`, `git reset --hard`, `git clean` e force push estão bloqueados.',
     )
   }
 
@@ -105,9 +125,17 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const decisao = [
     '## Quando precisar de decisão',
     '- Dentro do seu escopo: decida você e registre no summary.',
-    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}"${peerChannel ? ' e mande um SendMessage ao orquestrador' : ''}, no formato:`,
-    '  "BLOQUEIO: <1 linha> | OPÇÕES: A) … B) … | RECOMENDO: <A|B> porque <1 linha> | CUSTO DE ERRAR: <reversível|irreversível>"',
-    '- Depois PARE e espere. Não escolha sozinho e não invente requisito.',
+    `- Fora do escopo, ambiguidade material ou trade-off arquitetural: chame \`handoff_ask\` com handoffId="${args.handoffId}" e os campos estruturados${peerChannel ? ' (e avise o orquestrador por SendMessage)' : ''}:`,
+    '  - `kind`: decision | confirmation | human_action | question',
+    '  - `question`: o BLOQUEIO em 1 linha',
+    '  - `options`: [{ key: "A", label: "…" }, { key: "B", label: "…" }] (obrigatório em decision, 2 a 6)',
+    '  - `recommendation`: a key que você recomenda, e o porquê em 1 linha no detail da option',
+    '  - `costOfError`: o que acontece se errar e se é reversível',
+    '  - `risk`: "destructive_data" (migration destrutiva/dados) ou "deploy_infra_spend" (deploy/infra/gasto) quando for o caso; isso torna o pedido human_only e só o humano resolve',
+    '- Uma pergunta por chamada. Duas dúvidas = duas chamadas; cada uma é respondida separadamente.',
+    '- NUNCA pergunte só no terminal: pergunta fora do handoff_ask não existe para a mãe nem para o humano.',
+    '- A resposta chega como <pitwall-answer request-id="…">. Só retome o que ela libera; com outras pendentes, continue esperando.',
+    '- Depois de perguntar, PARE e espere. Não escolha sozinho e não invente requisito.',
   ]
 
   return [

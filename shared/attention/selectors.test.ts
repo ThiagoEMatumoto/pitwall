@@ -18,13 +18,13 @@ vi.mock('../../electron/main/services/live-session-states', () => ({
 }))
 
 const store = await import('../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../electron/main/services/attention/attention-service')
 const { buildSessionGraph, readSessionGraphInput } =
   await import('../../electron/main/services/session-graph')
 const harness = await import('../../electron/main/services/attention/attention-test-harness')
 const { projectAttention } = await import('./project-attention')
-const { countAttentionSubjects, humanQueue, itemsForFeature } = await import('./selectors')
+const { countAttentionSubjects, humanQueue, isAskItem, itemsForFeature } = await import('./selectors')
 const { buildSwitcherEntries } =
   await import('../../src/features/session-canvas/feature-switcher-model')
 
@@ -61,7 +61,12 @@ function surfaces(lives: Array<{ id: string; status: LiveStatus }>) {
   }>
   const live = rows.map((r) => toAttentionLive(r, states.get(r.id)!, null, null))
   const handoffs = store.list()
-  const items = projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live })
+  const items = projectAttention({
+    handoffs,
+    transitions: readTransitions(testDb, handoffs),
+    live,
+    ...readRequestInput(),
+  })
   const infos = live.map((s) => harness.toLiveInfo(testDb, s))
   const graph = buildSessionGraph({ ...readSessionGraphInput(testDb, states), attention: items })
   const inUse = new Set(graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId))
@@ -110,11 +115,30 @@ describe('itemsForFeature == needsYou do card da feature no Ctrl+`', () => {
       { id: 'A', status: 'working' },
       { id: 'B', status: 'working' },
     ])
-    expect(s.items.filter((i) => i.kind === 'child_question')).toHaveLength(2)
+    expect(s.items.filter((i) => i.kind === 'request')).toHaveLength(2)
     expect(countAttentionSubjects(s.room(F))).toBe(1)
     expect(countAttentionSubjects(s.room(F))).toBe(s.card(F))
     expect(countAttentionSubjects(s.room(G))).toBe(1)
     expect(countAttentionSubjects(s.room(G))).toBe(s.card(G))
+  })
+
+  it('humanQueue inclui request (kind produzido) e isAskItem o reconhece', () => {
+    store.ask(child('r1', 'A', F).id, {
+      kind: 'decision',
+      question: 'A ou B?',
+      options: [
+        { key: 'A', label: 'a' },
+        { key: 'B', label: 'b' },
+      ],
+    })
+    const s = surfaces([
+      { id: 'M', status: 'idle' },
+      { id: 'A', status: 'working' },
+    ])
+    const q = humanQueue(s.items)
+    expect(q.map((i) => i.kind)).toEqual(['request'])
+    expect(q.every(isAskItem)).toBe(true)
+    expect(countAttentionSubjects(s.room(F))).toBe(s.card(F))
   })
 
   it('filha interrompida sem nó vivo conta pela feature', () => {

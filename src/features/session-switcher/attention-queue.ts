@@ -1,6 +1,6 @@
 import { dockCrew } from '@/features/handoffs/crew'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
-import { humanQueue } from '../../../shared/attention/selectors'
+import { humanQueue, isAskItem } from '../../../shared/attention/selectors'
 import type {
   AttentionKind,
   AttentionItem as ProjectedAttentionItem,
@@ -50,14 +50,14 @@ export interface AttentionQueueInput extends SessionSurfacesInput {
 }
 
 function reasonOf(kind: AttentionKind): AttentionReason {
-  if (kind === 'child_question') return 'handoff-input'
+  if (isAskItem({ kind })) return 'handoff-input'
   if (kind === 'session_menu') return 'waiting'
   return 'crew'
 }
 
 // O porquê vem do mesmo item: o menu reconhecido na tela ou a pergunta do handoff.
 function detailOf(item: ProjectedAttentionItem): AttentionDetail | undefined {
-  if (item.kind === 'child_question') return 'handoff-input'
+  if (isAskItem(item)) return 'handoff-input'
   if (item.menuReason && item.menuReason !== 'unrecognized') return item.menuReason
   return undefined
 }

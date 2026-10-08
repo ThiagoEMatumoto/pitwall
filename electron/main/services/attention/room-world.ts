@@ -10,7 +10,7 @@ import type { Handoff, LiveSessionInfo } from '../../../../shared/types/ipc'
 import type { SessionGraph } from '../../../../shared/types/session-graph'
 import * as store from '../handoff-store'
 import { buildSessionGraph, readSessionGraphInput, type LiveSessionState } from '../session-graph'
-import { readTransitions, toAttentionLive } from './attention-service'
+import { readRequestInput, readTransitions, toAttentionLive } from './attention-service'
 import { toLiveInfo } from './attention-test-harness'
 
 export interface WorldLive {
@@ -28,7 +28,7 @@ export interface RoomWorld {
   graph: SessionGraph
 }
 
-export function roomWorld(db: Database.Database, lives: WorldLive[]): RoomWorld {
+export function roomWorld(db: Database.Database, lives: WorldLive[], now = Date.now()): RoomWorld {
   const states = new Map<string, LiveSessionState>(
     lives.map((l) => [l.id, { status: l.status, lastActivityAt: 1_000, name: null }]),
   )
@@ -51,6 +51,7 @@ export function roomWorld(db: Database.Database, lives: WorldLive[]): RoomWorld 
     handoffs,
     transitions: readTransitions(db, handoffs),
     live: attentionLive,
+    ...readRequestInput(now),
   })
   const live = attentionLive.map((s) => {
     const l = byId.get(s.sessionId)

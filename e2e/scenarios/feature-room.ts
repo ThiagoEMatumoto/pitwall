@@ -326,7 +326,7 @@ async function phaseStub(): Promise<void> {
     check((await openText()) === firstText, '4: K volta ao 1º')
 
     // Pergunta: abrir pela linha, Peek + Esc, depois responder pela Room.
-    const qRow = page.locator('[data-testid="room-queue-row"][data-kind="child_question"]')
+    const qRow = page.locator('[data-testid="room-queue-row"][data-kind="request"]')
     const collapsed = qRow.locator('button[aria-expanded="false"]')
     if (await collapsed.count()) await collapsed.click()
     await page.waitForTimeout(300)
@@ -350,7 +350,7 @@ async function phaseStub(): Promise<void> {
     await closeOverlays(page)
 
     await qRow.getByRole('textbox', { name: 'Resposta' }).fill('Pode, o índice novo já cobre.')
-    await qRow.getByRole('button', { name: 'Responder e retomar' }).click()
+    await qRow.getByRole('button', { name: 'Responder', exact: true }).click()
     const answered = await waitFor(
       page,
       'filha 0 running',

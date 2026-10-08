@@ -1,4 +1,10 @@
-import type { EffortLevel, Feature, FeatureLoopSnapshot, HandoffWakeHealth } from './ipc'
+import type {
+  EffortLevel,
+  Feature,
+  FeatureLoopSnapshot,
+  HandoffRequestHealth,
+  HandoffWakeHealth,
+} from './ipc'
 
 // Um vínculo feature → OKR já resolvido em títulos (feature_links + objectives/key_results).
 export interface RoomObjectiveLink {
@@ -30,6 +36,7 @@ export interface RoomSnapshot {
   timeline: RoomTimelineEvent[] // mais novo primeiro, LIMIT ROOM_TIMELINE_LIMIT
   loop: Pick<FeatureLoopSnapshot, 'pulse' | 'liveness' | 'issues'>
   wakeHealth: HandoffWakeHealth
+  requestHealth: HandoffRequestHealth
 }
 
 export const ROOM_TIMELINE_LIMIT = 200

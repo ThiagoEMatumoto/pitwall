@@ -55,6 +55,25 @@ export function seedSession(
   ).run(id, opts.repoId ?? 'r1', randomUUID(), Date.now(), opts.featureId ?? null)
 }
 
+// needs_input como o app antes da 058 deixava: pergunta só no espelho, sem linha em
+// handoff_requests. É o único estado escrito à mão aqui, e é de propósito: o store
+// atual não produz mais esse estado, e a rede de segurança (child_question) existe
+// justamente pra ele.
+export function legacyAsk(db: Database.Database, handoffId: string, question: string): void {
+  const now = Date.now()
+  const { status } = db.prepare('SELECT status FROM handoffs WHERE id = ?').get(handoffId) as {
+    status: string
+  }
+  db.prepare(
+    `UPDATE handoffs SET status = 'needs_input', pending_question = ?, question_asked_at = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(question, now, now, handoffId)
+  db.prepare(
+    `INSERT INTO handoff_events (id, handoff_id, from_status, to_status, event, detail, at)
+     VALUES (?, ?, ?, 'needs_input', 'ask', ?, ?)`,
+  ).run(randomUUID(), handoffId, status, question, now)
+}
+
 export function seedFeature(db: Database.Database, id: string): void {
   const now = Date.now()
   db.prepare(

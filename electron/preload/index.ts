@@ -116,6 +116,7 @@ import type {
   DesignAskInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
+import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
 import type { AttentionItem } from '../../shared/types/attention'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
@@ -382,6 +383,11 @@ const api: Api = {
       invoke('handoffs:mark-running', input),
     fail: (input: { id: string; error: string }) => invoke('handoffs:fail', input),
     sendMessage: (input: { id: string; text: string }) => invoke('handoffs:send-message', input),
+    answerRequest: (input: AnswerHandoffRequestInput) => invoke('handoffs:answer-request', input),
+    dismissAttention: (input: { dedupKey: string; requestId?: string }) =>
+      invoke('handoffs:dismiss-attention', input),
+    snoozeAttention: (input: { dedupKey: string; requestId?: string; until: number }) =>
+      invoke('handoffs:snooze-attention', input),
     setOutcome: (input: { id: string; outcome: HandoffOutcome }) =>
       invoke('handoffs:set-outcome', input),
     dismiss: (id: string) => invoke('handoffs:dismiss', id),

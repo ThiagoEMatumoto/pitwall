@@ -18,7 +18,7 @@ vi.mock('../../../electron/main/services/live-session-states', () => ({
 }))
 
 const store = await import('../../../electron/main/services/handoff-store')
-const { readTransitions, toAttentionLive } =
+const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const { buildSessionGraph, readSessionGraphInput } =
   await import('../../../electron/main/services/session-graph')
@@ -80,7 +80,12 @@ function world(
   })
   const handoffs = store.list()
   const attention = [
-    ...projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live }),
+    ...projectAttention({
+      handoffs,
+      transitions: readTransitions(testDb, handoffs),
+      live,
+      ...readRequestInput(),
+    }),
     ...(opts.extra ?? []),
   ]
   const infos = live.map((s) =>
@@ -274,7 +279,7 @@ describe('buildRoomView', () => {
       { id: 'M', status: 'idle' },
       { id: 'A', status: 'working' },
     ]
-    const real = world(lives).attention.find((i) => i.kind === 'child_question')!
+    const real = world(lives).attention.find((i) => i.kind === 'request')!
     const review: AttentionItem = {
       ...real,
       kind: 'review',
@@ -283,7 +288,7 @@ describe('buildRoomView', () => {
       handoffId: null,
     }
     const { view, card } = world(lives, { extra: [review] })
-    expect(view.queue.map((r) => r.head.kind)).toEqual(['child_question'])
+    expect(view.queue.map((r) => r.head.kind)).toEqual(['request'])
     expect(view.queue.flatMap((r) => r.also)).toEqual([])
     expect(card?.needsYou).toBe(view.needsYou)
   })

@@ -24,7 +24,15 @@ import type {
   SendPromptResult,
 } from '../../../../shared/types/send-prompt'
 
-export type WakeReason = 'asked' | 'reported' | 'failed' | 'interrupted' | 'spawn_failed'
+export type WakeReason =
+  | 'asked'
+  | 'reported'
+  | 'failed'
+  | 'interrupted'
+  | 'spawn_failed'
+  // Resposta/rejeição a um pedido (answer-delivery): mesmo ledger, fora do teto.
+  | 'answered'
+  | 'rejected'
 export type WakeOutcome =
   | 'queued' // na fila, esperando o fim do turno (transitório)
   | 'held' // na fila, segurado por menu/rascunho/tela não reconhecida (transitório)
@@ -92,6 +100,12 @@ export function setHandoffWakeQueue(q: WakeQueue | null): void {
   queue = q
 }
 
+// A entrega de respostas (answer-delivery) usa a MESMA fila; ela não tem setter
+// próprio pra não haver duas fontes da fila no boot.
+export function getWakeQueue(): WakeQueue | null {
+  return queue
+}
+
 export function __resetForTests(): void {
   queue = null
   pending.clear()
@@ -135,6 +149,9 @@ function renderPending(p: Pending): string {
 }
 
 function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boolean } {
+  if (reason === 'answered' || reason === 'rejected') {
+    return { body: 'Resposta a um pedido registrada: veja handoff_result.requests.', truncated: false }
+  }
   const raw =
     (reason === 'asked' ? h.pendingQuestion : reason === 'reported' ? h.summary : h.error) ?? ''
   if (raw.length <= WAKE_TEXT_CAP) return { body: raw, truncated: false }
@@ -143,7 +160,7 @@ function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boo
 
 // ---- ledger ----
 
-function insertRow(args: {
+export function insertRow(args: {
   wakeId: string
   handoffId: string
   mother: string | null
@@ -180,7 +197,8 @@ function wakesInLastHour(handoffId: string): number {
   const row = getDb()
     .prepare(
       `SELECT COUNT(DISTINCT wake_id) AS n FROM handoff_wake_deliveries
-        WHERE handoff_id = ? AND created_at > ? AND outcome <> 'capped'`,
+        WHERE handoff_id = ? AND created_at > ? AND outcome <> 'capped'
+          AND reason NOT IN ('answered','rejected')`,
     )
     .get(handoffId, Date.now() - HOUR_MS) as { n: number }
   return row.n

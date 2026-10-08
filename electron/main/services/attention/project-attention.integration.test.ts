@@ -1,8 +1,20 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyAllMigrations, scanFixture, seedRepos, seedSession } from './attention-test-harness'
+import {
+  applyAllMigrations,
+  legacyAsk,
+  scanFixture,
+  seedFeature,
+  seedRepos,
+  seedSession,
+} from './attention-test-harness'
 import { projectAttention } from '../../../../shared/attention/project-attention'
-import { countForLane, humanQueue } from '../../../../shared/attention/selectors'
+import {
+  countAttentionSubjects,
+  countForLane,
+  humanQueue,
+} from '../../../../shared/attention/selectors'
+import { loopSnapshot } from '../loop-snapshot'
 import type { LiveStatus, ScreenScan } from '../../../../shared/tui/attention-reason'
 import type { AttentionItem, AttentionLiveSession } from '../../../../shared/types/attention'
 
@@ -16,9 +28,11 @@ vi.mock('../session-activity', () => ({ buildSessionsFileIndex: () => new Map() 
 vi.mock('../live-session-states', () => ({ liveSessionStates: () => new Map() }))
 
 import * as store from '../handoff-store'
+import * as requestStore from '../handoff-requests'
 import {
   attentionCounters,
   projectAndCount,
+  readRequestInput,
   readTransitions,
   toAttentionLive,
 } from './attention-service'
@@ -56,7 +70,12 @@ function runningChild(repo: string, childSid: string) {
 
 function project(live: AttentionLiveSession[]): AttentionItem[] {
   const handoffs = store.list()
-  return projectAttention({ handoffs, transitions: readTransitions(testDb, handoffs), live })
+  return projectAttention({
+    handoffs,
+    transitions: readTransitions(testDb, handoffs),
+    live,
+    ...readRequestInput(),
+  })
 }
 
 function eventAt(handoffId: string, event: string): number {
@@ -82,10 +101,10 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
     vi.useRealTimers()
   })
 
-  it('1) ask sem progress posterior → 1 child_question com o relógio da pergunta', () => {
+  it('1) needs_input legado (sem pedido) sem progress posterior → 1 child_question com o relógio da pergunta', () => {
     const h = runningChild('r1', 'c1')
     vi.setSystemTime(T0 + 1_000)
-    store.ask(h.id, 'Qual branch?')
+    legacyAsk(testDb, h.id, 'Qual branch?')
     const asked = store.get(h.id)!
     const items = project([])
     expect(items).toHaveLength(1)
@@ -96,10 +115,10 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
     expect(items[0].actions.map((a) => a.kind)).toEqual(['send_message', 'open_session', 'dismiss'])
   })
 
-  it('2) ask e depois progress (relógio avançado) → 0 itens', () => {
+  it('2) needs_input legado e depois progress (relógio avançado) → 0 itens', () => {
     const h = runningChild('r1', 'c1')
     vi.setSystemTime(T0 + 1_000)
-    store.ask(h.id, 'Qual branch?')
+    legacyAsk(testDb, h.id, 'Qual branch?')
     vi.setSystemTime(T0 + 2_000)
     store.progress(h.id, 'segui com main')
     expect(store.get(h.id)!.status).toBe('needs_input')
@@ -158,6 +177,7 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
       handoffs: store.list(),
       transitions: new Map(),
       live: [liveOf('m', 'waiting', scan), liveOf('c1', 'working', null)],
+      ...readRequestInput(),
     }
     expect(JSON.stringify(projectAttention(input))).toBe(JSON.stringify(projectAttention(input)))
   })
@@ -169,7 +189,7 @@ describe('projectAttention — estado produzido pelo handoffStore real', () => {
     const scan = await scanFixture('permission-bash')
     // lastActivityAt 1_000 < questionAskedAt: o menu vem primeiro.
     const items = project([liveOf('m', 'waiting', scan)])
-    expect(items.map((i) => i.kind)).toEqual(['session_menu', 'child_question'])
+    expect(items.map((i) => i.kind)).toEqual(['session_menu', 'request'])
   })
 })
 
@@ -273,7 +293,7 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
     expect(project([liveOf('c1', 'idle', null)]).filter((i) => i.kind === 'pty_orphan')).toEqual([])
   })
 
-  it('10) dismiss tira child_question, child_failed e result_unconsumed', () => {
+  it('10) dismiss do handoff tira request, child_failed e result_unconsumed', () => {
     const q = runningChild('r1', 'c1')
     store.ask(q.id, 'q')
     const f = runningChild('r2', 'c2')
@@ -285,7 +305,7 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
       project(live)
         .map((i) => i.kind)
         .sort(),
-    ).toEqual(['child_failed', 'child_question', 'result_unconsumed'])
+    ).toEqual(['child_failed', 'request', 'result_unconsumed'])
     for (const id of [q.id, f.id, d.id]) store.dismiss(id)
     expect(project(live)).toEqual([])
   })
@@ -309,6 +329,7 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
     const items = projectAndCount({
       handoffs,
       transitions: readTransitions(testDb, handoffs),
+      ...readRequestInput(),
       live: [
         liveOf('s1', 'waiting', await scanFixture('permission-bash')),
         liveOf('s2', 'waiting', null),
@@ -321,6 +342,216 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
     expect(c.sessionMenuItems).toBe(2)
     expect(c.byKind.session_menu).toBe(2)
     expect(c.computedAt).toBe(T0)
+  })
+})
+
+describe('request — pedidos tipados pelo store real', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedRepos(testDb)
+    seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => {
+    testDb.close()
+    vi.useRealTimers()
+  })
+
+  function twoAsks() {
+    const h = runningChild('r1', 'c1')
+    vi.setSystemTime(T0 + 1_000)
+    const a = store.ask(h.id, {
+      kind: 'decision',
+      question: 'Qual banco?',
+      options: [
+        { key: 'A', label: 'Postgres' },
+        { key: 'B', label: 'SQLite', detail: 'já está no app' },
+      ],
+      recommendation: 'B',
+      costOfError: 'migração de dados depois',
+    }).request!
+    vi.setSystemTime(T0 + 2_000)
+    const b = store.ask(h.id, 'Pode renomear o módulo?').request!
+    return { h, a, b }
+  }
+
+  it('2 asks → 2 itens request do mesmo sujeito, sem child_question; a contagem é 1', () => {
+    const { h, a, b } = twoAsks()
+    const items = project([])
+    expect(items.map((i) => i.kind)).toEqual(['request', 'request'])
+    expect(items.map((i) => i.request?.requestId)).toEqual([a.id, b.id])
+    expect(new Set(items.map((i) => i.sessionId))).toEqual(new Set(['c1']))
+    expect(countAttentionSubjects(humanQueue(items))).toBe(1)
+    expect(items[0]).toMatchObject({
+      dedupKey: `request:${a.id}`,
+      severity: 'blocking',
+      audience: 'human',
+      handoffId: h.id,
+      createdAt: T0 + 1_000,
+      entryRule: "handoff_requests.status='open' kind='decision'",
+    })
+    expect(items[0].whyNow).toBe('task c1 precisa de uma decisão: Qual banco?')
+    expect(items[1].whyNow).toBe('task c1 perguntou: Pode renomear o módulo?')
+    expect(items[0].request).toEqual({
+      requestId: a.id,
+      kind: 'decision',
+      question: 'Qual banco?',
+      options: a.options,
+      recommendation: 'B',
+      costOfError: 'migração de dados depois',
+      resolver: 'mother',
+      risk: null,
+      escalated: false,
+    })
+    expect(items[0].actions).toEqual([
+      { kind: 'answer_request', requestId: a.id },
+      { kind: 'open_session', sessionId: 'c1' },
+      { kind: 'triage_dismiss', dedupKey: `request:${a.id}`, requestId: a.id },
+      { kind: 'triage_snooze', dedupKey: `request:${a.id}`, requestId: a.id },
+    ])
+  })
+
+  it('responder o 1º deixa 1 item; dispensar o 2º zera a fila sem mexer no handoff nem no pedido', () => {
+    const { h, a, b } = twoAsks()
+    requestStore.answerRequest(a.id, { choice: 'B', by: 'mother' })
+    expect(project([]).map((i) => i.request?.requestId)).toEqual([b.id])
+    expect(store.get(h.id)!.status).toBe('needs_input')
+    requestStore.dismissAttention(`request:${b.id}`, b.id)
+    expect(project([])).toEqual([])
+    expect(store.get(h.id)!.status).toBe('needs_input')
+    expect(requestStore.get(b.id)!.status).toBe('open')
+  })
+
+  it('snooze: até o prazo o item some; com o prazo vencido volta sozinho', () => {
+    const { b } = twoAsks()
+    requestStore.snoozeAttention(`request:${b.id}`, b.id, T0 + 60_000)
+    expect(project([]).map((i) => i.request?.requestId)).not.toContain(b.id)
+    vi.setSystemTime(T0 + 61_000)
+    expect(project([]).map((i) => i.request?.requestId)).toContain(b.id)
+    requestStore.snoozeAttention(`request:${b.id}`, b.id, T0 - 1)
+    expect(project([]).map((i) => i.request?.requestId)).toContain(b.id)
+  })
+
+  it('progress depois do ask não fecha o pedido (só resposta fecha)', () => {
+    const { h } = twoAsks()
+    vi.setSystemTime(T0 + 5_000)
+    store.progress(h.id, 'adiantando outra parte')
+    expect(project([]).map((i) => i.kind)).toEqual(['request', 'request'])
+  })
+
+  it('needs_input legado sem pedido → child_question (rede de segurança)', () => {
+    const h = runningChild('r1', 'c1')
+    legacyAsk(testDb, h.id, 'pergunta do app antigo')
+    expect(requestStore.listOpen({ handoffId: h.id })).toEqual([])
+    expect(project([]).map((i) => i.kind)).toEqual(['child_question'])
+  })
+
+  it('menu na tela vence o pedido comum, mas não o human_only (2 itens, 1 sujeito)', async () => {
+    const h = runningChild('r1', 'c1')
+    store.ask(h.id, 'q comum')
+    const scan = await scanFixture('permission-bash')
+    expect(project([liveOf('c1', 'waiting', scan)]).map((i) => i.kind)).toEqual(['session_menu'])
+    store.ask(h.id, {
+      kind: 'confirmation',
+      question: 'Deploy em prod?',
+      risk: 'deploy_infra_spend',
+    })
+    const items = project([liveOf('c1', 'waiting', scan)])
+    expect(items.map((i) => i.kind).sort()).toEqual(['request', 'session_menu'])
+    expect(items.find((i) => i.kind === 'request')!.whyNow).toBe(
+      'task c1 pede confirmação: Deploy em prod? — só você resolve',
+    )
+    expect(countAttentionSubjects(humanQueue(items))).toBe(1)
+  })
+
+  it('handoff dispensado esconde o pedido comum, mas não o human_only', () => {
+    const h = runningChild('r1', 'c1')
+    store.ask(h.id, 'comum')
+    const ho = store.ask(h.id, {
+      kind: 'human_action',
+      question: 'Rode o drop',
+      risk: 'destructive_data',
+    }).request!
+    store.dismiss(h.id)
+    expect(project([]).map((i) => i.request?.requestId)).toEqual([ho.id])
+    expect(project([])[0].whyNow).toBe(
+      'task c1 precisa que você faça: Rode o drop — só você resolve',
+    )
+  })
+
+  it('attentionCounters().byKind.request bate com os itens request', () => {
+    twoAsks()
+    const handoffs = store.list()
+    const items = projectAndCount({
+      handoffs,
+      transitions: readTransitions(testDb, handoffs),
+      live: [],
+      ...readRequestInput(),
+    })
+    expect(attentionCounters().byKind.request).toBe(
+      items.filter((i) => i.kind === 'request').length,
+    )
+    expect(attentionCounters().byKind.request).toBe(2)
+  })
+
+  function recompute() {
+    const handoffs = store.list()
+    return projectAndCount({
+      handoffs,
+      transitions: readTransitions(testDb, handoffs),
+      live: [],
+      ...readRequestInput(),
+    })
+  }
+
+  it('requestHealth: visível → escondido por regressão → triado (e o feature_health vê)', () => {
+    seedFeature(testDb, 'F')
+    seedSession(testDb, 'c1', { repoId: 'r1' })
+    const created = store.create({
+      targetRepoId: 'r1',
+      motherSessionId: 'm',
+      task: 'task c1',
+      composedPrompt: 'p',
+      featureId: 'F',
+    })
+    const h = store.markRunning(created.id, 'c1')
+    const r = store.ask(h.id, { question: 'Apago a tabela?', risk: 'destructive_data' }).request!
+    recompute()
+    expect(requestStore.requestHealth({ featureId: 'F' })).toMatchObject({
+      openHumanOnly: 1,
+      visibleHumanOnly: 1,
+      triagedHumanOnly: 0,
+      hiddenHumanOnly: 0,
+    })
+    const codes = () => loopSnapshot('F').issues.map((i) => i.code)
+    expect(codes()).not.toContain('human_only_hidden')
+    // Regressão simulada: o handoff sai do estado vivo sem cancelOpen.
+    testDb.prepare("UPDATE handoffs SET status = 'interrupted' WHERE id = ?").run(h.id)
+    vi.setSystemTime(T0 + 10_000)
+    recompute()
+    const hidden = requestStore.requestHealth({ featureId: 'F' })
+    expect(hidden).toMatchObject({ openHumanOnly: 1, visibleHumanOnly: 0, hiddenHumanOnly: 1 })
+    expect(hidden.oldestHiddenAt).toBe(r.createdAt)
+    expect(requestStore.requestHealth({ featureId: 'outra' }).openHumanOnly).toBe(0)
+    expect(codes()).toContain('human_only_hidden')
+    requestStore.dismissAttention(`request:${r.id}`, r.id)
+    expect(requestStore.requestHealth({})).toMatchObject({
+      triagedHumanOnly: 1,
+      hiddenHumanOnly: 0,
+    })
+    expect(codes()).not.toContain('human_only_hidden')
+  })
+
+  it('requestHealth: pedido mais novo que a última fila ainda não conta como escondido', () => {
+    recompute()
+    vi.setSystemTime(T0 + 1_000)
+    const h = runningChild('r1', 'c1')
+    store.ask(h.id, { question: 'Deploy?', risk: 'deploy_infra_spend' })
+    expect(requestStore.requestHealth({}).hiddenHumanOnly).toBe(0)
   })
 })
 

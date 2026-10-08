@@ -87,6 +87,8 @@ function seedCrewChild(status: LiveSessionInfo['status'] = 'waiting') {
     items: projectAttention({
       handoffs: useHandoffsStore.getState().handoffs,
       transitions: new Map(),
+      requests: [],
+      dismissals: new Map(),
       live: [
         {
           sessionId: 'child',

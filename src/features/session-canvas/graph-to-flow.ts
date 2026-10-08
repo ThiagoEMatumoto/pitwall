@@ -12,6 +12,7 @@ import {
   attentionSubjectKey,
   countAttentionSubjects,
   humanQueue,
+  isAskItem,
 } from '../../../shared/attention/selectors'
 import type { AttentionItem } from '../../../shared/types/attention'
 import type {
@@ -1127,7 +1128,7 @@ function graphEdges(
   // pergunta); a fila única já tirou a pergunta, a aresta segue a fila.
   const asking = attention
     ? new Set(
-        attention.flatMap((i) => (i.kind === 'child_question' && i.handoffId ? [i.handoffId] : [])),
+        attention.flatMap((i) => (isAskItem(i) && i.handoffId ? [i.handoffId] : [])),
       )
     : null
   const out: MapEdge[] = []

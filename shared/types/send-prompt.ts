@@ -12,6 +12,10 @@ export interface SendPromptInput {
   // Sessão de onde a mensagem saiu (o @alias digitado no composer de outra aba).
   // Só serve para a bolinha no fio do mapa, que sai quando a entrega acontece.
   fromSessionId?: string
+  // Só o main process liga (answer-delivery): a resposta a um pedido é o que a
+  // filha em needs_input espera, então passa pelo gate 'attention'. O IPC do
+  // renderer não aceita o campo (o schema zod o descarta).
+  bypassAttention?: boolean
 }
 
 export type SendPromptError =

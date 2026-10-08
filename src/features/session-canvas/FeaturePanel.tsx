@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { create } from 'zustand'
 import { Crown, Info, Pin, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { OpenRoomButton } from '@/features/feature-room/OpenRoomButton'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 import { FeaturePulse } from '@/features/features/FeaturePulse'
 import { FeatureSessions } from '@/features/features/FeatureSessions'
@@ -697,6 +698,7 @@ export function FeaturePanel({
             </span>
           )}
         </div>
+        <OpenRoomButton featureId={featureId} testId="feature-panel-open-room" className="mt-0.5" />
         <button
           type="button"
           data-testid="feature-panel-close"
