@@ -86,6 +86,13 @@ vi.mock('../handoff-store', () => ({
 }))
 vi.mock('../repo-dependency-store', () => ({ listByRepo: () => [] }))
 vi.mock('../notify', () => ({ broadcast: () => {} }))
+const wakes: unknown[][] = []
+vi.mock('./handoff-wake', () => ({
+  wakeMotherFor: (...args: unknown[]) => {
+    wakes.push(args)
+    return Promise.resolve()
+  },
+}))
 
 let transcript: string | null = '/home/u/.claude/projects/x/cc-1.jsonl'
 vi.mock('../transcript-path', () => ({ findTranscriptPath: () => transcript }))
@@ -150,6 +157,7 @@ beforeEach(() => {
   writes.length = 0
   markRunningCalls = []
   resumeCalls.length = 0
+  wakes.length = 0
   resumeError = null
   killError = null
   existingChildHandoff = null
@@ -293,6 +301,8 @@ describe('adoptSession — kill que falha não deixa estado intermediário', () 
     // failIfRunning é o caminho do RELANCE falho (recuperável); aqui não houve
     // relance nenhum, então nada de 'interrupted'.
     expect(failures).toHaveLength(0)
+    // A mãe nunca soube deste handoff: o wake leva o ator para o filtro de eco.
+    expect(wakes).toEqual([[created[0]!.id, 'failed', { actorSessionId: 'sess-mae' }]])
   })
 
   it('relance falho continua no caminho recuperável (não faz rollback)', async () => {

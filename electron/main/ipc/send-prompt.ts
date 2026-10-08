@@ -152,6 +152,7 @@ export function registerSendPromptIpc(): void {
   setHandoffWakeQueue({
     send: (input) => promptQueue.send(input),
     replaceText: (id, text) => promptQueue.replaceText(id, text),
+    cancel: (id) => promptQueue.cancel(id),
   })
   sweepOrphansOnBoot()
   setSendMessageObserver(recordChildDirectMessage)
