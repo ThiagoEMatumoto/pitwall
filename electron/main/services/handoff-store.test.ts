@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -1384,6 +1384,31 @@ describe('handoff-store — posse por diretório de trabalho', () => {
     rmSync(wt, { recursive: true, force: true })
     writer()
     expect(() => writer('gone')).toThrow(store.HandoffDuplicateError)
+  })
+
+  it('mesmo checkout por trailing slash, symlink ou worktree = raiz: uma chave só', () => {
+    const real = mkdtempSync(join(tmpdir(), 'wd-real-'))
+    const link = `${real}-link`
+    dirs.push(real, link)
+    symlinkSync(real, link)
+    testDb.prepare('UPDATE repos SET path = ? WHERE id = ?').run(`${real}/`, 'r1')
+    testDb.prepare('UPDATE repos SET path = ? WHERE id = ?').run(link, 'r2')
+    const first = writer()
+    expect(store.workDirOf(first.id)).toBe(real)
+    expect(() =>
+      store.create({ targetRepoId: 'r2', task: 't', composedPrompt: 'p', mode: 'auto-edits' }),
+    ).toThrow(store.HandoffDuplicateError)
+    const now = Date.now()
+    testDb
+      .prepare(
+        `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
+         VALUES ('froot', 'p1', 'froot', 'froot', 'in-progress', '/tmp/froot.md', ?, ?)`,
+      )
+      .run(now, now)
+    testDb
+      .prepare('INSERT INTO feature_repos (feature_id, repo_id, worktree_path) VALUES (?, ?, ?)')
+      .run('froot', 'r1', link)
+    expect(() => writer('froot')).toThrow(store.HandoffDuplicateError)
   })
 
   it('writer + filha plan no mesmo checkout: ambas nascem, nos dois sentidos', () => {

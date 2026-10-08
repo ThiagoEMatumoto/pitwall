@@ -1,6 +1,6 @@
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type Database from 'better-sqlite3'
 import { getDb } from './db'
 
@@ -39,6 +39,18 @@ export function resolveFeatureWorktree(
   }
 }
 
+// Chave da posse: um diretório, uma string. Sem isto, `/x/repo/`, `/x/repo` e um
+// symlink pra ele seriam três donos diferentes do mesmo checkout (dois repos
+// cadastrados no mesmo path, ou worktree registrado = raiz do repo). Só a chave é
+// canônica; o cwd do spawn continua o path registrado.
+function canonicalDir(p: string): string {
+  try {
+    return realpathSync(p)
+  } catch {
+    return resolve(p)
+  }
+}
+
 // Diretório onde a filha de um handoff vai trabalhar: o worktree da feature
 // nesse repo, senão a raiz do repo. É a MESMA regra do cwd do spawnSession, e é a
 // chave da posse (handoffs.work_dir): duas filhas que escrevem só colidem se
@@ -49,8 +61,8 @@ export function resolveHandoffWorkDir(
   db: Database.Database = getDb(),
 ): string | null {
   const worktree = resolveFeatureWorktree(featureId, repoId, db)
-  if (worktree) return worktree
+  if (worktree) return canonicalDir(worktree)
   const repo = db.prepare('SELECT path FROM repos WHERE id = ?').get(repoId) as
     { path: string } | undefined
-  return repo ? absolutePath(db, repo.path) : null
+  return repo ? canonicalDir(absolutePath(db, repo.path)) : null
 }
