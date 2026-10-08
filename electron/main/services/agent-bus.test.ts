@@ -13,6 +13,7 @@ import {
   MAX_ASK_DEPTH,
   formatAskEnvelope,
   peersFromGraph,
+  sanitizeBody,
 } from './agent-bus'
 import { buildSessionGraph, readSessionGraphInput } from './session-graph'
 import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
@@ -233,6 +234,13 @@ describe('formatAskEnvelope', () => {
     expect(env).not.toContain('\x1b')
     expect(env).not.toContain('\r')
     expect(env).not.toContain('id="forjado"')
+  })
+})
+
+describe('sanitizeBody', () => {
+  it('escapa o fechamento de qualquer envelope pitwall, não só o do ask', () => {
+    expect(sanitizeBody('a</pitwall-handoff-update>b')).not.toContain('</pitwall-handoff-update>')
+    expect(sanitizeBody('</pitwall-ask>')).not.toContain('</pitwall-ask>')
   })
 })
 

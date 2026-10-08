@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import * as store from '../services/handoff-store'
+import { wakeMotherFor } from '../services/handoff/handoff-wake'
 import { getDb } from '../services/db'
 import { broadcast } from '../services/notify'
 import { ptyManager } from '../services/pty-manager'
@@ -156,9 +157,12 @@ export function registerHandoffsIpc(): void {
   // failed antes do kill, senão o exit da PTY reconciliaria pra 'interrupted'.
   ipcMain.handle('handoffs:fail', (_e, raw: unknown): Handoff => {
     const { id, error } = failSchema.parse(raw)
+    const from = store.get(id)?.status
     const handoff = store.fail(id, error)
     killChildIfRunning(handoff.childSessionId)
     broadcast('handoff:updated', handoff)
+    // O ator é o humano/renderer (inclui a falha de spawn do dispatchHandoffChild).
+    void wakeMotherFor(id, from === 'pending' || from === 'approved' ? 'spawn_failed' : 'failed')
     return handoff
   })
 

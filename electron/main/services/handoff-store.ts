@@ -291,6 +291,14 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
   return fresh(id)
 }
 
+// Evento avulso na trilha, sem mudar status (ex.: child_direct_message). No-op se
+// o handoff não existe.
+export function recordEvent(handoffId: string, event: string, detail: string | null): void {
+  const s = currentStatus(handoffId)
+  if (s === null) return
+  logEvent(handoffId, event, s, s, detail)
+}
+
 export function get(id: string): Handoff | null {
   const row = getRow(id)
   return row ? toEntity(row) : null
@@ -316,20 +324,42 @@ export function childAlias(childSessionId: string | null): string | null {
   return row?.title ?? null
 }
 
-export function list(opts?: { status?: HandoffStatus | HandoffStatus[] }): Handoff[] {
-  const db = getDb()
-  let rows: HandoffRow[]
+interface ListFilter {
+  status?: HandoffStatus | HandoffStatus[]
+  // Só os handoffs que esta sessão despachou.
+  motherSessionId?: string
+}
+
+function listWhere(opts?: ListFilter): { whereSql: string; params: Array<string | number> } {
+  const where: string[] = []
+  const params: Array<string | number> = []
   if (opts?.status !== undefined) {
     const statuses = Array.isArray(opts.status) ? opts.status : [opts.status]
-    const placeholders = statuses.map(() => '?').join(', ')
-    rows = db
-      .prepare(
-        `${SELECT_HANDOFF} WHERE h.status IN (${placeholders}) ORDER BY h.created_at DESC`,
-      )
-      .all(...statuses) as HandoffRow[]
-  } else {
-    rows = db.prepare(`${SELECT_HANDOFF} ORDER BY h.created_at DESC`).all() as HandoffRow[]
+    where.push(`h.status IN (${statuses.map(() => '?').join(', ')})`)
+    params.push(...statuses)
   }
+  if (opts?.motherSessionId !== undefined) {
+    where.push('h.mother_session_id = ?')
+    params.push(opts.motherSessionId)
+  }
+  return { whereSql: where.length ? ` WHERE ${where.join(' AND ')}` : '', params }
+}
+
+export function count(opts?: ListFilter): number {
+  const { whereSql, params } = listWhere(opts)
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM handoffs h${whereSql}`)
+    .get(...params) as { n: number }
+  return row.n
+}
+
+export function list(opts?: ListFilter & { limit?: number }): Handoff[] {
+  const { whereSql, params } = listWhere(opts)
+  const limitSql = opts?.limit !== undefined ? ' LIMIT ?' : ''
+  if (opts?.limit !== undefined) params.push(opts.limit)
+  const rows = getDb()
+    .prepare(`${SELECT_HANDOFF}${whereSql} ORDER BY h.created_at DESC${limitSql}`)
+    .all(...params) as HandoffRow[]
   return rows.map(toEntity)
 }
 
@@ -554,7 +584,10 @@ export function failIfRunning(id: string, error: string): Handoff | null {
 // Fica de fora a sessão que entretanto virou filha de OUTRO handoff ativo (bastão,
 // adoção): ela não é mais deste desfecho.
 // Retorna o nº de handoffs reconciliados (interrompidos + filhas falhadas mortas).
-export function reconcileStuck(killChildPty?: (childSessionId: string) => void): number {
+export function reconcileStuck(
+  killChildPty?: (childSessionId: string) => void,
+  onInterrupted?: (handoffId: string) => void,
+): number {
   const db = getDb()
   const error = 'Sessão-filha encerrada sem reportar conclusão'
   // UPDATE em lote: SELECionar os ids + status ANTES, pra capturar o from_status
@@ -578,6 +611,7 @@ export function reconcileStuck(killChildPty?: (childSessionId: string) => void):
     .run(error, Date.now())
   for (const h of stuck) {
     logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
+    onInterrupted?.(h.id)
   }
   return res.changes + (killChildPty ? killFailedChildren(killChildPty) : 0)
 }

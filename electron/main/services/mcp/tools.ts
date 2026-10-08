@@ -23,6 +23,8 @@ import * as featureStore from '../feature-store'
 import { FEATURE_SECTIONS, USER_OWNED_SECTIONS } from '../../../../shared/feature-sections'
 import * as repoDepStore from '../repo-dependency-store'
 import * as handoffStore from '../handoff-store'
+import { waitForUpdates, wakeMotherFor } from '../handoff/handoff-wake'
+import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
@@ -707,6 +709,13 @@ const handoffStatusEnum = z.enum([
 
 const handoffListSchema = z.object({
   status: z.union([handoffStatusEnum, z.array(handoffStatusEnum)]).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  scope: z.enum(['mine', 'all']).optional(),
+})
+
+const handoffWaitSchema = z.object({
+  handoffIds: z.array(z.string().min(1)).max(50).optional(),
+  waitSeconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
 })
 
 const handoffReportSchema = z.object({
@@ -821,7 +830,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
 
         // Reconcilia órfãos ANTES do dedup: filha morta/crashada não pode barrar
         // um despacho novo pro mesmo repo-alvo como falso-ativo.
-        handoffStore.reconcileStuck()
+        // A mãe chamadora pode ter filhas de outros repos entre as órfãs: elas
+        // ficam sabendo pelo wake (o filtro de eco não vale, ela não foi a autora).
+        handoffStore.reconcileStuck(undefined, (id) => void wakeMotherFor(id, 'interrupted'))
 
         const target = resolveRepo(input.targetRepo)
         const from = input.fromRepo ? resolveRepo(input.fromRepo) : null
@@ -971,6 +982,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           const msg = err instanceof Error ? err.message : String(err)
           const failed = handoffStore.fail(handoffId, msg)
           notify.broadcast('handoff:updated', failed)
+          // Eco no caso normal (a mãe recebe o erro neste retorno): o filtro decide.
+          // Sem carimbo (config legada) vira linha not_running no ledger.
+          void wakeMotherFor(handoffId, 'spawn_failed', { actorSessionId: ctx.motherSessionId })
           return ok({
             handoffId,
             alias: null,
@@ -984,7 +998,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_result',
       title: 'Poll handoff result',
       description:
-        'Read the durable state and live TELEMETRY of one handoff — not the conversation channel (that is SendMessage to the child alias). Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus { liveStatus, lastActivityAt, lastText, tokens }, which cross-session messaging does NOT give you: liveStatus (working|waiting|idle|ended) reflects the child PTY in real time, so it is how you tell genuine progress from a stall. status=needs_input means the child raised a blocker (pendingQuestion) — answer it over SendMessage, or with handoff_message as fallback. needs_input only clears when the answer goes through handoff_message or the app inbox; the child reporting progress does NOT clear it, so a needs_input whose currentStep keeps advancing means the child already got your answer off-band and resumed. Read this at supervision ticks; do not busy-poll in place of talking to the child.',
+        'Read the durable state and live TELEMETRY of one handoff — not the conversation channel (that is SendMessage to the child alias). Returns { status, currentStep, stepUpdatedAt, pendingQuestion, summary, error } plus { liveStatus, lastActivityAt, lastText, tokens }, which cross-session messaging does NOT give you: liveStatus (working|waiting|idle|ended) reflects the child PTY in real time, so it is how you tell genuine progress from a stall. status=needs_input means the child raised a blocker (pendingQuestion) — answer it over SendMessage, or with handoff_message as fallback. needs_input only clears when the answer goes through handoff_message or the app inbox; the child reporting progress does NOT clear it, so a needs_input whose currentStep keeps advancing means the child already got your answer off-band and resumed. Read this when a <pitwall-handoff-update> arrives or you need detail; do not busy-poll in place of talking to the child.',
       inputSchema: handoffResultSchema,
       handler: (args) => {
         const { handoffId } = handoffResultSchema.parse(args)
@@ -1056,7 +1070,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_ask',
       title: 'Ask the mother a question',
       description:
-        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Asking again before the mother answers STACKS the new question onto the pending one (nothing is dropped). Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
+        'Called by the CHILD session when it hits a blocker it must NOT decide alone (out-of-scope work, material ambiguity, architectural trade-off, missing credential). Records the question and moves the handoff to needs_input — the durable half of the blocker. Asking again before the mother answers STACKS the new question onto the pending one (nothing is dropped). Send the same blocker to your orchestrator over SendMessage too (real-time half), then STOP and wait. The mother is woken automatically at the end of her turn. Do NOT use for routine progress (handoff_progress) or completion (handoff_report).',
       inputSchema: handoffAskSchema,
       handler: (args) => {
         const { handoffId, question } = handoffAskSchema.parse(args)
@@ -1070,6 +1084,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           toSessionId: updated.motherSessionId,
           kind: 'question',
         })
+        // Toda pergunta acorda (inclusive a empilhada); o coalescing junta.
+        if (updated.status === 'needs_input')
+          void wakeMotherFor(handoffId, 'asked', { actorSessionId: ctx.motherSessionId })
         return ok({
           status: updated.status,
           pendingQuestion: updated.pendingQuestion,
@@ -1080,27 +1097,49 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_list',
       title: 'List handoffs',
       description:
-        'List handoffs (optionally filtered by status), most recent first. Returns { handoffId, alias, targetRepo, status, mode, currentStep, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
+        'Lists YOUR handoffs (the ones this session dispatched) by default — pass scope "all" to see every handoff — optionally filtered by status, most recent first, up to limit (default 20, max 100). When more match than limit, truncated is true and total says how many exist — raise limit or filter by status to see the rest. Returns { items, truncated, total }, each item { handoffId, alias, targetRepo, status, mode, currentStep, pendingQuestion, task }. `alias` is the child session name (e.g. "mauricio-auth-refactor") — it is the ADDRESS for SendMessage({ to: alias }), so use it to talk to a running child in real time. null when the child has not spawned (or already died). This is the source of truth for the roster: prefer it over ListAgents, which also lists sessions that are not yours.',
       inputSchema: handoffListSchema,
       handler: (args) => {
-        const { status } = handoffListSchema.parse(args)
-        const items = handoffStore.list(status ? { status } : undefined).map((h) => ({
-          handoffId: h.id,
-          alias: handoffStore.childAlias(h.childSessionId),
-          targetRepo: h.targetRepoLabel,
-          status: h.status,
-          mode: h.mode,
-          currentStep: h.currentStep,
-          task: h.task,
-        }))
-        return ok({ items })
+        const { status, limit = 20, scope = 'mine' } = handoffListSchema.parse(args)
+        // Sem carimbo (config legada) não há identidade para filtrar: todos, como antes.
+        const mine = scope === 'mine' && ctx.motherSessionId ? ctx.motherSessionId : undefined
+        const total = handoffStore.count({ status, motherSessionId: mine })
+        const items = handoffStore
+          .list({ status, motherSessionId: mine, limit })
+          .map((h) => ({
+            handoffId: h.id,
+            alias: handoffStore.childAlias(h.childSessionId),
+            targetRepo: h.targetRepoLabel,
+            status: h.status,
+            mode: h.mode,
+            currentStep: h.currentStep,
+            pendingQuestion: h.pendingQuestion,
+            task: h.task,
+          }))
+        return ok({ items, truncated: total > items.length, total })
+      },
+    },
+    {
+      name: 'handoff_wait',
+      title: 'Wait for updates from your children',
+      description:
+        'Fallback when Pitwall cannot type the <pitwall-handoff-update> into your REPL: you are a Codex session (no screen mirror) or you are yourself a child blocked in needs_input. Returns the child updates (asked/reported/failed/interrupted) not yet fetched, waiting up to waitSeconds (max 60) for the next one. Claude mothers are woken automatically at the end of their turn and do NOT need this. Never call it in a loop: one call per stretch of work.',
+      inputSchema: handoffWaitSchema,
+      handler: async (args) => {
+        const { handoffIds, waitSeconds = 0 } = handoffWaitSchema.parse(args)
+        if (!ctx.motherSessionId)
+          throw new Error(
+            'handoff_wait exige a identidade da sessão (config MCP por sessão do Pitwall).',
+          )
+        const res = await waitForUpdates(ctx.motherSessionId, { handoffIds, waitSeconds })
+        return ok(res as unknown as Record<string, unknown>)
       },
     },
     {
       name: 'handoff_progress',
       title: 'Report handoff progress',
       description:
-        'Called by the CHILD session to report a NON-TERMINAL progress step (does NOT mark done). Use this throughout the work so the mother’s polls are informative. It does NOT close a blocker you raised with handoff_ask: the handoff stays needs_input until the mother answers. Only handoff_report marks the work done.',
+        'Called by the CHILD session to report a NON-TERMINAL progress step (does NOT mark done). Use this throughout the work so handoff_result stays informative; progress does NOT wake the mother. It does NOT close a blocker you raised with handoff_ask: the handoff stays needs_input until the mother answers. Only handoff_report marks the work done.',
       inputSchema: handoffProgressSchema,
       handler: (args) => {
         const { handoffId, step } = handoffProgressSchema.parse(args)
@@ -1134,7 +1173,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_report',
       title: 'Report handoff result',
       description:
-        'Called by the CHILD session ONLY when the handed-off work is fully complete AND verified (tests/typecheck pass). Records the summary and marks the handoff done. Do NOT call this before the work is actually finished — use handoff_progress for interim updates.',
+        'Called by the CHILD session ONLY when the handed-off work is fully complete AND verified (tests/typecheck pass). Records the summary and marks the handoff done. The mother is woken automatically. Do NOT call this before the work is actually finished — use handoff_progress for interim updates.',
       inputSchema: handoffReportSchema,
       handler: (args) => {
         const { handoffId, summary } = handoffReportSchema.parse(args)
@@ -1148,6 +1187,9 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           toSessionId: updated.motherSessionId,
           kind: 'report',
         })
+        // Só a 1ª transição para done acorda: o report duplicado não é notícia.
+        if (existing.status !== 'done' && updated.status === 'done')
+          void wakeMotherFor(handoffId, 'reported', { actorSessionId: ctx.motherSessionId })
         // Segundo report no mesmo handoff: o store preserva o summary original e
         // guarda este na trilha. Avisa em vez de responder um 'done' que finge
         // sucesso — antes o resultado duplicado sumia silenciosamente.

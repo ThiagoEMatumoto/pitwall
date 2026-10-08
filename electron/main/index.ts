@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { getDb, closeDb } from './services/db'
 import { ptyManager } from './services/pty-manager'
 import * as handoffStore from './services/handoff-store'
+import { wakeMotherFor } from './services/handoff/handoff-wake'
 import {
   sessionActivityService,
   setSessionGoneHook,
@@ -379,7 +380,8 @@ app.whenReady().then(async () => {
   // runtime (PTY exit pode não ter disparado a reconciliação). Não bloqueia o
   // boot e é idempotente — a query só toca handoffs órfãos.
   handoffReconcileTimer = setInterval(
-    () => handoffStore.reconcileStuck(killChildIfRunning),
+    () =>
+      handoffStore.reconcileStuck(killChildIfRunning, (id) => void wakeMotherFor(id, 'interrupted')),
     HANDOFF_RECONCILE_INTERVAL_MS,
   )
 

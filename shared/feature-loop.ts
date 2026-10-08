@@ -131,6 +131,12 @@ export interface LoopInput extends LoopActivityInput {
    * igual ao resto: o que se guarda é o candidato, a issue segue derivada aqui.
    */
   duplicateSuspect?: LoopDuplicateSuspect | null
+  /**
+   * Avisos de handoff à mãe nas últimas 24h (ledger handoff_wake_deliveries).
+   * missing = eventos de handoff sem nenhuma tentativa de wake (gancho que não
+   * disparou). Ausente/null = projeção não carregou.
+   */
+  handoffWake?: { attempted: number; delivered: number; undelivered: number; missing?: number } | null
 }
 
 // ---- Atividade ----
@@ -259,6 +265,30 @@ export function issuesOf(input: LoopInput): LoopIssue[] {
   // carrega os repos, e um info-level "sem repo" é um empurrão, não um veredito.
   if ((input.repos ?? []).length === 0) {
     issues.push({ level: 'info', code: 'no_repo_linked', message: 'Nenhum repo vinculado à feature.' })
+  }
+
+  const wake = input.handoffWake
+  if (wake && wake.undelivered > 0) {
+    issues.push(
+      wake.delivered === 0 && wake.attempted > 0
+        ? {
+            level: 'error',
+            code: 'handoff_wake_suppressed',
+            message: `Nenhum dos ${wake.attempted} avisos de handoff das últimas 24h chegou à mãe.`,
+          }
+        : {
+            level: 'warn',
+            code: 'handoff_wake_undelivered',
+            message: `${wake.undelivered} de ${wake.attempted} avisos de handoff não chegaram à mãe em 24h.`,
+          },
+    )
+  }
+  if (wake?.missing) {
+    issues.push({
+      level: 'warn',
+      code: 'handoff_wake_missing',
+      message: `${wake.missing} eventos de handoff das últimas 24h não tentaram avisar a mãe.`,
+    })
   }
 
   return issues

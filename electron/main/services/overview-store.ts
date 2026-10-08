@@ -1,4 +1,5 @@
 import { getDb } from './db'
+import { wakeHealth } from './handoff/handoff-wake'
 import * as objectiveStore from './objective-store'
 import * as taskStore from './task-store'
 import { classifyDue, isPendingStatus, sortPendingTasks } from '../../../shared/pending'
@@ -177,5 +178,11 @@ export function getOverview(): OverviewData {
     overdue: pending.filter((t) => classifyDue(t.dueDate, now) === 'overdue').length,
   }
 
-  return { objectives: roots, pending, counts, features: featureActivity() }
+  return {
+    objectives: roots,
+    pending,
+    counts,
+    features: featureActivity(),
+    handoffWake: wakeHealth({}, now),
+  }
 }
