@@ -53,6 +53,7 @@ import * as sessionCanvas from './051_session_canvas'
 import * as agentMessages from './052_agent_messages'
 import * as sessionsFeatureSource from './053_sessions_feature_source'
 import * as handoffActiveTargetIdx from './054_handoff_active_target_idx'
+import * as handoffWakeDeliveries from './055_handoff_wake_deliveries'
 import * as attentionResponses from './056_attention_responses'
 
 interface Migration {
@@ -122,6 +123,7 @@ export const migrations: Migration[] = [
   agentMessages,
   sessionsFeatureSource,
   handoffActiveTargetIdx,
+  handoffWakeDeliveries,
   attentionResponses,
 ]
 
