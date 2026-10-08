@@ -295,3 +295,58 @@ describe('wake da mãe pelos handlers reais', () => {
     expect(writes.filter((w) => w.id === MOTHER)).toEqual([])
   })
 })
+
+describe('handoff_list por mãe', () => {
+  it('a mother-1 não vê o handoff da mother-2; limit corta', async () => {
+    await dispatch('api')
+    await dispatch('web')
+    seedRepo('outro')
+    const other = await callAs<{ handoffId: string }>('mother-2', 'session_handoff', {
+      targetRepo: 'outro',
+      task: 'da outra mãe',
+      mode: 'plan',
+    })
+    const mine = await callAs<{ items: Array<{ handoffId: string }> }>(MOTHER, 'handoff_list', {})
+    expect(mine.items).toHaveLength(2)
+    expect(mine.items.map((i) => i.handoffId)).not.toContain(other.handoffId)
+    const one = await callAs<{ items: unknown[] }>(MOTHER, 'handoff_list', { limit: 1 })
+    expect(one.items).toHaveLength(1)
+    const all = await callAs<{ items: unknown[] }>(MOTHER, 'handoff_list', { scope: 'all' })
+    expect(all.items).toHaveLength(3)
+  })
+})
+
+describe('handoff_wait (fallback pull)', () => {
+  type Wait = { updates: Array<{ handoffId: string; reason: string; body: string }>; timedOut: boolean }
+
+  it('mãe sem espelho: o ask já ocorrido volta de imediato e não volta de novo', async () => {
+    const { handoffId, child } = await dispatch('api')
+    mother.scan = null
+    await callAs(child, 'handoff_ask', { handoffId, question: 'qual banco?' })
+    await settle()
+    expect(rows()).toMatchObject([{ outcome: 'no_screen', fetched_at: null }])
+
+    const first = await callAs<Wait>(MOTHER, 'handoff_wait', {})
+    expect(first.updates).toMatchObject([{ handoffId, reason: 'asked', body: 'qual banco?' }])
+    expect(rows()[0].fetched_at).toEqual(expect.any(Number))
+
+    const second = await callAs<Wait>(MOTHER, 'handoff_wait', { waitSeconds: 0 })
+    expect(second.updates).toEqual([])
+  })
+
+  it('espera pendente resolve com o ask da filha antes do prazo', async () => {
+    const { handoffId, child } = await dispatch('api')
+    mother.scan = null
+    const pending = callAs<Wait>(MOTHER, 'handoff_wait', { waitSeconds: 30 })
+    await settle()
+    await callAs(child, 'handoff_ask', { handoffId, question: 'e o deploy?' })
+    await settle()
+    const res = await pending
+    expect(res.timedOut).toBe(false)
+    expect(res.updates).toMatchObject([{ handoffId, reason: 'asked' }])
+  })
+
+  it('sem carimbo: erro legível', async () => {
+    await expect(callAs(null, 'handoff_wait', {})).rejects.toThrow(/identidade da sessão/)
+  })
+})
