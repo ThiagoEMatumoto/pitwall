@@ -1,13 +1,20 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
-import initSqlJs from 'sql.js'
 import { launchApp, writeCopyPrefs } from '../driver/launch'
 import { captureLogs } from '../driver/capture'
+import {
+  cleanCopy,
+  closeOverlays,
+  liveGlobal,
+  mcpAs,
+  projectionOf,
+  spawnSession,
+  waitFor as seedWaitFor,
+  type LiveRow,
+} from '../driver/crew-seed'
 import { createFakeHome, type FakeSessionEntry } from '../driver/fake-home'
-import { connectMcp } from '../driver/mcp'
 import { queryDb } from '../driver/inspect'
 import { goToArea, waitReady } from '../driver/nav'
 
@@ -29,7 +36,6 @@ import { goToArea, waitReady } from '../driver/nav'
 const SHOTS = process.env.ATTN_SHOTS ?? join(tmpdir(), `attn-projection-${Date.now()}`)
 mkdirSync(SHOTS, { recursive: true })
 const SANDBOX = process.env.ATTN_SANDBOX
-const nodeRequire = createRequire(import.meta.url)
 const out: { states: Capture[]; checks: Array<{ ok: boolean; label: string }>; notes: string[] } = {
   states: [],
   checks: [],
@@ -56,68 +62,8 @@ function check(ok: boolean, label: string): void {
   console.log(`[attn] ${ok ? 'PASS' : 'FAIL'} — ${label}`)
 }
 
-async function waitFor(page: Page, label: string, fn: () => Promise<boolean>, timeoutMs = 30_000) {
-  const started = Date.now()
-  for (;;) {
-    if (await fn().catch(() => false)) return true
-    if (Date.now() - started > timeoutMs) {
-      out.notes.push(`timeout: ${label}`)
-      console.log(`[attn] timeout esperando: ${label}`)
-      return false
-    }
-    await page.waitForTimeout(300)
-  }
-}
-
-// O length da projeção na unidade de toda superfície (attentionSubjectKey).
-async function projectionOf(page: Page): Promise<{ n: number; crew: number; kinds: string[] }> {
-  return page.evaluate(async () => {
-    const items = (await (window as any).api.attention.list()) as Array<{
-      kind: string
-      severity: string
-      sessionId: string | null
-      handoffId: string | null
-      dedupKey: string
-    }>
-    const human = items.filter((i) => i.severity !== 'info')
-    const keys = new Set(
-      human.map((i) => (i.sessionId ? `s:${i.sessionId}` : `h:${i.handoffId ?? i.dedupKey}`)),
-    )
-    // O dock só mostra as filhas que a mãe lidera (isLedByMother): failed fica de fora.
-    const hs = (await (window as any).api.handoffs.list()) as Array<{
-      id: string
-      status: string
-      dismissedAt: number | null
-      resumable: boolean
-    }>
-    const active = new Set(['pending', 'approved', 'running', 'needs_input'])
-    const led = new Set(
-      hs
-        .filter(
-          (h) =>
-            h.dismissedAt == null &&
-            (active.has(h.status) || (h.status === 'interrupted' && h.resumable)),
-        )
-        .map((h) => h.id),
-    )
-    const crew = new Set(
-      human.flatMap((i) => (i.handoffId && led.has(i.handoffId) ? [i.handoffId] : [])),
-    )
-    return { n: keys.size, crew: crew.size, kinds: items.map((i) => `${i.kind}/${i.severity}`) }
-  })
-}
-
-// Quick look / diálogos abertos (filha nova, Alt+A na crew) cobrem a tela.
-async function closeOverlays(page: Page): Promise<void> {
-  for (let i = 0; i < 4; i++) {
-    const open =
-      (await page.getByTestId('peek-backdrop').count()) +
-      (await page.locator('[data-modal-overlay]').count())
-    if (!open) return
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(400)
-  }
-}
+const waitFor = (page: Page, label: string, fn: () => Promise<boolean>, timeoutMs?: number) =>
+  seedWaitFor(page, label, fn, timeoutMs, out.notes)
 
 const numberIn = (text: string | null | undefined) => Number.parseInt(text ?? '', 10) || 0
 
@@ -222,56 +168,6 @@ async function capture(page: Page, phase: string, state: string): Promise<Captur
   return c
 }
 
-// Banco da cópia: sem handoffs vivos do perfil real e sem abas restauradas (as
-// abas dariam --resume em sessões reais).
-async function cleanCopy(userData: string, extra?: (db: any) => void): Promise<void> {
-  const SQL = await initSqlJs({
-    locateFile: () => nodeRequire.resolve('sql.js/dist/sql-wasm.wasm'),
-  })
-  const path = join(userData, 'app.db')
-  const db = new SQL.Database(readFileSync(path))
-  const now = Date.now()
-  db.run(
-    `UPDATE handoffs SET status = CASE WHEN status IN ('pending','approved','running','needs_input')
-       THEN 'done' ELSE status END, consumed_at = COALESCE(consumed_at, ?), dismissed_at = COALESCE(dismissed_at, ?)`,
-    [now, now],
-  )
-  db.run("UPDATE workspace_state SET open_panes = '[]', dock_layout = NULL WHERE id = 1")
-  extra?.(db)
-  writeFileSync(path, Buffer.from(db.export()))
-  db.close()
-}
-
-function mcpAs(userData: string, scratch: string, sessionId: string) {
-  const cfg = JSON.parse(readFileSync(join(userData, 'mcp.json'), 'utf8'))
-  const url = new URL(cfg.url)
-  url.searchParams.set('s', sessionId)
-  const dir = join(scratch, `mcp-as-${sessionId}`)
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ ...cfg, url: url.toString() }))
-  return connectMcp(dir)
-}
-
-async function spawnSession(page: Page, label: string, permission?: string): Promise<void> {
-  await page.keyboard.press('Control+n')
-  const search = page.getByPlaceholder('Nova sessão — escolher repo…')
-  await search.waitFor({ state: 'visible', timeout: 10_000 })
-  await search.fill(label)
-  await search.press('Enter')
-  const dialog = page.locator('div.fixed.inset-0', { hasText: `Nova sessão · ${label}` })
-  await dialog.waitFor({ state: 'visible', timeout: 10_000 })
-  const standard = dialog.getByRole('button', { name: 'Padrão', exact: true })
-  if (await standard.count()) await standard.first().click()
-  // O 1º "Padrão" é o preset de trabalho: ele volta pro defaultPermission do
-  // perfil copiado (que pode ser plan). O modo de permissão tem grupo próprio.
-  if (permission)
-    await dialog
-      .locator('div:has(> label:text-is("Permissão"))')
-      .getByRole('button', { name: permission, exact: true })
-      .click()
-  await dialog.getByRole('button', { name: 'Abrir', exact: true }).click()
-}
-
 // O claude só escreve ~/.claude/sessions/<pid>.json depois do trust: é a prova
 // de que a tela de confiança passou e de que o status deixa de ser 'starting'.
 function ccSessionFile(ccSessionId: string): { status?: string } | null {
@@ -286,10 +182,6 @@ function ccSessionFile(ccSessionId: string): { status?: string } | null {
   }
   return null
 }
-
-type LiveRow = { id: string; ccSessionId: string | null; repo: { id: string } | null }
-const liveGlobal = (page: Page) =>
-  page.evaluate(() => (window as any).api.sessions.listLiveGlobal()) as Promise<LiveRow[]>
 
 // ---------------- fase 1: HOME fake + stub ----------------
 async function phaseStub(): Promise<void> {

@@ -21,6 +21,7 @@ import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
 import { registerAttentionIpc } from './ipc/attention'
+import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerCanvasIpc } from './ipc/canvas'
 import { registerSendPromptIpc } from './ipc/send-prompt'
 import { registerAgentBusIpc } from './ipc/agent-bus'
@@ -316,6 +317,7 @@ app.whenReady().then(async () => {
   registerBatonIpc()
   registerSessionGraphIpc()
   registerAttentionIpc()
+  registerFeatureRoomIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
   registerAgentBusIpc()

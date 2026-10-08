@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
 import { createPortal } from 'react-dom'
 import { Crown, Layers } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
@@ -46,7 +47,12 @@ interface Session {
   // Aberto pelo botão da barra do mapa: não há modificador segurado, então soltar
   // tecla não confirma — só Enter ou o clique numa linha.
   sticky: boolean
+  // Quem abriu: pelo botão do mapa, confirmar uma feature fica no mapa (o mapa
+  // não muda de comportamento); pelo combo ou pela Room, vai para a Room.
+  origin: SwitcherOrigin
 }
+
+export type SwitcherOrigin = 'keyboard' | 'map-button' | 'room'
 
 // Soltar o modificador do combo confirma (o "Alt" do Alt+Tab). Combo sem
 // modificador (remapeado assim) só confirma com Enter.
@@ -65,12 +71,22 @@ const isCombo = (e: KeyboardEvent, c: Combo) =>
 // depois dos do mapa montado no boot.
 let onWindowKeyDown: ((e: KeyboardEvent) => void) | null = null
 let onWindowKeyUp: ((e: KeyboardEvent) => void) | null = null
-let openFromButton: (() => void) | null = null
+let openFromButton: ((origin: SwitcherOrigin) => void) | null = null
 let confirmKey: ((key: string) => void) | null = null
 let cancelSwitcher: (() => void) | null = null
 if (typeof window !== 'undefined') {
   window.addEventListener('keydown', (e) => onWindowKeyDown?.(e), true)
   window.addEventListener('keyup', (e) => onWindowKeyUp?.(e), true)
+}
+
+// As sessões que o mapa desenha (useMapSessionIds). A Room usa a MESMA: com outro
+// conjunto o "precisa de você" dela divergiria do card da feature aqui.
+export function switcherInUse(
+  graph: Parameters<typeof buildSwitcherEntries>[0],
+  liveSessions: ReturnType<typeof useAppStore.getState>['liveSessions'],
+): Set<string> {
+  const graphLive = graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId)
+  return mapSessionIds(liveSessions, graphLive, pendingEndSessionIds())
 }
 
 function entriesOf(
@@ -86,8 +102,7 @@ function entriesOf(
     return t ? tailText(t.lines) : null
   }
   // A mesma regra do mapa (useMapSessionIds): só lista o card que ele desenha.
-  const graphLive = graph.nodes.filter((n) => n.status !== 'ended').map((n) => n.sessionId)
-  const inUse = mapSessionIds(liveSessions, graphLive, pendingEndSessionIds())
+  const inUse = switcherInUse(graph, liveSessions)
   const titles = new Map(features.map((f) => [f.id, f.title]))
   return new Map(
     buildSwitcherEntries(graph, live, tailOf, inUse, attention, (id) => titles.get(id) ?? null).map(
@@ -108,8 +123,9 @@ const entriesNow = () =>
   )
 
 // Seletor rápido de features estilo Alt+Tab (Ctrl+`): um cartão por feature em
-// ordem de uso, a feature em foco primeiro. Confirmar leva ao mapa e foca a
-// feature (o mapa enquadra o card e o painel troca para a mãe dela).
+// ordem de uso, a feature em foco primeiro. Confirmar uma feature abre a Room
+// dela; aberto pelo botão do mapa, leva ao mapa e foca a feature (o mapa enquadra
+// o card e o painel troca para a mãe dela).
 export function FeatureSwitcher() {
   const overrides = useKeybindingsStore((s) => s.overrides)
   const [session, setSession] = useState<Session | null>(null)
@@ -139,15 +155,19 @@ export function FeatureSwitcher() {
         if (prev?.isConnected) prev.focus()
         return
       }
-      goTo(target)
+      goTo(target, s.origin)
     }
 
-    // O atual: o grupo "Sem feature" recém-escolhido (ele não muda a feature em
-    // foco), senão a feature em foco.
-    const open = (backward: boolean, sticky: boolean) => {
+    // O atual: a feature da Room na tela; senão o grupo "Sem feature" recém-escolhido
+    // (ele não muda a feature em foco), senão a feature em foco. Sem a Room aqui, o
+    // toque rápido a partir dela cairia de volta nela mesma.
+    const open = (backward: boolean, sticky: boolean, origin: SwitcherOrigin) => {
       const order = useFeatureMruStore.getState().order
+      const room =
+        useAppStore.getState().area === 'room' ? useFeatureRoomStore.getState().featureId : null
       const current =
-        order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId
+        room ??
+        (order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId)
       const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
       if (keys.length === 0) return false
       // Título da linha de atenção (feature sem card no mapa): o índice de features
@@ -156,7 +176,7 @@ export function FeatureSwitcher() {
       if (features.features.length === 0 && !features.loading) void features.load()
       restoreFocus.current = document.activeElement as HTMLElement | null
       const index = openIndex(keys.length, backward, !!current && keys[0] === current)
-      update(() => ({ keys, index, visible: sticky, sticky }))
+      update(() => ({ keys, index, visible: sticky, sticky, origin }))
       return true
     }
 
@@ -169,7 +189,7 @@ export function FeatureSwitcher() {
         e.preventDefault()
         e.stopImmediatePropagation()
         if (e.repeat) return
-        if (!open(e.shiftKey, false)) return
+        if (!open(e.shiftKey, false, 'keyboard')) return
         showTimer = window.setTimeout(
           () => update((cur) => (cur ? { ...cur, visible: true } : cur)),
           SHOW_DELAY_MS,
@@ -199,8 +219,8 @@ export function FeatureSwitcher() {
       if (!s.sticky && !comboHeld(e, combo)) close(true)
     }
     const onBlur = () => close(false)
-    const onButton = () => {
-      if (!sessionRef.current) open(false, true)
+    const onButton = (origin: SwitcherOrigin) => {
+      if (!sessionRef.current) open(false, true, origin)
     }
     const onPick = (key: string) => {
       const s = sessionRef.current
@@ -447,7 +467,7 @@ export function FeatureSwitcherButton({ className = BUTTON_CLASS }: { className?
     <button
       type="button"
       data-testid="map-feature-switcher"
-      onClick={() => openFromButton?.()}
+      onClick={() => openFromButton?.('map-button')}
       title={label}
       aria-label={label}
       className={className}
@@ -459,12 +479,13 @@ export function FeatureSwitcherButton({ className = BUTTON_CLASS }: { className?
   )
 }
 
-// Fora do mapa, confirmar leva até ele. Feature: o mapa enquadra o card e o
-// painel troca de mãe (map-focus-store). "Sem feature": só enquadra o grupo (não
-// há mãe de feature a seguir; o painel fica como está). O foco fica no mapa,
-// nunca no xterm. O que estava na frente de outra feature sai: a espiada, e o
-// painel da feature (ao montar, o mapa poria a feature dele em foco).
-function goTo(target: SwitcherEntry) {
+// O botão "Features" do cabeçalho da Room: o mesmo seletor, confirmando para a Room.
+export function openFeatureSwitcher(): void {
+  openFromButton?.('room')
+}
+
+// Card de feature (fora do botão do mapa) abre a Room. O resto segue para o mapa.
+function goTo(target: SwitcherEntry, origin: SwitcherOrigin) {
   const dock = useCrewDockStore.getState()
   // Card de atenção não tem card no mapa para enquadrar: abre o sujeito direto,
   // como o HUD (quick look da filha, senão a aba da sessão).
@@ -480,6 +501,24 @@ function goTo(target: SwitcherEntry) {
     }
     if (!target.featureId) return
   }
+  if (target.kind === 'feature' && target.featureId && origin !== 'map-button') {
+    useFeatureMruStore.getState().touch(target.key)
+    if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
+    useFeatureRoomStore.getState().openRoom(target.featureId)
+    return
+  }
+  showFeatureOnMap(target)
+}
+
+// Fora do mapa, confirmar leva até ele. Feature: o mapa enquadra o card e o
+// painel troca de mãe (map-focus-store). "Sem feature": só enquadra o grupo (não
+// há mãe de feature a seguir; o painel fica como está). O foco fica no mapa,
+// nunca no xterm. O que estava na frente de outra feature sai: a espiada, e o
+// painel da feature (ao montar, o mapa poria a feature dele em foco).
+export function showFeatureOnMap(
+  target: Pick<SwitcherEntry, 'key' | 'featureId' | 'laneFlowId' | 'projectIds'>,
+) {
+  const dock = useCrewDockStore.getState()
   useFeatureMruStore.getState().touch(target.key)
   if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
   const panel = useFeaturePanelStore.getState()

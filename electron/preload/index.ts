@@ -408,6 +408,10 @@ const api: Api = {
     debug: () => invoke('attention:debug'),
     onChanged: (handler) => subscribe<AttentionItem[]>('attention:changed', handler),
   },
+  room: {
+    get: (featureId) => invoke('room:get', featureId),
+    onChanged: (handler) => subscribe<{ featureId: string | null }>('room:changed', handler),
+  },
   agentBus: {
     list: () => invoke('agent-bus:list'),
     onUpdated: (handler) => subscribe<AgentBusSnapshot>('agent-bus:updated', handler),

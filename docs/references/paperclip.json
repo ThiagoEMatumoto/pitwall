@@ -1,0 +1,556 @@
+{
+  "name": "Paperclip (paperclipai/paperclip)",
+  "urls": [
+    "https://paperclip.ing/",
+    "https://github.com/paperclipai/paperclip",
+    "https://docs.paperclip.ing",
+    "https://github.com/paperclipai/paperclip/releases",
+    "https://news.ycombinator.com/item?id=47903549",
+    "https://news.ycombinator.com/item?id=49831929",
+    "https://news.ycombinator.com/item?id=49830940"
+  ],
+  "sources_read": [
+    "README.md (seções Features, Problems Paperclip solves, Why Paperclip is special, Systems) — checkout 4a8178e9c de 2026-10-07",
+    "DESIGN.md:13",
+    "doc/SPEC.md (achados prévios: 311-320, 464-473)",
+    "feature-map/inbox-search.md, steering.md, questions-and-approvals.md, recovery.md, task-coordination.md, status-cards.md (índice completo listado em feature-map/)",
+    "packages/shared/src/types/attention.ts (AttentionItem, AttentionFeed)",
+    "server/src/services/attention.ts (entryRule/exitRule por fonte)",
+    "ui/src/pages/WhatNeedsMe.tsx (página Decisions), ui/src/lib/attention.ts",
+    "ui/src/components/StatusBadge.tsx, StatusGlyph.tsx, ActiveAgentsPanel.tsx, ui/src/lib/status-colors.ts",
+    "ui/src/pages/Timeline.tsx (Work Timeline estilo Gantt)",
+    "screenshots/PR-8000-home-flag-on.png (Dashboard), PR-8000-task-thread-flag-on.png (tarefa), PR-8000-conference-room-flag-on.png (Conference Room + Agent Feed)",
+    "Achados prévios: packages/db/src/schema/agents.ts, schema/issues.ts, server/src/services/issue-goal-fallback.ts, skills/paperclip/SKILL.md, packages/adapters/claude-local/src/server/execute.ts, ui/src/pages/Dashboard.tsx, ui/src/App.tsx",
+    "Site https://paperclip.ing/ (fetch direto)",
+    "Releases GitHub (v2026.817.0 a v2026.1005.0)",
+    "GitHub issues #958, #3060, #9679, #12380, #14487, #14602, #15079, #15276 (+ prévios #3401, #12538, #14003)",
+    "HN via Algolia (busca 'paperclip agents'): threads 47903549, 49831929, 49830940 com 0 comentários",
+    "Reviews: kunalganglani.com, fast.io, eesel.ai, preuve.ai (prévio)",
+    "Reddit: API JSON bloqueada e buscas não retornaram threads diretas — não há citação Reddit além da relatada via preuve.ai"
+  ],
+  "how_it_works": {
+    "model": "Uma instância hospeda várias 'companies' isoladas. Cada company tem goals em árvore, projetos, issues (tarefas) e agentes num organograma (reportsTo) com título, papel, permissões e budget. Issues carregam company/project/goal/parent, 1 assignee, dependências de bloqueio de primeira classe, comentários, documentos e work products (README.md, seção 'Work & Task System'). O pitch é 'Manage business goals, not pull requests' e 'If OpenClaw is an employee, Paperclip is the company'.",
+    "execution_loop": "Heartbeat: fila de wakeup persistida em banco com coalescing; o agente acorda por agenda, atribuição, follow-up ou rotina; cada wake verifica budget, resolve workspace (opcionalmente git worktree isolado), injeta secrets e skills e invoca o adapter. Checkout atômico de issue com lock de execução (409 se outro já pegou). Runs geram logs, uso e estado de sessão do adapter; recuperação limitada para falhas suportadas. Mensagens enviadas durante um run ficam numa fila visível e só entram no run por ação explícita de 'steer' ou 'interrupt' (feature-map/steering.md:12-25; release v2026.1001.0).",
+    "status_detection": "Status é estado no banco do servidor, não detecção de processo: agentes têm active/paused/idle/running/error/pending_approval/terminated; runs têm queued/running/succeeded/failed/timed_out/cancelled/interrupted (ActiveAgentsPanel.tsx:25-33). Separa explicitamente status de workflow da tarefa (in_progress anima entre runs) de execução ao vivo do agente (StatusGlyph.tsx:21-28). Para atenção humana há um feed derivado (AttentionItem) com sourceKind, whyNow, entryRule/exitRule, severidade e rank, gerado por regras SQL no servidor (server/src/services/attention.ts:1196-1424).",
+    "coordination": "Só por tarefas e comentários: delegação desce/sobe o organograma via sub-issues; dependências acordam o dependente quando o bloqueador resolve (feature-map/task-coordination.md:9-12). @menção não acorda agente. Perguntas, confirmações de plano, aprovações formais do board e revisão de chamadas de ferramenta são interações tipadas distintas, cada uma com autoridade e regra de continuação próprias (feature-map/questions-and-approvals.md:3-28). Desde v2026.817.0 há propose/decide: agente propõe ações multi-opção e humano decide numa 'Decisions desk'.",
+    "shared_knowledge": "Contexto flui pela ancestralidade da tarefa: GET /issues/:id/heartbeat-context devolve ancestrais + goal ('o porquê'). Documentos e artefatos ficam presos à tarefa. Skills compartilhadas por company com Skill Studio (versionamento, testes salvos). Não há knowledge base no core; memória é plugável (doc/memory-landscape.md). Status Cards (experimental) resumem trabalho observado a partir de um prompt salvo (feature-map/status-cards.md).",
+    "claude_code_integration": "Adapter claude-local executa 'claude --print' com stream-json, --resume da sessão salva por tarefa, --append-system-prompt-file com instruções do agente e envs PAPERCLIP_* (API URL, company, run JWT). O agente usa a skill 'paperclip' para chamar a API (checkout, comentar, criar sub-issue). Não gerencia TUI interativa: cada run é headless; a conversa vive no thread da tarefa.",
+    "ui": "React SPA. Sidebar: New Task, Dashboard, Inbox (badge), Conference Room; Work (Tasks, Routines, Goals, Artifacts, Workspaces, Projects); Agents (lista de agentes por papel); Company (Org). Dashboard = 4 cards de runs recentes por agente + 4 métricas (agentes habilitados com 'N running, N paused, N errors', tarefas em andamento com 'open/blocked', gasto do mês, aprovações pendentes) + gráficos de 14 dias (screenshots/PR-8000-home-flag-on.png). Tarefa = corpo markdown + barra de progresso de sub-tasks ('3/3 done, 0 in progress, 0 blocked') + painel lateral de propriedades (status, prioridade, assignee, parent, Blocked by, Blocking, Sub-tasks, Reviewers, Approvers, Workspace, Branch) (screenshots/PR-8000-task-thread-flag-on.png). Conference Room = chat com o agente CEO + 'Agent Feed' lateral com eventos tipados ('X moved to in review PAP-49', 'commented', 'picked up') com glifo de status (screenshots/PR-8000-conference-room-flag-on.png). Decisions (WhatNeedsMe.tsx) = fila agrupável/filtrável com resolução inline, 'aging' após 30 dias e estado 'caught up'. Timeline = Gantt de atividade dos atores (Timeline.tsx:1-7). Status visual: cápsula vertical 8x16 por agente que pulsa quando running e pisca em error (StatusBadge.tsx:61-77); glifo único por status de tarefa, seguro para daltônicos (StatusGlyph.tsx:15-28)."
+  },
+  "strengths": [
+    {
+      "point": "Princípio de design explícito: toda tela responde em ordem 'o que está acontecendo, precisa de mim, o que eu faço' — exatamente o eixo do Feature Room.",
+      "evidence": "DESIGN.md:13",
+      "validation": "inferred",
+      "validation_note": "Não reli o DESIGN.md. Na prática o card de recovery segue o princípio (causa, ação, Connect Claude), mas o 'precisa de mim' está espalhado em 3 contadores diferentes."
+    },
+    {
+      "point": "Item de atenção é um contrato rico: whyNow (frase do porquê agora), entryRule/exitRule (quando entra/sai da fila), dedupKey, severidade, rank, decideBy, snoozedUntil e verbos de decisão para resolver inline.",
+      "evidence": "packages/shared/src/types/attention.ts:221-261",
+      "validation": "observed",
+      "validation_note": "/api/companies/:id/attention devolve whyNow, entryRule, exitRule e severity por item. A Decisions resolve inline (Confirm/Decline, Approve/Reject/Request revision, Submit answers) e tem 'When to decide' e Snooze. A UI mostra whyNow em alguns cards, mas não mostra entry/exit."
+    },
+    {
+      "point": "Regras de entrada/saída da fila são declaradas por fonte no servidor (ex.: 'approvals.status = pending' / 'Approval leaves pending status'), tornando auditável por que algo está ou não na fila.",
+      "evidence": "server/src/services/attention.ts:1196-1197",
+      "validation": "observed",
+      "validation_note": "Texto literal na API: approval 'approvals.status = pending' / 'Approval leaves pending status'; agent_error_alert 'agents.status = error' / 'Agent leaves error status or the row is dismissed'. As interações saíram quando a issue foi cancelada/concluída."
+    },
+    {
+      "point": "Separa status de workflow da tarefa de execução ao vivo: in_progress anima entre runs; indicadores live e detalhes do run dizem se há agente executando agora.",
+      "evidence": "ui/src/components/StatusGlyph.tsx:21-28",
+      "validation": "observed",
+      "validation_note": "A tarefa ficou 'In Progress' com glifo animado enquanto o card do agente dizia 'Finished 4m ago' e o run estava failed. A separação existe, mas na prática deixa uma tarefa sem execução parecendo ativa."
+    },
+    {
+      "point": "Status do agente na lista é uma pílula de texto ('idle', 'error' em vermelho) mais um chip azul 'Live' durante o run; a cápsula vertical pulsante de StatusBadge não apareceu nas telas visitadas (logo após a falha a linha mostrou 'Live' e 'error' juntos).",
+      "evidence": "ui/src/components/StatusBadge.tsx:61-77",
+      "original_point": "Status do agente legível de relance: cápsula vertical colorida que pulsa em running e pisca em error, respeitando prefers-reduced-motion.",
+      "validation": "contradicted",
+      "validation_note": "Na lista de agentes o status é uma pílula de texto ('idle', 'error' vermelha) mais um chip 'Live'. Não vi a cápsula 8x16 em nenhuma tela que abri. Pode existir em outro componente/tela que não visitei."
+    },
+    {
+      "point": "Distingue tipos de pedido humano que parecem iguais (pergunta, confirmação de plano, aprovação formal, revisão de tool) com autoridade e continuação próprias; decisão sobrevive a reload e não é repetida por cliques duplicados.",
+      "evidence": "feature-map/questions-and-approvals.md:3-28",
+      "validation": "observed",
+      "validation_note": "Na Decisions, cada tipo tem rótulo (ASK USER QUESTIONS / PENDING) e botões próprios: formulário, Decline/Confirm, Request revision/Reject/Approve. connection_intent mostra 'Only the addressed user can respond'. Porém o cabeçalho 'Decision requested' é igual para pergunta, confirmação e conexão. No thread da tarefa só uma interação aparecia (a pergunta): a request_confirmation pendente não estava visível na página. Não testei sobreviver a reload nem clique duplicado."
+    },
+    {
+      "point": "Fila de mensagens durante run com steer/interrupt explícitos; UI só afirma entrega após ack autoritativo e explica por que a mensagem está esperando.",
+      "evidence": "feature-map/steering.md:1-25",
+      "validation": "inferred",
+      "validation_note": "Sem run vivo (falha em ~3 s) não deu para enfileirar mensagem durante a execução."
+    },
+    {
+      "point": "Recovery honesto: mostra causa, dono da próxima ação e se há continuação segura; 'um ack de retry sozinho não prova que o trabalho retomou'; efeitos externos incertos exigem decisão explícita.",
+      "evidence": "feature-map/recovery.md:1-27",
+      "validation": "observed",
+      "validation_note": "Thread: 'AI connection needed' mais o card 'Connect here and the task will resume automatically'. Página do run: 'claude_auth_required', 'Login to Claude Code', Retry, Clear error. Ressalva: o Inbox trunca a causa ('terminal access failure.') e oferece Retry mesmo com a tarefa já cancelada ou done."
+    },
+    {
+      "point": "Arquivar no inbox é triagem pessoal, não conclusão da tarefa — separa 'eu já vi' de 'está pronto'.",
+      "evidence": "feature-map/inbox-search.md:52",
+      "validation": "observed",
+      "validation_note": "Arquivei a aprovação no Inbox: a API manteve status=pending, o badge do Inbox caiu de 3 para 2, e Dashboard (1) e Decisions (3) continuaram contando o item."
+    },
+    {
+      "point": "Tarefa mostra progresso agregado das filhas e o grafo de bloqueio (Blocked by / Blocking / Sub-tasks) num painel lateral compacto.",
+      "evidence": "screenshots/PR-8000-task-thread-flag-on.png",
+      "validation": "observed",
+      "validation_note": "Parcial. O painel tem Parent, Blocked by, Blocking e Subtasks (chip SAN-2), mais Reviewers, Approvers, Monitor e Watchdog. A barra 'N/M done, X in progress, Y blocked' não apareceu com 1 subtarefa, talvez porque a screenshot de referência era 'flag-on'."
+    },
+    {
+      "point": "Contexto de objetivo chega ao agente pela ancestralidade da tarefa (goal-aware execution), não por cópia manual.",
+      "evidence": "README.md:218",
+      "validation": "inferred",
+      "validation_note": "Sem run real não dá para ver o heartbeat-context. Na UI o goal não aparece na tarefa nem a tarefa no goal. O New Task não tem campo de goal, e a tarefa criada pela UI ficou com goalId=null."
+    },
+    {
+      "point": "Agent Feed (Conference Room) lista eventos tipados com ícone, verbo e tempo ('Backend Dev commented on SAN-2', 'Board requested approval…').",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/20-conference-room-feed-loaded.png",
+      "validation": "observed",
+      "validation_note": "Só existe com enableConferenceRoomChat ligado. Falhas de run e erro de agente não viram eventos."
+    },
+    {
+      "point": "Decisions (WhatNeedsMe) resolve inline com cards tipados (formulário de pergunta, Confirm/Decline, Approve/Reject/Request revision) e oferece 'When to decide', Snooze, 'Ask agent for recommendation', ordenação e grupos NEW TODAY/DECIDED/EXPIRED.",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/16-decisions-typed-cards.png",
+      "validation": "observed",
+      "validation_note": "Escondida por padrão (enableDecisions=false); a rota /decisions funciona sem link na sidebar."
+    }
+  ],
+  "weaknesses": [
+    {
+      "point": "Superfícies de pendente divergem: o tile Pending Approvals do dashboard conta só a tabela formal approvals, então cards request_confirmation nos threads ficam invisíveis — um usuário relatou 9 decisões esperando, a mais velha há uma semana, incluindo aprovação de release.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/9679",
+      "validation": "observed",
+      "validation_note": "Com 1 approval e 2 interações pendentes: tile Pending Approvals=1, badge do Inbox=3 (approval + 2 failed runs), badge de Decisions=7. Reproduzido ao vivo."
+    },
+    {
+      "point": "Regra de saída incompleta: item failed_run nunca sai quando a issue relacionada chega a done/cancelled, acumulando linhas de alta severidade obsoletas.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/15276",
+      "validation": "observed",
+      "validation_note": "Depois de SAN-1 cancelled e SAN-2 done, o Inbox manteve as 2 linhas 'failed' com Retry e /sidebar-badges seguiu com failedRuns=2. Ressalva: o attention feed tinha failed_run=0, porque o erro aparece lá como agent_error_alert, que fica enquanto o agente segue em error."
+    },
+    {
+      "point": "Badge do inbox congela: ao deletar um agente, políticas de budget órfãs fazem /sidebar-badges e /dashboard retornarem 404, e o cliente mantém o último valor bem-sucedido sem sinalizar que está velho.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/3060",
+      "validation": "inferred",
+      "validation_note": "Não deletei agente. Vi só um valor transitório '1' no badge durante o carregamento antes de virar 3."
+    },
+    {
+      "point": "'Unread' nunca contém issue atribuída a você porque updatedAt serve de recibo de leitura e todo comentário o atualiza.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/15079",
+      "validation": "inferred",
+      "validation_note": "Não abri a aba Unread com cenário controlado."
+    },
+    {
+      "point": "Histórico de runs sem paginação: dashboard, badges e lista de agentes baixam o histórico inteiro, levando o servidor a 3GB+ de RAM e travando o browser.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/958",
+      "validation": "inferred",
+      "validation_note": "Só 2 runs. Volume insuficiente."
+    },
+    {
+      "point": "Inbox sem controle de ordenação na lista principal e com aninhamento ligado por padrão, mudando a ordem aparente sem avisar.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/12380",
+      "validation": "observed",
+      "validation_note": "A toolbar tem 'Disable parent-child nesting' (aninhamento ligado: SAN-2 indentada sob SAN-1), Filter, Group e Columns, sem botão de sort. Já a Decisions tem botão de ordenação."
+    },
+    {
+      "point": "Superfícies demais e sobrepostas para o mesmo 'precisa de você': Inbox, Decisions, Approvals, Conference Room, Agent Feed, Status Cards, LegacyInbox.",
+      "evidence": "ui/src/pages/ (Inbox.tsx com 3348 linhas, WhatNeedsMe.tsx, Approvals.tsx, LegacyInbox.tsx, DecisionQueuePage.tsx)",
+      "validation": "observed",
+      "validation_note": "Com flags ligados a sidebar mostra Inbox(3), Decisions(7), Status beta e Conference Room, e ainda há /approvals. Cada uma cobre um subconjunto diferente. Com os defaults, só o Inbox aparece, e ele é a superfície menos completa: omite perguntas e confirmações."
+    },
+    {
+      "point": "Heartbeat agendado custa tokens a cada wake mesmo sem trabalho.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/3401",
+      "validation": "inferred",
+      "validation_note": "Sem credencial não há consumo de tokens. O wake por atribuição foi imediato ao criar a tarefa."
+    },
+    {
+      "point": "Custo reportado impreciso.",
+      "evidence": "https://github.com/paperclipai/paperclip/issues/14003",
+      "validation": "inferred",
+      "validation_note": "Gasto $0.00 sem runs reais."
+    },
+    {
+      "point": "Para falha de execução (ex.: auth) HÁ escalonamento visível: toasts, card 'Agent error' na Decisions, card de conexão no thread e Retry. A crítica de 'ninguém pega o erro' vale para erro de conteúdo (output errado), que não foi testável sem agente real.",
+      "evidence": "https://www.kunalganglani.com/blog/paperclip-ai-review-zero-human-company.md",
+      "original_point": "Sem caminho de escalonamento quando o agente erra: 'there's nobody to catch it. The system just keeps going'; agentes reiniciam premissas em silêncio após perder contexto.",
+      "validation": "contradicted",
+      "validation_note": "Para falha de execução (auth) houve escalonamento visível: toasts, Agent error na Decisions, card de conexão no thread, Retry. A crítica do review é sobre erro de conteúdo (output errado), que não dá para testar sem agente."
+    },
+    {
+      "point": "Organograma perdeu centralidade: com a UI streamlined ligada, a rota /org vira redirect para /agents/all.",
+      "evidence": "ui/src/App.tsx:279-280",
+      "validation": "observed",
+      "validation_note": "Navegar para /SAN/org terminou em /SAN/agents/all. A UI streamlined vem ligada por padrão."
+    },
+    {
+      "point": "Status que mente por omissão: tarefa segue 'In Progress' com glifo animado sem nada rodando (run failed), e o Agent Feed exibe 'Your agents are running' com os dois agentes em erro.",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/09-task-san1-failed-run.png",
+      "validation": "observed",
+      "validation_note": "Tile 'Agents Enabled' também conta como enabled agentes com status error."
+    },
+    {
+      "point": "A superfície padrão (Inbox) omite perguntas e confirmações pendentes; a Decisions, que as mostra, fica atrás de flag desligada por padrão. No thread da tarefa só uma interação pendente aparecia (a request_confirmation ficou invisível).",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/13-inbox-with-approval-interactions.png",
+      "validation": "observed",
+      "validation_note": "Com 1 approval + 2 interações, Inbox mostrou só a approval e os runs falhos."
+    },
+    {
+      "point": "Cadeia goal→tarefa invisível na UI: Goals fora da sidebar por padrão, a tarefa não mostra o goal, o GoalDetail não lista tarefas e o New Task não tem campo de goal (tarefa criada pela UI fica goalId=null).",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/21-goal-detail.png",
+      "validation": "observed",
+      "validation_note": "Feed registra 'Board created goal' sem o nome."
+    },
+    {
+      "point": "Inbox trunca a causa do erro ('terminal access failure.', sem a parte de login) e oferece Retry em runs de tarefas já canceladas/done.",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/22-inbox-after-tasks-closed.png",
+      "validation": "observed",
+      "validation_note": "Causa completa só na página do run e na Decisions."
+    },
+    {
+      "point": "Onboarding não tem caminho 'explorar sem modelo' nem passo de goal: trava em 'Connect a model' (Subscription dispara `claude setup-token`) e o app fica atrás do wizard em tela cheia até existir agente.",
+      "evidence": "/tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/02-onboarding-connect-model.png",
+      "validation": "observed",
+      "validation_note": "Contradiz o pitch 'manage business goals' no primeiro contato."
+    }
+  ],
+  "bring_to_pitwall": [
+    {
+      "idea": "Item de 'Precisa de você' com contrato explícito: kind, whyNow (1 frase), entryRule/exitRule, severity, dedupKey, createdAt e verbos de resolução inline.",
+      "problem_it_solves": "A fila do Feature Room fica explicável ('por que isto está aqui?') e não acumula lixo; evita a fila que mente (#9679, #15276).",
+      "pitwall_mapping": "View/serviço derivado (não tabela nova) que lê handoffs (status blocked/aguardando resposta), handoff_events (pergunta sem resposta), agent_messages não lidas pela mãe e sessions cujo ~/.claude/sessions/<pid>.json indica espera de permissão/input. Cada fonte declara entry/exit no código; dedupKey = fonte+id. Exibir whyNow no card. Teste: para cada fonte, um caso que sai da fila quando o handoff vira done.",
+      "priority": "now"
+    },
+    {
+      "idea": "Uma única fonte de contagem para badge e fila, calculada no mesmo lugar que a lista.",
+      "problem_it_solves": "Badge e lista discordando (Paperclip #9679 conta só uma fonte; #3060 badge congelado em erro) destrói confiança na fila.",
+      "pitwall_mapping": "O contador da aba/feature no Pitwall vem do mesmo seletor que renderiza 'Precisa de você' (main process), nunca de uma recontagem no renderer.",
+      "priority": "now"
+    },
+    {
+      "idea": "Separar status do trabalho (handoff/feature) de status de execução da sessão, com dois indicadores distintos: glifo de status por forma (seguro para daltônicos) e cápsula que pulsa quando a sessão está rodando e pisca em erro.",
+      "problem_it_solves": "No mapa atual 'sessão viva' e 'tarefa andando' se confundem; um handoff em progresso com sessão parada parece ok.",
+      "pitwall_mapping": "Card de sessão na sala do repo: cápsula = status de ~/.claude/sessions/<pid>.json (running/idle/waiting/dead); glifo = status do handoff atribuído (handoffs.status). Respeitar prefers-reduced-motion.",
+      "priority": "now"
+    },
+    {
+      "idea": "Tipar os pedidos humanos: pergunta, confirmação de plano, permissão de ferramenta e bloqueio externo são kinds diferentes com ação diferente.",
+      "problem_it_solves": "Hoje tudo vira 'mensagem'; o humano não sabe se precisa decidir, aprovar ou só ler.",
+      "pitwall_mapping": "Campo kind em handoff_events/agent_messages (question | plan_confirm | permission | blocker | info); a timeline tipada de handoffs e a fila usam o kind para ícone e botões.",
+      "priority": "now"
+    },
+    {
+      "idea": "Timeline tipada no estilo 'Agent Feed': uma linha por evento com verbo ('moveu para revisão', 'comentou', 'pegou', 'concluiu'), glifo de status e tempo relativo.",
+      "problem_it_solves": "Dá narrativa do que aconteceu na feature sem abrir terminais.",
+      "pitwall_mapping": "Ler handoff_events + feature_ledger ordenados por tempo, mapeando event type → verbo pt-BR e glifo; filtrar por sala/repo.",
+      "priority": "now"
+    },
+    {
+      "idea": "Progresso agregado das filhas no topo da cadeia: 'N/M concluídas, X em andamento, Y bloqueadas' com barra.",
+      "problem_it_solves": "Ver de relance se a feature avança sem contar cards.",
+      "pitwall_mapping": "No cabeçalho da cadeia de objetivo (objectives → features), agregar handoffs da feature por status.",
+      "priority": "now"
+    },
+    {
+      "idea": "Ancestralidade de objetivo injetada na filha: ao criar handoff, anexar objetivo → feature → tarefa no briefing.",
+      "problem_it_solves": "Filha sem o 'porquê' toma decisões locais erradas.",
+      "pitwall_mapping": "No session_handoff, montar bloco de contexto a partir de objectives + features + pulse atual (o equivalente ao heartbeat-context do Paperclip).",
+      "priority": "later"
+    },
+    {
+      "idea": "Mensagens enfileiradas para sessão ocupada com steer explícito, mostrando motivo da espera e só marcando 'entregue' após ack.",
+      "problem_it_solves": "Mensagem enviada para filha ocupada some ou interrompe na hora errada.",
+      "pitwall_mapping": "agent_messages com estados queued/delivered/acked; o injetor de PTY só escreve quando a sessão está idle ou o usuário clica em 'Enviar agora'.",
+      "priority": "later"
+    },
+    {
+      "idea": "Arquivar/dispensar item da fila é triagem pessoal e não muda o status do handoff.",
+      "problem_it_solves": "Evita 'limpar a fila' marcando trabalho como feito.",
+      "pitwall_mapping": "Tabela leve de dismissals (item key + até quando), separada de handoffs.status.",
+      "priority": "later"
+    },
+    {
+      "idea": "Card de recovery com causa, dono da próxima ação e ação permitida quando uma sessão filha morre ou trava.",
+      "problem_it_solves": "Sessão morta hoje só aparece como ausência.",
+      "pitwall_mapping": "Quando o pid de ~/.claude/sessions some com handoff aberto, gerar item 'recovery' na fila com ações retomar (--resume) / reatribuir / encerrar.",
+      "priority": "later"
+    },
+    {
+      "idea": "Organograma de agentes (CEO/CTO), contratação com aprovação do board e budgets por agente.",
+      "problem_it_solves": "Nenhum problema do Pitwall: as sessões são efêmeras por feature, e a hierarquia é só mãe → filhas.",
+      "pitwall_mapping": "avoid — vira org-chart theater; o próprio Paperclip, com a UI streamlined, redireciona /org para /agents/all (ui/src/App.tsx:279-280).",
+      "priority": "avoid"
+    },
+    {
+      "idea": "Wake por heartbeat agendado (polling do agente).",
+      "problem_it_solves": "Nenhum: as sessões do Pitwall são interativas e o status já vem de ~/.claude/sessions.",
+      "pitwall_mapping": "avoid — gasta tokens a cada wake sem trabalho (#3401).",
+      "priority": "avoid"
+    },
+    {
+      "idea": "Várias superfícies concorrentes para atenção (Inbox + Decisions + Approvals + Feed + Status Cards).",
+      "problem_it_solves": "Nenhum: fragmenta o 'precisa de você'.",
+      "pitwall_mapping": "avoid — manter uma única fila 'Precisa de você' por feature, com filtro por kind, em vez de páginas separadas.",
+      "priority": "avoid"
+    }
+  ],
+  "public_reception": [
+    {
+      "claim": "O site posiciona como 'A team of agents for every person' / 'Manage business goals not pull requests'; MIT, self-host sem conta, cloud em waitlist.",
+      "url": "https://paperclip.ing/"
+    },
+    {
+      "claim": "HN: posts de Paperclip com pouquíssima tração (3-4 pontos, 0 comentários), apesar das estrelas no GitHub.",
+      "url": "https://news.ycombinator.com/item?id=49831929"
+    },
+    {
+      "claim": "HN: 'Paperclip – a ticket-based multi AI agent orchestrator' com 3 pontos e 0 comentários.",
+      "url": "https://news.ycombinator.com/item?id=47903549"
+    },
+    {
+      "claim": "Review cética: onboarding sem atrito e ver o CEO delegar em tempo real é bom, mas o site gerado saiu quebrado, estatísticas alucinadas e não há quem pegue o erro.",
+      "url": "https://www.kunalganglani.com/blog/paperclip-ai-review-zero-human-company.md"
+    },
+    {
+      "claim": "Reviews tratam 'zero-human company' como hype; é uma camada de coordenação que ainda exige humano definindo objetivos e revisando; lançado em 2026-03-02 e com ~71k estrelas no fim de junho.",
+      "url": "https://fast.io/resources/paperclip-ai-review-2026/"
+    },
+    {
+      "claim": "Usuário self-hosted relata UI travando e servidor com 3GB+ de RAM por histórico de runs não paginado.",
+      "url": "https://github.com/paperclipai/paperclip/issues/958"
+    },
+    {
+      "claim": "Críticas de 'org-chart theater' (relatadas via review de terceiro, citando Reddit).",
+      "url": "https://preuve.ai/blog/paperclip-ai-review"
+    },
+    {
+      "claim": "Releases recentes focam em gestão humana dos agentes: propose/decide e Decisions desk (v2026.817.0), steer de respostas na fila durante run (v2026.1001.0), fim do takeover automático de tarefas encalhadas em favor de ação do board (v2026.831.0).",
+      "url": "https://github.com/paperclipai/paperclip/releases"
+    }
+  ],
+  "hands_on": {
+    "ran": true,
+    "date": "2026-10-07",
+    "mode": "ui-only, sem credenciais Claude",
+    "setup_notes": "Repo em fc6304dfe (2026-10-08, mais novo que o 4a8178e9c usado na análise). `pnpm install --store-dir ./.pnpm-store` dentro do repo (node_modules e .pnpm-store ficaram lá, ignorados pelo git; git status limpo). O servidor rodou com `pnpm dev:once --data-dir <scratch>/data`, HOME=<scratch>/handson/paperclip/home e `env -u` em ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY e GEMINI_API_KEY. O banco foi PGlite/embedded-postgres dentro do data-dir. A 1ª subida falhou porque o runner nativo (Rust) exige cargo, e o flag enableNativeRunner vem ligado por padrão. Para não instalar toolchain no home, usei PAPERCLIP_RUNNER_BINARY=/bin/false, que pula o build. O onboarding pede a org, depois o 1º agente, depois \"Connect a model\". Ao escolher \"Claude Subscription\" o servidor disparou `claude setup-token`. Conferi o processo: HOME isolado e chaves vazias. Matei o processo e parei esse fluxo, como mandam as regras. O resto foi feito pela API local (local_trusted, sem login): 2 agentes claude_local com cwd no sandbox-repo (Tech Lead e Backend Dev com reportsTo), o goal \"Adicionar endpoint /health no sandbox-repo\", o goalId na SAN-1, a subtarefa SAN-2, 1 aprovação request_board_approval e 2 interações (request_confirmation e ask_user_questions). Para ver Conference Room, Decisions e Goals na sidebar, liguei pelo PATCH /api/instance/settings/experimental os flags enableConferenceRoomChat, enableDecisions, enableGoalsSidebarLink e enableStatusCards. Todos vêm desligados por padrão, mas a rota /decisions funciona mesmo sem link. A SAN-1 foi criada pela UI (New Task). Em modo dev, cada navegação levou de 10 a 20 s para carregar. Screenshots em /tmp/claude-1000/-home-thiagoematumoto-projetos-pessoal-claude-manager/3e6fa140-d345-4f47-b6a7-ed1353c3c9db/scratchpad/handson/paperclip/shots/01..25.",
+    "flows": [
+      {
+        "flow": "Onboarding",
+        "what_happened": "O wizard tem 4 passos: nome da org, primeiro agente, Connect a model e Review. A company é criada já no passo 1. Não existe passo de objetivo/goal. 'Connect a model' só oferece Claude/OpenAI Subscription ou API key. Ao escolher Subscription o servidor dispara `claude setup-token` (login). Sem agente, o app fica atrás do wizard em tela cheia. Com agentes criados via API, o wizard some.",
+        "verdict": "Fluxo de login interrompido de propósito. Sem conectar modelo não dá para terminar o onboarding pela UI.",
+        "screenshot": "01-onboarding-name.png, 02-onboarding-connect-model.png"
+      },
+      {
+        "flow": "Dashboard (4 números)",
+        "what_happened": "Os 4 tiles: Agents Enabled 2 ('0 running, 0 paused, 2 errors'), Tasks In Progress 2 ('2 open, 0 blocked'), Month Spend $0.00 ('Unlimited budget') e Pending Approvals 1 ('Awaiting board review'). Abaixo: cards de run por agente com a tarefa e 'Finished 4m ago', gráficos de 14 dias (Run Activity com a barra vermelha de failed, Tasks by Status, Success Rate), Recent Activity e Recent Tasks. O tile Agents Enabled conta como 'enabled' agentes que a API marca active=0, error=2.",
+        "verdict": "Bate com a descrição do JSON.",
+        "screenshot": "04-dashboard-agents.png, 18-dashboard-with-pending.png"
+      },
+      {
+        "flow": "Lista de agentes e status visual",
+        "what_happened": "/agents/all tem abas All/Active/Paused/Error e alterna entre List e Org chart. Cada linha mostra avatar, papel/título, 'Claude Code', a hora do último run e uma pílula de texto ('idle', ou 'error' vermelha). Durante o run aparece um chip azul 'Live'. Logo depois da falha, a mesma linha mostrou 'Live' e 'error' juntos. A coroa marca o 'My primary agent'. Não vi a cápsula vertical pulsante: o status é uma pílula de texto.",
+        "verdict": "Status legível, mas a cápsula descrita no JSON não apareceu nesta tela.",
+        "screenshot": "05-agents-list.png, 06-agents-orgchart.png, 08-after-create-task.png"
+      },
+      {
+        "flow": "/org",
+        "what_happened": "Com a UI streamlined (ligada por padrão), /SAN/org redirecionou para /SAN/agents/all. O org chart sobrevive só como toggle de visualização na lista de agentes.",
+        "verdict": "Confirma o JSON.",
+        "screenshot": "06-agents-orgchart.png"
+      },
+      {
+        "flow": "Criação de tarefa e subtarefa",
+        "what_happened": "O New Task é um composer markdown com Project, assignee (padrão Tech Lead) e modelo. Não tem campo de goal nem de parent. Ao criar a SAN-1, a tarefa entrou direto em In Progress e acordou o agente. A subtarefa SAN-2 (parentId=SAN-1, atribuída ao Backend Dev) foi criada pela API e também acordou e falhou. Na SAN-1, o painel Properties mostra Subtasks: SAN-2 como chip. Não aparece barra 'N/M done'. A SAN-2 mostra Parent: SAN-1 só no painel; o breadcrumb é só 'TASKS > título'.",
+        "verdict": "Grafo pai/filho visível no painel lateral. Barra agregada de progresso não observada com 1 filha.",
+        "screenshot": "07-new-task-dialog.png, 10-task-san1-with-subtask-goal.png, 11-subtask-san2.png, 14-task-typed-interactions.png"
+      },
+      {
+        "flow": "Cadeia goal → tarefa",
+        "what_happened": "Por padrão o Goals não está na sidebar (flag enableGoalsSidebarLink=false). Com goalId gravado na SAN-1 e na SAN-2, a tela da tarefa não mostra o goal em lugar nenhum: o texto da página não contém 'goal' nem o título do goal. O GoalDetail mostra só 'Sub-Goals (0) / Projects (0)', sem listar tarefas. O Agent Feed registra 'Board created goal' sem o nome.",
+        "verdict": "A cadeia goal→tarefa não aparece na UI em nenhuma direção.",
+        "screenshot": "21-goal-detail.png"
+      },
+      {
+        "flow": "Run que falha por falta de credencial (recovery)",
+        "what_happened": "Toasts: 'Tech Lead run failed — ACP agent reported a terminal access failure. Not logged in · Please run /login' e 'Tech Lead errored'. No thread da tarefa: separador 'AI connection needed · Use the connection card below to continue' e um card 'Connect your Claude account — Tech Lead needs your own AI connection. Connect here and the task will resume automatically' com o botão Connect Claude. A página do run mostra 'Not logged in · Please run /login (claude_auth_required)', o botão 'Login to Claude Code', Exit code 1, Retry, Clear error e Re-run with provider trace. A tarefa continua 'In Progress' com glifo animado mesmo sem nada rodando. Na linha do Inbox o erro aparece truncado ('terminal access failure.'), sem a parte de login.",
+        "verdict": "Recovery honesto: mostra a causa, a ação e quem age (você). O status de workflow da tarefa, porém, segue 'In Progress' animado.",
+        "screenshot": "08-after-create-task.png, 09-task-san1-failed-run.png, 24-failed-run-detail.png"
+      },
+      {
+        "flow": "Inbox",
+        "what_happened": "/inbox → /inbox/mine. Abas Mine/Recent/Unread/Blocked/All, busca e botões 'Disable parent-child nesting' (o aninhamento vem ligado: SAN-2 indentada sob SAN-1), Filter, Group e Columns. Não há controle de ordenação. Linhas: as tarefas, 'Board Approval' com Approve/Reject inline e os runs falhos com Retry e Archive. As 2 interações pendentes (confirmação e pergunta) não aparecem no Inbox.",
+        "verdict": "Funciona, mas é incompleto como 'precisa de você'.",
+        "screenshot": "12-inbox.png, 13-inbox-with-approval-interactions.png"
+      },
+      {
+        "flow": "Decisions / Approvals",
+        "what_happened": "/decisions (WhatNeedsMe) mostra '7 decisions'. Cards tipados: ASK USER QUESTIONS com formulário inline (express/fastify/Other, Submit answers); 'Confirmar plano' com Decline/Confirm; Approval com Request revision/Reject/Approve/Open; 2× 'Connect Anthropic' (connection_intent, 'Only the addressed user can respond'); 2× 'Agent error' com a causa completa '...Not logged in · Please run /login'. Também tem 'When to decide' (Today/This week/Whenever/Pick date), Queues, Snooze, 'Ask agent for recommendation', controle de ordenação e grupos NEW TODAY/DECIDED/EXPIRED. A API /attention devolve whyNow/entryRule/exitRule por item (ex.: approval → 'approvals.status = pending' / 'Approval leaves pending status'). A UI mostra o whyNow como subtítulo de alguns cards, mas não entry/exit. /approvals/pending lista só a aprovação formal (1).",
+        "verdict": "É a superfície mais completa e tipada, mas fica escondida por padrão (enableDecisions=false).",
+        "screenshot": "15-decisions.png, 16-decisions-typed-cards.png, 17-decisions-approval-expanded.png, 25-approvals-pending.png"
+      },
+      {
+        "flow": "Conference Room + Agent Feed",
+        "what_happened": "Só existe com o flag enableConferenceRoomChat. O chat da esquerda ficou num indicador '…' sem resposta (não há agente funcional). O Agent Feed passou primeiro pelo estado vazio 'Your agents are running — activity will appear here shortly', o que é enganoso porque os dois agentes estavam em erro. Depois listou eventos tipados com ícone, verbo e tempo: 'Board requested approval…', 'Backend Dev commented on SAN-2', 'Board opened SAN-2', 'Board updated SAN-1', 'Board created goal', 'Board hired Tech Lead'. Run falho e erro de agente não viraram eventos do feed.",
+        "verdict": "O formato Agent Feed bate com o JSON. Falhas não aparecem no feed.",
+        "screenshot": "19-conference-room-feed.png, 20-conference-room-feed-loaded.png"
+      },
+      {
+        "flow": "Teste de fraquezas: badge vs lista, várias superfícies, regra de saída, arquivar",
+        "what_happened": "Com 1 aprovação, 2 interações, 2 connection_intents e 2 agentes em erro, cada superfície contou uma coisa: badge do Inbox 3 (/sidebar-badges approvals 1 + failedRuns 2), badge de Decisions 7 (attention deskBadgeCount 7) e tile Pending Approvals 1. Inbox 3 e Decisions 7 apareceram lado a lado na sidebar. Depois de cancelar a SAN-1 e marcar a SAN-2 como done, as interações saíram do attention, mas o Inbox seguiu com as 2 linhas de run falho (com Retry) e failedRuns=2 no badge. A aprovação ligada à tarefa cancelada continuou pendente. Arquivar a aprovação no Inbox manteve status=pending e baixou o badge do Inbox para 2, mas o Dashboard seguiu com 1 e o Decisions com 3. Num carregamento, o badge do Inbox mostrou '1' (preto) antes de virar 3.",
+        "verdict": "As divergências do JSON foram reproduzidas ao vivo.",
+        "screenshot": "20-conference-room-feed-loaded.png, 22-inbox-after-tasks-closed.png, 23-inbox-after-archive.png"
+      }
+    ],
+    "blocked_without_agents": [
+      "Conclusão real de tarefa, work products e documentos anexados",
+      "Delegação do lead para o subordinado via sub-issue criada pelo agente (criei a subtarefa via API)",
+      "Perguntas, confirmações e propose/decide criados pelo próprio agente, e a continuação (wake_assignee) depois da resposta",
+      "Fila de mensagens durante run com steer/interrupt e ack de entrega",
+      "Cápsula 'running' pulsando e o indicador Live durante execução longa",
+      "Barra de progresso agregada com várias filhas em estados diferentes",
+      "heartbeat-context / ancestralidade de goal injetada no prompt",
+      "Chat do Conference Room com o agente principal (ficou em '…')",
+      "Status Cards (resumo gerado a partir de prompt)",
+      "Custo e uso de tokens, budget e heartbeat agendado",
+      "Recovery de falhas no meio do trabalho (efeitos externos incertos), além da falha de auth",
+      "Volume para reproduzir #958 (histórico de runs não paginado)"
+    ],
+    "ux_impressions": "Visual limpo e calmo, mas modo dev lento (10-20 s por navegação, com spinner e skeleton). O onboarding é bonito, mas trava em \"Connect a model\". Não existe caminho \"explorar sem modelo\" e não há passo de goal, apesar do pitch \"manage business goals\".\n\nO melhor que vi foi o recovery da falha de auth. O thread diz \"AI connection needed\" e põe um card com o próximo passo. A página do run mostra o código claude_auth_required com Login/Retry/Clear error. Ninguém fica adivinhando.\n\nO pior é a fragmentação do \"precisa de você\". Ao mesmo tempo: Inbox 3, Decisions 7, tile Pending Approvals 1, Approvals 1. A Decisions é excelente: cards tipados, resolução inline, prazo, snooze e o whyNow vindo do contrato no servidor. Mas fica escondida por flag, e o Inbox, a superfície padrão, omite perguntas e confirmações. No thread só uma interação pendente aparece por vez: a confirmação estava pendente e invisível. Runs falhos de tarefas já done ou cancelled continuam no Inbox com Retry.\n\nA tarefa fica \"In Progress\" animada sem nada rodando, e o Agent Feed diz \"Your agents are running\" com os dois agentes em erro. São dois casos de status que mentem por omissão.\n\nO goal é quase invisível: não está na sidebar por padrão, não aparece na tarefa e o GoalDetail não lista tarefas.\n\nLição para o Pitwall: uma fila só, com contrato explícito, e o mesmo seletor alimentando badge e lista. Fica confirmado empiricamente."
+  },
+  "internals": {
+    "runtime": [
+      {
+        "name": "Fila durável de wakes",
+        "how_it_works": "Todo gatilho passa por enqueueWakeup, que grava recibo em agentWakeupRequests (queued/skipped/coalesced/deferred_issue_execution) e um heartbeatRuns queued; menção em comentário não acorda.",
+        "evidence": "server/src/services/heartbeat.ts:27257,27304,29076-29190"
+      },
+      {
+        "name": "Admissão atrás de run ativo (coalesce/defer/proceed)",
+        "how_it_works": "Com run ativo na issue: coalesce se mesmo agente sem info nova; defer (um deferred por issue que acumula comment ids) se chegou comentário/interaction/blockers_resolved; comentário humano nunca entra no turno corrente.",
+        "evidence": "server/src/modules/wake-queue/domain/policy.ts:44-61; use-cases.ts:783-955; heartbeat.ts:7191-7212"
+      },
+      {
+        "name": "Lock lazy executionRunId + drain on-idle",
+        "how_it_works": "executionRunId é carimbado no claim via UPDATE condicional; ao fim do run releaseIssueExecution promove um deferred por vez, filtra eco do próprio run, reabre task done se comentário humano chegou depois.",
+        "evidence": "heartbeat.ts:18219-18256,27189-27240; wake-queue/application/use-cases.ts:134-470"
+      },
+      {
+        "name": "Gates no claim",
+        "how_it_works": "claimQueuedRun cancela run se agente não invocável, budget/cap diário, blockers não resolvidos (revalidados na hora de rodar), tree hold ou run obsoleto.",
+        "evidence": "heartbeat.ts:17599-17757"
+      },
+      {
+        "name": "Concorrência por agente",
+        "how_it_works": "maxConcurrentRuns default 20 (1..50); ordena por issue in_progress pronta > pronta > sem issue > com blockers, depois prioridade e FIFO.",
+        "evidence": "heartbeat.ts:20268-20425; packages/shared/src/constants.ts:77"
+      },
+      {
+        "name": "Sessão por tarefa",
+        "how_it_works": "agentTaskSessions por agente+taskKey passado como --resume; reset em issue_assigned/forceFresh; --append-system-prompt-file só em sessão nova; mudança de skills invalida o resume.",
+        "evidence": "heartbeat.ts:5796-5855; claude-local/src/server/execute.ts:793-881"
+      },
+      {
+        "name": "Seleção de runtime",
+        "how_it_works": "claude_local é sempre legacy (--print); native exige adapterType=paperclip_runner, mesmo com enableNativeRunner=true; onboarding força claude_local.",
+        "evidence": "native-runtime/runtime-mode.ts:108-119; onboarding-seed.ts:34-45"
+      },
+      {
+        "name": "Disposition repair legacy",
+        "how_it_works": "Após run legacy succeeded sem disposição durável (blocker/monitor/interaction/approval/stage), agenda wake 'A final message alone does not record disposition'; máx 2 por fingerprint SHA do estado; depois escala ao board.",
+        "evidence": "heartbeat.ts:26264-26278; recovery/service.ts:3766-3922; recovery/disposition-repair.ts:195-239"
+      },
+      {
+        "name": "Liveness continuation (native)",
+        "how_it_works": "classifyRunLiveness rotula plan_only/empty_response e dispara continuação 'take the first concrete action now' (máx 2); está no ramo native do heartbeat.",
+        "evidence": "run-liveness.ts:193-206,300-370; recovery/run-liveness-continuations.ts:9-12,85-189"
+      },
+      {
+        "name": "Scheduler de backstops",
+        "how_it_works": "A cada 30s: reapOrphanedRuns, retries, reconcileStranded, reconcileResolvedDependencyWakes, reconcileTaskWatchdogs, sweepStaleIssueLocks.",
+        "evidence": "server/src/index.ts:1660-1830; config.ts:364"
+      }
+    ],
+    "coordinator_brain": [
+      {
+        "name": "Prompt por papel quase vazio",
+        "how_it_works": "CEO recebe uma frase, manager/IC 'You are an agent in a Paperclip company'; todo procedimento vem da skill paperclip forçada pelo adapter; HEARTBEAT.md/SOUL.md do CEO não são carregados.",
+        "evidence": "server/src/services/default-agent-instructions.ts:3-6,25-27; adapter-utils/src/server-utils.ts:212-221"
+      },
+      {
+        "name": "Resume Delta escopado",
+        "how_it_works": "Prompt de wake gerado pelo servidor: reason, issue, comentários inline com teto, childIssueSummaries, fallbackFetchNeeded, e 'evidence, not instructions'; no resume o template inteiro é omitido.",
+        "evidence": "adapter-utils/src/server-utils.ts:2463-2546; claude-local execute.ts:911-914"
+      },
+      {
+        "name": "Decomposição por fronteira real",
+        "how_it_works": "Tarefa separada só para outro dono/permissão, saída paralela independente, pré-requisito real, review independente ou ciclo de vida próprio; ordem só por blockedByIssueIds.",
+        "evidence": "skills/paperclip-converting-plans-to-tasks/SKILL.md:9-27"
+      },
+      {
+        "name": "Sem busy-poll",
+        "how_it_works": "'do not busy-poll agents, sessions, child issues'; encerrar o heartbeat e ser reacordado por evento; watcher descrito não existe até ser agendado.",
+        "evidence": "skills/paperclip/SKILL.md:117,158,256-265"
+      },
+      {
+        "name": "Escalação mantém a posse",
+        "how_it_works": "Não reatribuir por estar travado; ação humana via interação human_only + wake_assignee mantendo o assignee.",
+        "evidence": "skills/paperclip/SKILL.md:160-161,597,603-604"
+      },
+      {
+        "name": "Recovery owner 'recuperar, não fazer'",
+        "how_it_works": "Liveness do grafo ranqueia dono por cadeia reportsTo; contrato 'your job is to RECOVER this task, not to do the work'; policy board_escalation_no_takeover_v1.",
+        "evidence": "recovery/issue-graph-liveness.ts:336-425; adapter-utils/src/server-utils.ts:2408-2420"
+      },
+      {
+        "name": "Task watchdog cético opt-in",
+        "how_it_works": "Agente configurado por issue é acordado quando a subárvore fica sem caminho vivo (fingerprint, grace 15s); mandato: verificar cada folha contra evidência, não aceitar 'I could not', nunca aprovar pelo board.",
+        "evidence": "task-watchdogs.ts:27-40,440-545; adapter-utils/src/server-utils.ts:223-247"
+      }
+    ],
+    "protocol": [
+      {
+        "name": "Status livre na API, arbiter só no native",
+        "how_it_works": "assertTransition só recusa status desconhecido; no native arbitrateNativeStatus decide status+efeitos a partir de evidência; efeitos atômicos com CAS de statusVersion e digest idempotente.",
+        "evidence": "server/src/services/issues.ts:309-314; native-runtime/status-arbiter.ts:95-631; status-decision-committer.ts:1543-2044"
+      },
+      {
+        "name": "Completion contract com default fraco",
+        "how_it_works": "Sem reviewPolicy human_only/not_creator, contrato é low/agent_claim_policy: done aceita claim 'satisfied' sem evidência durável.",
+        "evidence": "native-runtime/completion-contracts.ts:79-87; status-arbiter.ts:376-389"
+      },
+      {
+        "name": "Guard 422 de disposição",
+        "how_it_works": "PATCH de agente para in_review exige caminho real de revisão (reviewer humano, participant, monitor, interação, approval); análogo para blocked; sem guard simétrico para done.",
+        "evidence": "server/src/routes/issues.ts:2041-2046,4437-4572,13925-13935"
+      },
+      {
+        "name": "executionPolicy stages",
+        "how_it_works": "Review/approval troca assignee para participante (sem self-review); changes_requested volta ao executor; cap DEFAULT_MAX_REVIEW_ROUNDS=3 escala ao responsibleUserId.",
+        "evidence": "server/src/services/issue-execution-policy.ts:69,650-990"
+      },
+      {
+        "name": "Interações tipadas",
+        "how_it_works": "issue_thread_interactions com kinds, resolverPolicy (anyone|not_creator|human_only), continuationPolicy (wake_assignee...), idempotencyKey; rejeição de plano sempre acorda o autor.",
+        "evidence": "packages/db/src/schema/issue_thread_interactions.ts:16-55; routes/issues.ts:2470-2545"
+      },
+      {
+        "name": "Barreira de filhos + stop relay",
+        "how_it_works": "Pai só acorda com issue_children_completed quando todos os filhos estão done/cancelled e ele não está done; resumo = último comentário do filho (500 chars, 20 filhos); filho blocked/cancelled gera stop relay.",
+        "evidence": "server/src/services/issues.ts:229-230,9265-9352; routes/issues.ts:15404-15505"
+      },
+      {
+        "name": "Atenção como projeção derivada",
+        "how_it_works": "attentionService.list recalcula a cada leitura a partir das fontes; dedupKey embute timestamp de transição; só dismissals/snoozes persistem.",
+        "evidence": "server/src/services/attention.ts:358-400,1102-1200,1920-1990"
+      },
+      {
+        "name": "Tree holds",
+        "how_it_works": "Pause de subárvore checado na admissão de cada wake (skip issue_tree_hold_active).",
+        "evidence": "issue-tree-control.ts:567-622; heartbeat.ts:27770-27800"
+      }
+    ]
+  }
+}

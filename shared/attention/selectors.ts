@@ -1,12 +1,17 @@
-import type { AttentionItem } from '../types/attention'
+import { PRODUCED_ATTENTION_KINDS, type AttentionItem } from '../types/attention'
+
+const PRODUCED: ReadonlySet<string> = new Set(PRODUCED_ATTENTION_KINDS)
 
 // O que o humano vê. Itens 'info' (resultado não lido pela mãe, PTY ociosa após
-// done) só entram se a superfície pedir.
+// done) só entram se a superfície pedir. Kind sem produtor declarado (F1+) fica de
+// fora AQUI, e não em cada superfície: badge e lista contam o mesmo conjunto.
 export function humanQueue(
   items: AttentionItem[],
   opts: { includeInfo?: boolean } = {},
 ): AttentionItem[] {
-  return items.filter((i) => (opts.includeInfo ? true : i.severity !== 'info'))
+  return items.filter(
+    (i) => PRODUCED.has(i.kind) && (opts.includeInfo ? true : i.severity !== 'info'),
+  )
 }
 
 export function attentionHandoffIds(items: AttentionItem[]): Set<string> {
@@ -36,4 +41,20 @@ export function countForLane(
       subjects.add(attentionSubjectKey(i))
   }
   return subjects.size
+}
+
+// Recorte de uma feature: o MESMO predicado do card do Ctrl+` (buildSwitcherEntries).
+// Item cuja sessão o mapa desenha pertence à lane pela sessão; senão, pela feature.
+// laneSessionIds = sessões da lane que estão em inUse.
+export function itemsForFeature(
+  queue: AttentionItem[],
+  laneSessionIds: ReadonlySet<string>,
+  inUse: ReadonlySet<string>,
+  featureId: string,
+): AttentionItem[] {
+  return queue.filter((i) =>
+    i.sessionId && inUse.has(i.sessionId)
+      ? laneSessionIds.has(i.sessionId)
+      : i.featureId === featureId,
+  )
 }

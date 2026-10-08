@@ -7,6 +7,7 @@ vi.mock('@/lib/ipc', () => ({
 
 import { FeatureSwitcher, FeatureSwitcherButton } from './FeatureSwitcher'
 import { useFeatureMruStore } from './feature-mru-store'
+import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { useMapFocusStore } from './map-focus-store'
 import { useProjectsViewStore } from './projects-view-store'
@@ -74,6 +75,12 @@ const graphOf = (lanes: SessionGraphLane[]): SessionGraph => ({
 const ctrlBackquote = (shiftKey = false) =>
   fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true, shiftKey })
 const releaseCtrl = () => fireEvent.keyUp(window, { key: 'Control', code: 'ControlLeft' })
+// O botão "Trocar feature" da barra do mapa: confirmar fica no mapa (OPEN-8).
+const pickFromMapButton = () => {
+  fireEvent.click(screen.getByTestId('map-feature-switcher'))
+  fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' })
+}
+const roomFeature = () => useFeatureRoomStore.getState().featureId
 
 describe('FeatureSwitcher', () => {
   beforeEach(() => {
@@ -87,10 +94,11 @@ describe('FeatureSwitcher', () => {
     useFeatureMruStore.setState({ order: ['f2', 'f3', 'f1'] })
     useMapFocusStore.setState({ featureId: 'f2', frame: null })
     useAppStore.setState({ area: 'features' })
+    useFeatureRoomStore.setState({ featureId: null })
     useProjectsViewStore.getState().setView('terminals')
   })
 
-  it('segurar mostra o overlay em ordem MRU; Tab avança; soltar confirma e leva ao mapa', () => {
+  it('segurar mostra o overlay em ordem MRU; Tab avança; soltar confirma e abre a Room', () => {
     render(<FeatureSwitcher />)
     ctrlBackquote()
     act(() => void vi.advanceTimersByTime(200))
@@ -103,18 +111,22 @@ describe('FeatureSwitcher', () => {
     expect(screen.getAllByRole('option')[2].getAttribute('aria-selected')).toBe('true')
     releaseCtrl()
     expect(screen.queryByRole('listbox')).toBeNull()
-    expect(useMapFocusStore.getState().featureId).toBe('f1')
-    expect(useMapFocusStore.getState().frame?.featureId).toBe('f1')
-    expect(useAppStore.getState().area).toBe('projects')
-    expect(useProjectsViewStore.getState().view).toBe('map')
+    expect(roomFeature()).toBe('f1')
+    expect(useAppStore.getState().area).toBe('room')
+    expect(useFeatureMruStore.getState().order[0]).toBe('f1')
+    expect(useMapFocusStore.getState().frame).toBeNull()
   })
 
   it('no escopo de outro projeto, confirmar abre o mapa em "Todos"', () => {
     useProjectsViewStore.getState().setScopeMode('project')
     useAppStore.setState({ activeProjectId: 'p9' })
-    render(<FeatureSwitcher />)
-    ctrlBackquote()
-    releaseCtrl()
+    render(
+      <>
+        <FeatureSwitcher />
+        <FeatureSwitcherButton />
+      </>,
+    )
+    pickFromMapButton()
     expect(useMapFocusStore.getState().featureId).toBe('f3')
     expect(useProjectsViewStore.getState().scopeMode).toBe('all')
   })
@@ -122,9 +134,13 @@ describe('FeatureSwitcher', () => {
   it('no escopo do projeto da feature, o escopo fica', () => {
     useProjectsViewStore.getState().setScopeMode('project')
     useAppStore.setState({ activeProjectId: 'p1' })
-    render(<FeatureSwitcher />)
-    ctrlBackquote()
-    releaseCtrl()
+    render(
+      <>
+        <FeatureSwitcher />
+        <FeatureSwitcherButton />
+      </>,
+    )
+    pickFromMapButton()
     expect(useProjectsViewStore.getState().scopeMode).toBe('project')
     useProjectsViewStore.getState().setScopeMode('all')
   })
@@ -134,7 +150,7 @@ describe('FeatureSwitcher', () => {
     ctrlBackquote()
     releaseCtrl()
     expect(screen.queryByRole('listbox')).toBeNull()
-    expect(useMapFocusStore.getState().featureId).toBe('f3')
+    expect(roomFeature()).toBe('f3')
   })
 
   it('Esc cancela sem mudar nada; Shift volta; setas também navegam', () => {
@@ -179,15 +195,19 @@ describe('FeatureSwitcher', () => {
     expect(useMapFocusStore.getState().featureId).toBe('f2')
     ctrlBackquote()
     releaseCtrl()
-    expect(useMapFocusStore.getState().featureId).toBe('f2')
-    expect(useMapFocusStore.getState().frame).toMatchObject({ flowId: 'lane:f:f2' })
+    expect(roomFeature()).toBe('f2')
+    expect(useAppStore.getState().area).toBe('room')
   })
 
   it('confirmar fecha o painel de outra feature (o mapa, ao montar, voltaria a ela)', () => {
     useFeaturePanelStore.setState({ openFeatureId: 'f1' })
-    render(<FeatureSwitcher />)
-    ctrlBackquote()
-    releaseCtrl()
+    render(
+      <>
+        <FeatureSwitcher />
+        <FeatureSwitcherButton />
+      </>,
+    )
+    pickFromMapButton()
     expect(useMapFocusStore.getState().featureId).toBe('f3')
     expect(useFeaturePanelStore.getState().openFeatureId).toBeNull()
   })
@@ -251,8 +271,7 @@ describe('FeatureSwitcher', () => {
     useMapFocusStore.getState().setFeature('f2') // clique num cartão de f2
     ctrlBackquote()
     releaseCtrl()
-    expect(useMapFocusStore.getState().frame).toMatchObject({ flowId: 'lane:f:f1' })
-    expect(useMapFocusStore.getState().featureId).toBe('f1')
+    expect(roomFeature()).toBe('f1')
   })
 
   // Regressão: no boot (a feature em foco não persiste) o toque pulava a mais recente.
@@ -261,7 +280,7 @@ describe('FeatureSwitcher', () => {
     render(<FeatureSwitcher />)
     ctrlBackquote()
     releaseCtrl()
-    expect(useMapFocusStore.getState().featureId).toBe('f2')
+    expect(roomFeature()).toBe('f2')
   })
 
   // No ABNT2 o layout rotula o Backquote como "'": a dica mostra a crase (o nome do
