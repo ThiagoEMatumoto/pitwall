@@ -291,6 +291,14 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
   return fresh(id)
 }
 
+// Evento avulso na trilha, sem mudar status (ex.: child_direct_message). No-op se
+// o handoff não existe.
+export function recordEvent(handoffId: string, event: string, detail: string | null): void {
+  const s = currentStatus(handoffId)
+  if (s === null) return
+  logEvent(handoffId, event, s, s, detail)
+}
+
 export function get(id: string): Handoff | null {
   const row = getRow(id)
   return row ? toEntity(row) : null

@@ -8,7 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
-import { emitSessionLinkPulse } from '../services/session-link-pulse'
+import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
   buildSessionsFileIndex,
@@ -21,6 +21,7 @@ import {
 import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
+import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import {
   onQueueSnapshot,
@@ -153,6 +154,7 @@ export function registerSendPromptIpc(): void {
     replaceText: (id, text) => promptQueue.replaceText(id, text),
   })
   sweepOrphansOnBoot()
+  setSendMessageObserver(recordChildDirectMessage)
   ptyManager.on('data', (e) => tailFeed.onData(e.sessionId))
   ptyManager.on('exit', (e) => tailFeed.onExit(e.sessionId))
 

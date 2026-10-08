@@ -75,13 +75,14 @@ export interface SendMessageCall {
   toolUseId: string
   to: string
   at: number
+  message?: string
 }
 
 interface ToolUseItem {
   type?: string
   id?: string
   name?: string
-  input?: { to?: unknown }
+  input?: { to?: unknown; message?: unknown }
 }
 
 // tool_use 'SendMessage' das linhas assistant. `at` vem do timestamp da linha: o
@@ -101,7 +102,8 @@ export function extractSendMessages(tail: string): SendMessageCall[] {
     for (const c of line.message.content) {
       if (c.type !== 'tool_use' || c.name !== 'SendMessage' || !c.id) continue
       if (typeof c.input?.to !== 'string' || !c.input.to) continue
-      out.push({ toolUseId: c.id, to: c.input.to, at })
+      const message = typeof c.input.message === 'string' ? c.input.message : undefined
+      out.push({ toolUseId: c.id, to: c.input.to, at, ...(message !== undefined ? { message } : {}) })
     }
   }
   return out
@@ -138,6 +140,13 @@ export const SEND_MESSAGE_FRESH_MS = 30_000
 export const SEND_MESSAGE_RETRY_MS = 30_000
 const SEEN_CAP = 2000
 
+export interface ObservedSendMessage {
+  fromSessionId: string
+  toSessionId: string
+  toolUseId: string
+  message: string | null
+}
+
 export class SendMessageWatcher {
   private seen = new Set<string>()
   private unresolved = new Map<string, number>()
@@ -146,6 +155,7 @@ export class SendMessageWatcher {
   constructor(
     private readonly emit: (input: PulseInput) => void,
     private readonly now: () => number = Date.now,
+    private readonly onCall?: (e: ObservedSendMessage) => void,
   ) {}
 
   markRead(sourceKey: string): void {
@@ -179,6 +189,12 @@ export class SendMessageWatcher {
         this.unresolved.delete(call.toolUseId)
         this.seen.add(call.toolUseId)
         this.emit({ fromSessionId, toSessionId: to, kind: 'message' })
+        this.onCall?.({
+          fromSessionId,
+          toSessionId: to,
+          toolUseId: call.toolUseId,
+          message: call.message ?? null,
+        })
       } else if (pendingSince === undefined) {
         // Remetente ainda sem cc_session_id no banco, ou destino ainda fora do
         // índice de ~/.claude/sessions: a próxima releitura tenta de novo.
@@ -250,7 +266,21 @@ export function emitSessionLinkPulse(input: PulseInput): void {
   }
 }
 
-const sendMessageWatcher = new SendMessageWatcher(emitSessionLinkPulse)
+// Segundo ouvinte do mesmo SendMessage observado (trilha do handoff). Setter pra
+// não puxar o handoff-store pra cá.
+let observedSendMessageListener: ((e: ObservedSendMessage) => void) | null = null
+
+export function setSendMessageObserver(fn: ((e: ObservedSendMessage) => void) | null): void {
+  observedSendMessageListener = fn
+}
+
+const sendMessageWatcher = new SendMessageWatcher(emitSessionLinkPulse, Date.now, (e) => {
+  try {
+    observedSendMessageListener?.(e)
+  } catch (err) {
+    console.warn('[session-link-pulse] observador de SendMessage falhou:', err)
+  }
+})
 
 function sessionIdForCc(ccSessionId: string): string | null {
   const row = getDb()
