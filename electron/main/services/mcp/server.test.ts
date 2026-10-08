@@ -200,7 +200,12 @@ describe('mcp server — identidade da sessão-mãe (?s=)', () => {
     try {
       const result = await client.callTool({
         name: 'session_handoff',
-        arguments: { targetRepo: 'ident', task: `Tarefa ${randomUUID()}`, force: true },
+        arguments: {
+          targetRepo: 'ident',
+          task: `Tarefa ${randomUUID()}`,
+          force: true,
+          forceReason: 'cada teste despacha de novo no mesmo repo',
+        },
       })
       return (result.structuredContent as { handoffId: string }).handoffId
     } finally {

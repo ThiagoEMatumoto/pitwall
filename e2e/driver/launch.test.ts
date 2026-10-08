@@ -35,14 +35,15 @@ function openLiveProfile(): Database.Database {
     now,
   )
   db.prepare(
-    "INSERT INTO repos (id, project_id, label, path, position, created_at) VALUES ('r1','p1','R1','/tmp/r1',0,?)",
-  ).run(now)
+    "INSERT INTO repos (id, project_id, label, path, position, created_at) VALUES ('r1','p1','R1','/tmp/r1',0,?), ('r2','p1','R2','/tmp/r2',1,?)",
+  ).run(now, now)
+  // Repos distintos: um handoff ativo por repo (índice da migration 054).
   const insertHandoff = db.prepare(
     `INSERT INTO handoffs (id, target_repo_id, task, composed_prompt, status, mode, created_at, updated_at)
-     VALUES (?, 'r1', 'tarefa', 'prompt', ?, 'interactive', ?, ?)`,
+     VALUES (?, ?, 'tarefa', 'prompt', ?, 'interactive', ?, ?)`,
   )
-  insertHandoff.run('h-pending', 'pending', now, now)
-  insertHandoff.run('h-running', 'running', now, now)
+  insertHandoff.run('h-pending', 'r1', 'pending', now, now)
+  insertHandoff.run('h-running', 'r2', 'running', now, now)
   return db
 }
 

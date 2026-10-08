@@ -25,9 +25,8 @@ describe('migration 053_sessions_feature_source', () => {
     db.close()
   })
 
-  it('is registered as the last migration, version 53', () => {
+  it('is registered as version 53', () => {
     expect(migrations.find((m) => m.version === 53)?.name).toBe('053_sessions_feature_source')
-    expect(Math.max(...migrations.map((m) => m.version))).toBe(53)
   })
 
   it('adds a nullable sessions.feature_source', () => {

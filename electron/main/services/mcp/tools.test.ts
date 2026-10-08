@@ -683,9 +683,11 @@ describe('mcp tools — session_handoff sem gate', () => {
     expect(spawned).toHaveLength(1)
   })
 
-  it('force: true despacha a segunda filha mesmo com o repo-alvo ocupado', () => {
+  // Um handoff ativo por repo (índice da 054): force SUBSTITUI o atual em vez de
+  // abrir um segundo, e o motivo fica na trilha das duas pontas.
+  it('force: true + forceReason substitui a filha ativa e grava o motivo na trilha', () => {
     seedRepo('payments', '/repos/payments')
-    call<HandoffResult>('session_handoff', {
+    const first = call<HandoffResult>('session_handoff', {
       targetRepo: 'payments',
       task: 'Primeira tarefa',
     })
@@ -693,10 +695,42 @@ describe('mcp tools — session_handoff sem gate', () => {
       targetRepo: 'payments',
       task: 'Segunda tarefa',
       force: true,
+      forceReason: 'a primeira travou num rebase',
     })
     expect(second.status).toBe('running')
     expect(second.error).toBeUndefined()
     expect(spawned).toHaveLength(2)
+
+    const db = getDb()
+    const old = db.prepare('SELECT status FROM handoffs WHERE id = ?').get(first.handoffId) as {
+      status: string
+    }
+    expect(old.status).toBe('interrupted')
+    const events = db
+      .prepare(
+        "SELECT handoff_id, event, detail FROM handoff_events WHERE event IN ('force','force_superseded') ORDER BY event",
+      )
+      .all() as Array<{ handoff_id: string; event: string; detail: string }>
+    expect(events.map((e) => [e.handoff_id, e.event])).toEqual([
+      [second.handoffId, 'force'],
+      [first.handoffId, 'force_superseded'],
+    ])
+    expect(JSON.parse(events[0].detail).reason).toBe('a primeira travou num rebase')
+  })
+
+  it('force: true sem forceReason é recusado sem criar nem spawnar', () => {
+    seedRepo('noreason', '/repos/noreason')
+    call<HandoffResult>('session_handoff', { targetRepo: 'noreason', task: 'Primeira' })
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'noreason',
+      task: 'Segunda',
+      force: true,
+    })
+    expect(res.error).toMatch(/forceReason/)
+    expect(res.handoffId).toBeUndefined()
+    expect(spawned).toHaveLength(1)
+    const n = getDb().prepare('SELECT COUNT(*) AS n FROM handoffs').get() as { n: number }
+    expect(n.n).toBe(1)
   })
 
   it('falha de spawn não deixa o handoff preso: vira failed com o erro', () => {
@@ -925,6 +959,7 @@ describe('mcp tools — session_handoff sem gate', () => {
         targetRepo: 'forcado',
         task: 'B',
         force: true,
+        forceReason: 'a mãe A foi encerrada',
       })
       expect(forced.status).toBe('running')
       expect(motherOf(forced.handoffId as string)).toBe(MOTHER_B)

@@ -99,6 +99,7 @@ const createManualSchema = z.object({
   task: z.string().min(1),
   featureId: z.string().min(1).optional(),
   mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
+  forceReason: z.string().trim().min(1).max(500).optional(),
 })
 
 // Adoção: a sessão-alvo e a tarefa que dá escopo ao apelido. A mãe é explícita
@@ -244,6 +245,7 @@ export function registerHandoffsIpc(): void {
       task: input.task,
       featureId: input.featureId ?? null,
       mode: input.mode,
+      forceReason: input.forceReason,
     })
   })
 
