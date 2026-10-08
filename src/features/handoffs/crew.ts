@@ -2,7 +2,7 @@ import { childSessionIds } from '@/store/handoffsStore'
 import type { BatonChildrenMissed, Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import { handoffAsking } from '../../../shared/tui/attention-reason'
-import { humanQueue } from '../../../shared/attention/selectors'
+import { attentionHandoffIds, humanQueue } from '../../../shared/attention/selectors'
 import type { AttentionItem as ProjectedAttentionItem } from '../../../shared/types/attention'
 
 // Domínio da "equipe": as sessões-filhas de handoffs ativos. Elas ficam FORA da
@@ -126,7 +126,8 @@ export function crewAttentionCount(
   handoffs: Handoff[],
 ): number {
   const dock = new Set(dockCrew(handoffs).map((h) => h.id))
-  return humanQueue(attention).filter((i) => i.handoffId != null && dock.has(i.handoffId)).length
+  // Cards, não itens: o HUD também deduplica por handoff.
+  return [...attentionHandoffIds(humanQueue(attention))].filter((id) => dock.has(id)).length
 }
 
 // Referência mínima de pane aberta (estrutural, pra não importar o appStore aqui).

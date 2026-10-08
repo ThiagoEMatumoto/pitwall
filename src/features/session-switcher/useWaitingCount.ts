@@ -14,8 +14,13 @@ export function useWaitingCount(): number {
   const attention = useAttentionListStore((s) => s.items)
   return useMemo(() => {
     const visibleIds = new Set(visible.map((s) => s.id))
-    return humanQueue(attention).filter((i) => i.sessionId != null && visibleIds.has(i.sessionId))
-      .length
+    // Sessões, não itens: menu + falha da mesma sessão é um chip só, como no HUD.
+    const waiting = new Set(
+      humanQueue(attention).flatMap((i) =>
+        i.sessionId != null && visibleIds.has(i.sessionId) ? [i.sessionId] : [],
+      ),
+    )
+    return waiting.size
   }, [visible, attention])
 }
 
