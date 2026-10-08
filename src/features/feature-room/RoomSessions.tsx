@@ -232,6 +232,22 @@ function WorkPillView({ row }: { row: RoomSessionRow }) {
   )
 }
 
+export const READ_ONLY_HINT =
+  'Não conta para a trava do diretório. Se você aprovar o plano dela, ela pode escrever pelo shell.'
+
+function ReadOnlyTag() {
+  return (
+    <span
+      data-testid="room-readonly"
+      title={READ_ONLY_HINT}
+      aria-label={`leitura: ${READ_ONLY_HINT}`}
+      className="shrink-0 rounded-full border border-[var(--color-border)] px-1.5 py-px text-[11px] font-normal text-[var(--color-text-dim)]"
+    >
+      leitura
+    </span>
+  )
+}
+
 function ChildRow({
   row,
   first,
@@ -268,9 +284,12 @@ function ChildRow({
           <Glyph shape={rowGlyph(row)} />
         </span>
         <span className="flex min-w-0 flex-col gap-px">
-          <span className="truncate text-[13.5px] font-semibold">
-            {row.depth === 2 ? '↳ ' : ''}
-            {row.title}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[13.5px] font-semibold">
+              {row.depth === 2 ? '↳ ' : ''}
+              {row.title}
+            </span>
+            {row.readOnly && <ReadOnlyTag />}
           </span>
           <ExecLine row={row} />
         </span>

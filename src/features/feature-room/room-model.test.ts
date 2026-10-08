@@ -44,7 +44,7 @@ interface Live {
   lastText?: string
 }
 
-function child(repo: string, sid: string, mother = 'M') {
+function child(repo: string, sid: string, mother = 'M', mode?: 'plan') {
   harness.seedSession(testDb, sid, { repoId: repo, featureId: F })
   const h = store.create({
     targetRepoId: repo,
@@ -52,6 +52,7 @@ function child(repo: string, sid: string, mother = 'M') {
     featureId: F,
     task: `task ${sid}`,
     composedPrompt: 'p',
+    mode,
   })
   return store.markRunning(h.id, sid)
 }
@@ -124,6 +125,20 @@ describe('buildRoomView', () => {
     permission = await harness.scanFixture('permission-bash')
   })
   afterEach(() => testDb.close())
+
+  it("readOnly vem do handoff mode 'plan' (só a filha plan; mãe e escritora não)", () => {
+    child('r1', 'P', 'M', 'plan')
+    child('r2', 'W')
+    const { view } = world([
+      { id: 'M', status: 'idle' },
+      { id: 'P', status: 'working' },
+      { id: 'W', status: 'working' },
+    ])
+    const bySid = new Map(rowsOf(view).map((r) => [r.sessionId, r.readOnly]))
+    expect(bySid.get('P')).toBe(true)
+    expect(bySid.get('W')).toBe(false)
+    expect(view.mother?.readOnly).toBe(false)
+  })
 
   it('needsYou === queue.length === countAttentionSubjects(recorte)', () => {
     store.ask(child('r1', 'A').id, 'qual branch?')

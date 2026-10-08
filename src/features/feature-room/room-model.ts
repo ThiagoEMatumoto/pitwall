@@ -48,6 +48,8 @@ export interface RoomSessionRow {
   exec: ExecState
   lastText: string | null
   purpose: string | null
+  // Handoff mode 'plan': fora da trava do diretório (pode escrever via shell após o plano aprovado).
+  readOnly: boolean
 }
 
 export interface RoomRepo {
@@ -132,6 +134,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
         exec: motherNode.status,
         lastText: lastTextOf.get(motherNode.sessionId) ?? null,
         purpose: safe(motherNode.purpose),
+        readOnly: false,
       }
     : null
 
@@ -154,6 +157,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       exec: node ? node.status : 'gone',
       lastText: h.childSessionId ? (lastTextOf.get(h.childSessionId) ?? null) : null,
       purpose: safe(node?.purpose ?? h.task),
+      readOnly: h.mode === 'plan',
     }
   }
   const handoffRows = handoffs.filter((h) => h.childSessionId !== motherId).map(handoffRow)
@@ -171,6 +175,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       exec: n.status,
       lastText: lastTextOf.get(n.sessionId) ?? null,
       purpose: safe(n.purpose),
+      readOnly: false,
     }))
 
   const repos = groupByRepo(handoffRows, looseRows, handoffs)
