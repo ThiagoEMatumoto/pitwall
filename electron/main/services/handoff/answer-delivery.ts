@@ -14,6 +14,7 @@ import * as handoffStore from '../handoff-store'
 import { attr, sanitizeBody } from '../agent-bus'
 import { WAKE_TEXT_CAP, getWakeQueue, insertRow, type WakeOutcome } from './handoff-wake'
 import { HANDOFF_ANSWER_TAG } from '../../../../shared/handoff-answer-envelope'
+import { stripUnsafeDisplay } from '../../../../shared/tui/permission-request'
 import type { HandoffRequest } from '../../../../shared/types/handoff-request'
 import type { PromptQueueSnapshot } from '../../../../shared/types/send-prompt'
 
@@ -26,11 +27,15 @@ export function __resetAnswerDeliveryForTests(): void {
   lastEventId = null
 }
 
-// O texto da filha não pode fechar o envelope nem abrir um forjado.
+// O texto não confiável (pergunta da filha, resposta/nota da mãe) não pode fechar
+// o envelope, abrir um forjado, nem forjar um campo: toda quebra de linha ganha
+// recuo, então "pendentes:"/"resposta:" só existem na coluna 0 quando o Pitwall os
+// escreve. stripUnsafeDisplay antes: U+2028/2029 viram \n e caem na mesma regra.
 function sanitizeEnvelopeText(text: string): string {
-  return sanitizeBody(text)
+  return sanitizeBody(stripUnsafeDisplay(text))
     .replace(/<\/pitwall-/gi, '<\\/pitwall-')
     .replace(/<pitwall-/gi, '<\\pitwall-')
+    .replace(/\n/g, '\n  ')
 }
 
 function clip(text: string): string {
