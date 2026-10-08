@@ -3,6 +3,7 @@ import {
   BarChart3,
   Blocks,
   Clapperboard,
+  DoorOpen,
   ClipboardList,
   Folder,
   Home,
@@ -21,6 +22,9 @@ import { useAppStore } from '@/store/appStore'
 import { Icon, ICON_SIZE_HEADER } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { useWaitingCount } from '@/features/session-switcher/useWaitingCount'
+import { attentionCount } from '@/features/session-switcher/attention-queue'
+import { useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
+import { openRoomFromNav } from '@/features/feature-room/open-room-entry'
 
 // Fundo do item ativo: gradiente da marca translúcido + anel inset accent.
 const ACTIVE_TILE: React.CSSProperties = {
@@ -38,6 +42,7 @@ interface AreaDef {
 const AREAS: AreaDef[] = [
   // Home primeiro: é a área default no boot.
   { id: 'overview', icon: Home, label: 'Home' },
+  { id: 'room', icon: DoorOpen, label: 'Room' },
   { id: 'meetings', icon: AudioLines, label: 'Reuniões' },
   { id: 'projects', icon: Folder, label: 'Projetos' },
   { id: 'architecture', icon: Network, label: 'Arquitetura' },
@@ -60,6 +65,8 @@ export function IconRail({ onOpenSettings }: Props) {
   const area = useAppStore((s) => s.area)
   const setArea = useAppStore((s) => s.setArea)
   const waitingCount = useWaitingCount()
+  // O mesmo "N no box" da TitleBar (a fila do Alt+A inteira): a Room é onde ele se resolve.
+  const needsYou = attentionCount(useAttentionQueue())
 
   return (
     <nav className="flex h-full w-14 shrink-0 flex-col items-center justify-between border-r border-[var(--color-border)] bg-[var(--color-bg)] py-3">
@@ -70,11 +77,14 @@ export function IconRail({ onOpenSettings }: Props) {
             <li key={a.id}>
               <button
                 type="button"
-                onClick={() => setArea(a.id)}
+                data-testid={`rail-${a.id}`}
+                onClick={() => (a.id === 'room' ? openRoomFromNav() : setArea(a.id))}
                 title={
                   a.id === 'projects' && waitingCount > 0
                     ? `${a.label} · ${waitingCount} aguardando você`
-                    : a.label
+                    : a.id === 'room' && needsYou > 0
+                      ? `${a.label} · ${needsYou} precisa de você`
+                      : a.label
                 }
                 className={`relative flex h-[38px] w-[38px] items-center justify-center rounded-[11px] transition ${
                   active
@@ -92,6 +102,15 @@ export function IconRail({ onOpenSettings }: Props) {
                     color="var(--color-accent)"
                     title={`${waitingCount} aguardando você`}
                   />
+                )}
+                {a.id === 'room' && needsYou > 0 && (
+                  <span
+                    data-testid="rail-room-badge"
+                    aria-label={`${needsYou} precisa de você`}
+                    className="absolute right-[1px] top-[1px] min-w-[15px] rounded-full bg-[var(--color-accent)] px-1 text-center text-[9px] font-semibold leading-[15px] text-[var(--color-bg)] tabular-nums"
+                  >
+                    {needsYou}
+                  </span>
                 )}
               </button>
             </li>
