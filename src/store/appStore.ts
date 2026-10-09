@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { sessionsApi, workspaceApi } from '@/lib/ipc'
+import { roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
@@ -13,6 +13,7 @@ import type {
   Repo,
   Session,
 } from '../../shared/types/ipc'
+import type { StartMotherInput, StartMotherResult } from '../../shared/types/feature-room'
 
 export type Area =
   | 'projects'
@@ -152,7 +153,12 @@ const resuming = new Set<string>()
 // `liveWatchStarted` guarda contra o duplo-mount do StrictMode.
 let offGlobalActivity: (() => void) | null = null
 let offPtyExit: (() => void) | null = null
+let offRoomChanged: (() => void) | null = null
+let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
+// room:changed chega em rajada (handoffs/loop coalescidos a 300ms no main);
+// um refetch por janela basta.
+export const ROOM_REFRESH_DEBOUNCE_MS = 150
 
 // Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
 // pra não gravar a cada teclada de spawn/close em sequência.
@@ -404,6 +410,10 @@ interface AppState {
   // Re-busca o snapshot de sessões vivas (entrada/saída de sessão). Preserva o
   // status mais fresco já recebido pelo stream pra entradas que persistem.
   refreshLiveSessions: () => Promise<void>
+  // Inicia a mãe da Room (room:start-mother). O main só avisa room:changed, então
+  // o snapshot vivo é refeito aqui antes de voltar — sem isso o Peek abria sobre
+  // uma sessão ausente de liveSessions e fechava na hora.
+  startMother: (input: StartMotherInput) => Promise<StartMotherResult>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -763,6 +773,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     offPtyExit = sessionsApi.onExit(() => {
       void get().refreshLiveSessions()
     })
+    // Sessão criada pela Room (mãe via room:start-mother, ou outro caminho) não
+    // emite evento de sessão nova: o main só avisa room:changed. Sem refetch aqui,
+    // a mãe não entrava em liveSessions e o Peek fechava na hora.
+    offRoomChanged = roomApi.onChanged(() => {
+      if (roomRefreshTimer) clearTimeout(roomRefreshTimer)
+      roomRefreshTimer = setTimeout(() => {
+        roomRefreshTimer = null
+        void get().refreshLiveSessions()
+      }, ROOM_REFRESH_DEBOUNCE_MS)
+    })
   },
 
   stopLiveWatch: () => {
@@ -773,6 +793,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offPtyExit) {
       offPtyExit()
       offPtyExit = null
+    }
+    if (offRoomChanged) {
+      offRoomChanged()
+      offRoomChanged = null
+    }
+    if (roomRefreshTimer) {
+      clearTimeout(roomRefreshTimer)
+      roomRefreshTimer = null
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
@@ -805,5 +833,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }),
     })
+  },
+
+  startMother: async (input) => {
+    const res = await roomApi.startMother(input)
+    useSessionFeatureStore.getState().note(res.sessionId, input.featureId)
+    await get().refreshLiveSessions()
+    return res
   },
 }))

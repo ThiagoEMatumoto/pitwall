@@ -417,6 +417,8 @@ const api: Api = {
   room: {
     get: (featureId) => invoke('room:get', featureId),
     onChanged: (handler) => subscribe<{ featureId: string | null }>('room:changed', handler),
+    motherPreflight: (featureId, repoId) => invoke('room:mother-preflight', featureId, repoId),
+    startMother: (input) => invoke('room:start-mother', input),
   },
   agentBus: {
     list: () => invoke('agent-bus:list'),

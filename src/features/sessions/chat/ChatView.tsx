@@ -98,6 +98,8 @@ interface Props {
   emptyHint?: string
   // O menu pendente é respondido por um painel fora do chat (quick look da filha).
   menuAnsweredElsewhere?: boolean
+  // Sem ele no mount o main não arma o watch; quando chega, o watch é refeito.
+  ccSessionId?: string | null
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
@@ -123,8 +125,8 @@ function TranscriptPlanCard({
   return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
 }
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere }, ref) {
-  const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId)
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId }, ref) {
+  const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   // Só auto-scrollamos se o usuário já estava colado no fim (não roubamos a

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { chatApi } from '@/lib/ipc'
+import { acquireChatWatch, noteChatWatchCcSessionId, releaseChatWatch } from './chat-watch-refs'
 import type { ChatMessage } from '../../../../shared/types/ipc'
 
 // Assina o transcript de uma sessão enquanto montado: read inicial + watch do
 // JSONL. O broadcast manda a LISTA completa reparseada, então só substituímos o
-// estado. unwatch no unmount (toggle pro terminal desmonta o ChatView).
-export function useChatTranscript(sessionId: string) {
+// estado. Libera o watch no unmount (toggle pro terminal desmonta o ChatView);
+// o refcount em chat-watch-refs só faz unwatch quando o último consumidor sai.
+export function useChatTranscript(sessionId: string, ccSessionId: string | null = null) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
   // O read inicial sinaliza inexistência via path null; o broadcast via flag. Isso
@@ -14,6 +16,10 @@ export function useChatTranscript(sessionId: string) {
   // Último arquivo de plano escrito pela sessão (~/.claude/plans/*.md) — usado
   // pra mostrar o CONTEÚDO do plano no card de aprovação pendente.
   const [lastPlanFilePath, setLastPlanFilePath] = useState<string | null>(null)
+  // Lido no acquire sem entrar nas deps: o cc id chegando depois não deve
+  // reassinar o transcript, só reativar o watch (efeito abaixo).
+  const ccSessionIdRef = useRef(ccSessionId)
+  ccSessionIdRef.current = ccSessionId
 
   useEffect(() => {
     let cancelled = false
@@ -25,7 +31,7 @@ export function useChatTranscript(sessionId: string) {
     setLoading(true)
 
     // Assina ANTES do read pra não perder updates emitidos nessa janela.
-    chatApi.watch(sessionId)
+    acquireChatWatch(sessionId, ccSessionIdRef.current)
     const off = chatApi.onTranscriptUpdate((u) => {
       if (u.sessionId !== sessionId) return
       gotUpdate = true
@@ -54,9 +60,13 @@ export function useChatTranscript(sessionId: string) {
     return () => {
       cancelled = true
       off()
-      chatApi.unwatch(sessionId)
+      releaseChatWatch(sessionId)
     }
   }, [sessionId])
+
+  useEffect(() => {
+    noteChatWatchCcSessionId(sessionId, ccSessionId)
+  }, [sessionId, ccSessionId])
 
   return { messages, loading, transcriptExists, lastPlanFilePath }
 }

@@ -691,6 +691,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
           ) : (live?.id ?? handoff?.childSessionId) ? (
             <ChatView
               sessionId={(live?.id ?? handoff?.childSessionId)!}
+              ccSessionId={live?.ccSessionId ?? graphNode?.ccSessionId ?? null}
               status={live?.status}
               // Sem onRespond: os cards do ChatView digitam no xterm, que o modo
               // chat não monta. O menu da filha é respondido pelo painel acima

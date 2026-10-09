@@ -183,6 +183,23 @@ function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose:
 // - Modal segurando (aba ou painel por baixo): "Trazer para cá" fecha a modal.
 // - Painel da mãe segurando (só a aba, escondida atrás do mapa): "Abrir aqui" vai
 //   para Terminais; o mapa desmonta e solta a lease do painel.
+// - Room segurando: sem botão; sair da Room desmonta o centro e solta a lease.
+const OWNER_LABEL: Record<TerminalLeaseHost, string> = {
+  modal: 'Aberta na janela do mapa',
+  dock: 'Aberta no Mapa',
+  room: 'Aberta na Room',
+}
+
+function leasedDetail(host: TerminalLeaseHost | undefined, owner: TerminalLeaseHost): string {
+  if (owner === 'dock') return 'O terminal desta sessão está no painel da mãe, ao lado do mapa.'
+  const where = owner === 'room' ? 'na Room' : 'na janela grande'
+  if (host === 'dock')
+    return `O terminal desta mãe está ${where}. Ele volta para o painel quando ela fechar.`
+  if (owner === 'room')
+    return 'O terminal desta sessão está no centro da Room. Ele volta para cá quando ela fechar.'
+  return 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'
+}
+
 export function LeasedPlaceholder({
   host,
   owner,
@@ -197,28 +214,24 @@ export function LeasedPlaceholder({
       data-owner={owner}
       className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] px-6 text-center"
     >
-      <span className="text-sm text-[var(--color-text)]">
-        {byDock ? 'Aberta no Mapa' : 'Aberta na janela do mapa'}
-      </span>
+      <span className="text-sm text-[var(--color-text)]">{OWNER_LABEL[owner]}</span>
       <span className="max-w-sm text-xs text-[var(--color-text-dim)]">
-        {byDock
-          ? 'O terminal desta sessão está no painel da mãe, ao lado do mapa.'
-          : host === 'dock'
-            ? 'O terminal desta mãe está na janela grande. Ele volta para o painel quando ela fechar.'
-            : 'O terminal desta sessão está na janela do mapa. Ele volta para cá quando ela fechar.'}
+        {leasedDetail(host, owner)}
       </span>
-      <button
-        type="button"
-        data-testid={byDock ? 'terminal-leased-open-here' : 'terminal-leased-bring-back'}
-        onClick={() =>
-          byDock
-            ? useProjectsViewStore.getState().setView('terminals')
-            : useCrewDockStore.getState().closePeek({ restoreFocus: false })
-        }
-        className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-      >
-        {byDock ? 'Abrir aqui' : 'Trazer para cá'}
-      </button>
+      {owner !== 'room' && (
+        <button
+          type="button"
+          data-testid={byDock ? 'terminal-leased-open-here' : 'terminal-leased-bring-back'}
+          onClick={() =>
+            byDock
+              ? useProjectsViewStore.getState().setView('terminals')
+              : useCrewDockStore.getState().closePeek({ restoreFocus: false })
+          }
+          className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+        >
+          {byDock ? 'Abrir aqui' : 'Trazer para cá'}
+        </button>
+      )}
     </div>
   )
 }
@@ -1325,6 +1338,7 @@ function TerminalHost({
           <ChatView
             ref={chatViewRef}
             sessionId={session.id}
+            ccSessionId={ccSessionId}
             status={activity?.status}
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()

@@ -22,6 +22,7 @@ import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
 import { registerAttentionIpc } from './ipc/attention'
 import { registerFeatureRoomIpc } from './ipc/feature-room'
+import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
 import { registerSendPromptIpc } from './ipc/send-prompt'
 import { registerAgentBusIpc } from './ipc/agent-bus'
@@ -318,6 +319,7 @@ app.whenReady().then(async () => {
   registerSessionGraphIpc()
   registerAttentionIpc()
   registerFeatureRoomIpc()
+  registerRoomMotherIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
   registerAgentBusIpc()
