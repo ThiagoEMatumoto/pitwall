@@ -29,7 +29,13 @@ import { GlobalAttentionStrip } from './GlobalAttentionStrip'
 import { useMotherPins } from './mother-pins-store'
 import { MotherTile } from './MotherTile'
 import { roomMothers } from './room-model'
-import { clampRoomPanelWidth, useRoomPanelStore } from './room-panel-store'
+import {
+  DOCKVIEW_HOST_ID,
+  ROOM_PANEL_COMPACT,
+  clampRoomPanelWidth,
+  shouldCompactRoomPanel,
+  useRoomPanelStore,
+} from './room-panel-store'
 import { useNow } from './room-ui'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
@@ -59,6 +65,27 @@ function useResizeHandle() {
     useRoomPanelStore.getState().setWidth(final)
   }
   return { dragWidth, handlers: { onPointerDown, onPointerMove, onPointerUp } }
+}
+
+// Recolhe para a faixa compacta quando o dockview, com o painel cheio, ficaria
+// estreito demais (shouldCompactRoomPanel). Mede o host do dockview, não a janela:
+// arquivos e Crew Dock também tiram largura dele.
+function useCompactWhenNarrow(panelWidth: number) {
+  useEffect(() => {
+    const host = document.getElementById(DOCKVIEW_HOST_ID)
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      const store = useRoomPanelStore.getState()
+      store.setCompact(
+        shouldCompactRoomPanel(host.getBoundingClientRect().width, panelWidth, store.compact),
+      )
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [panelWidth])
+  useEffect(() => () => useRoomPanelStore.getState().setCompact(false), [])
 }
 
 // Um painel à direita por vez: abrir o Crew Dock (clique, Ctrl+J) recolhe a Room,
@@ -94,7 +121,9 @@ export function RoomPanel() {
   const [, rerender] = useReducer((n: number) => n + 1, 0)
   const resize = useResizeHandle()
   const width = resize.dragWidth ?? storedWidth
+  const compact = useRoomPanelStore((s) => s.compact)
   useExclusiveWithCrewDock()
+  useCompactWhenNarrow(storedWidth)
 
   useEffect(ensureSessionGraph, [])
   useEffect(() => {
@@ -129,11 +158,13 @@ export function RoomPanel() {
   const visible = useVisibleTiles(gridRef, orderedIds)
   const liveIds = useMemo(
     () =>
-      new Set(
-        orderedIds.filter((id) => visible === null || visible.has(id)).slice(0, MAX_LIVE_TILES),
-      ),
+      compact
+        ? new Set<string>()
+        : new Set(
+            orderedIds.filter((id) => visible === null || visible.has(id)).slice(0, MAX_LIVE_TILES),
+          ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orderedIds.join(','), visible],
+    [orderedIds.join(','), visible, compact],
   )
   const liveKey = [...liveIds].join(',')
 
@@ -211,6 +242,16 @@ export function RoomPanel() {
 
   const badge = countAttentionSubjects(needYou)
   const filterTitle = featureFilter ? featureTitleOf(featureFilter) : null
+  if (compact) {
+    return (
+      <CompactRoomPanel
+        mothers={ordered}
+        badge={badge}
+        needOf={(id) => countAttentionSubjects(needById.get(id) ?? [])}
+        onOpen={openTile}
+      />
+    )
+  }
   return (
     <aside
       data-testid="room-panel"
@@ -332,6 +373,102 @@ export function RoomPanel() {
           })}
         </div>
       )}
+    </aside>
+  )
+}
+
+// A faixa compacta: contagem de mães, o badge "precisa de você" e um ícone por mãe
+// (inicial do título; ponto vermelho se ela ou as filhas precisam de você).
+// Clicar no ícone foca a pane, como o tile. Sem resize: a largura é fixa.
+function CompactRoomPanel({
+  mothers,
+  badge,
+  needOf,
+  onOpen,
+}: {
+  mothers: SessionGraphNode[]
+  badge: number
+  needOf: (sessionId: string) => number
+  onOpen: (node: SessionGraphNode) => void
+}) {
+  return (
+    <aside
+      data-testid="room-panel"
+      data-compact="true"
+      aria-label="Room: mães e o que precisa de você (compacta)"
+      style={{ width: ROOM_PANEL_COMPACT }}
+      className="flex h-full shrink-0 flex-col items-center gap-2 overflow-hidden border-l border-[var(--color-border)] bg-[var(--color-bg)] py-2 text-[var(--color-text)]"
+    >
+      <span
+        data-testid="room-panel-summary"
+        title={`${mothers.length} ${mothers.length === 1 ? 'mãe' : 'mães'}`}
+        className="text-[11px] font-semibold tabular-nums text-[var(--color-text-dim)]"
+      >
+        {mothers.length}
+      </span>
+      <span
+        data-testid="room-panel-badge"
+        aria-label={`${badge} precisa de você`}
+        className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-bold tabular-nums"
+        style={
+          badge > 0
+            ? { background: 'var(--color-danger)', color: 'var(--color-bg)' }
+            : { background: 'var(--color-surface-2)', color: 'var(--color-text-dim)' }
+        }
+      >
+        {badge}
+      </span>
+      <div
+        role="list"
+        aria-label="Sessões-mãe"
+        className="flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden"
+      >
+        {mothers.map((m) => {
+          const title = stripUnsafeDisplay(m.cliName ?? m.title)
+          const need = needOf(m.sessionId)
+          return (
+            <button
+              key={m.sessionId}
+              type="button"
+              role="listitem"
+              data-testid="room-panel-compact-mother"
+              data-tile={m.sessionId}
+              title={need > 0 ? `${title} · ${need} precisa de você` : title}
+              aria-label={title}
+              onClick={() => onOpen(m)}
+              className="relative flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-surface-2)] text-[12px] font-semibold uppercase hover:bg-[var(--color-surface)]"
+            >
+              {title.trim().charAt(0) || '?'}
+              {need > 0 && (
+                <span
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-[var(--color-danger)]"
+                />
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <button
+        type="button"
+        data-testid="room-panel-fullscreen"
+        title="Abrir a Room em tela cheia"
+        aria-label="Abrir a Room em tela cheia"
+        onClick={() => useFeatureRoomStore.getState().openAllMothers()}
+        className="rounded-md p-1 text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+      >
+        <Icon as={Maximize2} size={14} />
+      </button>
+      <button
+        type="button"
+        data-testid="room-panel-collapse"
+        title="Recolher o painel da Room (Ctrl+Shift+L)"
+        aria-label="Recolher o painel da Room"
+        onClick={() => useRoomPanelStore.getState().setOpen(false)}
+        className="rounded-md p-1 text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+      >
+        <Icon as={PanelRightClose} size={15} />
+      </button>
     </aside>
   )
 }

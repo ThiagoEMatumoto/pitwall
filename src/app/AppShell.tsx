@@ -18,7 +18,11 @@ import { CcConfigsArea } from '@/features/cc-configs/CcConfigsArea'
 import { MetricsArea } from '@/features/metrics/MetricsArea'
 import { FeatureRoom } from '@/features/feature-room/FeatureRoom'
 import { RoomPanel } from '@/features/feature-room/RoomPanel'
-import { useRoomPanelStore } from '@/features/feature-room/room-panel-store'
+import {
+  DOCKVIEW_HOST_ID,
+  useRoomPanelInset,
+  useRoomPanelStore,
+} from '@/features/feature-room/room-panel-store'
 import { FeaturesArea } from '@/features/features/FeaturesArea'
 import { ObjectivesArea } from '@/features/objectives/ObjectivesArea'
 import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
@@ -207,12 +211,14 @@ export function AppShell() {
   const projectsView = useProjectsViewStore((s) => s.view)
   useLeaveMapOnSessionFocus()
   const loadKeybindings = useKeybindingsStore((s) => s.load)
-  // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
-  // largura dele pra não cobrir os cards das filhas (e o input de resposta).
+  // A pilha de toasts encosta na direita — onde vivem o Crew Dock e, na visão de
+  // projeto, o painel da Room (entre <main> e o dock). Recua pelos dois pra não
+  // cobrir os cards das filhas, os tiles das mães e os inputs de resposta.
   const crewDockWidth = useCrewDockWidth()
+  const roomPanelInset = useRoomPanelInset()
   const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
-  const toastPlacement = useToastPlacement(crewDockWidth)
+  const toastPlacement = useToastPlacement(crewDockWidth + roomPanelInset)
   useUpdateStatusFeed()
   const updateShown = useUpdateToastShown()
   const toastStyle = {
@@ -809,7 +815,14 @@ export function AppShell() {
 
       // Ctrl+1..9 (pane.focusN): foca o n-ésimo pane diretamente (fallback caso
       // Ctrl+Tab seja interceptado pelo SO/Electron). Combo fixo (não editável).
-      if (!inDesign && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+      if (
+        !inDesign &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key >= '1' &&
+        e.key <= '9'
+      ) {
         const panels = api?.panels ?? []
         const target = panels[Number(e.key) - 1]
         if (target) {
@@ -984,8 +997,10 @@ export function AppShell() {
         </div>
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
-          <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain overrides={overrides} />}
+          <div id={DOCKVIEW_HOST_ID} className="relative min-h-0 flex-1">
+            {panes.length === 0 && projectsView === 'terminals' && (
+              <EmptyMain overrides={overrides} />
+            )}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
               <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
@@ -1066,8 +1081,8 @@ function EmptyMain({ overrides }: { overrides: Parameters<typeof resolveCombo>[1
           Nenhuma sessão aberta
         </div>
         <div className="text-sm">
-          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou escolha
-          um repo na barra lateral.
+          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou
+          escolha um repo na barra lateral.
         </div>
         <div className="mt-3 text-xs">
           <EmptyKbd combo={resolveCombo('palette.toggle', overrides)} /> busca sessões, features e

@@ -59,4 +59,44 @@ describe('room-panel-store', () => {
     })
     expect(JSON.parse(localStorage.getItem('cm:room-panel')!).open).toBe(true)
   })
+
+  it('compacta quando o dockview com o painel cheio fica abaixo do limiar, sem oscilar', async () => {
+    const {
+      shouldCompactRoomPanel,
+      DOCKVIEW_MIN_WITH_PANEL: MIN,
+      ROOM_PANEL_COMPACT: C,
+    } = await freshStore()
+    expect(shouldCompactRoomPanel(MIN, 300, false)).toBe(false)
+    expect(shouldCompactRoomPanel(MIN - 1, 300, false)).toBe(true)
+    // Compacto, o dockview tem 300 - C a mais: a conta desconta antes de decidir.
+    expect(shouldCompactRoomPanel(MIN - 1 + (300 - C), 300, true)).toBe(true)
+    expect(shouldCompactRoomPanel(MIN + (300 - C), 300, true)).toBe(false)
+  })
+
+  it('padrão 300 e mínimo 260: o painel não come o dockview', async () => {
+    const { ROOM_PANEL_DEFAULT, ROOM_PANEL_MIN, clampRoomPanelWidth } = await freshStore()
+    expect(ROOM_PANEL_DEFAULT).toBe(300)
+    expect(clampRoomPanelWidth(100)).toBe(ROOM_PANEL_MIN)
+    expect(ROOM_PANEL_MIN).toBe(260)
+  })
+
+  it('inset da direita (toasts recuam por ele): largura cheia, faixa compacta ou 0 fora de Projetos', async () => {
+    const { renderHook } = await import('@testing-library/react')
+    const { useRoomPanelStore, useRoomPanelInset, ROOM_PANEL_COMPACT } = await freshStore()
+    const { useAppStore } = await import('@/store/appStore')
+    useAppStore.setState({ area: 'projects' })
+    useRoomPanelStore.setState({ open: true, width: 320, compact: false })
+    const { result, rerender } = renderHook(() => useRoomPanelInset())
+    expect(result.current).toBe(320)
+    useRoomPanelStore.setState({ compact: true })
+    rerender()
+    expect(result.current).toBe(ROOM_PANEL_COMPACT)
+    useAppStore.setState({ area: 'overview' })
+    rerender()
+    expect(result.current).toBe(0)
+    useAppStore.setState({ area: 'projects' })
+    useRoomPanelStore.setState({ open: false })
+    rerender()
+    expect(result.current).toBe(0)
+  })
 })

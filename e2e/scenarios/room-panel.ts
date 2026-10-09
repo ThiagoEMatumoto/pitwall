@@ -213,7 +213,7 @@ async function run(): Promise<void> {
       await page.mouse.up()
     }
     const afterDrag = await persisted(page)
-    check(!!afterDrag && afterDrag.width > 360, `5: largura persistida (${afterDrag?.width})`)
+    check(!!afterDrag && afterDrag.width > 300, `5: largura persistida (${afterDrag?.width})`)
     await page.getByTestId('room-panel-collapse').click()
     check(!(await panel(page).isVisible()), '5: recolher esconde o painel')
     check((await persisted(page))?.open === false, '5: recolhido persiste')

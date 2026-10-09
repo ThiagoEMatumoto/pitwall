@@ -104,7 +104,13 @@ const harness = await import('../../../electron/main/services/attention/attentio
 const { roomWorld } = await import('../../../electron/main/services/attention/room-world')
 const { countAttentionSubjects, humanQueue } = await import('../../../shared/attention/selectors')
 const { RoomPanel } = await import('./RoomPanel')
-const { useRoomPanelStore, ROOM_PANEL_DEFAULT } = await import('./room-panel-store')
+const {
+  useRoomPanelStore,
+  ROOM_PANEL_DEFAULT,
+  ROOM_PANEL_COMPACT,
+  DOCKVIEW_HOST_ID,
+  DOCKVIEW_MIN_WITH_PANEL,
+} = await import('./room-panel-store')
 const { useMotherPins } = await import('./mother-pins-store')
 const { useCrewDockStore } = await import('@/features/handoffs/crew-dock-store')
 const { useProjectsViewStore } = await import('@/features/session-canvas/projects-view-store')
@@ -179,6 +185,7 @@ describe('RoomPanel', () => {
       width: ROOM_PANEL_DEFAULT,
       featureFilter: null,
       focus: null,
+      compact: false,
     })
     useCrewDockStore.setState({ collapsed: true })
     useProjectsViewStore.getState().setView('terminals')
@@ -242,6 +249,67 @@ describe('RoomPanel', () => {
     fireEvent.click(screen.getByTestId('room-panel-collapse'))
     expect(screen.queryByTestId('room-panel')).toBeNull()
     expect(persisted()).toEqual({ open: false, width: ROOM_PANEL_DEFAULT + 100 })
+  })
+
+  // O host do dockview com a largura que o layout daria; o ResizeObserver é
+  // controlado (jsdom não tem): `resize` reaplica a medição.
+  function dockviewHost(width: { value: number }) {
+    const host = document.createElement('div')
+    host.id = DOCKVIEW_HOST_ID
+    host.getBoundingClientRect = () => ({ width: width.value }) as DOMRect
+    document.body.appendChild(host)
+    const callbacks: Array<() => void> = []
+    const g = globalThis as { ResizeObserver?: unknown }
+    const original = g.ResizeObserver
+    g.ResizeObserver = class {
+      constructor(cb: () => void) {
+        callbacks.push(cb)
+      }
+      observe() {}
+      disconnect() {}
+    }
+    return {
+      resize: (w: number) => {
+        width.value = w
+        act(() => callbacks.forEach((cb) => cb()))
+      },
+      remove: () => {
+        host.remove()
+        g.ResizeObserver = original
+      },
+    }
+  }
+
+  it('dockview estreito: recolhe para a faixa compacta (contagem + ícone por mãe) e volta ao alargar', () => {
+    seed()
+    const host = dockviewHost({ value: DOCKVIEW_MIN_WITH_PANEL - 1 })
+    try {
+      mount(lives(BASE, { nori: { status: 'waiting', scan: permission } }))
+      const panel = screen.getByTestId('room-panel')
+      expect(panel.dataset.compact).toBe('true')
+      expect(panel.style.width).toBe(`${ROOM_PANEL_COMPACT}px`)
+      expect(screen.queryAllByTestId('mother-tile')).toHaveLength(0)
+      const icons = screen.getAllByTestId('room-panel-compact-mother')
+      expect(new Set(icons.map((i) => i.dataset.tile))).toEqual(
+        new Set(['lume', 'nori', 'sora', 'avulsa']),
+      )
+      expect(screen.getByTestId('room-panel-summary').textContent).toBe('4')
+      expect(screen.getByTestId('room-panel-badge').textContent).toBe('1')
+
+      fireEvent.click(icons.find((i) => i.dataset.tile === 'sora')!)
+      const { panes, focusPaneId } = useAppStore.getState()
+      expect(panes.find((p) => p.paneId === focusPaneId)?.session.id).toBe('sora')
+
+      // Compacto, o dockview ganhou (largura - faixa): só volta se o painel cheio
+      // ainda deixar o dockview acima do limiar — sem oscilar na fronteira.
+      host.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT - ROOM_PANEL_COMPACT - 1)
+      expect(screen.getByTestId('room-panel').dataset.compact).toBe('true')
+      host.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT - ROOM_PANEL_COMPACT)
+      expect(screen.getByTestId('room-panel').dataset.compact).toBeUndefined()
+      expect(tiles()).toHaveLength(4)
+    } finally {
+      host.remove()
+    }
   })
 
   it('pedido de foco numa feature filtra o painel e foca a pane da mãe principal (a com filhas)', () => {
