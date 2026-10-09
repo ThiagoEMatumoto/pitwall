@@ -12,6 +12,10 @@ let testDb: Database.Database
 vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
 // O centro da Room monta o Terminal da mãe (xterm, canvas); aqui só a fila importa.
 vi.mock('@/features/sessions/Terminal', () => ({ Terminal: () => null }))
+// Só a sala: o nível 1 (Todas as mães) não monta aqui. Sem ele, o grafo de módulos
+// fica menor e o GC não cai no meio do jsdom com Statements do better-sqlite3 vivos
+// (assert nativo "(env) != nullptr" no ~Statement, o "Worker exited" da baseline).
+vi.mock('./AllMothers', () => ({ AllMothers: () => null }))
 vi.mock('../../../electron/main/services/transcript-path', () => ({
   findTranscriptPath: () => null,
 }))
@@ -102,7 +106,12 @@ async function mount() {
   useHandoffsStore.setState({ handoffs: w.handoffs, loading: false })
   useAttentionListStore.setState({ items: w.attention })
   useAppStore.setState({ area: 'room', liveSessions: w.live })
-  useFeatureRoomStore.setState({ featureId: F, timelineFilter: null, openId: null })
+  useFeatureRoomStore.setState({
+    level: 'feature',
+    featureId: F,
+    timelineFilter: null,
+    openId: null,
+  })
   render(<FeatureRoom />)
   await screen.findByTestId('room-needs-count')
   return w

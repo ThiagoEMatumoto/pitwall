@@ -87,7 +87,12 @@ async function mount(lives: WorldLive[]) {
   useHandoffsStore.setState({ handoffs: w.handoffs, loading: false })
   useAttentionListStore.setState({ items: w.attention })
   useAppStore.setState({ area: 'room', liveSessions: w.live })
-  useFeatureRoomStore.setState({ featureId: F, timelineFilter: null, openId: null })
+  useFeatureRoomStore.setState({
+    level: 'feature',
+    featureId: F,
+    timelineFilter: null,
+    openId: null,
+  })
   const utils = render(<FeatureRoom />)
   await screen.findByTestId('room-needs-count')
   return { ...utils, world: w }

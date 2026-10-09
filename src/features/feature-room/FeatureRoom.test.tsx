@@ -166,6 +166,7 @@ async function mount(lives: WorldLive[]) {
   useAttentionListStore.setState({ items: w.attention })
   useAppStore.setState({ area: 'room', liveSessions: w.live })
   useFeatureRoomStore.setState({
+    level: 'feature',
     featureId: F,
     timelineFilter: null,
     openId: null,
@@ -303,7 +304,12 @@ describe('FeatureRoom', () => {
   })
 
   it('feature inexistente oferece a saída para o seletor', async () => {
-    useFeatureRoomStore.setState({ featureId: 'NOPE', timelineFilter: null, openId: null })
+    useFeatureRoomStore.setState({
+      level: 'feature',
+      featureId: 'NOPE',
+      timelineFilter: null,
+      openId: null,
+    })
     render(<FeatureRoom />)
     expect(await screen.findByText(/não existe mais/)).toBeInTheDocument()
     expect(screen.getByTestId('room-gone-switch')).toHaveTextContent('Trocar de feature')
@@ -319,7 +325,12 @@ describe('FeatureRoom', () => {
       useHandoffsStore.setState({ handoffs: w.handoffs, loading: false })
       useAttentionListStore.setState({ items: w.attention })
       useAppStore.setState({ area: 'room', liveSessions: w.live })
-      useFeatureRoomStore.setState({ featureId: F, timelineFilter: null, openId: null })
+      useFeatureRoomStore.setState({
+        level: 'feature',
+        featureId: F,
+        timelineFilter: null,
+        openId: null,
+      })
       render(<FeatureRoom />)
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'Não foi possível carregar a Room.',

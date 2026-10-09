@@ -166,8 +166,11 @@ export function FeatureSwitcher() {
     // toque rápido a partir dela cairia de volta nela mesma.
     const open = (backward: boolean, sticky: boolean, origin: SwitcherOrigin) => {
       const order = useFeatureMruStore.getState().order
+      const roomState = useFeatureRoomStore.getState()
       const room =
-        useAppStore.getState().area === 'room' ? useFeatureRoomStore.getState().featureId : null
+        useAppStore.getState().area === 'room' && roomState.level === 'feature'
+          ? roomState.featureId
+          : null
       const current =
         room ??
         (order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId)

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { TONE_COLOR } from '@/features/session-canvas/card-indicator'
 import type { HandoffStatus } from '../../../shared/types/ipc'
 import type { GlyphShape } from './room-labels'
@@ -105,3 +105,15 @@ export const COMPACT = '!px-3 !py-1 text-xs'
 // Foco visível em todo controle da Room (o app não tem regra global de :focus-visible).
 export const ROOM_FOCUS =
   '[&_*:focus-visible]:outline-2 [&_*:focus-visible]:outline-offset-2 [&_*:focus-visible]:outline-[var(--color-accent)] [&_*:focus-visible]:[outline-style:solid]'
+
+const CLOCK_MS = 30_000
+
+// Um relógio por superfície (não um timer por tile): "parada há X min", "há 2 min".
+export function useNow(): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), CLOCK_MS)
+    return () => window.clearInterval(t)
+  }, [])
+  return now
+}

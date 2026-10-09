@@ -12,13 +12,15 @@ import { Dialog } from '@/components/ui/Dialog'
 import { ensureSessionGraph, useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
 import { useAttentionListStore } from '@/store/attentionStore'
+import { countAttentionSubjects, humanQueue } from '../../../shared/attention/selectors'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { RoomTimelineEvent } from '../../../shared/types/feature-room'
+import { AllMothers } from './AllMothers'
 import { AttentionQueue } from './AttentionQueue'
 import { useFeatureRoomStore } from './feature-room-store'
 import type { QueueSubject } from './QueueItem'
 import { buildRoomView, type RoomQueueRow, type RoomSessionRow } from './room-model'
-import { COMPACT, ROOM_FOCUS } from './room-ui'
+import { COMPACT, ROOM_FOCUS, useNow } from './room-ui'
 import { Button } from '@/components/ui/Button'
 import { RoomHeader } from './RoomHeader'
 import { RoomHealth } from './RoomHealth'
@@ -29,20 +31,18 @@ import { StartMotherCard, focusMotherComposer, usePendingMotherProgress } from '
 import { useFeatureRoom } from './useFeatureRoom'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
-const CLOCK_MS = 30_000
-
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), CLOCK_MS)
-    return () => window.clearInterval(t)
-  }, [])
-  return now
+// A Room: nível 'all' (Todas as mães, entrada pela IconRail) ou a sala da feature
+// (tile, "Abrir sala" ou o seletor do Ctrl+`). Os passos de "Iniciar sessão-mãe"
+// avançam aqui, nos dois níveis: a mãe pode nascer pelo diálogo global.
+export function FeatureRoom() {
+  const level = useFeatureRoomStore((s) => s.level)
+  usePendingMotherProgress()
+  return level === 'all' ? <AllMothers /> : <FeatureSala />
 }
 
-// A Room de uma feature: fila de "precisa de você" (recorte da projeção única),
-// sessões por repo e a linha do tempo dos handoffs. Aberta pelo Ctrl+`.
-export function FeatureRoom() {
+// A sala de uma feature: fila de "precisa de você" (recorte da projeção única),
+// sessões por repo e a linha do tempo dos handoffs.
+function FeatureSala() {
   const featureId = useFeatureRoomStore((s) => s.featureId)
   const timelineFilter = useFeatureRoomStore((s) => s.timelineFilter)
   const openId = useFeatureRoomStore((s) => s.openId)
@@ -66,7 +66,6 @@ export function FeatureRoom() {
   const openHeadRef = useRef<HTMLDivElement>(null)
   const focusOpenHead = useRef(false)
 
-  usePendingMotherProgress()
   useEffect(ensureSessionGraph, [])
   useEffect(() => {
     const store = useHandoffsStore.getState()
@@ -172,6 +171,11 @@ export function FeatureRoom() {
     [handoffs, liveSessions, byHandoff, bySession],
   )
   const queue = view?.queue ?? []
+  // Badge do "← Todas": o needYou (o mesmo humanQueue do nível 1) menos esta feature.
+  const elsewhere = useMemo(() => {
+    const here = new Set(queue.flatMap((r) => [r.head, ...r.also]))
+    return countAttentionSubjects(humanQueue(attention).filter((i) => !here.has(i)))
+  }, [queue, attention])
   const openKey = queue.some((r) => r.subjectKey === openId)
     ? openId
     : (queue[0]?.subjectKey ?? null)
@@ -289,10 +293,26 @@ export function FeatureRoom() {
   const onKeyDown = (e: KeyboardEvent) => {
     // Eventos de portais (DelegateDialog, menus) borbulham pela árvore React mas não são da Room.
     if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return
-    // defaultPrevented: o composer vazio já mandou o Esc para a PTY.
-    if (e.key === 'Escape' && isTypingTarget(e.target) && !e.defaultPrevented) {
+    // Esc: o diálogo é portal (não chega aqui); depois o peek, depois Todas as mães.
+    // No composer da mãe, vazio volta e com texto só tira o foco (protege o rascunho). Do
+    // xterm (modo terminal) o Esc é da TUI: só devolve o foco à sala.
+    // defaultPrevented: quem recebeu o Esc já o tratou.
+    if (e.key === 'Escape' && !e.defaultPrevented) {
       e.preventDefault()
-      rootRef.current.focus({ preventScroll: true })
+      const t = e.target
+      if (isTypingTarget(t)) {
+        const emptyComposer =
+          t instanceof HTMLTextAreaElement &&
+          !t.closest('.xterm') &&
+          !!t.closest('[data-testid="room-mother"]') &&
+          t.value.trim() === ''
+        if (emptyComposer) useFeatureRoomStore.getState().openAllMothers()
+        else rootRef.current.focus({ preventScroll: true })
+        return
+      }
+      const dock = useCrewDockStore.getState()
+      if (dock.peekTarget) dock.closePeek()
+      else useFeatureRoomStore.getState().openAllMothers()
       return
     }
     if (e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target) || e.defaultPrevented) return
@@ -338,6 +358,8 @@ export function FeatureRoom() {
       className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)] text-[14px] text-[var(--color-text)] outline-none ${ROOM_FOCUS}`}
     >
       <RoomHeader
+        backBadge={elsewhere}
+        onBack={() => useFeatureRoomStore.getState().openAllMothers()}
         title={snapshot.feature.title}
         chain={snapshot.objectiveChain}
         needsYou={view.needsYou}

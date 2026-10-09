@@ -13,8 +13,13 @@ export interface PendingMother {
   failure?: string
 }
 
+// Nível da Room: 'all' = Todas as mães (entrada pela IconRail), 'feature' = a sala.
+export type RoomLevel = 'all' | 'feature'
+
 // A Room aberta: qual feature, o filtro da linha do tempo e o item aberto da fila.
 interface FeatureRoomState {
+  level: RoomLevel
+  // Continua guardada ao voltar para Todas: o "Abrir sala" reabre rápido.
   featureId: string | null
   timelineFilter: string | null // sessionId
   openId: string | null // subjectKey do item aberto
@@ -23,6 +28,7 @@ interface FeatureRoomState {
   selectedMotherId: Record<string, string>
   pendingMother: PendingMother | null
   openRoom: (featureId: string) => void
+  openAllMothers: () => void
   setFilter: (sessionId: string | null) => void
   setOpen: (subjectKey: string | null) => void
   selectMother: (featureId: string, sessionId: string) => void
@@ -30,6 +36,7 @@ interface FeatureRoomState {
 }
 
 export const useFeatureRoomStore = create<FeatureRoomState>((set, get) => ({
+  level: 'all',
   featureId: null,
   timelineFilter: null,
   openId: null,
@@ -38,6 +45,11 @@ export const useFeatureRoomStore = create<FeatureRoomState>((set, get) => ({
   openRoom: (featureId) => {
     // Trocar de feature zera filtro e item aberto (eram da outra).
     if (get().featureId !== featureId) set({ featureId, timelineFilter: null, openId: null })
+    set({ level: 'feature' })
+    useAppStore.getState().setArea('room')
+  },
+  openAllMothers: () => {
+    set({ level: 'all' })
     useAppStore.getState().setArea('room')
   },
   setFilter: (timelineFilter) => set({ timelineFilter }),

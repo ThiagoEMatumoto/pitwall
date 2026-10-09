@@ -27,10 +27,18 @@ export function startMotherErrorText(err: unknown): string {
 
 // O xterm fica montado (invisible) por baixo do chat e vem antes no DOM: sem o
 // :not, o 1º textarea é o helper dele, e o foco iria (ou tentaria ir) direto à PTY.
-export function focusMotherComposer(): boolean {
-  const el = document.querySelector<HTMLTextAreaElement>(
-    '[data-testid="room-mother"] textarea:not(.xterm-helper-textarea)',
-  )
+// Com o split, sessionId escolhe a coluna; sem ele, a ativa (senão a 1ª).
+export function focusMotherComposer(sessionId?: string | null): boolean {
+  const col = sessionId
+    ? `[data-testid="room-mother"][data-session-id="${sessionId.replace(/["\\]/g, '\\$&')}"]`
+    : '[data-testid="room-mother"][aria-current="true"]'
+  const el =
+    document.querySelector<HTMLTextAreaElement>(`${col} textarea:not(.xterm-helper-textarea)`) ??
+    (sessionId
+      ? null
+      : document.querySelector<HTMLTextAreaElement>(
+          '[data-testid="room-mother"] textarea:not(.xterm-helper-textarea)',
+        ))
   el?.focus()
   return !!el && document.activeElement === el
 }
@@ -112,13 +120,16 @@ function failPending(sessionId: string, failure: string): void {
 
 // O RoomMotherPane monta centenas de ms depois de o card sair (o grafo ainda
 // precisa enxergar a mãe): foca quando o composer aparecer, não num frame às cegas.
-export function focusMotherComposerWhenReady(timeoutMs = COMPOSER_WAIT_MS): () => void {
-  if (focusMotherComposer()) return () => {}
+export function focusMotherComposerWhenReady(
+  timeoutMs = COMPOSER_WAIT_MS,
+  sessionId?: string | null,
+): () => void {
+  if (focusMotherComposer(sessionId)) return () => {}
   const observer = new MutationObserver(() => {
     const active = document.activeElement
     // O humano já foi digitar em outro lugar: não roubar o foco.
     if (active && active !== document.body && isTypingTarget(active)) stop()
-    else if (focusMotherComposer()) stop()
+    else if (focusMotherComposer(sessionId)) stop()
   })
   const timer = setTimeout(stop, timeoutMs)
   function stop() {
