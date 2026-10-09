@@ -237,8 +237,12 @@ async function phaseStub(): Promise<void> {
     await waitFor(page, 'Room vazia', async () => (await roomState(page)) === 'empty', 20_000)
     check((await roomState(page)) === 'empty', '1: estado vazio depois do kill da mãe')
     check(
-      await room(page).getByText('Nenhuma sessão nesta feature').isVisible(),
-      '1: texto "Nenhuma sessão nesta feature"',
+      await room(page).getByTestId('start-mother').isVisible(),
+      '1: o card "Iniciar sessão-mãe" no centro',
+    )
+    check(
+      await room(page).getByText('Esta feature ainda não tem uma mãe').isVisible(),
+      '1: texto "Esta feature ainda não tem uma mãe"',
     )
     check(await page.getByTestId('room-new-child').isDisabled(), '1: "+ Filha" desabilitado')
     await shot(page, 'app-empty')

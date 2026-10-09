@@ -27,6 +27,8 @@ export interface RoomViewInput {
   inUse: ReadonlySet<string>
   timeline: RoomTimelineEvent[]
   timelineFilter: string | null // sessionId
+  // Tab escolhida (feature-room-store); fora da lista de mães, vale a 1ª.
+  selectedMotherId?: string | null
 }
 
 export interface RoomQueueRow {
@@ -50,6 +52,13 @@ export interface RoomSessionRow {
   purpose: string | null
   // Handoff mode 'plan': fora da trava do diretório (pode escrever via shell após o plano aprovado).
   readOnly: boolean
+  // "de <mãe>": só com 2+ mães na sala, quando a filha é de uma delas.
+  motherTitle?: string | null
+}
+
+export interface RoomMotherTab extends RoomSessionRow {
+  sessionId: string
+  waitingOnHuman: boolean // algum item da fila é dela
 }
 
 export interface RoomRepo {
@@ -71,7 +80,8 @@ export type RoomState = 'empty' | 'solo' | 'green' | 'normal'
 export interface RoomView {
   queue: RoomQueueRow[]
   needsYou: number // === queue.length
-  mother: RoomSessionRow | null
+  mothers: RoomMotherTab[]
+  mother: RoomMotherTab | null // a selecionada (ou a 1ª)
   progress: RoomProgress
   repos: RoomRepo[]
   timeline: RoomTimelineEvent[]
@@ -102,6 +112,37 @@ function nodeTitle(n: SessionGraphNode): string {
 const safe = (t: string | null | undefined): string | null =>
   t == null ? null : stripUnsafeDisplay(t)
 
+interface EdgeLike {
+  kind: string
+  from?: string
+  to?: string
+}
+
+// Mãe da Room = sessão de TOPO em uso desta feature. isMother (session-graph.ts)
+// só fica true com 1+ filha; a mãe recém-criada pela Room tem 0 e sumiria.
+export function roomMothers(
+  nodes: ReadonlyArray<SessionGraphNode>,
+  edges: ReadonlyArray<EdgeLike>,
+  inUse: ReadonlySet<string>,
+  featureId: string,
+): SessionGraphNode[] {
+  const underMother = new Set(
+    edges
+      .filter((e) => e.kind === 'handoff' && !!e.from && !!e.to && inUse.has(e.from))
+      .map((e) => e.to as string),
+  )
+  return nodes
+    .filter(
+      (n) => n.featureId === featureId && inUse.has(n.sessionId) && !underMother.has(n.sessionId),
+    )
+    .sort(
+      (a, b) =>
+        Number(!!b.isMother) - Number(!!a.isMother) ||
+        (b.childCount ?? 0) - (a.childCount ?? 0) ||
+        (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),
+    )
+}
+
 export function buildRoomView(input: RoomViewInput): RoomView {
   const { featureId, graph, inUse } = input
   const byId = new Map(graph.nodes.map((n) => [n.sessionId, n]))
@@ -117,26 +158,35 @@ export function buildRoomView(input: RoomViewInput): RoomView {
   const queue = groupBySubject(items)
 
   const handoffs = input.handoffs.filter((h) => h.featureId === featureId && h.dismissedAt == null)
-  // Sessão única que ainda não delegou: é a mãe da feature (estado "1 sessão só"),
-  // mesmo sem isMother no grafo.
-  const motherId =
-    motherOfFocus(laneNodes, graph.edges, inUse, { featureId }) ??
-    (laneNodes.length === 1 && handoffs.length === 0 ? laneNodes[0].sessionId : null)
-  const motherNode = motherId ? byId.get(motherId) : undefined
-  const mother: RoomSessionRow | null = motherNode
-    ? {
-        sessionId: motherNode.sessionId,
-        handoffId: motherNode.childOfHandoffId,
-        title: nodeTitle(motherNode),
-        repoLabel: motherNode.repoLabel ?? '',
-        depth: 0,
-        work: null,
-        exec: motherNode.status,
-        lastText: lastTextOf.get(motherNode.sessionId) ?? null,
-        purpose: safe(motherNode.purpose),
-        readOnly: false,
-      }
-    : null
+  const waiting = new Set(items.flatMap((i) => (i.sessionId ? [i.sessionId] : [])))
+  const motherRow = (n: SessionGraphNode): RoomMotherTab => ({
+    sessionId: n.sessionId,
+    handoffId: n.childOfHandoffId,
+    title: nodeTitle(n),
+    repoLabel: n.repoLabel ?? '',
+    depth: 0,
+    work: null,
+    exec: n.status,
+    lastText: lastTextOf.get(n.sessionId) ?? null,
+    purpose: safe(n.purpose),
+    readOnly: false,
+    waitingOnHuman: waiting.has(n.sessionId),
+  })
+  let motherNodes = roomMothers(graph.nodes, graph.edges, inUse, featureId)
+  if (motherNodes.length === 0) {
+    // Sessão única que ainda não delegou: é a mãe da feature (estado "1 sessão só").
+    const fallbackId =
+      motherOfFocus(laneNodes, graph.edges, inUse, { featureId }) ??
+      (laneNodes.length === 1 && handoffs.length === 0 ? laneNodes[0].sessionId : null)
+    const fallback = fallbackId ? byId.get(fallbackId) : undefined
+    motherNodes = fallback ? [fallback] : []
+  }
+  const mothers = motherNodes.map(motherRow)
+  const mother =
+    mothers.find((m) => m.sessionId === input.selectedMotherId) ?? mothers[0] ?? null
+  const motherIds = new Set(mothers.map((m) => m.sessionId))
+  const motherTitleOf = (id: string | null): string | null =>
+    mothers.length > 1 && id ? (mothers.find((m) => m.sessionId === id)?.title ?? null) : null
 
   const childIds = new Set(handoffs.flatMap((h) => (h.childSessionId ? [h.childSessionId] : [])))
   const handoffRow = (h: Handoff): RoomSessionRow & { repoId: string | null } => {
@@ -158,12 +208,15 @@ export function buildRoomView(input: RoomViewInput): RoomView {
       lastText: h.childSessionId ? (lastTextOf.get(h.childSessionId) ?? null) : null,
       purpose: safe(node?.purpose ?? h.task),
       readOnly: h.mode === 'plan',
+      motherTitle: motherTitleOf(h.motherSessionId),
     }
   }
-  const handoffRows = handoffs.filter((h) => h.childSessionId !== motherId).map(handoffRow)
+  const handoffRows = handoffs
+    .filter((h) => !h.childSessionId || !motherIds.has(h.childSessionId))
+    .map(handoffRow)
   // Sessões da lane sem handoff (nem mãe): filhas "soltas" na feature.
   const looseRows = laneNodes
-    .filter((n) => n.sessionId !== motherId && !childIds.has(n.sessionId))
+    .filter((n) => !motherIds.has(n.sessionId) && !childIds.has(n.sessionId))
     .map((n): RoomSessionRow & { repoId: string | null } => ({
       sessionId: n.sessionId,
       handoffId: null,
@@ -206,7 +259,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
           ? 'green'
           : 'normal'
 
-  return { queue, needsYou: queue.length, mother, progress, repos, timeline, state }
+  return { queue, needsYou: queue.length, mothers, mother, progress, repos, timeline, state }
 }
 
 // Filhas agrupadas pelo repo; cada neta vai logo abaixo da filha-mãe dela, na sala

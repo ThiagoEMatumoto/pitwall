@@ -11,6 +11,8 @@ vi.mock('electron', () => ({
 }))
 let testDb: Database.Database
 vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
+// O centro da Room monta o Terminal da mãe (xterm, canvas); aqui só a fila importa.
+vi.mock('@/features/sessions/Terminal', () => ({ Terminal: () => null }))
 let transcriptPath: string | null = null
 vi.mock('../../../electron/main/services/transcript-path', () => ({
   findTranscriptPath: () => transcriptPath,

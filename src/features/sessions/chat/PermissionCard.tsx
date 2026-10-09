@@ -101,6 +101,9 @@ export function PermissionCard({ kind, question, context, options, onRespond, se
                 <button
                   key={oi}
                   type="button"
+                  // Atalho 1-9 da Room (/^[1-9]$/): clica a opção N pelo mesmo caminho
+                  // guardado. O parser só lê opção de 1 dígito, então N nunca passa de 9.
+                  data-permission-option={oi + 1}
                   onClick={() => onRespond(oi, opt.label)}
                   className={`flex w-full items-start gap-2 rounded border px-2 py-1.5 text-left transition ${buttonClass(opt.label, oi === 0)}`}
                 >

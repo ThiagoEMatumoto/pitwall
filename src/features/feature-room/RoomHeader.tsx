@@ -21,6 +21,7 @@ interface Props {
   onSeeMap: () => void
   onFeatures: () => void
   onNewChild: () => void
+  onStartMother: () => void
 }
 
 // Barra da Room: feature + cadeia objetivo › KR, e os caminhos de saída.
@@ -32,6 +33,7 @@ export function RoomHeader({
   onSeeMap,
   onFeatures,
   onNewChild,
+  onStartMother,
 }: Props) {
   const chainText = objectiveChainText(chain)
   return (
@@ -90,6 +92,15 @@ export function RoomHeader({
         data-testid="room-new-child"
       >
         + Filha
+      </Button>
+      <Button
+        variant="ghost"
+        className={COMPACT}
+        onClick={onStartMother}
+        aria-haspopup="dialog"
+        data-testid="room-start-mother"
+      >
+        ＋ Iniciar sessão-mãe
       </Button>
     </header>
   )

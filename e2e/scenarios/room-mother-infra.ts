@@ -210,7 +210,7 @@ const PURPOSE = 'Validar a infra da mãe da Room (e2e)'
     check(await page.getByTestId('room-mother').isVisible(), 'd: Room mostra a mãe')
     await shot(page, 'A1-room')
     const peekChat = page.locator('[data-peek-mode="chat"]')
-    await page.getByTestId('room-mother').getByRole('button', { name: 'Peek', exact: true }).click()
+    await page.getByTestId('room-mother').getByRole('button', { name: /^Peek em / }).click()
     const firstTry = await waitFor(page, 'peek chat', async () => (await peekChat.count()) > 0, 5000)
     check(firstTry, 'd: Peek da mãe recém-criada abre na 1ª tentativa (renderer conhece a sessão)')
     if (!firstTry) {
@@ -228,7 +228,7 @@ const PURPOSE = 'Validar a infra da mãe da Room (e2e)'
       for (let i = 0; i < 2 && (await peekChat.count()) === 0; i++) {
         await openRoom()
         await page.waitForTimeout(1000)
-        await page.getByTestId('room-mother').getByRole('button', { name: 'Peek', exact: true }).click()
+        await page.getByTestId('room-mother').getByRole('button', { name: /^Peek em / }).click()
         await waitFor(page, `peek chat retry ${i}`, async () => (await peekChat.count()) > 0, 3000)
         note(`retry ${i}: peek aberto=${(await peekChat.count()) > 0}`)
       }
@@ -250,7 +250,7 @@ const PURPOSE = 'Validar a infra da mãe da Room (e2e)'
     // ChatView nº2: peek de novo pela Room (a aba fica montada, escondida).
     check(await openRoom(), 'd: volta para a Room')
     await waitFor(page, 'room-mother 2', () => page.getByTestId('room-mother').isVisible())
-    await page.getByTestId('room-mother').getByRole('button', { name: 'Peek', exact: true }).click()
+    await page.getByTestId('room-mother').getByRole('button', { name: /^Peek em / }).click()
     await waitFor(page, 'peek chat 2', async () => (await peekChat.count()) > 0)
     appendAssistant('MARK-1 com as duas abertas')
     check(

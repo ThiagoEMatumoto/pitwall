@@ -7,6 +7,8 @@ import {
 } from '@/features/session-canvas/FeatureSwitcher'
 import { DelegateDialog, type DelegateTarget } from '@/features/session-canvas/DelegateDialog'
 import { featureLaneId } from '@/features/session-canvas/graph-to-flow'
+import { isTypingTarget } from '@/features/session-canvas/typing-target'
+import { Dialog } from '@/components/ui/Dialog'
 import { ensureSessionGraph, useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
 import { useAttentionListStore } from '@/store/attentionStore'
@@ -20,23 +22,14 @@ import { COMPACT, ROOM_FOCUS } from './room-ui'
 import { Button } from '@/components/ui/Button'
 import { RoomHeader } from './RoomHeader'
 import { RoomHealth } from './RoomHealth'
+import { RoomMotherPane, type MotherMode } from './RoomMotherPane'
 import { RoomSessions } from './RoomSessions'
 import { RoomTimeline } from './RoomTimeline'
+import { StartMotherCard, focusMotherComposer, usePendingMotherProgress } from './StartMotherCard'
 import { useFeatureRoom } from './useFeatureRoom'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
 const CLOCK_MS = 30_000
-
-// J/K são da Room só fora de campos de texto e sem modificador (Ctrl+J/K têm dono).
-function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  return (
-    target.isContentEditable ||
-    target.tagName === 'INPUT' ||
-    target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT'
-  )
-}
 
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now())
@@ -59,11 +52,21 @@ export function FeatureRoom() {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const attention = useAttentionListStore((s) => s.items)
   const now = useNow()
+  const selectedMotherId = useFeatureRoomStore((s) =>
+    featureId ? (s.selectedMotherId[featureId] ?? null) : null,
+  )
+  const pendingMother = useFeatureRoomStore((s) =>
+    s.pendingMother && s.pendingMother.featureId === featureId ? s.pendingMother : null,
+  )
+  const [motherMode, setMotherMode] = useState<MotherMode>('chat')
+  const [startOpen, setStartOpen] = useState(false)
+  const [sideTab, setSideTab] = useState<'children' | 'timeline'>('children')
   const [delegate, setDelegate] = useState<DelegateTarget | null>(null)
   const rootRef = useRef<HTMLElement>(null)
   const openHeadRef = useRef<HTMLDivElement>(null)
   const focusOpenHead = useRef(false)
 
+  usePendingMotherProgress()
   useEffect(ensureSessionGraph, [])
   useEffect(() => {
     const store = useHandoffsStore.getState()
@@ -90,14 +93,52 @@ export function FeatureRoom() {
             inUse,
             timeline: snapshot?.timeline ?? [],
             timelineFilter,
+            selectedMotherId,
           })
         : null,
-    [featureId, graph, handoffs, liveSessions, attention, inUse, snapshot, timelineFilter],
+    [
+      featureId,
+      graph,
+      handoffs,
+      liveSessions,
+      attention,
+      inUse,
+      snapshot,
+      timelineFilter,
+      selectedMotherId,
+    ],
   )
 
+  // A mãe do centro: a tab escolhida; a recém-criada vale antes de o grafo a
+  // enxergar (está viva, mas ainda sem nó).
+  const centerId = useMemo(() => {
+    if (!view) return null
+    if (view.mothers.some((m) => m.sessionId === selectedMotherId)) return selectedMotherId
+    const fresh =
+      selectedMotherId &&
+      liveSessions.some((l) => l.id === selectedMotherId && l.status !== 'ended') &&
+      !graph.nodes.some((n) => n.sessionId === selectedMotherId)
+    return fresh ? selectedMotherId : (view.mother?.sessionId ?? null)
+  }, [view, selectedMotherId, liveSessions, graph])
+  useEffect(() => setMotherMode('chat'), [centerId])
+
+  // Ctrl+. alterna Chat⇄Terminal da mãe. Captura: com o foco no xterm a tecla
+  // não chega à bolha do React.
+  useEffect(() => {
+    if (!centerId) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.key !== '.') return
+      if (document.querySelector('[data-modal-overlay], [aria-modal="true"]')) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (!e.repeat) setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [centerId])
+
   const rows = useMemo(
-    () =>
-      view ? [...(view.mother ? [view.mother] : []), ...view.repos.flatMap((r) => r.rows)] : [],
+    () => (view ? [...view.mothers, ...view.repos.flatMap((r) => r.rows)] : []),
     [view],
   )
   const byHandoff = useMemo(
@@ -202,9 +243,7 @@ export function FeatureRoom() {
   }
 
   const lane = graph.lanes.find((l) => l.kind === 'feature' && l.featureId === featureId)
-  const motherNode = view.mother
-    ? graph.nodes.find((n) => n.sessionId === view.mother!.sessionId)
-    : null
+  const motherNode = centerId ? graph.nodes.find((n) => n.sessionId === centerId) : null
 
   const nameOf = (e: RoomTimelineEvent) =>
     (e.childSessionId && bySession.get(e.childSessionId)?.title) ||
@@ -230,11 +269,12 @@ export function FeatureRoom() {
             ]
           : [],
     })
+  const centerTab = view.mothers.find((m) => m.sessionId === centerId) ?? null
   const newChild = () => {
-    if (!view.mother?.sessionId) return
+    if (!centerTab) return
     setDelegate({
-      motherSessionId: view.mother.sessionId,
-      motherTitle: view.mother.title,
+      motherSessionId: centerTab.sessionId,
+      motherTitle: centerTab.title,
       targetRepoId: motherNode?.repoId ?? null,
       targetRepoLabel: motherNode?.repoLabel ?? null,
       pickRepo: true,
@@ -249,16 +289,42 @@ export function FeatureRoom() {
   const onKeyDown = (e: KeyboardEvent) => {
     // Eventos de portais (DelegateDialog, menus) borbulham pela árvore React mas não são da Room.
     if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return
-    if (e.key === 'Escape' && isTyping(e.target)) {
+    // defaultPrevented: o composer vazio já mandou o Esc para a PTY.
+    if (e.key === 'Escape' && isTypingTarget(e.target) && !e.defaultPrevented) {
       e.preventDefault()
       rootRef.current.focus({ preventScroll: true })
       return
     }
-    if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return
+    if (e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target) || e.defaultPrevented) return
+    if (e.key === '/' && centerId) {
+      if (focusMotherComposer()) e.preventDefault()
+      return
+    }
+    // 1-9: a opção do card de permissão da mãe, pelo mesmo clique (guardado)
+    // do ChatView. Sem card na tela, a tecla não faz nada.
+    if (/^[1-9]$/.test(e.key) && centerId) {
+      const option = rootRef.current.querySelector<HTMLButtonElement>(
+        `[data-testid="room-mother"] [data-permission-option="${e.key}"]`,
+      )
+      if (option) {
+        e.preventDefault()
+        option.click()
+      }
+      return
+    }
     const k = e.key.toLowerCase()
     if (k !== 'j' && k !== 'k') return
     e.preventDefault()
     step(k === 'j' ? 1 : -1)
+  }
+
+  const showCard = !!pendingMother || !centerId
+  const startMother = () => {
+    if (centerId) setStartOpen(true)
+    else
+      rootRef.current
+        ?.querySelector<HTMLTextAreaElement>('[data-testid="start-mother-purpose"]')
+        ?.focus()
   }
 
   return (
@@ -275,52 +341,111 @@ export function FeatureRoom() {
         title={snapshot.feature.title}
         chain={snapshot.objectiveChain}
         needsYou={view.needsYou}
-        canDelegate={!!view.mother}
+        canDelegate={!!centerTab}
         onSeeMap={seeMap}
         onFeatures={openFeatureSwitcher}
         onNewChild={newChild}
+        onStartMother={startMother}
       />
       <RoomHealth snapshot={snapshot} />
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_440px] max-[900px]:grid-cols-1 max-[900px]:overflow-auto">
-        <div className="flex min-h-0 flex-col border-r border-[var(--color-border)] max-[900px]:border-r-0">
-          <AttentionQueue
-            queue={queue}
-            state={view.state}
-            openKey={openKey}
-            subjectOf={subjectOf}
-            now={now}
-            onOpen={(key) => useFeatureRoomStore.getState().setOpen(key)}
-            onStep={step}
-            openHeadRef={openHeadRef}
-          />
-        </div>
-        <div className="flex min-h-0 flex-col">
-          <div className="max-h-[60%] shrink-0 overflow-auto">
-            <RoomSessions
-              mother={view.mother}
-              repos={view.repos}
-              progress={view.progress}
-              filter={timelineFilter}
-              canDelegate={!!view.mother}
-              onFilter={(id) => useFeatureRoomStore.getState().setFilter(id)}
-              onPeek={(row) => peek(row, 'chat')}
-              onTerminal={(row) => peek(row, 'terminal')}
-              onNewChild={newChild}
-              onSeeMap={seeMap}
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_380px] max-[900px]:grid-cols-1 max-[900px]:overflow-auto">
+        <div className="relative flex min-h-0 flex-col border-r border-[var(--color-border)] max-[900px]:min-h-[520px] max-[900px]:border-r-0">
+          {centerId && (
+            <RoomMotherPane
+              mothers={view.mothers}
+              motherId={centerId}
+              mode={motherMode}
+              onToggleMode={() => setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))}
+              onSelect={(id) => useFeatureRoomStore.getState().selectMother(featureId, id)}
+              onPeek={(id) => useCrewDockStore.getState().openSessionPeek(id, 'chat')}
             />
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <RoomTimeline
-              events={view.timeline}
-              filterName={filterName}
-              hasSessions={rows.length > 0}
-              nameOf={nameOf}
+          )}
+          {showCard && (
+            <div
+              className={`flex justify-center overflow-auto p-6 ${
+                centerId
+                  ? 'absolute inset-0 z-10 items-center bg-[var(--color-bg)]/90'
+                  : 'flex-1 items-center'
+              }`}
+            >
+              <StartMotherCard featureId={featureId} featureTitle={snapshot.feature.title} />
+            </div>
+          )}
+        </div>
+        <aside className="flex min-h-0 flex-col" aria-label="Fila e filhas">
+          <div className="max-h-[55%] shrink-0 overflow-auto border-b border-[var(--color-border)]">
+            <AttentionQueue
+              queue={queue}
+              state={view.state}
+              openKey={openKey}
+              subjectOf={subjectOf}
               now={now}
-              onClearFilter={() => useFeatureRoomStore.getState().setFilter(null)}
+              onOpen={(key) => useFeatureRoomStore.getState().setOpen(key)}
+              onStep={step}
+              openHeadRef={openHeadRef}
             />
           </div>
-        </div>
+          <div role="tablist" aria-label="Lateral da Room" className="flex gap-1 px-4 pt-2">
+            {(
+              [
+                ['children', 'Filhas'],
+                ['timeline', 'Linha do tempo'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={sideTab === id}
+                data-testid={`room-side-${id}`}
+                onClick={() => setSideTab(id)}
+                className={`rounded-md px-2 py-1 text-[12px] ${
+                  sideTab === id
+                    ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
+                    : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+            {sideTab === 'children' ? (
+              <RoomSessions
+                hasMother={!!centerId}
+                repos={view.repos}
+                progress={view.progress}
+                filter={timelineFilter}
+                onFilter={(id) => useFeatureRoomStore.getState().setFilter(id)}
+                onPeek={(row) => peek(row, 'chat')}
+                onSeeMap={seeMap}
+              />
+            ) : (
+              <RoomTimeline
+                events={view.timeline}
+                filterName={filterName}
+                hasSessions={rows.length > 0}
+                nameOf={nameOf}
+                now={now}
+                onClearFilter={() => useFeatureRoomStore.getState().setFilter(null)}
+              />
+            )}
+          </div>
+        </aside>
       </div>
+      <Dialog
+        open={startOpen}
+        onClose={() => setStartOpen(false)}
+        title="Nova sessão-mãe"
+        widthClassName="w-[36rem]"
+      >
+        <StartMotherCard
+          featureId={featureId}
+          featureTitle={snapshot.feature.title}
+          heading={false}
+          onStarted={() => setStartOpen(false)}
+        />
+      </Dialog>
       <DelegateDialog target={delegate} onClose={() => setDelegate(null)} />
     </main>
   )
