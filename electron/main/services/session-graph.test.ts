@@ -708,3 +708,56 @@ describe('session graph — mãe transferível (F3)', () => {
     expect(baton[0]).toMatchObject({ from: 'm', to: 'm2' })
   })
 })
+
+// Raiz = "as sessões que eu mesmo crio" (a mãe da Room): tudo o que não nasceu de
+// handoff. Cenários montados pelo handoff-store real (dispatch/passBaton/release).
+describe('session graph — raiz (isRoot)', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedBase(testDb)
+  })
+  afterEach(() => {
+    testDb.close()
+  })
+  const nodeOf = (g: ReturnType<typeof graphFor>, id: string) =>
+    g.nodes.find((n) => n.sessionId === id)
+
+  it('sessão aberta pelo humano, sem feature e sem filhas, é raiz (e não é mãe-coroa)', () => {
+    addSession('solo', 'r-web')
+    const n = nodeOf(graphFor(live({ solo: {} })), 'solo')
+    expect(n).toMatchObject({ isRoot: true, isMother: false, featureId: null })
+  })
+
+  it('filha de handoff não é raiz; a mãe dela é', () => {
+    addSession('m', 'r-web')
+    addSession('c1', 'r-api')
+    dispatch('m', 'c1', 'Mapa')
+    const g = graphFor(live({ m: {}, c1: {} }))
+    expect(nodeOf(g, 'c1')).toMatchObject({ isRoot: false })
+    expect(nodeOf(g, 'm')).toMatchObject({ isRoot: true, isMother: true })
+  })
+
+  it('sucessora do bastão é raiz', () => {
+    addSession('m', 'r-web')
+    addSession('old', 'r-api')
+    addSession('new', 'r-api')
+    const h = dispatch('m', 'old', 'Refatorar auth', 'r-api')
+    passBaton(h, 'old', 'new')
+    const g = graphFor(live({ m: {}, old: {}, new: {} }))
+    expect(nodeOf(g, 'new')).toMatchObject({ isRoot: true, childOfHandoffId: h })
+  })
+
+  it('filha solta por release() vira raiz (o vínculo child_session_id some)', () => {
+    addSession('m', 'r-web')
+    addSession('c1', 'r-api')
+    const h = dispatch('m', 'c1', 'Mapa', 'r-api')
+    expect(nodeOf(graphFor(live({ m: {}, c1: {} })), 'c1')).toMatchObject({ isRoot: false })
+    handoffStore.release(h)
+    expect(nodeOf(graphFor(live({ m: {}, c1: {} })), 'c1')).toMatchObject({
+      isRoot: true,
+      childOfHandoffId: null,
+    })
+  })
+})

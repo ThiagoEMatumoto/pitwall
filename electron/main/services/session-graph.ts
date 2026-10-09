@@ -192,6 +192,17 @@ function childCountByMother(
   return out
 }
 
+// Raiz = não é filha de handoff, ou é a sucessora do bastão (o handoff que ela
+// adota tem predecessor_session_id): quem herda a conversa por baton:pass foi
+// aberta pelo humano, não delegada. release() zera child_session_id (e dispensa o
+// handoff, que sai do leitor), então a filha solta passa a ser raiz — aceitável:
+// ela segue viva sob o humano, que é quem a dirige dali em diante.
+function isRootSession(handoff: GraphHandoffRow | undefined, sessionId: string): boolean {
+  if (!handoff) return true
+  const pred = handoff.predecessor_session_id
+  return pred != null && pred !== sessionId
+}
+
 function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHandoffRow>) {
   const passedBaton = predecessorHandoffIndex(input.handoffs)
   const children = childCountByMother(input.handoffs, childHandoff)
@@ -245,6 +256,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
       isMother: (children.get(s.id) ?? 0) > 0,
+      isRoot: isRootSession(handoff, s.id),
       childCount: children.get(s.id) ?? 0,
       batonPassed: gaveMotherBaton.has(s.id) && !children.has(s.id),
     }

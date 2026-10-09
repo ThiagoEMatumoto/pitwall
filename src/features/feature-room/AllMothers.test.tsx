@@ -200,15 +200,15 @@ describe('AllMothers', () => {
   })
   afterEach(() => testDb.close())
 
-  it('4 tiles; o badge é a soma dos pedidos dos tiles, do mesmo needYou', () => {
+  it('5 tiles (a avulsa sem feature também é mãe); o badge é a soma dos pedidos dos tiles', () => {
     seed()
     store.ask(store.list().find((h) => h.childSessionId === 'lume-kid')!.id, 'qual branch?')
     const { world } = mount(lives(BASE, { nori: { status: 'waiting', scan: permission } }))
     expect(screen.getByTestId('all-mothers')).toBeInTheDocument()
     expect(new Set(tiles().map((t) => t.dataset.tile))).toEqual(
-      new Set(['lume', 'nori', 'sora', 'solo']),
+      new Set(['lume', 'nori', 'sora', 'solo', 'avulsa']),
     )
-    expect(screen.getByTestId('all-mothers-summary')).toHaveTextContent('4 mães · 2 features')
+    expect(screen.getByTestId('all-mothers-summary')).toHaveTextContent('5 mães · 2 features')
     const sum = tiles().reduce(
       (n, t) => n + tileNum(t, 'mother-tile-own') + tileNum(t, 'mother-tile-kids'),
       0,

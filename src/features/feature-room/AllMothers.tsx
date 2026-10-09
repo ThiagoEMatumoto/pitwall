@@ -140,7 +140,7 @@ export function AllMothers() {
 
   const inUse = useMemo(() => switcherInUse(graph, liveSessions), [graph, liveSessions])
   const needYou = useMemo(() => humanQueue(attention), [attention])
-  const mothers = useMemo(() => allMothers(graph.nodes, graph.edges, inUse), [graph, inUse])
+  const mothers = useMemo(() => allMothers(graph.nodes, inUse), [graph, inUse])
   const kids = useMemo(() => childIdsByMother(graph.edges, inUse), [graph, inUse])
   const needOf = useCallback(
     (m: SessionGraphNode) => needYouFor(needYou, m, (id) => kids.get(id) ?? EMPTY_SET),

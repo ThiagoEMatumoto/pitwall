@@ -100,11 +100,23 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     testDb.close()
   })
 
-  it('allMothers: as 3 mães das features e a sem-feature que delegou; filha e avulsa ficam de fora', () => {
+  it('allMothers: toda sessão que o humano abriu (com ou sem feature/filhas); filhas ficam de fora', () => {
     seedScenario()
     const { graph, inUse } = produce(liveAll())
-    const ids = allMothers(graph.nodes, graph.edges, inUse).map((n) => n.sessionId)
-    expect(new Set(ids)).toEqual(new Set(['lume', 'nori', 'sora', 'solo']))
+    const ids = allMothers(graph.nodes, inUse).map((n) => n.sessionId)
+    expect(new Set(ids)).toEqual(new Set(['lume', 'nori', 'sora', 'avulsa', 'solo']))
+  })
+
+  it('a sessão sem feature e sem filhas entra; encerrada sai', () => {
+    seedScenario()
+    const avulsa = (live: Map<string, LiveSessionState>) => {
+      const { graph, inUse } = produce(live)
+      return allMothers(graph.nodes, inUse).some((n) => n.sessionId === 'avulsa')
+    }
+    expect(avulsa(liveAll())).toBe(true)
+    const ended = liveAll()
+    ended.delete('avulsa')
+    expect(avulsa(ended)).toBe(false)
   })
 
   it('mãe recém-criada com 0 filhas (isMother false) entra pela feature', () => {
@@ -112,14 +124,14 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     const { graph, inUse } = produce(liveAll())
     const nori = graph.nodes.find((n) => n.sessionId === 'nori')
     expect(nori?.isMother).toBeFalsy()
-    expect(allMothers(graph.nodes, graph.edges, inUse).map((n) => n.sessionId)).toContain('nori')
+    expect(allMothers(graph.nodes, inUse).map((n) => n.sessionId)).toContain('nori')
   })
 
   it('sessão fora de uso não vira tile', () => {
     seedScenario()
     const { graph, inUse } = produce(liveAll())
     inUse.delete('sora')
-    expect(allMothers(graph.nodes, graph.edges, inUse).map((n) => n.sessionId)).not.toContain(
+    expect(allMothers(graph.nodes, inUse).map((n) => n.sessionId)).not.toContain(
       'sora',
     )
   })
@@ -144,7 +156,7 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     expect(needYouFor(needYou, byId.get('nori')!, childIdsOf)).toEqual([])
 
     // A soma dos recortes por tile bate com o badge do topo (mesmo needYou).
-    const mothers = allMothers(graph.nodes, graph.edges, inUse)
+    const mothers = allMothers(graph.nodes, inUse)
     const perTile = mothers.map((m) => countAttentionSubjects(needYouFor(needYou, m, childIdsOf)))
     expect(perTile.reduce((a, b) => a + b, 0)).toBe(countAttentionSubjects(needYou))
     expect(countAttentionSubjects(needYou)).toBe(2)

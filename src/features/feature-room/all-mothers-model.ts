@@ -22,24 +22,15 @@ export function childIdsByMother(
   return out
 }
 
-// Mãe da Room = sessão de TOPO em uso, de qualquer feature. isMother
-// (session-graph.ts:247) só fica true com 1+ filha; a recém-criada tem 0.
-// Sessão de topo SEM feature só entra se já delegou (isMother): sem esse corte,
-// todo terminal avulso do usuário viraria tile.
+// Mãe da Room = sessão RAIZ (isRoot: o humano abriu, não nasceu de handoff) em
+// uso e não encerrada, de qualquer feature ou sem feature. Não confundir com
+// isMother (tem filhas): a recém-aberta tem 0 filhas e já é mãe aqui. A sucessora
+// do bastão é raiz mesmo que o handoff herdado tenha uma avó em uso.
 export function allMothers(
   nodes: ReadonlyArray<SessionGraphNode>,
-  edges: ReadonlyArray<EdgeLike>,
   inUse: ReadonlySet<string>,
 ): SessionGraphNode[] {
-  const underMother = new Set<string>()
-  for (const kids of childIdsByMother(edges, inUse).values())
-    for (const k of kids) underMother.add(k)
-  return nodes.filter(
-    (n) =>
-      inUse.has(n.sessionId) &&
-      !underMother.has(n.sessionId) &&
-      (n.featureId != null || n.isMother === true),
-  )
+  return nodes.filter((n) => n.isRoot === true && n.status !== 'ended' && inUse.has(n.sessionId))
 }
 
 // Recorte do needYou (humanQueue, calculado UMA vez pela superfície) que é desta
