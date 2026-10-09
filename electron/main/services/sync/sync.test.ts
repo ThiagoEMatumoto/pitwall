@@ -856,6 +856,173 @@ describe('sync import: bundle de versão anterior (tabela ausente)', () => {
   })
 })
 
+// ---- Tabelas LOCAIS (fora de SYNCED_TABLES) que referenciam linhas substituídas ----
+//
+// sessions, feature_session_records, handoffs, layouts e workspace_state não
+// sincronizam, mas apontam por FK para linhas que o replace-all apaga. Com as FKs
+// desligadas no import, o ON DELETE do schema não roda: sem tratamento, o
+// foreign_key_check acusa órfãs e o pull inteiro faz rollback.
+describe('sync import: órfãos em tabelas locais', () => {
+  const T = 1_700_000_000_000
+
+  function addLocalFeature(db: Database.Database, id: string): void {
+    db.prepare(
+      `INSERT INTO features (id, project_id, slug, title, status, doc_path, synth_mode, created_at, updated_at, origin)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, 'proj-1', id, id, 'pending', `/x/proj-1/${id}.md`, 'manual', T, T, 'manual')
+  }
+
+  function addSession(
+    db: Database.Database,
+    id: string,
+    featureId: string | null,
+    repoId: string | null,
+  ): void {
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, status, started_at, feature_id) VALUES (?,?,?,?,?)`,
+    ).run(id, repoId, 'ended', T, featureId)
+  }
+
+  function addSessionRecord(db: Database.Database, sessionId: string, featureId: string): void {
+    db.prepare(
+      `INSERT INTO feature_session_records (session_id, feature_id, summary, session_at, created_at)
+       VALUES (?,?,?,?,?)`,
+    ).run(sessionId, featureId, 'resumo', T, T)
+  }
+
+  function exportSeededBundle(): string {
+    const dbA = newDb()
+    seed(dbA)
+    const bundleDir = tmp('sync-bundle-')
+    exportBundle(dbA, bundleDir, { featuresRoot: tmp('sync-feat-'), exportedAt: 1 })
+    dbA.close()
+    return bundleDir
+  }
+
+  function importInto(db: Database.Database, bundleDir: string): void {
+    importBundle(db, bundleDir, { featuresRoot: tmp('sync-feat-b-'), ...noopWatcher })
+  }
+
+  it('feature só local: sessions.feature_id vira NULL e feature_session_records cai', () => {
+    const bundleDir = exportSeededBundle()
+    const dbB = newDb()
+    seed(dbB)
+    addLocalFeature(dbB, 'feat-local')
+    addSession(dbB, 's-orphan', 'feat-local', 'repo-1')
+    addSessionRecord(dbB, 's-orphan', 'feat-local')
+    addSession(dbB, 's-keep', 'feat-1', 'repo-1')
+    addSessionRecord(dbB, 's-keep', 'feat-1')
+
+    importInto(dbB, bundleDir)
+
+    expect(dbB.prepare(`SELECT id, feature_id FROM sessions ORDER BY id`).all()).toEqual([
+      { id: 's-keep', feature_id: 'feat-1' },
+      { id: 's-orphan', feature_id: null },
+    ])
+    expect(dbB.prepare(`SELECT session_id FROM feature_session_records`).all()).toEqual([
+      { session_id: 's-keep' },
+    ])
+    expect(dbB.prepare(`SELECT id FROM features WHERE id = 'feat-local'`).all()).toEqual([])
+    expect(dbB.pragma('foreign_key_check')).toEqual([])
+    dbB.close()
+  })
+
+  it('cascata: repo/projeto só locais levam sessions, handoffs e layouts; workspace_state zera', () => {
+    const bundleDir = exportSeededBundle()
+    const dbB = newDb()
+    seed(dbB)
+    dbB.prepare(
+      `INSERT INTO projects (id, name, created_at, updated_at, position) VALUES (?,?,?,?,?)`,
+    ).run('proj-local', 'Só daqui', T, T, 9)
+    dbB.prepare(
+      `INSERT INTO repos (id, project_id, label, path, position, created_at, link_kind)
+       VALUES (?,?,?,?,?,?,?)`,
+    ).run('repo-local', 'proj-1', 'local', '/home/x/local', 9, T, 'external')
+    addSession(dbB, 's-on-local-repo', 'feat-1', 'repo-local')
+    // 2º salto: o pai (sessions) só perde a linha durante a própria limpeza.
+    addSessionRecord(dbB, 's-on-local-repo', 'feat-1')
+    dbB.prepare(
+      `INSERT INTO handoffs (id, target_repo_id, task, composed_prompt, created_at, updated_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run('h-1', 'repo-local', 'tarefa', 'prompt', T, T)
+    dbB.prepare(
+      `INSERT INTO handoff_events (handoff_id, to_status, event, at) VALUES (?,?,?,?)`,
+    ).run('h-1', 'pending', 'created', T)
+    dbB.prepare(`INSERT INTO layouts (project_id, config_json, updated_at) VALUES (?,?,?)`).run(
+      'proj-local',
+      '{}',
+      T,
+    )
+    dbB.prepare(
+      `INSERT INTO workspace_state (id, active_project_id, last_opened_at) VALUES (1, ?, ?)`,
+    ).run('proj-local', T)
+    addSession(dbB, 's-keep', 'feat-1', 'repo-1')
+    addSessionRecord(dbB, 's-keep', 'feat-1')
+
+    importInto(dbB, bundleDir)
+
+    expect(dbB.prepare(`SELECT id FROM sessions`).all()).toEqual([{ id: 's-keep' }])
+    expect(dbB.prepare(`SELECT session_id FROM feature_session_records`).all()).toEqual([
+      { session_id: 's-keep' },
+    ])
+    expect(count(dbB, 'handoffs')).toBe(0)
+    expect(count(dbB, 'handoff_events')).toBe(0)
+    expect(count(dbB, 'layouts')).toBe(0)
+    expect(dbB.prepare(`SELECT active_project_id FROM workspace_state`).all()).toEqual([
+      { active_project_id: null },
+    ])
+    expect(dbB.pragma('foreign_key_check')).toEqual([])
+    dbB.close()
+  })
+
+  it('FK local sem ON DELETE (NO ACTION) continua sendo erro e o import reverte', () => {
+    const bundleDir = exportSeededBundle()
+    const dbB = newDb()
+    seed(dbB)
+    addLocalFeature(dbB, 'feat-local')
+    dbB.exec(`CREATE TABLE zz_no_action (id TEXT PRIMARY KEY, feature_id TEXT REFERENCES features(id))`)
+    dbB.prepare(`INSERT INTO zz_no_action (id, feature_id) VALUES (?,?)`).run('z-1', 'feat-local')
+
+    expect(() => importInto(dbB, bundleDir)).toThrow(/violação\(ões\) de FK/)
+
+    expect(dbB.prepare(`SELECT id FROM features WHERE id = 'feat-local'`).all()).toEqual([
+      { id: 'feat-local' },
+    ])
+    dbB.close()
+  })
+
+  it('violação de FK em tabela do bundle continua lançando e desfaz a limpeza local', () => {
+    const bundleDir = exportSeededBundle()
+    const reposFile = join(bundleDir, 'tables', 'repos.ndjson')
+    const corrupted = readFileSync(reposFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => {
+        const o = JSON.parse(l) as Record<string, unknown>
+        o.project_id = 'proj-ORPHAN'
+        return stableStringify(o)
+      })
+    writeFileSync(reposFile, corrupted.join('\n') + '\n')
+
+    const dbB = newDb()
+    seed(dbB)
+    addLocalFeature(dbB, 'feat-local')
+    addSession(dbB, 's-orphan', 'feat-local', 'repo-1')
+    addSessionRecord(dbB, 's-orphan', 'feat-local')
+
+    expect(() => importInto(dbB, bundleDir)).toThrow(/violação\(ões\) de FK/)
+
+    expect(dbB.prepare(`SELECT feature_id FROM sessions WHERE id = 's-orphan'`).get()).toEqual({
+      feature_id: 'feat-local',
+    })
+    expect(count(dbB, 'feature_session_records')).toBe(1)
+    expect(dbB.prepare(`SELECT id FROM features WHERE id = 'feat-local'`).all()).toEqual([
+      { id: 'feat-local' },
+    ])
+    dbB.close()
+  })
+})
+
 // ---- Regressão: import NUNCA persiste path relativo (bug repos.path relativo) ----
 //
 // O importer antigo gravava o retorno de localizePath mesmo quando unresolved
