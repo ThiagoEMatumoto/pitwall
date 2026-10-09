@@ -10,13 +10,15 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from 'dockview'
-import { FolderTree, PanelLeftOpen } from 'lucide-react'
+import { FolderTree, PanelLeftOpen, PanelRight } from 'lucide-react'
 import { IconRail } from './IconRail'
 import { Icon } from '@/components/ui/Icon'
 import { ProjectsSidebar } from '@/features/projects/ProjectsSidebar'
 import { CcConfigsArea } from '@/features/cc-configs/CcConfigsArea'
 import { MetricsArea } from '@/features/metrics/MetricsArea'
 import { FeatureRoom } from '@/features/feature-room/FeatureRoom'
+import { RoomPanel } from '@/features/feature-room/RoomPanel'
+import { useRoomPanelStore } from '@/features/feature-room/room-panel-store'
 import { FeaturesArea } from '@/features/features/FeaturesArea'
 import { ObjectivesArea } from '@/features/objectives/ObjectivesArea'
 import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
@@ -193,6 +195,8 @@ export function AppShell() {
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const filesOpen = useFilesStore((s) => s.open)
   const toggleFiles = useFilesStore((s) => s.toggle)
+  const roomPanelOpen = useRoomPanelStore((s) => s.open)
+  const toggleRoomPanel = useRoomPanelStore((s) => s.toggle)
   const setFileRoots = useFilesStore((s) => s.setRoots)
   const fileRoots = useFilesStore((s) => s.roots)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -663,6 +667,17 @@ export function AppShell() {
         useProjectsViewStore.getState().setView('map')
         return
       }
+      // Ctrl+Shift+L: o painel da Room. Fora da visão de projeto, leva até ela
+      // com o painel aberto (o destino padrão da Room); lá dentro, alterna.
+      if (matchCombo(e, resolveCombo('roomPanel.toggle', overrides))) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const panel = useRoomPanelStore.getState()
+        if (useAppStore.getState().area === 'projects') panel.toggle()
+        else panel.show()
+        return
+      }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
@@ -953,6 +968,19 @@ export function AppShell() {
             <SessionStrip onOpenSwitcher={() => setSwitcherOpen(true)} />
           </div>
           <ProjectsViewToggle />
+          <button
+            type="button"
+            data-testid="room-panel-toggle"
+            onClick={toggleRoomPanel}
+            aria-pressed={roomPanelOpen}
+            title="Painel da Room: mães e o que precisa de você (Ctrl+Shift+L)"
+            aria-label={roomPanelOpen ? 'Esconder o painel da Room' : 'Mostrar o painel da Room'}
+            className={`m-1 rounded-md p-1.5 transition hover:bg-[var(--color-surface-2)] ${
+              roomPanelOpen ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)]'
+            }`}
+          >
+            <Icon as={PanelRight} size={16} />
+          </button>
         </div>
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
@@ -975,6 +1003,10 @@ export function AppShell() {
           </div>
         </div>
       </main>
+
+      {/* A Room como painel lateral da visão de projeto (irmão de <main>, à
+          direita do dockview). Exclusivo com o Crew Dock expandido. */}
+      {area === 'projects' && roomPanelOpen && <RoomPanel />}
 
       {/* Irmão de <main>, não filho: o bloco de projetos fica `hidden` fora da
           área projects, e o dock precisa continuar visível em qualquer área (as

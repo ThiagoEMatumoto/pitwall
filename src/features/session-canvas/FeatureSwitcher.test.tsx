@@ -8,6 +8,7 @@ vi.mock('@/lib/ipc', () => ({
 import { FeatureSwitcher, FeatureSwitcherButton } from './FeatureSwitcher'
 import { useFeatureMruStore } from './feature-mru-store'
 import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
+import { useRoomPanelStore } from '@/features/feature-room/room-panel-store'
 import { useFeaturePanelStore } from './feature-panel-store'
 import { useMapFocusStore } from './map-focus-store'
 import { useProjectsViewStore } from './projects-view-store'
@@ -80,7 +81,8 @@ const pickFromMapButton = () => {
   fireEvent.click(screen.getByTestId('map-feature-switcher'))
   fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' })
 }
-const roomFeature = () => useFeatureRoomStore.getState().featureId
+// Ctrl+` numa feature: a visão de projeto com o painel da Room filtrado nela.
+const roomFeature = () => useRoomPanelStore.getState().featureFilter
 
 describe('FeatureSwitcher', () => {
   beforeEach(() => {
@@ -95,10 +97,11 @@ describe('FeatureSwitcher', () => {
     useMapFocusStore.setState({ featureId: 'f2', frame: null })
     useAppStore.setState({ area: 'features' })
     useFeatureRoomStore.setState({ featureId: null })
+    useRoomPanelStore.setState({ open: false, featureFilter: null, focus: null })
     useProjectsViewStore.getState().setView('terminals')
   })
 
-  it('segurar mostra o overlay em ordem MRU; Tab avança; soltar confirma e abre a Room', () => {
+  it('segurar mostra o overlay em ordem MRU; Tab avança; soltar confirma e abre o painel da Room', () => {
     render(<FeatureSwitcher />)
     ctrlBackquote()
     act(() => void vi.advanceTimersByTime(200))
@@ -112,7 +115,8 @@ describe('FeatureSwitcher', () => {
     releaseCtrl()
     expect(screen.queryByRole('listbox')).toBeNull()
     expect(roomFeature()).toBe('f1')
-    expect(useAppStore.getState().area).toBe('room')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState().open).toBe(true)
     expect(useFeatureMruStore.getState().order[0]).toBe('f1')
     expect(useMapFocusStore.getState().frame).toBeNull()
   })
@@ -196,7 +200,8 @@ describe('FeatureSwitcher', () => {
     ctrlBackquote()
     releaseCtrl()
     expect(roomFeature()).toBe('f2')
-    expect(useAppStore.getState().area).toBe('room')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState().open).toBe(true)
   })
 
   it('confirmar fecha o painel de outra feature (o mapa, ao montar, voltaria a ela)', () => {

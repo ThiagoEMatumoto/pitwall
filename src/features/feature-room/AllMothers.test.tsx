@@ -117,7 +117,7 @@ type WorldLive = import('../../../electron/main/services/attention/room-world').
 type RoomWorld = import('../../../electron/main/services/attention/room-world').RoomWorld
 
 // O cenário da Task 8: Lume (F1, 1 filha), Nori (F1), Sora (F2), uma sessão de topo
-// sem feature com filha (Solo) e uma avulsa sem filha (fica de fora).
+// sem feature com filha (Solo) e uma avulsa sem filha (também é mãe: o humano a abriu).
 function seed(): void {
   harness.seedFeature(testDb, 'F1')
   harness.seedFeature(testDb, 'F2')

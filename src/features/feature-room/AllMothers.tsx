@@ -37,7 +37,7 @@ const EMPTY_SET: ReadonlySet<string> = new Set()
 
 // Tiles visíveis na grade (IntersectionObserver no scroller). Sem o observer (o
 // ambiente não tem), todos contam como visíveis e o teto de 8 continua valendo.
-function useVisibleTiles(rootRef: React.RefObject<HTMLElement | null>, ids: string[]) {
+export function useVisibleTiles(rootRef: React.RefObject<HTMLElement | null>, ids: string[]) {
   // Com observer, ninguém é vivo antes do 1º callback: assinar e soltar logo em
   // seguida custaria um watcher no main por tile fora da tela.
   const [visible, setVisible] = useState<ReadonlySet<string> | null>(() =>

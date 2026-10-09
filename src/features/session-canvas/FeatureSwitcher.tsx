@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
+import { useRoomPanelStore } from '@/features/feature-room/room-panel-store'
 import { markRoomHintSeen, roomHintText, roomHintSeen } from '@/features/feature-room/room-hint'
 import { createPortal } from 'react-dom'
 import { Crown, Layers } from 'lucide-react'
@@ -171,8 +172,12 @@ export function FeatureSwitcher() {
         useAppStore.getState().area === 'room' && roomState.level === 'feature'
           ? roomState.featureId
           : null
+      const panel = useRoomPanelStore.getState()
+      const panelFeature =
+        useAppStore.getState().area === 'projects' && panel.open ? panel.featureFilter : null
       const current =
         room ??
+        panelFeature ??
         (order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId)
       const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
       if (keys.length === 0) return false
@@ -527,7 +532,9 @@ function goTo(target: SwitcherEntry, origin: SwitcherOrigin) {
   if (target.kind === 'feature' && target.featureId && origin !== 'map-button') {
     useFeatureMruStore.getState().touch(target.key)
     if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
-    useFeatureRoomStore.getState().openRoom(target.featureId)
+    // Destino padrão: a visão de projeto com o painel da Room filtrado na feature
+    // e a pane da mãe dela em foco.
+    useRoomPanelStore.getState().show({ featureId: target.featureId })
     return
   }
   showFeatureOnMap(target)
