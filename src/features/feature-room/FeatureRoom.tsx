@@ -277,20 +277,13 @@ function FeatureSala() {
     // Eventos de portais (DelegateDialog, menus) borbulham pela árvore React mas não são da Room.
     if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return
     // Esc: o diálogo é portal (não chega aqui); depois o peek, depois Todas as mães.
-    // No composer da mãe, vazio volta e com texto só tira o foco (protege o rascunho). Do
-    // xterm (modo terminal) o Esc é da TUI: só devolve o foco à sala.
-    // defaultPrevented: quem recebeu o Esc já o tratou.
+    // Num campo (resposta da fila, xterm) só devolve o foco à sala. O composer da
+    // mãe não chega aqui: vazio, ele manda o Esc para a TUI (interromper); com
+    // texto, o onKeyDownCapture abaixo tira o foco e protege o rascunho.
     if (e.key === 'Escape' && !e.defaultPrevented) {
       e.preventDefault()
-      const t = e.target
-      if (isTypingTarget(t)) {
-        const emptyComposer =
-          t instanceof HTMLTextAreaElement &&
-          !t.closest('.xterm') &&
-          !!t.closest('[data-testid="room-mother"]') &&
-          t.value.trim() === ''
-        if (emptyComposer) useFeatureRoomStore.getState().openAllMothers()
-        else rootRef.current.focus({ preventScroll: true })
+      if (isTypingTarget(e.target)) {
+        rootRef.current.focus({ preventScroll: true })
         return
       }
       const dock = useCrewDockStore.getState()
@@ -321,6 +314,21 @@ function FeatureSala() {
     step(k === 'j' ? 1 : -1)
   }
 
+  const onKeyDownCapture = (e: KeyboardEvent) => {
+    const t = e.target
+    if (
+      e.key !== 'Escape' ||
+      !(t instanceof HTMLTextAreaElement) ||
+      t.classList.contains('xterm-helper-textarea') ||
+      !t.closest('[data-testid="room-mother"]') ||
+      t.value.trim() === ''
+    )
+      return
+    e.preventDefault()
+    e.stopPropagation()
+    rootRef.current?.focus({ preventScroll: true })
+  }
+
   const showCard = !!pendingMother || !centerId
   const startMother = () => {
     if (centerId) setStartOpen(true)
@@ -338,6 +346,7 @@ function FeatureSala() {
       data-state={view.state}
       aria-label={`Room da feature ${snapshot.feature.title}`}
       onKeyDown={onKeyDown}
+      onKeyDownCapture={onKeyDownCapture}
       className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)] text-[14px] text-[var(--color-text)] outline-none ${ROOM_FOCUS}`}
     >
       <RoomHeader

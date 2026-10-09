@@ -168,9 +168,9 @@ async function run(): Promise<void> {
       const id = (await homeBtn.getAttribute('data-feature-id')) ?? ''
       const homeTitle = await page.evaluate(
         async (f) =>
-          ((await (window as any).api.features.list()) as Array<{ id: string; title: string }>).find(
-            (x) => x.id === f,
-          )?.title ?? '',
+          (
+            (await (window as any).api.features.list()) as Array<{ id: string; title: string }>
+          ).find((x) => x.id === f)?.title ?? '',
         id,
       )
       await homeBtn.scrollIntoViewIfNeeded()
@@ -204,9 +204,18 @@ async function run(): Promise<void> {
     const bar = (await titleBadge.count()) ? numberIn(await titleBadge.innerText()) : 0
     check(rail === bar, `3: badge da Room (${rail}) = "N no box" da TitleBar (${bar})`)
     await shot(page, '3-rail')
+    // B2b: a barra abre "Todas as mães"; o tile da mãe (Enter) leva à sala de F.
     await page.getByTestId('rail-room').click()
-    await waitFor(page, 'Room pela barra', async () => room(page).isVisible())
-    check((await roomTitle(page)) === title, '3: item "Room" abre a Room da última feature')
+    const tile = page.locator(`[data-testid="mother-tile"][data-tile="${M}"]`)
+    check(
+      await waitFor(page, 'Todas as mães pela barra', () => tile.isVisible()),
+      '3: item "Room" abre Todas as mães, com o tile da mãe',
+    )
+    await shot(page, '3-all-mothers')
+    await tile.focus()
+    await page.keyboard.press('Enter')
+    await waitFor(page, 'Room pelo tile', async () => room(page).isVisible())
+    check((await roomTitle(page)) === title, '3: Enter no tile abre a sala da feature')
     await shot(page, '3-room')
   } finally {
     await app.close()
