@@ -136,7 +136,13 @@ export interface LoopInput extends LoopActivityInput {
    * missing = eventos de handoff sem nenhuma tentativa de wake (gancho que não
    * disparou). Ausente/null = projeção não carregou.
    */
-  handoffWake?: { attempted: number; delivered: number; undelivered: number; missing?: number } | null
+  handoffWake?: {
+    attempted: number
+    delivered: number
+    undelivered: number
+    missing?: number
+    stuckUnparsed?: number
+  } | null
   /**
    * Pedidos human_only (handoff_requests). hiddenHumanOnly = abertos que a fila
    * não mostra e ninguém triou. Ausente/null = projeção não carregou.
@@ -287,6 +293,14 @@ export function issuesOf(input: LoopInput): LoopIssue[] {
             message: `${wake.undelivered} de ${wake.attempted} avisos de handoff não chegaram à mãe em 24h.`,
           },
     )
+  }
+  // Tela não reconhecida é defeito do parser da TUI, não da sessão: aponta onde olhar.
+  if (wake?.stuckUnparsed) {
+    issues.push({
+      level: 'warn',
+      code: 'handoff_wake_unparsed_screen',
+      message: `${wake.stuckUnparsed} entregas (aviso à mãe/resposta à filha) presas por tela não reconhecida em 24h.`,
+    })
   }
   if (wake?.missing) {
     issues.push({

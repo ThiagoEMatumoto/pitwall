@@ -25,7 +25,13 @@ import { PromptQueue, POLL_MS } from '../prompt-queue'
 import { TuiMenuWatch } from '../tui-menu-watch'
 import { FIXTURES } from '../test-support/screen-scans'
 import { handoffAsking, type ScreenScan } from '../../../../shared/tui/attention-reason'
-import { __resetForTests, onQueueSnapshot, setHandoffWakeQueue } from './handoff-wake'
+import {
+  WAKE_STALE_TRANSIENT_MS,
+  __resetForTests,
+  onQueueSnapshot,
+  setHandoffWakeQueue,
+  wakeHealth,
+} from './handoff-wake'
 import { __resetAnswerDeliveryForTests, deliverAnswer, onAnswerQueueSnapshot } from './answer-delivery'
 
 const MOTHER = 'mother-1'
@@ -117,5 +123,17 @@ describe('resposta humana a pedido escalado, filha já idle', () => {
     const rows = await escalateAndAnswerAsHuman()
     expect(rows.find((r) => r.target === CHILD)?.outcome).toBe('delivered')
     expect(writes.some((w) => w.id === CHILD && w.text.startsWith('<pitwall-answer'))).toBe(true)
+  })
+
+  // Lei do fail-closed: tela não reconhecida tem contador consumível no wakeHealth
+  // (overview_get / feature_health_get), medido com a fila e o ledger reais.
+  it('tela não reconhecida: a resposta presa conta em wakeHealth.stuckUnparsed', async () => {
+    childScan = { menu: null, inputPrompt: false, nonBlankLines: 12 }
+    const rows = await escalateAndAnswerAsHuman()
+    expect(rows.find((r) => r.target === CHILD)).toMatchObject({ outcome: 'held', detail: 'unparsed' })
+    expect(wakeHealth({}).stuckUnparsed).toBe(0)
+    const later = wakeHealth({}, Date.now() + WAKE_STALE_TRANSIENT_MS + 60_000)
+    expect(later.stuckUnparsed).toBe(1)
+    expect(later.undelivered).toBeGreaterThanOrEqual(1)
   })
 })
