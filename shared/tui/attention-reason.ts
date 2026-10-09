@@ -1,4 +1,5 @@
 import { gateMenuByStatus, parseTuiMenu, type TuiMenu } from './tui-menu-parser'
+import { isInputRule } from './input-rule'
 import { parseWithGrowingWindow } from './tui-read-window'
 
 // POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
@@ -22,16 +23,15 @@ const PROMPT_WINDOW = 40
 // Abaixo disso a tela ainda está nascendo (banner) — não é falha de parse.
 const UNPARSED_MIN_LINES = 3
 
-const RULE_RE = /^─{10,}$/
 const INPUT_LINE_RE = /^❯(\s|$)/
 
 // Caixa de input do claude 2.1.286 (captura real em __fixtures__/…idle-prompt):
-// régua, "❯ …", régua. A linha ❯ de uma opção de menu não tem régua logo acima.
+// régua, "❯ …", régua. No 2.1.295 a régua de cima pode trazer o nome da sessão. A linha ❯ de uma opção de menu não tem régua logo acima.
 export function hasInputPrompt(text: string): boolean {
   const lines = text.split('\n').map((l) => l.trim())
   for (let i = lines.length - 1; i > 0; i--) {
-    if (!INPUT_LINE_RE.test(lines[i]) || !RULE_RE.test(lines[i - 1])) continue
-    if (lines.slice(i + 1, i + 8).some((l) => RULE_RE.test(l))) return true
+    if (!INPUT_LINE_RE.test(lines[i]) || !isInputRule(lines[i - 1])) continue
+    if (lines.slice(i + 1, i + 8).some((l) => isInputRule(l))) return true
   }
   return false
 }
@@ -41,8 +41,8 @@ export function hasInputPrompt(text: string): boolean {
 export function inputBoxRows(lines: string[]): { start: number; end: number } | null {
   const trimmed = lines.map((l) => l.trim())
   for (let i = trimmed.length - 1; i > 0; i--) {
-    if (!INPUT_LINE_RE.test(trimmed[i]) || !RULE_RE.test(trimmed[i - 1])) continue
-    const close = trimmed.slice(i + 1, i + 8).findIndex((l) => RULE_RE.test(l))
+    if (!INPUT_LINE_RE.test(trimmed[i]) || !isInputRule(trimmed[i - 1])) continue
+    const close = trimmed.slice(i + 1, i + 8).findIndex((l) => isInputRule(l))
     if (close >= 0) return { start: i, end: i + 1 + close }
   }
   return null
