@@ -14,7 +14,7 @@ import {
 } from '../driver/crew-seed'
 import { createFakeHome, type FakeSessionEntry } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
-import { goToArea, waitReady } from '../driver/nav'
+import { clickVisibleInMap, goToArea, waitReady } from '../driver/nav'
 
 // Room da feature (feat/feature-room-page) no app buildado, HOME fake + stub do
 // claude, cópia do perfil (CM_DRIVE_SAFE=1). Estados criados DEPOIS do boot pelos
@@ -151,10 +151,17 @@ async function openMap(page: Page): Promise<void> {
 async function openRoomPage(page: Page, featureId: string): Promise<void> {
   await closeOverlays(page)
   await openMap(page)
-  await page
-    .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
-    .getByTestId('feature-card-header')
-    .click()
+  // O FeaturePanel desta feature pode seguir aberto (por cima do card) de antes.
+  const featurePanel = page.locator(
+    `[data-testid="feature-panel"][data-feature-panel="${featureId}"]`,
+  )
+  if (!(await featurePanel.isVisible()))
+    await clickVisibleInMap(
+      page,
+      page
+        .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
+        .getByTestId('feature-card-header'),
+    )
   await page.getByTestId('feature-panel-open-room').click({ timeout: 10_000 })
   await waitFor(page, 'página da Room', async () => room(page).isVisible())
 }
@@ -300,7 +307,8 @@ async function phaseStub(): Promise<void> {
       })
       kids.push({ handoffId: res.handoffId, sessionId: sid, ccSessionId: cc })
     }
-    await switchByKeyboard(page, F)
+    // Contrato v0.78: Ctrl+` leva ao painel; a página da Room é pelo FeaturePanel.
+    await openRoomPage(page, F)
     await waitFor(page, 'Room verde', async () => (await roomState(page)) === 'green', 20_000)
     check((await roomState(page)) === 'green', '3: estado tudo verde')
     check(
@@ -476,7 +484,15 @@ async function phaseStub(): Promise<void> {
     const header = page
       .locator(`[data-testid="lane-feature"][data-feature-id="${F}"]`)
       .getByTestId('feature-card-header')
-    await header.click()
+    // O FeaturePanel aberto antes fica por cima do card: fecha para provar que o
+    // card o abre de novo.
+    if (await page.getByTestId('feature-panel').isVisible()) {
+      await page.keyboard.press('Escape')
+      await waitFor(page, 'FeaturePanel fechado', async () =>
+        !(await page.getByTestId('feature-panel').isVisible()),
+      )
+    }
+    await clickVisibleInMap(page, header)
     check(
       await waitFor(
         page,

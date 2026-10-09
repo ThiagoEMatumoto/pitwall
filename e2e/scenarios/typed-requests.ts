@@ -33,7 +33,7 @@ import { captureLogs } from '../driver/capture'
 import { cleanCopy, closeOverlays, liveGlobal, mcpAs, spawnSession } from '../driver/crew-seed'
 import { createFakeHome } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
-import { goToArea, waitReady } from '../driver/nav'
+import { clickVisibleInMap, goToArea, waitReady } from '../driver/nav'
 
 const RUN_ID = Date.now()
 const SCRATCH = process.env.TR_SCRATCH ?? join(tmpdir(), `typed-requests-${RUN_ID}`)
@@ -224,10 +224,17 @@ async function openRoomPage(featureId: string): Promise<boolean> {
     .click()
     .catch(() => {})
   await page.getByTestId('session-map').waitFor({ state: 'visible', timeout: 15_000 })
-  await page
-    .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
-    .getByTestId('feature-card-header')
-    .click()
+  // O FeaturePanel desta feature pode seguir aberto (por cima do card) de antes.
+  const featurePanel = page.locator(
+    `[data-testid="feature-panel"][data-feature-panel="${featureId}"]`,
+  )
+  if (!(await featurePanel.isVisible()))
+    await clickVisibleInMap(
+      page,
+      page
+        .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
+        .getByTestId('feature-card-header'),
+    )
   await page.getByTestId('feature-panel-open-room').click({ timeout: 10_000 })
   await page.waitForTimeout(800)
   return page.getByTestId('feature-room').isVisible()

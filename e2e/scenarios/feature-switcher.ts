@@ -184,7 +184,7 @@ async function panelOnFeature(featureId: string): Promise<boolean> {
 async function roomPageOf(featureId: string): Promise<void> {
   await page.getByTestId('room-panel-fullscreen').click()
   const tile = page.locator(
-    `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${motherIdOf(featureId)}"]`,
+    `[data-testid="all-mothers"] [data-testid="mother-tile"][data-tile="${motherIdOf(featureId)}"]`,
   )
   await waitFor('tile em Todas as mães', () => tile.isVisible(), 8000)
   await tile.focus()

@@ -231,7 +231,7 @@ async function run(): Promise<void> {
     await shot(page, '3-panel')
     await page.getByTestId('room-panel-fullscreen').click()
     const tile = page.locator(
-      `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${M}"]`,
+      `[data-testid="all-mothers"] [data-testid="mother-tile"][data-tile="${M}"]`,
     )
     check(
       await waitFor(page, 'Todas as mães pelo ⤢', () => tile.isVisible()),

@@ -480,6 +480,11 @@ try {
 
   // ---- (f) recolher/expandir + relaunch
   const handle = page.getByTestId('room-panel-resize')
+  const available = await page.evaluate(() =>
+    ['#dockview-host', '[data-testid="room-panel"]']
+      .map((sel) => document.querySelector(sel)?.getBoundingClientRect().width ?? 0)
+      .reduce((a, b) => a + Math.round(b), 0),
+  )
   const box = await handle.boundingBox()
   if (box) {
     await page.mouse.move(box.x + 2, box.y + box.height / 2)
@@ -488,7 +493,16 @@ try {
     await page.mouse.up()
   }
   const w0 = (await persisted(page))?.width ?? 0
-  check(w0 > 360, `f: largura arrastada persistida (${w0})`)
+  // O arrasto alarga até o teto que ainda deixa o dockview em 720 (roomPanelFitMax):
+  // sem esse teto o painel caía para a faixa compacta no meio do arrasto, o cabo
+  // desmontava e o pointerup se perdia (largura ficava 300 e o painel oscilava).
+  const want = Math.min(300 + 80, Math.max(260, available - 720))
+  note(`f: dockview+painel=${available}px, alvo do arrasto=${want}`)
+  check(w0 === want && w0 > 300, `f: largura arrastada persistida (${w0} vs ${want})`)
+  check(
+    (await panel(page).getAttribute('data-compact')) === null,
+    'f: o arrasto não derruba o painel para a faixa compacta',
+  )
   await page.getByTestId('room-panel-collapse').click()
   check(!(await panel(page).isVisible()), 'f: recolher esconde')
   await page.getByTestId('room-panel-toggle').click()

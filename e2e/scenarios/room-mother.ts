@@ -527,7 +527,7 @@ try {
   check(!(await room().isVisible()), 'f3: a barra não abre a página Room')
   await page.getByTestId('room-panel-fullscreen').click()
   const tileM = page.locator(
-    `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${ids.M}"]`,
+    `[data-testid="all-mothers"] [data-testid="mother-tile"][data-tile="${ids.M}"]`,
   )
   check(
     await waitFor(page, 'tile da mãe em Todas as mães', () => tileM.isVisible(), 10_000),
