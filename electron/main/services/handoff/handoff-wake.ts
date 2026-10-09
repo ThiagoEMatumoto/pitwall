@@ -605,18 +605,20 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
   const params = scope.featureId ? [since, scope.featureId] : [since]
   const rows = db
     .prepare(
-      `SELECT d.outcome, d.created_at, d.fetched_at FROM handoff_wake_deliveries d
+      `SELECT d.outcome, d.detail, d.created_at, d.fetched_at FROM handoff_wake_deliveries d
          JOIN handoffs h ON h.id = d.handoff_id
         WHERE d.created_at > ?${feature}`,
     )
     .all(...params) as Array<{
     outcome: WakeOutcome
+    detail: string | null
     created_at: number
     fetched_at: number | null
   }>
   const byOutcome: Partial<Record<WakeOutcome, number>> = {}
   let delivered = 0
   let undelivered = 0
+  let stuckUnparsed = 0
   let lastUndeliveredAt: number | null = null
   const staleBefore = now - WAKE_STALE_TRANSIENT_MS
   for (const r of rows) {
@@ -629,6 +631,7 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
     if (lost) {
       undelivered++
       lastUndeliveredAt = Math.max(lastUndeliveredAt ?? 0, r.created_at)
+      if (r.detail === 'unparsed') stuckUnparsed++
     }
   }
   const missing = (
@@ -653,6 +656,7 @@ export function wakeHealth(scope: { featureId?: string }, now = Date.now()): Wak
     delivered,
     undelivered,
     missing,
+    stuckUnparsed,
     byOutcome,
     lastUndeliveredAt,
   }

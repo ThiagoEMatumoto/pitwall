@@ -1249,6 +1249,9 @@ export interface HandoffWakeHealth {
   delivered: number
   undelivered: number
   missing: number
+  // Subconjunto de undelivered segurado por 'unparsed': a fila não reconheceu a
+  // caixa de input da sessão alvo (wake da mãe ou resposta à filha).
+  stuckUnparsed: number
   byOutcome: Partial<Record<string, number>>
   lastUndeliveredAt: number | null
 }

@@ -202,6 +202,12 @@ describe('issuesOf', () => {
       expect(levelOf(undefined)).toEqual([])
     })
 
+    it('presas por tela não reconhecida → handoff_wake_unparsed_screen (warn)', () => {
+      expect(
+        levelOf({ attempted: 3, delivered: 2, undelivered: 1, stuckUnparsed: 1 }).map((i) => i.code),
+      ).toEqual(['handoff_wake_undelivered', 'handoff_wake_unparsed_screen'])
+    })
+
     it('evento sem tentativa de wake → handoff_wake_missing (warn)', () => {
       expect(levelOf({ attempted: 0, delivered: 0, undelivered: 0, missing: 2 })).toMatchObject([
         { level: 'warn', code: 'handoff_wake_missing' },
