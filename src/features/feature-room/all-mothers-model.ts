@@ -25,7 +25,7 @@ export function childIdsByMother(
 // Mãe da Room = sessão RAIZ (isRoot: o humano abriu, não nasceu de handoff) em
 // uso e não encerrada, de qualquer feature ou sem feature. Não confundir com
 // isMother (tem filhas): a recém-aberta tem 0 filhas e já é mãe aqui. A sucessora
-// do bastão é raiz mesmo que o handoff herdado tenha uma avó em uso.
+// do bastão de uma filha continua filha (conta só no tile da mãe).
 export function allMothers(
   nodes: ReadonlyArray<SessionGraphNode>,
   inUse: ReadonlySet<string>,

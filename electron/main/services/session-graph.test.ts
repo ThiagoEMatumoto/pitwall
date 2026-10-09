@@ -739,14 +739,31 @@ describe('session graph — raiz (isRoot)', () => {
     expect(nodeOf(g, 'm')).toMatchObject({ isRoot: true, isMother: true })
   })
 
-  it('sucessora do bastão é raiz', () => {
+  // baton:pass de uma FILHA religa a sucessora no mesmo handoff (markRunning em
+  // ipc/baton.ts): a mãe segue falando com ela. Raiz aqui viraria tile próprio E
+  // filha da mãe — o mesmo pedido contado duas vezes.
+  it('sucessora do bastão de uma filha continua filha (não é raiz)', () => {
     addSession('m', 'r-web')
     addSession('old', 'r-api')
     addSession('new', 'r-api')
     const h = dispatch('m', 'old', 'Refatorar auth', 'r-api')
     passBaton(h, 'old', 'new')
     const g = graphFor(live({ m: {}, old: {}, new: {} }))
-    expect(nodeOf(g, 'new')).toMatchObject({ isRoot: true, childOfHandoffId: h })
+    expect(nodeOf(g, 'new')).toMatchObject({ isRoot: false, childOfHandoffId: h })
+    expect(g.edges).toContainEqual(
+      expect.objectContaining({ kind: 'handoff', from: 'm', to: 'new' }),
+    )
+  })
+
+  it('sucessora do bastão da MÃE é raiz', () => {
+    addSession('m', 'r-web')
+    addSession('m2', 'r-web')
+    addSession('c1', 'r-api')
+    dispatch('m', 'c1', 'Mapa', 'r-api')
+    testDb.prepare("UPDATE handoffs SET mother_session_id = 'm2'").run()
+    const g = graphFor(live({ m: {}, m2: {}, c1: {} }))
+    expect(nodeOf(g, 'm2')).toMatchObject({ isRoot: true, isMother: true })
+    expect(nodeOf(g, 'c1')).toMatchObject({ isRoot: false })
   })
 
   it('filha solta por release() vira raiz (o vínculo child_session_id some)', () => {
