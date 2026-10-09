@@ -183,15 +183,30 @@ async function run(): Promise<void> {
     await shot(page, '3-focused')
 
     // ---- 4. Ctrl+` numa feature: painel filtrado e a pane da mãe dela em foco
+    // Espera a opção da feature em vez de ler o atributo às cegas: sem o overlay o
+    // getAttribute pendurava 30s e derrubava o cenário sem dizer o que havia na tela.
+    const opt = page.locator(`[data-testid="feature-switcher"] [role="option"][data-key="${F}"]`)
     await page.keyboard.down('Control')
     await page.keyboard.press('Backquote')
-    await page.waitForTimeout(600)
-    const opt = page.locator(`[data-testid="feature-switcher"] [role="option"][data-key="${F}"]`)
-    for (let i = 0; i < 20 && (await opt.getAttribute('aria-selected')) !== 'true'; i++) {
+    const listed = await waitFor(page, 'opção da feature no seletor', () => opt.isVisible(), 5000)
+    if (!listed) {
+      const keys = await page
+        .locator('[data-testid="feature-switcher"] [role="option"]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
+      const active = await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))
+      console.log(`[room-panel] 4: seletor sem ${F}: opções=${JSON.stringify(keys)} foco=${active}`)
+      await shot(page, '4-no-option')
+    }
+    for (
+      let i = 0;
+      listed && i < 20 && (await opt.getAttribute('aria-selected', { timeout: 1000 })) !== 'true';
+      i++
+    ) {
       await page.keyboard.press('Tab')
       await page.waitForTimeout(80)
     }
     await page.keyboard.up('Control')
+    check(listed, '4: Ctrl+` lista a feature no seletor')
     check(
       await waitFor(page, 'filtro da feature', () =>
         page.getByTestId('room-panel-filter').isVisible(),

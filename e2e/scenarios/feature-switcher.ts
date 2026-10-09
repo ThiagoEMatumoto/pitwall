@@ -6,7 +6,7 @@ import { captureLogs } from '../driver/capture'
 import { createFakeHome, type FakeSessionEntry } from '../driver/fake-home'
 import { connectMcp } from '../driver/mcp'
 import { queryDb } from '../driver/inspect'
-import { goToArea, waitReady } from '../driver/nav'
+import { clickVisibleInMap, goToArea, waitReady } from '../driver/nav'
 
 // F5 — seletor rápido de features (Ctrl+`, o "Alt+Tab" do Pitwall), sobre a CÓPIA
 // do perfil real com HOME fake e stubs vivos do `claude`:
@@ -32,9 +32,7 @@ import { goToArea, waitReady } from '../driver/nav'
 //   → fora do mapa (Terminais), confirmar leva ao mapa
 // Rodar: SWITCHER_SHOTS=<dir> npx tsx e2e/scenarios/feature-switcher.ts
 
-const SHOTS =
-  process.env.SWITCHER_SHOTS ??
-  '/home/thiagoematumoto/projetos/pessoal/claude-manager/.worktrees/feat-mother-panel/.cm-drive/mp2/drive/MP2-polish'
+const SHOTS = process.env.SWITCHER_SHOTS ?? join(tmpdir(), 'feature-switcher-shots')
 mkdirSync(SHOTS, { recursive: true })
 const fake = createFakeHome({ parentDir: tmpdir() })
 let shotN = 0
@@ -583,7 +581,7 @@ try {
       .first()
     const title = childNode.getByTestId('card-title').first()
     if (await title.count()) {
-      await title.click()
+      await clickVisibleInMap(page, title)
       await page
         .getByTestId('session-map')
         .focus()
