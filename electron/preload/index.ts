@@ -64,6 +64,7 @@ import type {
   SyncConfigureInput,
   SyncResolveConflictInput,
   SyncSetProjectsRootInput,
+  ChatTranscriptTail,
   ChatTranscriptUpdate,
   McpAddInput,
   McpRemoveInput,
@@ -199,6 +200,13 @@ const api: Api = {
     },
     onTranscriptUpdate: (handler) =>
       subscribe<ChatTranscriptUpdate>('chat:transcript-update', handler),
+    watchTail: (sessionId) => {
+      void invoke('chat:watch-tail', sessionId)
+    },
+    unwatchTail: (sessionId) => {
+      void invoke('chat:unwatch-tail', sessionId)
+    },
+    onTranscriptTail: (handler) => subscribe<ChatTranscriptTail>('chat:transcript-tail', handler),
   },
   shell: {
     openPath: (path: string) => invoke('shell:open-path', path),

@@ -133,3 +133,12 @@ export interface ChatTranscriptUpdate {
   messages: ChatMessage[]
   lastPlanFilePath: string | null
 }
+
+// Payload do broadcast chat:transcript-tail (tile da Room): só as últimas
+// mensagens, lidas da janela final do JSONL. Sem lastPlanFilePath: o tile não
+// mostra card de plano.
+export interface ChatTranscriptTail {
+  sessionId: string
+  transcriptExists: boolean
+  messages: ChatMessage[]
+}

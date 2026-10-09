@@ -893,6 +893,7 @@ export function registerSessionIpc(): void {
       // Para o watcher do transcript do Chat View desta sessão (evita leak de
       // chokidar/interval após a PTY morrer). No-op se ninguém estava observando.
       chatTranscriptService.unwatch(e.sessionId)
+      chatTranscriptService.unwatchTail(e.sessionId)
 
       // Reconciliação do handoff: se a sessão-filha morreu (exit/crash) sem ter
       // reportado conclusão (status ainda vivo: 'running' OU 'needs_input'), o
@@ -1561,5 +1562,13 @@ export function registerSessionIpc(): void {
 
   ipcMain.handle('chat:unwatch', (_e, sessionId: string) => {
     chatTranscriptService.unwatch(sessionId)
+  })
+
+  ipcMain.handle('chat:watch-tail', (_e, sessionId: string) => {
+    chatTranscriptService.watchTail(sessionId, resolveCcSessionId(sessionId))
+  })
+
+  ipcMain.handle('chat:unwatch-tail', (_e, sessionId: string) => {
+    chatTranscriptService.unwatchTail(sessionId)
   })
 }
