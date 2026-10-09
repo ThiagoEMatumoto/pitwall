@@ -74,10 +74,11 @@ describe('chat-watch-refs', () => {
 })
 
 describe('chat-watch-refs: cauda', () => {
-  it('acquire×2/release×1 de cauda: watchTail 1 vez, unwatchTail 0', () => {
+  it('acquire×2/release×1 de cauda: o 2º acquire repede a cauda, unwatchTail 0', () => {
     acquireTailWatch('t1')
     acquireTailWatch('t1')
-    expect(chatApi.watchTail).toHaveBeenCalledTimes(1)
+    // O 2º consumidor não ouviu o emit inicial: watchTail de novo faz o main reemitir.
+    expect(chatApi.watchTail).toHaveBeenCalledTimes(2)
     releaseTailWatch('t1')
     expect(chatApi.unwatchTail).not.toHaveBeenCalled()
     expect(tailWatchCountForTest('t1')).toBe(1)

@@ -4,7 +4,13 @@ import { dirname } from 'node:path'
 import chokidar, { FSWatcher } from 'chokidar'
 import { findTranscriptPath } from './session-activity'
 import { lastPlanFilePath, parseChatMessages } from './chat-transcript'
-import { readSubagentInfos } from './subagent-turns'
+import {
+  readSubagentIndex,
+  readSubagentInfos,
+  readSubagentTurns,
+  type SubagentRef,
+} from './subagent-turns'
+import type { SubagentInfo } from './chat-transcript'
 import type {
   ChatMessage,
   ChatTranscriptTail,
@@ -28,11 +34,36 @@ const TAIL_DEBOUNCE_MS = 400
 // primeira da janela pode ser um turno de assistant pela metade (o merge de
 // blocos por message.id começou antes da janela). Se não couber, dobra a janela
 // até TAIL_MAX_BYTES e devolve o que coube.
+//
+// Subagentes: o parser só precisa saber QUAIS tool_use são subagentes (índice dos
+// metas, cacheado). Os turnos (.jsonl, centenas de MB numa mãe) são resolvidos
+// depois, só para os cards que estão nas mensagens entregues — o custo por emit
+// não cresce com o número de subagentes da sessão.
 export async function readTail(
   path: string,
   ccSessionId: string | null = null,
 ): Promise<ChatMessage[]> {
-  const subagents = ccSessionId ? readSubagentInfos(dirname(path), ccSessionId) : undefined
+  const index = ccSessionId ? readSubagentIndex(dirname(path), ccSessionId) : undefined
+  const messages = await readTailMessages(path, index && withoutTurns(index))
+  if (!index) return messages
+  return messages.map((m) => {
+    const ref = m.kind === 'subagent' ? index.get(m.id) : undefined
+    return ref ? { ...m, ...readSubagentTurns(ref.jsonlPath) } : m
+  })
+}
+
+function withoutTurns(index: Map<string, SubagentRef>): Map<string, SubagentInfo> {
+  const out = new Map<string, SubagentInfo>()
+  for (const [id, ref] of index) {
+    out.set(id, { name: ref.name, description: ref.description, turnCount: 0, turns: [] })
+  }
+  return out
+}
+
+async function readTailMessages(
+  path: string,
+  subagents: Map<string, SubagentInfo> | undefined,
+): Promise<ChatMessage[]> {
   const fh = await open(path, 'r')
   try {
     const { size } = await fh.stat()
@@ -63,6 +94,9 @@ interface WatchEntry {
   watcher: FSWatcher | null
   poll: NodeJS.Timeout | null
   debounce: NodeJS.Timeout | null
+  // Só a cauda usa: numera as leituras para uma leitura velha que termina depois
+  // de uma nova não sobrescrever a cauda mais recente.
+  seq?: number
 }
 
 function broadcast(channel: string, payload: unknown): void {
@@ -154,8 +188,14 @@ class ChatTranscriptService {
     for (const id of [...this.tailWatches.keys()]) this.unwatchTail(id)
   }
 
+  // Watch já ativo: um 2º consumidor (outro tile/janela) não viu o emit inicial, e
+  // numa mãe parada nenhum change viria — reemite a cauda atual.
   watchTail(sessionId: string, ccSessionId: string | null): void {
-    if (this.tailWatches.has(sessionId)) return
+    const existing = this.tailWatches.get(sessionId)
+    if (existing) {
+      if (existing.path) void this.emitTail(sessionId, existing, existing.path)
+      return
+    }
     if (!ccSessionId) return
     const entry: WatchEntry = { ccSessionId, path: null, watcher: null, poll: null, debounce: null }
     this.tailWatches.set(sessionId, entry)
@@ -209,13 +249,15 @@ class ChatTranscriptService {
     // Compara a entrada, não só a chave: um unwatch+watch durante a leitura não
     // deve receber o emit do watcher velho.
     if (this.tailWatches.get(sessionId) !== entry) return
+    const seq = (entry.seq ?? 0) + 1
+    entry.seq = seq
     let messages: ChatMessage[]
     try {
       messages = await readTail(path, entry.ccSessionId)
     } catch {
       return // arquivo sumiu / corrida: o próximo change reemite.
     }
-    if (this.tailWatches.get(sessionId) !== entry) return
+    if (this.tailWatches.get(sessionId) !== entry || entry.seq !== seq) return
     broadcast('chat:transcript-tail', {
       sessionId,
       transcriptExists: true,

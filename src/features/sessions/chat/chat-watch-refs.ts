@@ -58,7 +58,10 @@ export function acquireTailWatch(sessionId: string, ccSessionId: string | null =
     return
   }
   entry.count += 1
-  noteTailWatchCcSessionId(sessionId, ccSessionId)
+  if (ccSessionId && !entry.ccSessionId) entry.ccSessionId = ccSessionId
+  // O novo consumidor não ouviu o emit inicial: o main reemite a cauda atual no
+  // watch repetido (numa mãe parada nenhum change viria).
+  chatApi.watchTail(sessionId)
 }
 
 export function noteTailWatchCcSessionId(sessionId: string, ccSessionId: string | null): void {
