@@ -6,6 +6,7 @@ import {
   openIndex,
   stepIndex,
   switcherKeyLabel,
+  switcherCurrent,
   switcherKeyNote,
 } from './feature-switcher-model'
 import { setKeyboardLayoutLabels } from '../../lib/keybindings'
@@ -272,5 +273,46 @@ describe('escopo do mapa', () => {
     // Sem repo cai nas avulsas, mesmo com projectId.
     expect(groupKeyOf(graph, 'l')).toBe('p:loose')
     expect(groupKeyOf(graph, 'x')).toBeNull()
+  })
+})
+
+describe('switcherCurrent', () => {
+  const isProjectKey = (k: string) => k.startsWith('p:')
+  const base = {
+    roomFeature: null,
+    panelFeature: null,
+    projectsView: 'map' as const,
+    mruHead: null,
+    mapFocus: null,
+    isProjectKey,
+  }
+
+  it('no mapa, a em foco vence o filtro velho do painel da Room', () => {
+    // Painel aberto na F1 pelo Ctrl+`, depois um card da F2 entrou em foco no mapa.
+    expect(
+      switcherCurrent({ ...base, panelFeature: 'F1', mruHead: 'F2', mapFocus: 'F2' }),
+    ).toBe('F2')
+  })
+
+  it('nos terminais, o painel filtrado é o atual', () => {
+    expect(
+      switcherCurrent({
+        ...base,
+        projectsView: 'terminals',
+        panelFeature: 'F1',
+        mruHead: 'F2',
+        mapFocus: 'F2',
+      }),
+    ).toBe('F1')
+  })
+
+  it('a Room na tela vence tudo', () => {
+    expect(
+      switcherCurrent({ ...base, roomFeature: 'R', panelFeature: 'F1', mapFocus: 'F2' }),
+    ).toBe('R')
+  })
+
+  it('o grupo "Sem feature" recém-escolhido vence a em foco', () => {
+    expect(switcherCurrent({ ...base, mruHead: 'p:repo', mapFocus: 'F2' })).toBe('p:repo')
   })
 })

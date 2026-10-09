@@ -30,6 +30,7 @@ import {
   leavesScope,
   openIndex,
   stepIndex,
+  switcherCurrent,
   switcherKeyLabel,
   switcherKeyNote,
   type SwitcherEntry,
@@ -162,23 +163,19 @@ export function FeatureSwitcher() {
       goTo(target, s.origin)
     }
 
-    // O atual: a feature da Room na tela; senão o grupo "Sem feature" recém-escolhido
-    // (ele não muda a feature em foco), senão a feature em foco. Sem a Room aqui, o
-    // toque rápido a partir dela cairia de volta nela mesma.
     const open = (backward: boolean, sticky: boolean, origin: SwitcherOrigin) => {
       const order = useFeatureMruStore.getState().order
+      const area = useAppStore.getState().area
       const roomState = useFeatureRoomStore.getState()
-      const room =
-        useAppStore.getState().area === 'room' && roomState.level === 'feature'
-          ? roomState.featureId
-          : null
       const panel = useRoomPanelStore.getState()
-      const panelFeature =
-        useAppStore.getState().area === 'projects' && panel.open ? panel.featureFilter : null
-      const current =
-        room ??
-        panelFeature ??
-        (order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId)
+      const current = switcherCurrent({
+        roomFeature: area === 'room' && roomState.level === 'feature' ? roomState.featureId : null,
+        panelFeature: area === 'projects' && panel.open ? panel.featureFilter : null,
+        projectsView: useProjectsViewStore.getState().view,
+        mruHead: order[0] ?? null,
+        mapFocus: useMapFocusStore.getState().featureId,
+        isProjectKey,
+      })
       const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
       if (keys.length === 0) return false
       // Título da linha de atenção (feature sem card no mapa): o índice de features
