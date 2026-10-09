@@ -625,22 +625,22 @@ describe('FeatureRoom', () => {
     expect(screen.getByTestId('room-queue-open').textContent).toBe(firstOpen)
   })
 
-  it('2 mães: tabs; escolher uma muda selectedMotherId e o centro', async () => {
+  it('2 mães: lado a lado; clicar na outra coluna a torna ativa (selectedMotherId)', async () => {
     harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
     harness.seedSession(testDb, 'M2', { repoId: 'r1', featureId: F })
     await mount([
       { id: 'M', status: 'idle' },
       { id: 'M2', status: 'idle' },
     ])
-    const tabs = screen.getAllByTestId('room-mother-tab')
-    expect(tabs).toHaveLength(2)
-    const other = tabs.find((t) => t.getAttribute('aria-selected') === 'false')!
-    const before = screen.getByTestId('room-mother').dataset.sessionId
-    fireEvent.click(other)
-    const picked = useFeatureRoomStore.getState().selectedMotherId[F]
-    expect(picked).toBeDefined()
-    expect(picked).not.toBe(before)
-    // A troca espera 300ms (o mesmo debounce do MotherDock) antes de remontar.
-    await waitFor(() => expect(screen.getByTestId('room-mother').dataset.sessionId).toBe(picked))
+    await waitFor(() => expect(screen.getAllByTestId('room-mother')).toHaveLength(2))
+    expect(screen.queryByTestId('room-mother-overflow')).toBeNull()
+    const cols = screen.getAllByTestId('room-mother')
+    const inactive = cols.find((c) => c.getAttribute('aria-current') !== 'true')!
+    fireEvent.mouseDown(inactive)
+    expect(useFeatureRoomStore.getState().selectedMotherId[F]).toBe(inactive.dataset.sessionId)
+    expect(inactive).toHaveAttribute('aria-current', 'true')
+    expect(
+      screen.getAllByTestId('room-mother').filter((c) => c.ariaCurrent === 'true'),
+    ).toHaveLength(1)
   })
 })

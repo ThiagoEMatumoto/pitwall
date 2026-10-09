@@ -18,15 +18,25 @@ interface Props {
   mothers: RoomMotherTab[]
   motherId: string
   mode: MotherMode
+  // Coluna ativa do split: filete + aria-current; os atalhos da sala agem nela.
+  active: boolean
   onToggleMode: () => void
-  onSelect: (sessionId: string) => void
+  onFocus: (sessionId: string) => void
   onPeek: (sessionId: string) => void
 }
 
 // Centro da Room: o chat ao vivo da mãe (o mesmo Terminal do MotherDock, em modo
 // chat). Segura a lease 'room' da PTY: a aba mostra "Aberta na Room" e uma modal
 // por cima toma a PTY e a devolve ao fechar.
-export function RoomMotherPane({ mothers, motherId, mode, onToggleMode, onSelect, onPeek }: Props) {
+export function RoomMotherPane({
+  mothers,
+  motherId,
+  mode,
+  active,
+  onToggleMode,
+  onFocus,
+  onPeek,
+}: Props) {
   // Trocar de tab remonta o xterm e manda resize: espera o clique assentar.
   const shownId = useSettled(motherId, SWITCH_DEBOUNCE_MS)
   const live = useAppStore((s) =>
@@ -60,8 +70,13 @@ export function RoomMotherPane({ mothers, motherId, mode, onToggleMode, onSelect
       data-testid="room-mother"
       data-session-id={shownId}
       data-mode={mode}
+      aria-current={active ? 'true' : undefined}
       aria-label={`Sessão-mãe ${title}`}
-      className="flex min-h-0 flex-1 flex-col"
+      onFocusCapture={() => !active && onFocus(shownId)}
+      onMouseDownCapture={() => !active && onFocus(shownId)}
+      className={`flex min-h-0 min-w-0 flex-1 flex-col border-t-2 ${
+        active ? 'border-[var(--color-accent)]' : 'border-transparent'
+      }`}
     >
       <header className="flex items-center gap-2.5 border-b border-[var(--color-border)] px-4 py-2">
         <Icon as={Crown} size={14} className="shrink-0 text-[var(--color-accent)]" />
@@ -84,9 +99,6 @@ export function RoomMotherPane({ mothers, motherId, mode, onToggleMode, onSelect
             <ExecDot exec={tab.exec} />
             {tab.waitingOnHuman ? 'esperando você' : EXEC_LABEL[tab.exec]}
           </span>
-        )}
-        {mothers.length > 1 && (
-          <MotherTabs mothers={mothers} selectedId={motherId} onSelect={onSelect} />
         )}
         <span className="ml-auto" />
         <Button
@@ -168,40 +180,41 @@ export function RoomMotherPane({ mothers, motherId, mode, onToggleMode, onSelect
   )
 }
 
-// Provisório: com o split (2-3 mães lado a lado) isto vira o overflow da 4ª em diante.
-export function MotherTabs({
+// A partir da 4ª mãe: as excedentes viram botões na borda; clicar troca de lugar
+// com a coluna ativa.
+export function MotherOverflow({
   mothers,
-  selectedId,
-  onSelect,
+  onSwap,
 }: {
   mothers: RoomMotherTab[]
-  selectedId: string
-  onSelect: (sessionId: string) => void
+  onSwap: (sessionId: string) => void
 }) {
   return (
-    <div role="tablist" aria-label="Mães da feature" className="flex min-w-0 gap-1 overflow-x-auto">
+    <div
+      role="group"
+      aria-label="Mais mães nesta feature"
+      data-testid="room-mother-overflow"
+      className="flex shrink-0 flex-col gap-1 border-l border-[var(--color-border)] p-1.5 max-[900px]:flex-row max-[900px]:border-l-0 max-[900px]:border-t"
+    >
       {mothers.map((m) => (
         <button
           key={m.sessionId}
           type="button"
-          role="tab"
-          aria-selected={m.sessionId === selectedId}
           data-testid="room-mother-tab"
-          onClick={() => onSelect(m.sessionId)}
+          data-session-id={m.sessionId}
+          onClick={() => onSwap(m.sessionId)}
           title={m.purpose ?? m.title}
-          className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 text-[12px] ${
-            m.sessionId === selectedId
-              ? 'border-[var(--color-accent)] text-[var(--color-text)]'
-              : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-          }`}
+          aria-label={`Trazer ${m.title} para o split`}
+          className="flex max-w-[160px] items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
         >
+          <Icon as={Crown} size={11} className="shrink-0" />
           {m.waitingOnHuman && (
             <span
               aria-label="esperando você"
-              className="h-1.5 w-1.5 rounded-full bg-[var(--color-danger)]"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-danger)]"
             />
           )}
-          <span className="max-w-[160px] truncate">{m.title}</span>
+          <span className="truncate">{m.title}</span>
         </button>
       ))}
     </div>

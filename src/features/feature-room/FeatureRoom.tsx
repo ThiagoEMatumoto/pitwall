@@ -24,7 +24,7 @@ import { COMPACT, ROOM_FOCUS, useNow } from './room-ui'
 import { Button } from '@/components/ui/Button'
 import { RoomHeader } from './RoomHeader'
 import { RoomHealth } from './RoomHealth'
-import { RoomMotherPane, type MotherMode } from './RoomMotherPane'
+import { RoomMotherSplit } from './RoomMotherSplit'
 import { RoomSessions } from './RoomSessions'
 import { RoomTimeline } from './RoomTimeline'
 import { StartMotherCard, focusMotherComposer, usePendingMotherProgress } from './StartMotherCard'
@@ -58,7 +58,6 @@ function FeatureSala() {
   const pendingMother = useFeatureRoomStore((s) =>
     s.pendingMother && s.pendingMother.featureId === featureId ? s.pendingMother : null,
   )
-  const [motherMode, setMotherMode] = useState<MotherMode>('chat')
   const [startOpen, setStartOpen] = useState(false)
   const [sideTab, setSideTab] = useState<'children' | 'timeline'>('children')
   const [delegate, setDelegate] = useState<DelegateTarget | null>(null)
@@ -119,22 +118,6 @@ function FeatureSala() {
       !graph.nodes.some((n) => n.sessionId === selectedMotherId)
     return fresh ? selectedMotherId : (view.mother?.sessionId ?? null)
   }, [view, selectedMotherId, liveSessions, graph])
-  useEffect(() => setMotherMode('chat'), [centerId])
-
-  // Ctrl+. alterna Chat⇄Terminal da mãe. Captura: com o foco no xterm a tecla
-  // não chega à bolha do React.
-  useEffect(() => {
-    if (!centerId) return
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.key !== '.') return
-      if (document.querySelector('[data-modal-overlay], [aria-modal="true"]')) return
-      e.preventDefault()
-      e.stopPropagation()
-      if (!e.repeat) setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [centerId])
 
   const rows = useMemo(
     () => (view ? [...view.mothers, ...view.repos.flatMap((r) => r.rows)] : []),
@@ -324,7 +307,7 @@ function FeatureSala() {
     // do ChatView. Sem card na tela, a tecla não faz nada.
     if (/^[1-9]$/.test(e.key) && centerId) {
       const option = rootRef.current.querySelector<HTMLButtonElement>(
-        `[data-testid="room-mother"] [data-permission-option="${e.key}"]`,
+        `[data-testid="room-mother"][aria-current="true"] [data-permission-option="${e.key}"]`,
       )
       if (option) {
         e.preventDefault()
@@ -373,12 +356,10 @@ function FeatureSala() {
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_380px] max-[900px]:grid-cols-1 max-[900px]:overflow-auto">
         <div className="relative flex min-h-0 flex-col border-r border-[var(--color-border)] max-[900px]:min-h-[520px] max-[900px]:border-r-0">
           {centerId && (
-            <RoomMotherPane
+            <RoomMotherSplit
               mothers={view.mothers}
-              motherId={centerId}
-              mode={motherMode}
-              onToggleMode={() => setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))}
-              onSelect={(id) => useFeatureRoomStore.getState().selectMother(featureId, id)}
+              activeId={centerId}
+              onActivate={(id) => useFeatureRoomStore.getState().selectMother(featureId, id)}
               onPeek={(id) => useCrewDockStore.getState().openSessionPeek(id, 'chat')}
             />
           )}
