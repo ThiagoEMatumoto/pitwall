@@ -141,6 +141,28 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchResu
   app.process().stderr?.on('data', (d) => output.push(String(d)))
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  // Shim de harness: uma tecla IntlRo presa no SO da máquina gera um "/" fantasma a ~30/s,
+  // que abre/fecha atalhos e quebra cenários de forma aleatória. Descartar code=IntlRo é seguro
+  // porque o Playwright digita "/" com code=Slash, então nenhum input do cenário é perdido.
+  const dropIntlRo = (): void => {
+    const w = window as unknown as { __cmDropIntlRo?: boolean }
+    if (w.__cmDropIntlRo) return
+    w.__cmDropIntlRo = true
+    for (const t of ['keydown', 'keypress', 'keyup']) {
+      window.addEventListener(
+        t,
+        (e) => {
+          if ((e as KeyboardEvent).code === 'IntlRo') {
+            e.stopImmediatePropagation()
+            e.preventDefault()
+          }
+        },
+        true,
+      )
+    }
+  }
+  await page.addInitScript(dropIntlRo)
+  await page.evaluate(dropIntlRo)
   return { app, page, userDataCopy: copy, mainOutput: () => output.join('') }
 }
 
