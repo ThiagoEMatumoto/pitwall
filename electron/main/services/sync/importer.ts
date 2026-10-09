@@ -128,6 +128,78 @@ function dropOrphansIn(db: Database.Database, tables: ReadonlySet<string>): void
   }
 }
 
+interface ForeignKey {
+  table: string
+  parent: string
+  onDelete: string
+  columns: Array<{ from: string; to: string }>
+}
+
+function foreignKeysOf(db: Database.Database, table: string): ForeignKey[] {
+  const rows = db.pragma(`foreign_key_list("${table}")`) as Array<{
+    id: number
+    table: string
+    from: string
+    to: string | null
+    on_delete: string
+  }>
+  const byId = new Map<number, ForeignKey>()
+  for (const r of rows) {
+    // FK que referencia a PK do pai sem nomear a coluna não existe no schema; se
+    // surgir, fica para o foreign_key_check em vez de virar SQL com coluna nula.
+    if (r.to === null) continue
+    const fk = byId.get(r.id) ?? { table, parent: r.table, onDelete: r.on_delete, columns: [] }
+    fk.columns.push({ from: r.from, to: r.to })
+    byId.set(r.id, fk)
+  }
+  return [...byId.values()]
+}
+
+// Tabelas FORA de SYNCED_TABLES (sessions, handoffs, layouts, ...) nunca entram
+// no bundle, mas apontam por FK para linhas que o replace-all apaga. Com as FKs
+// desligadas o ON DELETE do schema não dispara, então aplicamos aqui o que ele
+// declara: CASCADE apaga a linha, SET NULL zera a coluna. NO ACTION/RESTRICT ficam
+// de fora de propósito — viram violação no foreign_key_check, como antes.
+//
+// O critério é por VALOR (coluna filha ausente na coluna pai), não por rowid:
+// foreign_key_check devolve rowid nulo em tabela WITHOUT ROWID. Repete porque um
+// CASCADE esvazia a própria tabela filha, que pode ser pai de outra (sessions →
+// feature_session_records); só tabelas que já perderam linhas contam como pai
+// afetado, então órfã antiga e alheia ao sync não é limpa em silêncio.
+function applyOnDeleteToLocalOrphans(db: Database.Database): void {
+  const synced = new Set<string>(SYNCED_TABLES)
+  const tables = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+    .all() as Array<{ name: string }>
+  const foreignKeys = tables
+    .filter((t) => !synced.has(t.name))
+    .flatMap((t) => foreignKeysOf(db, t.name))
+    .filter((fk) => fk.onDelete === 'CASCADE' || fk.onDelete === 'SET NULL')
+
+  const shrunk = new Set<string>(SYNCED_TABLES)
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const fk of foreignKeys) {
+      if (!shrunk.has(fk.parent)) continue
+      const child = fk.columns.map((c) => `"${c.from}"`)
+      const parentKey = fk.columns.map((c) => `"${c.to}"`).join(', ')
+      const orphan =
+        `${child.map((c) => `${c} IS NOT NULL`).join(' AND ')} ` +
+        `AND (${child.join(', ')}) NOT IN (SELECT ${parentKey} FROM "${fk.parent}")`
+      if (fk.onDelete === 'CASCADE') {
+        const { changes } = db.prepare(`DELETE FROM "${fk.table}" WHERE ${orphan}`).run()
+        if (changes > 0) {
+          shrunk.add(fk.table)
+          changed = true
+        }
+      } else {
+        const nulls = child.map((c) => `${c} = NULL`).join(', ')
+        db.prepare(`UPDATE "${fk.table}" SET ${nulls} WHERE ${orphan}`).run()
+      }
+    }
+  }
+}
+
 // Reconcilia os `.md`: sobrescreve cada arquivo do bundle no destino local
 // (via markSelfWrite para o watcher ignorar) e remove os `.md` locais que não
 // existem no bundle. Replace-all => idempotente.
@@ -186,8 +258,9 @@ function reconcileFeatures(
 //   3. foreign_keys = OFF
 //   4. transação: DELETE em ordem REVERSA de FK; INSERT em ordem de FK;
 //      tabelas AUSENTES do bundle ficam de fora dos dois loops (preservadas);
-//      foreign_key_check DENTRO da tx (viola → throw → ROLLBACK automático,
-//      dados locais preservados)
+//      linhas de tabelas locais (fora do sync) que ficaram órfãs seguem o ON DELETE
+//      declarado; foreign_key_check DENTRO da tx (viola → throw → ROLLBACK
+//      automático, dados locais preservados)
 //   5. reconcilia .md (sobrescreve via markSelfWrite, remove órfãos) — SÓ após
 //      a tx ter sucesso
 //   6. finally: foreign_keys = ON, reinicia watcher
@@ -315,6 +388,7 @@ export function importBundle(
       // do check (mesmo efeito do CASCADE). Violação em tabela VINDA do bundle
       // continua sendo erro — bundle corrompido não deve virar delete silencioso.
       if (preserved.size > 0) dropOrphansIn(db, preserved)
+      applyOnDeleteToLocalOrphans(db)
 
       // FK check DENTRO da tx: violação → throw → ROLLBACK automático (o DELETE
       // não é commitado, dados locais ficam intactos). Funciona com o pragma OFF.
