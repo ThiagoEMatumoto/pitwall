@@ -103,7 +103,7 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
   it('allMothers: toda sessão que o humano abriu (com ou sem feature/filhas); filhas ficam de fora', () => {
     seedScenario()
     const { graph, inUse } = produce(liveAll())
-    const ids = allMothers(graph.nodes, inUse).map((n) => n.sessionId)
+    const ids = allMothers(graph, inUse).map((n) => n.sessionId)
     expect(new Set(ids)).toEqual(new Set(['lume', 'nori', 'sora', 'avulsa', 'solo']))
   })
 
@@ -111,7 +111,7 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     seedScenario()
     const avulsa = (live: Map<string, LiveSessionState>) => {
       const { graph, inUse } = produce(live)
-      return allMothers(graph.nodes, inUse).some((n) => n.sessionId === 'avulsa')
+      return allMothers(graph, inUse).some((n) => n.sessionId === 'avulsa')
     }
     expect(avulsa(liveAll())).toBe(true)
     const ended = liveAll()
@@ -124,16 +124,39 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     const { graph, inUse } = produce(liveAll())
     const nori = graph.nodes.find((n) => n.sessionId === 'nori')
     expect(nori?.isMother).toBeFalsy()
-    expect(allMothers(graph.nodes, inUse).map((n) => n.sessionId)).toContain('nori')
+    expect(allMothers(graph, inUse).map((n) => n.sessionId)).toContain('nori')
   })
 
   it('sessão fora de uso não vira tile', () => {
     seedScenario()
     const { graph, inUse } = produce(liveAll())
     inUse.delete('sora')
-    expect(allMothers(graph.nodes, inUse).map((n) => n.sessionId)).not.toContain(
-      'sora',
+    expect(allMothers(graph, inUse).map((n) => n.sessionId)).not.toContain('sora')
+  })
+
+  // Mãe encerrada: a filha segue viva e passa a ser dirigida pelo humano — vira
+  // tile próprio, com os pedidos dela contados ali (e não em lugar nenhum antes).
+  it('filha cuja mãe encerrou continua visível como tile próprio', () => {
+    const { lumeHandoff } = seedScenario()
+    handoffStore.ask(lumeHandoff, 'posso apagar a tabela?')
+    const live = liveAll()
+    live.delete('lume')
+    const { graph, attention, inUse } = produce(live)
+    const mothers = allMothers(graph, inUse)
+    expect(mothers.map((n) => n.sessionId)).toContain('lume-kid')
+    expect(mothers.map((n) => n.sessionId)).not.toContain('lume')
+    const needYou = humanQueue(attention)
+    const kids = childIdsByMother(graph.edges, inUse)
+    const perTile = mothers.map((m) =>
+      countAttentionSubjects(needYouFor(needYou, m, (id) => kids.get(id) ?? new Set<string>())),
     )
+    expect(perTile.reduce((a, b) => a + b, 0)).toBe(countAttentionSubjects(needYou))
+  })
+
+  it('com a mãe em uso, a filha não vira tile', () => {
+    seedScenario()
+    const { graph, inUse } = produce(liveAll())
+    expect(allMothers(graph, inUse).map((n) => n.sessionId)).not.toContain('lume-kid')
   })
 
   it('needYouFor: menu da Lume + pergunta da filha dela → 2 itens na Lume, 0 na Nori', async () => {
@@ -156,7 +179,7 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     expect(needYouFor(needYou, byId.get('nori')!, childIdsOf)).toEqual([])
 
     // A soma dos recortes por tile bate com o badge do topo (mesmo needYou).
-    const mothers = allMothers(graph.nodes, inUse)
+    const mothers = allMothers(graph, inUse)
     const perTile = mothers.map((m) => countAttentionSubjects(needYouFor(needYou, m, childIdsOf)))
     expect(perTile.reduce((a, b) => a + b, 0)).toBe(countAttentionSubjects(needYou))
     expect(countAttentionSubjects(needYou)).toBe(2)

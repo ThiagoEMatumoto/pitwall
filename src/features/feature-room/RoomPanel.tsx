@@ -105,7 +105,7 @@ export function RoomPanel() {
 
   const inUse = useMemo(() => switcherInUse(graph, liveSessions), [graph, liveSessions])
   const needYou = useMemo(() => humanQueue(attention), [attention])
-  const everyMother = useMemo(() => allMothers(graph.nodes, inUse), [graph, inUse])
+  const everyMother = useMemo(() => allMothers(graph, inUse), [graph, inUse])
   const mothers = useMemo(
     () => (featureFilter ? everyMother.filter((m) => m.featureId === featureFilter) : everyMother),
     [everyMother, featureFilter],
@@ -159,7 +159,7 @@ export function RoomPanel() {
     const target = focus.motherId
       ? (everyMother.find((m) => m.sessionId === focus.motherId) ?? null)
       : focus.featureId
-        ? (roomMothers(graph.nodes, inUse, focus.featureId)[0] ?? null)
+        ? (roomMothers(graph, inUse, focus.featureId)[0] ?? null)
         : null
     if (!target && graph.nodes.length === 0) return // grafo ainda não chegou
     useRoomPanelStore.getState().consumeFocus(focus.seq)

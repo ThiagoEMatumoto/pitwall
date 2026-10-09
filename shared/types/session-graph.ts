@@ -54,8 +54,9 @@ export interface SessionGraphNode {
   isMother?: boolean
   // Raiz = sessão que o humano abriu (não nasceu de handoff): é a "mãe" da Room,
   // tenha ou não filhas/feature. A sucessora do bastão da mãe é raiz; a do
-  // bastão de uma filha não (é religada no mesmo handoff). Filha solta por release() vira raiz (o vínculo
-  // child_session_id some). Diferente de isMother, que é "tem filhas" (coroa).
+  // bastão de uma filha não (é religada no mesmo handoff), nem a antecessora dela.
+  // Filha solta por release() vira raiz (o vínculo child_session_id some).
+  // Diferente de isMother, que é "tem filhas" (coroa).
   isRoot?: boolean
   childCount?: number
   // Passou o bastão de mãe (handoff_events 'mother_transferred') e não lidera

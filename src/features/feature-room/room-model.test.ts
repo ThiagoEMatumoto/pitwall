@@ -325,7 +325,7 @@ describe('roomMothers (nós do buildSessionGraph real)', () => {
       { id: 'M2', status: 'idle' },
     ])
     expect(graph.nodes.find((n) => n.sessionId === 'M2')?.isMother).toBeFalsy()
-    const ids = roomMothers(graph.nodes, inUse, F).map((n) => n.sessionId)
+    const ids = roomMothers(graph, inUse, F).map((n) => n.sessionId)
     expect(ids.sort()).toEqual(['M', 'M2'])
     expect(view.mothers.map((m) => m.sessionId).sort()).toEqual(['M', 'M2'])
   })
@@ -336,7 +336,7 @@ describe('roomMothers (nós do buildSessionGraph real)', () => {
       { id: 'M', status: 'idle' },
       { id: 'A', status: 'working' },
     ])
-    expect(roomMothers(graph.nodes, inUse, F).map((n) => n.sessionId)).toEqual(['M'])
+    expect(roomMothers(graph, inUse, F).map((n) => n.sessionId)).toEqual(['M'])
     expect(view.repos.flatMap((r) => r.rows).map((r) => r.sessionId)).toEqual(['A'])
   })
 

@@ -26,11 +26,22 @@ export function childIdsByMother(
 // uso e não encerrada, de qualquer feature ou sem feature. Não confundir com
 // isMother (tem filhas): a recém-aberta tem 0 filhas e já é mãe aqui. A sucessora
 // do bastão de uma filha continua filha (conta só no tile da mãe).
+// Filha ÓRFÃ (a mãe encerrou ou saiu de uso) vira tile próprio: sem ninguém em
+// uso liderando, quem a dirige é o humano — o mesmo critério de "mãe = sessão
+// do humano" que já vale para a filha solta por release(). Sem isto ela sumia da
+// Room, e os pedidos dela ficavam sem tile. Só conta quem ainda adota um handoff
+// (childOfHandoffId): a antecessora de um bastão de filha não volta como tile.
 export function allMothers(
-  nodes: ReadonlyArray<SessionGraphNode>,
+  graph: { nodes: ReadonlyArray<SessionGraphNode>; edges: ReadonlyArray<EdgeLike> },
   inUse: ReadonlySet<string>,
 ): SessionGraphNode[] {
-  return nodes.filter((n) => n.isRoot === true && n.status !== 'ended' && inUse.has(n.sessionId))
+  const led = new Set([...childIdsByMother(graph.edges, inUse).values()].flatMap((k) => [...k]))
+  return graph.nodes.filter(
+    (n) =>
+      n.status !== 'ended' &&
+      inUse.has(n.sessionId) &&
+      (n.isRoot === true || (n.childOfHandoffId != null && !led.has(n.sessionId))),
+  )
 }
 
 // Recorte do needYou (humanQueue, calculado UMA vez pela superfície) que é desta

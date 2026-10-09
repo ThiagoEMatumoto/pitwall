@@ -755,6 +755,19 @@ describe('session graph — raiz (isRoot)', () => {
     )
   })
 
+  // A antecessora perde o child_session_id (o handoff aponta pra sucessora), mas
+  // segue viva até o humano encerrar: não é sessão que ele abriu, não vira tile.
+  it('antecessora do bastão de uma filha não é raiz', () => {
+    addSession('m', 'r-web')
+    addSession('old', 'r-api')
+    addSession('new', 'r-api')
+    const h = dispatch('m', 'old', 'Refatorar auth', 'r-api')
+    passBaton(h, 'old', 'new')
+    const g = graphFor(live({ m: {}, old: {}, new: {} }))
+    expect(nodeOf(g, 'old')).toMatchObject({ isRoot: false, childOfHandoffId: null })
+    expect(nodeOf(g, 'm')).toMatchObject({ isRoot: true })
+  })
+
   it('sucessora do bastão da MÃE é raiz', () => {
     addSession('m', 'r-web')
     addSession('m2', 'r-web')

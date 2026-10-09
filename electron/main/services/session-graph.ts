@@ -198,8 +198,14 @@ function childCountByMother(
 // mãe. A sucessora do bastão da MÃE não adota handoff, então é raiz. release()
 // zera child_session_id, então a filha solta passa a ser raiz — aceitável: ela
 // segue viva sob o humano, que é quem a dirige dali em diante.
-function isRootSession(handoff: GraphHandoffRow | undefined): boolean {
-  return !handoff
+// A ANTECESSORA do bastão de uma filha também perde o child_session_id, mas o
+// handoff guarda predecessor_session_id (baton.ts, só no bastão de filha): ela
+// não foi aberta pelo humano e não vira tile.
+function isRootSession(
+  handoff: GraphHandoffRow | undefined,
+  passedChildBaton: GraphHandoffRow | undefined,
+): boolean {
+  return !handoff && !passedChildBaton
 }
 
 function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHandoffRow>) {
@@ -255,7 +261,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
       isMother: (children.get(s.id) ?? 0) > 0,
-      isRoot: isRootSession(handoff),
+      isRoot: isRootSession(handoff, passedBaton.get(s.id)),
       childCount: children.get(s.id) ?? 0,
       batonPassed: gaveMotherBaton.has(s.id) && !children.has(s.id),
     }
