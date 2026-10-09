@@ -237,6 +237,23 @@ export async function applyRemote(workdir: string): Promise<void> {
   await git.raw(['reset', '--hard', `origin/${branch}`])
 }
 
+// applyRemote + import como uma unidade. O reset --hard roda ANTES do import;
+// se o import lançar, o DB segue o estado antigo mas o clone já estaria no HEAD
+// do remoto — e o próximo push do coordinator (export do DB velho) seria um
+// fast-forward que sobrescreve o backup remoto. Restaurar o HEAD anterior faz esse
+// push ser rejeitado como non-fast-forward e cair no fluxo de conflito.
+export async function applyRemoteAndImport<T>(workdir: string, doImport: () => T): Promise<T> {
+  const git = simpleGit(workdir)
+  const previousHead = (await git.raw(['rev-parse', 'HEAD'])).trim()
+  await applyRemote(workdir)
+  try {
+    return doImport()
+  } catch (err) {
+    await git.raw(['reset', '--hard', previousHead])
+    throw err
+  }
+}
+
 // ---- pushBundle ----
 //
 // exportBundle → git add -A → commit (no-op se nada mudou) → push. Se o push é
