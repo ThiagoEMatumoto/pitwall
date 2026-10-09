@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/ipc', () => ({
-  chatApi: { watch: vi.fn(), unwatch: vi.fn() },
+  chatApi: { watch: vi.fn(), unwatch: vi.fn(), watchTail: vi.fn(), unwatchTail: vi.fn() },
 }))
 
 import { chatApi } from '@/lib/ipc'
 import {
   acquireChatWatch,
+  acquireTailWatch,
   chatWatchCountForTest,
   noteChatWatchCcSessionId,
+  noteTailWatchCcSessionId,
   releaseChatWatch,
+  releaseTailWatch,
+  tailWatchCountForTest,
 } from './chat-watch-refs'
 
 describe('chat-watch-refs', () => {
@@ -66,5 +70,56 @@ describe('chat-watch-refs', () => {
     // Sessão não assistida: não abre watch por conta própria.
     noteChatWatchCcSessionId('s5', 'cc-5')
     expect(chatApi.watch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('chat-watch-refs: cauda', () => {
+  it('acquire×2/release×1 de cauda: o 2º acquire repede a cauda, unwatchTail 0', () => {
+    acquireTailWatch('t1')
+    acquireTailWatch('t1')
+    // O 2º consumidor não ouviu o emit inicial: watchTail de novo faz o main reemitir.
+    expect(chatApi.watchTail).toHaveBeenCalledTimes(2)
+    releaseTailWatch('t1')
+    expect(chatApi.unwatchTail).not.toHaveBeenCalled()
+    expect(tailWatchCountForTest('t1')).toBe(1)
+    releaseTailWatch('t1')
+    expect(chatApi.unwatchTail).toHaveBeenCalledTimes(1)
+    expect(chatApi.unwatchTail).toHaveBeenCalledWith('t1')
+  })
+
+  it('cauda e completo são independentes na mesma sessão', () => {
+    vi.mocked(chatApi.watch).mockClear()
+    vi.mocked(chatApi.unwatch).mockClear()
+    vi.mocked(chatApi.watchTail).mockClear()
+    vi.mocked(chatApi.unwatchTail).mockClear()
+
+    acquireChatWatch('t2')
+    acquireTailWatch('t2')
+    expect(chatApi.watch).toHaveBeenCalledTimes(1)
+    expect(chatApi.watchTail).toHaveBeenCalledTimes(1)
+
+    releaseTailWatch('t2')
+    expect(chatApi.unwatchTail).toHaveBeenCalledTimes(1)
+    expect(chatApi.unwatch).not.toHaveBeenCalled()
+    expect(chatWatchCountForTest('t2')).toBe(1)
+
+    releaseChatWatch('t2')
+    expect(chatApi.unwatch).toHaveBeenCalledTimes(1)
+    expect(chatApi.unwatchTail).toHaveBeenCalledTimes(1)
+  })
+
+  it('release extra de cauda não chama unwatchTail', () => {
+    vi.mocked(chatApi.unwatchTail).mockClear()
+    releaseTailWatch('t3')
+    expect(chatApi.unwatchTail).not.toHaveBeenCalled()
+    expect(tailWatchCountForTest('t3')).toBe(0)
+  })
+
+  it('cauda aberta sem cc id: o cc id que chega refaz o watchTail, uma vez', () => {
+    vi.mocked(chatApi.watchTail).mockClear()
+    acquireTailWatch('t4', null)
+    noteTailWatchCcSessionId('t4', 'cc-4')
+    noteTailWatchCcSessionId('t4', 'cc-4')
+    expect(chatApi.watchTail).toHaveBeenCalledTimes(2)
   })
 })

@@ -45,3 +45,43 @@ export function releaseChatWatch(sessionId: string): void {
 export function chatWatchCountForTest(sessionId: string): number {
   return refs.get(sessionId)?.count ?? 0
 }
+
+// Cauda dos tiles (chat:watch-tail): contador próprio. O tile não usa o watch
+// completo, e o release de um não pode derrubar o outro.
+const tailRefs = new Map<string, Entry>()
+
+export function acquireTailWatch(sessionId: string, ccSessionId: string | null = null): void {
+  const entry = tailRefs.get(sessionId)
+  if (!entry) {
+    tailRefs.set(sessionId, { count: 1, ccSessionId })
+    chatApi.watchTail(sessionId)
+    return
+  }
+  entry.count += 1
+  if (ccSessionId && !entry.ccSessionId) entry.ccSessionId = ccSessionId
+  // O novo consumidor não ouviu o emit inicial: o main reemite a cauda atual no
+  // watch repetido (numa mãe parada nenhum change viria).
+  chatApi.watchTail(sessionId)
+}
+
+export function noteTailWatchCcSessionId(sessionId: string, ccSessionId: string | null): void {
+  const entry = tailRefs.get(sessionId)
+  if (!entry || entry.ccSessionId || !ccSessionId) return
+  entry.ccSessionId = ccSessionId
+  chatApi.watchTail(sessionId)
+}
+
+export function releaseTailWatch(sessionId: string): void {
+  const entry = tailRefs.get(sessionId)
+  if (!entry) return
+  if (entry.count <= 1) {
+    tailRefs.delete(sessionId)
+    chatApi.unwatchTail(sessionId)
+    return
+  }
+  entry.count -= 1
+}
+
+export function tailWatchCountForTest(sessionId: string): number {
+  return tailRefs.get(sessionId)?.count ?? 0
+}
