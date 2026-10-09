@@ -60,17 +60,51 @@ describe('room-panel-store', () => {
     expect(JSON.parse(localStorage.getItem('cm:room-panel')!).open).toBe(true)
   })
 
-  it('compacta quando o dockview com o painel cheio fica abaixo do limiar, sem oscilar', async () => {
+  it('compacta abaixo do limiar e só sai com folga (histerese)', async () => {
     const {
       shouldCompactRoomPanel,
       DOCKVIEW_MIN_WITH_PANEL: MIN,
-      ROOM_PANEL_COMPACT: C,
+      ROOM_PANEL_HYSTERESIS: H,
     } = await freshStore()
-    expect(shouldCompactRoomPanel(MIN, 300, false)).toBe(false)
-    expect(shouldCompactRoomPanel(MIN - 1, 300, false)).toBe(true)
-    // Compacto, o dockview tem 300 - C a mais: a conta desconta antes de decidir.
-    expect(shouldCompactRoomPanel(MIN - 1 + (300 - C), 300, true)).toBe(true)
-    expect(shouldCompactRoomPanel(MIN + (300 - C), 300, true)).toBe(false)
+    const W = 380
+    // availableWidth = dockview + painel na tela; com o painel cheio sobra available - W.
+    expect(shouldCompactRoomPanel(MIN + W, W, false)).toBe(false)
+    expect(shouldCompactRoomPanel(MIN + W - 1, W, false)).toBe(true)
+    // Já compacto: na faixa [MIN, MIN + H) continua compacto; sai a partir de MIN + H.
+    expect(shouldCompactRoomPanel(MIN + W, W, true)).toBe(true)
+    expect(shouldCompactRoomPanel(MIN + W + H - 1, W, true)).toBe(true)
+    expect(shouldCompactRoomPanel(MIN + W + H, W, true)).toBe(false)
+  })
+
+  it('não reage à mudança de largura que ele mesmo causa', async () => {
+    const { shouldCompactRoomPanel, ROOM_PANEL_COMPACT: C } = await freshStore()
+    // Janela de 1050 com painel de 380 -> dockview 670 (abaixo de 720): compacta.
+    // Compacto, o dockview cresce para 1002, mas a soma dockview + faixa segue 1050.
+    const W = 380
+    const total = 1050
+    let compact = shouldCompactRoomPanel(670 + W, W, false)
+    expect(compact).toBe(true)
+    for (let i = 0; i < 10; i++) {
+      const dockview = total - (compact ? C : W)
+      compact = shouldCompactRoomPanel(dockview + (compact ? C : W), W, compact)
+      expect(compact).toBe(true)
+    }
+  })
+
+  it('o arrasto para no teto que ainda deixa o dockview no limiar', async () => {
+    const {
+      roomPanelFitMax,
+      clampRoomPanelWidth,
+      DOCKVIEW_MIN_WITH_PANEL: MIN,
+      ROOM_PANEL_MIN,
+      ROOM_PANEL_MAX,
+    } = await freshStore()
+    expect(roomPanelFitMax(MIN + 400)).toBe(400)
+    expect(roomPanelFitMax(MIN + 100)).toBe(ROOM_PANEL_MIN)
+    expect(roomPanelFitMax(5000)).toBe(ROOM_PANEL_MAX)
+    expect(clampRoomPanelWidth(500, 400)).toBe(400)
+    expect(clampRoomPanelWidth(100, 400)).toBe(ROOM_PANEL_MIN)
+    expect(clampRoomPanelWidth(9999)).toBe(ROOM_PANEL_MAX)
   })
 
   it('padrão 300 e mínimo 260: o painel não come o dockview', async () => {

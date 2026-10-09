@@ -22,16 +22,33 @@ export const ROOM_PANEL_COMPACT = 48
 export const DOCKVIEW_HOST_ID = 'dockview-host'
 export const DOCKVIEW_MIN_WITH_PANEL = 720
 
-// Pura (testável): compacta quando o dockview com o painel CHEIO ficaria abaixo do
-// limiar. hostWidth é a largura atual do dockview — já sem o painel cheio quando
-// compacto, por isso soma a diferença de volta; assim não oscila na fronteira.
+// Histerese: sai do compacto só com folga acima do limiar de entrada, para um
+// pixel de jitter (barra de rolagem, arredondamento) não fazer o painel piscar.
+// Pequena de propósito: a realimentação já sai pela soma invariante abaixo, e uma
+// faixa larga prenderia o painel na faixa depois de uma medida transitória no
+// mount (o Crew Dock ainda expandido, por exemplo) num layout em que ele cabe.
+export const ROOM_PANEL_HYSTERESIS = 16
+
+// Pura (testável). availableWidth = dockview + painel como estão na tela agora:
+// a soma não muda quando o painel alterna entre cheio e faixa, então a decisão
+// não reage à mudança de largura que ela mesma causa. Entra no compacto abaixo
+// de DOCKVIEW_MIN_WITH_PANEL; sai só a partir do limiar + ROOM_PANEL_HYSTERESIS.
 export function shouldCompactRoomPanel(
-  hostWidth: number,
+  availableWidth: number,
   panelWidth: number,
   compact: boolean,
 ): boolean {
-  const withFullPanel = compact ? hostWidth - (panelWidth - ROOM_PANEL_COMPACT) : hostWidth
-  return withFullPanel < DOCKVIEW_MIN_WITH_PANEL
+  const dockviewWithFullPanel = availableWidth - panelWidth
+  const threshold = compact
+    ? DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_HYSTERESIS
+    : DOCKVIEW_MIN_WITH_PANEL
+  return dockviewWithFullPanel < threshold
+}
+
+// A maior largura do painel que ainda deixa o dockview no limiar: o arrasto para
+// aí em vez de empurrar o painel para o compacto (e desmontar o cabo no meio).
+export function roomPanelFitMax(availableWidth: number): number {
+  return Math.max(ROOM_PANEL_MIN, Math.min(ROOM_PANEL_MAX, availableWidth - DOCKVIEW_MIN_WITH_PANEL))
 }
 
 interface Persisted {
@@ -41,9 +58,10 @@ interface Persisted {
 
 const DEFAULTS: Persisted = { open: false, width: ROOM_PANEL_DEFAULT }
 
-export function clampRoomPanelWidth(w: number): number {
+export function clampRoomPanelWidth(w: number, max: number = ROOM_PANEL_MAX): number {
   if (!Number.isFinite(w)) return ROOM_PANEL_DEFAULT
-  return Math.min(ROOM_PANEL_MAX, Math.max(ROOM_PANEL_MIN, Math.round(w)))
+  const upper = Math.max(ROOM_PANEL_MIN, Math.min(ROOM_PANEL_MAX, max))
+  return Math.min(upper, Math.max(ROOM_PANEL_MIN, Math.round(w)))
 }
 
 function readPersisted(): Persisted {

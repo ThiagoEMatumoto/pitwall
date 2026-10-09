@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type PointerEvent,
+  type RefObject,
 } from 'react'
 import { Maximize2, PanelRightClose, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
@@ -32,7 +33,9 @@ import { roomMothers } from './room-model'
 import {
   DOCKVIEW_HOST_ID,
   ROOM_PANEL_COMPACT,
+  ROOM_PANEL_MAX,
   clampRoomPanelWidth,
+  roomPanelFitMax,
   shouldCompactRoomPanel,
   useRoomPanelStore,
 } from './room-panel-store'
@@ -40,51 +43,85 @@ import { useNow } from './room-ui'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
+// Dockview + painel como estão na tela: a soma não muda quando o painel alterna
+// entre cheio e faixa (ver shouldCompactRoomPanel).
+function availableWidth(panel: HTMLElement | null): number | null {
+  const host = document.getElementById(DOCKVIEW_HOST_ID)
+  if (!host || !panel) return null
+  return host.getBoundingClientRect().width + panel.getBoundingClientRect().width
+}
+
 // O cabo de redimensionar fica na borda esquerda: arrastar para a esquerda alarga.
-// A largura do arrasto fica local; só o pointerup persiste (como o CrewDock).
-function useResizeHandle() {
+// A largura do arrasto fica local; o fim do arrasto (pointerup, ou perda da
+// captura) persiste, como o CrewDock. O teto é o que ainda deixa o dockview no
+// limiar do compacto: arrastar não derruba o painel para a faixa.
+function useResizeHandle(panelRef: RefObject<HTMLElement>) {
   const [dragWidth, setDragWidth] = useState<number | null>(null)
-  const drag = useRef<{ x: number; w: number } | null>(null)
+  const drag = useRef<{ x: number; w: number; max: number } | null>(null)
+  const dragWidthRef = useRef<number | null>(null)
+  dragWidthRef.current = dragWidth
+  const widthAt = (clientX: number) => {
+    const d = drag.current!
+    return clampRoomPanelWidth(d.w + (d.x - clientX), d.max)
+  }
+  const finish = (clientX: number | null) => {
+    if (!drag.current) return
+    const final = clientX === null ? dragWidthRef.current : widthAt(clientX)
+    drag.current = null
+    setDragWidth(null)
+    if (final !== null) useRoomPanelStore.getState().setWidth(final)
+  }
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     const w = useRoomPanelStore.getState().width
-    drag.current = { x: e.clientX, w }
+    const available = availableWidth(panelRef.current)
+    drag.current = {
+      x: e.clientX,
+      w,
+      max: available === null ? ROOM_PANEL_MAX : roomPanelFitMax(available),
+    }
     setDragWidth(w)
     e.currentTarget.setPointerCapture?.(e.pointerId)
   }
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return
-    setDragWidth(clampRoomPanelWidth(drag.current.w + (drag.current.x - e.clientX)))
+    if (drag.current) setDragWidth(widthAt(e.clientX))
   }
   const onPointerUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return
-    const final = clampRoomPanelWidth(drag.current.w + (drag.current.x - e.clientX))
-    drag.current = null
-    setDragWidth(null)
     e.currentTarget.releasePointerCapture?.(e.pointerId)
-    useRoomPanelStore.getState().setWidth(final)
+    finish(e.clientX)
   }
-  return { dragWidth, handlers: { onPointerDown, onPointerMove, onPointerUp } }
+  const onLostPointerCapture = () => finish(null)
+  return {
+    dragWidth,
+    handlers: { onPointerDown, onPointerMove, onPointerUp, onLostPointerCapture },
+  }
 }
 
 // Recolhe para a faixa compacta quando o dockview, com o painel cheio, ficaria
-// estreito demais (shouldCompactRoomPanel). Mede o host do dockview, não a janela:
-// arquivos e Crew Dock também tiram largura dele.
-function useCompactWhenNarrow(panelWidth: number) {
+// estreito demais (shouldCompactRoomPanel, com histerese). Mede o host do
+// dockview, não a janela: arquivos e Crew Dock também tiram largura dele.
+// Durante o arrasto não decide: a largura do arrasto já tem teto que cabe.
+function useCompactWhenNarrow(
+  panelRef: RefObject<HTMLElement>,
+  panelWidth: number,
+  dragging: boolean,
+) {
   useEffect(() => {
+    if (dragging) return
     const host = document.getElementById(DOCKVIEW_HOST_ID)
     if (!host || typeof ResizeObserver === 'undefined') return
     const measure = () => {
+      const available = availableWidth(panelRef.current)
+      if (available === null) return
       const store = useRoomPanelStore.getState()
-      store.setCompact(
-        shouldCompactRoomPanel(host.getBoundingClientRect().width, panelWidth, store.compact),
-      )
+      store.setCompact(shouldCompactRoomPanel(available, panelWidth, store.compact))
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(host)
     return () => ro.disconnect()
-  }, [panelWidth])
+  }, [panelRef, panelWidth, dragging])
   useEffect(() => () => useRoomPanelStore.getState().setCompact(false), [])
 }
 
@@ -119,11 +156,12 @@ export function RoomPanel() {
   const gridRef = useRef<HTMLDivElement>(null)
   const frozenRef = useRef<string[] | null>(null)
   const [, rerender] = useReducer((n: number) => n + 1, 0)
-  const resize = useResizeHandle()
+  const panelRef = useRef<HTMLElement>(null)
+  const resize = useResizeHandle(panelRef)
   const width = resize.dragWidth ?? storedWidth
   const compact = useRoomPanelStore((s) => s.compact)
   useExclusiveWithCrewDock()
-  useCompactWhenNarrow(storedWidth)
+  useCompactWhenNarrow(panelRef, storedWidth, resize.dragWidth !== null)
 
   useEffect(ensureSessionGraph, [])
   useEffect(() => {
@@ -245,6 +283,7 @@ export function RoomPanel() {
   if (compact) {
     return (
       <CompactRoomPanel
+        panelRef={panelRef}
         mothers={ordered}
         badge={badge}
         needOf={(id) => countAttentionSubjects(needById.get(id) ?? [])}
@@ -254,6 +293,7 @@ export function RoomPanel() {
   }
   return (
     <aside
+      ref={panelRef}
       data-testid="room-panel"
       aria-label="Room: mães e o que precisa de você"
       style={{ width }}
@@ -381,11 +421,13 @@ export function RoomPanel() {
 // (inicial do título; ponto vermelho se ela ou as filhas precisam de você).
 // Clicar no ícone foca a pane, como o tile. Sem resize: a largura é fixa.
 function CompactRoomPanel({
+  panelRef,
   mothers,
   badge,
   needOf,
   onOpen,
 }: {
+  panelRef: RefObject<HTMLElement>
   mothers: SessionGraphNode[]
   badge: number
   needOf: (sessionId: string) => number
@@ -393,6 +435,7 @@ function CompactRoomPanel({
 }) {
   return (
     <aside
+      ref={panelRef}
       data-testid="room-panel"
       data-compact="true"
       aria-label="Room: mães e o que precisa de você (compacta)"

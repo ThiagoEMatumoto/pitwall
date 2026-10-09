@@ -110,6 +110,7 @@ const {
   ROOM_PANEL_COMPACT,
   DOCKVIEW_HOST_ID,
   DOCKVIEW_MIN_WITH_PANEL,
+  ROOM_PANEL_HYSTERESIS,
 } = await import('./room-panel-store')
 const { useMotherPins } = await import('./mother-pins-store')
 const { useCrewDockStore } = await import('@/features/handoffs/crew-dock-store')
@@ -251,13 +252,25 @@ describe('RoomPanel', () => {
     expect(persisted()).toEqual({ open: false, width: ROOM_PANEL_DEFAULT + 100 })
   })
 
-  // O host do dockview com a largura que o layout daria; o ResizeObserver é
-  // controlado (jsdom não tem): `resize` reaplica a medição.
-  function dockviewHost(width: { value: number }) {
+  // O layout da linha: dockview + painel dividem `total` (o painel fica com a
+  // largura do style dele). O ResizeObserver é controlado (jsdom não tem):
+  // `resize` muda o total e reaplica a medição.
+  function dockviewRow(initialTotal: number) {
+    let total = initialTotal
+    const panelW = () => {
+      const panel = document.querySelector<HTMLElement>('[data-testid="room-panel"]')
+      return panel ? Number.parseFloat(panel.style.width) || 0 : 0
+    }
     const host = document.createElement('div')
     host.id = DOCKVIEW_HOST_ID
-    host.getBoundingClientRect = () => ({ width: width.value }) as DOMRect
+    host.getBoundingClientRect = () => ({ width: total - panelW() }) as DOMRect
     document.body.appendChild(host)
+    const rect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if ((this as HTMLElement).dataset?.testid === 'room-panel')
+        return { width: panelW() } as DOMRect
+      return rect.call(this)
+    }
     const callbacks: Array<() => void> = []
     const g = globalThis as { ResizeObserver?: unknown }
     const original = g.ResizeObserver
@@ -269,12 +282,15 @@ describe('RoomPanel', () => {
       disconnect() {}
     }
     return {
+      // O painel mudou de largura: o dockview muda junto e o observer dispara.
+      settle: () => act(() => callbacks.forEach((cb) => cb())),
       resize: (w: number) => {
-        width.value = w
+        total = w
         act(() => callbacks.forEach((cb) => cb()))
       },
       remove: () => {
         host.remove()
+        Element.prototype.getBoundingClientRect = rect
         g.ResizeObserver = original
       },
     }
@@ -282,7 +298,7 @@ describe('RoomPanel', () => {
 
   it('dockview estreito: recolhe para a faixa compacta (contagem + ícone por mãe) e volta ao alargar', () => {
     seed()
-    const host = dockviewHost({ value: DOCKVIEW_MIN_WITH_PANEL - 1 })
+    const row = dockviewRow(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT - 1)
     try {
       mount(lives(BASE, { nori: { status: 'waiting', scan: permission } }))
       const panel = screen.getByTestId('room-panel')
@@ -300,15 +316,40 @@ describe('RoomPanel', () => {
       const { panes, focusPaneId } = useAppStore.getState()
       expect(panes.find((p) => p.paneId === focusPaneId)?.session.id).toBe('sora')
 
-      // Compacto, o dockview ganhou (largura - faixa): só volta se o painel cheio
-      // ainda deixar o dockview acima do limiar — sem oscilar na fronteira.
-      host.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT - ROOM_PANEL_COMPACT - 1)
+      // O dockview cresceu com a faixa, mas a soma não mudou: segue compacto.
+      row.settle()
       expect(screen.getByTestId('room-panel').dataset.compact).toBe('true')
-      host.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT - ROOM_PANEL_COMPACT)
+      // Histerese: volta só com folga acima do limiar.
+      row.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT + ROOM_PANEL_HYSTERESIS - 1)
+      expect(screen.getByTestId('room-panel').dataset.compact).toBe('true')
+      row.resize(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT + ROOM_PANEL_HYSTERESIS)
       expect(screen.getByTestId('room-panel').dataset.compact).toBeUndefined()
       expect(tiles()).toHaveLength(4)
+      // Cheio de novo, o dockview encolheu pela faixa: não volta ao compacto.
+      row.settle()
+      expect(screen.getByTestId('room-panel').dataset.compact).toBeUndefined()
     } finally {
-      host.remove()
+      row.remove()
+    }
+  })
+
+  it('o arrasto para no teto que deixa o dockview no limiar, sem compactar, e persiste', () => {
+    seed()
+    const row = dockviewRow(DOCKVIEW_MIN_WITH_PANEL + ROOM_PANEL_DEFAULT + 50)
+    try {
+      mount(lives(BASE))
+      const handle = screen.getByTestId('room-panel-resize')
+      pointer(handle, 'pointerdown', 1000)
+      pointer(handle, 'pointermove', 800)
+      row.settle()
+      expect(screen.getByTestId('room-panel').dataset.compact).toBeUndefined()
+      expect(screen.getByTestId('room-panel').style.width).toBe(`${ROOM_PANEL_DEFAULT + 50}px`)
+      pointer(screen.getByTestId('room-panel-resize'), 'pointerup', 800)
+      row.settle()
+      expect(persisted()).toEqual({ open: true, width: ROOM_PANEL_DEFAULT + 50 })
+      expect(screen.getByTestId('room-panel').dataset.compact).toBeUndefined()
+    } finally {
+      row.remove()
     }
   })
 
