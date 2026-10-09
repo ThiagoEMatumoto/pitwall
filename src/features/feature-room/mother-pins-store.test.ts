@@ -62,4 +62,11 @@ describe('mother-pins-store', () => {
     expect(pins.getState().order).toEqual(['cc-b'])
     expect(setItem).toHaveBeenCalledTimes(1)
   })
+
+  it('prune com alive vazio (grafo ainda não carregou) não apaga os pins', async () => {
+    const pins = await freshStore()
+    pins.getState().toggle('cc-a')
+    pins.getState().prune(new Set())
+    expect(pins.getState().order).toEqual(['cc-a'])
+  })
 })

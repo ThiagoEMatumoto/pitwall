@@ -41,6 +41,10 @@ export const useMotherPins = create<MotherPinsState>((set, get) => ({
     set({ order })
   },
   prune: (alive) => {
+    // Vazio = grafo ainda não carregou; podar aqui apagaria todos os pins. Sem
+    // nenhuma sessão viva de fato, manter os pins é inofensivo: o próximo prune
+    // com grafo os poda.
+    if (alive.size === 0) return
     const cur = get().order
     const order = cur.filter((k) => alive.has(k))
     if (order.length === cur.length) return
