@@ -6,7 +6,8 @@
 //      no stdin da filha
 //   C) filha pede deploy (risk deploy_infra_spend) → mãe não consegue responder
 //      (human_only) → handoff_escalate → escalated_by = mãe
-//   D) Room: o pedido escalado mostra "só você resolve", 2 radios, "recomendada",
+//   D) Ctrl+` leva ao painel da Room filtrado na feature (contrato v0.78); a página
+//      da Room (pelo FeaturePanel do mapa): o pedido escalado mostra "só você resolve", 2 radios, "recomendada",
 //      "Custo do erro"; o humano escolhe B e responde
 //   E) ledger reason='answered' para filha E mãe; envelopes nos dois stubs;
 //      handoff_events request_open → request_answer → request_escalate → resume
@@ -32,7 +33,7 @@ import { captureLogs } from '../driver/capture'
 import { cleanCopy, closeOverlays, liveGlobal, mcpAs, spawnSession } from '../driver/crew-seed'
 import { createFakeHome } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
-import { waitReady } from '../driver/nav'
+import { goToArea, waitReady } from '../driver/nav'
 
 const RUN_ID = Date.now()
 const SCRATCH = process.env.TR_SCRATCH ?? join(tmpdir(), `typed-requests-${RUN_ID}`)
@@ -186,7 +187,8 @@ async function waitFor(label: string, fn: () => Promise<boolean> | boolean, time
   }
 }
 
-async function openRoom(featureId: string): Promise<boolean> {
+// Ctrl+` → painel da Room filtrado na feature (não mais a página Room).
+async function switchToFeature(featureId: string): Promise<boolean> {
   await closeOverlays(page)
   await page.keyboard.down('Control')
   await page.keyboard.press('Backquote')
@@ -204,6 +206,29 @@ async function openRoom(featureId: string): Promise<boolean> {
     await page.waitForTimeout(80)
   }
   await page.keyboard.up('Control')
+  await page.waitForTimeout(800)
+  return (
+    (await page.getByTestId('room-panel').isVisible()) &&
+    (await page.getByTestId('room-panel-filter').isVisible()) &&
+    !(await page.getByTestId('feature-room').isVisible())
+  )
+}
+
+// A página da Room de uma feature: mapa → cabeçalho do card → "Room" do FeaturePanel.
+async function openRoomPage(featureId: string): Promise<boolean> {
+  await closeOverlays(page)
+  await goToArea(page, 'projects')
+  await page
+    .getByRole('button', { name: /Mapa/ })
+    .first()
+    .click()
+    .catch(() => {})
+  await page.getByTestId('session-map').waitFor({ state: 'visible', timeout: 15_000 })
+  await page
+    .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
+    .getByTestId('feature-card-header')
+    .click()
+  await page.getByTestId('feature-panel-open-room').click({ timeout: 10_000 })
   await page.waitForTimeout(800)
   return page.getByTestId('feature-room').isVisible()
 }
@@ -371,7 +396,8 @@ try {
   )
 
   // ---------- D) Room: o humano responde inline ----------
-  check('D: Room abre pelo Ctrl+`', await openRoom(F))
+  check('D: Ctrl+` abre o painel da Room filtrado na feature', await switchToFeature(F))
+  check('D: Room abre pelo FeaturePanel', await openRoomPage(F))
   const openItem = page.getByTestId('room-queue-open')
   await waitFor(
     'D: item aberto é o pedido escalado',

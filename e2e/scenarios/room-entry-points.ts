@@ -17,8 +17,10 @@ import { goToArea, waitReady } from '../driver/nav'
 
 // Os 3 caminhos até a Room (feat/room-entry-points) no app buildado, HOME fake +
 // stub do claude, cópia do perfil (CM_DRIVE_SAFE=1):
-//   1 Ctrl+` (com a dica única na 1ª abertura) · 2 "Abrir Room" no card da Home ·
-//   3 item "Room" da barra lateral (+ badge igual ao "N no box" da TitleBar).
+//   1 Ctrl+` (com a dica única na 1ª abertura) → visão de projeto com o painel da
+//     Room filtrado na feature e a pane da mãe em foco · 2 "Abrir Room" no card da
+//     Home → sala da feature · 3 item "Room" da barra → painel (+ badge igual ao
+//     "N no box" da TitleBar); "Todas as mães" pelo ⤢ do painel, Enter no tile → sala.
 // Rodar: npm run rebuild:native && npm run build, então
 //   ROOM_SHOTS=<dir> npx tsx e2e/scenarios/room-entry-points.ts
 
@@ -55,6 +57,15 @@ const roomTitle = async (page: Page) =>
       .innerText()
       .catch(() => '')
   ).trim()
+const panel = (page: Page) => page.getByTestId('room-panel')
+const panelTile = (page: Page, id: string) =>
+  page.locator(`[data-testid="room-panel"] [data-testid="mother-tile"][data-tile="${id}"]`)
+const activeTabText = (page: Page) =>
+  page
+    .locator('.dv-groupview.dv-active-group .dv-tab.dv-active-tab')
+    .first()
+    .innerText()
+    .catch(() => '')
 const numberIn = (text: string | null | undefined) => Number.parseInt(text ?? '', 10) || 0
 
 async function leaveRoom(page: Page): Promise<void> {
@@ -104,7 +115,7 @@ async function run(): Promise<void> {
       .click({ timeout: 3000 })
       .catch(() => {})
     // Perfil copiado = "depois do update": a dica ainda não foi vista nele.
-    await page.evaluate(() => localStorage.removeItem('cm:room-hint-seen'))
+    await page.evaluate(() => localStorage.removeItem('cm:room-panel-hint-seen'))
 
     // Mãe na feature: sem card no mapa, o Ctrl+` não lista a feature.
     const before = new Set((await liveGlobal(page)).map((s) => s.id))
@@ -127,7 +138,7 @@ async function run(): Promise<void> {
     )
     await page.waitForTimeout(1200)
 
-    // ---- 1. Ctrl+`: a dica aparece uma vez, confirmar leva à Room
+    // ---- 1. Ctrl+`: a dica aparece uma vez, confirmar leva ao painel da Room
     await goToArea(page, 'overview')
     await page.keyboard.down('Control')
     await page.keyboard.press('Backquote')
@@ -135,7 +146,9 @@ async function run(): Promise<void> {
     const hint = page.getByTestId('feature-switcher-room-hint')
     check(await hint.isVisible(), '1: dica na 1ª abertura do Ctrl+`')
     check(
-      /agora abre a Room da feature/.test(await hint.innerText().catch(() => '')),
+      /agora foca a mãe da feature, com o painel da Room ao lado/.test(
+        await hint.innerText().catch(() => ''),
+      ),
       '1: texto da dica',
     )
     await shot(page, '1-switcher-hint')
@@ -145,8 +158,23 @@ async function run(): Promise<void> {
       await page.waitForTimeout(80)
     }
     await page.keyboard.up('Control')
-    await waitFor(page, 'Room pelo Ctrl+`', async () => room(page).isVisible())
-    check((await roomTitle(page)) === title, '1: Ctrl+` abre a Room da feature')
+    check(
+      await waitFor(page, 'painel pelo Ctrl+`', () => panelTile(page, M).isVisible()),
+      '1: Ctrl+` abre o painel da Room com a mãe da feature',
+    )
+    check(
+      await page.getByTestId('room-panel-filter').isVisible(),
+      '1: Ctrl+` filtra o painel na feature',
+    )
+    check(!(await room(page).isVisible()), '1: Ctrl+` não abre a página Room')
+    const mTitle = (await panelTile(page, M).getByTestId('mother-tile-title').innerText()).trim()
+    check(
+      await waitFor(page, 'pane da mãe em foco', async () =>
+        (await activeTabText(page)).includes(mTitle),
+      ),
+      '1: Ctrl+` foca a pane da mãe no dockview',
+    )
+    await shot(page, '1-panel')
     await leaveRoom(page)
     await page.keyboard.down('Control')
     await page.keyboard.press('Backquote')
@@ -181,22 +209,9 @@ async function run(): Promise<void> {
         !!homeTitle && (await roomTitle(page)) === homeTitle,
         `2: botão da Home abre a Room daquela feature (${homeTitle})`,
       )
-      // O item da barra abre a última Room: volta para F pelo combo antes do passo 3.
-      if (id !== F) {
-        await leaveRoom(page)
-        await page.keyboard.down('Control')
-        await page.keyboard.press('Backquote')
-        await page.waitForTimeout(600)
-        for (let i = 0; i < 20 && (await opt.getAttribute('aria-selected')) !== 'true'; i++) {
-          await page.keyboard.press('Tab')
-          await page.waitForTimeout(80)
-        }
-        await page.keyboard.up('Control')
-        await waitFor(page, 'Room de F', async () => (await roomTitle(page)) === title)
-      }
     }
 
-    // ---- 3. Item "Room" da barra lateral: abre a última Room, badge = TitleBar
+    // ---- 3. Item "Room" da barra lateral: painel na visão de projeto, badge = TitleBar
     await leaveRoom(page)
     const railBadge = page.getByTestId('rail-room-badge')
     const titleBadge = page.getByTestId('titlebar-attention-badge')
@@ -204,12 +219,23 @@ async function run(): Promise<void> {
     const bar = (await titleBadge.count()) ? numberIn(await titleBadge.innerText()) : 0
     check(rail === bar, `3: badge da Room (${rail}) = "N no box" da TitleBar (${bar})`)
     await shot(page, '3-rail')
-    // B2b: a barra abre "Todas as mães"; o tile da mãe (Enter) leva à sala de F.
+    // Contrato v0.78: a barra leva ao painel; "Todas as mães" fica no ⤢ do painel,
+    // e o tile da mãe ali (Enter) leva à sala de F.
     await page.getByTestId('rail-room').click()
-    const tile = page.locator(`[data-testid="mother-tile"][data-tile="${M}"]`)
     check(
-      await waitFor(page, 'Todas as mães pela barra', () => tile.isVisible()),
-      '3: item "Room" abre Todas as mães, com o tile da mãe',
+      await waitFor(page, 'painel pela barra', () => panel(page).isVisible()),
+      '3: item "Room" abre o painel da Room na visão de projeto',
+    )
+    check(!(await room(page).isVisible()), '3: a barra não abre a página Room')
+    check(await panelTile(page, M).isVisible(), '3: o painel tem o tile da mãe')
+    await shot(page, '3-panel')
+    await page.getByTestId('room-panel-fullscreen').click()
+    const tile = page.locator(
+      `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${M}"]`,
+    )
+    check(
+      await waitFor(page, 'Todas as mães pelo ⤢', () => tile.isVisible()),
+      '3: ⤢ do painel abre Todas as mães, com o tile da mãe',
     )
     await shot(page, '3-all-mothers')
     await tile.focus()

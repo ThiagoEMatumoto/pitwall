@@ -14,7 +14,9 @@ import { PERMISSION_FIXTURE } from './attention-reason'
 // stub do claude, cópia do perfil (CM_DRIVE_SAFE=1), feature e repos descartáveis.
 //   a iniciar a mãe pela Room (feature vazia) · b composer → PTY → resposta no chat ·
 //   c menu de permissão inline (clique pelo 1) · d fila da filha ao lado ·
-//   e Chat⇄Terminal (botão e Ctrl+.) · f as 3 entradas da Room com a mãe no centro.
+//   e Chat⇄Terminal (botão e Ctrl+.) · f as 3 entradas da Room: Ctrl+` e a barra
+//   levam ao painel na visão de projeto (pane da mãe em foco); Home e o tile de
+//   "Todas as mães" (pelo ⤢ do painel) levam à sala com a mãe no centro.
 // Rodar: npm run rebuild:native && npm run build, então
 //   ROOM_MOTHER_SB=<dir> npx tsx e2e/scenarios/room-mother.ts
 
@@ -112,6 +114,20 @@ const composerFocused = () =>
       !!a.closest('[data-testid="room-mother"]')
     )
   })
+const panelTileM = () =>
+  page.locator(`[data-testid="room-panel"] [data-testid="mother-tile"][data-tile="${ids.M}"]`)
+async function paneOfMotherFocused(): Promise<boolean> {
+  const title = (await panelTileM().getByTestId('mother-tile-title').innerText()).trim()
+  return waitFor(page, `pane de ${title} em foco`, async () =>
+    (
+      await page
+        .locator('.dv-groupview.dv-active-group .dv-tab.dv-active-tab')
+        .first()
+        .innerText()
+        .catch(() => '')
+    ).includes(title),
+  )
+}
 async function leaveRoom() {
   await closeOverlays(page)
   await goToArea(page, 'overview')
@@ -451,15 +467,18 @@ try {
   if (!listed) await page.keyboard.press('Escape')
   await page.keyboard.up('Control')
   check(listed, 'f1: feature no Ctrl+`')
+  // Contrato v0.78: o Ctrl+` leva à visão de projeto com o painel da Room filtrado
+  // na feature e a pane REAL da mãe em foco (não mais a página Room).
   check(
-    await waitFor(
-      page,
-      'mãe via Ctrl+`',
-      async () => (await mother().getAttribute('data-session-id')) === ids.M,
-      10_000,
-    ),
-    'f1: Ctrl+` → Room com a mãe no centro',
+    await waitFor(page, 'painel via Ctrl+`', () => panelTileM().isVisible(), 10_000),
+    'f1: Ctrl+` → painel da Room com o tile da mãe',
   )
+  check(
+    await page.getByTestId('room-panel-filter').isVisible(),
+    'f1: Ctrl+` filtra o painel na feature',
+  )
+  check(!(await room().isVisible()), 'f1: Ctrl+` não abre a página Room')
+  check(await paneOfMotherFocused(), 'f1: Ctrl+` → a pane da mãe em foco no dockview')
   await shot(page, 'f1-ctrl-backquote')
 
   await leaveRoom()
@@ -498,12 +517,21 @@ try {
   await shot(page, 'f2-home')
 
   await leaveRoom()
-  // B2b: a barra abre "Todas as mães"; o tile da mãe (Enter) leva à sala.
+  // Contrato v0.78: a barra leva ao painel da Room na visão de projeto; a página
+  // "Todas as mães" fica no ⤢ do painel, e o tile dela (Enter) leva à sala.
   await page.getByTestId('rail-room').click()
-  const tileM = page.locator(`[data-testid="mother-tile"][data-tile="${ids.M}"]`)
   check(
-    await waitFor(page, 'tile da mãe via rail', () => tileM.isVisible(), 10_000),
-    'f3: item "Room" da barra → Todas as mães com o tile da mãe',
+    await waitFor(page, 'tile da mãe no painel via rail', () => panelTileM().isVisible(), 10_000),
+    'f3: item "Room" da barra → painel da Room com o tile da mãe',
+  )
+  check(!(await room().isVisible()), 'f3: a barra não abre a página Room')
+  await page.getByTestId('room-panel-fullscreen').click()
+  const tileM = page.locator(
+    `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${ids.M}"]`,
+  )
+  check(
+    await waitFor(page, 'tile da mãe em Todas as mães', () => tileM.isVisible(), 10_000),
+    'f3: ⤢ do painel → Todas as mães com o tile da mãe',
   )
   await tileM.focus()
   await page.keyboard.press('Enter')

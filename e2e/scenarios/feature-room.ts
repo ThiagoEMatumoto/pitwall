@@ -146,6 +146,28 @@ async function openMap(page: Page): Promise<void> {
   await page.waitForTimeout(800)
 }
 
+// Contrato v0.78: o Ctrl+` leva ao painel da Room na visão de projeto. A página da
+// Room de uma feature segue no "Room" do FeaturePanel (mapa → cabeçalho do card).
+async function openRoomPage(page: Page, featureId: string): Promise<void> {
+  await closeOverlays(page)
+  await openMap(page)
+  await page
+    .locator(`[data-testid="lane-feature"][data-feature-id="${featureId}"]`)
+    .getByTestId('feature-card-header')
+    .click()
+  await page.getByTestId('feature-panel-open-room').click({ timeout: 10_000 })
+  await waitFor(page, 'página da Room', async () => room(page).isVisible())
+}
+
+const panelFiltered = (page: Page) =>
+  waitFor(
+    page,
+    'painel filtrado',
+    async () =>
+      (await page.getByTestId('room-panel').isVisible()) &&
+      (await page.getByTestId('room-panel-filter').isVisible()),
+  )
+
 async function phaseStub(): Promise<void> {
   const fake = createFakeHome({ parentDir: tmpdir() })
   const first = await launchApp()
@@ -220,12 +242,15 @@ async function phaseStub(): Promise<void> {
       return id
     }
 
-    // ---- 2. 1 sessão só (Ctrl+` → card da feature → Room)
+    // ---- 2. 1 sessão só (Ctrl+` → painel filtrado; FeaturePanel → página da Room)
     let M = await spawnMother()
     await page.waitForTimeout(1500)
     const soloCard = await switchByKeyboard(page, F)
     check(soloCard !== null, '2: a feature com a mãe tem card no Ctrl+`')
-    check(await room(page).isVisible(), '2: confirmar o card abre a Room')
+    check(await panelFiltered(page), '2: confirmar o card abre o painel da Room filtrado')
+    check(!(await room(page).isVisible()), '2: confirmar o card não abre a página Room')
+    await openRoomPage(page, F)
+    check(await room(page).isVisible(), '2: "Room" do FeaturePanel abre a página da Room')
     await waitFor(page, 'Room solo', async () => (await roomState(page)) === 'solo')
     check((await roomState(page)) === 'solo', '2: estado solo')
     check(await page.getByTestId('room-mother').isVisible(), '2: card da mãe visível')
@@ -307,7 +332,8 @@ async function phaseStub(): Promise<void> {
     const n = await roomCount(page)
     const lane = await laneCount(page, F)
     const card = await switchByKeyboard(page, F, 'ctrl-backquote-normal')
-    await waitFor(page, 'Room de volta', async () => room(page).isVisible())
+    check(await panelFiltered(page), '4: Ctrl+` com fila leva ao painel filtrado')
+    await openRoomPage(page, F)
     check(
       n === card && card === lane,
       `4: Room ${n} == card do Ctrl+\` ${card} == countForLane da projeção ${lane}`,
@@ -411,7 +437,11 @@ async function phaseStub(): Promise<void> {
       '5: em Home a Room não está na tela',
     )
     await switchByKeyboard(page, F, 'ctrl-backquote-home')
-    check(await room(page).isVisible(), '5: Ctrl+` + soltar no card da feature abre a Room')
+    check(
+      await panelFiltered(page),
+      '5: Ctrl+` + soltar no card da feature abre o painel da Room filtrado',
+    )
+    check(!(await room(page).isVisible()), '5: e não a página Room')
     await shot(page, 'ctrl-backquote')
 
     // ---- 6. regressões
@@ -460,7 +490,7 @@ async function phaseStub(): Promise<void> {
     await page.keyboard.press('Escape')
     await closeOverlays(page)
 
-    await switchByKeyboard(page, F)
+    await openRoomPage(page, F)
     await page.getByTestId('room-see-map').click()
     await page.waitForTimeout(1500)
     check(

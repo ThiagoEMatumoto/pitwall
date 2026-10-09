@@ -21,8 +21,10 @@ import { goToArea, waitReady } from '../driver/nav'
 //   → F num cartão: o "fora da vista" não cai sobre ele
 //   → depois do reload (nada em foco), o toque rápido vai a F3, a mais recente
 //   → segurar Ctrl + `: overlay com as 3 em ordem MRU, a 2ª pré-selecionada
-//   → soltar o Ctrl confirma a 2ª: o mapa enquadra o card dela e o painel da mãe
-//     mostra a mãe dela; o foco fica fora do xterm
+//   → soltar o Ctrl confirma a 2ª: a visão de projeto com o painel da Room filtrado
+//     nela e a pane da mãe em foco (contrato v0.78); pela sala (⤢ → Todas as mães →
+//     tile) o "Ver no mapa" enquadra o card e o painel da mãe mostra a mãe dela;
+//     o foco fica fora do xterm
 //   → toque rápido (Ctrl+` e soltar) volta para a anterior, sem overlay
 //   → Esc cancela: nada muda
 //   → com o foco no xterm do painel, o combo e as teclas do seletor não chegam
@@ -156,6 +158,39 @@ const dockShows = () =>
   dock()
     .getAttribute('data-session-id')
     .catch(() => null)
+// Contrato v0.78: confirmar uma feature leva à visão de projeto com o painel da
+// Room filtrado nela, o tile da mãe ali e a pane dela em foco — não à página Room.
+const panelTileOf = (sessionId: string) =>
+  page.locator(`[data-testid="room-panel"] [data-testid="mother-tile"][data-tile="${sessionId}"]`)
+async function panelOnFeature(featureId: string): Promise<boolean> {
+  const tile = panelTileOf(motherIdOf(featureId))
+  if (!(await waitFor('painel da Room na feature', () => tile.isVisible(), 8000))) return false
+  if (!(await page.getByTestId('room-panel-filter').isVisible())) return false
+  if ((await page.getByTestId('feature-room').count()) > 0) return false
+  const title = (await tile.getByTestId('mother-tile-title').innerText()).trim()
+  return waitFor(
+    'pane da mãe em foco',
+    async () =>
+      (
+        await page
+          .locator('.dv-groupview.dv-active-group .dv-tab.dv-active-tab')
+          .first()
+          .innerText()
+      ).includes(title),
+    8000,
+  )
+}
+// A sala de uma feature a partir do painel: ⤢ → Todas as mães → Enter no tile da mãe.
+async function roomPageOf(featureId: string): Promise<void> {
+  await page.getByTestId('room-panel-fullscreen').click()
+  const tile = page.locator(
+    `[data-testid="feature-room"] [data-testid="mother-tile"][data-tile="${motherIdOf(featureId)}"]`,
+  )
+  await waitFor('tile em Todas as mães', () => tile.isVisible(), 8000)
+  await tile.focus()
+  await page.keyboard.press('Enter')
+}
+let motherIdOf: (featureId: string) => string = () => ''
 const mru = () =>
   page.evaluate(() => {
     try {
@@ -296,6 +331,7 @@ try {
     'mães e filhas com PTYs vivas (stub)',
   )
   const motherOf = new Map(feats.map((f) => [f.id, f.mother.id]))
+  motherIdOf = (featureId) => motherOf.get(featureId) ?? ''
   const ours = new Set(feats.map((f) => f.id))
 
   // MRU semeado: F3 (mais recente), F2, F1.
@@ -400,10 +436,17 @@ try {
     'soltar o Ctrl fecha o overlay',
   )
   check((await mru())[0] === target, `MRU agora começa pela escolhida (${target})`)
-  // Decisão do produto: soltar abre a Room da feature escolhida. O enquadramento
-  // no mapa continua coberto, agora pelo "Ver no mapa" da Room.
+  // Decisão do produto (v0.78): soltar abre o painel da Room filtrado na escolhida,
+  // com a pane da mãe em foco. A sala segue pelo ⤢ → Todas as mães → tile, e o
+  // enquadramento no mapa continua coberto pelo "Ver no mapa" dela.
   if (ours.has(target)) {
     const tf = feats.find((f) => f.id === target)!
+    check(
+      await panelOnFeature(target),
+      'soltar abre o painel da Room filtrado na escolhida, com a pane da mãe em foco',
+    )
+    await shot('painel-da-escolhida')
+    await roomPageOf(target)
     const room = page.getByTestId('feature-room')
     check(
       await waitFor(
@@ -413,7 +456,7 @@ try {
           (await room.getAttribute('aria-label')) === `Room da feature ${tf.title}`,
         5000,
       ),
-      `soltar abre a Room da escolhida (${await room.getAttribute('aria-label').catch(() => null)})`,
+      `o tile da mãe em Todas as mães abre a Room da escolhida (${await room.getAttribute('aria-label').catch(() => null)})`,
     )
     const roomMother = room.getByTestId('room-mother')
     check(
@@ -597,20 +640,24 @@ try {
     await waitFor('volta à anterior', async () => (await mru())[0] === previous, 3000),
     `toque rápido volta à anterior (${previous})`,
   )
-  // Toque rápido também confirma: abre a Room da anterior (39eaaac). Para seguir
-  // com o painel da mãe e a barra de Projetos, volta ao mapa pelo "Ver no mapa".
+  // Toque rápido também confirma: abre o painel da Room na anterior (v0.78). Para
+  // seguir com o painel da mãe e a barra de Projetos, vai à sala dela pelo ⤢ e
+  // volta ao mapa pelo "Ver no mapa".
   if (ours.has(previous)) {
     const pf = feats.find((f) => f.id === previous)!
+    check(await panelOnFeature(previous), 'toque rápido abre o painel da Room na anterior')
+    await roomPageOf(previous)
     const room = page.getByTestId('feature-room')
     check(
       await waitFor(
         'Room da anterior',
         async () =>
-          (await room.getAttribute('aria-label').catch(() => null)) === `Room da feature ${pf.title}` &&
+          (await room.getAttribute('aria-label').catch(() => null)) ===
+            `Room da feature ${pf.title}` &&
           ((await room.getByTestId('room-mother').textContent()) ?? '').includes(pf.mother.name),
         8000,
       ),
-      `toque rápido abre a Room da anterior com a mãe dela (${pf.mother.name})`,
+      `pelo ⤢, a Room da anterior com a mãe dela (${pf.mother.name})`,
     )
     await room.getByTestId('room-see-map').click()
     check(
@@ -688,12 +735,18 @@ try {
   const fromTerminals = (await optionKeys()).find((o) => o.selected)?.key ?? ''
   await shot('overlay-nos-terminais')
   await page.keyboard.up('Control')
-  // Fora do mapa, confirmar também abre a Room; o mapa vem pelo "Ver no mapa".
+  // Fora do mapa, confirmar também abre o painel da Room; o mapa vem pela sala
+  // (⤢ → Todas as mães → tile) e o "Ver no mapa" dela.
   if (ours.has(fromTerminals)) {
+    check(
+      await panelOnFeature(fromTerminals),
+      'confirmar fora do mapa abre o painel da Room na escolhida',
+    )
+    await roomPageOf(fromTerminals)
     const room = page.getByTestId('feature-room')
     check(
       await waitFor('Room (terminais)', async () => (await room.count()) === 1, 8000),
-      'confirmar fora do mapa abre a Room da escolhida',
+      'pelo ⤢, a Room da escolhida',
     )
     await room.getByTestId('room-see-map').click()
   }
