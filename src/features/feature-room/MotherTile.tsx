@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type KeyboardEvent } from 'react'
+import { memo, useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { Crown, Maximize2, Pin } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { peekAttentionItem } from '@/features/handoffs/peek-attention'
@@ -28,6 +28,9 @@ interface Props {
   now: number
   onOpen: (node: SessionGraphNode) => void
   onPin: (node: SessionGraphNode) => void
+  // 'panel': o tile do painel lateral da área Projetos — abrir foca a pane da mãe
+  // no dockview, não a sala.
+  variant?: 'grid' | 'panel'
 }
 
 function clip(text: string): string {
@@ -74,7 +77,10 @@ export const MotherTile = memo(function MotherTile({
   now,
   onOpen,
   onPin,
+  variant = 'grid',
 }: Props) {
+  const inPanel = variant === 'panel'
+  const openWhat = inPanel ? 'foca a sessão' : 'abre a sala'
   const liveInfo = useAppStore((s) =>
     s.liveSessions.find((l) => l.id === node.sessionId && l.status !== 'ended'),
   )
@@ -117,6 +123,14 @@ export const MotherTile = memo(function MotherTile({
       onOpen(node)
     }
   }
+  // No painel, clicar no corpo do tile foca a pane; os controles dele seguem seus.
+  const onTileClick = (e: MouseEvent<HTMLElement>) => {
+    if (!inPanel) return
+    const t = e.target as Element
+    if (t.closest('button, a, input, textarea, select, [data-tile-composer], [role="group"]'))
+      return
+    onOpen(node)
+  }
   // O eco otimista lê o texto antes do CardPromptBar limpá-lo (ele trata o Enter).
   const onComposerKeyCapture = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
@@ -138,16 +152,17 @@ export const MotherTile = memo(function MotherTile({
       data-testid="mother-tile"
       tabIndex={0}
       role="listitem"
-      aria-label={`${title}, ${feature}, ${status.text}. Enter abre a sala.`}
+      aria-label={`${title}, ${feature}, ${status.text}. Enter ${openWhat}.`}
       onKeyDown={onTileKey}
-      className={`relative flex min-h-[250px] min-w-0 flex-col rounded-[10px] border bg-[var(--color-surface)] outline-none transition focus-visible:border-[var(--color-accent)] focus-visible:shadow-[0_0_0_1px_var(--color-accent)] ${
+      onClick={onTileClick}
+      className={`relative flex ${inPanel ? 'min-h-[200px]' : 'min-h-[250px]'} min-w-0 flex-col rounded-[10px] border bg-[var(--color-surface)] outline-none transition focus-visible:border-[var(--color-accent)] focus-visible:shadow-[0_0_0_1px_var(--color-accent)] ${
         need > 0
           ? 'border-[var(--color-border)] border-t-[3px] border-t-[var(--color-danger)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-accent)]'
-      }`}
+      } ${inPanel ? 'cursor-pointer' : ''}`}
     >
       <header className="flex items-start gap-2 border-b border-[var(--color-border)] px-2.5 pb-1.5 pt-2">
-        {index < 9 && (
+        {index < 9 && !inPanel && (
           <kbd
             title={`Tecla ${index + 1} foca este tile`}
             className="mt-0.5 rounded border border-[var(--color-border)] px-1 font-mono text-[10.5px] text-[var(--color-text-dim)]"
@@ -157,7 +172,14 @@ export const MotherTile = memo(function MotherTile({
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[13.5px] font-semibold">
-            <Icon as={Crown} size={12} className="shrink-0 text-[var(--color-accent)]" />
+            {node.isMother && (
+              <Icon
+                as={Crown}
+                size={12}
+                aria-label="tem filhas"
+                className="shrink-0 text-[var(--color-accent)]"
+              />
+            )}
             <span className="min-w-0 truncate" data-testid="mother-tile-title">
               {title}
             </span>
@@ -193,8 +215,8 @@ export const MotherTile = memo(function MotherTile({
         </button>
         <button
           type="button"
-          aria-label={`Abrir a sala de ${title}`}
-          title="Abrir a sala da feature (Enter)"
+          aria-label={inPanel ? `Focar a sessão de ${title}` : `Abrir a sala de ${title}`}
+          title={inPanel ? 'Focar a sessão no terminal (Enter)' : 'Abrir a sala da feature (Enter)'}
           data-testid="mother-tile-open"
           onClick={() => onOpen(node)}
           className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
@@ -263,10 +285,11 @@ export const MotherTile = memo(function MotherTile({
               type="button"
               data-testid="mother-tile-kids"
               onClick={() => onOpen(node)}
-              aria-label={`${kidsNeed} pedidos das filhas de ${title}. Abrir sala`}
+              aria-label={`${kidsNeed} pedidos das filhas de ${title}. ${inPanel ? 'Focar sessão' : 'Abrir sala'}`}
               className="font-semibold text-[var(--color-danger)] hover:underline"
             >
-              {kidsNeed} {kidsNeed === 1 ? 'pedido' : 'pedidos'} das filhas · Abrir sala
+              {kidsNeed} {kidsNeed === 1 ? 'pedido' : 'pedidos'} das filhas ·{' '}
+              {inPanel ? 'Focar' : 'Abrir sala'}
             </button>
           ) : (
             <span data-testid="mother-tile-kids">filhas 0</span>

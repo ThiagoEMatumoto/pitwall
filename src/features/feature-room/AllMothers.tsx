@@ -37,7 +37,7 @@ const EMPTY_SET: ReadonlySet<string> = new Set()
 
 // Tiles visíveis na grade (IntersectionObserver no scroller). Sem o observer (o
 // ambiente não tem), todos contam como visíveis e o teto de 8 continua valendo.
-function useVisibleTiles(rootRef: React.RefObject<HTMLElement | null>, ids: string[]) {
+export function useVisibleTiles(rootRef: React.RefObject<HTMLElement | null>, ids: string[]) {
   // Com observer, ninguém é vivo antes do 1º callback: assinar e soltar logo em
   // seguida custaria um watcher no main por tile fora da tela.
   const [visible, setVisible] = useState<ReadonlySet<string> | null>(() =>
@@ -140,7 +140,7 @@ export function AllMothers() {
 
   const inUse = useMemo(() => switcherInUse(graph, liveSessions), [graph, liveSessions])
   const needYou = useMemo(() => humanQueue(attention), [attention])
-  const mothers = useMemo(() => allMothers(graph.nodes, graph.edges, inUse), [graph, inUse])
+  const mothers = useMemo(() => allMothers(graph, inUse), [graph, inUse])
   const kids = useMemo(() => childIdsByMother(graph.edges, inUse), [graph, inUse])
   const needOf = useCallback(
     (m: SessionGraphNode) => needYouFor(needYou, m, (id) => kids.get(id) ?? EMPTY_SET),

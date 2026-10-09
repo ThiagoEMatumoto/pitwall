@@ -22,23 +22,25 @@ export function childIdsByMother(
   return out
 }
 
-// Mãe da Room = sessão de TOPO em uso, de qualquer feature. isMother
-// (session-graph.ts:247) só fica true com 1+ filha; a recém-criada tem 0.
-// Sessão de topo SEM feature só entra se já delegou (isMother): sem esse corte,
-// todo terminal avulso do usuário viraria tile.
+// Mãe da Room = sessão RAIZ (isRoot: o humano abriu, não nasceu de handoff) em
+// uso e não encerrada, de qualquer feature ou sem feature. Não confundir com
+// isMother (tem filhas): a recém-aberta tem 0 filhas e já é mãe aqui. A sucessora
+// do bastão de uma filha continua filha (conta só no tile da mãe).
+// Filha ÓRFÃ (a mãe encerrou ou saiu de uso) vira tile próprio: sem ninguém em
+// uso liderando, quem a dirige é o humano — o mesmo critério de "mãe = sessão
+// do humano" que já vale para a filha solta por release(). Sem isto ela sumia da
+// Room, e os pedidos dela ficavam sem tile. Só conta quem ainda adota um handoff
+// (childOfHandoffId): a antecessora de um bastão de filha não volta como tile.
 export function allMothers(
-  nodes: ReadonlyArray<SessionGraphNode>,
-  edges: ReadonlyArray<EdgeLike>,
+  graph: { nodes: ReadonlyArray<SessionGraphNode>; edges: ReadonlyArray<EdgeLike> },
   inUse: ReadonlySet<string>,
 ): SessionGraphNode[] {
-  const underMother = new Set<string>()
-  for (const kids of childIdsByMother(edges, inUse).values())
-    for (const k of kids) underMother.add(k)
-  return nodes.filter(
+  const led = new Set([...childIdsByMother(graph.edges, inUse).values()].flatMap((k) => [...k]))
+  return graph.nodes.filter(
     (n) =>
+      n.status !== 'ended' &&
       inUse.has(n.sessionId) &&
-      !underMother.has(n.sessionId) &&
-      (n.featureId != null || n.isMother === true),
+      (n.isRoot === true || (n.childOfHandoffId != null && !led.has(n.sessionId))),
   )
 }
 

@@ -34,6 +34,7 @@ const { FeatureSwitcher, openFeatureSwitcher } =
 const { useFeatureMruStore } = await import('@/features/session-canvas/feature-mru-store')
 const { useMapFocusStore } = await import('@/features/session-canvas/map-focus-store')
 const { useFeatureRoomStore } = await import('@/features/feature-room/feature-room-store')
+const { useRoomPanelStore } = await import('@/features/feature-room/room-panel-store')
 const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
 const { useAttentionListStore } = await import('@/store/attentionStore')
 const { useHandoffsStore } = await import('@/store/handoffsStore')
@@ -134,6 +135,7 @@ describe('IconRail → Room', () => {
     useMapFocusStore.setState({ featureId: null, frame: null })
     useAppStore.setState({ area: 'overview', liveSessions: [] })
     useFeatureRoomStore.setState({ level: 'all', featureId: null })
+    useRoomPanelStore.setState({ open: false, featureFilter: null, focus: null })
     useAttentionListStore.setState({ items: [] })
     useHandoffsStore.setState({ handoffs: [] })
   })
@@ -142,16 +144,16 @@ describe('IconRail → Room', () => {
     vi.useRealTimers()
   })
 
-  it('abre Todas as mães e guarda a última feature (o "Abrir sala" reabre rápido)', () => {
+  it('leva à visão de projeto com o painel da Room aberto (a área room fica intocada)', () => {
     useFeatureRoomStore.setState({ level: 'feature', featureId: 'f9' })
     render(<IconRail onOpenSettings={() => {}} />)
     fireEvent.click(screen.getByTestId('rail-room'))
-    expect(useAppStore.getState().area).toBe('room')
-    expect(useFeatureRoomStore.getState().level).toBe('all')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState()).toMatchObject({ open: true, featureFilter: null })
     expect(useFeatureRoomStore.getState().featureId).toBe('f9')
   })
 
-  it('sem nenhuma feature conhecida também abre Todas as mães; o seletor leva à sala', () => {
+  it('sem nenhuma feature conhecida também abre o painel; o seletor filtra o painel na feature', () => {
     render(
       <>
         <IconRail onOpenSettings={() => {}} />
@@ -159,13 +161,13 @@ describe('IconRail → Room', () => {
       </>,
     )
     fireEvent.click(screen.getByTestId('rail-room'))
-    expect(useAppStore.getState().area).toBe('room')
-    expect(useFeatureRoomStore.getState().level).toBe('all')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState().open).toBe(true)
     act(() => openFeatureSwitcher())
     const option = screen.getAllByRole('option').find((o) => o.dataset.key === 'f1')!
     fireEvent.click(option)
-    expect(useFeatureRoomStore.getState().level).toBe('feature')
-    expect(useFeatureRoomStore.getState().featureId).toBe('f1')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState().featureFilter).toBe('f1')
   })
 
   it('badge "precisa de você" é o mesmo número da TitleBar, para o mesmo estado', () => {

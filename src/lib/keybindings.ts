@@ -224,6 +224,16 @@ export const COMMANDS: Command[] = [
     defaultCombo: { mod: true, shift: true, code: 'KeyP' },
     editable: true,
   },
+  // Mostrar/esconder o painel da Room (mães + "precisa de você") à direita da
+  // visão de projeto. Ctrl+Shift+L ("lateral"): livre no app, no GNOME e nos
+  // meta+letra do Claude Code (Alt/Meta, não Ctrl+Shift). Por code: estável com Shift.
+  {
+    id: 'roomPanel.toggle',
+    label: 'Mostrar/esconder o painel da Room',
+    context: 'Global',
+    defaultCombo: { mod: true, shift: true, code: 'KeyL' },
+    editable: true,
+  },
   {
     id: 'files.togglePanel',
     label: 'Alternar painel de arquivos',

@@ -10,13 +10,19 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from 'dockview'
-import { FolderTree, PanelLeftOpen } from 'lucide-react'
+import { FolderTree, PanelLeftOpen, PanelRight } from 'lucide-react'
 import { IconRail } from './IconRail'
 import { Icon } from '@/components/ui/Icon'
 import { ProjectsSidebar } from '@/features/projects/ProjectsSidebar'
 import { CcConfigsArea } from '@/features/cc-configs/CcConfigsArea'
 import { MetricsArea } from '@/features/metrics/MetricsArea'
 import { FeatureRoom } from '@/features/feature-room/FeatureRoom'
+import { RoomPanel } from '@/features/feature-room/RoomPanel'
+import {
+  DOCKVIEW_HOST_ID,
+  useRoomPanelInset,
+  useRoomPanelStore,
+} from '@/features/feature-room/room-panel-store'
 import { FeaturesArea } from '@/features/features/FeaturesArea'
 import { ObjectivesArea } from '@/features/objectives/ObjectivesArea'
 import { ArchitectureArea } from '@/features/architecture/ArchitectureArea'
@@ -193,6 +199,8 @@ export function AppShell() {
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const filesOpen = useFilesStore((s) => s.open)
   const toggleFiles = useFilesStore((s) => s.toggle)
+  const roomPanelOpen = useRoomPanelStore((s) => s.open)
+  const toggleRoomPanel = useRoomPanelStore((s) => s.toggle)
   const setFileRoots = useFilesStore((s) => s.setRoots)
   const fileRoots = useFilesStore((s) => s.roots)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -203,12 +211,14 @@ export function AppShell() {
   const projectsView = useProjectsViewStore((s) => s.view)
   useLeaveMapOnSessionFocus()
   const loadKeybindings = useKeybindingsStore((s) => s.load)
-  // A pilha de toasts encosta na direita — onde o Crew Dock vive. Recua pela
-  // largura dele pra não cobrir os cards das filhas (e o input de resposta).
+  // A pilha de toasts encosta na direita — onde vivem o Crew Dock e, na visão de
+  // projeto, o painel da Room (entre <main> e o dock). Recua pelos dois pra não
+  // cobrir os cards das filhas, os tiles das mães e os inputs de resposta.
   const crewDockWidth = useCrewDockWidth()
+  const roomPanelInset = useRoomPanelInset()
   const hasCrew = useHasCrew()
   // Com o peek aberto a pilha sai de cima do input de resposta (ver toast-placement).
-  const toastPlacement = useToastPlacement(crewDockWidth)
+  const toastPlacement = useToastPlacement(crewDockWidth + roomPanelInset)
   useUpdateStatusFeed()
   const updateShown = useUpdateToastShown()
   const toastStyle = {
@@ -663,6 +673,17 @@ export function AppShell() {
         useProjectsViewStore.getState().setView('map')
         return
       }
+      // Ctrl+Shift+L: o painel da Room. Fora da visão de projeto, leva até ela
+      // com o painel aberto (o destino padrão da Room); lá dentro, alterna.
+      if (matchCombo(e, resolveCombo('roomPanel.toggle', overrides))) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const panel = useRoomPanelStore.getState()
+        if (useAppStore.getState().area === 'projects') panel.toggle()
+        else panel.show()
+        return
+      }
       // Ctrl+B: alterna o painel lateral de arquivos.
       if (matchCombo(e, resolveCombo('files.togglePanel', overrides))) {
         e.preventDefault()
@@ -794,7 +815,14 @@ export function AppShell() {
 
       // Ctrl+1..9 (pane.focusN): foca o n-ésimo pane diretamente (fallback caso
       // Ctrl+Tab seja interceptado pelo SO/Electron). Combo fixo (não editável).
-      if (!inDesign && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+      if (
+        !inDesign &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key >= '1' &&
+        e.key <= '9'
+      ) {
         const panels = api?.panels ?? []
         const target = panels[Number(e.key) - 1]
         if (target) {
@@ -953,11 +981,26 @@ export function AppShell() {
             <SessionStrip onOpenSwitcher={() => setSwitcherOpen(true)} />
           </div>
           <ProjectsViewToggle />
+          <button
+            type="button"
+            data-testid="room-panel-toggle"
+            onClick={toggleRoomPanel}
+            aria-pressed={roomPanelOpen}
+            title="Painel da Room: mães e o que precisa de você (Ctrl+Shift+L)"
+            aria-label={roomPanelOpen ? 'Esconder o painel da Room' : 'Mostrar o painel da Room'}
+            className={`m-1 rounded-md p-1.5 transition hover:bg-[var(--color-surface-2)] ${
+              roomPanelOpen ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)]'
+            }`}
+          >
+            <Icon as={PanelRight} size={16} />
+          </button>
         </div>
         <div className="flex min-h-0 flex-1">
           {filesOpen && <FilesPanel />}
-          <div className="relative min-h-0 flex-1">
-            {panes.length === 0 && projectsView === 'terminals' && <EmptyMain overrides={overrides} />}
+          <div id={DOCKVIEW_HOST_ID} className="relative min-h-0 flex-1">
+            {panes.length === 0 && projectsView === 'terminals' && (
+              <EmptyMain overrides={overrides} />
+            )}
             {/* Por cima do dockview, que segue montado (xterm/PTY vivos por trás). */}
             {area === 'projects' && projectsView === 'map' && (
               <div id={MAP_DOCK_HOST_ID} className="absolute inset-0 z-20 bg-[var(--color-bg)]">
@@ -975,6 +1018,10 @@ export function AppShell() {
           </div>
         </div>
       </main>
+
+      {/* A Room como painel lateral da visão de projeto (irmão de <main>, à
+          direita do dockview). Exclusivo com o Crew Dock expandido. */}
+      {area === 'projects' && roomPanelOpen && <RoomPanel />}
 
       {/* Irmão de <main>, não filho: o bloco de projetos fica `hidden` fora da
           área projects, e o dock precisa continuar visível em qualquer área (as
@@ -1034,8 +1081,8 @@ function EmptyMain({ overrides }: { overrides: Parameters<typeof resolveCombo>[1
           Nenhuma sessão aberta
         </div>
         <div className="text-sm">
-          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou escolha
-          um repo na barra lateral.
+          <EmptyKbd combo={resolveCombo('session.new', overrides)} /> abre uma sessão nova; ou
+          escolha um repo na barra lateral.
         </div>
         <div className="mt-3 text-xs">
           <EmptyKbd combo={resolveCombo('palette.toggle', overrides)} /> busca sessões, features e

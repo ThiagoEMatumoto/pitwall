@@ -23,6 +23,7 @@ const { useFeatureMruStore } = await import('./feature-mru-store')
 const { useMapFocusStore } = await import('./map-focus-store')
 const { useProjectsViewStore } = await import('./projects-view-store')
 const { useFeatureRoomStore } = await import('@/features/feature-room/feature-room-store')
+const { useRoomPanelStore } = await import('@/features/feature-room/room-panel-store')
 const { useCrewDockStore } = await import('@/features/handoffs/crew-dock-store')
 const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
 const { useAttentionListStore } = await import('@/store/attentionStore')
@@ -105,6 +106,7 @@ describe('FeatureSwitcher → Room', () => {
     useMapFocusStore.setState({ featureId: 'f2', frame: null })
     useAppStore.setState({ area: 'features', liveSessions: [] })
     useFeatureRoomStore.setState({ featureId: null })
+    useRoomPanelStore.setState({ open: false, featureFilter: null, focus: null })
     useAttentionListStore.setState({ items: [] })
     useProjectsViewStore.getState().setView('terminals')
   })
@@ -113,12 +115,13 @@ describe('FeatureSwitcher → Room', () => {
     vi.useRealTimers()
   })
 
-  it('combo + card de feature: área room com a feature, MRU tocado, mapa não focado', () => {
+  it('combo + card de feature: visão de projeto com o painel da Room na feature, MRU tocado, mapa não focado', () => {
     render(both())
     ctrlBackquote()
     releaseCtrl()
-    expect(useAppStore.getState().area).toBe('room')
-    expect(useFeatureRoomStore.getState().featureId).toBe('f1')
+    expect(useAppStore.getState().area).toBe('projects')
+    expect(useRoomPanelStore.getState()).toMatchObject({ open: true, featureFilter: 'f1' })
+    expect(useFeatureRoomStore.getState().featureId).toBeNull()
     expect(useFeatureMruStore.getState().order[0]).toBe('f1')
     expect(useMapFocusStore.getState().featureId).toBe('f2')
     expect(useMapFocusStore.getState().frame).toBeNull()
@@ -188,14 +191,14 @@ describe('FeatureSwitcher → Room', () => {
     expect(useFeatureRoomStore.getState().featureId).toBeNull()
   })
 
-  it('toque rápido a partir da Room vai à feature anterior, não volta à mesma', () => {
+  it('toque rápido a partir do painel da Room vai à feature anterior, não volta à mesma', () => {
     render(both())
     ctrlBackquote()
     releaseCtrl()
-    expect(useFeatureRoomStore.getState().featureId).toBe('f1')
+    expect(useRoomPanelStore.getState().featureFilter).toBe('f1')
     ctrlBackquote()
     releaseCtrl()
-    expect(useFeatureRoomStore.getState().featureId).toBe('f2')
+    expect(useRoomPanelStore.getState().featureFilter).toBe('f2')
   })
   it('dica "Ctrl+` agora abre a Room" só na primeira abertura visível pelo combo', () => {
     render(both())
@@ -211,7 +214,7 @@ describe('FeatureSwitcher → Room', () => {
     ctrlBackquote()
     act(() => void vi.advanceTimersByTime(200))
     expect(screen.getByTestId('feature-switcher-room-hint')).toHaveTextContent(
-      'Ctrl+` agora abre a Room da feature',
+      'Ctrl+` agora foca a mãe da feature, com o painel da Room ao lado',
     )
     fireEvent.keyDown(window, { key: 'Escape' })
 

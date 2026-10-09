@@ -113,22 +113,14 @@ function nodeTitle(n: SessionGraphNode): string {
 const safe = (t: string | null | undefined): string | null =>
   t == null ? null : stripUnsafeDisplay(t)
 
-interface EdgeLike {
-  kind: string
-  from?: string
-  to?: string
-}
-
-// Mãe da Room = sessão de TOPO em uso desta feature: o recorte de allMothers (a
-// regra é uma só para os dois níveis). isMother só fica true com 1+ filha; a mãe
-// recém-criada pela Room tem 0 e entra pela feature.
+// Mãe da Room = sessão raiz em uso desta feature: o recorte de allMothers (a
+// regra é uma só para os dois níveis).
 export function roomMothers(
-  nodes: ReadonlyArray<SessionGraphNode>,
-  edges: ReadonlyArray<EdgeLike>,
+  graph: Parameters<typeof allMothers>[0],
   inUse: ReadonlySet<string>,
   featureId: string,
 ): SessionGraphNode[] {
-  return allMothers(nodes, edges, inUse)
+  return allMothers(graph, inUse)
     .filter((n) => n.featureId === featureId)
     .sort(
       (a, b) =>
@@ -167,7 +159,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
     readOnly: false,
     waitingOnHuman: waiting.has(n.sessionId),
   })
-  let motherNodes = roomMothers(graph.nodes, graph.edges, inUse, featureId)
+  let motherNodes = roomMothers(graph, inUse, featureId)
   if (motherNodes.length === 0) {
     // Sessão única que ainda não delegou: é a mãe da feature (estado "1 sessão só").
     const fallbackId =
@@ -177,8 +169,7 @@ export function buildRoomView(input: RoomViewInput): RoomView {
     motherNodes = fallback ? [fallback] : []
   }
   const mothers = motherNodes.map(motherRow)
-  const mother =
-    mothers.find((m) => m.sessionId === input.selectedMotherId) ?? mothers[0] ?? null
+  const mother = mothers.find((m) => m.sessionId === input.selectedMotherId) ?? mothers[0] ?? null
   const motherIds = new Set(mothers.map((m) => m.sessionId))
   const motherTitleOf = (id: string | null): string | null =>
     mothers.length > 1 && id ? (mothers.find((m) => m.sessionId === id)?.title ?? null) : null

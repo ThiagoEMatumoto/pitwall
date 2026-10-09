@@ -16,12 +16,23 @@ interface Props {
   featureTitleOf: (featureId: string | null) => string | null
   now: number
   onOpenRoom: (featureId: string) => void
+  // 'panel': a coluna estreita do painel lateral — itens empilhados, e o botão
+  // leva à feature dentro do próprio painel em vez de trocar de página.
+  variant?: 'strip' | 'panel'
 }
 
 // Faixa "Precisa de você" de todas as features. Cada sujeito é um item da fila da
 // sala (QueueItem): aberto, ele tem as mesmas ações (Aprovar/Negar via
 // AttentionMenuPanel, Responder, Ler). "Abrir sala" leva à feature do item.
-export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOpenRoom }: Props) {
+export function GlobalAttentionStrip({
+  needYou,
+  graph,
+  featureTitleOf,
+  now,
+  onOpenRoom,
+  variant = 'strip',
+}: Props) {
+  const inPanel = variant === 'panel'
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const liveSessions = useAppStore((s) => s.liveSessions)
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -60,7 +71,9 @@ export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOp
     <section
       data-testid="all-mothers-strip"
       aria-label="Precisa de você em todas as features"
-      className="flex shrink-0 flex-col gap-2 border-b border-[var(--color-border)] px-4 py-2.5"
+      className={`flex shrink-0 flex-col gap-2 border-b border-[var(--color-border)] py-2.5 ${
+        inPanel ? 'max-h-[45%] overflow-y-auto px-3' : 'px-4'
+      }`}
     >
       <div className="flex items-center gap-2 text-[12.5px] font-semibold">
         Precisa de você
@@ -70,16 +83,22 @@ export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOp
         >
           {rows.length}
         </span>
-        <span className="ml-auto flex items-center gap-1 text-[11.5px] font-normal text-[var(--color-text-dim)]">
-          <Kbd>1</Kbd>–<Kbd>9</Kbd> foca tile · <Kbd>/</Kbd> escreve · <Kbd>Enter</Kbd> abre a sala
-        </span>
+        {!inPanel && (
+          <span className="ml-auto flex items-center gap-1 text-[11.5px] font-normal text-[var(--color-text-dim)]">
+            <Kbd>1</Kbd>–<Kbd>9</Kbd> foca tile · <Kbd>/</Kbd> escreve · <Kbd>Enter</Kbd> abre a
+            sala
+          </span>
+        )}
       </div>
       {rows.length === 0 ? (
         <p className="m-0 text-[12.5px] text-[var(--color-text-dim)]">
           Nada esperando você em nenhuma feature.
         </p>
       ) : (
-        <ul role="list" className="m-0 flex list-none gap-2 overflow-x-auto p-0 pb-0.5">
+        <ul
+          role="list"
+          className={`m-0 flex list-none gap-2 p-0 pb-0.5 ${inPanel ? 'flex-col' : 'overflow-x-auto'}`}
+        >
           {rows.map((row) => {
             const featureId = featureOf(row)
             const title = featureTitleOf(featureId)
@@ -87,7 +106,7 @@ export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOp
               <li
                 key={row.subjectKey}
                 data-testid="all-mothers-strip-item"
-                className="flex w-[300px] shrink-0 flex-col gap-1"
+                className={`flex shrink-0 flex-col gap-1 ${inPanel ? 'w-full' : 'w-[300px]'}`}
               >
                 <ul role="list" className="m-0 list-none p-0">
                   <CollapsedItem
@@ -106,10 +125,10 @@ export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOp
                       variant="ghost"
                       className={COMPACT}
                       data-testid="all-mothers-strip-open-room"
-                      aria-label={`Abrir sala de ${subjectOf(row).who}`}
+                      aria-label={`${inPanel ? 'Ver as mães da feature de' : 'Abrir sala de'} ${subjectOf(row).who}`}
                       onClick={() => onOpenRoom(featureId)}
                     >
-                      Abrir sala
+                      {inPanel ? 'Ver feature' : 'Abrir sala'}
                     </Button>
                   )}
                 </div>

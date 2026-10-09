@@ -182,6 +182,26 @@ export function switcherKeyNote(combo: Combo): string | null {
 // Ao abrir, o destino já é a anterior (a 2ª da lista): um toque rápido alterna
 // entre as duas últimas, como o Alt+Tab. Shift abre pela última da lista. Sem a
 // atual no topo (nada em foco, como logo depois do boot) a 1ª já é a anterior.
+// A feature "atual" do seletor (a que abre a lista; o toque rápido vai à 2ª):
+// a da Room na tela; senão a do painel da Room, mas só na visão de terminais,
+// onde ele é o contexto à vista; senão o grupo "Sem feature" recém-escolhido
+// (ele não muda a em foco), senão a em foco no mapa. No mapa o filtro do painel
+// fica velho assim que outro card entra em foco: valendo ali, o toque rápido
+// pulava a anterior.
+export function switcherCurrent(at: {
+  roomFeature: string | null
+  panelFeature: string | null
+  projectsView: 'map' | 'terminals'
+  mruHead: string | null
+  mapFocus: string | null
+  isProjectKey: (key: string) => boolean
+}): string | null {
+  if (at.roomFeature) return at.roomFeature
+  if (at.panelFeature && at.projectsView === 'terminals') return at.panelFeature
+  if (at.mruHead && at.isProjectKey(at.mruHead)) return at.mruHead
+  return at.mapFocus
+}
+
 export function openIndex(size: number, backward: boolean, hasCurrent = true): number {
   if (size === 0) return -1
   if (backward) return size - 1

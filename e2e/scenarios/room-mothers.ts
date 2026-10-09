@@ -12,7 +12,7 @@ import { PERMISSION_FIXTURE } from './attention-reason'
 
 // B2b (feat/room-all-mothers): "Todas as mães" e o split, no app buildado, HOME
 // fake + stub do claude (o mesmo do room-mother), cópia do perfil (CM_DRIVE_SAFE=1).
-//   2 IconRail → Todas · 3 composer do tile → stub certo, cauda, 0 transcript-update ·
+//   2 IconRail → painel da Room (v0.78), ⤢ → Todas · 3 composer do tile → stub certo, cauda, 0 transcript-update ·
 //   4 aprovar no tile, badge e faixa caem juntos · 5 Enter expande · 6 split, um
 //   terminal por vez, Esc volta · 7 viewport 1024: tiles pausados, sem scroll lateral.
 // Rodar: npm run rebuild:native && npm run build, então
@@ -256,10 +256,27 @@ try {
     question: 'Posso seguir, M1?',
   })
 
-  // ---- 2. IconRail → Todas as mães
+  // ---- 2. IconRail → painel da Room; ⤢ do painel → Todas as mães (contrato v0.78)
   await goToArea(page, 'overview')
   await page.getByTestId('rail-room').click()
-  check(await waitFor(page, 'Todas as mães', () => all().isVisible()), '2: rail abre Todas as mães')
+  const panel = page.getByTestId('room-panel')
+  check(
+    await waitFor(page, 'painel da Room', () => panel.isVisible()),
+    '2: rail abre o painel da Room na visão de projeto',
+  )
+  check(!(await all().isVisible()), '2: rail não abre Todas as mães direto')
+  check(
+    await waitFor(
+      page,
+      '3 tiles no painel',
+      async () => (await panel.getByTestId('mother-tile').count()) === 3,
+      15_000,
+    ),
+    '2: o painel lista as 3 mães',
+  )
+  await panel.getByTestId('room-panel-fullscreen').click()
+  check(await waitFor(page, 'Todas as mães', () => all().isVisible()), '2: ⤢ abre Todas as mães')
+  check(!(await panel.isVisible()), '2: em tela cheia o painel sai de cena')
   await waitFor(
     page,
     '3 tiles',

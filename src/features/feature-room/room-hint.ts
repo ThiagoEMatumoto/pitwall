@@ -1,9 +1,11 @@
-// Dica única do Ctrl+` (v0.76 mudou o destino do combo para a Room). Preferência
+// Dica única do Ctrl+` (v0.76 levou o combo para a Room; v0.78 para o painel da
+// Room na visão de projeto — chave nova para a dica voltar uma vez). Preferência
 // local do renderer, como o MRU do seletor.
-const SEEN_KEY = 'cm:room-hint-seen'
+const SEEN_KEY = 'cm:room-panel-hint-seen'
 
 // shortcut: o combo de verdade (editável), "Ctrl+`" no padrão.
-export const roomHintText = (shortcut: string) => `${shortcut} agora abre a Room da feature`
+export const roomHintText = (shortcut: string) =>
+  `${shortcut} agora foca a mãe da feature, com o painel da Room ao lado`
 
 export function roomHintSeen(): boolean {
   try {

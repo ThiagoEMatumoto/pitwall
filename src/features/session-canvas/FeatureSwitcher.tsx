@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFeatureRoomStore } from '@/features/feature-room/feature-room-store'
+import { useRoomPanelStore } from '@/features/feature-room/room-panel-store'
 import { markRoomHintSeen, roomHintText, roomHintSeen } from '@/features/feature-room/room-hint'
 import { createPortal } from 'react-dom'
 import { Crown, Layers } from 'lucide-react'
@@ -29,6 +30,7 @@ import {
   leavesScope,
   openIndex,
   stepIndex,
+  switcherCurrent,
   switcherKeyLabel,
   switcherKeyNote,
   type SwitcherEntry,
@@ -161,19 +163,19 @@ export function FeatureSwitcher() {
       goTo(target, s.origin)
     }
 
-    // O atual: a feature da Room na tela; senão o grupo "Sem feature" recém-escolhido
-    // (ele não muda a feature em foco), senão a feature em foco. Sem a Room aqui, o
-    // toque rápido a partir dela cairia de volta nela mesma.
     const open = (backward: boolean, sticky: boolean, origin: SwitcherOrigin) => {
       const order = useFeatureMruStore.getState().order
+      const area = useAppStore.getState().area
       const roomState = useFeatureRoomStore.getState()
-      const room =
-        useAppStore.getState().area === 'room' && roomState.level === 'feature'
-          ? roomState.featureId
-          : null
-      const current =
-        room ??
-        (order[0] && isProjectKey(order[0]) ? order[0] : useMapFocusStore.getState().featureId)
+      const panel = useRoomPanelStore.getState()
+      const current = switcherCurrent({
+        roomFeature: area === 'room' && roomState.level === 'feature' ? roomState.featureId : null,
+        panelFeature: area === 'projects' && panel.open ? panel.featureFilter : null,
+        projectsView: useProjectsViewStore.getState().view,
+        mruHead: order[0] ?? null,
+        mapFocus: useMapFocusStore.getState().featureId,
+        isProjectKey,
+      })
       const keys = orderByMru([...entriesNow().keys()], order, current, isProjectKey)
       if (keys.length === 0) return false
       // Título da linha de atenção (feature sem card no mapa): o índice de features
@@ -527,7 +529,9 @@ function goTo(target: SwitcherEntry, origin: SwitcherOrigin) {
   if (target.kind === 'feature' && target.featureId && origin !== 'map-button') {
     useFeatureMruStore.getState().touch(target.key)
     if (dock.peekTarget) dock.closePeek({ restoreFocus: false })
-    useFeatureRoomStore.getState().openRoom(target.featureId)
+    // Destino padrão: a visão de projeto com o painel da Room filtrado na feature
+    // e a pane da mãe dela em foco.
+    useRoomPanelStore.getState().show({ featureId: target.featureId })
     return
   }
   showFeatureOnMap(target)
