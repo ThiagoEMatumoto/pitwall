@@ -8,6 +8,9 @@ export interface PendingMother {
   featureId: string
   sessionId: string | null // null enquanto o room:start-mother não voltou
   step: PendingMotherStep
+  // O passo travou (morreu depois de viva, ou estourou o prazo): o card mostra o
+  // motivo e a saída em vez de "Iniciando…" para sempre.
+  failure?: string
 }
 
 // A Room aberta: qual feature, o filtro da linha do tempo e o item aberto da fila.

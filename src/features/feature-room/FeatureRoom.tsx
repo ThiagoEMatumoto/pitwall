@@ -300,7 +300,7 @@ export function FeatureRoom() {
       if (focusMotherComposer()) e.preventDefault()
       return
     }
-    // 1/2/3: a opção do card de permissão da mãe, pelo mesmo clique (guardado)
+    // 1-9: a opção do card de permissão da mãe, pelo mesmo clique (guardado)
     // do ChatView. Sem card na tela, a tecla não faz nada.
     if (/^[1-9]$/.test(e.key) && centerId) {
       const option = rootRef.current.querySelector<HTMLButtonElement>(

@@ -7,17 +7,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // A Room sobre o estado que os PRODUTORES escrevem (handoffStore, projeção, grafo,
 // room:get real via roomSnapshot). Só window.api é dublê: ele devolve o que o main
 // devolveria a partir do mesmo banco.
+// Produtores reais do main que a Room consome ao iniciar a mãe: o list-live-global
+// (via ipcMain) e o chat:transcript-update (via broadcast da janela).
+const rt = vi.hoisted(() => ({
+  running: [] as string[],
+  index: new Map<string, unknown>(),
+  handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
+  chat: new Set<(u: unknown) => void>(),
+}))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '0.0.0-test' },
-  BrowserWindow: { getAllWindows: () => [] },
+  BrowserWindow: {
+    getAllWindows: () => [
+      {
+        webContents: {
+          send: (channel: string, payload: unknown) => {
+            if (channel === 'chat:transcript-update') rt.chat.forEach((cb) => cb(payload))
+          },
+        },
+      },
+    ],
+  },
+  ipcMain: {
+    handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) =>
+      rt.handlers.set(channel, fn),
+    on: () => {},
+    removeHandler: () => {},
+  },
 }))
 let testDb: Database.Database
 vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
 vi.mock('../../../electron/main/services/transcript-path', () => ({
+  PROJECTS_ROOT: '/nonexistent-projects',
   findTranscriptPath: () => null,
 }))
-vi.mock('../../../electron/main/services/session-activity', () => ({
-  buildSessionsFileIndex: () => new Map(),
+vi.mock('../../../electron/main/services/session-activity', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  // O ~/.claude/sessions/<pid>.json: vazio até o claude recém-spawnado escrevê-lo.
+  buildSessionsFileIndex: () => rt.index,
+  isPidAlive: () => true,
 }))
 vi.mock('../../../electron/main/services/live-session-states', () => ({
   liveSessionStates: () => new Map(),
@@ -25,7 +53,12 @@ vi.mock('../../../electron/main/services/live-session-states', () => ({
 // room:mother-preflight real (room-mother.ts) importa o spawnSession: a PTY e o MCP
 // são os únicos dublês, como no room-mother.test.
 vi.mock('../../../electron/main/services/pty-manager', () => ({
-  ptyManager: { on: () => {}, off: () => {}, isRunning: () => false, runningIds: () => [] },
+  ptyManager: {
+    on: () => {},
+    off: () => {},
+    isRunning: () => false,
+    runningIds: () => rt.running,
+  },
 }))
 vi.mock('../../../electron/main/services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
 vi.mock('../../../electron/main/services/feature-memory', () => ({
@@ -59,6 +92,12 @@ const special: Record<string, Record<string, unknown>> = {
     startMother: (input: unknown) => startMother.fn(input),
   },
   handoffs: { list: () => Promise.resolve(store.list()) },
+  chat: {
+    onTranscriptUpdate: (cb: (u: unknown) => void) => {
+      rt.chat.add(cb)
+      return () => rt.chat.delete(cb)
+    },
+  },
 }
 vi.stubGlobal(
   'window',
@@ -85,6 +124,16 @@ const harness = await import('../../../electron/main/services/attention/attentio
 const { roomWorld } = await import('../../../electron/main/services/attention/room-world')
 const { roomSnapshot } = await import('../../../electron/main/services/feature-room-service')
 const { motherPreflight } = await import('../../../electron/main/ipc/room-mother')
+const { registerSessionIpc } = await import('../../../electron/main/ipc/sessions')
+const { chatTranscriptService } =
+  await import('../../../electron/main/services/chat-transcript-service')
+const {
+  CHAT_TIMEOUT_MS,
+  CHAT_TIMEOUT_TEXT,
+  MOTHER_DIED_TEXT,
+  TERMINAL_TIMEOUT_MS,
+  TERMINAL_TIMEOUT_TEXT,
+} = await import('./StartMotherCard')
 const { FeatureRoom } = await import('./FeatureRoom')
 const { useTerminalLease } = await import('@/features/sessions/terminal-lease')
 const { useFeatureRoomStore } = await import('./feature-room-store')
@@ -149,9 +198,15 @@ describe('FeatureRoom', () => {
     terminalProps.length = 0
     useTerminalLease.setState({ leases: {}, stacks: {} })
     startMother.fn = vi.fn(() => new Promise(() => {}))
+    rt.running = []
+    rt.index.clear()
     permission = await harness.scanFixture('permission-bash')
   })
-  afterEach(() => testDb.close())
+  afterEach(() => {
+    chatTranscriptService.closeAll()
+    vi.useRealTimers()
+    testDb.close()
+  })
 
   it('vazio: sem sessões nem handoffs', async () => {
     await mount([])
@@ -427,7 +482,99 @@ describe('FeatureRoom', () => {
     expect(document.activeElement).toBe(composer)
   })
 
-  it('mãe encerrada durante o boot: o card de passos sai do centro', async () => {
+  // O list-live-global de verdade, como o renderer o recebe.
+  const liveFromMain = async () => {
+    if (!rt.handlers.has('sessions:list-live-global')) registerSessionIpc()
+    const list = (await rt.handlers.get('sessions:list-live-global')!({})) as Array<{
+      id: string
+      status: string
+    }>
+    act(() => useAppStore.setState({ liveSessions: list as never }))
+    return list
+  }
+  const ccOf = (id: string) =>
+    (
+      testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as {
+        cc_session_id: string
+      }
+    ).cc_session_id
+
+  it('recém-nascida (ended no list-live-global): os passos esperam e o foco chega ao composer quando ele monta', async () => {
+    await mount([])
+    harness.seedSession(testDb, 'M', { repoId: 'r1', featureId: F })
+    rt.running = ['M']
+    startMother.fn = vi.fn(() =>
+      Promise.resolve({ sessionId: 'M', ccSessionId: ccOf('M'), cwd: '', ccSessionIdReadyMs: 1 }),
+    )
+    fireEvent.click(await screen.findByTestId('start-mother-submit'))
+    await waitFor(() =>
+      expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'terminal' }),
+    )
+
+    // A PTY roda mas o sessions/<pid>.json ainda não existe: o main diz 'ended'.
+    expect((await liveFromMain()).find((l) => l.id === 'M')?.status).toBe('ended')
+    expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'terminal' })
+    expect(screen.getByTestId('start-mother-steps')).toBeInTheDocument()
+    expect(screen.queryByTestId('start-mother-failure')).toBeNull()
+
+    rt.index.set(ccOf('M'), { pid: 1, status: 'idle', name: null, cwd: null, updatedAt: 1 })
+    expect((await liveFromMain()).find((l) => l.id === 'M')?.status).toBe('idle')
+    expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'chat' })
+
+    // O watch do chat emite a lista vazia de cara (transcript ainda inexistente).
+    act(() => chatTranscriptService.watch('M', ccOf('M')))
+    expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
+
+    // O RoomMotherPane monta depois (o grafo ainda não via a mãe): o foco espera por ele.
+    const w = roomWorld(testDb, [{ id: 'M', status: 'idle' }])
+    act(() => useSessionGraphStore.setState({ graph: w.graph }))
+    const pane = await screen.findByTestId('room-mother')
+    const xterm = document.createElement('textarea')
+    xterm.className = 'xterm-helper-textarea'
+    const composer = document.createElement('textarea')
+    pane.append(xterm, composer)
+    await waitFor(() => expect(document.activeElement).toBe(composer))
+  })
+
+  it('não aparece viva no prazo: erro visível com saída', async () => {
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    rt.running = ['M']
+    await mount([])
+    await liveFromMain()
+    vi.useFakeTimers()
+    act(() =>
+      useFeatureRoomStore
+        .getState()
+        .setPendingMother({ featureId: F, sessionId: 'M', step: 'terminal' }),
+    )
+    act(() => void vi.advanceTimersByTime(TERMINAL_TIMEOUT_MS - 1))
+    expect(screen.queryByTestId('start-mother-failure')).toBeNull()
+    act(() => void vi.advanceTimersByTime(1))
+    expect(screen.getByTestId('start-mother-failure')).toHaveTextContent(TERMINAL_TIMEOUT_TEXT)
+    expect(document.querySelector('[data-step="terminal"]')).toHaveAttribute('data-state', 'failed')
+    expect(screen.getByTestId('start-mother-submit')).toHaveTextContent('Iniciar sessão-mãe')
+    fireEvent.click(screen.getByTestId('start-mother-dismiss'))
+    expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
+  })
+
+  it('chat sem o 1º transcript-update: o passo "chat" estoura o prazo com estado visível', async () => {
+    harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
+    await mount([{ id: 'M', status: 'idle' }])
+    vi.useFakeTimers()
+    act(() =>
+      useFeatureRoomStore
+        .getState()
+        .setPendingMother({ featureId: F, sessionId: 'M', step: 'chat' }),
+    )
+    act(() => void vi.advanceTimersByTime(CHAT_TIMEOUT_MS))
+    expect(screen.getByTestId('start-mother-failure')).toHaveTextContent(CHAT_TIMEOUT_TEXT)
+    expect(document.querySelector('[data-step="chat"]')).toHaveAttribute('data-state', 'failed')
+    // Chegou tarde, mas chegou: o card sai sozinho.
+    act(() => chatTranscriptService.watch('M', ccOf('M')))
+    expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
+  })
+
+  it('mãe encerrada depois de vista viva: erro com saída, não "Iniciando…" para sempre', async () => {
     harness.seedSession(testDb, 'M', { repoId: 'r6', featureId: F })
     await mount([{ id: 'M', status: 'idle' }])
     act(() =>
@@ -441,6 +588,8 @@ describe('FeatureRoom', () => {
         liveSessions: s.liveSessions.map((l) => (l.id === 'M' ? { ...l, status: 'ended' } : l)),
       })),
     )
+    expect(screen.getByTestId('start-mother-failure')).toHaveTextContent(MOTHER_DIED_TEXT)
+    fireEvent.click(screen.getByTestId('start-mother-dismiss'))
     expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
     expect(screen.queryByTestId('start-mother-steps')).not.toBeInTheDocument()
   })

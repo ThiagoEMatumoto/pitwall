@@ -4,6 +4,7 @@ import { chatApi, roomApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import type { MotherPreflight } from '../../../shared/types/feature-room'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { isTypingTarget } from '@/features/session-canvas/typing-target'
 import { useFeatureRoomStore, type PendingMotherStep } from './feature-room-store'
 
 const PURPOSE_MAX = 500 // o mesmo limite do room:start-mother (zod no main)
@@ -34,7 +35,17 @@ export function focusMotherComposer(): boolean {
   return !!el && document.activeElement === el
 }
 
-// Avança os passos 2 e 3 de "Iniciar sessão-mãe": a sessão aparece em
+// Prazos dos passos 2 e 3. O claude escreve o sessions/<pid>.json em poucos
+// segundos e o 1º chat:transcript-update sai assim que o watch arma.
+export const TERMINAL_TIMEOUT_MS = 30_000
+export const CHAT_TIMEOUT_MS = 20_000
+const COMPOSER_WAIT_MS = 10_000
+
+export const MOTHER_DIED_TEXT = 'A sessão-mãe encerrou durante o início.'
+export const TERMINAL_TIMEOUT_TEXT = `A sessão-mãe não apareceu viva em ${TERMINAL_TIMEOUT_MS / 1000}s.`
+export const CHAT_TIMEOUT_TEXT = `O chat ao vivo não respondeu em ${CHAT_TIMEOUT_MS / 1000}s. A mãe segue rodando: feche para vê-la (Ctrl+. alterna para o Terminal).`
+
+// Avança os passos 2 e 3 de "Iniciar sessão-mãe": a sessão fica viva em
 // liveSessions (terminal) e depois chega o 1º chat:transcript-update dela (chat,
 // mesmo com transcriptExists:false). Vive na Room, não no card: o card pode estar
 // num Dialog que já fechou.
@@ -42,26 +53,39 @@ export function usePendingMotherProgress(): void {
   const pending = useFeatureRoomStore((s) => s.pendingMother)
   const sessionId = pending?.sessionId ?? null
   const step = pending?.step ?? null
+  const failed = !!pending?.failure
   const liveStatus = useAppStore((s) =>
     sessionId ? (s.liveSessions.find((l) => l.id === sessionId)?.status ?? null) : null,
   )
   const isLive = liveStatus !== null && liveStatus !== 'ended'
   const gotUpdate = useRef(false)
+  const seenLive = useRef<string | null>(null)
 
-  // A mãe morreu no boot (ou sumiu depois de aparecer): sem isto o card ficaria
-  // por cima do centro com o form travado em "Iniciando…", sem saída.
+  // Recém-nascida, a mãe vem do list-live-global como 'ended' (o sessions/<pid>.json
+  // ainda não existe) ou nem vem: isso é "ainda não apareceu", não morte. Só conta
+  // como morta depois de ter sido vista viva; antes disso quem decide é o prazo.
   useEffect(() => {
-    if ((step === 'terminal' && liveStatus === 'ended') || (step === 'chat' && !isLive)) {
-      useFeatureRoomStore.getState().setPendingMother(null)
-    }
-  }, [step, liveStatus, isLive])
+    if (!sessionId || failed) return
+    if (isLive) seenLive.current = sessionId
+    else if (seenLive.current === sessionId) failPending(sessionId, MOTHER_DIED_TEXT)
+  }, [sessionId, isLive, failed])
 
   useEffect(() => {
-    if (step === 'terminal' && isLive) {
+    if (step === 'terminal' && isLive && !failed) {
       const cur = useFeatureRoomStore.getState().pendingMother
       if (cur) useFeatureRoomStore.getState().setPendingMother({ ...cur, step: 'chat' })
     }
-  }, [step, isLive])
+  }, [step, isLive, failed])
+
+  useEffect(() => {
+    if (!sessionId || failed || (step !== 'terminal' && step !== 'chat')) return
+    const text = step === 'terminal' ? TERMINAL_TIMEOUT_TEXT : CHAT_TIMEOUT_TEXT
+    const t = setTimeout(
+      () => failPending(sessionId, text),
+      step === 'terminal' ? TERMINAL_TIMEOUT_MS : CHAT_TIMEOUT_MS,
+    )
+    return () => clearTimeout(t)
+  }, [sessionId, step, failed])
 
   useEffect(() => {
     gotUpdate.current = false
@@ -70,6 +94,7 @@ export function usePendingMotherProgress(): void {
       if (u.sessionId !== sessionId) return
       gotUpdate.current = true
       const cur = useFeatureRoomStore.getState().pendingMother
+      // Inclui o chat que estourou o prazo: chegou tarde, mas chegou.
       if (cur?.sessionId === sessionId && cur.step === 'chat') finish()
     })
   }, [sessionId])
@@ -79,9 +104,39 @@ export function usePendingMotherProgress(): void {
   }, [step])
 }
 
+function failPending(sessionId: string, failure: string): void {
+  const room = useFeatureRoomStore.getState()
+  const cur = room.pendingMother
+  if (cur?.sessionId === sessionId && !cur.failure) room.setPendingMother({ ...cur, failure })
+}
+
+// O RoomMotherPane monta centenas de ms depois de o card sair (o grafo ainda
+// precisa enxergar a mãe): foca quando o composer aparecer, não num frame às cegas.
+export function focusMotherComposerWhenReady(timeoutMs = COMPOSER_WAIT_MS): () => void {
+  if (focusMotherComposer()) return () => {}
+  const observer = new MutationObserver(() => {
+    const active = document.activeElement
+    // O humano já foi digitar em outro lugar: não roubar o foco.
+    if (active && active !== document.body && isTypingTarget(active)) stop()
+    else if (focusMotherComposer()) stop()
+  })
+  const timer = setTimeout(stop, timeoutMs)
+  function stop() {
+    observer.disconnect()
+    clearTimeout(timer)
+  }
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['disabled'],
+  })
+  return stop
+}
+
 function finish(): void {
   useFeatureRoomStore.getState().setPendingMother(null)
-  requestAnimationFrame(() => focusMotherComposer())
+  focusMotherComposerWhenReady()
 }
 
 interface Props {
@@ -127,7 +182,8 @@ export function StartMotherCard({ featureId, featureTitle, onStarted, heading = 
   const repos = preflight?.repos.filter((r) => r.valid) ?? []
   const repo = repos.find((r) => r.repoId === repoId) ?? null
   const blocked = preflight !== null && !preflight.mcpReady
-  const busy = pending !== null
+  const failure = pending?.failure ?? null
+  const busy = pending !== null && !failure
   const canSubmit = !!preflight && !blocked && !!repo && !busy
 
   const submit = async (e: FormEvent) => {
@@ -272,7 +328,8 @@ export function StartMotherCard({ featureId, featureTitle, onStarted, heading = 
           className="m-0 flex list-none flex-col gap-1 p-0 text-[12.5px]"
         >
           {STEPS.map((s, i) => {
-            const state = i < doneIdx ? 'done' : i === doneIdx ? 'active' : 'todo'
+            const state =
+              i < doneIdx ? 'done' : i === doneIdx ? (failure ? 'failed' : 'active') : 'todo'
             return (
               <li
                 key={s.step}
@@ -281,12 +338,20 @@ export function StartMotherCard({ featureId, featureTitle, onStarted, heading = 
                 className={
                   state === 'done'
                     ? 'text-[var(--color-success)]'
-                    : state === 'active'
-                      ? 'text-[var(--color-text)]'
-                      : 'text-[var(--color-text-dim)]'
+                    : state === 'failed'
+                      ? 'text-[var(--color-danger)]'
+                      : state === 'active'
+                        ? 'text-[var(--color-text)]'
+                        : 'text-[var(--color-text-dim)]'
                 }
               >
-                {state === 'done' ? '✓ ' : state === 'active' ? '◌ ' : '· '}
+                {state === 'done'
+                  ? '✓ '
+                  : state === 'failed'
+                    ? '✕ '
+                    : state === 'active'
+                      ? '◌ '
+                      : '· '}
                 {s.label}
               </li>
             )
@@ -294,7 +359,30 @@ export function StartMotherCard({ featureId, featureTitle, onStarted, heading = 
         </ol>
       )}
 
+      {failure && (
+        <p
+          role="alert"
+          data-testid="start-mother-failure"
+          className="m-0 text-[12.5px] text-[var(--color-danger)]"
+        >
+          {stripUnsafeDisplay(failure)}
+        </p>
+      )}
+
       <div className="flex justify-end gap-2">
+        {failure && (
+          <Button
+            type="button"
+            variant="ghost"
+            data-testid="start-mother-dismiss"
+            onClick={() => {
+              useFeatureRoomStore.getState().setPendingMother(null)
+              focusMotherComposerWhenReady()
+            }}
+          >
+            Fechar
+          </Button>
+        )}
         {error && !busy && error !== EMPTY_PURPOSE_ERROR && (
           <Button type="submit" variant="ghost" data-testid="start-mother-retry">
             Tentar de novo
