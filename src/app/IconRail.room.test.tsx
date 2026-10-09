@@ -29,7 +29,8 @@ const harness = await import('../../electron/main/services/attention/attention-t
 const { projectAttention } = await import('../../shared/attention/project-attention')
 const { IconRail } = await import('./IconRail')
 const { TitleBar } = await import('@/features/titlebar/TitleBar')
-const { FeatureSwitcher } = await import('@/features/session-canvas/FeatureSwitcher')
+const { FeatureSwitcher, openFeatureSwitcher } =
+  await import('@/features/session-canvas/FeatureSwitcher')
 const { useFeatureMruStore } = await import('@/features/session-canvas/feature-mru-store')
 const { useMapFocusStore } = await import('@/features/session-canvas/map-focus-store')
 const { useFeatureRoomStore } = await import('@/features/feature-room/feature-room-store')
@@ -132,7 +133,7 @@ describe('IconRail → Room', () => {
     useFeatureMruStore.setState({ order: [] })
     useMapFocusStore.setState({ featureId: null, frame: null })
     useAppStore.setState({ area: 'overview', liveSessions: [] })
-    useFeatureRoomStore.setState({ featureId: null })
+    useFeatureRoomStore.setState({ level: 'all', featureId: null })
     useAttentionListStore.setState({ items: [] })
     useHandoffsStore.setState({ handoffs: [] })
   })
@@ -141,30 +142,16 @@ describe('IconRail → Room', () => {
     vi.useRealTimers()
   })
 
-  it('abre a Room da última feature aberta nela', () => {
-    useFeatureRoomStore.setState({ featureId: 'f9' })
-    useMapFocusStore.setState({ featureId: 'f1', frame: null })
+  it('abre Todas as mães e guarda a última feature (o "Abrir sala" reabre rápido)', () => {
+    useFeatureRoomStore.setState({ level: 'feature', featureId: 'f9' })
     render(<IconRail onOpenSettings={() => {}} />)
     fireEvent.click(screen.getByTestId('rail-room'))
     expect(useAppStore.getState().area).toBe('room')
+    expect(useFeatureRoomStore.getState().level).toBe('all')
     expect(useFeatureRoomStore.getState().featureId).toBe('f9')
   })
 
-  it('sem Room aberta antes: a feature em foco, senão a mais recente do seletor', () => {
-    useFeatureMruStore.setState({ order: ['p:p1', 'f7'] })
-    const { unmount } = render(<IconRail onOpenSettings={() => {}} />)
-    fireEvent.click(screen.getByTestId('rail-room'))
-    expect(useFeatureRoomStore.getState().featureId).toBe('f7')
-    unmount()
-
-    useFeatureRoomStore.setState({ featureId: null })
-    useMapFocusStore.setState({ featureId: 'f1', frame: null })
-    render(<IconRail onOpenSettings={() => {}} />)
-    fireEvent.click(screen.getByTestId('rail-room'))
-    expect(useFeatureRoomStore.getState().featureId).toBe('f1')
-  })
-
-  it('sem nenhuma feature conhecida, abre o seletor; confirmar leva à Room', () => {
+  it('sem nenhuma feature conhecida também abre Todas as mães; o seletor leva à sala', () => {
     render(
       <>
         <IconRail onOpenSettings={() => {}} />
@@ -172,10 +159,12 @@ describe('IconRail → Room', () => {
       </>,
     )
     fireEvent.click(screen.getByTestId('rail-room'))
-    expect(useAppStore.getState().area).toBe('overview')
+    expect(useAppStore.getState().area).toBe('room')
+    expect(useFeatureRoomStore.getState().level).toBe('all')
+    act(() => openFeatureSwitcher())
     const option = screen.getAllByRole('option').find((o) => o.dataset.key === 'f1')!
     fireEvent.click(option)
-    expect(useAppStore.getState().area).toBe('room')
+    expect(useFeatureRoomStore.getState().level).toBe('feature')
     expect(useFeatureRoomStore.getState().featureId).toBe('f1')
   })
 

@@ -14,6 +14,8 @@ export function objectiveChainText(links: RoomObjectiveLink[]): string {
 }
 
 interface Props {
+  backBadge: number // pedidos de OUTRAS features
+  onBack: () => void
   title: string
   chain: RoomObjectiveLink[]
   needsYou: number
@@ -26,6 +28,8 @@ interface Props {
 
 // Barra da Room: feature + cadeia objetivo › KR, e os caminhos de saída.
 export function RoomHeader({
+  backBadge,
+  onBack,
   title,
   chain,
   needsYou,
@@ -38,6 +42,25 @@ export function RoomHeader({
   const chainText = objectiveChainText(chain)
   return (
     <header className="flex items-center gap-4 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2.5">
+      <Button
+        variant="ghost"
+        className={COMPACT}
+        onClick={onBack}
+        title="Voltar para Todas as mães (Esc)"
+        aria-label={`Todas as mães, ${backBadge} precisa de você em outras features`}
+        data-testid="room-back-all"
+      >
+        ← Todas as mães
+        {backBadge > 0 && (
+          <span
+            data-testid="room-back-badge"
+            className="ml-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-bold tabular-nums"
+            style={{ background: 'var(--color-danger)', color: 'var(--color-bg)' }}
+          >
+            {backBadge}
+          </span>
+        )}
+      </Button>
       <div className="flex min-w-0 flex-1 flex-col gap-px">
         <h1 className="m-0 truncate text-[15px] font-semibold" data-testid="room-title">
           {title}

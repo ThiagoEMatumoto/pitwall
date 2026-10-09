@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { launchApp, writeCopyPrefs } from '../driver/launch'
 import { captureLogs } from '../driver/capture'
 import { cleanCopy, closeOverlays, liveGlobal, mcpAs } from '../driver/crew-seed'
 import { createFakeHome } from '../driver/fake-home'
+import { roomStubLogs, writeRoomClaudeStub } from '../driver/room-stub'
 import { goToArea, waitReady } from '../driver/nav'
 import { PERMISSION_FIXTURE } from './attention-reason'
 
@@ -31,7 +32,6 @@ const note = (s: string) => {
   out.notes.push(s)
   console.log(`[b1] note — ${s}`)
 }
-const shq = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`
 
 function gitRepo(name: string): string {
   const dir = join(SB, `${name}-${Date.now()}`)
@@ -49,99 +49,10 @@ const repoB = gitRepo('filha-descartavel')
 
 const fake = createFakeHome({ parentDir: SB })
 
-// Stub: lê byte a byte (raw). Enter fecha a linha: loga, grava user+assistant no
-// transcript (~/.claude/projects/<cwd>/<session>.jsonl, o que o chat lê) e redesenha
-// a caixa ociosa. "PEDE-PERMISSAO" desenha a captura REAL do menu de permissão; aí
-// um dígito responde e grava "PERMISSAO-RESPONDIDA <n>".
-const RULE = '─'.repeat(50)
-const stubPath = join(fake.root, 'bin', 'room-mother-claude.sh')
-writeFileSync(
-  stubPath,
-  `#!/usr/bin/env bash
-export LC_ALL=C
-SESSIONS_DIR=${shq(fake.sessionsDir)}
-LOG=${shq(fake.logDir)}/room-claude-$$.log
-FIXTURE=${shq(PERMISSION_FIXTURE)}
-printf 'argv:' >> "$LOG"; for a in "$@"; do printf ' %q' "$a" >> "$LOG"; done; printf '\\n' >> "$LOG"
-session_id=''; name=''
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --session-id|--resume) session_id="$2"; shift 2 ;;
-    -n|--name) name="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-json_str() { local s=\${1//\\\\/\\\\\\\\}; s=\${s//\\"/\\\\\\"}; printf '"%s"' "$s"; }
-write_status() {
-  local now; now=$(date +%s%3N)
-  printf '{"pid":%s,"sessionId":%s,"cwd":%s,"status":"%s","name":%s,"startedAt":%s,"updatedAt":%s}' \\
-    "$$" "$(json_str "$session_id")" "$(json_str "$PWD")" "$1" "$(json_str "$name")" "$now" "$now" > "$SESSIONS_DIR/$$.json"
-  printf 'status:%s\\n' "$1" >> "$LOG"
-}
-PROJ="$HOME/.claude/projects/\${PWD//[\\/.]/-}"
-mkdir -p "$PROJ"
-TR="$PROJ/$session_id.jsonl"
-n=0
-rec() { # role text
-  n=$((n+1)); local ts; ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
-  if [ "$1" = user ]; then
-    printf '{"type":"user","uuid":"u-%s-%s","sessionId":"%s","timestamp":"%s","message":{"role":"user","content":%s}}\\n' "$$" "$n" "$session_id" "$ts" "$(json_str "$2")" >> "$TR"
-  else
-    printf '{"type":"assistant","uuid":"a-%s-%s","sessionId":"%s","timestamp":"%s","message":{"id":"m-%s-%s","role":"assistant","model":"claude-e2e","content":[{"type":"text","text":%s}]}}\\n' "$$" "$n" "$session_id" "$ts" "$$" "$n" "$(json_str "$2")" >> "$TR"
-  fi
-}
-box() { printf '\\r\\n%s\\r\\n❯ \\r\\n%s\\r\\n' ${shq(RULE)} ${shq(RULE)}; }
-stty raw -echo
-printf 'Fake Claude Code (stub B1)\\r\\n  sessao: %s\\r\\n  nome:   %s\\r\\n' "$session_id" "$name"
-box
-write_status idle
-menu=0; esc=0; buf=''
-while true; do
-  if IFS= read -r -s -n1 -d '' ch; then
-    printf 'key:%02x\\n' "'$ch" >> "$LOG"
-    if [ $esc -eq 1 ]; then
-      case "$ch" in [A-Za-z~]) esc=0 ;; esac
-      continue
-    fi
-    if [ "$ch" = $'\\e' ]; then
-      IFS= read -r -s -n1 -d '' -t 0.05 nx || { buf+="$ch"; continue; }
-      if [ "$nx" = '[' ]; then esc=1; continue; fi
-      if [ "$nx" = 'O' ]; then IFS= read -r -s -n1 -d '' -t 0.05 _; fi
-      continue
-    fi
-    if [ $menu -eq 1 ]; then
-      case "$ch" in
-        [1-9]) menu=0; printf '\\033[2J\\033[H* respondido %s\\r\\n' "$ch"; printf 'menu-answer:%s\\n' "$ch" >> "$LOG"
-               rec assistant "PERMISSAO-RESPONDIDA $ch"; box; write_status idle ;;
-      esac
-      continue
-    fi
-    if [ "$ch" = $'\\r' ] || [ "$ch" = $'\\n' ]; then
-      line=$buf; buf=''
-      [ -z "$line" ] && continue
-      printf 'line:%s\\n' "$line" >> "$LOG"
-      printf '\\r\\nrecebido: %s\\r\\n' "$line"
-      rec user "$line"
-      if [[ "$line" == *PEDE-PERMISSAO* ]]; then
-        rec assistant "vou pedir permissao"
-        printf '\\033[2J\\033[3J\\033[H'; cat "$FIXTURE"; menu=1; write_status waiting
-      else
-        rec assistant "RESPOSTA-MAE: $line"; box; write_status idle
-      fi
-    else
-      buf+="$ch"
-    fi
-  elif [ $? -le 128 ]; then
-    exit 0
-  fi
-done
-`,
-)
-chmodSync(stubPath, 0o755)
+const stubPath = writeRoomClaudeStub(fake, PERMISSION_FIXTURE)
 const stubLog = () =>
-  readdirSync(fake.logDir)
-    .filter((f) => f.startsWith('room-claude-'))
-    .map((f) => readFileSync(join(fake.logDir, f), 'utf8'))
+  roomStubLogs(fake)
+    .map((l) => l.text)
     .join('\n')
 
 const first = await launchApp()
@@ -587,7 +498,15 @@ try {
   await shot(page, 'f2-home')
 
   await leaveRoom()
+  // B2b: a barra abre "Todas as mães"; o tile da mãe (Enter) leva à sala.
   await page.getByTestId('rail-room').click()
+  const tileM = page.locator(`[data-testid="mother-tile"][data-tile="${ids.M}"]`)
+  check(
+    await waitFor(page, 'tile da mãe via rail', () => tileM.isVisible(), 10_000),
+    'f3: item "Room" da barra → Todas as mães com o tile da mãe',
+  )
+  await tileM.focus()
+  await page.keyboard.press('Enter')
   check(
     await waitFor(
       page,
@@ -595,7 +514,7 @@ try {
       async () => (await mother().getAttribute('data-session-id')) === ids.M,
       10_000,
     ),
-    'f3: item "Room" da barra → mãe no centro',
+    'f3: Enter no tile → mãe no centro da sala',
   )
   await shot(page, 'f3-rail')
 
@@ -615,11 +534,18 @@ try {
 {
   const { DatabaseSync } = await import('node:sqlite')
   const db = new DatabaseSync(join(userData, 'app.db'), { readOnly: true })
-  const r = db.prepare('SELECT feature_id, repo_id, purpose, cc_session_id FROM sessions WHERE id = ?').get(ids.M) as any
+  const r = db
+    .prepare('SELECT feature_id, repo_id, purpose, cc_session_id FROM sessions WHERE id = ?')
+    .get(ids.M) as any
   db.close()
   note(`sql mãe: ${JSON.stringify(r)}`)
-  check(r?.feature_id === ids.F && r?.repo_id === ids.A && r?.purpose === 'Mãe do B1: validar o centro da Room' && r?.cc_session_id === ids.cc,
-    'a: SQL — sessão ligada à feature, repo A, purpose e ccSessionId')
+  check(
+    r?.feature_id === ids.F &&
+      r?.repo_id === ids.A &&
+      r?.purpose === 'Mãe do B1: validar o centro da Room' &&
+      r?.cc_session_id === ids.cc,
+    'a: SQL — sessão ligada à feature, repo A, purpose e ccSessionId',
+  )
 }
 check(consoleErrors.length === 0, `zero console errors (${consoleErrors.length})`)
 for (const e of consoleErrors) note(e.slice(0, 400))

@@ -12,37 +12,37 @@ import { Dialog } from '@/components/ui/Dialog'
 import { ensureSessionGraph, useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
 import { useAttentionListStore } from '@/store/attentionStore'
+import { countAttentionSubjects, humanQueue } from '../../../shared/attention/selectors'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { RoomTimelineEvent } from '../../../shared/types/feature-room'
+import { AllMothers } from './AllMothers'
 import { AttentionQueue } from './AttentionQueue'
 import { useFeatureRoomStore } from './feature-room-store'
 import type { QueueSubject } from './QueueItem'
 import { buildRoomView, type RoomQueueRow, type RoomSessionRow } from './room-model'
-import { COMPACT, ROOM_FOCUS } from './room-ui'
+import { COMPACT, ROOM_FOCUS, useNow } from './room-ui'
 import { Button } from '@/components/ui/Button'
 import { RoomHeader } from './RoomHeader'
 import { RoomHealth } from './RoomHealth'
-import { RoomMotherPane, type MotherMode } from './RoomMotherPane'
+import { RoomMotherSplit } from './RoomMotherSplit'
 import { RoomSessions } from './RoomSessions'
 import { RoomTimeline } from './RoomTimeline'
 import { StartMotherCard, focusMotherComposer, usePendingMotherProgress } from './StartMotherCard'
 import { useFeatureRoom } from './useFeatureRoom'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 
-const CLOCK_MS = 30_000
-
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), CLOCK_MS)
-    return () => window.clearInterval(t)
-  }, [])
-  return now
+// A Room: nível 'all' (Todas as mães, entrada pela IconRail) ou a sala da feature
+// (tile, "Abrir sala" ou o seletor do Ctrl+`). Os passos de "Iniciar sessão-mãe"
+// avançam aqui, nos dois níveis: a mãe pode nascer pelo diálogo global.
+export function FeatureRoom() {
+  const level = useFeatureRoomStore((s) => s.level)
+  usePendingMotherProgress()
+  return level === 'all' ? <AllMothers /> : <FeatureSala />
 }
 
-// A Room de uma feature: fila de "precisa de você" (recorte da projeção única),
-// sessões por repo e a linha do tempo dos handoffs. Aberta pelo Ctrl+`.
-export function FeatureRoom() {
+// A sala de uma feature: fila de "precisa de você" (recorte da projeção única),
+// sessões por repo e a linha do tempo dos handoffs.
+function FeatureSala() {
   const featureId = useFeatureRoomStore((s) => s.featureId)
   const timelineFilter = useFeatureRoomStore((s) => s.timelineFilter)
   const openId = useFeatureRoomStore((s) => s.openId)
@@ -58,7 +58,6 @@ export function FeatureRoom() {
   const pendingMother = useFeatureRoomStore((s) =>
     s.pendingMother && s.pendingMother.featureId === featureId ? s.pendingMother : null,
   )
-  const [motherMode, setMotherMode] = useState<MotherMode>('chat')
   const [startOpen, setStartOpen] = useState(false)
   const [sideTab, setSideTab] = useState<'children' | 'timeline'>('children')
   const [delegate, setDelegate] = useState<DelegateTarget | null>(null)
@@ -66,7 +65,6 @@ export function FeatureRoom() {
   const openHeadRef = useRef<HTMLDivElement>(null)
   const focusOpenHead = useRef(false)
 
-  usePendingMotherProgress()
   useEffect(ensureSessionGraph, [])
   useEffect(() => {
     const store = useHandoffsStore.getState()
@@ -120,22 +118,6 @@ export function FeatureRoom() {
       !graph.nodes.some((n) => n.sessionId === selectedMotherId)
     return fresh ? selectedMotherId : (view.mother?.sessionId ?? null)
   }, [view, selectedMotherId, liveSessions, graph])
-  useEffect(() => setMotherMode('chat'), [centerId])
-
-  // Ctrl+. alterna Chat⇄Terminal da mãe. Captura: com o foco no xterm a tecla
-  // não chega à bolha do React.
-  useEffect(() => {
-    if (!centerId) return
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.key !== '.') return
-      if (document.querySelector('[data-modal-overlay], [aria-modal="true"]')) return
-      e.preventDefault()
-      e.stopPropagation()
-      if (!e.repeat) setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [centerId])
 
   const rows = useMemo(
     () => (view ? [...view.mothers, ...view.repos.flatMap((r) => r.rows)] : []),
@@ -172,6 +154,11 @@ export function FeatureRoom() {
     [handoffs, liveSessions, byHandoff, bySession],
   )
   const queue = view?.queue ?? []
+  // Badge do "← Todas": o needYou (o mesmo humanQueue do nível 1) menos esta feature.
+  const elsewhere = useMemo(() => {
+    const here = new Set(queue.flatMap((r) => [r.head, ...r.also]))
+    return countAttentionSubjects(humanQueue(attention).filter((i) => !here.has(i)))
+  }, [queue, attention])
   const openKey = queue.some((r) => r.subjectKey === openId)
     ? openId
     : (queue[0]?.subjectKey ?? null)
@@ -289,10 +276,19 @@ export function FeatureRoom() {
   const onKeyDown = (e: KeyboardEvent) => {
     // Eventos de portais (DelegateDialog, menus) borbulham pela árvore React mas não são da Room.
     if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return
-    // defaultPrevented: o composer vazio já mandou o Esc para a PTY.
-    if (e.key === 'Escape' && isTypingTarget(e.target) && !e.defaultPrevented) {
+    // Esc: o diálogo é portal (não chega aqui); depois o peek, depois Todas as mães.
+    // Num campo (resposta da fila, xterm) só devolve o foco à sala. O composer da
+    // mãe não chega aqui: vazio, ele manda o Esc para a TUI (interromper); com
+    // texto, o onKeyDownCapture abaixo tira o foco e protege o rascunho.
+    if (e.key === 'Escape' && !e.defaultPrevented) {
       e.preventDefault()
-      rootRef.current.focus({ preventScroll: true })
+      if (isTypingTarget(e.target)) {
+        rootRef.current.focus({ preventScroll: true })
+        return
+      }
+      const dock = useCrewDockStore.getState()
+      if (dock.peekTarget) dock.closePeek()
+      else useFeatureRoomStore.getState().openAllMothers()
       return
     }
     if (e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(e.target) || e.defaultPrevented) return
@@ -304,7 +300,7 @@ export function FeatureRoom() {
     // do ChatView. Sem card na tela, a tecla não faz nada.
     if (/^[1-9]$/.test(e.key) && centerId) {
       const option = rootRef.current.querySelector<HTMLButtonElement>(
-        `[data-testid="room-mother"] [data-permission-option="${e.key}"]`,
+        `[data-testid="room-mother"][aria-current="true"] [data-permission-option="${e.key}"]`,
       )
       if (option) {
         e.preventDefault()
@@ -316,6 +312,21 @@ export function FeatureRoom() {
     if (k !== 'j' && k !== 'k') return
     e.preventDefault()
     step(k === 'j' ? 1 : -1)
+  }
+
+  const onKeyDownCapture = (e: KeyboardEvent) => {
+    const t = e.target
+    if (
+      e.key !== 'Escape' ||
+      !(t instanceof HTMLTextAreaElement) ||
+      t.classList.contains('xterm-helper-textarea') ||
+      !t.closest('[data-testid="room-mother"]') ||
+      t.value.trim() === ''
+    )
+      return
+    e.preventDefault()
+    e.stopPropagation()
+    rootRef.current?.focus({ preventScroll: true })
   }
 
   const showCard = !!pendingMother || !centerId
@@ -335,9 +346,12 @@ export function FeatureRoom() {
       data-state={view.state}
       aria-label={`Room da feature ${snapshot.feature.title}`}
       onKeyDown={onKeyDown}
+      onKeyDownCapture={onKeyDownCapture}
       className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-bg)] text-[14px] text-[var(--color-text)] outline-none ${ROOM_FOCUS}`}
     >
       <RoomHeader
+        backBadge={elsewhere}
+        onBack={() => useFeatureRoomStore.getState().openAllMothers()}
         title={snapshot.feature.title}
         chain={snapshot.objectiveChain}
         needsYou={view.needsYou}
@@ -351,12 +365,10 @@ export function FeatureRoom() {
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_380px] max-[900px]:grid-cols-1 max-[900px]:overflow-auto">
         <div className="relative flex min-h-0 flex-col border-r border-[var(--color-border)] max-[900px]:min-h-[520px] max-[900px]:border-r-0">
           {centerId && (
-            <RoomMotherPane
+            <RoomMotherSplit
               mothers={view.mothers}
-              motherId={centerId}
-              mode={motherMode}
-              onToggleMode={() => setMotherMode((m) => (m === 'chat' ? 'terminal' : 'chat'))}
-              onSelect={(id) => useFeatureRoomStore.getState().selectMother(featureId, id)}
+              activeId={centerId}
+              onActivate={(id) => useFeatureRoomStore.getState().selectMother(featureId, id)}
               onPeek={(id) => useCrewDockStore.getState().openSessionPeek(id, 'chat')}
             />
           )}

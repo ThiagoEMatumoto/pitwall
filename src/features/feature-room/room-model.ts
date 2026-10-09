@@ -1,6 +1,7 @@
 // PURO: o que a Room da feature mostra. Nenhuma regra de atenção própria — a fila
 // é o recorte da projeção do main pelo mesmo predicado do card do Ctrl+`.
 import { motherOfFocus } from '../session-canvas/mother-dock'
+import { allMothers } from './all-mothers-model'
 import {
   attentionSubjectKey,
   humanQueue,
@@ -92,7 +93,7 @@ const RUNNING: ReadonlySet<HandoffStatus> = new Set(['pending', 'approved', 'run
 const STOPPED: ReadonlySet<HandoffStatus> = new Set(['failed', 'interrupted'])
 
 // 1 linha por sujeito, na ordem da projeção (o 1º item do sujeito é o mais grave).
-function groupBySubject(items: AttentionItem[]): RoomQueueRow[] {
+export function groupBySubject(items: AttentionItem[]): RoomQueueRow[] {
   const rows = new Map<string, RoomQueueRow>()
   for (const item of items) {
     const key = attentionSubjectKey(item)
@@ -118,23 +119,17 @@ interface EdgeLike {
   to?: string
 }
 
-// Mãe da Room = sessão de TOPO em uso desta feature. isMother (session-graph.ts)
-// só fica true com 1+ filha; a mãe recém-criada pela Room tem 0 e sumiria.
+// Mãe da Room = sessão de TOPO em uso desta feature: o recorte de allMothers (a
+// regra é uma só para os dois níveis). isMother só fica true com 1+ filha; a mãe
+// recém-criada pela Room tem 0 e entra pela feature.
 export function roomMothers(
   nodes: ReadonlyArray<SessionGraphNode>,
   edges: ReadonlyArray<EdgeLike>,
   inUse: ReadonlySet<string>,
   featureId: string,
 ): SessionGraphNode[] {
-  const underMother = new Set(
-    edges
-      .filter((e) => e.kind === 'handoff' && !!e.from && !!e.to && inUse.has(e.from))
-      .map((e) => e.to as string),
-  )
-  return nodes
-    .filter(
-      (n) => n.featureId === featureId && inUse.has(n.sessionId) && !underMother.has(n.sessionId),
-    )
+  return allMothers(nodes, edges, inUse)
+    .filter((n) => n.featureId === featureId)
     .sort(
       (a, b) =>
         Number(!!b.isMother) - Number(!!a.isMother) ||
