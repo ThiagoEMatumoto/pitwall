@@ -67,6 +67,8 @@ let resumeGate: Promise<void> = Promise.resolve()
 // true simula o re-attach da guarda do main (PTY que já vivia antes do resume).
 let resumeReattached = false
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
+let becameLiveHandler:
+  ((e: { ccSessionId: string; session: ReturnType<typeof sessionFor> }) => void) | null = null
 // cc → título que o main resolve para a pane (custom/ai-title do transcript, como a
 // sessão viva; ver dormant-enrich.test.ts, que roda contra o produtor real).
 const mainTitles = new Map<string, string>()
@@ -116,6 +118,12 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   wakeResult: (r: unknown) => {
     calls.wakeResult.push(r)
     return Promise.resolve()
+  },
+  onDormantBecameLive: (h: typeof becameLiveHandler) => {
+    becameLiveHandler = h
+    return () => {
+      becameLiveHandler = null
+    }
   },
   onWakeRequest: (h: typeof wakeHandler) => {
     wakeHandler = h
@@ -786,5 +794,38 @@ describe('dormant x resume/wake em voo', () => {
     expect(id).toBe('sess-cc-sleep1')
     expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-live'])
     expect(useAppStore.getState().focusPaneId).toBe('pane-live')
+  })
+})
+
+describe('main retomou a conversa de uma pane dormindo (onDormantBecameLive)', () => {
+  it('converte a pane no lugar, na sessão recebida, sem novo resume', async () => {
+    seedDormant('cc-sleep1', 'pane-sleep1')
+
+    becameLiveHandler!({
+      ccSessionId: 'cc-sleep1',
+      session: sessionFor('cc-sleep1', 'sess-from-main'),
+    })
+
+    const [pane] = useAppStore.getState().panes
+    expect(pane.paneId).toBe('pane-sleep1')
+    expect(pane.dormant).toBeUndefined()
+    expect(pane.session.id).toBe('sess-from-main')
+    expect(calls.resume).toEqual([])
+    await flush()
+    expect(calls.dormantSync.at(-1)).toEqual([])
+  })
+
+  it('cc sem pane dormindo: nada muda', () => {
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    const before = useAppStore.getState().panes
+
+    becameLiveHandler!({ ccSessionId: 'cc-other', session: sessionFor('cc-other') })
+
+    expect(useAppStore.getState().panes).toBe(before)
+  })
+
+  it('stopLiveWatch desliga o listener', () => {
+    useAppStore.getState().stopLiveWatch()
+    expect(becameLiveHandler).toBeNull()
   })
 })

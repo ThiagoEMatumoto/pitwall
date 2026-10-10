@@ -9,6 +9,7 @@ import type {
   AgentProviderId,
   EffortLevel,
   LiveSessionInfo,
+  DormantBecameLiveEvent,
   DormantPaneInfo,
   PaneSnapshot,
   PermissionMode,
@@ -258,6 +259,7 @@ let offRoomChanged: (() => void) | null = null
 let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
+let offDormantBecameLive: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
 const wakes = new Map<string, Promise<string | null>>()
@@ -1048,6 +1050,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     liveWatchStarted = true
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
+    offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
     syncDormantPanes(get().panes)
     const list = await sessionsApi.listLiveGlobal()
@@ -1095,6 +1098,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offWakeRequest) {
       offWakeRequest()
       offWakeRequest = null
+    }
+    if (offDormantBecameLive) {
+      offDormantBecameLive()
+      offDormantBecameLive = null
     }
     if (offGlobalActivity) {
       offGlobalActivity()
@@ -1178,6 +1185,15 @@ function adoptLiveSession(paneId: string, session: Session): void {
   }
   schedulePersist(useAppStore.getState().panes)
   void useAppStore.getState().refreshLiveSessions()
+}
+
+// O main retomou (handoffs:resume/adopt) a conversa de uma pane dormindo: a pane
+// passa a mostrar essa sessão, sem um segundo resume.
+function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): void {
+  const pane = useAppStore
+    .getState()
+    .panes.find((p) => p.dormant && p.session.ccSessionId === ccSessionId)
+  if (pane) adoptLiveSession(pane.paneId, session)
 }
 
 // Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do
