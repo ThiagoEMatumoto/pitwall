@@ -44,3 +44,16 @@ export interface SessionHibernatedEvent {
   sessionId: string
   ccSessionId: string
 }
+
+// Por que o tick não roda. A ordem é a da checagem: o valor do boot vem antes
+// porque, com ele desligado, a pref ao vivo não muda nada até o próximo boot.
+export type HibernateDisabledReason =
+  'lazy-restore-off-at-boot' | 'lazy-restore-off' | 'after-min-off'
+
+// Contrato de sessions:hibernate-stats (o que a seção de Settings exibe).
+export interface HibernateStatsView {
+  hibernated: number
+  refusals: Record<string, number>
+  enabled: boolean
+  reasonDisabled?: HibernateDisabledReason
+}

@@ -182,6 +182,11 @@ vi.mock('../services/session-activity', () => ({
 
 import { registerSessionIpc, spawnSession } from './sessions'
 import { onBroadcast } from '../services/notify'
+import {
+  IdleHibernator,
+  setIdleHibernator,
+  type IdleHibernatorDeps,
+} from '../services/hibernate/idle-hibernator'
 import type { FeatureSessionSummary, SessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
@@ -504,5 +509,48 @@ describe('pty:exit respeita o "Sem feature" escolhido pelo usuário', () => {
     expect(seam.sessionExits).toEqual([
       { sessionId: 'sess-1', ccSessionId: 'cc-1', repoId: 'r1', featureId: null },
     ])
+  })
+})
+
+// H4: o renderer converte a pane em dormant pelo sessions:hibernated; se o
+// pty:exit chegasse antes, ele já teria fechado a pane com o toast.
+describe('pty:exit de sessão hibernando', () => {
+  const exit = (sessionId: string) =>
+    seam.ptyListeners.get('exit')?.({ sessionId, exitCode: 0, signal: null })
+  const channels = () => seam.broadcasts.map((b) => b.channel)
+
+  function hibernating(): IdleHibernator {
+    const h = new IdleHibernator({
+      send: async () => ({ ok: true, delivered: true }),
+      cancel: () => {},
+      warn: () => {},
+    } as unknown as IdleHibernatorDeps)
+    setIdleHibernator(h)
+    return h
+  }
+
+  it('emite sessions:hibernated ANTES do pty:exit, uma vez só', async () => {
+    const h = hibernating()
+    await h.hibernate({ sessionId: 'sess-1', ccSessionId: 'cc-1' })
+    exit('sess-1')
+    exit('sess-1')
+    expect(channels().filter((c) => c === 'sessions:hibernated' || c === 'pty:exit')).toEqual([
+      'sessions:hibernated',
+      'pty:exit',
+      'pty:exit',
+    ])
+    expect(seam.broadcasts[0].payload).toEqual({ sessionId: 'sess-1', ccSessionId: 'cc-1' })
+    expect(h.getStats().hibernated).toBe(1)
+    h.dispose()
+    setIdleHibernator(null)
+  })
+
+  it('exit comum (sem /exit da hibernação) só emite pty:exit', () => {
+    const h = hibernating()
+    exit('sess-2')
+    expect(channels()).not.toContain('sessions:hibernated')
+    expect(channels()).toContain('pty:exit')
+    h.dispose()
+    setIdleHibernator(null)
   })
 })

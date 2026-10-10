@@ -130,6 +130,10 @@ export class IdleHibernator {
     }
   }
 
+  isScheduled(): boolean {
+    return this.timer !== null
+  }
+
   dispose(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null

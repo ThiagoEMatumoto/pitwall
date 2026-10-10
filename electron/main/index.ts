@@ -26,6 +26,8 @@ import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
 import { registerSendPromptIpc } from './ipc/send-prompt'
 import { registerDormantPanesIpc } from './ipc/dormant-panes'
+import { registerHibernateIpc } from './ipc/hibernate'
+import { getIdleHibernator } from './services/hibernate/idle-hibernator'
 import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
@@ -331,6 +333,7 @@ app.whenReady().then(async () => {
   registerCanvasIpc()
   registerSendPromptIpc()
   registerDormantPanesIpc()
+  registerHibernateIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
@@ -478,6 +481,7 @@ function runFinalShutdown(): void {
     handoffReconcileTimer = null
   }
   stopAutoPull()
+  getIdleHibernator()?.dispose()
   if (autoPullBootTimer) {
     clearTimeout(autoPullBootTimer)
     autoPullBootTimer = null

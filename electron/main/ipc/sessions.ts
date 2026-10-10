@@ -43,6 +43,7 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   mcpClientConfigPath,
@@ -954,6 +955,10 @@ export function registerSessionIpc(): void {
       db.prepare(
         "UPDATE sessions SET status = ?, ended_at = ? WHERE id = ? AND status = 'running'",
       ).run(e.exitCode === 0 ? 'exited' : 'crashed', Date.now(), e.sessionId)
+      // Saiu pelo /exit da hibernação: o renderer precisa do evento ANTES do
+      // pty:exit para virar a pane dormant em vez de fechá-la com o toast.
+      const hibernated = getIdleHibernator()?.onExit(e.sessionId)
+      if (hibernated) broadcast('sessions:hibernated', hibernated)
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
