@@ -9,7 +9,7 @@ import { foreignHolderPid } from '../services/conversation-holder'
 import { computeRestorePlan } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
 import { screenOf } from './send-prompt'
-import type { RestorePlan } from '../../../shared/types/ipc'
+import type { DormantPaneInfo, RestorePlan } from '../../../shared/types/ipc'
 
 // Lazy restore: o plano do boot (quem sobe eager), o espelho das panes dormindo
 // e a volta do pedido de wake que o main fez ao renderer.
@@ -60,8 +60,12 @@ export function registerDormantPanesIpc(): void {
   ipcMain.handle('sessions:restore-plan', (_e, raw: unknown): RestorePlan =>
     computeRestorePlan(restorePlanSchema.parse(raw)),
   )
-  ipcMain.handle('sessions:dormant-sync', (_e, raw: unknown) => {
-    panes.setDormant(enrichDormantPanes(dormantSyncSchema.parse(raw)))
+  // Devolve a lista enriquecida: o renderer aplica o título nas panes dormindo
+  // (o snapshot não o guarda e sem ele a aba cai no rótulo do repo).
+  ipcMain.handle('sessions:dormant-sync', (_e, raw: unknown): DormantPaneInfo[] => {
+    const enriched = enrichDormantPanes(dormantSyncSchema.parse(raw))
+    panes.setDormant(enriched)
+    return enriched
   })
   ipcMain.handle('sessions:wake-result', (_e, raw: unknown) => {
     panes.onWakeResult(wakeResultSchema.parse(raw))

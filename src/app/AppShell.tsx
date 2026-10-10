@@ -125,6 +125,11 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   // para os params se ainda não estiver no store (transição de addPanel).
   const fromStore = useAppStore((s) => s.panes.find((p) => p.paneId === props.api.id))
   const pane = fromStore ?? props.params.pane
+  const dormantTitle = pane?.dormant ? pane.session.title : null
+  // O título do sync chega depois de o painel existir: leva para a aba.
+  useEffect(() => {
+    if (dormantTitle && props.api.title !== dormantTitle) props.api.setTitle(dormantTitle)
+  }, [dormantTitle, props.api])
   // Painel órfão: existe no dockview mas a pane sumiu do store (resume falhou ou
   // foi fechada). Nada a renderizar — o effect de restore/reconcile vai removê-lo.
   if (!pane) return null
@@ -192,7 +197,9 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
 
 // Título inicial legível pra aba (nunca o paneId). O Terminal sobrescreve ao vivo
 // via onTitleChange assim que o nome do CC chega.
+// Dormindo não tem Terminal para mandar o nome: o título é o do store (DB via sync).
 function paneTabTitle(pane: ActivePane): string {
+  if (pane.dormant && pane.session.title) return pane.session.title
   const repoLabel = pane.repo?.label ?? 'Avulsa'
   if (!pane.projectName) return repoLabel
   return `${pane.projectIcon ?? ''} ${repoLabel}`.trim()

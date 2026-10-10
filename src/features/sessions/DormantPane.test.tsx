@@ -105,6 +105,19 @@ describe('DormantPane', () => {
     expect(container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
   })
 
+  it('session.title (do sync) ganha do rótulo da aba, que pode ter caído em "Avulsa"', () => {
+    const titled: ActivePane = {
+      ...pane,
+      repo: null,
+      projectName: null,
+      session: { ...pane.session, title: 'lazy-C' },
+    }
+    render(<Wired target={titled} tabTitle="Avulsa" />)
+
+    expect(screen.getByText('lazy-C')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retomar lazy-C' })).toBeTruthy()
+  })
+
   it('avulsa sem rótulo de aba: "Avulsa" aparece uma vez só', () => {
     const avulsa: ActivePane = { ...pane, repo: null, projectName: null }
     useAppStore.setState({ panes: [avulsa] })

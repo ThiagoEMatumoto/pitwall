@@ -60,6 +60,16 @@ describe('enrichDormantPanes', () => {
     })
   })
 
+  it('pane do snapshot (repoId presente, title null) recebe o título do DB', () => {
+    session('s', 'cc-3', 'lazy-C', 1)
+
+    const [pane] = enrichDormantPanes([
+      { ccSessionId: 'cc-3', paneId: 'p', title: null, repoId: 'r1' },
+    ])
+
+    expect(pane).toEqual({ ccSessionId: 'cc-3', paneId: 'p', title: 'lazy-C', repoId: 'r1' })
+  })
+
   it('não sobrescreve o que o renderer mandou', () => {
     session('s', 'cc-2', 'do-banco', 1)
 

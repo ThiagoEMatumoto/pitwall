@@ -13,7 +13,10 @@ Object.assign(window, {
           {},
           {
             get: (_t2, prop) => (arg: unknown) => {
-              if (ns === 'sessions' && prop === 'dormantSync') synced.push(arg as unknown[])
+              if (ns === 'sessions' && prop === 'dormantSync') {
+                synced.push(arg as unknown[])
+                return Promise.resolve(arg)
+              }
               if (ns === 'sessions' && prop === 'listLiveGlobal') return Promise.resolve([])
               if (typeof prop === 'string' && prop.startsWith('on')) return () => {}
               return Promise.resolve()

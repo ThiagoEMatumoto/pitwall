@@ -10,8 +10,8 @@ const FOCUS_RING =
 // Aba restaurada sem processo (lazy restore). Não monta Terminal nem faz IPC: o
 // id da sessão é sintético. Montar NÃO acorda (o dockview monta todas as abas);
 // só o clique aqui ou a ativação da aba (AppShell).
-// tabTitle = o rótulo que a aba mostra (título salvo no layout do dockview), para
-// a pane e a aba dizerem o mesmo nome.
+// O nome é o session.title (DB via sync); sem ele, tabTitle = o rótulo que a aba
+// mostra (título salvo no layout do dockview), para a pane e a aba dizerem o mesmo.
 export function DormantPane({
   pane,
   tabTitle,
@@ -23,7 +23,7 @@ export function DormantPane({
 }) {
   const repoLabel = pane.repo?.label ?? 'Avulsa'
   const subtitle = pane.projectName ? `${pane.projectName} · ${repoLabel}` : repoLabel
-  const title = tabTitle || pane.session.title || repoLabel
+  const title = pane.session.title || tabTitle || repoLabel
   return (
     <div
       data-testid="dormant-pane"

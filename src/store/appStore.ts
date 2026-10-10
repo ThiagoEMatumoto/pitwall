@@ -1128,9 +1128,8 @@ function waitForRestore(timeoutMs: number): Promise<void> {
 // ainda guarda a lista do processo anterior, então o primeiro sync sai sempre,
 // vazio ou não.
 let lastDormantKey: string | null = null
-function syncDormantPanes(panes: ActivePane[]): void {
-  if (!liveWatchStarted) return
-  const list: DormantPaneInfo[] = panes
+function dormantList(panes: ActivePane[]): DormantPaneInfo[] {
+  return panes
     .filter((p) => p.dormant && p.session.ccSessionId)
     .map((p) => ({
       ccSessionId: p.session.ccSessionId as string,
@@ -1138,13 +1137,41 @@ function syncDormantPanes(panes: ActivePane[]): void {
       title: p.session.title,
       repoId: p.repo?.id ?? null,
     }))
+}
+function syncDormantPanes(panes: ActivePane[]): void {
+  if (!liveWatchStarted) return
+  const list = dormantList(panes)
   const key = JSON.stringify(list)
   if (key === lastDormantKey) return
   lastDormantKey = key
-  void sessionsApi.dormantSync(list).catch(() => {
-    // Sem o espelho o main só não acha a pane para acordar; o renderer segue igual.
-    lastDormantKey = null
+  void sessionsApi
+    .dormantSync(list)
+    .then(applyDormantTitles)
+    .catch(() => {
+      // Sem o espelho o main só não acha a pane para acordar; o renderer segue igual.
+      lastDormantKey = null
+    })
+}
+
+// O snapshot não guarda o título: a pane dormindo nasce com title null e a aba
+// caía no rótulo do repo ("Avulsa") a cada recriação do painel. O main devolve o
+// título do DB; só preenche quem ainda está sem (resposta atrasada não sobrescreve
+// nada). A chave do sync passa a ser a da lista já com o título — é o que o main
+// guardou — então aplicar não dispara outro sync.
+function applyDormantTitles(enriched: DormantPaneInfo[]): void {
+  const byPane = new Map(enriched.map((info) => [info.paneId, info]))
+  const panes = useAppStore.getState().panes
+  let changed = false
+  const next = panes.map((p) => {
+    const info = byPane.get(p.paneId)
+    if (!p.dormant || p.session.title !== null || !info?.title) return p
+    if (info.ccSessionId !== p.session.ccSessionId) return p
+    changed = true
+    return { ...p, session: { ...p.session, title: info.title } }
   })
+  if (!changed) return
+  lastDormantKey = JSON.stringify(dormantList(next))
+  useAppStore.setState({ panes: next })
 }
 useAppStore.subscribe((state, prev) => {
   if (state.panes !== prev.panes) syncDormantPanes(state.panes)

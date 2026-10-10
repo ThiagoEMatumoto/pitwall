@@ -2896,8 +2896,8 @@ export interface Api {
     setRendererFocus(ccSessionId: string | null): void
     /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
     restorePlan(ccSessionIds: string[]): Promise<RestorePlan>
-    /** Substitui a lista de panes dormindo que o main pode acordar. */
-    dormantSync(panes: DormantPaneInfo[]): Promise<void>
+    /** Substitui a lista de panes dormindo que o main pode acordar; devolve-a com title/repoId completados pelo DB. */
+    dormantSync(panes: DormantPaneInfo[]): Promise<DormantPaneInfo[]>
     /** O main pede para retomar uma pane dormindo; responda com wakeResult. */
     onWakeRequest(handler: (request: WakeRequest) => void): () => void
     wakeResult(result: WakeResult): Promise<void>
