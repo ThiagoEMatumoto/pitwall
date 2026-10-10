@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
-import { showToast } from '@/features/notifications/toast-store'
+import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import type {
@@ -201,8 +201,24 @@ const END_UNDO_MS = 5000
 const END_KILL_GRACE_MS = 750
 const pendingEnds = new Map<
   string,
-  { timer: ReturnType<typeof setTimeout>; pane: ActivePane | null; live: LiveSessionInfo | null }
+  {
+    timer: ReturnType<typeof setTimeout>
+    pane: ActivePane | null
+    live: LiveSessionInfo | null
+    toastId: number
+  }
 >()
+
+// A guarda do main re-anexa a PTY viva da conversa, inclusive uma que está na
+// janela de undo de um endSession: quem acabou de retomá-la a quer viva, então o
+// kill agendado (e o toast de desfazer, que não teria mais o que desfazer) caem.
+function cancelPendingEnd(sessionId: string): void {
+  const pending = pendingEnds.get(sessionId)
+  if (!pending) return
+  clearTimeout(pending.timer)
+  pendingEnds.delete(sessionId)
+  dismissToast(pending.toastId)
+}
 
 // Ids na janela de undo do Encerrar. O SessionStrip exclui esses do prune de
 // pins: a sessão já sumiu do snapshot (refresh filtra pendingEnds), mas pode
@@ -726,7 +742,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     resuming.add(ccSessionId)
     try {
-      const { session } = await sessionsApi.resume({ repoId: repo?.id ?? null, ccSessionId })
+      const { session, reattached } = await sessionsApi.resume({
+        repoId: repo?.id ?? null,
+        ccSessionId,
+      })
+      if (reattached) cancelPendingEnd(session.id)
       set((s) => ({
         panes: [
           ...s.panes,
@@ -769,6 +789,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           repoId: pane.repo?.id ?? null,
           ccSessionId,
         })
+        if (reattached) cancelPendingEnd(session.id)
         if (endedWhileWaking.delete(paneId)) {
           // Encerrada com o wake em voo: o processo que este wake subiu morre. Uma
           // sessão que a guarda do main re-anexou (já vivia antes) não é nossa.
@@ -870,15 +891,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       void sessionsApi.kill(sessionId)
       void get().refreshLiveSessions()
     }, END_UNDO_MS + END_KILL_GRACE_MS)
-    pendingEnds.set(sessionId, { timer, pane, live })
     const name = live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label
-    showToast({
+    const toastId = showToast({
       title: 'Sessão encerrada',
       body: name ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => get().undoEndSession(sessionId),
       durationMs: END_UNDO_MS,
     })
+    pendingEnds.set(sessionId, { timer, pane, live, toastId })
   },
 
   undoEndSession: (sessionId) => {

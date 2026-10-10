@@ -590,3 +590,61 @@ describe('closePane de pane dormant', () => {
     expect(useToastStore.getState().toasts).toEqual([])
   })
 })
+
+describe('re-attach de uma PTY na janela de undo do endSession', () => {
+  function seedLive(cc: string, paneId: string) {
+    seedDormant(cc, paneId)
+    const [pane] = useAppStore.getState().panes
+    const { dormant: _d, ...awake } = pane
+    useAppStore.setState({
+      panes: [{ ...awake, session: { ...pane.session, id: `sess-${cc}`, status: 'running' } }],
+    })
+  }
+
+  it('resumeSession que devolve a sessão pendente cancela o kill', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      seedLive('cc-x', 'pane-x')
+      useAppStore.getState().endSession('sess-cc-x')
+      resumeReattached = true
+
+      await useAppStore.getState().resumeSession(repo as never, 'Infra', null, null, 'cc-x')
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(calls.kill).toEqual([])
+      expect(useAppStore.getState().panes.map((p) => p.session.id)).toEqual(['sess-cc-x'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wakeDormantPane que re-anexa a sessão pendente cancela o kill', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      seedLive('cc-sleep1', 'pane-live')
+      useAppStore.getState().endSession('sess-cc-sleep1')
+      seedDormant('cc-sleep1', 'pane-sleep1')
+      resumeReattached = true
+
+      expect(await useAppStore.getState().wakeDormantPane('pane-sleep1')).toBe('sess-cc-sleep1')
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(calls.kill).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sem re-attach o kill pendente segue', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      seedLive('cc-x', 'pane-x')
+      useAppStore.getState().endSession('sess-cc-x')
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(calls.kill).toEqual(['sess-cc-x'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
