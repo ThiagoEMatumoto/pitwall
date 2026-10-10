@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Lazy restore no renderer (D5): no boot só sobem processo as eager (plano do
 // main + pane ativa do layout + sem transcript); o resto volta dormant, sem
@@ -59,14 +59,26 @@ const calls = {
   dormantSync: [] as unknown[][],
   wakeResult: [] as unknown[],
   restorePlan: [] as string[][],
+  kill: [] as string[],
   // Qualquer chamada IPC que carregue um id 'dormant:' — tem que ficar vazio.
   dormantIpc: [] as string[],
 }
 let resumeGate: Promise<void> = Promise.resolve()
+// startedAt da sessão que o resume devolve. null = spawn novo (agora); um valor
+// antigo simula o re-attach da guarda do main (PTY que já vivia).
+let resumeStartedAt: number | null = null
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
 
-function sessionFor(cc: string, id = `sess-${cc}`) {
-  return { id, ccSessionId: cc, repoId: 'r1', title: null, status: 'running', paneId: null }
+function sessionFor(cc: string, id = `sess-${cc}`, startedAt = Date.now()) {
+  return {
+    id,
+    ccSessionId: cc,
+    repoId: 'r1',
+    title: null,
+    status: 'running',
+    paneId: null,
+    startedAt,
+  }
 }
 
 const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
@@ -82,7 +94,11 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   resume: async (input: { repoId: string | null; ccSessionId: string }) => {
     calls.resume.push(input)
     await resumeGate
-    return sessionFor(input.ccSessionId)
+    return sessionFor(input.ccSessionId, undefined, resumeStartedAt ?? Date.now())
+  },
+  kill: (id: string) => {
+    calls.kill.push(id)
+    return Promise.resolve()
   },
   spawn: () => {
     calls.spawn += 1
@@ -177,18 +193,23 @@ function seedDormant(cc: string, paneId: string) {
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   calls.resume = []
   calls.spawn = 0
   calls.savePanes = []
   calls.dormantSync = []
   calls.wakeResult = []
   calls.restorePlan = []
+  calls.kill = []
   resumeGate = Promise.resolve()
-  useAppStore.setState({ panes: [], focusPaneId: null })
+  resumeStartedAt = null
+  useAppStore.setState({ panes: [], focusPaneId: null, restoreComplete: true })
+  // O espelho de dormant para o main só sai com o live-watch ativo (como no app).
+  await useAppStore.getState().startLiveWatch()
 })
 
 afterEach(() => {
+  useAppStore.getState().stopLiveWatch()
   expect(calls.dormantIpc).toEqual([])
 })
 
@@ -224,6 +245,31 @@ describe('boot lazy', () => {
       { ccSessionId: 'cc-sleep1', paneId: 'pane-sleep1', title: null, repoId: 'r1' },
       { ccSessionId: 'cc-sleep2', paneId: 'pane-sleep2', title: null, repoId: 'r1' },
     ])
+  })
+
+  it('dormant só entram depois que o resume das eager termina (fallback do layout)', async () => {
+    // Eager lenta (o resume demora > 1,5s). Com as dormant no store em t0, o
+    // AppShell via panes do layout presentes e armava o fallback de 1,5s, que
+    // aplicava o layout sem a eager.
+    let open!: () => void
+    resumeGate = new Promise((r) => (open = r))
+
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, dockLayout)
+    await vi.waitFor(() => expect(calls.resume).toHaveLength(2))
+    await flush()
+    expect(useAppStore.getState().panes.filter((p) => p.dormant)).toEqual([])
+
+    open()
+    await restoring
+    const panes = useAppStore.getState().panes
+    expect(panes.filter((p) => p.dormant).map((p) => p.paneId)).toEqual([
+      'pane-sleep1',
+      'pane-sleep2',
+    ])
+    // As eager entraram antes das dormant.
+    const ids = panes.map((p) => p.paneId)
+    expect(ids.indexOf('pane-active')).toBeLessThan(ids.indexOf('pane-sleep1'))
+    expect(ids.indexOf('pane-mother')).toBeLessThan(ids.indexOf('pane-sleep1'))
   })
 
   it('persist inclui as dormant; reboot com o snapshot salvo mantém todas as abas', async () => {
@@ -318,6 +364,85 @@ describe('um resume só por pane dormant', () => {
 
     expect(calls.resume).toHaveLength(1)
     expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-sleep1'])
+  })
+})
+
+describe('pedido de wake antes do restore terminar', () => {
+  it('espera o restore pôr a pane no store em vez de negar', async () => {
+    await useAppStore.getState().startLiveWatch()
+    useAppStore.setState({ restoreComplete: false })
+
+    wakeHandler!({ requestId: 'req-early', ccSessionId: 'cc-sleep1' })
+    await flush()
+    expect(calls.wakeResult).toEqual([])
+
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    useAppStore.setState({ restoreComplete: true })
+    await vi.waitFor(() => expect(calls.wakeResult).toHaveLength(1))
+
+    expect(calls.wakeResult).toEqual([{ requestId: 'req-early', sessionId: 'sess-cc-sleep1' }])
+    useAppStore.getState().stopLiveWatch()
+  })
+
+  it('restore que não termina em 20s: responde no-dormant-pane', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await useAppStore.getState().startLiveWatch()
+      useAppStore.setState({ restoreComplete: false })
+
+      wakeHandler!({ requestId: 'req-late', ccSessionId: 'cc-sleep1' })
+      await vi.advanceTimersByTimeAsync(19_999)
+      expect(calls.wakeResult).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(calls.wakeResult).toEqual([
+        { requestId: 'req-late', sessionId: null, error: 'no-dormant-pane' },
+      ])
+    } finally {
+      useAppStore.getState().stopLiveWatch()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('pane fechada com o wake em voo', () => {
+  function startWake() {
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    let open!: () => void
+    resumeGate = new Promise((r) => (open = r))
+    const wake = useAppStore.getState().wakeDormantPane('pane-sleep1')
+    return { wake, open }
+  }
+
+  it('endSession: o processo que o wake subiu é morto e a pane não volta', async () => {
+    const { wake, open } = startWake()
+    useAppStore.getState().endSession('dormant:cc-sleep1')
+    open()
+
+    expect(await wake).toBeNull()
+    expect(calls.kill).toEqual(['sess-cc-sleep1'])
+    expect(useAppStore.getState().panes).toEqual([])
+  })
+
+  it('endSession com re-attach (a PTY já vivia antes do wake): não mata', async () => {
+    resumeStartedAt = 1
+    const { wake, open } = startWake()
+    useAppStore.getState().endSession('dormant:cc-sleep1')
+    open()
+
+    expect(await wake).toBeNull()
+    expect(calls.kill).toEqual([])
+    expect(useAppStore.getState().panes).toEqual([])
+  })
+
+  it('closePane (detach): a PTY fica em background, sem kill e sem pane', async () => {
+    const { wake, open } = startWake()
+    useAppStore.getState().closePane('pane-sleep1')
+    open()
+
+    expect(await wake).toBe('sess-cc-sleep1')
+    expect(calls.kill).toEqual([])
+    expect(useAppStore.getState().panes).toEqual([])
   })
 })
 

@@ -229,6 +229,9 @@ let offWakeRequest: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
 const wakes = new Map<string, Promise<string | null>>()
+// paneIds encerradas (endSession) com o wake em voo: o resume que voltar é morto.
+// closePane é detach e não entra aqui: a PTY fica em background, como sempre.
+const endedWhileWaking = new Set<string>()
 // room:changed chega em rajada (handoffs/loop coalescidos a 300ms no main);
 // um refetch por janela basta.
 export const ROOM_REFRESH_DEBOUNCE_MS = 150
@@ -601,6 +604,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       schedulePersist(get().panes)
     }
     const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout)
+    // Dormant só entram DEPOIS das eager: o AppShell arma o fallback de 1,5s do
+    // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
+    // eager lenta perdia o lugar no layout.
+    await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
     const known = new Set(get().panes.map((p) => p.session.ccSessionId))
     const sleeping = dormant
       .filter((snap) => !known.has(snap.ccSessionId))
@@ -609,7 +616,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({ panes: [...s.panes, ...sleeping] }))
       schedulePersist(get().panes)
     }
-    await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
   },
 
   clearPendingLayout: () => set({ pendingLayout: null }),
@@ -757,9 +763,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!pane?.dormant) return Promise.resolve(pane ? pane.session.id : null)
     const ccSessionId = pane.session.ccSessionId as string
     const run = (async () => {
+      const wakeStartedAt = Date.now()
       try {
         // A guarda do main devolve a sessão existente se a PTY desse cc já vive.
         const session = await sessionsApi.resume({ repoId: pane.repo?.id ?? null, ccSessionId })
+        if (endedWhileWaking.delete(paneId)) {
+          // Encerrada com o wake em voo: o processo que este wake subiu morre. Uma
+          // sessão que a guarda do main re-anexou (já vivia antes) não é nossa.
+          if (session.startedAt >= wakeStartedAt) void sessionsApi.kill(session.id)
+          return null
+        }
         set((s) => ({
           panes: s.panes.map((p) => {
             if (p.paneId !== paneId || !p.dormant) return p
@@ -778,6 +791,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         return null
       } finally {
         wakes.delete(paneId)
+        endedWhileWaking.delete(paneId)
       }
     })()
     wakes.set(paneId, run)
@@ -795,6 +809,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   endSession: (sessionId, opts) => {
     // Pane dormant não tem processo: encerrar é só tirá-la, sem IPC com o id sintético.
     if (isDormantSessionId(sessionId)) {
+      const pane = get().panes.find((p) => p.session.id === sessionId)
+      if (pane && wakes.has(pane.paneId)) endedWhileWaking.add(pane.paneId)
       set((s) => ({ panes: s.panes.filter((p) => p.session.id !== sessionId) }))
       schedulePersist(get().panes)
       return
@@ -911,6 +927,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     liveWatchStarted = true
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
+    // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
+    syncDormantPanes(get().panes)
     const list = await sessionsApi.listLiveGlobal()
     set({ liveSessions: list })
     sessionsApi.watchGlobalActivity()
@@ -975,6 +993,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
+    lastDormantKey = null
     set({ liveSessions: [] })
   },
 
@@ -1017,7 +1036,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 // Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do
 // clique. Se a pane já acordou por outro caminho, devolve o id atual.
 async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promise<void> {
-  const pane = useAppStore.getState().panes.find((p) => p.session.ccSessionId === ccSessionId)
+  const find = () => useAppStore.getState().panes.find((p) => p.session.ccSessionId === ccSessionId)
+  let pane = find()
+  // O main pode pedir antes de o restore pôr as dormant no store (o sync do
+  // processo anterior sobrevive ao reload): espera o restore antes de negar.
+  if (!pane && !useAppStore.getState().restoreComplete) {
+    await waitForRestore(WAKE_RESTORE_WAIT_MS)
+    pane = find()
+  }
   if (!pane) {
     void sessionsApi.wakeResult({ requestId, sessionId: null, error: 'no-dormant-pane' })
     return
@@ -1028,13 +1054,34 @@ async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promi
   )
 }
 
+export const WAKE_RESTORE_WAIT_MS = 20_000
+
+function waitForRestore(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let off = () => {}
+    const timer = setTimeout(() => {
+      off()
+      resolve()
+    }, timeoutMs)
+    off = useAppStore.subscribe((state) => {
+      if (!state.restoreComplete) return
+      clearTimeout(timer)
+      off()
+      resolve()
+    })
+  })
+}
+
 // O main espelha as panes dormindo (lista inteira) para conseguir acordá-las.
 // Assinatura no store: pega toda mutação de panes sem cada action lembrar disso.
-// O main começa sem nenhuma: lista vazia não precisa de IPC.
-let lastDormantKey = '[]'
-useAppStore.subscribe((state, prev) => {
-  if (state.panes === prev.panes) return
-  const list: DormantPaneInfo[] = state.panes
+// Só com o live-watch ativo: é ele que escuta os wake-requests, sem ele o
+// espelho não serve. null = nada enviado neste ciclo; depois de um reload o main
+// ainda guarda a lista do processo anterior, então o primeiro sync sai sempre,
+// vazio ou não.
+let lastDormantKey: string | null = null
+function syncDormantPanes(panes: ActivePane[]): void {
+  if (!liveWatchStarted) return
+  const list: DormantPaneInfo[] = panes
     .filter((p) => p.dormant && p.session.ccSessionId)
     .map((p) => ({
       ccSessionId: p.session.ccSessionId as string,
@@ -1047,6 +1094,9 @@ useAppStore.subscribe((state, prev) => {
   lastDormantKey = key
   void sessionsApi.dormantSync(list).catch(() => {
     // Sem o espelho o main só não acha a pane para acordar; o renderer segue igual.
-    lastDormantKey = ''
+    lastDormantKey = null
   })
+}
+useAppStore.subscribe((state, prev) => {
+  if (state.panes !== prev.panes) syncDormantPanes(state.panes)
 })
