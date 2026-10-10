@@ -275,8 +275,7 @@ export function wakeMotherFor(
 
 function chainKey(mother: string): string {
   const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
-    | { cc_session_id: string | null }
-    | undefined
+    { cc_session_id: string | null } | undefined
   return row?.cc_session_id ? `cc:${row.cc_session_id}` : `session:${mother}`
 }
 
@@ -459,7 +458,9 @@ export async function redeliverFailedWakes(motherSessionId: string): Promise<num
   return count
 }
 
-function failedWakesFor(motherSessionId: string): Array<{ handoff_id: string; reason: WakeReason }> {
+function failedWakesFor(
+  motherSessionId: string,
+): Array<{ handoff_id: string; reason: WakeReason }> {
   const rows = getDb()
     .prepare(
       `SELECT d.handoff_id, d.reason FROM handoff_wake_deliveries d
