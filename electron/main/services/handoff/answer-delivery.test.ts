@@ -24,6 +24,9 @@ import { PromptQueue, SETTLE_MS } from '../prompt-queue'
 import { fixture, scanOf } from '../test-support/screen-scans'
 import { handoffAsking, type LiveStatus, type ScreenScan } from '../../../../shared/tui/attention-reason'
 import { __resetForTests, onQueueSnapshot, setHandoffWakeQueue } from './handoff-wake'
+import { DormantPanes, setDormantPanes } from '../dormant-panes'
+import { setPref } from '../prefs-store'
+import { LAZY_RESTORE_PREF, lazyRestoreEnabled } from '../restore-plan'
 import {
   __resetAnswerDeliveryForTests,
   deliverAnswer,
@@ -41,6 +44,8 @@ beforeAll(async () => {
 })
 
 const screens = new Map<string, { status: LiveStatus; scan: ScreenScan }>()
+// sessions.id sem PTY (linha de antes de um resume).
+const dead = new Set<string>()
 let writes: Array<{ id: string; text: string }> = []
 let queue: PromptQueue
 
@@ -77,8 +82,16 @@ beforeEach(() => {
   __resetForTests()
   __resetAnswerDeliveryForTests()
   const db = getDb()
-  for (const t of ['handoff_requests', 'handoff_wake_deliveries', 'handoff_events', 'handoffs'])
+  for (const t of [
+    'handoff_requests',
+    'handoff_wake_deliveries',
+    'handoff_events',
+    'handoffs',
+    'sessions',
+  ])
     db.prepare(`DELETE FROM ${t}`).run()
+  dead.clear()
+  setDormantPanes(null)
   db.prepare(
     `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',1,1)`,
   ).run()
@@ -90,7 +103,7 @@ beforeEach(() => {
   screens.set(CHILD, { status: 'idle', scan: SCANS.idle })
   writes = []
   queue = new PromptQueue({
-    isRunning: () => true,
+    isRunning: (id) => !dead.has(id),
     status: (id) => screens.get(id)?.status ?? 'idle',
     screen: async (id) => screens.get(id)?.scan ?? null,
     nativeStatus: () => true,
@@ -236,5 +249,99 @@ describe('formatAnswerEnvelope', () => {
     const text = formatAnswerEnvelope(answered, 0)
     expect(text).toContain('resposta: B — valibot')
     expect(text).toContain('nota: mais leve')
+  })
+})
+
+describe('deliverAnswer — alvo resolvido pela conversa', () => {
+  function session(id: string, cc: string, startedAt: number): void {
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, 'r1', ?, 'running', ?)`,
+      )
+      .run(id, cc, startedAt)
+  }
+
+  // A mãe escalou ao humano e depois foi retomada em outra linha (mesmo cc).
+  function escalatedAnswer(): ReturnType<typeof requestStore.answerRequest> {
+    const id = liveHandoff()
+    const a = handoffStore.ask(id, 'apago a tabela?', CHILD).request!
+    requestStore.escalateRequest(a.id, MOTHER)
+    return requestStore.answerRequest(a.id, { text: 'não', by: 'human' })
+  }
+
+  function dormantMother(): string[] {
+    const requests: string[] = []
+    const panes: DormantPanes = new DormantPanes({
+      requestWake: (req) => {
+        requests.push(req.ccSessionId)
+        queueMicrotask(() => {
+          session('mother-woke', req.ccSessionId, 30)
+          screens.set('mother-woke', { status: 'idle', scan: SCANS.idle })
+          panes.onWakeResult({ requestId: req.requestId, sessionId: 'mother-woke' })
+        })
+        return true
+      },
+      isRunning: (id) => !dead.has(id),
+      screen: async (id) => screens.get(id)?.scan ?? null,
+      warn: () => {},
+    })
+    panes.setDormant([{ ccSessionId: 'cc-mother', paneId: 'pane-m', title: 'mae', repoId: 'r1' }])
+    setDormantPanes(panes, lazyRestoreEnabled)
+    return requests
+  }
+
+  beforeEach(() => {
+    session(CHILD, 'cc-child', 1)
+    session(MOTHER, 'cc-mother', 2)
+    dead.add(MOTHER)
+    getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
+  })
+
+  // A pref fica ausente (beforeEach): a entrega pela conversa não depende dela.
+  it('mãe que escalou tem PTY viva em outra linha da conversa: entrega lá, com a pref desligada', async () => {
+    session('mother-2', 'cc-mother', 20)
+    screens.set('mother-2', { status: 'idle', scan: SCANS.idle })
+
+    await deliverAnswer(escalatedAnswer())
+    await settle()
+
+    expect(writes.map((w) => w.id).sort()).toEqual([CHILD, 'mother-2'].sort())
+    expect(
+      rows()
+        .map((r) => [r.mother_session_id, r.outcome])
+        .sort(),
+    ).toEqual(
+      [
+        [CHILD, 'delivered'],
+        ['mother-2', 'delivered'],
+      ].sort(),
+    )
+  })
+
+  it('mãe dormindo com sessions.lazyRestore ligada: acorda e entrega no id novo', async () => {
+    setPref(LAZY_RESTORE_PREF, true)
+    const requests = dormantMother()
+
+    await deliverAnswer(escalatedAnswer())
+    await settle()
+
+    expect(requests).toEqual(['cc-mother'])
+    expect(writes.map((w) => w.id).sort()).toEqual([CHILD, 'mother-woke'].sort())
+    expect(rows()).toContainEqual(
+      expect.objectContaining({ mother_session_id: 'mother-woke', outcome: 'delivered' }),
+    )
+  })
+
+  it('pref desligada: not_running para a mãe, sem wake (como antes)', async () => {
+    const requests = dormantMother()
+
+    await deliverAnswer(escalatedAnswer())
+    await settle()
+
+    expect(requests).toEqual([])
+    expect(writes.map((w) => w.id)).toEqual([CHILD])
+    expect(rows()).toContainEqual(
+      expect.objectContaining({ mother_session_id: MOTHER, outcome: 'not_running' }),
+    )
   })
 })

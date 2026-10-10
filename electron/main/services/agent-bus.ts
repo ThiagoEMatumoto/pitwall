@@ -21,6 +21,8 @@ import type {
   AgentPeer,
 } from '../../../shared/types/agent-bus'
 import type { SessionGraph } from '../../../shared/types/session-graph'
+import type { DormantPaneInfo } from '../../../shared/types/ipc'
+import type { DormantWakeOutcome } from './dormant-panes'
 import type {
   PromptQueueEvent,
   SendPromptError,
@@ -51,6 +53,12 @@ export interface AgentBusDeps {
   now?(): number
   // Bolinha no mapa (session-link-pulse): a pergunta chegou / a resposta voltou.
   pulse?(input: { fromSessionId: string; toSessionId: string; kind: 'ask' | 'reply' }): void
+  // Panes dormindo do lazy restore: sem PTY não estão em peers(), mas acordam.
+  dormant?: {
+    byAlias(name: string): DormantPaneInfo[]
+    byRepo(repoId: string): DormantPaneInfo[]
+    wake(ccSessionId: string): Promise<DormantWakeOutcome>
+  }
 }
 
 export interface AskInput {
@@ -110,6 +118,7 @@ const UNDELIVERABLE: Record<SendPromptError, string> = {
   unparsed: 'a tela do destino não foi reconhecida',
   'input-dirty': 'há texto não enviado na caixa de input do destino',
   cancelled: 'a mensagem foi cancelada antes de sair',
+  'wake-failed': 'a sessão de destino dormia e não acordou',
 }
 
 // Atributo do envelope: sem aspas, sinais de tag nem quebra — um alias forjado não
@@ -219,6 +228,8 @@ export class AgentBus {
     rejectedSelf: 0,
     undeliverable: 0,
     needsHandoff: 0,
+    wokeDormant: 0,
+    wakeFailed: 0,
   }
   // askId ↔ id do item na PromptQueue enquanto o envelope espera o fim do turno.
   private queued = new Map<string, string>()
@@ -264,26 +275,90 @@ export class AgentBus {
     }
     const peers = this.deps.peers().filter((p) => p.status !== 'ended')
     const caller = peers.find((p) => p.sessionId === input.fromSessionId)
-    const target = input.to
+    const resolved = input.to
       ? this.resolveAlias(peers, input.to)
       : this.resolveRepo(peers, input.fromSessionId, input.repo)
-    if ('needsHandoff' in target) return target.needsHandoff
-    if (target.peer.sessionId === input.fromSessionId) {
+    if ('needsHandoff' in resolved) return resolved.needsHandoff
+    let target: AgentPeer
+    if ('dormant' in resolved) {
+      // Profundidade e rate antes do wake: não acorda uma sessão para recusar a
+      // pergunta. O rate conta as linhas antigas da conversa (o id novo ainda não
+      // existe), senão cada ask a uma pane dormindo furaria o limite.
+      this.assertDepth(input.fromSessionId)
+      this.assertRate(input.fromSessionId, this.sessionIdsOfCc(resolved.dormant.ccSessionId))
+      target = await this.wakePeer(resolved.dormant)
+    } else {
+      target = resolved.peer
+    }
+    if (target.sessionId === input.fromSessionId) {
       this.reject('rejectedSelf', input.fromSessionId)
       throw new AgentBusError('Uma sessão não pode perguntar a si mesma.')
     }
-    const depth = this.inheritedDepth(input.fromSessionId) + 1
+    const depth = this.assertDepth(input.fromSessionId)
+    if ('peer' in resolved) this.assertRate(input.fromSessionId, [target.sessionId])
+    return this.dispatch(caller, input.fromSessionId, target, depth, text)
+  }
+
+  private assertDepth(fromSessionId: string): number {
+    const depth = this.inheritedDepth(fromSessionId) + 1
     if (depth > MAX_ASK_DEPTH) {
-      this.reject('rejectedDepth', input.fromSessionId)
+      this.reject('rejectedDepth', fromSessionId)
       throw new AgentBusError(
         `Cadeia de perguntas no limite de profundidade (${MAX_ASK_DEPTH}): responda o ask que você recebeu com o que já sabe em vez de perguntar adiante.`,
       )
     }
-    this.assertRate(input.fromSessionId, target.peer.sessionId)
-    return this.dispatch(caller, input.fromSessionId, target.peer, depth, text)
+    return depth
   }
 
-  private resolveAlias(peers: AgentPeer[], to: string): { peer: AgentPeer } {
+  // A pane dormindo acorda (resume no renderer) e a pergunta segue pelo caminho
+  // normal com o sessions.id novo. Sem coluna para isso em agent_messages: o
+  // registro do wake é o contador do snapshot + o warn estruturado.
+  private async wakePeer(pane: DormantPaneInfo): Promise<AgentPeer> {
+    const woke = await this.deps.dormant!.wake(pane.ccSessionId)
+    if (!woke.ok) {
+      this.counters.wakeFailed++
+      this.deps.warn({
+        event: 'agent_bus_wake_failed',
+        ccSessionId: pane.ccSessionId,
+        error: woke.error,
+        total: this.counters.wakeFailed,
+      })
+      this.publish()
+      throw new AgentBusError(
+        `A sessão "${pane.title ?? pane.ccSessionId}" estava dormindo e não acordou (${woke.error}); nada foi enviado.`,
+      )
+    }
+    this.counters.wokeDormant++
+    this.deps.warn({
+      event: 'agent_bus_woke_dormant',
+      ccSessionId: pane.ccSessionId,
+      sessionId: woke.sessionId,
+      total: this.counters.wokeDormant,
+    })
+    this.publish()
+    const live = this.deps.peers().find((p) => p.sessionId === woke.sessionId)
+    if (live) return live
+    // O grafo pode ainda não ter a linha nova: a entrega só precisa do id.
+    return {
+      sessionId: woke.sessionId,
+      alias: pane.title ?? pane.ccSessionId,
+      address: null,
+      projectId: null,
+      projectName: null,
+      repoId: pane.repoId,
+      repoLabel: null,
+      provider: 'claude',
+      status: 'idle',
+      purpose: null,
+      lastActivityAt: null,
+      startedAt: null,
+    }
+  }
+
+  private resolveAlias(
+    peers: AgentPeer[],
+    to: string,
+  ): { peer: AgentPeer } | { dormant: DormantPaneInfo } {
     const byId = peers.find((p) => p.sessionId === to)
     if (byId) return { peer: byId }
     const key = to.trim().toLowerCase()
@@ -291,6 +366,12 @@ export class AgentBus {
       (p) => p.alias.toLowerCase() === key || p.address?.toLowerCase() === key,
     )
     if (matches.length === 0) {
+      const asleep = this.deps.dormant?.byAlias(to) ?? []
+      if (asleep.length === 1) return { dormant: asleep[0] }
+      if (asleep.length > 1) {
+        const ids = asleep.map((p) => p.ccSessionId).join(', ')
+        throw new AgentBusError(`Apelido "${to}" ambíguo entre sessões dormindo: ${ids}.`)
+      }
       throw new AgentBusError(`Nenhuma sessão viva com o apelido "${to}". Veja agent_list.`)
     }
     if (matches.length > 1) {
@@ -304,7 +385,7 @@ export class AgentBus {
     peers: AgentPeer[],
     callerId: string,
     repo: string | undefined,
-  ): { peer: AgentPeer } | { needsHandoff: AskOutcome } {
+  ): { peer: AgentPeer } | { dormant: DormantPaneInfo } | { needsHandoff: AskOutcome } {
     if (!repo?.trim()) throw new AgentBusError('Informe `to` (apelido/sessionId) ou `repo`.')
     const rows = this.deps.db
       .prepare('SELECT id, label FROM repos WHERE id = ? OR lower(label) = lower(?)')
@@ -320,6 +401,8 @@ export class AgentBus {
     const candidates = inRepo.filter((p) => p.sessionId !== callerId)
     if (candidates.length > 0) return { peer: pickTarget(candidates) }
     if (inRepo.length > 0) return { peer: inRepo[0] }
+    const asleep = this.deps.dormant?.byRepo(row.id) ?? []
+    if (asleep.length > 0) return { dormant: this.mostRecentDormant(asleep) }
     this.counters.needsHandoff++
     this.publish()
     return {
@@ -346,14 +429,37 @@ export class AgentBus {
     return row.d ?? 0
   }
 
-  private assertRate(from: string, to: string): void {
+  // A pane dormindo do repo cuja conversa rodou por último (sessions.started_at),
+  // não a primeira que o renderer listou.
+  private mostRecentDormant(asleep: DormantPaneInfo[]): DormantPaneInfo {
+    const rows = this.deps.db
+      .prepare(
+        `SELECT cc_session_id AS cc, MAX(started_at) AS at FROM sessions
+          WHERE cc_session_id IN (SELECT value FROM json_each(?)) GROUP BY cc_session_id`,
+      )
+      .all(JSON.stringify(asleep.map((p) => p.ccSessionId))) as Array<{ cc: string; at: number }>
+    const startedAt = new Map(rows.map((r) => [r.cc, r.at]))
+    const at = (p: DormantPaneInfo) => startedAt.get(p.ccSessionId) ?? -Infinity
+    return asleep.reduce((best, p) => (at(p) > at(best) ? p : best))
+  }
+
+  private sessionIdsOfCc(ccSessionId: string): string[] {
+    const rows = this.deps.db
+      .prepare('SELECT id FROM sessions WHERE cc_session_id = ?')
+      .all(ccSessionId) as Array<{ id: string }>
+    return rows.map((r) => r.id)
+  }
+
+  private assertRate(from: string, to: string[]): void {
     const count = this.deps.db.prepare(
       `SELECT COUNT(*) AS n FROM agent_messages
-        WHERE from_session_id = ? AND to_session_id = ? AND created_at > ?`,
+        WHERE from_session_id = ? AND to_session_id IN (SELECT value FROM json_each(?))
+          AND created_at > ?`,
     )
     const now = this.now()
-    const perMinute = (count.get(from, to, now - 60_000) as { n: number }).n
-    const perHour = (count.get(from, to, now - 3_600_000) as { n: number }).n
+    const ids = JSON.stringify(to)
+    const perMinute = (count.get(from, ids, now - 60_000) as { n: number }).n
+    const perHour = (count.get(from, ids, now - 3_600_000) as { n: number }).n
     if (perMinute < ASK_RATE_PER_MINUTE && perHour < ASK_RATE_PER_HOUR) return
     this.reject('rejectedRate', from)
     throw new AgentBusError(

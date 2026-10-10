@@ -27,6 +27,10 @@ const seam = vi.hoisted(() => ({
   liveSessionIds: [] as string[],
   handoff: null as Record<string, unknown> | null,
   childRow: null as { cc_session_id: string | null; title: string | null } | null,
+  // Linhas de `sessions` por cc_session_id (guarda de re-attach do resume).
+  ccRows: [] as Array<Record<string, unknown>>,
+  transfers: [] as Array<{ from: string; to: string }>,
+  requestTransfers: [] as Array<{ from: string; to: string }>,
 }))
 
 const SESSION_CONFIG_DIR = '/tmp/cm-test-userdata/mcp-sessions'
@@ -52,7 +56,12 @@ vi.mock('../services/db', () => ({
         if (sql.includes('FROM sessions')) return seam.childRow ?? undefined
         return undefined
       },
-      all: () => [],
+      all: (...args: unknown[]) => {
+        if (sql.includes('WHERE cc_session_id = ?')) {
+          return seam.ccRows.filter((r) => r.cc_session_id === args[0])
+        }
+        return []
+      },
     }),
   }),
 }))
@@ -63,6 +72,10 @@ vi.mock('../services/pty-manager', () => ({
     write: () => {},
     isRunning: (sessionId: string) => seam.liveSessionIds.includes(sessionId),
     runningIds: () => [],
+    // Sem pid: o índice não desmente a linha (o desmentido é coberto em
+    // sessions-resume-guards.test.ts, com processos reais).
+    getPid: () => null,
+    sessionIdByPid: () => null,
     spawn: (opts: { sessionId: string; args: string[] }) => {
       seam.spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
     },
@@ -71,6 +84,13 @@ vi.mock('../services/pty-manager', () => ({
 vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
 vi.mock('../services/feature-store', () => ({ get: () => null, linkedObjectiveTitles: () => [] }))
 vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
+vi.mock('../services/handoff-requests', async () => ({
+  ...(await vi.importActual<object>('../services/handoff-requests')),
+  transferRequester: (from: string, to: string) => {
+    seam.requestTransfers.push({ from, to })
+    return 0
+  },
+}))
 vi.mock('../services/handoff-store', () => ({
   get: () => seam.handoff,
   markRunning: (id: string, childSessionId: string) => ({ id, childSessionId, status: 'running' }),
@@ -79,6 +99,10 @@ vi.mock('../services/handoff-store', () => ({
   findActiveWriterByWorkDir: () => null,
   getByChildSession: () => null,
   failIfRunning: () => null,
+  transferMother: (from: string, to: string) => {
+    seam.transfers.push({ from, to })
+    return []
+  },
 }))
 vi.mock('../services/mcp/server', () => ({ getMcpRuntime: () => seam.runtime }))
 vi.mock('../services/mcp/config', () => ({
@@ -435,10 +459,10 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
   })
 
   it('sessions:resume carimba a sessão retomada (mãe em potencial)', () => {
-    const session = handler('sessions:resume')(null, {
+    const { session } = handler('sessions:resume')(null, {
       repoId: 'r1',
       ccSessionId: CC_SESSION_ID,
-    } as never) as { id: string }
+    } as never) as { session: { id: string } }
     expect(expectStampedSpawn()).toBe(session.id)
     expect(seam.spawns[0].innerCmd).toContain(`--resume ${CC_SESSION_ID}`)
   })
@@ -448,7 +472,9 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
     const sessionId = expectStampedSpawn()
     // O alias fixado no spawn sobrevive ao resume — o carimbo não o desloca.
     expect(seam.spawns[0].innerCmd).toContain("-n 'mauricio-tarefa'")
-    expect(seam.spawns[0].innerCmd).toContain(`--mcp-config '${SESSION_CONFIG_DIR}/${sessionId}.json'`)
+    expect(seam.spawns[0].innerCmd).toContain(
+      `--mcp-config '${SESSION_CONFIG_DIR}/${sessionId}.json'`,
+    )
   })
 
   it('sem MCP server no ar não injeta --mcp-config nem escreve config por sessão', () => {
@@ -469,5 +495,102 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () => {
+  const CC = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+  // Shape do INSERT do startSession (as colunas que toSession lê).
+  const row = (id: string, startedAt: number) => ({
+    id,
+    repo_id: 'r1',
+    cc_session_id: CC,
+    title: 'api',
+    title_source: null,
+    pane_id: null,
+    status: 'running',
+    started_at: startedAt,
+    ended_at: null,
+    provider: 'claude',
+  })
+
+  beforeEach(() => {
+    seam.handlers.clear()
+    seam.spawns.length = 0
+    seam.insertedSessionIds.length = 0
+    seam.liveSessionIds.length = 0
+    seam.transcriptPath = '/tmp/transcript.jsonl'
+    seam.handoff = null
+    seam.childRow = null
+    seam.ccRows = []
+    seam.transfers = []
+    seam.requestTransfers = []
+    registerSessionIpc()
+  })
+
+  function resume(): { id: string; ccSessionId: string } {
+    return resumeResult().session
+  }
+
+  function resumeResult(): {
+    session: { id: string; ccSessionId: string }
+    reattached: boolean
+  } {
+    return seam.handlers.get('sessions:resume')!(null, {
+      repoId: 'r1',
+      ccSessionId: CC,
+    } as never) as { session: { id: string; ccSessionId: string }; reattached: boolean }
+  }
+
+  it('devolve a sessão viva existente sem chamar ptyManager.spawn', () => {
+    // Linha nova (já morta) + a viva mais antiga: vale a que tem PTY.
+    seam.ccRows = [row('dead-newer', 20), row('alive', 10)]
+    seam.liveSessionIds.push('alive')
+
+    const session = resume()
+
+    expect(session).toMatchObject({ id: 'alive', ccSessionId: CC, status: 'running' })
+    expect(seam.spawns).toEqual([])
+    expect(seam.insertedSessionIds).toEqual([])
+  })
+
+  it('reattached diz se esta chamada spawnou', () => {
+    seam.ccRows = [row('alive', 10)]
+    seam.liveSessionIds.push('alive')
+    expect(resumeResult()).toMatchObject({ reattached: true, session: { id: 'alive' } })
+
+    seam.liveSessionIds.length = 0
+    expect(resumeResult().reattached).toBe(false)
+    expect(seam.spawns).toHaveLength(1)
+  })
+
+  it('sem PTY viva para o cc, retoma como antes', () => {
+    seam.ccRows = [row('dead', 10)]
+
+    const session = resume()
+
+    expect(seam.spawns).toHaveLength(1)
+    expect(session.id).not.toBe('dead')
+  })
+
+  it('a liderança das linhas antigas sem PTY passa para a sessão retomada', () => {
+    seam.ccRows = [row('mother-old', 20), row('mother-older', 10)]
+
+    const session = resume()
+
+    expect(seam.transfers).toEqual([
+      { from: 'mother-old', to: session.id },
+      { from: 'mother-older', to: session.id },
+    ])
+    expect(seam.requestTransfers).toEqual(seam.transfers)
+  })
+
+  it('re-attach à PTY viva não transfere a liderança', () => {
+    seam.ccRows = [row('dead', 20), row('alive', 10)]
+    seam.liveSessionIds.push('alive')
+
+    resume()
+
+    expect(seam.transfers).toEqual([])
   })
 })

@@ -122,6 +122,7 @@ function snapshot(partial: Partial<PromptQueueSnapshot>): PromptQueueSnapshot {
       refusedMenuOpen: 0,
       refusedUnparsed: 0,
       refusedInputDirty: 0,
+      wakeFailed: 0,
     },
     lastEvent: null,
     ...partial,

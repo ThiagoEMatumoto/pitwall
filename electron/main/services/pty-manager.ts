@@ -288,6 +288,17 @@ class PtyManager extends TypedEmitter {
   runningIds(): string[] {
     return Array.from(this.ptys.keys())
   }
+
+  // pid da PTY. No Linux é o próprio claude (o wrapper faz exec); no Windows é o
+  // shell que o lançou, e por isso não casa com o pid de ~/.claude/sessions.
+  getPid(sessionId: string): number | null {
+    return this.ptys.get(sessionId)?.pid ?? null
+  }
+
+  sessionIdByPid(pid: number): string | null {
+    for (const [sessionId, pty] of this.ptys) if (pty.pid === pid) return sessionId
+    return null
+  }
 }
 
 export const ptyManager = new PtyManager()

@@ -1,12 +1,30 @@
 import { create } from 'zustand'
 import { featuresApi, sessionsApi } from '@/lib/ipc'
 
+// Feature de uma conversa pelo cc: a primeira linha dela que ainda está no índice
+// (o bySessionId segue o broadcast de mudança de feature do main).
+export function featureIdForCc(
+  state: Pick<SessionFeatureState, 'bySessionId' | 'sessionIdsByCc'>,
+  ccSessionId: string,
+): string | null {
+  for (const id of state.sessionIdsByCc[ccSessionId] ?? []) {
+    const featureId = state.bySessionId[id]
+    if (featureId) return featureId
+  }
+  return null
+}
+
 // Índice REVERSO sessão → feature. O main só sabe responder o caminho de ida
 // (`sessions:list-by-feature`), então o renderer monta o inverso uma vez, sob
 // demanda, e memoriza os vínculos novos no spawn. Some no dia em que a linha de
 // `sessions` carregar `feature_id` (ou existir um `sessions:get-feature`).
 interface SessionFeatureState {
   bySessionId: Record<string, string>
+  /**
+   * cc_session_id → sessions.id das linhas indexadas. Uma pane dormindo só tem o
+   * cc (o id dela é sintético): o chip resolve por aqui no mesmo bySessionId.
+   */
+  sessionIdsByCc: Record<string, string[]>
   featureTitles: Record<string, string>
   hydrated: boolean
   /** Vínculo recém-criado (spawn): entra no índice sem esperar hydrate. */
@@ -30,6 +48,7 @@ export function listenSessionFeatureChanges(): () => void {
 
 export const useSessionFeatureStore = create<SessionFeatureState>((set, get) => ({
   bySessionId: {},
+  sessionIdsByCc: {},
   featureTitles: {},
   hydrated: false,
 
@@ -59,14 +78,19 @@ export const useSessionFeatureStore = create<SessionFeatureState>((set, get) => 
       )
       const lists = await Promise.all(feats.map((f) => sessionsApi.listByFeature(f.id)))
       const bySessionId: Record<string, string> = {}
+      const sessionIdsByCc: Record<string, string[]> = {}
       const featureTitles: Record<string, string> = {}
       feats.forEach((f, i) => {
         featureTitles[f.id] = f.title
-        for (const s of lists[i]) bySessionId[s.id] = f.id
+        for (const s of lists[i]) {
+          bySessionId[s.id] = f.id
+          if (s.ccSessionId) (sessionIdsByCc[s.ccSessionId] ??= []).push(s.id)
+        }
       })
       set((s) => ({
         // O que veio do spawn é mais fresco que o índice: fica por cima.
         bySessionId: { ...bySessionId, ...s.bySessionId },
+        sessionIdsByCc,
         featureTitles: { ...featureTitles, ...s.featureTitles },
         hydrated: true,
       }))

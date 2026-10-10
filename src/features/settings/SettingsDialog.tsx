@@ -419,6 +419,8 @@ const PANE_MODE_OPTIONS = [
   { value: 'chat', label: 'Chat' },
 ] as const
 
+const LAZY_RESTORE_LABEL = 'Restaurar abas dormindo (economiza memória; experimental)'
+
 const KEYBOARD_OPTIONS: { value: KeyboardSendMode; label: string; hint: string }[] = [
   { value: 'enter-sends', label: 'Enter envia', hint: 'Shift+Enter quebra linha' },
   { value: 'enter-newline', label: 'Enter quebra linha', hint: 'Cmd/Ctrl+Enter envia' },
@@ -461,6 +463,8 @@ function SessionTab({ open }: { open: boolean }) {
   const keyboardMode = useSessionPrefsStore((s) => s.keyboardMode)
   const defaultPaneMode = useSessionPrefsStore((s) => s.defaultPaneMode)
   const setDefaultPaneMode = useSessionPrefsStore((s) => s.setDefaultPaneMode)
+  const lazyRestore = useSessionPrefsStore((s) => s.lazyRestore)
+  const setLazyRestore = useSessionPrefsStore((s) => s.setLazyRestore)
   const setDefaultModel = useSessionPrefsStore((s) => s.setDefaultModel)
   const setDefaultEffort = useSessionPrefsStore((s) => s.setDefaultEffort)
   const setDefaultPermission = useSessionPrefsStore((s) => s.setDefaultPermission)
@@ -556,6 +560,24 @@ function SessionTab({ open }: { open: boolean }) {
             onChange={(v) => void setDefaultPaneMode(v)}
           />
         </div>
+
+        <label className="mt-3 flex items-start justify-between gap-3 border-t border-[var(--color-border)] pt-3">
+          <div className="min-w-0">
+            <div className="text-sm text-[var(--color-text)]">{LAZY_RESTORE_LABEL}</div>
+            <div className="text-xs text-[var(--color-text-dim)]">
+              No boot as abas voltam dormindo e só a que você abrir retoma o processo (mães e filhas
+              de handoff ativo sobem sempre). Desligado por padrão. Vale a partir do próximo boot.
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={LAZY_RESTORE_LABEL}
+            checked={lazyRestore}
+            onChange={(e) => void setLazyRestore(e.target.checked)}
+            className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
+          />
+        </label>
       </div>
 
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">

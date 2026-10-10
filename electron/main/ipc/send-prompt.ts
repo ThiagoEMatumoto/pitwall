@@ -8,6 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
+import { getDormantPanes } from '../services/dormant-panes'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -18,7 +19,11 @@ import {
   sessionActivityService,
   setPromptQueueTurnHook,
 } from '../services/session-activity'
-import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
+import {
+  handoffAsking,
+  type LiveStatus,
+  type ScreenScan,
+} from '../../../shared/tui/attention-reason'
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
 import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
@@ -35,6 +40,7 @@ import type {
   PromptQueueSnapshot,
   ScreenPreview,
   SendPromptInput,
+  SendPromptResult,
 } from '../../../shared/types/send-prompt'
 
 // Mandar prompt pra qualquer sessão viva sem abri-la. A escrita é a mesma do
@@ -67,6 +73,34 @@ function statusOf(ptyId: string): LiveStatus | null {
   const entry = buildSessionsFileIndex().get(row.cc_session_id)
   if (!entry) return null
   return isPidAlive(entry.pid) ? mapStatus(entry.status) : 'ended'
+}
+
+// Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
+// tela parada parece 'idle' — um \r ali aprovaria. null + status não nativo recusa
+// os dois modos; quem quer falar com o Codex usa o terminal dele.
+export function screenOf(id: string): Promise<ScreenScan | null> {
+  return tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)
+}
+
+// O sessions.id de uma conversa que está dormindo no renderer não tem PTY: acorda
+// a pane e manda para o id novo. Sem pane dormindo, o 'not-running' segue.
+export async function sendWakingDormant(input: SendPromptInput): Promise<SendPromptResult> {
+  const sent = await promptQueue.send(input)
+  if (sent.ok || sent.error !== 'not-running') return sent
+  const panes = getDormantPanes()
+  const row = getDb()
+    .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
+    .get(input.sessionId) as { cc_session_id: string | null } | undefined
+  const cc = row?.cc_session_id
+  if (!panes || !cc || !panes.findDormantByCc(cc)) return sent
+  const woke = await panes.wakeDormant(cc, 'send-prompt')
+  if (!woke.ok) {
+    promptQueue.recordWakeFailed(input.sessionId, woke.error)
+    return { ok: false, error: 'wake-failed', detail: woke.error }
+  }
+  // Recém-acordada ainda pode estar no turno do --resume: 'now' escreveria no meio
+  // dele. A fila on-idle espera o idle/waiting certo.
+  return promptQueue.send({ ...input, sessionId: woke.sessionId, when: 'on-idle' })
 }
 
 let lastNotifiedEventId: string | null = null
@@ -108,10 +142,7 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
 export const promptQueue = new PromptQueue({
   isRunning: (id) => ptyManager.isRunning(id),
   status: statusOf,
-  // Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
-  // tela parada parece 'idle' — um \r ali aprovaria. null + status não nativo recusa
-  // os dois modos; quem quer falar com o Codex usa o terminal dele.
-  screen: (id) => (tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)),
+  screen: screenOf,
   nativeStatus: (id) => !sessionActivityService.isPtyTracked(id),
   handoffAsking: (id) => {
     const h = getByChildSession(id)
@@ -176,7 +207,7 @@ export function registerSendPromptIpc(): void {
 
   ipcMain.handle('sessions:send-prompt', (_e, raw: unknown) => {
     const input: SendPromptInput = sendSchema.parse(raw)
-    return promptQueue.send(input)
+    return sendWakingDormant(input)
   })
   ipcMain.handle('prompt-queue:cancel', (_e, raw: unknown) => {
     const { id } = idSchema.parse(raw)

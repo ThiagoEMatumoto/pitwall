@@ -385,7 +385,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       if (res.ok) clearDraft(value)
       setRouteNotice(
         !res.ok
-          ? `Não deu pra enviar para @${target.alias} (${sendRefusalReason(res.error)}).`
+          ? `Não deu pra enviar para @${target.alias} (${sendRefusalReason(res.error, res.detail)}).`
           : res.delivered
             ? `Enviado para @${target.alias}.`
             : `Na fila de @${target.alias} — entrega quando ela terminar o turno.`,

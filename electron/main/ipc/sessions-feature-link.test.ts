@@ -211,10 +211,12 @@ function handler(channel: string): (event: unknown, ...args: never[]) => unknown
 }
 
 function resume(): { id: string } {
-  return handler('sessions:resume')(null, {
-    repoId: 'r1',
-    ccSessionId: CC_SESSION_ID,
-  } as never) as { id: string }
+  return (
+    handler('sessions:resume')(null, {
+      repoId: 'r1',
+      ccSessionId: CC_SESSION_ID,
+    } as never) as { session: { id: string } }
+  ).session
 }
 
 // Conteúdo do arquivo apontado pelo --append-system-prompt-file do último spawn.
