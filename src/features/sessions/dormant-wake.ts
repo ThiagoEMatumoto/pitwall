@@ -4,7 +4,9 @@ import { useAppStore } from '@/store/appStore'
 // único gatilho fora do botão "Retomar": montagem e visibilidade não contam,
 // porque o dockview monta todas as abas (defaultRenderer="always").
 export function wakeIfDormant(paneId: string | null | undefined): void {
-  if (!paneId) return
+  // Pref desligada: a única dormant possível é um resume que falhou no boot, e
+  // essa só volta pelo botão Retomar.
+  if (!paneId || useAppStore.getState().lazyRestore !== true) return
   const pane = useAppStore.getState().panes.find((p) => p.paneId === paneId)
   if (pane?.dormant) void useAppStore.getState().wakeDormantPane(paneId)
 }

@@ -209,7 +209,12 @@ beforeEach(async () => {
   mainTitles.clear()
   resumeGate = Promise.resolve()
   resumeReattached = false
-  useAppStore.setState({ panes: [], focusPaneId: null, restoreComplete: true })
+  useAppStore.setState({
+    panes: [],
+    focusPaneId: null,
+    restoreComplete: true,
+    lazyRestore: true,
+  })
   // O espelho de dormant para o main só sai com o live-watch ativo (como no app).
   await useAppStore.getState().startLiveWatch()
 })

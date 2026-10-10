@@ -129,6 +129,7 @@ describe('DormantPane', () => {
 
 describe('wakeIfDormant (onDidActivePanelChange)', () => {
   it('ativar a aba dormant acorda; ativar aba acordada ou inexistente não faz nada', async () => {
+    useAppStore.setState({ lazyRestore: true })
     wakeIfDormant('pane-1')
     await new Promise((r) => setTimeout(r, 0))
     wakeIfDormant('pane-1')
@@ -137,5 +138,16 @@ describe('wakeIfDormant (onDidActivePanelChange)', () => {
     await new Promise((r) => setTimeout(r, 0))
 
     expect(resumed).toEqual(['cc-1'])
+  })
+
+  it('pref desligada: ativar a aba não acorda (só o botão Retomar)', async () => {
+    useAppStore.setState({ lazyRestore: false })
+    wakeIfDormant('pane-1')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(resumed).toEqual([])
+    useAppStore.setState({ lazyRestore: null })
+    wakeIfDormant('pane-1')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(resumed).toEqual([])
   })
 })

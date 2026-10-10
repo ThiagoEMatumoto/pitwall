@@ -1,8 +1,9 @@
 import { create } from 'zustand'
-import { roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
+import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
 import type {
   AdvisorModel,
   AgentProviderId,
@@ -387,7 +388,9 @@ function splitLiveSnapshots(
 async function splitDormantSnapshots(
   snapshots: PaneSnapshot[],
   dockLayout: string | null,
+  lazy: boolean,
 ): Promise<{ eager: PaneSnapshot[]; dormant: PaneSnapshot[] }> {
+  if (!lazy) return { eager: snapshots, dormant: [] }
   if (snapshots.length === 0) return { eager: [], dormant: [] }
   const plan = await sessionsApi.restorePlan(snapshots.map((s) => s.ccSessionId)).catch(() => null)
   if (!plan || plan.mode === 'eager') return { eager: snapshots, dormant: [] }
@@ -424,6 +427,10 @@ interface AppState {
   // true quando o fluxo de restore terminou (ou não havia nada a restaurar, ou
   // ficou bloqueado). A splash usa pra auto-avançar quando a animação já passou.
   restoreComplete: boolean
+  // Pref sessions.lazyRestore, lida uma vez no restore e congelada para o processo
+  // (vale a partir do próximo boot). null = ainda não lida. Fora do true o renderer
+  // se comporta como antes da feature: tudo eager, sem espelho, sem wake por ativação.
+  lazyRestore: boolean | null
   // Layout do dockview a aplicar (api.fromJSON) UMA vez, após as panes do restore
   // existirem no store. O AppShell consome e chama clearPendingLayout.
   pendingLayout: string | null
@@ -552,6 +559,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   restoreBlocked: false,
   bootSessionCount: null,
   restoreComplete: false,
+  lazyRestore: null,
   pendingLayout: null,
   focusPaneId: null,
   gridRequest: null,
@@ -577,6 +585,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   restoreWorkspace: async () => {
     if (restoreStarted) return
     restoreStarted = true
+    await loadLazyRestore()
     const { openPanes, cleanShutdown, restoreAttempts, dockLayout } =
       await workspaceApi.getBootState()
     set({ bootSessionCount: openPanes.length })
@@ -612,6 +621,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   restoreSnapshots: async (snapshots, dockLayout = null) => {
+    const lazy = await loadLazyRestore()
     const live = await sessionsApi.listLiveGlobal().catch(() => [])
     const { attached, rest } = splitLiveSnapshots(snapshots, live)
     const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
@@ -619,7 +629,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({ panes: [...s.panes, ...fresh] }))
       schedulePersist(get().panes)
     }
-    const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout)
+    const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout, lazy)
     // Dormant só entram DEPOIS das eager: o AppShell arma o fallback de 1,5s do
     // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
     // eager lenta perdia o lugar no layout.
@@ -1093,6 +1103,12 @@ async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promi
     await waitForRestore(WAKE_RESTORE_WAIT_MS)
     pane = find()
   }
+  // Pref desligada: o main não deveria pedir (o registro dele fica vazio); se
+  // pedir, nada acorda.
+  if (useAppStore.getState().lazyRestore !== true) {
+    void sessionsApi.wakeResult({ requestId, sessionId: null, error: 'lazy-restore-off' })
+    return
+  }
   if (!pane) {
     void sessionsApi.wakeResult({ requestId, sessionId: null, error: 'no-dormant-pane' })
     return
@@ -1104,6 +1120,17 @@ async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promi
 }
 
 export const WAKE_RESTORE_WAIT_MS = 20_000
+
+async function loadLazyRestore(): Promise<boolean> {
+  const current = useAppStore.getState().lazyRestore
+  if (current !== null) return current
+  const on = await Promise.resolve()
+    .then(() => prefsApi.get<unknown>(LAZY_RESTORE_PREF))
+    .then((value) => value === true)
+    .catch(() => false)
+  useAppStore.setState({ lazyRestore: on })
+  return on
+}
 
 function waitForRestore(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -1139,7 +1166,8 @@ function dormantList(panes: ActivePane[]): DormantPaneInfo[] {
     }))
 }
 function syncDormantPanes(panes: ActivePane[]): void {
-  if (!liveWatchStarted) return
+  // Pref desligada: nada de espelho, como antes da feature.
+  if (!liveWatchStarted || useAppStore.getState().lazyRestore !== true) return
   const list = dormantList(panes)
   const key = JSON.stringify(list)
   if (key === lastDormantKey) return
@@ -1174,5 +1202,7 @@ function applyDormantTitles(enriched: DormantPaneInfo[]): void {
   useAppStore.setState({ panes: next })
 }
 useAppStore.subscribe((state, prev) => {
-  if (state.panes !== prev.panes) syncDormantPanes(state.panes)
+  // A pref chega depois do live-watch no boot: ligá-la manda o primeiro sync.
+  if (state.panes !== prev.panes || state.lazyRestore !== prev.lazyRestore)
+    syncDormantPanes(state.panes)
 })

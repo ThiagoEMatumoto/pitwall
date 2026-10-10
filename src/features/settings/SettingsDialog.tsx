@@ -419,10 +419,7 @@ const PANE_MODE_OPTIONS = [
   { value: 'chat', label: 'Chat' },
 ] as const
 
-const RESTORE_MODE_OPTIONS = [
-  { value: 'lazy', label: 'Sob demanda' },
-  { value: 'eager', label: 'Todas' },
-] as const
+const LAZY_RESTORE_LABEL = 'Restaurar abas dormindo (economiza memória; experimental)'
 
 const KEYBOARD_OPTIONS: { value: KeyboardSendMode; label: string; hint: string }[] = [
   { value: 'enter-sends', label: 'Enter envia', hint: 'Shift+Enter quebra linha' },
@@ -564,20 +561,23 @@ function SessionTab({ open }: { open: boolean }) {
           />
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-[var(--color-border)] pt-3">
+        <label className="mt-3 flex items-start justify-between gap-3 border-t border-[var(--color-border)] pt-3">
           <div className="min-w-0">
-            <div className="text-sm text-[var(--color-text)]">Ao abrir o app</div>
+            <div className="text-sm text-[var(--color-text)]">{LAZY_RESTORE_LABEL}</div>
             <div className="text-xs text-[var(--color-text-dim)]">
-              Sob demanda: as abas voltam dormindo e só a que você abrir retoma o processo (mães e
-              filhas de handoff ativo sobem sempre). Vale a partir do próximo boot.
+              No boot as abas voltam dormindo e só a que você abrir retoma o processo (mães e filhas
+              de handoff ativo sobem sempre). Desligado por padrão. Vale a partir do próximo boot.
             </div>
           </div>
-          <Segmented
-            options={RESTORE_MODE_OPTIONS}
-            value={lazyRestore ? 'lazy' : 'eager'}
-            onChange={(v) => void setLazyRestore(v === 'lazy')}
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={LAZY_RESTORE_LABEL}
+            checked={lazyRestore}
+            onChange={(e) => void setLazyRestore(e.target.checked)}
+            className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
           />
-        </div>
+        </label>
       </div>
 
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">

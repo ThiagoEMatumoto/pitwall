@@ -30,11 +30,30 @@ Object.assign(window, {
 const { useAppStore } = await import('./appStore')
 
 describe('dormantSync', () => {
+  it('pref desligada: nenhum sync, nem o inicial', async () => {
+    useAppStore.setState({ lazyRestore: false })
+    await useAppStore.getState().startLiveWatch()
+    useAppStore.setState({ panes: [] })
+    expect(synced).toEqual([])
+    useAppStore.getState().stopLiveWatch()
+  })
+
   it('boot sem panes: o primeiro sync sai vazio; repetir a lista não reenvia', async () => {
+    useAppStore.setState({ lazyRestore: true })
     await useAppStore.getState().startLiveWatch()
     expect(synced).toEqual([[]])
 
     useAppStore.setState({ panes: [] })
+    expect(synced).toEqual([[]])
+    useAppStore.getState().stopLiveWatch()
+  })
+
+  it('pref lida depois do live-watch: ligá-la manda o primeiro sync', async () => {
+    synced.length = 0
+    useAppStore.setState({ lazyRestore: null })
+    await useAppStore.getState().startLiveWatch()
+    expect(synced).toEqual([])
+    useAppStore.setState({ lazyRestore: true })
     expect(synced).toEqual([[]])
     useAppStore.getState().stopLiveWatch()
   })
