@@ -8,7 +8,7 @@
 //
 // Sem electron: a janela, a PTY e a tela chegam por deps (como a PromptQueue).
 import { randomUUID } from 'node:crypto'
-import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
+import type { ScreenScan } from '../../../shared/tui/attention-reason'
 import type { DormantPaneInfo, WakeRequest, WakeResult } from '../../../shared/types/ipc'
 
 export const WAKE_RESULT_TIMEOUT_MS = 30_000
@@ -29,9 +29,8 @@ export interface DormantPanesDeps {
   // false = sem janela para pedir o resume.
   requestWake(request: WakeRequest): boolean
   isRunning(sessionId: string): boolean
-  // As mesmas fontes da PromptQueue: tela relida agora e status do índice.
+  // A mesma fonte da PromptQueue: tela relida agora.
   screen(sessionId: string): Promise<ScreenScan | null>
-  status(sessionId: string): LiveStatus | null
   warn(event: Record<string, unknown>): void
   resultTimeoutMs?: number
   readyTimeoutMs?: number

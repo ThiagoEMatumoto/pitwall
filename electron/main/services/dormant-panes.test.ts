@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { DormantPanes, type DormantPanesDeps } from './dormant-panes'
-import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
+import type { ScreenScan } from '../../../shared/tui/attention-reason'
 import type { DormantPaneInfo, WakeRequest } from '../../../shared/types/ipc'
 
 const PANE: DormantPaneInfo = {
@@ -12,10 +12,9 @@ const PANE: DormantPaneInfo = {
 const SCAN = { menu: null, inputPrompt: true, inputDirty: false } as unknown as ScreenScan
 
 // O "renderer": responde o pedido de wake com o sessions.id da sessão retomada e
-// a PTY sobe; a tela/status ficam prontos quando o teste mandar.
+// a PTY sobe; a tela fica pronta quando o teste mandar.
 function harness(over: Partial<DormantPanesDeps> & { answer?: 'ok' | 'error' | 'silent' } = {}) {
   const running = new Set<string>()
-  const status = new Map<string, LiveStatus>()
   const screens = new Map<string, ScreenScan | null>()
   const requests: WakeRequest[] = []
   const warns: Array<Record<string, unknown>> = []
@@ -38,7 +37,6 @@ function harness(over: Partial<DormantPanesDeps> & { answer?: 'ok' | 'error' | '
     },
     isRunning: (id) => running.has(id),
     screen: async (id) => screens.get(id) ?? null,
-    status: (id) => status.get(id) ?? null,
     warn: (e) => warns.push(e),
     resultTimeoutMs: 50,
     readyTimeoutMs: 80,
@@ -48,9 +46,8 @@ function harness(over: Partial<DormantPanesDeps> & { answer?: 'ok' | 'error' | '
   panes.setDormant([PANE])
   const ready = (id: string) => {
     screens.set(id, SCAN)
-    status.set(id, 'idle')
   }
-  return { panes, requests, warns, running, ready, status, screens }
+  return { panes, requests, warns, running, ready, screens }
 }
 
 describe('DormantPanes registry', () => {
@@ -113,7 +110,6 @@ describe('wakeDormant', () => {
     const p = h.panes.wakeDormant('cc-1', 'agent-bus')
     await vi.waitFor(() => expect(h.running.has('s-1')).toBe(true))
     h.screens.set('s-1', SCAN)
-    h.status.set('s-1', 'working')
 
     // A fila on-idle de quem entrega é que espera o idle.
     expect(await p).toEqual({ ok: true, sessionId: 's-1' })

@@ -5,7 +5,7 @@ import { getMainWindow } from '../services/notifications'
 import { DormantPanes, setDormantPanes } from '../services/dormant-panes'
 import { computeRestorePlan } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
-import { screenOf, statusOf } from './send-prompt'
+import { screenOf } from './send-prompt'
 import type { RestorePlan } from '../../../shared/types/ipc'
 
 // Lazy restore: o plano do boot (quem sobe eager), o espelho das panes dormindo
@@ -42,7 +42,6 @@ export function registerDormantPanesIpc(): void {
     },
     isRunning: (id) => ptyManager.isRunning(id),
     screen: screenOf,
-    status: statusOf,
     warn: (event) => console.warn(JSON.stringify(event)),
   })
   setDormantPanes(panes)

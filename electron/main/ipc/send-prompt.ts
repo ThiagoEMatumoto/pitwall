@@ -64,7 +64,7 @@ const tailSubscribeSchema = z.object({
   sessionIds: z.array(z.string().min(1)).max(MAX_TAIL_SUBSCRIPTIONS),
 })
 
-export function statusOf(ptyId: string): LiveStatus | null {
+function statusOf(ptyId: string): LiveStatus | null {
   // Provider sem índice nativo (Codex): o status é o da PTY.
   if (sessionActivityService.isPtyTracked(ptyId)) return ptyStatusFor(ptyId)
   const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(ptyId) as

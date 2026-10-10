@@ -106,7 +106,6 @@ function harness(opts: { wakeWorks: boolean }): Harness {
     },
     isRunning: (id) => running().has(id),
     screen: async (id) => (running().has(id) ? IDLE_SCAN : null),
-    status: (id) => status.get(id) ?? null,
     warn: () => {},
     readyPollMs: 1,
   })
