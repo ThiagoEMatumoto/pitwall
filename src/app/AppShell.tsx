@@ -28,7 +28,7 @@ import { VideosArea } from '@/features/videos/VideosArea'
 import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { DormantPane } from '@/features/sessions/DormantPane'
-import { wakeIfDormant } from '@/features/sessions/dormant-wake'
+import { createActivationWaker } from '@/features/sessions/dormant-wake'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
@@ -255,6 +255,15 @@ export function AppShell() {
   // true enquanto a reconciliação adiciona/remove painéis: o addPanel ativa o
   // painel novo, e isso não é o usuário escolhendo acordar uma aba dormindo.
   const reconciling = useRef(false)
+  // Wake por ativação só depois do dwell, e nunca pela reativação que o dockview
+  // faz ao remover/mover um painel (X, arrastar entre grupos).
+  const activationWaker = useRef(
+    createActivationWaker((paneId) => apiRef.current?.activePanel?.id === paneId),
+  )
+  useEffect(() => {
+    const waker = activationWaker.current
+    return () => waker.dispose()
+  }, [])
   // false até o fluxo de restore concluir (ou se não houver restore pendente).
   // Enquanto false, NÃO persistimos layout (evita sobrescrever o salvo com vazio
   // antes das panes voltarem).
@@ -288,9 +297,12 @@ export function AppShell() {
         syncFilesRepoToActivePane()
         const id = event.api.activePanel?.id ?? null
         setActivePanelId(id)
-        if (!applyingLayout.current && !reconciling.current) wakeIfDormant(id)
+        const userChoice = !applyingLayout.current && !reconciling.current
+        activationWaker.current.activated(userChoice ? id : null)
       })
+      event.api.onDidMovePanel(() => activationWaker.current.panelRemovedOrMoved())
       event.api.onDidRemovePanel((panel) => {
+        activationWaker.current.panelRemovedOrMoved()
         // Loop guard: se a remoção partiu do store (api.removePanel nosso), ignora.
         if (removingFromStore.current.delete(panel.id)) return
         // Veio do usuário (botão X do dockview / move). closePane é idempotente.
