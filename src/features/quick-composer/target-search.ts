@@ -120,8 +120,9 @@ const REFUSAL_REASON: Record<SendPromptError, string> = {
   'wake-failed': 'ela dormia e não acordou',
 }
 
-export function sendRefusalReason(error: SendPromptError): string {
-  return REFUSAL_REASON[error]
+// detail = o porquê que o main mandou junto (hoje só no 'wake-failed').
+export function sendRefusalReason(error: SendPromptError, detail?: string): string {
+  return detail ? `${REFUSAL_REASON[error]}: ${detail}` : REFUSAL_REASON[error]
 }
 
 export const STATUS_DOT: Record<SendTarget['status'], string> = {
