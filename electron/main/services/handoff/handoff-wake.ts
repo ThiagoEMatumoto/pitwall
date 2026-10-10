@@ -446,6 +446,8 @@ async function wakeNow(handoffId: string, reason: WakeReason, opts: WakeOpts): P
 // retomada. "Para trás" = wake_failed de qualquer linha da mesma conversa sem
 // entrega, item na fila ou handoff_wait posterior para o mesmo handoff (o envelope
 // relê o estado atual do handoff, então uma entrega posterior já o cobre).
+// Resposta a pedido (answered/rejected) fica de fora: o envelope daqui é o de
+// update das filhas; a resposta segue legível em handoff_result/handoff_wait.
 //
 // Na MESMA cadeia (por cc) dos wakes: um wake em curso que acordou a mãe e vai
 // entregar precisa gravar a entrega antes de a consulta abaixo decidir o que
@@ -480,6 +482,7 @@ function failedWakesFor(
     .prepare(
       `SELECT d.handoff_id, d.reason FROM handoff_wake_deliveries d
         WHERE d.outcome = 'wake_failed' AND d.fetched_at IS NULL
+          AND d.reason NOT IN ('answered','rejected')
           AND d.mother_session_id IN (
             SELECT s.id FROM sessions s
              WHERE s.cc_session_id = (SELECT cc_session_id FROM sessions WHERE id = ?))

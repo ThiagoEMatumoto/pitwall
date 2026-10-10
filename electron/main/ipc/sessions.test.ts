@@ -30,6 +30,7 @@ const seam = vi.hoisted(() => ({
   // Linhas de `sessions` por cc_session_id (guarda de re-attach do resume).
   ccRows: [] as Array<Record<string, unknown>>,
   transfers: [] as Array<{ from: string; to: string }>,
+  requestTransfers: [] as Array<{ from: string; to: string }>,
 }))
 
 const SESSION_CONFIG_DIR = '/tmp/cm-test-userdata/mcp-sessions'
@@ -79,6 +80,13 @@ vi.mock('../services/pty-manager', () => ({
 vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
 vi.mock('../services/feature-store', () => ({ get: () => null, linkedObjectiveTitles: () => [] }))
 vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
+vi.mock('../services/handoff-requests', async () => ({
+  ...(await vi.importActual<object>('../services/handoff-requests')),
+  transferRequester: (from: string, to: string) => {
+    seam.requestTransfers.push({ from, to })
+    return 0
+  },
+}))
 vi.mock('../services/handoff-store', () => ({
   get: () => seam.handoff,
   markRunning: (id: string, childSessionId: string) => ({ id, childSessionId, status: 'running' }),
@@ -512,6 +520,7 @@ describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () 
     seam.childRow = null
     seam.ccRows = []
     seam.transfers = []
+    seam.requestTransfers = []
     registerSessionIpc()
   })
 
@@ -569,6 +578,7 @@ describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () 
       { from: 'mother-old', to: session.id },
       { from: 'mother-older', to: session.id },
     ])
+    expect(seam.requestTransfers).toEqual(seam.transfers)
   })
 
   it('re-attach à PTY viva não transfere a liderança', () => {

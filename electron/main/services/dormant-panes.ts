@@ -23,7 +23,7 @@ export function openElsewhereError(pid: number): string {
   return `conversa aberta em outro processo (pid ${pid})`
 }
 
-export type DormantWakeReason = 'agent-bus' | 'handoff-wake' | 'send-prompt'
+export type DormantWakeReason = 'agent-bus' | 'handoff-wake' | 'send-prompt' | 'answer-delivery'
 
 export type DormantWakeOutcome =
   | { ok: true; sessionId: string }

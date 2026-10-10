@@ -13,6 +13,7 @@ import { ptyManager } from '../services/pty-manager'
 import { assertNotOpenElsewhere } from '../services/conversation-holder'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
+import * as requestStore from '../services/handoff-requests'
 import { wakeMotherFor } from '../services/handoff/handoff-wake'
 // formatPtyInjection vive em services/handoff/inject.ts (fonte canônica, sem
 // dependência de electron). Reexportado abaixo para não quebrar quem importa
@@ -905,7 +906,10 @@ export function transferLeadershipToResumed(
   origin: ResumeOrigin,
 ): void {
   for (const id of priorSessionIds) {
-    if (!ptyManager.isRunning(id)) handoffStore.transferMother(id, resumed.id)
+    if (ptyManager.isRunning(id)) continue
+    handoffStore.transferMother(id, resumed.id)
+    // A resposta a um pedido aberto vai para quem perguntou/escalou: a retomada.
+    requestStore.transferRequester(id, resumed.id)
   }
   resumedHook(resumed, origin)
 }
