@@ -69,6 +69,9 @@ class PtyManager extends TypedEmitter {
   // Última escrita/resize vinda do app: o eco da tecla e o reflow que vêm logo
   // depois não são o agente trabalhando.
   private lastInputAt = new Map<string, number>()
+  // Último I/O de qualquer lado (saída do processo, escrita ou resize do app),
+  // para TODA PTY: a hibernação por ociosidade só considera quem está parado.
+  private lastIoAt = new Map<string, number>()
 
   spawn(opts: SpawnOptions): void {
     if (this.ptys.has(opts.sessionId)) {
@@ -96,6 +99,7 @@ class PtyManager extends TypedEmitter {
 
     this.ptys.set(opts.sessionId, pty)
     this.backlog.set(opts.sessionId, '')
+    this.lastIoAt.set(opts.sessionId, Date.now())
     if (opts.sampleActivity) {
       this.samples.set(opts.sessionId, { lastByteAt: null, tailHash: null, hashChangedAt: null })
     }
@@ -106,6 +110,7 @@ class PtyManager extends TypedEmitter {
       const next = prev + data
       const capped = next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next
       this.backlog.set(opts.sessionId, capped)
+      this.lastIoAt.set(opts.sessionId, Date.now())
       const sample = this.samples.get(opts.sessionId)
       if (sample) {
         const now = Date.now()
@@ -119,6 +124,7 @@ class PtyManager extends TypedEmitter {
       this.ptys.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
+      this.lastIoAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
     })
   }
@@ -126,6 +132,17 @@ class PtyManager extends TypedEmitter {
   // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
   getActivitySample(sessionId: string): PtySample | null {
     return this.samples.get(sessionId) ?? null
+  }
+
+  // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
+  getLastIoAt(sessionId: string): number | null {
+    return this.lastIoAt.get(sessionId) ?? null
+  }
+
+  // PID do processo da PTY. O spawn é `<shell> -c 'exec <cli>'`, então no Linux
+  // é o próprio claude depois do exec.
+  getPid(sessionId: string): number | null {
+    return this.ptys.get(sessionId)?.pid ?? null
   }
 
   getBacklog(sessionId: string): string {
@@ -136,6 +153,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) throw new Error(`session ${sessionId} not running`)
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.write(data)
   }
 
@@ -143,6 +161,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.resize(cols, rows)
     this.emit('resize', { sessionId, cols, rows })
   }
@@ -154,6 +173,7 @@ class PtyManager extends TypedEmitter {
     this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
+    this.lastIoAt.delete(sessionId)
   }
 
   killAll(): void {
@@ -162,6 +182,7 @@ class PtyManager extends TypedEmitter {
     this.backlog.clear()
     this.samples.clear()
     this.lastInputAt.clear()
+    this.lastIoAt.clear()
   }
 
   isRunning(sessionId: string): boolean {

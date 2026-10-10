@@ -87,6 +87,8 @@ interface CcSessionFile {
   updatedAt?: number
   // Campo 22 de /proc/<pid>/stat (starttime, em ticks) do processo que escreveu.
   procStart?: string
+  // Quando o status atual começou (epoch ms) — o updatedAt muda por outros campos.
+  statusUpdatedAt?: number
 }
 
 export interface IndexEntry {
@@ -96,6 +98,7 @@ export interface IndexEntry {
   name: string | null
   cwd: string | null
   updatedAt: number | null
+  statusUpdatedAt: number | null
 }
 
 // Lê todos os ~/.claude/sessions/<pid>.json e indexa por sessionId. Compartilhado
@@ -123,6 +126,7 @@ export function buildSessionsFileIndex(): Map<string, IndexEntry> {
       name: data.name ?? null,
       cwd: data.cwd ?? null,
       updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : null,
+      statusUpdatedAt: typeof data.statusUpdatedAt === 'number' ? data.statusUpdatedAt : null,
     })
   }
   return next
