@@ -387,10 +387,7 @@ app.whenReady().then(async () => {
   // boot e é idempotente — a query só toca handoffs órfãos.
   handoffReconcileTimer = setInterval(
     () =>
-      handoffStore.reconcileStuck(
-        killChildIfRunning,
-        (id) => void wakeMotherFor(id, 'interrupted'),
-      ),
+      handoffStore.reconcileStuck(killChildIfRunning, (id) => void wakeMotherFor(id, 'interrupted')),
     HANDOFF_RECONCILE_INTERVAL_MS,
   )
 

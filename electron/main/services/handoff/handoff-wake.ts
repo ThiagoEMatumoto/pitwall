@@ -153,10 +153,7 @@ function renderPending(p: Pending): string {
 
 function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boolean } {
   if (reason === 'answered' || reason === 'rejected') {
-    return {
-      body: 'Resposta a um pedido registrada: veja handoff_result.requests.',
-      truncated: false,
-    }
+    return { body: 'Resposta a um pedido registrada: veja handoff_result.requests.', truncated: false }
   }
   const raw =
     (reason === 'asked' ? h.pendingQuestion : reason === 'reported' ? h.summary : h.error) ?? ''
@@ -659,7 +656,8 @@ function ledgerStartedAt(): number | null {
     .get()
   if (!hasRunner) return null
   const row = db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as
-    { applied_at: number } | undefined
+    | { applied_at: number }
+    | undefined
   return row?.applied_at ?? null
 }
 

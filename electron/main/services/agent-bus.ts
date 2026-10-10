@@ -548,11 +548,7 @@ export class AgentBus {
     if (res.changes === 0) return
     const row = this.row(id)
     if (row.to_session_id)
-      this.deps.pulse?.({
-        fromSessionId: row.from_session_id,
-        toSessionId: row.to_session_id,
-        kind: 'ask',
-      })
+      this.deps.pulse?.({ fromSessionId: row.from_session_id, toSessionId: row.to_session_id, kind: 'ask' })
   }
 
   // Evento terminal da PromptQueue: o envelope que esperava o fim do turno saiu
