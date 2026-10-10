@@ -198,11 +198,13 @@ export function insertRow(args: {
     )
 }
 
+// wake_failed não conta: não chegou à mãe, e contar faria o reenvio dele (quando
+// ela volta) estourar o teto que existe contra loop de entregas.
 function wakesInLastHour(handoffId: string): number {
   const row = getDb()
     .prepare(
       `SELECT COUNT(DISTINCT wake_id) AS n FROM handoff_wake_deliveries
-        WHERE handoff_id = ? AND created_at > ? AND outcome NOT IN ('capped','woke_dormant')
+        WHERE handoff_id = ? AND created_at > ? AND outcome NOT IN ('capped','woke_dormant','wake_failed')
           AND reason NOT IN ('answered','rejected')`,
     )
     .get(handoffId, Date.now() - HOUR_MS) as { n: number }
@@ -258,7 +260,7 @@ export function wakeMotherFor(
   reason: WakeReason,
   // toSessionId: entrega a esta sessão em vez da mãe gravada no handoff (o
   // reenvio para a mãe retomada; handoff terminal não tem a liderança transferida).
-  opts: { actorSessionId?: string | null; toSessionId?: string } = {},
+  opts: WakeOpts = {},
 ): Promise<void> {
   // Nunca lança, nem síncrono: o chamador está no meio de outra transição (ex.: o
   // erro original da adoção) e um throw aqui o mascararia.
@@ -291,11 +293,14 @@ function inChain(key: string, task: () => Promise<void>): Promise<void> {
   return next
 }
 
-async function wakeNow(
-  handoffId: string,
-  reason: WakeReason,
-  opts: { actorSessionId?: string | null; toSessionId?: string },
-): Promise<void> {
+interface WakeOpts {
+  actorSessionId?: string | null
+  toSessionId?: string
+  // Reenvio de um wake_failed: fora do teto, que já o barrou ou o contaria de novo.
+  redelivery?: boolean
+}
+
+async function wakeNow(handoffId: string, reason: WakeReason, opts: WakeOpts): Promise<void> {
   const h = handoffStore.get(handoffId)
   if (!h) return
   let mother = opts.toSessionId ?? h.motherSessionId
@@ -314,10 +319,20 @@ async function wakeNow(
     return
   }
   try {
-    const total = wakesInLastHour(handoffId)
+    const total = opts.redelivery ? 0 : wakesInLastHour(handoffId)
     if (total >= WAKE_CAP_PER_HANDOFF_PER_HOUR) {
-      insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome: 'capped' })
-      console.warn(JSON.stringify({ event: 'handoff_wake_capped', handoffId, total }))
+      // Mãe dormindo: o update não chegaria agora de qualquer jeito. wake_failed é
+      // reenviado quando ela volta; capped se perderia.
+      const asleep = dormantMotherCc(mother) !== null
+      insertRow({
+        wakeId: randomUUID(),
+        handoffId,
+        mother,
+        reason,
+        outcome: asleep ? 'wake_failed' : 'capped',
+        detail: asleep ? 'capped-while-dormant' : null,
+      })
+      console.warn(JSON.stringify({ event: 'handoff_wake_capped', handoffId, total, asleep }))
       return
     }
     const { body, truncated } = bodyFor(h, reason)
@@ -449,7 +464,7 @@ export async function redeliverFailedWakes(motherSessionId: string): Promise<num
     count = todo.length
     for (const r of todo) {
       try {
-        await wakeNow(r.handoff_id, r.reason, { toSessionId: motherSessionId })
+        await wakeNow(r.handoff_id, r.reason, { toSessionId: motherSessionId, redelivery: true })
       } catch (err) {
         console.error('[handoff-wake] reenvio de wake_failed falhou:', err)
       }
@@ -492,17 +507,24 @@ async function wakeDormantMother(
   mother: string,
 ): Promise<{ ok: true; sessionId: string } | { ok: false; error: string } | null> {
   const panes = getDormantPanes()
-  if (!panes) return null
-  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
-    { cc_session_id: string | null } | undefined
-  const cc = row?.cc_session_id
-  if (!cc || !panes.findDormantByCc(cc)) return null
+  const cc = dormantMotherCc(mother)
+  if (!panes || !cc) return null
   const woke = await panes.wakeDormant(cc, 'handoff-wake')
   if (!woke.ok) return { ok: false, error: woke.error }
   // O sessions:resume já transferiu; repetir é no-op (a mãe antiga não lidera mais
   // nada). Fica para o caso de o renderer retomar por outro caminho.
   handoffStore.transferMother(mother, woke.sessionId)
   return { ok: true, sessionId: woke.sessionId }
+}
+
+// cc da conversa da mãe se ela está numa pane dormindo; null com a pref desligada.
+function dormantMotherCc(mother: string): string | null {
+  const panes = getDormantPanes()
+  if (!panes) return null
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
+    { cc_session_id: string | null } | undefined
+  const cc = row?.cc_session_id
+  return cc && panes.findDormantByCc(cc) ? cc : null
 }
 
 function recordSent(

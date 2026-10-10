@@ -23,7 +23,9 @@ import { DormantPanes, setDormantPanes } from '../dormant-panes'
 import { setPref } from '../prefs-store'
 import { LAZY_RESTORE_PREF, lazyRestoreEnabled } from '../restore-plan'
 import {
+  WAKE_CAP_PER_HANDOFF_PER_HOUR,
   __resetForTests,
+  insertRow,
   redeliverFailedWakes,
   setHandoffWakeQueue,
   wakeHealth,
@@ -294,5 +296,85 @@ describe('pref sessions.lazyRestore desligada', () => {
     expect(rows()).toEqual([
       { outcome: 'not_running', mother_session_id: OLD_MOTHER, detail: 'not-running' },
     ])
+  })
+})
+
+describe('teto anti-loop (6/h) e mãe dormindo', () => {
+  function fillCap(id: string, outcome: 'delivered' | 'wake_failed') {
+    for (let i = 0; i < WAKE_CAP_PER_HANDOFF_PER_HOUR; i++) {
+      insertRow({
+        wakeId: `cap-${i}`,
+        handoffId: id,
+        mother: OLD_MOTHER,
+        reason: 'reported',
+        outcome,
+      })
+    }
+  }
+
+  function motherResumed() {
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, 'r1', 'cc-mother', 'running', ?)`,
+      )
+      .run(NEW_MOTHER, Date.now())
+  }
+
+  it('wake_failed não conta no teto', async () => {
+    const id = seed('report')
+    fillCap(id, 'wake_failed')
+    dormant('ok')
+    const send = fakeQueue()
+
+    await wakeMotherFor(id, 'reported')
+
+    expect(send.mock.calls.map(([i]) => i.sessionId)).toEqual([OLD_MOTHER, NEW_MOTHER])
+    expect(rows().filter((r) => r.outcome === 'capped')).toEqual([])
+  })
+
+  it('teto estourado com a mãe dormindo vira wake_failed e é reenviado quando ela volta', async () => {
+    const id = seed('report')
+    fillCap(id, 'delivered')
+    dormant('ok')
+    const send = fakeQueue()
+
+    await wakeMotherFor(id, 'reported')
+
+    expect(send).not.toHaveBeenCalled()
+    expect(wakeRequests).toEqual([])
+    expect(rows().at(-1)).toEqual({
+      outcome: 'wake_failed',
+      mother_session_id: OLD_MOTHER,
+      detail: 'capped-while-dormant',
+    })
+
+    motherResumed()
+    expect(await redeliverFailedWakes(NEW_MOTHER)).toBe(1)
+
+    expect(send.mock.calls.map(([i]) => i.sessionId)).toEqual([NEW_MOTHER])
+    expect(rows().at(-1)).toMatchObject({ outcome: 'delivered', mother_session_id: NEW_MOTHER })
+  })
+
+  it('teto estourado com a mãe sem pane dormindo segue capped', async () => {
+    const id = seed('report')
+    fillCap(id, 'delivered')
+    const send = fakeQueue()
+
+    await wakeMotherFor(id, 'reported')
+
+    expect(send).not.toHaveBeenCalled()
+    expect(rows().at(-1)).toMatchObject({ outcome: 'capped', detail: null })
+  })
+
+  it('pref desligada: capped como antes, mesmo com a pane registrada', async () => {
+    getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
+    const id = seed('report')
+    fillCap(id, 'delivered')
+    dormant('ok')
+    fakeQueue()
+
+    await wakeMotherFor(id, 'reported')
+
+    expect(rows().at(-1)).toMatchObject({ outcome: 'capped', detail: null })
   })
 })
