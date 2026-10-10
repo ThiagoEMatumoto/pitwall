@@ -31,11 +31,15 @@ export interface HibernateCandidate {
 // O recorte de ~/.claude/sessions/<pid>.json que o gate lê (escritor = o claude).
 export interface SessionFileState {
   pid: number
+  procStart: string | null
   status: 'busy' | 'idle' | 'waiting' | 'shell' | null
   statusUpdatedAt: number | null
 }
 
 export interface IdleHibernatorDeps {
+  // Pref sessions.lazyRestore (opt-in): sem ela não existe pane dormant nem wake,
+  // então hibernar seria só matar a sessão. false = desligado, como afterMin <= 0.
+  lazyRestore(): boolean
   // Minutos da pref; <= 0 = desligado.
   afterMin(): number
   // PTYs vivas do provider claude com ccSessionId.
@@ -45,7 +49,10 @@ export interface IdleHibernatorDeps {
   lastIoAt(sessionId: string): number | null
   // null = sem arquivo, ilegível ou sem pid.
   sessionFile(ccSessionId: string): SessionFileState | null
-  isPidAlive(pid: number): boolean
+  // Mesmo critério do índice de sessões: pid vivo E o mesmo processo (procStart).
+  isPidAlive(file: SessionFileState): boolean
+  // sessions.id da PTY viva desta conversa (findAliveByCc), ou null.
+  aliveSessionId(ccSessionId: string): string | null
   activeHandoffCcSessionIds(): string[]
   queueHas(sessionId: string): boolean
   // agent_ask envolvendo a conversa desde `since` (ou ainda pendente).
@@ -102,9 +109,17 @@ export class IdleHibernator {
     return this.pending.has(sessionId)
   }
 
-  // Liga o tick só com a pref > 0. Chamado no boot e quando a pref muda.
-  reschedule(): void {
+  // Minutos efetivos: 0 se qualquer uma das duas prefs estiver desligada.
+  private effectiveAfterMin(): number {
+    if (!this.deps.lazyRestore()) return 0
     const afterMin = this.deps.afterMin()
+    return afterMin > 0 ? afterMin : 0
+  }
+
+  // Liga o tick só com lazyRestore E afterMin > 0. Chamado no boot e quando
+  // qualquer uma das duas prefs muda.
+  reschedule(): void {
+    const afterMin = this.effectiveAfterMin()
     this.stats.afterMin = afterMin
     if (afterMin > 0 && !this.timer) {
       this.timer = setInterval(() => void this.tick(), this.deps.tickMs ?? HIBERNATE_TICK_MS)
@@ -123,7 +138,7 @@ export class IdleHibernator {
   }
 
   async tick(): Promise<void> {
-    const afterMin = this.deps.afterMin()
+    const afterMin = this.effectiveAfterMin()
     this.stats.afterMin = afterMin
     if (afterMin <= 0 || this.ticking) return
     this.ticking = true
@@ -160,7 +175,8 @@ export class IdleHibernator {
     // c) status do próprio claude.
     const file = this.deps.sessionFile(c.ccSessionId)
     if (!file) return refuse('status-missing')
-    if (!this.deps.isPidAlive(file.pid)) return refuse('status-dead')
+    if (!this.deps.isPidAlive(file)) return refuse('status-dead')
+    if (this.deps.aliveSessionId(c.ccSessionId) !== c.sessionId) return refuse('status-dead')
     if (file.status !== 'idle') return refuse('status-not-idle')
     if (file.statusUpdatedAt === null || now - file.statusUpdatedAt < windowMs) {
       return refuse('status-recent')

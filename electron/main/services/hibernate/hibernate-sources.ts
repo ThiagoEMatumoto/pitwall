@@ -11,7 +11,12 @@ import type { HibernateCandidate, SessionFileState } from './idle-hibernator'
 export function sessionFileFor(ccSessionId: string): SessionFileState | null {
   const entry = buildSessionsFileIndex().get(ccSessionId)
   if (!entry) return null
-  return { pid: entry.pid, status: entry.status ?? null, statusUpdatedAt: entry.statusUpdatedAt }
+  return {
+    pid: entry.pid,
+    procStart: entry.procStart,
+    status: entry.status ?? null,
+    statusUpdatedAt: entry.statusUpdatedAt,
+  }
 }
 
 // Aba no layout salvo E acordada (a dormant não tem PTY, mas o snapshot é igual).
