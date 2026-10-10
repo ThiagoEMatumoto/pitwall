@@ -677,7 +677,8 @@ export function resumeHandoffChild(
   // a trabalhar sozinha. Quem pede trabalho passa o texto — o painel manda o
   // defaultResumeKickoff, e a adoção manda o dela (quem foi adotada nunca viu
   // briefing nenhum, e este é o único turno onde ela descobre o próprio apelido).
-  opts: { cols?: number; rows?: number; kickoff?: string } = {},
+  // origin 'renderer' = veio do sessions:resume (a pane já sabe que retomou).
+  opts: { cols?: number; rows?: number; kickoff?: string; origin?: ResumeOrigin } = {},
 ): ResumeHandoffChildResult {
   const db = getDb()
   const handoff = handoffStore.get(id)
@@ -820,7 +821,7 @@ export function resumeHandoffChild(
   broadcast('handoff:updated', updated)
   // A filha também pode ser mãe: o que as linhas antigas lideravam vem junto, e
   // os wake_failed dela saem de novo (vale para handoffs:resume, adopt e relink).
-  transferLeadershipToResumed(priorSessionIds, namedSession.id)
+  transferLeadershipToResumed(priorSessionIds, namedSession, opts.origin ?? 'main')
   return { handoff: updated, session: namedSession, alreadyRunning: false }
 }
 
@@ -900,20 +901,25 @@ function recordResponded(e: AttentionRespondedEvent): void {
 // filha chegaria a um id morto.
 export function transferLeadershipToResumed(
   priorSessionIds: string[],
-  resumedSessionId: string,
+  resumed: Session,
+  origin: ResumeOrigin,
 ): void {
   for (const id of priorSessionIds) {
-    if (!ptyManager.isRunning(id)) handoffStore.transferMother(id, resumedSessionId)
+    if (!ptyManager.isRunning(id)) handoffStore.transferMother(id, resumed.id)
   }
-  resumedHook(resumedSessionId)
+  resumedHook(resumed, origin)
 }
+
+// Quem pediu o resume: o renderer (sessions:resume, a pane já é dele) ou o
+// próprio main (handoffs:resume, adopt), que a pane dormindo não viu acontecer.
+export type ResumeOrigin = 'renderer' | 'main'
 
 // Conversa que voltou a ter PTY (resume spawnou). Injetável (padrão do
 // setTurnEndedHook): quem reenvia os wakes perdidos precisa da tela, que mora no
 // ipc/send-prompt; importá-lo daqui puxaria a fila inteira para este módulo.
-let resumedHook: (sessionId: string) => void = () => {}
+let resumedHook: (session: Session, origin: ResumeOrigin) => void = () => {}
 
-export function setResumedSessionHook(fn: (sessionId: string) => void): void {
+export function setResumedSessionHook(fn: (session: Session, origin: ResumeOrigin) => void): void {
   resumedHook = fn
 }
 
@@ -1125,7 +1131,11 @@ export function registerSessionIpc(): void {
     // acontece igual — o que não acontece é o disparo automático de trabalho.
     const linked = findRelinkableHandoff(input.ccSessionId)
     if (linked) {
-      const resumed = resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows })
+      const resumed = resumeHandoffChild(linked.id, {
+        cols: input.cols,
+        rows: input.rows,
+        origin: 'renderer',
+      })
       return { session: resumed.session, reattached: resumed.alreadyRunning }
     }
 
@@ -1159,7 +1169,7 @@ export function registerSessionIpc(): void {
       cols: input.cols,
       rows: input.rows,
     })
-    transferLeadershipToResumed(priorSessionIds, session.id)
+    transferLeadershipToResumed(priorSessionIds, session, 'renderer')
     return { session, reattached: false }
   })
 

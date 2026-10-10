@@ -27,6 +27,9 @@ vi.mock('../services/pty-manager', () => ({
 
 import * as handoffStore from '../services/handoff-store'
 import { transferLeadershipToResumed } from './sessions'
+import type { Session } from '../../../shared/types/ipc'
+
+const RESUMED = { id: 'mother-new' } as Session
 
 const CC = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
 
@@ -114,7 +117,7 @@ describe('transferLeadershipToResumed (DB real)', () => {
     insertSession('mother-new', 20, 'running')
     live.add('mother-new')
 
-    transferLeadershipToResumed(prior, 'mother-new')
+    transferLeadershipToResumed(prior, RESUMED, 'renderer')
 
     expect(motherOf(h.id)).toBe('mother-new')
     expect(handoffStore.get(h.id)?.motherSessionId).toBe('mother-new')
@@ -129,7 +132,7 @@ describe('transferLeadershipToResumed (DB real)', () => {
     handoffStore.report(done.id, 'feito')
     const moved = childOf('mother-dead', 'r-c', 'child-c')
 
-    transferLeadershipToResumed(priorIdsOfCc(), 'mother-new')
+    transferLeadershipToResumed(priorIdsOfCc(), RESUMED, 'renderer')
 
     expect(motherOf(keptAlive.id)).toBe('mother-alive')
     expect(motherOf(done.id)).toBe('mother-dead')

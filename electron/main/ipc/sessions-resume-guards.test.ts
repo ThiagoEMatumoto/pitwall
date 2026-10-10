@@ -285,7 +285,7 @@ describe('hook de sessão retomada (reenvio dos wake_failed)', () => {
 
   it('dispara com o id novo quando o resume spawna, e não no re-attach', () => {
     const resumed: string[] = []
-    setResumedSessionHook((id) => resumed.push(id))
+    setResumedSessionHook((session) => resumed.push(session.id))
     insertSession('old', CC, 10)
 
     const { session } = resumeResult()
@@ -293,6 +293,22 @@ describe('hook de sessão retomada (reenvio dos wake_failed)', () => {
 
     expect(resumeResult().reattached).toBe(true)
     expect(resumed).toEqual([session.id])
+  })
+
+  it("origem: sessions:resume (inclusive o relink) é 'renderer'; handoffs:resume é 'main'", () => {
+    const origins: Array<[string, string]> = []
+    setResumedSessionHook((session, origin) => origins.push([session.id, origin]))
+    const { h1 } = childThatIsAlsoMother()
+
+    const viaSwitcher = resumeResult().session.id
+    seam.live.clear()
+    seam.handlers.get('handoffs:resume')!(null, h1 as never)
+    const viaPanel = seam.spawns[1]
+
+    expect(origins).toEqual([
+      [viaSwitcher, 'renderer'],
+      [viaPanel, 'main'],
+    ])
   })
 })
 
@@ -432,7 +448,7 @@ describe('handoffs:resume (resumeHandoffChild)', () => {
       cancel: () => true,
     })
     const redelivered: Array<Promise<number>> = []
-    setResumedSessionHook((id) => redelivered.push(redeliverFailedWakes(id)))
+    setResumedSessionHook((session) => redelivered.push(redeliverFailedWakes(session.id)))
 
     seam.handlers.get('handoffs:resume')!(null, h1 as never)
     const resumedId = seam.spawns[0]

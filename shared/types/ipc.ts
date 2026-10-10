@@ -1309,6 +1309,13 @@ export interface WakeResult {
   error?: string
 }
 
+// main → renderer: o main retomou (handoffs:resume, adopt) a conversa de uma
+// pane que está dormindo; a pane deve passar a mostrar esta sessão viva.
+export interface DormantBecameLiveEvent {
+  ccSessionId: string
+  session: Session
+}
+
 // reattached = a conversa já tinha PTY viva e a guarda do main devolveu essa
 // sessão; nada foi spawnado por esta chamada.
 export interface ResumeSessionResult {
@@ -2901,6 +2908,8 @@ export interface Api {
     /** O main pede para retomar uma pane dormindo; responda com wakeResult. */
     onWakeRequest(handler: (request: WakeRequest) => void): () => void
     wakeResult(result: WakeResult): Promise<void>
+    /** O main retomou a conversa de uma pane dormindo (só com sessions.lazyRestore ligada). */
+    onDormantBecameLive(handler: (event: DormantBecameLiveEvent) => void): () => void
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

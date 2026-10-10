@@ -9,6 +9,7 @@ import type {
   SpawnSessionInput,
   ResumeSessionInput,
   WakeRequest,
+  DormantBecameLiveEvent,
   PtyDataEvent,
   PtyExitEvent,
   SessionFeatureChangedEvent,
@@ -193,6 +194,8 @@ const api: Api = {
     dormantSync: (panes) => invoke('sessions:dormant-sync', panes),
     onWakeRequest: (handler) => subscribe<WakeRequest>('sessions:wake-request', handler),
     wakeResult: (result) => invoke('sessions:wake-result', result),
+    onDormantBecameLive: (handler) =>
+      subscribe<DormantBecameLiveEvent>('sessions:dormant-became-live', handler),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),

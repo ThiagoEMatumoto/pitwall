@@ -90,6 +90,12 @@ export class DormantPanes {
     return this.byCc.get(ccSessionId) ?? null
   }
 
+  // A conversa voltou a ter PTY por fora do wake (resume pedido no main): deixa de
+  // contar como dormindo já, antes do próximo sync do renderer.
+  forget(ccSessionId: string): void {
+    this.byCc.delete(ccSessionId)
+  }
+
   // Mesmo critério do resolveAlias do agent-bus: título, case-insensitive.
   findDormantByAlias(name: string): DormantPaneInfo[] {
     const key = name.trim().toLowerCase()
