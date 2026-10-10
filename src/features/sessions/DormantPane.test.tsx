@@ -127,6 +127,24 @@ describe('DormantPane', () => {
   })
 })
 
+describe('DormantPane com erro de restore', () => {
+  it('mostra o motivo e o Retomar, sem o badge de dormindo', () => {
+    const failed: ActivePane = {
+      ...pane,
+      restoreError: 'conversa aberta em outro processo (pid 42)',
+    }
+    useAppStore.setState({ panes: [failed] })
+    render(<Wired target={failed} />)
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'conversa aberta em outro processo (pid 42)',
+    )
+    expect(screen.queryByText(DORMANT_BADGE)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Retomar/ }))
+    expect(resumed).toEqual(['cc-1'])
+  })
+})
+
 describe('wakeIfDormant (onDidActivePanelChange)', () => {
   it('ativar a aba dormant acorda; ativar aba acordada ou inexistente não faz nada', async () => {
     useAppStore.setState({ lazyRestore: true })

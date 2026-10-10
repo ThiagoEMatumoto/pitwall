@@ -44,6 +44,8 @@ const calls = {
   prefsGet: [] as string[],
 }
 let prefValue: unknown = undefined
+// cc → erro com que o resume rejeita (a recusa da guarda do main, via IPC).
+const resumeFails = new Map<string, string>()
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
 
 const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
@@ -51,6 +53,8 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   isResumable: (cc: string) => Promise.resolve(cc !== 'cc-nojsonl'),
   resume: (input: { ccSessionId: string }) => {
     calls.resume.push(input.ccSessionId)
+    const fail = resumeFails.get(input.ccSessionId)
+    if (fail) return Promise.reject(new Error(fail))
     return Promise.resolve({
       session: {
         id: `sess-${input.ccSessionId}`,
@@ -140,6 +144,7 @@ beforeEach(async () => {
   calls.wakeResult = []
   calls.prefsGet = []
   prefValue = undefined
+  resumeFails.clear()
   useAppStore.setState({ panes: [], lazyRestore: null, restoreComplete: false })
   await useAppStore.getState().startLiveWatch()
 })
@@ -194,5 +199,67 @@ describe('restore com a pref desligada (default)', () => {
     expect(calls.wakeResult).toEqual([
       { requestId: 'w1', sessionId: null, error: 'lazy-restore-off' },
     ])
+  })
+})
+
+describe('resume eager que falha no boot', () => {
+  const refusal =
+    "Error invoking remote method 'sessions:resume': Error: conversa aberta em outro processo (pid 42)"
+
+  it('pref off: a pane volta dormant com o erro e fica no open_panes (N continua N)', async () => {
+    resumeFails.set('cc-a', refusal)
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await waitPersist()
+
+    const panes = useAppStore.getState().panes
+    expect(panes.map((p) => p.paneId).sort()).toEqual(bootSnaps.map((s) => s.paneId).sort())
+    const failed = panes.find((p) => p.paneId === 'pane-a')!
+    expect(failed.dormant).toBe(true)
+    expect(failed.session.id).toBe('dormant:cc-a')
+    expect(failed.restoreError).toBe('conversa aberta em outro processo (pid 42)')
+    // As outras seguem vivas: é a única dormant possível com a pref off.
+    expect(panes.filter((p) => p.dormant).map((p) => p.paneId)).toEqual(['pane-a'])
+    expect(
+      calls.savePanes
+        .at(-1)!
+        .map((s) => s.paneId)
+        .sort(),
+    ).toEqual(bootSnaps.map((s) => s.paneId).sort())
+    expect(calls.dormantSync).toBe(0)
+  })
+
+  it('Retomar depois que a recusa passou acorda a pane no lugar, sem o erro', async () => {
+    resumeFails.set('cc-a', refusal)
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    resumeFails.clear()
+
+    const id = await useAppStore.getState().wakeDormantPane('pane-a')
+
+    expect(id).toBe('sess-cc-a')
+    const pane = useAppStore.getState().panes.find((p) => p.paneId === 'pane-a')!
+    expect(pane.dormant).toBeUndefined()
+    expect(pane.restoreError).toBeUndefined()
+  })
+
+  it('Retomar que falha de novo atualiza o erro mostrado', async () => {
+    resumeFails.set('cc-a', refusal)
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    resumeFails.set('cc-a', "Error invoking remote method 'sessions:resume': Error: outro motivo")
+
+    expect(await useAppStore.getState().wakeDormantPane('pane-a')).toBeNull()
+    const pane = useAppStore.getState().panes.find((p) => p.paneId === 'pane-a')!
+    expect(pane.dormant).toBe(true)
+    expect(pane.restoreError).toBe('outro motivo')
+  })
+
+  it('spawn de pane sem transcript que falha segue descartada (nada a retomar)', async () => {
+    const spawn = sessionsImpl.spawn
+    sessionsImpl.spawn = () => Promise.reject(new Error('boom'))
+    try {
+      await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    } finally {
+      sessionsImpl.spawn = spawn
+    }
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-nojsonl')).toBe(false)
   })
 })

@@ -71,6 +71,10 @@ export interface ActivePane {
   // (id 'dormant:<cc>', status 'exited') e NUNCA vai a IPC; acorda por
   // ativação explícita (wakeDormantPane), mantendo o paneId.
   dormant?: true
+  // Dormant porque o resume do boot falhou (ex.: conversa aberta em outro
+  // processo). A aba fica no layout e no open_panes com o erro à vista e o
+  // Retomar; vale mesmo com a pref de lazy restore desligada.
+  restoreError?: string
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -79,7 +83,11 @@ export function isDormantSessionId(id: string | null | undefined): boolean {
   return !!id && id.startsWith(DORMANT_ID_PREFIX)
 }
 
-function dormantPaneFromSnapshot(snap: PaneSnapshot, paneId: string): ActivePane {
+function dormantPaneFromSnapshot(
+  snap: PaneSnapshot,
+  paneId: string,
+  restoreError?: string,
+): ActivePane {
   return {
     paneId,
     session: {
@@ -100,7 +108,14 @@ function dormantPaneFromSnapshot(snap: PaneSnapshot, paneId: string): ActivePane
     projectColor: snap.projectColor ?? null,
     mode: readPaneMode(snap.ccSessionId),
     dormant: true,
+    ...(restoreError ? { restoreError } : {}),
   }
+}
+
+// "Error invoking remote method 'sessions:resume': Error: <msg>" → "<msg>".
+function ipcErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
 }
 
 // Pane ativa do layout salvo do dockview: activeGroup → o grupo na árvore do
@@ -275,7 +290,8 @@ function schedulePersist(panes: ActivePane[]): void {
 
 // Restaura com paralelismo limitado: no máximo `limit` spawns de claude
 // simultâneos, pra não disparar dezenas de PTYs de uma vez. A falha de um
-// individual não aborta os demais — o erro aparece no terminal da pane.
+// individual não aborta os demais: devolve os resumes que falharam, para a aba
+// voltar dormant com o erro em vez de sumir do layout e do open_panes.
 // Sessões com transcript retomam (--resume); as sem (spawn que nunca conversou)
 // viram sessão NOVA no mesmo repo, mantendo o paneId pra o layout do dockview bater.
 async function restoreFromSnapshots(
@@ -283,14 +299,16 @@ async function restoreFromSnapshots(
   resume: AppState['resumeSession'],
   open: AppState['openSession'],
   limit = 4,
-): Promise<void> {
+): Promise<{ snap: PaneSnapshot; error: string }[]> {
+  const failed: { snap: PaneSnapshot; error: string }[] = []
   const queue = [...snapshots]
   async function worker(): Promise<void> {
     let snap = queue.shift()
     while (snap) {
       const current = snap
+      let resumable = false
       try {
-        const resumable = await sessionsApi.isResumable(current.ccSessionId)
+        resumable = await sessionsApi.isResumable(current.ccSessionId)
         if (resumable) {
           await resume(
             current.repo,
@@ -309,13 +327,16 @@ async function restoreFromSnapshots(
             current.paneId,
           )
         }
-      } catch {
-        // Pane individual não restaurável — segue restaurando as outras.
+      } catch (err) {
+        // Pane individual não restaurável — segue restaurando as outras. Sem
+        // transcript (spawn falhou) não há o que retomar depois: segue fora.
+        if (resumable) failed.push({ snap: current, error: ipcErrorMessage(err) })
       }
       snap = queue.shift()
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, snapshots.length) }, worker))
+  return failed
 }
 
 // Reconstrói uma ActivePane a partir de uma sessão LIVE da lista global. Como o
@@ -633,11 +654,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Dormant só entram DEPOIS das eager: o AppShell arma o fallback de 1,5s do
     // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
     // eager lenta perdia o lugar no layout.
-    await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
+    const failed = await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
     const known = new Set(get().panes.map((p) => p.session.ccSessionId))
-    const sleeping = dormant
-      .filter((snap) => !known.has(snap.ccSessionId))
-      .map((snap) => dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`))
+    const sleeping = [...failed, ...dormant.map((snap) => ({ snap, error: undefined }))]
+      .filter(({ snap }) => !known.has(snap.ccSessionId))
+      .map(({ snap, error }) =>
+        dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`, error),
+      )
     if (sleeping.length) {
       set((s) => ({ panes: [...s.panes, ...sleeping] }))
       schedulePersist(get().panes)
@@ -809,7 +832,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((s) => ({
           panes: s.panes.map((p) => {
             if (p.paneId !== paneId || !p.dormant) return p
-            const { dormant: _dormant, ...awake } = p
+            const { dormant: _dormant, restoreError: _error, ...awake } = p
             return { ...awake, session }
           }),
         }))
@@ -817,10 +840,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         void get().refreshLiveSessions()
         return session.id
       } catch (err) {
-        showToast({
-          title: 'Não deu para retomar a sessão',
-          body: err instanceof Error ? err.message : undefined,
-        })
+        const message = ipcErrorMessage(err)
+        // A pane com erro de restore mostra o motivo novo no lugar do antigo.
+        set((s) => ({
+          panes: s.panes.map((p) =>
+            p.paneId === paneId && p.dormant && p.restoreError
+              ? { ...p, restoreError: message }
+              : p,
+          ),
+        }))
+        showToast({ title: 'Não deu para retomar a sessão', body: message })
         return null
       } finally {
         wakes.delete(paneId)

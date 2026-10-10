@@ -1,4 +1,4 @@
-import { Moon } from 'lucide-react'
+import { AlertTriangle, Moon } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import type { ActivePane } from '@/store/appStore'
 
@@ -12,6 +12,8 @@ const FOCUS_RING =
 // só o clique aqui ou a ativação da aba (AppShell).
 // O nome é o session.title (DB via sync); sem ele, tabTitle = o rótulo que a aba
 // mostra (título salvo no layout do dockview), para a pane e a aba dizerem o mesmo.
+// Com restoreError (o resume do boot falhou) mostra o motivo no lugar do badge:
+// essa pane não acorda por ativação, só pelo Retomar.
 export function DormantPane({
   pane,
   tabTitle,
@@ -29,20 +31,30 @@ export function DormantPane({
       data-testid="dormant-pane"
       className="flex h-full w-full flex-col items-center justify-center gap-3 bg-[var(--color-bg)] p-6 text-center"
     >
-      <Icon as={Moon} aria-hidden className="text-[var(--color-text-dim)]" />
+      <Icon
+        as={pane.restoreError ? AlertTriangle : Moon}
+        aria-hidden
+        className="text-[var(--color-text-dim)]"
+      />
       <div className="min-w-0">
         <div className="truncate text-sm text-[var(--color-text)]">{title}</div>
         {subtitle !== title && (
           <div className="truncate text-xs text-[var(--color-text-dim)]">{subtitle}</div>
         )}
       </div>
-      <button
-        type="button"
-        onClick={onWake}
-        className={`rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text-dim)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] ${FOCUS_RING}`}
-      >
-        {DORMANT_BADGE}
-      </button>
+      {pane.restoreError ? (
+        <div role="alert" className="max-w-md text-xs text-[var(--color-text-dim)]">
+          Não deu para retomar: {pane.restoreError}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onWake}
+          className={`rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text-dim)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] ${FOCUS_RING}`}
+        >
+          {DORMANT_BADGE}
+        </button>
+      )}
       <button
         type="button"
         onClick={onWake}

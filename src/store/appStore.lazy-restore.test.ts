@@ -307,6 +307,35 @@ describe('boot lazy', () => {
   })
 })
 
+describe('eager que falha no boot (pref on)', () => {
+  it('a pane ativa cujo resume rejeita volta dormant com o erro, no open_panes', async () => {
+    const resume = sessionsImpl.resume
+    sessionsImpl.resume = (async (input: { repoId: string | null; ccSessionId: string }) => {
+      if (input.ccSessionId === 'cc-active')
+        throw new Error(
+          "Error invoking remote method 'sessions:resume': Error: conversa aberta em outro processo (pid 7)",
+        )
+      return (resume as (i: typeof input) => Promise<unknown>)(input)
+    }) as never
+    try {
+      await useAppStore.getState().restoreSnapshots(bootSnaps, dockLayout)
+    } finally {
+      sessionsImpl.resume = resume
+    }
+    await waitPersist()
+
+    const active = useAppStore.getState().panes.find((p) => p.paneId === 'pane-active')!
+    expect(active.dormant).toBe(true)
+    expect(active.restoreError).toBe('conversa aberta em outro processo (pid 7)')
+    expect(
+      calls.savePanes
+        .at(-1)!
+        .map((s) => s.paneId)
+        .sort(),
+    ).toEqual(bootSnaps.map((s) => s.paneId).sort())
+  })
+})
+
 describe('wakeDormantPane', () => {
   it('retoma no lugar: mesmo paneId, sem dormant, sessão nova', async () => {
     seedDormant('cc-sleep1', 'pane-sleep1')

@@ -185,7 +185,7 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
-      {pane?.dormant && (
+      {pane?.dormant && !pane.restoreError && (
         <span role="img" title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
           <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
         </span>
