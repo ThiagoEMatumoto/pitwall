@@ -20,7 +20,7 @@ import { app } from 'electron'
 import { closeDb, getDb } from './db'
 import * as handoffStore from './handoff-store'
 import { setPref } from './prefs-store'
-import { RESTORE_MODE_PREF, computeRestorePlan } from './restore-plan'
+import { LAZY_RESTORE_PREF, computeRestorePlan } from './restore-plan'
 
 function session(id: string, cc: string): void {
   // Mesmas colunas que o startSession grava (sessions.ts) — é o escritor real.
@@ -49,7 +49,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM handoff_events').run()
   db.prepare('DELETE FROM handoffs').run()
   db.prepare('DELETE FROM sessions').run()
-  db.prepare('DELETE FROM app_prefs WHERE key = ?').run(RESTORE_MODE_PREF)
+  db.prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
+  setPref(LAZY_RESTORE_PREF, true)
   db.prepare(
     `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',1,1)`,
   ).run()
@@ -137,13 +138,35 @@ describe('computeRestorePlan', () => {
     expect(computeRestorePlan(['cc-mother', 'cc-child']).eagerCcSessionIds).toEqual([])
   })
 
-  it("pref sessions.restoreMode = 'eager' sobe todas", () => {
+  it('pref sessions.lazyRestore ausente (default) sobe todas, mesmo com handoff ativo', () => {
+    getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
+    session('mother', 'cc-mother')
+    session('child', 'cc-child')
+    session('loose', 'cc-loose')
+    activeHandoff('mother', 'child')
+
+    const plan = computeRestorePlan(['cc-mother', 'cc-child', 'cc-loose'])
+
+    expect(plan).toEqual({
+      mode: 'eager',
+      eagerCcSessionIds: ['cc-mother', 'cc-child', 'cc-loose'],
+    })
+  })
+
+  it('pref sessions.lazyRestore = false sobe todas', () => {
     session('loose', 'cc-loose')
     session('other', 'cc-other')
-    setPref(RESTORE_MODE_PREF, 'eager')
+    setPref(LAZY_RESTORE_PREF, false)
 
     const plan = computeRestorePlan(['cc-loose', 'cc-other'])
 
     expect(plan).toEqual({ mode: 'eager', eagerCcSessionIds: ['cc-loose', 'cc-other'] })
+  })
+
+  it("valor legado da pref ('lazy' do restoreMode antigo) não liga", () => {
+    session('loose', 'cc-loose')
+    setPref(LAZY_RESTORE_PREF, 'lazy')
+
+    expect(computeRestorePlan(['cc-loose']).mode).toBe('eager')
   })
 })

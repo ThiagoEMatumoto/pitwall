@@ -2,14 +2,19 @@ import { activeHandoffCcSessionIds } from './handoff-store'
 import { getPref } from './prefs-store'
 import type { RestorePlan } from '../../../shared/types/ipc'
 
-import { RESTORE_MODE_PREF } from '../../../shared/restore-mode'
+import { DEFAULT_LAZY_RESTORE, LAZY_RESTORE_PREF } from '../../../shared/lazy-restore'
 
-export { RESTORE_MODE_PREF }
+export { LAZY_RESTORE_PREF }
+
+// Só o booleano true liga: valor legado ou corrompido cai no default (desligado).
+export function lazyRestoreEnabled(): boolean {
+  return getPref<unknown>(LAZY_RESTORE_PREF, DEFAULT_LAZY_RESTORE) === true
+}
 
 // Quem sobe eager no boot, só pelo estado durável. A PromptQueue não entra: ela
 // é em memória e está vazia no boot, então "tem mensagem esperando" nunca vale aqui.
 export function computeRestorePlan(ccSessionIds: string[]): RestorePlan {
-  if (getPref<string>(RESTORE_MODE_PREF, 'lazy') === 'eager') {
+  if (!lazyRestoreEnabled()) {
     return { mode: 'eager', eagerCcSessionIds: [...new Set(ccSessionIds)] }
   }
   const active = new Set(activeHandoffCcSessionIds())

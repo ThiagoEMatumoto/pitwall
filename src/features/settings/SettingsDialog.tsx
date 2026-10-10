@@ -466,8 +466,8 @@ function SessionTab({ open }: { open: boolean }) {
   const keyboardMode = useSessionPrefsStore((s) => s.keyboardMode)
   const defaultPaneMode = useSessionPrefsStore((s) => s.defaultPaneMode)
   const setDefaultPaneMode = useSessionPrefsStore((s) => s.setDefaultPaneMode)
-  const restoreMode = useSessionPrefsStore((s) => s.restoreMode)
-  const setRestoreMode = useSessionPrefsStore((s) => s.setRestoreMode)
+  const lazyRestore = useSessionPrefsStore((s) => s.lazyRestore)
+  const setLazyRestore = useSessionPrefsStore((s) => s.setLazyRestore)
   const setDefaultModel = useSessionPrefsStore((s) => s.setDefaultModel)
   const setDefaultEffort = useSessionPrefsStore((s) => s.setDefaultEffort)
   const setDefaultPermission = useSessionPrefsStore((s) => s.setDefaultPermission)
@@ -574,8 +574,8 @@ function SessionTab({ open }: { open: boolean }) {
           </div>
           <Segmented
             options={RESTORE_MODE_OPTIONS}
-            value={restoreMode}
-            onChange={(v) => void setRestoreMode(v)}
+            value={lazyRestore ? 'lazy' : 'eager'}
+            onChange={(v) => void setLazyRestore(v === 'lazy')}
           />
         </div>
       </div>

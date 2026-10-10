@@ -5,7 +5,7 @@ import { AgentBus, peersFromGraph, setAgentBus } from '../services/agent-bus'
 import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { createSecretRedactor } from '../services/custom-env'
 import { loadSessionGraph } from './session-graph'
-import { getDormantPanes } from '../services/dormant-panes'
+import { agentBusDormantDeps } from '../services/dormant-panes'
 import { promptQueue } from './send-prompt'
 import type { AgentBusSnapshot } from '../../../shared/types/agent-bus'
 import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
@@ -32,13 +32,7 @@ export function registerAgentBusIpc(): void {
     // Snapshot por chamada: um segredo cadastrado agora já sai redigido.
     redact: (text) => createSecretRedactor()(text),
     pulse: emitSessionLinkPulse,
-    dormant: {
-      byAlias: (name) => getDormantPanes()?.findDormantByAlias(name) ?? [],
-      byRepo: (repoId) => getDormantPanes()?.findDormantByRepo(repoId) ?? [],
-      wake: (cc) =>
-        getDormantPanes()?.wakeDormant(cc, 'agent-bus') ??
-        Promise.resolve({ ok: false, error: 'no-registry', sessionId: null }),
-    },
+    dormant: agentBusDormantDeps(),
   })
   setAgentBus(bus)
   onBroadcast('prompt-queue:updated', (_channel, payload) =>

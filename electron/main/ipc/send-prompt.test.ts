@@ -99,7 +99,7 @@ describe('promptQueue wiring — PTY sem espelho (Codex)', () => {
 })
 
 describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
-  function dormant(wakeTo: string | null) {
+  function dormant(wakeTo: string | null, lazyRestore = true) {
     const requests: string[] = []
     const panes: DormantPanes = new DormantPanes({
       requestWake: (req) => {
@@ -119,7 +119,7 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
       readyPollMs: 1,
     })
     panes.setDormant([{ ccSessionId: 'cc-old', paneId: 'p1', title: 'api', repoId: null }])
-    setDormantPanes(panes)
+    setDormantPanes(panes, () => lazyRestore)
     return requests
   }
 
@@ -173,5 +173,17 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
 
     expect(res).toEqual({ ok: false, error: 'not-running' })
     expect(requests).toEqual([])
+  })
+
+  it('pref sessions.lazyRestore desligada: not-running de antes, sem pedir wake', async () => {
+    seam.dead.add('old-pty')
+    seam.ccOf.set('old-pty', 'cc-old')
+    const requests = dormant('new-pty', false)
+
+    const res = await sendWakingDormant({ sessionId: 'old-pty', text: 'segue', when: 'now' })
+
+    expect(res).toEqual({ ok: false, error: 'not-running' })
+    expect(requests).toEqual([])
+    expect(seam.writes).toEqual([])
   })
 })

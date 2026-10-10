@@ -10,7 +10,7 @@ import { migrations } from './migrations'
 import { TuiMenuWatch } from './tui-menu-watch'
 import { PromptQueue } from './prompt-queue'
 import { AgentBus, AgentBusError, ASK_RATE_PER_MINUTE } from './agent-bus'
-import { DormantPanes } from './dormant-panes'
+import { DormantPanes, agentBusDormantDeps, setDormantPanes } from './dormant-panes'
 import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reason'
 import type { AgentBusSnapshot, AgentPeer } from '../../../shared/types/agent-bus'
 
@@ -46,7 +46,7 @@ interface Harness {
   panes: DormantPanes
 }
 
-function harness(opts: { wakeWorks: boolean }): Harness {
+function harness(opts: { wakeWorks: boolean; lazyRestore?: boolean }): Harness {
   const db = new Database(':memory:')
   db.pragma('foreign_keys = OFF')
   for (const m of migrations) m.up(db)
@@ -120,12 +120,10 @@ function harness(opts: { wakeWorks: boolean }): Harness {
     cancel: (id) => queue.cancel(id),
     emit: (snap) => snapshots.push(snap),
     warn: (e) => warns.push(e),
-    dormant: {
-      byAlias: (name) => panes.findDormantByAlias(name),
-      byRepo: (repoId) => panes.findDormantByRepo(repoId),
-      wake: (cc) => panes.wakeDormant(cc, 'agent-bus'),
-    },
+    // A mesma fiação do main (ipc/agent-bus), com a pref sessions.lazyRestore no gate.
+    dormant: agentBusDormantDeps(),
   })
+  setDormantPanes(panes, () => opts.lazyRestore ?? true)
   return { bus, db, written, wakeRequests, snapshots, warns, panes }
 }
 
@@ -226,5 +224,27 @@ describe('AgentBus → wake falhou', () => {
     expect(h.warns).toContainEqual(
       expect.objectContaining({ event: 'agent_bus_wake_failed', error: 'no-window' }),
     )
+  })
+})
+
+describe('AgentBus com a pref sessions.lazyRestore desligada', () => {
+  beforeEach(() => {
+    h = harness({ wakeWorks: true, lazyRestore: false })
+  })
+
+  it('apelido de pane dormindo: o erro de sempre, sem pedir wake', async () => {
+    await expect(
+      h.bus.ask({ fromSessionId: FRONT, to: 'api-contrato', text: 'oi' }),
+    ).rejects.toThrow('Nenhuma sessão viva com o apelido "api-contrato"')
+    expect(h.wakeRequests).toEqual([])
+    expect(h.written).toEqual([])
+  })
+
+  it('repo só com pane dormindo: sugere handoff como antes', async () => {
+    const out = await h.bus.ask({ fromSessionId: FRONT, repo: 'api', text: 'oi' })
+
+    expect(out.mode).toBe('needs-handoff')
+    expect(h.wakeRequests).toEqual([])
+    expect(h.snapshots.at(-1)?.counters.needsHandoff).toBe(1)
   })
 })

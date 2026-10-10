@@ -20,6 +20,8 @@ import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import { DormantPanes, setDormantPanes } from '../dormant-panes'
+import { setPref } from '../prefs-store'
+import { LAZY_RESTORE_PREF, lazyRestoreEnabled } from '../restore-plan'
 import {
   __resetForTests,
   redeliverFailedWakes,
@@ -62,10 +64,13 @@ function seed(finish: 'ask' | 'report' = 'report'): string {
   return h.id
 }
 
+const wakeRequests: string[] = []
+
 function dormant(answer: 'ok' | 'fail') {
   const running = new Set<string>()
   const panes: DormantPanes = new DormantPanes({
     requestWake: (req) => {
+      wakeRequests.push(req.ccSessionId)
       if (answer === 'fail') return false
       queueMicrotask(() => {
         // O resume do renderer cria a linha nova (startSession) e a PTY sobe.
@@ -85,7 +90,8 @@ function dormant(answer: 'ok' | 'fail') {
     readyPollMs: 1,
   })
   panes.setDormant([{ ccSessionId: 'cc-mother', paneId: 'pane-m', title: 'mae', repoId: 'r1' }])
-  setDormantPanes(panes)
+  // Mesmo gate do main: a pref real, lida do app_prefs.
+  setDormantPanes(panes, lazyRestoreEnabled)
   return panes
 }
 
@@ -115,6 +121,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM handoff_events').run()
   db.prepare('DELETE FROM handoffs').run()
   db.prepare('DELETE FROM sessions').run()
+  setPref(LAZY_RESTORE_PREF, true)
+  wakeRequests.length = 0
 })
 
 afterAll(() => {
@@ -241,5 +249,23 @@ describe('reenvio dos wake_failed quando a mãe volta', () => {
       .run()
 
     expect(await redeliverFailedWakes('stranger')).toBe(0)
+  })
+})
+
+describe('pref sessions.lazyRestore desligada', () => {
+  it('mãe dormindo: not_running de antes, sem wake nem transferência', async () => {
+    getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
+    const id = seed('ask')
+    dormant('ok')
+    const send = fakeQueue()
+
+    await wakeMotherFor(id, 'asked')
+
+    expect(wakeRequests).toEqual([])
+    expect(send.mock.calls.map(([i]) => i.sessionId)).toEqual([OLD_MOTHER])
+    expect(handoffStore.get(id)?.motherSessionId).toBe(OLD_MOTHER)
+    expect(rows()).toEqual([
+      { outcome: 'not_running', mother_session_id: OLD_MOTHER, detail: 'not-running' },
+    ])
   })
 })

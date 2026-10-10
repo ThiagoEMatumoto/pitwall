@@ -179,11 +179,33 @@ export class DormantPanes {
 }
 
 let current: DormantPanes | null = null
+let enabled: () => boolean = () => true
 
-export function setDormantPanes(panes: DormantPanes | null): void {
+// enabled = a pref sessions.lazyRestore (o main real passa o leitor dela). Lida a
+// cada chamada: desligar vale na hora, sem reiniciar.
+export function setDormantPanes(panes: DormantPanes | null, isEnabled?: () => boolean): void {
   current = panes
+  enabled = isEnabled ?? (() => true)
 }
 
+// null com a pref desligada: agent-bus, wake da mãe, send-prompt e a resposta a
+// pedido escalado seguem o caminho de antes da feature (not-running/not_running).
 export function getDormantPanes(): DormantPanes | null {
-  return current
+  return current && enabled() ? current : null
+}
+
+// O que o agent-bus enxerga das panes dormindo. Relido a cada chamada: com a pref
+// desligada não há pane dormindo e o ask cai no "nenhuma sessão viva" de antes.
+export function agentBusDormantDeps(): {
+  byAlias(name: string): DormantPaneInfo[]
+  byRepo(repoId: string): DormantPaneInfo[]
+  wake(ccSessionId: string): Promise<DormantWakeOutcome>
+} {
+  return {
+    byAlias: (name) => getDormantPanes()?.findDormantByAlias(name) ?? [],
+    byRepo: (repoId) => getDormantPanes()?.findDormantByRepo(repoId) ?? [],
+    wake: (cc) =>
+      getDormantPanes()?.wakeDormant(cc, 'agent-bus') ??
+      Promise.resolve({ ok: false, error: 'no-registry', sessionId: null }),
+  }
 }

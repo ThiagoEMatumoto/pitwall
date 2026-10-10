@@ -6,7 +6,7 @@ import { DormantPanes, setDormantPanes, waitPtyReady } from '../services/dormant
 import { redeliverFailedWakes } from '../services/handoff/handoff-wake'
 import { setResumedSessionHook } from './sessions'
 import { foreignHolderPid } from '../services/conversation-holder'
-import { computeRestorePlan } from '../services/restore-plan'
+import { computeRestorePlan, lazyRestoreEnabled } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
 import { screenOf } from './send-prompt'
 import type { DormantPaneInfo, RestorePlan } from '../../../shared/types/ipc'
@@ -48,7 +48,7 @@ export function registerDormantPanesIpc(): void {
     screen: screenOf,
     warn: (event) => console.warn(JSON.stringify(event)),
   })
-  setDormantPanes(panes)
+  setDormantPanes(panes, lazyRestoreEnabled)
   // A mãe que dormia voltou (wake ou resume dela): os wake_failed dela saem de novo
   // assim que a TUI estiver pronta para a fila on-idle.
   setResumedSessionHook((sessionId) => {
@@ -63,7 +63,13 @@ export function registerDormantPanesIpc(): void {
   // Devolve a lista enriquecida: o renderer aplica o título nas panes dormindo
   // (o snapshot não o guarda e sem ele a aba cai no rótulo do repo).
   ipcMain.handle('sessions:dormant-sync', (_e, raw: unknown): DormantPaneInfo[] => {
-    const enriched = enrichDormantPanes(dormantSyncSchema.parse(raw))
+    const list = dormantSyncSchema.parse(raw)
+    // Pref desligada: o registro fica vazio, nada no main acorda pane.
+    if (!lazyRestoreEnabled()) {
+      panes.setDormant([])
+      return list
+    }
+    const enriched = enrichDormantPanes(list)
     panes.setDormant(enriched)
     return enriched
   })
