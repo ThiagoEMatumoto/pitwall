@@ -860,6 +860,19 @@ function recordResponded(e: AttentionRespondedEvent): void {
   }
 }
 
+// Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
+// PTY) lideravam passam a responder a esta, venha o resume de clique,
+// agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
+// filha chegaria a um id morto.
+export function transferLeadershipToResumed(
+  priorSessionIds: string[],
+  resumedSessionId: string,
+): void {
+  for (const id of priorSessionIds) {
+    if (!ptyManager.isRunning(id)) handoffStore.transferMother(id, resumedSessionId)
+  }
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
@@ -1102,13 +1115,10 @@ export function registerSessionIpc(): void {
       cols: input.cols,
       rows: input.rows,
     })
-    // Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
-    // PTY) lideravam passam a responder a esta, venha o resume de clique,
-    // agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
-    // filha chegaria a um id morto.
-    for (const prior of priorRows) {
-      if (!ptyManager.isRunning(prior.id)) handoffStore.transferMother(prior.id, session.id)
-    }
+    transferLeadershipToResumed(
+      priorRows.map((row) => row.id),
+      session.id,
+    )
     return session
   })
 
