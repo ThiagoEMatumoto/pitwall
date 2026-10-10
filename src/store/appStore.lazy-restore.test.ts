@@ -526,3 +526,50 @@ describe('openSessionsInGrid com abas dormindo', () => {
     expect(calls.resume).toEqual([])
   })
 })
+
+describe('closePane de pane dormant', () => {
+  it("toast 'Desfazer' devolve a mesma pane e ela volta ao persist", async () => {
+    const { useToastStore } = await import('@/features/notifications/toast-store')
+    useToastStore.setState({ toasts: [] })
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    const before = useAppStore.getState().panes[0]
+
+    useAppStore.getState().closePane('pane-sleep1')
+    await waitPersist()
+    expect(calls.savePanes.at(-1)).toEqual([])
+
+    const toast = useToastStore.getState().toasts.at(-1)!
+    expect(toast.actionLabel).toBe('Desfazer')
+    toast.onAction!()
+    await waitPersist()
+
+    expect(useAppStore.getState().panes).toEqual([before])
+    expect(calls.savePanes.at(-1)?.map((s) => [s.paneId, s.ccSessionId])).toEqual([
+      ['pane-sleep1', 'cc-sleep1'],
+    ])
+    expect(calls.resume).toEqual([])
+  })
+
+  it('desfazer não duplica se a conversa já voltou por outro caminho', async () => {
+    const { useToastStore } = await import('@/features/notifications/toast-store')
+    useToastStore.setState({ toasts: [] })
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    useAppStore.getState().closePane('pane-sleep1')
+    seedDormant('cc-sleep1', 'pane-other')
+
+    useToastStore.getState().toasts.at(-1)!.onAction!()
+
+    expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-other'])
+  })
+
+  it('pane viva fechada é detach: sem toast de desfazer', async () => {
+    const { useToastStore } = await import('@/features/notifications/toast-store')
+    useToastStore.setState({ toasts: [] })
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    await useAppStore.getState().wakeDormantPane('pane-sleep1')
+
+    useAppStore.getState().closePane('pane-sleep1')
+
+    expect(useToastStore.getState().toasts).toEqual([])
+  })
+})

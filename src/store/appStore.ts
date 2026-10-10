@@ -801,9 +801,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Detach, NÃO mata: só tira da view + persiste. A PTY sobrevive no main
   // (background). Kill explícito é endSession.
   closePane: (paneId) => {
+    const closed = get().panes.find((p) => p.paneId === paneId)
     set((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
+    // Dormindo não tem PTY em background: fechar é perder a aba de vez. O desfazer
+    // devolve a MESMA pane (paneId e snapshot), como o do endSession.
+    if (closed?.dormant) {
+      showToast({
+        title: 'Aba fechada',
+        body: closed.session.title ?? closed.repo?.label ?? undefined,
+        actionLabel: 'Desfazer',
+        onAction: () => {
+          const cc = closed.session.ccSessionId
+          set((s) =>
+            s.panes.some((p) => p.paneId === paneId || (cc && p.session.ccSessionId === cc))
+              ? s
+              : { panes: [...s.panes, closed] },
+          )
+          schedulePersist(get().panes)
+        },
+        durationMs: END_UNDO_MS,
+      })
+    }
   },
 
   endSession: (sessionId, opts) => {
