@@ -46,6 +46,8 @@ const calls = {
 let prefValue: unknown = undefined
 // cc → erro com que o resume rejeita (a recusa da guarda do main, via IPC).
 const resumeFails = new Map<string, string>()
+// cc → atraso do resume (eager lenta).
+const resumeDelays = new Map<string, number>()
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
 
 const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
@@ -55,7 +57,8 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
     calls.resume.push(input.ccSessionId)
     const fail = resumeFails.get(input.ccSessionId)
     if (fail) return Promise.reject(new Error(fail))
-    return Promise.resolve({
+    const delay = resumeDelays.get(input.ccSessionId) ?? 0
+    return new Promise((r) => setTimeout(r, delay)).then(() => ({
       session: {
         id: `sess-${input.ccSessionId}`,
         ccSessionId: input.ccSessionId,
@@ -66,7 +69,7 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
         startedAt: 1,
       },
       reattached: false,
-    })
+    }))
   },
   spawn: () => {
     calls.spawn += 1
@@ -145,6 +148,7 @@ beforeEach(async () => {
   calls.prefsGet = []
   prefValue = undefined
   resumeFails.clear()
+  resumeDelays.clear()
   useAppStore.setState({ panes: [], lazyRestore: null, restoreComplete: false })
   await useAppStore.getState().startLiveWatch()
 })
@@ -261,5 +265,29 @@ describe('resume eager que falha no boot', () => {
       sessionsImpl.spawn = spawn
     }
     expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-nojsonl')).toBe(false)
+  })
+})
+
+describe('open_panes durante o restore', () => {
+  it('nenhum savePanes com subconjunto enquanto uma eager lenta não volta', async () => {
+    // A viva re-attacha em t0 e cc-a volta logo; cc-b demora mais que o debounce
+    // do persist (500ms). Antes, o save de t0+500 gravava 3 de 4 abas.
+    resumeDelays.set('cc-b', 900)
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await waitPersist()
+
+    expect(calls.savePanes.length).toBeGreaterThan(0)
+    for (const saved of calls.savePanes) expect(saved).toHaveLength(bootSnaps.length)
+  })
+
+  it('uma pane aberta pelo usuário no meio do restore entra no save final', async () => {
+    resumeDelays.set('cc-b', 300)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await useAppStore.getState().openSession(null, null, null, null, 'pane-user')
+    await restoring
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId)).toContain('pane-user')
   })
 })

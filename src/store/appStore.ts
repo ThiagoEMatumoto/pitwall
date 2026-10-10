@@ -268,9 +268,38 @@ const endedWhileWaking = new Set<string>()
 // um refetch por janela basta.
 export const ROOM_REFRESH_DEBOUNCE_MS = 150
 
+// Durante o restore as panes entram aos poucos (attached, eager, dormant): um save
+// no meio gravaria um subconjunto no open_panes, e é ele que o próximo boot
+// restaura se o app cair agora. O save fica para o fim, com o conjunto final.
+let restoringDepth = 0
+let persistDeferred = false
+
+async function withPersistDeferred<T>(run: () => Promise<T>): Promise<T> {
+  if (restoringDepth === 0 && savePanesTimer) {
+    // Um save agendado antes do restore cairia no meio dele com o conjunto velho.
+    clearTimeout(savePanesTimer)
+    savePanesTimer = null
+    persistDeferred = true
+  }
+  restoringDepth += 1
+  try {
+    return await run()
+  } finally {
+    restoringDepth -= 1
+    if (restoringDepth === 0 && persistDeferred) {
+      persistDeferred = false
+      schedulePersist(useAppStore.getState().panes)
+    }
+  }
+}
+
 // Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
 // pra não gravar a cada teclada de spawn/close em sequência.
 function schedulePersist(panes: ActivePane[]): void {
+  if (restoringDepth > 0) {
+    persistDeferred = true
+    return
+  }
   if (savePanesTimer) clearTimeout(savePanesTimer)
   savePanesTimer = setTimeout(() => {
     // Dormant entra igual: o snapshot é o mesmo, e o próximo boot decide de novo.
@@ -641,31 +670,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     await workspaceApi.resetRestoreAttempts()
   },
 
-  restoreSnapshots: async (snapshots, dockLayout = null) => {
-    const lazy = await loadLazyRestore()
-    const live = await sessionsApi.listLiveGlobal().catch(() => [])
-    const { attached, rest } = splitLiveSnapshots(snapshots, live)
-    const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
-    if (fresh.length) {
-      set((s) => ({ panes: [...s.panes, ...fresh] }))
-      schedulePersist(get().panes)
-    }
-    const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout, lazy)
-    // Dormant só entram DEPOIS das eager: o AppShell arma o fallback de 1,5s do
-    // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
-    // eager lenta perdia o lugar no layout.
-    const failed = await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
-    const known = new Set(get().panes.map((p) => p.session.ccSessionId))
-    const sleeping = [...failed, ...dormant.map((snap) => ({ snap, error: undefined }))]
-      .filter(({ snap }) => !known.has(snap.ccSessionId))
-      .map(({ snap, error }) =>
-        dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`, error),
-      )
-    if (sleeping.length) {
-      set((s) => ({ panes: [...s.panes, ...sleeping] }))
-      schedulePersist(get().panes)
-    }
-  },
+  restoreSnapshots: (snapshots, dockLayout = null) =>
+    withPersistDeferred(async () => {
+      const lazy = await loadLazyRestore()
+      const live = await sessionsApi.listLiveGlobal().catch(() => [])
+      const { attached, rest } = splitLiveSnapshots(snapshots, live)
+      const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
+      if (fresh.length) {
+        set((s) => ({ panes: [...s.panes, ...fresh] }))
+        schedulePersist(get().panes)
+      }
+      const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout, lazy)
+      // Dormant só entram DEPOIS das eager: o AppShell arma o fallback de 1,5s do
+      // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
+      // eager lenta perdia o lugar no layout.
+      const failed = await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
+      const known = new Set(get().panes.map((p) => p.session.ccSessionId))
+      const sleeping = [...failed, ...dormant.map((snap) => ({ snap, error: undefined }))]
+        .filter(({ snap }) => !known.has(snap.ccSessionId))
+        .map(({ snap, error }) =>
+          dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`, error),
+        )
+      if (sleeping.length) {
+        set((s) => ({ panes: [...s.panes, ...sleeping] }))
+        schedulePersist(get().panes)
+      }
+    }),
 
   clearPendingLayout: () => set({ pendingLayout: null }),
   clearFocusPane: () => set({ focusPaneId: null }),
