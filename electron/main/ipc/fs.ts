@@ -37,10 +37,27 @@ function allowedRoots(): string[] {
   roots.add(path.join(homedir(), '.claude'))
   roots.add(path.resolve(tmpdir()))
   roots.add('/tmp')
-  // Scratchpad do claude sai do tmpfs quando CLAUDE_CODE_TMPDIR está definido;
-  // sem isto, clicar num path de scratch no terminal dá "fora do permitido".
-  if (process.env.CLAUDE_CODE_TMPDIR) roots.add(path.resolve(process.env.CLAUDE_CODE_TMPDIR))
+  const scratch = claudeScratchRoot()
+  if (scratch) roots.add(scratch)
   return [...roots]
+}
+
+// Scratchpad do claude fora do tmpfs (CLAUDE_CODE_TMPDIR): sem esta raiz, clicar
+// num path de scratch no terminal dá "fora do permitido". Libera só o diretório
+// per-uid que o claude cria (claude-<uid>), e nunca '/', o home ou um ancestral
+// dele — a env vem do ambiente da sessão gráfica e não é validada por ninguém.
+function claudeScratchRoot(): string | null {
+  const base = process.env.CLAUDE_CODE_TMPDIR
+  if (!base || !path.isAbsolute(base)) return null
+  let real: string
+  try {
+    real = realpathSync(path.join(base, `claude-${process.getuid?.() ?? 0}`))
+  } catch {
+    return null
+  }
+  const home = realpathSync(homedir())
+  if (real === path.parse(real).root || real === home || isInsideVault(real, home)) return null
+  return real
 }
 
 // Resolve symlinks ANTES de comparar para impedir escape via link simbólico.

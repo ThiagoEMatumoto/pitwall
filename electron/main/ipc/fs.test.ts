@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 const handlers = new Map<string, (e: unknown, payload: unknown) => unknown>()
@@ -21,22 +22,28 @@ vi.mock('../services/db', () => ({
 
 import { registerFsIpc } from './fs'
 
-// Fora de /tmp, tmpdir() e ~/.claude: simula o scratch em ~/.cache/ct.
-let scratchRoot: string
+const UID_DIR = `claude-${process.getuid?.() ?? 0}`
+// Fora de /tmp, tmpdir(), ~/.claude e do repo: simula o scratch em ~/.cache/ct.
+let base: string
 let scratchFile: string
+let outsideUidDir: string
 const originalTmpdir = process.env.CLAUDE_CODE_TMPDIR
 
 beforeAll(() => {
-  scratchRoot = mkdtempSync(path.join(process.cwd(), '.fs-test-ct-'))
-  const dir = path.join(scratchRoot, 'claude-1000', 'proj', 'session', 'scratchpad')
+  const cache = path.join(homedir(), '.cache')
+  mkdirSync(cache, { recursive: true })
+  base = mkdtempSync(path.join(cache, 'pitwall-fs-test-'))
+  const dir = path.join(base, UID_DIR, 'proj', 'session', 'scratchpad')
   mkdirSync(dir, { recursive: true })
   scratchFile = path.join(dir, 'notes.md')
   writeFileSync(scratchFile, 'oi', 'utf8')
+  outsideUidDir = path.join(base, 'outside.txt')
+  writeFileSync(outsideUidDir, 'x', 'utf8')
   registerFsIpc()
 })
 
 afterAll(() => {
-  rmSync(scratchRoot, { recursive: true, force: true })
+  rmSync(base, { recursive: true, force: true })
 })
 
 afterEach(() => {
@@ -54,20 +61,31 @@ describe('fs IPC × CLAUDE_CODE_TMPDIR', () => {
     expect(() => readFile(scratchFile)).toThrow('Path fora do permitido')
   })
 
-  it('abre arquivo do scratch quando CLAUDE_CODE_TMPDIR aponta para a raiz dele', () => {
-    process.env.CLAUDE_CODE_TMPDIR = scratchRoot
+  it('abre arquivo do scratch sob <CLAUDE_CODE_TMPDIR>/claude-<uid>', () => {
+    process.env.CLAUDE_CODE_TMPDIR = base
     expect(readFile(scratchFile)).toEqual({ path: scratchFile, content: 'oi' })
   })
 
-  it('resolve CLAUDE_CODE_TMPDIR relativo/não normalizado', () => {
-    process.env.CLAUDE_CODE_TMPDIR = path.relative(process.cwd(), scratchRoot) + '/./'
-    expect(readFile(scratchFile)).toEqual({ path: scratchFile, content: 'oi' })
+  it('recusa CLAUDE_CODE_TMPDIR relativo', () => {
+    process.env.CLAUDE_CODE_TMPDIR = path.relative(process.cwd(), base)
+    expect(() => readFile(scratchFile)).toThrow('Path fora do permitido')
   })
 
-  it('não libera irmãos da raiz configurada', () => {
-    process.env.CLAUDE_CODE_TMPDIR = path.join(scratchRoot, 'claude-1000', 'proj', 'session')
-    const sibling = path.join(scratchRoot, 'outside.txt')
-    writeFileSync(sibling, 'x', 'utf8')
-    expect(() => readFile(sibling)).toThrow('Path fora do permitido')
+  it('libera só o diretório per-uid, não a base inteira', () => {
+    process.env.CLAUDE_CODE_TMPDIR = base
+    expect(() => readFile(outsideUidDir)).toThrow('Path fora do permitido')
+  })
+
+  it('base sem claude-<uid> não vira raiz (e não vaza ENOENT)', () => {
+    const empty = mkdtempSync(path.join(base, 'empty-'))
+    process.env.CLAUDE_CODE_TMPDIR = empty
+    expect(() => readFile(scratchFile)).toThrow('Path fora do permitido')
+  })
+
+  it('recusa raiz que resolve para o home (ou ancestral dele)', () => {
+    const evil = mkdtempSync(path.join(base, 'evil-'))
+    symlinkSync(homedir(), path.join(evil, UID_DIR))
+    process.env.CLAUDE_CODE_TMPDIR = evil
+    expect(() => readFile(outsideUidDir)).toThrow('Path fora do permitido')
   })
 })
