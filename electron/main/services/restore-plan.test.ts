@@ -107,6 +107,36 @@ describe('computeRestorePlan', () => {
     expect(computeRestorePlan(['cc-mother']).eagerCcSessionIds).toEqual(['cc-mother'])
   })
 
+  // O boot de verdade: o getDb da abertura marca running/needs_input como
+  // 'interrupted' ANTES de o renderer pedir o plano.
+  it('handoff em voo quando o app fechou: mãe e filha sobem eager depois do sweep do getDb', () => {
+    session('mother', 'cc-mother')
+    session('child', 'cc-child')
+    session('loose', 'cc-loose')
+    const id = activeHandoff('mother', 'child')
+    closeDb()
+    getDb()
+    expect(handoffStore.get(id)?.status).toBe('interrupted')
+
+    const plan = computeRestorePlan(['cc-mother', 'cc-child', 'cc-loose'])
+
+    expect([...plan.eagerCcSessionIds].sort()).toEqual(['cc-child', 'cc-mother'])
+  })
+
+  it("'interrupted' de antes desta abertura do banco não sobe eager", () => {
+    session('mother', 'cc-mother')
+    session('child', 'cc-child')
+    const id = activeHandoff('mother', 'child')
+    closeDb()
+    getDb()
+    // Segundo boot sem retomar nada: o handoff já era 'interrupted' ao abrir.
+    closeDb()
+    getDb()
+    expect(handoffStore.get(id)?.status).toBe('interrupted')
+
+    expect(computeRestorePlan(['cc-mother', 'cc-child']).eagerCcSessionIds).toEqual([])
+  })
+
   it("pref sessions.restoreMode = 'eager' sobe todas", () => {
     session('loose', 'cc-loose')
     session('other', 'cc-other')
