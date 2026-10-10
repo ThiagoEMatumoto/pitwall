@@ -13,7 +13,7 @@ import { useAppStore } from '@/store/appStore'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { showToast, useToastStore } from '@/features/notifications/toast-store'
 import { useToastPlacement } from './useToastPlacement'
-import { TOAST_MARGIN } from './toast-placement'
+import { TOAST_EST_H, TOAST_MARGIN } from './toast-placement'
 
 const W = 1400
 let panelLeft = W - 420
@@ -188,5 +188,43 @@ describe('useToastPlacement — modal do terminal redimensionada', () => {
     width = 1280
     act(() => roCallbacks.forEach((cb) => cb()))
     expect(result.current.maxWidth).toBeUndefined()
+  })
+})
+
+describe('useToastPlacement — janela maximizada fora do mapa', () => {
+  afterEach(() => {
+    act(() => useToastStore.setState({ toasts: [] }))
+  })
+
+  // Maximizar em Terminais com o composer na coluna da pilha: a altura velha dava
+  // bottom = 700 − (900 − 16) = −184 e o "Desfazer" saía da tela.
+  it('o resize remede a altura e a pilha continua dentro da viewport', () => {
+    useFeaturePanelStore.setState({ openFeatureId: null })
+    useProjectsViewStore.setState({ view: 'terminals' })
+    Object.defineProperty(window, 'innerHeight', { value: 700, configurable: true })
+    let composerTop = 600
+    const composer = document.createElement('div')
+    composer.setAttribute('data-composer-dock', '')
+    composer.getBoundingClientRect = () =>
+      ({ left: 0, top: composerTop, width: W, height: 100 }) as DOMRect
+    document.body.appendChild(composer)
+
+    const { result } = renderHook(() => useToastPlacement(0))
+    act(
+      () =>
+        void showToast({ title: 'Sessão encerrada', actionLabel: 'Desfazer', onAction: () => {} }),
+    )
+    settle()
+    expect(result.current.bottom).toBe(700 - (600 - TOAST_MARGIN))
+
+    Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true })
+    composerTop = 900
+    act(() => void window.dispatchEvent(new Event('resize')))
+    settle()
+
+    const { bottom } = result.current
+    expect(bottom).toBeGreaterThanOrEqual(0)
+    expect(bottom).toBe(1000 - (900 - TOAST_MARGIN))
+    expect(1000 - bottom! - TOAST_EST_H).toBeGreaterThanOrEqual(0)
   })
 })
