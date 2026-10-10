@@ -75,7 +75,6 @@ function dormant(answer: 'ok' | 'fail') {
     },
     isRunning: (id) => running.has(id),
     screen: async (id) => (running.has(id) ? SCAN : null),
-    status: (id) => (running.has(id) ? 'idle' : null),
     warn: () => {},
     readyPollMs: 1,
   })

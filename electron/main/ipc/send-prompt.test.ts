@@ -115,7 +115,6 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
       },
       isRunning: (id) => !seam.dead.has(id),
       screen: async () => ({ menu: null, inputPrompt: true, inputDirty: false }) as never,
-      status: () => 'idle',
       warn: () => {},
       readyPollMs: 1,
     })
