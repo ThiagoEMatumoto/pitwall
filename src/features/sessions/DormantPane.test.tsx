@@ -53,9 +53,9 @@ const pane: ActivePane = {
   dormant: true,
 }
 
-function Wired() {
+function Wired({ tabTitle, target = pane }: { tabTitle?: string; target?: ActivePane }) {
   const wake = useAppStore((s) => s.wakeDormantPane)
-  return <DormantPane pane={pane} onWake={() => void wake(pane.paneId)} />
+  return <DormantPane pane={target} tabTitle={tabTitle} onWake={() => void wake(target.paneId)} />
 }
 
 beforeEach(() => {
@@ -76,13 +76,41 @@ describe('DormantPane', () => {
   it('"Retomar" acorda a pane no lugar', async () => {
     render(<Wired />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retomar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retomar infra' }))
     await new Promise((r) => setTimeout(r, 0))
 
     expect(resumed).toEqual(['cc-1'])
     const [after] = useAppStore.getState().panes
     expect(after.paneId).toBe('pane-1')
     expect(after.dormant).toBeUndefined()
+  })
+
+  it('o badge também acorda e é um botão (teclado)', async () => {
+    render(<Wired />)
+
+    const badge = screen.getByRole('button', { name: DORMANT_BADGE })
+    expect(badge.tagName).toBe('BUTTON')
+    fireEvent.click(badge)
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(resumed).toEqual(['cc-1'])
+  })
+
+  it('título = rótulo da aba; repo só como subtítulo; ícone decorativo oculto', () => {
+    const { container } = render(<Wired tabTitle="lazy-B" />)
+
+    expect(screen.getByText('lazy-B')).toBeTruthy()
+    expect(screen.getByText('Infra · infra')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retomar lazy-B' })).toBeTruthy()
+    expect(container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('avulsa sem rótulo de aba: "Avulsa" aparece uma vez só', () => {
+    const avulsa: ActivePane = { ...pane, repo: null, projectName: null }
+    useAppStore.setState({ panes: [avulsa] })
+    render(<Wired target={avulsa} />)
+
+    expect(screen.getAllByText('Avulsa')).toHaveLength(1)
   })
 })
 

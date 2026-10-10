@@ -101,12 +101,24 @@ function requestOpenSettings() {
   window.dispatchEvent(new CustomEvent('cm:open-settings'))
 }
 
+// Rótulo atual da aba (o Terminal o atualiza via setTitle; o fromJSON traz o salvo).
+function usePanelTitle(api: IDockviewPanelProps['api']): string | undefined {
+  const [title, setTitle] = useState(api.title)
+  useEffect(() => {
+    setTitle(api.title)
+    const sub = api.onDidTitleChange((e) => setTitle(e.title))
+    return () => sub.dispose()
+  }, [api])
+  return title
+}
+
 function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   const closePane = useAppStore((s) => s.closePane)
   const openSession = useAppStore((s) => s.openSession)
   const endSession = useAppStore((s) => s.endSession)
   const setPaneMode = useAppStore((s) => s.setPaneMode)
   const wakeDormantPane = useAppStore((s) => s.wakeDormantPane)
+  const tabTitle = usePanelTitle(props.api)
   // Busca a pane no store pelo id do painel (= paneId). Após api.fromJSON do
   // restore, os params serializados no JSON podem estar stale (session/repo são
   // recriados pelo resume), então a fonte da verdade é sempre o store. Fallback
@@ -117,7 +129,13 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   // foi fechada). Nada a renderizar — o effect de restore/reconcile vai removê-lo.
   if (!pane) return null
   if (pane.dormant)
-    return <DormantPane pane={pane} onWake={() => void wakeDormantPane(pane.paneId)} />
+    return (
+      <DormantPane
+        pane={pane}
+        tabTitle={tabTitle}
+        onWake={() => void wakeDormantPane(pane.paneId)}
+      />
+    )
   return (
     <Terminal
       session={pane.session}
@@ -163,7 +181,7 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
       {pane?.dormant && (
-        <span title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
+        <span role="img" title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
           <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
         </span>
       )}
