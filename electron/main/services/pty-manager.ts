@@ -155,6 +155,8 @@ class PtyManager extends TypedEmitter {
     // "primeiro data" que arma a injeção do comando inicial (sessions.ts) nem
     // aparecer no terminal quando o spawn cai para o direto.
     let held: string[] = []
+    // O que o pid escreveu antes do exec: decide se a saída foi falha do wrapper.
+    let preExec = ''
     const flushHeld = (): void => {
       const chunks = held
       held = []
@@ -163,7 +165,8 @@ class PtyManager extends TypedEmitter {
     const execWatch = unit ? this.watchScopeExec(pty.pid, flushHeld) : null
 
     pty.onData((data) => {
-      if (execWatch && !execWatch.confirmed()) held.push(data)
+      if (execWatch && !execWatch.execSeen() && preExec.length < 4096) preExec += data
+      if (execWatch && !execWatch.released()) held.push(data)
       else deliver(data)
     })
 
@@ -171,18 +174,17 @@ class PtyManager extends TypedEmitter {
       execWatch?.stop()
       const current = this.ptys.get(opts.sessionId)
       if (current && current !== pty) return
-      const wrapperOut = held.join('')
       if (
         current &&
         execWatch &&
-        !execWatch.confirmed() &&
+        !execWatch.execSeen() &&
         exitCode === 1 &&
-        /Failed to /.test(wrapperOut) &&
+        /Failed to /.test(preExec) &&
         !this.killed.has(pty)
       ) {
         // O systemd-run morreu sem virar o comando: refaz direto, uma vez, no
         // tamanho atual (pode ter havido resize no meio).
-        reportScopeFailure(wrapperOut.trim().split('\n')[0] ?? `exit ${exitCode}`)
+        reportScopeFailure(preExec.trim().split('\n')[0] ?? `exit ${exitCode}`)
         this.ptys.delete(opts.sessionId)
         this.spawnPty({ ...opts, cols: pty.cols, rows: pty.rows }, false)
         return
@@ -196,28 +198,31 @@ class PtyManager extends TypedEmitter {
     })
   }
 
-  // Confirmado = o pid foi visto como outro processo que não o systemd-run nem o
-  // fork do próprio app antes do exec (mesmo comm do pai).
+  // execSeen = o pid foi visto como outro processo que não o systemd-run nem o
+  // fork do próprio app antes do exec (mesmo comm do pai). released = a saída
+  // segurada já foi liberada: no exec ou, sem ele, no teto.
   private watchScopeExec(
     pid: number,
-    onConfirmed: () => void,
-  ): { confirmed: () => boolean; stop: () => void } {
+    onRelease: () => void,
+  ): { execSeen: () => boolean; released: () => boolean; stop: () => void } {
     const ownComm = procComm(process.pid)
-    let confirmed = false
+    let execSeen = false
+    let released = false
     const startedAt = Date.now()
     const timer = setInterval(() => {
       const comm = procComm(pid)
-      const execed = comm !== null && comm !== 'systemd-run' && comm !== ownComm
+      execSeen = comm !== null && comm !== 'systemd-run' && comm !== ownComm
       // No teto, para de segurar a saída: um terminal mudo é pior que um fallback perdido.
-      if (execed || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) {
-        confirmed = true
+      if (execSeen || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) {
+        released = true
         clearInterval(timer)
-        onConfirmed()
+        onRelease()
       }
     }, SCOPE_EXEC_POLL_MS)
     timer.unref?.()
     return {
-      confirmed: () => confirmed,
+      execSeen: () => execSeen,
+      released: () => released,
       stop: () => clearInterval(timer),
     }
   }

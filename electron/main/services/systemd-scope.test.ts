@@ -14,6 +14,7 @@ vi.mock('node:child_process', () => {
 
 import {
   SCOPE_RETRY_BACKOFF_MS,
+  armOrphanSweep,
   SYSTEMD_SCOPE_PREF,
   ensureScopeProbe,
   isPermanentScopeFailure,
@@ -28,6 +29,7 @@ import {
 } from './systemd-scope'
 
 const originalPlatform = process.platform
+const originalRuntime = process.env.XDG_RUNTIME_DIR
 
 function setPlatform(p: string): void {
   Object.defineProperty(process, 'platform', { value: p })
@@ -38,12 +40,15 @@ beforeEach(() => {
   getPref.mockReset().mockImplementation((_k: string, fallback: unknown) => fallback)
   execFile.mockReset()
   setPlatform('linux')
+  process.env.XDG_RUNTIME_DIR = '/run/user/1000'
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
 
 afterEach(() => {
   setPlatform(originalPlatform)
+  if (originalRuntime === undefined) delete process.env.XDG_RUNTIME_DIR
+  else process.env.XDG_RUNTIME_DIR = originalRuntime
 })
 
 // Assíncrono como o execFile real: o callback nunca roda dentro da chamada.
@@ -110,15 +115,27 @@ describe('probe e estado', () => {
     expect(execFile).toHaveBeenCalledTimes(1)
   })
 
-  it('sem conexão com o user manager → indisponível até o app fechar', async () => {
+  it('sem conexão com o user manager → backoff (o manager travado sob pressão volta)', async () => {
     probeExits(
       new Error('Command failed'),
       'Failed to connect to user scope bus via local transport',
     )
     expect(await ensureScopeProbe()).toBe(false)
+    expect(scopeState().kind).toBe('backoff')
+  })
+
+  it('XDG_RUNTIME_DIR ausente → indisponível, sem rodar o probe', async () => {
+    delete process.env.XDG_RUNTIME_DIR
+    expect(await ensureScopeProbe()).toBe(false)
     expect(scopeState().kind).toBe('unavailable')
-    expect(scopeWrapEnabled(Date.now() + 10 * SCOPE_RETRY_BACKOFF_MS)).toBe(false)
-    expect(execFile).toHaveBeenCalledTimes(1)
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it('5 backoffs seguidos sem sucesso viram indisponível', () => {
+    for (let i = 0; i < 4; i++) reportScopeFailure('Failed to connect to user scope bus')
+    expect(scopeState().kind).toBe('backoff')
+    reportScopeFailure('Failed to connect to user scope bus')
+    expect(scopeState().kind).toBe('unavailable')
   })
 
   it('binário ausente → indisponível', async () => {
@@ -147,15 +164,13 @@ describe('probe e estado', () => {
     expect(scopeWrapEnabled()).toBe(true)
   })
 
-  it('falha de runtime transitória (unit duplicada) só suspende; sem bus, desliga', () => {
+  it('falha de runtime transitória só suspende; só ENOENT desliga', () => {
     expect(
       isPermanentScopeFailure('Failed to start transient scope unit: Unit x.scope already exists.'),
     ).toBe(false)
     reportScopeFailure('Failed to start transient scope unit: Unit x.scope already exists.')
     expect(scopeState().kind).toBe('backoff')
-    reportScopeFailure(
-      'Failed to connect to user scope bus via local transport: No such file or directory',
-    )
+    reportScopeFailure('spawn systemd-run ENOENT')
     expect(scopeState().kind).toBe('unavailable')
   })
 
@@ -209,5 +224,50 @@ describe('sweepOrphanScopes', () => {
   it('não varre quando os scopes não estão em uso', async () => {
     expect(await sweepOrphanScopes()).toEqual([])
     expect(execFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('política da varredura de órfãos', () => {
+  function routeExec(listing: string): void {
+    execFile.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: ExecCb) => {
+      const done = (typeof opts === 'function' ? opts : cb) as ExecCb
+      setImmediate(() =>
+        done(null, cmd === 'systemctl' && args.includes('list-units') ? listing : '', ''),
+      )
+    })
+  }
+  const listed = (): number =>
+    execFile.mock.calls.filter(
+      (c) => c[0] === 'systemctl' && (c[1] as string[]).includes('list-units'),
+    ).length
+
+  it('depois de crash/kill, o primeiro probe ok varre uma vez', async () => {
+    routeExec('')
+    armOrphanSweep(false)
+    await ensureScopeProbe()
+    await new Promise((r) => setImmediate(r))
+    expect(listed()).toBe(1)
+    await ensureScopeProbe()
+    await new Promise((r) => setImmediate(r))
+    expect(listed()).toBe(1)
+  })
+
+  it('depois de quit limpo não varre: o que ficou rodando foi de propósito', async () => {
+    routeExec('')
+    armOrphanSweep(true)
+    await ensureScopeProbe()
+    await new Promise((r) => setImmediate(r))
+    expect(listed()).toBe(0)
+  })
+
+  it('boot em backoff varre quando o probe volta a dar ok', async () => {
+    probeExits(Object.assign(new Error('Command failed'), { killed: true }))
+    armOrphanSweep(false)
+    await ensureScopeProbe()
+    expect(scopeState().kind).toBe('backoff')
+    routeExec('')
+    await ensureScopeProbe()
+    await new Promise((r) => setImmediate(r))
+    expect(listed()).toBe(1)
   })
 })

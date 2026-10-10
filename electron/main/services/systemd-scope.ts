@@ -41,20 +41,51 @@ function setState(next: ScopeState): void {
   }
 }
 
-// Sem binário ou sem como falar com o user manager não vai melhorar sozinho;
-// o resto (timeout, erro pontual) pode.
+// Só a ausência do binário é definitiva. "Failed to connect" acontece com o
+// manager travado sob a mesma pressão de memória que motivou os scopes, e passa.
 export function isPermanentScopeFailure(message: string): boolean {
-  return /ENOENT|Failed to connect/i.test(message)
+  return /ENOENT/.test(message)
 }
 
+// Backoffs seguidos sem nenhum sucesso: o manager não volta, para de tentar.
+const MAX_CONSECUTIVE_BACKOFFS = 5
+let consecutiveBackoffs = 0
+
 export function reportScopeFailure(reason: string): void {
-  if (isPermanentScopeFailure(reason)) setState({ kind: 'unavailable', reason })
-  else setState({ kind: 'backoff', reason, retryAt: Date.now() + SCOPE_RETRY_BACKOFF_MS })
+  if (isPermanentScopeFailure(reason)) {
+    setState({ kind: 'unavailable', reason })
+    return
+  }
+  consecutiveBackoffs += 1
+  if (consecutiveBackoffs >= MAX_CONSECUTIVE_BACKOFFS) {
+    setState({ kind: 'unavailable', reason: `${consecutiveBackoffs} falhas seguidas: ${reason}` })
+    return
+  }
+  setState({ kind: 'backoff', reason, retryAt: Date.now() + SCOPE_RETRY_BACKOFF_MS })
+}
+
+// Varredura de órfãos: no máximo uma por processo, e só depois de um boot que
+// não veio de quit normal (crash, kill, oomd no Electron). Depois de um quit
+// limpo, o que ficou rodando num scope foi deixado de propósito pelo usuário.
+let sweep: 'unarmed' | 'armed' | 'done' = 'unarmed'
+
+export function armOrphanSweep(previousShutdownWasClean: boolean): void {
+  if (sweep === 'unarmed' && !previousShutdownWasClean) sweep = 'armed'
+}
+
+function sweepOnceIfArmed(): void {
+  if (sweep !== 'armed') return
+  sweep = 'done'
+  void sweepOrphanScopes()
 }
 
 function runProbe(): Promise<boolean> {
   if (process.platform !== 'linux') {
     state = { kind: 'unavailable', reason: process.platform }
+    return Promise.resolve(false)
+  }
+  if (!process.env.XDG_RUNTIME_DIR) {
+    setState({ kind: 'unavailable', reason: 'XDG_RUNTIME_DIR ausente' })
     return Promise.resolve(false)
   }
   // Não basta o binário existir: com o user manager inalcançável (XDG_RUNTIME_DIR
@@ -74,7 +105,10 @@ function runProbe(): Promise<boolean> {
           )
           resolve(false)
         } else {
+          consecutiveBackoffs = 0
           setState({ kind: 'ok' })
+          // Vale para o probe do boot e para a volta de um backoff.
+          sweepOnceIfArmed()
           resolve(true)
         }
       },
@@ -198,4 +232,6 @@ export function sweepOrphanScopes(): Promise<string[]> {
 export function resetScopeProbeForTests(): void {
   probe = null
   state = { kind: 'unknown' }
+  consecutiveBackoffs = 0
+  sweep = 'unarmed'
 }
