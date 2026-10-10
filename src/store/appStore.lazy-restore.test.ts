@@ -459,3 +459,70 @@ describe('fechar/encerrar pane dormant', () => {
     // afterEach confere que nenhum IPC levou 'dormant:'.
   })
 })
+
+function seedManyDormant(entries: Array<[cc: string, paneId: string]>) {
+  const panes = entries.flatMap(([cc, paneId]) => {
+    seedDormant(cc, paneId)
+    return useAppStore.getState().panes
+  })
+  useAppStore.setState({ panes })
+}
+
+function liveItem(cc: string) {
+  return {
+    id: `sess-${cc}`,
+    ccSessionId: cc,
+    repo,
+    projectName: 'Infra',
+    projectIcon: null,
+    projectColor: null,
+    title: null,
+    name: null,
+    status: 'idle',
+  } as never
+}
+
+describe('openSessionsInGrid com abas dormindo', () => {
+  it('as dormant fora da seleção continuam no store e no persist', async () => {
+    seedManyDormant([
+      ['cc-sleep1', 'pane-sleep1'],
+      ['cc-sleep2', 'pane-sleep2'],
+      ['cc-sleep3', 'pane-sleep3'],
+    ])
+
+    await useAppStore.getState().openSessionsInGrid([liveItem('cc-a'), liveItem('cc-b')])
+    await waitPersist()
+
+    const { panes, gridRequest } = useAppStore.getState()
+    expect(panes.filter((p) => p.dormant).map((p) => p.paneId)).toEqual([
+      'pane-sleep1',
+      'pane-sleep2',
+      'pane-sleep3',
+    ])
+    // A grade é só a seleção.
+    expect(gridRequest).toHaveLength(2)
+    const saved = calls.savePanes.at(-1)!
+    expect(saved.map((s) => s.ccSessionId).sort()).toEqual([
+      'cc-a',
+      'cc-b',
+      'cc-sleep1',
+      'cc-sleep2',
+      'cc-sleep3',
+    ])
+  })
+
+  it('dormant selecionada vira a pane viva no mesmo paneId, sem duplicar', async () => {
+    seedManyDormant([
+      ['cc-sleep1', 'pane-sleep1'],
+      ['cc-sleep2', 'pane-sleep2'],
+    ])
+
+    await useAppStore.getState().openSessionsInGrid([liveItem('cc-sleep1'), liveItem('cc-b')])
+
+    const panes = useAppStore.getState().panes
+    expect(panes.filter((p) => p.paneId === 'pane-sleep1')).toHaveLength(1)
+    expect(panes.find((p) => p.paneId === 'pane-sleep1')?.dormant).toBeUndefined()
+    expect(panes.find((p) => p.paneId === 'pane-sleep2')?.dormant).toBe(true)
+    expect(calls.resume).toEqual([])
+  })
+})

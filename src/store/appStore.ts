@@ -912,8 +912,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (existing?.dormant) return paneFromLiveSession(item, existing.paneId)
       return existing ?? paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`)
     })
+    // Dormindo fora da seleção fica: não tem processo no main, então tirá-la do
+    // store (e do open_panes) perderia a conversa da restauração. O AppShell a
+    // põe como aba inativa, fora da grade.
+    const keptDormant = current.filter(
+      (p) => p.dormant && !wanted.some((w) => w.paneId === p.paneId),
+    )
     set({
-      panes: wanted,
+      panes: [...wanted, ...keptDormant],
       area: 'projects',
       gridRequest: wanted.map((p) => p.paneId),
     })

@@ -572,6 +572,21 @@ export function AppShell() {
           position,
         })
       })
+      // O que ficou no store fora da seleção (abas dormindo): aba INATIVA no grupo
+      // da última célula. Ativa, ela acordaria a pane (onDidActivePanelChange).
+      const lastId = ids[ids.length - 1]
+      for (const pane of panes) {
+        if (ids.includes(pane.paneId) || !api.getPanel(lastId)) continue
+        api.addPanel<PaneParams>({
+          id: pane.paneId,
+          component: 'terminal',
+          tabComponent: 'terminal',
+          title: paneTabTitle(pane),
+          params: { pane },
+          position: { referencePanel: lastId, direction: 'within' },
+          inactive: true,
+        })
+      }
     } finally {
       applyingLayout.current = false
       clearGridRequest()
