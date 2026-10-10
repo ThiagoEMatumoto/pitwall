@@ -175,7 +175,9 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     expect(ptyManager.scopeUnitFor(SESSION)).toBeNull()
-    expect(cgroupOf(pid)).not.toContain('app-pitwall-session-')
+    // Spawn direto herda o cgroup do processo de teste — que pode já ser o scope de
+    // uma sessão do Pitwall quando o vitest roda dentro dela.
+    expect(cgroupOf(pid)).toBe(cgroupOf(process.pid))
   }, 15_000)
 
   it('fallback de runtime: systemd-run morre antes do exec → respawn direto uma vez', async () => {
@@ -207,7 +209,7 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     expect(seen).not.toContain('Failed to')
     expect(ptyManager.getBacklog(SESSION)).not.toContain('Failed to')
     expect(ptyManager.scopeUnitFor(SESSION)).toBeNull()
-    expect(cgroupOf(pid)).not.toContain('app-pitwall-session-')
+    expect(cgroupOf(pid)).toBe(cgroupOf(process.pid))
     expect(scopeWrapEnabled()).toBe(false)
   }, 15_000)
 
