@@ -1,13 +1,22 @@
 /** @vitest-environment node */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { ptyManager, type PtyExitEvent } from './pty-manager'
-import { ensureScopeProbe, resetScopeProbeForTests, scopeWrapEnabled } from './systemd-scope'
+import {
+  ensureScopeProbe,
+  resetScopeProbeForTests,
+  scopeWrapEnabled,
+  sweepOrphanScopes,
+} from './systemd-scope'
 
-// Contra o systemd --user real: só roda no Linux com o user manager alcançável.
-const hasUserBus = process.platform === 'linux' && !!process.env.XDG_RUNTIME_DIR
+// Contra o systemd --user real: só roda onde o próprio probe passa.
+const hasUserBus =
+  process.platform === 'linux' &&
+  spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--', 'true'], {
+    timeout: 2_000,
+  }).status === 0
 const SESSION = 'sc0pe-it-session'
 const SHELL = process.env.SHELL || '/bin/sh'
 const originalBus = process.env.DBUS_SESSION_BUS_ADDRESS
@@ -95,6 +104,7 @@ function nextExit(): Promise<PtyExitEvent> {
 describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real', () => {
   beforeEach(async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
     resetScopeProbeForTests()
     restoreEnv()
   })
@@ -110,14 +120,16 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
-    expect(unit).toMatch(/^app-pitwall-session-sc0peits-\d+$/)
+    expect(unit).toMatch(new RegExp(`^app-pitwall-session-${process.pid}-sc0peits-\\d+$`))
     expect(cgroupOf(pid)).toContain(`/app.slice/${unit}.scope`)
   }, 15_000)
 
   it('kill encerra o processo e, depois do grace, a árvore que sobrou no scope', async () => {
     await ensureScopeProbe()
-    // Um órfão em background segura o scope vivo depois do SIGHUP no pid da PTY.
-    spawnLogin(`sh -c 'sleep 301 & echo ORPHAN=$!; exec sleep 300'`)
+    // Órfão em outra sessão (setsid): escapa do SIGHUP da PTY e só o stop do scope o mata.
+    spawnLogin(
+      `sh -c 'setsid sleep 301 </dev/null >/dev/null 2>&1 & echo ORPHAN=$!; exec sleep 300'`,
+    )
     const pid = ptyPid()
     let out = ''
     const onData = (e: { sessionId: string; data: string }): void => {
@@ -134,6 +146,9 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     ptyManager.kill(SESSION)
     await exited
     expect(alive(pid)).toBe(false)
+    // Sem o stop, o órfão sobreviveria: vivo logo após o exit, morto depois do grace.
+    expect(alive(orphan)).toBe(true)
+    expect(unitActive(unit)).toBe(true)
     await until(() => !alive(orphan) && !unitActive(unit), 8_000)
   }, 20_000)
 
@@ -168,9 +183,14 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     // O manager fica inalcançável depois do probe: o systemd-run sai com erro em ms.
     breakUserManager()
     let exitEmitted = false
+    let seen = ''
     const onExit = (e: PtyExitEvent): void => {
       if (e.sessionId === SESSION) exitEmitted = true
     }
+    const onData = (e: { sessionId: string; data: string }): void => {
+      if (e.sessionId === SESSION) seen += e.data
+    }
+    ptyManager.on('data', onData)
     ptyManager.on('exit', onExit)
     spawnLogin('sleep 300')
     await until(() => {
@@ -181,9 +201,40 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     }, 8_000)
     ptyManager.off('exit', onExit)
     const pid = ptyPid()
+    ptyManager.off('data', onData)
     expect(exitEmitted).toBe(false)
+    // O erro do systemd-run não vira o "primeiro data" (que arma o comando inicial).
+    expect(seen).not.toContain('Failed to')
+    expect(ptyManager.getBacklog(SESSION)).not.toContain('Failed to')
     expect(ptyManager.scopeUnitFor(SESSION)).toBeNull()
     expect(cgroupOf(pid)).not.toContain('app-pitwall-session-')
     expect(scopeWrapEnabled()).toBe(false)
   }, 15_000)
+
+  it('varredura do boot para o scope de uma instância morta e poupa o desta', async () => {
+    expect(await ensureScopeProbe()).toBe(true)
+    const deadPid = 2 ** 22 + 4321 // acima do pid_max padrão: nunca existe
+    const orphanUnit = `app-pitwall-session-${deadPid}-orphan00-${Date.now()}`
+    const keepUnit = `app-pitwall-session-${process.pid}-keep0000-${Date.now()}`
+    const start = (unit: string): void => {
+      spawn(
+        'systemd-run',
+        ['--user', '--scope', '--quiet', '--collect', `--unit=${unit}`, '--', 'sleep', '300'],
+        { detached: true, stdio: 'ignore' },
+      ).unref()
+    }
+    start(orphanUnit)
+    start(keepUnit)
+    try {
+      await until(() => unitActive(orphanUnit) && unitActive(keepUnit), 5_000)
+      const stopped = await sweepOrphanScopes()
+      expect(stopped).toContain(orphanUnit)
+      expect(stopped).not.toContain(keepUnit)
+      await until(() => !unitActive(orphanUnit), 5_000)
+      expect(unitActive(keepUnit)).toBe(true)
+    } finally {
+      // A órfã já pode ter sido coletada: stop de unit ausente sai com erro.
+      spawnSync('systemctl', ['--user', 'stop', `${orphanUnit}.scope`, `${keepUnit}.scope`])
+    }
+  }, 20_000)
 })

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { nextPtySample, type PtySample } from './providers/pty-status'
 import {
-  disableScopes,
+  reportScopeFailure,
   scopeUnitName,
   scopeWrapEnabled,
   stopScopeUnit,
@@ -137,7 +137,7 @@ class PtyManager extends TypedEmitter {
     }
     this.emit('spawn', { sessionId: opts.sessionId, cols, rows })
 
-    pty.onData((data) => {
+    const deliver = (data: string): void => {
       const prev = this.backlog.get(opts.sessionId) ?? ''
       const next = prev + data
       const capped = next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next
@@ -149,29 +149,45 @@ class PtyManager extends TypedEmitter {
         this.samples.set(opts.sessionId, nextPtySample(sample, capped, now, { echo }))
       }
       this.emit('data', { sessionId: opts.sessionId, data })
+    }
+
+    // Até o exec, a saída é do systemd-run: segurada, para o erro dele não virar o
+    // "primeiro data" que arma a injeção do comando inicial (sessions.ts) nem
+    // aparecer no terminal quando o spawn cai para o direto.
+    let held: string[] = []
+    const flushHeld = (): void => {
+      const chunks = held
+      held = []
+      for (const c of chunks) deliver(c)
+    }
+    const execWatch = unit ? this.watchScopeExec(pty.pid, flushHeld) : null
+
+    pty.onData((data) => {
+      if (execWatch && !execWatch.confirmed()) held.push(data)
+      else deliver(data)
     })
 
-    const execWatch = unit ? this.watchScopeExec(pty.pid) : null
-
     pty.onExit(({ exitCode, signal }) => {
+      execWatch?.stop()
       const current = this.ptys.get(opts.sessionId)
       if (current && current !== pty) return
+      const wrapperOut = held.join('')
       if (
         current &&
         execWatch &&
         !execWatch.confirmed() &&
-        exitCode !== 0 &&
+        exitCode === 1 &&
+        /Failed to /.test(wrapperOut) &&
         !this.killed.has(pty)
       ) {
         // O systemd-run morreu sem virar o comando: refaz direto, uma vez, no
         // tamanho atual (pode ter havido resize no meio).
-        execWatch.stop()
-        disableScopes(`systemd-run saiu com ${exitCode} antes do exec`)
+        reportScopeFailure(wrapperOut.trim().split('\n')[0] ?? `exit ${exitCode}`)
         this.ptys.delete(opts.sessionId)
         this.spawnPty({ ...opts, cols: pty.cols, rows: pty.rows }, false)
         return
       }
-      execWatch?.stop()
+      flushHeld()
       this.ptys.delete(opts.sessionId)
       this.scopeUnits.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
@@ -182,14 +198,22 @@ class PtyManager extends TypedEmitter {
 
   // Confirmado = o pid foi visto como outro processo que não o systemd-run nem o
   // fork do próprio app antes do exec (mesmo comm do pai).
-  private watchScopeExec(pid: number): { confirmed: () => boolean; stop: () => void } {
+  private watchScopeExec(
+    pid: number,
+    onConfirmed: () => void,
+  ): { confirmed: () => boolean; stop: () => void } {
     const ownComm = procComm(process.pid)
     let confirmed = false
     const startedAt = Date.now()
     const timer = setInterval(() => {
       const comm = procComm(pid)
-      if (comm !== null && comm !== 'systemd-run' && comm !== ownComm) confirmed = true
-      if (confirmed || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) clearInterval(timer)
+      const execed = comm !== null && comm !== 'systemd-run' && comm !== ownComm
+      // No teto, para de segurar a saída: um terminal mudo é pior que um fallback perdido.
+      if (execed || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) {
+        confirmed = true
+        clearInterval(timer)
+        onConfirmed()
+      }
     }, SCOPE_EXEC_POLL_MS)
     timer.unref?.()
     return {
