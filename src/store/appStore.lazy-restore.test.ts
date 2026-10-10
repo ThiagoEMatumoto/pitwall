@@ -67,8 +67,9 @@ let resumeGate: Promise<void> = Promise.resolve()
 // true simula o re-attach da guarda do main (PTY que já vivia antes do resume).
 let resumeReattached = false
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
-// cc → title da tabela sessions, que o main usa para enriquecer o sync.
-const dbTitles = new Map<string, string>()
+// cc → título que o main resolve para a pane (custom/ai-title do transcript, como a
+// sessão viva; ver dormant-enrich.test.ts, que roda contra o produtor real).
+const mainTitles = new Map<string, string>()
 
 function sessionFor(cc: string, id = `sess-${cc}`, startedAt = Date.now()) {
   return {
@@ -105,11 +106,11 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
     calls.spawn += 1
     return Promise.resolve(sessionFor('cc-fresh', 'sess-fresh'))
   },
-  // Como o main: devolve a lista com o título do DB onde a pane não tinha.
+  // Como o main: devolve a lista com o título resolvido onde a pane não tinha.
   dormantSync: (list: { ccSessionId: string; title: string | null }[]) => {
     calls.dormantSync.push(list)
     return Promise.resolve(
-      list.map((p) => ({ ...p, title: p.title ?? dbTitles.get(p.ccSessionId) ?? null })),
+      list.map((p) => ({ ...p, title: p.title ?? mainTitles.get(p.ccSessionId) ?? null })),
     )
   },
   wakeResult: (r: unknown) => {
@@ -205,7 +206,7 @@ beforeEach(async () => {
   calls.wakeResult = []
   calls.restorePlan = []
   calls.kill = []
-  dbTitles.clear()
+  mainTitles.clear()
   resumeGate = Promise.resolve()
   resumeReattached = false
   useAppStore.setState({ panes: [], focusPaneId: null, restoreComplete: true })
@@ -555,7 +556,7 @@ describe('título da pane dormindo vindo do sync', () => {
     useAppStore.getState().panes.find((p) => p.paneId === paneId)?.session.title
 
   it('aplica o título do main e não entra em loop de sync', async () => {
-    dbTitles.set('cc-sleep1', 'lazy-C')
+    mainTitles.set('cc-sleep1', 'lazy-C')
     seedDormant('cc-sleep1', 'pane-sleep1')
     await flush()
 
@@ -566,7 +567,7 @@ describe('título da pane dormindo vindo do sync', () => {
   })
 
   it('continua com o título depois de openSessionsInGrid (aba dormindo preservada)', async () => {
-    dbTitles.set('cc-sleep1', 'lazy-C')
+    mainTitles.set('cc-sleep1', 'lazy-C')
     seedManyDormant([['cc-sleep1', 'pane-sleep1']])
     await flush()
 
@@ -579,7 +580,7 @@ describe('título da pane dormindo vindo do sync', () => {
   it('continua com o título depois de closePane → Desfazer', async () => {
     const { useToastStore } = await import('@/features/notifications/toast-store')
     useToastStore.setState({ toasts: [] })
-    dbTitles.set('cc-sleep1', 'lazy-C')
+    mainTitles.set('cc-sleep1', 'lazy-C')
     seedDormant('cc-sleep1', 'pane-sleep1')
     await flush()
 
