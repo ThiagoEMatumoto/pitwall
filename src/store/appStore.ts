@@ -261,6 +261,9 @@ let offWakeRequest: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
 const wakes = new Map<string, Promise<string | null>>()
+// cc dos wakes em voo: a pane pode sair do store (closePane) antes de o resume
+// voltar, e o restore não pode pôr uma dormant para uma conversa subindo.
+const wakingCc = new Set<string>()
 // paneIds encerradas (endSession) com o wake em voo: o resume que voltar é morto.
 // closePane é detach e não entra aqui: a PTY fica em background, como sempre.
 const endedWhileWaking = new Set<string>()
@@ -685,7 +688,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       // layout quando a primeira pane do layout aparece. Com as dormant em t0, uma
       // eager lenta perdia o lugar no layout.
       const failed = await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
-      const known = new Set(get().panes.map((p) => p.session.ccSessionId))
+      // Resume/wake em voo da mesma conversa (switcher, wake do main) já vai pôr a
+      // pane viva: a dormant seria uma segunda aba dela.
+      const known = new Set([
+        ...get().panes.map((p) => p.session.ccSessionId),
+        ...resuming,
+        ...wakingCc,
+      ])
       const sleeping = [...failed, ...dormant.map((snap) => ({ snap, error: undefined }))]
         .filter(({ snap }) => !known.has(snap.ccSessionId))
         .map(({ snap, error }) =>
@@ -859,15 +868,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (!reattached) void sessionsApi.kill(session.id)
           return null
         }
-        set((s) => ({
-          panes: s.panes.map((p) => {
-            if (p.paneId !== paneId || !p.dormant) return p
-            const { dormant: _dormant, restoreError: _error, ...awake } = p
-            return { ...awake, session }
-          }),
-        }))
-        schedulePersist(get().panes)
-        void get().refreshLiveSessions()
+        adoptLiveSession(paneId, session)
         return session.id
       } catch (err) {
         const message = ipcErrorMessage(err)
@@ -883,10 +884,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         return null
       } finally {
         wakes.delete(paneId)
+        wakingCc.delete(ccSessionId)
         endedWhileWaking.delete(paneId)
       }
     })()
     wakes.set(paneId, run)
+    wakingCc.add(ccSessionId)
     return run
   },
 
@@ -1150,6 +1153,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     return res
   },
 }))
+
+// A pane dormant passa a mostrar a sessão viva no lugar (mesmo paneId). Se outra
+// pane já mostra essa sessão (a guarda do main re-anexou uma PTY que já tinha
+// aba), a dormant sai e o foco vai para a existente: duas abas da mesma PTY não.
+function adoptLiveSession(paneId: string, session: Session): void {
+  const { panes } = useAppStore.getState()
+  const existing = panes.find(
+    (p) => p.paneId !== paneId && !p.dormant && p.session.id === session.id,
+  )
+  if (existing) {
+    useAppStore.setState({
+      panes: panes.filter((p) => p.paneId !== paneId),
+      focusPaneId: existing.paneId,
+    })
+  } else {
+    useAppStore.setState({
+      panes: panes.map((p) => {
+        if (p.paneId !== paneId || !p.dormant) return p
+        const { dormant: _dormant, restoreError: _error, ...awake } = p
+        return { ...awake, session }
+      }),
+    })
+  }
+  schedulePersist(useAppStore.getState().panes)
+  void useAppStore.getState().refreshLiveSessions()
+}
 
 // Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do
 // clique. Se a pane já acordou por outro caminho, devolve o id atual.

@@ -732,3 +732,59 @@ describe('re-attach de uma PTY na janela de undo do endSession', () => {
     }
   })
 })
+
+describe('dormant x resume/wake em voo', () => {
+  const sleepSnaps = [snap('cc-sleep1', 'pane-sleep1'), snap('cc-sleep2', 'pane-sleep2')]
+
+  it('restore não põe dormant para a conversa com resume em voo (switcher)', async () => {
+    let open!: () => void
+    resumeGate = new Promise((r) => (open = r))
+    const resuming = useAppStore
+      .getState()
+      .resumeSession(repo as never, 'Infra', null, null, 'cc-sleep1', 'pane-user')
+
+    await useAppStore.getState().restoreSnapshots(sleepSnaps, null)
+    expect(useAppStore.getState().panes.map((p) => [p.paneId, !!p.dormant])).toEqual([
+      ['pane-sleep2', true],
+    ])
+
+    open()
+    await resuming
+    const forCc = useAppStore.getState().panes.filter((p) => p.session.ccSessionId === 'cc-sleep1')
+    expect(forCc.map((p) => [p.paneId, !!p.dormant])).toEqual([['pane-user', false]])
+  })
+
+  it('restore não põe dormant para a conversa com wake em voo', async () => {
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    let open!: () => void
+    resumeGate = new Promise((r) => (open = r))
+    const waking = useAppStore.getState().wakeDormantPane('pane-sleep1')
+    // Detach com o wake em voo: a pane sai do store, a PTY sobe em background.
+    useAppStore.getState().closePane('pane-sleep1')
+
+    await useAppStore.getState().restoreSnapshots(sleepSnaps, null)
+    expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-sleep2'])
+
+    open()
+    await waking
+  })
+
+  it('wake re-anexado com a sessão já numa aba: a dormant sai e o foco vai para a existente', async () => {
+    seedDormant('cc-sleep1', 'pane-sleep1')
+    const dormantPane = useAppStore.getState().panes[0]
+    const livePane = {
+      ...dormantPane,
+      paneId: 'pane-live',
+      session: { ...dormantPane.session, id: 'sess-cc-sleep1', status: 'running' as const },
+      dormant: undefined,
+    }
+    useAppStore.setState({ panes: [livePane, dormantPane], focusPaneId: null })
+    resumeReattached = true
+
+    const id = await useAppStore.getState().wakeDormantPane('pane-sleep1')
+
+    expect(id).toBe('sess-cc-sleep1')
+    expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-live'])
+    expect(useAppStore.getState().focusPaneId).toBe('pane-live')
+  })
+})
