@@ -672,7 +672,10 @@ export function AppShell() {
         if (e.repeat) return
         const activeId = apiRef.current?.activePanel?.id
         const pane = useAppStore.getState().panes.find((p) => p.paneId === activeId)
-        useMotherDockStore.getState().requestFromOutside(pane?.session.id ?? null)
+        // Pane dormindo não tem sessão viva no mapa: o id sintético não casa com nó nenhum.
+        useMotherDockStore
+          .getState()
+          .requestFromOutside(pane && !pane.dormant ? pane.session.id : null)
         useAppStore.getState().setArea('projects')
         useProjectsViewStore.getState().setView('map')
         return
