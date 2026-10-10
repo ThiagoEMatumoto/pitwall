@@ -25,9 +25,10 @@ vi.mock('node:os', async () => {
   return { ...actual, homedir: () => HOME }
 })
 
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { closeDb, getDb } from '../db'
+import { isSessionPidAlive } from '../session-activity'
 import { IdleHibernator, type IdleHibernatorDeps } from './idle-hibernator'
 import {
   agentMessageSince,
@@ -43,8 +44,15 @@ const WINDOW = 30 * MIN
 const CC = '74f13261-5b8e-4f43-9d0e-2c5a2b1f7c11'
 const PTY = 'pty-1'
 
-// Chaves exatamente as do arquivo real (plano, fatos verificados 10/10): pid,
-// sessionId, cwd, status, statusUpdatedAt, updatedAt, name, messagingSocketPath.
+// Campo 22 de /proc/<pid>/stat, como o claude grava no procStart.
+function procStartOf(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+}
+
+// Chaves e tipos copiados de um ~/.claude/sessions/<pid>.json real (claude 2.1.296,
+// 10/10); só os valores identificadores foram trocados. procStart é o do processo
+// do teste, para isSessionPidAlive (o leitor real) aceitar o pid.
 function writeSessionFile(over: Record<string, unknown> = {}): void {
   mkdirSync(SESSIONS_DIR, { recursive: true })
   const pid = (over.pid as number | undefined) ?? process.pid
@@ -52,11 +60,21 @@ function writeSessionFile(over: Record<string, unknown> = {}): void {
     pid,
     sessionId: CC,
     cwd: '/home/user/projetos/pessoal/claude-manager',
+    startedAt: NOW - 5 * WINDOW,
+    procStart: pid === process.pid ? procStartOf(pid) : '184015',
+    version: '2.1.296',
+    peerProtocol: 1,
+    peerFeatures: ['notify_idle', 'reply_across_default_dirs', 'artifact_yield'],
+    kind: 'interactive',
+    entrypoint: 'cli',
+    pidDomain: 'linux:708fa216fccc4e7b99ffa809881e561c:pid:[4026531836]',
+    messagingSocketPath: `/tmp/claude-1000/messaging/${pid}.sock`,
+    name: 'claude-manager',
+    nameSource: 'user',
+    nameSince: NOW - 5 * WINDOW,
+    updatedAt: NOW - 2 * WINDOW,
     status: 'idle',
     statusUpdatedAt: NOW - 2 * WINDOW,
-    updatedAt: NOW - 2 * WINDOW,
-    name: 'claude-manager',
-    messagingSocketPath: `/tmp/claude-1000/messaging/${pid}.sock`,
     ...over,
   }
   writeFileSync(join(SESSIONS_DIR, `${pid}.json`), JSON.stringify(real))
@@ -100,19 +118,14 @@ function ask(from: string, to: string, createdAt: number, status = 'answered'): 
 
 function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
   return new IdleHibernator({
+    lazyRestore: () => true,
     afterMin: () => 30,
     candidates: () => claudeCandidates([PTY]),
     hasPane: (cc) => hasAwakePane(cc, () => false),
     lastIoAt: () => NOW - 2 * WINDOW,
     sessionFile: sessionFileFor,
-    isPidAlive: (pid) => {
-      try {
-        process.kill(pid, 0)
-        return true
-      } catch {
-        return false
-      }
-    },
+    isPidAlive: (file) => isSessionPidAlive(file),
+    aliveSessionId: () => PTY,
     activeHandoffCcSessionIds: () => [],
     queueHas: () => false,
     agentMessageSince,
@@ -183,6 +196,22 @@ describe('gate da hibernação (fontes reais)', () => {
     expect(await evaluate(gate())).toEqual({ ok: false, reason: 'status-dead' })
   })
 
+  it('c) pid reciclado (procStart de outro processo) → status-dead', async () => {
+    writeSessionFile({ procStart: '1' })
+    expect(await evaluate(gate())).toEqual({ ok: false, reason: 'status-dead' })
+  })
+
+  it('c) a PTY viva da conversa é outra (findAliveByCc) → status-dead', async () => {
+    expect(await evaluate(gate({ aliveSessionId: () => 'pty-outra' }))).toEqual({
+      ok: false,
+      reason: 'status-dead',
+    })
+    expect(await evaluate(gate({ aliveSessionId: () => null }))).toEqual({
+      ok: false,
+      reason: 'status-dead',
+    })
+  })
+
   it.each(['busy', 'waiting', 'shell', null])('c) status %s → status-not-idle', async (status) => {
     writeSessionFile({ status })
     expect(await evaluate(gate())).toEqual({ ok: false, reason: 'status-not-idle' })
@@ -247,5 +276,55 @@ describe('gate da hibernação (fontes reais)', () => {
     })
     expect(await evaluate(h)).toEqual({ ok: false, reason: 'proc-tree' })
     expect(seen).toEqual([process.pid])
+  })
+})
+
+describe('tick: as três condições', () => {
+  const offCases: Array<[string, Partial<IdleHibernatorDeps>]> = [
+    ['lazyRestore desligado', { lazyRestore: () => false }],
+    ['afterMin 0', { afterMin: () => 0 }],
+    ['afterMin negativo', { afterMin: () => -5 }],
+  ]
+  it.each(offCases)('%s → o tick não avalia nem age', async (_name, over) => {
+    const candidates = vi.fn(() => claudeCandidates([PTY]))
+    const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
+    const h = gate({ ...over, candidates, send })
+    await h.tick()
+    expect(candidates).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats()).toMatchObject({ afterMin: 0, hibernated: 0, lastTickAt: null })
+    expect(Object.values(h.getStats().refused).every((n) => n === 0)).toBe(true)
+  })
+
+  it('reschedule não liga o timer com qualquer condição desligada', () => {
+    vi.useFakeTimers()
+    try {
+      const candidates = vi.fn(() => [])
+      let lazy = false
+      const h = gate({ lazyRestore: () => lazy, candidates, tickMs: 1_000 })
+      h.reschedule()
+      vi.advanceTimersByTime(5_000)
+      expect(candidates).not.toHaveBeenCalled()
+      lazy = true
+      h.reschedule()
+      vi.advanceTimersByTime(1_000)
+      expect(candidates).toHaveBeenCalledTimes(1)
+      lazy = false
+      h.reschedule()
+      vi.advanceTimersByTime(5_000)
+      expect(candidates).toHaveBeenCalledTimes(1)
+      h.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tudo ligado → avalia o candidato real e manda o /exit', async () => {
+    const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
+    const h = gate({ send, exitTimeoutMs: 60_000 })
+    await h.tick()
+    expect(send).toHaveBeenCalledWith({ sessionId: PTY, text: '/exit', when: 'on-idle' })
+    expect(h.isHibernating(PTY)).toBe(true)
+    h.dispose()
   })
 })
