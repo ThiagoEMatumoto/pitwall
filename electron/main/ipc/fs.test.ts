@@ -82,10 +82,29 @@ describe('fs IPC × CLAUDE_CODE_TMPDIR', () => {
     expect(() => readFile(scratchFile)).toThrow('Path fora do permitido')
   })
 
-  it('recusa raiz que resolve para o home (ou ancestral dele)', () => {
+  it('recusa claude-<uid> que é symlink, mesmo apontando para um diretório válido', () => {
     const evil = mkdtempSync(path.join(base, 'evil-'))
     symlinkSync(homedir(), path.join(evil, UID_DIR))
     process.env.CLAUDE_CODE_TMPDIR = evil
     expect(() => readFile(outsideUidDir)).toThrow('Path fora do permitido')
+
+    const viaLink = mkdtempSync(path.join(base, 'link-'))
+    symlinkSync(path.join(base, UID_DIR), path.join(viaLink, UID_DIR))
+    process.env.CLAUDE_CODE_TMPDIR = viaLink
+    expect(() => readFile(scratchFile)).toThrow('Path fora do permitido')
+  })
+
+  it('claude-<uid> criado depois do registro passa a valer sem reiniciar', () => {
+    const later = mkdtempSync(path.join(base, 'later-'))
+    const uidPath = path.join(later, UID_DIR)
+    const file = path.join(uidPath, 'notes.md')
+    process.env.CLAUDE_CODE_TMPDIR = later
+    // Antes: claude-<uid> existe mas não é diretório → não é raiz.
+    writeFileSync(uidPath, 'ainda não', 'utf8')
+    expect(() => readFile(uidPath)).toThrow('Path fora do permitido')
+    rmSync(uidPath)
+    mkdirSync(uidPath)
+    writeFileSync(file, 'depois', 'utf8')
+    expect(readFile(file)).toEqual({ path: file, content: 'depois' })
   })
 })
