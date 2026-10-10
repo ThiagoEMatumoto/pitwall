@@ -875,6 +875,16 @@ export function transferLeadershipToResumed(
   for (const id of priorSessionIds) {
     if (!ptyManager.isRunning(id)) handoffStore.transferMother(id, resumedSessionId)
   }
+  resumedHook(resumedSessionId)
+}
+
+// Conversa que voltou a ter PTY (resume spawnou). Injetável (padrão do
+// setTurnEndedHook): quem reenvia os wakes perdidos precisa da tela, que mora no
+// ipc/send-prompt; importá-lo daqui puxaria a fila inteira para este módulo.
+let resumedHook: (sessionId: string) => void = () => {}
+
+export function setResumedSessionHook(fn: (sessionId: string) => void): void {
+  resumedHook = fn
 }
 
 export function registerSessionIpc(): void {

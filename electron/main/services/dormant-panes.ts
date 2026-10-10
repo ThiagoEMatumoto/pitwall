@@ -48,6 +48,30 @@ export interface DormantPanesDeps {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+export interface PtyReadyDeps {
+  isRunning(sessionId: string): boolean
+  screen(sessionId: string): Promise<ScreenScan | null>
+  readyTimeoutMs?: number
+  readyPollMs?: number
+}
+
+// Pronta = PTY viva com a TUI reconhecida (tela espelhada). Sem isso o on-idle
+// recusaria com no-screen. O turno ocioso NÃO é esperado aqui: quem entrega usa
+// a fila on-idle, que já espera o idle/waiting certo.
+export async function waitPtyReady(
+  sessionId: string,
+  deps: PtyReadyDeps,
+): Promise<'ready' | 'exited' | 'timeout'> {
+  const deadline = Date.now() + (deps.readyTimeoutMs ?? WAKE_READY_TIMEOUT_MS)
+  const poll = deps.readyPollMs ?? WAKE_READY_POLL_MS
+  for (;;) {
+    if (!deps.isRunning(sessionId)) return 'exited'
+    if ((await deps.screen(sessionId)) != null) return 'ready'
+    if (Date.now() >= deadline) return 'timeout'
+    await sleep(poll)
+  }
+}
+
 export class DormantPanes {
   private byCc = new Map<string, DormantPaneInfo>()
   // Um wake por cc: dois remetentes ao mesmo tempo não podem retomar duas vezes.
@@ -144,26 +168,13 @@ export class DormantPanes {
     })
   }
 
-  // Pronta = PTY viva com a TUI reconhecida (tela espelhada). Sem isso o on-idle
-  // recusaria com no-screen. O turno ocioso NÃO é esperado aqui: quem entrega usa
-  // a fila on-idle, que já espera o idle/waiting certo.
   private async waitReady(sessionId: string): Promise<DormantWakeOutcome> {
-    const timeout = this.deps.readyTimeoutMs ?? WAKE_READY_TIMEOUT_MS
-    const poll = this.deps.readyPollMs ?? WAKE_READY_POLL_MS
-    const deadline = Date.now() + timeout
-    for (;;) {
-      if (!this.deps.isRunning(sessionId)) {
-        return { ok: false, error: 'exited-before-ready', sessionId }
-      }
-      if ((await this.deps.screen(sessionId)) != null) return { ok: true, sessionId }
-      if (Date.now() >= deadline) {
-        // PTY viva sem tela no teto: devolve o id mesmo assim (sucesso degradado);
-        // a fila on-idle decide se e quando entrega.
-        this.deps.warn({ event: 'dormant_ready_timeout', sessionId })
-        return { ok: true, sessionId }
-      }
-      await sleep(poll)
-    }
+    const ready = await waitPtyReady(sessionId, this.deps)
+    if (ready === 'exited') return { ok: false, error: 'exited-before-ready', sessionId }
+    // PTY viva sem tela no teto: devolve o id mesmo assim (sucesso degradado); a
+    // fila on-idle decide se e quando entrega.
+    if (ready === 'timeout') this.deps.warn({ event: 'dormant_ready_timeout', sessionId })
+    return { ok: true, sessionId }
   }
 }
 

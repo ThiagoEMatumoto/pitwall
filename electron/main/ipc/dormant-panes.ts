@@ -2,7 +2,9 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
 import { getMainWindow } from '../services/notifications'
-import { DormantPanes, setDormantPanes } from '../services/dormant-panes'
+import { DormantPanes, setDormantPanes, waitPtyReady } from '../services/dormant-panes'
+import { redeliverFailedWakes } from '../services/handoff/handoff-wake'
+import { setResumedSessionHook } from './sessions'
 import { foreignHolderPid } from '../services/conversation-holder'
 import { computeRestorePlan } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
@@ -47,6 +49,13 @@ export function registerDormantPanesIpc(): void {
     warn: (event) => console.warn(JSON.stringify(event)),
   })
   setDormantPanes(panes)
+  // A mãe que dormia voltou (wake ou resume dela): os wake_failed dela saem de novo
+  // assim que a TUI estiver pronta para a fila on-idle.
+  setResumedSessionHook((sessionId) => {
+    void waitPtyReady(sessionId, { isRunning: (id) => ptyManager.isRunning(id), screen: screenOf })
+      .then((ready) => (ready === 'ready' ? redeliverFailedWakes(sessionId) : 0))
+      .catch((err) => console.error('[dormant-panes] reenvio de wake_failed falhou:', err))
+  })
 
   ipcMain.handle('sessions:restore-plan', (_e, raw: unknown): RestorePlan =>
     computeRestorePlan(restorePlanSchema.parse(raw)),

@@ -20,7 +20,13 @@ import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import { DormantPanes, setDormantPanes } from '../dormant-panes'
-import { __resetForTests, setHandoffWakeQueue, wakeHealth, wakeMotherFor } from './handoff-wake'
+import {
+  __resetForTests,
+  redeliverFailedWakes,
+  setHandoffWakeQueue,
+  wakeHealth,
+  wakeMotherFor,
+} from './handoff-wake'
 import type { ScreenScan } from '../../../../shared/tui/attention-reason'
 import type { SendPromptInput, SendPromptResult } from '../../../../shared/types/send-prompt'
 
@@ -176,5 +182,64 @@ describe('wake da mãe dormindo', () => {
     expect(rows()).toEqual([
       { outcome: 'not_running', mother_session_id: OLD_MOTHER, detail: 'not-running' },
     ])
+  })
+})
+
+describe('reenvio dos wake_failed quando a mãe volta', () => {
+  // O resume da mãe (wake ou clique) cria a linha nova da MESMA conversa.
+  function motherResumed() {
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, 'r1', 'cc-mother', 'running', ?)`,
+      )
+      .run(NEW_MOTHER, Date.now())
+  }
+
+  it('reenfileira on-idle para a sessão retomada, uma vez só', async () => {
+    const id = seed('report')
+    dormant('fail')
+    const send = fakeQueue()
+    await wakeMotherFor(id, 'reported')
+    expect(rows().map((r) => r.outcome)).toEqual(['wake_failed'])
+
+    motherResumed()
+    expect(await redeliverFailedWakes(NEW_MOTHER)).toBe(1)
+
+    expect(send.mock.calls.at(-1)?.[0]).toMatchObject({ sessionId: NEW_MOTHER, when: 'on-idle' })
+    expect(rows().map((r) => [r.outcome, r.mother_session_id])).toEqual([
+      ['wake_failed', OLD_MOTHER],
+      ['delivered', NEW_MOTHER],
+    ])
+
+    // Segundo resume da mesma conversa: já entregue, nada sai de novo.
+    const calls = send.mock.calls.length
+    expect(await redeliverFailedWakes(NEW_MOTHER)).toBe(0)
+    expect(send.mock.calls.length).toBe(calls)
+  })
+
+  it('wake_failed que o handoff_wait já devolveu não é reenviado', async () => {
+    const id = seed('report')
+    dormant('fail')
+    const send = fakeQueue()
+    await wakeMotherFor(id, 'reported')
+    getDb().prepare('UPDATE handoff_wake_deliveries SET fetched_at = ?').run(Date.now())
+
+    motherResumed()
+    expect(await redeliverFailedWakes(NEW_MOTHER)).toBe(0)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('outra conversa não herda os wake_failed desta mãe', async () => {
+    const id = seed('report')
+    dormant('fail')
+    fakeQueue()
+    await wakeMotherFor(id, 'reported')
+    getDb()
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('stranger', 'r1', 'cc-other', 'running', 3)`,
+      )
+      .run()
+
+    expect(await redeliverFailedWakes('stranger')).toBe(0)
   })
 })

@@ -254,13 +254,15 @@ function waitFor(mother: string, ms: number): Promise<void> {
 export function wakeMotherFor(
   handoffId: string,
   reason: WakeReason,
-  opts: { actorSessionId?: string | null } = {},
+  // toSessionId: entrega a esta sessão em vez da mãe gravada no handoff (o
+  // reenvio para a mãe retomada; handoff terminal não tem a liderança transferida).
+  opts: { actorSessionId?: string | null; toSessionId?: string } = {},
 ): Promise<void> {
   // Nunca lança, nem síncrono: o chamador está no meio de outra transição (ex.: o
   // erro original da adoção) e um throw aqui o mascararia.
   let mother: string | null = null
   try {
-    mother = handoffStore.get(handoffId)?.motherSessionId ?? null
+    mother = opts.toSessionId ?? handoffStore.get(handoffId)?.motherSessionId ?? null
   } catch (err) {
     console.error('[handoff-wake] wake da mãe falhou:', err)
     return Promise.resolve()
@@ -280,11 +282,11 @@ export function wakeMotherFor(
 async function wakeNow(
   handoffId: string,
   reason: WakeReason,
-  opts: { actorSessionId?: string | null },
+  opts: { actorSessionId?: string | null; toSessionId?: string },
 ): Promise<void> {
   const h = handoffStore.get(handoffId)
   if (!h) return
-  let mother = h.motherSessionId
+  let mother = opts.toSessionId ?? h.motherSessionId
   // Eco: a mãe é a autora (ex.: spawn falhou dentro do session_handoff dela) e já
   // soube pelo retorno da própria tool.
   if (opts.actorSessionId && opts.actorSessionId === mother) return
@@ -409,6 +411,41 @@ async function wakeNow(
   } finally {
     resolveWaiters(mother)
   }
+}
+
+// wake_failed é terminal: a notificação que não chegou à mãe dormindo se perderia
+// mesmo depois de ela acordar. Quando a conversa da mãe volta a ter PTY pronta
+// (wake ou resume dela), o que ficou para trás vai de novo, on-idle, para a sessão
+// retomada. "Para trás" = wake_failed de qualquer linha da mesma conversa sem
+// entrega, item na fila ou handoff_wait posterior para o mesmo handoff (o envelope
+// relê o estado atual do handoff, então uma entrega posterior já o cobre).
+export async function redeliverFailedWakes(motherSessionId: string): Promise<number> {
+  const rows = getDb()
+    .prepare(
+      `SELECT d.handoff_id, d.reason FROM handoff_wake_deliveries d
+        WHERE d.outcome = 'wake_failed' AND d.fetched_at IS NULL
+          AND d.mother_session_id IN (
+            SELECT s.id FROM sessions s
+             WHERE s.cc_session_id = (SELECT cc_session_id FROM sessions WHERE id = ?))
+          AND NOT EXISTS (
+            SELECT 1 FROM handoff_wake_deliveries x
+             WHERE x.handoff_id = d.handoff_id
+               AND (x.created_at > d.created_at OR (x.created_at = d.created_at AND x.rowid > d.rowid))
+               AND (x.outcome IN ('delivered','queued','held','attention') OR x.fetched_at IS NOT NULL))
+        ORDER BY d.created_at, d.rowid`,
+    )
+    .all(motherSessionId) as Array<{ handoff_id: string; reason: WakeReason }>
+  const seen = new Set<string>()
+  const todo = rows.filter((r) => {
+    const key = `${r.handoff_id}:${r.reason}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  for (const r of todo) {
+    await wakeMotherFor(r.handoff_id, r.reason, { toSessionId: motherSessionId })
+  }
+  return todo.length
 }
 
 // A mãe sem PTY pode só estar dormindo (lazy restore): acorda a pane dela e passa a

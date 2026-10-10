@@ -67,7 +67,7 @@ vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 import * as handoffStore from '../services/handoff-store'
 import { DormantPanes } from '../services/dormant-panes'
 import { foreignHolderPid } from '../services/conversation-holder'
-import { registerSessionIpc } from './sessions'
+import { registerSessionIpc, setResumedSessionHook } from './sessions'
 
 const CC = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
 const REPO_DIR = join(HOME, 'repo')
@@ -228,6 +228,22 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     })
     expect(requestWake).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'dormant_wake_failed' }))
+  })
+})
+
+describe('hook de sessão retomada (reenvio dos wake_failed)', () => {
+  afterEach(() => setResumedSessionHook(() => {}))
+
+  it('dispara com o id novo quando o resume spawna, e não no re-attach', () => {
+    const resumed: string[] = []
+    setResumedSessionHook((id) => resumed.push(id))
+    insertSession('old', CC, 10)
+
+    const { session } = resumeResult()
+    expect(resumed).toEqual([session.id])
+
+    expect(resumeResult().reattached).toBe(true)
+    expect(resumed).toEqual([session.id])
   })
 })
 
