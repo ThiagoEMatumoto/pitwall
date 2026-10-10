@@ -66,7 +66,9 @@ function seed(finish: 'ask' | 'report' = 'report'): string {
 
 const wakeRequests: string[] = []
 
-function dormant(answer: 'ok' | 'fail') {
+// onResume: o hook de sessão retomada do main (sessions:resume → reenvio dos
+// wake_failed) roda dentro do resume, antes de o wake devolver o id novo.
+function dormant(answer: 'ok' | 'fail', onResume?: () => void) {
   const running = new Set<string>()
   const panes: DormantPanes = new DormantPanes({
     requestWake: (req) => {
@@ -80,6 +82,7 @@ function dormant(answer: 'ok' | 'fail') {
           )
           .run(NEW_MOTHER, req.ccSessionId, Date.now())
         running.add(NEW_MOTHER)
+        onResume?.()
         panes.onWakeResult({ requestId: req.requestId, sessionId: NEW_MOTHER })
       })
       return true
@@ -223,6 +226,30 @@ describe('reenvio dos wake_failed quando a mãe volta', () => {
     const calls = send.mock.calls.length
     expect(await redeliverFailedWakes(NEW_MOTHER)).toBe(0)
     expect(send.mock.calls.length).toBe(calls)
+  })
+
+  it('reenvio e wake da mesma conversa em série: o update sai uma vez só', async () => {
+    const id = seed('report')
+    dormant('fail')
+    const send = fakeQueue()
+    await wakeMotherFor(id, 'reported')
+    expect(rows().map((r) => r.outcome)).toEqual(['wake_failed'])
+
+    // Novo evento com a mãe ainda dormindo; desta vez o wake funciona e o resume
+    // dela dispara o reenvio enquanto o wake ainda não terminou.
+    let redelivery: Promise<number> | null = null
+    dormant('ok', () => {
+      redelivery = redeliverFailedWakes(NEW_MOTHER)
+    })
+    await wakeMotherFor(id, 'reported')
+    expect(await redelivery).toBe(0)
+
+    expect(send.mock.calls.filter(([i]) => i.sessionId === NEW_MOTHER)).toHaveLength(1)
+    expect(rows().map((r) => [r.outcome, r.mother_session_id])).toEqual([
+      ['wake_failed', OLD_MOTHER],
+      ['woke_dormant', OLD_MOTHER],
+      ['delivered', NEW_MOTHER],
+    ])
   })
 
   it('wake_failed que o handoff_wait já devolveu não é reenviado', async () => {

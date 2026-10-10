@@ -95,7 +95,9 @@ let queue: WakeQueue | null = null
 const pending = new Map<string, Pending>()
 const waiters = new Map<string, Set<() => void>>()
 // Wakes da mesma mãe em série: dois eventos simultâneos não podem criar dois itens
-// na fila (o send() só devolve o id do item depois de reler a tela).
+// na fila (o send() só devolve o id do item depois de reler a tela). A chave é a
+// CONVERSA da mãe (cc), não o sessions.id: o wake da mãe dormindo troca o id no
+// meio do caminho e o reenvio dos wake_failed chega pelo id novo.
 const chains = new Map<string, Promise<void>>()
 let lastEventId: string | null = null
 
@@ -260,17 +262,28 @@ export function wakeMotherFor(
 ): Promise<void> {
   // Nunca lança, nem síncrono: o chamador está no meio de outra transição (ex.: o
   // erro original da adoção) e um throw aqui o mascararia.
-  let mother: string | null = null
+  let key: string
   try {
-    mother = opts.toSessionId ?? handoffStore.get(handoffId)?.motherSessionId ?? null
+    const mother = opts.toSessionId ?? handoffStore.get(handoffId)?.motherSessionId ?? null
+    key = mother ? chainKey(mother) : `no-mother:${handoffId}`
   } catch (err) {
     console.error('[handoff-wake] wake da mãe falhou:', err)
     return Promise.resolve()
   }
-  const key = mother ?? `no-mother:${handoffId}`
+  return inChain(key, () => wakeNow(handoffId, reason, opts))
+}
+
+function chainKey(mother: string): string {
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
+    | { cc_session_id: string | null }
+    | undefined
+  return row?.cc_session_id ? `cc:${row.cc_session_id}` : `session:${mother}`
+}
+
+function inChain(key: string, task: () => Promise<void>): Promise<void> {
   const prev = chains.get(key) ?? Promise.resolve()
   const next = prev
-    .then(() => wakeNow(handoffId, reason, opts))
+    .then(task)
     .catch((err) => console.error('[handoff-wake] wake da mãe falhou:', err))
   chains.set(key, next)
   void next.then(() => {
@@ -419,7 +432,34 @@ async function wakeNow(
 // retomada. "Para trás" = wake_failed de qualquer linha da mesma conversa sem
 // entrega, item na fila ou handoff_wait posterior para o mesmo handoff (o envelope
 // relê o estado atual do handoff, então uma entrega posterior já o cobre).
+//
+// Na MESMA cadeia (por cc) dos wakes: um wake em curso que acordou a mãe e vai
+// entregar precisa gravar a entrega antes de a consulta abaixo decidir o que
+// "ficou para trás"; senão o mesmo update sai duas vezes.
 export async function redeliverFailedWakes(motherSessionId: string): Promise<number> {
+  let count = 0
+  let key: string
+  try {
+    key = chainKey(motherSessionId)
+  } catch (err) {
+    console.error('[handoff-wake] reenvio de wake_failed falhou:', err)
+    return 0
+  }
+  await inChain(key, async () => {
+    const todo = failedWakesFor(motherSessionId)
+    count = todo.length
+    for (const r of todo) {
+      try {
+        await wakeNow(r.handoff_id, r.reason, { toSessionId: motherSessionId })
+      } catch (err) {
+        console.error('[handoff-wake] reenvio de wake_failed falhou:', err)
+      }
+    }
+  })
+  return count
+}
+
+function failedWakesFor(motherSessionId: string): Array<{ handoff_id: string; reason: WakeReason }> {
   const rows = getDb()
     .prepare(
       `SELECT d.handoff_id, d.reason FROM handoff_wake_deliveries d
@@ -436,16 +476,12 @@ export async function redeliverFailedWakes(motherSessionId: string): Promise<num
     )
     .all(motherSessionId) as Array<{ handoff_id: string; reason: WakeReason }>
   const seen = new Set<string>()
-  const todo = rows.filter((r) => {
+  return rows.filter((r) => {
     const key = `${r.handoff_id}:${r.reason}`
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
-  for (const r of todo) {
-    await wakeMotherFor(r.handoff_id, r.reason, { toSessionId: motherSessionId })
-  }
-  return todo.length
 }
 
 // A mãe sem PTY pode só estar dormindo (lazy restore): acorda a pane dela e passa a
