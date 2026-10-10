@@ -4,7 +4,7 @@
 // lido do disco por buildSessionsFileIndex (HOME temporário). O processo "de fora"
 // é um `sleep` de verdade, com o pid no arquivo do índice.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -99,13 +99,33 @@ function insertSession(id: string, cc: string, startedAt: number, title: string 
     .run(id, cc, title, startedAt)
 }
 
-// O arquivo que o Claude Code escreve por processo vivo.
-function holdConversationInForeignProcess(cc: string): number {
-  foreign = spawn('sleep', ['30'], { stdio: 'ignore' })
+// Campo 22 de /proc/<pid>/stat: o que o Claude Code grava em procStart.
+function procStartOf(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+}
+
+// O arquivo que o Claude Code escreve por processo vivo (formato do 2.1.295:
+// procStart = start time do próprio processo). procStart: 'real' = o do processo,
+// null = arquivo de versão antiga, string = outro processo (pid reciclado).
+function holdConversationInForeignProcess(
+  cc: string,
+  opts: { procStart?: 'real' | null | string; argv0?: string } = {},
+): number {
+  foreign = spawn('sleep', ['30'], { stdio: 'ignore', argv0: opts.argv0 })
   const pid = foreign.pid!
+  const mode = opts.procStart === undefined ? 'real' : opts.procStart
+  const procStart = mode === 'real' ? procStartOf(pid) : mode
   writeFileSync(
     join(SESSIONS_DIR, `${pid}.json`),
-    JSON.stringify({ pid, sessionId: cc, cwd: REPO_DIR, status: 'idle', updatedAt: Date.now() }),
+    JSON.stringify({
+      pid,
+      sessionId: cc,
+      cwd: REPO_DIR,
+      status: 'idle',
+      updatedAt: Date.now(),
+      ...(procStart === null ? {} : { procStart }),
+    }),
   )
   return pid
 }
@@ -174,6 +194,28 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     resume()
 
     expect(seam.spawns).toHaveLength(1)
+  })
+
+  it('pid reciclado (vivo, mas procStart de outro processo) não bloqueia o resume', () => {
+    insertSession('old', CC, 10)
+    const pid = holdConversationInForeignProcess(CC, { procStart: '1' })
+    expect(procStartOf(pid)).not.toBe('1')
+
+    expect(foreignHolderPid(CC)).toBeNull()
+    resume()
+    expect(seam.spawns).toHaveLength(1)
+  })
+
+  it('arquivo sem procStart: só bloqueia se o cmdline do pid for de um claude', () => {
+    insertSession('old', CC, 10)
+    holdConversationInForeignProcess(CC, { procStart: null })
+    expect(foreignHolderPid(CC)).toBeNull()
+    foreign?.kill()
+
+    const pid = holdConversationInForeignProcess(CC, { procStart: null, argv0: 'claude' })
+    expect(foreignHolderPid(CC)).toBe(pid)
+    expect(() => resume()).toThrow(`conversa aberta em outro processo (pid ${pid})`)
+    expect(seam.spawns).toEqual([])
   })
 
   it('a conversa com PTY do próprio Pitwall é re-attach, não recusa', () => {

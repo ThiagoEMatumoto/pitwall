@@ -85,10 +85,13 @@ interface CcSessionFile {
   status?: 'busy' | 'idle' | 'waiting' | 'shell' | null
   name?: string | null
   updatedAt?: number
+  // Campo 22 de /proc/<pid>/stat (starttime, em ticks) do processo que escreveu.
+  procStart?: string
 }
 
 export interface IndexEntry {
   pid: number
+  procStart: string | null
   status: CcSessionFile['status']
   name: string | null
   cwd: string | null
@@ -115,6 +118,7 @@ export function buildSessionsFileIndex(): Map<string, IndexEntry> {
     if (!data.sessionId || typeof data.pid !== 'number') continue
     next.set(data.sessionId, {
       pid: data.pid,
+      procStart: typeof data.procStart === 'string' ? data.procStart : null,
       status: data.status ?? null,
       name: data.name ?? null,
       cwd: data.cwd ?? null,
@@ -133,6 +137,37 @@ export function isPidAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+// Pid lido de ~/.claude/sessions/<pid>.json: o arquivo sobrevive ao processo
+// (crash, kill -9) e o pid é reciclado, então kill(pid, 0) sozinho acusaria de
+// "dono da conversa" um processo qualquer. Vivo = /proc/<pid> existe e o start
+// time bate com o procStart que o Claude Code gravou; arquivo sem procStart
+// (versão antiga) = o cmdline precisa ser de um claude. Fora do Linux não há
+// /proc: fica o kill(pid, 0).
+export function isSessionPidAlive(
+  entry: Pick<IndexEntry, 'pid' | 'procStart'>,
+  procRoot = '/proc',
+): boolean {
+  if (process.platform !== 'linux') return isPidAlive(entry.pid)
+  let stat: string
+  try {
+    stat = readFileSync(join(procRoot, String(entry.pid), 'stat'), 'utf8')
+  } catch {
+    return false
+  }
+  if (entry.procStart) return procStartOf(stat) === entry.procStart
+  try {
+    return readFileSync(join(procRoot, String(entry.pid), 'cmdline'), 'utf8').includes('claude')
+  } catch {
+    return false
+  }
+}
+
+// O comm (campo 2) vem entre parênteses e pode ter espaço: conta a partir do
+// último ')'. O que sobra começa no campo 3, então o 22 é o índice 19.
+function procStartOf(stat: string): string | null {
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null
 }
 
 export function mapStatus(cc: CcSessionFile['status']): SessionActivity['status'] {
