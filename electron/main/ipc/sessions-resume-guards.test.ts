@@ -67,6 +67,13 @@ vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 import * as handoffStore from '../services/handoff-store'
 import { DormantPanes } from '../services/dormant-panes'
 import { foreignHolderPid } from '../services/conversation-holder'
+import {
+  __resetForTests as resetHandoffWake,
+  insertRow,
+  redeliverFailedWakes,
+  setHandoffWakeQueue,
+} from '../services/handoff/handoff-wake'
+import type { SendPromptInput } from '../../../shared/types/send-prompt'
 import { registerSessionIpc, setResumedSessionHook } from './sessions'
 
 const CC = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
@@ -329,5 +336,118 @@ describe('sessions:resume da filha de handoff (ramo linked)', () => {
       .prepare('SELECT mother_session_id FROM handoffs WHERE id = ?')
       .get(h2.id) as { mother_session_id: string }
     expect(row.mother_session_id).toBe(session.id)
+  })
+})
+
+// H1: C é a filha (interrompida, retomável). H2: C é a mãe de outra filha (r2).
+function childThatIsAlsoMother(): { h1: string; h2: string } {
+  insertSession('c-old', CC, 10, 'filha-api')
+  const repo2 = join(HOME, 'repo2')
+  mkdirSync(repo2, { recursive: true })
+  seam.db
+    .prepare(
+      `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at)
+       VALUES ('r2','p1','Repo 2',?,0,1)`,
+    )
+    .run(repo2)
+  const h1 = handoffStore.create({
+    targetRepoId: 'r1',
+    task: 'h1',
+    composedPrompt: 'p',
+    motherSessionId: null,
+    status: 'approved',
+  })
+  handoffStore.markRunning(h1.id, 'c-old')
+  handoffStore.failIfRunning(h1.id, 'caiu')
+  insertSession('grandchild', '6f9619ff-8b86-d011-b42d-00c04fc964ff', 5)
+  const h2 = handoffStore.create({
+    targetRepoId: 'r2',
+    task: 'h2',
+    composedPrompt: 'p',
+    motherSessionId: 'c-old',
+    status: 'approved',
+  })
+  handoffStore.markRunning(h2.id, 'grandchild')
+  return { h1: h1.id, h2: h2.id }
+}
+
+function motherOf(handoffId: string): string {
+  return (
+    seam.db.prepare('SELECT mother_session_id FROM handoffs WHERE id = ?').get(handoffId) as {
+      mother_session_id: string
+    }
+  ).mother_session_id
+}
+
+describe('handoffs:resume (resumeHandoffChild)', () => {
+  afterEach(() => {
+    setResumedSessionHook(() => {})
+    resetHandoffWake()
+  })
+
+  it('outra linha do mesmo cc com PTY viva: relink para ela, alreadyRunning, sem spawn', () => {
+    const { h1 } = childThatIsAlsoMother()
+    insertSession('c-live', CC, 20, 'filha-api')
+    seam.live.add('c-live')
+
+    const updated = seam.handlers.get('handoffs:resume')!(null, h1 as never) as {
+      status: string
+      childSessionId: string
+    }
+
+    expect(seam.spawns).toEqual([])
+    expect(updated).toMatchObject({ status: 'running', childSessionId: 'c-live' })
+    expect(handoffStore.get(h1)?.childSessionId).toBe('c-live')
+  })
+
+  it('sessions:resume do mesmo cc com outra linha viva também é re-attach', () => {
+    insertSession('c-old', CC, 10)
+    insertSession('c-live', CC, 20)
+    seam.live.add('c-live')
+
+    expect(resumeResult()).toMatchObject({ session: { id: 'c-live' }, reattached: true })
+    expect(seam.spawns).toEqual([])
+  })
+
+  it('spawnou: transfere a liderança e reenvia os wake_failed da mãe para o id novo', async () => {
+    const { h1, h2 } = childThatIsAlsoMother()
+    // A filha de H2 reportou enquanto C (a mãe) dormia e o wake falhou.
+    insertRow({
+      wakeId: 'w-1',
+      handoffId: h2,
+      mother: 'c-old',
+      reason: 'reported',
+      outcome: 'wake_failed',
+      detail: 'no-window',
+    })
+    const sent: SendPromptInput[] = []
+    setHandoffWakeQueue({
+      send: async (input) => {
+        sent.push(input)
+        return seam.live.has(input.sessionId)
+          ? { ok: true, delivered: true }
+          : { ok: false, error: 'not-running' }
+      },
+      replaceText: () => true,
+      cancel: () => true,
+    })
+    const redelivered: Array<Promise<number>> = []
+    setResumedSessionHook((id) => redelivered.push(redeliverFailedWakes(id)))
+
+    seam.handlers.get('handoffs:resume')!(null, h1 as never)
+    const resumedId = seam.spawns[0]
+    await Promise.all(redelivered)
+
+    expect(seam.spawns).toHaveLength(1)
+    expect(handoffStore.get(h1)?.childSessionId).toBe(resumedId)
+    expect(motherOf(h2)).toBe(resumedId)
+    expect(sent.map((i) => i.sessionId)).toEqual([resumedId])
+    const last = seam.db
+      .prepare(
+        `SELECT outcome, mother_session_id FROM handoff_wake_deliveries
+          WHERE handoff_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(h2) as { outcome: string; mother_session_id: string }
+    expect(last).toEqual({ outcome: 'delivered', mother_session_id: resumedId })
   })
 })

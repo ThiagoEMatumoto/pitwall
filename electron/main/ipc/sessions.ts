@@ -727,7 +727,18 @@ export function resumeHandoffChild(
     throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
   }
 
+  // A conversa já tem PTY viva em OUTRA linha (a pane foi retomada pelo
+  // switcher, ou acordada): um 2º --resume escreveria no mesmo JSONL. O handoff
+  // passa a apontar para a linha viva, sem spawn.
+  const alive = findAliveByCc(ccSessionId)
+  if (alive) {
+    const relinked = handoffStore.markRunning(id, alive.id)
+    broadcast('handoff:updated', relinked)
+    return { handoff: relinked, session: toSession(alive), alreadyRunning: true }
+  }
+
   assertNotOpenElsewhere(ccSessionId)
+  const priorSessionIds = sessionIdsOfCc(ccSessionId)
 
   // Gate de resumibilidade: o transcript JSONL precisa existir no disco.
   const transcript = findTranscriptPath(ccSessionId)
@@ -807,7 +818,26 @@ export function resumeHandoffChild(
   // RELINKA o handoff, sem o que a filha sumiria do painel.
   const updated = handoffStore.markRunning(id, namedSession.id)
   broadcast('handoff:updated', updated)
+  // A filha também pode ser mãe: o que as linhas antigas lideravam vem junto, e
+  // os wake_failed dela saem de novo (vale para handoffs:resume, adopt e relink).
+  transferLeadershipToResumed(priorSessionIds, namedSession.id)
   return { handoff: updated, session: namedSession, alreadyRunning: false }
+}
+
+// PTY viva do Pitwall com esta conversa, em qualquer linha de sessions (cada
+// resume abre uma linha nova com o mesmo cc_session_id).
+export function findAliveByCc(ccSessionId: string): SessionRow | null {
+  const rows = getDb()
+    .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
+    .all(ccSessionId) as SessionRow[]
+  return rows.find((row) => ptyManager.isRunning(row.id)) ?? null
+}
+
+function sessionIdsOfCc(ccSessionId: string): string[] {
+  const rows = getDb()
+    .prepare('SELECT id FROM sessions WHERE cc_session_id = ?')
+    .all(ccSessionId) as Array<{ id: string }>
+  return rows.map((row) => row.id)
 }
 
 // Kickoff do resume pelo PAINEL (Crew Dock): retomar a tarefa e reportar via MCP.
@@ -1036,12 +1066,10 @@ export function registerSessionIpc(): void {
     // Re-attach: a conversa já tem PTY viva (wake do main e clique no mesmo
     // instante, duas janelas, restore eager + ativação). Um segundo --resume do
     // mesmo id escreveria no mesmo JSONL com dois processos.
-    const priorRows = db
-      .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
-      .all(input.ccSessionId) as SessionRow[]
-    const alive = priorRows.find((row) => ptyManager.isRunning(row.id))
+    const alive = findAliveByCc(input.ccSessionId)
     if (alive) return { session: toSession(alive), reattached: true }
     assertNotOpenElsewhere(input.ccSessionId)
+    const priorSessionIds = sessionIdsOfCc(input.ccSessionId)
 
     // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
     // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
@@ -1098,13 +1126,6 @@ export function registerSessionIpc(): void {
     const linked = findRelinkableHandoff(input.ccSessionId)
     if (linked) {
       const resumed = resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows })
-      // A filha também pode ser mãe: o que as linhas antigas lideravam vem junto.
-      if (!resumed.alreadyRunning) {
-        transferLeadershipToResumed(
-          priorRows.map((row) => row.id),
-          resumed.session.id,
-        )
-      }
       return { session: resumed.session, reattached: resumed.alreadyRunning }
     }
 
@@ -1138,10 +1159,7 @@ export function registerSessionIpc(): void {
       cols: input.cols,
       rows: input.rows,
     })
-    transferLeadershipToResumed(
-      priorRows.map((row) => row.id),
-      session.id,
-    )
+    transferLeadershipToResumed(priorSessionIds, session.id)
     return { session, reattached: false }
   })
 
