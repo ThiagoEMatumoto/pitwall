@@ -1086,7 +1086,15 @@ export function registerSessionIpc(): void {
     // acontece igual — o que não acontece é o disparo automático de trabalho.
     const linked = findRelinkableHandoff(input.ccSessionId)
     if (linked) {
-      return resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows }).session
+      const resumed = resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows })
+      // A filha também pode ser mãe: o que as linhas antigas lideravam vem junto.
+      if (!resumed.alreadyRunning) {
+        transferLeadershipToResumed(
+          priorRows.map((row) => row.id),
+          resumed.session.id,
+        )
+      }
+      return resumed.session
     }
 
     // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.

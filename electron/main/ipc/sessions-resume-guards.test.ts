@@ -226,3 +226,45 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'dormant_wake_failed' }))
   })
 })
+
+describe('sessions:resume da filha de handoff (ramo linked)', () => {
+  it('a liderança que a filha tinha como mãe passa para a sessão retomada', () => {
+    insertSession('c-old', CC, 10, 'filha-api')
+    const repo2 = join(HOME, 'repo2')
+    mkdirSync(repo2)
+    seam.db
+      .prepare(
+        `INSERT INTO repos (id, project_id, label, path, position, created_at)
+         VALUES ('r2','p1','Repo 2',?,0,1)`,
+      )
+      .run(repo2)
+    // H1: C é a filha (interrompida, retomável). H2: C é a mãe de outra filha.
+    const h1 = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 'h1',
+      composedPrompt: 'p',
+      motherSessionId: null,
+      status: 'approved',
+    })
+    handoffStore.markRunning(h1.id, 'c-old')
+    handoffStore.failIfRunning(h1.id, 'caiu')
+    insertSession('grandchild', '6f9619ff-8b86-d011-b42d-00c04fc964ff', 5)
+    const h2 = handoffStore.create({
+      targetRepoId: 'r2',
+      task: 'h2',
+      composedPrompt: 'p',
+      motherSessionId: 'c-old',
+      status: 'approved',
+    })
+    handoffStore.markRunning(h2.id, 'grandchild')
+
+    const session = resume()
+
+    expect(seam.spawns).toEqual([session.id])
+    expect(handoffStore.get(h1.id)?.childSessionId).toBe(session.id)
+    const row = seam.db
+      .prepare('SELECT mother_session_id FROM handoffs WHERE id = ?')
+      .get(h2.id) as { mother_session_id: string }
+    expect(row.mother_session_id).toBe(session.id)
+  })
+})
