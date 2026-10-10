@@ -60,11 +60,7 @@ import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
 import type { AgentProvider, LaunchOpts } from '../services/providers/types'
-import {
-  buildImageFilename,
-  isImageTempFile,
-  isSessionImageTempFile,
-} from '../services/image-temp'
+import { buildImageFilename, isImageTempFile, isSessionImageTempFile } from '../services/image-temp'
 import { mapLiveSessionRepo, type LiveSessionJoinRow } from './live-session-mapping'
 import type {
   Session,
@@ -202,9 +198,8 @@ function resolveHandoffChildCwd(
 // app_prefs (mesmo padrão de claude_command), default ~/ClaudeManager/scratch.
 // Garante a existência antes do spawn (PTY com cwd inexistente falha).
 function resolveScratchDir(): string {
-  const row = getDb()
-    .prepare('SELECT value FROM app_prefs WHERE key = ?')
-    .get(SCRATCH_DIR_KEY) as { value: string } | undefined
+  const row = getDb().prepare('SELECT value FROM app_prefs WHERE key = ?').get(SCRATCH_DIR_KEY) as
+    { value: string } | undefined
   const dir = row?.value?.trim() || join(homedir(), 'ClaudeManager', 'scratch')
   mkdirSync(dir, { recursive: true })
   return dir
@@ -516,9 +511,8 @@ export function spawnSession(input: SpawnSessionInput): Session {
   let cwd: string
   let defaultName: string
   if (repoId) {
-    const repo = db
-      .prepare('SELECT path, label FROM repos WHERE id = ?')
-      .get(repoId) as RepoPathRow | undefined
+    const repo = db.prepare('SELECT path, label FROM repos WHERE id = ?').get(repoId) as
+      RepoPathRow | undefined
     if (!repo) throw new Error(`repo not found: ${repoId}`)
     // repos.path legado pode ser RELATIVO (bug do importer do sync antigo):
     // resolve contra o vault root antes do guard e do cwd do spawn.
@@ -681,9 +675,7 @@ export function resumeHandoffChild(
   const handoff = handoffStore.get(id)
   if (!handoff) throw new Error(`Handoff não encontrado: ${id}`)
   if (TERMINAL_HANDOFF_STATUSES.has(handoff.status)) {
-    throw new Error(
-      `Só dá pra retomar um handoff não-terminal (status atual: ${handoff.status}).`,
-    )
+    throw new Error(`Só dá pra retomar um handoff não-terminal (status atual: ${handoff.status}).`)
   }
   if (!handoff.childSessionId) {
     throw new Error('Handoff não tem sessão-filha registrada para retomar.')
@@ -732,9 +724,8 @@ export function resumeHandoffChild(
   }
 
   const repoId = handoff.targetRepoId
-  const repo = db
-    .prepare('SELECT path, label FROM repos WHERE id = ?')
-    .get(repoId) as RepoPathRow | undefined
+  const repo = db.prepare('SELECT path, label FROM repos WHERE id = ?').get(repoId) as
+    RepoPathRow | undefined
   if (!repo) throw new Error(`repo-alvo do handoff não encontrado: ${repoId}`)
   // repos.path legado pode ser RELATIVO (bug do importer do sync antigo).
   const repoPath = resolveRepoPath(repo.path)
@@ -967,9 +958,9 @@ export function registerSessionIpc(): void {
       // o que interessa ao doc é o loop (pulso/ledger/métricas) que a sessão já
       // escreveu enquanto rodava.
       try {
-        const linked = db.prepare('SELECT feature_id FROM sessions WHERE id = ?').get(e.sessionId) as
-          | { feature_id: string | null }
-          | undefined
+        const linked = db
+          .prepare('SELECT feature_id FROM sessions WHERE id = ?')
+          .get(e.sessionId) as { feature_id: string | null } | undefined
         if (linked?.feature_id) {
           void exportLoopDoc(linked.feature_id).catch((err) => {
             console.error('[sessions] loop export failed:', err)
@@ -1006,6 +997,15 @@ export function registerSessionIpc(): void {
     const db = getDb()
     const repoId = input.repoId ?? null
 
+    // Re-attach: a conversa já tem PTY viva (wake do main e clique no mesmo
+    // instante, duas janelas, restore eager + ativação). Um segundo --resume do
+    // mesmo id escreveria no mesmo JSONL com dois processos.
+    const priorRows = db
+      .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
+      .all(input.ccSessionId) as SessionRow[]
+    const alive = priorRows.find((row) => ptyManager.isRunning(row.id))
+    if (alive) return toSession(alive)
+
     // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
     // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
     // de contexto — e como retomar é o gesto mais comum, o loop nunca chegava.
@@ -1021,17 +1021,15 @@ export function registerSessionIpc(): void {
           ORDER BY started_at DESC LIMIT 1`,
       )
       .get(input.ccSessionId, MANUAL_FEATURE_SOURCE) as
-      | { feature_id: string | null; feature_source: string | null }
-      | undefined
+      { feature_id: string | null; feature_source: string | null } | undefined
     const featureId = featureRow?.feature_id ?? null
     const featureSource = featureRow?.feature_source ?? null
 
     let cwd: string
     let defaultName: string
     if (repoId) {
-      const repo = db
-        .prepare('SELECT path, label FROM repos WHERE id = ?')
-        .get(repoId) as RepoPathRow | undefined
+      const repo = db.prepare('SELECT path, label FROM repos WHERE id = ?').get(repoId) as
+        RepoPathRow | undefined
       if (!repo) throw new Error(`repo not found: ${repoId}`)
       // Mesmo guard do spawn: repos.path legado relativo resolve contra o vault.
       const repoPath = resolveRepoPath(repo.path)
@@ -1082,7 +1080,7 @@ export function registerSessionIpc(): void {
       systemPromptFilePath: writeSessionSystemPromptFile({ repoId, featureId }),
     })
 
-    return startSession({
+    const session = startSession({
       id: internalSessionId,
       ccSessionId: input.ccSessionId,
       repoId,
@@ -1093,6 +1091,14 @@ export function registerSessionIpc(): void {
       cols: input.cols,
       rows: input.rows,
     })
+    // Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
+    // PTY) lideravam passam a responder a esta, venha o resume de clique,
+    // agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
+    // filha chegaria a um id morto.
+    for (const prior of priorRows) {
+      if (!ptyManager.isRunning(prior.id)) handoffStore.transferMother(prior.id, session.id)
+    }
+    return session
   })
 
   ipcMain.handle('sessions:is-resumable', (_e, ccSessionId: string): boolean => {
@@ -1201,50 +1207,47 @@ export function registerSessionIpc(): void {
   // feature o histórico de trabalho e o cc_session_id que o `sessions:resume`
   // consome. `isLive` vem do ptyManager (PTY viva NESTE app), não do banco:
   // status='running' sobrevive a um crash do app e mentiria.
-  ipcMain.handle(
-    'sessions:list-by-feature',
-    (_e, featureId: string): FeatureSessionSummary[] => {
-      const rows = getDb()
-        .prepare(
-          `SELECT id, repo_id, cc_session_id, title, title_source, status, started_at, ended_at
+  ipcMain.handle('sessions:list-by-feature', (_e, featureId: string): FeatureSessionSummary[] => {
+    const rows = getDb()
+      .prepare(
+        `SELECT id, repo_id, cc_session_id, title, title_source, status, started_at, ended_at
              FROM sessions WHERE feature_id = ? ORDER BY started_at DESC`,
-        )
-        .all(featureId) as Omit<SessionRow, 'pane_id'>[]
+      )
+      .all(featureId) as Omit<SessionRow, 'pane_id'>[]
 
-      const live = new Set(ptyManager.runningIds())
-      // Mãe de cada filha: o handoff mais recente em que ela é a filha atual
-      // (o bastão da mãe reescreve mother_session_id, então é a mãe de agora).
-      const mothers = new Map(
-        (
-          getDb()
-            .prepare(
-              `SELECT child_session_id, mother_session_id FROM handoffs
+    const live = new Set(ptyManager.runningIds())
+    // Mãe de cada filha: o handoff mais recente em que ela é a filha atual
+    // (o bastão da mãe reescreve mother_session_id, então é a mãe de agora).
+    const mothers = new Map(
+      (
+        getDb()
+          .prepare(
+            `SELECT child_session_id, mother_session_id FROM handoffs
                 WHERE child_session_id IN (SELECT value FROM json_each(?))
                   AND mother_session_id IS NOT NULL
                 ORDER BY created_at`,
-            )
-            .all(JSON.stringify(rows.map((r) => r.id))) as Array<{
-            child_session_id: string
-            mother_session_id: string
-          }>
-        ).map((h) => [h.child_session_id, h.mother_session_id]),
-      )
-      return rows.map((row) => ({
-        motherSessionId: mothers.get(row.id) ?? null,
-        id: row.id,
-        ccSessionId: row.cc_session_id,
-        repoId: row.repo_id,
-        // O DB só tem título quando houve rename; senão o nome real está no
-        // transcript. Sem o fallback a lista fica cheia de linhas sem rótulo.
-        title: row.title ?? transcriptTitleOrNull(row.cc_session_id),
-        titleSource: row.title_source,
-        status: row.status,
-        startedAt: row.started_at,
-        endedAt: row.ended_at,
-        isLive: live.has(row.id),
-      }))
-    },
-  )
+          )
+          .all(JSON.stringify(rows.map((r) => r.id))) as Array<{
+          child_session_id: string
+          mother_session_id: string
+        }>
+      ).map((h) => [h.child_session_id, h.mother_session_id]),
+    )
+    return rows.map((row) => ({
+      motherSessionId: mothers.get(row.id) ?? null,
+      id: row.id,
+      ccSessionId: row.cc_session_id,
+      repoId: row.repo_id,
+      // O DB só tem título quando houve rename; senão o nome real está no
+      // transcript. Sem o fallback a lista fica cheia de linhas sem rótulo.
+      title: row.title ?? transcriptTitleOrNull(row.cc_session_id),
+      titleSource: row.title_source,
+      status: row.status,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      isLive: live.has(row.id),
+    }))
+  })
 
   ipcMain.handle('sessions:list-live-global', async (): Promise<LiveSessionInfo[]> => {
     const db = getDb()
@@ -1300,7 +1303,10 @@ export function registerSessionIpc(): void {
       let lastActivityAt: number | null
       if (isLive) {
         status = mapStatus(indexed!.status)
-        name = indexed!.name ?? (transcript ? readTranscriptTitle(transcript) : null) ?? row.session_title
+        name =
+          indexed!.name ??
+          (transcript ? readTranscriptTitle(transcript) : null) ??
+          row.session_title
         lastActivityAt = indexed!.updatedAt
       } else {
         status = 'ended'
@@ -1363,9 +1369,8 @@ export function registerSessionIpc(): void {
     // antigas 'exited' no DB — não podem aparecer como encerradas de novo.
     const liveCc = new Set<string>()
     for (const sessionId of ptyManager.runningIds()) {
-      const row = db
-        .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-        .get(sessionId) as { cc_session_id: string | null } | undefined
+      const row = db.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
+        { cc_session_id: string | null } | undefined
       if (row?.cc_session_id) liveCc.add(row.cc_session_id)
     }
 
@@ -1474,8 +1479,7 @@ export function registerSessionIpc(): void {
     // reiniciar o app.
     const db = getDb()
     const before = db.prepare('SELECT feature_id FROM sessions WHERE id = ?').get(sessionId) as
-      | { feature_id: string | null }
-      | undefined
+      { feature_id: string | null } | undefined
     db.prepare('UPDATE sessions SET feature_id = ?, feature_source = ? WHERE id = ?').run(
       featureId,
       MANUAL_FEATURE_SOURCE,

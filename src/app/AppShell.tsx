@@ -10,7 +10,7 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from 'dockview'
-import { FolderTree, PanelLeftOpen } from 'lucide-react'
+import { FolderTree, Moon, PanelLeftOpen } from 'lucide-react'
 import { IconRail } from './IconRail'
 import { Icon } from '@/components/ui/Icon'
 import { ProjectsSidebar } from '@/features/projects/ProjectsSidebar'
@@ -27,6 +27,8 @@ import { DesignArea } from '@/features/design/DesignArea'
 import { VideosArea } from '@/features/videos/VideosArea'
 import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
+import { DormantPane } from '@/features/sessions/DormantPane'
+import { wakeIfDormant } from '@/features/sessions/dormant-wake'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
@@ -104,6 +106,7 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   const openSession = useAppStore((s) => s.openSession)
   const endSession = useAppStore((s) => s.endSession)
   const setPaneMode = useAppStore((s) => s.setPaneMode)
+  const wakeDormantPane = useAppStore((s) => s.wakeDormantPane)
   // Busca a pane no store pelo id do painel (= paneId). Após api.fromJSON do
   // restore, os params serializados no JSON podem estar stale (session/repo são
   // recriados pelo resume), então a fonte da verdade é sempre o store. Fallback
@@ -113,6 +116,8 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   // Painel órfão: existe no dockview mas a pane sumiu do store (resume falhou ou
   // foi fechada). Nada a renderizar — o effect de restore/reconcile vai removê-lo.
   if (!pane) return null
+  if (pane.dormant)
+    return <DormantPane pane={pane} onWake={() => void wakeDormantPane(pane.paneId)} />
   return (
     <Terminal
       session={pane.session}
@@ -157,6 +162,11 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
+      {pane?.dormant && (
+        <span title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
+          <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
+        </span>
+      )}
       <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
     </div>
   )
@@ -242,6 +252,9 @@ export function AppShell() {
   // Guard: true enquanto api.fromJSON do restore roda — suprime persist e a
   // reconciliação store→dockview (que duplicaria/removeria painéis).
   const applyingLayout = useRef(false)
+  // true enquanto a reconciliação adiciona/remove painéis: o addPanel ativa o
+  // painel novo, e isso não é o usuário escolhendo acordar uma aba dormindo.
+  const reconciling = useRef(false)
   // false até o fluxo de restore concluir (ou se não houver restore pendente).
   // Enquanto false, NÃO persistimos layout (evita sobrescrever o salvo com vazio
   // antes das panes voltarem).
@@ -273,7 +286,9 @@ export function AppShell() {
       // o repo daquele terminal (quando está entre os roots).
       event.api.onDidActivePanelChange(() => {
         syncFilesRepoToActivePane()
-        setActivePanelId(event.api.activePanel?.id ?? null)
+        const id = event.api.activePanel?.id ?? null
+        setActivePanelId(id)
+        if (!applyingLayout.current && !reconciling.current) wakeIfDormant(id)
       })
       event.api.onDidRemovePanel((panel) => {
         // Loop guard: se a remoção partiu do store (api.removePanel nosso), ignora.
@@ -405,39 +420,43 @@ export function AppShell() {
     if (pendingLayout || gridRequest || applyingLayout.current) return
 
     const storeIds = new Set(panes.map((p) => p.paneId))
-
-    for (const panel of api.panels) {
-      if (!storeIds.has(panel.id)) {
-        removingFromStore.current.add(panel.id)
-        api.removePanel(panel)
+    reconciling.current = true
+    try {
+      for (const panel of api.panels) {
+        if (!storeIds.has(panel.id)) {
+          removingFromStore.current.add(panel.id)
+          api.removePanel(panel)
+        }
       }
-    }
 
-    for (const pane of panes) {
-      const existing = api.getPanel(pane.paneId)
-      if (existing) {
-        // Atualiza os params caso o objeto pane tenha sido recriado (ex: rename).
-        existing.api.updateParameters({ pane })
-        continue
+      for (const pane of panes) {
+        const existing = api.getPanel(pane.paneId)
+        if (existing) {
+          // Atualiza os params caso o objeto pane tenha sido recriado (ex: rename).
+          existing.api.updateParameters({ pane })
+          continue
+        }
+        const active = api.activePanel
+        const intent = nextPosition.current
+        // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
+        // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.
+        const position = active
+          ? intent === 'tab'
+            ? { referenceGroup: active.group.id }
+            : { referencePanel: active.id, direction: intent ?? 'right' }
+          : undefined
+        api.addPanel<PaneParams>({
+          id: pane.paneId,
+          component: 'terminal',
+          tabComponent: 'terminal',
+          title: paneTabTitle(pane),
+          params: { pane },
+          position,
+        })
+        nextPosition.current = undefined
       }
-      const active = api.activePanel
-      const intent = nextPosition.current
-      // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
-      // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.
-      const position = active
-        ? intent === 'tab'
-          ? { referenceGroup: active.group.id }
-          : { referencePanel: active.id, direction: intent ?? 'right' }
-        : undefined
-      api.addPanel<PaneParams>({
-        id: pane.paneId,
-        component: 'terminal',
-        tabComponent: 'terminal',
-        title: paneTabTitle(pane),
-        params: { pane },
-        position,
-      })
-      nextPosition.current = undefined
+    } finally {
+      reconciling.current = false
     }
   }, [panes, ready, pendingLayout, gridRequest])
 

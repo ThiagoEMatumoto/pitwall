@@ -8,6 +8,7 @@ import type {
   ReorderReposInput,
   SpawnSessionInput,
   ResumeSessionInput,
+  WakeRequest,
   PtyDataEvent,
   PtyExitEvent,
   SessionFeatureChangedEvent,
@@ -188,6 +189,10 @@ const api: Api = {
     setRendererFocus: (ccSessionId) => {
       void invoke('sessions:renderer-focus', ccSessionId)
     },
+    restorePlan: (ccSessionIds) => invoke('sessions:restore-plan', ccSessionIds),
+    dormantSync: (panes) => invoke('sessions:dormant-sync', panes),
+    onWakeRequest: (handler) => subscribe<WakeRequest>('sessions:wake-request', handler),
+    wakeResult: (result) => invoke('sessions:wake-result', result),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),
@@ -583,8 +588,7 @@ const api: Api = {
       onUpdated: (handler) => subscribe<unknown>('videoScenes:updated', handler),
     },
     script: {
-      list: (projectId: string, locale: string) =>
-        invoke('video:script-list', projectId, locale),
+      list: (projectId: string, locale: string) => invoke('video:script-list', projectId, locale),
       set: (input: SetVideoScriptInput) => invoke('video:script-set', input),
       onUpdated: (handler) => subscribe<unknown>('videoScript:updated', handler),
     },
@@ -617,10 +621,12 @@ const api: Api = {
     list: () => invoke('meetings:list'),
     get: (id: string) => invoke('meetings:get', id),
     update: (input: UpdateMeetingInput) => invoke('meetings:update', input),
-    quickNote: (meetingId: string, text: string) => invoke('meetings:quickNote', { meetingId, text }),
+    quickNote: (meetingId: string, text: string) =>
+      invoke('meetings:quickNote', { meetingId, text }),
     delete: (id: string) => invoke('meetings:delete', id),
     resummarize: (id: string) => invoke('meetings:resummarize', id),
-    actionItemsBatch: (input: MeetingActionItemBatch) => invoke('meetings:actionItems:batch', input),
+    actionItemsBatch: (input: MeetingActionItemBatch) =>
+      invoke('meetings:actionItems:batch', input),
     renameSpeaker: (input: RenameMeetingSpeakerInput) => invoke('meetings:renameSpeaker', input),
     listVoices: () => invoke('meetings:voices:list'),
     deleteVoice: (id: string) => invoke('meetings:voices:delete', id),

@@ -13,6 +13,7 @@
 // Sem electron e sem ipc/: a fila chega por setter (como notify-mother-alias).
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db'
+import { getDormantPanes } from '../dormant-panes'
 import * as handoffStore from '../handoff-store'
 import { MAX_WAIT_SECONDS, attr, sanitizeBody } from '../agent-bus'
 import { handoffAsking } from '../../../../shared/tui/attention-reason'
@@ -44,6 +45,8 @@ export type WakeOutcome =
   | 'capped' // teto anti-loop estourado, não foi enfileirado
   | 'cancelled' // humano tirou da fila pela UI
   | 'fetched' // a mãe puxou por handoff_wait antes de a fila entregar; o item saiu da fila
+  | 'woke_dormant' // a mãe dormia (lazy restore): pane acordada, liderança transferida, reenvio segue em outra linha
+  | 'wake_failed' // a mãe dormia e não acordou (sem janela, resume falhou, não ficou pronta)
 
 export const WAKE_TEXT_CAP = 1500
 export const WAKE_MAX_BLOCKS = 10
@@ -150,7 +153,10 @@ function renderPending(p: Pending): string {
 
 function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boolean } {
   if (reason === 'answered' || reason === 'rejected') {
-    return { body: 'Resposta a um pedido registrada: veja handoff_result.requests.', truncated: false }
+    return {
+      body: 'Resposta a um pedido registrada: veja handoff_result.requests.',
+      truncated: false,
+    }
   }
   const raw =
     (reason === 'asked' ? h.pendingQuestion : reason === 'reported' ? h.summary : h.error) ?? ''
@@ -197,7 +203,7 @@ function wakesInLastHour(handoffId: string): number {
   const row = getDb()
     .prepare(
       `SELECT COUNT(DISTINCT wake_id) AS n FROM handoff_wake_deliveries
-        WHERE handoff_id = ? AND created_at > ? AND outcome <> 'capped'
+        WHERE handoff_id = ? AND created_at > ? AND outcome NOT IN ('capped','woke_dormant')
           AND reason NOT IN ('answered','rejected')`,
     )
     .get(handoffId, Date.now() - HOUR_MS) as { n: number }
@@ -281,7 +287,7 @@ async function wakeNow(
 ): Promise<void> {
   const h = handoffStore.get(handoffId)
   if (!h) return
-  const mother = h.motherSessionId
+  let mother = h.motherSessionId
   // Eco: a mãe é a autora (ex.: spawn falhou dentro do session_handoff dela) e já
   // soube pelo retorno da própria tool.
   if (opts.actorSessionId && opts.actorSessionId === mother) return
@@ -364,52 +370,112 @@ async function wakeNow(
       return
     }
     const fresh: Pending = { queueId: '', blocks: [block] }
-    const sent = await queue.send({
-      sessionId: mother,
-      text: renderPending(fresh),
-      when: 'on-idle',
-      fromSessionId: h.childSessionId ?? undefined,
-    })
-    if (sent.ok && sent.delivered) {
-      const now = Date.now()
-      insertRow({
-        wakeId: randomUUID(),
-        handoffId,
-        mother,
-        reason,
-        outcome: 'delivered',
-        deliveredAt: now,
+    const text = renderPending(fresh)
+    const q = queue
+    const sendTo = (sessionId: string) =>
+      q.send({
+        sessionId,
+        text,
+        when: 'on-idle',
+        fromSessionId: h.childSessionId ?? undefined,
       })
-      return
+    let sent = await sendTo(mother)
+    if (!sent.ok && sent.error === 'not-running') {
+      const woke = await wakeDormantMother(mother)
+      if (woke) {
+        if (!woke.ok) {
+          insertRow({
+            wakeId: randomUUID(),
+            handoffId,
+            mother,
+            reason,
+            outcome: 'wake_failed',
+            detail: woke.error,
+          })
+          return
+        }
+        insertRow({
+          wakeId: randomUUID(),
+          handoffId,
+          mother,
+          reason,
+          outcome: 'woke_dormant',
+          detail: JSON.stringify({ from: mother, to: woke.sessionId }),
+        })
+        // Os waiters do handoff_wait da mãe antiga não têm mais quem os chame.
+        resolveWaiters(mother)
+        mother = woke.sessionId
+        sent = await sendTo(mother)
+      }
     }
-    if (sent.ok) {
-      const q = sent.queued
-      const outcome: WakeOutcome = q.heldReason ? 'held' : unheldOutcome(mother)
-      pending.set(mother, { queueId: q.id, blocks: fresh.blocks })
-      insertRow({
-        wakeId: q.id,
-        handoffId,
-        mother,
-        reason,
-        outcome,
-        detail: q.heldReason,
-        heldAt: q.heldReason ? Date.now() : null,
-      })
-      return
-    }
-    const outcome: WakeOutcome =
-      sent.error === 'no-screen'
-        ? 'no_screen'
-        : sent.error === 'cancelled'
-          ? 'cancelled'
-          : sent.error === 'not-running'
-            ? 'not_running'
-            : // 'on-idle' não recusa por menu/attention (segura na fila); defensivo.
-              'not_running'
-    insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome, detail: sent.error })
+    recordSent(sent, { handoffId, mother, reason, blocks: fresh.blocks })
   } finally {
     resolveWaiters(mother)
   }
+}
+
+// A mãe sem PTY pode só estar dormindo (lazy restore): acorda a pane dela e passa a
+// liderança dos handoffs para a sessão retomada (mesma conversa, sessions.id novo).
+// null = não estava dormindo; o not_running segue.
+async function wakeDormantMother(
+  mother: string,
+): Promise<{ ok: true; sessionId: string } | { ok: false; error: string } | null> {
+  const panes = getDormantPanes()
+  if (!panes) return null
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
+    { cc_session_id: string | null } | undefined
+  const cc = row?.cc_session_id
+  if (!cc || !panes.findDormantByCc(cc)) return null
+  const woke = await panes.wakeDormant(cc, 'handoff-wake')
+  if (!woke.ok) return { ok: false, error: woke.error }
+  // O sessions:resume já transferiu; repetir é no-op (a mãe antiga não lidera mais
+  // nada). Fica para o caso de o renderer retomar por outro caminho.
+  handoffStore.transferMother(mother, woke.sessionId)
+  return { ok: true, sessionId: woke.sessionId }
+}
+
+function recordSent(
+  sent: SendPromptResult,
+  ctx: { handoffId: string; mother: string; reason: WakeReason; blocks: WakeBlock[] },
+): void {
+  const { handoffId, mother, reason } = ctx
+  if (sent.ok && sent.delivered) {
+    const now = Date.now()
+    insertRow({
+      wakeId: randomUUID(),
+      handoffId,
+      mother,
+      reason,
+      outcome: 'delivered',
+      deliveredAt: now,
+    })
+    return
+  }
+  if (sent.ok) {
+    const q = sent.queued
+    const outcome: WakeOutcome = q.heldReason ? 'held' : unheldOutcome(mother)
+    pending.set(mother, { queueId: q.id, blocks: ctx.blocks })
+    insertRow({
+      wakeId: q.id,
+      handoffId,
+      mother,
+      reason,
+      outcome,
+      detail: q.heldReason,
+      heldAt: q.heldReason ? Date.now() : null,
+    })
+    return
+  }
+  const outcome: WakeOutcome =
+    sent.error === 'no-screen'
+      ? 'no_screen'
+      : sent.error === 'cancelled'
+        ? 'cancelled'
+        : sent.error === 'not-running'
+          ? 'not_running'
+          : // 'on-idle' não recusa por menu/attention (segura na fila); defensivo.
+            'not_running'
+  insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome, detail: sent.error })
 }
 
 // Na fila e sem hold: a mãe que é filha em needs_input só sai pelo handoff_wait.
@@ -575,6 +641,7 @@ const UNDELIVERED_TERMINAL = new Set<WakeOutcome>([
   'no_screen',
   'capped',
   'cancelled',
+  'wake_failed',
 ])
 const TRANSIENT = new Set<WakeOutcome>(['queued', 'held', 'attention'])
 // Eventos que acordam a mãe. `fail` de pending/approved fica de fora: no
@@ -592,8 +659,7 @@ function ledgerStartedAt(): number | null {
     .get()
   if (!hasRunner) return null
   const row = db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as
-    | { applied_at: number }
-    | undefined
+    { applied_at: number } | undefined
   return row?.applied_at ?? null
 }
 

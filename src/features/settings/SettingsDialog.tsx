@@ -419,6 +419,11 @@ const PANE_MODE_OPTIONS = [
   { value: 'chat', label: 'Chat' },
 ] as const
 
+const RESTORE_MODE_OPTIONS = [
+  { value: 'lazy', label: 'Sob demanda' },
+  { value: 'eager', label: 'Todas' },
+] as const
+
 const KEYBOARD_OPTIONS: { value: KeyboardSendMode; label: string; hint: string }[] = [
   { value: 'enter-sends', label: 'Enter envia', hint: 'Shift+Enter quebra linha' },
   { value: 'enter-newline', label: 'Enter quebra linha', hint: 'Cmd/Ctrl+Enter envia' },
@@ -461,6 +466,8 @@ function SessionTab({ open }: { open: boolean }) {
   const keyboardMode = useSessionPrefsStore((s) => s.keyboardMode)
   const defaultPaneMode = useSessionPrefsStore((s) => s.defaultPaneMode)
   const setDefaultPaneMode = useSessionPrefsStore((s) => s.setDefaultPaneMode)
+  const restoreMode = useSessionPrefsStore((s) => s.restoreMode)
+  const setRestoreMode = useSessionPrefsStore((s) => s.setRestoreMode)
   const setDefaultModel = useSessionPrefsStore((s) => s.setDefaultModel)
   const setDefaultEffort = useSessionPrefsStore((s) => s.setDefaultEffort)
   const setDefaultPermission = useSessionPrefsStore((s) => s.setDefaultPermission)
@@ -554,6 +561,21 @@ function SessionTab({ open }: { open: boolean }) {
             options={PANE_MODE_OPTIONS}
             value={defaultPaneMode}
             onChange={(v) => void setDefaultPaneMode(v)}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-[var(--color-border)] pt-3">
+          <div className="min-w-0">
+            <div className="text-sm text-[var(--color-text)]">Ao abrir o app</div>
+            <div className="text-xs text-[var(--color-text-dim)]">
+              Sob demanda: as abas voltam dormindo e só a que você abrir retoma o processo (mães e
+              filhas de handoff ativo sobem sempre). Vale a partir do próximo boot.
+            </div>
+          </div>
+          <Segmented
+            options={RESTORE_MODE_OPTIONS}
+            value={restoreMode}
+            onChange={(v) => void setRestoreMode(v)}
           />
         </div>
       </div>

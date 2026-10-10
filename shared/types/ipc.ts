@@ -1279,6 +1279,36 @@ export interface OverviewData {
   handoffRequests: HandoffRequestHealth
 }
 
+// Lazy restore: no boot as panes persistidas voltam dormindo (sem spawn), menos
+// as eager. O main decide pelo estado durável (handoff ativo, pref); a pane
+// ativa do layout e snapshots sem JSONL o renderer acrescenta sozinho.
+export interface RestorePlan {
+  mode: 'lazy' | 'eager'
+  eagerCcSessionIds: string[]
+}
+
+// Pane dormindo no renderer, espelhada no main para a entrega cross-process
+// (agent-bus, wake da mãe, send-prompt) conseguir acordá-la.
+export interface DormantPaneInfo {
+  ccSessionId: string
+  paneId: string
+  title: string | null
+  repoId: string | null
+}
+
+// main → renderer: retome esta pane dormindo. Resposta por sessions:wake-result.
+export interface WakeRequest {
+  requestId: string
+  ccSessionId: string
+}
+
+// sessionId = sessions.id da sessão retomada; null = não deu (error diz por quê).
+export interface WakeResult {
+  requestId: string
+  sessionId: string | null
+  error?: string
+}
+
 export interface ResumeSessionInput {
   // null = sessão avulsa: retoma no scratch dir.
   repoId: string | null
@@ -1448,8 +1478,7 @@ export interface AttentionMenuSnapshot {
 }
 
 export type AttentionAction =
-  | { kind: 'select'; optionIndex: number }
-  | { kind: 'other'; optionIndex: number; text: string }
+  { kind: 'select'; optionIndex: number } | { kind: 'other'; optionIndex: number; text: string }
 
 export interface AttentionRespondInput {
   sessionId: string
@@ -2043,14 +2072,7 @@ export type DiagramAuthor = 'claude' | 'human'
 
 // Parents linkáveis: um diagrama pode ilustrar qualquer entidade do app.
 export type DiagramParentType =
-  | 'project'
-  | 'repo'
-  | 'feature'
-  | 'task'
-  | 'objective'
-  | 'key_result'
-  | 'session'
-  | 'handoff'
+  'project' | 'repo' | 'feature' | 'task' | 'objective' | 'key_result' | 'session' | 'handoff'
 
 // Origem da cena: skeleton (gerado pelo Claude via shared/diagram-skeleton),
 // mermaid (convertido), scene (desenhado direto no canvas). null = desconhecida.
@@ -2865,6 +2887,13 @@ export interface Api {
     attentionDebug(): Promise<AttentionReasonCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
+    /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
+    restorePlan(ccSessionIds: string[]): Promise<RestorePlan>
+    /** Substitui a lista de panes dormindo que o main pode acordar. */
+    dormantSync(panes: DormantPaneInfo[]): Promise<void>
+    /** O main pede para retomar uma pane dormindo; responda com wakeResult. */
+    onWakeRequest(handler: (request: WakeRequest) => void): () => void
+    wakeResult(result: WakeResult): Promise<void>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

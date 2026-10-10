@@ -3,6 +3,7 @@ import { prefsApi } from '@/lib/ipc'
 import type { AdvisorModel, EffortLevel, PermissionMode } from '../../shared/types/ipc'
 import { SPAWNABLE_MODEL_ALIASES, type ModelAlias } from '../../shared/models'
 import { setDefaultPaneModeFallback, type PaneMode } from '@/store/appStore'
+import { DEFAULT_RESTORE_MODE, RESTORE_MODE_PREF, type RestoreMode } from '../../shared/restore-mode'
 
 const DEFAULT_MODEL_KEY = 'session.defaultModel'
 const DEFAULT_EFFORT_KEY = 'session.defaultEffort'
@@ -60,6 +61,8 @@ interface SessionPrefsState {
   defaultAdvisor: AdvisorDefault
   keyboardMode: KeyboardSendMode
   defaultPaneMode: PaneMode
+  // Lido pelo main no boot (restore-plan); aqui só se escreve.
+  restoreMode: RestoreMode
   showIntroOnBoot: boolean
   loaded: boolean
   load: () => Promise<void>
@@ -69,6 +72,7 @@ interface SessionPrefsState {
   setDefaultAdvisor: (a: AdvisorDefault) => Promise<void>
   setKeyboardMode: (k: KeyboardSendMode) => Promise<void>
   setDefaultPaneMode: (m: PaneMode) => Promise<void>
+  setRestoreMode: (m: RestoreMode) => Promise<void>
   setShowIntroOnBoot: (v: boolean) => Promise<void>
 }
 
@@ -82,20 +86,23 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
   defaultAdvisor: '',
   keyboardMode: DEFAULT_KEYBOARD_MODE,
   defaultPaneMode: DEFAULT_PANE_MODE,
+  restoreMode: DEFAULT_RESTORE_MODE,
   showIntroOnBoot: true,
   loaded: false,
 
   load: async () => {
     if (get().loaded) return
-    const [model, effort, permission, advisor, keyboard, paneMode, showIntro] = await Promise.all([
-      prefsApi.get<string>(DEFAULT_MODEL_KEY),
-      prefsApi.get<string>(DEFAULT_EFFORT_KEY),
-      prefsApi.get<string>(DEFAULT_PERMISSION_KEY),
-      prefsApi.get<string>(DEFAULT_ADVISOR_KEY),
-      prefsApi.get<string>(KEYBOARD_MODE_KEY),
-      prefsApi.get<string>(DEFAULT_PANE_MODE_KEY),
-      prefsApi.get<boolean>(SHOW_INTRO_ON_BOOT_KEY),
-    ])
+    const [model, effort, permission, advisor, keyboard, paneMode, showIntro, restoreMode] =
+      await Promise.all([
+        prefsApi.get<string>(DEFAULT_MODEL_KEY),
+        prefsApi.get<string>(DEFAULT_EFFORT_KEY),
+        prefsApi.get<string>(DEFAULT_PERMISSION_KEY),
+        prefsApi.get<string>(DEFAULT_ADVISOR_KEY),
+        prefsApi.get<string>(KEYBOARD_MODE_KEY),
+        prefsApi.get<string>(DEFAULT_PANE_MODE_KEY),
+        prefsApi.get<boolean>(SHOW_INTRO_ON_BOOT_KEY),
+        prefsApi.get<string>(RESTORE_MODE_PREF),
+      ])
     set({
       defaultModel: model && MODEL_WHITELIST.has(model) ? (model as ModelDefault) : '',
       defaultEffort: effort && EFFORT_WHITELIST.has(effort) ? (effort as EffortLevel) : '',
@@ -106,6 +113,7 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
       defaultAdvisor: advisor && ADVISOR_WHITELIST.has(advisor) ? (advisor as AdvisorDefault) : '',
       keyboardMode: keyboard === 'enter-newline' ? 'enter-newline' : DEFAULT_KEYBOARD_MODE,
       defaultPaneMode: sanitizePaneMode(paneMode),
+      restoreMode: restoreMode === 'eager' ? 'eager' : DEFAULT_RESTORE_MODE,
       // Ausente (undefined) = default ligado; só desliga com o valor explícito false.
       showIntroOnBoot: showIntro !== false,
       loaded: true,
@@ -142,6 +150,11 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
     // Espelha no appStore pra valer já na próxima sessão, sem esperar reboot.
     setDefaultPaneModeFallback(m)
     await prefsApi.set(DEFAULT_PANE_MODE_KEY, m)
+  },
+
+  setRestoreMode: async (m) => {
+    set({ restoreMode: m })
+    await prefsApi.set(RESTORE_MODE_PREF, m)
   },
 
   setShowIntroOnBoot: async (v) => {

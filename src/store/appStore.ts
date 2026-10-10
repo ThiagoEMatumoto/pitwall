@@ -8,10 +8,12 @@ import type {
   AgentProviderId,
   EffortLevel,
   LiveSessionInfo,
+  DormantPaneInfo,
   PaneSnapshot,
   PermissionMode,
   Repo,
   Session,
+  WakeRequest,
 } from '../../shared/types/ipc'
 import type { StartMotherInput, StartMotherResult } from '../../shared/types/feature-room'
 
@@ -64,6 +66,73 @@ export interface ActivePane {
   projectIcon: string | null
   projectColor: string | null
   mode: PaneMode
+  // Lazy restore: aba restaurada sem processo. A session é sintética
+  // (id 'dormant:<cc>', status 'exited') e NUNCA vai a IPC; acorda por
+  // ativação explícita (wakeDormantPane), mantendo o paneId.
+  dormant?: true
+}
+
+const DORMANT_ID_PREFIX = 'dormant:'
+
+export function isDormantSessionId(id: string | null | undefined): boolean {
+  return !!id && id.startsWith(DORMANT_ID_PREFIX)
+}
+
+function dormantPaneFromSnapshot(snap: PaneSnapshot, paneId: string): ActivePane {
+  return {
+    paneId,
+    session: {
+      id: `${DORMANT_ID_PREFIX}${snap.ccSessionId}`,
+      repoId: snap.repo?.id ?? null,
+      ccSessionId: snap.ccSessionId,
+      title: null,
+      titleSource: null,
+      paneId,
+      status: 'exited',
+      startedAt: Date.now(),
+      endedAt: null,
+      provider: 'claude',
+    },
+    repo: snap.repo,
+    projectName: snap.projectName,
+    projectIcon: snap.projectIcon,
+    projectColor: snap.projectColor ?? null,
+    mode: readPaneMode(snap.ccSessionId),
+    dormant: true,
+  }
+}
+
+// Pane ativa do layout salvo do dockview: activeGroup → o grupo na árvore do
+// grid → activeView. Ela sobe eager (é a que o usuário vê ao abrir). Formato
+// inesperado = nenhuma, sem quebrar o boot.
+export function activePaneIdFromLayout(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const layout = JSON.parse(raw) as {
+      activeGroup?: unknown
+      grid?: { root?: unknown }
+      floatingGroups?: { data?: unknown }[]
+    }
+    if (typeof layout?.activeGroup !== 'string') return null
+    const stack: unknown[] = [layout.grid?.root, ...(layout.floatingGroups ?? [])]
+    while (stack.length) {
+      const node = stack.pop() as { data?: unknown } | null | undefined
+      if (!node || typeof node !== 'object') continue
+      if (Array.isArray(node.data)) {
+        stack.push(...node.data)
+        continue
+      }
+      const group = node.data as { id?: unknown; views?: unknown; activeView?: unknown }
+      if (group?.id !== layout.activeGroup) continue
+      if (typeof group.activeView === 'string') return group.activeView
+      return Array.isArray(group.views) && typeof group.views[0] === 'string'
+        ? group.views[0]
+        : null
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 // Memória leve do último modo por sessão (chave = ccSessionId), no mesmo padrão
@@ -156,6 +225,10 @@ let offPtyExit: (() => void) | null = null
 let offRoomChanged: (() => void) | null = null
 let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
+let offWakeRequest: (() => void) | null = null
+// Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
+// resultam num único resume.
+const wakes = new Map<string, Promise<string | null>>()
 // room:changed chega em rajada (handoffs/loop coalescidos a 300ms no main);
 // um refetch por janela basta.
 export const ROOM_REFRESH_DEBOUNCE_MS = 150
@@ -165,6 +238,7 @@ export const ROOM_REFRESH_DEBOUNCE_MS = 150
 function schedulePersist(panes: ActivePane[]): void {
   if (savePanesTimer) clearTimeout(savePanesTimer)
   savePanesTimer = setTimeout(() => {
+    // Dormant entra igual: o snapshot é o mesmo, e o próximo boot decide de novo.
     const snapshots: PaneSnapshot[] = panes
       .filter((p) => p.session.ccSessionId)
       .map((p) => ({
@@ -287,6 +361,34 @@ function splitLiveSnapshots(
   return { attached, rest }
 }
 
+// Lazy restore: das abas sem PTY viva, quais sobem processo agora. Eager = plano
+// do main (handoff ativo, pref) + a pane ativa do layout + sem transcript (vira
+// sessão nova, como sempre). O resto volta dormant. Plano indisponível = tudo
+// eager, o comportamento de antes.
+async function splitDormantSnapshots(
+  snapshots: PaneSnapshot[],
+  dockLayout: string | null,
+): Promise<{ eager: PaneSnapshot[]; dormant: PaneSnapshot[] }> {
+  if (snapshots.length === 0) return { eager: [], dormant: [] }
+  const plan = await sessionsApi.restorePlan(snapshots.map((s) => s.ccSessionId)).catch(() => null)
+  if (!plan || plan.mode === 'eager') return { eager: snapshots, dormant: [] }
+  const eagerCc = new Set(plan.eagerCcSessionIds)
+  const activePaneId = activePaneIdFromLayout(dockLayout)
+  const eager: PaneSnapshot[] = []
+  const candidates: PaneSnapshot[] = []
+  for (const snap of snapshots) {
+    if (eagerCc.has(snap.ccSessionId) || (activePaneId && snap.paneId === activePaneId))
+      eager.push(snap)
+    else candidates.push(snap)
+  }
+  const resumable = await Promise.all(
+    candidates.map((s) => sessionsApi.isResumable(s.ccSessionId).catch(() => false)),
+  )
+  const dormant: PaneSnapshot[] = []
+  candidates.forEach((snap, i) => (resumable[i] ? dormant : eager).push(snap))
+  return { eager, dormant }
+}
+
 interface AppState {
   area: Area
   activeProjectId: string | null
@@ -319,8 +421,9 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void
   initActiveProject: () => Promise<void>
   restoreWorkspace: () => Promise<void>
-  // Re-attacha às PTYs vivas e só sobe processo pras abas sem sessão viva.
-  restoreSnapshots: (snapshots: PaneSnapshot[]) => Promise<void>
+  // Re-attacha às PTYs vivas; das demais só sobem processo as eager (plano do
+  // main + pane ativa do layout + sem transcript). O resto volta dormant.
+  restoreSnapshots: (snapshots: PaneSnapshot[], dockLayout?: string | null) => Promise<void>
   retryRestore: () => Promise<void>
   clearPendingLayout: () => void
   clearFocusPane: () => void
@@ -388,6 +491,9 @@ interface AppState {
     paneId?: string,
   ) => Promise<void>
   closePane: (paneId: string) => void
+  // Retoma a pane dormant no lugar (mesmo paneId). Devolve o sessions.id novo, ou
+  // null se não deu. Idempotente: pane já acordada devolve o id atual.
+  wakeDormantPane: (paneId: string) => Promise<string | null>
   // Alterna/define o display da pane (terminal ⇄ chat) e lembra por sessão.
   setPaneMode: (paneId: string, mode: PaneMode) => void
   // Encerramento com undo: some da UI na hora, toast "Desfazer" por ~5s; o kill
@@ -473,7 +579,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
     // esta feature). Snapshots antigos caem no addPanel padrão.
     if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
-    await get().restoreSnapshots(openPanes)
+    await get().restoreSnapshots(openPanes, dockLayout)
     await workspaceApi.resetRestoreAttempts()
     set({ restoreComplete: true })
   },
@@ -482,11 +588,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { openPanes, dockLayout } = await workspaceApi.getBootState()
     set({ restoreBlocked: false })
     if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
-    await get().restoreSnapshots(openPanes)
+    await get().restoreSnapshots(openPanes, dockLayout)
     await workspaceApi.resetRestoreAttempts()
   },
 
-  restoreSnapshots: async (snapshots) => {
+  restoreSnapshots: async (snapshots, dockLayout = null) => {
     const live = await sessionsApi.listLiveGlobal().catch(() => [])
     const { attached, rest } = splitLiveSnapshots(snapshots, live)
     const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
@@ -494,7 +600,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({ panes: [...s.panes, ...fresh] }))
       schedulePersist(get().panes)
     }
-    await restoreFromSnapshots(rest, get().resumeSession, get().openSession)
+    const { eager, dormant } = await splitDormantSnapshots(rest, dockLayout)
+    const known = new Set(get().panes.map((p) => p.session.ccSessionId))
+    const sleeping = dormant
+      .filter((snap) => !known.has(snap.ccSessionId))
+      .map((snap) => dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`))
+    if (sleeping.length) {
+      set((s) => ({ panes: [...s.panes, ...sleeping] }))
+      schedulePersist(get().panes)
+    }
+    await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
   },
 
   clearPendingLayout: () => set({ pendingLayout: null }),
@@ -591,6 +706,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   resumeSession: async (repo, projectName, projectIcon, projectColor, ccSessionId, paneId) => {
+    // Já existe a aba dormindo desta conversa: acorda ELA (foco + wake), nunca uma
+    // segunda pane para o mesmo cc.
+    const sleeping = get().panes.find((p) => p.dormant && p.session.ccSessionId === ccSessionId)
+    if (sleeping) {
+      set({ focusPaneId: sleeping.paneId, area: 'projects' })
+      await get().wakeDormantPane(sleeping.paneId)
+      return
+    }
     // Já há uma pane com essa sessão aberta (ou um resume em voo)? Não duplicar.
     // `resuming` é reservado de forma síncrona antes do await pra fechar a corrida.
     if (get().panes.some((p) => p.session.ccSessionId === ccSessionId) || resuming.has(ccSessionId))
@@ -627,6 +750,40 @@ export const useAppStore = create<AppState>((set, get) => ({
     writePaneMode(pane?.session.ccSessionId ?? null, mode)
   },
 
+  wakeDormantPane: (paneId) => {
+    const inflight = wakes.get(paneId)
+    if (inflight) return inflight
+    const pane = get().panes.find((p) => p.paneId === paneId)
+    if (!pane?.dormant) return Promise.resolve(pane ? pane.session.id : null)
+    const ccSessionId = pane.session.ccSessionId as string
+    const run = (async () => {
+      try {
+        // A guarda do main devolve a sessão existente se a PTY desse cc já vive.
+        const session = await sessionsApi.resume({ repoId: pane.repo?.id ?? null, ccSessionId })
+        set((s) => ({
+          panes: s.panes.map((p) => {
+            if (p.paneId !== paneId || !p.dormant) return p
+            const { dormant: _dormant, ...awake } = p
+            return { ...awake, session }
+          }),
+        }))
+        schedulePersist(get().panes)
+        void get().refreshLiveSessions()
+        return session.id
+      } catch (err) {
+        showToast({
+          title: 'Não deu para retomar a sessão',
+          body: err instanceof Error ? err.message : undefined,
+        })
+        return null
+      } finally {
+        wakes.delete(paneId)
+      }
+    })()
+    wakes.set(paneId, run)
+    return run
+  },
+
   // Detach, NÃO mata: só tira da view + persiste. A PTY sobrevive no main
   // (background). Kill explícito é endSession.
   closePane: (paneId) => {
@@ -636,6 +793,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   endSession: (sessionId, opts) => {
+    // Pane dormant não tem processo: encerrar é só tirá-la, sem IPC com o id sintético.
+    if (isDormantSessionId(sessionId)) {
+      set((s) => ({ panes: s.panes.filter((p) => p.session.id !== sessionId) }))
+      schedulePersist(get().panes)
+      return
+    }
     if (opts?.immediate) {
       // Sem janela de undo: mata direto. Cancela um pending anterior se houver,
       // pra não disparar um segundo kill quando o timer expirar.
@@ -709,6 +872,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
       set({ focusPaneId: existing.paneId, area: 'projects' })
+      if (existing.dormant) await get().wakeDormantPane(existing.paneId)
       return
     }
     // Item da lista é sempre LIVE — re-attacha à PTY existente (sem segundo claude).
@@ -726,11 +890,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // dispara o arranjo em grade no AppShell. Date.now() é fixo no tick, então
     // desambiguamos o paneId com item.id (UUID único da sessão).
     const current = get().panes
-    const wanted: ActivePane[] = items.map(
-      (item) =>
-        current.find((p) => paneShowsLive(p, item)) ??
-        paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`),
-    )
+    const wanted: ActivePane[] = items.map((item) => {
+      const existing = current.find((p) => paneShowsLive(p, item))
+      // Aba dormindo de uma sessão que já tem PTY viva: anexa no lugar, sem resume.
+      if (existing?.dormant) return paneFromLiveSession(item, existing.paneId)
+      return existing ?? paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`)
+    })
     set({
       panes: wanted,
       area: 'projects',
@@ -744,6 +909,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // StrictMode monta o effect 2x; só uma assinatura real (a outra é no-op).
     if (liveWatchStarted) return
     liveWatchStarted = true
+    // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
+    offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     const list = await sessionsApi.listLiveGlobal()
     set({ liveSessions: list })
     sessionsApi.watchGlobalActivity()
@@ -786,6 +953,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   stopLiveWatch: () => {
+    if (offWakeRequest) {
+      offWakeRequest()
+      offWakeRequest = null
+    }
     if (offGlobalActivity) {
       offGlobalActivity()
       offGlobalActivity = null
@@ -842,3 +1013,40 @@ export const useAppStore = create<AppState>((set, get) => ({
     return res
   },
 }))
+
+// Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do
+// clique. Se a pane já acordou por outro caminho, devolve o id atual.
+async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promise<void> {
+  const pane = useAppStore.getState().panes.find((p) => p.session.ccSessionId === ccSessionId)
+  if (!pane) {
+    void sessionsApi.wakeResult({ requestId, sessionId: null, error: 'no-dormant-pane' })
+    return
+  }
+  const sessionId = await useAppStore.getState().wakeDormantPane(pane.paneId)
+  void sessionsApi.wakeResult(
+    sessionId ? { requestId, sessionId } : { requestId, sessionId: null, error: 'resume-failed' },
+  )
+}
+
+// O main espelha as panes dormindo (lista inteira) para conseguir acordá-las.
+// Assinatura no store: pega toda mutação de panes sem cada action lembrar disso.
+// O main começa sem nenhuma: lista vazia não precisa de IPC.
+let lastDormantKey = '[]'
+useAppStore.subscribe((state, prev) => {
+  if (state.panes === prev.panes) return
+  const list: DormantPaneInfo[] = state.panes
+    .filter((p) => p.dormant && p.session.ccSessionId)
+    .map((p) => ({
+      ccSessionId: p.session.ccSessionId as string,
+      paneId: p.paneId,
+      title: p.session.title,
+      repoId: p.repo?.id ?? null,
+    }))
+  const key = JSON.stringify(list)
+  if (key === lastDormantKey) return
+  lastDormantKey = key
+  void sessionsApi.dormantSync(list).catch(() => {
+    // Sem o espelho o main só não acha a pane para acordar; o renderer segue igual.
+    lastDormantKey = ''
+  })
+})
