@@ -10,7 +10,10 @@ import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
-import { assertNotOpenElsewhere } from '../services/conversation-holder'
+import {
+  assertNotOpenElsewhere,
+  ptyMovedToOtherConversation,
+} from '../services/conversation-holder'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
 import * as requestStore from '../services/handoff-requests'
@@ -827,12 +830,17 @@ export function resumeHandoffChild(
 }
 
 // PTY viva do Pitwall com esta conversa, em qualquer linha de sessions (cada
-// resume abre uma linha nova com o mesmo cc_session_id).
+// resume abre uma linha nova com o mesmo cc_session_id). A linha não acompanha
+// /clear nem /resume dentro da TUI: se o índice diz que o pid daquela PTY está em
+// outra conversa, ela não é desta, e reanexá-la mostraria a conversa errada.
 export function findAliveByCc(ccSessionId: string): SessionRow | null {
   const rows = getDb()
     .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
     .all(ccSessionId) as SessionRow[]
-  return rows.find((row) => ptyManager.isRunning(row.id)) ?? null
+  const running = rows.filter((row) => ptyManager.isRunning(row.id))
+  if (running.length === 0) return null
+  const index = buildSessionsFileIndex()
+  return running.find((row) => !ptyMovedToOtherConversation(row.id, ccSessionId, index)) ?? null
 }
 
 function sessionIdsOfCc(ccSessionId: string): string[] {

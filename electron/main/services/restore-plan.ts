@@ -13,8 +13,12 @@ export function lazyRestoreEnabled(): boolean {
 
 // Quem sobe eager no boot, só pelo estado durável. A PromptQueue não entra: ela
 // é em memória e está vazia no boot, então "tem mensagem esperando" nunca vale aqui.
-export function computeRestorePlan(ccSessionIds: string[]): RestorePlan {
-  if (!lazyRestoreEnabled()) {
+// enabled: o main real passa o valor congelado no boot (ipc/dormant-panes).
+export function computeRestorePlan(
+  ccSessionIds: string[],
+  enabled = lazyRestoreEnabled(),
+): RestorePlan {
+  if (!enabled) {
     return { mode: 'eager', eagerCcSessionIds: [...new Set(ccSessionIds)] }
   }
   const active = new Set(activeHandoffCcSessionIds())

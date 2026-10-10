@@ -19,6 +19,8 @@ const seam = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: never[]) => unknown>(),
   spawns: [] as string[],
   live: new Set<string>(),
+  // pid de cada PTY "viva" (sessions.id → pid), como o ptyManager real expõe.
+  pids: new Map<string, number>(),
 }))
 
 vi.mock('node:os', async () => {
@@ -48,6 +50,9 @@ vi.mock('../services/pty-manager', () => ({
     write: () => {},
     isRunning: (id: string) => seam.live.has(id),
     runningIds: () => [...seam.live],
+    getPid: (id: string) => (seam.live.has(id) ? (seam.pids.get(id) ?? null) : null),
+    sessionIdByPid: (pid: number) =>
+      [...seam.pids].find(([id, p]) => p === pid && seam.live.has(id))?.[0] ?? null,
     spawn: (opts: { sessionId: string }) => {
       seam.spawns.push(opts.sessionId)
       seam.live.add(opts.sessionId)
@@ -66,7 +71,7 @@ vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 
 import * as handoffStore from '../services/handoff-store'
 import { DormantPanes } from '../services/dormant-panes'
-import { foreignHolderPid } from '../services/conversation-holder'
+import { foreignHolderPid, openElsewhereReason } from '../services/conversation-holder'
 import {
   __resetForTests as resetHandoffWake,
   insertRow,
@@ -81,6 +86,7 @@ const REPO_DIR = join(HOME, 'repo')
 const SESSIONS_DIR = join(HOME, '.claude', 'sessions')
 
 let foreign: ChildProcess | null = null
+const ownPtys: ChildProcess[] = []
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -137,11 +143,28 @@ function holdConversationInForeignProcess(
   return pid
 }
 
-function resumeResult(): { session: { id: string }; reattached: boolean } {
+function resumeResult(cc = CC): { session: { id: string }; reattached: boolean } {
   return seam.handlers.get('sessions:resume')!(null, {
     repoId: 'r1',
-    ccSessionId: CC,
+    ccSessionId: cc,
   } as never) as { session: { id: string }; reattached: boolean }
+}
+
+// PTY do Pitwall (linha `id`) com um processo de verdade; o índice diz em que
+// conversa o pid dela está agora (o claude reescreve o próprio <pid>.json no /clear).
+function pitwallPty(id: string, indexedCc: string | null): number {
+  const proc = spawn('sleep', ['30'], { stdio: 'ignore' })
+  ownPtys.push(proc)
+  const pid = proc.pid!
+  seam.live.add(id)
+  seam.pids.set(id, pid)
+  if (indexedCc) {
+    writeFileSync(
+      join(SESSIONS_DIR, `${pid}.json`),
+      JSON.stringify({ pid, sessionId: indexedCc, status: 'idle', procStart: procStartOf(pid) }),
+    )
+  }
+  return pid
 }
 
 function resume(): { id: string } {
@@ -151,6 +174,7 @@ function resume(): { id: string } {
 beforeEach(() => {
   seam.spawns.length = 0
   seam.live.clear()
+  seam.pids.clear()
   seam.handlers.clear()
   rmSync(HOME, { recursive: true, force: true })
   mkdirSync(REPO_DIR, { recursive: true })
@@ -175,6 +199,7 @@ beforeEach(() => {
 afterEach(() => {
   foreign?.kill()
   foreign = null
+  for (const proc of ownPtys.splice(0)) proc.kill()
   seam.db.close()
 })
 
@@ -225,6 +250,30 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     expect(seam.spawns).toEqual([])
   })
 
+  it('fora do Linux (sem procStart verificável) não recusa: loga e spawna', () => {
+    insertSession('old', CC, 10)
+    const pid = holdConversationInForeignProcess(CC)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let warned: string[] = []
+    try {
+      for (const os of ['darwin', 'win32']) {
+        Object.defineProperty(process, 'platform', { ...platform, value: os })
+        expect(foreignHolderPid(CC)).toBeNull()
+      }
+      resume()
+      warned = warn.mock.calls.map((c) => String(c[0]))
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      warn.mockRestore()
+    }
+
+    expect(seam.spawns).toHaveLength(1)
+    expect(warned).toContainEqual(
+      expect.stringContaining(`"event":"conversation_holder_unverified","pid":${pid}`),
+    )
+  })
+
   it('a conversa com PTY do próprio Pitwall é re-attach, não recusa', () => {
     insertSession('mine', CC, 10)
     seam.live.add('mine')
@@ -264,7 +313,7 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
       isRunning: () => false,
       screen: async () => null,
       warn,
-      foreignHolderPid,
+      openElsewhere: openElsewhereReason,
     })
     panes.setDormant([{ ccSessionId: CC, paneId: 'pane-1', title: 'api', repoId: 'r1' }])
 
@@ -277,6 +326,54 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     })
     expect(requestWake).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ event: 'dormant_wake_failed' }))
+  })
+})
+
+describe('PTY do Pitwall que mudou de conversa na TUI (/clear, /resume)', () => {
+  const OTHER = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d'
+
+  it('o índice diz que o pid está em outra conversa: não reanexa, spawna o resume', () => {
+    insertSession('a', CC, 10)
+    pitwallPty('a', OTHER)
+
+    const { session, reattached } = resumeResult()
+
+    expect(reattached).toBe(false)
+    expect(seam.spawns).toEqual([session.id])
+  })
+
+  it('o índice confirma a conversa: reanexa sem spawn', () => {
+    insertSession('a', CC, 10)
+    pitwallPty('a', CC)
+
+    expect(resumeResult()).toMatchObject({ session: { id: 'a' }, reattached: true })
+    expect(seam.spawns).toEqual([])
+  })
+
+  it('pid ausente do índice (claude subindo, Windows): vale a linha, reanexa', () => {
+    insertSession('a', CC, 10)
+    pitwallPty('a', null)
+
+    expect(resumeResult()).toMatchObject({ session: { id: 'a' }, reattached: true })
+  })
+
+  it('retomar a conversa para onde a aba foi: recusa dizendo que é uma aba do Pitwall', () => {
+    insertSession('a', CC, 10)
+    const pid = pitwallPty('a', OTHER)
+
+    expect(() => resumeResult(OTHER)).toThrow(
+      `conversa aberta em outra aba do Pitwall (pid ${pid})`,
+    )
+    expect(seam.spawns).toEqual([])
+  })
+
+  it('linha movida não conta como dona: um claude de fora com a conversa ainda recusa', () => {
+    insertSession('a', CC, 10)
+    pitwallPty('a', OTHER)
+    const pid = holdConversationInForeignProcess(CC)
+
+    expect(() => resume()).toThrow(`conversa aberta em outro processo (pid ${pid})`)
+    expect(seam.spawns).toEqual([])
   })
 })
 

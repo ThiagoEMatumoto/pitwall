@@ -297,7 +297,8 @@ describe('deliverAnswer — alvo resolvido pela conversa', () => {
     getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
   })
 
-  it('mãe que escalou tem PTY viva em outra linha da conversa: entrega lá', async () => {
+  // A pref fica ausente (beforeEach): a entrega pela conversa não depende dela.
+  it('mãe que escalou tem PTY viva em outra linha da conversa: entrega lá, com a pref desligada', async () => {
     session('mother-2', 'cc-mother', 20)
     screens.set('mother-2', { status: 'idle', scan: SCANS.idle })
 

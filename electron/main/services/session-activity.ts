@@ -143,13 +143,21 @@ export function isPidAlive(pid: number): boolean {
 // (crash, kill -9) e o pid é reciclado, então kill(pid, 0) sozinho acusaria de
 // "dono da conversa" um processo qualquer. Vivo = /proc/<pid> existe e o start
 // time bate com o procStart que o Claude Code gravou; arquivo sem procStart
-// (versão antiga) = o cmdline precisa ser de um claude. Fora do Linux não há
-// /proc: fica o kill(pid, 0).
+// (versão antiga) = o cmdline precisa ser de um claude.
+// Fora do Linux não há /proc, e kill(pid, 0) aceita pid reciclado (no Windows,
+// depressa): recusar o resume por ele bloquearia conversas livres. Lá o dono não
+// é verificável e conta como não-vivo; só fica o log.
 export function isSessionPidAlive(
   entry: Pick<IndexEntry, 'pid' | 'procStart'>,
   procRoot = '/proc',
 ): boolean {
-  if (process.platform !== 'linux') return isPidAlive(entry.pid)
+  if (process.platform !== 'linux') {
+    if (isPidAlive(entry.pid)) {
+      const event = { event: 'conversation_holder_unverified', pid: entry.pid }
+      console.warn(JSON.stringify({ ...event, platform: process.platform }))
+    }
+    return false
+  }
   let stat: string
   try {
     stat = readFileSync(join(procRoot, String(entry.pid), 'stat'), 'utf8')

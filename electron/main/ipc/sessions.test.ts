@@ -72,6 +72,10 @@ vi.mock('../services/pty-manager', () => ({
     write: () => {},
     isRunning: (sessionId: string) => seam.liveSessionIds.includes(sessionId),
     runningIds: () => [],
+    // Sem pid: o índice não desmente a linha (o desmentido é coberto em
+    // sessions-resume-guards.test.ts, com processos reais).
+    getPid: () => null,
+    sessionIdByPid: () => null,
     spawn: (opts: { sessionId: string; args: string[] }) => {
       seam.spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
     },

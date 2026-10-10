@@ -248,7 +248,8 @@ export function pendingEndSessionIds(): ReadonlySet<string> {
 let restoreStarted = false
 // Reserva síncrona de ccSessionIds em resume — fecha a corrida entre o check de
 // duplicata e o `await` do spawn (duas chamadas concorrentes passariam o check).
-const resuming = new Set<string>()
+// O valor é o desfecho do resume em voo: null = subiu; string = o erro.
+const resuming = new Map<string, Promise<string | null>>()
 
 // Dono único da assinatura do stream global de atividade (strip + overlay leem o
 // mesmo `liveSessions`). `offGlobalActivity` guarda o unsubscribe do onGlobalActivity;
@@ -328,6 +329,16 @@ function schedulePersist(panes: ActivePane[]): void {
 // voltar dormant com o erro em vez de sumir do layout e do open_panes.
 // Sessões com transcript retomam (--resume); as sem (spawn que nunca conversou)
 // viram sessão NOVA no mesmo repo, mantendo o paneId pra o layout do dockview bater.
+function keepPaneOfFailedResume(snap: PaneSnapshot, error: string | null): void {
+  const cc = snap.ccSessionId
+  if (error === null || resuming.has(cc)) return
+  const { panes } = useAppStore.getState()
+  if (panes.some((p) => p.session.ccSessionId === cc)) return
+  const pane = dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${cc}`, error)
+  useAppStore.setState((s) => ({ panes: [...s.panes, pane] }))
+  schedulePersist(useAppStore.getState().panes)
+}
+
 async function restoreFromSnapshots(
   snapshots: PaneSnapshot[],
   resume: AppState['resumeSession'],
@@ -675,9 +686,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     await workspaceApi.resetRestoreAttempts()
   },
 
-  restoreSnapshots: (snapshots, dockLayout = null) =>
-    withPersistDeferred(async () => {
-      const lazy = await loadLazyRestore()
+  restoreSnapshots: async (snapshots, dockLayout = null) => {
+    const lazy = await loadLazyRestore()
+    // Com a pref desligada o persist segue o timing da main (save a cada pane).
+    const run = lazy ? withPersistDeferred : (fn: () => Promise<void>) => fn()
+    return run(async () => {
       const live = await sessionsApi.listLiveGlobal().catch(() => [])
       const { attached, rest } = splitLiveSnapshots(snapshots, live)
       const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
@@ -692,12 +705,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       const failed = await restoreFromSnapshots(eager, get().resumeSession, get().openSession)
       // Resume/wake em voo da mesma conversa (switcher, wake do main) já vai pôr a
       // pane viva: a dormant seria uma segunda aba dela.
+      const inflight = new Map(resuming)
       const known = new Set([
         ...get().panes.map((p) => p.session.ccSessionId),
-        ...resuming,
+        ...inflight.keys(),
         ...wakingCc,
       ])
-      const sleeping = [...failed, ...dormant.map((snap) => ({ snap, error: undefined }))]
+      const candidates = [
+        ...failed,
+        ...dormant.map((snap) => ({ snap, error: undefined as string | undefined })),
+      ]
+      const sleeping = candidates
         .filter(({ snap }) => !known.has(snap.ccSessionId))
         .map(({ snap, error }) =>
           dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`, error),
@@ -706,7 +724,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         set((s) => ({ panes: [...s.panes, ...sleeping] }))
         schedulePersist(get().panes)
       }
-    }),
+      // O resume em voo que fez a pane ser pulada pode falhar, e aí ninguém a põe:
+      // o open_panes ficaria sem ela. Se falhar, ela volta dormant com o erro (com a
+      // pref desligada também, como a eager que falha). Sem esperar aqui: um resume
+      // lento não segura o restore nem o save do fim.
+      for (const { snap } of candidates) {
+        const outcome = inflight.get(snap.ccSessionId)
+        if (outcome) void outcome.then((error) => keepPaneOfFailedResume(snap, error))
+      }
+    })
+  },
 
   clearPendingLayout: () => set({ pendingLayout: null }),
   clearFocusPane: () => set({ focusPaneId: null }),
@@ -810,11 +837,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().wakeDormantPane(sleeping.paneId)
       return
     }
-    // Já há uma pane com essa sessão aberta (ou um resume em voo)? Não duplicar.
-    // `resuming` é reservado de forma síncrona antes do await pra fechar a corrida.
-    if (get().panes.some((p) => p.session.ccSessionId === ccSessionId) || resuming.has(ccSessionId))
+    // Já há uma pane com essa sessão aberta? Não duplicar.
+    if (get().panes.some((p) => p.session.ccSessionId === ccSessionId)) return
+    // Resume em voo da mesma conversa: este segue o desfecho dele. Se ele falhar,
+    // quem chamou (o restore) recebe o erro e a aba volta dormant em vez de sumir.
+    const inflight = resuming.get(ccSessionId)
+    if (inflight) {
+      const error = await inflight
+      if (error !== null) throw new Error(error)
       return
-    resuming.add(ccSessionId)
+    }
+    // Reservado de forma síncrona antes do await pra fechar a corrida.
+    let settle!: (error: string | null) => void
+    resuming.set(ccSessionId, new Promise((resolve) => (settle = resolve)))
     try {
       const { session, reattached } = await sessionsApi.resume({
         repoId: repo?.id ?? null,
@@ -837,6 +872,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
       schedulePersist(get().panes)
       void get().refreshLiveSessions()
+      settle(null)
+    } catch (err) {
+      settle(ipcErrorMessage(err))
+      throw err
     } finally {
       resuming.delete(ccSessionId)
     }

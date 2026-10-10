@@ -19,8 +19,11 @@ export const WAKE_READY_POLL_MS = 500
 export const WAKE_FAILURE_COOLDOWN_MS = 60_000
 
 // Mesmo texto do resume recusado (conversation-holder), para o wake_failed dizer o porquê.
-export function openElsewhereError(pid: number): string {
-  return `conversa aberta em outro processo (pid ${pid})`
+// inPitwall = o pid é de uma PTY do próprio app (chegou à conversa por /resume na TUI).
+export function openElsewhereError(pid: number, inPitwall = false): string {
+  return inPitwall
+    ? `conversa aberta em outra aba do Pitwall (pid ${pid})`
+    : `conversa aberta em outro processo (pid ${pid})`
 }
 
 export type DormantWakeReason = 'agent-bus' | 'handoff-wake' | 'send-prompt' | 'answer-delivery'
@@ -34,8 +37,8 @@ export interface DormantPanesDeps {
   // false = sem janela para pedir o resume.
   requestWake(request: WakeRequest): boolean
   isRunning(sessionId: string): boolean
-  // pid de um processo fora do Pitwall com a conversa aberta; null = livre.
-  foreignHolderPid?(ccSessionId: string): number | null
+  // Motivo da recusa se outro processo segura a conversa; null = livre.
+  openElsewhere?(ccSessionId: string): string | null
   // A mesma fonte da PromptQueue: tela relida agora.
   screen(sessionId: string): Promise<ScreenScan | null>
   warn(event: Record<string, unknown>): void
@@ -144,10 +147,8 @@ export class DormantPanes {
 
   private async wakeNow(ccSessionId: string): Promise<DormantWakeOutcome> {
     if (!this.byCc.has(ccSessionId)) return { ok: false, error: 'not-dormant', sessionId: null }
-    const holder = this.deps.foreignHolderPid?.(ccSessionId) ?? null
-    if (holder !== null) {
-      return { ok: false, error: openElsewhereError(holder), sessionId: null }
-    }
+    const holder = this.deps.openElsewhere?.(ccSessionId) ?? null
+    if (holder !== null) return { ok: false, error: holder, sessionId: null }
     const result = await this.requestResume(ccSessionId)
     if (!result.sessionId) {
       return { ok: false, error: result.error ?? 'resume-failed', sessionId: null }
@@ -187,8 +188,8 @@ export class DormantPanes {
 let current: DormantPanes | null = null
 let enabled: () => boolean = () => true
 
-// enabled = a pref sessions.lazyRestore (o main real passa o leitor dela). Lida a
-// cada chamada: desligar vale na hora, sem reiniciar.
+// enabled = a pref sessions.lazyRestore. O main real passa o valor congelado no
+// boot (ipc/dormant-panes): mudar a pref só vale no próximo boot, como no renderer.
 export function setDormantPanes(panes: DormantPanes | null, isEnabled?: () => boolean): void {
   current = panes
   enabled = isEnabled ?? (() => true)

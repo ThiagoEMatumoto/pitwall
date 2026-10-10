@@ -46,7 +46,7 @@ import { closeDb, getDb } from '../services/db'
 import { setPref } from '../services/prefs-store'
 import { getDormantPanes } from '../services/dormant-panes'
 import { LAZY_RESTORE_PREF } from '../services/restore-plan'
-import { registerDormantPanesIpc } from './dormant-panes'
+import { __resetForTests, registerDormantPanesIpc } from './dormant-panes'
 
 const PANE = { ccSessionId: 'cc-1', paneId: 'pane-1', title: 'api', repoId: null }
 
@@ -54,11 +54,17 @@ function sync(list: unknown[]): unknown {
   return seam.handlers.get('sessions:dormant-sync')!(null, list)
 }
 
-registerDormantPanesIpc()
+// Um boot do main com a pref como está no DB agora: o main a lê só aqui.
+function boot(pref?: boolean): void {
+  if (pref !== undefined) setPref(LAZY_RESTORE_PREF, pref)
+  __resetForTests()
+  registerDormantPanesIpc()
+}
 
 beforeEach(() => {
   getDb().prepare('DELETE FROM app_prefs WHERE key = ?').run(LAZY_RESTORE_PREF)
   seam.sent.length = 0
+  seam.handlers.clear()
 })
 
 afterAll(() => {
@@ -68,27 +74,44 @@ afterAll(() => {
 
 describe('sessions:dormant-sync e o registro', () => {
   it('pref ausente (default desligada): ignora o sync e o main não vê pane dormindo', () => {
+    boot()
     expect(sync([PANE])).toEqual([PANE])
 
     expect(getDormantPanes()).toBeNull()
+    // Ligar em runtime não vale até o próximo boot.
     setPref(LAZY_RESTORE_PREF, true)
-    // Nada foi registrado enquanto estava desligada.
-    expect(getDormantPanes()?.findDormantByCc('cc-1')).toBeNull()
+    sync([PANE])
+    expect(getDormantPanes()).toBeNull()
   })
 
   it('pref ligada: registra e o registro fica alcançável', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+    boot(true)
 
     sync([PANE])
 
     expect(getDormantPanes()?.findDormantByCc('cc-1')).toMatchObject({ paneId: 'pane-1' })
   })
 
-  it('desligar depois de registrar: some na hora, sem reiniciar', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+  it('desligar em runtime não muda os wakes deste processo (vale no próximo boot)', () => {
+    boot(true)
     sync([PANE])
 
     setPref(LAZY_RESTORE_PREF, false)
+
+    expect(getDormantPanes()?.findDormantByCc('cc-1')).toMatchObject({ paneId: 'pane-1' })
+    // O sync seguinte (renderer congelado em true) não zera o registro.
+    sync([PANE])
+    expect(getDormantPanes()?.findDormantByCc('cc-1')).toMatchObject({ paneId: 'pane-1' })
+    const plan = seam.handlers.get('sessions:restore-plan')!(null, ['cc-1'])
+    expect(plan).toEqual({ mode: 'lazy', eagerCcSessionIds: [] })
+  })
+
+  it('próximo boot com a pref desligada: o main não vê pane dormindo', () => {
+    boot(true)
+    sync([PANE])
+    setPref(LAZY_RESTORE_PREF, false)
+
+    boot()
 
     expect(getDormantPanes()).toBeNull()
   })
@@ -96,6 +119,7 @@ describe('sessions:dormant-sync e o registro', () => {
 
 describe('sessions:restore-plan', () => {
   it('pref desligada: tudo eager', () => {
+    boot()
     const plan = seam.handlers.get('sessions:restore-plan')!(null, ['cc-1', 'cc-2'])
     expect(plan).toEqual({ mode: 'eager', eagerCcSessionIds: ['cc-1', 'cc-2'] })
   })
@@ -111,7 +135,7 @@ describe('sessions:dormant-became-live', () => {
   }
 
   it('resume pedido no main para cc com pane dormindo: emite e tira do registro', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+    boot(true)
     sync([PANE])
 
     seam.hook!(SESSION, 'main')
@@ -121,7 +145,7 @@ describe('sessions:dormant-became-live', () => {
   })
 
   it('resume pedido pelo renderer (sessions:resume): não emite', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+    boot(true)
     sync([PANE])
 
     seam.hook!(SESSION, 'renderer')
@@ -130,7 +154,7 @@ describe('sessions:dormant-became-live', () => {
   })
 
   it('cc sem pane dormindo: não emite', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+    boot(true)
     sync([PANE])
 
     seam.hook!({ ...SESSION, ccSessionId: 'cc-outra' }, 'main')
@@ -138,10 +162,9 @@ describe('sessions:dormant-became-live', () => {
     expect(became()).toEqual([])
   })
 
-  it('pref desligada: não emite', () => {
-    setPref(LAZY_RESTORE_PREF, true)
+  it('pref desligada no boot: não emite', () => {
+    boot(false)
     sync([PANE])
-    setPref(LAZY_RESTORE_PREF, false)
 
     seam.hook!(SESSION, 'main')
 
