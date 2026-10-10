@@ -37,6 +37,9 @@ function allowedRoots(): string[] {
   roots.add(path.join(homedir(), '.claude'))
   roots.add(path.resolve(tmpdir()))
   roots.add('/tmp')
+  // Scratchpad do claude sai do tmpfs quando CLAUDE_CODE_TMPDIR está definido;
+  // sem isto, clicar num path de scratch no terminal dá "fora do permitido".
+  if (process.env.CLAUDE_CODE_TMPDIR) roots.add(path.resolve(process.env.CLAUDE_CODE_TMPDIR))
   return [...roots]
 }
 
