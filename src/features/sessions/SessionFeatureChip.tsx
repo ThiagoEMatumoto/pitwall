@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Target } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { navigateToFeature } from '@/lib/nav'
-import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
+import { featureIdForCc, useSessionFeatureStore } from '@/store/sessionFeatureStore'
 
 export type ChipDensity = 'chip' | 'dot'
 
@@ -16,16 +16,29 @@ interface Props {
    * índice reverso — útil onde a sessão nem aparece nele (listas por repo).
    */
   featureId?: string | null
+  /**
+   * Pane dormindo: o sessionId é sintético e não está no índice; a feature sai
+   * das linhas da mesma conversa (cc_session_id).
+   */
+  ccSessionId?: string | null
   className?: string
 }
 
 // A marca "de que frente é esta sessão", clicável, em toda superfície que lista
 // sessões. Lê o índice reverso CRU (sessionFeatureStore) — nunca useSessionFeature,
 // que puxa um loop snapshot por sessão e viraria N chamadas numa lista.
-export function SessionFeatureChip({ sessionId, density, featureId: known, className }: Props) {
+export function SessionFeatureChip({
+  sessionId,
+  density,
+  featureId: known,
+  ccSessionId,
+  className,
+}: Props) {
   const hydrate = useSessionFeatureStore((s) => s.hydrate)
-  const indexed = useSessionFeatureStore((s) =>
-    sessionId ? (s.bySessionId[sessionId] ?? null) : null,
+  const indexed = useSessionFeatureStore(
+    (s) =>
+      (sessionId ? s.bySessionId[sessionId] : undefined) ??
+      (ccSessionId ? featureIdForCc(s, ccSessionId) : null),
   )
   const featureId = known ?? indexed
   const title = useSessionFeatureStore((s) =>

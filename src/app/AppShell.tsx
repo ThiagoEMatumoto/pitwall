@@ -190,7 +190,12 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
           <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
         </span>
       )}
-      <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
+      <SessionFeatureChip
+        sessionId={pane?.session.id}
+        ccSessionId={pane?.dormant ? pane.session.ccSessionId : null}
+        density="dot"
+        className="mr-1.5"
+      />
     </div>
   )
 }
