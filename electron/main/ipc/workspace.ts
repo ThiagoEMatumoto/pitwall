@@ -37,6 +37,11 @@ export function markWorkspaceRunning(): void {
   getDb().prepare('UPDATE workspace_state SET clean_shutdown = 0 WHERE id = 1').run()
 }
 
+// O boot anterior terminou por quit normal? Só vale depois de markWorkspaceRunning.
+export function previousShutdownWasClean(): boolean {
+  return prevCleanShutdown
+}
+
 export function markWorkspaceCleanShutdown(): void {
   getDb().prepare('UPDATE workspace_state SET clean_shutdown = 1 WHERE id = 1').run()
 }

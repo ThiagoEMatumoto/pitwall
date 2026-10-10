@@ -65,21 +65,17 @@ function readMinimapBox(): PeekBox | null {
 
 // O minimapa monta junto com o ReactFlow (frame seguinte ao mapa aparecer) e não
 // muda de tamanho sozinho: mede ao entrar no mapa, um pouco depois e no resize.
-function useMinimapBox(): { box: PeekBox | null; viewportHeight: number } {
+function useMinimapBox(): PeekBox | null {
   const mapVisible = useProjectsViewStore((s) => s.view === 'map')
   const area = useAppStore((s) => s.area)
   const on = mapVisible && area === 'projects'
   const [box, setBox] = useState<PeekBox | null>(null)
-  const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight)
   useEffect(() => {
     if (!on) {
       setBox(null)
       return
     }
-    const measure = () => {
-      setBox(readMinimapBox())
-      setViewportHeight(window.innerHeight)
-    }
+    const measure = () => setBox(readMinimapBox())
     const raf = requestAnimationFrame(measure)
     const late = setTimeout(measure, 400)
     window.addEventListener('resize', measure)
@@ -89,7 +85,20 @@ function useMinimapBox(): { box: PeekBox | null; viewportHeight: number } {
       window.removeEventListener('resize', measure)
     }
   }, [on])
-  return { box: on ? box : null, viewportHeight }
+  return on ? box : null
+}
+
+// Tamanho da janela, vivo em qualquer vista. Medido só junto do mapa/peek, ficava
+// velho depois de maximizar fora deles e empurrava a pilha de toasts para fora da
+// tela ("Desfazer" inalcançável).
+function useWindowSize(): { width: number; height: number } {
+  const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  useEffect(() => {
+    const measure = () => setSize({ width: window.innerWidth, height: window.innerHeight })
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  return size
 }
 
 function readComposerBoxes(): PeekBox[] {
@@ -227,6 +236,7 @@ function useMapObstacles(onMap: boolean, narrow: boolean): MapObstacles {
 
 export function useToastPlacement(dockWidth: number): ToastPlacement {
   const minimap = useMinimapBox()
+  const viewport = useWindowSize()
   const composers = useComposerBoxes()
   const mapView = useProjectsViewStore((s) => s.view === 'map')
   const inProjects = useAppStore((s) => s.area === 'projects')
@@ -238,7 +248,6 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
   const peekId = useCrewDockStore((s) => s.peekTarget?.id ?? null)
   const [peek, setPeek] = useState<PeekBox | null>(null)
   const [lift, setLift] = useState(false)
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
 
   useEffect(() => {
     if (!peekId) {
@@ -250,7 +259,6 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
     const measure = () => {
       setPeek(readPeekBox())
       setLift(isLiftOpen())
-      setViewportWidth(window.innerWidth)
     }
     // A modal também muda de tamanho sem a janela mudar (alça, duplo clique,
     // "Tamanho padrão"): observa a caixa dela.
@@ -274,10 +282,10 @@ export function useToastPlacement(dockWidth: number): ToastPlacement {
   return toastStackPlacement({
     dockWidth,
     peek: peekId ? peek : null,
-    viewportWidth,
-    minimap: minimap.box,
+    viewportWidth: viewport.width,
+    minimap,
     obstacles: [...composers, ...mapObstacles.boxes],
-    viewportHeight: minimap.viewportHeight,
+    viewportHeight: viewport.height,
     lift: !!peekId && lift,
     onMap,
     rightPanel: featurePanel,

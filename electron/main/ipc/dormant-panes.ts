@@ -10,7 +10,7 @@ import {
 } from '../services/dormant-panes'
 import { redeliverFailedWakes } from '../services/handoff/handoff-wake'
 import { setResumedSessionHook } from './sessions'
-import { foreignHolderPid } from '../services/conversation-holder'
+import { openElsewhereReason } from '../services/conversation-holder'
 import { computeRestorePlan, lazyRestoreEnabled } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
 import { screenOf } from './send-prompt'
@@ -43,9 +43,18 @@ const wakeResultSchema = z.object({
 
 let registered = false
 
+export function __resetForTests(): void {
+  registered = false
+}
+
 export function registerDormantPanesIpc(): void {
   if (registered) return
   registered = true
+  // Lida uma vez, no boot, como o renderer (appStore.lazyRestore) e o texto do
+  // Settings ("vale a partir do próximo boot"). Lida ao vivo, desligar com abas
+  // dormindo fazia o main parar de acordá-las enquanto o renderer seguia
+  // mostrando-as acordáveis, e o wake da mãe virava not_running sem reenvio.
+  const lazyRestore = lazyRestoreEnabled()
   const panes = new DormantPanes({
     requestWake: (request) => {
       const win = getMainWindow()
@@ -54,11 +63,11 @@ export function registerDormantPanesIpc(): void {
       return true
     },
     isRunning: (id) => ptyManager.isRunning(id),
-    foreignHolderPid,
+    openElsewhere: openElsewhereReason,
     screen: screenOf,
     warn: (event) => console.warn(JSON.stringify(event)),
   })
-  setDormantPanes(panes, lazyRestoreEnabled)
+  setDormantPanes(panes, () => lazyRestore)
   // A mãe que dormia voltou (wake ou resume dela): os wake_failed dela saem de novo
   // assim que a TUI estiver pronta para a fila on-idle.
   setResumedSessionHook((session, origin) => {
@@ -70,14 +79,14 @@ export function registerDormantPanesIpc(): void {
   })
 
   ipcMain.handle('sessions:restore-plan', (_e, raw: unknown): RestorePlan =>
-    computeRestorePlan(restorePlanSchema.parse(raw)),
+    computeRestorePlan(restorePlanSchema.parse(raw), lazyRestore),
   )
   // Devolve a lista enriquecida: o renderer aplica o título nas panes dormindo
   // (o snapshot não o guarda e sem ele a aba cai no rótulo do repo).
   ipcMain.handle('sessions:dormant-sync', (_e, raw: unknown): DormantPaneInfo[] => {
     const list = dormantSyncSchema.parse(raw)
     // Pref desligada: o registro fica vazio, nada no main acorda pane.
-    if (!lazyRestoreEnabled()) {
+    if (!lazyRestore) {
       panes.setDormant([])
       return list
     }

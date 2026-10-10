@@ -151,6 +151,10 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
 // linha (resume, wake) ou estar numa pane dormindo. Sem PTY no id gravado, tenta
 // as outras linhas da mesma conversa (a fila recusa na hora quem não tem PTY) e,
 // com sessions.lazyRestore ligada, acorda a pane dormindo.
+// O passo das outras linhas vale SEMPRE, com a pref desligada também: todo resume
+// (inclusive o restore eager de cada boot) abre uma linha nova para a mesma
+// conversa, e sem ele a resposta à mãe retomada morria em not_running. Só o
+// wake da pane dormindo depende da pref.
 async function sendByConversation(
   queue: WakeQueue,
   target: string,

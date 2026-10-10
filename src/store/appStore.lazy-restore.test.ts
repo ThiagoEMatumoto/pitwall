@@ -64,6 +64,8 @@ const calls = {
   dormantIpc: [] as string[],
 }
 let resumeGate: Promise<void> = Promise.resolve()
+// cc → erro com que o resume rejeita depois do gate (a recusa do main, via IPC).
+const resumeErrors = new Map<string, string>()
 // true simula o re-attach da guarda do main (PTY que já vivia antes do resume).
 let resumeReattached = false
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
@@ -98,6 +100,8 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   resume: async (input: { repoId: string | null; ccSessionId: string }) => {
     calls.resume.push(input)
     await resumeGate
+    const error = resumeErrors.get(input.ccSessionId)
+    if (error) throw new Error(error)
     return { session: sessionFor(input.ccSessionId), reattached: resumeReattached }
   },
   kill: (id: string) => {
@@ -216,6 +220,7 @@ beforeEach(async () => {
   calls.kill = []
   mainTitles.clear()
   resumeGate = Promise.resolve()
+  resumeErrors.clear()
   resumeReattached = false
   useAppStore.setState({
     panes: [],
@@ -760,6 +765,40 @@ describe('dormant x resume/wake em voo', () => {
     await resuming
     const forCc = useAppStore.getState().panes.filter((p) => p.session.ccSessionId === 'cc-sleep1')
     expect(forCc.map((p) => [p.paneId, !!p.dormant])).toEqual([['pane-user', false]])
+  })
+
+  it('resume em voo (switcher) que falha: a pane pulada volta dormant com o erro e é salva', async () => {
+    let open!: () => void
+    resumeGate = new Promise((r) => (open = r))
+    resumeErrors.set(
+      'cc-sleep1',
+      "Error invoking remote method 'sessions:resume': Error: transcript sumiu",
+    )
+    const resuming = useAppStore
+      .getState()
+      .resumeSession(repo as never, 'Infra', null, null, 'cc-sleep1', 'pane-user')
+      .catch(() => {})
+
+    await useAppStore.getState().restoreSnapshots(sleepSnaps, null)
+    expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-sleep2'])
+
+    open()
+    await resuming
+    await flush()
+    await waitPersist()
+
+    const panes = useAppStore.getState().panes
+    expect(panes.map((p) => [p.paneId, !!p.dormant]).sort()).toEqual([
+      ['pane-sleep1', true],
+      ['pane-sleep2', true],
+    ])
+    expect(panes.find((p) => p.paneId === 'pane-sleep1')?.restoreError).toBe('transcript sumiu')
+    expect(
+      calls.savePanes
+        .at(-1)!
+        .map((s) => s.paneId)
+        .sort(),
+    ).toEqual(['pane-sleep1', 'pane-sleep2'])
   })
 
   it('restore não põe dormant para a conversa com wake em voo', async () => {

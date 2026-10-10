@@ -56,20 +56,23 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   resume: (input: { ccSessionId: string }) => {
     calls.resume.push(input.ccSessionId)
     const fail = resumeFails.get(input.ccSessionId)
-    if (fail) return Promise.reject(new Error(fail))
     const delay = resumeDelays.get(input.ccSessionId) ?? 0
-    return new Promise((r) => setTimeout(r, delay)).then(() => ({
-      session: {
-        id: `sess-${input.ccSessionId}`,
-        ccSessionId: input.ccSessionId,
-        repoId: 'r1',
-        title: null,
-        status: 'running',
-        paneId: null,
-        startedAt: 1,
-      },
-      reattached: false,
-    }))
+    if (fail && !delay) return Promise.reject(new Error(fail))
+    return new Promise((r) => setTimeout(r, delay)).then(() => {
+      if (fail) throw new Error(fail)
+      return {
+        session: {
+          id: `sess-${input.ccSessionId}`,
+          ccSessionId: input.ccSessionId,
+          repoId: 'r1',
+          title: null,
+          status: 'running',
+          paneId: null,
+          startedAt: 1,
+        },
+        reattached: false,
+      }
+    })
   },
   spawn: () => {
     calls.spawn += 1
@@ -256,6 +259,34 @@ describe('resume eager que falha no boot', () => {
     expect(pane.restoreError).toBe('outro motivo')
   })
 
+  it('pref off: a eager pulada por um resume em voo (switcher) que falha não some', async () => {
+    resumeDelays.set('cc-a', 50)
+    resumeFails.set('cc-a', refusal)
+    const switcher = useAppStore
+      .getState()
+      .resumeSession(repo as never, 'Infra', null, null, 'cc-a', 'pane-user')
+      .catch((err: Error) => err.message)
+
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    expect(await switcher).toBe(refusal)
+    await waitPersist()
+
+    // Um só resume do cc-a: o do restore seguiu o desfecho do switcher.
+    expect(calls.resume.filter((cc) => cc === 'cc-a')).toEqual(['cc-a'])
+    const panes = useAppStore.getState().panes
+    expect(panes.map((p) => p.paneId).sort()).toEqual(bootSnaps.map((s) => s.paneId).sort())
+    expect(panes.find((p) => p.paneId === 'pane-a')).toMatchObject({
+      dormant: true,
+      restoreError: 'conversa aberta em outro processo (pid 42)',
+    })
+    expect(
+      calls.savePanes
+        .at(-1)!
+        .map((s) => s.paneId)
+        .sort(),
+    ).toEqual(bootSnaps.map((s) => s.paneId).sort())
+  })
+
   it('spawn de pane sem transcript que falha segue descartada (nada a retomar)', async () => {
     const spawn = sessionsImpl.spawn
     sessionsImpl.spawn = () => Promise.reject(new Error('boom'))
@@ -269,7 +300,21 @@ describe('resume eager que falha no boot', () => {
 })
 
 describe('open_panes durante o restore', () => {
-  it('nenhum savePanes com subconjunto enquanto uma eager lenta não volta', async () => {
+  it('pref off: o persist segue o timing da main (salva no meio de um restore lento)', async () => {
+    resumeDelays.set('cc-b', 900)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await waitPersist()
+
+    // cc-b ainda não voltou e o open_panes já foi gravado, como na main.
+    expect(calls.resume).toContain('cc-b')
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
+    expect(calls.savePanes.length).toBeGreaterThan(0)
+    await restoring
+  })
+
+  // Com a pref ligada o save fica para o fim do restore (plano 'eager' do mock: sem dormant).
+  it('pref on: nenhum savePanes com subconjunto enquanto uma eager lenta não volta', async () => {
+    prefValue = true
     // A viva re-attacha em t0 e cc-a volta logo; cc-b demora mais que o debounce
     // do persist (500ms). Antes, o save de t0+500 gravava 3 de 4 abas.
     resumeDelays.set('cc-b', 900)
@@ -280,7 +325,8 @@ describe('open_panes durante o restore', () => {
     for (const saved of calls.savePanes) expect(saved).toHaveLength(bootSnaps.length)
   })
 
-  it('uma pane aberta pelo usuário no meio do restore entra no save final', async () => {
+  it('pref on: uma pane aberta pelo usuário no meio do restore entra no save final', async () => {
+    prefValue = true
     resumeDelays.set('cc-b', 300)
     const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
     await useAppStore.getState().openSession(null, null, null, null, 'pane-user')
