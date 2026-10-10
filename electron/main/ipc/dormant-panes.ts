@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
 import { getMainWindow } from '../services/notifications'
 import { DormantPanes, setDormantPanes } from '../services/dormant-panes'
+import { foreignHolderPid } from '../services/conversation-holder'
 import { computeRestorePlan } from '../services/restore-plan'
 import { enrichDormantPanes } from '../services/dormant-enrich'
 import { screenOf } from './send-prompt'
@@ -41,6 +42,7 @@ export function registerDormantPanesIpc(): void {
       return true
     },
     isRunning: (id) => ptyManager.isRunning(id),
+    foreignHolderPid,
     screen: screenOf,
     warn: (event) => console.warn(JSON.stringify(event)),
   })

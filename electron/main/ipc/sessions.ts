@@ -10,6 +10,7 @@ import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
+import { assertNotOpenElsewhere } from '../services/conversation-holder'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
 import { wakeMotherFor } from '../services/handoff/handoff-wake'
@@ -725,6 +726,8 @@ export function resumeHandoffChild(
     throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
   }
 
+  assertNotOpenElsewhere(ccSessionId)
+
   // Gate de resumibilidade: o transcript JSONL precisa existir no disco.
   const transcript = findTranscriptPath(ccSessionId)
   if (!transcript) {
@@ -1027,6 +1030,7 @@ export function registerSessionIpc(): void {
       .all(input.ccSessionId) as SessionRow[]
     const alive = priorRows.find((row) => ptyManager.isRunning(row.id))
     if (alive) return toSession(alive)
+    assertNotOpenElsewhere(input.ccSessionId)
 
     // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
     // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
