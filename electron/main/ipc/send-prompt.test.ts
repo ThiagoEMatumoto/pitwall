@@ -153,14 +153,16 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
     void promptQueue.cancel(queued)
   })
 
-  it('wake falhou: devolve o not-running original sem escrever', async () => {
+  it('wake falhou: erro wake-failed com o motivo, contador no snapshot, nada escrito', async () => {
     seam.dead.add('old-pty')
     seam.ccOf.set('old-pty', 'cc-old')
     dormant(null)
+    const before = promptQueue.snapshot().counters.wakeFailed
 
     const res = await sendWakingDormant({ sessionId: 'old-pty', text: 'segue', when: 'now' })
 
-    expect(res).toEqual({ ok: false, error: 'not-running' })
+    expect(res).toEqual({ ok: false, error: 'wake-failed', detail: 'resume-threw' })
+    expect(promptQueue.snapshot().counters.wakeFailed).toBe(before + 1)
     expect(seam.writes).toEqual([])
   })
 

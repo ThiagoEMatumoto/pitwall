@@ -117,6 +117,7 @@ const REFUSAL_REASON: Record<SendPromptError, string> = {
   'not-running': 'sessão encerrada',
   'input-dirty': 'ela tem texto não enviado no prompt',
   cancelled: 'a mensagem foi cancelada',
+  'wake-failed': 'ela dormia e não acordou',
 }
 
 export function sendRefusalReason(error: SendPromptError): string {

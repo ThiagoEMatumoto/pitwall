@@ -94,7 +94,10 @@ export async function sendWakingDormant(input: SendPromptInput): Promise<SendPro
   const cc = row?.cc_session_id
   if (!panes || !cc || !panes.findDormantByCc(cc)) return sent
   const woke = await panes.wakeDormant(cc, 'send-prompt')
-  if (!woke.ok) return sent
+  if (!woke.ok) {
+    promptQueue.recordWakeFailed(input.sessionId, woke.error)
+    return { ok: false, error: 'wake-failed', detail: woke.error }
+  }
   // Recém-acordada ainda pode estar no turno do --resume: 'now' escreveria no meio
   // dele. A fila on-idle espera o idle/waiting certo.
   return promptQueue.send({ ...input, sessionId: woke.sessionId, when: 'on-idle' })

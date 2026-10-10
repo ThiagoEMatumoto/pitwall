@@ -116,6 +116,7 @@ export class PromptQueue {
     refusedMenuOpen: 0,
     refusedUnparsed: 0,
     refusedInputDirty: 0,
+    wakeFailed: 0,
   }
   private lastEvent: PromptQueueEvent | null = null
   // sessionId → quando a última entrega saiu (espera o claude trabalhar).
@@ -361,6 +362,19 @@ export class PromptQueue {
       at: this.now(),
     }
     if (this.items.length === 0) this.dispose()
+    this.publish()
+  }
+
+  // O wake da sessão dormindo é de quem chama (send-prompt); o contador fica aqui,
+  // junto dos outros que o snapshot já leva ao renderer.
+  recordWakeFailed(sessionId: string, detail: string): void {
+    this.counters.wakeFailed++
+    this.deps.warn({
+      event: 'prompt_queue_wake_failed',
+      sessionId,
+      detail,
+      total: this.counters.wakeFailed,
+    })
     this.publish()
   }
 

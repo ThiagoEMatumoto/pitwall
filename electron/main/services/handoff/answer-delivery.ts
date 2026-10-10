@@ -134,7 +134,9 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
       ? 'no_screen'
       : sent.error === 'cancelled'
         ? 'cancelled'
-        : 'not_running'
+        : sent.error === 'wake-failed'
+          ? 'wake_failed'
+          : 'not_running'
   insertRow({
     wakeId: randomUUID(),
     handoffId: r.handoffId,

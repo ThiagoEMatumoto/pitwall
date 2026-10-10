@@ -29,7 +29,15 @@ export function useSendTargets(): SendTarget[] {
 
 const EMPTY_QUEUE: PromptQueueSnapshot = {
   items: [],
-  counters: { delivered: 0, expired: 0, sessionGone: 0, refusedMenuOpen: 0, refusedUnparsed: 0, refusedInputDirty: 0 },
+  counters: {
+    delivered: 0,
+    expired: 0,
+    sessionGone: 0,
+    refusedMenuOpen: 0,
+    refusedUnparsed: 0,
+    refusedInputDirty: 0,
+    wakeFailed: 0,
+  },
   lastEvent: null,
 }
 

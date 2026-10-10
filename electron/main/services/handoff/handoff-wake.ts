@@ -567,8 +567,8 @@ function recordSent(
       ? 'no_screen'
       : sent.error === 'cancelled'
         ? 'cancelled'
-        : sent.error === 'not-running'
-          ? 'not_running'
+        : sent.error === 'wake-failed'
+          ? 'wake_failed'
           : // 'on-idle' não recusa por menu/attention (segura na fila); defensivo.
             'not_running'
   insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome, detail: sent.error })

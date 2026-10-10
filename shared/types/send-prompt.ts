@@ -36,11 +36,13 @@ export type SendPromptError =
   | 'input-dirty'
   // Cancelada da fila enquanto o próprio envio ainda relia a tela.
   | 'cancelled'
+  // O destino dormia (lazy restore) e não acordou; detail diz por quê.
+  | 'wake-failed'
 
 export type SendPromptResult =
   | { ok: true; delivered: true }
   | { ok: true; delivered: false; queued: QueuedPrompt }
-  | { ok: false; error: SendPromptError }
+  | { ok: false; error: SendPromptError; detail?: string }
 
 export interface QueuedPrompt {
   id: string
@@ -76,6 +78,8 @@ export interface PromptQueueCounters {
   refusedUnparsed: number
   // Entregas recusadas/seguradas por texto não enviado na caixa de input do destino.
   refusedInputDirty: number
+  // Envios para uma sessão dormindo cujo wake falhou (nada foi escrito).
+  wakeFailed: number
 }
 
 export interface PromptQueueSnapshot {
