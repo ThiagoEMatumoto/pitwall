@@ -11,6 +11,7 @@ import { gpuApi, sessionsApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useAppStore, type PaneMode } from '@/store/appStore'
+import { exitAction } from './hibernate-exit'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSession } from './useSession'
 import { Composer, type ComposerHandle } from './Composer'
@@ -158,7 +159,7 @@ function readFooterText(term: Xterm): string {
 export function Terminal(props: Props) {
   const owner = useTerminalLease((s) => s.leases[props.session.id])
   const blocked = leaseBlocks(owner, props.leaseHost)
-  useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose)
+  useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose, props.leaseHost)
   if (blocked) return <LeasedPlaceholder host={props.leaseHost} owner={owner!} />
   return <TerminalHost {...props} />
 }
@@ -166,15 +167,21 @@ export function Terminal(props: Props) {
 // Com a lease fora, o useSession desta aba não está montado e perde o exit da
 // PTY; ao remontar nasceria exited=false e ficaria como pane morta. O toast de
 // "Sessão encerrada" é da modal (o Terminal dela viu o exit) — aqui só fecha.
-function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose: () => void) {
+function useCloseOnExitWhileLeased(
+  sessionId: string,
+  blocked: boolean,
+  onClose: () => void,
+  leaseHost: TerminalLeaseHost | undefined,
+) {
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   useEffect(() => {
     if (!blocked) return
     return sessionsApi.onExit((e) => {
-      if (e.sessionId === sessionId) onCloseRef.current()
+      if (e.sessionId !== sessionId) return
+      if (exitAction(sessionId, leaseHost) !== 'keep') onCloseRef.current()
     })
-  }, [sessionId, blocked])
+  }, [sessionId, blocked, leaseHost])
 }
 
 // Quem cedeu a PTY: sem xterm montado, nada disputa o resize. Nenhum host puxa a
@@ -254,6 +261,7 @@ function TerminalHost({
   onTitleChange,
   onReopen,
   onOpenSettings,
+  leaseHost,
 }: Props) {
   // Provider sem Chat View (Codex) fica no terminal cru, seja qual for o modo
   // lembrado; sem parser de menu, nada de card/pill que digita na TUI do claude.
@@ -720,6 +728,11 @@ function TerminalHost({
   useEffect(() => {
     if (!exited || claudeNotFound || autoClosedRef.current) return
     autoClosedRef.current = true
+    const action = exitAction(session.id, leaseHost)
+    if (action !== 'toast-and-close') {
+      if (action === 'close') onClose()
+      return
+    }
     showToast({
       title: 'Sessão encerrada',
       body: `${displayTitle}${exitCode != null && exitCode !== 0 ? ` (código ${exitCode})` : ''} — retome pelo seletor de sessões, em Encerradas.`,

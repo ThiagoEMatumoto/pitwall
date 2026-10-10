@@ -4,6 +4,11 @@ import type { AdvisorModel, EffortLevel, PermissionMode } from '../../shared/typ
 import { SPAWNABLE_MODEL_ALIASES, type ModelAlias } from '../../shared/models'
 import { setDefaultPaneModeFallback, type PaneMode } from '@/store/appStore'
 import { DEFAULT_LAZY_RESTORE, LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
+import {
+  DEFAULT_HIBERNATE_AFTER_MIN,
+  HIBERNATE_AFTER_MIN_PREF,
+  sanitizeHibernateAfterMin,
+} from '../../shared/hibernate'
 
 const DEFAULT_MODEL_KEY = 'session.defaultModel'
 const DEFAULT_EFFORT_KEY = 'session.defaultEffort'
@@ -63,6 +68,8 @@ interface SessionPrefsState {
   defaultPaneMode: PaneMode
   // Lido pelo main no boot (restore-plan); aqui só se escreve.
   lazyRestore: boolean
+  // Lido pelo tick do main (0 = desligado); aqui só se escreve.
+  hibernateAfterMin: number
   showIntroOnBoot: boolean
   loaded: boolean
   load: () => Promise<void>
@@ -73,6 +80,7 @@ interface SessionPrefsState {
   setKeyboardMode: (k: KeyboardSendMode) => Promise<void>
   setDefaultPaneMode: (m: PaneMode) => Promise<void>
   setLazyRestore: (on: boolean) => Promise<void>
+  setHibernateAfterMin: (min: number) => Promise<void>
   setShowIntroOnBoot: (v: boolean) => Promise<void>
 }
 
@@ -87,22 +95,33 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
   keyboardMode: DEFAULT_KEYBOARD_MODE,
   defaultPaneMode: DEFAULT_PANE_MODE,
   lazyRestore: DEFAULT_LAZY_RESTORE,
+  hibernateAfterMin: DEFAULT_HIBERNATE_AFTER_MIN,
   showIntroOnBoot: true,
   loaded: false,
 
   load: async () => {
     if (get().loaded) return
-    const [model, effort, permission, advisor, keyboard, paneMode, showIntro, lazyRestore] =
-      await Promise.all([
-        prefsApi.get<string>(DEFAULT_MODEL_KEY),
-        prefsApi.get<string>(DEFAULT_EFFORT_KEY),
-        prefsApi.get<string>(DEFAULT_PERMISSION_KEY),
-        prefsApi.get<string>(DEFAULT_ADVISOR_KEY),
-        prefsApi.get<string>(KEYBOARD_MODE_KEY),
-        prefsApi.get<string>(DEFAULT_PANE_MODE_KEY),
-        prefsApi.get<boolean>(SHOW_INTRO_ON_BOOT_KEY),
-        prefsApi.get<boolean>(LAZY_RESTORE_PREF),
-      ])
+    const [
+      model,
+      effort,
+      permission,
+      advisor,
+      keyboard,
+      paneMode,
+      showIntro,
+      lazyRestore,
+      hibernateAfterMin,
+    ] = await Promise.all([
+      prefsApi.get<string>(DEFAULT_MODEL_KEY),
+      prefsApi.get<string>(DEFAULT_EFFORT_KEY),
+      prefsApi.get<string>(DEFAULT_PERMISSION_KEY),
+      prefsApi.get<string>(DEFAULT_ADVISOR_KEY),
+      prefsApi.get<string>(KEYBOARD_MODE_KEY),
+      prefsApi.get<string>(DEFAULT_PANE_MODE_KEY),
+      prefsApi.get<boolean>(SHOW_INTRO_ON_BOOT_KEY),
+      prefsApi.get<boolean>(LAZY_RESTORE_PREF),
+      prefsApi.get<unknown>(HIBERNATE_AFTER_MIN_PREF),
+    ])
     set({
       defaultModel: model && MODEL_WHITELIST.has(model) ? (model as ModelDefault) : '',
       defaultEffort: effort && EFFORT_WHITELIST.has(effort) ? (effort as EffortLevel) : '',
@@ -114,6 +133,7 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
       keyboardMode: keyboard === 'enter-newline' ? 'enter-newline' : DEFAULT_KEYBOARD_MODE,
       defaultPaneMode: sanitizePaneMode(paneMode),
       lazyRestore: lazyRestore === true,
+      hibernateAfterMin: sanitizeHibernateAfterMin(hibernateAfterMin),
       // Ausente (undefined) = default ligado; só desliga com o valor explícito false.
       showIntroOnBoot: showIntro !== false,
       loaded: true,
@@ -155,6 +175,12 @@ export const useSessionPrefsStore = create<SessionPrefsState>((set, get) => ({
   setLazyRestore: async (on) => {
     set({ lazyRestore: on })
     await prefsApi.set(LAZY_RESTORE_PREF, on)
+  },
+
+  setHibernateAfterMin: async (min) => {
+    const value = sanitizeHibernateAfterMin(min)
+    set({ hibernateAfterMin: value })
+    await prefsApi.set(HIBERNATE_AFTER_MIN_PREF, value)
   },
 
   setShowIntroOnBoot: async (v) => {

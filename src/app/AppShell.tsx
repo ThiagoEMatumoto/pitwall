@@ -186,7 +186,12 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
       {pane?.dormant && !pane.restoreError && (
-        <span role="img" title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
+        <span
+          role="img"
+          title={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          aria-label={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          className="mr-1 flex"
+        >
           <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
         </span>
       )}

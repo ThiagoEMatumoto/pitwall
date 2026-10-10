@@ -4,6 +4,7 @@ import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
+import type { SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
   AdvisorModel,
   AgentProviderId,
@@ -76,6 +77,9 @@ export interface ActivePane {
   // processo). A aba fica no layout e no open_panes com o erro à vista e o
   // Retomar; vale mesmo com a pref de lazy restore desligada.
   restoreError?: string
+  // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
+  // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
+  dormantReason?: 'hibernated'
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -261,6 +265,13 @@ let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
+let offHibernated: (() => void) | null = null
+// sessions.id das PTYs que saíram por hibernação: o pty:exit que chega logo
+// depois não fecha a pane nem mostra o toast de sessão encerrada (Terminal).
+const hibernatedSessionIds = new Set<string>()
+export function isHibernatedSession(sessionId: string): boolean {
+  return hibernatedSessionIds.has(sessionId)
+}
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
 const wakes = new Map<string, Promise<string | null>>()
@@ -1090,6 +1101,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
+    offHibernated = sessionsApi.onHibernated(onHibernated)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
     syncDormantPanes(get().panes)
     const list = await sessionsApi.listLiveGlobal()
@@ -1141,6 +1153,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offDormantBecameLive) {
       offDormantBecameLive()
       offDormantBecameLive = null
+    }
+    if (offHibernated) {
+      offHibernated()
+      offHibernated = null
     }
     if (offGlobalActivity) {
       offGlobalActivity()
@@ -1217,7 +1233,7 @@ function adoptLiveSession(paneId: string, session: Session): void {
     useAppStore.setState({
       panes: panes.map((p) => {
         if (p.paneId !== paneId || !p.dormant) return p
-        const { dormant: _dormant, restoreError: _error, ...awake } = p
+        const { dormant: _dormant, restoreError: _error, dormantReason: _reason, ...awake } = p
         return { ...awake, session }
       }),
     })
@@ -1233,6 +1249,33 @@ function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): 
     .getState()
     .panes.find((p) => p.dormant && p.session.ccSessionId === ccSessionId)
   if (pane) adoptLiveSession(pane.paneId, session)
+}
+
+// A PTY saiu por hibernação (o evento vem ANTES do pty:exit): a pane vira dormant
+// no lugar (mesmo paneId), como uma restaurada dormindo, e entra no dormantSync
+// para o agent-bus achá-la. Sessão sem pane (background) não tem o que converter.
+function onHibernated({ sessionId, ccSessionId }: SessionHibernatedEvent): void {
+  hibernatedSessionIds.add(sessionId)
+  const { panes } = useAppStore.getState()
+  if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) return
+  useAppStore.setState({
+    panes: panes.map((p) => {
+      if (p.dormant || p.session.id !== sessionId) return p
+      return {
+        ...p,
+        session: {
+          ...p.session,
+          id: `${DORMANT_ID_PREFIX}${ccSessionId}`,
+          ccSessionId,
+          status: 'exited',
+          endedAt: null,
+        },
+        dormant: true,
+        dormantReason: 'hibernated',
+      }
+    }),
+  })
+  schedulePersist(useAppStore.getState().panes)
 }
 
 // Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do

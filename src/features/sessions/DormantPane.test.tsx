@@ -27,7 +27,7 @@ Object.assign(window, {
 })
 
 const { useAppStore } = await import('@/store/appStore')
-const { DormantPane, DORMANT_BADGE } = await import('./DormantPane')
+const { DormantPane, DORMANT_BADGE, HIBERNATED_BADGE } = await import('./DormantPane')
 const { wakeIfDormant } = await import('./dormant-wake')
 type ActivePane = import('@/store/appStore').ActivePane
 
@@ -124,6 +124,25 @@ describe('DormantPane', () => {
     render(<Wired target={avulsa} />)
 
     expect(screen.getAllByText('Avulsa')).toHaveLength(1)
+  })
+})
+
+describe('DormantPane hibernada', () => {
+  it('badge "hibernada" no lugar de "dormindo"; o clique acorda pelo mesmo wake', async () => {
+    const hibernated: ActivePane = { ...pane, dormantReason: 'hibernated' }
+    useAppStore.setState({ panes: [hibernated] })
+    render(<Wired target={hibernated} />)
+
+    expect(HIBERNATED_BADGE).toBe('hibernada — clique para acordar')
+    expect(screen.queryByText(DORMANT_BADGE)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: HIBERNATED_BADGE }))
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(resumed).toEqual(['cc-1'])
+    const [after] = useAppStore.getState().panes
+    expect(after.paneId).toBe('pane-1')
+    expect(after.dormant).toBeUndefined()
+    expect(after.dormantReason).toBeUndefined()
   })
 })
 
