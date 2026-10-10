@@ -96,6 +96,7 @@ import {
 } from './services/design/protocol'
 import * as designStore from './services/design/design-store'
 import * as designAssets from './services/design/asset-store'
+import { ensureScopeProbe } from './services/systemd-scope'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -314,6 +315,9 @@ app.whenReady().then(async () => {
   registerProjectIpc()
   registerRepoDependenciesIpc()
   registerHandoffsIpc()
+  // Antes das sessões: o restore do renderer spawna logo depois da janela, e o
+  // probe (≤2s, uma vez) decide se cada sessão ganha o próprio scope systemd.
+  await ensureScopeProbe()
   registerSessionIpc()
   registerBatonIpc()
   registerSessionGraphIpc()

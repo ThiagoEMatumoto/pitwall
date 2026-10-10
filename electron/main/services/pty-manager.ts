@@ -1,7 +1,14 @@
 import { spawn, IPty } from 'node-pty'
 import { EventEmitter } from 'node:events'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { nextPtySample, type PtySample } from './providers/pty-status'
+import {
+  disableScopes,
+  scopeUnitName,
+  scopeWrapEnabled,
+  stopScopeUnit,
+  wrapInScope,
+} from './systemd-scope'
 
 export interface SpawnOptions {
   sessionId: string
@@ -57,6 +64,21 @@ class TypedEmitter extends EventEmitter {
 const BACKLOG_CAP = 256 * 1024
 // Janela em que a saída é tratada como eco/reflow de input do app.
 const INPUT_ECHO_MS = 300
+// Até o pid deixar de ser o systemd-run, uma saída é falha do wrapper (bus caiu,
+// unit duplicada), não do comando. O teto cobre o timeout de 25s do D-Bus.
+const SCOPE_EXEC_POLL_MS = 25
+const SCOPE_EXEC_WATCH_MAX_MS = 30_000
+// Depois do SIGHUP no pid da PTY, o que sobrou no scope (MCPs, processos em
+// background) é parado junto.
+const SCOPE_STOP_GRACE_MS = 3_000
+
+function procComm(pid: number): string | null {
+  try {
+    return readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
+  } catch {
+    return null
+  }
+}
 
 class PtyManager extends TypedEmitter {
   private ptys = new Map<string, IPty>()
@@ -69,6 +91,10 @@ class PtyManager extends TypedEmitter {
   // Última escrita/resize vinda do app: o eco da tecla e o reflow que vêm logo
   // depois não são o agente trabalhando.
   private lastInputAt = new Map<string, number>()
+  // Unit .scope de cada sessão spawnada via systemd-run.
+  private scopeUnits = new Map<string, string>()
+  // Saída pedida pelo app não é falha do systemd-run.
+  private killed = new WeakSet<IPty>()
 
   spawn(opts: SpawnOptions): void {
     if (this.ptys.has(opts.sessionId)) {
@@ -79,9 +105,17 @@ class PtyManager extends TypedEmitter {
       throw new Error(`cwd does not exist or is not a directory: ${opts.cwd}`)
     }
 
+    this.spawnPty(opts, scopeWrapEnabled())
+  }
+
+  private spawnPty(opts: SpawnOptions, inScope: boolean): void {
     const cols = opts.cols ?? 80
     const rows = opts.rows ?? 24
-    const pty = spawn(opts.command, opts.args ?? [], {
+    const unit = inScope ? scopeUnitName(opts.sessionId) : null
+    const target = unit
+      ? wrapInScope(opts.command, opts.args ?? [], unit)
+      : { command: opts.command, args: opts.args ?? [] }
+    const pty = spawn(target.command, target.args, {
       name: 'xterm-256color',
       cols,
       rows,
@@ -95,7 +129,9 @@ class PtyManager extends TypedEmitter {
     })
 
     this.ptys.set(opts.sessionId, pty)
-    this.backlog.set(opts.sessionId, '')
+    if (unit) this.scopeUnits.set(opts.sessionId, unit)
+    else this.scopeUnits.delete(opts.sessionId)
+    if (!this.backlog.has(opts.sessionId)) this.backlog.set(opts.sessionId, '')
     if (opts.sampleActivity) {
       this.samples.set(opts.sessionId, { lastByteAt: null, tailHash: null, hashChangedAt: null })
     }
@@ -115,12 +151,55 @@ class PtyManager extends TypedEmitter {
       this.emit('data', { sessionId: opts.sessionId, data })
     })
 
+    const execWatch = unit ? this.watchScopeExec(pty.pid) : null
+
     pty.onExit(({ exitCode, signal }) => {
+      const current = this.ptys.get(opts.sessionId)
+      if (current && current !== pty) return
+      if (
+        current &&
+        execWatch &&
+        !execWatch.confirmed() &&
+        exitCode !== 0 &&
+        !this.killed.has(pty)
+      ) {
+        // O systemd-run morreu sem virar o comando: refaz direto, uma vez, no
+        // tamanho atual (pode ter havido resize no meio).
+        execWatch.stop()
+        disableScopes(`systemd-run saiu com ${exitCode} antes do exec`)
+        this.ptys.delete(opts.sessionId)
+        this.spawnPty({ ...opts, cols: pty.cols, rows: pty.rows }, false)
+        return
+      }
+      execWatch?.stop()
       this.ptys.delete(opts.sessionId)
+      this.scopeUnits.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
     })
+  }
+
+  // Confirmado = o pid foi visto como outro processo que não o systemd-run nem o
+  // fork do próprio app antes do exec (mesmo comm do pai).
+  private watchScopeExec(pid: number): { confirmed: () => boolean; stop: () => void } {
+    const ownComm = procComm(process.pid)
+    let confirmed = false
+    const startedAt = Date.now()
+    const timer = setInterval(() => {
+      const comm = procComm(pid)
+      if (comm !== null && comm !== 'systemd-run' && comm !== ownComm) confirmed = true
+      if (confirmed || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) clearInterval(timer)
+    }, SCOPE_EXEC_POLL_MS)
+    timer.unref?.()
+    return {
+      confirmed: () => confirmed,
+      stop: () => clearInterval(timer),
+    }
+  }
+
+  scopeUnitFor(sessionId: string): string | null {
+    return this.scopeUnits.get(sessionId) ?? null
   }
 
   // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
@@ -150,14 +229,23 @@ class PtyManager extends TypedEmitter {
   kill(sessionId: string): void {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
+    this.killed.add(pty)
     pty.kill()
+    const unit = this.scopeUnits.get(sessionId)
+    if (unit) setTimeout(() => stopScopeUnit(unit), SCOPE_STOP_GRACE_MS).unref?.()
     this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
   }
 
   killAll(): void {
-    for (const pty of this.ptys.values()) pty.kill()
+    for (const pty of this.ptys.values()) {
+      this.killed.add(pty)
+      pty.kill()
+    }
+    // Quit: só o SIGHUP, como antes; um stop agora mandaria SIGTERM junto e
+    // poderia cortar o flush do transcript.
+    this.scopeUnits.clear()
     this.ptys.clear()
     this.backlog.clear()
     this.samples.clear()
