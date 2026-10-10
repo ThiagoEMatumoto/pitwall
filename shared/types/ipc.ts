@@ -1492,7 +1492,8 @@ export interface AttentionMenuSnapshot {
 }
 
 export type AttentionAction =
-  { kind: 'select'; optionIndex: number } | { kind: 'other'; optionIndex: number; text: string }
+  | { kind: 'select'; optionIndex: number }
+  | { kind: 'other'; optionIndex: number; text: string }
 
 export interface AttentionRespondInput {
   sessionId: string
@@ -2086,7 +2087,14 @@ export type DiagramAuthor = 'claude' | 'human'
 
 // Parents linkáveis: um diagrama pode ilustrar qualquer entidade do app.
 export type DiagramParentType =
-  'project' | 'repo' | 'feature' | 'task' | 'objective' | 'key_result' | 'session' | 'handoff'
+  | 'project'
+  | 'repo'
+  | 'feature'
+  | 'task'
+  | 'objective'
+  | 'key_result'
+  | 'session'
+  | 'handoff'
 
 // Origem da cena: skeleton (gerado pelo Claude via shared/diagram-skeleton),
 // mermaid (convertido), scene (desenhado direto no canvas). null = desconhecida.
