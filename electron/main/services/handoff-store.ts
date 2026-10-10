@@ -156,7 +156,8 @@ function fresh(id: string): Handoff {
 // de uma mutação. NULL se o handoff não existe (não loga nada nesse caso).
 function currentStatus(id: string): string | null {
   const row = getDb().prepare('SELECT status FROM handoffs WHERE id = ?').get(id) as
-    { status: string } | undefined
+    | { status: string }
+    | undefined
   return row?.status ?? null
 }
 
@@ -339,8 +340,9 @@ export function activeSessionNames(): string[] {
 // Fonte da verdade = sessions.title, fixado como 'manual' no spawn.
 export function childAlias(childSessionId: string | null): string | null {
   if (!childSessionId) return null
-  const row = getDb().prepare('SELECT title FROM sessions WHERE id = ?').get(childSessionId) as
-    { title: string | null } | undefined
+  const row = getDb()
+    .prepare('SELECT title FROM sessions WHERE id = ?')
+    .get(childSessionId) as { title: string | null } | undefined
   return row?.title ?? null
 }
 
@@ -776,7 +778,8 @@ export function release(id: string): Handoff {
   const row = db
     .prepare('SELECT status, child_session_id, dismissed_at FROM handoffs WHERE id = ?')
     .get(id) as
-    { status: string; child_session_id: string | null; dismissed_at: number | null } | undefined
+    | { status: string; child_session_id: string | null; dismissed_at: number | null }
+    | undefined
   if (!row) throw new Error(`handoff not found: ${id}`)
   // Já solto (sem vínculo E fora do painel): no-op, pra não empilhar eventos
   // idênticos a cada clique repetido.
