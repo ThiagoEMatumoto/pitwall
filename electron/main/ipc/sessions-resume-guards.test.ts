@@ -4,7 +4,7 @@
 // lido do disco por buildSessionsFileIndex (HOME temporário). O processo "de fora"
 // é um `sleep` de verdade, com o pid no arquivo do índice.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -73,6 +73,11 @@ import * as handoffStore from '../services/handoff-store'
 import { DormantPanes } from '../services/dormant-panes'
 import { foreignHolderPid, openElsewhereReason } from '../services/conversation-holder'
 import {
+  buildSessionsFileIndex,
+  isSessionPidAlive,
+  parsePsLstartComm,
+} from '../services/session-activity'
+import {
   __resetForTests as resetHandoffWake,
   insertRow,
   redeliverFailedWakes,
@@ -123,9 +128,14 @@ function procStartOf(pid: number): string {
 // null = arquivo de versão antiga, string = outro processo (pid reciclado).
 function holdConversationInForeignProcess(
   cc: string,
-  opts: { procStart?: 'real' | null | string; argv0?: string } = {},
+  opts: {
+    procStart?: 'real' | null | string
+    argv0?: string
+    exe?: string
+    startedAt?: number
+  } = {},
 ): number {
-  foreign = spawn('sleep', ['30'], { stdio: 'ignore', argv0: opts.argv0 })
+  foreign = spawn(opts.exe ?? 'sleep', ['30'], { stdio: 'ignore', argv0: opts.argv0 })
   const pid = foreign.pid!
   const mode = opts.procStart === undefined ? 'real' : opts.procStart
   const procStart = mode === 'real' ? procStartOf(pid) : mode
@@ -137,6 +147,7 @@ function holdConversationInForeignProcess(
       cwd: REPO_DIR,
       status: 'idle',
       updatedAt: Date.now(),
+      ...(opts.startedAt === undefined ? {} : { startedAt: opts.startedAt }),
       ...(procStart === null ? {} : { procStart }),
     }),
   )
@@ -152,19 +163,55 @@ function resumeResult(cc = CC): { session: { id: string }; reattached: boolean }
 
 // PTY do Pitwall (linha `id`) com um processo de verdade; o índice diz em que
 // conversa o pid dela está agora (o claude reescreve o próprio <pid>.json no /clear).
-function pitwallPty(id: string, indexedCc: string | null): number {
+// procStart: 'real' = o do processo; null = arquivo sem o campo; string = arquivo
+// velho de outro processo cujo pid a PTY herdou.
+function pitwallPty(
+  id: string,
+  indexedCc: string | null,
+  procStart: 'real' | null | string = 'real',
+): number {
   const proc = spawn('sleep', ['30'], { stdio: 'ignore' })
   ownPtys.push(proc)
   const pid = proc.pid!
   seam.live.add(id)
   seam.pids.set(id, pid)
   if (indexedCc) {
+    const start = procStart === 'real' ? procStartOf(pid) : procStart
     writeFileSync(
       join(SESSIONS_DIR, `${pid}.json`),
-      JSON.stringify({ pid, sessionId: indexedCc, status: 'idle', procStart: procStartOf(pid) }),
+      JSON.stringify({
+        pid,
+        sessionId: indexedCc,
+        status: 'idle',
+        ...(start ? { procStart: start } : {}),
+      }),
     )
   }
   return pid
+}
+
+// Um executável chamado claude (cópia do sleep): o comm do processo é "claude".
+function claudeExe(): string {
+  const exe = join(HOME, 'bin', 'claude')
+  mkdirSync(join(HOME, 'bin'), { recursive: true })
+  copyFileSync(execPathOf('sleep'), exe)
+  return exe
+}
+
+function execPathOf(cmd: string): string {
+  const dir = (process.env.PATH ?? '').split(':').find((d) => existsSync(join(d, cmd)))
+  if (!dir) throw new Error(`${cmd} não encontrado no PATH`)
+  return join(dir, cmd)
+}
+
+function withPlatform<T>(os: NodeJS.Platform, fn: () => T): T {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: os })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
 }
 
 function resume(): { id: string } {
@@ -250,21 +297,18 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     expect(seam.spawns).toEqual([])
   })
 
-  it('fora do Linux (sem procStart verificável) não recusa: loga e spawna', () => {
+  it('win32 (dono não verificável) não recusa: loga e spawna', () => {
     insertSession('old', CC, 10)
     const pid = holdConversationInForeignProcess(CC)
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let warned: string[] = []
     try {
-      for (const os of ['darwin', 'win32']) {
-        Object.defineProperty(process, 'platform', { ...platform, value: os })
+      withPlatform('win32', () => {
         expect(foreignHolderPid(CC)).toBeNull()
-      }
-      resume()
+        resume()
+      })
       warned = warn.mock.calls.map((c) => String(c[0]))
     } finally {
-      Object.defineProperty(process, 'platform', platform)
       warn.mockRestore()
     }
 
@@ -272,6 +316,70 @@ describe('resume com a conversa aberta fora do Pitwall', () => {
     expect(warned).toContainEqual(
       expect.stringContaining(`"event":"conversation_holder_unverified","pid":${pid}`),
     )
+  })
+
+  // darwin pelo caminho real: o ps do sistema (procps aqui) com LC_ALL=C, e um
+  // processo cujo comm é claude.
+  it('darwin: claude vivo que nasceu antes do arquivo recusa o resume', () => {
+    insertSession('old', CC, 10)
+    const pid = holdConversationInForeignProcess(CC, { exe: claudeExe(), procStart: null })
+
+    withPlatform('darwin', () => {
+      expect(() => resume()).toThrow(`conversa aberta em outro processo (pid ${pid})`)
+    })
+    expect(seam.spawns).toEqual([])
+  })
+
+  it('darwin: pid reciclado (processo nasceu depois do startedAt do arquivo) não recusa', () => {
+    insertSession('old', CC, 10)
+    holdConversationInForeignProcess(CC, {
+      exe: claudeExe(),
+      procStart: null,
+      startedAt: Date.now() - 60 * 60 * 1000,
+    })
+
+    withPlatform('darwin', () => {
+      expect(foreignHolderPid(CC)).toBeNull()
+      resume()
+    })
+    expect(seam.spawns).toHaveLength(1)
+  })
+
+  it('darwin: pid vivo de outro programa não prova dono; sem PTY nossa, não recusa', () => {
+    insertSession('old', CC, 10)
+    holdConversationInForeignProcess(CC, { procStart: null })
+
+    withPlatform('darwin', () => expect(foreignHolderPid(CC)).toBeNull())
+  })
+
+  it('darwin: ps injetado decide pelo comm e pelo start', () => {
+    const pid = holdConversationInForeignProcess(CC, { procStart: null })
+    const entry = buildSessionsFileIndex().get(CC)!
+    const at = (ms: number) => new Date(ms).toString().split(' ').slice(0, 5)
+    const lstart = (ms: number) => {
+      const [dow, mon, day, year, time] = at(ms)
+      return `${dow} ${mon} ${day.padStart(2, ' ')} ${time} ${year}`
+    }
+    const before = lstart(entry.updatedAt! - 5000)
+    const after = lstart(entry.updatedAt! + 5000)
+    const alive = (out: string | null) =>
+      withPlatform('darwin', () => isSessionPidAlive(entry, { ps: () => out }))
+
+    expect(alive(`${before} /Applications/Claude Code/claude\n`)).toBe(true)
+    expect(alive(`${after} /Applications/Claude Code/claude`)).toBe(false)
+    expect(alive(`${before} node`)).toBe(false)
+    expect(alive(null)).toBe(false)
+    expect(alive('sáb out 10 17:26:16 2026 claude')).toBe(false)
+    expect(pid).toBe(entry.pid)
+  })
+
+  it('parsePsLstartComm: dia com espaço duplo e comm com espaço', () => {
+    expect(parsePsLstartComm('Wed Oct  1 09:05:07 2026 /Apps/My App/claude\n')).toEqual({
+      startMs: new Date(2026, 9, 1, 9, 5, 7).getTime(),
+      comm: '/Apps/My App/claude',
+    })
+    expect(parsePsLstartComm('')).toBeNull()
+    expect(parsePsLstartComm('Wed Foo 1 09:05:07 2026 claude')).toBeNull()
   })
 
   it('a conversa com PTY do próprio Pitwall é re-attach, não recusa', () => {
@@ -365,6 +473,27 @@ describe('PTY do Pitwall que mudou de conversa na TUI (/clear, /resume)', () => 
       `conversa aberta em outra aba do Pitwall (pid ${pid})`,
     )
     expect(seam.spawns).toEqual([])
+  })
+
+  it('arquivo velho com pid reciclado pela PTY recém-spawnada: não a dá como movida', () => {
+    insertSession('a', CC, 10)
+    const pid = pitwallPty('a', OTHER, '1')
+    expect(procStartOf(pid)).not.toBe('1')
+
+    expect(resumeResult()).toMatchObject({ session: { id: 'a' }, reattached: true })
+    expect(seam.spawns).toEqual([])
+  })
+
+  // Sem procStart e com cmdline que não é de um claude, o /proc não prova nada; o
+  // pid ser de uma PTY viva nossa prova.
+  it('Linux: arquivo sem procStart no pid de uma PTY nossa conta como vivo', () => {
+    insertSession('a', CC, 10)
+    const pid = pitwallPty('a', OTHER, null)
+
+    expect(isSessionPidAlive(buildSessionsFileIndex().get(OTHER)!)).toBe(true)
+    expect(() => resumeResult(OTHER)).toThrow(
+      `conversa aberta em outra aba do Pitwall (pid ${pid})`,
+    )
   })
 
   it('linha movida não conta como dona: um claude de fora com a conversa ainda recusa', () => {

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import {
   existsSync,
@@ -85,6 +86,8 @@ interface CcSessionFile {
   status?: 'busy' | 'idle' | 'waiting' | 'shell' | null
   name?: string | null
   updatedAt?: number
+  // Epoch ms de quando o processo abriu a sessão (2.1.29x grava junto do pid).
+  startedAt?: number
   // Campo 22 de /proc/<pid>/stat (starttime, em ticks) do processo que escreveu.
   procStart?: string
 }
@@ -96,6 +99,7 @@ export interface IndexEntry {
   name: string | null
   cwd: string | null
   updatedAt: number | null
+  startedAt: number | null
 }
 
 // Lê todos os ~/.claude/sessions/<pid>.json e indexa por sessionId. Compartilhado
@@ -123,6 +127,7 @@ export function buildSessionsFileIndex(): Map<string, IndexEntry> {
       name: data.name ?? null,
       cwd: data.cwd ?? null,
       updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : null,
+      startedAt: typeof data.startedAt === 'number' ? data.startedAt : null,
     })
   }
   return next
@@ -141,23 +146,43 @@ export function isPidAlive(pid: number): boolean {
 
 // Pid lido de ~/.claude/sessions/<pid>.json: o arquivo sobrevive ao processo
 // (crash, kill -9) e o pid é reciclado, então kill(pid, 0) sozinho acusaria de
-// "dono da conversa" um processo qualquer. Vivo = /proc/<pid> existe e o start
-// time bate com o procStart que o Claude Code gravou; arquivo sem procStart
-// (versão antiga) = o cmdline precisa ser de um claude.
-// Fora do Linux não há /proc, e kill(pid, 0) aceita pid reciclado (no Windows,
-// depressa): recusar o resume por ele bloquearia conversas livres. Lá o dono não
-// é verificável e conta como não-vivo; só fica o log.
-export function isSessionPidAlive(
-  entry: Pick<IndexEntry, 'pid' | 'procStart'>,
-  procRoot = '/proc',
-): boolean {
-  if (process.platform !== 'linux') {
-    if (isPidAlive(entry.pid)) {
-      const event = { event: 'conversation_holder_unverified', pid: entry.pid }
-      console.warn(JSON.stringify({ ...event, platform: process.platform }))
-    }
-    return false
+// "dono da conversa" um processo qualquer. Cada plataforma dá o veredito que
+// consegue provar: true/false quando a evidência é definitiva, null quando não é.
+// Só no null vale o atalho "o pid é de uma PTY viva nossa" — ele não pode
+// desmentir um procStart/start time diferente, que é justamente o arquivo velho
+// com pid reciclado caindo numa PTY recém-spawnada.
+// No Windows a PTY é o shell e kill(pid, 0) aceita pid reciclado depressa: o dono
+// não é verificável, conta como não-vivo e só fica o log.
+export type PsProbe = (pid: number) => string | null
+
+export interface PidLivenessDeps {
+  procRoot?: string
+  ps?: PsProbe
+}
+
+type LivenessEntry = Pick<IndexEntry, 'pid' | 'procStart'> &
+  Partial<Pick<IndexEntry, 'startedAt' | 'updatedAt'>>
+
+export function isSessionPidAlive(entry: LivenessEntry, deps: PidLivenessDeps = {}): boolean {
+  const verdict =
+    process.platform === 'linux'
+      ? linuxVerdict(entry, deps.procRoot ?? '/proc')
+      : process.platform === 'darwin'
+        ? darwinVerdict(entry, deps.ps ?? runPs)
+        : null
+  if (verdict !== null) return verdict
+  if (ptyManager.sessionIdByPid(entry.pid) !== null) return true
+  if (process.platform === 'win32' && isPidAlive(entry.pid)) {
+    const event = { event: 'conversation_holder_unverified', pid: entry.pid }
+    console.warn(JSON.stringify({ ...event, platform: process.platform }))
   }
+  return false
+}
+
+// Vivo = /proc/<pid> existe e o start time bate com o procStart que o Claude Code
+// gravou. Arquivo sem procStart (versão antiga): cmdline de um claude prova; outro
+// cmdline não prova nada.
+function linuxVerdict(entry: LivenessEntry, procRoot: string): boolean | null {
   let stat: string
   try {
     stat = readFileSync(join(procRoot, String(entry.pid), 'stat'), 'utf8')
@@ -167,9 +192,55 @@ export function isSessionPidAlive(
   if (entry.procStart) return procStartOf(stat) === entry.procStart
   try {
     return readFileSync(join(procRoot, String(entry.pid), 'cmdline'), 'utf8').includes('claude')
+      ? true
+      : null
   } catch {
-    return false
+    return null
   }
+}
+
+// Sem /proc: o processo tem de ter nascido antes de o arquivo dizer que a sessão
+// abriu (startedAt; updatedAt em arquivo sem ele). Nascido depois = pid reciclado.
+function darwinVerdict(entry: LivenessEntry, ps: PsProbe): boolean | null {
+  if (!isPidAlive(entry.pid)) return false
+  const parsed = parsePsLstartComm(ps(entry.pid))
+  const ref = entry.startedAt ?? entry.updatedAt ?? null
+  if (!parsed || ref === null) return null
+  if (parsed.startMs > ref) return false
+  return parsed.comm.includes('claude') ? true : null
+}
+
+// LC_ALL=C: o lstart sai em inglês ("Sat Oct 10 17:26:16 2026"); no locale do
+// usuário viria "sáb out 10". lstart primeiro porque o comm pode ter espaço.
+function runPs(pid: number): string | null {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'comm='], {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C' },
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+  } catch {
+    return null
+  }
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// "Sat Oct  1 17:26:16 2026 /Applications/x/claude" → start em ms (hora local,
+// a mesma do ps) e o comm. Resolução de segundo: trunca para baixo, nunca passa
+// do start real.
+export function parsePsLstartComm(out: string | null): { startMs: number; comm: string } | null {
+  const tokens = out?.trim().split(/\s+/) ?? []
+  if (tokens.length < 6) return null
+  const [, mon, day, time, year] = tokens
+  const month = MONTHS.indexOf(mon)
+  const hms = time.split(':').map(Number)
+  const d = Number(day)
+  const y = Number(year)
+  if (month < 0 || hms.length !== 3 || [...hms, d, y].some((n) => !Number.isInteger(n))) return null
+  const startMs = new Date(y, month, d, hms[0], hms[1], hms[2]).getTime()
+  return { startMs, comm: tokens.slice(5).join(' ') }
 }
 
 // O comm (campo 2) vem entre parênteses e pode ter espaço: conta a partir do

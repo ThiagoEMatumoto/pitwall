@@ -14,7 +14,8 @@ export interface ConversationHolder {
 // A linha de sessions guarda o cc do spawn e não acompanha /clear nem /resume
 // dentro da TUI. Movida = o índice ~/.claude/sessions diz que o pid desta PTY
 // está em OUTRA conversa. Pid ausente do índice (claude ainda subindo, Windows,
-// onde a PTY é o shell) não desmente a linha.
+// onde a PTY é o shell) não desmente a linha. Entrada cujo processo não está vivo
+// (arquivo velho cujo pid foi reciclado pela PTY recém-spawnada) também não.
 export function ptyMovedToOtherConversation(
   sessionId: string,
   ccSessionId: string,
@@ -22,7 +23,9 @@ export function ptyMovedToOtherConversation(
 ): boolean {
   const pid = ptyManager.getPid(sessionId)
   if (pid === null) return false
-  for (const [sid, entry] of index) if (entry.pid === pid) return sid !== ccSessionId
+  for (const [sid, entry] of index) {
+    if (entry.pid === pid && isSessionPidAlive(entry)) return sid !== ccSessionId
+  }
   return false
 }
 

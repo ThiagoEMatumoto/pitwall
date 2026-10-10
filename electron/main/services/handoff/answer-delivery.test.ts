@@ -2,8 +2,19 @@
 // Entrega de <pitwall-answer> pela PromptQueue REAL, com ScreenScans produzidos
 // pelo TuiMenuWatch real a partir de telas gravadas da CLI 2.1.286. Os pedidos
 // nascem pelo produtor (handoffStore.ask) e são resolvidos pelo store real.
-import { rmSync } from 'node:fs'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// ~/.claude/sessions num HOME temporário: o índice é lido do disco pelo produtor real.
+const { HOME } = vi.hoisted(() => ({
+  HOME: `${process.env.TMPDIR ?? '/tmp'}/cm-answer-delivery-${process.pid}-${Date.now()}`,
+}))
+vi.mock('node:os', async () => {
+  const actual = await vi.importActual<typeof import('node:os')>('node:os')
+  return { ...actual, homedir: () => HOME }
+})
 
 vi.mock('electron', async () => {
   const { mkdtempSync } = await import('node:fs')
@@ -26,6 +37,7 @@ import { handoffAsking, type LiveStatus, type ScreenScan } from '../../../../sha
 import { __resetForTests, onQueueSnapshot, setHandoffWakeQueue } from './handoff-wake'
 import { DormantPanes, setDormantPanes } from '../dormant-panes'
 import { setPref } from '../prefs-store'
+import { ptyManager } from '../pty-manager'
 import { LAZY_RESTORE_PREF, lazyRestoreEnabled } from '../restore-plan'
 import {
   __resetAnswerDeliveryForTests,
@@ -135,6 +147,7 @@ afterEach(() => {
 afterAll(() => {
   closeDb()
   rmSync(app.getPath('userData'), { recursive: true, force: true })
+  rmSync(HOME, { recursive: true, force: true })
 })
 
 describe('deliverAnswer', () => {
@@ -343,5 +356,85 @@ describe('deliverAnswer — alvo resolvido pela conversa', () => {
     expect(rows()).toContainEqual(
       expect.objectContaining({ mother_session_id: MOTHER, outcome: 'not_running' }),
     )
+  })
+
+  describe('linha viva movida para outra conversa na TUI (/clear, /resume)', () => {
+    const OTHER_CC = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d'
+    const SESSIONS_DIR = join(HOME, '.claude', 'sessions')
+    let proc: ChildProcess | null = null
+
+    // A PTY da mãe é um processo de verdade; o <pid>.json que o claude reescreve no
+    // /clear aponta outra conversa (procStart real = arquivo do próprio processo).
+    function motherPtyMovedTo(cc: string): number {
+      proc = spawn('sleep', ['30'], { stdio: 'ignore' })
+      const pid = proc.pid!
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      const procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+      mkdirSync(SESSIONS_DIR, { recursive: true })
+      writeFileSync(
+        join(SESSIONS_DIR, `${pid}.json`),
+        JSON.stringify({ pid, sessionId: cc, status: 'idle', updatedAt: Date.now(), procStart }),
+      )
+      vi.spyOn(ptyManager, 'getPid').mockImplementation((id) => (id === MOTHER ? pid : null))
+      return pid
+    }
+
+    beforeEach(() => {
+      dead.delete(MOTHER)
+    })
+
+    afterEach(() => {
+      proc?.kill()
+      proc = null
+      vi.restoreAllMocks()
+      rmSync(SESSIONS_DIR, { recursive: true, force: true })
+    })
+
+    it('o próprio alvo foi movido: a resposta não é injetada nele, fica not_running', async () => {
+      motherPtyMovedTo(OTHER_CC)
+
+      await deliverAnswer(escalatedAnswer())
+      await settle()
+
+      expect(writes.map((w) => w.id)).toEqual([CHILD])
+      expect(rows()).toContainEqual(
+        expect.objectContaining({ mother_session_id: MOTHER, outcome: 'not_running' }),
+      )
+      expect(rows()).not.toContainEqual(
+        expect.objectContaining({ mother_session_id: MOTHER, outcome: 'delivered' }),
+      )
+    })
+
+    it('alvo movido e outra linha viva na conversa: entrega na outra', async () => {
+      motherPtyMovedTo(OTHER_CC)
+      session('mother-2', 'cc-mother', 20)
+      screens.set('mother-2', { status: 'idle', scan: SCANS.idle })
+
+      await deliverAnswer(escalatedAnswer())
+      await settle()
+
+      expect(writes.map((w) => w.id).sort()).toEqual([CHILD, 'mother-2'].sort())
+    })
+
+    it('alvo movido com sessions.lazyRestore ligada: acorda a pane dormindo da conversa', async () => {
+      setPref(LAZY_RESTORE_PREF, true)
+      const requests = dormantMother()
+      motherPtyMovedTo(OTHER_CC)
+
+      await deliverAnswer(escalatedAnswer())
+      await settle()
+
+      expect(requests).toEqual(['cc-mother'])
+      expect(writes.map((w) => w.id).sort()).toEqual([CHILD, 'mother-woke'].sort())
+    })
+
+    it('o índice confirma a conversa: entrega no alvo como antes', async () => {
+      motherPtyMovedTo('cc-mother')
+
+      await deliverAnswer(escalatedAnswer())
+      await settle()
+
+      expect(writes.map((w) => w.id).sort()).toEqual([CHILD, MOTHER].sort())
+    })
   })
 })
