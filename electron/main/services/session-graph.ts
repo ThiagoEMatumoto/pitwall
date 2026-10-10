@@ -134,8 +134,18 @@ export function sessionNodeTitle(args: {
   liveName: string | null
   repoLabel: string | null
 }): string {
+  return sessionOwnTitle(args) || args.repoLabel || 'Avulsa'
+}
+
+// O nome próprio da sessão, sem os fallbacks de exibição (repo/'Avulsa'): é o que
+// vira alias no agent-bus e o que a pane dormindo herda (dormant-enrich).
+export function sessionOwnTitle(args: {
+  title: string | null
+  titleSource: 'manual' | 'auto' | null
+  liveName: string | null
+}): string | null {
   const manual = args.titleSource === 'manual' ? args.title : null
-  return manual || args.liveName || args.title || args.repoLabel || 'Avulsa'
+  return manual || args.liveName || args.title || null
 }
 
 // O "precisa de você" do nó é o da fila única (attention:list), nunca uma regra

@@ -25,6 +25,7 @@ import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
 import { registerSendPromptIpc } from './ipc/send-prompt'
+import { registerDormantPanesIpc } from './ipc/dormant-panes'
 import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
@@ -329,6 +330,7 @@ app.whenReady().then(async () => {
   registerRoomMotherIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
+  registerDormantPanesIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no

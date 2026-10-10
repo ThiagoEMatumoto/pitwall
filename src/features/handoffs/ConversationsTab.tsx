@@ -25,6 +25,8 @@ const EMPTY: AgentBusSnapshot = {
     rejectedSelf: 0,
     undeliverable: 0,
     needsHandoff: 0,
+    wokeDormant: 0,
+    wakeFailed: 0,
   },
 }
 
@@ -91,6 +93,7 @@ const GUARDS: Array<{ key: keyof AgentBusCounters; label: string; hint: string }
   { key: 'rejectedSelf', label: 'a si mesma', hint: 'Recusadas: a sessão perguntou a ela própria' },
   { key: 'undeliverable', label: 'sem entrega', hint: 'O destino não podia receber' },
   { key: 'needsHandoff', label: 'sem sessão', hint: 'Repo sem sessão viva: sugerido handoff' },
+  { key: 'wakeFailed', label: 'não acordou', hint: 'O destino dormia e o wake falhou' },
 ]
 
 function GuardCounters({ counters }: { counters: AgentBusCounters }) {

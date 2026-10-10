@@ -12,11 +12,24 @@ import { getDb } from '../db'
 import * as requestStore from '../handoff-requests'
 import * as handoffStore from '../handoff-store'
 import { attr, sanitizeBody } from '../agent-bus'
-import { WAKE_TEXT_CAP, getWakeQueue, insertRow, type WakeOutcome } from './handoff-wake'
+import { getDormantPanes } from '../dormant-panes'
+import { ptyMovedToOtherConversation } from '../conversation-holder'
+import { buildSessionsFileIndex } from '../session-activity'
+import {
+  WAKE_TEXT_CAP,
+  getWakeQueue,
+  insertRow,
+  type WakeOutcome,
+  type WakeQueue,
+} from './handoff-wake'
 import { HANDOFF_ANSWER_TAG } from '../../../../shared/handoff-answer-envelope'
 import { stripUnsafeDisplay } from '../../../../shared/tui/permission-request'
 import type { HandoffRequest } from '../../../../shared/types/handoff-request'
-import type { PromptQueueSnapshot } from '../../../../shared/types/send-prompt'
+import type {
+  PromptQueueSnapshot,
+  SendPromptInput,
+  SendPromptResult,
+} from '../../../../shared/types/send-prompt'
 
 // queueId → alvo (sessions.id), para resolver o desfecho pelo snapshot.
 const answerPending = new Map<string, string>()
@@ -79,7 +92,20 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
     })
     return
   }
-  const sent = await queue.send({ sessionId: target, text, when: 'on-idle', bypassAttention: true })
+  const resolved = await sendByConversation(queue, target, text)
+  const sent = resolved.sent
+  target = resolved.to
+  if (resolved.wakeError) {
+    insertRow({
+      wakeId: randomUUID(),
+      handoffId: r.handoffId,
+      mother: target,
+      reason,
+      outcome: 'wake_failed',
+      detail: resolved.wakeError,
+    })
+    return
+  }
   if (sent.ok && sent.delivered) {
     insertRow({
       wakeId: randomUUID(),
@@ -110,7 +136,9 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
       ? 'no_screen'
       : sent.error === 'cancelled'
         ? 'cancelled'
-        : 'not_running'
+        : sent.error === 'wake-failed'
+          ? 'wake_failed'
+          : 'not_running'
   insertRow({
     wakeId: randomUUID(),
     handoffId: r.handoffId,
@@ -119,6 +147,50 @@ async function deliverTo(r: HandoffRequest, target: string, text: string): Promi
     outcome,
     detail: sent.error,
   })
+}
+
+// O alvo gravado no pedido é um sessions.id; a conversa pode ter voltado em outra
+// linha (resume, wake) ou estar numa pane dormindo. Tenta o alvo e as outras
+// linhas da mesma conversa (a fila recusa na hora quem não tem PTY) e, com
+// sessions.lazyRestore ligada, acorda a pane dormindo.
+// O passo das outras linhas vale SEMPRE, com a pref desligada também: todo resume
+// (inclusive o restore eager de cada boot) abre uma linha nova para a mesma
+// conversa, e sem ele a resposta à mãe retomada morria em not_running. Só o
+// wake da pane dormindo depende da pref.
+// A linha guarda o cc do spawn e não acompanha /clear nem /resume na TUI: linha
+// cuja PTY o índice ~/.claude/sessions diz estar em outra conversa é pulada,
+// inclusive o próprio alvo, antes de qualquer send — senão a resposta cairia na
+// conversa errada e ficaria como delivered.
+async function sendByConversation(
+  queue: WakeQueue,
+  target: string,
+  text: string,
+): Promise<{ sent: SendPromptResult; to: string; wakeError?: string }> {
+  const send = (sessionId: string) => {
+    const input: SendPromptInput = { sessionId, text, when: 'on-idle', bypassAttention: true }
+    return queue.send(input)
+  }
+  const db = getDb()
+  const row = db.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(target) as
+    { cc_session_id: string | null } | undefined
+  const cc = row?.cc_session_id
+  if (!cc) return { sent: await send(target), to: target }
+  const index = buildSessionsFileIndex()
+  const others = db
+    .prepare('SELECT id FROM sessions WHERE cc_session_id = ? AND id <> ? ORDER BY started_at DESC')
+    .all(cc, target) as Array<{ id: string }>
+  let sent: SendPromptResult = { ok: false, error: 'not-running' }
+  for (const id of [target, ...others.map((o) => o.id)]) {
+    if (ptyMovedToOtherConversation(id, cc, index)) continue
+    const tried = await send(id)
+    if (tried.ok || tried.error !== 'not-running') return { sent: tried, to: id }
+    if (id === target) sent = tried
+  }
+  const panes = getDormantPanes()
+  if (!panes?.findDormantByCc(cc)) return { sent, to: target }
+  const woke = await panes.wakeDormant(cc, 'answer-delivery')
+  if (!woke.ok) return { sent, to: target, wakeError: woke.error }
+  return { sent: await send(woke.sessionId), to: woke.sessionId }
 }
 
 // Best-effort por contrato: a resposta já está gravada; isto é notificação.

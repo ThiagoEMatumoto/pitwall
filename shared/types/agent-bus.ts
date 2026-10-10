@@ -61,6 +61,9 @@ export interface AgentBusCounters {
   rejectedSelf: number
   undeliverable: number
   needsHandoff: number
+  // Lazy restore: o destino dormia e foi acordado / não acordou.
+  wokeDormant: number
+  wakeFailed: number
 }
 
 export interface AgentBusSnapshot {

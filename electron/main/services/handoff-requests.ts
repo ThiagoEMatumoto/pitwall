@@ -323,6 +323,27 @@ export function escalateRequest(requestId: string, escalatedBy: string): Handoff
 
 // Saída de running/needs_input: pedido aberto num handoff encerrado não tem mais
 // quem o resolva. Sem acordar ninguém e sem espelho (o handoff já é terminal).
+// A conversa voltou com sessions.id novo (resume): os pedidos ainda abertos passam
+// a ter como destinatário da resposta a sessão retomada, venha ela de quem
+// perguntou ou de quem escalou.
+export function transferRequester(fromSessionId: string, toSessionId: string): number {
+  if (fromSessionId === toSessionId) return 0
+  const db = getDb()
+  return db.transaction(() => {
+    const asker = db
+      .prepare(
+        "UPDATE handoff_requests SET asker_session_id = ? WHERE asker_session_id = ? AND status = 'open'",
+      )
+      .run(toSessionId, fromSessionId).changes
+    const escalated = db
+      .prepare(
+        "UPDATE handoff_requests SET escalated_by = ? WHERE escalated_by = ? AND status = 'open'",
+      )
+      .run(toSessionId, fromSessionId).changes
+    return asker + escalated
+  })()
+}
+
 export function cancelOpen(handoffId: string, reason: string): number {
   const open = listOpen({ handoffId })
   if (open.length === 0) return 0

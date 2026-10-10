@@ -5,6 +5,12 @@ import { mkdirSync } from 'node:fs'
 import { runMigrations } from './migrations/index'
 
 let dbInstance: Database.Database | null = null
+let interruptedAtOpen: ReadonlySet<string> = new Set()
+
+// Handoffs que o sweep desta abertura do banco tirou de running/needs_input.
+export function handoffsInterruptedAtOpen(): string[] {
+  return [...interruptedAtOpen]
+}
 
 export function getDb(): Database.Database {
   if (dbInstance) return dbInstance
@@ -35,6 +41,14 @@ export function getDb(): Database.Database {
   // 'failed'): app-restart não é erro de tarefa; o handoff sai do ativo (libera
   // o dedup) mas fica retomável pelo humano. Mantém em sync com failIfRunning /
   // reconcileStuck (mesma transição em → interrupted).
+  //
+  // Quem estava em voo é lido ANTES do UPDATE: o lazy restore sobe eager a mãe e a
+  // filha desses handoffs, e depois do sweep eles são indistinguíveis de um
+  // 'interrupted' antigo (que não deve acordar nada no boot).
+  const inFlight = db
+    .prepare("SELECT id FROM handoffs WHERE status IN ('running','needs_input')")
+    .all() as Array<{ id: string }>
+  interruptedAtOpen = new Set(inFlight.map((r) => r.id))
   db.prepare(
     "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",
   ).run('Sessão-filha órfã: app reiniciou sem reconciliar o handoff', Date.now())

@@ -1279,6 +1279,50 @@ export interface OverviewData {
   handoffRequests: HandoffRequestHealth
 }
 
+// Lazy restore: no boot as panes persistidas voltam dormindo (sem spawn), menos
+// as eager. O main decide pelo estado durável (handoff ativo, pref); a pane
+// ativa do layout e snapshots sem JSONL o renderer acrescenta sozinho.
+export interface RestorePlan {
+  mode: 'lazy' | 'eager'
+  eagerCcSessionIds: string[]
+}
+
+// Pane dormindo no renderer, espelhada no main para a entrega cross-process
+// (agent-bus, wake da mãe, send-prompt) conseguir acordá-la.
+export interface DormantPaneInfo {
+  ccSessionId: string
+  paneId: string
+  title: string | null
+  repoId: string | null
+}
+
+// main → renderer: retome esta pane dormindo. Resposta por sessions:wake-result.
+export interface WakeRequest {
+  requestId: string
+  ccSessionId: string
+}
+
+// sessionId = sessions.id da sessão retomada; null = não deu (error diz por quê).
+export interface WakeResult {
+  requestId: string
+  sessionId: string | null
+  error?: string
+}
+
+// main → renderer: o main retomou (handoffs:resume, adopt) a conversa de uma
+// pane que está dormindo; a pane deve passar a mostrar esta sessão viva.
+export interface DormantBecameLiveEvent {
+  ccSessionId: string
+  session: Session
+}
+
+// reattached = a conversa já tinha PTY viva e a guarda do main devolveu essa
+// sessão; nada foi spawnado por esta chamada.
+export interface ResumeSessionResult {
+  session: Session
+  reattached: boolean
+}
+
 export interface ResumeSessionInput {
   // null = sessão avulsa: retoma no scratch dir.
   repoId: string | null
@@ -2831,7 +2875,7 @@ export interface Api {
   }
   sessions: {
     spawn(input: SpawnSessionInput): Promise<Session>
-    resume(input: ResumeSessionInput): Promise<Session>
+    resume(input: ResumeSessionInput): Promise<ResumeSessionResult>
     isResumable(ccSessionId: string): Promise<boolean>
     listByRepo(repoId: string): Promise<SessionSummary[]>
     /** Sessões de uma feature, da mais recente pra mais antiga. */
@@ -2865,6 +2909,15 @@ export interface Api {
     attentionDebug(): Promise<AttentionReasonCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
+    /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
+    restorePlan(ccSessionIds: string[]): Promise<RestorePlan>
+    /** Substitui a lista de panes dormindo que o main pode acordar; devolve-a com title/repoId completados pelo DB. */
+    dormantSync(panes: DormantPaneInfo[]): Promise<DormantPaneInfo[]>
+    /** O main pede para retomar uma pane dormindo; responda com wakeResult. */
+    onWakeRequest(handler: (request: WakeRequest) => void): () => void
+    wakeResult(result: WakeResult): Promise<void>
+    /** O main retomou a conversa de uma pane dormindo (só com sessions.lazyRestore ligada). */
+    onDormantBecameLive(handler: (event: DormantBecameLiveEvent) => void): () => void
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

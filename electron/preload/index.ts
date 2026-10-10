@@ -8,6 +8,8 @@ import type {
   ReorderReposInput,
   SpawnSessionInput,
   ResumeSessionInput,
+  WakeRequest,
+  DormantBecameLiveEvent,
   PtyDataEvent,
   PtyExitEvent,
   SessionFeatureChangedEvent,
@@ -188,6 +190,12 @@ const api: Api = {
     setRendererFocus: (ccSessionId) => {
       void invoke('sessions:renderer-focus', ccSessionId)
     },
+    restorePlan: (ccSessionIds) => invoke('sessions:restore-plan', ccSessionIds),
+    dormantSync: (panes) => invoke('sessions:dormant-sync', panes),
+    onWakeRequest: (handler) => subscribe<WakeRequest>('sessions:wake-request', handler),
+    wakeResult: (result) => invoke('sessions:wake-result', result),
+    onDormantBecameLive: (handler) =>
+      subscribe<DormantBecameLiveEvent>('sessions:dormant-became-live', handler),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),

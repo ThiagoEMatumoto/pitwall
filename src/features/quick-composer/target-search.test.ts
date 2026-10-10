@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { aliasOf, buildTargets, defaultWhen, searchTargets, type SendTarget } from './target-search'
+import {
+  aliasOf,
+  buildTargets,
+  defaultWhen,
+  searchTargets,
+  sendRefusalReason,
+  type SendTarget,
+} from './target-search'
 import type { LiveSessionInfo, Repo } from '../../../shared/types/ipc'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
@@ -126,5 +133,18 @@ describe('defaultWhen', () => {
     expect(defaultWhen(t, true)).toBe('on-idle')
     expect(defaultWhen({ ...t, status: 'working' }, false)).toBe('on-idle')
     expect(defaultWhen({ ...t, attentionReason: 'permission' }, false)).toBe('on-idle')
+  })
+})
+
+describe('sendRefusalReason', () => {
+  it("'wake-failed' mostra o detail que o main mandou", () => {
+    expect(sendRefusalReason('wake-failed', 'wake-result-timeout')).toBe(
+      'ela dormia e não acordou: wake-result-timeout',
+    )
+  })
+
+  it('sem detail fica só o motivo', () => {
+    expect(sendRefusalReason('wake-failed')).toBe('ela dormia e não acordou')
+    expect(sendRefusalReason('menu-open')).toBe('menu aberto na tela')
   })
 })
