@@ -71,6 +71,7 @@ import type {
   Session,
   SpawnSessionInput,
   ResumeSessionInput,
+  ResumeSessionResult,
   SessionSummary,
   FeatureSessionSummary,
   LiveSessionInfo,
@@ -1018,7 +1019,7 @@ export function registerSessionIpc(): void {
     }),
   )
 
-  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput) => {
+  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput): ResumeSessionResult => {
     const db = getDb()
     const repoId = input.repoId ?? null
 
@@ -1029,7 +1030,7 @@ export function registerSessionIpc(): void {
       .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
       .all(input.ccSessionId) as SessionRow[]
     const alive = priorRows.find((row) => ptyManager.isRunning(row.id))
-    if (alive) return toSession(alive)
+    if (alive) return { session: toSession(alive), reattached: true }
     assertNotOpenElsewhere(input.ccSessionId)
 
     // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
@@ -1094,7 +1095,7 @@ export function registerSessionIpc(): void {
           resumed.session.id,
         )
       }
-      return resumed.session
+      return { session: resumed.session, reattached: resumed.alreadyRunning }
     }
 
     // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.
@@ -1131,7 +1132,7 @@ export function registerSessionIpc(): void {
       priorRows.map((row) => row.id),
       session.id,
     )
-    return session
+    return { session, reattached: false }
   })
 
   ipcMain.handle('sessions:is-resumable', (_e, ccSessionId: string): boolean => {

@@ -726,7 +726,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     resuming.add(ccSessionId)
     try {
-      const session = await sessionsApi.resume({ repoId: repo?.id ?? null, ccSessionId })
+      const { session } = await sessionsApi.resume({ repoId: repo?.id ?? null, ccSessionId })
       set((s) => ({
         panes: [
           ...s.panes,
@@ -763,14 +763,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!pane?.dormant) return Promise.resolve(pane ? pane.session.id : null)
     const ccSessionId = pane.session.ccSessionId as string
     const run = (async () => {
-      const wakeStartedAt = Date.now()
       try {
         // A guarda do main devolve a sessão existente se a PTY desse cc já vive.
-        const session = await sessionsApi.resume({ repoId: pane.repo?.id ?? null, ccSessionId })
+        const { session, reattached } = await sessionsApi.resume({
+          repoId: pane.repo?.id ?? null,
+          ccSessionId,
+        })
         if (endedWhileWaking.delete(paneId)) {
           // Encerrada com o wake em voo: o processo que este wake subiu morre. Uma
           // sessão que a guarda do main re-anexou (já vivia antes) não é nossa.
-          if (session.startedAt >= wakeStartedAt) void sessionsApi.kill(session.id)
+          if (!reattached) void sessionsApi.kill(session.id)
           return null
         }
         set((s) => ({

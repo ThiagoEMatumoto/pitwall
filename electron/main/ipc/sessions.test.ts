@@ -447,10 +447,10 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
   })
 
   it('sessions:resume carimba a sessão retomada (mãe em potencial)', () => {
-    const session = handler('sessions:resume')(null, {
+    const { session } = handler('sessions:resume')(null, {
       repoId: 'r1',
       ccSessionId: CC_SESSION_ID,
-    } as never) as { id: string }
+    } as never) as { session: { id: string } }
     expect(expectStampedSpawn()).toBe(session.id)
     expect(seam.spawns[0].innerCmd).toContain(`--resume ${CC_SESSION_ID}`)
   })
@@ -516,10 +516,17 @@ describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () 
   })
 
   function resume(): { id: string; ccSessionId: string } {
+    return resumeResult().session
+  }
+
+  function resumeResult(): {
+    session: { id: string; ccSessionId: string }
+    reattached: boolean
+  } {
     return seam.handlers.get('sessions:resume')!(null, {
       repoId: 'r1',
       ccSessionId: CC,
-    } as never) as { id: string; ccSessionId: string }
+    } as never) as { session: { id: string; ccSessionId: string }; reattached: boolean }
   }
 
   it('devolve a sessão viva existente sem chamar ptyManager.spawn', () => {
@@ -532,6 +539,16 @@ describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () 
     expect(session).toMatchObject({ id: 'alive', ccSessionId: CC, status: 'running' })
     expect(seam.spawns).toEqual([])
     expect(seam.insertedSessionIds).toEqual([])
+  })
+
+  it('reattached diz se esta chamada spawnou', () => {
+    seam.ccRows = [row('alive', 10)]
+    seam.liveSessionIds.push('alive')
+    expect(resumeResult()).toMatchObject({ reattached: true, session: { id: 'alive' } })
+
+    seam.liveSessionIds.length = 0
+    expect(resumeResult().reattached).toBe(false)
+    expect(seam.spawns).toHaveLength(1)
   })
 
   it('sem PTY viva para o cc, retoma como antes', () => {

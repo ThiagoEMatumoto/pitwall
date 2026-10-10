@@ -1309,6 +1309,13 @@ export interface WakeResult {
   error?: string
 }
 
+// reattached = a conversa já tinha PTY viva e a guarda do main devolveu essa
+// sessão; nada foi spawnado por esta chamada.
+export interface ResumeSessionResult {
+  session: Session
+  reattached: boolean
+}
+
 export interface ResumeSessionInput {
   // null = sessão avulsa: retoma no scratch dir.
   repoId: string | null
@@ -2853,7 +2860,7 @@ export interface Api {
   }
   sessions: {
     spawn(input: SpawnSessionInput): Promise<Session>
-    resume(input: ResumeSessionInput): Promise<Session>
+    resume(input: ResumeSessionInput): Promise<ResumeSessionResult>
     isResumable(ccSessionId: string): Promise<boolean>
     listByRepo(repoId: string): Promise<SessionSummary[]>
     /** Sessões de uma feature, da mais recente pra mais antiga. */

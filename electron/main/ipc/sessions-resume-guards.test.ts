@@ -110,11 +110,15 @@ function holdConversationInForeignProcess(cc: string): number {
   return pid
 }
 
-function resume(): { id: string } {
+function resumeResult(): { session: { id: string }; reattached: boolean } {
   return seam.handlers.get('sessions:resume')!(null, {
     repoId: 'r1',
     ccSessionId: CC,
-  } as never) as { id: string }
+  } as never) as { session: { id: string }; reattached: boolean }
+}
+
+function resume(): { id: string } {
+  return resumeResult().session
 }
 
 beforeEach(() => {
@@ -258,8 +262,9 @@ describe('sessions:resume da filha de handoff (ramo linked)', () => {
     })
     handoffStore.markRunning(h2.id, 'grandchild')
 
-    const session = resume()
+    const { session, reattached } = resumeResult()
 
+    expect(reattached).toBe(false)
     expect(seam.spawns).toEqual([session.id])
     expect(handoffStore.get(h1.id)?.childSessionId).toBe(session.id)
     const row = seam.db

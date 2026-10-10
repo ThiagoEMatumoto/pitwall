@@ -64,9 +64,8 @@ const calls = {
   dormantIpc: [] as string[],
 }
 let resumeGate: Promise<void> = Promise.resolve()
-// startedAt da sessão que o resume devolve. null = spawn novo (agora); um valor
-// antigo simula o re-attach da guarda do main (PTY que já vivia).
-let resumeStartedAt: number | null = null
+// true simula o re-attach da guarda do main (PTY que já vivia antes do resume).
+let resumeReattached = false
 let wakeHandler: ((r: { requestId: string; ccSessionId: string }) => void) | null = null
 
 function sessionFor(cc: string, id = `sess-${cc}`, startedAt = Date.now()) {
@@ -94,7 +93,7 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   resume: async (input: { repoId: string | null; ccSessionId: string }) => {
     calls.resume.push(input)
     await resumeGate
-    return sessionFor(input.ccSessionId, undefined, resumeStartedAt ?? Date.now())
+    return { session: sessionFor(input.ccSessionId), reattached: resumeReattached }
   },
   kill: (id: string) => {
     calls.kill.push(id)
@@ -202,7 +201,7 @@ beforeEach(async () => {
   calls.restorePlan = []
   calls.kill = []
   resumeGate = Promise.resolve()
-  resumeStartedAt = null
+  resumeReattached = false
   useAppStore.setState({ panes: [], focusPaneId: null, restoreComplete: true })
   // O espelho de dormant para o main só sai com o live-watch ativo (como no app).
   await useAppStore.getState().startLiveWatch()
@@ -425,7 +424,7 @@ describe('pane fechada com o wake em voo', () => {
   })
 
   it('endSession com re-attach (a PTY já vivia antes do wake): não mata', async () => {
-    resumeStartedAt = 1
+    resumeReattached = true
     const { wake, open } = startWake()
     useAppStore.getState().endSession('dormant:cc-sleep1')
     open()
@@ -433,6 +432,24 @@ describe('pane fechada com o wake em voo', () => {
     expect(await wake).toBeNull()
     expect(calls.kill).toEqual([])
     expect(useAppStore.getState().panes).toEqual([])
+  })
+
+  it('decide pelo reattached do main, não pelo relógio: spawn com startedAt antigo morre', async () => {
+    const realResume = sessionsImpl.resume
+    sessionsImpl.resume = (async (input: { repoId: string | null; ccSessionId: string }) => {
+      await resumeGate
+      return { session: sessionFor(input.ccSessionId, undefined, 1), reattached: false }
+    }) as never
+    try {
+      const { wake, open } = startWake()
+      useAppStore.getState().endSession('dormant:cc-sleep1')
+      open()
+
+      expect(await wake).toBeNull()
+      expect(calls.kill).toEqual(['sess-cc-sleep1'])
+    } finally {
+      sessionsImpl.resume = realResume
+    }
   })
 
   it('closePane (detach): a PTY fica em background, sem kill e sem pane', async () => {

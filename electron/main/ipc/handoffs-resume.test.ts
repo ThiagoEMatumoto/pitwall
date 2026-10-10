@@ -377,10 +377,12 @@ describe('sessions:resume — relink da filha de handoff', () => {
   })
 
   function sessionsResume() {
-    return handlers.get('sessions:resume')!(null, {
-      repoId: 'r1',
-      ccSessionId: VALID_CC,
-    }) as { id: string; ccSessionId: string | null }
+    return (
+      handlers.get('sessions:resume')!(null, {
+        repoId: 'r1',
+        ccSessionId: VALID_CC,
+      }) as { session: { id: string; ccSessionId: string | null } }
+    ).session
   }
 
   function linkedChild(status: string, over: Partial<Handoff> = {}): void {
@@ -518,10 +520,10 @@ describe('resumeHandoffChild — kickoff do relance', () => {
   // O bug: o usuário abre pelo switcher uma sessão que um dia foi filha e ela
   // começa a trabalhar sozinha, sem ele ter pedido nada.
   it('relink pelo switcher: relinka a identidade mas NÃO injeta kickoff', () => {
-    const session = handlers.get('sessions:resume')!(null, {
+    const { session } = handlers.get('sessions:resume')!(null, {
       repoId: 'r1',
       ccSessionId: VALID_CC,
-    }) as { id: string }
+    }) as { session: { id: string } }
 
     expect(injectedCommands(session.id)).toHaveLength(0)
     // A identidade continua sendo restaurada: apelido, settings e relink.
