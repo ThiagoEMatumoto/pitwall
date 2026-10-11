@@ -44,6 +44,7 @@ import {
   useUpdateToastShown,
 } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
+import { useMaybeUndeliveredToasts } from '@/features/quick-composer/maybe-undelivered-toasts'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
@@ -214,6 +215,7 @@ const components = { terminal: TerminalPanel }
 const tabComponents = { terminal: TerminalTab }
 
 export function AppShell() {
+  useMaybeUndeliveredToasts()
   const area = useAppStore((s) => s.area)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)

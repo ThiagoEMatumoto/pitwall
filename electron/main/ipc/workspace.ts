@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../services/db'
+import { saveDockLayout, saveOpenPanes } from '../services/workspace-state'
 import type { PaneSnapshot, WorkspaceBootState } from '../../../shared/types/ipc'
 
 interface ActiveRow {
@@ -65,15 +66,11 @@ export function registerWorkspaceIpc(): void {
   })
 
   ipcMain.handle('workspace:save-panes', (_e, { panes }: { panes: PaneSnapshot[] }) => {
-    ensureRow()
-    getDb()
-      .prepare('UPDATE workspace_state SET open_panes = ? WHERE id = 1')
-      .run(JSON.stringify(panes))
+    saveOpenPanes(getDb(), panes)
   })
 
   ipcMain.handle('workspace:save-layout', (_e, { layout }: { layout: string | null }) => {
-    ensureRow()
-    getDb().prepare('UPDATE workspace_state SET dock_layout = ? WHERE id = 1').run(layout)
+    saveDockLayout(getDb(), layout)
   })
 
   ipcMain.handle('workspace:get-boot-state', (): WorkspaceBootState => {

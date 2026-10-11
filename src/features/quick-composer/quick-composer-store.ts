@@ -37,6 +37,10 @@ const EMPTY_QUEUE: PromptQueueSnapshot = {
     refusedUnparsed: 0,
     refusedInputDirty: 0,
     wakeFailed: 0,
+    restored: 0,
+    restoredDelivered: 0,
+    maybeUndelivered: 0,
+    expiredRestored: 0,
   },
   lastEvent: null,
 }

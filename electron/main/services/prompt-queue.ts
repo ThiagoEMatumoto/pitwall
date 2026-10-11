@@ -11,6 +11,8 @@ import type {
   SendPromptResult,
   SendPromptWhen,
 } from '../../../shared/types/send-prompt'
+import type { PersistedPrompt, PromptQueueStore, TranscriptVerdict } from './prompt-queue-store'
+import { promptQueuePersistFailures } from './prompt-queue-store'
 
 // Fila de prompts por sessão, entregues no fim do turno. A regra de segurança é
 // uma só: só escrever com prova positiva de que a caixa de input está ociosa. O
@@ -20,6 +22,10 @@ import type {
 // hora da entrega e nem o status nem a ausência de menu autorizam nada.
 
 export const PROMPT_TTL_MS = 30 * 60_000
+// Item que sobreviveu a um kill/reboot espera a conversa voltar a ter PTY (resume
+// ou wake). 12h cobre uma noite com o app fechado; depois disso a mensagem é velha
+// demais para chegar sozinha e sai como 'expired' (contador expiredRestored).
+export const DURABLE_TTL_MS = 12 * 60 * 60_000
 // Espera depois da borda do fim de turno: a TUI termina de desenhar a tela.
 export const SETTLE_MS = 400
 // Rede de segurança pra borda perdida (índice de status sem watcher, flip rápido).
@@ -43,16 +49,14 @@ export interface PromptQueueDeps {
   emit(snapshot: PromptQueueSnapshot): void
   warn(event: Record<string, unknown>): void
   now?(): number
+  // Persistência (app.db). Sem store a fila é só memória (testes antigos).
+  store?: PromptQueueStore
+  // Boot: a mensagem 'delivering' de antes do kill entrou na conversa?
+  deliveryInTranscript?(ccSessionId: string | null, text: string, since: number): TranscriptVerdict
 }
 
 type Verdict =
-  | 'deliver'
-  | 'busy'
-  | 'menu-open'
-  | 'attention'
-  | 'unparsed'
-  | 'no-screen'
-  | 'input-dirty'
+  'deliver' | 'busy' | 'menu-open' | 'attention' | 'unparsed' | 'no-screen' | 'input-dirty'
 type HoldVerdict = 'menu-open' | 'unparsed' | 'input-dirty'
 
 export function deliveryVerdict(
@@ -101,6 +105,8 @@ const isHold = (v: Verdict): v is HoldVerdict =>
 
 interface Item extends QueuedPrompt {
   holding: boolean
+  // Alvo de verdade de um item persistido: a conversa, que troca de sessions.id ao retomar.
+  ccSessionId: string | null
   fromSessionId?: string
   bypassAttention?: boolean
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
@@ -117,7 +123,17 @@ export class PromptQueue {
     refusedUnparsed: 0,
     refusedInputDirty: 0,
     wakeFailed: 0,
+    restored: 0,
+    restoredDelivered: 0,
+    maybeUndelivered: 0,
+    expiredRestored: 0,
   }
+  // Itens de antes de um kill/reboot sem PTY viva da conversa ainda, e os
+  // 'maybe-undelivered' que esperam o usuário decidir. Fora de `items` porque o
+  // tick trataria o sessionId antigo (PTY morta) como session-gone.
+  private parked: Item[] = []
+  // No quit limpo as PTYs morrem por killAll: isso não é session-gone para o banco.
+  private shuttingDown = false
   private lastEvent: PromptQueueEvent | null = null
   // sessionId → quando a última entrega saiu (espera o claude trabalhar).
   private awaitingWork = new Map<string, number>()
@@ -141,10 +157,8 @@ export class PromptQueue {
 
   snapshot(): PromptQueueSnapshot {
     return {
-      items: this.items.map(
-        ({ holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...q }) => q,
-      ),
-      counters: { ...this.counters },
+      items: [...this.items, ...this.parked].map(publicItem),
+      counters: { ...this.counters, persistFailed: promptQueuePersistFailures() },
       lastEvent: this.lastEvent,
     }
   }
@@ -165,8 +179,7 @@ export class PromptQueue {
     if (item.outcome === 'delivered') return { ok: true, delivered: true }
     if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
     if (item.outcome) return { ok: false, error: 'not-running' }
-    const { holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...rest } = item
-    return { ok: true, delivered: false, queued: rest }
+    return { ok: true, delivered: false, queued: publicItem(item) }
   }
 
   private sendNow(
@@ -194,18 +207,128 @@ export class PromptQueue {
   // entrega em curso: tryDeliver lê head.text DEPOIS do await da tela, e write+finish
   // são síncronos — ou o texto novo sai, ou o item já saiu e isto devolve false.
   replaceText(id: string, text: string): boolean {
-    const item = this.items.find((i) => i.id === id)
+    const item = this.find(id)
     if (!item) return false
+    this.deps.store?.updateText(id, text)
     item.text = text
     this.publish()
     return true
   }
 
   cancel(id: string): boolean {
-    const item = this.items.find((i) => i.id === id)
+    const item = this.find(id)
     if (!item) return false
     this.finish(item, 'cancelled')
     return true
+  }
+
+  // "Talvez não entregue — reenviar?": o usuário decidiu reenviar. Volta a ser um
+  // item normal da conversa; sem PTY viva, espera o resume como os outros.
+  resend(id: string): boolean {
+    const item = this.parked.find((i) => i.id === id && i.recovery === 'maybe-undelivered')
+    if (!item) return false
+    this.deps.store?.setState(id, 'queued')
+    item.recovery = 'awaiting-session'
+    if (this.deps.isRunning(item.sessionId)) this.attach([item], item.sessionId)
+    else this.publish()
+    return true
+  }
+
+  // Quit limpo: as PTYs vão morrer por killAll e a fila não deve apagar do banco o
+  // que estava esperando — o próximo boot reentrega quando a conversa voltar.
+  suspendForShutdown(): void {
+    this.shuttingDown = true
+    this.dispose()
+  }
+
+  // Boot: carrega o que o processo anterior aceitou e não terminou. 'delivering'
+  // nunca é reenviado às cegas: o transcript da conversa decide (ver
+  // reconcileDelivering). Chamado uma vez, antes de qualquer PTY subir.
+  restore(): void {
+    const store = this.deps.store
+    if (!store) return
+    const now = this.now()
+    for (const row of store.loadAll()) {
+      const item = fromRow(row, row.ccSessionId ?? store.ccSessionOf(row.sessionId))
+      this.counters.restored++
+      this.parked = [...this.parked, item]
+      if (item.expiresAt <= now) {
+        this.finish(item, 'expired')
+        continue
+      }
+      if (row.state === 'delivering') this.reconcileDelivering(item, row)
+    }
+    if (this.parked.length > 0) this.ensurePoll()
+    this.publish()
+  }
+
+  // Uma PTY nova da conversa `ccSessionId` (spawn/resume/wake): os itens dela que
+  // sobreviveram ao boot passam a mirar esta PTY. Os 'maybe-undelivered' só são
+  // reapontados — continuam esperando o usuário.
+  onSessionLive(sessionId: string, ccSessionId: string | null): void {
+    if (!ccSessionId) return
+    const mine = this.parked.filter((i) => i.ccSessionId === ccSessionId)
+    if (mine.length === 0) return
+    for (const item of mine) {
+      this.deps.store?.rebind(item.id, sessionId)
+      item.sessionId = sessionId
+    }
+    this.attach(
+      mine.filter((i) => i.recovery !== 'maybe-undelivered'),
+      sessionId,
+    )
+  }
+
+  private attach(items: Item[], sessionId: string): void {
+    const now = this.now()
+    for (const item of items) {
+      item.recovery = undefined
+      item.sessionId = sessionId
+      item.expiresAt = now + PROMPT_TTL_MS
+    }
+    this.parked = this.parked.filter((i) => !items.includes(i))
+    // Antes dos que chegaram depois do boot: a ordem de aceite se mantém.
+    this.items = [...items, ...this.items]
+    this.ensurePoll()
+    this.publish()
+  }
+
+  private reconcileDelivering(item: Item, row: PersistedPrompt): void {
+    const since = row.deliveringAt ?? row.createdAt
+    const verdict =
+      this.deps.deliveryInTranscript?.(item.ccSessionId, item.text, since) ?? 'unknown'
+    if (verdict === 'found') {
+      this.counters.restoredDelivered++
+      this.finish(item, 'delivered')
+      return
+    }
+    if (verdict === 'absent') {
+      this.deps.store?.setState(item.id, 'queued')
+      return
+    }
+    this.deps.store?.setState(item.id, 'uncertain')
+    this.markMaybeUndelivered(item)
+  }
+
+  private markMaybeUndelivered(item: Item): void {
+    item.recovery = 'maybe-undelivered'
+    this.counters.maybeUndelivered++
+    this.deps.warn({
+      event: 'prompt_queue_maybe_undelivered',
+      sessionId: item.sessionId,
+      id: item.id,
+    })
+    this.lastEvent = {
+      kind: 'maybe-undelivered',
+      id: item.id,
+      sessionId: item.sessionId,
+      text: item.text,
+      at: this.now(),
+    }
+  }
+
+  private find(id: string): Item | undefined {
+    return this.items.find((i) => i.id === id) ?? this.parked.find((i) => i.id === id)
   }
 
   // Borda working → idle/waiting de uma PTY com mensagem na fila.
@@ -244,9 +367,11 @@ export class PromptQueue {
     bypassAttention?: boolean,
   ): Item {
     const createdAt = this.now()
+    const store = this.deps.store
     const item: Item = {
       id: randomUUID(),
       sessionId,
+      ccSessionId: store?.ccSessionOf(sessionId) ?? null,
       text,
       createdAt,
       expiresAt: createdAt + PROMPT_TTL_MS,
@@ -256,6 +381,19 @@ export class PromptQueue {
       fromSessionId,
       bypassAttention,
     }
+    // Grava ANTES de existir na fila: se o banco falhar, o send rejeita em vez de
+    // responder 'queued' com algo que um kill apagaria.
+    store?.insert({
+      id: item.id,
+      sessionId,
+      ccSessionId: item.ccSessionId,
+      text,
+      fromSessionId: fromSessionId ?? null,
+      bypassAttention: bypassAttention === true,
+      state: 'queued',
+      createdAt,
+      deliveringAt: null,
+    })
     this.items = [...this.items, item]
     this.ensurePoll()
     this.publish()
@@ -300,6 +438,9 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
+      // 'delivering' durável ANTES do write: um kill entre o write e a remoção deixa
+      // a prova para o boot conferir no transcript em vez de reenviar às cegas.
+      if (!this.markDelivering(head)) return false
       this.write(sessionId, head.text, head.fromSessionId)
       this.finish(head, 'delivered')
       return true
@@ -345,11 +486,34 @@ export class PromptQueue {
     }
   }
 
+  private markDelivering(item: Item): boolean {
+    try {
+      this.deps.store?.markDelivering(item.id, this.now())
+      return true
+    } catch (err) {
+      // Sem a marca não há como provar no boot o que aconteceu: não escreve agora.
+      this.deps.warn({ event: 'prompt_queue_persist_failed', id: item.id, detail: String(err) })
+      return false
+    }
+  }
+
   private finish(item: Item, kind: PromptQueueEventKind): void {
     item.outcome = kind
+    const restored = this.parked.includes(item)
     this.items = this.items.filter((i) => i !== item)
+    this.parked = this.parked.filter((i) => i !== item)
+    if (!this.shuttingDown) {
+      try {
+        this.deps.store?.remove(item.id)
+      } catch (err) {
+        // A linha fica: no boot, 'delivering' é conferido no transcript (sem
+        // duplicata); 'queued' seria reentregue — por isso o aviso.
+        this.deps.warn({ event: 'prompt_queue_persist_failed', id: item.id, detail: String(err) })
+      }
+    }
     if (kind === 'delivered') this.counters.delivered++
     if (kind === 'expired') this.counters.expired++
+    if (kind === 'expired' && restored) this.counters.expiredRestored++
     if (kind === 'session-gone') this.counters.sessionGone++
     if (kind === 'expired' || kind === 'session-gone') {
       this.deps.warn({ event: `prompt_queue_${kind}`, sessionId: item.sessionId })
@@ -361,7 +525,7 @@ export class PromptQueue {
       text: item.text,
       at: this.now(),
     }
-    if (this.items.length === 0) this.dispose()
+    if (this.items.length === 0 && this.parked.length === 0) this.dispose()
     this.publish()
   }
 
@@ -390,7 +554,9 @@ export class PromptQueue {
 
   private async tick(): Promise<void> {
     const now = this.now()
-    for (const item of this.items.filter((i) => i.expiresAt <= now)) this.finish(item, 'expired')
+    for (const item of [...this.items, ...this.parked].filter((i) => i.expiresAt <= now)) {
+      this.finish(item, 'expired')
+    }
     const sessions = [...new Set(this.items.map((i) => i.sessionId))]
     for (const sessionId of sessions) {
       if (this.deps.status(sessionId) === 'working') {
@@ -399,5 +565,33 @@ export class PromptQueue {
       }
       await this.tryDeliver(sessionId)
     }
+  }
+}
+
+function publicItem({
+  holding: _h,
+  outcome: _o,
+  fromSessionId: _f,
+  bypassAttention: _b,
+  ccSessionId: _c,
+  ...q
+}: Item): QueuedPrompt {
+  return q
+}
+
+function fromRow(row: PersistedPrompt, ccSessionId: string | null): Item {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    ccSessionId,
+    text: row.text,
+    createdAt: row.createdAt,
+    expiresAt: row.createdAt + DURABLE_TTL_MS,
+    heldByMenu: 0,
+    heldReason: null,
+    recovery: row.state === 'uncertain' ? 'maybe-undelivered' : 'awaiting-session',
+    holding: false,
+    fromSessionId: row.fromSessionId ?? undefined,
+    bypassAttention: row.bypassAttention || undefined,
   }
 }
