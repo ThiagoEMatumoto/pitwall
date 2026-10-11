@@ -73,6 +73,12 @@ async function until(cond: () => boolean, timeoutMs: number): Promise<void> {
   }
 }
 
+// O kill é assíncrono: sem esperar o exit, o próximo spawn colide com a sessão viva.
+async function killAndWait(): Promise<void> {
+  ptyManager.kill(SESSION)
+  await until(() => !ptyManager.isRunning(SESSION), 5_000)
+}
+
 // Igual ao loginShellSpawn (sessions.ts): o wrapper envolve o shell de login.
 function spawnLogin(innerCmd: string): void {
   ptyManager.spawn({
@@ -111,9 +117,9 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     restoreEnv()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreEnv()
-    ptyManager.kill(SESSION)
+    await killAndWait()
   })
 
   it('pty.pid é o processo final, dentro do scope da sessão em app.slice', async () => {
@@ -256,8 +262,8 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     resetScopeProbeForTests()
   })
 
-  afterEach(() => {
-    ptyManager.kill(SESSION)
+  afterEach(async () => {
+    await killAndWait()
   })
 
   it('o scope da sessão nasce com MemoryMax/High/SwapMax do default (14G/10G/2G)', async () => {
@@ -266,6 +272,8 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
+    // Sob carga o systemctl show pode ler a unit antes de ela estar ativa.
+    await until(() => unitActive(unit), 5_000)
     const gib = 1024 ** 3
     expect(unitProp(unit, 'MemoryMax')).toBe(String(14 * gib))
     expect(unitProp(unit, 'MemoryHigh')).toBe(String(10 * gib))
