@@ -3,6 +3,7 @@ import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
+import { layoutToRestore } from '../../shared/dock-layout-restore'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
 import type {
   AdvisorModel,
@@ -739,9 +740,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       if (!boot.cleanShutdown) await workspaceApi.bumpRestoreAttempts()
-      // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
-      // esta feature). Snapshots antigos caem no addPanel padrão.
-      if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
+      // pendingLayout só com paneId em comum com o open_panes (ver layoutToRestore);
+      // snapshots antigos e layout descasado caem no addPanel padrão.
+      const layout = layoutToRestore(dockLayout, openPanes)
+      if (layout) set({ pendingLayout: layout })
       // restoreSnapshots segura o persist por conta própria (síncrono, antes do
       // primeiro await): soltar o daqui depois de chamá-lo não abre janela.
       restoring = get().restoreSnapshots(openPanes, dockLayout)
@@ -760,7 +762,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { openPanes, dockLayout } = await workspaceApi.getBootState()
       blockedSnapshots = null
       set({ restoreBlocked: false })
-      if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
+      const layout = layoutToRestore(dockLayout, openPanes)
+      if (layout) set({ pendingLayout: layout })
       restoring = get().restoreSnapshots(openPanes, dockLayout)
     } finally {
       release()
