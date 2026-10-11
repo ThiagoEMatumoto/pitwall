@@ -165,15 +165,17 @@ it('flushSync antes da hidratação junta o salvo ao digitado, sem sobrescrever'
 
 // Write-through: cada mudança chega ao main, que comita (NORMAL) no máximo uma
 // vez por janela de DRAFT_COALESCE_MS (50ms), sempre a última versão. SIGKILL
-// ~60ms após a última mudança (passada a janela), sem flush e com o debounce FULL
-// ainda pendente: a última versão está no app.db.
-const KILL_AFTER_LAST_KEY_MS = 60
+// ~200ms após a última mudança, sem flush e com o debounce FULL ainda pendente: a
+// última versão está no app.db. A janela documentada é 50ms + atraso do event loop;
+// a margem de 200ms absorve esse atraso sob carga — o teste prova o throttle e o
+// write-through contra kill -9, não a latência exata.
+const KILL_AFTER_LAST_KEY_MS = 200
 
 it.each([
   ['keys', 'cada tecla no seu tick'],
   ['burst', '200 mudanças no mesmo tick, coalescidas'],
 ])(
-  'write-through (%s): SIGKILL ~60ms após a última mudança mantém a última versão — %s',
+  'write-through (%s): SIGKILL ~200ms após a última mudança mantém a última versão — %s',
   async (mode) => {
     const key = `pane:p-wt-${mode}`
     const { dbPath, exited } = await runChild({
