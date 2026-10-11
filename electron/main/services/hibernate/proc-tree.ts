@@ -2,11 +2,20 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 // Item g da hibernação: um /exit mataria o que o claude deixou rodando embaixo
-// dele (shell em background, navegador do Playwright, Monitor). Lê a árvore real
-// em /proc; qualquer leitura que falhe vira recusa — na dúvida, não hiberna.
+// dele (shell do Bash tool em background, navegador do Playwright). Lê a árvore
+// real em /proc; falha ao ler /proc ou a raiz vira recusa — na dúvida, não hiberna.
+//
+// Forma real dos filhos diretos de um claude (2.1.29x, conferida com ps):
+// - shell do Bash tool: `zsh -c source ~/.claude/shell-snapshots/snapshot-zsh-….sh …`.
+//   Só existe enquanto um comando roda (foreground ou run_in_background).
+// - servidor MCP stdio: `node …/mcp-server.js`, ou `npm exec @x/mcp` →
+//   `sh -c 'x-mcp'` → node. Vivem a sessão inteira; o `sh -c` deles é launcher.
+// - zumbis `[zsh] <defunct>` (estado Z) de shells que o claude não colheu.
+// Por isso o shell só bloqueia com a assinatura do Bash tool, e dentro da
+// subárvore de um MCP só um navegador de verdade bloqueia.
 
-const SHELLS = new Set(['bash', 'zsh', 'sh', 'dash', 'fish'])
-const BROWSER_RE = /chrom(e|ium)|headless_shell|playwright/i
+const BASH_TOOL_RE = /\bsource \S*\/shell-snapshots\//
+const BROWSER_NAMES = new Set(['chrome', 'chromium', 'chromium-browser', 'headless_shell'])
 
 export type ProcTreeVerdict = { ok: true } | { ok: false; blocker: string }
 
@@ -14,10 +23,11 @@ interface ProcInfo {
   pid: number
   ppid: number
   comm: string
+  state: string
 }
 
 // /proc/<pid>/stat: "pid (comm) state ppid ...". O comm pode ter espaço e
-// parênteses, então o ppid vem depois do ÚLTIMO ')'.
+// parênteses, então estado e ppid vêm depois do ÚLTIMO ')'.
 function readStat(procRoot: string, pid: number): ProcInfo | null {
   let raw: string
   try {
@@ -31,7 +41,7 @@ function readStat(procRoot: string, pid: number): ProcInfo | null {
   const rest = raw.slice(close + 2).split(' ')
   const ppid = Number(rest[1])
   if (!Number.isInteger(ppid)) return null
-  return { pid, ppid, comm: raw.slice(open + 1, close) }
+  return { pid, ppid, comm: raw.slice(open + 1, close), state: rest[0] ?? '' }
 }
 
 function readCmdline(procRoot: string, pid: number): string {
@@ -44,12 +54,8 @@ function readCmdline(procRoot: string, pid: number): string {
   }
 }
 
-function blockerOf(comm: string, cmdline: string): string | null {
-  const exe = basename(cmdline.split(' ')[0] ?? '')
-  if (SHELLS.has(comm) || SHELLS.has(exe)) return `shell:${comm}`
-  if (BROWSER_RE.test(comm) || BROWSER_RE.test(cmdline)) return `browser:${comm}`
-  if (cmdline.includes('Monitor')) return `monitor:${comm}`
-  return null
+function isBrowser(comm: string, cmdline: string): boolean {
+  return BROWSER_NAMES.has(comm) || BROWSER_NAMES.has(basename(cmdline.split(' ')[0] ?? ''))
 }
 
 export function inspectProcTree(rootPid: number, procRoot = '/proc'): ProcTreeVerdict {
@@ -67,17 +73,24 @@ export function inspectProcTree(rootPid: number, procRoot = '/proc'): ProcTreeVe
   for (const name of entries) {
     if (!/^\d+$/.test(name)) continue
     const info = readStat(procRoot, Number(name))
-    if (!info) continue
+    if (!info || info.state === 'Z') continue // zumbi não roda nada.
     const list = children.get(info.ppid) ?? []
     list.push(info)
     children.set(info.ppid, list)
   }
-  const stack = [...(children.get(rootPid) ?? [])]
-  while (stack.length) {
-    const proc = stack.pop()!
-    const blocker = blockerOf(proc.comm, readCmdline(procRoot, proc.pid))
-    if (blocker) return { ok: false, blocker }
-    stack.push(...(children.get(proc.pid) ?? []))
+  for (const child of children.get(rootPid) ?? []) {
+    const cmdline = readCmdline(procRoot, child.pid)
+    if (BASH_TOOL_RE.test(cmdline)) return { ok: false, blocker: `shell:${child.comm}` }
+    // Todo o resto pendurado direto no claude é servidor MCP: só um navegador
+    // aberto por ele (o do Playwright) tem estado que o /exit perderia.
+    const stack = [child]
+    while (stack.length) {
+      const proc = stack.pop()!
+      if (isBrowser(proc.comm, readCmdline(procRoot, proc.pid))) {
+        return { ok: false, blocker: `browser:${proc.comm}` }
+      }
+      stack.push(...(children.get(proc.pid) ?? []))
+    }
   }
   return { ok: true }
 }

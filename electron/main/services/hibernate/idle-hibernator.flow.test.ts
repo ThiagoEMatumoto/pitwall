@@ -94,7 +94,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     queueHas: unused,
     agentMessageSince: unused,
     transcriptPath: unused,
-    usedScheduling: unused,
+    scanTranscript: unused,
     procTree: unused,
     confirmPane: unused,
     registerDormant: (cc, paneId) => {

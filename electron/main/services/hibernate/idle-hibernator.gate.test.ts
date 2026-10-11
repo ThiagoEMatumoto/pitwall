@@ -133,7 +133,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     queueHas: () => false,
     agentMessageSince,
     transcriptPath: () => '/fake/transcript.jsonl',
-    usedScheduling: async () => false,
+    scanTranscript: async () => 'clear',
     procTree: () => ({ ok: true }),
     send: async () => ({ ok: true, delivered: true }),
     cancel: () => {},
@@ -254,18 +254,22 @@ describe('gate da hibernação (fontes reais)', () => {
     expect(await evaluate(gate())).toEqual({ ok: false, reason: 'agent-msg' })
   })
 
-  it('f) transcript ausente/ilegível → no-transcript; agendou → scheduled', async () => {
+  it('f) transcript ausente/ilegível → no-transcript; agendou → scheduled; background aberto → background-task', async () => {
     expect(await evaluate(gate({ transcriptPath: () => null }))).toEqual({
       ok: false,
       reason: 'no-transcript',
     })
-    expect(await evaluate(gate({ usedScheduling: async () => null }))).toEqual({
+    expect(await evaluate(gate({ scanTranscript: async () => null }))).toEqual({
       ok: false,
       reason: 'no-transcript',
     })
-    expect(await evaluate(gate({ usedScheduling: async () => true }))).toEqual({
+    expect(await evaluate(gate({ scanTranscript: async () => 'scheduled' }))).toEqual({
       ok: false,
       reason: 'scheduled',
+    })
+    expect(await evaluate(gate({ scanTranscript: async () => 'background-task' }))).toEqual({
+      ok: false,
+      reason: 'background-task',
     })
   })
 

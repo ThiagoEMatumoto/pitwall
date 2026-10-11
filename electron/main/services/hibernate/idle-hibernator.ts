@@ -17,6 +17,7 @@ import {
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
 import type { ProcTreeVerdict } from './proc-tree'
+import type { TranscriptVerdict } from './schedule-scan'
 
 export const HIBERNATE_TICK_MS = 60_000
 export const EXIT_TIMEOUT_MS = 30_000
@@ -71,7 +72,8 @@ export interface IdleHibernatorDeps {
   // agent_ask envolvendo a conversa desde `since` (ou ainda pendente).
   agentMessageSince(ccSessionId: string, since: number): boolean
   transcriptPath(ccSessionId: string): string | null
-  usedScheduling(path: string): Promise<boolean | null>
+  // null = transcript ilegível.
+  scanTranscript(path: string): Promise<TranscriptVerdict | null>
   procTree(pid: number): ProcTreeVerdict
   send(input: SendPromptInput): Promise<SendPromptResult>
   cancel(queueId: string): void
@@ -222,12 +224,13 @@ export class IdleHibernator {
     if (this.deps.queueHas(c.sessionId)) return refuse('queue')
     // e) agent_ask recente.
     if (this.deps.agentMessageSince(c.ccSessionId, now - windowMs)) return refuse('agent-msg')
-    // f) agendamento em qualquer ponto do transcript.
+    // f) agendamento em qualquer ponto do transcript, ou trabalho em background
+    // que o status 'idle' não conta (Monitor, teammate, task MCP) ainda aberto.
     const path = this.deps.transcriptPath(c.ccSessionId)
     if (!path) return refuse('no-transcript')
-    const scheduled = await this.deps.usedScheduling(path)
-    if (scheduled === null) return refuse('no-transcript')
-    if (scheduled) return refuse('scheduled')
+    const transcript = await this.deps.scanTranscript(path)
+    if (transcript === null) return refuse('no-transcript')
+    if (transcript !== 'clear') return refuse(transcript)
     // g) nada rodando embaixo do claude.
     const tree = this.deps.procTree(file.pid)
     if (!tree.ok) return refuse('proc-tree')

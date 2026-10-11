@@ -23,6 +23,7 @@ export const HIBERNATE_REFUSALS = [
   'agent-msg',
   'no-transcript',
   'scheduled',
+  'background-task',
   'proc-tree',
   'guard-held',
   'exit-timeout',

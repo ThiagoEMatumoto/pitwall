@@ -99,7 +99,7 @@ export function createIdleHibernator(): IdleHibernator {
     queueHas: (id) => promptQueue.snapshot().items.some((item) => item.sessionId === id),
     agentMessageSince,
     transcriptPath: findTranscriptPath,
-    usedScheduling: (path) => scanner.usedScheduling(path),
+    scanTranscript: (path) => scanner.scan(path),
     procTree: (pid) => inspectProcTree(pid),
     send: (input) => promptQueue.send(input),
     cancel: (id) => {
