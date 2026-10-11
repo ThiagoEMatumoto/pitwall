@@ -58,6 +58,7 @@ import * as attentionResponses from './056_attention_responses'
 import * as handoffWorkDir from './057_handoff_work_dir'
 import * as handoffRequests from './058_handoff_requests'
 import * as handoffRequestAnswerKey from './059_handoff_request_answer_key'
+import * as composerDrafts from './060_composer_drafts'
 
 interface Migration {
   version: number
@@ -131,6 +132,7 @@ export const migrations: Migration[] = [
   handoffWorkDir,
   handoffRequests,
   handoffRequestAnswerKey,
+  composerDrafts,
 ]
 
 export function runMigrations(db: Database.Database): void {

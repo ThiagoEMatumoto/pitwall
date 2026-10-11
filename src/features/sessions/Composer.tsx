@@ -12,7 +12,11 @@ import { MentionMenu, SessionPill, useMentionMenu } from './MentionMenu'
 import { applyCompletion, parseSend, rewriteFileMentions, type ActiveToken } from './mention-parser'
 import { useSendTargets } from '@/features/quick-composer/quick-composer-store'
 import { defaultWhen, sendRefusalReason } from '@/features/quick-composer/target-search'
-import { attachmentsBySession, drafts } from './composer-drafts'
+import {
+  composerDraftKey,
+  createDraftPersister,
+  type DraftPersister,
+} from './composer-draft-persister'
 
 export interface ComposerHandle {
   focus: () => void
@@ -34,10 +38,15 @@ interface Attachment {
 
 interface Props {
   sessionId: string
-  // Injeta o texto no input do claude E submete (Enter).
-  onSend: (text: string) => void
-  // Injeta o texto SEM submeter (usuário revisa antes do Enter).
-  onInsert: (text: string) => void
+  // Identidade durável do rascunho: a pane (atravessa o restore) ou, sem pane, a
+  // conversa. Sem nenhum dos dois o rascunho fica só em memória.
+  paneId?: string | null
+  ccSessionId?: string | null
+  // Injeta o texto no input do claude E submete (Enter). Resolve quando o PTY
+  // aceitou a escrita; rejeita se falhou — o rascunho só é limpo no resolve.
+  onSend: (text: string) => Promise<void>
+  // Injeta o texto SEM submeter (usuário revisa antes do Enter). Mesmo contrato.
+  onInsert: (text: string) => Promise<void>
   // Encaminha uma sequência ANSI crua direto pro PTY (modelo Warp: o xterm é
   // display-only e o composer dirige a TUI do claude — setas, Ctrl+C, Esc, etc).
   onForwardKey?: (seq: string) => void
@@ -52,9 +61,10 @@ interface Props {
   compact?: boolean
 }
 
-// Drafts e anexos por sessão vivem em composer-drafts (a hibernação os move para
-// o id novo). O Composer é montado uma vez por sessão, então a chave é estável
-// durante o ciclo de vida da instância.
+// Drafts em memória por chave do rascunho (pane, ou sessão sem chave durável) —
+// cache do remount sem esperar o IPC. A cópia durável vive no app.db
+// (composer-draft-persister): sobrevive a kill do main, reboot e queda de energia.
+const drafts = new Map<string, string>()
 
 // Histórico de prompts despachados por sessão (em ordem cronológica). Mesma
 // natureza dos drafts: memória, por sessão, sobrevive ao remount do dock mas não
@@ -70,6 +80,12 @@ function pushHistory(sessionId: string, value: string) {
   histories.set(sessionId, [...list, v])
 }
 
+// Anexos persistidos por sessão: só a parte serializável ({name, path}). O
+// `previewUrl` (object URL) é efêmero e não viaja — ao restaurar, o chip aparece
+// sem thumbnail (com ícone). Mesma natureza dos drafts/histórico: memória.
+type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
+const attachmentsBySession = new Map<string, PersistedAttachment[]>()
+
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
 // acima (memória, sobrevive ao remount, não persiste em disco). Era uma
 // preferência GLOBAL em session-prefs-store; virou por-sessão pra colapsar um
@@ -83,10 +99,22 @@ const MAX_HEIGHT = 192
 // resolvendo a dor do Enter/Shift+Enter do input nativo do claude no xterm. É
 // aditivo: o input direto na TUI continua funcionando.
 export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
-  { sessionId, onSend, onInsert, onForwardKey, toolbar, collapsible = false, compact = false },
+  {
+    sessionId,
+    paneId = null,
+    ccSessionId = null,
+    onSend,
+    onInsert,
+    onForwardKey,
+    toolbar,
+    collapsible = false,
+    compact = false,
+  },
   ref,
 ) {
-  const [text, setText] = useState(() => drafts.get(sessionId) ?? '')
+  const draftKey = composerDraftKey(paneId, ccSessionId)
+  const memKey = draftKey ?? sessionId
+  const [text, setText] = useState(() => drafts.get(memKey) ?? '')
   // Navegação do histórico de prompts: `histIndex` null = editando o rascunho
   // atual (fora do histórico); >= 0 = posição no histórico da sessão. `savedDraft`
   // guarda o rascunho ao entrar no histórico pra restaurá-lo ao voltar pro fim.
@@ -95,7 +123,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Imagens anexadas ao draft atual (thumbnail + nome). Restaura da persistência
   // por sessão — sem object URL (chip com ícone até o usuário reanexar).
   const [attached, setAttached] = useState<Attachment[]>(() =>
-    (attachmentsBySession.get(sessionId) ?? []).map((a) => ({
+    (attachmentsBySession.get(memKey) ?? []).map((a) => ({
       ...a,
       previewUrl: '',
     })),
@@ -193,9 +221,52 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
 
   // Persiste o draft em memória a cada mudança.
   useEffect(() => {
-    if (text) drafts.set(sessionId, text)
-    else drafts.delete(sessionId)
-  }, [sessionId, text])
+    if (text) drafts.set(memKey, text)
+    else drafts.delete(memKey)
+  }, [memKey, text])
+
+  // Rascunho durável: hidrata do app.db no mount (boot/restore da pane) quando a
+  // memória não tem nada mais novo, e grava cada mudança com debounce. O
+  // desmonte grava o pendente na hora.
+  const persisterRef = useRef<DraftPersister | null>(null)
+  useEffect(() => {
+    const persister = createDraftPersister({
+      key: draftKey,
+      ccSessionId,
+      paneId,
+      api: {
+        get: sessionsApi.getDraft,
+        save: sessionsApi.saveDraft,
+        clear: sessionsApi.clearDraft,
+      },
+    })
+    persisterRef.current = persister
+    const hasMemory = drafts.has(memKey) || attachmentsBySession.has(memKey)
+    if (hasMemory) {
+      persister.update({
+        text: drafts.get(memKey) ?? '',
+        attachments: attachmentsBySession.get(memKey) ?? [],
+      })
+    }
+    void persister.hydrate((saved) => {
+      if (hasMemory) return
+      setText(saved.text)
+      setAttached(saved.attachments.map((a) => ({ ...a, previewUrl: '' })))
+    })
+    return () => {
+      persisterRef.current = null
+      void persister.dispose()
+    }
+    // ccSessionId/paneId só rotulam a linha; a identidade é a chave.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey, memKey])
+
+  useEffect(() => {
+    persisterRef.current?.update({
+      text,
+      attachments: attached.map(({ name, path }) => ({ name, path })),
+    })
+  }, [text, attached])
 
   useEffect(() => {
     attachedRef.current = attached
@@ -206,13 +277,13 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   useEffect(() => {
     if (attached.length > 0) {
       attachmentsBySession.set(
-        sessionId,
+        memKey,
         attached.map(({ name, path }) => ({ name, path })),
       )
     } else {
-      attachmentsBySession.delete(sessionId)
+      attachmentsBySession.delete(memKey)
     }
-  }, [sessionId, attached])
+  }, [memKey, attached])
 
   // Revoga os object URLs ainda pendurados ao desmontar o composer.
   useEffect(() => {
@@ -353,13 +424,25 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     innerRef.current?.setSelectionRange(next.caret, next.caret)
   }
 
+  // Envia por `send` e só limpa o rascunho (memória + app.db) se o envio foi
+  // confirmado. Falha mantém tudo como está.
+  function sendThenClear(value: string, send: () => Promise<boolean>): Promise<boolean> {
+    const persister = persisterRef.current
+    if (persister) return persister.sendThenClear(value, send)
+    return send().catch((err) => {
+      console.error('[composer] envio falhou; rascunho mantido:', err)
+      return false
+    })
+  }
+
+  // Chamado depois do envio confirmado. Se o usuário digitou durante o envio, o
+  // texto novo fica (é outro rascunho).
   function clearDraft(value: string) {
     pushHistory(sessionId, value)
-    setText('')
+    setText((cur) => (cur === value ? '' : cur))
     setPickedFiles(new Set())
     setHistIndex(null)
     clearAttachments()
-    drafts.delete(sessionId)
     refocus()
   }
 
@@ -368,54 +451,61 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   async function sendElsewhere(value: string) {
     if (parsed.kind !== 'ok') return
     const target = parsed.target
-    try {
+    const body = parsed.body
+    let notice = `Não deu pra enviar para @${target.alias} — tente de novo.`
+    const ok = await sendThenClear(value, async () => {
       const res = await sendToApi.send({
         sessionId: target.sessionId,
-        text: parsed.body,
+        text: body,
         when: defaultWhen(target, false),
         fromSessionId: sessionId,
       })
-      if (res.ok) clearDraft(value)
-      setRouteNotice(
-        !res.ok
-          ? `Não deu pra enviar para @${target.alias} (${sendRefusalReason(res.error, res.detail)}).`
-          : res.delivered
-            ? `Enviado para @${target.alias}.`
-            : `Na fila de @${target.alias} — entrega quando ela terminar o turno.`,
-      )
-    } catch (err) {
-      console.error('[composer] falha ao enviar para outra sessão:', err)
-      setRouteNotice(`Não deu pra enviar para @${target.alias} — tente de novo.`)
-    }
+      notice = !res.ok
+        ? `Não deu pra enviar para @${target.alias} (${sendRefusalReason(res.error, res.detail)}).`
+        : res.delivered
+          ? `Enviado para @${target.alias}.`
+          : `Na fila de @${target.alias} — entrega quando ela terminar o turno.`
+      return res.ok
+    })
+    if (ok) clearDraft(value)
+    setRouteNotice(notice)
   }
 
   function submit() {
     const value = text
     if (value.trim().length === 0) return
     // @palavra que não é sessão viva (@Makefile, @src) é menção do próprio claude.
-    if (parsed.kind === 'no-match') return sendHere(value)
+    if (parsed.kind === 'no-match') return void sendHere(value)
     if (parsed.kind === 'ambiguous') {
       return setRouteNotice(`Mais de uma sessão chamada @${parsed.alias} — escolha pelo menu`)
     }
     if (routedTo) return void sendElsewhere(value)
-    sendHere(value)
+    void sendHere(value)
   }
 
-  function sendHere(value: string) {
+  async function sendHere(value: string) {
     setRouteNotice(null)
-    onSend(rewriteFileMentions(value, selfTarget?.cwd ?? null, pickedFiles))
-    clearDraft(value)
+    const prompt = rewriteFileMentions(value, selfTarget?.cwd ?? null, pickedFiles)
+    const ok = await sendThenClear(value, async () => {
+      await onSend(prompt)
+      return true
+    })
+    if (ok) clearDraft(value)
+    else setRouteNotice('Não deu pra enviar — o rascunho foi mantido.')
   }
 
-  function insertOnly() {
+  async function insertOnly() {
     const value = text
     if (value.trim().length === 0) return
-    onInsert(value)
+    const ok = await sendThenClear(value, async () => {
+      await onInsert(value)
+      return true
+    })
+    if (!ok) return setRouteNotice('Não deu pra inserir — o rascunho foi mantido.')
     pushHistory(sessionId, value)
-    setText('')
+    setText((cur) => (cur === value ? '' : cur))
     setHistIndex(null)
     clearAttachments()
-    drafts.delete(sessionId)
     refocus()
   }
 
@@ -618,7 +708,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={insertOnly}
+                  onClick={() => void insertOnly()}
                   aria-label="Inserir sem enviar"
                   title="Inserir sem enviar: põe o texto no prompt do claude para você revisar e apertar Enter"
                 >

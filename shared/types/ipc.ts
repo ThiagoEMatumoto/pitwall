@@ -10,6 +10,7 @@ export type {
   ChatTranscriptTail,
   ChatTranscriptUpdate,
 } from './chat'
+import type { ComposerDraft, ComposerDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
@@ -2890,6 +2891,12 @@ export interface Api {
     write(sessionId: string, data: string): Promise<void>
     /** Grava uma imagem (paste/drag) como binário em <userData>/tmp e devolve o path absoluto. */
     saveImage(sessionId: string, bytes: ArrayBuffer, mime: string): Promise<string>
+    /** Rascunho durável do Composer (app.db), por pane. null = sem rascunho. */
+    getDraft(key: string): Promise<ComposerDraft | null>
+    /** Grava o rascunho; vazio (sem texto nem anexos) remove. */
+    saveDraft(draft: ComposerDraftInput): Promise<void>
+    /** Remove o rascunho — só depois do envio confirmado. */
+    clearDraft(key: string): Promise<void>
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
