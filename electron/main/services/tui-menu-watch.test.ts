@@ -11,6 +11,7 @@ import {
   MIRROR_SCROLLBACK,
 } from './tui-menu-watch'
 import { TAIL_WINDOWS } from '../../../shared/tui/tui-read-window'
+import { deliveryVerdict } from './prompt-queue'
 
 const FIXTURES = join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__')
 const PERMISSION = readFileSync(join(FIXTURES, 'claude-2.1.286-permission-bash.ansi'), 'utf8')
@@ -427,4 +428,21 @@ describe('TuiMenuWatch — PTY alto lê a viewport inteira', () => {
       expect(scan?.inputPrompt).toBe(true)
     },
   )
+})
+
+// Negativo: na mesma pane alta, uma caixa de input velha acima de um menu ATIVO
+// não pode virar "pronto para entregar" — ler a viewport inteira não pode
+// esconder o menu que o \r aprovaria.
+describe('TuiMenuWatch — PTY alto com menu ativo abaixo de input velho', () => {
+  it('82 linhas: input antigo acima + permissão real abaixo → menu-open', async () => {
+    const pty = new FakePty()
+    const watch = new TuiMenuWatch()
+    watch.attach(pty)
+    pty.emit('spawn', { sessionId: 's1', cols: 80, rows: 82 })
+    pty.emit('data', { sessionId: 's1', data: IDLE_PROMPT })
+    pty.emit('data', { sessionId: 's1', data: '\r\n' + PERMISSION })
+    const scan = await watch.rescan('s1')
+    expect(scan?.menu?.kind).toBe('permission')
+    expect(deliveryVerdict('idle', scan, false)).toBe('menu-open')
+  })
 })
