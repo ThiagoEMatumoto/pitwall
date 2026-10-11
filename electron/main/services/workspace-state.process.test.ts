@@ -145,3 +145,39 @@ describe.each([
     20000,
   )
 })
+
+// Ação do usuário no meio do restore: o renderer grava o conjunto COMPLETO (as N
+// salvas, inclusive as que ainda não voltaram, mais a ação). Um kill -9 logo depois
+// deixa no open_panes exatamente esse conjunto, nunca um subconjunto.
+describe('kill -9 logo depois de uma ação do usuário durante o restore', () => {
+  const saved = ['A', 'B', 'C', 'D']
+  it.each([
+    { name: 'abre E: N+1', after: [...saved, 'E'] },
+    { name: 'fecha C (ainda não restaurada): N−1', after: ['A', 'B', 'D'] },
+  ])(
+    '$name',
+    async ({ after }) => {
+      const dbPath = join(dir, 'app.db')
+      const seed = openAppDb(dbPath)
+      saveOpenPanes(seed, saved.map(snap))
+      seed.close()
+
+      const exit = await runAndKill({
+        entry: 'workspace-panes-writer.ts',
+        dir,
+        args: [dbPath, JSON.stringify(after.map(snap))],
+        marker: 'saved',
+      })
+      expect(exit.signal).toBe('SIGKILL')
+
+      const db = new Database(dbPath)
+      try {
+        expect(db.pragma('integrity_check', { simple: true })).toBe('ok')
+        expect(readOpenPanes(db)).toEqual(after.map(snap))
+      } finally {
+        db.close()
+      }
+    },
+    20000,
+  )
+})
