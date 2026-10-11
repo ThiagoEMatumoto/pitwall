@@ -8,7 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
-import { createPromptQueueStore, deliveryInTranscript } from '../services/prompt-queue-store'
+import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
 import { getDormantPanes } from '../services/dormant-panes'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
@@ -168,7 +168,7 @@ export const promptQueue = new PromptQueue({
   },
   warn: (event) => console.warn(JSON.stringify(event)),
   store: createPromptQueueStore(getDb),
-  deliveryInTranscript,
+  deliveryProof,
 })
 
 // A PTY que acabou de subir é de uma conversa com itens de antes do kill/reboot?

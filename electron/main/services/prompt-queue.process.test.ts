@@ -101,7 +101,7 @@ async function boot(): Promise<BootOutput> {
     entry: ENTRY,
     dir,
     args: ['boot', dbPath, scanJson, NEW_PTY, CC],
-    env: { HOME: home },
+    env: { HOME: home, TRANSCRIPT: transcript, CC_SESSION_ID: CC },
   })
   return JSON.parse(out.trim().split('\n').at(-1) as string) as BootOutput
 }
@@ -145,6 +145,18 @@ describe('kill -9 com o item em cada estado', () => {
     expect((await boot()).writes).toEqual([])
   }, 30000)
 
+  it('escrito no PTY e kill antes de o claude gravar: a linha segue delivering e o boot reenvia uma vez', async () => {
+    writeHistory()
+    await kill('written')
+    // O write retornou, mas não há prova de que a mensagem entrou na conversa.
+    expect(rows()).toEqual([expect.objectContaining({ state: 'delivering' })])
+
+    const first = await boot()
+    expect(first.writes).toEqual([`${NEW_PTY}:${TEXT}`])
+    expect(rows()).toEqual([])
+    expect((await boot()).writes).toEqual([])
+  }, 30000)
+
   it('delivering depois do write: o transcript prova que entrou e nada é reenviado', async () => {
     writeHistory()
     await kill('after-write')
@@ -178,7 +190,7 @@ describe('kill -9 com o item em cada estado', () => {
     ])
   }, 30000)
 
-  it('entregue antes do kill: não reaparece no boot', async () => {
+  it('confirmado pelo transcript (mensagem + resposta) antes do kill: não reaparece no boot', async () => {
     writeHistory()
     await kill('delivered')
     expect(rows()).toEqual([])

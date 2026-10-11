@@ -151,16 +151,25 @@ function userPrompt(obj: Record<string, unknown>): string | null {
   return texts.length > 0 ? texts.join('\n') : null
 }
 
-export function transcriptVerdict(
+// Prova de entrega: o veredito e se a conversa já andou depois da mensagem (uma
+// linha do assistant gravada depois dela). Só o 'answered' sobrevive a uma queda
+// de energia com mais confiança: o claude não faz fsync do JSONL.
+export interface TranscriptProof {
+  verdict: TranscriptVerdict
+  answered: boolean
+}
+
+export function transcriptProof(
   jsonl: string | null,
   text: string,
   since: number,
-): TranscriptVerdict {
-  if (jsonl == null) return 'unknown'
+): TranscriptProof {
+  if (jsonl == null) return { verdict: 'unknown', answered: false }
   const want = exact(text)
   const wantLoose = loose(text)
   const wantPrefix = wantLoose.slice(0, PREFIX_CHARS)
   let similar = false
+  let found = false
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue
     let obj: Record<string, unknown>
@@ -168,14 +177,21 @@ export function transcriptVerdict(
       obj = JSON.parse(line) as Record<string, unknown>
     } catch {
       // Linha cortada no meio (o claude morreu escrevendo): pode ser a nossa.
-      if (line.includes(wantPrefix.slice(0, 40))) similar = true
+      if (!found && line.includes(wantPrefix.slice(0, 40))) similar = true
+      continue
+    }
+    if (found) {
+      if (obj.type === 'assistant') return { verdict: 'found', answered: true }
       continue
     }
     const ts = typeof obj.timestamp === 'string' ? Date.parse(obj.timestamp) : NaN
     if (Number.isFinite(ts) && ts < since - CLOCK_SLACK_MS) continue
     const got = userPrompt(obj)
     if (got == null) continue
-    if (exact(got) === want) return 'found'
+    if (exact(got) === want) {
+      found = true
+      continue
+    }
     const gotLoose = loose(got)
     if (
       gotLoose === wantLoose ||
@@ -185,20 +201,29 @@ export function transcriptVerdict(
       similar = true
     }
   }
-  return similar ? 'unknown' : 'absent'
+  if (found) return { verdict: 'found', answered: false }
+  return { verdict: similar ? 'unknown' : 'absent', answered: false }
 }
 
-export function deliveryInTranscript(
-  ccSessionId: string | null,
+export function transcriptVerdict(
+  jsonl: string | null,
   text: string,
   since: number,
 ): TranscriptVerdict {
-  if (!ccSessionId) return 'unknown'
+  return transcriptProof(jsonl, text, since).verdict
+}
+
+export function deliveryProof(
+  ccSessionId: string | null,
+  text: string,
+  since: number,
+): TranscriptProof {
+  if (!ccSessionId) return { verdict: 'unknown', answered: false }
   const path = findTranscriptPath(ccSessionId)
-  if (!path) return 'unknown'
+  if (!path) return { verdict: 'unknown', answered: false }
   try {
-    return transcriptVerdict(readFileSync(path, 'utf8'), text, since)
+    return transcriptProof(readFileSync(path, 'utf8'), text, since)
   } catch {
-    return 'unknown'
+    return { verdict: 'unknown', answered: false }
   }
 }

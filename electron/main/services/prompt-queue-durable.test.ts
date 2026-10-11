@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { openAppDb } from './db'
-import { DURABLE_TTL_MS, PromptQueue } from './prompt-queue'
+import { CONFIRM_GIVEUP_MS, DURABLE_TTL_MS, PromptQueue, WRITEBACK_MS } from './prompt-queue'
 import {
   createPromptQueueStore,
+  transcriptProof,
   transcriptVerdict,
   type TranscriptVerdict,
 } from './prompt-queue-store'
@@ -39,7 +40,13 @@ afterEach(() => {
 })
 
 function makeQueue(
-  opts: { status?: LiveStatus; now?: () => number; verdict?: TranscriptVerdict } = {},
+  opts: {
+    status?: LiveStatus
+    now?: () => number
+    verdict?: TranscriptVerdict
+    // Transcript da conversa (JSONL real): a prova passa pelo parser de produção.
+    jsonl?: () => string | null
+  } = {},
 ) {
   const writes: string[] = []
   let last: PromptQueueSnapshot | null = null
@@ -55,7 +62,10 @@ function makeQueue(
     warn: () => {},
     now: opts.now,
     store: createPromptQueueStore(() => db),
-    deliveryInTranscript: () => opts.verdict ?? 'unknown',
+    deliveryProof: (_cc, text, since) =>
+      opts.jsonl
+        ? transcriptProof(opts.jsonl(), text, since)
+        : { verdict: opts.verdict ?? 'unknown', answered: false },
   })
   return { queue, writes, running, snap: () => last as PromptQueueSnapshot | null }
 }
@@ -128,8 +138,66 @@ describe('PromptQueue durável (DB real)', () => {
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([`${PTY}:talvez`])
-    expect(rows()).toEqual([])
+    expect(rows()).toEqual([expect.objectContaining({ state: 'delivering' })])
     boot.queue.dispose()
+    boot.queue.dispose()
+  })
+
+  it('a linha só sai do banco quando o transcript mostra a mensagem e a resposta', async () => {
+    const jsonl: string[] = []
+    const { queue, writes } = makeQueue({ status: 'idle', jsonl: () => jsonl.join('\n') })
+    const res = await queue.send({ sessionId: PTY, text: 'roda os testes', when: 'on-idle' })
+    expect(res).toMatchObject({ ok: true, delivered: true })
+    expect(writes).toEqual([`${PTY}:roda os testes`])
+    // O write retornou, mas o claude ainda não gravou: a linha segue durável.
+    expect(rows()).toEqual([expect.objectContaining({ state: 'delivering' })])
+    queue.onTurnEnded(PTY)
+    expect(rows()).toHaveLength(1)
+
+    jsonl.push(claudeLine('user', 'roda os testes'))
+    queue.onTurnEnded(PTY)
+    // Achou a mensagem, mas sem resposta ela ainda pode estar só no page cache.
+    expect(rows()).toHaveLength(1)
+
+    jsonl.push(claudeLine('assistant', 'rodando'))
+    queue.onTurnEnded(PTY)
+    expect(rows()).toEqual([])
+    queue.dispose()
+  })
+
+  it('mensagem achada sem resposta sai depois da janela de writeback', async () => {
+    let now = 1_000_000
+    const jsonl: string[] = []
+    const { queue } = makeQueue({ status: 'idle', now: () => now, jsonl: () => jsonl.join('\n') })
+    await queue.send({ sessionId: PTY, text: 'oi', when: 'on-idle' })
+    jsonl.push(claudeLine('user', 'oi', now + 500))
+    now += 1_000
+    queue.onTurnEnded(PTY)
+    now += WRITEBACK_MS - 1
+    queue.onTurnEnded(PTY)
+    expect(rows()).toHaveLength(1)
+    now += 1
+    queue.onTurnEnded(PTY)
+    expect(rows()).toEqual([])
+    queue.dispose()
+  })
+
+  it('sem a mensagem no transcript até o limite: vira talvez-não-entregue visível, sem reenviar', async () => {
+    let now = 1_000_000
+    const { queue, writes, snap } = makeQueue({ status: 'idle', now: () => now, jsonl: () => '' })
+    await queue.send({ sessionId: PTY, text: 'sumiu?', when: 'on-idle' })
+    now += CONFIRM_GIVEUP_MS - 1
+    queue.onTurnEnded(PTY)
+    expect(rows()).toEqual([expect.objectContaining({ state: 'delivering' })])
+    now += 1
+    queue.onTurnEnded(PTY)
+    expect(rows()).toEqual([expect.objectContaining({ state: 'uncertain' })])
+    expect(snap()?.items).toEqual([
+      expect.objectContaining({ text: 'sumiu?', recovery: 'maybe-undelivered' }),
+    ])
+    expect(snap()?.lastEvent).toMatchObject({ kind: 'maybe-undelivered' })
+    expect(writes).toHaveLength(1)
+    queue.dispose()
   })
 
   it('PTY de outra conversa não puxa itens restaurados', async () => {
@@ -146,6 +214,23 @@ describe('PromptQueue durável (DB real)', () => {
     boot.queue.dispose()
   })
 })
+
+// Linha no formato que o claude grava no JSONL da conversa.
+function claudeLine(type: 'user' | 'assistant', text: string, at = Date.now()): string {
+  return JSON.stringify({
+    parentUuid: 'p',
+    isSidechain: false,
+    type,
+    message:
+      type === 'user'
+        ? { role: 'user', content: text }
+        : { role: 'assistant', content: [{ type: 'text', text }] },
+    uuid: `${type}-${text}`,
+    timestamp: new Date(at).toISOString(),
+    userType: 'external',
+    sessionId: CC,
+  })
+}
 
 describe('transcriptVerdict (formato real do JSONL do claude)', () => {
   const since = Date.parse('2026-10-11T12:00:00.000Z')

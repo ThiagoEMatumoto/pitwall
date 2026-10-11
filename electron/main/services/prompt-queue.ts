@@ -11,7 +11,7 @@ import type {
   SendPromptResult,
   SendPromptWhen,
 } from '../../../shared/types/send-prompt'
-import type { PersistedPrompt, PromptQueueStore, TranscriptVerdict } from './prompt-queue-store'
+import type { PersistedPrompt, PromptQueueStore, TranscriptProof } from './prompt-queue-store'
 import { promptQueuePersistFailures } from './prompt-queue-store'
 
 // Fila de prompts por sessão, entregues no fim do turno. A regra de segurança é
@@ -33,6 +33,15 @@ export const POLL_MS = 3_000
 // Depois de uma entrega, a próxima espera o claude trabalhar (o status ainda diz
 // idle por um instante). Se ele nunca trabalhar, a fila não fica presa por isto.
 export const AWAIT_WORK_MS = 15_000
+// Depois do write a linha segue 'delivering' no app.db até o transcript provar que a
+// mensagem entrou na conversa. Achada a linha 'user', ela só sai do banco com a
+// resposta do assistant gravada depois dela ou passada a janela de writeback do
+// kernel: o claude não faz fsync do JSONL, e uma queda de energia antes disso
+// apagaria a mensagem dos dois lados.
+export const WRITEBACK_MS = 30_000
+// Sem a linha 'user' depois disto, a entrega vira 'talvez não entregue' (visível,
+// Reenviar/Descartar) em vez de sumir ou ser reenviada às cegas.
+export const CONFIRM_GIVEUP_MS = 60_000
 
 export interface PromptQueueDeps {
   isRunning(sessionId: string): boolean
@@ -51,8 +60,18 @@ export interface PromptQueueDeps {
   now?(): number
   // Persistência (app.db). Sem store a fila é só memória (testes antigos).
   store?: PromptQueueStore
-  // Boot: a mensagem 'delivering' de antes do kill entrou na conversa?
-  deliveryInTranscript?(ccSessionId: string | null, text: string, since: number): TranscriptVerdict
+  // A mensagem 'delivering' entrou na conversa (e a conversa andou depois dela)?
+  // Usado no boot e na confirmação de cada entrega.
+  deliveryProof?(ccSessionId: string | null, text: string, since: number): TranscriptProof
+}
+
+const NO_PROOF: TranscriptProof = { verdict: 'unknown', answered: false }
+
+// Entrega escrita no PTY cuja linha ainda está no banco esperando a prova.
+interface Confirming {
+  item: Item
+  deliveringAt: number
+  foundAt: number | null
 }
 
 type Verdict =
@@ -138,6 +157,7 @@ export class PromptQueue {
   // sessionId → quando a última entrega saiu (espera o claude trabalhar).
   private awaitingWork = new Map<string, number>()
   private delivering = new Set<string>()
+  private confirming: Confirming[] = []
   private settleTimers = new Map<string, NodeJS.Timeout>()
   private poll: NodeJS.Timeout | null = null
 
@@ -295,8 +315,7 @@ export class PromptQueue {
 
   private reconcileDelivering(item: Item, row: PersistedPrompt): void {
     const since = row.deliveringAt ?? row.createdAt
-    const verdict =
-      this.deps.deliveryInTranscript?.(item.ccSessionId, item.text, since) ?? 'unknown'
+    const { verdict } = this.deps.deliveryProof?.(item.ccSessionId, item.text, since) ?? NO_PROOF
     if (verdict === 'found') {
       this.counters.restoredDelivered++
       this.finish(item, 'delivered')
@@ -334,6 +353,7 @@ export class PromptQueue {
   // Borda working → idle/waiting de uma PTY com mensagem na fila.
   onTurnEnded(sessionId: string): void {
     this.awaitingWork.delete(sessionId)
+    this.confirmDeliveries(sessionId)
     if (!this.items.some((i) => i.sessionId === sessionId)) return
     const prev = this.settleTimers.get(sessionId)
     if (prev) clearTimeout(prev)
@@ -438,11 +458,18 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
-      // 'delivering' durável ANTES do write: um kill entre o write e a remoção deixa
-      // a prova para o boot conferir no transcript em vez de reenviar às cegas.
-      if (!this.markDelivering(head)) return false
+      // 'delivering' durável ANTES do write, e a linha só sai do banco com prova no
+      // transcript (confirmDeliveries): um kill ou queda de energia antes de o claude
+      // gravar a mensagem deixa o boot conferir em vez de perdê-la ou reenviá-la às cegas.
+      const deliveringAt = this.now()
+      if (!this.markDelivering(head, deliveringAt)) return false
       this.write(sessionId, head.text, head.fromSessionId)
-      this.finish(head, 'delivered')
+      const keepRow = this.deps.store != null
+      if (keepRow) {
+        this.confirming = [...this.confirming, { item: head, deliveringAt, foundAt: null }]
+        this.ensurePoll()
+      }
+      this.finish(head, 'delivered', keepRow)
       return true
     } finally {
       this.delivering.delete(sessionId)
@@ -486,9 +513,9 @@ export class PromptQueue {
     }
   }
 
-  private markDelivering(item: Item): boolean {
+  private markDelivering(item: Item, at: number): boolean {
     try {
-      this.deps.store?.markDelivering(item.id, this.now())
+      this.deps.store?.markDelivering(item.id, at)
       return true
     } catch (err) {
       // Sem a marca não há como provar no boot o que aconteceu: não escreve agora.
@@ -497,12 +524,13 @@ export class PromptQueue {
     }
   }
 
-  private finish(item: Item, kind: PromptQueueEventKind): void {
+  // keepRow: a entrega saiu da fila mas a linha espera a prova (confirmDeliveries).
+  private finish(item: Item, kind: PromptQueueEventKind, keepRow = false): void {
     item.outcome = kind
     const restored = this.parked.includes(item)
     this.items = this.items.filter((i) => i !== item)
     this.parked = this.parked.filter((i) => i !== item)
-    if (!this.shuttingDown) {
+    if (!this.shuttingDown && !keepRow) {
       try {
         this.deps.store?.remove(item.id)
       } catch (err) {
@@ -525,7 +553,57 @@ export class PromptQueue {
       text: item.text,
       at: this.now(),
     }
-    if (this.items.length === 0 && this.parked.length === 0) this.dispose()
+    this.disposeIfIdle()
+    this.publish()
+  }
+
+  private disposeIfIdle(): void {
+    if (this.items.length + this.parked.length + this.confirming.length === 0) this.dispose()
+  }
+
+  // Confere no transcript as entregas escritas no PTY (fim de turno e poll). A
+  // linha do banco só sai com prova; sem prova até CONFIRM_GIVEUP_MS, o item volta
+  // visível como 'talvez não entregue'.
+  private confirmDeliveries(sessionId?: string): void {
+    const now = this.now()
+    const mine = this.confirming.filter((c) => !sessionId || c.item.sessionId === sessionId)
+    for (const c of mine) {
+      const { item } = c
+      // Sem conversa nativa (Codex) não há transcript: sai depois do writeback.
+      if (!item.ccSessionId) {
+        if (now - c.deliveringAt >= WRITEBACK_MS) this.settleConfirmed(c)
+        continue
+      }
+      const proof =
+        this.deps.deliveryProof?.(item.ccSessionId, item.text, c.deliveringAt) ?? NO_PROOF
+      if (proof.verdict === 'found') {
+        c.foundAt ??= now
+        if (proof.answered || now - c.foundAt >= WRITEBACK_MS) this.settleConfirmed(c)
+        continue
+      }
+      if (now - c.deliveringAt >= CONFIRM_GIVEUP_MS) this.unconfirmed(c)
+    }
+  }
+
+  private settleConfirmed(c: Confirming): void {
+    this.confirming = this.confirming.filter((x) => x !== c)
+    try {
+      this.deps.store?.remove(c.item.id)
+    } catch (err) {
+      // A linha fica 'delivering': o boot confere no transcript, sem duplicata.
+      this.deps.warn({ event: 'prompt_queue_persist_failed', id: c.item.id, detail: String(err) })
+    }
+    this.disposeIfIdle()
+  }
+
+  private unconfirmed(c: Confirming): void {
+    this.confirming = this.confirming.filter((x) => x !== c)
+    const { item } = c
+    this.deps.store?.setState(item.id, 'uncertain')
+    item.outcome = undefined
+    item.expiresAt = item.createdAt + DURABLE_TTL_MS
+    this.parked = [...this.parked, item]
+    this.markMaybeUndelivered(item)
     this.publish()
   }
 
@@ -553,6 +631,7 @@ export class PromptQueue {
   }
 
   private async tick(): Promise<void> {
+    this.confirmDeliveries()
     const now = this.now()
     for (const item of [...this.items, ...this.parked].filter((i) => i.expiresAt <= now)) {
       this.finish(item, 'expired')
