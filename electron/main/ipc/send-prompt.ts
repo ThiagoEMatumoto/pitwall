@@ -38,6 +38,7 @@ import {
   setHandoffWakeQueue,
   sweepOrphansOnBoot,
 } from '../services/handoff/handoff-wake'
+import { registerImageKeeper } from '../services/image-temp-sweep'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
@@ -185,6 +186,7 @@ export const promptQueue = new PromptQueue({
     getIdleHibernator()?.beforeWrite(id, text, tuiMenuWatch.current(id)?.inputDirty === true) ??
     true,
 })
+registerImageKeeper((name) => promptQueue.references(name))
 
 const tailFeed = new ScreenTailFeed({
   read: (id) => tuiMenuWatch.styledTail(id, TAIL_LINES),

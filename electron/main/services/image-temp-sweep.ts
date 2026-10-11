@@ -31,6 +31,14 @@ export function sweepImageTempDir(
 // por um rascunho persistido do Composer (o rascunho sobrevive ao reboot, ao exit
 // da PTY e à hibernação; a imagem dele também precisa). Sem conseguir ler os
 // rascunhos, não apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
+// Quem mais segura referências a temps de imagem (ex.: mensagem retida na fila
+// durante o /exit da hibernação, entregue só na sessão acordada).
+const extraKeepers: Array<(filename: string) => boolean> = []
+
+export function registerImageKeeper(keep: (filename: string) => boolean): void {
+  extraKeepers.push(keep)
+}
+
 export function sweepImageTempsKeepingDrafts(
   db: () => Database.Database,
   dir: string,
@@ -43,7 +51,8 @@ export function sweepImageTempsKeepingDrafts(
     console.error('[sessions] sweep de imagens adiado: rascunhos ilegíveis', err)
     return
   }
-  sweepImageTempDir(dir, shouldRemove, isKept)
+  const kept = isKept
+  sweepImageTempDir(dir, shouldRemove, (name) => kept(name) || extraKeepers.some((k) => k(name)))
 }
 
 // Sweep das imagens de uma sessão que saiu: uma imagem colada pode estar só no

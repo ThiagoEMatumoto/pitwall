@@ -153,6 +153,11 @@ export class PromptQueue {
     return !bypassAttention && this.deps.handoffAsking(sessionId)
   }
 
+  // Algum item ainda não entregue cita este trecho (ex.: nome de um temp de imagem)?
+  references(fragment: string): boolean {
+    return this.items.some((i) => i.text.includes(fragment))
+  }
+
   snapshot(): PromptQueueSnapshot {
     return {
       items: this.items.map(

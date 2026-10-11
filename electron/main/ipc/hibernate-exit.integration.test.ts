@@ -20,6 +20,13 @@ const seam = vi.hoisted(() => ({
   onWake: () => {},
 }))
 
+// O renderer confirma o flush dos rascunhos (o caminho real do sweep do exit só
+// apaga temps depois disso).
+vi.mock('./composer-drafts', async (orig) => ({
+  ...(await orig<typeof import('./composer-drafts')>()),
+  requestDraftFlush: async () => true,
+}))
+
 vi.mock('electron', async () => {
   const { mkdtempSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
@@ -240,7 +247,7 @@ describe('exit da hibernação pelos handlers reais', () => {
     // Exit comum de outra sessão: a imagem dela é varrida, a da hibernada fica.
     const otherImage = pastedImage(OTHER)
     exit(OTHER)
-    expect(existsSync(otherImage)).toBe(false)
+    await vi.waitFor(() => expect(existsSync(otherImage)).toBe(false))
     expect(existsSync(image)).toBe(true)
 
     // A sweep do boot recolhe os temps de imagem (num processo fresco todos são
