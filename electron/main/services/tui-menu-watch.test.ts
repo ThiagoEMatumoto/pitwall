@@ -409,3 +409,22 @@ describe('TuiMenuWatch — custo do espelho sempre ligado', () => {
     expect(scan?.menu?.kind).toBe('permission')
   })
 })
+
+// PTY mais alto que a janela fixa de 40 linhas, com pouco conteúdo: a caixa de
+// input fica no topo da tela visível. Sem ler a viewport inteira o scan dava
+// unparsed e a guarda de entrega segurava o envio para sempre.
+describe('TuiMenuWatch — PTY alto lê a viewport inteira', () => {
+  it.each([53, 82])(
+    'caixa de input no topo de uma tela de %i linhas é reconhecida',
+    async (rows) => {
+      const pty = new FakePty()
+      const watch = new TuiMenuWatch()
+      watch.attach(pty)
+      pty.emit('spawn', { sessionId: 's1', cols: 80, rows })
+      pty.emit('data', { sessionId: 's1', data: IDLE_PROMPT })
+      const scan = await watch.rescan('s1')
+      expect(scan?.menu).toBeNull()
+      expect(scan?.inputPrompt).toBe(true)
+    },
+  )
+})

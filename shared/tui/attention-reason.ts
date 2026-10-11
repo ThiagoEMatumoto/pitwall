@@ -63,9 +63,16 @@ export function inputBoxHasUserText(rows: InputCell[][]): boolean {
   })
 }
 
-export function scanScreen(readTail: (lines: number) => string, bufferLines: number): ScreenScan {
+// viewportRows: altura da PTY. Num terminal mais alto que PROMPT_WINDOW e com
+// pouco conteúdo, a caixa de input fica no topo da tela visível — fora das
+// últimas 40 linhas. Ler a viewport inteira é o que a tela de fato mostra.
+export function scanScreen(
+  readTail: (lines: number) => string,
+  bufferLines: number,
+  viewportRows = 0,
+): ScreenScan {
   const menu = parseWithGrowingWindow(readTail, parseTuiMenu, bufferLines)
-  const tail = readTail(PROMPT_WINDOW)
+  const tail = readTail(Math.max(PROMPT_WINDOW, viewportRows))
   return {
     menu,
     inputPrompt: menu == null && hasInputPrompt(tail),
