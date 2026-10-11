@@ -3,6 +3,7 @@ import type {
   ComposerDraft,
   ComposerDraftAttachment,
   ComposerDraftInput,
+  VersionedDraftInput,
 } from '../../../shared/types/composer-draft'
 import { findTranscriptPath } from './transcript-path'
 
@@ -34,21 +35,39 @@ function isEmptyDraft(d: Pick<ComposerDraftInput, 'text' | 'attachments'>): bool
   return d.text.length === 0 && d.attachments.length === 0
 }
 
+function writeDraftRow(db: Database.Database, draft: ComposerDraftInput, now: number): void {
+  if (isEmptyDraft(draft)) {
+    db.prepare('DELETE FROM composer_drafts WHERE draft_key = ?').run(draft.key)
+    return
+  }
+  const attachments = JSON.stringify(draft.attachments.map(({ name, path }) => ({ name, path })))
+  db.prepare(
+    `INSERT OR REPLACE INTO composer_drafts
+       (draft_key, cc_session_id, pane_id, text, attachments, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(draft.key, draft.ccSessionId, draft.paneId, draft.text, attachments, now)
+}
+
 // Rascunho vazio = sem rascunho: grava a remoção, não uma linha em branco.
 export function saveComposerDraft(
   db: Database.Database,
   draft: ComposerDraftInput,
   now: number = Date.now(),
 ): void {
-  if (isEmptyDraft(draft)) return clearComposerDraft(db, draft.key)
-  const attachments = JSON.stringify(draft.attachments.map(({ name, path }) => ({ name, path })))
-  writeDurably(db, () => {
-    db.prepare(
-      `INSERT OR REPLACE INTO composer_drafts
-         (draft_key, cc_session_id, pane_id, text, attachments, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(draft.key, draft.ccSessionId, draft.paneId, draft.text, attachments, now)
-  })
+  writeDurably(db, () => writeDraftRow(db, draft, now))
+}
+
+// Write-through de cada tecla: uma transação, no synchronous da conexão (NORMAL).
+// O commit no WAL sobrevive a kill -9 do processo; a queda de energia fica a cargo
+// do saveComposerDraft (FULL) que o debounce do renderer manda logo depois.
+export function saveComposerDraftsFast(
+  db: Database.Database,
+  drafts: ComposerDraftInput[],
+  now: number = Date.now(),
+): void {
+  db.transaction(() => {
+    for (const d of drafts) writeDraftRow(db, d, now)
+  })()
 }
 
 export function clearComposerDraft(db: Database.Database, key: string): void {
@@ -258,6 +277,15 @@ function isNullableString(v: unknown): v is string | null {
 }
 
 // Fronteira do IPC: o payload vem do renderer.
+export function parseVersionedDraftInput(raw: unknown): VersionedDraftInput {
+  const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  if (typeof o.writer !== 'string' || o.writer.length === 0) throw new Error('rascunho sem autor')
+  if (typeof o.seq !== 'number' || !Number.isSafeInteger(o.seq) || o.seq < 0) {
+    throw new Error('rascunho sem versão')
+  }
+  return { ...parseComposerDraftInput(raw), writer: o.writer, seq: o.seq }
+}
+
 export function parseComposerDraftInput(raw: unknown): ComposerDraftInput {
   if (typeof raw !== 'object' || raw === null) throw new Error('rascunho inválido')
   const o = raw as Record<string, unknown>

@@ -15,6 +15,14 @@ export interface ComposerDraftInput {
   attachments: ComposerDraftAttachment[]
 }
 
+// Versão do rascunho: `writer` identifica o persister (uma montagem do Composer)
+// e `seq` cresce a cada mudança dele. O main nunca grava uma versão mais antiga
+// do mesmo writer por cima de uma mais nova.
+export interface VersionedDraftInput extends ComposerDraftInput {
+  writer: string
+  seq: number
+}
+
 export interface ComposerDraft extends ComposerDraftInput {
   updatedAt: number
 }

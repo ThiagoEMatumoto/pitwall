@@ -10,7 +10,7 @@ export type {
   ChatTranscriptTail,
   ChatTranscriptUpdate,
 } from './chat'
-import type { ComposerDraft, ComposerDraftInput } from './composer-draft'
+import type { ComposerDraft, VersionedDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
@@ -2893,8 +2893,10 @@ export interface Api {
     saveImage(sessionId: string, bytes: ArrayBuffer, mime: string): Promise<string>
     /** Rascunho durável do Composer (app.db), por pane. null = sem rascunho. */
     getDraft(key: string): Promise<ComposerDraft | null>
-    /** Grava o rascunho; vazio (sem texto nem anexos) remove. */
-    saveDraft(draft: ComposerDraftInput): Promise<void>
+    /** Grava o rascunho com fsync (FULL); vazio (sem texto nem anexos) remove. */
+    saveDraft(draft: VersionedDraftInput): Promise<void>
+    /** Write-through de cada mudança (send assíncrono, NORMAL): sobrevive a kill -9. */
+    writeDraft(draft: VersionedDraftInput): void
     /** Remove o rascunho — só depois do envio confirmado. */
     clearDraft(key: string): Promise<void>
     /** Pane nova sem rascunho herda o das panes fechadas da mesma conversa. */
@@ -2916,7 +2918,7 @@ export interface Api {
     /** getDraft síncrono (sendSync): só no flush, antes da hidratação terminar. */
     getDraftSync(key: string): ComposerDraft | null
     /** saveDraft síncrono (sendSync): retorna depois do commit; erro vira throw. */
-    saveDraftSync(draft: ComposerDraftInput): void
+    saveDraftSync(draft: VersionedDraftInput): void
     /** Main pede o flush dos rascunhos (quit, exit de sessão); responder com draftFlushDone. */
     onDraftFlushRequest(handler: (requestId: string) => void): () => void
     draftFlushDone(requestId: string): void

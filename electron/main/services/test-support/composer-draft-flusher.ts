@@ -2,7 +2,8 @@
 // o persister REAL do renderer, ligado ao serviço do main sobre o app.db aberto
 // pelo caminho de produção. Digita (o debounce de 500ms fica pendente) e:
 //  - 'flush': chama flushSync, o ponto de flush do blur/quit, e avisa;
-//  - 'no-flush': só avisa (controle: prova que o debounce ainda não gravou);
+//  - 'no-flush': só avisa, com o write-through desligado (controle: prova que
+//    o debounce ainda não gravou);
 //  - 'flush-before-hydrate': digita antes da leitura do salvo terminar e dá
 //    flushSync (o salvo é juntado, não sobrescrito).
 // Em todos os modos o pai manda SIGKILL assim que lê o aviso.
@@ -21,6 +22,7 @@ const persister = createDraftPersister({
     getSync: (k) => getComposerDraft(db, k),
     save: async (d) => saveComposerDraft(db, d),
     saveSync: (d) => saveComposerDraft(db, d),
+    writeThrough: () => {},
     clear: async (k) => clearComposerDraft(db, k),
   },
 })

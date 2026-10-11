@@ -14,6 +14,7 @@ import {
   getComposerDraft,
   parseComposerDraftInput,
   saveComposerDraft,
+  saveComposerDraftsFast,
 } from './composer-drafts'
 import { sweepImageTempDir } from './image-temp-sweep'
 import { buildImageFilename, isImageTempFile } from './image-temp'
@@ -37,6 +38,7 @@ function realApi(conn: () => Database.Database): DraftApi {
     getSync: (key) => getComposerDraft(conn(), key),
     save: async (draft) => saveComposerDraft(conn(), draft),
     saveSync: (draft) => saveComposerDraft(conn(), draft),
+    writeThrough: (draft) => saveComposerDraftsFast(conn(), [draft]),
     clear: async (key) => clearComposerDraft(conn(), key),
   }
 }
@@ -81,16 +83,15 @@ afterEach(() => {
 })
 
 describe('rascunho durável do Composer (app.db real)', () => {
-  it('grava só depois do debounce e uma nova conexão lê o rascunho íntegro', async () => {
+  it('grava na hora (write-through) e uma nova conexão lê o rascunho íntegro', async () => {
     const p = newPersister()
     await p.hydrate(() => {})
     const text = 'refatora o parser\nlinha 2 — acentuação ✓'
     const attachments = [{ name: 'shot.png', path: join(dir, 'img-s1-abc.png') }]
     p.update({ text, attachments })
 
-    await vi.advanceTimersByTimeAsync(499)
-    expect(getComposerDraft(db, KEY)).toBeNull()
-    await vi.advanceTimersByTimeAsync(1)
+    expect(getComposerDraft(reopen(), KEY)?.text).toBe(text)
+    await vi.advanceTimersByTimeAsync(500)
 
     const saved = getComposerDraft(reopen(), KEY)
     expect(saved).toMatchObject({
