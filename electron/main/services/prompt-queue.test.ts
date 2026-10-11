@@ -297,15 +297,17 @@ describe('PromptQueue — envio para qualquer sessão', () => {
     expect(PROMPT_TTL_MS).toBe(30 * 60_000)
   })
 
-  it('sessão que morreu com mensagem na fila marca e avisa', async () => {
+  it('sessão que morreu com mensagem na fila: o item fica esperando a conversa voltar', async () => {
     const { queue, state, snapshots } = setup({ status: 'working' })
     await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle' })
     state.running = false
     queue.onSessionExit(SID)
     const snap = queue.snapshot()
-    expect(snap.items).toEqual([])
-    expect(snap.counters.sessionGone).toBe(1)
-    expect(snapshots.at(-1)?.lastEvent).toMatchObject({ kind: 'session-gone', text: 'oi' })
+    expect(snap.items).toEqual([
+      expect.objectContaining({ text: 'oi', recovery: 'awaiting-session' }),
+    ])
+    expect(snap.counters.sessionGone).toBe(0)
+    expect(snapshots.at(-1)?.lastEvent).toBeNull()
   })
 
   it('cancelar tira da fila e nunca entrega', async () => {
@@ -384,9 +386,12 @@ describe('PromptQueue — envio para qualquer sessão', () => {
       queue.onSessionExit(SID)
     }
     const res = await queue.send({ sessionId: SID, text: 'oi', when: 'on-idle' })
-    expect(res).toEqual({ ok: false, error: 'not-running' })
+    // Não entregue, mas também não perdido: espera a conversa voltar.
+    expect(res).toMatchObject({ ok: true, delivered: false })
     expect(writes).toEqual([])
-    expect(snapshots.at(-1)?.lastEvent?.kind).toBe('session-gone')
+    expect(snapshots.at(-1)?.items).toEqual([
+      expect.objectContaining({ text: 'oi', recovery: 'awaiting-session' }),
+    ])
     expect(queue.snapshot().counters.delivered).toBe(0)
   })
 

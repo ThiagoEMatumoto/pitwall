@@ -510,11 +510,34 @@ export class PromptQueue {
     )
   }
 
+  // A PTY morreu com o Pitwall vivo (OOM, systemd-oomd, crash do claude): os itens
+  // não saem do banco. Ficam esperando a conversa voltar (resume/wake) como os
+  // restaurados do boot, e o aviso de AWAITING_NOTICE_MS os mostra se ela não voltar.
+  // No quit limpo as linhas ficam para o próximo boot, sem desfecho nenhum.
   onSessionExit(sessionId: string): void {
     this.awaitingWork.delete(sessionId)
-    for (const item of this.items.filter((i) => i.sessionId === sessionId)) {
-      this.finish(item, 'session-gone')
+    if (this.shuttingDown) return
+    const mine = this.items.filter((i) => i.sessionId === sessionId)
+    if (mine.length === 0) return
+    for (const item of mine) {
+      item.recovery = 'awaiting-session'
+      item.expiresAt = NEVER
+      item.holding = false
+      item.heldReason = null
+      // Mesmo tratamento do item restaurado: se a conversa voltar velha demais,
+      // pergunta antes de entregar.
+      item.restored = true
+      this.deps.warn({
+        event: 'prompt_queue_session_exit_parked',
+        sessionId,
+        id: item.id,
+      })
     }
+    this.items = this.items.filter((i) => !mine.includes(i))
+    this.parked = [...this.parked, ...mine]
+    this.ensurePoll()
+    this.armAwaitingNotice()
+    this.publish()
   }
 
   dispose(): void {
