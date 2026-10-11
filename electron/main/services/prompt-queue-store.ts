@@ -134,24 +134,58 @@ const PREFIX_CHARS = 120
 const exact = (s: string) => s.replace(/\r\n?/g, '\n').trim()
 const loose = (s: string) => s.replace(/\s+/g, ' ').trim()
 
+const tag = (s: string, name: string): string | null =>
+  new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(s)?.[1] ?? null
+
+// Formas alternativas que o claude grava para o que foi digitado: '/cmd args'
+// vira <command-name>/cmd</command-name>…<command-args>args</command-args> (com
+// ou sem a barra, skill com <command-message> antes), e '!cmd' vira
+// <bash-input>cmd</bash-input>. Volta ao texto digitado para comparar.
+function typedForm(content: string): string {
+  const name = tag(content, 'command-name')
+  if (name != null) {
+    const cmd = name.trim().startsWith('/') ? name.trim() : `/${name.trim()}`
+    const args = tag(content, 'command-args')?.trim()
+    return args ? `${cmd} ${args}` : cmd
+  }
+  const bash = tag(content, 'bash-input')
+  if (bash != null) return `!${bash.trim()}`
+  return content
+}
+
+// O texto que a fila escreveu, na mesma forma de typedForm ('! cmd' = '!cmd').
+function sentForm(text: string): string {
+  const t = text.trim()
+  return t.startsWith('!') ? `!${t.slice(1).trim()}` : t
+}
+
+interface UserPrompt {
+  text: string
+  // queued_command: o claude registra a mensagem que chegou com ele trabalhando —
+  // é a fila entregando, não alguém digitando o mesmo texto.
+  queued: boolean
+}
+
 // O que o usuário (ou o paste) mandou: a linha 'user' com texto, ou o
 // queued_command que o claude grava quando a mensagem chega com ele trabalhando.
 // tool_result e isMeta (comandos/skills) não são mensagem digitada.
-function userPrompt(obj: Record<string, unknown>): string | null {
+function userPrompt(obj: Record<string, unknown>): UserPrompt | null {
   if (obj.type === 'attachment') {
     const a = obj.attachment as { type?: unknown; prompt?: unknown } | undefined
-    return a?.type === 'queued_command' && typeof a.prompt === 'string' ? a.prompt : null
+    return a?.type === 'queued_command' && typeof a.prompt === 'string'
+      ? { text: typedForm(a.prompt), queued: true }
+      : null
   }
   if (obj.type !== 'user' || obj.isMeta === true) return null
   const content = (obj.message as { content?: unknown } | undefined)?.content
-  if (typeof content === 'string') return content
+  if (typeof content === 'string') return { text: typedForm(content), queued: false }
   if (!Array.isArray(content)) return null
   const texts = content
     .filter(
       (c): c is { type: 'text'; text: string } => c?.type === 'text' && typeof c.text === 'string',
     )
     .map((c) => c.text)
-  return texts.length > 0 ? texts.join('\n') : null
+  return texts.length > 0 ? { text: typedForm(texts.join('\n')), queued: false } : null
 }
 
 // Prova de entrega: o veredito e se a conversa já andou depois da mensagem (uma
@@ -168,8 +202,8 @@ export function transcriptProof(
   since: number,
 ): TranscriptProof {
   if (jsonl == null) return { verdict: 'unknown', answered: false }
-  const want = exact(text)
-  const wantLoose = loose(text)
+  const want = exact(sentForm(text))
+  const wantLoose = loose(sentForm(text))
   const wantPrefix = wantLoose.slice(0, PREFIX_CHARS)
   let similar = false
   let found = false
@@ -189,10 +223,15 @@ export function transcriptProof(
     }
     const ts = typeof obj.timestamp === 'string' ? Date.parse(obj.timestamp) : NaN
     if (Number.isFinite(ts) && ts < since - CLOCK_SLACK_MS) continue
-    const got = userPrompt(obj)
-    if (got == null) continue
+    const prompt = userPrompt(obj)
+    if (prompt == null) continue
+    const got = prompt.text
     if (exact(got) === want) {
-      found = true
+      // Depois do delivering_at = prova. Na folga de relógio (antes dele) ou sem
+      // timestamp, texto igual pode ser a mensagem anterior idêntica ('ok', 'ok'):
+      // só vale com o queued_command; sem ele é ambíguo — 'unknown' (visível).
+      if ((Number.isFinite(ts) && ts >= since) || prompt.queued) found = true
+      else similar = true
       continue
     }
     const gotLoose = loose(got)

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openAppDb } from './db'
 import {
+  AWAITING_NOTICE_MS,
   CONFIRM_GIVEUP_MS,
   POLL_MS,
   PROMPT_TTL_MS,
@@ -222,6 +223,39 @@ describe('PromptQueue durável (DB real)', () => {
       ])
       expect(boot.snap()?.counters.expired).toBe(0)
       expect(rows()).toHaveLength(1)
+      boot.queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('conversa que não volta: o item aparece 2 min depois do fim do restore, e segue no banco', async () => {
+    vi.useFakeTimers()
+    try {
+      db.prepare(
+        `INSERT INTO prompt_queue_items (id, session_id, cc_session_id, text, state, created_at)
+         VALUES ('a1', 'pty-morta', ?, 'espera a conversa', 'queued', ?)`,
+      ).run(CC, Date.now())
+      const boot = makeQueue({ status: 'idle' })
+      boot.queue.restore()
+      // O renderer termina o restore 90s depois: o prazo conta dali.
+      await vi.advanceTimersByTimeAsync(90_000)
+      boot.queue.onWorkspaceRestored()
+      await vi.advanceTimersByTimeAsync(AWAITING_NOTICE_MS - 1)
+      expect(boot.snap()?.items[0]).not.toHaveProperty('waitingNotice')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(boot.snap()?.items).toEqual([
+        expect.objectContaining({ id: 'a1', recovery: 'awaiting-session', waitingNotice: true }),
+      ])
+      expect(boot.snap()?.counters.awaitingNoticed).toBe(1)
+      expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
+
+      // A conversa volta: entrega sozinha e o aviso sai.
+      boot.queue.onSessionLive(PTY, CC)
+      expect(boot.snap()?.items[0].waitingNotice).toBeUndefined()
+      boot.queue.onTurnEnded(PTY)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(boot.writes).toEqual([`${PTY}:espera a conversa`])
       boot.queue.dispose()
     } finally {
       vi.useRealTimers()
@@ -513,6 +547,48 @@ describe('transcriptVerdict (formato real do JSONL do claude)', () => {
 
   it('conteúdo divergente só na formatação = unknown', () => {
     expect(transcriptVerdict(user('faz   X\n\ne Y', after), 'faz X e Y', since)).toBe('unknown')
+  })
+
+  it('slash command com args (forma de skill) = found', () => {
+    const line = user(
+      '<command-message>kz:do</command-message>\n<command-name>/kz:do</command-name>\n<command-args>implementa X</command-args>',
+      after,
+    )
+    expect(transcriptVerdict(line, '/kz:do implementa X', since)).toBe('found')
+  })
+
+  it('slash command embutido (indentado, args vazios, nome sem barra) = found', () => {
+    const builtin = user(
+      '<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>',
+      after,
+    )
+    expect(transcriptVerdict(builtin, '/model', since)).toBe('found')
+    const bare = user(
+      '<command-message>browser-validate</command-message>\n<command-name>browser-validate</command-name>',
+      after,
+    )
+    expect(transcriptVerdict(bare, '/browser-validate', since)).toBe('found')
+  })
+
+  it("'!' vira <bash-input> = found", () => {
+    expect(
+      transcriptVerdict(user('<bash-input> ls -la</bash-input>', after), '! ls -la', since),
+    ).toBe('found')
+  })
+
+  it('texto idêntico só na folga de 2s (a mensagem anterior igual) é ambíguo = unknown', () => {
+    const before = '2026-10-11T11:59:59.000Z'
+    expect(transcriptVerdict(user('ok', before), 'ok', since)).toBe('unknown')
+    expect(transcriptVerdict(user('ok', undefined as never), 'ok', since)).toBe('unknown')
+  })
+
+  it('na folga de 2s com queued_command = found (é a fila entregando)', () => {
+    const queued = JSON.stringify({
+      type: 'attachment',
+      attachment: { type: 'queued_command', prompt: 'ok' },
+      timestamp: '2026-10-11T11:59:59.000Z',
+    })
+    expect(transcriptVerdict(queued, 'ok', since)).toBe('found')
   })
 
   it('sem transcript = unknown', () => {

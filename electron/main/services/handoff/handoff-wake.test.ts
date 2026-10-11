@@ -129,6 +129,7 @@ function snapshot(partial: Partial<PromptQueueSnapshot>): PromptQueueSnapshot {
       maybeUndelivered: 0,
       needsConfirmation: 0,
       discardedObsolete: 0,
+      awaitingNoticed: 0,
     },
     lastEvent: null,
     ...partial,

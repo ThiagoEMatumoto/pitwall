@@ -11,6 +11,7 @@ import { PromptQueue } from '../services/prompt-queue'
 import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
 import { getDormantPanes, setDormantSyncHook } from '../services/dormant-panes'
 import { liveConversationOf } from '../services/conversation-holder'
+import { setWorkspaceRestoredHook } from './workspace'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -240,6 +241,7 @@ export function registerSendPromptIpc(): void {
   restoreQueueWithLedger(promptQueue)
   ptyManager.on('spawn', (e) => onPtySpawn(e.sessionId))
   setDormantSyncHook(wakeParkedTargets)
+  setWorkspaceRestoredHook(() => promptQueue.onWorkspaceRestored())
   setSendMessageObserver((e) => {
     recordChildDirectMessage(e)
     const answered = answerCitedRequests(e)

@@ -29,6 +29,10 @@ export const PROMPT_TTL_MS = 30 * 60_000
 // pode já ter reenviado à mão ou a instrução perdeu o contexto ('pode fazer o
 // deploy'): vira 'needs-confirmation' e só sai com Enviar/Descartar.
 export const STALE_RESTORE_MS = 15 * 60_000
+// Item restaurado esperando a conversa voltar (resume/wake) não fica parado em
+// silêncio: se ela não voltou 2 min depois do fim do restore do workspace, o item
+// aparece no toast (enviar quando ela voltar / descartar). Continua no banco.
+export const AWAITING_NOTICE_MS = 2 * 60_000
 // expiresAt de item restaurado parado: não expira (o número cabe no JSON do IPC).
 const NEVER = Number.MAX_SAFE_INTEGER
 // Espera depois da borda do fim de turno: a TUI termina de desenhar a tela.
@@ -165,6 +169,7 @@ export class PromptQueue {
     maybeUndelivered: 0,
     needsConfirmation: 0,
     discardedObsolete: 0,
+    awaitingNoticed: 0,
   }
   // Itens de antes de um kill/reboot sem PTY viva da conversa ainda, e os
   // 'maybe-undelivered' que esperam o usuário decidir. Fora de `items` porque o
@@ -182,6 +187,7 @@ export class PromptQueue {
   private pendingRemoval = new Set<string>()
   private settleTimers = new Map<string, NodeJS.Timeout>()
   private poll: NodeJS.Timeout | null = null
+  private noticeTimer: NodeJS.Timeout | null = null
 
   constructor(private deps: PromptQueueDeps) {}
 
@@ -328,6 +334,39 @@ export class PromptQueue {
       }
     }
     if (this.parked.length > 0) this.ensurePoll()
+    // Fim do restore do main; o do renderer (onWorkspaceRestored) rearma o prazo.
+    this.armAwaitingNotice()
+    this.publish()
+  }
+
+  // O renderer terminou de restaurar as panes: quem ainda espera conversa tem
+  // AWAITING_NOTICE_MS a partir de agora para ela ficar viva.
+  onWorkspaceRestored(): void {
+    this.armAwaitingNotice()
+  }
+
+  private armAwaitingNotice(): void {
+    if (!this.parked.some((i) => i.recovery === 'awaiting-session')) return
+    if (this.noticeTimer) clearTimeout(this.noticeTimer)
+    this.noticeTimer = setTimeout(() => {
+      this.noticeTimer = null
+      this.noticeAwaiting()
+    }, AWAITING_NOTICE_MS)
+    this.noticeTimer.unref?.()
+  }
+
+  private noticeAwaiting(): void {
+    const waiting = this.parked.filter((i) => i.recovery === 'awaiting-session' && !i.waitingNotice)
+    if (waiting.length === 0) return
+    for (const item of waiting) {
+      item.waitingNotice = true
+      this.counters.awaitingNoticed++
+      this.deps.warn({
+        event: 'prompt_queue_awaiting_session',
+        sessionId: item.sessionId,
+        id: item.id,
+      })
+    }
     this.publish()
   }
 
@@ -407,6 +446,7 @@ export class PromptQueue {
     const now = this.now()
     for (const item of items) {
       item.recovery = undefined
+      item.waitingNotice = undefined
       item.sessionId = sessionId
       item.expiresAt = now + PROMPT_TTL_MS
     }
@@ -480,6 +520,8 @@ export class PromptQueue {
   dispose(): void {
     if (this.poll) clearInterval(this.poll)
     this.poll = null
+    if (this.noticeTimer) clearTimeout(this.noticeTimer)
+    this.noticeTimer = null
     for (const t of this.settleTimers.values()) clearTimeout(t)
     this.settleTimers.clear()
   }

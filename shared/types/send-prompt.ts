@@ -65,6 +65,9 @@ export interface QueuedPrompt {
   // wake da conversa falhou: espera Enviar/Descartar do usuário.
   // Nenhum dos três expira.
   recovery?: 'awaiting-session' | 'maybe-undelivered' | 'needs-confirmation'
+  // 'awaiting-session' que passou de AWAITING_NOTICE_MS sem a conversa voltar:
+  // o renderer mostra (enviar quando ela voltar / descartar).
+  waitingNotice?: true
 }
 
 // 'maybe-undelivered' não é terminal: o item segue no snapshot, marcado.
@@ -105,6 +108,8 @@ export interface PromptQueueCounters {
   needsConfirmation: number
   // Envelopes de handoff restaurados descartados porque os handoffs já terminaram.
   discardedObsolete: number
+  // Restaurados que passaram a aparecer por esperar a conversa voltar.
+  awaitingNoticed: number
 }
 
 export interface PromptQueueSnapshot {

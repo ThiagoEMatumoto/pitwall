@@ -35,6 +35,22 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
     const title = await deps.titleOf(item.sessionId).catch(() => null)
     if (disposed) return
     const target = title ?? 'a sessão'
+    if (item.recovery === 'awaiting-session') {
+      // Segue esperando sozinho: "enviar quando voltar" só tira o aviso da tela.
+      toastOf.set(
+        item.id,
+        deps.show({
+          title: `Aguardando a conversa ${target} voltar para entregar a mensagem`,
+          body: item.text.slice(0, 160),
+          actionLabel: 'Enviar quando voltar',
+          onAction: () => decide(item.id, async () => true, 'keep'),
+          secondaryActionLabel: 'Descartar',
+          onSecondaryAction: () => decide(item.id, deps.cancel, 'cancel'),
+          persistent: true,
+        }),
+      )
+      return
+    }
     const stale = item.recovery === 'needs-confirmation'
     const toastId = deps.show({
       title: stale
@@ -54,7 +70,12 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
     if (disposed) return
     const pending = new Set(
       snapshot.items
-        .filter((i) => i.recovery === 'maybe-undelivered' || i.recovery === 'needs-confirmation')
+        .filter(
+          (i) =>
+            i.recovery === 'maybe-undelivered' ||
+            i.recovery === 'needs-confirmation' ||
+            (i.recovery === 'awaiting-session' && i.waitingNotice),
+        )
         .map((i) => i.id),
     )
     for (const item of snapshot.items) {
