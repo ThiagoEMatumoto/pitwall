@@ -210,7 +210,7 @@ describe('sessions:hibernate-stats reflete os contadores do hibernator', () => {
     // /exit entregue na hora pela fila real (tela ociosa reconhecida) → exit.
     expect(await hibernator().hibernate({ sessionId: PTY, ccSessionId: CC })).toBe(true)
     expect(seam.writes).toEqual([`${PTY}:/exit`])
-    expect(hibernator().onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC })
+    expect(hibernator().onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: null })
 
     const view = stats()
     expect(view.hibernated).toBe(1)

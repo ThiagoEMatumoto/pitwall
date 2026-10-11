@@ -30,6 +30,7 @@ import { join } from 'node:path'
 import { closeDb, getDb } from '../db'
 import { isSessionPidAlive } from '../session-activity'
 import { IdleHibernator, type IdleHibernatorDeps } from './idle-hibernator'
+import { PANE_CHECK_TIMEOUT_MS, PaneConfirmer } from './pane-confirm'
 import {
   agentMessageSince,
   claudeCandidates,
@@ -122,6 +123,8 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     afterMin: () => 30,
     candidates: () => claudeCandidates([PTY]),
     hasPane: (cc) => hasAwakePane(cc, () => false),
+    confirmPane: async () => 'pane-1',
+    registerDormant: () => {},
     lastIoAt: () => NOW - 2 * WINDOW,
     sessionFile: sessionFileFor,
     isPidAlive: (file) => isSessionPidAlive(file),
@@ -314,6 +317,60 @@ describe('tick: as três condições', () => {
       vi.advanceTimersByTime(5_000)
       expect(candidates).toHaveBeenCalledTimes(1)
       h.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('round-trip: o renderer responde a aba → /exit sai com o paneId confirmado', async () => {
+    const asked: Array<{ sessionId: string; ccSessionId: string }> = []
+    const confirmer = new PaneConfirmer({
+      request: (r) => {
+        asked.push({ sessionId: r.sessionId, ccSessionId: r.ccSessionId })
+        queueMicrotask(() => confirmer.onResult({ requestId: r.requestId, paneId: 'pane-7' }))
+        return true
+      },
+    })
+    const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
+    const registered: string[] = []
+    const h = gate({
+      send,
+      confirmPane: (id, cc) => confirmer.confirm(id, cc),
+      registerDormant: (cc, paneId) => registered.push(`${cc}:${paneId}`),
+      exitTimeoutMs: 60_000,
+    })
+    await h.tick()
+    expect(asked).toEqual([{ sessionId: PTY, ccSessionId: CC }])
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(h.onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: 'pane-7' })
+    expect(registered).toEqual([`${CC}:pane-7`])
+    h.dispose()
+  })
+
+  it.each([
+    ['o renderer diz que não há aba (open_panes atrasado)', 'null' as const],
+    ['sem resposta em 3s', 'silent' as const],
+    ['sem janela', 'no-window' as const],
+  ])('round-trip sem confirmação (%s) → no-pane, sem /exit', async (_name, mode) => {
+    vi.useFakeTimers()
+    try {
+      const confirmer = new PaneConfirmer({
+        request: (r) => {
+          if (mode === 'no-window') return false
+          if (mode === 'null') {
+            queueMicrotask(() => confirmer.onResult({ requestId: r.requestId, paneId: null }))
+          }
+          return true
+        },
+      })
+      const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
+      const h = gate({ send, confirmPane: (id, cc) => confirmer.confirm(id, cc) })
+      const ticked = h.tick()
+      await vi.advanceTimersByTimeAsync(PANE_CHECK_TIMEOUT_MS)
+      await ticked
+      expect(send).not.toHaveBeenCalled()
+      expect(h.getStats().refused['no-pane']).toBe(1)
+      expect(h.isHibernating(PTY)).toBe(false)
     } finally {
       vi.useRealTimers()
     }

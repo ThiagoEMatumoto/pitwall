@@ -69,7 +69,12 @@ import type {
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
-import type { HibernateStatsView, SessionHibernatedEvent } from '../hibernate'
+import type {
+  HibernateStatsView,
+  PaneCheckRequest,
+  PaneCheckResult,
+  SessionHibernatedEvent,
+} from '../hibernate'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
 import type { AgentBusSnapshot } from './agent-bus'
@@ -2923,6 +2928,9 @@ export interface Api {
     hibernateStats(): Promise<HibernateStatsView>
     /** Uma PTY saiu pelo /exit da hibernação; chega ANTES do pty:exit da mesma PTY. */
     onHibernated(handler: (event: SessionHibernatedEvent) => void): () => void
+    /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
+    onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
+    paneCheckResult(result: PaneCheckResult): Promise<void>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

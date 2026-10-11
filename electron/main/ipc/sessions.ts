@@ -962,8 +962,10 @@ export function registerSessionIpc(): void {
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
-      // as anexou na entrega; o path injetado não serve depois do exit.
-      sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+      // as anexou na entrega; o path injetado não serve depois do exit. Hibernada
+      // não: o rascunho do Composer (com esses paths) volta no wake da sessão nova;
+      // o sweep do próximo boot recolhe o que sobrar.
+      if (!hibernated) sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
 
       // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
@@ -1528,6 +1530,7 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
+    getIdleHibernator()?.onUserInput(sessionId, data)
     ptyManager.write(sessionId, data)
   })
 

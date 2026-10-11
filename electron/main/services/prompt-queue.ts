@@ -43,6 +43,10 @@ export interface PromptQueueDeps {
   emit(snapshot: PromptQueueSnapshot): void
   warn(event: Record<string, unknown>): void
   now?(): number
+  // A PTY saiu sem ser o fim da conversa (hibernação): devolve o sessions.id da
+  // sessão acordada para os itens seguirem nela, ou null se não acordou. null aqui
+  // (em vez da promessa) = saída comum, os itens terminam como session-gone.
+  redirectOnExit?(sessionId: string): Promise<string | null> | null
 }
 
 type Verdict =
@@ -122,6 +126,8 @@ export class PromptQueue {
   // sessionId → quando a última entrega saiu (espera o claude trabalhar).
   private awaitingWork = new Map<string, number>()
   private delivering = new Set<string>()
+  // sessionId que saiu e cujos itens esperam o wake para mudar de sessão.
+  private rebinding = new Set<string>()
   private settleTimers = new Map<string, NodeJS.Timeout>()
   private poll: NodeJS.Timeout | null = null
 
@@ -225,9 +231,37 @@ export class PromptQueue {
 
   onSessionExit(sessionId: string): void {
     this.awaitingWork.delete(sessionId)
-    for (const item of this.items.filter((i) => i.sessionId === sessionId)) {
-      this.finish(item, 'session-gone')
+    if (this.rebinding.has(sessionId)) return
+    const items = this.items.filter((i) => i.sessionId === sessionId)
+    if (items.length === 0) return
+    const redirect = this.deps.redirectOnExit?.(sessionId) ?? null
+    if (!redirect) {
+      for (const item of items) this.finish(item, 'session-gone')
+      return
     }
+    this.rebinding.add(sessionId)
+    void redirect
+      .catch((err: unknown) => {
+        this.deps.warn({ event: 'prompt_queue_redirect_failed', sessionId, error: String(err) })
+        return null
+      })
+      .then((next) => this.rebind(sessionId, next))
+  }
+
+  // Mesmo item (mesmo id) na sessão nova: quem acompanha pelo id (ledger do
+  // handoff-wake, resposta a pedido) vê o 'delivered' de verdade quando sair.
+  private rebind(from: string, to: string | null): void {
+    this.rebinding.delete(from)
+    const moving = this.items.filter((i) => i.sessionId === from)
+    if (!to) {
+      for (const item of moving) this.finish(item, 'session-gone')
+      return
+    }
+    if (moving.length === 0) return
+    for (const item of moving) item.sessionId = to
+    this.deps.warn({ event: 'prompt_queue_rebound', from, to, count: moving.length })
+    this.publish()
+    void this.tryDeliver(to)
   }
 
   dispose(): void {

@@ -43,6 +43,21 @@ export interface HibernateStats {
 export interface SessionHibernatedEvent {
   sessionId: string
   ccSessionId: string
+  // Aba confirmada pelo renderer antes do /exit (null = hibernada sem confirmação).
+  paneId: string | null
+}
+
+// main → renderer, logo antes do /exit: qual aba mostra esta PTY agora?
+export interface PaneCheckRequest {
+  requestId: string
+  sessionId: string
+  ccSessionId: string
+}
+
+// paneId null = nenhuma aba acordada mostra a PTY.
+export interface PaneCheckResult {
+  requestId: string
+  paneId: string | null
 }
 
 // Por que o tick não roda. A ordem é a da checagem: o valor do boot vem antes

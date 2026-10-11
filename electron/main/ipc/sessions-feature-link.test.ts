@@ -539,8 +539,24 @@ describe('pty:exit de sessão hibernando', () => {
       'pty:exit',
       'pty:exit',
     ])
-    expect(seam.broadcasts[0].payload).toEqual({ sessionId: 'sess-1', ccSessionId: 'cc-1' })
+    expect(seam.broadcasts[0].payload).toEqual({
+      sessionId: 'sess-1',
+      ccSessionId: 'cc-1',
+      paneId: null,
+    })
     expect(h.getStats().hibernated).toBe(1)
+    h.dispose()
+    setIdleHibernator(null)
+  })
+
+  it('o usuário digita (sessions:write) depois do /exit entregue → o exit é comum', async () => {
+    const h = hibernating()
+    await h.hibernate({ sessionId: 'sess-3', ccSessionId: 'cc-3' })
+    handler('sessions:write')(null, ...(['sess-3', 'git status\r'] as never[]))
+    exit('sess-3')
+    expect(channels()).not.toContain('sessions:hibernated')
+    expect(channels()).toContain('pty:exit')
+    expect(h.getStats().hibernated).toBe(0)
     h.dispose()
     setIdleHibernator(null)
   })

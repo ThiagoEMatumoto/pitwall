@@ -1,10 +1,14 @@
 import { ipcMain } from 'electron'
+import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
 import { getPref } from '../services/prefs-store'
 import { activeHandoffCcSessionIds } from '../services/handoff-store'
 import { findTranscriptPath } from '../services/transcript-path'
 import { isSessionPidAlive } from '../services/session-activity'
 import { getDormantPanes } from '../services/dormant-panes'
+import { enrichDormantPanes } from '../services/dormant-enrich'
+import { getMainWindow } from '../services/notifications'
+import { PaneConfirmer } from '../services/hibernate/pane-confirm'
 import { lazyRestoreEnabled } from '../services/restore-plan'
 import { inspectProcTree } from '../services/hibernate/proc-tree'
 import { ScheduleScanner } from '../services/hibernate/schedule-scan'
@@ -56,6 +60,28 @@ export function hibernateStatsView(): HibernateStatsView {
   }
 }
 
+const paneCheckResultSchema = z.object({
+  requestId: z.string().min(1),
+  paneId: z.string().min(1).nullable(),
+})
+
+const paneConfirmer = new PaneConfirmer({
+  request: (request) => {
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) return false
+    win.webContents.send('sessions:pane-check-request', request)
+    return true
+  },
+})
+
+// A dormant entra no registro do main no exit, antes do dormantSync do renderer.
+function registerHibernatedDormant(ccSessionId: string, paneId: string): void {
+  const panes = getDormantPanes()
+  if (!panes) return
+  const [info] = enrichDormantPanes([{ ccSessionId, paneId, title: null, repoId: null }])
+  panes.add(info)
+}
+
 export function createIdleHibernator(): IdleHibernator {
   const scanner = new ScheduleScanner()
   return new IdleHibernator({
@@ -63,6 +89,8 @@ export function createIdleHibernator(): IdleHibernator {
     afterMin: afterMinPref,
     candidates: () => claudeCandidates(ptyManager.runningIds()),
     hasPane: (cc) => hasAwakePane(cc, (c) => getDormantPanes()?.findDormantByCc(c) != null),
+    confirmPane: (sessionId, cc) => paneConfirmer.confirm(sessionId, cc),
+    registerDormant: registerHibernatedDormant,
     lastIoAt: (id) => ptyManager.getLastIoAt(id),
     sessionFile: sessionFileFor,
     isPidAlive: (file) => isSessionPidAlive(file),
@@ -97,4 +125,7 @@ export function registerHibernateIpc(): void {
   setIdleHibernator(hibernator)
   hibernator.reschedule()
   ipcMain.handle('sessions:hibernate-stats', (): HibernateStatsView => hibernateStatsView())
+  ipcMain.handle('sessions:pane-check-result', (_e, raw: unknown) => {
+    paneConfirmer.onResult(paneCheckResultSchema.parse(raw))
+  })
 }

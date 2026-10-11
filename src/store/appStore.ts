@@ -4,7 +4,12 @@ import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
-import type { SessionHibernatedEvent } from '../../shared/hibernate'
+import {
+  putComposerDraft,
+  takeComposerDraft,
+  type ComposerDraft,
+} from '@/features/sessions/composer-drafts'
+import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
   AdvisorModel,
   AgentProviderId,
@@ -80,6 +85,9 @@ export interface ActivePane {
   // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
   // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
   dormantReason?: 'hibernated'
+  // Rascunho do Composer (texto + anexos) da sessão que hibernou: o id da sessão
+  // muda no wake e o rascunho, guardado por id, ficaria órfão. Volta no wake.
+  composerDraft?: ComposerDraft
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -266,6 +274,7 @@ let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
 let offHibernated: (() => void) | null = null
+let offPaneCheck: (() => void) | null = null
 // sessions.id das PTYs que saíram por hibernação: o pty:exit que chega logo
 // depois não fecha a pane nem mostra o toast de sessão encerrada (Terminal).
 const hibernatedSessionIds = new Set<string>()
@@ -1102,6 +1111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
     offHibernated = sessionsApi.onHibernated(onHibernated)
+    offPaneCheck = sessionsApi.onPaneCheckRequest(answerPaneCheck)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
     syncDormantPanes(get().panes)
     const list = await sessionsApi.listLiveGlobal()
@@ -1157,6 +1167,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offHibernated) {
       offHibernated()
       offHibernated = null
+    }
+    if (offPaneCheck) {
+      offPaneCheck()
+      offPaneCheck = null
     }
     if (offGlobalActivity) {
       offGlobalActivity()
@@ -1221,6 +1235,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 // aba), a dormant sai e o foco vai para a existente: duas abas da mesma PTY não.
 function adoptLiveSession(paneId: string, session: Session): void {
   const { panes } = useAppStore.getState()
+  // Antes do setState: o Composer da sessão nova lê o rascunho ao montar.
+  const draft = panes.find((p) => p.paneId === paneId && p.dormant)?.composerDraft
+  if (draft) putComposerDraft(session.id, draft)
   const existing = panes.find(
     (p) => p.paneId !== paneId && !p.dormant && p.session.id === session.id,
   )
@@ -1233,7 +1250,13 @@ function adoptLiveSession(paneId: string, session: Session): void {
     useAppStore.setState({
       panes: panes.map((p) => {
         if (p.paneId !== paneId || !p.dormant) return p
-        const { dormant: _dormant, restoreError: _error, dormantReason: _reason, ...awake } = p
+        const {
+          dormant: _dormant,
+          restoreError: _error,
+          dormantReason: _reason,
+          composerDraft: _draft,
+          ...awake
+        } = p
         return { ...awake, session }
       }),
     })
@@ -1253,11 +1276,15 @@ function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): 
 
 // A PTY saiu por hibernação (o evento vem ANTES do pty:exit): a pane vira dormant
 // no lugar (mesmo paneId), como uma restaurada dormindo, e entra no dormantSync
-// para o agent-bus achá-la. Sessão sem pane (background) não tem o que converter.
-function onHibernated({ sessionId, ccSessionId }: SessionHibernatedEvent): void {
+// para o agent-bus achá-la. O rascunho do Composer vai junto com a pane.
+function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent): void {
   hibernatedSessionIds.add(sessionId)
+  const composerDraft = takeComposerDraft(sessionId) ?? undefined
   const { panes } = useAppStore.getState()
-  if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) return
+  if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) {
+    addHibernatedPane(sessionId, ccSessionId, paneId, composerDraft)
+    return
+  }
   useAppStore.setState({
     panes: panes.map((p) => {
       if (p.dormant || p.session.id !== sessionId) return p
@@ -1272,10 +1299,50 @@ function onHibernated({ sessionId, ccSessionId }: SessionHibernatedEvent): void 
         },
         dormant: true,
         dormantReason: 'hibernated',
+        ...(composerDraft ? { composerDraft } : {}),
       }
     }),
   })
   schedulePersist(useAppStore.getState().panes)
+}
+
+// A aba confirmada antes do /exit sumiu até o exit (fechada nessa janela): sem
+// pane a conversa ficaria sem PTY e sem nada para acordá-la. Vira uma dormant
+// 'hibernated' nova, com os dados da sessão viva que o store ainda conhece.
+function addHibernatedPane(
+  sessionId: string,
+  ccSessionId: string,
+  paneId: string | null,
+  composerDraft: ComposerDraft | undefined,
+): void {
+  const { panes, liveSessions } = useAppStore.getState()
+  if (panes.some((p) => p.session.ccSessionId === ccSessionId)) return
+  const live = liveSessions.find((s) => s.id === sessionId)
+  const id = paneId && !panes.some((p) => p.paneId === paneId) ? paneId : `pane-${Date.now()}`
+  const base = dormantPaneFromSnapshot(
+    {
+      ccSessionId,
+      repo: live?.repo ?? null,
+      projectName: live?.projectName ?? null,
+      projectIcon: live?.projectIcon ?? null,
+      projectColor: live?.projectColor ?? null,
+    },
+    id,
+  )
+  const pane: ActivePane = {
+    ...base,
+    session: { ...base.session, title: live?.title ?? null },
+    dormantReason: 'hibernated',
+    ...(composerDraft ? { composerDraft } : {}),
+  }
+  useAppStore.setState({ panes: [...panes, pane] })
+  schedulePersist(useAppStore.getState().panes)
+}
+
+// O main confirma, logo antes do /exit, que uma aba acordada mostra esta PTY.
+function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
+  const pane = useAppStore.getState().panes.find((p) => !p.dormant && p.session.id === sessionId)
+  void sessionsApi.paneCheckResult({ requestId, paneId: pane?.paneId ?? null })
 }
 
 // Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do

@@ -12,6 +12,7 @@ import { MentionMenu, SessionPill, useMentionMenu } from './MentionMenu'
 import { applyCompletion, parseSend, rewriteFileMentions, type ActiveToken } from './mention-parser'
 import { useSendTargets } from '@/features/quick-composer/quick-composer-store'
 import { defaultWhen, sendRefusalReason } from '@/features/quick-composer/target-search'
+import { attachmentsBySession, drafts } from './composer-drafts'
 
 export interface ComposerHandle {
   focus: () => void
@@ -51,11 +52,9 @@ interface Props {
   compact?: boolean
 }
 
-// Drafts em memória por sessão — princípio "nunca perder input". Sobrevive ao
-// remount do dock (toggle de aba, reopen de pane) enquanto o app vive; não
-// persiste em disco. O Composer é montado uma vez por sessão, então a chave é
-// estável durante o ciclo de vida da instância.
-const drafts = new Map<string, string>()
+// Drafts e anexos por sessão vivem em composer-drafts (a hibernação os move para
+// o id novo). O Composer é montado uma vez por sessão, então a chave é estável
+// durante o ciclo de vida da instância.
 
 // Histórico de prompts despachados por sessão (em ordem cronológica). Mesma
 // natureza dos drafts: memória, por sessão, sobrevive ao remount do dock mas não
@@ -70,12 +69,6 @@ function pushHistory(sessionId: string, value: string) {
   if (list[list.length - 1] === v) return
   histories.set(sessionId, [...list, v])
 }
-
-// Anexos persistidos por sessão: só a parte serializável ({name, path}). O
-// `previewUrl` (object URL) é efêmero e não viaja — ao restaurar, o chip aparece
-// sem thumbnail (com ícone). Mesma natureza dos drafts/histórico: memória.
-type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
-const attachmentsBySession = new Map<string, PersistedAttachment[]>()
 
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
 // acima (memória, sobrevive ao remount, não persiste em disco). Era uma

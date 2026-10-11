@@ -20,6 +20,12 @@ import type { ProcTreeVerdict } from './proc-tree'
 
 export const HIBERNATE_TICK_MS = 60_000
 export const EXIT_TIMEOUT_MS = 30_000
+// Depois do exit-timeout o /exit continua entregue: um claude lento que sai aos
+// 45s ainda hibernou. O marcador só cai no pty:exit, no input do usuário ou aqui.
+export const EXIT_MARKER_TTL_MS = 5 * 60_000
+// O exit da PTY chega a dois ouvintes (este e a PromptQueue) sem ordem garantida:
+// a fila pergunta wasHibernatedExit depois que este já consumiu o marcador.
+const RECENT_EXIT_MS = 60_000
 export const EXIT_COMMAND = '/exit'
 
 export interface HibernateCandidate {
@@ -44,8 +50,15 @@ export interface IdleHibernatorDeps {
   afterMin(): number
   // PTYs vivas do provider claude com ccSessionId.
   candidates(): HibernateCandidate[]
-  // Pane (aba) acordada no renderer para esta conversa.
+  // Pane (aba) acordada no renderer para esta conversa, pelo open_panes salvo
+  // (debounce): filtro barato antes do round-trip.
   hasPane(ccSessionId: string): boolean
+  // Round-trip com o renderer logo antes do /exit: paneId da aba que mostra esta
+  // PTY agora, ou null (sem pane, sem janela, sem resposta no prazo).
+  confirmPane(sessionId: string, ccSessionId: string): Promise<string | null>
+  // Registra a dormant no main já no exit, sem esperar o dormantSync do renderer:
+  // uma mensagem que chega nessa janela precisa achar a pane para acordá-la.
+  registerDormant(ccSessionId: string, paneId: string): void
   lastIoAt(sessionId: string): number | null
   // null = sem arquivo, ilegível ou sem pid.
   sessionFile(ccSessionId: string): SessionFileState | null
@@ -65,6 +78,7 @@ export interface IdleHibernatorDeps {
   warn(event: Record<string, unknown>): void
   now?(): number
   exitTimeoutMs?: number
+  exitMarkerTtlMs?: number
   tickMs?: number
 }
 
@@ -79,7 +93,11 @@ function emptyRefusals(): Record<HibernateRefusal, number> {
 
 interface Pending {
   ccSessionId: string
+  paneId: string | null
+  // A fila escreveu o /exit. Antes disso, input do usuário não desfaz nada.
+  delivered: boolean
   timer: NodeJS.Timeout | null
+  expireTimer: NodeJS.Timeout | null
 }
 
 export class IdleHibernator {
@@ -92,6 +110,7 @@ export class IdleHibernator {
   // sessions.id → /exit em curso. Marcado ANTES do envio: o exit pode chegar
   // antes de o send devolver.
   private pending = new Map<string, Pending>()
+  private recentExits = new Map<string, NodeJS.Timeout>()
   private timer: NodeJS.Timeout | null = null
   private ticking = false
 
@@ -137,8 +156,15 @@ export class IdleHibernator {
   dispose(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    for (const p of this.pending.values()) if (p.timer) clearTimeout(p.timer)
+    for (const p of this.pending.values()) this.clearTimers(p)
     this.pending.clear()
+    for (const t of this.recentExits.values()) clearTimeout(t)
+    this.recentExits.clear()
+  }
+
+  private clearTimers(p: Pending): void {
+    if (p.timer) clearTimeout(p.timer)
+    if (p.expireTimer) clearTimeout(p.expireTimer)
   }
 
   async tick(): Promise<void> {
@@ -156,7 +182,13 @@ export class IdleHibernator {
           this.refuse(verdict.reason)
           continue
         }
-        await this.hibernate(candidate)
+        // O open_panes tem debounce: a aba pode ter fechado depois do último save.
+        const paneId = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
+        if (!paneId) {
+          this.refuse('no-pane')
+          continue
+        }
+        await this.hibernate(candidate, paneId)
       }
     } finally {
       this.ticking = false
@@ -204,8 +236,14 @@ export class IdleHibernator {
 
   // H3: /exit pela fila on-idle com a guarda do agent-bus. Só conta como em curso
   // se a fila escreveu agora; segurado/enfileirado/recusado = cancela e não hiberna.
-  async hibernate(c: HibernateCandidate): Promise<boolean> {
-    const pending: Pending = { ccSessionId: c.ccSessionId, timer: null }
+  async hibernate(c: HibernateCandidate, paneId: string | null = null): Promise<boolean> {
+    const pending: Pending = {
+      ccSessionId: c.ccSessionId,
+      paneId,
+      delivered: false,
+      timer: null,
+      expireTimer: null,
+    }
     this.pending.set(c.sessionId, pending)
     let sent: SendPromptResult
     try {
@@ -227,23 +265,55 @@ export class IdleHibernator {
       })
       return false
     }
+    pending.delivered = true
     pending.timer = setTimeout(() => {
+      pending.timer = null
       if (this.pending.get(c.sessionId) !== pending) return
-      this.pending.delete(c.sessionId)
+      // Conta, mas não esquece: o claude ainda pode sair com o /exit entregue.
       this.refuse('exit-timeout')
       this.deps.warn({ event: 'hibernate_exit_timeout', sessionId: c.sessionId })
     }, this.deps.exitTimeoutMs ?? EXIT_TIMEOUT_MS)
     pending.timer.unref?.()
+    pending.expireTimer = setTimeout(() => {
+      if (this.pending.get(c.sessionId) !== pending) return
+      this.forget(c.sessionId, pending)
+      this.deps.warn({ event: 'hibernate_exit_marker_expired', sessionId: c.sessionId })
+    }, this.deps.exitMarkerTtlMs ?? EXIT_MARKER_TTL_MS)
+    pending.expireTimer.unref?.()
     return true
+  }
+
+  private forget(sessionId: string, pending: Pending): void {
+    this.clearTimers(pending)
+    this.pending.delete(sessionId)
+  }
+
+  // O app escreveu no PTY (input do usuário) depois do /exit entregue: quem sair
+  // daqui em diante saiu por vontade do usuário, não por hibernação.
+  onUserInput(sessionId: string, data: string): void {
+    const pending = this.pending.get(sessionId)
+    if (!pending?.delivered || isTerminalReport(data)) return
+    this.forget(sessionId, pending)
+    this.deps.warn({ event: 'hibernate_cancelled_by_input', sessionId })
+  }
+
+  // O exit desta PTY é (ou acabou de ser) o da hibernação. Vale antes e depois
+  // de onExit, para os ouvintes do exit não dependerem da ordem de registro.
+  wasHibernatedExit(sessionId: string): boolean {
+    return this.pending.has(sessionId) || this.recentExits.has(sessionId)
   }
 
   // Exit de PTY: se era o /exit da hibernação, devolve o evento que o renderer
   // usa para converter a pane em dormant (em vez de fechar).
   onExit(sessionId: string): SessionHibernatedEvent | null {
+    // Sem exigir delivered: o exit pode chegar antes de o send devolver.
     const pending = this.pending.get(sessionId)
     if (!pending) return null
-    if (pending.timer) clearTimeout(pending.timer)
-    this.pending.delete(sessionId)
+    this.forget(sessionId, pending)
+    const recent = setTimeout(() => this.recentExits.delete(sessionId), RECENT_EXIT_MS)
+    recent.unref?.()
+    this.recentExits.set(sessionId, recent)
+    if (pending.paneId) this.deps.registerDormant(pending.ccSessionId, pending.paneId)
     this.stats.hibernated++
     this.deps.warn({
       event: 'session_hibernated',
@@ -251,12 +321,21 @@ export class IdleHibernator {
       ccSessionId: pending.ccSessionId,
       total: this.stats.hibernated,
     })
-    return { sessionId, ccSessionId: pending.ccSessionId }
+    return { sessionId, ccSessionId: pending.ccSessionId, paneId: pending.paneId }
   }
 
   private refuse(reason: HibernateRefusal): void {
     this.stats.refused[reason]++
   }
+}
+
+// O que o xterm responde sozinho (foco, posição do cursor, atributos, cores) não é
+// o usuário digitando: com focus reporting ligado, trocar de aba já escreve.
+const TERMINAL_REPORT_RE =
+  /^(?:\x1b\[[IO]|\x1b\[\??[\d;]*[Rcn]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))+$/
+
+export function isTerminalReport(data: string): boolean {
+  return TERMINAL_REPORT_RE.test(data)
 }
 
 let current: IdleHibernator | null = null

@@ -9,6 +9,8 @@ import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
 import { getDormantPanes } from '../services/dormant-panes'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { hibernateExitRedirect } from '../services/hibernate/hibernate-redirect'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -84,14 +86,17 @@ export function screenOf(id: string): Promise<ScreenScan | null> {
 
 // O sessions.id de uma conversa que está dormindo no renderer não tem PTY: acorda
 // a pane e manda para o id novo. Sem pane dormindo, o 'not-running' segue.
+function ccOf(sessionId: string): string | null {
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
+    { cc_session_id: string | null } | undefined
+  return row?.cc_session_id ?? null
+}
+
 export async function sendWakingDormant(input: SendPromptInput): Promise<SendPromptResult> {
   const sent = await promptQueue.send(input)
   if (sent.ok || sent.error !== 'not-running') return sent
   const panes = getDormantPanes()
-  const row = getDb()
-    .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-    .get(input.sessionId) as { cc_session_id: string | null } | undefined
-  const cc = row?.cc_session_id
+  const cc = ccOf(input.sessionId)
   if (!panes || !cc || !panes.findDormantByCc(cc)) return sent
   const woke = await panes.wakeDormant(cc, 'send-prompt')
   if (!woke.ok) {
@@ -166,6 +171,13 @@ export const promptQueue = new PromptQueue({
     }
   },
   warn: (event) => console.warn(JSON.stringify(event)),
+  redirectOnExit: (id) =>
+    hibernateExitRedirect({
+      wasHibernatedExit: (sid) => getIdleHibernator()?.wasHibernatedExit(sid) ?? false,
+      panes: getDormantPanes,
+      ccOf,
+      wakeFailed: (sid, error) => promptQueue.recordWakeFailed(sid, error),
+    })(id),
 })
 
 const tailFeed = new ScreenTailFeed({
