@@ -163,21 +163,24 @@ it('flushSync antes da hidratação junta o salvo ao digitado, sem sobrescrever'
   expect(readDraft(dbPath, 'pane:p-race')?.text).toBe('salvo antes do reboot\n\ndigitado no boot')
 }, 30000)
 
-// Write-through: cada mudança chega ao main e é commitada (NORMAL) antes de o
-// renderer seguir para a próxima. SIGKILL logo após a última mudança, sem flush e
-// com o debounce FULL ainda pendente: a última versão está no app.db.
+// Write-through: cada mudança chega ao main, que comita (NORMAL) no máximo uma
+// vez por janela de DRAFT_COALESCE_MS (50ms), sempre a última versão. SIGKILL
+// ~60ms após a última mudança (passada a janela), sem flush e com o debounce FULL
+// ainda pendente: a última versão está no app.db.
+const KILL_AFTER_LAST_KEY_MS = 60
+
 it.each([
   ['keys', 'cada tecla no seu tick'],
   ['burst', '200 mudanças no mesmo tick, coalescidas'],
 ])(
-  'write-through (%s): SIGKILL logo após a última mudança mantém a última versão — %s',
+  'write-through (%s): SIGKILL ~60ms após a última mudança mantém a última versão — %s',
   async (mode) => {
     const key = `pane:p-wt-${mode}`
     const { dbPath, exited } = await runChild({
       entry: 'composer-draft-typist',
       args: (db) => [db, mode, key, 'versão', '200'],
       marker: 'ready',
-      onReady: (child) => child.kill('SIGKILL'),
+      onReady: (child) => setTimeout(() => child.kill('SIGKILL'), KILL_AFTER_LAST_KEY_MS),
     })
     expect(await exited).toEqual({ code: null, signal: 'SIGKILL' })
     expect(readDraft(dbPath, key)).toMatchObject({ key, text: 'versão 200', attachments: [] })
