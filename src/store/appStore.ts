@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
+import { oomToastText } from '@/features/sessions/oom-toast'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
@@ -14,6 +15,7 @@ import type {
   PaneSnapshot,
   PermissionMode,
   Repo,
+  ScopeOomEvent,
   Session,
   WakeRequest,
 } from '../../shared/types/ipc'
@@ -261,6 +263,7 @@ let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
+let offOom: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
 const wakes = new Map<string, Promise<string | null>>()
@@ -1090,6 +1093,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
+    offOom = sessionsApi.onOom(onSessionOom)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
     syncDormantPanes(get().panes)
     const list = await sessionsApi.listLiveGlobal()
@@ -1141,6 +1145,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offDormantBecameLive) {
       offDormantBecameLive()
       offDormantBecameLive = null
+    }
+    if (offOom) {
+      offOom()
+      offOom = null
     }
     if (offGlobalActivity) {
       offGlobalActivity()
@@ -1224,6 +1232,18 @@ function adoptLiveSession(paneId: string, session: Session): void {
   }
   schedulePersist(useAppStore.getState().panes)
   void useAppStore.getState().refreshLiveSessions()
+}
+
+const OOM_TOAST_MS = 12_000
+
+// O kernel matou um processo da sessão por passar do teto de memória do scope.
+export function onSessionOom(event: ScopeOomEvent): void {
+  const { liveSessions, panes } = useAppStore.getState()
+  const live = liveSessions.find((x) => x.id === event.sessionId)
+  const pane = panes.find((p) => p.session.id === event.sessionId)
+  const title =
+    live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label ?? 'sem título'
+  showToast({ title: oomToastText(title, event), durationMs: OOM_TOAST_MS })
 }
 
 // O main retomou (handoffs:resume/adopt) a conversa de uma pane dormindo: a pane
