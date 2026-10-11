@@ -7,8 +7,12 @@ import type {
 // Persistência durável do rascunho do Composer, sem React: o Composer alimenta o
 // estado a cada mudança e o persister grava no app.db com debounce. Regras que
 // protegem o trabalho do usuário:
-//  - nada é gravado antes da hidratação: o estado vazio do mount não pode
-//    apagar o rascunho que ainda está sendo lido;
+//  - nada é gravado antes da hidratação: o estado do mount não pode sobrescrever
+//    o rascunho que ainda está sendo lido;
+//  - se o usuário digitou antes da leitura terminar, salvo e digitado são
+//    JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
+//  - flushSync grava na hora por IPC síncrono (blur, troca de pane, unload,
+//    pedido do main no quit/exit): quando retorna, o commit já aconteceu;
 //  - a remoção só acontece depois do envio confirmado (sendThenClear) ou porque
 //    o usuário esvaziou o texto à mão.
 
@@ -19,7 +23,10 @@ export interface DraftState {
 
 export interface DraftApi {
   get(key: string): Promise<ComposerDraft | null>
+  // Síncronos (ipcRenderer.sendSync): retornam depois do commit no main.
+  getSync(key: string): ComposerDraft | null
   save(draft: ComposerDraftInput): Promise<void>
+  saveSync(draft: ComposerDraftInput): void
   clear(key: string): Promise<void>
 }
 
@@ -37,16 +44,54 @@ function isEmpty(s: DraftState): boolean {
   return s.text.length === 0 && s.attachments.length === 0
 }
 
+function sameState(a: DraftState, b: DraftState): boolean {
+  return a.text === b.text && sameAttachments(a.attachments, b.attachments)
+}
+
+// Salvo primeiro (é o mais antigo), depois o que foi digitado antes da leitura.
+export function mergeDrafts(saved: DraftState, typed: DraftState): DraftState {
+  const text =
+    saved.text.length === 0
+      ? typed.text
+      : typed.text.length === 0
+        ? saved.text
+        : `${saved.text}\n\n${typed.text}`
+  const extra = typed.attachments.filter((t) => !saved.attachments.some((s) => s.path === t.path))
+  return { text, attachments: [...saved.attachments, ...extra] }
+}
+
+// `merged` = o salvo foi juntado ao que o usuário digitou antes da leitura.
+export type ApplyDraft = (state: DraftState, merged: boolean) => void
+
 export interface DraftPersister {
-  // Lê o rascunho salvo; `apply` só é chamado se o usuário ainda não mexeu.
-  hydrate(apply: (draft: ComposerDraft) => void): Promise<void>
+  // Lê o rascunho salvo e o entrega ao `apply` (direto, ou juntado ao digitado).
+  hydrate(apply: ApplyDraft): Promise<void>
+  // Estado em memória do mesmo processo (remount): é mais novo que o banco, então
+  // dispensa a leitura e vale como hidratado.
+  seed(state: DraftState): void
   update(state: DraftState): void
-  // Grava agora o que estiver pendente (unmount/desmontagem da pane).
+  // Grava agora o que estiver pendente, assíncrono.
   flush(): Promise<void>
+  // Grava agora, síncrono: ao retornar, o rascunho já está commitado.
+  flushSync(): void
   // Envia e, SÓ se `send` confirmar (resolver true), remove o rascunho enviado.
   // Falha (false ou throw) mantém o rascunho intacto.
   sendThenClear(sentText: string, send: () => Promise<boolean>): Promise<boolean>
-  dispose(): Promise<void>
+  // Desmonte: grava o pendente síncrono e para de aplicar na UI.
+  dispose(): void
+}
+
+// Persisters vivos, para o flush global (beforeunload, troca de pane, pedido do main).
+const live = new Set<DraftPersister>()
+
+export function flushAllDraftsSync(): void {
+  for (const p of live) {
+    try {
+      p.flushSync()
+    } catch (err) {
+      console.error('[composer] flush síncrono falhou:', err)
+    }
+  }
 }
 
 export function createDraftPersister(opts: {
@@ -62,6 +107,7 @@ export function createDraftPersister(opts: {
   let hydrated = false
   let dirty = false
   let disposed = false
+  let apply: ApplyDraft | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
 
   function cancelTimer() {
@@ -69,13 +115,16 @@ export function createDraftPersister(opts: {
     timer = null
   }
 
+  function draftInput(k: string): ComposerDraftInput {
+    return { key: k, ccSessionId, paneId, ...latest }
+  }
+
   async function write(): Promise<void> {
     cancelTimer()
     if (!key || !hydrated || !dirty) return
     dirty = false
-    const state = latest
     try {
-      await api.save({ key, ccSessionId, paneId, ...state })
+      await api.save(draftInput(key))
     } catch (err) {
       dirty = true
       console.error('[composer] falha ao gravar o rascunho:', err)
@@ -88,36 +137,80 @@ export function createDraftPersister(opts: {
     timer = setTimeout(() => void write(), delayMs)
   }
 
-  return {
-    async hydrate(apply) {
+  // Primeira resolução vence (a leitura assíncrona ou a síncrona do flush).
+  function resolveSaved(saved: ComposerDraft | null) {
+    if (hydrated) return
+    hydrated = true
+    if (saved) {
+      const stored: DraftState = { text: saved.text, attachments: saved.attachments }
+      if (!dirty && isEmpty(latest)) {
+        latest = stored
+        if (!disposed) apply?.(stored, false)
+      } else if (!sameState(stored, latest)) {
+        latest = mergeDrafts(stored, latest)
+        dirty = true
+        if (!disposed) apply?.(latest, true)
+      }
+    }
+    if (dirty) schedule()
+  }
+
+  function flushSync(): void {
+    if (!key) return
+    if (!hydrated) {
+      if (!dirty) return
+      // Digitou antes da leitura: sem saber o salvo, gravar o digitado o apagaria.
+      try {
+        resolveSaved(api.getSync(key))
+      } catch (err) {
+        console.error('[composer] leitura síncrona do rascunho falhou; não gravo:', err)
+        return
+      }
+    }
+    cancelTimer()
+    if (!dirty) return
+    dirty = false
+    try {
+      api.saveSync(draftInput(key))
+    } catch (err) {
+      dirty = true
+      console.error('[composer] falha ao gravar o rascunho (síncrono):', err)
+      schedule()
+    }
+  }
+
+  const persister: DraftPersister = {
+    async hydrate(fn) {
+      apply = fn
       if (!key) {
         hydrated = true
         return
       }
+      let saved: ComposerDraft | null = null
       try {
-        const saved = await api.get(key)
-        if (saved && !disposed && !dirty && isEmpty(latest)) {
-          latest = { text: saved.text, attachments: saved.attachments }
-          apply(saved)
-        }
+        saved = await api.get(key)
       } catch (err) {
         console.error('[composer] falha ao ler o rascunho salvo:', err)
-      } finally {
-        hydrated = true
-        if (dirty) schedule()
       }
+      resolveSaved(saved)
+    },
+
+    seed(state) {
+      latest = state
+      dirty = true
+      hydrated = true
+      schedule()
     },
 
     update(state) {
-      if (state.text === latest.text && sameAttachments(state.attachments, latest.attachments)) {
-        return
-      }
+      if (sameState(state, latest)) return
       latest = state
       dirty = true
       if (hydrated) schedule()
     },
 
     flush: write,
+    flushSync,
 
     async sendThenClear(sentText, send) {
       let ok = false
@@ -144,11 +237,16 @@ export function createDraftPersister(opts: {
       return ok
     },
 
-    async dispose() {
-      await write()
+    dispose() {
       disposed = true
+      live.delete(persister)
+      flushSync()
+      // O síncrono falhou: última tentativa pelo caminho assíncrono.
+      if (dirty) void write()
     },
   }
+  live.add(persister)
+  return persister
 }
 
 function sameAttachments(a: ComposerDraftAttachment[], b: ComposerDraftAttachment[]): boolean {

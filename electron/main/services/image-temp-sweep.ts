@@ -24,3 +24,24 @@ export function sweepImageTempDir(
     }
   }
 }
+
+// Sweep das imagens de uma sessão que saiu: uma imagem colada pode estar só no
+// debounce do rascunho do renderer, ainda fora do app.db. Primeiro o flush; sem
+// confirmação dele, não apaga nada (o sweep do boot pega os órfãos depois).
+export async function sweepAfterDraftFlush(
+  flushDrafts: () => Promise<boolean>,
+  sweep: () => void,
+): Promise<boolean> {
+  let flushed = false
+  try {
+    flushed = await flushDrafts()
+  } catch (err) {
+    console.error('[sessions] flush dos rascunhos antes do sweep falhou:', err)
+  }
+  if (!flushed) {
+    console.warn('[sessions] sweep de imagens adiado: rascunhos sem flush confirmado')
+    return false
+  }
+  sweep()
+  return true
+}

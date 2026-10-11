@@ -6,14 +6,9 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
-import {
-  clearComposerDraft,
-  draftReferencesFile,
-  getComposerDraft,
-  parseComposerDraftInput,
-  saveComposerDraft,
-} from '../services/composer-drafts'
-import { sweepImageTempDir } from '../services/image-temp-sweep'
+import { draftReferencesFile } from '../services/composer-drafts'
+import { requestDraftFlush } from './composer-drafts'
+import { sweepAfterDraftFlush, sweepImageTempDir } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
@@ -960,7 +955,11 @@ export function registerSessionIpc(): void {
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
       // as anexou na entrega; o path injetado não serve depois do exit.
-      sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+      // Antes, o flush dos rascunhos: a imagem colada ainda no debounce do
+      // renderer não está no app.db e o sweep a apagaria.
+      void sweepAfterDraftFlush(requestDraftFlush, () =>
+        sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId)),
+      )
 
       // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
@@ -1534,19 +1533,6 @@ export function registerSessionIpc(): void {
       saveImageTemp(sessionId, bytes, mime),
   )
 
-  ipcMain.handle('sessions:get-draft', (_e, key: unknown) => {
-    if (typeof key !== 'string' || key.length === 0) throw new Error('chave de rascunho inválida')
-    return getComposerDraft(getDb(), key)
-  })
-
-  ipcMain.handle('sessions:save-draft', (_e, raw: unknown) => {
-    saveComposerDraft(getDb(), parseComposerDraftInput(raw))
-  })
-
-  ipcMain.handle('sessions:clear-draft', (_e, key: unknown) => {
-    if (typeof key !== 'string' || key.length === 0) throw new Error('chave de rascunho inválida')
-    clearComposerDraft(getDb(), key)
-  })
 
   ipcMain.handle('sessions:resize', (_e, sessionId: string, cols: number, rows: number) => {
     ptyManager.resize(sessionId, cols, rows)

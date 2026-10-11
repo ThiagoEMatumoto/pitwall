@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
+import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
@@ -79,6 +80,31 @@ export interface ActivePane {
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
+
+// Identidade da pane: chave do layout do dockview e do rascunho durável do
+// Composer ('pane:<id>'). Única sempre — nunca derivada do cc (duas panes da
+// mesma conversa dividiriam o rascunho) nem só do relógio (dois spawns no
+// mesmo ms colidiriam).
+export function newPaneId(): string {
+  const uuid =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `pane-${uuid}`
+}
+
+// Snapshot antigo (ou de um caminho que não gravou paneId) ganha um id agora; o
+// persist do fim do restore o grava no open_panes e o próximo boot o reusa.
+function withStablePaneIds(snapshots: PaneSnapshot[]): {
+  snapshots: PaneSnapshot[]
+  generated: boolean
+} {
+  let generated = false
+  const out = snapshots.map((snap) => {
+    if (snap.paneId) return snap
+    generated = true
+    return { ...snap, paneId: newPaneId() }
+  })
+  return { snapshots: out, generated }
+}
 
 export function isDormantSessionId(id: string | null | undefined): boolean {
   return !!id && id.startsWith(DORMANT_ID_PREFIX)
@@ -244,6 +270,20 @@ export function pendingEndSessionIds(): ReadonlySet<string> {
   return new Set(pendingEnds.keys())
 }
 
+// Fechamento de pane: o rascunho dela é apagado só quando a janela do Desfazer
+// expira (com a mesma graça do kill do endSession) e a pane não voltou. Devolve
+// o cancelamento, chamado pelo Desfazer.
+function scheduleDraftExpiry(paneId: string): () => void {
+  const timer = setTimeout(() => {
+    if (useAppStore.getState().panes.some((p) => p.paneId === paneId)) return
+    const key = composerDraftKey(paneId, null) as string
+    sessionsApi.clearDraft(key).catch((err: unknown) => {
+      console.error('[composer] falha ao apagar o rascunho da aba fechada:', err)
+    })
+  }, END_UNDO_MS + END_KILL_GRACE_MS)
+  return () => clearTimeout(timer)
+}
+
 // Guarda o auto-restore contra a dupla montagem do StrictMode (rodaria 2x).
 let restoreStarted = false
 // Reserva síncrona de ccSessionIds em resume — fecha a corrida entre o check de
@@ -334,7 +374,7 @@ function keepPaneOfFailedResume(snap: PaneSnapshot, error: string | null): void 
   if (error === null || resuming.has(cc)) return
   const { panes } = useAppStore.getState()
   if (panes.some((p) => p.session.ccSessionId === cc)) return
-  const pane = dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${cc}`, error)
+  const pane = dormantPaneFromSnapshot(snap, snap.paneId ?? newPaneId(), error)
   useAppStore.setState((s) => ({ panes: [...s.panes, pane] }))
   schedulePersist(useAppStore.getState().panes)
 }
@@ -440,8 +480,7 @@ function splitLiveSnapshots(
   const rest: PaneSnapshot[] = []
   for (const snap of snapshots) {
     const item = live.find((l) => l.ccSessionId === snap.ccSessionId)
-    if (item)
-      attached.push(paneFromLiveSession(item, snap.paneId ?? `pane-${Date.now()}-${item.id}`))
+    if (item) attached.push(paneFromLiveSession(item, snap.paneId ?? newPaneId()))
     else rest.push(snap)
   }
   return { attached, rest }
@@ -686,7 +725,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     await workspaceApi.resetRestoreAttempts()
   },
 
-  restoreSnapshots: async (snapshots, dockLayout = null) => {
+  restoreSnapshots: async (rawSnapshots, dockLayout = null) => {
+    const { snapshots, generated } = withStablePaneIds(rawSnapshots)
     const lazy = await loadLazyRestore()
     // Com a pref desligada o persist segue o timing da main (save a cada pane).
     const run = lazy ? withPersistDeferred : (fn: () => Promise<void>) => fn()
@@ -717,9 +757,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ]
       const sleeping = candidates
         .filter(({ snap }) => !known.has(snap.ccSessionId))
-        .map(({ snap, error }) =>
-          dormantPaneFromSnapshot(snap, snap.paneId ?? `pane-${snap.ccSessionId}`, error),
-        )
+        .map(({ snap, error }) => dormantPaneFromSnapshot(snap, snap.paneId ?? newPaneId(), error))
       if (sleeping.length) {
         set((s) => ({ panes: [...s.panes, ...sleeping] }))
         schedulePersist(get().panes)
@@ -732,6 +770,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         const outcome = inflight.get(snap.ccSessionId)
         if (outcome) void outcome.then((error) => keepPaneOfFailedResume(snap, error))
       }
+      // paneIds gerados agora precisam chegar ao open_panes mesmo se nenhuma pane
+      // nova entrou acima (ex.: todas re-attachadas): é a chave do rascunho.
+      if (generated) schedulePersist(get().panes)
     })
   },
 
@@ -781,7 +822,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       panes: [
         ...s.panes,
         {
-          paneId: paneId ?? `pane-${Date.now()}`,
+          paneId: paneId ?? newPaneId(),
           session,
           repo,
           projectName,
@@ -860,7 +901,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         panes: [
           ...s.panes,
           {
-            paneId: paneId ?? `pane-${Date.now()}`,
+            paneId: paneId ?? newPaneId(),
             session,
             repo,
             projectName,
@@ -935,31 +976,32 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Detach, NÃO mata: só tira da view + persiste. A PTY sobrevive no main
-  // (background). Kill explícito é endSession.
+  // (background). Kill explícito é endSession. O rascunho do Composer da pane
+  // fica durante a janela do Desfazer (que devolve a MESMA pane, e com ela o
+  // rascunho 'pane:<id>'); só é apagado quando a janela expira sem desfazer.
   closePane: (paneId) => {
     const closed = get().panes.find((p) => p.paneId === paneId)
     set((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
-    // Dormindo não tem PTY em background: fechar é perder a aba de vez. O desfazer
-    // devolve a MESMA pane (paneId e snapshot), como o do endSession.
-    if (closed?.dormant) {
-      showToast({
-        title: 'Aba fechada',
-        body: closed.session.title ?? closed.repo?.label ?? undefined,
-        actionLabel: 'Desfazer',
-        onAction: () => {
-          const cc = closed.session.ccSessionId
-          set((s) =>
-            s.panes.some((p) => p.paneId === paneId || (cc && p.session.ccSessionId === cc))
-              ? s
-              : { panes: [...s.panes, closed] },
-          )
-          schedulePersist(get().panes)
-        },
-        durationMs: END_UNDO_MS,
-      })
-    }
+    if (!closed) return
+    const cancelExpiry = scheduleDraftExpiry(paneId)
+    showToast({
+      title: 'Aba fechada',
+      body: closed.session.title ?? closed.repo?.label ?? undefined,
+      actionLabel: 'Desfazer',
+      onAction: () => {
+        cancelExpiry()
+        const cc = closed.session.ccSessionId
+        set((s) =>
+          s.panes.some((p) => p.paneId === paneId || (cc && p.session.ccSessionId === cc))
+            ? s
+            : { panes: [...s.panes, closed] },
+        )
+        schedulePersist(get().panes)
+      },
+      durationMs: END_UNDO_MS,
+    })
   },
 
   endSession: (sessionId, opts) => {
@@ -1048,7 +1090,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
     // Item da lista é sempre LIVE — re-attacha à PTY existente (sem segundo claude).
-    const paneId = `pane-${Date.now()}`
+    const paneId = newPaneId()
     const pane = paneFromLiveSession(item, paneId)
     set((s) => ({ panes: [...s.panes, pane], area: 'projects', focusPaneId: paneId }))
     schedulePersist(get().panes)
@@ -1066,7 +1108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const existing = current.find((p) => paneShowsLive(p, item))
       // Aba dormindo de uma sessão que já tem PTY viva: anexa no lugar, sem resume.
       if (existing?.dormant) return paneFromLiveSession(item, existing.paneId)
-      return existing ?? paneFromLiveSession(item, `pane-${Date.now()}-${item.id}`)
+      return existing ?? paneFromLiveSession(item, newPaneId())
     })
     // Dormindo fora da seleção fica: não tem processo no main, então tirá-la do
     // store (e do open_panes) perderia a conversa da restauração. O AppShell a

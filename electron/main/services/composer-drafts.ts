@@ -90,6 +90,58 @@ export function draftReferencesFile(db: Database.Database): (filename: string) =
     rows.some((r) => r.text.includes(filename) || r.attachments.includes(filename))
 }
 
+export const DRAFT_GC_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+interface OpenPaneRef {
+  paneId?: string | null
+  ccSessionId?: string | null
+}
+
+// GC dos rascunhos de panes que não existem mais: nem abertas nem dormindo (as
+// duas estão no open_panes) e sem gravação há mais de `maxAgeMs`. A janela de
+// idade cobre o fechamento que o app não chegou a confirmar (crash no meio do
+// Desfazer). Devolve as chaves removidas.
+export function gcComposerDrafts(
+  db: Database.Database,
+  openPanes: OpenPaneRef[],
+  now: number = Date.now(),
+  maxAgeMs: number = DRAFT_GC_MAX_AGE_MS,
+): string[] {
+  const paneIds = new Set(openPanes.map((p) => p.paneId).filter(Boolean))
+  const ccs = new Set(openPanes.map((p) => p.ccSessionId).filter(Boolean))
+  const rows = db
+    .prepare('SELECT draft_key, pane_id, cc_session_id FROM composer_drafts WHERE updated_at < ?')
+    .all(now - maxAgeMs) as Array<Pick<DraftRow, 'draft_key' | 'pane_id' | 'cc_session_id'>>
+  const stale = rows.filter((r) =>
+    r.pane_id ? !paneIds.has(r.pane_id) : !r.cc_session_id || !ccs.has(r.cc_session_id),
+  )
+  if (stale.length === 0) return []
+  writeDurably(db, () => {
+    const del = db.prepare('DELETE FROM composer_drafts WHERE draft_key = ?')
+    for (const r of stale) del.run(r.draft_key)
+  })
+  return stale.map((r) => r.draft_key)
+}
+
+// GC do boot, lendo o open_panes gravado pelo renderer. open_panes ilegível =
+// não sabemos quais panes vivem: não apaga nada. Deve rodar ANTES do sweep de
+// imagens, que então libera as imagens só desses rascunhos.
+export function gcComposerDraftsAtBoot(db: Database.Database, now: number = Date.now()): string[] {
+  const row = db.prepare('SELECT open_panes FROM workspace_state WHERE id = 1').get() as
+    { open_panes: string | null } | undefined
+  let openPanes: OpenPaneRef[] = []
+  if (row?.open_panes) {
+    try {
+      const parsed: unknown = JSON.parse(row.open_panes)
+      if (!Array.isArray(parsed)) return []
+      openPanes = parsed as OpenPaneRef[]
+    } catch {
+      return []
+    }
+  }
+  return gcComposerDrafts(db, openPanes, now)
+}
+
 function isAttachment(v: unknown): v is ComposerDraftAttachment {
   if (typeof v !== 'object' || v === null) return false
   const o = v as Record<string, unknown>

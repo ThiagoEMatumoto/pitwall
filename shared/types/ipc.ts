@@ -2891,6 +2891,13 @@ export interface Api {
     saveDraft(draft: ComposerDraftInput): Promise<void>
     /** Remove o rascunho — só depois do envio confirmado. */
     clearDraft(key: string): Promise<void>
+    /** getDraft síncrono (sendSync): só no flush, antes da hidratação terminar. */
+    getDraftSync(key: string): ComposerDraft | null
+    /** saveDraft síncrono (sendSync): retorna depois do commit; erro vira throw. */
+    saveDraftSync(draft: ComposerDraftInput): void
+    /** Main pede o flush dos rascunhos (quit, exit de sessão); responder com draftFlushDone. */
+    onDraftFlushRequest(handler: (requestId: string) => void): () => void
+    draftFlushDone(requestId: string): void
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
