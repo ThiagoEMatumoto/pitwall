@@ -65,6 +65,9 @@ export interface PromptQueueDeps {
   now?(): number
   // Persistência (app.db). Sem store a fila é só memória (testes antigos).
   store?: PromptQueueStore
+  // Conversa que a PTY segura agora (índice ~/.claude/sessions): a linha sessions
+  // guarda o cc do spawn e não acompanha /clear nem /resume. null = sem prova.
+  liveCcOf?(sessionId: string): string | null
   // Envelope de handoff (wake da mãe / resposta à filha) restaurado cujos handoffs
   // já terminaram: chegaria fora de contexto, sai descartado (discardedObsolete).
   isObsolete?(id: string, text: string): boolean
@@ -218,6 +221,8 @@ export class PromptQueue {
     if (item.outcome === 'delivered') return { ok: true, delivered: true }
     if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
     if (item.outcome) return { ok: false, error: 'not-running' }
+    if (item.unpersisted)
+      return { ok: true, delivered: false, queued: publicItem(item), durable: false }
     return { ok: true, delivered: false, queued: publicItem(item) }
   }
 
@@ -509,9 +514,10 @@ export class PromptQueue {
     return item
   }
 
+  // O cc vivo da PTY; sem prova dele, o da linha sessions.
   private ccSessionOf(sessionId: string): string | null {
     try {
-      return this.deps.store?.ccSessionOf(sessionId) ?? null
+      return this.deps.liveCcOf?.(sessionId) ?? this.deps.store?.ccSessionOf(sessionId) ?? null
     } catch {
       return null
     }
@@ -608,6 +614,9 @@ export class PromptQueue {
       // transcript (confirmDeliveries): um kill ou queda de energia antes de o claude
       // gravar a mensagem deixa o boot conferir em vez de perdê-la ou reenviá-la às cegas.
       const deliveringAt = this.now()
+      // A conversa pode ter mudado (/clear, /resume) desde o enqueue: a prova e o
+      // boot conferem no transcript em que a mensagem entra agora.
+      head.ccSessionId = this.ccSessionOf(sessionId) ?? head.ccSessionId
       if (!this.markDelivering(head, deliveringAt)) return false
       this.write(sessionId, head.text, head.fromSessionId)
       const keepRow = this.deps.store != null
@@ -662,7 +671,9 @@ export class PromptQueue {
   // Sem a marca não há como provar no boot o que aconteceu: não escreve agora (o
   // item segue na fila e é retentado).
   private markDelivering(item: Item, at: number): boolean {
-    return this.persist(item.id, 'markDelivering', (st) => st.markDelivering(item.id, at))
+    return this.persist(item.id, 'markDelivering', (st) =>
+      st.markDelivering(item.id, at, item.ccSessionId),
+    )
   }
 
   // keepRow: a entrega saiu da fila mas a linha espera a prova (confirmDeliveries).

@@ -10,6 +10,7 @@ import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
 import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
 import { getDormantPanes, setDormantSyncHook } from '../services/dormant-panes'
+import { liveConversationOf } from '../services/conversation-holder'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -170,6 +171,7 @@ export const promptQueue = new PromptQueue({
   warn: (event) => console.warn(JSON.stringify(event)),
   store: createPromptQueueStore(getDb),
   deliveryProof,
+  liveCcOf: (id) => liveConversationOf(id),
   isObsolete: (id, text) =>
     (isHandoffWakeEnvelope(text) || isHandoffAnswerEnvelope(text)) && queuedEnvelopeObsolete(id),
 })

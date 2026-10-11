@@ -93,6 +93,7 @@ describe('PromptQueue durável (DB real)', () => {
     const { queue } = makeQueue()
     const res = await queue.send({ sessionId: PTY, text: 'oi', when: 'on-idle' })
     expect(res).toMatchObject({ ok: true, delivered: false })
+    expect(res).not.toHaveProperty('durable')
     expect(rows()).toEqual([
       expect.objectContaining({ state: 'queued', session_id: PTY, cc_session_id: CC }),
     ])
@@ -378,7 +379,8 @@ describe('falha de persistência (SQLite abortando a escrita)', () => {
     fail(true)
     const { queue, writes, snap } = makeQueue({ status: 'idle' })
     const res = await queue.send({ sessionId: PTY, text: 'sem banco', when: 'on-idle' })
-    expect(res).toMatchObject({ ok: true, delivered: false })
+    // Aceito, mas o chamador sabe que um kill agora o perderia.
+    expect(res).toMatchObject({ ok: true, delivered: false, durable: false })
     expect(writes).toEqual([])
     expect(rows()).toEqual([])
     expect(snap()?.items).toEqual([expect.objectContaining({ text: 'sem banco' })])

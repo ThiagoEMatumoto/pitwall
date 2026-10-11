@@ -41,7 +41,9 @@ export type SendPromptError =
 
 export type SendPromptResult =
   | { ok: true; delivered: true }
-  | { ok: true; delivered: false; queued: QueuedPrompt }
+  // durable: false = o app.db recusou a gravação: o item está só em memória (um kill
+  // o perde) e só é entregue depois que gravar (persistFailed conta).
+  | { ok: true; delivered: false; queued: QueuedPrompt; durable?: false }
   | { ok: false; error: SendPromptError; detail?: string }
 
 export interface QueuedPrompt {

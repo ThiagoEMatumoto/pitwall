@@ -23,7 +23,8 @@ export interface PersistedPrompt {
 
 export interface PromptQueueStore {
   insert(item: PersistedPrompt): void
-  markDelivering(id: string, at: number): void
+  // ccSessionId: a conversa em que a mensagem entra de fato (o boot confere nela).
+  markDelivering(id: string, at: number, ccSessionId: string | null): void
   setState(id: string, state: PersistedState): void
   updateText(id: string, text: string): void
   rebind(id: string, sessionId: string): void
@@ -82,10 +83,12 @@ export function createPromptQueueStore(db: () => Database.Database): PromptQueue
         i.createdAt,
         i.deliveringAt,
       ),
-    markDelivering: (id, at) =>
+    markDelivering: (id, at, cc) =>
       run(
-        "UPDATE prompt_queue_items SET state = 'delivering', delivering_at = ? WHERE id = ?",
+        `UPDATE prompt_queue_items SET state = 'delivering', delivering_at = ?,
+           cc_session_id = COALESCE(?, cc_session_id) WHERE id = ?`,
         at,
+        cc,
         id,
       ),
     setState: (id, state) => run('UPDATE prompt_queue_items SET state = ? WHERE id = ?', state, id),
