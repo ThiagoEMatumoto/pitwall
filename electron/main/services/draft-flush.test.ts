@@ -65,6 +65,9 @@ async function typed(
       getSync: (k) => getComposerDraft(db, k),
       save: async (d) => saveComposerDraft(db, d),
       saveSync: (d) => saveComposerDraft(db, d),
+      // Write-through desligado: estes testes provam a via do flush, a que sobra
+      // se a mensagem por tecla não chegar.
+      writeThrough: () => {},
       clear: async (k) => clearComposerDraft(db, k),
     },
   })

@@ -55,6 +55,8 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
     drafts.saveComposerDraft(db, d),
   saveDraftSync: (d: Parameters<typeof drafts.saveComposerDraft>[1]) =>
     drafts.saveComposerDraft(db, d),
+  writeDraft: (d: Parameters<typeof drafts.saveComposerDraft>[1]) =>
+    drafts.saveComposerDraftsFast(db, [d]),
   clearDraft: async (key: string) => drafts.clearComposerDraft(db, key),
   adoptDraft: async (t: Parameters<typeof drafts.adoptComposerDraft>[1]) =>
     drafts.adoptComposerDraft(db, t),
@@ -123,6 +125,7 @@ function persisterFor(paneId: string, cc: string) {
       getSync: sessionsImpl.getDraftSync as never,
       save: sessionsImpl.saveDraft as never,
       saveSync: sessionsImpl.saveDraftSync as never,
+      writeThrough: sessionsImpl.writeDraft as never,
       clear: sessionsImpl.clearDraft as never,
     },
   })

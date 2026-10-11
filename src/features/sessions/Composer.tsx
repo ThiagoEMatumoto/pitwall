@@ -241,6 +241,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         getSync: sessionsApi.getDraftSync,
         save: sessionsApi.saveDraft,
         saveSync: sessionsApi.saveDraftSync,
+        writeThrough: sessionsApi.writeDraft,
         clear: sessionsApi.clearDraft,
       },
     })

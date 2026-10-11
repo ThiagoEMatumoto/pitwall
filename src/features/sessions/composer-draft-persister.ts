@@ -1,12 +1,14 @@
 import type {
   ComposerDraft,
   ComposerDraftAttachment,
-  ComposerDraftInput,
+  VersionedDraftInput,
 } from '../../../shared/types/composer-draft'
 
 // Persistência durável do rascunho do Composer, sem React: o Composer alimenta o
-// estado a cada mudança e o persister grava no app.db com debounce. Regras que
-// protegem o trabalho do usuário:
+// estado a cada mudança e o persister grava no app.db em duas vias: cada mudança
+// vai na hora ao main (writeThrough, commit NORMAL: sobrevive a kill -9) e o
+// debounce grava com fsync (FULL: cobre queda de energia). Regras que protegem o
+// trabalho do usuário:
 //  - nada é gravado antes da hidratação: o estado do mount não pode sobrescrever
 //    o rascunho que ainda está sendo lido;
 //  - se o usuário digitou antes da leitura terminar, salvo e digitado são
@@ -25,8 +27,10 @@ export interface DraftApi {
   get(key: string): Promise<ComposerDraft | null>
   // Síncronos (ipcRenderer.sendSync): retornam depois do commit no main.
   getSync(key: string): ComposerDraft | null
-  save(draft: ComposerDraftInput): Promise<void>
-  saveSync(draft: ComposerDraftInput): void
+  save(draft: VersionedDraftInput): Promise<void>
+  saveSync(draft: VersionedDraftInput): void
+  // Fire-and-forget, uma por mudança (ipcRenderer.send: FIFO, não bloqueia a tecla).
+  writeThrough(draft: VersionedDraftInput): void
   clear(key: string): Promise<void>
 }
 
@@ -109,14 +113,31 @@ export function createDraftPersister(opts: {
   let disposed = false
   let apply: ApplyDraft | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  // Versão monotônica deste persister: o main descarta versão antiga do mesmo writer.
+  const writer = newWriterId()
+  let seq = 0
 
   function cancelTimer() {
     if (timer) clearTimeout(timer)
     timer = null
   }
 
-  function draftInput(k: string): ComposerDraftInput {
-    return { key: k, ccSessionId, paneId, ...latest }
+  function draftInput(k: string): VersionedDraftInput {
+    return { key: k, ccSessionId, paneId, ...latest, writer, seq }
+  }
+
+  // Nova versão de `latest`: vai já ao main (antes do debounce FULL).
+  function changed(state: DraftState) {
+    latest = state
+    seq++
+    dirty = true
+    if (!key || !hydrated) return
+    try {
+      api.writeThrough(draftInput(key))
+    } catch (err) {
+      console.error('[composer] write-through do rascunho falhou:', err)
+    }
+    schedule()
   }
 
   async function write(): Promise<void> {
@@ -147,12 +168,12 @@ export function createDraftPersister(opts: {
         latest = stored
         if (!disposed) apply?.(stored, false)
       } else if (!sameState(stored, latest)) {
-        latest = mergeDrafts(stored, latest)
-        dirty = true
+        changed(mergeDrafts(stored, latest))
         if (!disposed) apply?.(latest, true)
+        return
       }
     }
-    if (dirty) schedule()
+    if (dirty) changed(latest)
   }
 
   function flushSync(): void {
@@ -196,17 +217,13 @@ export function createDraftPersister(opts: {
     },
 
     seed(state) {
-      latest = state
-      dirty = true
       hydrated = true
-      schedule()
+      changed(state)
     },
 
     update(state) {
       if (sameState(state, latest)) return
-      latest = state
-      dirty = true
-      if (hydrated) schedule()
+      changed(state)
     },
 
     flush: write,
@@ -251,4 +268,8 @@ export function createDraftPersister(opts: {
 
 function sameAttachments(a: ComposerDraftAttachment[], b: ComposerDraftAttachment[]): boolean {
   return a.length === b.length && a.every((x, i) => x.path === b[i].path && x.name === b[i].name)
+}
+
+function newWriterId(): string {
+  return globalThis.crypto.randomUUID()
 }

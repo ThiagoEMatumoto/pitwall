@@ -9,8 +9,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ app: {} }))
 
 const { openAppDb } = await import('../../electron/main/services/db')
-const { clearComposerDraft, gcComposerDraftsAfterRestore, getComposerDraft, saveComposerDraft } =
-  await import('../../electron/main/services/composer-drafts')
+const {
+  clearComposerDraft,
+  gcComposerDraftsAfterRestore,
+  getComposerDraft,
+  saveComposerDraft,
+  saveComposerDraftsFast,
+} = await import('../../electron/main/services/composer-drafts')
 
 const dir = mkdtempSync(join(tmpdir(), 'cm-store-draft-'))
 let db: Database.Database = openAppDb(join(dir, 'app.db'))
@@ -42,6 +47,7 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   getDraftSync: (key: string) => getComposerDraft(db, key),
   saveDraft: async (d: Parameters<typeof saveComposerDraft>[1]) => saveComposerDraft(db, d),
   saveDraftSync: (d: Parameters<typeof saveComposerDraft>[1]) => saveComposerDraft(db, d),
+  writeDraft: (d: Parameters<typeof saveComposerDraft>[1]) => saveComposerDraftsFast(db, [d]),
   clearDraft: async (key: string) => clearComposerDraft(db, key),
 }
 
@@ -97,6 +103,7 @@ function persisterFor(paneId: string, cc: string) {
       getSync: sessionsImpl.getDraftSync as never,
       save: sessionsImpl.saveDraft as never,
       saveSync: sessionsImpl.saveDraftSync as never,
+      writeThrough: sessionsImpl.writeDraft as never,
       clear: sessionsImpl.clearDraft as never,
     },
   })

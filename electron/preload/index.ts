@@ -173,6 +173,7 @@ const api: Api = {
     saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
     getDraft: (key) => invoke('sessions:get-draft', key),
     saveDraft: (draft) => invoke('sessions:save-draft', draft),
+    writeDraft: (draft) => ipcRenderer.send('sessions:write-draft', draft),
     clearDraft: (key) => invoke('sessions:clear-draft', key),
     adoptDraft: (target) => invoke('sessions:adopt-draft', target),
     clearSessionDrafts: (target) => invoke('sessions:clear-session-drafts', target),
