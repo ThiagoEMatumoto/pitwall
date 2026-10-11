@@ -15,6 +15,7 @@ import {
 } from './prompt-queue'
 import {
   createPromptQueueStore,
+  promptQueuePersistFailures,
   transcriptProof,
   transcriptVerdict,
   type TranscriptVerdict,
@@ -330,6 +331,121 @@ describe('PromptQueue durável (DB real)', () => {
       expect.objectContaining({ id: 'q1', recovery: 'awaiting-session' }),
     ])
     boot.queue.dispose()
+  })
+})
+
+// Disco cheio/IOERR de verdade no caminho do store (writeDurably + better-sqlite3):
+// triggers que abortam a escrita enquanto o interruptor estiver ligado.
+function failWrites(ops: Array<'INSERT' | 'UPDATE' | 'DELETE'>): (on: boolean) => void {
+  db.exec('CREATE TABLE IF NOT EXISTS fail_switch (op TEXT PRIMARY KEY)')
+  for (const op of ops) {
+    db.exec(`CREATE TRIGGER fail_${op} BEFORE ${op} ON prompt_queue_items
+      WHEN EXISTS (SELECT 1 FROM fail_switch WHERE op = '${op}')
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`)
+  }
+  return (on) => {
+    for (const op of ops) {
+      if (on) db.prepare('INSERT OR IGNORE INTO fail_switch (op) VALUES (?)').run(op)
+      else db.prepare('DELETE FROM fail_switch WHERE op = ?').run(op)
+    }
+  }
+}
+
+describe('falha de persistência (SQLite abortando a escrita)', () => {
+  it('store: a escrita que falha lança e conta em persistFailed', () => {
+    const fail = failWrites(['INSERT'])
+    fail(true)
+    const store = createPromptQueueStore(() => db)
+    const before = promptQueuePersistFailures()
+    expect(() =>
+      store.insert({
+        id: 'x',
+        sessionId: PTY,
+        ccSessionId: CC,
+        text: 't',
+        fromSessionId: null,
+        bypassAttention: false,
+        state: 'queued',
+        createdAt: 1,
+        deliveringAt: null,
+      }),
+    ).toThrow(/disk is full/)
+    expect(promptQueuePersistFailures()).toBe(before + 1)
+  })
+
+  it('insert falhou: fica em memória, não entrega sem o registro, e entrega quando grava', async () => {
+    const fail = failWrites(['INSERT'])
+    fail(true)
+    const { queue, writes, snap } = makeQueue({ status: 'idle' })
+    const res = await queue.send({ sessionId: PTY, text: 'sem banco', when: 'on-idle' })
+    expect(res).toMatchObject({ ok: true, delivered: false })
+    expect(writes).toEqual([])
+    expect(rows()).toEqual([])
+    expect(snap()?.items).toEqual([expect.objectContaining({ text: 'sem banco' })])
+    expect(snap()?.counters.persistFailed).toBeGreaterThan(0)
+
+    // Fim de turno com o disco ainda cheio: segue sem entregar.
+    queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toEqual([])
+
+    fail(false)
+    queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toEqual([`${PTY}:sem banco`])
+    expect(rows()).toEqual([expect.objectContaining({ state: 'delivering' })])
+    queue.dispose()
+  })
+
+  it('markDelivering falhou: não escreve no PTY e retenta', async () => {
+    const opts: { status: LiveStatus } = { status: 'working' }
+    const { queue, writes } = makeQueue(opts)
+    await queue.send({ sessionId: PTY, text: 'marca', when: 'on-idle' })
+    const fail = failWrites(['UPDATE'])
+    fail(true)
+    opts.status = 'idle'
+    queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toEqual([])
+    expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
+
+    fail(false)
+    queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toEqual([`${PTY}:marca`])
+    queue.dispose()
+  })
+
+  it('cancelar com o DELETE falhando: a linha não fica para trás, o poll retenta', async () => {
+    vi.useFakeTimers()
+    try {
+      const { queue, snap } = makeQueue()
+      const res = await queue.send({ sessionId: PTY, text: 'cancela', when: 'on-idle' })
+      const fail = failWrites(['DELETE'])
+      fail(true)
+      queue.cancel(res.ok && !res.delivered ? res.queued.id : '')
+      expect(snap()?.items).toEqual([])
+      expect(rows()).toHaveLength(1)
+
+      fail(false)
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(rows()).toEqual([])
+      queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('coalescing com o UPDATE falhando: devolve false e o banco segue com o texto entregável', async () => {
+    const { queue } = makeQueue()
+    const res = await queue.send({ sessionId: PTY, text: 'v1', when: 'on-idle' })
+    const id = res.ok && !res.delivered ? res.queued.id : ''
+    const fail = failWrites(['UPDATE'])
+    fail(true)
+    expect(queue.replaceText(id, 'v2')).toBe(false)
+    expect(queue.snapshot().items[0].text).toBe('v1')
+    expect(db.prepare('SELECT text FROM prompt_queue_items').get()).toEqual({ text: 'v1' })
+    queue.dispose()
   })
 })
 

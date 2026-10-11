@@ -140,6 +140,9 @@ interface Item extends QueuedPrompt {
   restored?: boolean
   // O usuário mandou enviar (Reenviar/Enviar): não pede confirmação de novo.
   confirmed?: boolean
+  // O insert no app.db falhou: só existe em memória. Não é entregue até gravar
+  // (tryDeliver retenta) — um kill depois do write não deixaria prova nenhuma.
+  unpersisted?: boolean
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
   outcome?: PromptQueueEventKind
 }
@@ -171,6 +174,9 @@ export class PromptQueue {
   private awaitingWork = new Map<string, number>()
   private delivering = new Set<string>()
   private confirming: Confirming[] = []
+  // Linhas que deviam ter saído do banco (cancelada, expirada, entregue com prova)
+  // e cujo DELETE falhou: o tick retenta, senão o boot as traria de volta.
+  private pendingRemoval = new Set<string>()
   private settleTimers = new Map<string, NodeJS.Timeout>()
   private poll: NodeJS.Timeout | null = null
 
@@ -242,7 +248,10 @@ export class PromptQueue {
   replaceText(id: string, text: string): boolean {
     const item = this.find(id)
     if (!item) return false
-    this.deps.store?.updateText(id, text)
+    // Sem o texto novo no banco, um kill entregaria o velho: quem chama faz outro item.
+    if (!item.unpersisted && !this.persist(id, 'updateText', (st) => st.updateText(id, text))) {
+      return false
+    }
     item.text = text
     this.publish()
     return true
@@ -262,7 +271,7 @@ export class PromptQueue {
       (i) => i.id === id && i.recovery && i.recovery !== 'awaiting-session',
     )
     if (!item) return false
-    this.deps.store?.setState(id, 'queued')
+    this.persist(id, 'setState', (st) => st.setState(id, 'queued'))
     item.recovery = 'awaiting-session'
     item.confirmed = true
     if (this.deps.isRunning(item.sessionId)) this.attach([item], item.sessionId)
@@ -280,7 +289,12 @@ export class PromptQueue {
   // Boot, antes do restore(): o que vai voltar do app.db. Quem acompanha os itens
   // (ledger de handoff) se reidrata com isto antes de o restore publicar desfechos.
   restorable(): Array<{ id: string; text: string }> {
-    return this.deps.store?.loadAll().map((r) => ({ id: r.id, text: r.text })) ?? []
+    try {
+      return this.deps.store?.loadAll().map((r) => ({ id: r.id, text: r.text })) ?? []
+    } catch (err) {
+      this.deps.warn({ event: 'prompt_queue_load_failed', detail: String(err) })
+      return []
+    }
   }
 
   // Boot: carrega o que o processo anterior aceitou e não terminou. 'delivering'
@@ -289,7 +303,15 @@ export class PromptQueue {
   restore(): void {
     const store = this.deps.store
     if (!store) return
-    for (const row of store.loadAll()) {
+    let rows: PersistedPrompt[]
+    try {
+      rows = store.loadAll()
+    } catch (err) {
+      // Banco ilegível: a fila nasce vazia em vez de derrubar o registro do IPC.
+      this.deps.warn({ event: 'prompt_queue_load_failed', detail: String(err) })
+      return
+    }
+    for (const row of rows) {
       const item = fromRow(row, row.ccSessionId ?? store.ccSessionOf(row.sessionId))
       this.counters.restored++
       this.parked = [...this.parked, item]
@@ -363,7 +385,7 @@ export class PromptQueue {
     if (mine.length === 0) return
     const kept = mine.filter((i) => !this.discardIfObsolete(i))
     for (const item of kept) {
-      this.deps.store?.rebind(item.id, sessionId)
+      this.persist(item.id, 'rebind', (st) => st.rebind(item.id, sessionId))
       item.sessionId = sessionId
       // Esperou a conversa voltar até ficar velho: pergunta antes de entregar.
       if (item.recovery === 'awaiting-session' && this.isStale(item)) {
@@ -399,10 +421,10 @@ export class PromptQueue {
       return
     }
     if (verdict === 'absent') {
-      this.deps.store?.setState(item.id, 'queued')
+      this.persist(item.id, 'setState', (st) => st.setState(item.id, 'queued'))
       return
     }
-    this.deps.store?.setState(item.id, 'uncertain')
+    this.persist(item.id, 'setState', (st) => st.setState(item.id, 'uncertain'))
     this.markMaybeUndelivered(item)
   }
 
@@ -468,7 +490,7 @@ export class PromptQueue {
     const item: Item = {
       id: randomUUID(),
       sessionId,
-      ccSessionId: store?.ccSessionOf(sessionId) ?? null,
+      ccSessionId: this.ccSessionOf(sessionId),
       text,
       createdAt,
       expiresAt: createdAt + PROMPT_TTL_MS,
@@ -478,23 +500,64 @@ export class PromptQueue {
       fromSessionId,
       bypassAttention,
     }
-    // Grava ANTES de existir na fila: se o banco falhar, o send rejeita em vez de
-    // responder 'queued' com algo que um kill apagaria.
-    store?.insert({
-      id: item.id,
-      sessionId,
-      ccSessionId: item.ccSessionId,
-      text,
-      fromSessionId: fromSessionId ?? null,
-      bypassAttention: bypassAttention === true,
-      state: 'queued',
-      createdAt,
-      deliveringAt: null,
-    })
+    // Grava ANTES de existir na fila. Se o banco falhar, o item fica só em memória
+    // e não é entregue até o insert passar (tryDeliver retenta; persistFailed conta).
+    if (store && !this.insertRow(item)) item.unpersisted = true
     this.items = [...this.items, item]
     this.ensurePoll()
     this.publish()
     return item
+  }
+
+  private ccSessionOf(sessionId: string): string | null {
+    try {
+      return this.deps.store?.ccSessionOf(sessionId) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  private insertRow(item: Item): boolean {
+    return this.persist(item.id, 'insert', (st) =>
+      st.insert({
+        id: item.id,
+        sessionId: item.sessionId,
+        ccSessionId: item.ccSessionId,
+        text: item.text,
+        fromSessionId: item.fromSessionId ?? null,
+        bypassAttention: item.bypassAttention === true,
+        state: 'queued',
+        createdAt: item.createdAt,
+        deliveringAt: null,
+      }),
+    )
+  }
+
+  // Uma escrita no app.db. false = falhou (o store já contou em persistFailed):
+  // quem chama não segue como se estivesse gravado. Sem store, nada a gravar.
+  private persist(id: string, op: string, write: (store: PromptQueueStore) => void): boolean {
+    const store = this.deps.store
+    if (!store) return true
+    try {
+      write(store)
+      return true
+    } catch (err) {
+      this.deps.warn({ event: 'prompt_queue_persist_failed', op, id, detail: String(err) })
+      return false
+    }
+  }
+
+  private removeRow(id: string): void {
+    if (this.persist(id, 'remove', (st) => st.remove(id))) {
+      this.pendingRemoval.delete(id)
+      return
+    }
+    this.pendingRemoval.add(id)
+    this.ensurePoll()
+  }
+
+  private retryRemovals(): void {
+    for (const id of [...this.pendingRemoval]) this.removeRow(id)
   }
 
   private write(sessionId: string, text: string, fromSessionId?: string): void {
@@ -535,6 +598,12 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
+      // Sem o registro durável não entrega: retenta o insert agora, e no próximo
+      // fim de turno/poll se falhar de novo.
+      if (head.unpersisted) {
+        if (!this.insertRow(head)) return false
+        head.unpersisted = false
+      }
       // 'delivering' durável ANTES do write, e a linha só sai do banco com prova no
       // transcript (confirmDeliveries): um kill ou queda de energia antes de o claude
       // gravar a mensagem deixa o boot conferir em vez de perdê-la ou reenviá-la às cegas.
@@ -590,15 +659,10 @@ export class PromptQueue {
     }
   }
 
+  // Sem a marca não há como provar no boot o que aconteceu: não escreve agora (o
+  // item segue na fila e é retentado).
   private markDelivering(item: Item, at: number): boolean {
-    try {
-      this.deps.store?.markDelivering(item.id, at)
-      return true
-    } catch (err) {
-      // Sem a marca não há como provar no boot o que aconteceu: não escreve agora.
-      this.deps.warn({ event: 'prompt_queue_persist_failed', id: item.id, detail: String(err) })
-      return false
-    }
+    return this.persist(item.id, 'markDelivering', (st) => st.markDelivering(item.id, at))
   }
 
   // keepRow: a entrega saiu da fila mas a linha espera a prova (confirmDeliveries).
@@ -606,15 +670,7 @@ export class PromptQueue {
     item.outcome = kind
     this.items = this.items.filter((i) => i !== item)
     this.parked = this.parked.filter((i) => i !== item)
-    if (!this.shuttingDown && !keepRow) {
-      try {
-        this.deps.store?.remove(item.id)
-      } catch (err) {
-        // A linha fica: no boot, 'delivering' é conferido no transcript (sem
-        // duplicata); 'queued' seria reentregue — por isso o aviso.
-        this.deps.warn({ event: 'prompt_queue_persist_failed', id: item.id, detail: String(err) })
-      }
-    }
+    if (!this.shuttingDown && !keepRow && !item.unpersisted) this.removeRow(item.id)
     if (kind === 'delivered') this.counters.delivered++
     if (kind === 'expired') this.counters.expired++
     if (kind === 'session-gone') this.counters.sessionGone++
@@ -633,7 +689,8 @@ export class PromptQueue {
   }
 
   private disposeIfIdle(): void {
-    if (this.items.length + this.parked.length + this.confirming.length === 0) this.dispose()
+    const open = this.items.length + this.parked.length + this.confirming.length
+    if (open + this.pendingRemoval.size === 0) this.dispose()
   }
 
   // Confere no transcript as entregas escritas no PTY (fim de turno e poll). A
@@ -662,19 +719,15 @@ export class PromptQueue {
 
   private settleConfirmed(c: Confirming): void {
     this.confirming = this.confirming.filter((x) => x !== c)
-    try {
-      this.deps.store?.remove(c.item.id)
-    } catch (err) {
-      // A linha fica 'delivering': o boot confere no transcript, sem duplicata.
-      this.deps.warn({ event: 'prompt_queue_persist_failed', id: c.item.id, detail: String(err) })
-    }
+    // Falhou: fica 'delivering' até o retry (o boot confere no transcript, sem duplicata).
+    this.removeRow(c.item.id)
     this.disposeIfIdle()
   }
 
   private unconfirmed(c: Confirming): void {
     this.confirming = this.confirming.filter((x) => x !== c)
     const { item } = c
-    this.deps.store?.setState(item.id, 'uncertain')
+    this.persist(item.id, 'setState', (st) => st.setState(item.id, 'uncertain'))
     item.outcome = undefined
     item.expiresAt = NEVER
     this.parked = [...this.parked, item]
@@ -706,6 +759,7 @@ export class PromptQueue {
   }
 
   private async tick(): Promise<void> {
+    this.retryRemovals()
     this.confirmDeliveries()
     const now = this.now()
     // Parados (restaurados, talvez-não-entregues) não expiram. Restaurado que não
@@ -737,6 +791,7 @@ function publicItem({
   ccSessionId: _c,
   restored: _r,
   confirmed: _k,
+  unpersisted: _p,
   ...q
 }: Item): QueuedPrompt {
   return q

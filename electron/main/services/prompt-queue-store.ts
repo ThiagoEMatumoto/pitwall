@@ -45,8 +45,8 @@ interface Row {
 }
 
 // getDb é lazy: a fila nasce no import do módulo, antes de o app abrir o banco.
-// Falhas de persistência: a fila segue em memória (como antes da durabilidade) em
-// vez de recusar a mensagem; o contador deixa a degradação visível.
+// Toda escrita que falha LANÇA (e conta): quem chama decide — a fila não entrega
+// sem o registro durável e retenta (ver PromptQueue.persist).
 let persistFailures = 0
 
 export function promptQueuePersistFailures(): number {
@@ -63,7 +63,7 @@ export function createPromptQueueStore(db: () => Database.Database): PromptQueue
       })
     } catch (err) {
       persistFailures += 1
-      console.error('[prompt-queue] persistência falhou, item segue só em memória:', err)
+      throw err
     }
   }
   return {

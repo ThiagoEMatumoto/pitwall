@@ -19,13 +19,19 @@ vi.mock('electron', () => ({
   ipcMain: { handle: () => {} },
   webContents: { fromId: () => null },
 }))
+// O store da fila grava pelo writeDurably (pragma + transaction): o mock cobre o
+// contrato do better-sqlite3 que ele usa, e as escritas da fila são aceitas.
 vi.mock('../services/db', () => ({
   getDb: () => ({
+    pragma: () => 1,
+    transaction: (fn: () => unknown) => () => fn(),
     prepare: (sql: string) => ({
       get: (id: string) =>
         sql.includes('SELECT cc_session_id FROM sessions WHERE id = ?') && seam.ccOf.has(id)
           ? { cc_session_id: seam.ccOf.get(id) }
           : undefined,
+      run: () => ({ changes: 1 }),
+      all: () => [],
     }),
   }),
 }))
