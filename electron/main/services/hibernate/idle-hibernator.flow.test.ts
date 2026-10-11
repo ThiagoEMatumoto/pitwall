@@ -98,6 +98,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     isPidAlive: unused,
     aliveSessionId: unused,
     activeHandoffCcSessionIds: unused,
+    isHandoffChild: unused,
     queueHas: unused,
     agentMessageSince: unused,
     transcriptPath: unused,

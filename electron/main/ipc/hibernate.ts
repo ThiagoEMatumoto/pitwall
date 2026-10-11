@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
 import { getPref } from '../services/prefs-store'
-import { activeHandoffCcSessionIds } from '../services/handoff-store'
+import { activeHandoffCcSessionIds, isHandoffChildCc } from '../services/handoff-store'
 import { findTranscriptPath } from '../services/transcript-path'
 import { isSessionPidAlive } from '../services/session-activity'
 import { getDormantPanes } from '../services/dormant-panes'
@@ -99,6 +99,7 @@ export function createIdleHibernator(): IdleHibernator {
     isPidAlive: (file) => isSessionPidAlive(file),
     aliveSessionId: (cc) => findAliveByCc(cc)?.id ?? null,
     activeHandoffCcSessionIds,
+    isHandoffChild: isHandoffChildCc,
     queueHas: (id) => promptQueue.snapshot().items.some((item) => item.sessionId === id),
     agentMessageSince,
     transcriptPath: findTranscriptPath,

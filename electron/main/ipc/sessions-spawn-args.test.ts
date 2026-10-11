@@ -17,7 +17,7 @@ const seam = vi.hoisted(() => ({
   db: null as unknown as import('better-sqlite3').Database,
   handlers: new Map<string, (event: unknown, ...args: never[]) => unknown>(),
   // Linha de comando de cada spawn real (o que o login shell executa).
-  spawns: [] as { sessionId: string; argv: string }[],
+  spawns: [] as { sessionId: string; argv: string; cwd: string }[],
   live: new Set<string>(),
 }))
 
@@ -51,8 +51,12 @@ vi.mock('../services/pty-manager', () => ({
     runningIds: () => [...seam.live],
     getPid: () => null,
     sessionIdByPid: () => null,
-    spawn: (opts: { sessionId: string; command: string; args: string[] }) => {
-      seam.spawns.push({ sessionId: opts.sessionId, argv: [opts.command, ...opts.args].join(' ') })
+    spawn: (opts: { sessionId: string; command: string; args: string[]; cwd: string }) => {
+      seam.spawns.push({
+        sessionId: opts.sessionId,
+        argv: [opts.command, ...opts.args].join(' '),
+        cwd: opts.cwd,
+      })
       seam.live.add(opts.sessionId)
     },
   },
@@ -105,6 +109,12 @@ function relevantFlags(argv: string): string[] {
 function systemPromptOf(argv: string): string | null {
   const m = /--append-system-prompt-file '([^']+)'/.exec(argv)
   return m ? readFileSync(m[1], 'utf8') : null
+}
+
+function cwdOf(sessionId: string): string {
+  const s = seam.spawns.find((x) => x.sessionId === sessionId)
+  if (!s) throw new Error(`sem spawn para ${sessionId}`)
+  return s.cwd
 }
 
 function argvOf(sessionId: string): string {
@@ -270,5 +280,55 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
       )
       .run(cc, JSON.stringify({ model: "x'; rm -rf ~", permissionMode: 'yolo', effort: 'high' }))
     expect(relevantFlags(argvOf(wake(cc)))).toEqual(['--effort', "'high'"])
+  })
+})
+
+describe('wake da hibernação volta no cwd do spawn', () => {
+  const WORKTREE = join(HOME, 'worktree-b')
+
+  // O vínculo da sessão muda para uma feature com worktree registrado para r1.
+  function relinkToFeatureWithWorktree(sessionId: string): void {
+    mkdirSync(WORKTREE, { recursive: true })
+    seam.db
+      .prepare(
+        `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
+         VALUES ('f1', 'p1', 'f1', 'F1', 'in-progress', 'f1.md', 1, 1)`,
+      )
+      .run()
+    seam.db
+      .prepare(
+        `INSERT INTO feature_repos (feature_id, repo_id, worktree_path) VALUES ('f1', 'r1', ?)`,
+      )
+      .run(WORKTREE)
+    seam.db.prepare(`UPDATE sessions SET feature_id = 'f1' WHERE id = ?`).run(sessionId)
+  }
+
+  it('nasce na raiz (A), feature_id muda para worktree B, hiberna e acorda em A', () => {
+    const spawned = spawnSession({ repoId: 'r1', name: 'raiz' } as never)
+    expect(cwdOf(spawned.id)).toBe(REPO_DIR)
+    const cc = ccOf(spawned.id)
+    writeTranscript(cc)
+    relinkToFeatureWithWorktree(spawned.id)
+
+    exitPty(spawned.id)
+    const woke = wake(cc)
+    expect(cwdOf(woke)).toBe(REPO_DIR)
+    // A linha do wake carimba o mesmo cwd: a segunda hibernação também volta em A.
+    exitPty(woke)
+    expect(cwdOf(wake(cc))).toBe(REPO_DIR)
+  })
+
+  it('cwd gravado que sumiu do disco: cai no recalculado (worktree B)', () => {
+    const spawned = spawnSession({ repoId: 'r1', name: 'sumiu' } as never)
+    const cc = ccOf(spawned.id)
+    writeTranscript(cc)
+    relinkToFeatureWithWorktree(spawned.id)
+    const gone = join(HOME, 'removido')
+    seam.db
+      .prepare(`UPDATE sessions SET spawn_args = json_set(spawn_args, '$.cwd', ?) WHERE id = ?`)
+      .run(gone, spawned.id)
+
+    exitPty(spawned.id)
+    expect(cwdOf(wake(cc))).toBe(WORKTREE)
   })
 })

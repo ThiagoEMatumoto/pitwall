@@ -22,6 +22,8 @@ export interface SpawnArgs {
   systemPromptText: string | null
   // Filha de handoff: relança com o --settings dela.
   handoffChild: boolean
+  // Diretório efetivo do spawn, carimbado pelo startSession (quem chama não passa).
+  cwd?: string | null
 }
 
 export interface RelaunchFlags {
@@ -68,6 +70,7 @@ export function parseSpawnArgs(raw: string | null): SpawnArgs | null {
       : null,
     systemPromptText: str(r.systemPromptText),
     handoffChild: r.handoffChild === true,
+    cwd: str(r.cwd),
   }
 }
 

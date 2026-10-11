@@ -29,6 +29,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { closeDb, getDb } from '../db'
 import { isSessionPidAlive } from '../session-activity'
+import * as handoffStore from '../handoff-store'
 import { IdleHibernator, type IdleHibernatorDeps } from './idle-hibernator'
 import { PANE_CHECK_TIMEOUT_MS, PaneConfirmer } from './pane-confirm'
 import {
@@ -117,6 +118,18 @@ function ask(from: string, to: string, createdAt: number, status = 'answered'): 
     .run(`ask-${Math.random()}`, from, to, status, createdAt, createdAt + 60 * MIN)
 }
 
+// Repo alvo do handoff (target_repo_id tem FK em repos).
+function seedRepo(): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'P1', 1, 1)`,
+  ).run()
+  db.prepare(
+    `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at)
+     VALUES ('r1', 'p1', 'Repo 1', ?, 0, 1)`,
+  ).run(HOME)
+}
+
 // Aba confirmada, fora de foco e com o Composer vazio: pode hibernar.
 function idlePane(paneId: string) {
   return { paneId, focused: false, composerHasText: false, composerFocused: false }
@@ -135,6 +148,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     isPidAlive: (file) => isSessionPidAlive(file),
     aliveSessionId: () => PTY,
     activeHandoffCcSessionIds: () => [],
+    isHandoffChild: handoffStore.isHandoffChildCc,
     queueHas: () => false,
     agentMessageSince,
     transcriptPath: () => '/fake/transcript.jsonl',
@@ -155,7 +169,9 @@ const evaluate = (h: IdleHibernator, handoff: string[] = []) =>
 beforeEach(() => {
   rmSync(SESSIONS_DIR, { recursive: true, force: true })
   const db = getDb()
-  db.exec('DELETE FROM agent_messages; DELETE FROM sessions; DELETE FROM workspace_state;')
+  db.exec(
+    'DELETE FROM agent_messages; DELETE FROM handoffs; DELETE FROM sessions; DELETE FROM workspace_state;',
+  )
   seedSession(PTY, CC)
   savePanes([CC])
   writeSessionFile()
@@ -243,6 +259,39 @@ describe('gate da hibernação (fontes reais)', () => {
     expect(await evaluate(gate(), [CC])).toEqual({ ok: false, reason: 'handoff' })
     const queued = gate({ queueHas: (id) => id === PTY })
     expect(await evaluate(queued)).toEqual({ ok: false, reason: 'queue' })
+  })
+
+  it('d) filha de handoff já encerrada (done, pelo handoff-store) → handoff-child', async () => {
+    seedRepo()
+    const h = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 't',
+      composedPrompt: 'p',
+      motherSessionId: null,
+      mode: 'plan',
+      status: 'approved',
+    })
+    handoffStore.markRunning(h.id, PTY)
+    handoffStore.report(h.id, 'pronto')
+    expect(handoffStore.get(h.id)?.status).toBe('done')
+    // Fora do recorte "ativo": só o gate novo a segura.
+    expect(handoffStore.activeHandoffCcSessionIds()).not.toContain(CC)
+    expect(await evaluate(gate())).toEqual({ ok: false, reason: 'handoff-child' })
+  })
+
+  it('d) filha relinkada: a linha antiga da mesma conversa também conta', async () => {
+    seedSession('pty-relink', CC)
+    seedRepo()
+    const h = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 't',
+      composedPrompt: 'p',
+      motherSessionId: null,
+      status: 'approved',
+    })
+    handoffStore.markRunning(h.id, 'pty-relink')
+    handoffStore.fail(h.id, 'caiu')
+    expect(await evaluate(gate())).toEqual({ ok: false, reason: 'handoff-child' })
   })
 
   it('e) agent_ask recente (de/para qualquer sessions.id da conversa) → agent-msg', async () => {

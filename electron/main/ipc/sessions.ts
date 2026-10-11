@@ -465,7 +465,7 @@ function startSession(opts: {
     opts.featureId ?? null,
     row.provider,
     opts.featureSource ?? null,
-    opts.spawnArgs ? JSON.stringify(opts.spawnArgs) : null,
+    opts.spawnArgs ? JSON.stringify({ ...opts.spawnArgs, cwd: opts.cwd }) : null,
   )
   if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
@@ -1189,6 +1189,23 @@ export function registerSessionIpc(): void {
     // whitelists: retomar não dá à sessão nada que ela não tinha.
     const spawned = latestSpawnArgs(db, input.ccSessionId)
     const original = relaunchFlags(spawned)
+    // Volta no diretório em que a conversa rodou: o feature_id pode ter mudado
+    // depois do spawn, e o cwd recalculado pelo vínculo levaria a sessão acordada
+    // para outro checkout. Diretório removido: fica o recalculado.
+    if (spawned?.cwd && spawned.cwd !== cwd) {
+      if (isDirectory(spawned.cwd)) {
+        cwd = spawned.cwd
+      } else {
+        console.warn(
+          JSON.stringify({
+            event: 'resume_spawn_cwd_missing',
+            ccSessionId: input.ccSessionId,
+            spawnCwd: spawned.cwd,
+            cwd,
+          }),
+        )
+      }
+    }
     const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
       command,
       sessionId: input.ccSessionId,

@@ -69,6 +69,10 @@ export interface IdleHibernatorDeps {
   // sessions.id da PTY viva desta conversa (findAliveByCc), ou null.
   aliveSessionId(ccSessionId: string): string | null
   activeHandoffCcSessionIds(): string[]
+  // Filha de handoff em QUALQUER status (inclusive done/failed). Uma filha
+  // terminada acordaria pelo resume genérico, sem o relink que devolve alias,
+  // permissão e --settings, no checkout que a posse reservou para ela.
+  isHandoffChild(ccSessionId: string): boolean
   queueHas(sessionId: string): boolean
   // agent_ask envolvendo a conversa desde `since` (ou ainda pendente).
   agentMessageSince(ccSessionId: string, since: number): boolean
@@ -250,8 +254,9 @@ export class IdleHibernator {
     if (file.statusUpdatedAt === null || now - file.statusUpdatedAt < windowMs) {
       return refuse('status-recent')
     }
-    // d) handoff ativo (mãe ou filha) e fila de prompts.
+    // d) handoff ativo (mãe ou filha), filha de handoff já encerrada e fila de prompts.
     if (handoffCc.has(c.ccSessionId)) return refuse('handoff')
+    if (this.deps.isHandoffChild(c.ccSessionId)) return refuse('handoff-child')
     if (this.deps.queueHas(c.sessionId)) return refuse('queue')
     // e) agent_ask recente.
     if (this.deps.agentMessageSince(c.ccSessionId, now - windowMs)) return refuse('agent-msg')

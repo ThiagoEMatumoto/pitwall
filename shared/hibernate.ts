@@ -21,6 +21,7 @@ export const HIBERNATE_REFUSALS = [
   'status-not-idle',
   'status-recent',
   'handoff',
+  'handoff-child',
   'queue',
   'agent-msg',
   'no-transcript',
