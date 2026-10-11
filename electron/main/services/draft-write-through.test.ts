@@ -10,7 +10,7 @@ vi.mock('electron', () => ({ app: {} }))
 
 const { openAppDb } = await import('./db')
 const { getComposerDraft, saveComposerDraft } = await import('./composer-drafts')
-const { createDraftWriteThrough } = await import('./draft-write-through')
+const { createDraftWriteThrough, DRAFT_COALESCE_MS } = await import('./draft-write-through')
 const { createDraftPersister } =
   await import('../../../src/features/sessions/composer-draft-persister')
 
@@ -18,7 +18,8 @@ const KEY = 'pane:p-wt'
 let dir: string
 let dbPath: string
 let db: Database.Database
-// setImmediate controlado: o teste decide quando o "tick" do main acaba.
+// Janela controlada: o teste decide quando a janela de coalescência do main fecha
+// ("tick" abaixo = uma janela).
 let ticks: Array<() => void>
 const endTick = () => ticks.splice(0).forEach((fn) => fn())
 
@@ -152,6 +153,69 @@ describe('write-through do rascunho no main', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// Com o defer padrão (setTimeout da janela), contando commits NORMAL pelo getDb,
+// que só é chamado quando há algo novo a gravar.
+describe('coalescência no tempo (janela padrão)', () => {
+  function countingMain() {
+    let commits = 0
+    const main = createDraftWriteThrough(() => {
+      commits++
+      return db
+    })
+    return { main, commits: () => commits }
+  }
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('100 mudanças em 10ms: 1 escrita imediata + 1 final, com o último texto', () => {
+    const { main, commits } = countingMain()
+    for (let i = 1; i <= 100; i++) {
+      main.write(draft(`v${i}`, i))
+      if (i % 10 === 0) vi.advanceTimersByTime(1) // ticks distintos, 10ms no total
+    }
+    expect(commits()).toBe(1)
+    expect(committedText()).toBe('v1')
+
+    vi.advanceTimersByTime(DRAFT_COALESCE_MS)
+    expect(commits()).toBe(2)
+    expect(committedText()).toBe('v100')
+
+    vi.advanceTimersByTime(DRAFT_COALESCE_MS * 4) // nada pendente: a janela fecha
+    expect(commits()).toBe(2)
+
+    main.write(draft('v101', 101)) // janela fechada: borda de subida, na hora
+    expect(commits()).toBe(3)
+    expect(committedText()).toBe('v101')
+  })
+
+  it('digitação contínua mais rápida que a janela: no máximo 1 commit por janela', () => {
+    const { main, commits } = countingMain()
+    const windows = 20
+    let seq = 0
+    for (let ms = 0; ms < windows * DRAFT_COALESCE_MS; ms += 5) {
+      main.write(draft(`v${++seq}`, seq))
+      vi.advanceTimersByTime(5)
+    }
+    expect(commits()).toBeLessThanOrEqual(windows + 1)
+    vi.advanceTimersByTime(DRAFT_COALESCE_MS)
+    expect(committedText()).toBe(`v${seq}`)
+  })
+
+  it('drain (flush/save FULL) grava o pendente na hora, sem esperar a janela', () => {
+    const { main } = countingMain()
+    main.write(draft('v1', 1))
+    main.write(draft('v2', 2))
+    expect(committedText()).toBe('v1')
+    main.drain()
+    expect(committedText()).toBe('v2')
+    main.saveDurable(draft('v3', 3))
+    expect(committedText()).toBe('v3')
+    vi.advanceTimersByTime(DRAFT_COALESCE_MS)
+    expect(committedText()).toBe('v3')
   })
 })
 
