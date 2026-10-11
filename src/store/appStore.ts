@@ -284,6 +284,52 @@ function scheduleDraftExpiry(paneId: string): () => void {
   return () => clearTimeout(timer)
 }
 
+function openPaneIds(): string[] {
+  return useAppStore.getState().panes.map((p) => p.paneId)
+}
+
+// Pane nova de uma conversa que já teve pane (reabrir pela lista): antes de ela
+// entrar no store (e o Composer hidratar 'pane:<id>'), herda o rascunho das panes
+// fechadas da mesma conversa. Falha não segura a abertura.
+async function adoptDraftInto(paneId: string, ccSessionId: string): Promise<void> {
+  try {
+    await sessionsApi.adoptDraft({ paneId, ccSessionId, openPaneIds: openPaneIds() })
+  } catch (err) {
+    console.error('[composer] falha ao herdar o rascunho da conversa:', err)
+  }
+}
+
+// GC dos rascunhos, só depois de um restore bem-sucedido: com o restore bloqueado
+// as panes ainda não voltaram e o GC não sabe quais vivem.
+async function collectDraftGarbage(): Promise<void> {
+  const panes = useAppStore
+    .getState()
+    .panes.map((p) => ({ paneId: p.paneId, ccSessionId: p.session.ccSessionId ?? null }))
+  try {
+    await sessionsApi.gcDrafts(panes)
+  } catch (err) {
+    console.error('[composer] GC dos rascunhos falhou:', err)
+  }
+}
+
+// Encerrar confirmado: os rascunhos da conversa só saem depois do kill.
+async function killAndClearDrafts(
+  sessionId: string,
+  pane: ActivePane | null,
+  live: LiveSessionInfo | null,
+): Promise<void> {
+  try {
+    await sessionsApi.kill(sessionId)
+    await sessionsApi.clearSessionDrafts({
+      ccSessionId: pane?.session.ccSessionId ?? live?.ccSessionId ?? null,
+      paneId: pane?.paneId ?? null,
+      openPaneIds: openPaneIds(),
+    })
+  } catch (err) {
+    console.error('[sessions] encerrar: kill ou limpeza dos rascunhos falhou:', err)
+  }
+}
+
 // Guarda o auto-restore contra a dupla montagem do StrictMode (rodaria 2x).
 let restoreStarted = false
 // Reserva síncrona de ccSessionIds em resume — fecha a corrida entre o check de
@@ -696,6 +742,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ bootSessionCount: openPanes.length })
     if (openPanes.length === 0) {
       set({ restoreComplete: true })
+      void collectDraftGarbage()
       return
     }
 
@@ -715,6 +762,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().restoreSnapshots(openPanes, dockLayout)
     await workspaceApi.resetRestoreAttempts()
     set({ restoreComplete: true })
+    void collectDraftGarbage()
   },
 
   retryRestore: async () => {
@@ -723,6 +771,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
     await get().restoreSnapshots(openPanes, dockLayout)
     await workspaceApi.resetRestoreAttempts()
+    void collectDraftGarbage()
   },
 
   restoreSnapshots: async (rawSnapshots, dockLayout = null) => {
@@ -976,16 +1025,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Detach, NÃO mata: só tira da view + persiste. A PTY sobrevive no main
-  // (background). Kill explícito é endSession. O rascunho do Composer da pane
-  // fica durante a janela do Desfazer (que devolve a MESMA pane, e com ela o
-  // rascunho 'pane:<id>'); só é apagado quando a janela expira sem desfazer.
+  // (background). Kill explícito é endSession. Pane viva: o rascunho fica (a
+  // conversa segue e reabri-la pela lista o herda — adoptDraftInto); sai no
+  // Encerrar confirmado ou pelo GC. Pane dormant: o rascunho fica durante a
+  // janela do Desfazer (que devolve a MESMA pane, e com ela 'pane:<id>') e só é
+  // apagado quando a janela expira sem desfazer.
   closePane: (paneId) => {
     const closed = get().panes.find((p) => p.paneId === paneId)
     set((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
     if (!closed) return
-    const cancelExpiry = scheduleDraftExpiry(paneId)
+    const cancelExpiry = closed.dormant ? scheduleDraftExpiry(paneId) : () => {}
     showToast({
       title: 'Aba fechada',
       body: closed.session.title ?? closed.repo?.label ?? undefined,
@@ -1043,7 +1094,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Kill só depois do toast sumir (graça): ver comentário em END_KILL_GRACE_MS.
     const timer = setTimeout(() => {
       pendingEnds.delete(sessionId)
-      void sessionsApi.kill(sessionId)
+      // Fim definitivo: kill + rascunhos da conversa. (O caminho `immediate` não
+      // apaga rascunho: é o Reabrir, que segue com a conversa.)
+      void killAndClearDrafts(sessionId, pane, live)
       void get().refreshLiveSessions()
     }, END_UNDO_MS + END_KILL_GRACE_MS)
     const name = live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label
@@ -1091,6 +1144,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     // Item da lista é sempre LIVE — re-attacha à PTY existente (sem segundo claude).
     const paneId = newPaneId()
+    await adoptDraftInto(paneId, item.ccSessionId)
+    // Algo abriu a mesma conversa durante a adoção: foca a que entrou.
+    const opened = get().panes.find((p) => paneShowsLive(p, item))
+    if (opened) {
+      set({ focusPaneId: opened.paneId, area: 'projects' })
+      return
+    }
     const pane = paneFromLiveSession(item, paneId)
     set((s) => ({ panes: [...s.panes, pane], area: 'projects', focusPaneId: paneId }))
     schedulePersist(get().panes)
@@ -1103,12 +1163,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     // (as não-selecionadas saem da view; PTY segue viva no main). gridRequest
     // dispara o arranjo em grade no AppShell. Date.now() é fixo no tick, então
     // desambiguamos o paneId com item.id (UUID único da sessão).
+    // Pane nova (sem aba da conversa) herda o rascunho das panes fechadas dela.
+    const fresh = new Map<string, string>()
+    for (const item of items) {
+      if (!get().panes.some((p) => paneShowsLive(p, item))) fresh.set(item.id, newPaneId())
+    }
+    await Promise.all(
+      items
+        .filter((item) => fresh.has(item.id))
+        .map((item) => adoptDraftInto(fresh.get(item.id) as string, item.ccSessionId)),
+    )
     const current = get().panes
     const wanted: ActivePane[] = items.map((item) => {
       const existing = current.find((p) => paneShowsLive(p, item))
       // Aba dormindo de uma sessão que já tem PTY viva: anexa no lugar, sem resume.
       if (existing?.dormant) return paneFromLiveSession(item, existing.paneId)
-      return existing ?? paneFromLiveSession(item, newPaneId())
+      return existing ?? paneFromLiveSession(item, fresh.get(item.id) ?? newPaneId())
     })
     // Dormindo fora da seleção fica: não tem processo no main, então tirá-la do
     // store (e do open_panes) perderia a conversa da restauração. O AppShell a

@@ -19,7 +19,6 @@ import {
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
 import { registerComposerDraftIpc, requestDraftFlush } from './ipc/composer-drafts'
-import { gcComposerDraftsAtBoot } from './services/composer-drafts'
 import { flushBeforeQuit } from './services/draft-flush'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
@@ -337,13 +336,9 @@ app.whenReady().then(async () => {
   registerDormantPanesIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
-  // GC dos rascunhos de panes que sumiram há mais de 7 dias; roda antes do sweep
-  // para as imagens só deles também irem embora.
-  try {
-    gcComposerDraftsAtBoot(getDb())
-  } catch (err) {
-    console.error('[composer] GC dos rascunhos falhou:', err)
-  }
+  // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
+  // bem-sucedido (sessions:gc-drafts). As imagens dos rascunhos coletados saem no
+  // sweep do boot seguinte.
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
   // composer) deixados por sessões de execuções anteriores.
   sweepOrphanImageTemps()

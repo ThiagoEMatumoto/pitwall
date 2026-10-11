@@ -4,6 +4,7 @@ import type {
   ComposerDraftAttachment,
   ComposerDraftInput,
 } from '../../../shared/types/composer-draft'
+import { findTranscriptPath } from './transcript-path'
 
 interface DraftRow {
   draft_key: string
@@ -90,30 +91,54 @@ export function draftReferencesFile(db: Database.Database): (filename: string) =
     rows.some((r) => r.text.includes(filename) || r.attachments.includes(filename))
 }
 
-export const DRAFT_GC_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+// Sem gravação há mais que isto, o rascunho de pane fechada vai embora mesmo com
+// a conversa ainda em disco.
+export const DRAFT_GC_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+// Rascunho cuja conversa não tem transcript só vai embora depois desta folga: cobre
+// a sessão que ainda não gravou o JSONL e o crash no meio do Desfazer.
+export const DRAFT_GC_ORPHAN_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 
-interface OpenPaneRef {
+export interface OpenPaneRef {
   paneId?: string | null
   ccSessionId?: string | null
 }
 
-// GC dos rascunhos de panes que não existem mais: nem abertas nem dormindo (as
-// duas estão no open_panes) e sem gravação há mais de `maxAgeMs`. A janela de
-// idade cobre o fechamento que o app não chegou a confirmar (crash no meio do
-// Desfazer). Devolve as chaves removidas.
+type DraftRef = Pick<DraftRow, 'draft_key' | 'pane_id' | 'cc_session_id' | 'updated_at'>
+
+function hasTranscriptOnDisk(ccSessionId: string): boolean {
+  return findTranscriptPath(ccSessionId) !== null
+}
+
+// GC dos rascunhos de panes fechadas. Fora do conjunto aberto (abertas + dormant)
+// NÃO basta: o rascunho só sai se a conversa não tem mais transcript em disco (com
+// a folga acima) ou se está há mais de `maxAgeMs` sem gravação. Devolve as chaves
+// removidas.
 export function gcComposerDrafts(
   db: Database.Database,
   openPanes: OpenPaneRef[],
-  now: number = Date.now(),
-  maxAgeMs: number = DRAFT_GC_MAX_AGE_MS,
+  opts: {
+    now?: number
+    maxAgeMs?: number
+    hasTranscript?: (ccSessionId: string) => boolean
+  } = {},
 ): string[] {
+  const now = opts.now ?? Date.now()
+  const maxAgeMs = opts.maxAgeMs ?? DRAFT_GC_MAX_AGE_MS
+  const hasTranscript = opts.hasTranscript ?? hasTranscriptOnDisk
   const paneIds = new Set(openPanes.map((p) => p.paneId).filter(Boolean))
   const ccs = new Set(openPanes.map((p) => p.ccSessionId).filter(Boolean))
   const rows = db
-    .prepare('SELECT draft_key, pane_id, cc_session_id FROM composer_drafts WHERE updated_at < ?')
-    .all(now - maxAgeMs) as Array<Pick<DraftRow, 'draft_key' | 'pane_id' | 'cc_session_id'>>
-  const stale = rows.filter((r) =>
-    r.pane_id ? !paneIds.has(r.pane_id) : !r.cc_session_id || !ccs.has(r.cc_session_id),
+    .prepare(
+      'SELECT draft_key, pane_id, cc_session_id, updated_at FROM composer_drafts WHERE updated_at < ?',
+    )
+    .all(now - DRAFT_GC_ORPHAN_GRACE_MS) as DraftRef[]
+  const isOpen = (r: DraftRef) =>
+    (r.pane_id !== null && paneIds.has(r.pane_id)) ||
+    (r.cc_session_id !== null && ccs.has(r.cc_session_id))
+  const stale = rows.filter(
+    (r) =>
+      !isOpen(r) &&
+      (r.updated_at < now - maxAgeMs || !r.cc_session_id || !hasTranscript(r.cc_session_id)),
   )
   if (stale.length === 0) return []
   writeDurably(db, () => {
@@ -123,23 +148,103 @@ export function gcComposerDrafts(
   return stale.map((r) => r.draft_key)
 }
 
-// GC do boot, lendo o open_panes gravado pelo renderer. open_panes ilegível =
-// não sabemos quais panes vivem: não apaga nada. Deve rodar ANTES do sweep de
-// imagens, que então libera as imagens só desses rascunhos.
-export function gcComposerDraftsAtBoot(db: Database.Database, now: number = Date.now()): string[] {
+// GC acionado pelo renderer DEPOIS de um restore bem-sucedido, nunca às cegas no
+// boot: com o restore bloqueado (crash-loop) as panes ainda não voltaram e o
+// open_panes não diz quais vivem. Protege a união das panes que o renderer tem
+// agora com as do open_panes gravado; open_panes ilegível = não apaga nada.
+export function gcComposerDraftsAfterRestore(
+  db: Database.Database,
+  rendererPanes: OpenPaneRef[],
+  opts: { now?: number; hasTranscript?: (ccSessionId: string) => boolean } = {},
+): string[] {
   const row = db.prepare('SELECT open_panes FROM workspace_state WHERE id = 1').get() as
     { open_panes: string | null } | undefined
-  let openPanes: OpenPaneRef[] = []
+  let saved: OpenPaneRef[] = []
   if (row?.open_panes) {
     try {
       const parsed: unknown = JSON.parse(row.open_panes)
       if (!Array.isArray(parsed)) return []
-      openPanes = parsed as OpenPaneRef[]
+      saved = parsed as OpenPaneRef[]
     } catch {
       return []
     }
   }
-  return gcComposerDrafts(db, openPanes, now)
+  return gcComposerDrafts(db, [...saved, ...rendererPanes], opts)
+}
+
+function joinDrafts(rows: DraftRow[]): { text: string; attachments: ComposerDraftAttachment[] } {
+  const text = rows
+    .map((r) => r.text)
+    .filter((t) => t.length > 0)
+    .join('\n\n')
+  const attachments: ComposerDraftAttachment[] = []
+  for (const a of rows.flatMap((r) => parseAttachments(r.attachments))) {
+    if (!attachments.some((x) => x.path === a.path)) attachments.push(a)
+  }
+  return { text, attachments }
+}
+
+// Pane nova de uma conversa (reabrir pela lista dá outro paneId): sem rascunho
+// próprio, herda os de panes fechadas da MESMA conversa — juntados do mais antigo
+// ao mais novo, então nada se perde se houver mais de um. Os rascunhos de panes
+// ainda abertas (`openPaneIds`) e o do quick look ('cc:') não são tocados. Devolve
+// o rascunho adotado (null = nada a adotar).
+export function adoptComposerDraft(
+  db: Database.Database,
+  target: { paneId: string; ccSessionId: string; openPaneIds: string[] },
+  now: number = Date.now(),
+): ComposerDraft | null {
+  const key = `pane:${target.paneId}`
+  if (getComposerDraft(db, key)) return null
+  const open = new Set(target.openPaneIds)
+  const rows = (
+    db
+      .prepare(
+        `SELECT * FROM composer_drafts
+         WHERE cc_session_id = ? AND pane_id IS NOT NULL AND draft_key != ?
+         ORDER BY updated_at ASC`,
+      )
+      .all(target.ccSessionId, key) as DraftRow[]
+  ).filter((r) => !open.has(r.pane_id as string))
+  if (rows.length === 0) return null
+  const merged = joinDrafts(rows)
+  writeDurably(db, () => {
+    db.prepare(
+      `INSERT INTO composer_drafts
+         (draft_key, cc_session_id, pane_id, text, attachments, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      key,
+      target.ccSessionId,
+      target.paneId,
+      merged.text,
+      JSON.stringify(merged.attachments),
+      now,
+    )
+    const del = db.prepare('DELETE FROM composer_drafts WHERE draft_key = ?')
+    for (const r of rows) del.run(r.draft_key)
+  })
+  return getComposerDraft(db, key)
+}
+
+// Fim definitivo da conversa (Encerrar confirmado, depois do Desfazer): apaga os
+// rascunhos dela — da pane encerrada, de panes fechadas e do quick look —, menos
+// os de panes que seguem abertas. Devolve as chaves removidas.
+export function clearSessionDrafts(
+  db: Database.Database,
+  target: { ccSessionId: string | null; paneId: string | null; openPaneIds: string[] },
+): string[] {
+  const open = new Set(target.openPaneIds)
+  const rows = db
+    .prepare('SELECT * FROM composer_drafts WHERE cc_session_id = ? OR draft_key = ?')
+    .all(target.ccSessionId, target.paneId ? `pane:${target.paneId}` : null) as DraftRow[]
+  const gone = rows.filter((r) => !r.pane_id || !open.has(r.pane_id))
+  if (gone.length === 0) return []
+  writeDurably(db, () => {
+    const del = db.prepare('DELETE FROM composer_drafts WHERE draft_key = ?')
+    for (const r of gone) del.run(r.draft_key)
+  })
+  return gone.map((r) => r.draft_key)
 }
 
 function isAttachment(v: unknown): v is ComposerDraftAttachment {

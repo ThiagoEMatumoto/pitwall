@@ -9,7 +9,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ app: {} }))
 
 const { openAppDb } = await import('../../electron/main/services/db')
-const { clearComposerDraft, gcComposerDraftsAtBoot, getComposerDraft, saveComposerDraft } =
+const { clearComposerDraft, gcComposerDraftsAfterRestore, getComposerDraft, saveComposerDraft } =
   await import('../../electron/main/services/composer-drafts')
 
 const dir = mkdtempSync(join(tmpdir(), 'cm-store-draft-'))
@@ -198,10 +198,13 @@ describe('paneId estável', () => {
     ])
     await typeDraft(generated, 'cc-reboot', 'sobrevive ao reboot')
 
-    // Reboot: banco reaberto, GC do boot, store vazio restaurando do open_panes.
+    // Reboot: banco reaberto, GC pós-restore, store vazio restaurando do open_panes.
     db.close()
     db = openAppDb(join(dir, 'app.db'))
-    gcComposerDraftsAtBoot(db, Date.now() + 30 * 24 * 60 * 60 * 1000)
+    gcComposerDraftsAfterRestore(db, [], {
+      now: Date.now() + 31 * 24 * 60 * 60 * 1000,
+      hasTranscript: () => false,
+    })
     useAppStore.setState({ panes: [] })
     await restoreDormant(openPanes())
 
