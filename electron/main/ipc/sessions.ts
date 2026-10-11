@@ -6,14 +6,9 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
-import {
-  clearComposerDraft,
-  draftReferencesFile,
-  getComposerDraft,
-  parseComposerDraftInput,
-  saveComposerDraft,
-} from '../services/composer-drafts'
-import { sweepImageTempDir } from '../services/image-temp-sweep'
+import { requestDraftFlush } from './composer-drafts'
+import { latestSpawnArgs, relaunchFlags, type SpawnArgs } from '../services/spawn-args'
+import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
@@ -320,19 +315,8 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
-// Remove temporários de imagem que casam com o predicado, menos os referenciados
-// por um rascunho persistido do Composer (o rascunho sobrevive ao reboot e ao
-// exit da PTY; a imagem dele também precisa). Sem conseguir ler os rascunhos,
-// não apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let isKept: (filename: string) => boolean
-  try {
-    isKept = draftReferencesFile(getDb())
-  } catch (err) {
-    console.error('[sessions] sweep de imagens adiado: rascunhos ilegíveis', err)
-    return
-  }
-  sweepImageTempDir(tempDir(), predicate, isKept)
+  sweepImageTempsKeepingDrafts(getDb, tempDir(), predicate)
 }
 
 // Sweep de boot: num processo fresco só os rascunhos persistidos referenciam
@@ -447,6 +431,8 @@ function startSession(opts: {
   rows?: number
   provider?: AgentProvider
   env?: Record<string, string>
+  // Flags do spawn original (sessions.spawn_args): o próximo resume as reaplica.
+  spawnArgs?: SpawnArgs | null
 }): Session {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
@@ -465,8 +451,8 @@ function startSession(opts: {
   }
   db.prepare(
     `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source, spawn_args)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.repo_id,
@@ -479,6 +465,7 @@ function startSession(opts: {
     opts.featureId ?? null,
     row.provider,
     opts.featureSource ?? null,
+    opts.spawnArgs ? JSON.stringify(opts.spawnArgs) : null,
   )
   if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
@@ -624,6 +611,15 @@ export function spawnSession(input: SpawnSessionInput): Session {
     rows: input.rows,
     provider,
     env: mcp.env,
+    spawnArgs: {
+      model,
+      effort,
+      advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: input.systemPromptText?.trim() || null,
+      handoffChild: Boolean(input.handoffChild),
+    },
   })
 
   // Sem `-n` na CLI (Codex): o nome só existe aqui, e é dele que a lista viva
@@ -778,6 +774,10 @@ export function resumeHandoffChild(
   // spawnSession (whitelist + merge do HANDOFF_CHILD_DENY em modo autônomo).
   const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
   const disallowedTools = resolveDisallowedTools(permissionMode, null, { handoffChild: true })
+  // Model/effort/advisor do spawn da filha voltam também; a permissão segue do
+  // modo do handoff (a autoridade sobre o que a filha pode fazer).
+  const spawned = latestSpawnArgs(db, ccSessionId)
+  const original = relaunchFlags(spawned)
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -787,7 +787,9 @@ export function resumeHandoffChild(
     resume: true,
     name,
     mcpConfigArg: mcpConfigArg(internalSessionId),
-    model: null,
+    model: original.model,
+    effort: original.effort,
+    advisorModel: original.advisorModel,
     systemPromptFilePath: null,
     permissionMode,
     disallowedTools,
@@ -804,6 +806,15 @@ export function resumeHandoffChild(
     initialCommand: opts.kickoff,
     cols: opts.cols,
     rows: opts.rows,
+    spawnArgs: {
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: spawned?.systemPromptText ?? null,
+      handoffChild: true,
+    },
   })
 
   // O apelido é o ENDEREÇO do peer, e o relance cria uma LINHA NOVA em `sessions`
@@ -964,10 +975,14 @@ export function registerSessionIpc(): void {
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
-      // as anexou na entrega; o path injetado não serve depois do exit. Hibernada
-      // não: o rascunho do Composer (com esses paths) volta no wake da sessão nova;
-      // o sweep do próximo boot recolhe o que sobrar.
-      if (!hibernated) sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+      // as anexou na entrega; o path injetado não serve depois do exit. Antes, o
+      // flush dos rascunhos: a imagem colada ainda no debounce do renderer não
+      // está no app.db e o sweep a apagaria. Vale também para a hibernada: a pane
+      // dormant mantém o paneId, então o rascunho 'pane:<id>' (com o path) segue
+      // no app.db e o sweep poupa a imagem que ele referencia.
+      void sweepAfterDraftFlush(requestDraftFlush, () =>
+        sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId)),
+      )
 
       // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
@@ -1167,16 +1182,32 @@ export function registerSessionIpc(): void {
     const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
+    // O --resume não guarda as flags do spawn: sem reaplicá-las, a sessão acordada
+    // da hibernação (ou retomada à mão) voltava no modo de permissão, modelo e
+    // denylist default, e a filha de handoff já terminada, sem o --settings. São
+    // as mesmas que o spawn validou para esta conversa, revalidadas pelas
+    // whitelists: retomar não dá à sessão nada que ela não tinha.
+    const spawned = latestSpawnArgs(db, input.ccSessionId)
+    const original = relaunchFlags(spawned)
     const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
       command,
       sessionId: input.ccSessionId,
       resume: true,
       name,
       mcpConfigArg: mcpConfigArg(internalSessionId),
-      model: null,
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode: original.permissionMode,
+      disallowedTools: original.disallowedTools,
+      settingsJson: original.settingsJson,
       // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
       // compartilhada — é isso que impede spawn e resume de divergirem de novo.
-      systemPromptFilePath: writeSessionSystemPromptFile({ repoId, featureId }),
+      systemPromptFilePath: writeSessionSystemPromptFile({
+        repoId,
+        featureId,
+        systemPromptText: original.systemPromptText,
+      }),
     })
 
     const session = startSession({
@@ -1189,6 +1220,7 @@ export function registerSessionIpc(): void {
       featureSource,
       cols: input.cols,
       rows: input.rows,
+      spawnArgs: spawned,
     })
     transferLeadershipToResumed(priorSessionIds, session, 'renderer')
     return { session, reattached: false }
@@ -1544,19 +1576,6 @@ export function registerSessionIpc(): void {
       saveImageTemp(sessionId, bytes, mime),
   )
 
-  ipcMain.handle('sessions:get-draft', (_e, key: unknown) => {
-    if (typeof key !== 'string' || key.length === 0) throw new Error('chave de rascunho inválida')
-    return getComposerDraft(getDb(), key)
-  })
-
-  ipcMain.handle('sessions:save-draft', (_e, raw: unknown) => {
-    saveComposerDraft(getDb(), parseComposerDraftInput(raw))
-  })
-
-  ipcMain.handle('sessions:clear-draft', (_e, key: unknown) => {
-    if (typeof key !== 'string' || key.length === 0) throw new Error('chave de rascunho inválida')
-    clearComposerDraft(getDb(), key)
-  })
 
   ipcMain.handle('sessions:resize', (_e, sessionId: string, cols: number, rows: number) => {
     ptyManager.resize(sessionId, cols, rows)

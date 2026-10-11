@@ -3,7 +3,7 @@
 // wake-result: o main pergunta ao renderer e espera a resposta com teto. Sem
 // resposta = sem pane (fail-closed: a sessão não hiberna).
 import { randomUUID } from 'node:crypto'
-import type { PaneCheckRequest, PaneCheckResult } from '../../../../shared/hibernate'
+import type { PaneCheck, PaneCheckRequest, PaneCheckResult } from '../../../../shared/hibernate'
 
 export const PANE_CHECK_TIMEOUT_MS = 3_000
 
@@ -14,11 +14,11 @@ export interface PaneConfirmerDeps {
 }
 
 export class PaneConfirmer {
-  private awaiting = new Map<string, (paneId: string | null) => void>()
+  private awaiting = new Map<string, (check: PaneCheck | null) => void>()
 
   constructor(private deps: PaneConfirmerDeps) {}
 
-  confirm(sessionId: string, ccSessionId: string): Promise<string | null> {
+  confirm(sessionId: string, ccSessionId: string): Promise<PaneCheck | null> {
     const requestId = randomUUID()
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -26,12 +26,14 @@ export class PaneConfirmer {
         resolve(null)
       }, this.deps.timeoutMs ?? PANE_CHECK_TIMEOUT_MS)
       timer.unref?.()
-      this.awaiting.set(requestId, (paneId) => {
+      this.awaiting.set(requestId, (check) => {
         clearTimeout(timer)
-        resolve(paneId)
+        resolve(check)
       })
       if (!this.deps.request({ requestId, sessionId, ccSessionId })) {
-        this.onResult({ requestId, paneId: null })
+        this.awaiting.delete(requestId)
+        clearTimeout(timer)
+        resolve(null)
       }
     })
   }
@@ -40,6 +42,7 @@ export class PaneConfirmer {
     const resolve = this.awaiting.get(result.requestId)
     if (!resolve) return
     this.awaiting.delete(result.requestId)
-    resolve(result.paneId)
+    const { requestId: _id, ...check } = result
+    resolve(check)
   }
 }

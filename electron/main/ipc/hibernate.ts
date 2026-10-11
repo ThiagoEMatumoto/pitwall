@@ -63,6 +63,9 @@ export function hibernateStatsView(): HibernateStatsView {
 const paneCheckResultSchema = z.object({
   requestId: z.string().min(1),
   paneId: z.string().min(1).nullable(),
+  focused: z.boolean(),
+  composerHasText: z.boolean(),
+  composerFocused: z.boolean(),
 })
 
 const paneConfirmer = new PaneConfirmer({

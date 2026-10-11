@@ -117,13 +117,18 @@ function ask(from: string, to: string, createdAt: number, status = 'answered'): 
     .run(`ask-${Math.random()}`, from, to, status, createdAt, createdAt + 60 * MIN)
 }
 
+// Aba confirmada, fora de foco e com o Composer vazio: pode hibernar.
+function idlePane(paneId: string) {
+  return { paneId, focused: false, composerHasText: false, composerFocused: false }
+}
+
 function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
   return new IdleHibernator({
     lazyRestore: () => true,
     afterMin: () => 30,
     candidates: () => claudeCandidates([PTY]),
     hasPane: (cc) => hasAwakePane(cc, () => false),
-    confirmPane: async () => 'pane-1',
+    confirmPane: async () => idlePane('pane-1'),
     registerDormant: () => {},
     lastIoAt: () => NOW - 2 * WINDOW,
     sessionFile: sessionFileFor,
@@ -332,7 +337,7 @@ describe('tick: as três condições', () => {
     const confirmer = new PaneConfirmer({
       request: (r) => {
         asked.push({ sessionId: r.sessionId, ccSessionId: r.ccSessionId })
-        queueMicrotask(() => confirmer.onResult({ requestId: r.requestId, paneId: 'pane-7' }))
+        queueMicrotask(() => confirmer.onResult({ requestId: r.requestId, ...idlePane('pane-7') }))
         return true
       },
     })
@@ -363,7 +368,9 @@ describe('tick: as três condições', () => {
         request: (r) => {
           if (mode === 'no-window') return false
           if (mode === 'null') {
-            queueMicrotask(() => confirmer.onResult({ requestId: r.requestId, paneId: null }))
+            queueMicrotask(() =>
+              confirmer.onResult({ requestId: r.requestId, ...idlePane('x'), paneId: null }),
+            )
           }
           return true
         },
@@ -379,6 +386,27 @@ describe('tick: as três condições', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it.each([
+    ['a aba é a focada', { focused: true }, 'pane-focused'],
+    ['o Composer tem rascunho', { composerHasText: true }, 'composer-busy'],
+    ['o Composer está com foco', { composerFocused: true }, 'composer-busy'],
+  ] as const)('round-trip: %s → recusa %s, sem /exit', async (_name, over, reason) => {
+    const confirmer = new PaneConfirmer({
+      request: (r) => {
+        queueMicrotask(() =>
+          confirmer.onResult({ requestId: r.requestId, ...idlePane('pane-7'), ...over }),
+        )
+        return true
+      },
+    })
+    const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
+    const h = gate({ send, confirmPane: (id, cc) => confirmer.confirm(id, cc) })
+    await h.tick()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats().refused[reason]).toBe(1)
+    expect(h.isHibernating(PTY)).toBe(false)
   })
 
   it('tudo ligado → avalia o candidato real e manda o /exit', async () => {

@@ -134,6 +134,15 @@ import type {
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
 
+// Rascunho síncrono: o main devolve {ok, value} ou {ok:false, error}; aqui vira
+// retorno ou throw, como o invoke.
+function draftSync<T>(channel: string, arg: unknown): T {
+  const res = ipcRenderer.sendSync(channel, arg) as
+    { ok: true; value: T } | { ok: false; error: string }
+  if (!res.ok) throw new Error(res.error)
+  return res.value
+}
+
 function subscribe<T>(channel: string, handler: (event: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T) => handler(payload)
   ipcRenderer.on(channel, listener)
@@ -166,6 +175,13 @@ const api: Api = {
     getDraft: (key) => invoke('sessions:get-draft', key),
     saveDraft: (draft) => invoke('sessions:save-draft', draft),
     clearDraft: (key) => invoke('sessions:clear-draft', key),
+    adoptDraft: (target) => invoke('sessions:adopt-draft', target),
+    clearSessionDrafts: (target) => invoke('sessions:clear-session-drafts', target),
+    gcDrafts: (openPanes) => invoke('sessions:gc-drafts', openPanes),
+    getDraftSync: (key) => draftSync('sessions:get-draft-sync', key),
+    saveDraftSync: (draft) => draftSync('sessions:save-draft-sync', draft),
+    onDraftFlushRequest: (handler) => subscribe<string>('composer:flush-request', handler),
+    draftFlushDone: (requestId) => ipcRenderer.send('composer:flush-done', requestId),
     resize: (sessionId, cols, rows) => invoke('sessions:resize', sessionId, cols, rows),
     kill: (sessionId) => invoke('sessions:kill', sessionId),
     rename: (sessionId, title) => invoke('sessions:rename', sessionId, title),

@@ -259,14 +259,22 @@ describe('closePane avisa o main', () => {
 describe('sessions:pane-check-request (confirmação antes do /exit)', () => {
   it('aba acordada mostrando a PTY → devolve o paneId', () => {
     paneCheckHandler!({ requestId: 'r1', sessionId: 'sess-b', ccSessionId: 'cc-b' })
-    expect(calls.paneCheck).toEqual([{ requestId: 'r1', paneId: 'pane-b' }])
+    expect(calls.paneCheck).toEqual([
+      {
+        requestId: 'r1',
+        paneId: 'pane-b',
+        focused: false,
+        composerHasText: false,
+        composerFocused: false,
+      },
+    ])
   })
 
   it('sem aba (fechada) ou já dormindo → null', () => {
     paneCheckHandler!({ requestId: 'r2', sessionId: 'sess-x', ccSessionId: 'cc-x' })
     hibernatedHandler!({ sessionId: 'sess-a', ccSessionId: 'cc-a', paneId: 'pane-a' })
     paneCheckHandler!({ requestId: 'r3', sessionId: 'sess-a', ccSessionId: 'cc-a' })
-    expect(calls.paneCheck).toEqual([
+    expect(calls.paneCheck).toMatchObject([
       { requestId: 'r2', paneId: null },
       { requestId: 'r3', paneId: null },
     ])

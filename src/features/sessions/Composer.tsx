@@ -17,6 +17,8 @@ import {
   createDraftPersister,
   type DraftPersister,
 } from './composer-draft-persister'
+import { installDraftFlushHooks } from './draft-flush-hooks'
+import { noteComposerContent, noteComposerFocus } from './pane-activity'
 
 export interface ComposerHandle {
   focus: () => void
@@ -227,39 +229,57 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
 
   // Rascunho durável: hidrata do app.db no mount (boot/restore da pane) quando a
   // memória não tem nada mais novo, e grava cada mudança com debounce. O
-  // desmonte grava o pendente na hora.
+  // desmonte, o blur e os flushes globais (draft-flush-hooks) gravam na hora.
   const persisterRef = useRef<DraftPersister | null>(null)
   useEffect(() => {
+    installDraftFlushHooks()
     const persister = createDraftPersister({
       key: draftKey,
       ccSessionId,
       paneId,
       api: {
         get: sessionsApi.getDraft,
+        getSync: sessionsApi.getDraftSync,
         save: sessionsApi.saveDraft,
+        saveSync: sessionsApi.saveDraftSync,
         clear: sessionsApi.clearDraft,
       },
     })
     persisterRef.current = persister
-    const hasMemory = drafts.has(memKey) || attachmentsBySession.has(memKey)
-    if (hasMemory) {
-      persister.update({
+    // Memória do mesmo processo (remount) é mais nova que o banco: dispensa a leitura.
+    if (drafts.has(memKey) || attachmentsBySession.has(memKey)) {
+      persister.seed({
         text: drafts.get(memKey) ?? '',
         attachments: attachmentsBySession.get(memKey) ?? [],
       })
+    } else {
+      // Digitou antes da leitura terminar: o persister junta salvo + digitado
+      // (nada é descartado) e avisamos. flushSync do react-dom aplica na hora,
+      // para uma tecla no meio não sobrescrever o texto juntado.
+      void persister.hydrate((draft, merged) => {
+        flushSync(() => {
+          setText(draft.text)
+          setAttached(draft.attachments.map((a) => ({ ...a, previewUrl: '' })))
+          if (merged) {
+            setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
+          }
+        })
+      })
     }
-    void persister.hydrate((saved) => {
-      if (hasMemory) return
-      setText(saved.text)
-      setAttached(saved.attachments.map((a) => ({ ...a, previewUrl: '' })))
-    })
     return () => {
       persisterRef.current = null
-      void persister.dispose()
+      persister.dispose()
     }
     // ccSessionId/paneId só rotulam a linha; a identidade é a chave.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, memKey])
+
+  function flushDraftNow() {
+    const persister = persisterRef.current
+    if (!persister) return
+    persister.update({ text, attachments: attached.map(({ name, path }) => ({ name, path })) })
+    persister.flushSync()
+  }
 
   useEffect(() => {
     persisterRef.current?.update({
@@ -284,6 +304,16 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       attachmentsBySession.delete(memKey)
     }
   }, [memKey, attached])
+
+  // O pane-check da hibernação recusa aba com rascunho ou com o Composer em foco.
+  useEffect(() => {
+    if (paneId) noteComposerContent(paneId, text.length > 0 || attached.length > 0)
+  }, [paneId, text, attached])
+
+  useEffect(() => {
+    if (!paneId) return
+    return () => noteComposerFocus(paneId, false)
+  }, [paneId])
 
   // Revoga os object URLs ainda pendurados ao desmontar o composer.
   useEffect(() => {
@@ -625,6 +655,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   if (histIndex !== null) setHistIndex(null)
                 }}
                 onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+                onFocus={() => paneId && noteComposerFocus(paneId, true)}
+                onBlur={() => {
+                  if (paneId) noteComposerFocus(paneId, false)
+                  flushDraftNow()
+                }}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}

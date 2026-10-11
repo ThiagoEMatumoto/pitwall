@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import type Database from 'better-sqlite3'
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -34,7 +34,9 @@ let db: Database.Database
 function realApi(conn: () => Database.Database): DraftApi {
   return {
     get: async (key) => getComposerDraft(conn(), key),
+    getSync: (key) => getComposerDraft(conn(), key),
     save: async (draft) => saveComposerDraft(conn(), draft),
+    saveSync: (draft) => saveComposerDraft(conn(), draft),
     clear: async (key) => clearComposerDraft(conn(), key),
   }
 }
@@ -169,13 +171,66 @@ describe('rascunho durável do Composer (app.db real)', () => {
   })
 })
 
+describe('hidratação × digitação (corrida)', () => {
+  it('digitou antes da leitura terminar: salvo e digitado são juntados, nada se perde', async () => {
+    await typedAndPersisted('salvo antes do reboot', [{ name: 'a.png', path: '/x/img-s-a.png' }])
+    reopen()
+
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const api = realApi(() => db)
+    const p = createDraftPersister({
+      key: KEY,
+      ccSessionId: 'cc-1',
+      paneId: 'pane-1',
+      api: { ...api, get: async (k) => (await gate, api.get(k)) },
+    })
+    const applied: Array<{ text: string; merged: boolean }> = []
+    const reading = p.hydrate((d, merged) => applied.push({ text: d.text, merged }))
+    p.update({ text: 'digitado no boot', attachments: [{ name: 'b.png', path: '/x/img-s-b.png' }] })
+    await vi.advanceTimersByTimeAsync(1000)
+    // Antes da leitura, nada é gravado: o salvo segue intacto.
+    expect(getComposerDraft(db, KEY)?.text).toBe('salvo antes do reboot')
+
+    release()
+    await reading
+    expect(applied).toEqual([{ text: 'salvo antes do reboot\n\ndigitado no boot', merged: true }])
+    await vi.advanceTimersByTimeAsync(500)
+    expect(getComposerDraft(reopen(), KEY)).toMatchObject({
+      text: 'salvo antes do reboot\n\ndigitado no boot',
+      attachments: [
+        { name: 'a.png', path: '/x/img-s-a.png' },
+        { name: 'b.png', path: '/x/img-s-b.png' },
+      ],
+    })
+  })
+
+  it('memória do remount (seed) vale mais que o banco: sem merge, sem leitura', async () => {
+    await typedAndPersisted('versão antiga')
+    const p = newPersister()
+    p.seed({ text: 'versão antiga + mais', attachments: [] })
+    p.flushSync()
+    expect(getComposerDraft(reopen(), KEY)?.text).toBe('versão antiga + mais')
+  })
+
+  it('flushSync e dispose gravam na hora, sem esperar o debounce', async () => {
+    const p = newPersister()
+    await p.hydrate(() => {})
+    p.update({ text: 'blur', attachments: [] })
+    p.flushSync()
+    expect(getComposerDraft(db, KEY)?.text).toBe('blur')
+    p.update({ text: 'desmontou', attachments: [] })
+    p.dispose()
+    expect(getComposerDraft(reopen(), KEY)?.text).toBe('desmontou')
+  })
+})
+
 describe('sweep de imagens coladas', () => {
   it('poupa a imagem referenciada por rascunho persistido e remove a órfã', async () => {
     const tmp = join(dir, 'tmp')
     const inText = buildImageFilename({ id: 'a', mime: 'image/png', sessionId: 's1' })
     const inChip = buildImageFilename({ id: 'b', mime: 'image/png', sessionId: 's1' })
     const orphan = buildImageFilename({ id: 'c', mime: 'image/png', sessionId: 's1' })
-    const { mkdirSync } = await import('node:fs')
     mkdirSync(tmp)
     for (const n of [inText, inChip, orphan, 'outro.txt']) writeFileSync(join(tmp, n), 'x')
 

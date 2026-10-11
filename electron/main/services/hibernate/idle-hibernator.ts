@@ -12,7 +12,9 @@
 import type { SendPromptInput, SendPromptResult } from '../../../../shared/types/send-prompt'
 import {
   HIBERNATE_REFUSALS,
+  paneCheckRefusal,
   type HibernateRefusal,
+  type PaneCheck,
   type HibernateStats,
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
@@ -53,9 +55,9 @@ export interface IdleHibernatorDeps {
   // Pane (aba) acordada no renderer para esta conversa, pelo open_panes salvo
   // (debounce): filtro barato antes do round-trip.
   hasPane(ccSessionId: string): boolean
-  // Round-trip com o renderer logo antes do /exit: paneId da aba que mostra esta
-  // PTY agora, ou null (sem pane, sem janela, sem resposta no prazo).
-  confirmPane(sessionId: string, ccSessionId: string): Promise<string | null>
+  // Round-trip com o renderer logo antes do /exit: a aba que mostra esta PTY
+  // agora e se o usuário está nela, ou null (sem janela, sem resposta no prazo).
+  confirmPane(sessionId: string, ccSessionId: string): Promise<PaneCheck | null>
   // Registra a dormant no main já no exit, sem esperar o dormantSync do renderer:
   // uma mensagem que chega nessa janela precisa achar a pane para acordá-la.
   registerDormant(ccSessionId: string, paneId: string): void
@@ -212,12 +214,14 @@ export class IdleHibernator {
           continue
         }
         // O open_panes tem debounce: a aba pode ter fechado depois do último save.
-        const paneId = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
-        if (!paneId) {
-          this.refuse('no-pane')
+        // E a aba focada, ou com o Composer em uso, nunca hiberna.
+        const check = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
+        const refusal = paneCheckRefusal(check)
+        if (refusal) {
+          this.refuse(refusal)
           continue
         }
-        await this.hibernate(candidate, paneId)
+        await this.hibernate(candidate, check?.paneId ?? null)
       }
     } finally {
       this.ticking = false

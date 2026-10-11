@@ -18,6 +18,8 @@ import {
 } from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
+import { registerComposerDraftIpc, requestDraftFlush } from './ipc/composer-drafts'
+import { flushBeforeQuit } from './services/draft-flush'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
 import { registerAttentionIpc } from './ipc/attention'
@@ -332,10 +334,14 @@ app.whenReady().then(async () => {
   registerRoomMotherIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
+  registerComposerDraftIpc()
   registerDormantPanesIpc()
   registerHibernateIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
+  // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
+  // bem-sucedido (sessions:gc-drafts). As imagens dos rascunhos coletados saem no
+  // sweep do boot seguinte.
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
   // composer) deixados por sessões de execuções anteriores.
   sweepOrphanImageTemps()
@@ -519,15 +525,15 @@ app.on('before-quit', (event) => {
   // então DEVE rodar antes do closeDb (em runFinalShutdown).
   event.preventDefault()
 
-  const flushDone = syncCoordinator.flush().catch((err) => {
-    console.warn('[sync] flush no quit falhou (não-fatal):', String((err as Error)?.message ?? err))
+  // Junto, o flush dos rascunhos do Composer: o renderer grava o debounce
+  // pendente e confirma (teto de 1,5s), antes do closeDb.
+  const flushed = flushBeforeQuit({
+    flushDrafts: () => requestDraftFlush(),
+    flushSync: () => syncCoordinator.flush(),
+    syncTimeoutMs: QUIT_FLUSH_TIMEOUT_MS,
   })
-  const bounded = Promise.race([
-    flushDone,
-    new Promise<void>((resolve) => setTimeout(resolve, QUIT_FLUSH_TIMEOUT_MS)),
-  ])
 
-  void bounded.then(() => {
+  void flushed.then(() => {
     runFinalShutdown()
     app.quit() // re-dispara o quit; didShutdown=true → before-quit é no-op agora
   })

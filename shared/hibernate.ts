@@ -13,6 +13,8 @@ export function sanitizeHibernateAfterMin(raw: unknown): number {
 // Um motivo por recusa (o primeiro gate que falhou). Na dúvida, o gate recusa.
 export const HIBERNATE_REFUSALS = [
   'no-pane',
+  'pane-focused',
+  'composer-busy',
   'io-recent',
   'status-missing',
   'status-dead',
@@ -55,10 +57,29 @@ export interface PaneCheckRequest {
   ccSessionId: string
 }
 
-// paneId null = nenhuma aba acordada mostra a PTY.
+// paneId null = nenhuma aba acordada mostra a PTY. O resto diz se o usuário
+// está nela: o Composer não passa pelo PTY, então nem o lastIoAt nem a guarda
+// input-dirty enxergam alguém escrevendo ou lendo a aba.
 export interface PaneCheckResult {
   requestId: string
   paneId: string | null
+  // Aba ativa numa janela com foco.
+  focused: boolean
+  // Rascunho com texto ou anexo no Composer da aba.
+  composerHasText: boolean
+  composerFocused: boolean
+}
+
+export type PaneCheck = Omit<PaneCheckResult, 'requestId'>
+
+// Recusa do round-trip (null = pode hibernar). Sem resposta = sem pane.
+export function paneCheckRefusal(
+  check: PaneCheck | null,
+): Extract<HibernateRefusal, 'no-pane' | 'pane-focused' | 'composer-busy'> | null {
+  if (!check?.paneId) return 'no-pane'
+  if (check.focused) return 'pane-focused'
+  if (check.composerHasText || check.composerFocused) return 'composer-busy'
+  return null
 }
 
 // Por que o tick não roda. A ordem é a da checagem: o valor do boot vem antes

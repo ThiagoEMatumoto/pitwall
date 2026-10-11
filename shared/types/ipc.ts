@@ -2897,6 +2897,29 @@ export interface Api {
     saveDraft(draft: ComposerDraftInput): Promise<void>
     /** Remove o rascunho — só depois do envio confirmado. */
     clearDraft(key: string): Promise<void>
+    /** Pane nova sem rascunho herda o das panes fechadas da mesma conversa. */
+    adoptDraft(target: {
+      paneId: string
+      ccSessionId: string
+      openPaneIds: string[]
+    }): Promise<ComposerDraft | null>
+    /** Encerrar confirmado: apaga os rascunhos da conversa, menos os de panes abertas. */
+    clearSessionDrafts(target: {
+      ccSessionId: string | null
+      paneId: string | null
+      openPaneIds: string[]
+    }): Promise<string[]>
+    /** GC dos rascunhos — só depois de um restore bem-sucedido. */
+    gcDrafts(
+      openPanes: Array<{ paneId: string | null; ccSessionId: string | null }>,
+    ): Promise<string[]>
+    /** getDraft síncrono (sendSync): só no flush, antes da hidratação terminar. */
+    getDraftSync(key: string): ComposerDraft | null
+    /** saveDraft síncrono (sendSync): retorna depois do commit; erro vira throw. */
+    saveDraftSync(draft: ComposerDraftInput): void
+    /** Main pede o flush dos rascunhos (quit, exit de sessão); responder com draftFlushDone. */
+    onDraftFlushRequest(handler: (requestId: string) => void): () => void
+    draftFlushDone(requestId: string): void
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
