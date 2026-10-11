@@ -277,6 +277,12 @@ export class PromptQueue {
     this.dispose()
   }
 
+  // Boot, antes do restore(): o que vai voltar do app.db. Quem acompanha os itens
+  // (ledger de handoff) se reidrata com isto antes de o restore publicar desfechos.
+  restorable(): Array<{ id: string; text: string }> {
+    return this.deps.store?.loadAll().map((r) => ({ id: r.id, text: r.text })) ?? []
+  }
+
   // Boot: carrega o que o processo anterior aceitou e não terminou. 'delivering'
   // nunca é reenviado às cegas: o transcript da conversa decide (ver
   // reconcileDelivering). Chamado uma vez, antes de qualquer PTY subir.

@@ -32,11 +32,11 @@ import { answerCitedRequests } from '../services/handoff/cited-answer'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import { onAnswerQueueSnapshot } from '../services/handoff/answer-delivery'
+import { restoreQueueWithLedger } from '../services/handoff/boot-ledger'
 import {
   onQueueSnapshot,
   queuedEnvelopeObsolete,
   setHandoffWakeQueue,
-  sweepOrphansOnBoot,
 } from '../services/handoff/handoff-wake'
 import type {
   PromptQueueSnapshot,
@@ -234,9 +234,8 @@ export function registerSendPromptIpc(): void {
     replaceText: (id, text) => promptQueue.replaceText(id, text),
     cancel: (id) => promptQueue.cancel(id),
   })
-  sweepOrphansOnBoot()
-  // Depois do sweep e antes de qualquer PTY: as que subirem já acham os itens.
-  promptQueue.restore()
+  // Antes de qualquer PTY: as que subirem já acham os itens.
+  restoreQueueWithLedger(promptQueue)
   ptyManager.on('spawn', (e) => onPtySpawn(e.sessionId))
   setDormantSyncHook(wakeParkedTargets)
   setSendMessageObserver((e) => {
