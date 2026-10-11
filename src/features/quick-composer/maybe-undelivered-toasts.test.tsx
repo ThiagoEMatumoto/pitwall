@@ -55,6 +55,41 @@ async function flush() {
 afterEach(() => act(() => useToastStore.setState({ toasts: [] })))
 
 describe('watchMaybeUndelivered', () => {
+  it('esperando a conversa (waitingNotice): aviso com Enviar quando voltar / Descartar', async () => {
+    const waiting = { ...item('w', 'awaiting-session'), waitingNotice: true as const }
+    const { deps, stop } = setup([waiting, item('quieto', 'awaiting-session')])
+    await flush()
+    await flush()
+    render(<NotificationToast />)
+    expect(screen.getAllByText(/Aguardando a conversa/)).toHaveLength(1)
+    fireEvent.click(screen.getByText('Enviar quando voltar'))
+    expect(deps.resend).not.toHaveBeenCalled()
+    expect(deps.cancel).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('esperando a conversa: Descartar cancela o item', async () => {
+    const waiting = { ...item('d', 'awaiting-session'), waitingNotice: true as const }
+    const { deps, stop } = setup([waiting])
+    await flush()
+    await flush()
+    render(<NotificationToast />)
+    fireEvent.click(screen.getByText('Descartar'))
+    expect(deps.cancel).toHaveBeenCalledWith('d')
+    stop()
+  })
+
+  it('item velho restaurado (needs-confirmation) pede Enviar/Descartar', async () => {
+    const { deps, stop } = setup([item('v', 'needs-confirmation')])
+    await flush()
+    await flush()
+    render(<NotificationToast />)
+    expect(screen.getByText(/ficou na fila desde .* enviar agora\?/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Enviar'))
+    expect(deps.resend).toHaveBeenCalledWith('v')
+    stop()
+  })
+
   it('evento maybe-undelivered mostra toast persistente com Reenviar e Descartar', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {

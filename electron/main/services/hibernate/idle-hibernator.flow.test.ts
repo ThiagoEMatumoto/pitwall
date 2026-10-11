@@ -188,12 +188,12 @@ describe('H3: entregue', () => {
     expect(hibernator.getStats().hibernated).toBe(1)
     expect(hibernator.getStats().refused['exit-timeout']).toBe(0)
     expect(hibernator.isHibernating(PTY)).toBe(false)
-    // O timer de 30s foi desarmado: não vira exit-timeout depois.
+    // O timer do exit-timeout foi desarmado: não vira exit-timeout depois.
     await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS)
     expect(hibernator.getStats().refused['exit-timeout']).toBe(0)
   })
 
-  it('sem exit em 30s → exit-timeout e o marcador cai; nunca kill nem Ctrl-U', async () => {
+  it('sem exit em EXIT_TIMEOUT_MS → exit-timeout e o marcador cai; nunca kill nem Ctrl-U', async () => {
     const { hibernator, writes, warnings } = setup()
     expect(await hibernator.hibernate(CANDIDATE)).toBe(true)
     await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS)
@@ -207,10 +207,19 @@ describe('H3: entregue', () => {
     expect(writes).toEqual([`${PTY}:/exit`])
   })
 
-  it('claude lento: exit aos 45s (depois do exit-timeout) → exit comum', async () => {
+  it('hook SessionEnd de 60s: o exit que chega aos 60s ainda é hibernação', async () => {
+    const { hibernator } = setup()
+    expect(await hibernator.hibernate(CANDIDATE)).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hibernator.onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: null })
+    expect(hibernator.getStats().hibernated).toBe(1)
+    expect(hibernator.getStats().refused['exit-timeout']).toBe(0)
+  })
+
+  it('claude lento: exit depois do exit-timeout → exit comum', async () => {
     const { hibernator, exit, registered } = setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
-    await vi.advanceTimersByTimeAsync(45_000)
+    await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS + 15_000)
     expect(hibernator.getStats().refused['exit-timeout']).toBe(1)
     expect(exit()).toBeNull()
     expect(hibernator.getStats().hibernated).toBe(0)
@@ -230,7 +239,7 @@ describe('H3: entregue', () => {
   it('input depois do exit-timeout vai direto ao PTY (a sessão está viva)', async () => {
     const { hibernator, exit } = setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
-    await vi.advanceTimersByTimeAsync(40_000)
+    await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS + 10_000)
     expect(hibernator.onUserInput(PTY, 'oi\r')).toBe(false)
     expect(exit()).toBeNull()
     expect(hibernator.getStats().hibernated).toBe(0)

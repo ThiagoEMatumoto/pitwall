@@ -31,3 +31,9 @@ export function readOpenPanes(db: Database.Database): PaneSnapshot[] {
     { open_panes: string | null } | undefined
   return row?.open_panes ? (JSON.parse(row.open_panes) as PaneSnapshot[]) : []
 }
+
+export function readDockLayout(db: Database.Database): string | null {
+  const row = db.prepare('SELECT dock_layout FROM workspace_state WHERE id = 1').get() as
+    { dock_layout: string | null } | undefined
+  return row?.dock_layout ?? null
+}

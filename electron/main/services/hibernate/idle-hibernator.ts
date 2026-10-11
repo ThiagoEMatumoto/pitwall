@@ -23,8 +23,9 @@ import type { TranscriptVerdict } from './schedule-scan'
 
 export const HIBERNATE_TICK_MS = 60_000
 // O marcador cai aqui: um exit depois disso é um exit comum (o claude que não saiu
-// em 30s pode sair por qualquer motivo, e só o /exit entregue conta como hibernação).
-export const EXIT_TIMEOUT_MS = 30_000
+// em 75s pode sair por qualquer motivo, e só o /exit entregue conta como hibernação).
+// Hooks SessionEnd legítimos levam até 60s antes de o processo sair.
+export const EXIT_TIMEOUT_MS = 75_000
 // O exit da PTY chega a dois ouvintes (este e a PromptQueue) sem ordem garantida:
 // a fila pergunta wasHibernatedExit depois que este já consumiu o marcador.
 const RECENT_EXIT_MS = 60_000

@@ -47,7 +47,9 @@ export type SendPromptError =
 
 export type SendPromptResult =
   | { ok: true; delivered: true }
-  | { ok: true; delivered: false; queued: QueuedPrompt }
+  // durable: false = o app.db recusou a gravação: o item está só em memória (um kill
+  // o perde) e só é entregue depois que gravar (persistFailed conta).
+  | { ok: true; delivered: false; queued: QueuedPrompt; durable?: false }
   | { ok: false; error: SendPromptError; detail?: string }
 
 export interface QueuedPrompt {
@@ -65,7 +67,13 @@ export interface QueuedPrompt {
   // 'maybe-undelivered' = o app morreu no meio da entrega e o transcript não
   // provou nem que entrou nem que não entrou. Não sai sozinho: o usuário reenvia
   // (prompt-queue:resend) ou cancela.
-  recovery?: 'awaiting-session' | 'maybe-undelivered'
+  // 'needs-confirmation' = velho demais para sair sozinho (STALE_RESTORE_MS), ou o
+  // wake da conversa falhou: espera Enviar/Descartar do usuário.
+  // Nenhum dos três expira.
+  recovery?: 'awaiting-session' | 'maybe-undelivered' | 'needs-confirmation'
+  // 'awaiting-session' que passou de AWAITING_NOTICE_MS sem a conversa voltar:
+  // o renderer mostra (enviar quando ela voltar / descartar).
+  waitingNotice?: true
 }
 
 // 'maybe-undelivered' não é terminal: o item segue no snapshot, marcado.
@@ -102,9 +110,12 @@ export interface PromptQueueCounters {
   maybeUndelivered: number
   // Gravações no app.db que falharam (o item seguiu só em memória).
   persistFailed?: number
-  // Restaurados que passaram de DURABLE_TTL_MS sem a conversa voltar (também
-  // entram em `expired`).
-  expiredRestored: number
+  // Restaurados que passaram a pedir confirmação antes de sair (velhos ou sem wake).
+  needsConfirmation: number
+  // Envelopes de handoff restaurados descartados porque os handoffs já terminaram.
+  discardedObsolete: number
+  // Restaurados que passaram a aparecer por esperar a conversa voltar.
+  awaitingNoticed: number
 }
 
 export interface PromptQueueSnapshot {

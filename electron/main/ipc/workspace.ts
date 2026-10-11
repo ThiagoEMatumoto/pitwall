@@ -29,6 +29,14 @@ function ensureRow(): void {
     .run(Date.now())
 }
 
+// Fim do restore do workspace no renderer (a fila conta o prazo dos itens que
+// esperam a conversa a partir daqui).
+let workspaceRestoredHook: (() => void) | null = null
+
+export function setWorkspaceRestoredHook(hook: (() => void) | null): void {
+  workspaceRestoredHook = hook
+}
+
 export function markWorkspaceRunning(): void {
   ensureRow()
   const row = getDb()
@@ -99,7 +107,9 @@ export function registerWorkspaceIpc(): void {
       .run()
   })
 
+  // O renderer chama isto ao terminar o restore das panes.
   ipcMain.handle('workspace:reset-restore-attempts', () => {
     getDb().prepare('UPDATE workspace_state SET restore_attempts = 0 WHERE id = 1').run()
+    workspaceRestoredHook?.()
   })
 }

@@ -35,6 +35,20 @@ import type {
 const answerPending = new Map<string, string>()
 let lastEventId: string | null = null
 
+// Boot: a resposta que voltou do app.db volta a ser acompanhada, para o snapshot
+// resolver o desfecho no ledger (wake_id = id do item).
+export function rehydrateAnswerPending(queueId: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT mother_session_id FROM handoff_wake_deliveries
+        WHERE wake_id = ? AND outcome IN ('queued','held','attention') LIMIT 1`,
+    )
+    .get(queueId) as { mother_session_id: string | null } | undefined
+  if (!row?.mother_session_id) return false
+  answerPending.set(queueId, row.mother_session_id)
+  return true
+}
+
 export function __resetAnswerDeliveryForTests(): void {
   answerPending.clear()
   lastEventId = null

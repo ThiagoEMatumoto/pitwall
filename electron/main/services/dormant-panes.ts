@@ -87,6 +87,7 @@ export class DormantPanes {
   // A lista inteira a cada sync: o renderer é a fonte, o main só espelha.
   setDormant(list: DormantPaneInfo[]): void {
     this.byCc = new Map(list.map((p) => [p.ccSessionId, p]))
+    dormantSyncHook?.()
   }
 
   // Uma pane só, sem esperar a lista inteira do renderer (a sessão que acabou de
@@ -189,6 +190,13 @@ export class DormantPanes {
     if (ready === 'timeout') this.deps.warn({ event: 'dormant_ready_timeout', sessionId })
     return { ok: true, sessionId }
   }
+}
+
+// Avisado a cada sync do renderer: a fila acorda as conversas com item restaurado.
+let dormantSyncHook: (() => void) | null = null
+
+export function setDormantSyncHook(hook: (() => void) | null): void {
+  dormantSyncHook = hook
 }
 
 let current: DormantPanes | null = null

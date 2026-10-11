@@ -221,14 +221,81 @@ function siblingState(wakeId: string): { outcome: WakeOutcome; heldAt: number | 
   return row ? { outcome: row.outcome, heldAt: row.held_at } : null
 }
 
-// Linhas queued/held de antes do restart: a fila é em memória, o item sumiu com ela.
-export function sweepOrphansOnBoot(): number {
-  return getDb()
+// Item da fila restaurado do app.db é envelope de wake/resposta (o ledger o liga
+// pelo wake_id = id do item) e todos os handoffs dele já terminaram (ou sumiram)?
+// Entregá-lo depois do restart chegaria fora de contexto; o estado final segue no
+// handoff_result.
+export function queuedEnvelopeObsolete(queueId: string): boolean {
+  const rows = getDb()
     .prepare(
-      `UPDATE handoff_wake_deliveries SET outcome = 'expired', detail = 'app-restart', finished_at = ?
-        WHERE outcome IN ('queued','held','attention')`,
+      `SELECT h.status AS status FROM handoff_wake_deliveries d
+         LEFT JOIN handoffs h ON h.id = d.handoff_id
+        WHERE d.wake_id = ? GROUP BY d.handoff_id`,
     )
-    .run(Date.now()).changes
+    .all(queueId) as Array<{ status: string | null }>
+  return rows.length > 0 && rows.every((r) => r.status == null || !ACTIVE_HANDOFF.has(r.status))
+}
+
+const ACTIVE_HANDOFF = new Set(['pending', 'approved', 'running', 'needs_input'])
+
+// Linhas queued/held de antes do restart cujo item NÃO voltou do app.db (fila
+// durável, prompt_queue_items): esse item sumiu de vez. As do item restaurado
+// seguem transitórias — o snapshot da fila resolve o desfecho delas.
+export function sweepOrphansOnBoot(restoredQueueIds: ReadonlySet<string> = new Set()): number {
+  const stmt = getDb().prepare(
+    `UPDATE handoff_wake_deliveries SET outcome = 'expired', detail = 'app-restart', finished_at = ?
+      WHERE wake_id = ? AND outcome IN ${TRANSIENT_SQL}`,
+  )
+  const orphans = getDb()
+    .prepare(
+      `SELECT DISTINCT wake_id FROM handoff_wake_deliveries WHERE outcome IN ${TRANSIENT_SQL}`,
+    )
+    .all() as Array<{ wake_id: string }>
+  const now = Date.now()
+  let changes = 0
+  for (const { wake_id } of orphans) {
+    if (!restoredQueueIds.has(wake_id)) changes += stmt.run(now, wake_id).changes
+  }
+  return changes
+}
+
+// Boot: o envelope à mãe que voltou do app.db volta a ser o pending dela, para o
+// snapshot resolver o desfecho no ledger e um evento novo coalescer no mesmo item.
+// Os blocos são refeitos do ledger (handoff + reasons em ordem) com o estado atual
+// de cada handoff; handoff que sumiu fica de fora.
+export function rehydrateWakePending(queueId: string): boolean {
+  const rows = getDb()
+    .prepare(
+      `SELECT handoff_id, mother_session_id, reason, outcome FROM handoff_wake_deliveries
+        WHERE wake_id = ? ORDER BY created_at, rowid`,
+    )
+    .all(queueId) as Array<{
+    handoff_id: string
+    mother_session_id: string | null
+    reason: WakeReason
+    outcome: WakeOutcome
+  }>
+  const mother = rows.find((r) => r.mother_session_id)?.mother_session_id
+  if (!mother || !rows.some((r) => ['queued', 'held', 'attention'].includes(r.outcome))) {
+    return false
+  }
+  const blocks: WakeBlock[] = []
+  for (const handoffId of [...new Set(rows.map((r) => r.handoff_id))]) {
+    const h = handoffStore.get(handoffId)
+    if (!h) continue
+    const reasons = rows.filter((r) => r.handoff_id === handoffId).map((r) => r.reason)
+    const { body, truncated } = bodyFor(h, reasons[reasons.length - 1])
+    blocks.push({
+      handoffId,
+      alias: handoffStore.childAlias(h.childSessionId),
+      status: h.status,
+      reasons,
+      body,
+      truncated,
+    })
+  }
+  pending.set(mother, { queueId, blocks })
+  return true
 }
 
 // ---- waiters do handoff_wait ----

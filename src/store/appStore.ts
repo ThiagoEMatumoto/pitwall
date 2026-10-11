@@ -5,6 +5,7 @@ import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
+import { layoutToRestore } from '../../shared/dock-layout-restore'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
 import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
@@ -378,6 +379,16 @@ export const ROOM_REFRESH_DEBOUNCE_MS = 150
 // restaura se o app cair agora. O save fica para o fim, com o conjunto final.
 let restoringDepth = 0
 let persistDeferred = false
+// Restore em curso: o snapshot salvo que ainda não entrou no store. Uma ação do
+// usuário no meio (abrir, fechar) grava na hora o conjunto COMPLETO — store + o
+// que falta restaurar —, nunca um subconjunto. As panes que o próprio restore
+// põe seguem no defer: elas não mudam o conjunto, só o completam.
+let restorePending: PaneSnapshot[] | null = null
+// paneIds do último conjunto que o open_panes tem durante o restore.
+let restoreSavedKey = ''
+// Fechadas pelo usuário durante o restore: o restore não as põe de volta.
+const restoreClosedPanes = new Set<string>()
+const restoreClosedCc = new Set<string>()
 // Restore bloqueado (crash-loop): o open_panes guarda as abas que o banner ainda
 // pode restaurar. Uma aba aberta enquanto isso não pode sobrescrevê-las.
 let blockedSnapshots: PaneSnapshot[] | null = null
@@ -392,14 +403,26 @@ function holdPersist(): () => void {
     if (released) return
     released = true
     restoringDepth -= 1
-    if (restoringDepth === 0 && persistDeferred) {
-      persistDeferred = false
-      schedulePersist(useAppStore.getState().panes)
-    }
+    releaseRestoreHold()
   }
 }
 
-async function withPersistDeferred<T>(run: () => Promise<T>): Promise<T> {
+function releaseRestoreHold(): void {
+  if (restoringDepth > 0) return
+  restorePending = null
+  restoreSavedKey = ''
+  restoreClosedPanes.clear()
+  restoreClosedCc.clear()
+  if (persistDeferred) {
+    persistDeferred = false
+    schedulePersist(useAppStore.getState().panes)
+  }
+}
+
+async function withPersistDeferred<T>(
+  snapshots: PaneSnapshot[],
+  run: () => Promise<T>,
+): Promise<T> {
   if (restoringDepth === 0 && savePanesTimer) {
     // Um save agendado antes do restore cairia no meio dele com o conjunto velho.
     clearTimeout(savePanesTimer)
@@ -407,15 +430,66 @@ async function withPersistDeferred<T>(run: () => Promise<T>): Promise<T> {
     persistDeferred = true
   }
   restoringDepth += 1
+  if (restorePending === null) {
+    restorePending = snapshots
+    restoreSavedKey = snapshotsKey(snapshots)
+  } else {
+    const known = new Set(restorePending.map((s) => s.ccSessionId))
+    restorePending = [...restorePending, ...snapshots.filter((s) => !known.has(s.ccSessionId))]
+  }
+  // Uma aba aberta enquanto o boot lia o estado ficou segurada: grava já, completa.
+  if (persistDeferred) persistDuringRestore(useAppStore.getState().panes)
   try {
     return await run()
   } finally {
     restoringDepth -= 1
-    if (restoringDepth === 0 && persistDeferred) {
-      persistDeferred = false
-      schedulePersist(useAppStore.getState().panes)
-    }
+    releaseRestoreHold()
   }
+}
+
+function snapshotsKey(snaps: PaneSnapshot[]): string {
+  return snaps
+    .map((s) => s.paneId ?? s.ccSessionId)
+    .sort()
+    .join('\n')
+}
+
+// Grava só se o usuário mudou o conjunto (abriu ou fechou uma aba): uma pane que
+// o restore pôs tem o paneId do snapshot e deixa o conjunto igual.
+function persistDuringRestore(panes: ActivePane[]): void {
+  persistDeferred = true
+  if (!restorePending) return
+  // Fechada pelo usuário que o resume do restore ainda pôs no store: sai em seguida.
+  const current = toPaneSnapshots(panes).filter(
+    (s) => !(s.paneId && restoreClosedPanes.has(s.paneId)),
+  )
+  const present = new Set(current.flatMap((s) => [s.ccSessionId, s.paneId ?? '']))
+  restorePending = restorePending.filter(
+    (s) => !present.has(s.ccSessionId) && !(s.paneId && present.has(s.paneId)),
+  )
+  const snaps = [...current, ...restorePending]
+  const key = snapshotsKey(snaps)
+  if (key === restoreSavedKey) return
+  restoreSavedKey = key
+  void workspaceApi.savePanes(snaps)
+}
+
+// Fechar durante o restore tira a aba do conjunto, inclusive uma salva que o
+// restore ainda não pôs.
+function closeDuringRestore(paneId: string, ccSessionId: string | null): void {
+  if (!restorePending) return
+  const snap = restorePending.find((s) => s.paneId === paneId)
+  restoreClosedPanes.add(paneId)
+  const cc = ccSessionId ?? snap?.ccSessionId
+  if (cc) restoreClosedCc.add(cc)
+  restorePending = restorePending.filter((s) => s.paneId !== paneId)
+}
+
+function closedDuringRestore(snap: PaneSnapshot): boolean {
+  return (
+    restoreClosedCc.has(snap.ccSessionId) ||
+    (snap.paneId ? restoreClosedPanes.has(snap.paneId) : false)
+  )
 }
 
 function toPaneSnapshots(panes: ActivePane[]): PaneSnapshot[] {
@@ -450,7 +524,7 @@ function flushPersist(): void {
   if (savePanesTimer) clearTimeout(savePanesTimer)
   savePanesTimer = null
   if (restoringDepth > 0) {
-    persistDeferred = true
+    persistDuringRestore(useAppStore.getState().panes)
     return
   }
   const panes = pendingPanes
@@ -470,7 +544,7 @@ function flushPersist(): void {
 // tick viram um save só. Rajada de metadado segue no debounce de 500ms.
 function schedulePersist(panes: ActivePane[]): void {
   if (restoringDepth > 0) {
-    persistDeferred = true
+    persistDuringRestore(panes)
     return
   }
   pendingPanes = panes
@@ -513,6 +587,10 @@ async function restoreFromSnapshots(
     while (snap) {
       const current = snap
       let resumable = false
+      if (closedDuringRestore(current)) {
+        snap = queue.shift()
+        continue
+      }
       try {
         resumable = await sessionsApi.isResumable(current.ccSessionId)
         if (resumable) {
@@ -532,6 +610,12 @@ async function restoreFromSnapshots(
             current.projectColor ?? null,
             current.paneId,
           )
+        }
+        // Fechada com o spawn em voo: o processo fica em background, como no closePane.
+        if (current.paneId && closedDuringRestore(current)) {
+          const paneId = current.paneId
+          useAppStore.setState((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
+          schedulePersist(useAppStore.getState().panes)
         }
       } catch (err) {
         // Pane individual não restaurável — segue restaurando as outras. Sem
@@ -838,9 +922,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       if (!boot.cleanShutdown) await workspaceApi.bumpRestoreAttempts()
-      // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
-      // esta feature). Snapshots antigos caem no addPanel padrão.
-      if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
+      // pendingLayout só com paneId em comum com o open_panes (ver layoutToRestore);
+      // snapshots antigos e layout descasado caem no addPanel padrão.
+      const layout = layoutToRestore(dockLayout, openPanes)
+      if (layout) set({ pendingLayout: layout })
       // restoreSnapshots segura o persist por conta própria (síncrono, antes do
       // primeiro await): soltar o daqui depois de chamá-lo não abre janela.
       restoring = get().restoreSnapshots(openPanes, dockLayout)
@@ -860,7 +945,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { openPanes, dockLayout } = await workspaceApi.getBootState()
       blockedSnapshots = null
       set({ restoreBlocked: false })
-      if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
+      const layout = layoutToRestore(dockLayout, openPanes)
+      if (layout) set({ pendingLayout: layout })
       restoring = get().restoreSnapshots(openPanes, dockLayout)
     } finally {
       release()
@@ -872,17 +958,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   restoreSnapshots: async (rawSnapshots, dockLayout = null) => {
     const { snapshots, generated } = withStablePaneIds(rawSnapshots)
-    const release = holdPersist()
-    let lazy: boolean
-    try {
-      lazy = await loadLazyRestore()
-    } finally {
-      // withPersistDeferred abaixo assume no mesmo tick, sem janela.
-      release()
-    }
-    // Com ou sem a pref, as panes entram uma a uma: o save fica para o fim, com o
-    // conjunto final, senão um kill no meio deixa no open_panes só as já restauradas.
-    return withPersistDeferred(async () => {
+    // Com ou sem a pref, as panes entram uma a uma: o save delas fica para o fim,
+    // com o conjunto final, senão um kill no meio deixa no open_panes só as já
+    // restauradas. Ação do usuário no meio grava na hora (ver persistDuringRestore).
+    return withPersistDeferred(snapshots, async () => {
+      const lazy = await loadLazyRestore()
       const live = await sessionsApi.listLiveGlobal().catch(() => [])
       const { attached, rest } = splitLiveSnapshots(snapshots, live)
       const fresh = attached.filter((a) => !get().panes.some((p) => p.session.id === a.session.id))
@@ -908,7 +988,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...dormant.map((snap) => ({ snap, error: undefined as string | undefined })),
       ]
       const sleeping = candidates
-        .filter(({ snap }) => !known.has(snap.ccSessionId))
+        .filter(({ snap }) => !known.has(snap.ccSessionId) && !closedDuringRestore(snap))
         .map(({ snap, error }) => dormantPaneFromSnapshot(snap, snap.paneId ?? newPaneId(), error))
       if (sleeping.length) {
         set((s) => ({ panes: [...s.panes, ...sleeping] }))
@@ -1135,6 +1215,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // apagado quando a janela expira sem desfazer.
   closePane: (paneId) => {
     const closed = get().panes.find((p) => p.paneId === paneId)
+    closeDuringRestore(paneId, closed?.session.ccSessionId ?? null)
     set((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
@@ -1148,6 +1229,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       onAction: () => {
         cancelExpiry()
         const cc = closed.session.ccSessionId
+        restoreClosedPanes.delete(paneId)
+        if (cc) restoreClosedCc.delete(cc)
         set((s) =>
           s.panes.some((p) => p.paneId === paneId || (cc && p.session.ccSessionId === cc))
             ? s
