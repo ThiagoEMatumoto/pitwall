@@ -260,16 +260,16 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     ptyManager.kill(SESSION)
   })
 
-  it('o scope da sessão nasce com MemoryMax/High/SwapMax do default (14G/10G/2G)', async () => {
+  it('o scope da sessão nasce com MemoryMax 18G, sem MemoryHigh e sem swap', async () => {
     expect(await ensureScopeProbe()).toBe(true)
     spawnLogin('sleep 300')
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
     const gib = 1024 ** 3
-    expect(unitProp(unit, 'MemoryMax')).toBe(String(14 * gib))
-    expect(unitProp(unit, 'MemoryHigh')).toBe(String(10 * gib))
-    expect(unitProp(unit, 'MemorySwapMax')).toBe(String(2 * gib))
+    expect(unitProp(unit, 'MemoryMax')).toBe(String(18 * gib))
+    expect(unitProp(unit, 'MemoryHigh')).toBe('infinity')
+    expect(unitProp(unit, 'MemorySwapMax')).toBe('0')
   }, 15_000)
 
   it('quem passa do MemoryMax é morto pelo kernel dentro do scope; o pai sobrevive', () => {
@@ -279,7 +279,6 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
       'const a=[];for(let i=0;i<64;i++){const b=Buffer.alloc(8*1024*1024,1);a.push(b)};console.log("SOBREVIVEU")'
     const { command, args } = wrapInScope(process.execPath, ['-e', hog], unit, {
       max: '64M',
-      high: null,
       swapMax: '0',
     })
     const r = spawnSync(command, args, { encoding: 'utf8', timeout: 30_000 })
@@ -288,4 +287,79 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     expect(r.signal === 'SIGKILL' || r.status === 137).toBe(true)
     expect(alive(process.pid)).toBe(true)
   }, 40_000)
+})
+
+// O systemd-oomd mata o cgroup inteiro quando a pressão de memória (PSI) passa do
+// limite por um tempo. Não dá para disparar o oomd do usuário num teste, então o
+// teste mede a causa: um alocador lento até perto do teto não pode gerar pressão.
+// (Medido à mão: com MemoryHigh abaixo do uso e swap no scope, o que a #319 fazia,
+// a pressão `full avg10` chegou a ~98% e a carga ficou estrangulada por minutos —
+// foi assim que uma sessão real morreu em 11/10. Lento demais para um teste.)
+describe.skipIf(!hasUserBus)('pressão de memória do scope × systemd real', () => {
+  // Aloca 270 MB (90% do teto) e depois continua tocando todas as páginas por 3s,
+  // como uma sessão ativa perto do teto (o que trazia de volta o que foi pro swap).
+  const ALLOC =
+    'const a=[];let n=0;const t=setInterval(()=>{a.push(Buffer.alloc(10*1024*1024,1));if(++n>=27){clearInterval(t);const end=Date.now()+3000;const touch=()=>{for(const b of a)for(let i=0;i<b.length;i+=4096)b[i]++;if(Date.now()<end)setImmediate(touch);else process.exit(0)};touch()}},100)'
+
+  function runScoped(
+    extra: string[],
+  ): Promise<{ code: number | null; peakFull: number; ms: number }> {
+    const unit = scopeUnitName('psi-it', Date.now())
+    const started = Date.now()
+    const child = spawn(
+      'systemd-run',
+      [
+        '--user',
+        '--scope',
+        '--quiet',
+        '--collect',
+        '--slice=app.slice',
+        `--unit=${unit}`,
+        '-p',
+        'MemoryMax=300M',
+        '-p',
+        'MemorySwapMax=0',
+        ...extra,
+        '--',
+        process.execPath,
+        '-e',
+        ALLOC,
+      ],
+      { stdio: 'ignore' },
+    )
+    let peakFull = 0
+    const timer = setInterval(() => {
+      try {
+        const cg = execFileSync(
+          'systemctl',
+          ['--user', 'show', '-p', 'ControlGroup', '--value', `${unit}.scope`],
+          { encoding: 'utf8' },
+        ).trim()
+        const line = readFileSync(`/sys/fs/cgroup${cg}/memory.pressure`, 'utf8')
+          .split('\n')
+          .find((l) => l.startsWith('full'))
+        const avg10 = Number(/avg10=([\d.]+)/.exec(line ?? '')?.[1] ?? 0)
+        peakFull = Math.max(peakFull, avg10)
+      } catch {
+        // scope ainda não existe ou já foi coletado
+      }
+    }, 200)
+    return new Promise((resolve) => {
+      const done = (code: number | null): void => {
+        clearInterval(timer)
+        resolve({ code, peakFull, ms: Date.now() - started })
+      }
+      child.on('exit', (code) => done(code))
+      setTimeout(() => {
+        spawnSync('systemctl', ['--user', 'stop', `${unit}.scope`])
+      }, 25_000)
+    })
+  }
+
+  it('sem MemoryHigh: alocar devagar até 90% do teto termina rápido e sem pressão', async () => {
+    const r = await runScoped([])
+    expect(r.code).toBe(0)
+    expect(r.ms).toBeLessThan(10_000)
+    expect(r.peakFull).toBeLessThan(10)
+  }, 30_000)
 })

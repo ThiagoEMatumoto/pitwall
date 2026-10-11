@@ -164,14 +164,17 @@ export function unitOwnerPid(unit: string): number | null {
 // chegou a 27,9 GB e derrubou a sessão gráfica inteira: com MemoryMax o kernel
 // mata dentro do scope da sessão, e o desktop e as outras sessões ficam de pé.
 export const SESSION_MEMORY_MAX_PREF = 'sessions.memoryMaxGB'
-export const DEFAULT_SESSION_MEMORY_MAX_GB = 14
-const HIGH_BELOW_MAX_GB = 4
-const SWAP_MAX = '2G'
+export const DEFAULT_SESSION_MEMORY_MAX_GB = 18
+// Sem MemoryHigh e sem swap no scope: o MemoryHigh estrangulava a sessão perto
+// do teto (PSI full avg10 ~98% medido) e o systemd-oomd matava o scope inteiro
+// antes de o MemoryMax agir; swap dentro do scope também gera pressão. Com só o
+// MemoryMax, o kernel mata o maior processo da sessão na hora (PSI ~0) e o
+// OOMPolicy=continue mantém o resto vivo.
+const SWAP_MAX = '0'
 
 export interface ScopeMemoryLimits {
   // Valores aceitos pelo systemd (ex.: '14G', '64M').
   max: string
-  high: string | null
   swapMax: string
 }
 
@@ -180,8 +183,7 @@ const MIN_MAX_GB = 2
 
 // Só 0 explícito desliga. Valor não numérico, negativo ou NaN cai no default (o
 // teto nunca some por engano); o resto vira inteiro entre 2 GB e 90% da RAM, para
-// nada fora de faixa chegar ao systemd-run. High = Max − 4 GB: o kernel começa a
-// apertar (reclaim) antes de matar.
+// nada fora de faixa chegar ao systemd-run.
 export function memoryLimitsFromGB(
   maxGB: unknown,
   totalMemBytes = totalmem(),
@@ -193,8 +195,7 @@ export function memoryLimitsFromGB(
       : DEFAULT_SESSION_MEMORY_MAX_GB
   const ceiling = Math.max(MIN_MAX_GB, Math.floor((totalMemBytes * 0.9) / GIB))
   const max = Math.min(ceiling, Math.max(MIN_MAX_GB, Math.round(wanted)))
-  const high = max - HIGH_BELOW_MAX_GB
-  return { max: `${max}G`, high: high >= 1 ? `${high}G` : null, swapMax: SWAP_MAX }
+  return { max: `${max}G`, swapMax: SWAP_MAX }
 }
 
 // Lida a cada spawn: mudar a pref vale só para sessões novas.
@@ -216,13 +217,7 @@ export function wrapInScope(
   memory: ScopeMemoryLimits | null = null,
 ): { command: string; args: string[] } {
   const props = memory
-    ? [
-        ...(memory.high ? ['-p', `MemoryHigh=${memory.high}`] : []),
-        '-p',
-        `MemoryMax=${memory.max}`,
-        '-p',
-        `MemorySwapMax=${memory.swapMax}`,
-      ]
+    ? ['-p', `MemoryMax=${memory.max}`, '-p', `MemorySwapMax=${memory.swapMax}`]
     : []
   return {
     command: 'systemd-run',

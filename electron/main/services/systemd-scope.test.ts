@@ -277,36 +277,36 @@ describe('política da varredura de órfãos', () => {
 
 describe('teto de memória por sessão', () => {
   it('Max em GB, High = Max − 4 e swap fixo de 2G', () => {
-    expect(memoryLimitsFromGB(14)).toEqual({ max: '14G', high: '10G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(18)).toEqual({ max: '18G', swapMax: '0' })
   })
 
   it('Max pequeno demais para High: só Max e swap', () => {
-    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', swapMax: '0' })
   })
 
   it('só 0 explícito desliga; inválido cai no default de 14', () => {
     expect(memoryLimitsFromGB(0)).toBeNull()
     for (const bad of [true, 'abc', null, undefined, Number.NaN, -3, Infinity]) {
-      expect(memoryLimitsFromGB(bad)?.max).toBe('14G')
+      expect(memoryLimitsFromGB(bad)?.max).toBe('18G')
     }
   })
 
   it('arredonda para inteiro ≥ 2', () => {
-    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', swapMax: '0' })
     expect(memoryLimitsFromGB(13.6)?.max).toBe('14G')
   })
 
   it('nunca passa de 90% da RAM total', () => {
     const ram32 = 32 * 1024 ** 3
-    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', high: '24G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', swapMax: '0' })
     expect(memoryLimitsFromGB(14, ram32)?.max).toBe('14G')
   })
 
   it('a pref lida a cada spawn passa pela mesma validação', () => {
     for (const [stored, expected] of [
-      [true, '14G'],
-      ['abc', '14G'],
-      [null, '14G'],
+      [true, '18G'],
+      ['abc', '18G'],
+      [null, '18G'],
       [8, '8G'],
     ] as const) {
       getPref.mockImplementation((k: string, fallback: unknown) =>
@@ -328,11 +328,13 @@ describe('teto de memória por sessão', () => {
   })
 
   it('as propriedades vão antes do --, no argv do systemd-run', () => {
-    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(18))
     const sep = args.indexOf('--')
     expect(args.slice(0, sep)).toEqual(
-      expect.arrayContaining(['-p', 'MemoryHigh=10G', 'MemoryMax=14G', 'MemorySwapMax=2G']),
+      expect.arrayContaining(['-p', 'MemoryMax=18G', 'MemorySwapMax=0']),
     )
+    // MemoryHigh estrangula perto do teto e faz o systemd-oomd matar o scope inteiro.
+    expect(args.some((a) => a.startsWith('MemoryHigh='))).toBe(false)
     expect(args.slice(sep + 1)).toEqual(['/usr/bin/zsh', '-l'])
   })
 
