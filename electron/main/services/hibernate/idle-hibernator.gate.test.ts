@@ -462,7 +462,12 @@ describe('tick: as três condições', () => {
     const send = vi.fn(async () => ({ ok: true, delivered: true }) as const)
     const h = gate({ send, exitTimeoutMs: 60_000 })
     await h.tick()
-    expect(send).toHaveBeenCalledWith({ sessionId: PTY, text: '/exit', when: 'on-idle' })
+    expect(send).toHaveBeenCalledWith({
+      sessionId: PTY,
+      text: '/exit',
+      when: 'on-idle',
+      ephemeral: true,
+    })
     expect(h.isHibernating(PTY)).toBe(true)
     h.dispose()
   })

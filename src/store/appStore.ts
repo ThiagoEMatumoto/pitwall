@@ -379,6 +379,23 @@ export const ROOM_REFRESH_DEBOUNCE_MS = 150
 let restoringDepth = 0
 let persistDeferred = false
 
+// Segura o persist até o restore saber o que vai restaurar. Como o save estrutural
+// é imediato, uma aba aberta enquanto o boot ainda lê o estado/a pref gravaria só
+// ela no open_panes — e um kill ali perderia as outras. Libera uma vez só.
+function holdPersist(): () => void {
+  restoringDepth += 1
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    restoringDepth -= 1
+    if (restoringDepth === 0 && persistDeferred) {
+      persistDeferred = false
+      schedulePersist(useAppStore.getState().panes)
+    }
+  }
+}
+
 async function withPersistDeferred<T>(run: () => Promise<T>): Promise<T> {
   if (restoringDepth === 0 && savePanesTimer) {
     // Um save agendado antes do restore cairia no meio dele com o conjunto velho.
@@ -398,28 +415,65 @@ async function withPersistDeferred<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-// Persiste um snapshot enxuto (suficiente pra resume sem lookups), com debounce
-// pra não gravar a cada teclada de spawn/close em sequência.
+function toPaneSnapshots(panes: ActivePane[]): PaneSnapshot[] {
+  // Dormant entra igual: o snapshot é o mesmo, e o próximo boot decide de novo.
+  return panes
+    .filter((p) => p.session.ccSessionId)
+    .map((p) => ({
+      ccSessionId: p.session.ccSessionId as string,
+      repo: p.repo,
+      projectName: p.projectName,
+      projectIcon: p.projectIcon,
+      projectColor: p.projectColor,
+      paneId: p.paneId,
+    }))
+}
+
+// O que muda o que o próximo boot reabre: quais conversas, em qual pane, e se
+// dormem. Mudou isto = estrutural, grava já; o resto (metadado) espera o debounce.
+function structuralKey(panes: ActivePane[]): string {
+  return panes
+    .filter((p) => p.session.ccSessionId)
+    .map((p) => `${p.session.ccSessionId}|${p.paneId}|${p.dormant ? 'd' : 'l'}`)
+    .join('\n')
+}
+
+let pendingPanes: ActivePane[] | null = null
+let lastSavedKey: string | null = null
+let flushQueued = false
+
+function flushPersist(): void {
+  flushQueued = false
+  if (savePanesTimer) clearTimeout(savePanesTimer)
+  savePanesTimer = null
+  if (restoringDepth > 0) {
+    persistDeferred = true
+    return
+  }
+  const panes = pendingPanes
+  pendingPanes = null
+  if (!panes) return
+  lastSavedKey = structuralKey(panes)
+  void workspaceApi.savePanes(toPaneSnapshots(panes))
+}
+
+// Mudança estrutural (abrir, fechar, wake/dormant, paneId novo) grava no mesmo
+// tick: um kill -9 150ms depois de abrir a aba não pode perdê-la. Várias no mesmo
+// tick viram um save só. Rajada de metadado segue no debounce de 500ms.
 function schedulePersist(panes: ActivePane[]): void {
   if (restoringDepth > 0) {
     persistDeferred = true
     return
   }
+  pendingPanes = panes
+  if (flushQueued) return
+  if (structuralKey(panes) !== lastSavedKey) {
+    flushQueued = true
+    queueMicrotask(flushPersist)
+    return
+  }
   if (savePanesTimer) clearTimeout(savePanesTimer)
-  savePanesTimer = setTimeout(() => {
-    // Dormant entra igual: o snapshot é o mesmo, e o próximo boot decide de novo.
-    const snapshots: PaneSnapshot[] = panes
-      .filter((p) => p.session.ccSessionId)
-      .map((p) => ({
-        ccSessionId: p.session.ccSessionId as string,
-        repo: p.repo,
-        projectName: p.projectName,
-        projectIcon: p.projectIcon,
-        projectColor: p.projectColor,
-        paneId: p.paneId,
-      }))
-    void workspaceApi.savePanes(snapshots)
-  }, 500)
+  savePanesTimer = setTimeout(flushPersist, 500)
 }
 
 // Restaura com paralelismo limitado: no máximo `limit` spawns de claude
@@ -749,30 +803,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   restoreWorkspace: async () => {
     if (restoreStarted) return
     restoreStarted = true
-    await loadLazyRestore()
-    const { openPanes, cleanShutdown, restoreAttempts, dockLayout } =
-      await workspaceApi.getBootState()
-    set({ bootSessionCount: openPanes.length })
-    if (openPanes.length === 0) {
-      set({ restoreComplete: true })
-      void collectDraftGarbage()
-      return
-    }
+    const release = holdPersist()
+    let restoring: Promise<void>
+    let dockLayout: string | null
+    let openPanes: PaneSnapshot[]
+    try {
+      await loadLazyRestore()
+      const boot = await workspaceApi.getBootState()
+      openPanes = boot.openPanes
+      dockLayout = boot.dockLayout
+      set({ bootSessionCount: openPanes.length })
+      if (openPanes.length === 0) {
+        set({ restoreComplete: true })
+        void collectDraftGarbage()
+        return
+      }
 
-    // Shutdown gracioso: confiamos no estado salvo e restauramos direto.
-    // Crash com >=2 tentativas seguidas: provável crash-loop — não auto-restaura,
-    // expõe banner pra o usuário decidir.
-    const manualOnly = !cleanShutdown && restoreAttempts >= 2
-    if (manualOnly) {
-      set({ restoreBlocked: true, restoreComplete: true })
-      return
-    }
+      // Shutdown gracioso: confiamos no estado salvo e restauramos direto.
+      // Crash com >=2 tentativas seguidas: provável crash-loop — não auto-restaura,
+      // expõe banner pra o usuário decidir.
+      const manualOnly = !boot.cleanShutdown && boot.restoreAttempts >= 2
+      if (manualOnly) {
+        set({ restoreBlocked: true, restoreComplete: true })
+        return
+      }
 
-    if (!cleanShutdown) await workspaceApi.bumpRestoreAttempts()
-    // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
-    // esta feature). Snapshots antigos caem no addPanel padrão.
-    if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
-    await get().restoreSnapshots(openPanes, dockLayout)
+      if (!boot.cleanShutdown) await workspaceApi.bumpRestoreAttempts()
+      // pendingLayout só faz sentido se todos os snapshots têm paneId (gravados após
+      // esta feature). Snapshots antigos caem no addPanel padrão.
+      if (dockLayout && openPanes.every((p) => p.paneId)) set({ pendingLayout: dockLayout })
+      // restoreSnapshots segura o persist por conta própria (síncrono, antes do
+      // primeiro await): soltar o daqui depois de chamá-lo não abre janela.
+      restoring = get().restoreSnapshots(openPanes, dockLayout)
+    } finally {
+      release()
+    }
+    await restoring
     await workspaceApi.resetRestoreAttempts()
     set({ restoreComplete: true })
     void collectDraftGarbage()
@@ -789,7 +855,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   restoreSnapshots: async (rawSnapshots, dockLayout = null) => {
     const { snapshots, generated } = withStablePaneIds(rawSnapshots)
-    const lazy = await loadLazyRestore()
+    const release = holdPersist()
+    let lazy: boolean
+    try {
+      lazy = await loadLazyRestore()
+    } finally {
+      // Lazy: withPersistDeferred abaixo assume no mesmo tick, sem janela.
+      release()
+    }
     // Com a pref desligada o persist segue o timing da main (save a cada pane).
     const run = lazy ? withPersistDeferred : (fn: () => Promise<void>) => fn()
     return run(async () => {

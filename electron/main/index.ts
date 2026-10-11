@@ -26,7 +26,7 @@ import { registerAttentionIpc } from './ipc/attention'
 import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
-import { registerSendPromptIpc } from './ipc/send-prompt'
+import { promptQueue, registerSendPromptIpc } from './ipc/send-prompt'
 import { registerDormantPanesIpc } from './ipc/dormant-panes'
 import { registerHibernateIpc } from './ipc/hibernate'
 import { getIdleHibernator } from './services/hibernate/idle-hibernator'
@@ -494,6 +494,8 @@ function runFinalShutdown(): void {
   }
   syncCoordinator.stop()
   featureMemory.close()
+  // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.
+  promptQueue.suspendForShutdown()
   ptyManager.killAll()
   // Render do Remotion é processo filho e não morre sozinho com o app.
   killAllVideoRenders()

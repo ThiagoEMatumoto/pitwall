@@ -19,6 +19,9 @@ export interface SendPromptInput {
   // Só o main liga (hibernação): bytes que o app escreveu no PTY depois do /exit,
   // reentregues como foram escritos (sem o bracketed-paste + \r da injeção).
   raw?: boolean
+  // Só o main liga (o /exit da hibernação): não vai para o app.db. Reentregue no
+  // boot, encerraria a conversa que o usuário acabou de retomar.
+  ephemeral?: boolean
 }
 
 export type SendPromptError =
@@ -57,9 +60,17 @@ export interface QueuedPrompt {
   heldByMenu: number
   // Por que a entrega está segurada agora (null = só esperando o fim do turno).
   heldReason: 'menu-open' | 'unparsed' | 'input-dirty' | null
+  // Só em item que sobreviveu a um kill/reboot do app:
+  // 'awaiting-session' = espera a conversa ter PTY viva de novo (resume/wake);
+  // 'maybe-undelivered' = o app morreu no meio da entrega e o transcript não
+  // provou nem que entrou nem que não entrou. Não sai sozinho: o usuário reenvia
+  // (prompt-queue:resend) ou cancela.
+  recovery?: 'awaiting-session' | 'maybe-undelivered'
 }
 
-export type PromptQueueEventKind = 'delivered' | 'expired' | 'session-gone' | 'cancelled'
+// 'maybe-undelivered' não é terminal: o item segue no snapshot, marcado.
+export type PromptQueueEventKind =
+  'delivered' | 'expired' | 'session-gone' | 'cancelled' | 'maybe-undelivered'
 
 export interface PromptQueueEvent {
   kind: PromptQueueEventKind
@@ -83,6 +94,17 @@ export interface PromptQueueCounters {
   refusedInputDirty: number
   // Envios para uma sessão dormindo cujo wake falhou (nada foi escrito).
   wakeFailed: number
+  // Itens carregados do app.db no boot (sobreviveram a kill/reboot).
+  restored: number
+  // Dos restaurados em 'delivering', os que o transcript provou entregues.
+  restoredDelivered: number
+  // Restaurados em 'delivering' sem prova: marcados para o usuário decidir.
+  maybeUndelivered: number
+  // Gravações no app.db que falharam (o item seguiu só em memória).
+  persistFailed?: number
+  // Restaurados que passaram de DURABLE_TTL_MS sem a conversa voltar (também
+  // entram em `expired`).
+  expiredRestored: number
 }
 
 export interface PromptQueueSnapshot {

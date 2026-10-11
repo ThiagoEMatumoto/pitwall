@@ -8,6 +8,7 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
+import { createPromptQueueStore, deliveryInTranscript } from '../services/prompt-queue-store'
 import { getDormantPanes } from '../services/dormant-panes'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { hibernateExitRedirect } from '../services/hibernate/hibernate-redirect'
@@ -185,8 +186,23 @@ export const promptQueue = new PromptQueue({
   beforeWrite: (id, text) =>
     getIdleHibernator()?.beforeWrite(id, text, tuiMenuWatch.current(id)?.inputDirty === true) ??
     true,
+  store: createPromptQueueStore(getDb),
+  deliveryInTranscript,
 })
 registerImageKeeper((name) => promptQueue.references(name))
+
+// A PTY que acabou de subir é de uma conversa com itens de antes do kill/reboot?
+// É o mesmo ponto em que o espelho da tela nasce (spawn): resume e wake passam por ele.
+function onPtySpawn(sessionId: string): void {
+  try {
+    const row = getDb()
+      .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
+      .get(sessionId) as { cc_session_id: string | null } | undefined
+    promptQueue.onSessionLive(sessionId, row?.cc_session_id ?? null)
+  } catch (err) {
+    console.error('[prompt-queue] reentrega no spawn falhou:', err)
+  }
+}
 
 const tailFeed = new ScreenTailFeed({
   read: (id) => tuiMenuWatch.styledTail(id, TAIL_LINES),
@@ -217,6 +233,9 @@ export function registerSendPromptIpc(): void {
     cancel: (id) => promptQueue.cancel(id),
   })
   sweepOrphansOnBoot()
+  // Depois do sweep e antes de qualquer PTY: as que subirem já acham os itens.
+  promptQueue.restore()
+  ptyManager.on('spawn', (e) => onPtySpawn(e.sessionId))
   setSendMessageObserver((e) => {
     recordChildDirectMessage(e)
     const answered = answerCitedRequests(e)
@@ -232,6 +251,10 @@ export function registerSendPromptIpc(): void {
   ipcMain.handle('prompt-queue:cancel', (_e, raw: unknown) => {
     const { id } = idSchema.parse(raw)
     return promptQueue.cancel(id)
+  })
+  ipcMain.handle('prompt-queue:resend', (_e, raw: unknown) => {
+    const { id } = idSchema.parse(raw)
+    return promptQueue.resend(id)
   })
   ipcMain.handle('prompt-queue:list', () => promptQueue.snapshot())
   // A janela diz quais cartões estão abertos E visíveis; cada chamada substitui a

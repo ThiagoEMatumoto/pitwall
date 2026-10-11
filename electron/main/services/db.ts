@@ -21,7 +21,7 @@ export function openAppDb(dbPath: string): Database.Database {
   db.pragma('foreign_keys = ON')
   // NORMAL em WAL: commit sobrevive a kill -9, não a queda de energia. Escritas
   // que precisam sobreviver à energia sobem para FULL na própria transação
-  // (ver composer-drafts.ts).
+  // (ver durable-write.ts).
   db.pragma('synchronous = NORMAL')
   runMigrations(db)
   return db

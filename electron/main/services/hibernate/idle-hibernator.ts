@@ -289,7 +289,12 @@ export class IdleHibernator {
     this.pending.set(c.sessionId, pending)
     let sent: SendPromptResult
     try {
-      sent = await this.deps.send({ sessionId: c.sessionId, text: EXIT_COMMAND, when: 'on-idle' })
+      sent = await this.deps.send({
+        sessionId: c.sessionId,
+        text: EXIT_COMMAND,
+        when: 'on-idle',
+        ephemeral: true,
+      })
     } catch (err) {
       this.deps.warn({ event: 'hibernate_send_failed', sessionId: c.sessionId, error: String(err) })
       sent = { ok: false, error: 'not-running' }

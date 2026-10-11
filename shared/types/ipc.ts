@@ -3283,6 +3283,8 @@ export interface Api {
   sendTo: {
     send(input: SendPromptInput): Promise<SendPromptResult>
     cancel(id: string): Promise<boolean>
+    // Item 'maybe-undelivered' (o app morreu no meio da entrega): o usuário confirma o reenvio.
+    resend(id: string): Promise<boolean>
     queue(): Promise<PromptQueueSnapshot>
     // Fim da tela espelhada da PTY; null = sem espelho (shell, codex).
     preview(sessionId: string): Promise<ScreenPreview | null>

@@ -1,0 +1,209 @@
+import type Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
+import { writeDurably } from './durable-write'
+import { findTranscriptPath } from './transcript-path'
+
+// Persistência da PromptQueue no app.db (tabela prompt_queue_items, migration 062).
+// Toda escrita é FULL: um 'queued' respondido ao chamador e um 'delivering' antes
+// do write no PTY precisam sobreviver a kill -9 E a queda de energia.
+
+export type PersistedState = 'queued' | 'delivering' | 'uncertain'
+
+export interface PersistedPrompt {
+  id: string
+  sessionId: string
+  ccSessionId: string | null
+  text: string
+  fromSessionId: string | null
+  bypassAttention: boolean
+  // Bytes crus do PTY (input segurado na hibernação), sem o paste + \r da injeção.
+  raw: boolean
+  state: PersistedState
+  createdAt: number
+  deliveringAt: number | null
+}
+
+export interface PromptQueueStore {
+  insert(item: PersistedPrompt): void
+  markDelivering(id: string, at: number): void
+  setState(id: string, state: PersistedState): void
+  updateText(id: string, text: string): void
+  rebind(id: string, sessionId: string): void
+  remove(id: string): void
+  loadAll(): PersistedPrompt[]
+  ccSessionOf(sessionId: string): string | null
+}
+
+interface Row {
+  id: string
+  session_id: string
+  cc_session_id: string | null
+  text: string
+  from_session_id: string | null
+  bypass_attention: number
+  raw: number
+  state: PersistedState
+  created_at: number
+  delivering_at: number | null
+}
+
+// getDb é lazy: a fila nasce no import do módulo, antes de o app abrir o banco.
+// Falhas de persistência: a fila segue em memória (como antes da durabilidade) em
+// vez de recusar a mensagem; o contador deixa a degradação visível.
+let persistFailures = 0
+
+export function promptQueuePersistFailures(): number {
+  return persistFailures
+}
+
+export function createPromptQueueStore(db: () => Database.Database): PromptQueueStore {
+  const run = (sql: string, ...args: unknown[]): void => {
+    try {
+      writeDurably(db(), () => {
+        db()
+          .prepare(sql)
+          .run(...args)
+      })
+    } catch (err) {
+      persistFailures += 1
+      console.error('[prompt-queue] persistência falhou, item segue só em memória:', err)
+    }
+  }
+  return {
+    insert: (i) =>
+      run(
+        `INSERT INTO prompt_queue_items
+           (id, session_id, cc_session_id, text, from_session_id, bypass_attention, raw, state, created_at, delivering_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        i.id,
+        i.sessionId,
+        i.ccSessionId,
+        i.text,
+        i.fromSessionId,
+        i.bypassAttention ? 1 : 0,
+        i.raw ? 1 : 0,
+        i.state,
+        i.createdAt,
+        i.deliveringAt,
+      ),
+    markDelivering: (id, at) =>
+      run(
+        "UPDATE prompt_queue_items SET state = 'delivering', delivering_at = ? WHERE id = ?",
+        at,
+        id,
+      ),
+    setState: (id, state) => run('UPDATE prompt_queue_items SET state = ? WHERE id = ?', state, id),
+    updateText: (id, text) => run('UPDATE prompt_queue_items SET text = ? WHERE id = ?', text, id),
+    rebind: (id, sessionId) =>
+      run('UPDATE prompt_queue_items SET session_id = ? WHERE id = ?', sessionId, id),
+    remove: (id) => run('DELETE FROM prompt_queue_items WHERE id = ?', id),
+    loadAll: () =>
+      (
+        db()
+          .prepare('SELECT * FROM prompt_queue_items ORDER BY created_at ASC, rowid ASC')
+          .all() as Row[]
+      ).map((r) => ({
+        id: r.id,
+        sessionId: r.session_id,
+        ccSessionId: r.cc_session_id,
+        text: r.text,
+        fromSessionId: r.from_session_id,
+        bypassAttention: r.bypass_attention === 1,
+        raw: r.raw === 1,
+        state: r.state,
+        createdAt: r.created_at,
+        deliveringAt: r.delivering_at,
+      })),
+    ccSessionOf: (sessionId) => {
+      const row = db().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
+        { cc_session_id: string | null } | undefined
+      return row?.cc_session_id ?? null
+    },
+  }
+}
+
+// ---- prova de entrega pelo transcript ----
+
+// 'found' = a mensagem entrou na conversa; 'absent' = o transcript existe e
+// nenhuma mensagem do usuário depois do write parece com ela; 'unknown' = sem
+// transcript, ou algo parecido mas não igual (formatação divergiu).
+export type TranscriptVerdict = 'found' | 'absent' | 'unknown'
+
+// Folga de relógio entre o delivering_at (main) e o timestamp que o claude grava.
+const CLOCK_SLACK_MS = 2_000
+const PREFIX_CHARS = 120
+
+const exact = (s: string) => s.replace(/\r\n?/g, '\n').trim()
+const loose = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+// O que o usuário (ou o paste) mandou: a linha 'user' com texto, ou o
+// queued_command que o claude grava quando a mensagem chega com ele trabalhando.
+// tool_result e isMeta (comandos/skills) não são mensagem digitada.
+function userPrompt(obj: Record<string, unknown>): string | null {
+  if (obj.type === 'attachment') {
+    const a = obj.attachment as { type?: unknown; prompt?: unknown } | undefined
+    return a?.type === 'queued_command' && typeof a.prompt === 'string' ? a.prompt : null
+  }
+  if (obj.type !== 'user' || obj.isMeta === true) return null
+  const content = (obj.message as { content?: unknown } | undefined)?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  const texts = content
+    .filter(
+      (c): c is { type: 'text'; text: string } => c?.type === 'text' && typeof c.text === 'string',
+    )
+    .map((c) => c.text)
+  return texts.length > 0 ? texts.join('\n') : null
+}
+
+export function transcriptVerdict(
+  jsonl: string | null,
+  text: string,
+  since: number,
+): TranscriptVerdict {
+  if (jsonl == null) return 'unknown'
+  const want = exact(text)
+  const wantLoose = loose(text)
+  const wantPrefix = wantLoose.slice(0, PREFIX_CHARS)
+  let similar = false
+  for (const line of jsonl.split('\n')) {
+    if (!line.trim()) continue
+    let obj: Record<string, unknown>
+    try {
+      obj = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      // Linha cortada no meio (o claude morreu escrevendo): pode ser a nossa.
+      if (line.includes(wantPrefix.slice(0, 40))) similar = true
+      continue
+    }
+    const ts = typeof obj.timestamp === 'string' ? Date.parse(obj.timestamp) : NaN
+    if (Number.isFinite(ts) && ts < since - CLOCK_SLACK_MS) continue
+    const got = userPrompt(obj)
+    if (got == null) continue
+    if (exact(got) === want) return 'found'
+    const gotLoose = loose(got)
+    if (
+      gotLoose === wantLoose ||
+      gotLoose.includes(wantPrefix) ||
+      wantLoose.includes(gotLoose.slice(0, PREFIX_CHARS))
+    ) {
+      similar = true
+    }
+  }
+  return similar ? 'unknown' : 'absent'
+}
+
+export function deliveryInTranscript(
+  ccSessionId: string | null,
+  text: string,
+  since: number,
+): TranscriptVerdict {
+  if (!ccSessionId) return 'unknown'
+  const path = findTranscriptPath(ccSessionId)
+  if (!path) return 'unknown'
+  try {
+    return transcriptVerdict(readFileSync(path, 'utf8'), text, since)
+  } catch {
+    return 'unknown'
+  }
+}
