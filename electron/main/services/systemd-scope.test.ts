@@ -13,6 +13,8 @@ vi.mock('node:child_process', () => {
 })
 
 import {
+  SESSION_MEMORY_MAX_PREF,
+  sessionMemoryLimits,
   memoryLimitsFromGB,
   SCOPE_RETRY_BACKOFF_MS,
   armOrphanSweep,
@@ -282,10 +284,47 @@ describe('teto de memória por sessão', () => {
     expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', high: null, swapMax: '2G' })
   })
 
-  it('0, negativo ou inválido desliga', () => {
+  it('só 0 explícito desliga; inválido cai no default de 14', () => {
     expect(memoryLimitsFromGB(0)).toBeNull()
-    expect(memoryLimitsFromGB(-3)).toBeNull()
-    expect(memoryLimitsFromGB(Number.NaN)).toBeNull()
+    for (const bad of [true, 'abc', null, undefined, Number.NaN, -3, Infinity]) {
+      expect(memoryLimitsFromGB(bad)?.max).toBe('14G')
+    }
+  })
+
+  it('arredonda para inteiro ≥ 2', () => {
+    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(13.6)?.max).toBe('14G')
+  })
+
+  it('nunca passa de 90% da RAM total', () => {
+    const ram32 = 32 * 1024 ** 3
+    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', high: '24G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(14, ram32)?.max).toBe('14G')
+  })
+
+  it('a pref lida a cada spawn passa pela mesma validação', () => {
+    for (const [stored, expected] of [
+      [true, '14G'],
+      ['abc', '14G'],
+      [null, '14G'],
+      [8, '8G'],
+    ] as const) {
+      getPref.mockImplementation((k: string, fallback: unknown) =>
+        k === SESSION_MEMORY_MAX_PREF ? stored : fallback,
+      )
+      expect(sessionMemoryLimits()?.max).toBe(expected)
+    }
+    getPref.mockImplementation((k: string, fallback: unknown) =>
+      k === SESSION_MEMORY_MAX_PREF ? 0 : fallback,
+    )
+    expect(sessionMemoryLimits()).toBeNull()
+  })
+
+  it('"Failed to parse" do systemd-run não entra no backoff', async () => {
+    probeExits(null)
+    await ensureScopeProbe()
+    reportScopeFailure('Failed to parse MemoryMax= value: 1e21G')
+    expect(scopeState().kind).toBe('ok')
   })
 
   it('as propriedades vão antes do --, no argv do systemd-run', () => {
