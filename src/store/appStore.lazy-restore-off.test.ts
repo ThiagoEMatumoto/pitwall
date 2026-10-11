@@ -300,16 +300,52 @@ describe('resume eager que falha no boot', () => {
 })
 
 describe('open_panes durante o restore', () => {
-  it('pref off: o persist segue o timing da main (salva no meio de um restore lento)', async () => {
+  // As panes entram uma a uma (pool de 4): um save no meio deixaria no open_panes só
+  // as já restauradas, e um kill -9 ali perderia as outras.
+  it('pref off: resumes lentos não gravam subconjunto; ao fim, 1 save com as N', async () => {
+    resumeDelays.set('cc-a', 300)
     resumeDelays.set('cc-b', 900)
     const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
     await waitPersist()
 
-    // cc-b ainda não voltou e o open_panes já foi gravado, como na main.
-    expect(calls.resume).toContain('cc-b')
     expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
-    expect(calls.savePanes.length).toBeGreaterThan(0)
+    expect(calls.savePanes).toEqual([])
     await restoring
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId).sort()).toEqual(
+      bootSnaps.map((s) => s.paneId).sort(),
+    )
+  })
+
+  it('pref off: uma aba aberta no meio do restore entra no save final (N+1)', async () => {
+    resumeDelays.set('cc-b', 300)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await useAppStore.getState().openSession(null, null, null, null, 'pane-user')
+    await restoring
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId).sort()).toEqual(
+      [...bootSnaps.map((s) => s.paneId), 'pane-user'].sort(),
+    )
+  })
+
+  it('pref off: eager que falha fica no save final como dormant, sem save intermediário', async () => {
+    resumeDelays.set('cc-a', 300)
+    resumeFails.set('cc-a', 'boom')
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId).sort()).toEqual(
+      bootSnaps.map((s) => s.paneId).sort(),
+    )
+    expect(useAppStore.getState().panes.find((p) => p.paneId === 'pane-a')).toMatchObject({
+      dormant: true,
+      restoreError: 'boom',
+    })
   })
 
   // Com a pref ligada o save fica para o fim do restore (plano 'eager' do mock: sem dormant).
