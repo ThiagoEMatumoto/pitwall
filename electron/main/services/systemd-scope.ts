@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { totalmem } from 'node:os'
 import { getPref } from './prefs-store'
 
 // Cada sessão roda no próprio scope transiente do systemd --user (Linux). Em
@@ -52,6 +53,12 @@ const MAX_CONSECUTIVE_BACKOFFS = 5
 let consecutiveBackoffs = 0
 
 export function reportScopeFailure(reason: string): void {
+  // Argumento que o systemd-run não aceitou (ex.: propriedade de memória): é bug
+  // nosso, não do user manager — não entra no backoff nem desliga os scopes.
+  if (/Failed to parse/i.test(reason)) {
+    console.warn(`[systemd-scope] systemd-run recusou um argumento, spawn direto: ${reason}`)
+    return
+  }
   if (isPermanentScopeFailure(reason)) {
     setState({ kind: 'unavailable', reason })
     return
@@ -153,12 +160,70 @@ export function unitOwnerPid(unit: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+// Teto de memória por sessão. Em 10/10 uma sessão (suítes de teste em paralelo)
+// chegou a 27,9 GB e derrubou a sessão gráfica inteira: com MemoryMax o kernel
+// mata dentro do scope da sessão, e o desktop e as outras sessões ficam de pé.
+export const SESSION_MEMORY_MAX_PREF = 'sessions.memoryMaxGB'
+export const DEFAULT_SESSION_MEMORY_MAX_GB = 14
+const HIGH_BELOW_MAX_GB = 4
+const SWAP_MAX = '2G'
+
+export interface ScopeMemoryLimits {
+  // Valores aceitos pelo systemd (ex.: '14G', '64M').
+  max: string
+  high: string | null
+  swapMax: string
+}
+
+const GIB = 1024 ** 3
+const MIN_MAX_GB = 2
+
+// Só 0 explícito desliga. Valor não numérico, negativo ou NaN cai no default (o
+// teto nunca some por engano); o resto vira inteiro entre 2 GB e 90% da RAM, para
+// nada fora de faixa chegar ao systemd-run. High = Max − 4 GB: o kernel começa a
+// apertar (reclaim) antes de matar.
+export function memoryLimitsFromGB(
+  maxGB: unknown,
+  totalMemBytes = totalmem(),
+): ScopeMemoryLimits | null {
+  if (maxGB === 0) return null
+  const wanted =
+    typeof maxGB === 'number' && Number.isFinite(maxGB) && maxGB > 0
+      ? maxGB
+      : DEFAULT_SESSION_MEMORY_MAX_GB
+  const ceiling = Math.max(MIN_MAX_GB, Math.floor((totalMemBytes * 0.9) / GIB))
+  const max = Math.min(ceiling, Math.max(MIN_MAX_GB, Math.round(wanted)))
+  const high = max - HIGH_BELOW_MAX_GB
+  return { max: `${max}G`, high: high >= 1 ? `${high}G` : null, swapMax: SWAP_MAX }
+}
+
+// Lida a cada spawn: mudar a pref vale só para sessões novas.
+export function sessionMemoryLimits(): ScopeMemoryLimits | null {
+  let raw: unknown = DEFAULT_SESSION_MEMORY_MAX_GB
+  try {
+    raw = getPref<unknown>(SESSION_MEMORY_MAX_PREF, DEFAULT_SESSION_MEMORY_MAX_GB)
+  } catch {
+    // Sem DB (testes, boot muito cedo): o default protege.
+  }
+  return memoryLimitsFromGB(raw)
+}
+
 // --scope faz exec in-place: o pid da PTY continua sendo o do processo final.
 export function wrapInScope(
   command: string,
   args: string[],
   unit: string,
+  memory: ScopeMemoryLimits | null = null,
 ): { command: string; args: string[] } {
+  const props = memory
+    ? [
+        ...(memory.high ? ['-p', `MemoryHigh=${memory.high}`] : []),
+        '-p',
+        `MemoryMax=${memory.max}`,
+        '-p',
+        `MemorySwapMax=${memory.swapMax}`,
+      ]
+    : []
   return {
     command: 'systemd-run',
     args: [
@@ -168,6 +233,7 @@ export function wrapInScope(
       '--collect',
       '--slice=app.slice',
       `--unit=${unit}`,
+      ...props,
       '--',
       command,
       ...args,

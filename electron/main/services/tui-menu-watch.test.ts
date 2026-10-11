@@ -11,6 +11,7 @@ import {
   MIRROR_SCROLLBACK,
 } from './tui-menu-watch'
 import { TAIL_WINDOWS } from '../../../shared/tui/tui-read-window'
+import { deliveryVerdict } from './prompt-queue'
 
 const FIXTURES = join(__dirname, '..', '..', '..', 'shared', 'tui', '__fixtures__')
 const PERMISSION = readFileSync(join(FIXTURES, 'claude-2.1.286-permission-bash.ansi'), 'utf8')
@@ -407,5 +408,41 @@ describe('TuiMenuWatch — custo do espelho sempre ligado', () => {
     const { watch } = setup(`${noise}\r\n${PERMISSION}`)
     const scan = await watch.rescan('s1')
     expect(scan?.menu?.kind).toBe('permission')
+  })
+})
+
+// PTY mais alto que a janela fixa de 40 linhas, com pouco conteúdo: a caixa de
+// input fica no topo da tela visível. Sem ler a viewport inteira o scan dava
+// unparsed e a guarda de entrega segurava o envio para sempre.
+describe('TuiMenuWatch — PTY alto lê a viewport inteira', () => {
+  it.each([53, 82])(
+    'caixa de input no topo de uma tela de %i linhas é reconhecida',
+    async (rows) => {
+      const pty = new FakePty()
+      const watch = new TuiMenuWatch()
+      watch.attach(pty)
+      pty.emit('spawn', { sessionId: 's1', cols: 80, rows })
+      pty.emit('data', { sessionId: 's1', data: IDLE_PROMPT })
+      const scan = await watch.rescan('s1')
+      expect(scan?.menu).toBeNull()
+      expect(scan?.inputPrompt).toBe(true)
+    },
+  )
+})
+
+// Negativo: na mesma pane alta, uma caixa de input velha acima de um menu ATIVO
+// não pode virar "pronto para entregar" — ler a viewport inteira não pode
+// esconder o menu que o \r aprovaria.
+describe('TuiMenuWatch — PTY alto com menu ativo abaixo de input velho', () => {
+  it('82 linhas: input antigo acima + permissão real abaixo → menu-open', async () => {
+    const pty = new FakePty()
+    const watch = new TuiMenuWatch()
+    watch.attach(pty)
+    pty.emit('spawn', { sessionId: 's1', cols: 80, rows: 82 })
+    pty.emit('data', { sessionId: 's1', data: IDLE_PROMPT })
+    pty.emit('data', { sessionId: 's1', data: '\r\n' + PERMISSION })
+    const scan = await watch.rescan('s1')
+    expect(scan?.menu?.kind).toBe('permission')
+    expect(deliveryVerdict('idle', scan, false)).toBe('menu-open')
   })
 })

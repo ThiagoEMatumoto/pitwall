@@ -13,6 +13,9 @@ vi.mock('node:child_process', () => {
 })
 
 import {
+  SESSION_MEMORY_MAX_PREF,
+  sessionMemoryLimits,
+  memoryLimitsFromGB,
   SCOPE_RETRY_BACKOFF_MS,
   armOrphanSweep,
   SYSTEMD_SCOPE_PREF,
@@ -269,5 +272,71 @@ describe('política da varredura de órfãos', () => {
     await ensureScopeProbe()
     await new Promise((r) => setImmediate(r))
     expect(listed()).toBe(1)
+  })
+})
+
+describe('teto de memória por sessão', () => {
+  it('Max em GB, High = Max − 4 e swap fixo de 2G', () => {
+    expect(memoryLimitsFromGB(14)).toEqual({ max: '14G', high: '10G', swapMax: '2G' })
+  })
+
+  it('Max pequeno demais para High: só Max e swap', () => {
+    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', high: null, swapMax: '2G' })
+  })
+
+  it('só 0 explícito desliga; inválido cai no default de 14', () => {
+    expect(memoryLimitsFromGB(0)).toBeNull()
+    for (const bad of [true, 'abc', null, undefined, Number.NaN, -3, Infinity]) {
+      expect(memoryLimitsFromGB(bad)?.max).toBe('14G')
+    }
+  })
+
+  it('arredonda para inteiro ≥ 2', () => {
+    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(13.6)?.max).toBe('14G')
+  })
+
+  it('nunca passa de 90% da RAM total', () => {
+    const ram32 = 32 * 1024 ** 3
+    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', high: '24G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(14, ram32)?.max).toBe('14G')
+  })
+
+  it('a pref lida a cada spawn passa pela mesma validação', () => {
+    for (const [stored, expected] of [
+      [true, '14G'],
+      ['abc', '14G'],
+      [null, '14G'],
+      [8, '8G'],
+    ] as const) {
+      getPref.mockImplementation((k: string, fallback: unknown) =>
+        k === SESSION_MEMORY_MAX_PREF ? stored : fallback,
+      )
+      expect(sessionMemoryLimits()?.max).toBe(expected)
+    }
+    getPref.mockImplementation((k: string, fallback: unknown) =>
+      k === SESSION_MEMORY_MAX_PREF ? 0 : fallback,
+    )
+    expect(sessionMemoryLimits()).toBeNull()
+  })
+
+  it('"Failed to parse" do systemd-run não entra no backoff', async () => {
+    probeExits(null)
+    await ensureScopeProbe()
+    reportScopeFailure('Failed to parse MemoryMax= value: 1e21G')
+    expect(scopeState().kind).toBe('ok')
+  })
+
+  it('as propriedades vão antes do --, no argv do systemd-run', () => {
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const sep = args.indexOf('--')
+    expect(args.slice(0, sep)).toEqual(
+      expect.arrayContaining(['-p', 'MemoryHigh=10G', 'MemoryMax=14G', 'MemorySwapMax=2G']),
+    )
+    expect(args.slice(sep + 1)).toEqual(['/usr/bin/zsh', '-l'])
+  })
+
+  it('sem limites, o argv é o de antes', () => {
+    expect(wrapInScope('sh', [], 'u').args).not.toContain('-p')
   })
 })

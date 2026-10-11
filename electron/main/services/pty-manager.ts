@@ -7,6 +7,7 @@ import {
   scopeUnitName,
   scopeWrapEnabled,
   stopScopeUnit,
+  sessionMemoryLimits,
   wrapInScope,
 } from './systemd-scope'
 
@@ -116,7 +117,7 @@ class PtyManager extends TypedEmitter {
     const rows = opts.rows ?? 24
     const unit = inScope ? scopeUnitName(opts.sessionId) : null
     const target = unit
-      ? wrapInScope(opts.command, opts.args ?? [], unit)
+      ? wrapInScope(opts.command, opts.args ?? [], unit, sessionMemoryLimits())
       : { command: opts.command, args: opts.args ?? [] }
     const pty = spawn(target.command, target.args, {
       name: 'xterm-256color',
