@@ -9,6 +9,8 @@ import {
   resetScopeProbeForTests,
   scopeWrapEnabled,
   sweepOrphanScopes,
+  scopeUnitName,
+  wrapInScope,
 } from './systemd-scope'
 
 // Contra o systemd --user real: só roda onde o próprio probe passa.
@@ -239,4 +241,51 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
       spawnSync('systemctl', ['--user', 'stop', `${orphanUnit}.scope`, `${keepUnit}.scope`])
     }
   }, 20_000)
+})
+
+function unitProp(unit: string, prop: string): string {
+  return execFileSync('systemctl', ['--user', 'show', '-p', prop, '--value', `${unit}.scope`], {
+    encoding: 'utf8',
+  }).trim()
+}
+
+describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    resetScopeProbeForTests()
+  })
+
+  afterEach(() => {
+    ptyManager.kill(SESSION)
+  })
+
+  it('o scope da sessão nasce com MemoryMax/High/SwapMax do default (14G/10G/2G)', async () => {
+    expect(await ensureScopeProbe()).toBe(true)
+    spawnLogin('sleep 300')
+    const pid = ptyPid()
+    await until(() => commOf(pid) === 'sleep', 5_000)
+    const unit = ptyManager.scopeUnitFor(SESSION)!
+    const gib = 1024 ** 3
+    expect(unitProp(unit, 'MemoryMax')).toBe(String(14 * gib))
+    expect(unitProp(unit, 'MemoryHigh')).toBe(String(10 * gib))
+    expect(unitProp(unit, 'MemorySwapMax')).toBe(String(2 * gib))
+  }, 15_000)
+
+  it('quem passa do MemoryMax é morto pelo kernel dentro do scope; o pai sobrevive', () => {
+    const unit = scopeUnitName('memcap-it', Date.now())
+    // Aloca 512 MB tocando cada página, num scope de 64M sem swap.
+    const hog =
+      'const a=[];for(let i=0;i<64;i++){const b=Buffer.alloc(8*1024*1024,1);a.push(b)};console.log("SOBREVIVEU")'
+    const { command, args } = wrapInScope(process.execPath, ['-e', hog], unit, {
+      max: '64M',
+      high: null,
+      swapMax: '0',
+    })
+    const r = spawnSync(command, args, { encoding: 'utf8', timeout: 30_000 })
+    expect(r.stdout).not.toContain('SOBREVIVEU')
+    // OOM kill do cgroup: SIGKILL no processo, que o systemd-run (exec in-place) repassa.
+    expect(r.signal === 'SIGKILL' || r.status === 137).toBe(true)
+    expect(alive(process.pid)).toBe(true)
+  }, 40_000)
 })

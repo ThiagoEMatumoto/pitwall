@@ -153,12 +153,57 @@ export function unitOwnerPid(unit: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+// Teto de memória por sessão. Em 10/10 uma sessão (suítes de teste em paralelo)
+// chegou a 27,9 GB e derrubou a sessão gráfica inteira: com MemoryMax o kernel
+// mata dentro do scope da sessão, e o desktop e as outras sessões ficam de pé.
+export const SESSION_MEMORY_MAX_PREF = 'sessions.memoryMaxGB'
+export const DEFAULT_SESSION_MEMORY_MAX_GB = 14
+const HIGH_BELOW_MAX_GB = 4
+const SWAP_MAX = '2G'
+
+export interface ScopeMemoryLimits {
+  // Valores aceitos pelo systemd (ex.: '14G', '64M').
+  max: string
+  high: string | null
+  swapMax: string
+}
+
+// 0 (ou inválido) desliga o teto. High = Max − 4 GB: o kernel começa a apertar
+// (reclaim) antes de matar.
+export function memoryLimitsFromGB(maxGB: number): ScopeMemoryLimits | null {
+  if (!Number.isFinite(maxGB) || maxGB <= 0) return null
+  const max = Math.floor(maxGB)
+  if (max <= 0) return null
+  const high = max - HIGH_BELOW_MAX_GB
+  return { max: `${max}G`, high: high >= 1 ? `${high}G` : null, swapMax: SWAP_MAX }
+}
+
+export function sessionMemoryLimits(): ScopeMemoryLimits | null {
+  let gb = DEFAULT_SESSION_MEMORY_MAX_GB
+  try {
+    gb = Number(getPref<number>(SESSION_MEMORY_MAX_PREF, DEFAULT_SESSION_MEMORY_MAX_GB))
+  } catch {
+    // Sem DB (testes, boot muito cedo): o default protege.
+  }
+  return memoryLimitsFromGB(gb)
+}
+
 // --scope faz exec in-place: o pid da PTY continua sendo o do processo final.
 export function wrapInScope(
   command: string,
   args: string[],
   unit: string,
+  memory: ScopeMemoryLimits | null = null,
 ): { command: string; args: string[] } {
+  const props = memory
+    ? [
+        ...(memory.high ? ['-p', `MemoryHigh=${memory.high}`] : []),
+        '-p',
+        `MemoryMax=${memory.max}`,
+        '-p',
+        `MemorySwapMax=${memory.swapMax}`,
+      ]
+    : []
   return {
     command: 'systemd-run',
     args: [
@@ -168,6 +213,7 @@ export function wrapInScope(
       '--collect',
       '--slice=app.slice',
       `--unit=${unit}`,
+      ...props,
       '--',
       command,
       ...args,

@@ -13,6 +13,7 @@ vi.mock('node:child_process', () => {
 })
 
 import {
+  memoryLimitsFromGB,
   SCOPE_RETRY_BACKOFF_MS,
   armOrphanSweep,
   SYSTEMD_SCOPE_PREF,
@@ -269,5 +270,34 @@ describe('política da varredura de órfãos', () => {
     await ensureScopeProbe()
     await new Promise((r) => setImmediate(r))
     expect(listed()).toBe(1)
+  })
+})
+
+describe('teto de memória por sessão', () => {
+  it('Max em GB, High = Max − 4 e swap fixo de 2G', () => {
+    expect(memoryLimitsFromGB(14)).toEqual({ max: '14G', high: '10G', swapMax: '2G' })
+  })
+
+  it('Max pequeno demais para High: só Max e swap', () => {
+    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', high: null, swapMax: '2G' })
+  })
+
+  it('0, negativo ou inválido desliga', () => {
+    expect(memoryLimitsFromGB(0)).toBeNull()
+    expect(memoryLimitsFromGB(-3)).toBeNull()
+    expect(memoryLimitsFromGB(Number.NaN)).toBeNull()
+  })
+
+  it('as propriedades vão antes do --, no argv do systemd-run', () => {
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const sep = args.indexOf('--')
+    expect(args.slice(0, sep)).toEqual(
+      expect.arrayContaining(['-p', 'MemoryHigh=10G', 'MemoryMax=14G', 'MemorySwapMax=2G']),
+    )
+    expect(args.slice(sep + 1)).toEqual(['/usr/bin/zsh', '-l'])
+  })
+
+  it('sem limites, o argv é o de antes', () => {
+    expect(wrapInScope('sh', [], 'u').args).not.toContain('-p')
   })
 })
