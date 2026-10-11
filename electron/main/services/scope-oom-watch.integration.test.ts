@@ -5,7 +5,14 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import type { ScopeOomEvent } from '../../../shared/types/ipc'
 import { ScopeOomWatch, readOomKills, scopeCgroupDir } from './scope-oom-watch'
-import { scopeUnitName, wrapInScope } from './systemd-scope'
+import {
+  scopeUnitName,
+  wrapInScope,
+  ensureScopeProbe,
+  resetScopeProbeForTests,
+} from './systemd-scope'
+import { ptyManager } from './pty-manager'
+import { tmpdir } from 'node:os'
 
 // Contra o systemd --user real: só roda onde o próprio probe passa.
 const hasUserBus =
@@ -148,4 +155,54 @@ describe.skipIf(!hasUserBus)('OOM dentro do scope da sessão × systemd real', (
     expect(events).toEqual([{ sessionId: 's-dead', maxGB: MAX_GB, claudeAlive: false }])
     expect(watch.stats().bySession['s-dead']).toBeGreaterThanOrEqual(1)
   }, 40_000)
+})
+
+// O caminho real: ptyManager.spawn num scope com teto emite scope-exec depois do
+// exec, e um watcher ligado DEPOIS (restore, watcher recriado) readota a sessão.
+describe.skipIf(!hasUserBus)('scope-exec do ptyManager × readoção', () => {
+  const SESSION = 'oomw-readopt'
+  afterEach(() => {
+    ptyManager.kill(SESSION)
+  })
+
+  it('emite scope-exec com o pid final e o watcher posterior readota a sessão', async () => {
+    resetScopeProbeForTests()
+    expect(await ensureScopeProbe()).toBe(true)
+    const early = new ScopeOomWatch(60_000)
+    early.attach(ptyManager)
+    const seen: string[] = []
+    ptyManager.on('scope-exec', (e) => seen.push(`${e.sessionId}:${e.pid}`))
+    ptyManager.spawn({
+      sessionId: SESSION,
+      command: '/bin/sh',
+      args: ['-c', 'exec sleep 300'],
+      cwd: tmpdir(),
+    })
+    await until(() => seen.length > 0, 5_000)
+    const pid = (ptyManager as unknown as { ptys: Map<string, { pid: number }> }).ptys.get(
+      SESSION,
+    )!.pid
+    expect(seen).toEqual([`${SESSION}:${pid}`])
+    expect(early.stats().watching).toBe(1)
+
+    const late = new ScopeOomWatch(60_000)
+    late.attach(ptyManager)
+    expect(late.stats().watching).toBe(1)
+    early.stopAll()
+    late.stopAll()
+  }, 15_000)
+})
+
+describe('ScopeOomWatch — contagem limitada', () => {
+  it('guarda no máximo 200 sessões na contagem de kills (LRU)', () => {
+    const w = new ScopeOomWatch(60_000)
+    const record = (
+      w as unknown as { record: (id: string, t: { baseline: number }, n: number) => void }
+    ).record.bind(w)
+    for (let i = 0; i < 250; i++) record(`s${i}`, { baseline: 0 }, 1)
+    const by = w.stats().bySession
+    expect(Object.keys(by)).toHaveLength(200)
+    expect(by.s0).toBeUndefined()
+    expect(by.s249).toBe(1)
+  })
 })

@@ -61,6 +61,7 @@ export interface ScopeExecEvent {
 interface PtySource {
   on(event: 'scope-exec', listener: (e: ScopeExecEvent) => void): unknown
   on(event: 'exit', listener: (e: { sessionId: string; signal: number | null }) => void): unknown
+  scopedSessions?(): ScopeExecEvent[]
 }
 
 interface Tracked {
@@ -75,6 +76,8 @@ interface Tracked {
   settle: ReturnType<typeof setTimeout> | null
 }
 
+const KILLS_CAP = 200
+
 export class ScopeOomWatch extends EventEmitter {
   private tracked = new Map<string, Tracked>()
   // oom-kills por sessão, inclusive das que já saíram.
@@ -87,6 +90,8 @@ export class ScopeOomWatch extends EventEmitter {
   attach(source: PtySource): void {
     source.on('scope-exec', (e) => this.track(e.sessionId, e.pid, e.maxGB))
     source.on('exit', (e) => this.onExit(e.sessionId, e.signal))
+    // Sessões que fizeram exec antes de o watcher escutar seguiriam sem monitor.
+    for (const e of source.scopedSessions?.() ?? []) this.track(e.sessionId, e.pid, e.maxGB)
   }
 
   track(sessionId: string, pid: number, maxGB: number): boolean {
@@ -156,7 +161,16 @@ export class ScopeOomWatch extends EventEmitter {
   }
 
   private record(sessionId: string, t: Tracked, count: number): void {
-    this.kills.set(sessionId, Math.max(this.kills.get(sessionId) ?? 0, count - t.baseline))
+    const next = Math.max(this.kills.get(sessionId) ?? 0, count - t.baseline)
+    // LRU: a contagem de sessões que já saíram fica para os stats, sem crescer
+    // para sempre num app que roda por semanas.
+    this.kills.delete(sessionId)
+    this.kills.set(sessionId, next)
+    while (this.kills.size > KILLS_CAP) {
+      const oldest = this.kills.keys().next().value
+      if (oldest === undefined) break
+      this.kills.delete(oldest)
+    }
   }
 
   private untrack(sessionId: string): void {

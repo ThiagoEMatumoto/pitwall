@@ -98,6 +98,9 @@ class PtyManager extends TypedEmitter {
   private lastInputAt = new Map<string, number>()
   // Unit .scope de cada sessão spawnada via systemd-run.
   private scopeUnits = new Map<string, string>()
+  // Sessões com teto que já fizeram exec: quem passa a observar depois (watcher
+  // recriado, ligado após o restore) as readota por aqui.
+  private scopeExecs = new Map<string, ScopeExecEvent>()
   // Saída pedida pelo app não é falha do systemd-run.
   private killed = new WeakSet<IPty>()
 
@@ -174,7 +177,9 @@ class PtyManager extends TypedEmitter {
           if (execSeen && memory && this.ptys.get(opts.sessionId) === pty) {
             // memoryLimitsFromGB sempre devolve o teto em G.
             const maxGB = Number.parseFloat(memory.max)
-            this.emit('scope-exec', { sessionId: opts.sessionId, pid: pty.pid, maxGB })
+            const exec = { sessionId: opts.sessionId, pid: pty.pid, maxGB }
+            this.scopeExecs.set(opts.sessionId, exec)
+            this.emit('scope-exec', exec)
           }
         })
       : null
@@ -207,6 +212,7 @@ class PtyManager extends TypedEmitter {
       flushHeld()
       this.ptys.delete(opts.sessionId)
       this.scopeUnits.delete(opts.sessionId)
+      this.scopeExecs.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
@@ -240,6 +246,10 @@ class PtyManager extends TypedEmitter {
       released: () => released,
       stop: () => clearInterval(timer),
     }
+  }
+
+  scopedSessions(): ScopeExecEvent[] {
+    return [...this.scopeExecs.values()].filter((e) => this.ptys.has(e.sessionId))
   }
 
   scopeUnitFor(sessionId: string): string | null {
