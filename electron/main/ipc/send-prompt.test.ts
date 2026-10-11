@@ -54,7 +54,7 @@ vi.mock('../services/session-activity', () => ({
   setPromptQueueTurnHook: () => {},
 }))
 
-import { promptQueue, sendWakingDormant } from './send-prompt'
+import { promptQueue, sendWakingDormant, wakeParkedTargets } from './send-prompt'
 import { DormantPanes, setDormantPanes } from '../services/dormant-panes'
 
 const CODEX = 'codex-pty'
@@ -164,6 +164,31 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
     expect(res).toEqual({ ok: false, error: 'wake-failed', detail: 'resume-threw' })
     expect(promptQueue.snapshot().counters.wakeFailed).toBe(before + 1)
     expect(seam.writes).toEqual([])
+  })
+
+  it('item restaurado esperando conversa dormindo: acorda só as dormindo', async () => {
+    const requests = dormant('new-pty')
+    const targets = vi.spyOn(promptQueue, 'wakeTargets').mockReturnValue(['cc-old', 'cc-viva'])
+    const surface = vi.spyOn(promptQueue, 'surfaceTarget')
+    wakeParkedTargets()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requests).toEqual(['cc-old'])
+    expect(surface).not.toHaveBeenCalled()
+    targets.mockRestore()
+    surface.mockRestore()
+  })
+
+  it('wake do item restaurado falhou: os itens ficam visíveis e o contador sobe', async () => {
+    dormant(null)
+    const before = promptQueue.snapshot().counters.wakeFailed
+    const targets = vi.spyOn(promptQueue, 'wakeTargets').mockReturnValue(['cc-old'])
+    const surface = vi.spyOn(promptQueue, 'surfaceTarget')
+    wakeParkedTargets()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(surface).toHaveBeenCalledWith('cc-old')
+    expect(promptQueue.snapshot().counters.wakeFailed).toBe(before + 1)
+    targets.mockRestore()
+    surface.mockRestore()
   })
 
   it('sem pane dormindo para a conversa: not-running sem pedir wake', async () => {

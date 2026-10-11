@@ -221,6 +221,23 @@ function siblingState(wakeId: string): { outcome: WakeOutcome; heldAt: number | 
   return row ? { outcome: row.outcome, heldAt: row.held_at } : null
 }
 
+// Item da fila restaurado do app.db é envelope de wake/resposta (o ledger o liga
+// pelo wake_id = id do item) e todos os handoffs dele já terminaram (ou sumiram)?
+// Entregá-lo depois do restart chegaria fora de contexto; o estado final segue no
+// handoff_result.
+export function queuedEnvelopeObsolete(queueId: string): boolean {
+  const rows = getDb()
+    .prepare(
+      `SELECT h.status AS status FROM handoff_wake_deliveries d
+         LEFT JOIN handoffs h ON h.id = d.handoff_id
+        WHERE d.wake_id = ? GROUP BY d.handoff_id`,
+    )
+    .all(queueId) as Array<{ status: string | null }>
+  return rows.length > 0 && rows.every((r) => r.status == null || !ACTIVE_HANDOFF.has(r.status))
+}
+
+const ACTIVE_HANDOFF = new Set(['pending', 'approved', 'running', 'needs_input'])
+
 // Linhas queued/held de antes do restart: a fila é em memória, o item sumiu com ela.
 export function sweepOrphansOnBoot(): number {
   return getDb()

@@ -14,7 +14,8 @@ export interface MaybeUndeliveredDeps {
   dismiss: typeof dismissToast
 }
 
-// "Talvez não entregue — reenviar?". Sincroniza pelos itens do snapshot, não pelo
+// "Talvez não entregue — reenviar?" e "Ficou na fila desde HH:MM — enviar agora?"
+// (item restaurado velho demais para sair sozinho). Sincroniza pelos itens do snapshot, não pelo
 // lastEvent: o boot pode marcar vários itens antes do renderer subir e o lastEvent
 // só guarda o último.
 export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
@@ -33,10 +34,14 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
     seen.add(item.id)
     const title = await deps.titleOf(item.sessionId).catch(() => null)
     if (disposed) return
+    const target = title ?? 'a sessão'
+    const stale = item.recovery === 'needs-confirmation'
     const toastId = deps.show({
-      title: `Mensagem para ${title ?? 'a sessão'} talvez não tenha sido entregue`,
+      title: stale
+        ? `Mensagem para ${target} ficou na fila desde ${clock(item.createdAt)} — enviar agora?`
+        : `Mensagem para ${target} talvez não tenha sido entregue`,
       body: item.text.slice(0, 160),
-      actionLabel: 'Reenviar',
+      actionLabel: stale ? 'Enviar' : 'Reenviar',
       onAction: () => decide(item.id, deps.resend, 'resend'),
       secondaryActionLabel: 'Descartar',
       onSecondaryAction: () => decide(item.id, deps.cancel, 'cancel'),
@@ -48,7 +53,9 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
   const sync = (snapshot: PromptQueueSnapshot) => {
     if (disposed) return
     const pending = new Set(
-      snapshot.items.filter((i) => i.recovery === 'maybe-undelivered').map((i) => i.id),
+      snapshot.items
+        .filter((i) => i.recovery === 'maybe-undelivered' || i.recovery === 'needs-confirmation')
+        .map((i) => i.id),
     )
     for (const item of snapshot.items) {
       if (pending.has(item.id) && !seen.has(item.id)) void open(item)
@@ -71,6 +78,19 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
     disposed = true
     off()
   }
+}
+
+function clock(at: number): string {
+  const d = new Date(at)
+  const sameDay = d.toDateString() === new Date().toDateString()
+  return sameDay
+    ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
 }
 
 // O sessionId do item é a PTY de quando foi aceito, em geral já morta: o título

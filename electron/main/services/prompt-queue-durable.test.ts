@@ -3,9 +3,16 @@ import type Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openAppDb } from './db'
-import { CONFIRM_GIVEUP_MS, DURABLE_TTL_MS, PromptQueue, WRITEBACK_MS } from './prompt-queue'
+import {
+  CONFIRM_GIVEUP_MS,
+  POLL_MS,
+  PROMPT_TTL_MS,
+  PromptQueue,
+  STALE_RESTORE_MS,
+  WRITEBACK_MS,
+} from './prompt-queue'
 import {
   createPromptQueueStore,
   transcriptProof,
@@ -46,6 +53,7 @@ function makeQueue(
     verdict?: TranscriptVerdict
     // Transcript da conversa (JSONL real): a prova passa pelo parser de produção.
     jsonl?: () => string | null
+    obsolete?: (id: string, text: string) => boolean
   } = {},
 ) {
   const writes: string[] = []
@@ -62,6 +70,7 @@ function makeQueue(
     warn: () => {},
     now: opts.now,
     store: createPromptQueueStore(() => db),
+    isObsolete: opts.obsolete,
     deliveryProof: (_cc, text, since) =>
       opts.jsonl
         ? transcriptProof(opts.jsonl(), text, since)
@@ -107,17 +116,126 @@ describe('PromptQueue durável (DB real)', () => {
     expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
   })
 
-  it('item restaurado expira depois de DURABLE_TTL_MS e conta em expiredRestored', async () => {
+  it('restaurado velho (noite fora) nunca é apagado: pede confirmação e só sai com Enviar', async () => {
     let now = 1_000
     const first = makeQueue({ now: () => now })
-    await first.queue.send({ sessionId: PTY, text: 'velha', when: 'on-idle' })
+    await first.queue.send({ sessionId: PTY, text: 'pode fazer o deploy', when: 'on-idle' })
     first.queue.dispose()
 
-    now += DURABLE_TTL_MS + 1
-    const boot = makeQueue({ now: () => now })
+    now += 3 * 24 * 60 * 60_000
+    const boot = makeQueue({ status: 'idle', now: () => now })
     boot.queue.restore()
-    expect(boot.snap()?.counters).toMatchObject({ restored: 1, expired: 1, expiredRestored: 1 })
-    expect(boot.snap()?.lastEvent).toMatchObject({ kind: 'expired', text: 'velha' })
+    expect(boot.snap()?.items).toEqual([
+      expect.objectContaining({ text: 'pode fazer o deploy', recovery: 'needs-confirmation' }),
+    ])
+    expect(boot.snap()?.counters).toMatchObject({ expired: 0, needsConfirmation: 1 })
+    expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
+    expect(boot.queue.wakeTargets()).toEqual([])
+
+    // A conversa volta: não entrega sozinho.
+    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(boot.writes).toEqual([])
+    expect(rows()).toHaveLength(1)
+
+    const id = boot.snap()?.items[0].id as string
+    expect(boot.queue.resend(id)).toBe(true)
+    boot.queue.onTurnEnded(PTY)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(boot.writes).toEqual([`${PTY}:pode fazer o deploy`])
+    boot.queue.dispose()
+  })
+
+  it('restaurado recente sai sozinho; envelhecido esperando a conversa pede confirmação', async () => {
+    let now = 1_000
+    const first = makeQueue({ now: () => now })
+    await first.queue.send({ sessionId: PTY, text: 'recente', when: 'on-idle' })
+    first.queue.dispose()
+
+    now += STALE_RESTORE_MS - 1
+    const boot = makeQueue({ status: 'idle', now: () => now })
+    boot.queue.restore()
+    expect(boot.snap()?.items).toEqual([expect.objectContaining({ recovery: 'awaiting-session' })])
+    // Conversa dormindo: alvo do wake.
+    expect(boot.queue.wakeTargets()).toEqual([CC])
+
+    now += 2
+    boot.queue.onSessionLive(PTY, CC)
+    expect(boot.snap()?.items).toEqual([
+      expect.objectContaining({ recovery: 'needs-confirmation' }),
+    ])
+    boot.queue.dispose()
+  })
+
+  it('wake da conversa falhou: os itens dela ficam visíveis', async () => {
+    db.prepare(
+      `INSERT INTO prompt_queue_items (id, session_id, cc_session_id, text, state, created_at)
+       VALUES ('w1', 'pty-morta', ?, 'acorda', 'queued', ?)`,
+    ).run(CC, Date.now())
+    const boot = makeQueue()
+    boot.queue.restore()
+    boot.queue.surfaceTarget(CC)
+    expect(boot.snap()?.items).toEqual([
+      expect.objectContaining({ id: 'w1', recovery: 'needs-confirmation' }),
+    ])
+    expect(rows()).toHaveLength(1)
+    boot.queue.dispose()
+  })
+
+  it('uncertain antigo nunca expira, nem com o poll rodando', async () => {
+    vi.useFakeTimers()
+    try {
+      const old = Date.now() - 30 * 24 * 60 * 60_000
+      db.prepare(
+        `INSERT INTO prompt_queue_items (id, session_id, cc_session_id, text, state, created_at, delivering_at)
+         VALUES ('u1', 'pty-morta', ?, 'talvez', 'uncertain', ?, ?)`,
+      ).run(CC, old, old)
+      const boot = makeQueue()
+      boot.queue.restore()
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+      expect(boot.snap()?.items).toEqual([
+        expect.objectContaining({ id: 'u1', recovery: 'maybe-undelivered' }),
+      ])
+      expect(rows()).toEqual([expect.objectContaining({ state: 'uncertain' })])
+      boot.queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restaurado entregue à conversa viva que não fica ociosa em PROMPT_TTL_MS: volta a pedir confirmação, sem apagar', async () => {
+    vi.useFakeTimers()
+    try {
+      db.prepare(
+        `INSERT INTO prompt_queue_items (id, session_id, cc_session_id, text, state, created_at)
+         VALUES ('t1', 'pty-morta', ?, 'espera', 'queued', ?)`,
+      ).run(CC, Date.now())
+      const boot = makeQueue({ status: 'working' })
+      boot.queue.restore()
+      boot.queue.onSessionLive(PTY, CC)
+      await vi.advanceTimersByTimeAsync(PROMPT_TTL_MS + POLL_MS)
+      expect(boot.snap()?.items).toEqual([
+        expect.objectContaining({ id: 't1', recovery: 'needs-confirmation' }),
+      ])
+      expect(boot.snap()?.counters.expired).toBe(0)
+      expect(rows()).toHaveLength(1)
+      boot.queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('envelope de handoff já terminado é descartado no boot, com contador', async () => {
+    db.prepare(
+      `INSERT INTO prompt_queue_items (id, session_id, cc_session_id, text, state, created_at)
+       VALUES ('e1', 'pty-morta', ?, '<pitwall-answer request-id="r">ok</pitwall-answer>', 'queued', ?)`,
+    ).run(CC, Date.now())
+    const boot = makeQueue({ obsolete: (id) => id === 'e1' })
+    boot.queue.restore()
+    expect(boot.snap()?.items).toEqual([])
+    expect(boot.snap()?.counters.discardedObsolete).toBe(1)
+    expect(boot.snap()?.lastEvent).toMatchObject({ kind: 'cancelled', id: 'e1' })
     expect(rows()).toEqual([])
   })
 

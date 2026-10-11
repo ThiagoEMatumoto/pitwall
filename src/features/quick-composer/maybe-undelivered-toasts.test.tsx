@@ -55,6 +55,17 @@ async function flush() {
 afterEach(() => act(() => useToastStore.setState({ toasts: [] })))
 
 describe('watchMaybeUndelivered', () => {
+  it('item velho restaurado (needs-confirmation) pede Enviar/Descartar', async () => {
+    const { deps, stop } = setup([item('v', 'needs-confirmation')])
+    await flush()
+    await flush()
+    render(<NotificationToast />)
+    expect(screen.getByText(/ficou na fila desde .* enviar agora\?/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Enviar'))
+    expect(deps.resend).toHaveBeenCalledWith('v')
+    stop()
+  })
+
   it('evento maybe-undelivered mostra toast persistente com Reenviar e Descartar', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {

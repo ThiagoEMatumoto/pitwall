@@ -22,10 +22,15 @@ import { promptQueuePersistFailures } from './prompt-queue-store'
 // hora da entrega e nem o status nem a ausência de menu autorizam nada.
 
 export const PROMPT_TTL_MS = 30 * 60_000
-// Item que sobreviveu a um kill/reboot espera a conversa voltar a ter PTY (resume
-// ou wake). 12h cobre uma noite com o app fechado; depois disso a mensagem é velha
-// demais para chegar sozinha e sai como 'expired' (contador expiredRestored).
-export const DURABLE_TTL_MS = 12 * 60 * 60_000
+// Item que sobreviveu a um kill/reboot nunca expira: espera a conversa voltar a ter
+// PTY (resume ou wake) ou a decisão do usuário. Até STALE_RESTORE_MS de idade ele é
+// entregue sozinho — 15 min cobrem com folga um crash/kill -9 e reabrir o app.
+// Mais velho que isso (noite, fim de semana, queda de energia longa), o usuário
+// pode já ter reenviado à mão ou a instrução perdeu o contexto ('pode fazer o
+// deploy'): vira 'needs-confirmation' e só sai com Enviar/Descartar.
+export const STALE_RESTORE_MS = 15 * 60_000
+// expiresAt de item restaurado parado: não expira (o número cabe no JSON do IPC).
+const NEVER = Number.MAX_SAFE_INTEGER
 // Espera depois da borda do fim de turno: a TUI termina de desenhar a tela.
 export const SETTLE_MS = 400
 // Rede de segurança pra borda perdida (índice de status sem watcher, flip rápido).
@@ -60,6 +65,9 @@ export interface PromptQueueDeps {
   now?(): number
   // Persistência (app.db). Sem store a fila é só memória (testes antigos).
   store?: PromptQueueStore
+  // Envelope de handoff (wake da mãe / resposta à filha) restaurado cujos handoffs
+  // já terminaram: chegaria fora de contexto, sai descartado (discardedObsolete).
+  isObsolete?(id: string, text: string): boolean
   // A mensagem 'delivering' entrou na conversa (e a conversa andou depois dela)?
   // Usado no boot e na confirmação de cada entrega.
   deliveryProof?(ccSessionId: string | null, text: string, since: number): TranscriptProof
@@ -128,6 +136,10 @@ interface Item extends QueuedPrompt {
   ccSessionId: string | null
   fromSessionId?: string
   bypassAttention?: boolean
+  // Veio do app.db no boot: não expira, e velho demais pede confirmação.
+  restored?: boolean
+  // O usuário mandou enviar (Reenviar/Enviar): não pede confirmação de novo.
+  confirmed?: boolean
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
   outcome?: PromptQueueEventKind
 }
@@ -145,7 +157,8 @@ export class PromptQueue {
     restored: 0,
     restoredDelivered: 0,
     maybeUndelivered: 0,
-    expiredRestored: 0,
+    needsConfirmation: 0,
+    discardedObsolete: 0,
   }
   // Itens de antes de um kill/reboot sem PTY viva da conversa ainda, e os
   // 'maybe-undelivered' que esperam o usuário decidir. Fora de `items` porque o
@@ -245,10 +258,13 @@ export class PromptQueue {
   // "Talvez não entregue — reenviar?": o usuário decidiu reenviar. Volta a ser um
   // item normal da conversa; sem PTY viva, espera o resume como os outros.
   resend(id: string): boolean {
-    const item = this.parked.find((i) => i.id === id && i.recovery === 'maybe-undelivered')
+    const item = this.parked.find(
+      (i) => i.id === id && i.recovery && i.recovery !== 'awaiting-session',
+    )
     if (!item) return false
     this.deps.store?.setState(id, 'queued')
     item.recovery = 'awaiting-session'
+    item.confirmed = true
     if (this.deps.isRunning(item.sessionId)) this.attach([item], item.sessionId)
     else this.publish()
     return true
@@ -267,19 +283,69 @@ export class PromptQueue {
   restore(): void {
     const store = this.deps.store
     if (!store) return
-    const now = this.now()
     for (const row of store.loadAll()) {
       const item = fromRow(row, row.ccSessionId ?? store.ccSessionOf(row.sessionId))
       this.counters.restored++
       this.parked = [...this.parked, item]
-      if (item.expiresAt <= now) {
-        this.finish(item, 'expired')
-        continue
-      }
+      if (this.discardIfObsolete(item)) continue
       if (row.state === 'delivering') this.reconcileDelivering(item, row)
+      if (item.outcome) continue
+      if (item.recovery === 'awaiting-session' && this.isStale(item)) {
+        this.markNeedsConfirmation(item)
+      }
     }
     if (this.parked.length > 0) this.ensurePoll()
     this.publish()
+  }
+
+  // Conversas dormindo com item que pode sair sozinho: quem chama (send-prompt)
+  // acorda a pane, e o spawn traz o item por onSessionLive.
+  wakeTargets(): string[] {
+    const ccs = this.parked
+      .filter((i) => i.recovery === 'awaiting-session' && !this.isStale(i) && i.ccSessionId)
+      .map((i) => i.ccSessionId as string)
+    return [...new Set(ccs)]
+  }
+
+  // O wake da conversa falhou: os itens dela ficam visíveis em vez de esperar
+  // calados por um resume que pode não vir.
+  surfaceTarget(ccSessionId: string): void {
+    const mine = this.parked.filter(
+      (i) => i.ccSessionId === ccSessionId && i.recovery === 'awaiting-session',
+    )
+    for (const item of mine) this.markNeedsConfirmation(item)
+    if (mine.length > 0) this.publish()
+  }
+
+  private isStale(item: Item): boolean {
+    return !!item.restored && !item.confirmed && this.now() - item.createdAt > STALE_RESTORE_MS
+  }
+
+  private discardIfObsolete(item: Item): boolean {
+    if (!this.deps.isObsolete?.(item.id, item.text)) return false
+    this.counters.discardedObsolete++
+    this.deps.warn({
+      event: 'prompt_queue_discarded_obsolete',
+      id: item.id,
+      total: this.counters.discardedObsolete,
+    })
+    this.finish(item, 'cancelled')
+    return true
+  }
+
+  private markNeedsConfirmation(item: Item): void {
+    item.recovery = 'needs-confirmation'
+    item.expiresAt = NEVER
+    if (!this.parked.includes(item)) {
+      this.items = this.items.filter((i) => i !== item)
+      this.parked = [...this.parked, item]
+    }
+    this.counters.needsConfirmation++
+    this.deps.warn({
+      event: 'prompt_queue_needs_confirmation',
+      sessionId: item.sessionId,
+      id: item.id,
+    })
   }
 
   // Uma PTY nova da conversa `ccSessionId` (spawn/resume/wake): os itens dela que
@@ -289,12 +355,17 @@ export class PromptQueue {
     if (!ccSessionId) return
     const mine = this.parked.filter((i) => i.ccSessionId === ccSessionId)
     if (mine.length === 0) return
-    for (const item of mine) {
+    const kept = mine.filter((i) => !this.discardIfObsolete(i))
+    for (const item of kept) {
       this.deps.store?.rebind(item.id, sessionId)
       item.sessionId = sessionId
+      // Esperou a conversa voltar até ficar velho: pergunta antes de entregar.
+      if (item.recovery === 'awaiting-session' && this.isStale(item)) {
+        this.markNeedsConfirmation(item)
+      }
     }
     this.attach(
-      mine.filter((i) => i.recovery !== 'maybe-undelivered'),
+      kept.filter((i) => i.recovery === 'awaiting-session'),
       sessionId,
     )
   }
@@ -527,7 +598,6 @@ export class PromptQueue {
   // keepRow: a entrega saiu da fila mas a linha espera a prova (confirmDeliveries).
   private finish(item: Item, kind: PromptQueueEventKind, keepRow = false): void {
     item.outcome = kind
-    const restored = this.parked.includes(item)
     this.items = this.items.filter((i) => i !== item)
     this.parked = this.parked.filter((i) => i !== item)
     if (!this.shuttingDown && !keepRow) {
@@ -541,7 +611,6 @@ export class PromptQueue {
     }
     if (kind === 'delivered') this.counters.delivered++
     if (kind === 'expired') this.counters.expired++
-    if (kind === 'expired' && restored) this.counters.expiredRestored++
     if (kind === 'session-gone') this.counters.sessionGone++
     if (kind === 'expired' || kind === 'session-gone') {
       this.deps.warn({ event: `prompt_queue_${kind}`, sessionId: item.sessionId })
@@ -601,7 +670,7 @@ export class PromptQueue {
     const { item } = c
     this.deps.store?.setState(item.id, 'uncertain')
     item.outcome = undefined
-    item.expiresAt = item.createdAt + DURABLE_TTL_MS
+    item.expiresAt = NEVER
     this.parked = [...this.parked, item]
     this.markMaybeUndelivered(item)
     this.publish()
@@ -633,8 +702,15 @@ export class PromptQueue {
   private async tick(): Promise<void> {
     this.confirmDeliveries()
     const now = this.now()
-    for (const item of [...this.items, ...this.parked].filter((i) => i.expiresAt <= now)) {
-      this.finish(item, 'expired')
+    // Parados (restaurados, talvez-não-entregues) não expiram. Restaurado que não
+    // sai em PROMPT_TTL_MS com a conversa viva volta a pedir confirmação.
+    for (const item of this.items.filter((i) => i.expiresAt <= now)) {
+      if (item.restored) {
+        this.markNeedsConfirmation(item)
+        this.publish()
+      } else {
+        this.finish(item, 'expired')
+      }
     }
     const sessions = [...new Set(this.items.map((i) => i.sessionId))]
     for (const sessionId of sessions) {
@@ -653,6 +729,8 @@ function publicItem({
   fromSessionId: _f,
   bypassAttention: _b,
   ccSessionId: _c,
+  restored: _r,
+  confirmed: _k,
   ...q
 }: Item): QueuedPrompt {
   return q
@@ -665,12 +743,13 @@ function fromRow(row: PersistedPrompt, ccSessionId: string | null): Item {
     ccSessionId,
     text: row.text,
     createdAt: row.createdAt,
-    expiresAt: row.createdAt + DURABLE_TTL_MS,
+    expiresAt: NEVER,
     heldByMenu: 0,
     heldReason: null,
     recovery: row.state === 'uncertain' ? 'maybe-undelivered' : 'awaiting-session',
     holding: false,
     fromSessionId: row.fromSessionId ?? undefined,
     bypassAttention: row.bypassAttention || undefined,
+    restored: true,
   }
 }
