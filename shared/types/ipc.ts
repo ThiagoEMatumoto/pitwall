@@ -2931,6 +2931,8 @@ export interface Api {
     /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
     onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
     paneCheckResult(result: PaneCheckResult): Promise<void>
+    /** A aba de uma PTY viva foi fechada pelo X: um /exit da hibernação em curso não a recria. */
+    paneClosed(sessionId: string): Promise<void>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

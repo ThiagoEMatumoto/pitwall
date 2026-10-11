@@ -1,17 +1,13 @@
 /** @vitest-environment node */
 // H3 com a PromptQueue REAL: o /exit passa pela mesma guarda do agent-bus (tela
 // relida pelo espelho headless real, telas capturadas do claude 2.1.286). Fakes só
-// na borda: status, escrita no PTY e o relógio.
+// na borda: status, escrita no PTY e o relógio. A fila liga isHibernating e
+// beforeWrite ao hibernador como o ipc/send-prompt.ts.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fixture, scanOf } from '../test-support/screen-scans'
 import { PromptQueue } from '../prompt-queue'
 import { DormantPanes } from '../dormant-panes'
-import {
-  EXIT_MARKER_TTL_MS,
-  EXIT_TIMEOUT_MS,
-  IdleHibernator,
-  type IdleHibernatorDeps,
-} from './idle-hibernator'
+import { EXIT_TIMEOUT_MS, IdleHibernator, type IdleHibernatorDeps } from './idle-hibernator'
 import { hibernateExitRedirect } from './hibernate-redirect'
 import type { LiveStatus, ScreenScan } from '../../../../shared/tui/attention-reason'
 import type { PromptQueueSnapshot } from '../../../../shared/types/send-prompt'
@@ -38,6 +34,10 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     scan: opts.screen === null ? null : SCANS[opts.screen ?? 'idle'],
     now: 1_000_000,
     running: new Set([PTY]),
+    // input-dirty do espelho no instante do write (o eco chegou depois da releitura).
+    inputDirtyNow: false,
+    // Roda durante a releitura da tela da fila (o await do rescan).
+    duringScreen: null as (() => void) | null,
   }
   const writes: string[] = []
   const snapshots: PromptQueueSnapshot[] = []
@@ -69,13 +69,20 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
         wakeFailed: (_sid, error) => wakeFailures.push(error),
       })(id),
     status: () => state.status,
-    screen: async () => state.scan,
+    screen: async () => {
+      const during = state.duringScreen
+      state.duringScreen = null
+      during?.()
+      return state.scan
+    },
     nativeStatus: () => true,
     handoffAsking: () => false,
-    write: (id, text) => writes.push(`${id}:${text}`),
+    write: (id, text, raw) => writes.push(`${id}:${raw ? 'raw:' : ''}${text}`),
     emit: (s) => snapshots.push(s),
     warn: () => {},
     now: () => state.now,
+    isHibernating: (id) => hibernator?.isHibernating(id) ?? false,
+    beforeWrite: (id, text) => hibernator?.beforeWrite(id, text, state.inputDirtyNow) ?? true,
   })
   const warnings: Array<Record<string, unknown>> = []
   const unused = (): never => {
@@ -105,6 +112,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     cancel: (id) => {
       queue.cancel(id)
     },
+    replaceText: (id, text) => queue.replaceText(id, text),
     warn: (e) => warnings.push(e),
     now: () => state.now,
   }
@@ -184,69 +192,147 @@ describe('H3: entregue', () => {
     expect(hibernator.getStats().refused['exit-timeout']).toBe(0)
   })
 
-  it('sem exit em 30s → exit-timeout, mantém o marcador, nunca kill nem Ctrl-U', async () => {
+  it('sem exit em 30s → exit-timeout e o marcador cai; nunca kill nem Ctrl-U', async () => {
     const { hibernator, writes, warnings } = setup()
     expect(await hibernator.hibernate(CANDIDATE)).toBe(true)
     await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS)
     expect(hibernator.getStats().refused['exit-timeout']).toBe(1)
     expect(hibernator.getStats().hibernated).toBe(0)
     expect(warnings).toContainEqual({ event: 'hibernate_exit_timeout', sessionId: PTY })
-    // O /exit segue entregue: o marcador só expira em 5 min.
-    expect(hibernator.isHibernating(PTY)).toBe(true)
+    expect(hibernator.isHibernating(PTY)).toBe(false)
+    expect(hibernator.wasHibernatedExit(PTY)).toBe(false)
     // A única escrita foi o /exit: nem \x15 (Ctrl-U), nem \x03, nem limpeza de input.
     // O hibernador não tem dep de kill: a sessão segue viva.
     expect(writes).toEqual([`${PTY}:/exit`])
-    await vi.advanceTimersByTimeAsync(EXIT_MARKER_TTL_MS - EXIT_TIMEOUT_MS)
-    expect(hibernator.isHibernating(PTY)).toBe(false)
-    // Exit depois de o marcador expirar não vira hibernada: a pane fecha normal.
-    expect(hibernator.onExit(PTY)).toBeNull()
-    expect(hibernator.getStats().hibernated).toBe(0)
   })
 
-  it('claude lento: exit aos 45s (depois do exit-timeout) → hibernated', async () => {
+  it('claude lento: exit aos 45s (depois do exit-timeout) → exit comum', async () => {
     const { hibernator, exit, registered } = setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
     await vi.advanceTimersByTimeAsync(45_000)
     expect(hibernator.getStats().refused['exit-timeout']).toBe(1)
-    expect(exit()).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: PANE })
-    expect(hibernator.getStats().hibernated).toBe(1)
-    expect(registered).toEqual([{ cc: CC, paneId: PANE }])
-  })
-
-  it('input do usuário depois da entrega, depois exit → exit normal', async () => {
-    const { hibernator, exit, warnings, registered } = setup()
-    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
-    // Foco/relatórios do terminal não são o usuário: o marcador fica.
-    hibernator.onUserInput(PTY, '\x1b[I')
-    hibernator.onUserInput(PTY, '\x1b[O\x1b[12;40R')
-    expect(hibernator.isHibernating(PTY)).toBe(true)
-    hibernator.onUserInput(PTY, 'a')
-    expect(hibernator.isHibernating(PTY)).toBe(false)
-    expect(warnings).toContainEqual({ event: 'hibernate_cancelled_by_input', sessionId: PTY })
     expect(exit()).toBeNull()
     expect(hibernator.getStats().hibernated).toBe(0)
     expect(registered).toEqual([])
   })
 
-  it('input depois do exit-timeout também desfaz o marcador', async () => {
+  it('aba fechada pelo X com o /exit em curso → exit comum, sem dormant', async () => {
+    const { hibernator, exit, registered, warnings } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
+    hibernator.onPaneClosed(PTY)
+    expect(warnings).toContainEqual({ event: 'hibernate_cancelled_by_close', sessionId: PTY })
+    expect(exit()).toBeNull()
+    expect(hibernator.getStats().hibernated).toBe(0)
+    expect(registered).toEqual([])
+  })
+
+  it('input depois do exit-timeout vai direto ao PTY (a sessão está viva)', async () => {
     const { hibernator, exit } = setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
     await vi.advanceTimersByTimeAsync(40_000)
-    hibernator.onUserInput(PTY, 'oi\r')
+    expect(hibernator.onUserInput(PTY, 'oi\r')).toBe(false)
     expect(exit()).toBeNull()
     expect(hibernator.getStats().hibernated).toBe(0)
   })
 })
 
+describe('input do app depois do /exit entregue (sessions:write)', () => {
+  it('não chega ao PTY que sai; a sessão hiberna e o texto chega cru na acordada', async () => {
+    const { queue, hibernator, writes, exit, registered, wakeRequests } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
+    // Foco/relatórios do terminal não são o usuário: passam e o marcador fica.
+    expect(hibernator.onUserInput(PTY, '\x1b[I')).toBe(false)
+    expect(hibernator.onUserInput(PTY, '\x1b[O\x1b[12;40R')).toBe(false)
+    // O envio do Composer: bracketed-paste do texto, depois o \r que submete.
+    const composer = '\x1b[200~revisa o PR\x1b[201~'
+    expect(hibernator.onUserInput(PTY, composer)).toBe(true)
+    expect(hibernator.onUserInput(PTY, '\r')).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hibernator.isHibernating(PTY)).toBe(true)
+    expect(writes).toEqual([`${PTY}:/exit`])
+    // Um item só, com o texto acumulado.
+    expect(queue.snapshot().items.map((i) => i.text)).toEqual([`${composer}\r`])
+
+    expect(exit()).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: PANE })
+    expect(hibernator.getStats().hibernated).toBe(1)
+    expect(registered).toEqual([{ cc: CC, paneId: PANE }])
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wakeRequests).toEqual([CC])
+    expect(writes).toEqual([`${PTY}:/exit`, `${WOKEN}:raw:${composer}\r`])
+    expect(queue.snapshot().counters.sessionGone).toBe(0)
+    queue.dispose()
+  })
+
+  it('write que chega enquanto o item segurado ainda está sendo criado entra no mesmo item', async () => {
+    const { queue, hibernator, writes, exit } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
+    // Os dois na mesma volta do event loop: o send do primeiro ainda relê a tela.
+    hibernator.onUserInput(PTY, 'a')
+    hibernator.onUserInput(PTY, 'b')
+    await vi.advanceTimersByTimeAsync(0)
+    hibernator.onUserInput(PTY, 'c')
+    expect(queue.snapshot().items.map((i) => i.text)).toEqual(['abc'])
+    exit()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(writes).toEqual([`${PTY}:/exit`, `${WOKEN}:raw:abc`])
+    queue.dispose()
+  })
+
+  it('exit-timeout com input segurado → o texto é entregue na própria sessão viva', async () => {
+    const { queue, hibernator, writes, state } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
+    hibernator.onUserInput(PTY, 'oi\r')
+    await vi.advanceTimersByTimeAsync(EXIT_TIMEOUT_MS)
+    expect(hibernator.isHibernating(PTY)).toBe(false)
+    // O poll da fila acha a sessão ociosa (o fim de turno do /exit nunca veio).
+    state.now += EXIT_TIMEOUT_MS
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(writes).toEqual([`${PTY}:/exit`, `${PTY}:raw:oi\r`])
+    queue.dispose()
+  })
+})
+
+describe('corrida entre tecla e /exit', () => {
+  it('tecla digitada durante a releitura da tela → aborta o /exit, guard-held', async () => {
+    const { queue, hibernator, writes, state, warnings } = setup()
+    // O eco ainda não voltou: a tela relida mostra a caixa limpa.
+    state.duringScreen = () => {
+      expect(hibernator.onUserInput(PTY, 'a')).toBe(false)
+    }
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(false)
+    expect(writes).toEqual([])
+    expect(queue.snapshot().items).toEqual([])
+    expect(hibernator.getStats().refused['guard-held']).toBe(1)
+    expect(hibernator.isHibernating(PTY)).toBe(false)
+    expect(warnings).toContainEqual({ event: 'hibernate_exit_aborted_by_input', sessionId: PTY })
+    expect(hibernator.onExit(PTY)).toBeNull()
+  })
+
+  it('o espelho mostra input-dirty no instante do write → aborta o /exit', async () => {
+    const { hibernator, writes, state } = setup()
+    state.duringScreen = () => {
+      state.inputDirtyNow = true
+    }
+    expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(false)
+    expect(writes).toEqual([])
+    expect(hibernator.getStats().refused['guard-held']).toBe(1)
+  })
+})
+
 describe('mensagem que chega com o /exit em voo', () => {
-  it('agent_ask enfileirado entre a entrega e a saída → reentregue na sessão acordada', async () => {
+  it.each([
+    ['claude saindo (working)', 'working' as const, 'on-idle' as const],
+    // O arquivo de status ainda diz idle: sem isHibernating a fila entregaria.
+    ['status ainda idle', 'idle' as const, 'on-idle' as const],
+    ['"enviar agora"', 'idle' as const, 'now' as const],
+  ])('agent_ask entre a entrega e a saída (%s) → reentregue na acordada', async (_n, st, when) => {
     const { queue, hibernator, writes, snapshots, state, exit, wakeRequests, wakeFailures } =
       setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
-    // O claude começou a sair: a próxima mensagem fica na fila (espera o turno).
-    state.status = 'working'
-    const sent = await queue.send({ sessionId: PTY, text: 'pergunta do agente', when: 'on-idle' })
+    state.status = st
+    const sent = await queue.send({ sessionId: PTY, text: 'pergunta do agente', when })
     expect(sent).toMatchObject({ ok: true, delivered: false })
+    expect(writes).toEqual([`${PTY}:/exit`])
     const queuedId = sent.ok && !sent.delivered ? sent.queued.id : ''
     expect(exit()).toMatchObject({ sessionId: PTY, ccSessionId: CC })
     // A sessão acordada fica ociosa: a fila entrega o MESMO item nela.

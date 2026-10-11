@@ -1530,7 +1530,9 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
-    getIdleHibernator()?.onUserInput(sessionId, data)
+    // Com o /exit da hibernação já escrito, o texto vai para a fila e chega na
+    // sessão acordada; escrito aqui, cairia num claude saindo.
+    if (getIdleHibernator()?.onUserInput(sessionId, data)) return
     ptyManager.write(sessionId, data)
   })
 

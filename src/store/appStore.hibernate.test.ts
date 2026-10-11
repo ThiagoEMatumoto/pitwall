@@ -11,6 +11,7 @@ const calls = {
   dormantSync: [] as { ccSessionId: string; paneId: string }[][],
   kill: [] as string[],
   paneCheck: [] as { requestId: string; paneId: string | null }[],
+  paneClosed: [] as string[],
 }
 type HibernatedEvent = { sessionId: string; ccSessionId: string; paneId: string | null }
 let hibernatedHandler: ((e: HibernatedEvent) => void) | null = null
@@ -50,6 +51,10 @@ const sessionsImpl: Record<string, (...args: never[]) => unknown> = {
   },
   paneCheckResult: (r: { requestId: string; paneId: string | null }) => {
     calls.paneCheck.push(r)
+    return Promise.resolve()
+  },
+  paneClosed: (id: string) => {
+    calls.paneClosed.push(id)
     return Promise.resolve()
   },
   onExit: (h: (e: { sessionId: string; exitCode: number | null }) => void) => {
@@ -122,6 +127,7 @@ beforeEach(async () => {
   calls.dormantSync = []
   calls.kill = []
   calls.paneCheck = []
+  calls.paneClosed = []
   liveList = []
   useToastStore.setState({ toasts: [] })
   useAppStore.setState({
@@ -231,6 +237,22 @@ describe('sessions:hibernated', () => {
     await flush()
     const bg = useAppStore.getState().panes.find((p) => p.session.ccSessionId === 'cc-bg')!
     expect(bg).toMatchObject({ dormant: true, dormantReason: 'hibernated', repo: null })
+  })
+})
+
+// Fechar pelo X avisa o main: um /exit da hibernação em curso vira exit comum em
+// vez de recriar a aba que o usuário acabou de fechar.
+describe('closePane avisa o main', () => {
+  it('aba acordada → sessions:pane-closed com o id da PTY', () => {
+    useAppStore.getState().closePane('pane-a')
+    expect(calls.paneClosed).toEqual(['sess-a'])
+  })
+
+  it('aba dormindo não tem PTY → não avisa', async () => {
+    hibernatedHandler!({ sessionId: 'sess-a', ccSessionId: 'cc-a', paneId: 'pane-a' })
+    await flush()
+    useAppStore.getState().closePane('pane-a')
+    expect(calls.paneClosed).toEqual([])
   })
 })
 

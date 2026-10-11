@@ -20,10 +20,9 @@ import type { ProcTreeVerdict } from './proc-tree'
 import type { TranscriptVerdict } from './schedule-scan'
 
 export const HIBERNATE_TICK_MS = 60_000
+// O marcador cai aqui: um exit depois disso é um exit comum (o claude que não saiu
+// em 30s pode sair por qualquer motivo, e só o /exit entregue conta como hibernação).
 export const EXIT_TIMEOUT_MS = 30_000
-// Depois do exit-timeout o /exit continua entregue: um claude lento que sai aos
-// 45s ainda hibernou. O marcador só cai no pty:exit, no input do usuário ou aqui.
-export const EXIT_MARKER_TTL_MS = 5 * 60_000
 // O exit da PTY chega a dois ouvintes (este e a PromptQueue) sem ordem garantida:
 // a fila pergunta wasHibernatedExit depois que este já consumiu o marcador.
 const RECENT_EXIT_MS = 60_000
@@ -77,10 +76,11 @@ export interface IdleHibernatorDeps {
   procTree(pid: number): ProcTreeVerdict
   send(input: SendPromptInput): Promise<SendPromptResult>
   cancel(queueId: string): void
+  // Coalescing do input segurado: o item da fila já criado recebe o texto acumulado.
+  replaceText(queueId: string, text: string): boolean
   warn(event: Record<string, unknown>): void
   now?(): number
   exitTimeoutMs?: number
-  exitMarkerTtlMs?: number
   tickMs?: number
 }
 
@@ -96,10 +96,17 @@ function emptyRefusals(): Record<HibernateRefusal, number> {
 interface Pending {
   ccSessionId: string
   paneId: string | null
-  // A fila escreveu o /exit. Antes disso, input do usuário não desfaz nada.
+  // A fila escreveu o /exit. Daqui até o exit, todo write do app é segurado.
   delivered: boolean
+  // O usuário escreveu no PTY antes de o /exit sair: a caixa pode ter texto cujo
+  // eco a tela relida ainda não mostrou, e o /exit seria colado depois dele.
+  inputSeen: boolean
+  // Bytes segurados depois do /exit, reentregues crus na sessão acordada por um
+  // único item da fila (queueId), atualizado por replaceText a cada write novo.
+  held: string
+  queueId: string | null
+  holding: boolean
   timer: NodeJS.Timeout | null
-  expireTimer: NodeJS.Timeout | null
 }
 
 export class IdleHibernator {
@@ -126,8 +133,28 @@ export class IdleHibernator {
     return { ...this.stats, refused: { ...this.stats.refused } }
   }
 
+  // O /exit já foi escrito e o exit ainda não veio: qualquer escrita agora cairia
+  // num claude saindo. A fila e o sessions:write seguram até o wake.
   isHibernating(sessionId: string): boolean {
-    return this.pending.has(sessionId)
+    return this.pending.get(sessionId)?.delivered === true
+  }
+
+  // A fila chama logo antes de qualquer write no PTY. false = não escreve agora (o
+  // item segue na fila). Para o /exit da hibernação é a última releitura do input:
+  // uma tecla digitada durante a releitura da tela ainda não ecoou, e o /exit
+  // seria submetido junto com ela. Escrito o /exit, o marcador vira delivered aqui,
+  // sem esperar o send devolver.
+  beforeWrite(sessionId: string, text: string, inputDirty: boolean): boolean {
+    const pending = this.pending.get(sessionId)
+    if (!pending) return true
+    if (pending.delivered) return false
+    if (text !== EXIT_COMMAND) return true
+    if (pending.inputSeen || inputDirty) {
+      this.deps.warn({ event: 'hibernate_exit_aborted_by_input', sessionId })
+      return false
+    }
+    pending.delivered = true
+    return true
   }
 
   // Minutos efetivos: 0 se qualquer uma das duas prefs estiver desligada.
@@ -166,7 +193,7 @@ export class IdleHibernator {
 
   private clearTimers(p: Pending): void {
     if (p.timer) clearTimeout(p.timer)
-    if (p.expireTimer) clearTimeout(p.expireTimer)
+    p.timer = null
   }
 
   async tick(): Promise<void> {
@@ -244,8 +271,11 @@ export class IdleHibernator {
       ccSessionId: c.ccSessionId,
       paneId,
       delivered: false,
+      inputSeen: false,
+      held: '',
+      queueId: null,
+      holding: false,
       timer: null,
-      expireTimer: null,
     }
     this.pending.set(c.sessionId, pending)
     let sent: SendPromptResult
@@ -272,17 +302,13 @@ export class IdleHibernator {
     pending.timer = setTimeout(() => {
       pending.timer = null
       if (this.pending.get(c.sessionId) !== pending) return
-      // Conta, mas não esquece: o claude ainda pode sair com o /exit entregue.
+      // A sessão continua viva: o input segurado segue no item da fila, que volta a
+      // entregar nela mesma agora que isHibernating é false.
+      this.forget(c.sessionId, pending)
       this.refuse('exit-timeout')
       this.deps.warn({ event: 'hibernate_exit_timeout', sessionId: c.sessionId })
     }, this.deps.exitTimeoutMs ?? EXIT_TIMEOUT_MS)
     pending.timer.unref?.()
-    pending.expireTimer = setTimeout(() => {
-      if (this.pending.get(c.sessionId) !== pending) return
-      this.forget(c.sessionId, pending)
-      this.deps.warn({ event: 'hibernate_exit_marker_expired', sessionId: c.sessionId })
-    }, this.deps.exitMarkerTtlMs ?? EXIT_MARKER_TTL_MS)
-    pending.expireTimer.unref?.()
     return true
   }
 
@@ -291,13 +317,58 @@ export class IdleHibernator {
     this.pending.delete(sessionId)
   }
 
-  // O app escreveu no PTY (input do usuário) depois do /exit entregue: quem sair
-  // daqui em diante saiu por vontade do usuário, não por hibernação.
-  onUserInput(sessionId: string, data: string): void {
+  // Write do app no PTY (sessions:write). true = segurado: o chamador NÃO escreve.
+  // Antes do /exit sair, só anota (o beforeWrite aborta o /exit). Depois, o exit que
+  // vier ainda é o do /exit, e o texto iria para um claude saindo: vai para a fila
+  // e é reentregue cru na sessão acordada.
+  onUserInput(sessionId: string, data: string): boolean {
     const pending = this.pending.get(sessionId)
-    if (!pending?.delivered || isTerminalReport(data)) return
+    if (!pending || isTerminalReport(data)) return false
+    if (!pending.delivered) {
+      pending.inputSeen = true
+      return false
+    }
+    pending.held += data
+    this.flushHeld(sessionId, pending)
+    return true
+  }
+
+  private flushHeld(sessionId: string, pending: Pending): void {
+    if (pending.queueId) {
+      if (!this.deps.replaceText(pending.queueId, pending.held)) {
+        this.deps.warn({ event: 'hibernate_held_input_lost', sessionId, reason: 'item-gone' })
+      }
+      return
+    }
+    // O send ainda não devolveu o id: o .then leva o que se acumulou até lá.
+    if (pending.holding) return
+    pending.holding = true
+    const text = pending.held
+    void this.deps
+      .send({ sessionId, text, when: 'on-idle', raw: true })
+      .catch((err: unknown): SendPromptResult => {
+        this.deps.warn({ event: 'hibernate_held_send_failed', sessionId, error: String(err) })
+        return { ok: false, error: 'not-running' }
+      })
+      .then((sent) => {
+        pending.holding = false
+        if (!sent.ok) {
+          this.deps.warn({ event: 'hibernate_held_input_lost', sessionId, reason: sent.error })
+          return
+        }
+        if (sent.delivered) return
+        pending.queueId = sent.queued.id
+        if (pending.held !== text) this.flushHeld(sessionId, pending)
+      })
+  }
+
+  // A aba foi fechada pelo X com o /exit em curso: quem fechou não quer a pane de
+  // volta, então o exit que vier é comum (sem dormant, sem contar hibernação).
+  onPaneClosed(sessionId: string): void {
+    const pending = this.pending.get(sessionId)
+    if (!pending) return
     this.forget(sessionId, pending)
-    this.deps.warn({ event: 'hibernate_cancelled_by_input', sessionId })
+    this.deps.warn({ event: 'hibernate_cancelled_by_close', sessionId })
   }
 
   // O exit desta PTY é (ou acabou de ser) o da hibernação. Vale antes e depois

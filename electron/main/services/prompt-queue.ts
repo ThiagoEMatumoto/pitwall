@@ -37,7 +37,8 @@ export interface PromptQueueDeps {
   // false = o status vem só da PTY (Codex): nunca diz 'waiting', então não prova nada.
   nativeStatus(sessionId: string): boolean
   handoffAsking(sessionId: string): boolean
-  write(sessionId: string, text: string): void
+  // raw = o texto já são os bytes do PTY (input segurado na hibernação).
+  write(sessionId: string, text: string, raw: boolean): void
   // Escrita de fato no PTY (agora ou ao sair da fila) — nunca no enfileiramento.
   delivered?(sessionId: string, fromSessionId: string | undefined): void
   emit(snapshot: PromptQueueSnapshot): void
@@ -47,6 +48,12 @@ export interface PromptQueueDeps {
   // sessão acordada para os itens seguirem nela, ou null se não acordou. null aqui
   // (em vez da promessa) = saída comum, os itens terminam como session-gone.
   redirectOnExit?(sessionId: string): Promise<string | null> | null
+  // O /exit da hibernação já foi escrito e a PTY ainda não saiu: nada é escrito nela,
+  // nem 'now'. Os itens esperam o exit e seguem para a sessão acordada.
+  isHibernating?(sessionId: string): boolean
+  // Última palavra antes do write (síncrona, logo antes de escrever). false = segura
+  // o item na fila.
+  beforeWrite?(sessionId: string, text: string): boolean
 }
 
 type Verdict =
@@ -107,6 +114,7 @@ interface Item extends QueuedPrompt {
   holding: boolean
   fromSessionId?: string
   bypassAttention?: boolean
+  raw?: boolean
   // Como saiu da fila: o send() que a criou lê isto depois dos awaits.
   outcome?: PromptQueueEventKind
 }
@@ -148,7 +156,7 @@ export class PromptQueue {
   snapshot(): PromptQueueSnapshot {
     return {
       items: this.items.map(
-        ({ holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...q }) => q,
+        ({ holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, raw: _r, ...q }) => q,
       ),
       counters: { ...this.counters },
       lastEvent: this.lastEvent,
@@ -156,12 +164,15 @@ export class PromptQueue {
   }
 
   async send(input: SendPromptInput): Promise<SendPromptResult> {
-    const { sessionId, text, when, fromSessionId, bypassAttention } = input
+    const { sessionId, text, when, fromSessionId, bypassAttention, raw } = input
     if (!this.deps.isRunning(sessionId)) return { ok: false, error: 'not-running' }
     const scan = await this.deps.screen(sessionId)
-    if (when === 'now') return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
-    if (!scan) return { ok: false, error: 'no-screen' }
-    const item = this.enqueue(sessionId, text, fromSessionId, bypassAttention)
+    if (when === 'now' && !this.deps.isHibernating?.(sessionId)) {
+      return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
+    }
+    // Hibernando não há tela que importe: o destino é a sessão acordada.
+    if (!scan && !this.deps.isHibernating?.(sessionId)) return { ok: false, error: 'no-screen' }
+    const item = this.enqueue(sessionId, text, fromSessionId, bypassAttention, raw)
     const isHead = this.items.find((i) => i.sessionId === sessionId) === item
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
@@ -171,7 +182,14 @@ export class PromptQueue {
     if (item.outcome === 'delivered') return { ok: true, delivered: true }
     if (item.outcome === 'cancelled') return { ok: false, error: 'cancelled' }
     if (item.outcome) return { ok: false, error: 'not-running' }
-    const { holding: _h, outcome: _o, fromSessionId: _f, bypassAttention: _b, ...rest } = item
+    const {
+      holding: _h,
+      outcome: _o,
+      fromSessionId: _f,
+      bypassAttention: _b,
+      raw: _r,
+      ...rest
+    } = item
     return { ok: true, delivered: false, queued: rest }
   }
 
@@ -192,7 +210,7 @@ export class PromptQueue {
       this.countRefusal(sessionId, verdict)
       return { ok: false, error }
     }
-    this.write(sessionId, text, fromSessionId)
+    this.write(sessionId, text, false, fromSessionId)
     return { ok: true, delivered: true }
   }
 
@@ -276,6 +294,7 @@ export class PromptQueue {
     text: string,
     fromSessionId?: string,
     bypassAttention?: boolean,
+    raw?: boolean,
   ): Item {
     const createdAt = this.now()
     const item: Item = {
@@ -289,6 +308,7 @@ export class PromptQueue {
       holding: false,
       fromSessionId,
       bypassAttention,
+      ...(raw ? { raw } : {}),
     }
     this.items = [...this.items, item]
     this.ensurePoll()
@@ -296,8 +316,8 @@ export class PromptQueue {
     return item
   }
 
-  private write(sessionId: string, text: string, fromSessionId?: string): void {
-    this.deps.write(sessionId, text)
+  private write(sessionId: string, text: string, raw: boolean, fromSessionId?: string): void {
+    this.deps.write(sessionId, text, raw)
     this.awaitingWork.set(sessionId, this.now())
     this.deps.delivered?.(sessionId, fromSessionId)
   }
@@ -310,6 +330,7 @@ export class PromptQueue {
     if (since != null && this.now() - since < AWAIT_WORK_MS) return false
     const head = this.items.find((i) => i.sessionId === sessionId)
     if (!head) return false
+    if (this.deps.isHibernating?.(sessionId)) return false
     this.delivering.add(sessionId)
     try {
       if (!this.deps.isRunning(sessionId)) {
@@ -334,7 +355,10 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
-      this.write(sessionId, head.text, head.fromSessionId)
+      // O /exit da hibernação pode ter saído durante a releitura da tela.
+      if (this.deps.isHibernating?.(sessionId)) return false
+      if (this.deps.beforeWrite && !this.deps.beforeWrite(sessionId, head.text)) return false
+      this.write(sessionId, head.text, head.raw === true, head.fromSessionId)
       this.finish(head, 'delivered')
       return true
     } finally {

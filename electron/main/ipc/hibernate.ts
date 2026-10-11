@@ -105,6 +105,7 @@ export function createIdleHibernator(): IdleHibernator {
     cancel: (id) => {
       promptQueue.cancel(id)
     },
+    replaceText: (id, text) => promptQueue.replaceText(id, text),
     warn: (event) => console.warn(JSON.stringify(event)),
   })
 }
@@ -127,5 +128,8 @@ export function registerHibernateIpc(): void {
   ipcMain.handle('sessions:hibernate-stats', (): HibernateStatsView => hibernateStatsView())
   ipcMain.handle('sessions:pane-check-result', (_e, raw: unknown) => {
     paneConfirmer.onResult(paneCheckResultSchema.parse(raw))
+  })
+  ipcMain.handle('sessions:pane-closed', (_e, raw: unknown) => {
+    getIdleHibernator()?.onPaneClosed(z.string().min(1).parse(raw))
   })
 }

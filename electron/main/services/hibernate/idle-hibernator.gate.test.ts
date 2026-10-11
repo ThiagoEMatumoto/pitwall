@@ -137,6 +137,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     procTree: () => ({ ok: true }),
     send: async () => ({ ok: true, delivered: true }),
     cancel: () => {},
+    replaceText: () => true,
     warn: () => {},
     now: () => NOW,
     ...over,

@@ -961,6 +961,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ panes: s.panes.filter((p) => p.paneId !== paneId) }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
+    if (closed && !closed.dormant) void sessionsApi.paneClosed(closed.session.id)
     // Dormindo não tem PTY em background: fechar é perder a aba de vez. O desfazer
     // devolve a MESMA pane (paneId e snapshot), como o do endSession.
     if (closed?.dormant) {

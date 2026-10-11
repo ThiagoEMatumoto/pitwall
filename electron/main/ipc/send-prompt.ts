@@ -153,7 +153,7 @@ export const promptQueue = new PromptQueue({
     const h = getByChildSession(id)
     return h ? handoffAsking(h) : false
   },
-  write: (id, text) => injectIntoSession(id, text),
+  write: (id, text, raw) => (raw ? ptyManager.write(id, text) : injectIntoSession(id, text)),
   // Origem que já morreu não tem cartão vivo no mapa para a bolinha sair.
   delivered: (to, from) => {
     if (from && ptyManager.isRunning(from)) {
@@ -178,6 +178,12 @@ export const promptQueue = new PromptQueue({
       ccOf,
       wakeFailed: (sid, error) => promptQueue.recordWakeFailed(sid, error),
     })(id),
+  isHibernating: (id) => getIdleHibernator()?.isHibernating(id) ?? false,
+  // O estado do input relido do espelho no instante do write: o eco de uma tecla
+  // pode ter chegado depois da releitura que deu 'deliver'.
+  beforeWrite: (id, text) =>
+    getIdleHibernator()?.beforeWrite(id, text, tuiMenuWatch.current(id)?.inputDirty === true) ??
+    true,
 })
 
 const tailFeed = new ScreenTailFeed({

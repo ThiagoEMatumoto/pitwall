@@ -202,6 +202,7 @@ const api: Api = {
     onPaneCheckRequest: (handler) =>
       subscribe<PaneCheckRequest>('sessions:pane-check-request', handler),
     paneCheckResult: (result) => invoke('sessions:pane-check-result', result),
+    paneClosed: (sessionId) => invoke('sessions:pane-closed', sessionId),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),
