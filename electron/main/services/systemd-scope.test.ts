@@ -381,6 +381,13 @@ describe('teto de memória por sessão', () => {
     expect(args.slice(sep + 1)).toEqual(['/usr/bin/zsh', '-l'])
   })
 
+  it('com teto de memória, OOMPolicy=continue: o kernel matar um processo não para o scope', () => {
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const sep = args.indexOf('--')
+    const props = args.slice(0, sep)
+    expect(props[props.indexOf('OOMPolicy=continue') - 1]).toBe('-p')
+  })
+
   it('sem limites, o argv é o de antes', () => {
     expect(wrapInScope('sh', [], 'u').args).not.toContain('-p')
   })
