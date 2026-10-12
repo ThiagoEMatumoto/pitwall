@@ -60,6 +60,10 @@ export const DESTRUCTIVE_DENYLIST = [
   'Bash(git push --force:*)',
   'Bash(git push -f:*)',
   'Bash(git clean:*)',
+  // Matar processo por padrão (`pkill -f cat`) casa a cmdline de QUALQUER processo
+  // do usuário, inclusive as outras sessões do Pitwall.
+  'Bash(pkill:*)',
+  'Bash(killall:*)',
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +376,7 @@ export const HANDOFF_CHILD_DENY = [
   'Bash(gcloud * --impersonate-service-account*)',
 ]
 
-// Settings entregues via `--settings <json-inline>` a CADA sessão-filha de
+// Settings entregues via `--settings <arquivo>` (session-settings.ts) a CADA sessão-filha de
 // handoff — NUNCA global. `crossSessionInbound: accept` deixa a filha RECEBER
 // SendMessage do orquestrador; sem isso a mensagem fica `held` silenciosamente e
 // o canal peer parece funcionar sem funcionar. Global afetaria todas as sessões
@@ -400,19 +404,26 @@ export const HANDOFF_CHILD_PLAN_DENY = [
 
 // Settings da filha a partir do --permission-mode resolvido. Só 'plan' muda a
 // política; o resto recebe a política comum.
-export function handoffChildSettingsJson(permissionMode: string | null): string {
+export function handoffChildSettings(permissionMode: string | null): {
+  crossSessionInbound: string
+  permissions: { allow: string[]; ask: string[]; deny: string[] }
+} {
   const deny =
     permissionMode === 'plan'
       ? Array.from(new Set([...HANDOFF_CHILD_DENY, ...HANDOFF_CHILD_PLAN_DENY]))
       : HANDOFF_CHILD_DENY
-  return JSON.stringify({
+  return {
     crossSessionInbound: 'accept',
     permissions: {
-      allow: HANDOFF_CHILD_ALLOW,
-      ask: HANDOFF_CHILD_ASK,
-      deny,
+      allow: [...HANDOFF_CHILD_ALLOW],
+      ask: [...HANDOFF_CHILD_ASK],
+      deny: [...deny],
     },
-  })
+  }
+}
+
+export function handoffChildSettingsJson(permissionMode: string | null): string {
+  return JSON.stringify(handoffChildSettings(permissionMode))
 }
 
 export const HANDOFF_CHILD_SETTINGS_JSON = handoffChildSettingsJson(null)
