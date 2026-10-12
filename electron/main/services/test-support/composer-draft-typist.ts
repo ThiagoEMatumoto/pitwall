@@ -5,7 +5,8 @@
 // mudanças SEM flush (o debounce de 500ms fica pendente) e avisa:
 //  - 'keys': uma mudança por tick, como teclas; avisa no mesmo tick da última;
 //  - 'burst': as N no mesmo tick (coalescidas no main); avisa no tick seguinte.
-// O pai manda SIGKILL ~60ms depois do aviso (passada a janela de coalescência).
+// O pai manda SIGKILL ~300ms depois do aviso: passada a janela de coalescência
+// (100ms), antes do debounce FULL (500ms).
 import { openAppDb } from '../db'
 import { getComposerDraft } from '../composer-drafts'
 import { createDraftWriteThrough } from '../draft-write-through'

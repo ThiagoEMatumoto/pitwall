@@ -9,7 +9,7 @@ vi.mock('electron', () => ({ app: {} }))
 
 const { openAppDb } = await import('./db')
 const { parseVersionedDraftInput } = await import('./composer-drafts')
-const { createDraftWriteThrough, DRAFT_COALESCE_MS } = await import('./draft-write-through')
+const { createDraftWriteThrough } = await import('./draft-write-through')
 
 // Custo do write-through na thread do main: `DRAFT_BENCH_DIR=<dir em disco real>
 // npx vitest run electron/main/services/draft-write-through.bench.test.ts`. O
@@ -36,19 +36,23 @@ const nextTick = () => new Promise((r) => setImmediate(r))
 function typist(dir: string, size: number) {
   const db = openAppDb(join(dir, `app-${size}-${Math.random().toString(36).slice(2)}.db`))
   let commits = 0
-  // Commits que saem quando a janela fecha: rodam no main, fora do handler.
-  const windowClose: number[] = []
+  // Flushes agendados: rodam no main, fora do handler (o agendador padrão,
+  // instrumentado).
+  const flushes: number[] = []
   const main = createDraftWriteThrough(
     () => {
       commits++
       return db
     },
-    (fn) =>
-      setTimeout(() => {
+    (fn, delayMs) => {
+      const run = () => {
         const t0 = performance.now()
         fn()
-        windowClose.push(performance.now() - t0)
-      }, DRAFT_COALESCE_MS),
+        flushes.push(performance.now() - t0)
+      }
+      if (delayMs <= 0) setImmediate(run)
+      else setTimeout(run, delayMs)
+    },
   )
   let text = 'x'.repeat(size)
   let seq = 0
@@ -69,7 +73,7 @@ function typist(dir: string, size: number) {
       main.write(parseVersionedDraftInput(raw))
       handler.push(performance.now() - t0)
     },
-    stats: () => ({ handler, commits, windowClose }),
+    stats: () => ({ handler, commits, flushes }),
     close() {
       main.drain()
       db.close()
@@ -122,12 +126,13 @@ describe.runIf(!!benchDir)('bench do write-through no main', () => {
         for (const cadence of ['tick', 30, 50] as const) {
           const t = typist(dir, size)
           await typeKeys(t, cadence)
-          const { handler, commits, windowClose } = t.stats()
+          const { handler, commits, flushes } = t.stats()
           t.close()
           const rate = cadence === 'tick' ? '1/tick' : `${Math.round(1000 / cadence)}/s`
           console.info(
             `[bench] ${label} ${rate} handler (${KEYS}x): ${fmt(handler)} commits=${commits} ` +
-              `main total=${(sum(handler) + sum(windowClose)).toFixed(0)}ms`,
+              `flush ${flushes.length ? fmt(flushes) : '-'} ` +
+              `main total=${(sum(handler) + sum(flushes)).toFixed(0)}ms`,
           )
         }
       }
@@ -137,10 +142,11 @@ describe.runIf(!!benchDir)('bench do write-through no main', () => {
       for (const [label, size] of SIZES) {
         const t = typist(dir, size)
         const typing = await pumpPty(() => t.key(), 50)
-        const { handler, commits } = t.stats()
+        const { handler, commits, flushes } = t.stats()
         t.close()
         console.info(
-          `[bench] PTY com digitação ${label} 20/s: ${pump(typing)} handler ${fmt(handler)} commits=${commits}/${handler.length}`,
+          `[bench] PTY com digitação ${label} 20/s: ${pump(typing)} handler ${fmt(handler)} ` +
+            `flush ${flushes.length ? fmt(flushes) : '-'} commits=${commits}/${handler.length}`,
         )
       }
     } finally {
