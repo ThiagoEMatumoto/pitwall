@@ -21,8 +21,9 @@ export interface LaunchOpts {
   advisorModel?: string | null
   systemPromptFilePath: string | null
   permissionMode?: string | null
-  disallowedTools?: string[] | null
-  settingsJson?: string | null
+  // Path do arquivo de settings da sessão (session-settings.ts): leva o denylist
+  // e a política da filha. NUNCA JSON inline — o argv é casado por `pkill -f`.
+  settingsFilePath?: string | null
   initialPrompt?: string | null
   // Instruções de sistema como TEXTO, para provider sem flag de arquivo (Codex:
   // developer_instructions). O claude usa systemPromptFilePath e ignora isto.

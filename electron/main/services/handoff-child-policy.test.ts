@@ -15,9 +15,10 @@ import {
   DESTRUCTIVE_DENYLIST,
   HANDOFF_CHILD_DENY,
   HANDOFF_CHILD_SETTINGS_JSON,
+  handoffChildSettings,
   resolveDisallowedTools,
 } from './spawn-flags'
-import { claudeProvider } from './providers/claude'
+import { buildSessionSettings } from './session-settings'
 
 type Decision = 'deny' | 'ask' | 'allow' | 'default'
 
@@ -227,22 +228,14 @@ describe('camada --disallowedTools da filha', () => {
     expect(DESTRUCTIVE_DENYLIST).toContain('Bash(rm:*)')
   })
 
-  it('o comando montado da filha não carrega git push:* nem rm:* em lugar nenhum', () => {
-    const cmd = claudeProvider.buildLaunch({
-      command: 'claude',
-      sessionId: '00000000-0000-4000-8000-000000000000',
-      name: 'handoff: x',
-      mcpConfigArg: '',
-      model: null,
-      systemPromptFilePath: null,
-      permissionMode: 'acceptEdits',
-      disallowedTools: childDisallowed,
-      settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
-    })
-    expect(cmd).toContain('--disallowedTools')
-    expect(cmd).not.toContain("'Bash(git push:*)'")
-    expect(cmd).not.toContain('"Bash(git push:*)"')
-    expect(cmd).not.toContain("'Bash(rm:*)'")
-    expect(cmd).toContain("'Bash(git push * main)'")
+  // O deny da filha (settings + --disallowedTools) agora é UM arquivo; o merge
+  // não pode reintroduzir `git push:*`/`rm:*`, que anulariam o allow/ask.
+  it('o settings montado da filha não carrega git push:* nem rm:* em lugar nenhum', () => {
+    const settings = buildSessionSettings(handoffChildSettings('acceptEdits'), childDisallowed)
+    const deny = settings?.permissions?.deny ?? []
+    expect(deny).not.toContain('Bash(git push:*)')
+    expect(deny).not.toContain('Bash(rm:*)')
+    expect(deny).toContain('Bash(git push * main)')
+    expect(deny).toEqual(expect.arrayContaining(childDisallowed))
   })
 })

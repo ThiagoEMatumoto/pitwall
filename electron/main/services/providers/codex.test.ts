@@ -70,8 +70,7 @@ describe('codexProvider.buildLaunch', () => {
       resume: true,
       effort: 'high',
       advisorModel: 'opus',
-      disallowedTools: ['Bash(rm:*)'],
-      settingsJson: '{"a":1}',
+      settingsFilePath: '/tmp/cm/session-settings/s1.json',
     })
     expect(cmd).toBe(codexProvider.buildLaunch(base))
   })

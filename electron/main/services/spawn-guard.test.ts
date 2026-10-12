@@ -15,7 +15,7 @@ import {
   resolvePermissionMode,
 } from './spawn-flags'
 import { getProvider, registeredProviderIds } from './providers/registry'
-import { shquote } from './providers/claude'
+import { buildSessionSettings } from './session-settings'
 import type { AgentProviderId } from '../../../shared/types/ipc'
 
 // Do registry: um provider novo entra aqui sozinho e tem de provar a trava.
@@ -24,14 +24,21 @@ const MODES: (string | null)[] = [...SPAWN_PERMISSION_MODES, null]
 // O claude em default/dontAsk/plan não age sozinho (pergunta, nega ou só lê).
 const CLAUDE_AUTONOMOUS = new Set(['acceptEdits', 'auto', 'bypassPermissions'])
 
-function autonomousLaunch(provider: AgentProviderId, rawMode: string | null): string | null {
+const SETTINGS_PATH = '/tmp/cm/session-settings/filha.json'
+
+// O denylist do claude vai no arquivo de settings (o argv só leva o path).
+function autonomousLaunch(
+  provider: AgentProviderId,
+  rawMode: string | null,
+): { cmd: string; deny: string[] } | null {
   const permissionMode = resolvePermissionMode(rawMode)
   try {
     assertAutonomousSpawnGuarded(provider, permissionMode, true)
   } catch {
     return null
   }
-  return getProvider(provider).buildLaunch({
+  const settings = buildSessionSettings(null, resolveDisallowedTools(permissionMode, null))
+  const cmd = getProvider(provider).buildLaunch({
     command: provider,
     sessionId: '11111111-1111-1111-1111-111111111111',
     name: 'filha',
@@ -39,19 +46,22 @@ function autonomousLaunch(provider: AgentProviderId, rawMode: string | null): st
     model: null,
     systemPromptFilePath: null,
     permissionMode,
-    disallowedTools: resolveDisallowedTools(permissionMode, null),
+    settingsFilePath: settings ? SETTINGS_PATH : null,
   })
+  return { cmd, deny: settings?.permissions?.deny ?? [] }
 }
 
 describe('spawn autônomo sempre sai com guard-rail', () => {
   for (const provider of PROVIDERS) {
     for (const mode of MODES) {
       it(`${provider} · ${mode ?? 'sem modo'}`, () => {
-        const cmd = autonomousLaunch(provider, mode)
-        if (cmd === null) return // recusado: nada sobe
+        const launch = autonomousLaunch(provider, mode)
+        if (launch === null) return // recusado: nada sobe
+        const { cmd, deny } = launch
         if (provider === 'claude') {
           if (!mode || !CLAUDE_AUTONOMOUS.has(mode)) return
-          for (const spec of DESTRUCTIVE_DENYLIST) expect(cmd).toContain(shquote(spec))
+          expect(cmd).toContain(`--settings '${SETTINGS_PATH}'`)
+          expect(deny).toEqual(expect.arrayContaining(DESTRUCTIVE_DENYLIST))
         } else {
           expect(cmd).toContain("-s 'read-only'")
         }

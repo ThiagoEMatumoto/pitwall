@@ -13,8 +13,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const seam = vi.hoisted(() => ({
   // Handlers registrados por registerSessionIpc (ipcMain.handle).
   handlers: new Map<string, (event: unknown, ...args: never[]) => unknown>(),
-  // PTYs disparadas: { sessionId, innerCmd }.
-  spawns: [] as Array<{ sessionId: string; innerCmd: string }>,
+  // PTYs disparadas: { sessionId, innerCmd, args (argv REAL do spawn) }, e se o
+  // arquivo de --settings já existia no disco no instante do spawn.
+  spawns: [] as Array<{
+    sessionId: string
+    innerCmd: string
+    args: string[]
+    settingsExistedAtSpawn: boolean | null
+  }>,
+  // Listeners de `exit` registrados no ptyManager (limpeza pós-PTY).
+  exitListeners: [] as Array<(e: { sessionId: string; exitCode: number }) => void>,
   // Linhas gravadas em `sessions` (args do INSERT).
   insertedSessionIds: [] as string[],
   // Configs MCP por sessão escritas/removidas.
@@ -65,9 +73,13 @@ vi.mock('../services/db', () => ({
     }),
   }),
 }))
-vi.mock('../services/pty-manager', () => ({
+vi.mock('../services/pty-manager', async () => {
+  const { existsSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+  return {
   ptyManager: {
-    on: () => {},
+    on: (event: string, fn: (e: { sessionId: string; exitCode: number }) => void) => {
+      if (event === 'exit') seam.exitListeners.push(fn)
+    },
     off: () => {},
     write: () => {},
     isRunning: (sessionId: string) => seam.liveSessionIds.includes(sessionId),
@@ -77,10 +89,18 @@ vi.mock('../services/pty-manager', () => ({
     getPid: () => null,
     sessionIdByPid: () => null,
     spawn: (opts: { sessionId: string; args: string[] }) => {
-      seam.spawns.push({ sessionId: opts.sessionId, innerCmd: opts.args.join(' ') })
+      const innerCmd = opts.args.join(' ')
+      const m = innerCmd.match(/--settings '([^']+)'/)
+      seam.spawns.push({
+        sessionId: opts.sessionId,
+        innerCmd,
+        args: [...opts.args],
+        settingsExistedAtSpawn: m ? existsSync(m[1]) : null,
+      })
     },
   },
-}))
+  }
+})
 vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
 vi.mock('../services/feature-store', () => ({ get: () => null, linkedObjectiveTitles: () => [] }))
 vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
@@ -135,7 +155,8 @@ import {
   resolveDisallowedTools,
   spawnSession,
 } from './sessions'
-import { HANDOFF_CHILD_SETTINGS_JSON } from '../services/spawn-flags'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { handoffChildSettings } from '../services/spawn-flags'
 import { buildHandoffAlias } from '../services/handoff/alias'
 
 describe('formatPtyInjection', () => {
@@ -234,36 +255,17 @@ describe('buildSpawnInnerCmd', () => {
     expect(buildSpawnInnerCmd(base)).not.toContain('--permission-mode')
   })
 
-  it('anexa --disallowedTools com cada spec quotado (denylist destrutivo)', () => {
-    const cmd = buildSpawnInnerCmd({
-      ...base,
-      disallowedTools: ['Bash(rm:*)', 'Bash(git push:*)'],
-    })
-    expect(cmd).toContain("--disallowedTools 'Bash(rm:*)' 'Bash(git push:*)'")
-  })
-
-  it('NÃO inclui --disallowedTools quando a lista é vazia/ausente', () => {
-    expect(buildSpawnInnerCmd({ ...base, disallowedTools: [] })).not.toContain('--disallowedTools')
-    expect(buildSpawnInnerCmd(base)).not.toContain('--disallowedTools')
-  })
-
-  it('anexa --settings com o JSON inline quotado (filha de handoff)', () => {
-    const cmd = buildSpawnInnerCmd({ ...base, settingsJson: HANDOFF_CHILD_SETTINGS_JSON })
-    expect(cmd).toContain(`--settings '${HANDOFF_CHILD_SETTINGS_JSON}'`)
-    expect(cmd).toContain('crossSessionInbound')
+  it('anexa --settings <path quotado> e nunca --disallowedTools', () => {
+    const cmd = buildSpawnInnerCmd({ ...base, settingsFilePath: '/tmp/a b/s.json' })
+    expect(cmd).toContain("--settings '/tmp/a b/s.json'")
+    expect(cmd).not.toContain('--disallowedTools')
   })
 
   // A filha nasce em acceptEdits, que só auto-aceita EDIÇÃO — sem esta política
-  // ela para a cada `rg`/`git`/`npm`. O allow/ask/deny viaja no MESMO --settings
-  // do crossSessionInbound: um argumento só, uma fonte só.
-  it('leva a política allow/ask/deny junto do crossSessionInbound no mesmo --settings', () => {
-    const cmd = buildSpawnInnerCmd({ ...base, settingsJson: HANDOFF_CHILD_SETTINGS_JSON })
-    const settingsArg = cmd.slice(cmd.indexOf("--settings '") + "--settings '".length)
-    const json = settingsArg.slice(0, settingsArg.indexOf("'"))
-    const parsed = JSON.parse(json) as {
-      crossSessionInbound: string
-      permissions: { allow: string[]; ask: string[]; deny: string[] }
-    }
+  // ela para a cada `rg`/`git`/`npm`. O allow/ask/deny viaja no MESMO settings
+  // do crossSessionInbound: um arquivo só, uma fonte só.
+  it('leva a política allow/ask/deny junto do crossSessionInbound no mesmo settings', () => {
+    const parsed = handoffChildSettings(null)
     expect(parsed.crossSessionInbound).toBe('accept')
     expect(parsed.permissions.allow).toContain('Bash(rg:*)')
     expect(parsed.permissions.allow).toContain('Bash(git status:*)')
@@ -280,7 +282,7 @@ describe('buildSpawnInnerCmd', () => {
 
   it('NÃO inclui --settings quando ausente/null (sessão normal, nada global)', () => {
     expect(buildSpawnInnerCmd(base)).not.toContain('--settings')
-    expect(buildSpawnInnerCmd({ ...base, settingsJson: null })).not.toContain('--settings')
+    expect(buildSpawnInnerCmd({ ...base, settingsFilePath: null })).not.toContain('--settings')
   })
 
   it('monta -n <alias> + --settings juntos, e o posicional segue por último', () => {
@@ -288,12 +290,12 @@ describe('buildSpawnInnerCmd', () => {
     const cmd = buildSpawnInnerCmd({
       ...base,
       name: alias,
-      settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
+      settingsFilePath: '/tmp/cm/settings.json',
       systemPromptFilePath: '/tmp/cm/handoff-1.md',
       initialPrompt: 'Comece a tarefa do handoff',
     })
     expect(cmd).toContain("-n 'mauricio-auth-refactor-v2'")
-    expect(cmd).toContain(`--settings '${HANDOFF_CHILD_SETTINGS_JSON}'`)
+    expect(cmd).toContain("--settings '/tmp/cm/settings.json'")
     // --settings precede o system-prompt-file e o posicional fecha o comando.
     expect(cmd.indexOf('--settings')).toBeLessThan(cmd.indexOf('--append-system-prompt-file'))
     expect(cmd.endsWith("'Comece a tarefa do handoff'")).toBe(true)
@@ -495,6 +497,106 @@ describe('carimbo de identidade no --mcp-config (3 call sites)', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+// Incidente: `pkill -f cat` de outra sessão matou sessões do Pitwall, porque o
+// argv do claude carregava o settings como JSON inline (`Bash(cat:*)`) e o
+// `--disallowedTools` com `Bash(rm:*)`/`Bash(git ...)`. `-f` casa a cmdline
+// inteira. Aqui o alvo é o argv REAL entregue ao ptyManager.spawn pelos call
+// sites de produção, e o arquivo REAL gravado pelo session-settings.
+describe('argv do spawn sem padrões de permissão (pkill -f)', () => {
+  const CC_SESSION_ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+
+  beforeEach(() => {
+    // exitListeners NÃO é zerado: o registerSessionIpc só anexa os listeners da
+    // PTY uma vez por módulo (listenersAttached).
+    seam.handlers.clear()
+    seam.spawns.length = 0
+    seam.insertedSessionIds.length = 0
+    seam.writtenSessionConfigs.length = 0
+    seam.removedSessionConfigs.length = 0
+    seam.runtime = { url: 'http://127.0.0.1:41956/mcp', token: 'tok' }
+    seam.transcriptPath = '/tmp/transcript.jsonl'
+    seam.liveSessionIds.length = 0
+    seam.childRow = { cc_session_id: CC_SESSION_ID, title: 'mauricio-tarefa' }
+    seam.handoff = {
+      id: 'h1',
+      status: 'interrupted',
+      mode: 'auto-edits',
+      childSessionId: 'child-1',
+      targetRepoId: 'r1',
+      featureId: null,
+    }
+    registerSessionIpc()
+  })
+
+  // Nenhum elemento do argv pode levar padrão de permissão nem JSON.
+  function expectCleanArgv(args: string[]): void {
+    for (const arg of args) {
+      expect(arg).not.toContain('{')
+      expect(arg).not.toContain('Bash(')
+      expect(arg).not.toMatch(/\b(cat|rm|git)[ :]/)
+      expect(arg).not.toContain('--disallowedTools')
+    }
+  }
+
+  function settingsPathOf(innerCmd: string): string {
+    const m = innerCmd.match(/--settings '([^']+)'/)
+    if (!m) throw new Error(`sem --settings: ${innerCmd}`)
+    return m[1]
+  }
+
+  it('sessão autônoma com repo: argv limpo, deny (com pkill/killall) no arquivo 0600 gravado antes do spawn', () => {
+    const session = spawnSession({ repoId: 'r1', name: 'api', permissionMode: 'acceptEdits' })
+    const spawn = seam.spawns[0]
+    expectCleanArgv(spawn.args)
+    expect(spawn.settingsExistedAtSpawn).toBe(true)
+
+    const path = settingsPathOf(spawn.innerCmd)
+    expect(path).toBe(`/tmp/cm-test-userdata/session-settings/${session.id}.json`)
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    const deny = JSON.parse(readFileSync(path, 'utf8')).permissions.deny as string[]
+    expect(deny).toEqual(
+      expect.arrayContaining(['Bash(rm:*)', 'Bash(git push:*)', 'Bash(pkill:*)', 'Bash(killall:*)']),
+    )
+  })
+
+  it('filha de handoff (spawn e resume): argv limpo e política inteira no arquivo', () => {
+    spawnSession({
+      repoId: 'r1',
+      name: 'mauricio-tarefa',
+      permissionMode: 'acceptEdits',
+      handoffChild: true,
+    })
+    seam.handlers.get('handoffs:resume')!(null, 'h1' as never)
+    expect(seam.spawns).toHaveLength(2)
+    for (const spawn of seam.spawns) {
+      expectCleanArgv(spawn.args)
+      expect(spawn.settingsExistedAtSpawn).toBe(true)
+      const settings = JSON.parse(readFileSync(settingsPathOf(spawn.innerCmd), 'utf8'))
+      expect(settings.crossSessionInbound).toBe('accept')
+      expect(settings.permissions.deny).toEqual(
+        expect.arrayContaining(['Bash(pkill:*)', 'Bash(killall:*)', 'Bash(rm -r*)']),
+      )
+    }
+  })
+
+  it('o arquivo some no exit da PTY, junto com o mcp-config', () => {
+    const session = spawnSession({ repoId: 'r1', name: 'api', permissionMode: 'acceptEdits' })
+    const path = settingsPathOf(seam.spawns[0].innerCmd)
+    expect(existsSync(path)).toBe(true)
+
+    for (const fn of seam.exitListeners) fn({ sessionId: session.id, exitCode: 0 })
+
+    expect(existsSync(path)).toBe(false)
+    expect(seam.removedSessionConfigs).toContain(session.id)
+  })
+
+  it('sessão interativa sem denylist não ganha --settings', () => {
+    spawnSession({ repoId: 'r1', name: 'api' })
+    expect(seam.spawns[0].innerCmd).not.toContain('--settings')
+    expectCleanArgv(seam.spawns[0].args)
   })
 })
 
