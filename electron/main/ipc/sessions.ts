@@ -44,6 +44,7 @@ import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
 import { scopeOomWatch } from '../services/scope-oom-watch'
+import { OomAutoResume } from '../services/scope-oom-resume'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   buildSessionSettings,
@@ -986,7 +987,15 @@ export function registerSessionIpc(): void {
     })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     scopeOomWatch.attach(ptyManager)
-    scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', e))
+    const oomAutoResume = new OomAutoResume({
+      ccOf: (id) =>
+        (
+          getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as
+            | { cc_session_id: string | null }
+            | undefined
+        )?.cc_session_id ?? null,
+    })
+    scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', oomAutoResume.annotate(e)))
     ptyManager.on('exit', (e) => {
       const db = getDb()
       db.prepare(

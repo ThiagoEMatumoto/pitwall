@@ -13,6 +13,9 @@ const PROBE_TIMEOUT_MS = 2_000
 // direto, e o probe é refeito depois disto.
 export const SCOPE_RETRY_BACKOFF_MS = 60_000
 const UNIT_PREFIX = 'app-pitwall-session-'
+// Testes de integração criam units reais: com prefixo próprio, nada que vigie as
+// app-pitwall-session-* da máquina (guarda, sweep de outra instância) as alcança.
+let unitPrefix = UNIT_PREFIX
 
 // ok = wrapper em uso; unavailable = não existe nesta máquina/sessão (vale até o
 // app fechar); backoff = falhou agora, tenta de novo depois de retryAt.
@@ -152,10 +155,10 @@ export function scopeWrapEnabled(now = Date.now()): boolean {
 export function scopeUnitName(sessionId: string, now = Date.now(), ownerPid = process.pid): string {
   const id8 = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'session'
   // O timestamp evita colisão com a unit de um resume do mesmo id ainda coletando.
-  return `${UNIT_PREFIX}${ownerPid}-${id8}-${now}`
+  return `${unitPrefix}${ownerPid}-${id8}-${now}`
 }
 
-export function unitOwnerPid(unit: string, prefix = UNIT_PREFIX): number | null {
+export function unitOwnerPid(unit: string, prefix = unitPrefix): number | null {
   if (!unit.startsWith(prefix)) return null
   const m = /^(\d+)-/.exec(unit.slice(prefix.length))
   return m ? Number(m[1]) : null
@@ -171,14 +174,17 @@ function assertUnitPrefix(prefix: string): void {
 // chegou a 27,9 GB e derrubou a sessão gráfica inteira: com MemoryMax o kernel
 // mata dentro do scope da sessão, e o desktop e as outras sessões ficam de pé.
 export const SESSION_MEMORY_MAX_PREF = 'sessions.memoryMaxGB'
-export const DEFAULT_SESSION_MEMORY_MAX_GB = 14
-const HIGH_BELOW_MAX_GB = 4
-const SWAP_MAX = '2G'
+export const DEFAULT_SESSION_MEMORY_MAX_GB = 18
+// Sem MemoryHigh e sem swap no scope: o MemoryHigh estrangulava a sessão perto
+// do teto (PSI full avg10 ~98% medido) e o systemd-oomd matava o scope inteiro
+// antes de o MemoryMax agir; swap dentro do scope também gera pressão. Com só o
+// MemoryMax, o kernel mata o maior processo da sessão na hora (PSI ~0) e o
+// OOMPolicy=continue mantém o resto vivo.
+const SWAP_MAX = '0'
 
 export interface ScopeMemoryLimits {
   // Valores aceitos pelo systemd (ex.: '14G', '64M').
   max: string
-  high: string | null
   swapMax: string
 }
 
@@ -187,8 +193,7 @@ const MIN_MAX_GB = 2
 
 // Só 0 explícito desliga. Valor não numérico, negativo ou NaN cai no default (o
 // teto nunca some por engano); o resto vira inteiro entre 2 GB e 90% da RAM, para
-// nada fora de faixa chegar ao systemd-run. High = Max − 4 GB: o kernel começa a
-// apertar (reclaim) antes de matar.
+// nada fora de faixa chegar ao systemd-run.
 export function memoryLimitsFromGB(
   maxGB: unknown,
   totalMemBytes = totalmem(),
@@ -200,8 +205,7 @@ export function memoryLimitsFromGB(
       : DEFAULT_SESSION_MEMORY_MAX_GB
   const ceiling = Math.max(MIN_MAX_GB, Math.floor((totalMemBytes * 0.9) / GIB))
   const max = Math.min(ceiling, Math.max(MIN_MAX_GB, Math.round(wanted)))
-  const high = max - HIGH_BELOW_MAX_GB
-  return { max: `${max}G`, high: high >= 1 ? `${high}G` : null, swapMax: SWAP_MAX }
+  return { max: `${max}G`, swapMax: SWAP_MAX }
 }
 
 // Lida a cada spawn: mudar a pref vale só para sessões novas.
@@ -224,7 +228,6 @@ export function wrapInScope(
 ): { command: string; args: string[] } {
   const props = memory
     ? [
-        ...(memory.high ? ['-p', `MemoryHigh=${memory.high}`] : []),
         '-p',
         `MemoryMax=${memory.max}`,
         '-p',
@@ -273,7 +276,7 @@ function ownerAlive(pid: number): boolean {
 // Se o main morreu (oomd no Electron, kill -9), o claude sai pelo SIGHUP da PTY,
 // mas o que ele deixou em background fica preso no scope para sempre. No boot,
 // para as units de instâncias que não existem mais.
-export function sweepOrphanScopes(prefix = UNIT_PREFIX): Promise<string[]> {
+export function sweepOrphanScopes(prefix = unitPrefix): Promise<string[]> {
   assertUnitPrefix(prefix)
   if (state.kind !== 'ok') return Promise.resolve([])
   return new Promise((resolve) => {
@@ -306,6 +309,12 @@ export function sweepOrphanScopes(prefix = UNIT_PREFIX): Promise<string[]> {
       },
     )
   })
+}
+
+// Sem argumento, volta ao prefixo de produção.
+export function setScopeUnitPrefixForTests(prefix: string = UNIT_PREFIX): void {
+  assertUnitPrefix(prefix)
+  unitPrefix = prefix
 }
 
 export function resetScopeProbeForTests(): void {
