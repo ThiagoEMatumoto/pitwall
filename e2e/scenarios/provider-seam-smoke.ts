@@ -26,17 +26,6 @@ const SCRATCH = process.env.SMOKE_SCRATCH ?? mkdtempSync(join(tmpdir(), 'provide
 mkdirSync(SCRATCH, { recursive: true })
 const fake = createFakeHome({ parentDir: SCRATCH })
 
-// Denylist destrutivo canônico (spawn-flags.ts) em modo autônomo — literal de
-// propósito: é o formato de ANTES que está sob teste.
-const DENYLIST = [
-  'Bash(rm:*)',
-  'Bash(git push:*)',
-  'Bash(git reset --hard:*)',
-  'Bash(git push --force:*)',
-  'Bash(git push -f:*)',
-  'Bash(git clean:*)',
-]
-
 // Mesma serialização do stub (`printf ' %q'` do bash), para comparar texto com texto.
 function bashQuoted(tokens: string[]): string {
   return execFileSync('bash', ['-c', 'for a in "$@"; do printf " %q" "$a"; done', '_', ...tokens], {
@@ -160,8 +149,10 @@ try {
     'high',
     '--permission-mode',
     'acceptEdits',
-    '--disallowedTools',
-    ...DENYLIST,
+    // O denylist destrutivo vai no arquivo de settings da sessão, nunca no argv
+    // (`pkill -f rm` casaria a cmdline e mataria a sessão).
+    '--settings',
+    join(userData, 'session-settings', `${row.id}.json`),
   ]
   const argv = argvLine.slice('argv:'.length)
   const prefix = bashQuoted([
