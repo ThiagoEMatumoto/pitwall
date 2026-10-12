@@ -200,32 +200,77 @@ describe('probe e estado', () => {
 })
 
 describe('sweepOrphanScopes', () => {
-  it('para só as units cujo main não existe mais', async () => {
-    probeExits(null)
-    await ensureScopeProbe()
-    const deadPid = 2 ** 22 + 12345 // acima do pid_max padrão: nunca existe
-    const listing = [
-      `app-pitwall-session-${deadPid}-aaaa1111-1.scope loaded active running zsh`,
-      `app-pitwall-session-${process.pid}-bbbb2222-2.scope loaded active running zsh`,
-      'app-pitwall-session-legacy.scope loaded active running zsh',
-      '',
-    ].join('\n')
+  // Prefixo próprio: o sweep nunca alcança as units app-pitwall-session-* reais.
+  const PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
+  const deadPid = 2 ** 22 + 12345 // acima do pid_max padrão: nunca existe
+
+  function routeList(listing: string): void {
     execFile.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: ExecCb) => {
       const done = (typeof opts === 'function' ? opts : cb) as ExecCb
       if (cmd === 'systemctl' && args.includes('list-units')) done(null, listing, '')
       else done(null, '', '')
     })
-    const stopped = await sweepOrphanScopes()
-    expect(stopped).toEqual([`app-pitwall-session-${deadPid}-aaaa1111-1`])
+  }
+  const stopCalls = (): string[][] =>
+    execFile.mock.calls
+      .filter((c) => c[0] === 'systemctl' && (c[1] as string[]).includes('stop'))
+      .map((c) => c[1] as string[])
+
+  it('para só as units cujo main não existe mais', async () => {
+    probeExits(null)
+    await ensureScopeProbe()
+    routeList(
+      [
+        `${PREFIX}${deadPid}-aaaa1111-1.scope loaded active running zsh`,
+        `${PREFIX}${process.pid}-bbbb2222-2.scope loaded active running zsh`,
+        `${PREFIX}legacy.scope loaded active running zsh`,
+        '',
+      ].join('\n'),
+    )
+    const stopped = await sweepOrphanScopes(PREFIX)
+    expect(stopped).toEqual([`${PREFIX}${deadPid}-aaaa1111-1`])
     expect(execFile).toHaveBeenCalledWith(
       'systemctl',
-      ['--user', 'stop', '--no-block', `app-pitwall-session-${deadPid}-aaaa1111-1.scope`],
+      ['--user', 'stop', '--no-block', `${PREFIX}${deadPid}-aaaa1111-1.scope`],
+      expect.any(Function),
+    )
+  })
+
+  it('com prefixo de teste, não lista nem para nenhuma app-pitwall-session-*', async () => {
+    probeExits(null)
+    await ensureScopeProbe()
+    const realUnit = `app-pitwall-session-${deadPid}-x-1`
+    routeList(`${realUnit}.scope loaded active running zsh\n`)
+    expect(await sweepOrphanScopes(PREFIX)).toEqual([])
+    const list = execFile.mock.calls.find(
+      (c) => c[0] === 'systemctl' && (c[1] as string[]).includes('list-units'),
+    )?.[1] as string[]
+    expect(list).toContain(`${PREFIX}*.scope`)
+    expect(list.some((a) => a.startsWith('app-pitwall-session-'))).toBe(false)
+    expect(stopCalls()).toEqual([])
+  })
+
+  it('rejeita prefixo que não termina em - ou tem caractere fora de [a-z0-9-]', () => {
+    expect(() => sweepOrphanScopes('app-pitwall-test')).toThrow(/prefixo/)
+    expect(() => sweepOrphanScopes('app-pitwall-*-')).toThrow(/prefixo/)
+    expect(() => sweepOrphanScopes('App-pitwall-')).toThrow(/prefixo/)
+  })
+
+  it('sem argumento varre o prefixo de produção', async () => {
+    probeExits(null)
+    await ensureScopeProbe()
+    routeList('')
+    await sweepOrphanScopes()
+    expect(execFile).toHaveBeenCalledWith(
+      'systemctl',
+      ['--user', 'list-units', '--plain', '--no-legend', 'app-pitwall-session-*.scope'],
+      expect.anything(),
       expect.any(Function),
     )
   })
 
   it('não varre quando os scopes não estão em uso', async () => {
-    expect(await sweepOrphanScopes()).toEqual([])
+    expect(await sweepOrphanScopes(PREFIX)).toEqual([])
     expect(execFile).not.toHaveBeenCalled()
   })
 })
@@ -277,36 +322,36 @@ describe('política da varredura de órfãos', () => {
 
 describe('teto de memória por sessão', () => {
   it('Max em GB, High = Max − 4 e swap fixo de 2G', () => {
-    expect(memoryLimitsFromGB(14)).toEqual({ max: '14G', high: '10G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(18)).toEqual({ max: '18G', swapMax: '0' })
   })
 
   it('Max pequeno demais para High: só Max e swap', () => {
-    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(4)).toEqual({ max: '4G', swapMax: '0' })
   })
 
   it('só 0 explícito desliga; inválido cai no default de 14', () => {
     expect(memoryLimitsFromGB(0)).toBeNull()
     for (const bad of [true, 'abc', null, undefined, Number.NaN, -3, Infinity]) {
-      expect(memoryLimitsFromGB(bad)?.max).toBe('14G')
+      expect(memoryLimitsFromGB(bad)?.max).toBe('18G')
     }
   })
 
   it('arredonda para inteiro ≥ 2', () => {
-    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', high: null, swapMax: '2G' })
+    expect(memoryLimitsFromGB(0.5)).toEqual({ max: '2G', swapMax: '0' })
     expect(memoryLimitsFromGB(13.6)?.max).toBe('14G')
   })
 
   it('nunca passa de 90% da RAM total', () => {
     const ram32 = 32 * 1024 ** 3
-    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', high: '24G', swapMax: '2G' })
+    expect(memoryLimitsFromGB(1e21, ram32)).toEqual({ max: '28G', swapMax: '0' })
     expect(memoryLimitsFromGB(14, ram32)?.max).toBe('14G')
   })
 
   it('a pref lida a cada spawn passa pela mesma validação', () => {
     for (const [stored, expected] of [
-      [true, '14G'],
-      ['abc', '14G'],
-      [null, '14G'],
+      [true, '18G'],
+      ['abc', '18G'],
+      [null, '18G'],
       [8, '8G'],
     ] as const) {
       getPref.mockImplementation((k: string, fallback: unknown) =>
@@ -328,12 +373,41 @@ describe('teto de memória por sessão', () => {
   })
 
   it('as propriedades vão antes do --, no argv do systemd-run', () => {
-    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(18))
     const sep = args.indexOf('--')
     expect(args.slice(0, sep)).toEqual(
-      expect.arrayContaining(['-p', 'MemoryHigh=10G', 'MemoryMax=14G', 'MemorySwapMax=2G']),
+      expect.arrayContaining(['-p', 'MemoryMax=18G', 'MemorySwapMax=0']),
     )
+    // MemoryHigh estrangula perto do teto e faz o systemd-oomd matar o scope inteiro.
+    expect(args.some((a) => a.startsWith('MemoryHigh='))).toBe(false)
     expect(args.slice(sep + 1)).toEqual(['/usr/bin/zsh', '-l'])
+  })
+
+  it('com teto de memória, OOMPolicy=continue: o kernel matar um processo não para o scope', () => {
+    const { args } = wrapInScope('/usr/bin/zsh', ['-l'], 'u', memoryLimitsFromGB(14))
+    const sep = args.indexOf('--')
+    const props = args.slice(0, sep)
+    expect(props[props.indexOf('OOMPolicy=continue') - 1]).toBe('-p')
+  })
+
+  it('argv final completo: só MemoryMax, swap 0 e OOMPolicy=continue', () => {
+    expect(wrapInScope('/usr/bin/zsh', ['-l'], 'app-u', memoryLimitsFromGB(18)).args).toEqual([
+      '--user',
+      '--scope',
+      '--quiet',
+      '--collect',
+      '--slice=app.slice',
+      '--unit=app-u',
+      '-p',
+      'MemoryMax=18G',
+      '-p',
+      'MemorySwapMax=0',
+      '-p',
+      'OOMPolicy=continue',
+      '--',
+      '/usr/bin/zsh',
+      '-l',
+    ])
   })
 
   it('sem limites, o argv é o de antes', () => {

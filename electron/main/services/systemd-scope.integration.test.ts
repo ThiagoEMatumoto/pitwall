@@ -1,8 +1,29 @@
 /** @vitest-environment node */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+
+// A pref real da máquina (sessions.memoryMaxGB) não pode decidir o teto esperado.
+vi.mock('./prefs-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./prefs-store')>()
+  return {
+    ...actual,
+    getPref: (key: string, fallback: unknown) =>
+      key === 'sessions.memoryMaxGB' ? 14 : actual.getPref(key, fallback),
+  }
+})
+
+// Passthrough: o execFile real roda, mas o argv fica registrado para conferir o prefixo.
+const execFileSpy = vi.hoisted(() => ({ fn: null as null | ReturnType<typeof vi.fn> }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  execFileSpy.fn = vi.fn((...args: unknown[]) =>
+    (actual.execFile as (...a: unknown[]) => unknown)(...args),
+  )
+  const mod = { ...actual, execFile: execFileSpy.fn }
+  return { ...mod, default: mod }
+})
 import { ptyManager, type PtyExitEvent } from './pty-manager'
 import {
   ensureScopeProbe,
@@ -10,6 +31,7 @@ import {
   scopeWrapEnabled,
   sweepOrphanScopes,
   scopeUnitName,
+  setScopeUnitPrefixForTests,
   wrapInScope,
 } from './systemd-scope'
 
@@ -19,6 +41,11 @@ const hasUserBus =
   spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--', 'true'], {
     timeout: 2_000,
   }).status === 0
+// Prefixo próprio: guardas da máquina que vigiam app-pitwall-session-* (e sobem
+// MemoryMax/oom_score_adj) não alcançam as units destes testes.
+const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
+beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
+afterAll(() => setScopeUnitPrefixForTests())
 const SESSION = 'sc0pe-it-session'
 const SHELL = process.env.SHELL || '/bin/sh'
 const originalBus = process.env.DBUS_SESSION_BUS_ADDRESS
@@ -128,7 +155,7 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
-    expect(unit).toMatch(new RegExp(`^app-pitwall-session-${process.pid}-sc0peits-\\d+$`))
+    expect(unit).toMatch(new RegExp(`^${TEST_UNIT_PREFIX}${process.pid}-sc0peits-\\d+$`))
     expect(cgroupOf(pid)).toContain(`/app.slice/${unit}.scope`)
   }, 15_000)
 
@@ -223,9 +250,11 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
 
   it('varredura do boot para o scope de uma instância morta e poupa o desta', async () => {
     expect(await ensureScopeProbe()).toBe(true)
+    // Prefixo próprio: o sweep nunca alcança as units app-pitwall-session-* reais.
+    const prefix = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
     const deadPid = 2 ** 22 + 4321 // acima do pid_max padrão: nunca existe
-    const orphanUnit = `app-pitwall-session-${deadPid}-orphan00-${Date.now()}`
-    const keepUnit = `app-pitwall-session-${process.pid}-keep0000-${Date.now()}`
+    const orphanUnit = `${prefix}${deadPid}-orphan00-${Date.now()}`
+    const keepUnit = `${prefix}${process.pid}-keep0000-${Date.now()}`
     const start = (unit: string): void => {
       spawn(
         'systemd-run',
@@ -237,9 +266,17 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     start(keepUnit)
     try {
       await until(() => unitActive(orphanUnit) && unitActive(keepUnit), 5_000)
-      const stopped = await sweepOrphanScopes()
+      execFileSpy.fn!.mockClear()
+      const stopped = await sweepOrphanScopes(prefix)
       expect(stopped).toContain(orphanUnit)
       expect(stopped).not.toContain(keepUnit)
+      expect(stopped.every((u) => u.startsWith(prefix))).toBe(true)
+      const systemctlArgs = execFileSpy
+        .fn!.mock.calls.filter((c) => c[0] === 'systemctl')
+        .map((c) => c[1] as string[])
+      const list = systemctlArgs.find((a) => a.includes('list-units'))
+      expect(list).toContain(`${prefix}*.scope`)
+      expect(systemctlArgs.flat().some((a) => a.startsWith('app-pitwall-session-'))).toBe(false)
       await until(() => !unitActive(orphanUnit), 5_000)
       expect(unitActive(keepUnit)).toBe(true)
     } finally {
@@ -266,7 +303,7 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     await killAndWait()
   })
 
-  it('o scope da sessão nasce com MemoryMax/High/SwapMax do default (14G/10G/2G)', async () => {
+  it('o scope da sessão nasce com MemoryMax da pref (14G no mock), sem MemoryHigh e sem swap', async () => {
     expect(await ensureScopeProbe()).toBe(true)
     spawnLogin('sleep 300')
     const pid = ptyPid()
@@ -276,8 +313,8 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     await until(() => unitActive(unit), 5_000)
     const gib = 1024 ** 3
     expect(unitProp(unit, 'MemoryMax')).toBe(String(14 * gib))
-    expect(unitProp(unit, 'MemoryHigh')).toBe(String(10 * gib))
-    expect(unitProp(unit, 'MemorySwapMax')).toBe(String(2 * gib))
+    expect(unitProp(unit, 'MemoryHigh')).toBe('infinity')
+    expect(unitProp(unit, 'MemorySwapMax')).toBe('0')
   }, 15_000)
 
   it('quem passa do MemoryMax é morto pelo kernel dentro do scope; o pai sobrevive', () => {
@@ -287,7 +324,6 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
       'const a=[];for(let i=0;i<64;i++){const b=Buffer.alloc(8*1024*1024,1);a.push(b)};console.log("SOBREVIVEU")'
     const { command, args } = wrapInScope(process.execPath, ['-e', hog], unit, {
       max: '64M',
-      high: null,
       swapMax: '0',
     })
     const r = spawnSync(command, args, { encoding: 'utf8', timeout: 30_000 })
@@ -296,4 +332,79 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     expect(r.signal === 'SIGKILL' || r.status === 137).toBe(true)
     expect(alive(process.pid)).toBe(true)
   }, 40_000)
+})
+
+// O systemd-oomd mata o cgroup inteiro quando a pressão de memória (PSI) passa do
+// limite por um tempo. Não dá para disparar o oomd do usuário num teste, então o
+// teste mede a causa: um alocador lento até perto do teto não pode gerar pressão.
+// (Medido à mão: com MemoryHigh abaixo do uso e swap no scope, o que a #319 fazia,
+// a pressão `full avg10` chegou a ~98% e a carga ficou estrangulada por minutos —
+// foi assim que uma sessão real morreu em 11/10. Lento demais para um teste.)
+describe.skipIf(!hasUserBus)('pressão de memória do scope × systemd real', () => {
+  // Aloca 270 MB (90% do teto) e depois continua tocando todas as páginas por 3s,
+  // como uma sessão ativa perto do teto (o que trazia de volta o que foi pro swap).
+  const ALLOC =
+    'const a=[];let n=0;const t=setInterval(()=>{a.push(Buffer.alloc(10*1024*1024,1));if(++n>=27){clearInterval(t);const end=Date.now()+3000;const touch=()=>{for(const b of a)for(let i=0;i<b.length;i+=4096)b[i]++;if(Date.now()<end)setImmediate(touch);else process.exit(0)};touch()}},100)'
+
+  function runScoped(
+    extra: string[],
+  ): Promise<{ code: number | null; peakFull: number; ms: number }> {
+    const unit = scopeUnitName('psi-it', Date.now())
+    const started = Date.now()
+    const child = spawn(
+      'systemd-run',
+      [
+        '--user',
+        '--scope',
+        '--quiet',
+        '--collect',
+        '--slice=app.slice',
+        `--unit=${unit}`,
+        '-p',
+        'MemoryMax=300M',
+        '-p',
+        'MemorySwapMax=0',
+        ...extra,
+        '--',
+        process.execPath,
+        '-e',
+        ALLOC,
+      ],
+      { stdio: 'ignore' },
+    )
+    let peakFull = 0
+    const timer = setInterval(() => {
+      try {
+        const cg = execFileSync(
+          'systemctl',
+          ['--user', 'show', '-p', 'ControlGroup', '--value', `${unit}.scope`],
+          { encoding: 'utf8' },
+        ).trim()
+        const line = readFileSync(`/sys/fs/cgroup${cg}/memory.pressure`, 'utf8')
+          .split('\n')
+          .find((l) => l.startsWith('full'))
+        const avg10 = Number(/avg10=([\d.]+)/.exec(line ?? '')?.[1] ?? 0)
+        peakFull = Math.max(peakFull, avg10)
+      } catch {
+        // scope ainda não existe ou já foi coletado
+      }
+    }, 200)
+    return new Promise((resolve) => {
+      const done = (code: number | null): void => {
+        clearInterval(timer)
+        resolve({ code, peakFull, ms: Date.now() - started })
+      }
+      child.on('exit', (code) => done(code))
+      setTimeout(() => {
+        spawnSync('systemctl', ['--user', 'stop', `${unit}.scope`])
+      }, 25_000)
+    })
+  }
+
+  it('sem MemoryHigh: alocar devagar até 90% do teto termina rápido e sem pressão', async () => {
+    const r = await runScoped([])
+    expect(r.code).toBe(0)
+    expect(r.ms).toBeLessThan(10_000)
+    expect(r.peakFull).toBeLessThan(10)
+  }, 30_000)
 })

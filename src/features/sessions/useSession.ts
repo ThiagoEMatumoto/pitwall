@@ -26,10 +26,10 @@ export function useSession(sessionId: string) {
     dataHandlerRef.current = handler
   }, [])
 
+  // Devolve a promessa do IPC: quem precisa de confirmação (envio do Composer)
+  // espera; o resto ignora como antes.
   const write = useCallback(
-    (data: string) => {
-      void sessionsApi.write(sessionId, data)
-    },
+    (data: string): Promise<void> => sessionsApi.write(sessionId, data),
     [sessionId],
   )
 

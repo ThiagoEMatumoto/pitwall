@@ -10,6 +10,7 @@ export type {
   ChatTranscriptTail,
   ChatTranscriptUpdate,
 } from './chat'
+import type { ComposerDraft, VersionedDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
@@ -1518,6 +1519,25 @@ export interface AttentionReasonCounters {
   lastUnparsedAt: number | null
 }
 
+// main → renderer: o kernel matou um processo da sessão por MemoryMax.
+// claudeAlive false = o morto foi o próprio claude (a sessão acabou).
+export interface ScopeOomEvent {
+  sessionId: string
+  maxGB: number
+  claudeAlive: boolean
+  // Claude morto por memória e dentro da cota de resume automático: o renderer
+  // retoma esta conversa sozinho.
+  resumeCcSessionId?: string
+}
+
+// oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
+// boot; watching = sessões com scope sendo observadas agora.
+export interface ScopeStats {
+  total: number
+  bySession: Record<string, number>
+  watching: number
+}
+
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'
 
 export interface GithubAsset {
@@ -2884,6 +2904,37 @@ export interface Api {
     write(sessionId: string, data: string): Promise<void>
     /** Grava uma imagem (paste/drag) como binário em <userData>/tmp e devolve o path absoluto. */
     saveImage(sessionId: string, bytes: ArrayBuffer, mime: string): Promise<string>
+    /** Rascunho durável do Composer (app.db), por pane. null = sem rascunho. */
+    getDraft(key: string): Promise<ComposerDraft | null>
+    /** Grava o rascunho com fsync (FULL); vazio (sem texto nem anexos) remove. */
+    saveDraft(draft: VersionedDraftInput): Promise<void>
+    /** Write-through de cada mudança (send assíncrono, NORMAL): sobrevive a kill -9. */
+    writeDraft(draft: VersionedDraftInput): void
+    /** Remove o rascunho — só depois do envio confirmado. */
+    clearDraft(key: string): Promise<void>
+    /** Pane nova sem rascunho herda o das panes fechadas da mesma conversa. */
+    adoptDraft(target: {
+      paneId: string
+      ccSessionId: string
+      openPaneIds: string[]
+    }): Promise<ComposerDraft | null>
+    /** Encerrar confirmado: apaga os rascunhos da conversa, menos os de panes abertas. */
+    clearSessionDrafts(target: {
+      ccSessionId: string | null
+      paneId: string | null
+      openPaneIds: string[]
+    }): Promise<string[]>
+    /** GC dos rascunhos — só depois de um restore bem-sucedido. */
+    gcDrafts(
+      openPanes: Array<{ paneId: string | null; ccSessionId: string | null }>,
+    ): Promise<string[]>
+    /** getDraft síncrono (sendSync): só no flush, antes da hidratação terminar. */
+    getDraftSync(key: string): ComposerDraft | null
+    /** saveDraft síncrono (sendSync): retorna depois do commit; erro vira throw. */
+    saveDraftSync(draft: VersionedDraftInput): void
+    /** Main pede o flush dos rascunhos (quit, exit de sessão); responder com draftFlushDone. */
+    onDraftFlushRequest(handler: (requestId: string) => void): () => void
+    draftFlushDone(requestId: string): void
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
@@ -2918,6 +2969,10 @@ export interface Api {
     wakeResult(result: WakeResult): Promise<void>
     /** O main retomou a conversa de uma pane dormindo (só com sessions.lazyRestore ligada). */
     onDormantBecameLive(handler: (event: DormantBecameLiveEvent) => void): () => void
+    /** O kernel matou um processo da sessão por passar do teto de memória. */
+    onOom(handler: (event: ScopeOomEvent) => void): () => void
+    /** Contador de oom-kills por sessão/total (scopes do systemd). */
+    scopeStats(): Promise<ScopeStats>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */

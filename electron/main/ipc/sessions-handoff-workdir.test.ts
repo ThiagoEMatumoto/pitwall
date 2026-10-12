@@ -2,7 +2,7 @@
 // O cwd da filha de handoff no spawn é o work_dir gravado no create (a chave da
 // posse), não o worktree recalculado na hora do spawn. Banco SQLite real e
 // handoff-store real: o work_dir é escrito pelo produtor (create), não por fixture.
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -45,6 +45,13 @@ vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 
 import * as handoffStore from '../services/handoff-store'
 import { spawnSession } from './sessions'
+
+// O denylist e a política da filha vivem no ARQUIVO apontado por --settings.
+function settingsOf(cmd: string): { permissions?: { deny?: string[] } } {
+  const m = cmd.match(/--settings '([^']+)'/)
+  if (!m) throw new Error(`sem --settings no comando: ${cmd}`)
+  return JSON.parse(readFileSync(m[1], 'utf8'))
+}
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -190,6 +197,8 @@ describe('spawnSession — cwd da filha vem do work_dir do create', () => {
       handoffChild: true,
       handoffId: h.id,
     })
-    expect(spawns[0].innerCmd).toContain('"Edit","Write","NotebookEdit"')
+    expect(settingsOf(spawns[0].innerCmd).permissions?.deny).toEqual(
+      expect.arrayContaining(['Edit', 'Write', 'NotebookEdit']),
+    )
   })
 })

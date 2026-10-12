@@ -10,6 +10,7 @@ import {
   sessionMemoryLimits,
   wrapInScope,
 } from './systemd-scope'
+import type { ScopeExecEvent } from './scope-oom-watch'
 
 export interface SpawnOptions {
   sessionId: string
@@ -48,6 +49,9 @@ interface PtyEvents {
   resize: (e: PtySizeEvent) => void
   data: (e: PtyDataEvent) => void
   exit: (e: PtyExitEvent) => void
+  // O pid virou o comando dentro do scope (só com teto de memória): quem observa
+  // o cgroup começa daqui.
+  'scope-exec': (e: ScopeExecEvent) => void
 }
 
 class TypedEmitter extends EventEmitter {
@@ -94,6 +98,9 @@ class PtyManager extends TypedEmitter {
   private lastInputAt = new Map<string, number>()
   // Unit .scope de cada sessão spawnada via systemd-run.
   private scopeUnits = new Map<string, string>()
+  // Sessões com teto que já fizeram exec: quem passa a observar depois (watcher
+  // recriado, ligado após o restore) as readota por aqui.
+  private scopeExecs = new Map<string, ScopeExecEvent>()
   // Saída pedida pelo app não é falha do systemd-run.
   private killed = new WeakSet<IPty>()
 
@@ -113,8 +120,9 @@ class PtyManager extends TypedEmitter {
     const cols = opts.cols ?? 80
     const rows = opts.rows ?? 24
     const unit = inScope ? scopeUnitName(opts.sessionId) : null
+    const memory = unit ? sessionMemoryLimits() : null
     const target = unit
-      ? wrapInScope(opts.command, opts.args ?? [], unit, sessionMemoryLimits())
+      ? wrapInScope(opts.command, opts.args ?? [], unit, memory)
       : { command: opts.command, args: opts.args ?? [] }
     const pty = spawn(target.command, target.args, {
       name: 'xterm-256color',
@@ -163,7 +171,18 @@ class PtyManager extends TypedEmitter {
       held = []
       for (const c of chunks) deliver(c)
     }
-    const execWatch = unit ? this.watchScopeExec(pty.pid, flushHeld) : null
+    const execWatch = unit
+      ? this.watchScopeExec(pty.pid, (execSeen) => {
+          flushHeld()
+          if (execSeen && memory && this.ptys.get(opts.sessionId) === pty) {
+            // memoryLimitsFromGB sempre devolve o teto em G.
+            const maxGB = Number.parseFloat(memory.max)
+            const exec = { sessionId: opts.sessionId, pid: pty.pid, maxGB }
+            this.scopeExecs.set(opts.sessionId, exec)
+            this.emit('scope-exec', exec)
+          }
+        })
+      : null
 
     pty.onData((data) => {
       if (execWatch && !execWatch.execSeen() && preExec.length < 4096) preExec += data
@@ -193,6 +212,7 @@ class PtyManager extends TypedEmitter {
       flushHeld()
       this.ptys.delete(opts.sessionId)
       this.scopeUnits.delete(opts.sessionId)
+      this.scopeExecs.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
@@ -204,7 +224,7 @@ class PtyManager extends TypedEmitter {
   // segurada já foi liberada: no exec ou, sem ele, no teto.
   private watchScopeExec(
     pid: number,
-    onRelease: () => void,
+    onRelease: (execSeen: boolean) => void,
   ): { execSeen: () => boolean; released: () => boolean; stop: () => void } {
     const ownComm = procComm(process.pid)
     let execSeen = false
@@ -217,7 +237,7 @@ class PtyManager extends TypedEmitter {
       if (execSeen || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) {
         released = true
         clearInterval(timer)
-        onRelease()
+        onRelease(execSeen)
       }
     }, SCOPE_EXEC_POLL_MS)
     timer.unref?.()
@@ -226,6 +246,10 @@ class PtyManager extends TypedEmitter {
       released: () => released,
       stop: () => clearInterval(timer),
     }
+  }
+
+  scopedSessions(): ScopeExecEvent[] {
+    return [...this.scopeExecs.values()].filter((e) => this.ptys.has(e.sessionId))
   }
 
   scopeUnitFor(sessionId: string): string | null {

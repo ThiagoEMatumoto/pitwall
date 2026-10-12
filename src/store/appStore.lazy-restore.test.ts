@@ -676,15 +676,20 @@ describe('closePane de pane dormant', () => {
     expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-other'])
   })
 
-  it('pane viva fechada é detach: sem toast de desfazer', async () => {
+  // Toda aba fechada pelo X tem a janela do Desfazer: é ela que segura o
+  // rascunho do Composer da pane (ver appStore.composer-draft.test.ts).
+  it('pane viva fechada é detach, sem kill; o Desfazer devolve a mesma pane viva', async () => {
     const { useToastStore } = await import('@/features/notifications/toast-store')
     useToastStore.setState({ toasts: [] })
     seedDormant('cc-sleep1', 'pane-sleep1')
     await useAppStore.getState().wakeDormantPane('pane-sleep1')
+    const awake = useAppStore.getState().panes[0]
 
     useAppStore.getState().closePane('pane-sleep1')
+    useToastStore.getState().toasts.at(-1)!.onAction!()
 
-    expect(useToastStore.getState().toasts).toEqual([])
+    expect(useAppStore.getState().panes).toEqual([awake])
+    expect(calls.kill).toEqual([])
   })
 })
 
