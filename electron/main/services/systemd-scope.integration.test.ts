@@ -3,6 +3,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+
+// A pref real da máquina (sessions.memoryMaxGB) não pode decidir o teto esperado.
+vi.mock('./prefs-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./prefs-store')>()
+  return {
+    ...actual,
+    getPref: (key: string, fallback: unknown) =>
+      key === 'sessions.memoryMaxGB' ? 14 : actual.getPref(key, fallback),
+  }
+})
+
+// Passthrough: o execFile real roda, mas o argv fica registrado para conferir o prefixo.
+const execFileSpy = vi.hoisted(() => ({ fn: null as null | ReturnType<typeof vi.fn> }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  execFileSpy.fn = vi.fn((...args: unknown[]) =>
+    (actual.execFile as (...a: unknown[]) => unknown)(...args),
+  )
+  const mod = { ...actual, execFile: execFileSpy.fn }
+  return { ...mod, default: mod }
+})
 import { ptyManager, type PtyExitEvent } from './pty-manager'
 import {
   ensureScopeProbe,
@@ -73,6 +94,12 @@ async function until(cond: () => boolean, timeoutMs: number): Promise<void> {
   }
 }
 
+// O kill é assíncrono: sem esperar o exit, o próximo spawn colide com a sessão viva.
+async function killAndWait(): Promise<void> {
+  ptyManager.kill(SESSION)
+  await until(() => !ptyManager.isRunning(SESSION), 5_000)
+}
+
 // Igual ao loginShellSpawn (sessions.ts): o wrapper envolve o shell de login.
 function spawnLogin(innerCmd: string): void {
   ptyManager.spawn({
@@ -111,9 +138,9 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     restoreEnv()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreEnv()
-    ptyManager.kill(SESSION)
+    await killAndWait()
   })
 
   it('pty.pid é o processo final, dentro do scope da sessão em app.slice', async () => {
@@ -217,9 +244,11 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
 
   it('varredura do boot para o scope de uma instância morta e poupa o desta', async () => {
     expect(await ensureScopeProbe()).toBe(true)
+    // Prefixo próprio: o sweep nunca alcança as units app-pitwall-session-* reais.
+    const prefix = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
     const deadPid = 2 ** 22 + 4321 // acima do pid_max padrão: nunca existe
-    const orphanUnit = `app-pitwall-session-${deadPid}-orphan00-${Date.now()}`
-    const keepUnit = `app-pitwall-session-${process.pid}-keep0000-${Date.now()}`
+    const orphanUnit = `${prefix}${deadPid}-orphan00-${Date.now()}`
+    const keepUnit = `${prefix}${process.pid}-keep0000-${Date.now()}`
     const start = (unit: string): void => {
       spawn(
         'systemd-run',
@@ -231,9 +260,17 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     start(keepUnit)
     try {
       await until(() => unitActive(orphanUnit) && unitActive(keepUnit), 5_000)
-      const stopped = await sweepOrphanScopes()
+      execFileSpy.fn!.mockClear()
+      const stopped = await sweepOrphanScopes(prefix)
       expect(stopped).toContain(orphanUnit)
       expect(stopped).not.toContain(keepUnit)
+      expect(stopped.every((u) => u.startsWith(prefix))).toBe(true)
+      const systemctlArgs = execFileSpy
+        .fn!.mock.calls.filter((c) => c[0] === 'systemctl')
+        .map((c) => c[1] as string[])
+      const list = systemctlArgs.find((a) => a.includes('list-units'))
+      expect(list).toContain(`${prefix}*.scope`)
+      expect(systemctlArgs.flat().some((a) => a.startsWith('app-pitwall-session-'))).toBe(false)
       await until(() => !unitActive(orphanUnit), 5_000)
       expect(unitActive(keepUnit)).toBe(true)
     } finally {
@@ -256,8 +293,8 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     resetScopeProbeForTests()
   })
 
-  afterEach(() => {
-    ptyManager.kill(SESSION)
+  afterEach(async () => {
+    await killAndWait()
   })
 
   it('o scope da sessão nasce com MemoryMax 18G, sem MemoryHigh e sem swap', async () => {
@@ -266,6 +303,8 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
+    // Sob carga o systemctl show pode ler a unit antes de ela estar ativa.
+    await until(() => unitActive(unit), 5_000)
     const gib = 1024 ** 3
     expect(unitProp(unit, 'MemoryMax')).toBe(String(18 * gib))
     expect(unitProp(unit, 'MemoryHigh')).toBe('infinity')
