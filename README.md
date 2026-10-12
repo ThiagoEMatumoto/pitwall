@@ -109,6 +109,8 @@ The app auto-updates via `electron-updater`.
 
 Requirements: **Node 20+**.
 
+The test suite runs on the Node pinned in `.nvmrc` (24.18.1). Node 24.19+ aborts the process when better-sqlite3 objects are garbage-collected ([nodejs/node#65446](https://github.com/nodejs/node/issues/65446)); unpin once that is fixed. After switching Node, run `npm rebuild better-sqlite3` before `npm run test:unit`.
+
 ```bash
 npm install
 npm run dev      # electron-vite dev with HMR
