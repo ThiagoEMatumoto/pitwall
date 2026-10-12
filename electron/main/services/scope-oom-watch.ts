@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { readFileSync, watch, type FSWatcher } from 'node:fs'
+import { readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import type { ScopeOomEvent, ScopeStats } from '../../../shared/types/ipc'
 
 // Com OOMPolicy=continue o scope sobrevive quando o kernel mata um processo por
@@ -8,6 +8,13 @@ import type { ScopeOomEvent, ScopeStats } from '../../../shared/types/ipc'
 // cobre o caso de o watch não estar disponível.
 
 export const OOM_POLL_MS = 15_000
+// cgroup.procs não gera evento de inotify: os pids novos chegam por poll.
+export const PROCS_POLL_MS = 1_000
+// No OOM do memcg o kernel soma adj × teto / 1000 ao RSS de cada processo: com
+// +500 sobre o claude, um filho só perde para ele se o claude tiver meio teto a
+// mais de RSS. Aumentar o próprio valor não exige privilégio; diminuir exige.
+export const CHILD_OOM_ADJ_DELTA = 500
+const OOM_ADJ_MAX = 1000
 const SIGKILL = 9
 const CGROUP_ROOT = '/sys/fs/cgroup'
 
@@ -52,6 +59,40 @@ function survived(pid: number): boolean {
   }
 }
 
+function readOomScoreAdj(pid: number): number | null {
+  try {
+    return Number.parseInt(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8'), 10)
+  } catch {
+    return null
+  }
+}
+
+export function readScopePids(cgroupDir: string): number[] {
+  try {
+    return readFileSync(`${cgroupDir}/cgroup.procs`, 'utf8').split('\n').filter(Boolean).map(Number)
+  } catch {
+    return []
+  }
+}
+
+// Só sobe: um filho que já pediu para morrer primeiro (adj maior) fica como está.
+// false = o pid já saiu ou recusou; true = o valor final é >= target.
+export function raiseOomScoreAdj(pid: number, target: number): boolean {
+  const current = readOomScoreAdj(pid)
+  if (current === null) return false
+  if (current >= target) return true
+  try {
+    writeFileSync(`/proc/${pid}/oom_score_adj`, String(target))
+    return true
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ESRCH') {
+      console.warn(`[scope-oom-watch] oom_score_adj do pid ${pid} falhou: ${code}`)
+    }
+    return false
+  }
+}
+
 export interface ScopeExecEvent {
   sessionId: string
   pid: number
@@ -74,6 +115,10 @@ interface Tracked {
   timer: ReturnType<typeof setInterval>
   watcher: FSWatcher | null
   settle: ReturnType<typeof setTimeout> | null
+  // Filhos já marcados como vítimas preferenciais do OOM do scope.
+  childAdj: number
+  adjusted: Set<number>
+  procsTimer: ReturnType<typeof setInterval>
 }
 
 const KILLS_CAP = 200
@@ -83,7 +128,10 @@ export class ScopeOomWatch extends EventEmitter {
   // oom-kills por sessão, inclusive das que já saíram.
   private kills = new Map<string, number>()
 
-  constructor(private readonly pollMs = OOM_POLL_MS) {
+  constructor(
+    private readonly pollMs = OOM_POLL_MS,
+    private readonly procsPollMs = PROCS_POLL_MS,
+  ) {
     super()
   }
 
@@ -109,6 +157,8 @@ export class ScopeOomWatch extends EventEmitter {
     } catch {
       watcher = null
     }
+    const procsTimer = setInterval(() => this.adjustChildren(sessionId), this.procsPollMs)
+    procsTimer.unref?.()
     this.tracked.set(sessionId, {
       pid,
       dir,
@@ -118,8 +168,26 @@ export class ScopeOomWatch extends EventEmitter {
       timer,
       watcher,
       settle: null,
+      childAdj: Math.min(OOM_ADJ_MAX, (readOomScoreAdj(pid) ?? 0) + CHILD_OOM_ADJ_DELTA),
+      adjusted: new Set(),
+      procsTimer,
     })
+    this.adjustChildren(sessionId)
     return true
+  }
+
+  // Ao bater o MemoryMax o kernel mata o maior processo do scope, e o claude
+  // (o pid da PTY) costuma ser o maior: os filhos (vitest, tsc, MCPs) vão antes.
+  adjustChildren(sessionId: string): void {
+    const t = this.tracked.get(sessionId)
+    if (!t) return
+    const pids = readScopePids(t.dir)
+    // Pid que saiu sai do conjunto: se for reusado, o processo novo é marcado.
+    for (const p of t.adjusted) if (!pids.includes(p)) t.adjusted.delete(p)
+    for (const p of pids) {
+      if (p === t.pid || t.adjusted.has(p)) continue
+      if (raiseOomScoreAdj(p, t.childAdj)) t.adjusted.add(p)
+    }
   }
 
   check(sessionId: string): void {
@@ -177,6 +245,7 @@ export class ScopeOomWatch extends EventEmitter {
     const t = this.tracked.get(sessionId)
     if (!t) return
     clearInterval(t.timer)
+    clearInterval(t.procsTimer)
     if (t.settle) clearTimeout(t.settle)
     t.watcher?.close()
     this.tracked.delete(sessionId)

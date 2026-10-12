@@ -157,6 +157,103 @@ describe.skipIf(!hasUserBus)('OOM dentro do scope da sessão × systemd real', (
   }, 40_000)
 })
 
+// O claude é o maior do scope: um node com 40M além do próprio runtime. O filho
+// é um perl magro que, 2s depois de nascer (tempo de o watcher marcá-lo), aloca
+// 512M em blocos de 8M e anuncia cada bloco. O kernel mata quando o scope passa
+// de 96M, com o filho ainda bem menor que o principal.
+const PRINCIPAL = `
+const fs = require('fs')
+const keep = Buffer.alloc(40 * 1024 * 1024, 1)
+const rss = () => Number(/VmRSS:\\s+(\\d+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))[1]) >> 10
+const child = require('child_process').spawn('perl', ['-e', process.env.PERL_HOG], { stdio: ['ignore', 'inherit', 'inherit'] })
+console.log('CHILD_PID:' + child.pid + ' PRINCIPAL_RSS_MB:' + rss())
+child.on('exit', (code, sig) => console.log('CHILD_EXIT:' + sig + ' PRINCIPAL_RSS_MB:' + rss() + ' keep:' + keep.length))
+setInterval(() => {}, 1e6)
+`
+const PERL_HOG =
+  'select STDOUT; $|=1; sleep 2; my @a; for my $i (1..64) { push @a, "x" x (8*1024*1024); print "HOG_MB:".($i*8)."\\n" } sleep 100'
+const SMALL = { max: '96M', swapMax: '0' }
+
+function launchPrincipal(unit: string): Launched {
+  const argv = wrapInScope(process.execPath, ['-e', PRINCIPAL], unit, SMALL)
+  const child = spawn(argv.command, argv.args, {
+    env: { ...process.env, PERL_HOG },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let out = ''
+  let done = false
+  child.stdout!.on('data', (d) => (out += String(d)))
+  child.on('exit', () => (done = true))
+  const l = { child, unit, stdout: () => out, exited: () => done }
+  launched.push(l)
+  return l
+}
+
+function lastHogMB(out: string): number {
+  const all = [...out.matchAll(/HOG_MB:(\d+)/g)]
+  return all.length ? Number(all[all.length - 1][1]) : 0
+}
+
+function childPidOf(out: string): number | null {
+  const m = /CHILD_PID:(\d+)/.exec(out)
+  return m ? Number(m[1]) : null
+}
+
+describe.skipIf(!hasUserBus)('oom_score_adj dos filhos × systemd real (MemoryMax=96M)', () => {
+  afterEach(() => {
+    for (const l of launched.splice(0)) {
+      if (!l.exited()) l.child.kill('SIGKILL')
+      spawnSync('systemctl', ['--user', 'stop', `${l.unit}.scope`])
+    }
+  })
+
+  it('com o ajuste: o filho morre e o principal (maior) sobrevive', async () => {
+    const unit = scopeUnitName('oom-adj', Date.now())
+    const l = launchPrincipal(unit)
+    const pid = l.child.pid!
+    await until(() => scopeCgroupDir(pid)?.includes(unit) === true, 5_000)
+    const watch = new ScopeOomWatch(60_000, 200)
+    const source = new EventEmitter()
+    watch.attach(source)
+    source.emit('scope-exec', { sessionId: 's-adj', pid, maxGB: 96 / 1024 })
+
+    await until(() => childPidOf(l.stdout()) !== null, 5_000)
+    const childPid = childPidOf(l.stdout())!
+    const principalAdj = Number(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8'))
+    await until(
+      () =>
+        Number(readFileSync(`/proc/${childPid}/oom_score_adj`, 'utf8')) ===
+        Math.min(1000, principalAdj + 500),
+      2_000,
+    )
+
+    await until(() => l.stdout().includes('CHILD_EXIT:'), 20_000)
+    const out = l.stdout()
+    console.log(
+      `[com ajuste] principal adj=${principalAdj}; ${out.match(/CHILD_EXIT:.*/)?.[0]}; filho chegou a ${lastHogMB(out)}MB`,
+    )
+    expect(out).toContain('CHILD_EXIT:SIGKILL')
+    // O principal era o maior no instante do kill: é o caso que o ajuste resolve.
+    const principalMB = Number(/CHILD_EXIT:\S+ PRINCIPAL_RSS_MB:(\d+)/.exec(out)![1])
+    expect(principalMB).toBeGreaterThan(lastHogMB(out))
+    await new Promise((r) => setTimeout(r, 1_000))
+    expect(l.exited()).toBe(false)
+    watch.stopAll()
+  }, 40_000)
+
+  it('sem o ajuste (controle): o kernel mata o principal, que é o maior', async () => {
+    const unit = scopeUnitName('oom-noadj', Date.now())
+    const l = launchPrincipal(unit)
+    await until(() => l.exited(), 20_000)
+    const out = l.stdout()
+    console.log(
+      `[sem ajuste] principal saiu por ${l.child.signalCode}; filho chegou a ${lastHogMB(out)}MB`,
+    )
+    expect(l.child.signalCode).toBe('SIGKILL')
+    expect(out).not.toContain('CHILD_EXIT:')
+  }, 40_000)
+})
+
 // O caminho real: ptyManager.spawn num scope com teto emite scope-exec depois do
 // exec, e um watcher ligado DEPOIS (restore, watcher recriado) readota a sessão.
 describe.skipIf(!hasUserBus)('scope-exec do ptyManager × readoção', () => {
