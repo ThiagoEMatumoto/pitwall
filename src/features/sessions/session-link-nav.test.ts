@@ -4,6 +4,7 @@ import { formatCombo } from '@/lib/keybindings'
 vi.mock('@/lib/ipc', () => ({
   sessionGraphApi: { get: vi.fn(() => new Promise(() => {})), onUpdated: vi.fn(() => () => {}) },
   handoffsApi: {},
+  workspaceApi: { savePanes: vi.fn(() => Promise.resolve()) },
 }))
 
 import {
