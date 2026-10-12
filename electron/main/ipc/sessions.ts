@@ -1,6 +1,6 @@
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
@@ -70,6 +70,7 @@ import {
   isImageTempFile,
   isSessionImageTempFile,
 } from '../services/image-temp'
+import { imageKeptByKeepers, sweepImageTempDir } from '../services/image-temp-sweep'
 import { mapLiveSessionRepo, type LiveSessionJoinRow } from './live-session-mapping'
 import type {
   Session,
@@ -311,29 +312,14 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
-// Remove temporários de imagem que casam com o predicado. Best-effort: se o
-// diretório não existe ainda (nenhuma imagem foi colada) ou um arquivo some numa
-// corrida, ignora — limpeza nunca pode derrubar o boot/exit.
+// Remove temporários de imagem que casam com o predicado, poupando os citados por
+// um item da fila durável (registerImageKeeper em send-prompt.ts).
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let names: string[]
-  const dir = tempDir()
-  try {
-    names = readdirSync(dir)
-  } catch {
-    return
-  }
-  for (const name of names) {
-    if (!predicate(name)) continue
-    try {
-      unlinkSync(join(dir, name))
-    } catch {
-      // já removido / em uso — segue
-    }
-  }
+  sweepImageTempDir(tempDir(), predicate, imageKeptByKeepers)
 }
 
 // Sweep de boot: num processo fresco nenhum compose referencia temps de imagem,
-// então todos são órfãos. Chamado uma vez no app.whenReady (index.ts).
+// então todos são órfãos — salvo os dos itens que a fila restaurou do app.db. Chamado uma vez no app.whenReady (index.ts).
 export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }

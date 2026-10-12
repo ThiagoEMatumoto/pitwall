@@ -207,6 +207,18 @@ export class PromptQueue {
     return !bypassAttention && this.deps.handoffAsking(sessionId)
   }
 
+  // Algum item ainda não entregue cita este trecho (o nome de um temp de imagem)?
+  // Inclui os estacionados (esperando a conversa ou a decisão do usuário) e os
+  // escritos que ainda esperam a prova: sem ela voltam como 'talvez não entregue'.
+  references(fragment: string): boolean {
+    const cites = (i: Item) => i.text.includes(fragment)
+    return (
+      this.items.some(cites) ||
+      this.parked.some(cites) ||
+      this.confirming.some((c) => cites(c.item))
+    )
+  }
+
   snapshot(): PromptQueueSnapshot {
     return {
       items: [...this.items, ...this.parked].map(publicItem),
