@@ -31,6 +31,7 @@ import {
   formatWakeEnvelope,
   onQueueSnapshot,
   setHandoffWakeQueue,
+  queuedEnvelopeObsolete,
   sweepOrphansOnBoot,
   wakeHealth,
   wakeMotherFor,
@@ -123,6 +124,12 @@ function snapshot(partial: Partial<PromptQueueSnapshot>): PromptQueueSnapshot {
       refusedUnparsed: 0,
       refusedInputDirty: 0,
       wakeFailed: 0,
+      restored: 0,
+      restoredDelivered: 0,
+      maybeUndelivered: 0,
+      needsConfirmation: 0,
+      discardedObsolete: 0,
+      awaitingNoticed: 0,
     },
     lastEvent: null,
     ...partial,
@@ -334,6 +341,29 @@ describe('sweepOrphansOnBoot', () => {
     expect(sweepOrphansOnBoot()).toBe(1)
     expect(rows()[0]).toMatchObject({ outcome: 'expired', detail: 'app-restart' })
     expect(rows()[0].finished_at).toEqual(expect.any(Number))
+  })
+})
+
+describe('queuedEnvelopeObsolete (envelope restaurado do app.db)', () => {
+  it('handoff ainda aberto: o envelope segue valendo', async () => {
+    fakeQueue(() => queued('q-open'))
+    const id = seedHandoff()
+    handoffStore.ask(id, 'posso seguir?')
+    await wakeMotherFor(id, 'asked')
+    expect(queuedEnvelopeObsolete('q-open')).toBe(false)
+  })
+
+  it('handoff já terminou depois do envelope entrar na fila: obsoleto', async () => {
+    fakeQueue(() => queued('q-done'))
+    const id = seedHandoff()
+    handoffStore.ask(id, 'posso seguir?')
+    await wakeMotherFor(id, 'asked')
+    handoffStore.fail(id, 'abortado')
+    expect(queuedEnvelopeObsolete('q-done')).toBe(true)
+  })
+
+  it('item que não é de nenhum handoff nunca é obsoleto', () => {
+    expect(queuedEnvelopeObsolete('q-sem-ledger')).toBe(false)
   })
 })
 

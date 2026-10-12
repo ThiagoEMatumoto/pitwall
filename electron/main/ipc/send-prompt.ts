@@ -8,7 +8,11 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
-import { getDormantPanes } from '../services/dormant-panes'
+import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
+import { getDormantPanes, setDormantSyncHook } from '../services/dormant-panes'
+import { liveConversationOf } from '../services/conversation-holder'
+import { registerImageKeeper } from '../services/image-temp-sweep'
+import { setWorkspaceRestoredHook } from './workspace'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -31,10 +35,11 @@ import { answerCitedRequests } from '../services/handoff/cited-answer'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import { onAnswerQueueSnapshot } from '../services/handoff/answer-delivery'
+import { restoreQueueWithLedger } from '../services/handoff/boot-ledger'
 import {
   onQueueSnapshot,
+  queuedEnvelopeObsolete,
   setHandoffWakeQueue,
-  sweepOrphansOnBoot,
 } from '../services/handoff/handoff-wake'
 import type {
   PromptQueueSnapshot,
@@ -166,7 +171,45 @@ export const promptQueue = new PromptQueue({
     }
   },
   warn: (event) => console.warn(JSON.stringify(event)),
+  store: createPromptQueueStore(getDb),
+  deliveryProof,
+  liveCcOf: (id) => liveConversationOf(id),
+  isObsolete: (id, text) =>
+    (isHandoffWakeEnvelope(text) || isHandoffAnswerEnvelope(text)) && queuedEnvelopeObsolete(id),
 })
+// Imagem colada citada por um item na fila: nem o sweep do exit da PTY nem o do
+// boot (que roda depois do restore da fila) a apagam antes da entrega.
+registerImageKeeper((name) => promptQueue.references(name))
+
+// Itens restaurados esperando uma conversa que está dormindo no renderer: acorda a
+// pane (o spawn os traz por onSessionLive). Wake que falha deixa os itens visíveis
+// (Enviar/Descartar) em vez de esperar calados.
+export function wakeParkedTargets(): void {
+  const panes = getDormantPanes()
+  if (!panes) return
+  for (const cc of promptQueue.wakeTargets()) {
+    if (!panes.findDormantByCc(cc)) continue
+    void panes
+      .wakeDormant(cc, 'send-prompt')
+      .then((woke) => {
+        if (woke.ok) return
+        promptQueue.recordWakeFailed(cc, woke.error)
+        promptQueue.surfaceTarget(cc)
+      })
+      .catch((err) => console.error('[prompt-queue] wake do item restaurado falhou:', err))
+  }
+}
+
+// A PTY que acabou de subir é de uma conversa com itens de antes do kill/reboot?
+// É o mesmo ponto em que o espelho da tela nasce (spawn): resume e wake passam por ele.
+// A fila resolve a conversa pela mesma fonte do enqueue (liveCcOf + linha sessions).
+function onPtySpawn(sessionId: string): void {
+  try {
+    promptQueue.onSessionLive(sessionId)
+  } catch (err) {
+    console.error('[prompt-queue] reentrega no spawn falhou:', err)
+  }
+}
 
 const tailFeed = new ScreenTailFeed({
   read: (id) => tuiMenuWatch.styledTail(id, TAIL_LINES),
@@ -196,7 +239,11 @@ export function registerSendPromptIpc(): void {
     replaceText: (id, text) => promptQueue.replaceText(id, text),
     cancel: (id) => promptQueue.cancel(id),
   })
-  sweepOrphansOnBoot()
+  // Antes de qualquer PTY: as que subirem já acham os itens.
+  restoreQueueWithLedger(promptQueue)
+  ptyManager.on('spawn', (e) => onPtySpawn(e.sessionId))
+  setDormantSyncHook(wakeParkedTargets)
+  setWorkspaceRestoredHook(() => promptQueue.onWorkspaceRestored())
   setSendMessageObserver((e) => {
     recordChildDirectMessage(e)
     const answered = answerCitedRequests(e)
@@ -212,6 +259,12 @@ export function registerSendPromptIpc(): void {
   ipcMain.handle('prompt-queue:cancel', (_e, raw: unknown) => {
     const { id } = idSchema.parse(raw)
     return promptQueue.cancel(id)
+  })
+  ipcMain.handle('prompt-queue:resend', (_e, raw: unknown) => {
+    const { id } = idSchema.parse(raw)
+    const ok = promptQueue.resend(id)
+    if (ok) wakeParkedTargets()
+    return ok
   })
   ipcMain.handle('prompt-queue:list', () => promptQueue.snapshot())
   // A janela diz quais cartões estão abertos E visíveis; cada chamada substitui a

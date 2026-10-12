@@ -8,7 +8,11 @@ import { z } from 'zod'
 import { getDb } from '../services/db'
 import { draftReferencesFile } from '../services/composer-drafts'
 import { requestDraftFlush } from './composer-drafts'
-import { sweepAfterDraftFlush, sweepImageTempDir } from '../services/image-temp-sweep'
+import {
+  imageKeptByKeepers,
+  sweepAfterDraftFlush,
+  sweepImageTempDir,
+} from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
@@ -336,21 +340,23 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
 
 // Remove temporários de imagem que casam com o predicado, menos os referenciados
 // por um rascunho persistido do Composer (o rascunho sobrevive ao reboot e ao
-// exit da PTY; a imagem dele também precisa). Sem conseguir ler os rascunhos,
-// não apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
+// exit da PTY; a imagem dele também precisa) ou por um item da fila durável
+// (registerImageKeeper em send-prompt.ts). Sem conseguir ler os rascunhos, não
+// apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let isKept: (filename: string) => boolean
+  let draftKeeps: (filename: string) => boolean
   try {
-    isKept = draftReferencesFile(getDb())
+    draftKeeps = draftReferencesFile(getDb())
   } catch (err) {
     console.error('[sessions] sweep de imagens adiado: rascunhos ilegíveis', err)
     return
   }
-  sweepImageTempDir(tempDir(), predicate, isKept)
+  sweepImageTempDir(tempDir(), predicate, (name) => draftKeeps(name) || imageKeptByKeepers(name))
 }
 
-// Sweep de boot: num processo fresco só os rascunhos persistidos referenciam
-// temps de imagem; o resto é órfão. Chamado uma vez no app.whenReady (index.ts).
+// Sweep de boot: num processo fresco só os rascunhos persistidos e os itens que a
+// fila restaurou do app.db referenciam temps de imagem; o resto é órfão. Chamado
+// uma vez no app.whenReady (index.ts).
 export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }

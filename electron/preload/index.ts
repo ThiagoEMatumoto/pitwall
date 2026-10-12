@@ -482,6 +482,7 @@ const api: Api = {
   sendTo: {
     send: (input: SendPromptInput) => invoke('sessions:send-prompt', input),
     cancel: (id: string) => invoke('prompt-queue:cancel', { id }),
+    resend: (id: string) => invoke('prompt-queue:resend', { id }),
     queue: () => invoke('prompt-queue:list'),
     preview: (sessionId: string) => invoke('sessions:screen-preview', { sessionId }),
     subscribeTail: (sessionIds: string[]) => invoke('sessions:tail-subscribe', { sessionIds }),

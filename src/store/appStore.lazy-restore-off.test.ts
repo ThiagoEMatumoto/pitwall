@@ -300,16 +300,99 @@ describe('resume eager que falha no boot', () => {
 })
 
 describe('open_panes durante o restore', () => {
-  it('pref off: o persist segue o timing da main (salva no meio de um restore lento)', async () => {
+  // As panes entram uma a uma (pool de 4): um save no meio deixaria no open_panes só
+  // as já restauradas, e um kill -9 ali perderia as outras.
+  it('pref off: resumes lentos não gravam subconjunto; ao fim, 1 save com as N', async () => {
+    resumeDelays.set('cc-a', 300)
     resumeDelays.set('cc-b', 900)
     const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
     await waitPersist()
 
-    // cc-b ainda não voltou e o open_panes já foi gravado, como na main.
-    expect(calls.resume).toContain('cc-b')
     expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
-    expect(calls.savePanes.length).toBeGreaterThan(0)
+    expect(calls.savePanes).toEqual([])
     await restoring
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId).sort()).toEqual(
+      bootSnaps.map((s) => s.paneId).sort(),
+    )
+  })
+
+  // Ação do usuário no meio do restore grava na hora o conjunto COMPLETO: as salvas
+  // (inclusive as que ainda não voltaram) + a ação. Nunca um subconjunto.
+  const ids = (snaps: { paneId: string }[]) => snaps.map((s) => s.paneId).sort()
+  const bootIds = bootSnaps.map((s) => s.paneId)
+
+  it('pref off: aba aberta no meio do restore grava já N+1, e de novo ao fim', async () => {
+    resumeDelays.set('cc-a', 300)
+    resumeDelays.set('cc-b', 900)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(calls.savePanes).toEqual([])
+
+    await useAppStore.getState().openSession(null, null, null, null, 'pane-user')
+
+    // Imediato: sem esperar o debounce nem o fim do restore (cc-b ainda em voo).
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
+    expect(calls.savePanes).toHaveLength(1)
+    expect(ids(calls.savePanes[0])).toEqual([...bootIds, 'pane-user'].sort())
+    await restoring
+    await waitPersist()
+
+    for (const saved of calls.savePanes)
+      expect(ids(saved)).toEqual([...bootIds, 'pane-user'].sort())
+    expect(calls.savePanes).toHaveLength(2)
+  })
+
+  it('pref off: fechar uma salva ainda não restaurada grava já N−1 e ela não volta', async () => {
+    resumeDelays.set('cc-b', 600)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
+
+    useAppStore.getState().closePane('pane-b')
+
+    const rest = bootIds.filter((id) => id !== 'pane-b').sort()
+    expect(calls.savePanes).toHaveLength(1)
+    expect(ids(calls.savePanes[0])).toEqual(rest)
+    await restoring
+    await waitPersist()
+
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-b')).toBe(false)
+    for (const saved of calls.savePanes) expect(ids(saved)).toEqual(rest)
+  })
+
+  it('pref off: fechar uma já restaurada no meio grava já N−1, sem as em voo sumirem', async () => {
+    resumeDelays.set('cc-b', 600)
+    const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(useAppStore.getState().panes.some((p) => p.paneId === 'pane-live')).toBe(true)
+
+    useAppStore.getState().closePane('pane-live')
+
+    const rest = bootIds.filter((id) => id !== 'pane-live').sort()
+    expect(calls.savePanes).toHaveLength(1)
+    expect(ids(calls.savePanes[0])).toEqual(rest)
+    await restoring
+    await waitPersist()
+    for (const saved of calls.savePanes) expect(ids(saved)).toEqual(rest)
+  })
+
+  it('pref off: eager que falha fica no save final como dormant, sem save intermediário', async () => {
+    resumeDelays.set('cc-a', 300)
+    resumeFails.set('cc-a', 'boom')
+    await useAppStore.getState().restoreSnapshots(bootSnaps, null)
+    await waitPersist()
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(calls.savePanes[0].map((s) => s.paneId).sort()).toEqual(
+      bootSnaps.map((s) => s.paneId).sort(),
+    )
+    expect(useAppStore.getState().panes.find((p) => p.paneId === 'pane-a')).toMatchObject({
+      dormant: true,
+      restoreError: 'boom',
+    })
   })
 
   // Com a pref ligada o save fica para o fim do restore (plano 'eager' do mock: sem dormant).
@@ -325,15 +408,18 @@ describe('open_panes durante o restore', () => {
     for (const saved of calls.savePanes) expect(saved).toHaveLength(bootSnaps.length)
   })
 
-  it('pref on: uma pane aberta pelo usuário no meio do restore entra no save final', async () => {
+  it('pref on: uma pane aberta pelo usuário no meio do restore grava já, completa', async () => {
     prefValue = true
     resumeDelays.set('cc-b', 300)
     const restoring = useAppStore.getState().restoreSnapshots(bootSnaps, null)
     await useAppStore.getState().openSession(null, null, null, null, 'pane-user')
+
+    expect(calls.savePanes).toHaveLength(1)
+    expect(ids(calls.savePanes[0])).toEqual([...bootIds, 'pane-user'].sort())
     await restoring
     await waitPersist()
 
-    expect(calls.savePanes).toHaveLength(1)
-    expect(calls.savePanes[0].map((s) => s.paneId)).toContain('pane-user')
+    for (const saved of calls.savePanes)
+      expect(ids(saved)).toEqual([...bootIds, 'pane-user'].sort())
   })
 })

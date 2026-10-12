@@ -21,12 +21,23 @@ export function ptyMovedToOtherConversation(
   ccSessionId: string,
   index: SessionsFileIndex = buildSessionsFileIndex(),
 ): boolean {
+  const live = liveConversationOf(sessionId, index)
+  return live !== null && live !== ccSessionId
+}
+
+// A conversa que a PTY segura AGORA, pelo índice ~/.claude/sessions (acompanha
+// /clear e /resume). null = sem prova (pid fora do índice ou entrada de processo
+// morto): quem chama fica com a linha sessions.
+export function liveConversationOf(
+  sessionId: string,
+  index: SessionsFileIndex = buildSessionsFileIndex(),
+): string | null {
   const pid = ptyManager.getPid(sessionId)
-  if (pid === null) return false
+  if (pid === null) return null
   for (const [sid, entry] of index) {
-    if (entry.pid === pid && isSessionPidAlive(entry)) return sid !== ccSessionId
+    if (entry.pid === pid && isSessionPidAlive(entry)) return sid
   }
-  return false
+  return null
 }
 
 // Processo vivo segurando a conversa sem ser a PTY que o Pitwall reanexaria:

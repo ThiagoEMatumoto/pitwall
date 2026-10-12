@@ -9,6 +9,10 @@ export interface LocalToast {
   body?: string
   actionLabel?: string
   onAction?: () => void
+  secondaryActionLabel?: string
+  onSecondaryAction?: () => void
+  // Não some sozinho: espera uma decisão do usuário (ação ou dispensar).
+  persistent?: boolean
   durationMs: number
 }
 

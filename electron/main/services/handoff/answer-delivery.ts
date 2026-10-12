@@ -35,6 +35,20 @@ import type {
 const answerPending = new Map<string, string>()
 let lastEventId: string | null = null
 
+// Boot: a resposta que voltou do app.db volta a ser acompanhada, para o snapshot
+// resolver o desfecho no ledger (wake_id = id do item).
+export function rehydrateAnswerPending(queueId: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT mother_session_id FROM handoff_wake_deliveries
+        WHERE wake_id = ? AND outcome IN ('queued','held','attention') LIMIT 1`,
+    )
+    .get(queueId) as { mother_session_id: string | null } | undefined
+  if (!row?.mother_session_id) return false
+  answerPending.set(queueId, row.mother_session_id)
+  return true
+}
+
 export function __resetAnswerDeliveryForTests(): void {
   answerPending.clear()
   lastEventId = null
@@ -225,6 +239,16 @@ export function onAnswerQueueSnapshot(snapshot: PromptQueueSnapshot): void {
   for (const queueId of answerPending.keys()) {
     const item = snapshot.items.find((i) => i.id === queueId)
     if (!item) continue
+    // Talvez não entregue (kill no meio da entrega, transcript inconclusivo): não é
+    // desfecho. Fica 'held' com o motivo, visível no ledger, até o Reenviar
+    // (delivered) ou o Descartar (cancelled) do toast da fila.
+    if (item.recovery === 'maybe-undelivered') {
+      db.prepare(
+        `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = 'maybe-undelivered'
+          WHERE wake_id = ? AND outcome IN ('queued','held','attention')`,
+      ).run(now, queueId)
+      continue
+    }
     if (item.heldReason) {
       db.prepare(
         `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = ?
@@ -238,9 +262,13 @@ export function onAnswerQueueSnapshot(snapshot: PromptQueueSnapshot): void {
     }
   }
   const ev = snapshot.lastEvent
-  if (!ev || ev.id === lastEventId) return
-  lastEventId = ev.id
+  // Por tipo + id: o mesmo item emite 'maybe-undelivered' e depois o desfecho.
+  const evKey = ev && `${ev.kind}:${ev.id}`
+  if (!ev || evKey === lastEventId) return
+  lastEventId = evKey
   if (!answerPending.has(ev.id)) return
+  // Não terminal: segue pendente até o delivered/cancelled que vier depois.
+  if (ev.kind === 'maybe-undelivered') return
   answerPending.delete(ev.id)
   const outcome: WakeOutcome =
     ev.kind === 'delivered'

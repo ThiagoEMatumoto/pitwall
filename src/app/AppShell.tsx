@@ -44,11 +44,13 @@ import {
   useUpdateToastShown,
 } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
+import { useMaybeUndeliveredToasts } from '@/features/quick-composer/maybe-undelivered-toasts'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
+import { layoutRestoreStep } from '../../shared/dock-layout-restore'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
@@ -202,6 +204,14 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   )
 }
 
+// Quais painéis o dockview tem, sem a ordem nem o arranjo.
+function panelSetKey(api: DockviewApi): string {
+  return api.panels
+    .map((p) => p.id)
+    .sort()
+    .join('|')
+}
+
 // Título inicial legível pra aba (nunca o paneId). O Terminal sobrescreve ao vivo
 // via onTitleChange assim que o nome do CC chega.
 // Dormindo não tem Terminal para mandar o nome: o título é o do store (DB via sync).
@@ -216,6 +226,7 @@ const components = { terminal: TerminalPanel }
 const tabComponents = { terminal: TerminalTab }
 
 export function AppShell() {
+  useMaybeUndeliveredToasts()
   const area = useAppStore((s) => s.area)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
@@ -225,6 +236,7 @@ export function AppShell() {
   const restoreBlocked = useAppStore((s) => s.restoreBlocked)
   const retryRestore = useAppStore((s) => s.retryRestore)
   const pendingLayout = useAppStore((s) => s.pendingLayout)
+  const restoreComplete = useAppStore((s) => s.restoreComplete)
   const clearPendingLayout = useAppStore((s) => s.clearPendingLayout)
   const focusPaneId = useAppStore((s) => s.focusPaneId)
   const clearFocusPane = useAppStore((s) => s.clearFocusPane)
@@ -305,6 +317,29 @@ export function AppShell() {
 
   // Debounce do persist de layout: onDidLayoutChange dispara a cada drag/resize.
   const layoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Conjunto de painéis do último layout gravado. Mudou (aba aberta/fechada) =
+  // grava já, junto do open_panes que o store gravou no mesmo tick; drag/resize
+  // segue no debounce.
+  const savedLayoutPanels = useRef<string | null>(null)
+
+  const saveLayoutNow = useCallback(() => {
+    if (layoutTimer.current) clearTimeout(layoutTimer.current)
+    layoutTimer.current = null
+    const api = apiRef.current
+    if (!api) return
+    savedLayoutPanels.current = panelSetKey(api)
+    const layout = api.panels.length > 0 ? JSON.stringify(api.toJSON()) : null
+    void workspaceApi.saveLayout(layout)
+  }, [])
+
+  // Quit/reload com um drag ainda no debounce: grava antes de a janela sumir.
+  useEffect(() => {
+    const flush = () => {
+      if (layoutTimer.current) saveLayoutNow()
+    }
+    window.addEventListener('beforeunload', flush)
+    return () => window.removeEventListener('beforeunload', flush)
+  }, [saveLayoutNow])
 
   // Alinha o seletor do painel de arquivos ao repo do pane ATIVO do dockview.
   // Preserva a escolha manual enquanto o pane ativo não muda (só re-seleciona
@@ -348,17 +383,16 @@ export function AppShell() {
         // Não persiste enquanto aplicamos o layout do restore (evita salvar estados
         // intermediários da reconstrução) nem antes do restore ter terminado.
         if (applyingLayout.current || !restoreDone.current) return
+        if (panelSetKey(event.api) !== savedLayoutPanels.current) {
+          saveLayoutNow()
+          return
+        }
         if (layoutTimer.current) clearTimeout(layoutTimer.current)
-        layoutTimer.current = setTimeout(() => {
-          const api = apiRef.current
-          if (!api) return
-          const layout = api.panels.length > 0 ? JSON.stringify(api.toJSON()) : null
-          void workspaceApi.saveLayout(layout)
-        }, 500)
+        layoutTimer.current = setTimeout(saveLayoutNow, 500)
       })
       setReady(true)
     },
-    [closePane, syncFilesRepoToActivePane],
+    [closePane, syncFilesRepoToActivePane, saveLayoutNow],
   )
 
   // Bastão da mãe: filha que não recebeu a nota do endereço novo segue escrevendo
@@ -398,23 +432,23 @@ export function AppShell() {
       return
     }
 
-    const storeIds = new Set(panes.map((p) => p.paneId))
-    const restored = wantedIds.filter((id) => storeIds.has(id))
     // Ainda faltam panes do layout voltando do resume: espera o próximo render.
-    // Timeout de fallback aplica o parcial (remove órfãos) caso algum resume falhe.
-    const allBack = wantedIds.every((id) => storeIds.has(id))
-    if (!allBack && restored.length === 0) return
+    // O fallback aplica o parcial (remove órfãos) se algum resume falhar, ou
+    // desiste do layout se o restore terminou sem nenhuma delas.
+    const step = layoutRestoreStep(wantedIds, new Set(panes.map((p) => p.paneId)), restoreComplete)
+    if (step === 'wait') return
 
     const apply = () => {
       if (!pendingLayout) return
       applyingLayout.current = true
       try {
-        // Remove do JSON os painéis cujas panes não voltaram (resume falhou),
-        // pra fromJSON não tentar materializar painéis órfãos.
-        const orphans = wantedIds.filter((id) => !storeIds.has(id))
-        if (orphans.length > 0) {
-          for (const id of orphans) delete layout.panels[id]
-        }
+        // O fallback dispara depois: confere as panes de agora, não as do render
+        // que o armou. Órfãs saem do JSON pra fromJSON não materializá-las.
+        const back = new Set(useAppStore.getState().panes.map((p) => p.paneId))
+        const orphans = wantedIds.filter((id) => !back.has(id))
+        for (const id of orphans) delete layout.panels[id]
+        // Nenhuma voltou: o layout não serve; a reconciliação monta o grid padrão.
+        if (orphans.length === wantedIds.length) return
         api.fromJSON(layout)
         // Sincroniza params de cada painel com a pane do store (id = paneId).
         for (const panel of api.panels) {
@@ -439,14 +473,14 @@ export function AppShell() {
       }
     }
 
-    if (allBack) {
+    if (step === 'apply') {
       apply()
     } else if (!fallbackTimer.current) {
       // Algumas panes ainda não voltaram; dá um tempo extra antes de aplicar o
       // parcial. Se chegarem antes, o ramo allBack acima dispara e limpa o timer.
       fallbackTimer.current = setTimeout(apply, 1500)
     }
-  }, [ready, panes, pendingLayout, clearPendingLayout])
+  }, [ready, panes, pendingLayout, clearPendingLayout, restoreComplete])
 
   // Reconciliação store → dockview. O store é a fonte da verdade: criamos painéis
   // pra panes novas e removemos painéis órfãos, SEM tocar nos painéis existentes
