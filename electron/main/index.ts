@@ -89,6 +89,7 @@ import {
   markWorkspaceCleanShutdown,
 } from './ipc/workspace'
 import { startMcpServer, stopMcpServer } from './services/mcp/server'
+import { sweepSessionSettings } from './services/session-settings'
 import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
@@ -313,6 +314,10 @@ app.whenReady().then(async () => {
   // MCP server local (writes externos via Claude Code). Async e fire-and-forget:
   // EADDRINUSE etc. são logados dentro do start — nunca derrubam o boot.
   void startMcpServer()
+  // Settings por sessão órfãos (nenhuma PTY sobrevive ao quit), antes de
+  // qualquer spawn. Fora do
+  // startMcpServer de propósito: o settings existe mesmo sem MCP no ar.
+  sweepSessionSettings()
   // Captura o clean_shutdown do boot anterior e o zera; deve rodar antes da
   // janela para que o renderer leia o valor correto via workspace:get-boot-state.
   markWorkspaceRunning()

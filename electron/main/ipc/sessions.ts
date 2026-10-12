@@ -46,7 +46,14 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { scopeOomWatch } from '../services/scope-oom-watch'
 import { getMcpRuntime } from '../services/mcp/server'
+import {
+  buildSessionSettings,
+  removeSessionSettings,
+  writeSessionSettings,
+  type SessionSettings,
+} from '../services/session-settings'
 import {
   mcpClientConfigPath,
   removeSessionMcpConfig,
@@ -60,7 +67,7 @@ import {
   resolveEffort,
   resolveAdvisor,
   permissionModeForHandoffMode,
-  handoffChildSettingsJson,
+  handoffChildSettings,
   assertAutonomousSpawnGuarded,
   resolveCodexModel,
 } from '../services/spawn-flags'
@@ -262,6 +269,18 @@ function mcpLaunch(
   }
 }
 
+// Settings da sessão (denylist + política da filha) gravado em ARQUIVO antes do
+// spawn; o argv leva só o path. Devolve null quando não há nada a entregar. Falha
+// de escrita PROPAGA: subir sem o denylist abriria a sessão em silêncio.
+function sessionSettingsFile(
+  internalSessionId: string,
+  base: SessionSettings | null,
+  deny: readonly string[] | null,
+): string | null {
+  const settings = buildSessionSettings(base, deny)
+  return settings ? writeSessionSettings(internalSessionId, settings) : null
+}
+
 // O claude vive em ~/.local/bin e o env do Electron GUI não herda o PATH do rc.
 // Subimos o shell de login+interativo (-l -i carrega .zprofile/.zshrc) e damos
 // `exec claude` para que o PTY encerre quando o claude sair.
@@ -457,26 +476,30 @@ function startSession(opts: {
     ended_at: null,
     provider: provider.id,
   }
-  db.prepare(
-    `INSERT INTO sessions
+  // O settings da sessão já foi gravado pelo chamador: qualquer falha daqui até
+  // a PTY existir (INSERT ou spawn) precisa removê-lo, senão fica órfão até o boot.
+  let inserted = false
+  try {
+    db.prepare(
+      `INSERT INTO sessions
      (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    row.id,
-    row.repo_id,
-    row.cc_session_id,
-    row.title,
-    row.pane_id,
-    row.status,
-    row.started_at,
-    row.ended_at,
-    opts.featureId ?? null,
-    row.provider,
-    opts.featureSource ?? null,
-  )
-  if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
+    ).run(
+      row.id,
+      row.repo_id,
+      row.cc_session_id,
+      row.title,
+      row.pane_id,
+      row.status,
+      row.started_at,
+      row.ended_at,
+      opts.featureId ?? null,
+      row.provider,
+      opts.featureSource ?? null,
+    )
+    inserted = true
+    if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
 
-  try {
     const { command, args } = loginShellSpawn(opts.innerCmd)
     ptyManager.spawn({
       sessionId: row.id,
@@ -489,10 +512,14 @@ function startSession(opts: {
       sampleActivity: !provider.supports.nativeTranscript,
     })
   } catch (err) {
-    db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
-      Date.now(),
-      row.id,
-    )
+    if (inserted) {
+      db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
+        Date.now(),
+        row.id,
+      )
+    }
+    // Sem PTY não haverá exit para limpar o settings gravado no pré-spawn.
+    removeSessionSettings(row.id)
     throw err
   }
 
@@ -597,10 +624,16 @@ export function spawnSession(input: SpawnSessionInput): Session {
     advisorModel,
     systemPromptFilePath,
     permissionMode,
-    disallowedTools,
-    // Só a filha de handoff recebe --settings; o valor é a constante canônica do
-    // main (o renderer não escolhe settings — só sinaliza que é filha).
-    settingsJson: input.handoffChild ? handoffChildSettingsJson(permissionMode) : null,
+    // Denylist + (só na filha de handoff) a política canônica do main — o renderer
+    // não escolhe settings, só sinaliza que é filha. Só o claude lê o arquivo.
+    settingsFilePath:
+      provider.id === 'claude'
+        ? sessionSettingsFile(
+            internalSessionId,
+            input.handoffChild ? handoffChildSettings(permissionMode) : null,
+            disallowedTools,
+          )
+        : null,
     initialPrompt: input.initialPrompt,
     systemPromptText,
   })
@@ -784,8 +817,11 @@ export function resumeHandoffChild(
     model: null,
     systemPromptFilePath: null,
     permissionMode,
-    disallowedTools,
-    settingsJson: handoffChildSettingsJson(permissionMode),
+    settingsFilePath: sessionSettingsFile(
+      internalSessionId,
+      handoffChildSettings(permissionMode),
+      disallowedTools,
+    ),
   })
 
   const session = startSession({
@@ -946,6 +982,8 @@ export function registerSessionIpc(): void {
       }
     })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
+    scopeOomWatch.attach(ptyManager)
+    scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
       db.prepare(
@@ -965,6 +1003,9 @@ export function registerSessionIpc(): void {
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
       // sobrando depois que a PTY morre.
       removeSessionMcpConfig(e.sessionId)
+      // Settings da sessão (<userData>/session-settings/<sessions.id>.json): mesmo
+      // ciclo de vida do mcp-config.
+      removeSessionSettings(e.sessionId)
 
       // Para o watcher do transcript do Chat View desta sessão (evita leak de
       // chokidar/interval após a PTY morrer). No-op se ninguém estava observando.
@@ -1518,6 +1559,7 @@ export function registerSessionIpc(): void {
     tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
   )
   ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+  ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)
