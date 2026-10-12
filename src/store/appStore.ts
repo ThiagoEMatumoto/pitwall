@@ -1557,8 +1557,13 @@ export function onSessionOom(event: ScopeOomEvent): void {
   const cc = event.resumeCcSessionId
   if (!cc) return
   // O main manda este evento antes do pty:exit: a pane morta ainda está aqui e
-  // sai já, senão o resumeSession a veria com o mesmo cc e não retomaria.
-  if (pane) useAppStore.getState().closePane(pane.paneId)
+  // sai já, senão o resumeSession a veria com o mesmo cc e não retomaria. Não é o
+  // closePane: aquele é o "fechar aba" do usuário, com toast e Desfazer, e desfazer
+  // aqui traria de volta a pane morta ao lado da retomada.
+  if (pane) {
+    useAppStore.setState((s) => ({ panes: s.panes.filter((p) => p.paneId !== pane.paneId) }))
+    schedulePersist(useAppStore.getState().panes)
+  }
   useAppStore
     .getState()
     .resumeSession(
