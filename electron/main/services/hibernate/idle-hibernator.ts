@@ -62,6 +62,9 @@ export interface IdleHibernatorDeps {
   // Registra a dormant no main já no exit, sem esperar o dormantSync do renderer:
   // uma mensagem que chega nessa janela precisa achar a pane para acordá-la.
   registerDormant(ccSessionId: string, paneId: string): void
+  // Estado "hibernada" no app.db (sessions.hibernated_at). true = grava durável
+  // ANTES do /exit (lança se não conseguir); false = o /exit não virou hibernação.
+  persistHibernating(sessionId: string, on: boolean): void
   lastIoAt(sessionId: string): number | null
   // null = sem arquivo, ilegível ou sem pid.
   sessionFile(ccSessionId: string): SessionFileState | null
@@ -160,8 +163,24 @@ export class IdleHibernator {
       this.deps.warn({ event: 'hibernate_exit_aborted_by_input', sessionId })
       return false
     }
+    // Sem o estado no banco, um restart antes do wake perderia as flags do spawn:
+    // não grava = não sai.
+    try {
+      this.deps.persistHibernating(sessionId, true)
+    } catch (err) {
+      this.deps.warn({ event: 'hibernate_persist_failed', sessionId, error: String(err) })
+      return false
+    }
     pending.delivered = true
     return true
+  }
+
+  private unpersist(sessionId: string): void {
+    try {
+      this.deps.persistHibernating(sessionId, false)
+    } catch (err) {
+      this.deps.warn({ event: 'hibernate_unpersist_failed', sessionId, error: String(err) })
+    }
   }
 
   // Minutos efetivos: 0 se qualquer uma das duas prefs estiver desligada.
@@ -304,6 +323,7 @@ export class IdleHibernator {
     if (this.pending.get(c.sessionId) !== pending) return sent.ok && sent.delivered
     if (!sent.ok || !sent.delivered) {
       if (sent.ok) this.deps.cancel(sent.queued.id)
+      if (pending.delivered) this.unpersist(c.sessionId)
       this.pending.delete(c.sessionId)
       this.refuse('guard-held')
       this.deps.warn({
@@ -320,6 +340,7 @@ export class IdleHibernator {
       // A sessão continua viva: o input segurado segue no item da fila, que volta a
       // entregar nela mesma agora que isHibernating é false.
       this.forget(c.sessionId, pending)
+      this.unpersist(c.sessionId)
       this.refuse('exit-timeout')
       this.deps.warn({ event: 'hibernate_exit_timeout', sessionId: c.sessionId })
     }, this.deps.exitTimeoutMs ?? EXIT_TIMEOUT_MS)
@@ -383,6 +404,7 @@ export class IdleHibernator {
     const pending = this.pending.get(sessionId)
     if (!pending) return
     this.forget(sessionId, pending)
+    if (pending.delivered) this.unpersist(sessionId)
     this.deps.warn({ event: 'hibernate_cancelled_by_close', sessionId })
   }
 

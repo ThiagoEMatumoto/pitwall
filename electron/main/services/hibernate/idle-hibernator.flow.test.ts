@@ -111,6 +111,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
       registered.push({ cc, paneId })
       panes.add({ ccSessionId: cc, paneId, title: null, repoId: null })
     },
+    persistHibernating: () => {},
     send: (input) => queue.send(input),
     cancel: (id) => {
       queue.cancel(id)

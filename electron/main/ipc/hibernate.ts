@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
+import { getDb } from '../services/db'
 import { getPref } from '../services/prefs-store'
 import { activeHandoffCcSessionIds, isHandoffChildCc } from '../services/handoff-store'
 import { findTranscriptPath } from '../services/transcript-path'
@@ -12,6 +13,7 @@ import { PaneConfirmer } from '../services/hibernate/pane-confirm'
 import { lazyRestoreEnabled } from '../services/restore-plan'
 import { inspectProcTree } from '../services/hibernate/proc-tree'
 import { ScheduleScanner } from '../services/hibernate/schedule-scan'
+import { markHibernated, unmarkHibernated } from '../services/hibernate/hibernated-store'
 import {
   IdleHibernator,
   getIdleHibernator,
@@ -94,6 +96,8 @@ export function createIdleHibernator(): IdleHibernator {
     hasPane: (cc) => hasAwakePane(cc, (c) => getDormantPanes()?.findDormantByCc(c) != null),
     confirmPane: (sessionId, cc) => paneConfirmer.confirm(sessionId, cc),
     registerDormant: registerHibernatedDormant,
+    persistHibernating: (sessionId, on) =>
+      on ? markHibernated(getDb(), sessionId) : unmarkHibernated(getDb(), sessionId),
     lastIoAt: (id) => ptyManager.getLastIoAt(id),
     sessionFile: sessionFileFor,
     isPidAlive: (file) => isSessionPidAlive(file),

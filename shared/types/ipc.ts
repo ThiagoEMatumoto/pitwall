@@ -1336,8 +1336,8 @@ export interface ResumeSessionInput {
   ccSessionId: string
   cols?: number
   rows?: number
-  // Wake de uma pane hibernada: reaplica as flags do spawn (modelo, modo de
-  // permissão etc.). O main só honra se a conversa saiu mesmo pela hibernação.
+  // Wake de uma pane hibernada. Informativo: quem decide se as flags do spawn
+  // voltam é o sessions.hibernated_at no main (sobrevive a restart; isto não).
   fromHibernation?: boolean
 }
 

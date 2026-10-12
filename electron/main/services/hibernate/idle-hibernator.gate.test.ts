@@ -143,6 +143,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     hasPane: (cc) => hasAwakePane(cc, () => false),
     confirmPane: async () => idlePane('pane-1'),
     registerDormant: () => {},
+    persistHibernating: () => {},
     lastIoAt: () => NOW - 2 * WINDOW,
     sessionFile: sessionFileFor,
     isPidAlive: (file) => isSessionPidAlive(file),

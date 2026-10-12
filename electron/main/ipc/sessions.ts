@@ -6,11 +6,15 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
+import {
+  clearConversationHibernated,
+  isConversationHibernated,
+  markHibernated,
+} from '../services/hibernate/hibernated-store'
 import { requestDraftFlush } from './composer-drafts'
 import {
   latestSpawnArgs,
   relaunchFlags,
-  withoutFlags,
   type SpawnArgs,
 } from '../services/spawn-args'
 import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
@@ -901,10 +905,6 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 }
 
 let listenersAttached = false
-// cc das conversas que saíram pelo /exit da hibernação e ainda não voltaram. É a
-// conferência do main para o fromHibernation do sessions:resume: o renderer pede,
-// mas só uma conversa hibernada de fato volta com as flags do spawn.
-const hibernatedConversations = new Set<string>()
 
 // Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
 // provider com menus na TUI ganha o espelho headless do tui-menu-watch.
@@ -986,7 +986,13 @@ export function registerSessionIpc(): void {
       // pty:exit para virar a pane dormant em vez de fechá-la com o toast.
       const hibernated = getIdleHibernator()?.onExit(e.sessionId)
       if (hibernated) {
-        hibernatedConversations.add(hibernated.ccSessionId)
+        // O hibernator já gravou antes do /exit; regravar cobre o exit que chegou
+        // antes do beforeWrite. Falha aqui não pode impedir a pane de virar dormant.
+        try {
+          markHibernated(db, e.sessionId)
+        } catch (err) {
+          console.error('[hibernate] failed to persist hibernated state', err)
+        }
         broadcast('sessions:hibernated', hibernated)
       }
       broadcast('pty:exit', e)
@@ -1204,9 +1210,10 @@ export function registerSessionIpc(): void {
     // estava (modo de permissão, modelo, denylist, --settings da filha). No
     // resume manual quem escolhe é o usuário, e as flags ficam no default. As
     // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
+    // A fonte da verdade é sessions.hibernated_at, não o fromHibernation do
+    // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
     const spawned = latestSpawnArgs(db, input.ccSessionId)
-    const fromHibernation =
-      input.fromHibernation === true && hibernatedConversations.has(input.ccSessionId)
+    const fromHibernation = isConversationHibernated(db, input.ccSessionId)
     const original = relaunchFlags(fromHibernation ? spawned : null)
     // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
     // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
@@ -1257,11 +1264,13 @@ export function registerSessionIpc(): void {
       featureSource,
       cols: input.cols,
       rows: input.rows,
-      // A linha grava o que ESTE processo recebeu: um resume manual sem flags
-      // que depois hibernasse não pode acordar com as de um spawn anterior.
-      spawnArgs: fromHibernation ? spawned : withoutFlags(spawned),
+      // Copia o registro como está: um resume sem flags não pode apagar as do
+      // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
+      // novas grava outras.
+      spawnArgs: spawned,
     })
-    hibernatedConversations.delete(input.ccSessionId)
+    // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
+    clearConversationHibernated(db, input.ccSessionId)
     transferLeadershipToResumed(priorSessionIds, session, 'renderer')
     return { session, reattached: false }
   })

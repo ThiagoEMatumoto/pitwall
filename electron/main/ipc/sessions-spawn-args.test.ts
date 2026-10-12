@@ -77,7 +77,9 @@ vi.mock('../services/mcp/config', () => ({
 vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
-import { setIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { IdleHibernator, setIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { markHibernated, unmarkHibernated } from '../services/hibernate/hibernated-store'
+import { parseSpawnArgs } from '../services/spawn-args'
 
 const REPO_DIR = join(HOME, 'repo')
 const MODEL = SPAWNABLE_MODEL_ALIASES[0]
@@ -169,6 +171,12 @@ function wake(cc: string): string {
   return resume(cc, true)
 }
 
+function openDb(file: string): Database.Database {
+  const db = new Database(file)
+  db.pragma('foreign_keys = ON')
+  return db
+}
+
 beforeEach(() => {
   seam.handlers.clear()
   seam.spawns = []
@@ -176,8 +184,8 @@ beforeEach(() => {
   rmSync(HOME, { recursive: true, force: true })
   mkdirSync(REPO_DIR, { recursive: true })
   mkdirSync(join(HOME, '.claude', 'sessions'), { recursive: true })
-  seam.db = new Database(':memory:')
-  seam.db.pragma('foreign_keys = ON')
+  // Arquivo real: o teste de restart fecha e reabre o mesmo app.db.
+  seam.db = openDb(join(HOME, 'app.db'))
   applyAllMigrations(seam.db)
   seam.db
     .prepare(`INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1','P1',1,1)`)
@@ -411,17 +419,38 @@ describe('resume manual: só o cwd do spawn volta', () => {
     expectDefaultFlags(wake(cc))
   })
 
-  it('hibernada retomada à mão (aba fechada): sem flags, e a hibernação seguinte não as ressuscita', () => {
+  // Quem decide é o sessions.hibernated_at, não o fromHibernation do renderer: a
+  // conversa hibernada volta com as flags por qualquer caminho de resume.
+  it('hibernada retomada à mão (aba fechada): volta com as flags, uma vez', () => {
     const { id, cc } = spawnWithFlags('fechada')
     hibernate(id)
     const resumed = resume(cc)
-    expectDefaultFlags(resumed)
+    expect(argvOf(resumed)).toContain("--permission-mode 'acceptEdits'")
     expect(cwdOf(resumed)).toBe(REPO_DIR)
-    // A linha do resume manual grava o que o processo recebeu: nada além do cwd.
+    // O estado é consumido no resume: o seguinte, sem hibernação, é manual.
+    exitPty(resumed, { hibernated: false })
+    expectDefaultFlags(resume(cc))
+  })
+
+  it('resume manual não apaga as flags gravadas: a hibernação seguinte as reaplica', () => {
+    const { id, cc } = spawnWithFlags('preserva')
+    exitPty(id, { hibernated: false })
+    const resumed = resume(cc)
+    expectDefaultFlags(resumed)
+    const row = seam.db.prepare('SELECT spawn_args FROM sessions WHERE id = ?').get(resumed) as {
+      spawn_args: string
+    }
+    expect(parseSpawnArgs(row.spawn_args)).toMatchObject({
+      permissionMode: 'acceptEdits',
+      model: MODEL,
+      effort: 'high',
+      systemPromptText: 'Responda sempre em inglês.',
+      cwd: REPO_DIR,
+    })
     hibernate(resumed)
     const woke = wake(cc)
-    expectDefaultFlags(woke)
-    expect(cwdOf(woke)).toBe(REPO_DIR)
+    expect(argvOf(woke)).toContain("--permission-mode 'acceptEdits'")
+    expect(argvOf(woke)).toContain(`--model '${MODEL}'`)
   })
 
   it('wake da hibernada: o argv tem X/Y e o cwd gravado', () => {
@@ -432,5 +461,121 @@ describe('resume manual: só o cwd do spawn volta', () => {
     expect(argvOf(woke)).toContain(`--model '${MODEL}'`)
     expect(systemPromptOf(argvOf(woke))).toContain('Responda sempre em inglês.')
     expect(cwdOf(woke)).toBe(REPO_DIR)
+  })
+})
+
+describe('estado "hibernada" no app.db sobrevive a restart', () => {
+  // O IdleHibernator real com a mesma ligação de persistência do hibernate.ts: o
+  // beforeWrite grava antes de a fila escrever o /exit, e o exit da PTY sai pelo
+  // handler real.
+  function realHibernator(persist: (sessionId: string, on: boolean) => void): IdleHibernator {
+    const unused = (): never => {
+      throw new Error('gate fora do escopo')
+    }
+    const h: IdleHibernator = new IdleHibernator({
+      lazyRestore: () => true,
+      afterMin: () => 30,
+      candidates: unused,
+      hasPane: unused,
+      confirmPane: unused,
+      registerDormant: () => {},
+      persistHibernating: persist,
+      lastIoAt: unused,
+      sessionFile: unused,
+      isPidAlive: unused,
+      aliveSessionId: unused,
+      activeHandoffCcSessionIds: unused,
+      isHandoffChild: unused,
+      queueHas: unused,
+      agentMessageSince: unused,
+      transcriptPath: unused,
+      scanTranscript: unused,
+      procTree: unused,
+      // A PromptQueue chama beforeWrite logo antes de escrever no PTY.
+      send: async (input) =>
+        h.beforeWrite(input.sessionId, input.text, false)
+          ? { ok: true, delivered: true }
+          : { ok: false, error: 'not-running' },
+      cancel: () => {},
+      replaceText: () => true,
+      warn: () => {},
+    })
+    return h
+  }
+
+  const persistToDb = (sessionId: string, on: boolean): void =>
+    on ? markHibernated(seam.db, sessionId) : unmarkHibernated(seam.db, sessionId)
+
+  function hibernatedAt(sessionId: string): number | null {
+    return (
+      seam.db.prepare('SELECT hibernated_at FROM sessions WHERE id = ?').get(sessionId) as {
+        hibernated_at: number | null
+      }
+    ).hibernated_at
+  }
+
+  it('hiberna, o app reinicia (Set e hibernator zerados, banco reaberto) e o wake volta com as flags', async () => {
+    const spawned = spawnSession({
+      repoId: 'r1',
+      name: 'restart',
+      permissionMode: 'acceptEdits',
+      model: MODEL,
+      effort: 'high',
+      disallowedTools: ['Bash(curl:*)'],
+      systemPromptText: 'Responda sempre em inglês.',
+    } as never)
+    const cc = ccOf(spawned.id)
+    writeTranscript(cc)
+    const before = relevantFlags(argvOf(spawned.id))
+
+    const h = realHibernator(persistToDb)
+    setIdleHibernator(h)
+    expect(await h.hibernate({ sessionId: spawned.id, ccSessionId: cc }, 'pane-1')).toBe(true)
+    // Gravado antes do exit: uma queda de energia aqui não perde o estado.
+    expect(hibernatedAt(spawned.id)).not.toBeNull()
+    seam.live.delete(spawned.id)
+    for (const fn of seam.exitHandlers) fn({ sessionId: spawned.id, exitCode: 0 })
+    setIdleHibernator(null)
+
+    // Restart: nada em memória sobre a hibernação; o app.db é reaberto do disco.
+    seam.db.close()
+    seam.db = openDb(join(HOME, 'app.db'))
+    // Depois do restart a pane volta dormant sem dormantReason: fromHibernation false.
+    const woke = resume(cc, false)
+    expect(relevantFlags(argvOf(woke))).toEqual(before)
+    expect(systemPromptOf(argvOf(woke))).toContain('Responda sempre em inglês.')
+    // Consumido pelo wake; a linha nova copia as flags para a próxima hibernação.
+    expect(hibernatedAt(spawned.id)).toBeNull()
+    expect(parseSpawnArgs(
+      (seam.db.prepare('SELECT spawn_args FROM sessions WHERE id = ?').get(woke) as {
+        spawn_args: string
+      }).spawn_args,
+    )).toMatchObject({ permissionMode: 'acceptEdits', model: MODEL })
+
+    // Resume manual depois do wake: sem flags no argv, mas o registro continua com elas.
+    seam.live.delete(woke)
+    for (const fn of seam.exitHandlers) fn({ sessionId: woke, exitCode: 0 })
+    const manual = resume(cc)
+    expect(relevantFlags(argvOf(manual))).toEqual([])
+    const row = seam.db.prepare('SELECT spawn_args FROM sessions WHERE id = ?').get(manual) as {
+      spawn_args: string
+    }
+    expect(parseSpawnArgs(row.spawn_args)).toMatchObject({
+      permissionMode: 'acceptEdits',
+      model: MODEL,
+      effort: 'high',
+      disallowedTools: expect.arrayContaining(['Bash(curl:*)']),
+    })
+  })
+
+  it('banco recusa gravar o estado: o /exit não sai e a sessão segue viva', async () => {
+    const spawned = spawnSession({ repoId: 'r1', name: 'sem-banco' } as never)
+    const cc = ccOf(spawned.id)
+    const h = realHibernator(() => {
+      throw new Error('SQLITE_FULL')
+    })
+    expect(await h.hibernate({ sessionId: spawned.id, ccSessionId: cc }, 'pane-1')).toBe(false)
+    expect(h.isHibernating(spawned.id)).toBe(false)
+    expect(h.getStats().refused['guard-held']).toBe(1)
   })
 })
