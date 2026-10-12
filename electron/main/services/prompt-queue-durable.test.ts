@@ -139,7 +139,7 @@ describe('PromptQueue durável (DB real)', () => {
         `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
       ).run(resumed, CC)
       q.running.add(resumed)
-      q.queue.onSessionLive(resumed, CC)
+      q.queue.onSessionLive(resumed)
       expect(rows()).toEqual([expect.objectContaining({ session_id: resumed })])
       opts.status = 'idle'
       q.queue.onTurnEnded(resumed)
@@ -179,7 +179,7 @@ describe('PromptQueue durável (DB real)', () => {
     expect(boot.queue.wakeTargets()).toEqual([])
 
     // A conversa volta: não entrega sozinho.
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([])
@@ -207,7 +207,7 @@ describe('PromptQueue durável (DB real)', () => {
     expect(boot.queue.wakeTargets()).toEqual([CC])
 
     now += 2
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     expect(boot.snap()?.items).toEqual([
       expect.objectContaining({ recovery: 'needs-confirmation' }),
     ])
@@ -259,7 +259,7 @@ describe('PromptQueue durável (DB real)', () => {
       ).run(CC, Date.now())
       const boot = makeQueue({ status: 'working' })
       boot.queue.restore()
-      boot.queue.onSessionLive(PTY, CC)
+      boot.queue.onSessionLive(PTY)
       await vi.advanceTimersByTimeAsync(PROMPT_TTL_MS + POLL_MS)
       expect(boot.snap()?.items).toEqual([
         expect.objectContaining({ id: 't1', recovery: 'needs-confirmation' }),
@@ -294,7 +294,7 @@ describe('PromptQueue durável (DB real)', () => {
       expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
 
       // A conversa volta: entrega sozinha e o aviso sai.
-      boot.queue.onSessionLive(PTY, CC)
+      boot.queue.onSessionLive(PTY)
       expect(boot.snap()?.items[0].waitingNotice).toBeUndefined()
       boot.queue.onTurnEnded(PTY)
       await vi.advanceTimersByTimeAsync(1_000)
@@ -325,7 +325,7 @@ describe('PromptQueue durável (DB real)', () => {
     ).run(CC, Date.now(), Date.now())
     const boot = makeQueue({ status: 'idle', verdict: 'unknown' })
     boot.queue.restore()
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([])
@@ -404,7 +404,10 @@ describe('PromptQueue durável (DB real)', () => {
     ).run(CC, Date.now())
     const boot = makeQueue({ status: 'idle' })
     boot.queue.restore()
-    boot.queue.onSessionLive('pty-outra', 'cc-outra')
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('pty-outra', NULL, 'cc-outra', 'running', 2)`,
+    ).run()
+    boot.queue.onSessionLive('pty-outra')
     expect(boot.snap()?.items).toEqual([
       expect.objectContaining({ id: 'q1', recovery: 'awaiting-session' }),
     ])

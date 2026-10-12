@@ -39,6 +39,11 @@ let idle: ScreenScan
 let db: Database.Database
 let proc: ChildProcess | null = null
 let pid = 0
+// PTY do resume (outro processo, outro sessions.id).
+const RESUMED = 'pty-2'
+let resumedProc: ChildProcess | null = null
+const pids = new Map<string, number>()
+const running = new Set<string>()
 
 beforeAll(async () => {
   idle = await scanOf(fixture('claude-2.1.286-idle-prompt.ansi'))
@@ -53,25 +58,37 @@ beforeEach(() => {
   // A PTY é um processo de verdade; o índice diz em que conversa ele está.
   proc = spawn('sleep', ['30'], { stdio: 'ignore' })
   pid = proc.pid as number
-  vi.spyOn(ptyManager, 'getPid').mockImplementation((id) => (id === PTY ? pid : null))
+  pids.clear()
+  pids.set(PTY, pid)
+  running.clear()
+  running.add(PTY)
+  vi.spyOn(ptyManager, 'getPid').mockImplementation((id) => pids.get(id) ?? null)
 })
 
 afterEach(() => {
   proc?.kill()
   proc = null
+  resumedProc?.kill()
+  resumedProc = null
   vi.restoreAllMocks()
   db.close()
   rmSync(HOME, { recursive: true, force: true })
 })
 
 // O <pid>.json que o claude reescreve ao trocar de conversa.
-function ptyIsIn(cc: string): void {
-  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+function ptyIsIn(cc: string, target = pid): void {
+  const stat = readFileSync(`/proc/${target}/stat`, 'utf8')
   const procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
   mkdirSync(SESSIONS_DIR, { recursive: true })
   writeFileSync(
-    join(SESSIONS_DIR, `${pid}.json`),
-    JSON.stringify({ pid, sessionId: cc, status: 'idle', updatedAt: Date.now(), procStart }),
+    join(SESSIONS_DIR, `${target}.json`),
+    JSON.stringify({
+      pid: target,
+      sessionId: cc,
+      status: 'idle',
+      updatedAt: Date.now(),
+      procStart,
+    }),
   )
 }
 
@@ -88,7 +105,7 @@ function claudeWrites(cc: string, text: string): void {
 function makeQueue(state: { status: LiveStatus; onWrite?: (text: string) => void }) {
   const writes: string[] = []
   const queue = new PromptQueue({
-    isRunning: (id) => id === PTY,
+    isRunning: (id) => running.has(id),
     status: () => state.status,
     screen: async () => idle,
     nativeStatus: () => true,
@@ -149,11 +166,76 @@ describe('alvo durável = conversa viva da PTY', () => {
     const boot = makeQueue({ status: 'idle' })
     boot.queue.restore()
     expect(boot.queue.snapshot().lastEvent).toMatchObject({ kind: 'delivered' })
-    boot.queue.onSessionLive(PTY, CLEARED_CC)
+    boot.queue.onSessionLive(PTY)
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([])
     expect(db.prepare('SELECT COUNT(*) AS n FROM prompt_queue_items').get()).toEqual({ n: 0 })
     boot.queue.dispose()
+  })
+
+  it('/clear → enqueue → PTY morre → restore retoma a pane pelo cc do spawn: entregue uma vez', async () => {
+    ptyIsIn(CLEARED_CC)
+    const state: { status: LiveStatus; onWrite?: (text: string) => void } = { status: 'working' }
+    const q = makeQueue(state)
+    await q.queue.send({ sessionId: PTY, text: 'depois do clear', when: 'on-idle' })
+    expect(rowCc()).toBe(CLEARED_CC)
+
+    // OOM: o processo morre e o ptyManager emite 'exit'.
+    proc?.kill('SIGKILL')
+    await new Promise((r) => proc?.once('exit', r))
+    running.delete(PTY)
+    q.queue.onSessionExit(PTY)
+    expect(q.queue.snapshot().items).toEqual([
+      expect.objectContaining({ text: 'depois do clear', recovery: 'awaiting-session' }),
+    ])
+
+    // O restore retoma a pane com o cc da linha sessions (o do spawn): linha nova,
+    // processo novo, e o claude ainda não escreveu no índice (o caso do 'spawn').
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
+    ).run(RESUMED, SPAWN_CC)
+    resumedProc = spawn('sleep', ['30'], { stdio: 'ignore' })
+    pids.set(RESUMED, resumedProc.pid as number)
+    running.add(RESUMED)
+    expect(liveConversationOf(RESUMED)).toBeNull()
+    q.queue.onSessionLive(RESUMED)
+    expect(q.queue.snapshot().items).toEqual([
+      expect.objectContaining({ sessionId: RESUMED, recovery: undefined }),
+    ])
+
+    // O claude retomado sobe e escreve o índice; a entrega confere a conversa viva.
+    ptyIsIn(SPAWN_CC, resumedProc.pid as number)
+    state.onWrite = (text) => claudeWrites(SPAWN_CC, text)
+    state.status = 'idle'
+    q.queue.onTurnEnded(RESUMED)
+    await new Promise((r) => setTimeout(r, 600))
+    q.queue.onTurnEnded(RESUMED)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(q.writes).toEqual(['depois do clear'])
+    expect(q.queue.snapshot().items).toEqual([])
+    // A prova da entrega achou a mensagem + resposta: a linha saiu do banco.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM prompt_queue_items').get()).toEqual({ n: 0 })
+    q.queue.dispose()
+  })
+
+  it('resume da própria conversa do /clear (linha sessions nova com o cc novo) também entrega', async () => {
+    ptyIsIn(CLEARED_CC)
+    const state: { status: LiveStatus } = { status: 'working' }
+    const q = makeQueue(state)
+    await q.queue.send({ sessionId: PTY, text: 'na conversa nova', when: 'on-idle' })
+    running.delete(PTY)
+    q.queue.onSessionExit(PTY)
+
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
+    ).run(RESUMED, CLEARED_CC)
+    running.add(RESUMED)
+    q.queue.onSessionLive(RESUMED)
+    state.status = 'idle'
+    q.queue.onTurnEnded(RESUMED)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(q.writes).toEqual(['na conversa nova'])
+    q.queue.dispose()
   })
 })

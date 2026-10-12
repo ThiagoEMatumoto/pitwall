@@ -122,11 +122,11 @@ const assistantLine = () =>
     ...meta(),
   })}\n`
 
-async function boot(newPty: string, cc: string): Promise<void> {
+async function boot(newPty: string): Promise<void> {
   onWrite = (_id, written) => appendTranscript(userLine(written) + assistantLine())
   queue.restore()
   const restored = last
-  queue.onSessionLive(newPty, cc)
+  queue.onSessionLive(newPty)
   queue.onTurnEnded(newPty)
   await new Promise((r) => setTimeout(r, 800))
   // Fim do turno da resposta: a fila confere o transcript e solta a linha.
@@ -137,4 +137,4 @@ async function boot(newPty: string, cc: string): Promise<void> {
 }
 
 if (mode === 'enqueue') void enqueue(rest[0], rest[1], rest[2])
-else void boot(rest[0], rest[1])
+else void boot(rest[0])

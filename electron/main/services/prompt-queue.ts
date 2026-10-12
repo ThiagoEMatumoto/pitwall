@@ -141,6 +141,10 @@ interface Item extends QueuedPrompt {
   holding: boolean
   // Alvo de verdade de um item persistido: a conversa, que troca de sessions.id ao retomar.
   ccSessionId: string | null
+  // cc da linha sessions da PTY (o do spawn): é com ele que o restore do workspace e o
+  // wake retomam a pane, mesmo depois de um /clear que moveu ccSessionId. Derivado
+  // da linha sessions, não persistido.
+  paneCc: string | null
   fromSessionId?: string
   bypassAttention?: boolean
   // Veio do app.db no boot: não expira, e velho demais pede confirmação.
@@ -323,7 +327,8 @@ export class PromptQueue {
       return
     }
     for (const row of rows) {
-      const item = fromRow(row, row.ccSessionId ?? store.ccSessionOf(row.sessionId))
+      const paneCc = this.rowCcOf(row.sessionId)
+      const item = fromRow(row, row.ccSessionId ?? paneCc, paneCc)
       this.counters.restored++
       this.parked = [...this.parked, item]
       if (this.discardIfObsolete(item)) continue
@@ -374,8 +379,9 @@ export class PromptQueue {
   // acorda a pane, e o spawn traz o item por onSessionLive.
   wakeTargets(): string[] {
     const ccs = this.parked
-      .filter((i) => i.recovery === 'awaiting-session' && !this.isStale(i) && i.ccSessionId)
-      .map((i) => i.ccSessionId as string)
+      .filter((i) => i.recovery === 'awaiting-session' && !this.isStale(i))
+      .flatMap((i) => [i.paneCc, i.ccSessionId])
+      .filter((cc): cc is string => cc != null)
     return [...new Set(ccs)]
   }
 
@@ -383,7 +389,9 @@ export class PromptQueue {
   // calados por um resume que pode não vir.
   surfaceTarget(ccSessionId: string): void {
     const mine = this.parked.filter(
-      (i) => i.ccSessionId === ccSessionId && i.recovery === 'awaiting-session',
+      (i) =>
+        (i.ccSessionId === ccSessionId || i.paneCc === ccSessionId) &&
+        i.recovery === 'awaiting-session',
     )
     for (const item of mine) this.markNeedsConfirmation(item)
     if (mine.length > 0) this.publish()
@@ -420,17 +428,29 @@ export class PromptQueue {
     })
   }
 
-  // Uma PTY nova da conversa `ccSessionId` (spawn/resume/wake): os itens dela que
-  // sobreviveram ao boot passam a mirar esta PTY. Os 'maybe-undelivered' só são
+  // Uma PTY nova (spawn/resume/wake): os itens da conversa dela que sobreviveram ao
+  // boot ou à morte da PTY anterior passam a mirar esta. A conversa sai da MESMA
+  // fonte do enqueue (ccSessionOf: índice vivo, senão a linha sessions), e o item
+  // casa pelo cc em que entraria (ccSessionId, que acompanha /clear) ou pelo da pane
+  // (paneCc, com o qual o restore retoma). Os 'maybe-undelivered' só são
   // reapontados — continuam esperando o usuário.
-  onSessionLive(sessionId: string, ccSessionId: string | null): void {
-    if (!ccSessionId) return
-    const mine = this.parked.filter((i) => i.ccSessionId === ccSessionId)
+  onSessionLive(sessionId: string): void {
+    const live = new Set(
+      [this.ccSessionOf(sessionId), this.rowCcOf(sessionId)].filter((cc) => cc != null),
+    )
+    if (live.size === 0) return
+    const mine = this.parked.filter(
+      (i) =>
+        (i.ccSessionId != null && live.has(i.ccSessionId)) ||
+        (i.paneCc != null && live.has(i.paneCc)),
+    )
     if (mine.length === 0) return
     const kept = mine.filter((i) => !this.discardIfObsolete(i))
+    const paneCc = this.rowCcOf(sessionId)
     for (const item of kept) {
       this.persist(item.id, 'rebind', (st) => st.rebind(item.id, sessionId))
       item.sessionId = sessionId
+      item.paneCc = paneCc
       // Esperou a conversa voltar até ficar velho: pergunta antes de entregar.
       if (item.recovery === 'awaiting-session' && this.isStale(item)) {
         this.markNeedsConfirmation(item)
@@ -561,6 +581,7 @@ export class PromptQueue {
       id: randomUUID(),
       sessionId,
       ccSessionId: this.ccSessionOf(sessionId),
+      paneCc: this.rowCcOf(sessionId),
       text,
       createdAt,
       expiresAt: createdAt + PROMPT_TTL_MS,
@@ -582,7 +603,15 @@ export class PromptQueue {
   // O cc vivo da PTY; sem prova dele, o da linha sessions.
   private ccSessionOf(sessionId: string): string | null {
     try {
-      return this.deps.liveCcOf?.(sessionId) ?? this.deps.store?.ccSessionOf(sessionId) ?? null
+      return this.deps.liveCcOf?.(sessionId) ?? this.rowCcOf(sessionId)
+    } catch {
+      return this.rowCcOf(sessionId)
+    }
+  }
+
+  private rowCcOf(sessionId: string): string | null {
+    try {
+      return this.deps.store?.ccSessionOf(sessionId) ?? null
     } catch {
       return null
     }
@@ -865,6 +894,7 @@ function publicItem({
   fromSessionId: _f,
   bypassAttention: _b,
   ccSessionId: _c,
+  paneCc: _pc,
   restored: _r,
   confirmed: _k,
   unpersisted: _p,
@@ -873,11 +903,12 @@ function publicItem({
   return q
 }
 
-function fromRow(row: PersistedPrompt, ccSessionId: string | null): Item {
+function fromRow(row: PersistedPrompt, ccSessionId: string | null, paneCc: string | null): Item {
   return {
     id: row.id,
     sessionId: row.sessionId,
     ccSessionId,
+    paneCc,
     text: row.text,
     createdAt: row.createdAt,
     expiresAt: NEVER,

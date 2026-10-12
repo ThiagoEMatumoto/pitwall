@@ -188,7 +188,7 @@ describe('restart com envelope de handoff na fila durável', () => {
     restart()
     expect(ledger()).toMatchObject([{ wake_id: wakeId, outcome: 'queued' }])
 
-    queue.onSessionLive(MOTHER, CC[MOTHER])
+    queue.onSessionLive(MOTHER)
     await turnEnds(MOTHER)
     expect(writes.map((w) => w.id)).toEqual([MOTHER])
     expect(ledger()).toMatchObject([{ wake_id: wakeId, outcome: 'delivered' }])
@@ -244,7 +244,7 @@ describe('restart com envelope de handoff na fila durável', () => {
     // Segue transitória (a tela ainda não foi relida desde o boot), nunca expired.
     expect(ledger()).toMatchObject([{ reason: 'answered', outcome: 'queued' }])
 
-    queue.onSessionLive(CHILD, CC[CHILD])
+    queue.onSessionLive(CHILD)
     await turnEnds(CHILD)
     expect(writes.map((w) => w.id)).toEqual([CHILD])
     expect(ledger()).toMatchObject([{ reason: 'answered', outcome: 'delivered' }])

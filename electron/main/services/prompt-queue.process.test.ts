@@ -100,7 +100,7 @@ async function boot(): Promise<BootOutput> {
   const out = await runToEnd({
     entry: ENTRY,
     dir,
-    args: ['boot', dbPath, scanJson, NEW_PTY, CC],
+    args: ['boot', dbPath, scanJson, NEW_PTY],
     env: { HOME: home, TRANSCRIPT: transcript, CC_SESSION_ID: CC },
   })
   return JSON.parse(out.trim().split('\n').at(-1) as string) as BootOutput
