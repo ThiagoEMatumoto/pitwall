@@ -109,6 +109,8 @@ O app se atualiza sozinho via `electron-updater`.
 
 Requisitos: **Node 20+**.
 
+A suíte de testes roda no Node fixado em `.nvmrc` (24.18.1). O Node 24.19+ aborta o processo quando objetos do better-sqlite3 são coletados pelo GC ([nodejs/node#65446](https://github.com/nodejs/node/issues/65446)); remova a fixação quando isso for corrigido. Depois de trocar de Node, rode `npm rebuild better-sqlite3` antes de `npm run test:unit`.
+
 ```bash
 npm install
 npm run dev      # electron-vite dev com HMR
