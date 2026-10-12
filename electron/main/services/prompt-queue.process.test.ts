@@ -202,3 +202,35 @@ describe('kill -9 com o item em cada estado', () => {
     expect(first.restored?.items).toEqual([])
   }, 30000)
 })
+
+describe('kill -9 durante o /exit da hibernação', () => {
+  it('o input retido fica queued+raw no banco e o wake depois do boot o entrega cru, uma vez', async () => {
+    writeHistory()
+    const exit = await runAndKill({
+      entry: ENTRY,
+      dir,
+      args: ['hibernate', dbPath, scanJson, OLD_PTY, 'git st', 'atus\r'],
+      marker: 'held',
+      env: { HOME: home },
+    })
+    expect(exit.signal).toBe('SIGKILL')
+    // Só o input retido: o /exit é efêmero e reentregá-lo encerraria a conversa.
+    const db = openAppDb(dbPath)
+    try {
+      expect(
+        db
+          .prepare('SELECT state, raw, text, session_id, cc_session_id FROM prompt_queue_items')
+          .all(),
+      ).toEqual([
+        { state: 'queued', raw: 1, text: 'git status\r', session_id: OLD_PTY, cc_session_id: CC },
+      ])
+    } finally {
+      db.close()
+    }
+
+    const first = await boot()
+    expect(first.writes).toEqual([`${NEW_PTY}:raw:git status\r`])
+    expect(rows()).toEqual([])
+    expect((await boot()).writes).toEqual([])
+  }, 30000)
+})

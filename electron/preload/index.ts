@@ -125,6 +125,7 @@ import type { AttentionItem } from '../../shared/types/attention'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
+import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
   PromptQueueSnapshot,
   ScreenTailUpdate,
@@ -217,6 +218,12 @@ const api: Api = {
     wakeResult: (result) => invoke('sessions:wake-result', result),
     onDormantBecameLive: (handler) =>
       subscribe<DormantBecameLiveEvent>('sessions:dormant-became-live', handler),
+    hibernateStats: () => invoke('sessions:hibernate-stats'),
+    onHibernated: (handler) => subscribe<SessionHibernatedEvent>('sessions:hibernated', handler),
+    onPaneCheckRequest: (handler) =>
+      subscribe<PaneCheckRequest>('sessions:pane-check-request', handler),
+    paneCheckResult: (result) => invoke('sessions:pane-check-result', result),
+    paneClosed: (sessionId) => invoke('sessions:pane-closed', sessionId),
     onOom: (handler) => subscribe<ScopeOomEvent>('sessions:oom', handler),
     scopeStats: () => invoke('sessions:scope-stats'),
   },

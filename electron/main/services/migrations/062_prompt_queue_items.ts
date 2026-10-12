@@ -9,7 +9,7 @@ export const name = '062_prompt_queue_items'
 // retomar, por isso o alvo de verdade é o cc_session_id.
 // state: queued → delivering (gravado antes do write no PTY) → linha removida.
 // 'uncertain' = boot achou um delivering sem prova no transcript: espera o usuário.
-// (060 e 061 ficam com composer_drafts e sessions_spawn_args, em outras branches.)
+// raw = bytes do PTY segurados na hibernação, reentregues sem o paste + \r.
 export function up(db: Database.Database): void {
   db.exec(`
     CREATE TABLE prompt_queue_items (
@@ -19,6 +19,7 @@ export function up(db: Database.Database): void {
       text             TEXT NOT NULL,
       from_session_id  TEXT,
       bypass_attention INTEGER NOT NULL DEFAULT 0,
+      raw              INTEGER NOT NULL DEFAULT 0,
       state            TEXT NOT NULL CHECK (state IN ('queued','delivering','uncertain')),
       created_at       INTEGER NOT NULL,
       delivering_at    INTEGER

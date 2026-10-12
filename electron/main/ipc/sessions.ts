@@ -6,13 +6,18 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
-import { draftReferencesFile } from '../services/composer-drafts'
+import {
+  clearConversationHibernated,
+  isConversationHibernated,
+  markHibernated,
+} from '../services/hibernate/hibernated-store'
 import { requestDraftFlush } from './composer-drafts'
 import {
-  imageKeptByKeepers,
-  sweepAfterDraftFlush,
-  sweepImageTempDir,
-} from '../services/image-temp-sweep'
+  latestSpawnArgs,
+  relaunchFlags,
+  type SpawnArgs,
+} from '../services/spawn-args'
+import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
@@ -50,6 +55,7 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
 import { getMcpRuntime } from '../services/mcp/server'
@@ -338,20 +344,11 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
-// Remove temporários de imagem que casam com o predicado, menos os referenciados
-// por um rascunho persistido do Composer (o rascunho sobrevive ao reboot e ao
-// exit da PTY; a imagem dele também precisa) ou por um item da fila durável
-// (registerImageKeeper em send-prompt.ts). Sem conseguir ler os rascunhos, não
-// apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
+// Remove temporários de imagem que casam com o predicado, poupando os citados por
+// um rascunho persistido ou por um item da fila durável (registerImageKeeper em
+// send-prompt.ts).
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let draftKeeps: (filename: string) => boolean
-  try {
-    draftKeeps = draftReferencesFile(getDb())
-  } catch (err) {
-    console.error('[sessions] sweep de imagens adiado: rascunhos ilegíveis', err)
-    return
-  }
-  sweepImageTempDir(tempDir(), predicate, (name) => draftKeeps(name) || imageKeptByKeepers(name))
+  sweepImageTempsKeepingDrafts(getDb, tempDir(), predicate)
 }
 
 // Sweep de boot: num processo fresco só os rascunhos persistidos e os itens que a
@@ -467,6 +464,9 @@ function startSession(opts: {
   rows?: number
   provider?: AgentProvider
   env?: Record<string, string>
+  // Flags com que este processo subiu (sessions.spawn_args): o wake de uma
+  // hibernação as reaplica.
+  spawnArgs?: SpawnArgs | null
 }): Session {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
@@ -489,8 +489,8 @@ function startSession(opts: {
   try {
     db.prepare(
       `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source, spawn_args)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       row.id,
       row.repo_id,
@@ -503,6 +503,7 @@ function startSession(opts: {
       opts.featureId ?? null,
       row.provider,
       opts.featureSource ?? null,
+      opts.spawnArgs ? JSON.stringify({ ...opts.spawnArgs, cwd: opts.cwd }) : null,
     )
     inserted = true
     if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
@@ -658,6 +659,15 @@ export function spawnSession(input: SpawnSessionInput): Session {
     rows: input.rows,
     provider,
     env: mcp.env,
+    spawnArgs: {
+      model,
+      effort,
+      advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: input.systemPromptText?.trim() || null,
+      handoffChild: Boolean(input.handoffChild),
+    },
   })
 
   // Sem `-n` na CLI (Codex): o nome só existe aqui, e é dele que a lista viva
@@ -812,6 +822,10 @@ export function resumeHandoffChild(
   // spawnSession (whitelist + merge do HANDOFF_CHILD_DENY em modo autônomo).
   const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
   const disallowedTools = resolveDisallowedTools(permissionMode, null, { handoffChild: true })
+  // Model/effort/advisor do spawn da filha voltam também; a permissão segue do
+  // modo do handoff (a autoridade sobre o que a filha pode fazer).
+  const spawned = latestSpawnArgs(db, ccSessionId)
+  const original = relaunchFlags(spawned)
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -821,7 +835,9 @@ export function resumeHandoffChild(
     resume: true,
     name,
     mcpConfigArg: mcpConfigArg(internalSessionId),
-    model: null,
+    model: original.model,
+    effort: original.effort,
+    advisorModel: original.advisorModel,
     systemPromptFilePath: null,
     permissionMode,
     settingsFilePath: sessionSettingsFile(
@@ -841,6 +857,15 @@ export function resumeHandoffChild(
     initialCommand: opts.kickoff,
     cols: opts.cols,
     rows: opts.rows,
+    spawnArgs: {
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: spawned?.systemPromptText ?? null,
+      handoffChild: true,
+    },
   })
 
   // O apelido é o ENDEREÇO do peer, e o relance cria uma LINHA NOVA em `sessions`
@@ -1004,12 +1029,27 @@ export function registerSessionIpc(): void {
       db.prepare(
         "UPDATE sessions SET status = ?, ended_at = ? WHERE id = ? AND status = 'running'",
       ).run(e.exitCode === 0 ? 'exited' : 'crashed', Date.now(), e.sessionId)
+      // Saiu pelo /exit da hibernação: o renderer precisa do evento ANTES do
+      // pty:exit para virar a pane dormant em vez de fechá-la com o toast.
+      const hibernated = getIdleHibernator()?.onExit(e.sessionId)
+      if (hibernated) {
+        // O hibernator já gravou antes do /exit; regravar cobre o exit que chegou
+        // antes do beforeWrite. Falha aqui não pode impedir a pane de virar dormant.
+        try {
+          markHibernated(db, e.sessionId)
+        } catch (err) {
+          console.error('[hibernate] failed to persist hibernated state', err)
+        }
+        broadcast('sessions:hibernated', hibernated)
+      }
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
-      // as anexou na entrega; o path injetado não serve depois do exit.
-      // Antes, o flush dos rascunhos: a imagem colada ainda no debounce do
-      // renderer não está no app.db e o sweep a apagaria.
+      // as anexou na entrega; o path injetado não serve depois do exit. Antes, o
+      // flush dos rascunhos: a imagem colada ainda no debounce do renderer não
+      // está no app.db e o sweep a apagaria. Vale também para a hibernada: a pane
+      // dormant mantém o paneId, então o rascunho 'pane:<id>' (com o path) segue
+      // no app.db e o sweep poupa a imagem que ele referencia.
       void sweepAfterDraftFlush(requestDraftFlush, () =>
         sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId)),
       )
@@ -1215,16 +1255,58 @@ export function registerSessionIpc(): void {
     const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
+    // O --resume não guarda as flags do spawn. Só o wake de uma hibernada as
+    // reaplica: o usuário não pediu para a sessão sair, então ela volta como
+    // estava (modo de permissão, modelo, denylist, --settings da filha). No
+    // resume manual quem escolhe é o usuário, e as flags ficam no default. As
+    // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
+    // A fonte da verdade é sessions.hibernated_at, não o fromHibernation do
+    // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
+    const spawned = latestSpawnArgs(db, input.ccSessionId)
+    const fromHibernation = isConversationHibernated(db, input.ccSessionId)
+    const original = relaunchFlags(fromHibernation ? spawned : null)
+    // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
+    // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
+    // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
+    // conversa). Diretório removido: fica o recalculado.
+    if (spawned?.cwd && spawned.cwd !== cwd) {
+      if (isDirectory(spawned.cwd)) {
+        cwd = spawned.cwd
+      } else {
+        console.warn(
+          JSON.stringify({
+            event: 'resume_spawn_cwd_missing',
+            ccSessionId: input.ccSessionId,
+            spawnCwd: spawned.cwd,
+            cwd,
+          }),
+        )
+      }
+    }
     const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
       command,
       sessionId: input.ccSessionId,
       resume: true,
       name,
       mcpConfigArg: mcpConfigArg(internalSessionId),
-      model: null,
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode: original.permissionMode,
+      // Arquivo NOVO a cada wake, carimbado com o id desta linha: o da sessão
+      // anterior foi apagado no exit dela.
+      settingsFilePath: sessionSettingsFile(
+        internalSessionId,
+        original.settings,
+        original.disallowedTools,
+      ),
       // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
       // compartilhada — é isso que impede spawn e resume de divergirem de novo.
-      systemPromptFilePath: writeSessionSystemPromptFile({ repoId, featureId }),
+      systemPromptFilePath: writeSessionSystemPromptFile({
+        repoId,
+        featureId,
+        systemPromptText: original.systemPromptText,
+      }),
     })
 
     const session = startSession({
@@ -1237,7 +1319,13 @@ export function registerSessionIpc(): void {
       featureSource,
       cols: input.cols,
       rows: input.rows,
+      // Copia o registro como está: um resume sem flags não pode apagar as do
+      // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
+      // novas grava outras.
+      spawnArgs: spawned,
     })
+    // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
+    clearConversationHibernated(db, input.ccSessionId)
     transferLeadershipToResumed(priorSessionIds, session, 'renderer')
     return { session, reattached: false }
   })
@@ -1581,6 +1669,9 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
+    // Com o /exit da hibernação já escrito, o texto vai para a fila e chega na
+    // sessão acordada; escrito aqui, cairia num claude saindo.
+    if (getIdleHibernator()?.onUserInput(sessionId, data)) return
     ptyManager.write(sessionId, data)
   })
 

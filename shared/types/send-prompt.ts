@@ -16,6 +16,12 @@ export interface SendPromptInput {
   // filha em needs_input espera, então passa pelo gate 'attention'. O IPC do
   // renderer não aceita o campo (o schema zod o descarta).
   bypassAttention?: boolean
+  // Só o main liga (hibernação): bytes que o app escreveu no PTY depois do /exit,
+  // reentregues como foram escritos (sem o bracketed-paste + \r da injeção).
+  raw?: boolean
+  // Só o main liga (o /exit da hibernação): não vai para o app.db. Reentregue no
+  // boot, encerraria a conversa que o usuário acabou de retomar.
+  ephemeral?: boolean
 }
 
 export type SendPromptError =

@@ -18,6 +18,7 @@ import {
   type DraftPersister,
 } from './composer-draft-persister'
 import { installDraftFlushHooks } from './draft-flush-hooks'
+import { noteComposerContent, noteComposerFocus } from './pane-activity'
 
 export interface ComposerHandle {
   focus: () => void
@@ -304,6 +305,16 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       attachmentsBySession.delete(memKey)
     }
   }, [memKey, attached])
+
+  // O pane-check da hibernação recusa aba com rascunho ou com o Composer em foco.
+  useEffect(() => {
+    if (paneId) noteComposerContent(paneId, text.length > 0 || attached.length > 0)
+  }, [paneId, text, attached])
+
+  useEffect(() => {
+    if (!paneId) return
+    return () => noteComposerFocus(paneId, false)
+  }, [paneId])
 
   // Revoga os object URLs ainda pendurados ao desmontar o composer.
   useEffect(() => {
@@ -645,7 +656,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   if (histIndex !== null) setHistIndex(null)
                 }}
                 onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                onBlur={flushDraftNow}
+                onFocus={() => paneId && noteComposerFocus(paneId, true)}
+                onBlur={() => {
+                  if (paneId) noteComposerFocus(paneId, false)
+                  flushDraftNow()
+                }}
                 onPaste={handlePaste}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}

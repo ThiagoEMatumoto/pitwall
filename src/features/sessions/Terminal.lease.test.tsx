@@ -35,6 +35,12 @@ vi.mock('@/lib/ipc', () => ({
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
 }))
 
+const { hibernated } = vi.hoisted(() => ({ hibernated: new Set<string>() }))
+vi.mock('@/store/appStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/store/appStore')>()),
+  isHibernatedSession: (id: string) => hibernated.has(id),
+}))
+
 import { LeasedPlaceholder, Terminal } from './Terminal'
 import { useTerminalLease } from './terminal-lease'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -61,6 +67,7 @@ describe('Terminal × lease da modal', () => {
     resize.mockClear()
     useSession.mockClear()
     exitListeners.clear()
+    hibernated.clear()
   })
 
   it('com a lease na modal, a aba não monta o xterm nem manda resize', () => {
@@ -128,6 +135,30 @@ describe('Terminal × lease da modal', () => {
     expect(onClose).not.toHaveBeenCalled()
     for (const cb of exitListeners) cb({ sessionId: 's1', exitCode: 0 })
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // Hibernada: a aba já virou a pane dormant no mesmo paneId; fechar a tiraria
+  // do layout. A modal que segurava a lease fecha normalmente.
+  it('a PTY hiberna com a lease na modal: a aba NÃO fecha, a modal fecha', () => {
+    hibernated.add('s1')
+    useTerminalLease.getState().acquire('s1', 'dock')
+    useTerminalLease.getState().acquire('s1', 'modal')
+    const onCloseTab = vi.fn()
+    const onCloseDock = vi.fn()
+    tab(onCloseTab)
+    render(
+      <Terminal
+        session={session}
+        repoLabel="web"
+        repoPath="/tmp"
+        projectName="p"
+        leaseHost="dock"
+        onClose={onCloseDock}
+      />,
+    )
+    for (const cb of exitListeners) cb({ sessionId: 's1', exitCode: 0 })
+    expect(onCloseTab).not.toHaveBeenCalled()
+    expect(onCloseDock).toHaveBeenCalledTimes(1)
   })
 
   it('aba com a Room segurando: "Aberta na Room", sem botão nem xterm', () => {

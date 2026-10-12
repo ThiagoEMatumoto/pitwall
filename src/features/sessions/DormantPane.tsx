@@ -3,6 +3,8 @@ import { Icon } from '@/components/ui/Icon'
 import type { ActivePane } from '@/store/appStore'
 
 export const DORMANT_BADGE = 'dormindo — clique para acordar'
+// Saiu por ociosidade (hibernação): mesmo wake, rótulo próprio.
+export const HIBERNATED_BADGE = 'hibernada — clique para acordar'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]'
@@ -52,7 +54,7 @@ export function DormantPane({
           onClick={onWake}
           className={`rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text-dim)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)] ${FOCUS_RING}`}
         >
-          {DORMANT_BADGE}
+          {pane.dormantReason === 'hibernated' ? HIBERNATED_BADGE : DORMANT_BADGE}
         </button>
       )}
       <button

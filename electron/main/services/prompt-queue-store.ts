@@ -16,6 +16,8 @@ export interface PersistedPrompt {
   text: string
   fromSessionId: string | null
   bypassAttention: boolean
+  // Bytes crus do PTY (input segurado na hibernação), sem o paste + \r da injeção.
+  raw: boolean
   state: PersistedState
   createdAt: number
   deliveringAt: number | null
@@ -40,6 +42,7 @@ interface Row {
   text: string
   from_session_id: string | null
   bypass_attention: number
+  raw: number
   state: PersistedState
   created_at: number
   delivering_at: number | null
@@ -71,14 +74,15 @@ export function createPromptQueueStore(db: () => Database.Database): PromptQueue
     insert: (i) =>
       run(
         `INSERT INTO prompt_queue_items
-           (id, session_id, cc_session_id, text, from_session_id, bypass_attention, state, created_at, delivering_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, cc_session_id, text, from_session_id, bypass_attention, raw, state, created_at, delivering_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         i.id,
         i.sessionId,
         i.ccSessionId,
         i.text,
         i.fromSessionId,
         i.bypassAttention ? 1 : 0,
+        i.raw ? 1 : 0,
         i.state,
         i.createdAt,
         i.deliveringAt,
@@ -108,6 +112,7 @@ export function createPromptQueueStore(db: () => Database.Database): PromptQueue
         text: r.text,
         fromSessionId: r.from_session_id,
         bypassAttention: r.bypass_attention === 1,
+        raw: r.raw === 1,
         state: r.state,
         createdAt: r.created_at,
         deliveringAt: r.delivering_at,

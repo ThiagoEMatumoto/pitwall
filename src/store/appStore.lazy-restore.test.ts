@@ -356,7 +356,9 @@ describe('wakeDormantPane', () => {
     const id = await useAppStore.getState().wakeDormantPane('pane-sleep1')
 
     expect(id).toBe('sess-cc-sleep1')
-    expect(calls.resume).toEqual([{ repoId: 'r1', ccSessionId: 'cc-sleep1' }])
+    expect(calls.resume).toEqual([
+      { repoId: 'r1', ccSessionId: 'cc-sleep1', fromHibernation: false },
+    ])
     const [pane] = useAppStore.getState().panes
     expect(pane.paneId).toBe('pane-sleep1')
     expect(pane.dormant).toBeUndefined()

@@ -90,6 +90,12 @@ export class DormantPanes {
     dormantSyncHook?.()
   }
 
+  // Uma pane só, sem esperar a lista inteira do renderer (a sessão que acabou de
+  // hibernar); o próximo sync substitui tudo, com ela incluída.
+  add(info: DormantPaneInfo): void {
+    this.byCc = new Map(this.byCc).set(info.ccSessionId, info)
+  }
+
   findDormantByCc(ccSessionId: string): DormantPaneInfo | null {
     return this.byCc.get(ccSessionId) ?? null
   }

@@ -59,7 +59,9 @@ import * as handoffWorkDir from './057_handoff_work_dir'
 import * as handoffRequests from './058_handoff_requests'
 import * as handoffRequestAnswerKey from './059_handoff_request_answer_key'
 import * as composerDrafts from './060_composer_drafts'
+import * as sessionsSpawnArgs from './061_sessions_spawn_args'
 import * as promptQueueItems from './062_prompt_queue_items'
+import * as sessionsHibernatedAt from './063_sessions_hibernated_at'
 
 interface Migration {
   version: number
@@ -134,7 +136,9 @@ export const migrations: Migration[] = [
   handoffRequests,
   handoffRequestAnswerKey,
   composerDrafts,
+  sessionsSpawnArgs,
   promptQueueItems,
+  sessionsHibernatedAt,
 ]
 
 export function runMigrations(db: Database.Database): void {

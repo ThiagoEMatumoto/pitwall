@@ -13,6 +13,10 @@
 //       ($TRANSCRIPT), mas a fila ainda não conferiu;
 //     - delivered: o claude gravou a mensagem e a resposta, e a fila confirmou
 //       pelo transcript e removeu a linha.
+//   hibernate <dbPath> <scan> <ptyId> <first> <more>
+//     O /exit da hibernação sai pela fila; com ele escrito e a PTY ainda viva, o
+//     input do usuário chega cru (<first>, depois acumulado com <more> pelo
+//     replaceText, como o hibernator faz). Avisa 'held' e trava para o SIGKILL.
 //   boot <dbPath> <scan> <newPtyId> <ccSessionId>
 //     restore() + onSessionLive(newPty): imprime o snapshot do boot e as escritas.
 //     A PTY nova age como o claude: grava a mensagem e a resposta no $TRANSCRIPT.
@@ -35,6 +39,7 @@ const hang = (): never => {
 }
 
 let status: LiveStatus = 'idle'
+let hibernating = false
 let onWrite: (id: string, text: string) => void = () => {}
 const writes: string[] = []
 let last: PromptQueueSnapshot | null = null
@@ -45,9 +50,15 @@ const queue = new PromptQueue({
   screen: async () => scan,
   nativeStatus: () => true,
   handoffAsking: () => false,
-  write: (id, text) => {
-    writes.push(`${id}:${text}`)
+  write: (id, text, raw) => {
+    writes.push(`${id}:${raw ? 'raw:' : ''}${text}`)
     onWrite(id, text)
+  },
+  isHibernating: () => hibernating,
+  beforeWrite: (_id, text) => {
+    if (hibernating) return false
+    if (text === '/exit') hibernating = true
+    return true
   },
   emit: (s) => (last = s),
   warn: () => {},
@@ -89,6 +100,21 @@ async function enqueue(ptyId: string, text: string, stage: string): Promise<void
     }, 20)
   }
   setInterval(() => {}, 1 << 30)
+}
+
+async function hibernate(ptyId: string, first: string, more: string): Promise<void> {
+  const exit = await queue.send({
+    sessionId: ptyId,
+    text: '/exit',
+    when: 'on-idle',
+    ephemeral: true,
+  })
+  if (!exit.ok || !exit.delivered) throw new Error(`/exit não saiu: ${JSON.stringify(exit)}`)
+  const held = await queue.send({ sessionId: ptyId, text: first, when: 'on-idle', raw: true })
+  if (!held.ok || held.delivered) throw new Error(`input não ficou retido: ${JSON.stringify(held)}`)
+  queue.replaceText(held.queued.id, first + more)
+  say('held')
+  hang()
 }
 
 const appendTranscript = (lines: string) => appendFileSync(process.env.TRANSCRIPT as string, lines)
@@ -137,4 +163,5 @@ async function boot(newPty: string): Promise<void> {
 }
 
 if (mode === 'enqueue') void enqueue(rest[0], rest[1], rest[2])
+else if (mode === 'hibernate') void hibernate(rest[0], rest[1], rest[2])
 else void boot(rest[0])

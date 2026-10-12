@@ -11,8 +11,9 @@ import { PromptQueue } from '../services/prompt-queue'
 import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
 import { getDormantPanes, setDormantSyncHook } from '../services/dormant-panes'
 import { liveConversationOf } from '../services/conversation-holder'
-import { registerImageKeeper } from '../services/image-temp-sweep'
 import { setWorkspaceRestoredHook } from './workspace'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { hibernateExitRedirect } from '../services/hibernate/hibernate-redirect'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -41,6 +42,7 @@ import {
   queuedEnvelopeObsolete,
   setHandoffWakeQueue,
 } from '../services/handoff/handoff-wake'
+import { registerImageKeeper } from '../services/image-temp-sweep'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
@@ -89,14 +91,17 @@ export function screenOf(id: string): Promise<ScreenScan | null> {
 
 // O sessions.id de uma conversa que está dormindo no renderer não tem PTY: acorda
 // a pane e manda para o id novo. Sem pane dormindo, o 'not-running' segue.
+function ccOf(sessionId: string): string | null {
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
+    { cc_session_id: string | null } | undefined
+  return row?.cc_session_id ?? null
+}
+
 export async function sendWakingDormant(input: SendPromptInput): Promise<SendPromptResult> {
   const sent = await promptQueue.send(input)
   if (sent.ok || sent.error !== 'not-running') return sent
   const panes = getDormantPanes()
-  const row = getDb()
-    .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-    .get(input.sessionId) as { cc_session_id: string | null } | undefined
-  const cc = row?.cc_session_id
+  const cc = ccOf(input.sessionId)
   if (!panes || !cc || !panes.findDormantByCc(cc)) return sent
   const woke = await panes.wakeDormant(cc, 'send-prompt')
   if (!woke.ok) {
@@ -153,7 +158,7 @@ export const promptQueue = new PromptQueue({
     const h = getByChildSession(id)
     return h ? handoffAsking(h) : false
   },
-  write: (id, text) => injectIntoSession(id, text),
+  write: (id, text, raw) => (raw ? ptyManager.write(id, text) : injectIntoSession(id, text)),
   // Origem que já morreu não tem cartão vivo no mapa para a bolinha sair.
   delivered: (to, from) => {
     if (from && ptyManager.isRunning(from)) {
@@ -171,6 +176,19 @@ export const promptQueue = new PromptQueue({
     }
   },
   warn: (event) => console.warn(JSON.stringify(event)),
+  redirectOnExit: (id) =>
+    hibernateExitRedirect({
+      wasHibernatedExit: (sid) => getIdleHibernator()?.wasHibernatedExit(sid) ?? false,
+      panes: getDormantPanes,
+      ccOf,
+      wakeFailed: (sid, error) => promptQueue.recordWakeFailed(sid, error),
+    })(id),
+  isHibernating: (id) => getIdleHibernator()?.isHibernating(id) ?? false,
+  // O estado do input relido do espelho no instante do write: o eco de uma tecla
+  // pode ter chegado depois da releitura que deu 'deliver'.
+  beforeWrite: (id, text) =>
+    getIdleHibernator()?.beforeWrite(id, text, tuiMenuWatch.current(id)?.inputDirty === true) ??
+    true,
   store: createPromptQueueStore(getDb),
   deliveryProof,
   liveCcOf: (id) => liveConversationOf(id),

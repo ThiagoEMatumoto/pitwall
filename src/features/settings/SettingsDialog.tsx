@@ -32,6 +32,7 @@ import {
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { TerminalSection } from './TerminalSection'
 import { MeetingsSection } from './MeetingsSection'
+import { HibernateSetting } from './HibernateSetting'
 import { useProjectsPrefsStore } from '@/lib/projects-prefs-store'
 import { useSessionPrefsStore, type KeyboardSendMode } from '@/lib/session-prefs-store'
 import { MODEL_OPTIONS, EFFORT_OPTIONS, ADVISOR_OPTIONS } from '@/features/sessions/spawn-options'
@@ -578,6 +579,7 @@ function SessionTab({ open }: { open: boolean }) {
             className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
           />
         </label>
+        <HibernateSetting open={open} />
       </div>
 
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">

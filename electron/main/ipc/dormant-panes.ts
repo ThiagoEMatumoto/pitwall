@@ -42,9 +42,18 @@ const wakeResultSchema = z.object({
 })
 
 let registered = false
+let bootLazyRestore = false
 
 export function __resetForTests(): void {
   registered = false
+  bootLazyRestore = false
+}
+
+// O sessions.lazyRestore congelado no boot (o mesmo que o renderer usa). A
+// hibernação exige este valor: ligar a pref no meio da sessão não cria pane
+// dormant acordável até o próximo boot.
+export function lazyRestoreAtBoot(): boolean {
+  return bootLazyRestore
 }
 
 export function registerDormantPanesIpc(): void {
@@ -55,6 +64,7 @@ export function registerDormantPanesIpc(): void {
   // dormindo fazia o main parar de acordá-las enquanto o renderer seguia
   // mostrando-as acordáveis, e o wake da mãe virava not_running sem reenvio.
   const lazyRestore = lazyRestoreEnabled()
+  bootLazyRestore = lazyRestore
   const panes = new DormantPanes({
     requestWake: (request) => {
       const win = getMainWindow()

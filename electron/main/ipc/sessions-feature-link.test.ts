@@ -47,6 +47,7 @@ const seam = vi.hoisted(() => ({
   // Linha anterior da conversa (propósito/grupo/resumo) e o UPDATE que a herda.
   prevCanvasRow: null as Record<string, unknown> | null,
   canvasInherits: [] as unknown[][],
+  ptyWrites: [] as string[],
 }))
 
 vi.mock('electron', () => ({
@@ -132,7 +133,7 @@ vi.mock('../services/pty-manager', () => ({
   ptyManager: {
     on: (event: string, fn: (e: unknown) => void) => seam.ptyListeners.set(event, fn),
     off: () => {},
-    write: () => {},
+    write: (id: string, data: string) => seam.ptyWrites.push(`${id}:${data}`),
     isRunning: (id: string) => seam.runningIds.includes(id),
     runningIds: () => seam.runningIds,
     spawn: (opts: { sessionId: string; args: string[]; cwd: string }) => {
@@ -182,6 +183,11 @@ vi.mock('../services/session-activity', () => ({
 
 import { registerSessionIpc, spawnSession } from './sessions'
 import { onBroadcast } from '../services/notify'
+import {
+  IdleHibernator,
+  setIdleHibernator,
+  type IdleHibernatorDeps,
+} from '../services/hibernate/idle-hibernator'
 import type { FeatureSessionSummary, SessionSummary } from '../../../shared/types/ipc'
 
 const FEATURE = {
@@ -504,5 +510,74 @@ describe('pty:exit respeita o "Sem feature" escolhido pelo usuário', () => {
     expect(seam.sessionExits).toEqual([
       { sessionId: 'sess-1', ccSessionId: 'cc-1', repoId: 'r1', featureId: null },
     ])
+  })
+})
+
+// H4: o renderer converte a pane em dormant pelo sessions:hibernated; se o
+// pty:exit chegasse antes, ele já teria fechado a pane com o toast.
+describe('pty:exit de sessão hibernando', () => {
+  const exit = (sessionId: string) =>
+    seam.ptyListeners.get('exit')?.({ sessionId, exitCode: 0, signal: null })
+  const channels = () => seam.broadcasts.map((b) => b.channel)
+
+  const held: string[] = []
+  function hibernating(): IdleHibernator {
+    held.length = 0
+    const h = new IdleHibernator({
+      // O /exit sai na hora; o input segurado entra na fila.
+      send: async (input: { text: string; raw?: boolean }) => {
+        if (!input.raw) return { ok: true, delivered: true }
+        held.push(input.text)
+        return { ok: true, delivered: false, queued: { id: 'q1', text: input.text } }
+      },
+      cancel: () => {},
+      replaceText: () => true,
+      warn: () => {},
+    } as unknown as IdleHibernatorDeps)
+    setIdleHibernator(h)
+    return h
+  }
+
+  it('emite sessions:hibernated ANTES do pty:exit, uma vez só', async () => {
+    const h = hibernating()
+    await h.hibernate({ sessionId: 'sess-1', ccSessionId: 'cc-1' })
+    exit('sess-1')
+    exit('sess-1')
+    expect(channels().filter((c) => c === 'sessions:hibernated' || c === 'pty:exit')).toEqual([
+      'sessions:hibernated',
+      'pty:exit',
+      'pty:exit',
+    ])
+    expect(seam.broadcasts[0].payload).toEqual({
+      sessionId: 'sess-1',
+      ccSessionId: 'cc-1',
+      paneId: null,
+    })
+    expect(h.getStats().hibernated).toBe(1)
+    h.dispose()
+    setIdleHibernator(null)
+  })
+
+  it('sessions:write depois do /exit entregue não chega ao PTY e o exit ainda hiberna', async () => {
+    seam.ptyWrites.length = 0
+    const h = hibernating()
+    await h.hibernate({ sessionId: 'sess-3', ccSessionId: 'cc-3' })
+    handler('sessions:write')(null, ...(['sess-3', 'git status\r'] as never[]))
+    expect(seam.ptyWrites).toEqual([])
+    expect(held).toEqual(['git status\r'])
+    exit('sess-3')
+    expect(channels()).toContain('sessions:hibernated')
+    expect(h.getStats().hibernated).toBe(1)
+    h.dispose()
+    setIdleHibernator(null)
+  })
+
+  it('exit comum (sem /exit da hibernação) só emite pty:exit', () => {
+    const h = hibernating()
+    exit('sess-2')
+    expect(channels()).not.toContain('sessions:hibernated')
+    expect(channels()).toContain('pty:exit')
+    h.dispose()
+    setIdleHibernator(null)
   })
 })

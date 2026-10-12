@@ -96,6 +96,9 @@ class PtyManager extends TypedEmitter {
   // Última escrita/resize vinda do app: o eco da tecla e o reflow que vêm logo
   // depois não são o agente trabalhando.
   private lastInputAt = new Map<string, number>()
+  // Último I/O de qualquer lado (saída do processo, escrita ou resize do app),
+  // para TODA PTY: a hibernação por ociosidade só considera quem está parado.
+  private lastIoAt = new Map<string, number>()
   // Unit .scope de cada sessão spawnada via systemd-run.
   private scopeUnits = new Map<string, string>()
   // Sessões com teto que já fizeram exec: quem passa a observar depois (watcher
@@ -141,6 +144,7 @@ class PtyManager extends TypedEmitter {
     if (unit) this.scopeUnits.set(opts.sessionId, unit)
     else this.scopeUnits.delete(opts.sessionId)
     if (!this.backlog.has(opts.sessionId)) this.backlog.set(opts.sessionId, '')
+    this.lastIoAt.set(opts.sessionId, Date.now())
     if (opts.sampleActivity) {
       this.samples.set(opts.sessionId, { lastByteAt: null, tailHash: null, hashChangedAt: null })
     }
@@ -151,6 +155,7 @@ class PtyManager extends TypedEmitter {
       const next = prev + data
       const capped = next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next
       this.backlog.set(opts.sessionId, capped)
+      this.lastIoAt.set(opts.sessionId, Date.now())
       const sample = this.samples.get(opts.sessionId)
       if (sample) {
         const now = Date.now()
@@ -215,6 +220,7 @@ class PtyManager extends TypedEmitter {
       this.scopeExecs.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
+      this.lastIoAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
     })
   }
@@ -261,6 +267,11 @@ class PtyManager extends TypedEmitter {
     return this.samples.get(sessionId) ?? null
   }
 
+  // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
+  getLastIoAt(sessionId: string): number | null {
+    return this.lastIoAt.get(sessionId) ?? null
+  }
+
   getBacklog(sessionId: string): string {
     return this.backlog.get(sessionId) ?? ''
   }
@@ -269,6 +280,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) throw new Error(`session ${sessionId} not running`)
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.write(data)
   }
 
@@ -276,6 +288,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.resize(cols, rows)
     this.emit('resize', { sessionId, cols, rows })
   }
@@ -290,6 +303,7 @@ class PtyManager extends TypedEmitter {
     this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
+    this.lastIoAt.delete(sessionId)
   }
 
   killAll(): void {
@@ -304,6 +318,7 @@ class PtyManager extends TypedEmitter {
     this.backlog.clear()
     this.samples.clear()
     this.lastInputAt.clear()
+    this.lastIoAt.clear()
   }
 
   isRunning(sessionId: string): boolean {

@@ -70,6 +70,12 @@ import type {
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type {
+  HibernateStatsView,
+  PaneCheckRequest,
+  PaneCheckResult,
+  SessionHibernatedEvent,
+} from '../hibernate'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
 import type { AgentBusSnapshot } from './agent-bus'
@@ -1330,6 +1336,9 @@ export interface ResumeSessionInput {
   ccSessionId: string
   cols?: number
   rows?: number
+  // Wake de uma pane hibernada. Informativo: quem decide se as flags do spawn
+  // voltam é o sessions.hibernated_at no main (sobrevive a restart; isto não).
+  fromHibernation?: boolean
 }
 
 export interface SessionSummary {
@@ -2969,6 +2978,15 @@ export interface Api {
     wakeResult(result: WakeResult): Promise<void>
     /** O main retomou a conversa de uma pane dormindo (só com sessions.lazyRestore ligada). */
     onDormantBecameLive(handler: (event: DormantBecameLiveEvent) => void): () => void
+    /** Contadores da hibernação por ociosidade e se o tick está ligado (e por que não). */
+    hibernateStats(): Promise<HibernateStatsView>
+    /** Uma PTY saiu pelo /exit da hibernação; chega ANTES do pty:exit da mesma PTY. */
+    onHibernated(handler: (event: SessionHibernatedEvent) => void): () => void
+    /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
+    onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
+    paneCheckResult(result: PaneCheckResult): Promise<void>
+    /** A aba de uma PTY viva foi fechada pelo X: um /exit da hibernação em curso não a recria. */
+    paneClosed(sessionId: string): Promise<void>
     /** O kernel matou um processo da sessão por passar do teto de memória. */
     onOom(handler: (event: ScopeOomEvent) => void): () => void
     /** Contador de oom-kills por sessão/total (scopes do systemd). */

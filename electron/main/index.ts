@@ -28,6 +28,8 @@ import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
 import { promptQueue, registerSendPromptIpc } from './ipc/send-prompt'
 import { registerDormantPanesIpc } from './ipc/dormant-panes'
+import { registerHibernateIpc } from './ipc/hibernate'
+import { getIdleHibernator } from './services/hibernate/idle-hibernator'
 import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
@@ -339,6 +341,7 @@ app.whenReady().then(async () => {
   registerSendPromptIpc()
   registerComposerDraftIpc()
   registerDormantPanesIpc()
+  registerHibernateIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
   // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
@@ -489,6 +492,7 @@ function runFinalShutdown(): void {
     handoffReconcileTimer = null
   }
   stopAutoPull()
+  getIdleHibernator()?.dispose()
   if (autoPullBootTimer) {
     clearTimeout(autoPullBootTimer)
     autoPullBootTimer = null

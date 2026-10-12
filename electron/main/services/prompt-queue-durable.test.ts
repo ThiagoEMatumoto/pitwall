@@ -13,6 +13,7 @@ import {
   PromptQueue,
   STALE_RESTORE_MS,
   WRITEBACK_MS,
+  type PromptQueueDeps,
 } from './prompt-queue'
 import {
   createPromptQueueStore,
@@ -57,6 +58,7 @@ function makeQueue(
     // Transcript da conversa (JSONL real): a prova passa pelo parser de produção.
     jsonl?: () => string | null
     obsolete?: (id: string, text: string) => boolean
+    extra?: Partial<PromptQueueDeps>
   } = {},
 ) {
   const writes: string[] = []
@@ -68,7 +70,7 @@ function makeQueue(
     screen: async () => idle,
     nativeStatus: () => true,
     handoffAsking: () => false,
-    write: (id, text) => writes.push(`${id}:${text}`),
+    write: (id, text, raw) => writes.push(`${id}:${raw ? 'raw:' : ''}${text}`),
     emit: (s) => (last = s),
     warn: () => {},
     now: opts.now,
@@ -78,6 +80,7 @@ function makeQueue(
       opts.jsonl
         ? transcriptProof(opts.jsonl(), text, since)
         : { verdict: opts.verdict ?? 'unknown', answered: false },
+    ...opts.extra,
   })
   return { queue, writes, running, snap: () => last as PromptQueueSnapshot | null }
 }
@@ -446,6 +449,7 @@ describe('falha de persistência (SQLite abortando a escrita)', () => {
         text: 't',
         fromSessionId: null,
         bypassAttention: false,
+        raw: false,
         state: 'queued',
         createdAt: 1,
         deliveringAt: null,
@@ -639,5 +643,166 @@ describe('transcriptVerdict (formato real do JSONL do claude)', () => {
 
   it('sem transcript = unknown', () => {
     expect(transcriptVerdict(null, 'faz X', since)).toBe('unknown')
+  })
+})
+
+describe('hibernação × fila durável', () => {
+  const WOKEN = 'pty-acordada'
+  const rawRows = () =>
+    db.prepare('SELECT state, raw, text, session_id FROM prompt_queue_items').all() as Array<{
+      state: string
+      raw: number
+      text: string
+      session_id: string
+    }>
+
+  it('o /exit é efêmero: enfileirado não vai para o app.db', async () => {
+    const { queue } = makeQueue({ status: 'working' })
+    const res = await queue.send({
+      sessionId: PTY,
+      text: '/exit',
+      when: 'on-idle',
+      ephemeral: true,
+    })
+    expect(res).toMatchObject({ ok: true, delivered: false })
+    expect(rows()).toEqual([])
+    queue.dispose()
+  })
+
+  it('redirect sem kill: o input retido segue a mesma linha até a sessão acordada e sai uma vez', async () => {
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
+    ).run(WOKEN, CC)
+    let hibernating = true
+    let wake!: (id: string | null) => void
+    const writes: string[] = []
+    // Estado da linha no instante do write: 'delivering' tem que estar gravado antes.
+    const atWrite: unknown[] = []
+    const stateOf = db.prepare('SELECT state FROM prompt_queue_items')
+    const jsonl: string[] = []
+    const q = makeQueue({
+      status: 'idle',
+      jsonl: () => jsonl.join('\n'),
+      extra: {
+        isHibernating: (id) => hibernating && id === PTY,
+        redirectOnExit: () => new Promise<string | null>((r) => (wake = r)),
+        write: (id, text, raw) => {
+          atWrite.push(stateOf.all())
+          writes.push(`${id}:${raw ? 'raw:' : ''}${text}`)
+        },
+      },
+    })
+    const { queue, running } = q
+    running.add(WOKEN)
+
+    const held = await queue.send({ sessionId: PTY, text: 'ab', when: 'on-idle', raw: true })
+    if (!held.ok || held.delivered) throw new Error('input deveria ficar retido')
+    expect(queue.replaceText(held.queued.id, 'abc\r')).toBe(true)
+    expect(rawRows()).toEqual([{ state: 'queued', raw: 1, text: 'abc\r', session_id: PTY }])
+    expect(writes).toEqual([])
+
+    // A PTY sai; o wake sobe a conversa em outra PTY (o spawn chama onSessionLive)
+    // antes de o redirect devolver: nada é puxado duas vezes.
+    hibernating = false
+    running.delete(PTY)
+    queue.onSessionExit(PTY)
+    queue.onSessionLive(WOKEN)
+    wake(WOKEN)
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(writes).toEqual([`${WOKEN}:raw:abc\r`])
+    // 'delivering' gravado antes do write cru.
+    expect(atWrite).toEqual([[{ state: 'delivering' }]])
+    expect(q.snap()?.lastEvent).toMatchObject({ kind: 'delivered', id: held.queued.id })
+    // A linha só sai com a prova no transcript, como qualquer entrega.
+    expect(rawRows()).toEqual([{ state: 'delivering', raw: 1, text: 'abc\r', session_id: WOKEN }])
+
+    jsonl.push(claudeLine('user', 'abc'), claudeLine('assistant', 'ok'))
+    queue.onTurnEnded(WOKEN)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toHaveLength(1)
+    expect(rawRows()).toEqual([])
+    queue.dispose()
+  })
+
+  it('kill entre o redirect e a entrega: a linha já aponta para a sessão acordada', async () => {
+    let wake!: (id: string | null) => void
+    const { queue, running } = makeQueue({
+      status: 'working',
+      extra: {
+        isHibernating: () => true,
+        redirectOnExit: () => new Promise<string | null>((r) => (wake = r)),
+      },
+    })
+    await queue.send({ sessionId: PTY, text: 'x', when: 'on-idle', raw: true })
+    running.delete(PTY)
+    queue.onSessionExit(PTY)
+    wake(WOKEN)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(rawRows()).toEqual([{ state: 'queued', raw: 1, text: 'x', session_id: WOKEN }])
+    queue.dispose()
+  })
+
+  it('wake do redirect falhou: o input retido nunca é apagado, fica visível e Reenviar entrega quando a conversa volta', async () => {
+    let hibernating = true
+    let wake!: (id: string | null) => void
+    const { queue, writes, running, snap } = makeQueue({
+      status: 'idle',
+      extra: {
+        isHibernating: (id) => hibernating && id === PTY,
+        redirectOnExit: () => new Promise<string | null>((r) => (wake = r)),
+      },
+    })
+    const held = await queue.send({ sessionId: PTY, text: 'deploy\r', when: 'on-idle', raw: true })
+    if (!held.ok || held.delivered) throw new Error('input deveria ficar retido')
+
+    hibernating = false
+    running.delete(PTY)
+    queue.onSessionExit(PTY)
+    wake(null)
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(writes).toEqual([])
+    expect(rawRows()).toEqual([{ state: 'uncertain', raw: 1, text: 'deploy\r', session_id: PTY }])
+    expect(snap()?.items).toEqual([
+      expect.objectContaining({ id: held.queued.id, recovery: 'maybe-undelivered' }),
+    ])
+    expect(snap()?.lastEvent).toMatchObject({ kind: 'maybe-undelivered', id: held.queued.id })
+    expect(snap()?.counters.sessionGone).toBe(0)
+
+    // Reenviar com a conversa ainda dormindo: espera ela voltar, sem escrever.
+    expect(queue.resend(held.queued.id)).toBe(true)
+    expect(rawRows()).toEqual([{ state: 'queued', raw: 1, text: 'deploy\r', session_id: PTY }])
+    expect(writes).toEqual([])
+
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
+    ).run(WOKEN, CC)
+    running.add(WOKEN)
+    queue.onSessionLive(WOKEN)
+    queue.onTurnEnded(WOKEN)
+    await new Promise((r) => setTimeout(r, 600))
+    expect(writes).toEqual([`${WOKEN}:raw:deploy\r`])
+    expect(rawRows()).toEqual([
+      { state: 'delivering', raw: 1, text: 'deploy\r', session_id: WOKEN },
+    ])
+    queue.dispose()
+  })
+
+  it('wake falhou com o /exit efêmero ainda na fila: ele sai sem gravar nada', async () => {
+    let wake!: (id: string | null) => void
+    const { queue, running, snap } = makeQueue({
+      status: 'working',
+      extra: { redirectOnExit: () => new Promise<string | null>((r) => (wake = r)) },
+    })
+    await queue.send({ sessionId: PTY, text: '/exit', when: 'on-idle', ephemeral: true })
+    running.delete(PTY)
+    queue.onSessionExit(PTY)
+    wake(null)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(rawRows()).toEqual([])
+    expect(snap()?.items).toEqual([])
+    expect(snap()?.lastEvent).toMatchObject({ kind: 'session-gone' })
+    queue.dispose()
   })
 })

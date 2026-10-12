@@ -6,6 +6,8 @@ import { beforeEach, expect, it } from 'vitest'
 
 const saved: { paneId: string; ccSessionId: string }[][] = []
 let spawned = 0
+type HibernatedHandler = (e: { sessionId: string; ccSessionId: string; paneId: string }) => void
+let hibernated: HibernatedHandler | null = null
 
 Object.assign(window, {
   api: new Proxy(
@@ -30,6 +32,12 @@ Object.assign(window, {
                   saved.push(snaps)
                   return Promise.resolve()
                 }
+              if (ns === 'sessions' && prop === 'onHibernated')
+                return (h: HibernatedHandler) => {
+                  hibernated = h
+                  return () => {}
+                }
+              if (ns === 'sessions' && prop === 'listLiveGlobal') return () => Promise.resolve([])
               if (typeof prop === 'string' && prop.startsWith('on')) return () => () => {}
               return () => Promise.resolve()
             },
@@ -62,4 +70,21 @@ it('fechar uma pane também grava na hora', async () => {
   await nextTick()
   expect(saved.length).toBe(before + 1)
   expect(saved.at(-1)?.map((s) => s.paneId)).not.toContain('pane-x')
+})
+
+it('pane que hiberna (vira dormant) grava o open_panes na hora, com ela dentro', async () => {
+  await useAppStore.getState().startLiveWatch()
+  await useAppStore.getState().openSession(null, null, null, null, 'pane-sleepy')
+  await nextTick()
+  const pane = useAppStore.getState().panes.find((p) => p.paneId === 'pane-sleepy')!
+  const before = saved.length
+  hibernated!({
+    sessionId: pane.session.id,
+    ccSessionId: pane.session.ccSessionId as string,
+    paneId: 'pane-sleepy',
+  })
+  expect(useAppStore.getState().panes.find((p) => p.paneId === 'pane-sleepy')?.dormant).toBe(true)
+  await nextTick()
+  expect(saved.length).toBe(before + 1)
+  expect(saved.at(-1)?.map((s) => s.paneId)).toContain('pane-sleepy')
 })

@@ -61,12 +61,23 @@ export interface PromptQueueDeps {
   // false = o status vem só da PTY (Codex): nunca diz 'waiting', então não prova nada.
   nativeStatus(sessionId: string): boolean
   handoffAsking(sessionId: string): boolean
-  write(sessionId: string, text: string): void
+  // raw = o texto já são os bytes do PTY (input segurado na hibernação).
+  write(sessionId: string, text: string, raw: boolean): void
   // Escrita de fato no PTY (agora ou ao sair da fila) — nunca no enfileiramento.
   delivered?(sessionId: string, fromSessionId: string | undefined): void
   emit(snapshot: PromptQueueSnapshot): void
   warn(event: Record<string, unknown>): void
   now?(): number
+  // A PTY saiu sem ser o fim da conversa (hibernação): devolve o sessions.id da
+  // sessão acordada para os itens seguirem nela, ou null se não acordou. null aqui
+  // (em vez da promessa) = saída comum, os itens terminam como session-gone.
+  redirectOnExit?(sessionId: string): Promise<string | null> | null
+  // O /exit da hibernação já foi escrito e a PTY ainda não saiu: nada é escrito nela,
+  // nem 'now'. Os itens esperam o exit e seguem para a sessão acordada.
+  isHibernating?(sessionId: string): boolean
+  // Última palavra antes do write (síncrona, logo antes de escrever). false = segura
+  // o item na fila.
+  beforeWrite?(sessionId: string, text: string): boolean
   // Persistência (app.db). Sem store a fila é só memória (testes antigos).
   store?: PromptQueueStore
   // Conversa que a PTY segura agora (índice ~/.claude/sessions): a linha sessions
@@ -147,6 +158,9 @@ interface Item extends QueuedPrompt {
   paneCc: string | null
   fromSessionId?: string
   bypassAttention?: boolean
+  raw?: boolean
+  // Fora do app.db: não sobrevive a um kill (o /exit da hibernação).
+  ephemeral?: boolean
   // Veio do app.db no boot: não expira, e velho demais pede confirmação.
   restored?: boolean
   // O usuário mandou enviar (Reenviar/Enviar): não pede confirmação de novo.
@@ -185,6 +199,8 @@ export class PromptQueue {
   // sessionId → quando a última entrega saiu (espera o claude trabalhar).
   private awaitingWork = new Map<string, number>()
   private delivering = new Set<string>()
+  // sessionId que saiu e cujos itens esperam o wake para mudar de sessão.
+  private rebinding = new Set<string>()
   private confirming: Confirming[] = []
   // Linhas que deviam ter saído do banco (cancelada, expirada, entregue com prova)
   // e cujo DELETE falhou: o tick retenta, senão o boot as traria de volta.
@@ -228,12 +244,15 @@ export class PromptQueue {
   }
 
   async send(input: SendPromptInput): Promise<SendPromptResult> {
-    const { sessionId, text, when, fromSessionId, bypassAttention } = input
+    const { sessionId, text, when, fromSessionId, bypassAttention, raw, ephemeral } = input
     if (!this.deps.isRunning(sessionId)) return { ok: false, error: 'not-running' }
     const scan = await this.deps.screen(sessionId)
-    if (when === 'now') return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
-    if (!scan) return { ok: false, error: 'no-screen' }
-    const item = this.enqueue(sessionId, text, fromSessionId, bypassAttention)
+    if (when === 'now' && !this.deps.isHibernating?.(sessionId)) {
+      return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
+    }
+    // Hibernando não há tela que importe: o destino é a sessão acordada.
+    if (!scan && !this.deps.isHibernating?.(sessionId)) return { ok: false, error: 'no-screen' }
+    const item = this.enqueue(sessionId, text, { fromSessionId, bypassAttention, raw, ephemeral })
     const isHead = this.items.find((i) => i.sessionId === sessionId) === item
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
@@ -265,7 +284,7 @@ export class PromptQueue {
       this.countRefusal(sessionId, verdict)
       return { ok: false, error }
     }
-    this.write(sessionId, text, fromSessionId)
+    this.write(sessionId, text, false, fromSessionId)
     return { ok: true, delivered: true }
   }
 
@@ -549,9 +568,33 @@ export class PromptQueue {
   onSessionExit(sessionId: string): void {
     this.awaitingWork.delete(sessionId)
     if (this.shuttingDown) return
+    if (this.rebinding.has(sessionId)) return
     const mine = this.items.filter((i) => i.sessionId === sessionId)
     if (mine.length === 0) return
+    const redirect = this.deps.redirectOnExit?.(sessionId) ?? null
+    if (!redirect) {
+      this.parkAwaitingSession(sessionId, mine)
+      return
+    }
+    this.rebinding.add(sessionId)
+    void redirect
+      .catch((err: unknown) => {
+        this.deps.warn({ event: 'prompt_queue_redirect_failed', sessionId, error: String(err) })
+        return null
+      })
+      .then((next) => this.rebind(sessionId, next))
+  }
+
+  // Sem sessão acordada para onde mandar: os itens ficam esperando a conversa
+  // voltar (resume/wake), como os restaurados do boot. O ephemeral (/exit da
+  // hibernação) não tem linha no banco e não pode sair na conversa que voltar.
+  private parkAwaitingSession(sessionId: string, mine: Item[]): void {
+    const parking: Item[] = []
     for (const item of mine) {
+      if (item.ephemeral) {
+        this.finish(item, 'session-gone')
+        continue
+      }
       item.recovery = 'awaiting-session'
       item.expiresAt = NEVER
       item.holding = false
@@ -564,12 +607,57 @@ export class PromptQueue {
         sessionId,
         id: item.id,
       })
+      parking.push(item)
     }
-    this.items = this.items.filter((i) => !mine.includes(i))
-    this.parked = [...this.parked, ...mine]
+    if (parking.length === 0) return
+    this.items = this.items.filter((i) => !parking.includes(i))
+    this.parked = [...this.parked, ...parking]
     this.ensurePoll()
     this.armAwaitingNotice()
     this.publish()
+  }
+
+  // Mesmo item (mesmo id) na sessão nova: quem acompanha pelo id (ledger do
+  // handoff-wake, resposta a pedido) vê o 'delivered' de verdade quando sair.
+  private rebind(from: string, to: string | null): void {
+    this.rebinding.delete(from)
+    const moving = this.items.filter((i) => i.sessionId === from)
+    if (!to) {
+      this.strand(moving)
+      return
+    }
+    if (moving.length === 0) return
+    for (const item of moving) {
+      // Mesma linha no app.db: um kill depois daqui reentrega na sessão acordada.
+      if (!item.ephemeral) this.persist(item.id, 'rebind', (st) => st.rebind(item.id, to))
+      item.sessionId = to
+      item.ccSessionId = this.ccSessionOf(to) ?? item.ccSessionId
+      item.paneCc = this.rowCcOf(to) ?? item.paneCc
+    }
+    this.deps.warn({ event: 'prompt_queue_rebound', from, to, count: moving.length })
+    this.publish()
+    void this.tryDeliver(to)
+  }
+
+  // O wake depois do /exit da hibernação falhou: o texto que o usuário digitou
+  // nunca é apagado. Fica no banco como 'uncertain' e visível (Reenviar/Descartar);
+  // Reenviar o entrega quando a conversa voltar (onSessionLive).
+  private strand(items: Item[]): void {
+    for (const item of items) {
+      if (item.ephemeral) {
+        this.finish(item, 'session-gone')
+        continue
+      }
+      if (item.unpersisted && this.insertRow(item)) item.unpersisted = false
+      this.persist(item.id, 'setState', (st) => st.setState(item.id, 'uncertain'))
+      item.expiresAt = NEVER
+      item.holding = false
+      item.heldReason = null
+      this.items = this.items.filter((i) => i !== item)
+      this.parked = [...this.parked, item]
+      this.markMaybeUndelivered(item)
+    }
+    if (items.length > 0) this.publish()
   }
 
   dispose(): void {
@@ -584,11 +672,11 @@ export class PromptQueue {
   private enqueue(
     sessionId: string,
     text: string,
-    fromSessionId?: string,
-    bypassAttention?: boolean,
+    opts: Pick<SendPromptInput, 'fromSessionId' | 'bypassAttention' | 'raw' | 'ephemeral'>,
   ): Item {
+    const { fromSessionId, bypassAttention, raw, ephemeral } = opts
     const createdAt = this.now()
-    const store = this.deps.store
+    const store = ephemeral ? undefined : this.deps.store
     const item: Item = {
       id: randomUUID(),
       sessionId,
@@ -602,9 +690,12 @@ export class PromptQueue {
       holding: false,
       fromSessionId,
       bypassAttention,
+      ...(raw ? { raw } : {}),
+      ...(ephemeral ? { ephemeral } : {}),
     }
     // Grava ANTES de existir na fila. Se o banco falhar, o item fica só em memória
     // e não é entregue até o insert passar (tryDeliver retenta; persistFailed conta).
+    // O ephemeral (/exit da hibernação) nunca vai ao banco.
     if (store && !this.insertRow(item)) item.unpersisted = true
     this.items = [...this.items, item]
     this.ensurePoll()
@@ -638,6 +729,7 @@ export class PromptQueue {
         text: item.text,
         fromSessionId: item.fromSessionId ?? null,
         bypassAttention: item.bypassAttention === true,
+        raw: item.raw === true,
         state: 'queued',
         createdAt: item.createdAt,
         deliveringAt: null,
@@ -672,8 +764,8 @@ export class PromptQueue {
     for (const id of [...this.pendingRemoval]) this.removeRow(id)
   }
 
-  private write(sessionId: string, text: string, fromSessionId?: string): void {
-    this.deps.write(sessionId, text)
+  private write(sessionId: string, text: string, raw: boolean, fromSessionId?: string): void {
+    this.deps.write(sessionId, text, raw)
     this.awaitingWork.set(sessionId, this.now())
     this.deps.delivered?.(sessionId, fromSessionId)
   }
@@ -686,6 +778,7 @@ export class PromptQueue {
     if (since != null && this.now() - since < AWAIT_WORK_MS) return false
     const head = this.items.find((i) => i.sessionId === sessionId)
     if (!head) return false
+    if (this.deps.isHibernating?.(sessionId)) return false
     this.delivering.add(sessionId)
     try {
       if (!this.deps.isRunning(sessionId)) {
@@ -710,22 +803,26 @@ export class PromptQueue {
         this.publish()
       }
       if (verdict !== 'deliver') return false
+      // O /exit da hibernação pode ter saído durante a releitura da tela.
+      if (this.deps.isHibernating?.(sessionId)) return false
+      if (this.deps.beforeWrite && !this.deps.beforeWrite(sessionId, head.text)) return false
       // Sem o registro durável não entrega: retenta o insert agora, e no próximo
       // fim de turno/poll se falhar de novo.
       if (head.unpersisted) {
         if (!this.insertRow(head)) return false
         head.unpersisted = false
       }
-      // 'delivering' durável ANTES do write, e a linha só sai do banco com prova no
-      // transcript (confirmDeliveries): um kill ou queda de energia antes de o claude
-      // gravar a mensagem deixa o boot conferir em vez de perdê-la ou reenviá-la às cegas.
+      // 'delivering' durável ANTES do write (raw também), e a linha só sai do banco
+      // com prova no transcript (confirmDeliveries): um kill ou queda de energia antes
+      // de o claude gravar a mensagem deixa o boot conferir em vez de perdê-la ou
+      // reenviá-la às cegas. O ephemeral não tem linha nem espera prova.
       const deliveringAt = this.now()
       // A conversa pode ter mudado (/clear, /resume) desde o enqueue: a prova e o
       // boot conferem no transcript em que a mensagem entra agora.
       head.ccSessionId = this.ccSessionOf(sessionId) ?? head.ccSessionId
       if (!this.markDelivering(head, deliveringAt)) return false
-      this.write(sessionId, head.text, head.fromSessionId)
-      const keepRow = this.deps.store != null
+      this.write(sessionId, head.text, head.raw === true, head.fromSessionId)
+      const keepRow = this.deps.store != null && !head.ephemeral
       if (keepRow) {
         this.confirming = [...this.confirming, { item: head, deliveringAt, foundAt: null }]
         this.ensurePoll()
@@ -777,6 +874,7 @@ export class PromptQueue {
   // Sem a marca não há como provar no boot o que aconteceu: não escreve agora (o
   // item segue na fila e é retentado).
   private markDelivering(item: Item, at: number): boolean {
+    if (item.ephemeral) return true
     return this.persist(item.id, 'markDelivering', (st) =>
       st.markDelivering(item.id, at, item.ccSessionId),
     )
@@ -787,7 +885,9 @@ export class PromptQueue {
     item.outcome = kind
     this.items = this.items.filter((i) => i !== item)
     this.parked = this.parked.filter((i) => i !== item)
-    if (!this.shuttingDown && !keepRow && !item.unpersisted) this.removeRow(item.id)
+    if (!this.shuttingDown && !keepRow && !item.unpersisted && !item.ephemeral) {
+      this.removeRow(item.id)
+    }
     if (kind === 'delivered') this.counters.delivered++
     if (kind === 'expired') this.counters.expired++
     if (kind === 'session-gone') this.counters.sessionGone++
@@ -906,8 +1006,10 @@ function publicItem({
   fromSessionId: _f,
   bypassAttention: _b,
   ccSessionId: _c,
+  raw: _r,
+  ephemeral: _e,
   paneCc: _pc,
-  restored: _r,
+  restored: _rs,
   confirmed: _k,
   unpersisted: _p,
   ...q
@@ -930,6 +1032,7 @@ function fromRow(row: PersistedPrompt, ccSessionId: string | null, paneCc: strin
     holding: false,
     fromSessionId: row.fromSessionId ?? undefined,
     bypassAttention: row.bypassAttention || undefined,
+    ...(row.raw ? { raw: true } : {}),
     restored: true,
   }
 }

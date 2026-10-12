@@ -29,6 +29,7 @@ import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { DormantPane } from '@/features/sessions/DormantPane'
 import { createActivationWaker } from '@/features/sessions/dormant-wake'
+import { noteActivePane } from '@/features/sessions/pane-activity'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
@@ -190,7 +191,12 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
       {pane?.dormant && !pane.restoreError && (
-        <span role="img" title="Dormindo" aria-label="Dormindo" className="mr-1 flex">
+        <span
+          role="img"
+          title={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          aria-label={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          className="mr-1 flex"
+        >
           <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
         </span>
       )}
@@ -366,6 +372,7 @@ export function AppShell() {
         syncFilesRepoToActivePane()
         const id = event.api.activePanel?.id ?? null
         setActivePanelId(id)
+        noteActivePane(id)
         const userChoice = !applyingLayout.current && !reconciling.current
         activationWaker.current.activated(userChoice ? id : null)
       })
