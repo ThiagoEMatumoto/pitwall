@@ -25,6 +25,9 @@ const seam = vi.hoisted(() => ({
   exitListeners: [] as Array<(e: { sessionId: string; exitCode: number }) => void>,
   // Linhas gravadas em `sessions` (args do INSERT).
   insertedSessionIds: [] as string[],
+  // Força falha no INSERT de `sessions` / no ptyManager.spawn.
+  failInsert: false,
+  failSpawn: false,
   // Configs MCP por sessão escritas/removidas.
   writtenSessionConfigs: [] as string[],
   removedSessionConfigs: [] as string[],
@@ -56,7 +59,10 @@ vi.mock('../services/db', () => ({
   getDb: () => ({
     prepare: (sql: string) => ({
       run: (...args: unknown[]) => {
-        if (sql.includes('INSERT INTO sessions')) seam.insertedSessionIds.push(args[0] as string)
+        if (sql.includes('INSERT INTO sessions')) {
+          if (seam.failInsert) throw new Error('SQLITE_BUSY')
+          seam.insertedSessionIds.push(args[0] as string)
+        }
         return { changes: 1 }
       },
       get: (..._args: unknown[]) => {
@@ -91,6 +97,7 @@ vi.mock('../services/pty-manager', async () => {
     spawn: (opts: { sessionId: string; args: string[] }) => {
       const innerCmd = opts.args.join(' ')
       const m = innerCmd.match(/--settings '([^']+)'/)
+      if (seam.failSpawn) throw new Error('posix_spawnp failed')
       seam.spawns.push({
         sessionId: opts.sessionId,
         innerCmd,
@@ -155,7 +162,7 @@ import {
   resolveDisallowedTools,
   spawnSession,
 } from './sessions'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { handoffChildSettings } from '../services/spawn-flags'
 import { buildHandoffAlias } from '../services/handoff/alias'
 
@@ -592,6 +599,28 @@ describe('argv do spawn sem padrões de permissão (pkill -f)', () => {
     expect(existsSync(path)).toBe(false)
     expect(seam.removedSessionConfigs).toContain(session.id)
   })
+
+  // O arquivo é gravado antes do INSERT; sem PTY não há exit para removê-lo.
+  for (const failure of ['failInsert', 'failSpawn'] as const) {
+    it(`${failure}: o settings gravado no pré-spawn não fica órfão`, () => {
+      const dir = '/tmp/cm-test-userdata/session-settings'
+      const before = new Set(existsSync(dir) ? readdirSync(dir) : [])
+      seam[failure] = true
+      try {
+        expect(() =>
+          spawnSession({ repoId: 'r1', name: 'api', permissionMode: 'acceptEdits' }),
+        ).toThrow()
+      } finally {
+        seam[failure] = false
+      }
+
+      // Prova que houve arquivo a limpar: o diretório existe (gravado no pré-spawn).
+      expect(existsSync(dir)).toBe(true)
+      const leaked = readdirSync(dir).filter((f) => !before.has(f))
+      expect(leaked).toEqual([])
+      expect(seam.spawns).toEqual([])
+    })
+  }
 
   it('sessão interativa sem denylist não ganha --settings', () => {
     spawnSession({ repoId: 'r1', name: 'api' })

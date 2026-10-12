@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -50,6 +50,14 @@ describe('arquivo de settings por sessão', () => {
     expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(JSON.parse(readFileSync(path, 'utf8')).permissions.deny).toEqual(['Bash(pkill:*)'])
     expect(readdirSync(dir)).toEqual([`${ID}.json`])
+  })
+
+  it('aperta para 0700 um diretório que já existia com 0755', () => {
+    const dir = tmpDir()
+    mkdirSync(dir, { mode: 0o755 })
+    expect(statSync(dir).mode & 0o777).toBe(0o755)
+    writeSessionSettings(ID, {}, dir)
+    expect(statSync(dir).mode & 0o777).toBe(0o700)
   })
 
   it('remove só a sessão dada e é no-op se já sumiu', () => {

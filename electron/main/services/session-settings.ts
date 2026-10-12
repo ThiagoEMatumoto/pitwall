@@ -54,6 +54,8 @@ export function writeSessionSettings(
   dir: string = sessionSettingsDir(),
 ): string {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
+  // `mode` do mkdir não toca um diretório que já existe (ex.: criado 0755 antes).
+  chmodSync(dir, 0o700)
   const path = sessionSettingsPath(sessionId, dir)
   const tmp = `${path}.${process.pid}.tmp`
   writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 })
