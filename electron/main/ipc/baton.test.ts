@@ -3,6 +3,13 @@
 // Não exercita o claude real: captura os callbacks que register*Ipc passam a
 // ipcMain.handle e o innerCmd que o ptyManager receberia.
 import { readFileSync } from 'node:fs'
+
+// O denylist e a política da filha vivem no ARQUIVO apontado por --settings.
+function settingsOf(cmd: string): { permissions?: { deny?: string[] } } {
+  const m = cmd.match(/--settings '([^']+)'/)
+  if (!m) throw new Error(`sem --settings no comando: ${cmd}`)
+  return JSON.parse(readFileSync(m[1], 'utf8'))
+}
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const handlers = new Map<string, (e: unknown, ...args: unknown[]) => unknown>()
@@ -331,14 +338,13 @@ describe('baton:pass — herança do papel de filha de handoff', () => {
   it('herda as permissões do modo: acceptEdits + denylist da filha', () => {
     pass()
     expect(spawns[0].innerCmd).toContain("--permission-mode 'acceptEdits'")
-    expect(spawns[0].innerCmd).toContain('--disallowedTools')
-    // Filha recebe o deny PRÓPRIO (coerente com o --settings): sem `git push:*`
-    // nem `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
-    for (const spec of HANDOFF_CHILD_DENY) {
-      expect(spawns[0].innerCmd).toContain(`'${spec}'`)
-    }
-    expect(spawns[0].innerCmd).not.toContain("'Bash(git push:*)'")
-    expect(spawns[0].innerCmd).not.toContain("'Bash(rm:*)'")
+    expect(spawns[0].innerCmd).not.toContain('--disallowedTools')
+    // Filha recebe o deny PRÓPRIO no arquivo de settings: sem `git push:*` nem
+    // `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
+    const deny = settingsOf(spawns[0].innerCmd).permissions?.deny ?? []
+    expect(deny).toEqual(expect.arrayContaining(HANDOFF_CHILD_DENY))
+    expect(deny).not.toContain('Bash(git push:*)')
+    expect(deny).not.toContain('Bash(rm:*)')
   })
 
   it('modo plan: a sucessora volta read-only, sem denylist (nada a negar)', () => {
@@ -346,6 +352,8 @@ describe('baton:pass — herança do papel de filha de handoff', () => {
     pass()
     expect(spawns[0].innerCmd).toContain("--permission-mode 'plan'")
     expect(spawns[0].innerCmd).not.toContain('--disallowedTools')
+    // O deny que resta é o read-only do settings da filha plan.
+    expect(settingsOf(spawns[0].innerCmd).permissions?.deny).toContain('Edit')
   })
 
   it('herda o endereço: --settings da filha + apelido espelhado no título', () => {

@@ -18,7 +18,15 @@ const seam = vi.hoisted(() => ({
   db: null as unknown as import('better-sqlite3').Database,
   handlers: new Map<string, (event: unknown, ...args: never[]) => unknown>(),
   // Linha de comando de cada spawn real (o que o login shell executa).
-  spawns: [] as { sessionId: string; argv: string; cwd: string }[],
+  // settings: conteúdo do --settings lido NO spawn (o exit apaga o arquivo);
+  // null = o argv não tem --settings ou o arquivo não existia.
+  spawns: [] as {
+    sessionId: string
+    argv: string
+    cwd: string
+    settingsPath: string | null
+    settings: string | null
+  }[],
   live: new Set<string>(),
   // Registrado uma vez por módulo (listenersAttached): não se limpa entre testes.
   exitHandlers: [] as ((e: { sessionId: string; exitCode: number }) => void)[],
@@ -45,8 +53,9 @@ vi.mock('../services/db', () => ({
   getDb: () => seam.db,
   handoffsInterruptedAtOpen: () => [],
 }))
-vi.mock('../services/pty-manager', () => ({
-  ptyManager: {
+vi.mock('../services/pty-manager', async () => {
+  const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
+  return { ptyManager: {
     on: (event: string, fn: (e: { sessionId: string; exitCode: number }) => void) => {
       if (event === 'exit') seam.exitHandlers.push(fn)
     },
@@ -57,15 +66,20 @@ vi.mock('../services/pty-manager', () => ({
     getPid: () => null,
     sessionIdByPid: () => null,
     spawn: (opts: { sessionId: string; command: string; args: string[]; cwd: string }) => {
+      const argv = [opts.command, ...opts.args].join(' ')
+      const settingsPath = /--settings '([^']+)'/.exec(argv)?.[1] ?? null
       seam.spawns.push({
         sessionId: opts.sessionId,
-        argv: [opts.command, ...opts.args].join(' '),
+        argv,
         cwd: opts.cwd,
+        settingsPath,
+        settings:
+          settingsPath && fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : null,
       })
       seam.live.add(opts.sessionId)
     },
-  },
-}))
+  } }
+})
 vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
 vi.mock('../services/feature-memory', () => ({ featureMemory: { onSessionExit: () => {} } }))
 vi.mock('../services/mcp/server', () => ({ getMcpRuntime: () => null }))
@@ -99,19 +113,41 @@ function applyAllMigrations(db: Database.Database): void {
   }
 }
 
-// Flags que o resume precisa reproduzir. O --append-system-prompt-file é um
-// arquivo temporário novo a cada launch: compara-se o conteúdo, não o path.
+// Flags que o resume precisa reproduzir. O --append-system-prompt-file e o
+// --settings são arquivos novos a cada launch: compara-se o conteúdo, não o path.
 const RELEVANT = /^--(model|effort|advisor|permission-mode|disallowedTools|settings)$/
 
 function relevantFlags(argv: string): string[] {
   const tokens = argv.match(/'(?:[^']|'\\'')*'|\S+/g) ?? []
   const out: string[] = []
   let inFlag = false
+  let prev = ''
   for (const t of tokens) {
     if (t.startsWith('--')) inFlag = RELEVANT.test(t)
-    if (inFlag) out.push(t)
+    if (inFlag) out.push(prev === '--settings' ? '<settings>' : t)
+    prev = t
   }
   return out
+}
+
+function spawnOf(sessionId: string): (typeof seam.spawns)[number] {
+  const s = seam.spawns.find((x) => x.sessionId === sessionId)
+  if (!s) throw new Error(`sem spawn para ${sessionId}`)
+  return s
+}
+
+// Conteúdo do --settings como estava no disco no momento do spawn.
+function settingsOf(sessionId: string): {
+  crossSessionInbound?: string
+  permissions?: { deny?: string[] }
+} | null {
+  const raw = spawnOf(sessionId).settings
+  return raw ? JSON.parse(raw) : null
+}
+
+// O que o wake precisa reproduzir: as flags + o arquivo de settings.
+function launchOf(sessionId: string): { flags: string[]; settings: unknown } {
+  return { flags: relevantFlags(argvOf(sessionId)), settings: settingsOf(sessionId) }
 }
 
 function systemPromptOf(argv: string): string | null {
@@ -227,9 +263,10 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     } as never)
     const cc = ccOf(spawned.id)
     writeTranscript(cc)
-    const before = argvOf(spawned.id)
-    // acceptEdits é autônomo: o denylist destrutivo canônico entra depois do pedido.
-    expect(relevantFlags(before).slice(0, 10)).toEqual([
+    const before = launchOf(spawned.id)
+    // acceptEdits é autônomo: o denylist destrutivo canônico entra depois do pedido,
+    // e tudo vai no arquivo de --settings, não no argv.
+    expect(before.flags).toEqual([
       '--model',
       `'${MODEL}'`,
       '--effort',
@@ -238,21 +275,22 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
       "'opus'",
       '--permission-mode',
       "'acceptEdits'",
-      '--disallowedTools',
-      "'Bash(curl:*)'",
+      '--settings',
+      '<settings>',
     ])
-    expect(relevantFlags(before)).toContain("'Bash(rm:*)'")
+    expect(settingsOf(spawned.id)?.permissions?.deny?.slice(0, 1)).toEqual(['Bash(curl:*)'])
+    expect(settingsOf(spawned.id)?.permissions?.deny).toContain('Bash(rm:*)')
 
     hibernate(spawned.id)
     const woke = wake(cc)
     const after = argvOf(woke)
     expect(after).toContain(`--resume ${cc}`)
-    expect(relevantFlags(after)).toEqual(relevantFlags(before))
+    expect(launchOf(woke)).toEqual(before)
     expect(systemPromptOf(after)).toContain('Responda sempre em inglês.')
 
     // Segunda hibernação: a linha do wake guardou as flags, a cadeia não as perde.
     hibernate(woke)
-    expect(relevantFlags(argvOf(wake(cc)))).toEqual(relevantFlags(before))
+    expect(launchOf(wake(cc))).toEqual(before)
   })
 
   it('modo autônomo: o denylist destrutivo canônico volta junto', () => {
@@ -263,11 +301,11 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     } as never)
     const cc = ccOf(spawned.id)
     writeTranscript(cc)
-    const before = relevantFlags(argvOf(spawned.id))
-    expect(before).toContain("'bypassPermissions'")
-    expect(before.length).toBeGreaterThan(4)
+    const before = launchOf(spawned.id)
+    expect(before.flags).toContain("'bypassPermissions'")
+    expect(settingsOf(spawned.id)?.permissions?.deny).toContain('Bash(rm:*)')
     hibernate(spawned.id)
-    expect(relevantFlags(argvOf(wake(cc)))).toEqual(before)
+    expect(launchOf(wake(cc))).toEqual(before)
   })
 
   it('filha de handoff já terminada (sem relink): volta em plan e com o --settings dela', () => {
@@ -279,11 +317,12 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     } as never)
     const cc = ccOf(spawned.id)
     writeTranscript(cc)
-    const before = relevantFlags(argvOf(spawned.id))
-    expect(before).toContain('--settings')
-    expect(before).toContain("'plan'")
+    const before = launchOf(spawned.id)
+    expect(before.flags).toContain('--settings')
+    expect(before.flags).toContain("'plan'")
+    expect(settingsOf(spawned.id)?.crossSessionInbound).toBe('accept')
     hibernate(spawned.id)
-    expect(relevantFlags(argvOf(wake(cc)))).toEqual(before)
+    expect(launchOf(wake(cc))).toEqual(before)
   })
 
   it('conversa sem registro (linha de antes da 061): resume sem flags, como antes', () => {
@@ -526,7 +565,8 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
     } as never)
     const cc = ccOf(spawned.id)
     writeTranscript(cc)
-    const before = relevantFlags(argvOf(spawned.id))
+    const before = launchOf(spawned.id)
+    const oldSettingsPath = spawnOf(spawned.id).settingsPath
 
     const h = realHibernator(persistToDb)
     setIdleHibernator(h)
@@ -542,7 +582,22 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
     seam.db = openDb(join(HOME, 'app.db'))
     // Depois do restart a pane volta dormant sem dormantReason: fromHibernation false.
     const woke = resume(cc, false)
-    expect(relevantFlags(argvOf(woke))).toEqual(before)
+    expect(launchOf(woke)).toEqual(before)
+    // Regressão: o wake reusava o --settings da sessão anterior, apagado no exit
+    // dela ("Settings file not found"), e punha a denylist de volta no argv.
+    const wokeSpawn = spawnOf(woke)
+    expect(oldSettingsPath).not.toBeNull()
+    expect(wokeSpawn.settingsPath).not.toBeNull()
+    expect(wokeSpawn.settingsPath).not.toBe(oldSettingsPath)
+    expect(wokeSpawn.settings).not.toBeNull()
+    expect(settingsOf(woke)?.permissions?.deny).toEqual(
+      expect.arrayContaining(['Bash(curl:*)', 'Bash(pkill:*)', 'Bash(killall:*)']),
+    )
+    expect(wokeSpawn.argv).not.toContain('{')
+    expect(wokeSpawn.argv).not.toContain('Bash(')
+    expect(wokeSpawn.argv).toContain(`--model '${MODEL}'`)
+    expect(wokeSpawn.argv).toContain("--effort 'high'")
+    expect(wokeSpawn.argv).toContain("--permission-mode 'acceptEdits'")
     expect(systemPromptOf(argvOf(woke))).toContain('Responda sempre em inglês.')
     // Consumido pelo wake; a linha nova copia as flags para a próxima hibernação.
     expect(hibernatedAt(spawned.id)).toBeNull()

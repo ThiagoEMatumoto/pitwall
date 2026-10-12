@@ -2,8 +2,9 @@
 // reaplicadas no resume da mesma conversa. Guarda os valores já resolvidos; quem
 // relança passa de novo pelas whitelists (resolve*), como o spawn.
 import type Database from 'better-sqlite3'
+import type { SessionSettings } from './session-settings'
 import {
-  handoffChildSettingsJson,
+  handoffChildSettings,
   resolveAdvisor,
   resolveDisallowedTools,
   resolveEffort,
@@ -32,7 +33,9 @@ export interface RelaunchFlags {
   advisorModel: string | null
   permissionMode: string | null
   disallowedTools: string[] | null
-  settingsJson: string | null
+  // Base do arquivo de --settings (a política da filha); a denylist vai junto no
+  // mesmo arquivo, nunca no argv.
+  settings: SessionSettings | null
   systemPromptText: string | null
 }
 
@@ -42,7 +45,7 @@ const NO_FLAGS: RelaunchFlags = {
   advisorModel: null,
   permissionMode: null,
   disallowedTools: null,
-  settingsJson: null,
+  settings: null,
   systemPromptText: null,
 }
 
@@ -99,7 +102,7 @@ export function relaunchFlags(args: SpawnArgs | null): RelaunchFlags {
     disallowedTools: resolveDisallowedTools(permissionMode, args.disallowedTools, {
       handoffChild: args.handoffChild,
     }),
-    settingsJson: args.handoffChild ? handoffChildSettingsJson(permissionMode) : null,
+    settings: args.handoffChild ? handoffChildSettings(permissionMode) : null,
     systemPromptText: args.systemPromptText,
   }
 }
