@@ -195,6 +195,8 @@ export const promptQueue = new PromptQueue({
   isObsolete: (id, text) =>
     (isHandoffWakeEnvelope(text) || isHandoffAnswerEnvelope(text)) && queuedEnvelopeObsolete(id),
 })
+// Imagem colada citada por um item na fila: nem o sweep do exit da PTY nem o do
+// boot (que roda depois do restore da fila) a apagam antes da entrega.
 registerImageKeeper((name) => promptQueue.references(name))
 
 // Itens restaurados esperando uma conversa que está dormindo no renderer: acorda a
@@ -218,12 +220,10 @@ export function wakeParkedTargets(): void {
 
 // A PTY que acabou de subir é de uma conversa com itens de antes do kill/reboot?
 // É o mesmo ponto em que o espelho da tela nasce (spawn): resume e wake passam por ele.
+// A fila resolve a conversa pela mesma fonte do enqueue (liveCcOf + linha sessions).
 function onPtySpawn(sessionId: string): void {
   try {
-    const row = getDb()
-      .prepare('SELECT cc_session_id FROM sessions WHERE id = ?')
-      .get(sessionId) as { cc_session_id: string | null } | undefined
-    promptQueue.onSessionLive(sessionId, row?.cc_session_id ?? null)
+    promptQueue.onSessionLive(sessionId)
   } catch (err) {
     console.error('[prompt-queue] reentrega no spawn falhou:', err)
   }

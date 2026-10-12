@@ -155,7 +155,10 @@ function renderPending(p: Pending): string {
 
 function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boolean } {
   if (reason === 'answered' || reason === 'rejected') {
-    return { body: 'Resposta a um pedido registrada: veja handoff_result.requests.', truncated: false }
+    return {
+      body: 'Resposta a um pedido registrada: veja handoff_result.requests.',
+      truncated: false,
+    }
   }
   const raw =
     (reason === 'asked' ? h.pendingQuestion : reason === 'reported' ? h.summary : h.error) ?? ''
@@ -655,6 +658,16 @@ export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
   for (const [mother, p] of pending) {
     const item = snapshot.items.find((i) => i.id === p.queueId)
     if (!item) continue
+    // Talvez não entregue (kill no meio da entrega, transcript inconclusivo): não é
+    // desfecho. Fica 'held' com o motivo, visível no ledger, até o Reenviar
+    // (delivered) ou o Descartar (cancelled) do toast da fila.
+    if (item.recovery === 'maybe-undelivered') {
+      db.prepare(
+        `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = 'maybe-undelivered'
+          WHERE wake_id = ? AND outcome IN ('queued','held','attention')`,
+      ).run(now, p.queueId)
+      continue
+    }
     if (item.heldReason) {
       db.prepare(
         `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = ?
@@ -669,10 +682,14 @@ export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
     }
   }
   const ev = snapshot.lastEvent
-  if (!ev || ev.id === lastEventId) return
-  lastEventId = ev.id
+  // Por tipo + id: o mesmo item emite 'maybe-undelivered' e depois o desfecho.
+  const evKey = ev && `${ev.kind}:${ev.id}`
+  if (!ev || evKey === lastEventId) return
+  lastEventId = evKey
   const owner = [...pending].find(([, p]) => p.queueId === ev.id)
   if (!owner) return
+  // Não terminal: o pending fica para o delivered/cancelled que vier depois.
+  if (ev.kind === 'maybe-undelivered') return
   pending.delete(owner[0])
   const outcome: WakeOutcome =
     ev.kind === 'delivered'
@@ -822,8 +839,7 @@ function ledgerStartedAt(): number | null {
     .get()
   if (!hasRunner) return null
   const row = db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as
-    | { applied_at: number }
-    | undefined
+    { applied_at: number } | undefined
   return row?.applied_at ?? null
 }
 

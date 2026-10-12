@@ -77,6 +77,8 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     },
     nativeStatus: () => true,
     handoffAsking: () => false,
+    // A conversa da PTY velha e da acordada é a mesma (o índice vivo do main).
+    liveCcOf: (id) => (id === PTY || id === WOKEN ? CC : null),
     write: (id, text, raw) => writes.push(`${id}:${raw ? 'raw:' : ''}${text}`),
     emit: (s) => snapshots.push(s),
     warn: () => {},
@@ -362,14 +364,26 @@ describe('mensagem que chega com o /exit em voo', () => {
     queue.dispose()
   })
 
-  it('exit comum (não hibernado) com item na fila → session-gone, sem wake', async () => {
-    const { queue, state, exit, wakeRequests } = setup()
+  it('exit comum (não hibernado) com item na fila → espera a conversa voltar, sem wake', async () => {
+    const { queue, state, exit, writes, wakeRequests } = setup()
     state.status = 'working'
     await queue.send({ sessionId: PTY, text: 'pergunta', when: 'on-idle' })
     expect(exit()).toBeNull()
     await vi.advanceTimersByTimeAsync(100)
     expect(wakeRequests).toEqual([])
-    expect(queue.snapshot().counters.sessionGone).toBe(1)
+    expect(queue.snapshot().counters.sessionGone).toBe(0)
+    expect(queue.snapshot().items).toEqual([
+      expect.objectContaining({ text: 'pergunta', recovery: 'awaiting-session' }),
+    ])
+    expect(writes).toEqual([])
+
+    // A conversa volta (resume) numa PTY nova: o item sai uma vez só, nela.
+    state.running.add(WOKEN)
+    state.status = 'idle'
+    queue.onSessionLive(WOKEN)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(writes).toEqual([`${WOKEN}:pergunta`])
+    expect(wakeRequests).toEqual([])
     queue.dispose()
   })
 })

@@ -23,7 +23,7 @@ import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import * as requestStore from '../handoff-requests'
 import { PromptQueue, SETTLE_MS } from '../prompt-queue'
-import { createPromptQueueStore } from '../prompt-queue-store'
+import { createPromptQueueStore, type TranscriptProof } from '../prompt-queue-store'
 import { fixture, scanOf } from '../test-support/screen-scans'
 import {
   handoffAsking,
@@ -54,6 +54,9 @@ beforeAll(async () => {
 })
 
 const screens = new Map<string, { status: LiveStatus; scan: ScreenScan }>()
+// A conversa gravou a mensagem e respondeu (padrão): a linha sai do banco.
+const FOUND: TranscriptProof = { verdict: 'found', answered: true }
+let proof: TranscriptProof = FOUND
 let writes: Array<{ id: string; text: string }> = []
 let queue: PromptQueue
 
@@ -74,8 +77,7 @@ function makeQueue(): PromptQueue {
     },
     warn: () => {},
     store: createPromptQueueStore(getDb),
-    // A conversa gravou a mensagem e respondeu: a linha sai do banco.
-    deliveryProof: () => ({ verdict: 'found', answered: true }),
+    deliveryProof: () => proof,
   })
   setHandoffWakeQueue({
     send: (i) => q.send(i),
@@ -158,6 +160,7 @@ beforeEach(() => {
       `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, 'r1', ?, 'running', 1)`,
     ).run(id, CC[id])
   }
+  proof = FOUND
   screens.clear()
   screens.set(MOTHER, { status: 'working', scan: SCANS.idle })
   screens.set(CHILD, { status: 'idle', scan: SCANS.idle })
@@ -188,7 +191,7 @@ describe('restart com envelope de handoff na fila durável', () => {
     restart()
     expect(ledger()).toMatchObject([{ wake_id: wakeId, outcome: 'queued' }])
 
-    queue.onSessionLive(MOTHER, CC[MOTHER])
+    queue.onSessionLive(MOTHER)
     await turnEnds(MOTHER)
     expect(writes.map((w) => w.id)).toEqual([MOTHER])
     expect(ledger()).toMatchObject([{ wake_id: wakeId, outcome: 'delivered' }])
@@ -244,9 +247,52 @@ describe('restart com envelope de handoff na fila durável', () => {
     // Segue transitória (a tela ainda não foi relida desde o boot), nunca expired.
     expect(ledger()).toMatchObject([{ reason: 'answered', outcome: 'queued' }])
 
-    queue.onSessionLive(CHILD, CC[CHILD])
+    queue.onSessionLive(CHILD)
     await turnEnds(CHILD)
     expect(writes.map((w) => w.id)).toEqual([CHILD])
     expect(ledger()).toMatchObject([{ reason: 'answered', outcome: 'delivered' }])
   })
+
+  it.each([
+    { name: 'wake da mãe', reason: 'asked' },
+    { name: 'resposta à filha', reason: 'answered' },
+  ])(
+    '$name em delivering sem prova no boot: fica visível (held/maybe-undelivered) e o Reenviar fecha como entregue',
+    async ({ reason }) => {
+      const id = liveHandoff()
+      const a = handoffStore.ask(id, 'posso seguir?', CHILD).request!
+      const target = reason === 'asked' ? MOTHER : CHILD
+      screens.set(target, { status: 'working', scan: SCANS.idle })
+      if (reason === 'asked') await wakeMotherFor(id, 'asked')
+      else await deliverAnswer(requestStore.answerRequest(a.id, { text: 'sim', by: 'human' }))
+      await settle()
+      expect(ledger()).toMatchObject([{ reason, outcome: 'queued' }])
+      const wakeId = ledger()[0].wake_id
+
+      // Queda no meio da entrega: o 'delivering' (FULL) chegou ao app.db e o
+      // desfecho do ledger não. O boot não acha a mensagem no transcript.
+      createPromptQueueStore(getDb).markDelivering(wakeId, Date.now(), CC[target])
+      proof = { verdict: 'unknown', answered: false }
+      restart()
+
+      expect(queue.snapshot().items).toEqual([
+        expect.objectContaining({ id: wakeId, recovery: 'maybe-undelivered' }),
+      ])
+      const row = () =>
+        getDb()
+          .prepare(
+            'SELECT outcome, detail, finished_at FROM handoff_wake_deliveries WHERE wake_id = ?',
+          )
+          .get(wakeId)
+      expect(row()).toEqual({ outcome: 'held', detail: 'maybe-undelivered', finished_at: null })
+
+      // O usuário clica Reenviar no toast: entregue uma vez, e o ledger fecha.
+      proof = FOUND
+      queue.onSessionLive(target)
+      expect(queue.resend(wakeId)).toBe(true)
+      await turnEnds(target)
+      expect(writes.map((w) => w.id)).toEqual([target])
+      expect(row()).toMatchObject({ outcome: 'delivered', detail: null })
+    },
+  )
 })

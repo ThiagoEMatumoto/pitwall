@@ -320,12 +320,16 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
+// Remove temporários de imagem que casam com o predicado, poupando os citados por
+// um rascunho persistido ou por um item da fila durável (registerImageKeeper em
+// send-prompt.ts).
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
   sweepImageTempsKeepingDrafts(getDb, tempDir(), predicate)
 }
 
-// Sweep de boot: num processo fresco só os rascunhos persistidos referenciam
-// temps de imagem; o resto é órfão. Chamado uma vez no app.whenReady (index.ts).
+// Sweep de boot: num processo fresco só os rascunhos persistidos e os itens que a
+// fila restaurou do app.db referenciam temps de imagem; o resto é órfão. Chamado
+// uma vez no app.whenReady (index.ts).
 export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }

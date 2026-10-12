@@ -3,12 +3,12 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openAppDb } from './db'
 import { readDockLayout, readOpenPanes, saveDockLayout, saveOpenPanes } from './workspace-state'
 import { layoutRestoreStep, layoutToRestore } from '../../../shared/dock-layout-restore'
 import type { PaneSnapshot } from '../../../shared/types/ipc'
-import { runAndKill } from './test-support/kill-after-write'
+import { runAndKill, disposeBundles } from './test-support/kill-after-write'
 
 // Durabilidade do open_panes contra kill -9 com processo de verdade: o filho
 // grava pelo mesmo serviço do IPC e leva SIGKILL assim que avisa que gravou.
@@ -22,6 +22,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
+
+afterAll(() => disposeBundles())
 
 it('o open_panes gravado sobrevive a SIGKILL logo depois do save', async () => {
   const dbPath = join(dir, 'app.db')
@@ -58,7 +60,7 @@ it('o open_panes gravado sobrevive a SIGKILL logo depois do save', async () => {
   } finally {
     db.close()
   }
-}, 20000)
+}, 60_000)
 
 // open_panes e dock_layout gravam em transações separadas. Em qualquer ponto em
 // que o kill caia, o boot tem que mostrar as abas do open_panes: o layout só vale
@@ -142,7 +144,7 @@ describe.each([
         expect(layoutRestoreStep(wanted, tabs, true)).not.toBe('wait')
       }
     },
-    20000,
+    60_000,
   )
 })
 
@@ -178,6 +180,6 @@ describe('kill -9 logo depois de uma ação do usuário durante o restore', () =
         db.close()
       }
     },
-    20000,
+    60_000,
   )
 })

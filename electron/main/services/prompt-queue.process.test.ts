@@ -2,10 +2,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { openAppDb } from './db'
 import { fixture, scanOf } from './test-support/screen-scans'
-import { runAndKill, runToEnd } from './test-support/kill-after-write'
+import { runAndKill, runToEnd, disposeBundles } from './test-support/kill-after-write'
 import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
 
 // Fila durável contra kill -9 com processos de verdade: um filho enfileira pela
@@ -50,6 +50,8 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
+
+afterAll(() => disposeBundles())
 
 // Histórico anterior da conversa, no formato que o claude grava.
 function writeHistory(): void {
@@ -100,7 +102,7 @@ async function boot(): Promise<BootOutput> {
   const out = await runToEnd({
     entry: ENTRY,
     dir,
-    args: ['boot', dbPath, scanJson, NEW_PTY, CC],
+    args: ['boot', dbPath, scanJson, NEW_PTY],
     env: { HOME: home, TRANSCRIPT: transcript, CC_SESSION_ID: CC },
   })
   return JSON.parse(out.trim().split('\n').at(-1) as string) as BootOutput

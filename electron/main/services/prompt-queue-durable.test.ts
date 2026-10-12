@@ -27,6 +27,7 @@ import type { LiveStatus, ScreenScan } from '../../../shared/tui/attention-reaso
 import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
 
 const CC = 'cc-durable'
+const SETTLE_MS_FOR_TEST = 1_000
 const PTY = 'pty-1'
 let idle: ScreenScan
 let dir: string
@@ -104,14 +105,56 @@ describe('PromptQueue durável (DB real)', () => {
     queue.dispose()
   })
 
-  it('cancelar e session-gone removem a linha', async () => {
+  it('cancelar remove a linha', async () => {
     const { queue } = makeQueue()
     const a = await queue.send({ sessionId: PTY, text: 'a', when: 'on-idle' })
     await queue.send({ sessionId: PTY, text: 'b', when: 'on-idle' })
     queue.cancel(a.ok && !a.delivered ? a.queued.id : '')
-    expect(rows()).toHaveLength(1)
-    queue.onSessionExit(PTY)
-    expect(rows()).toEqual([])
+    expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
+    queue.dispose()
+  })
+
+  it('PTY morta com o Pitwall vivo (OOM): o item fica no banco, visível, e o resume entrega uma vez', async () => {
+    vi.useFakeTimers()
+    try {
+      const opts: { status: LiveStatus } = { status: 'working' }
+      const q = makeQueue(opts)
+      await q.queue.send({ sessionId: PTY, text: 'quando terminar: X', when: 'on-idle' })
+      q.running.delete(PTY)
+      q.queue.onSessionExit(PTY)
+
+      expect(rows()).toEqual([
+        expect.objectContaining({ state: 'queued', session_id: PTY, cc_session_id: CC }),
+      ])
+      expect(q.snap()?.items).toEqual([
+        expect.objectContaining({ text: 'quando terminar: X', recovery: 'awaiting-session' }),
+      ])
+      expect(q.snap()?.counters.sessionGone).toBe(0)
+      expect(q.snap()?.lastEvent?.kind).not.toBe('session-gone')
+      // Sem a conversa voltar, o aviso aparece.
+      await vi.advanceTimersByTimeAsync(AWAITING_NOTICE_MS)
+      expect(q.snap()?.items[0]).toMatchObject({ waitingNotice: true })
+      expect(rows()).toHaveLength(1)
+
+      // Resume da mesma conversa numa PTY nova.
+      const resumed = 'pty-resume'
+      db.prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
+      ).run(resumed, CC)
+      q.running.add(resumed)
+      q.queue.onSessionLive(resumed)
+      expect(rows()).toEqual([expect.objectContaining({ session_id: resumed })])
+      opts.status = 'idle'
+      q.queue.onTurnEnded(resumed)
+      await vi.advanceTimersByTimeAsync(SETTLE_MS_FOR_TEST)
+      q.queue.onTurnEnded(resumed)
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+      expect(q.writes).toEqual([`${resumed}:quando terminar: X`])
+      expect(q.snap()?.items).toEqual([])
+      q.queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('quit limpo: as PTYs morrem mas os itens ficam para o próximo boot', async () => {
@@ -139,7 +182,7 @@ describe('PromptQueue durável (DB real)', () => {
     expect(boot.queue.wakeTargets()).toEqual([])
 
     // A conversa volta: não entrega sozinho.
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([])
@@ -167,7 +210,7 @@ describe('PromptQueue durável (DB real)', () => {
     expect(boot.queue.wakeTargets()).toEqual([CC])
 
     now += 2
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     expect(boot.snap()?.items).toEqual([
       expect.objectContaining({ recovery: 'needs-confirmation' }),
     ])
@@ -219,7 +262,7 @@ describe('PromptQueue durável (DB real)', () => {
       ).run(CC, Date.now())
       const boot = makeQueue({ status: 'working' })
       boot.queue.restore()
-      boot.queue.onSessionLive(PTY, CC)
+      boot.queue.onSessionLive(PTY)
       await vi.advanceTimersByTimeAsync(PROMPT_TTL_MS + POLL_MS)
       expect(boot.snap()?.items).toEqual([
         expect.objectContaining({ id: 't1', recovery: 'needs-confirmation' }),
@@ -254,7 +297,7 @@ describe('PromptQueue durável (DB real)', () => {
       expect(rows()).toEqual([expect.objectContaining({ state: 'queued' })])
 
       // A conversa volta: entrega sozinha e o aviso sai.
-      boot.queue.onSessionLive(PTY, CC)
+      boot.queue.onSessionLive(PTY)
       expect(boot.snap()?.items[0].waitingNotice).toBeUndefined()
       boot.queue.onTurnEnded(PTY)
       await vi.advanceTimersByTimeAsync(1_000)
@@ -285,7 +328,7 @@ describe('PromptQueue durável (DB real)', () => {
     ).run(CC, Date.now(), Date.now())
     const boot = makeQueue({ status: 'idle', verdict: 'unknown' })
     boot.queue.restore()
-    boot.queue.onSessionLive(PTY, CC)
+    boot.queue.onSessionLive(PTY)
     boot.queue.onTurnEnded(PTY)
     await new Promise((r) => setTimeout(r, 600))
     expect(boot.writes).toEqual([])
@@ -364,7 +407,10 @@ describe('PromptQueue durável (DB real)', () => {
     ).run(CC, Date.now())
     const boot = makeQueue({ status: 'idle' })
     boot.queue.restore()
-    boot.queue.onSessionLive('pty-outra', 'cc-outra')
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('pty-outra', NULL, 'cc-outra', 'running', 2)`,
+    ).run()
+    boot.queue.onSessionLive('pty-outra')
     expect(boot.snap()?.items).toEqual([
       expect.objectContaining({ id: 'q1', recovery: 'awaiting-session' }),
     ])
@@ -660,7 +706,7 @@ describe('hibernação × fila durável', () => {
     hibernating = false
     running.delete(PTY)
     queue.onSessionExit(PTY)
-    queue.onSessionLive(WOKEN, CC)
+    queue.onSessionLive(WOKEN)
     wake(WOKEN)
     await new Promise((r) => setTimeout(r, 50))
 
@@ -733,7 +779,7 @@ describe('hibernação × fila durável', () => {
       `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, ?, 'running', 2)`,
     ).run(WOKEN, CC)
     running.add(WOKEN)
-    queue.onSessionLive(WOKEN, CC)
+    queue.onSessionLive(WOKEN)
     queue.onTurnEnded(WOKEN)
     await new Promise((r) => setTimeout(r, 600))
     expect(writes).toEqual([`${WOKEN}:raw:deploy\r`])
