@@ -1554,6 +1554,27 @@ export function onSessionOom(event: ScopeOomEvent): void {
   const title =
     live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label ?? 'sem título'
   showToast({ title: oomToastText(title, event), durationMs: OOM_TOAST_MS })
+  const cc = event.resumeCcSessionId
+  if (!cc) return
+  // O main manda este evento antes do pty:exit: a pane morta ainda está aqui e
+  // sai já, senão o resumeSession a veria com o mesmo cc e não retomaria.
+  if (pane) useAppStore.getState().closePane(pane.paneId)
+  useAppStore
+    .getState()
+    .resumeSession(
+      pane?.repo ?? live?.repo ?? null,
+      pane?.projectName ?? live?.projectName ?? null,
+      pane?.projectIcon ?? live?.projectIcon ?? null,
+      pane?.projectColor ?? live?.projectColor ?? null,
+      cc,
+    )
+    .catch((err) =>
+      showToast({
+        title: `sessão ${title} não foi retomada sozinha — retome`,
+        body: ipcErrorMessage(err),
+        durationMs: OOM_TOAST_MS,
+      }),
+    )
 }
 
 // O main retomou (handoffs:resume/adopt) a conversa de uma pane dormindo: a pane

@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
@@ -10,6 +10,7 @@ import {
   wrapInScope,
   ensureScopeProbe,
   resetScopeProbeForTests,
+  setScopeUnitPrefixForTests,
 } from './systemd-scope'
 import { ptyManager } from './pty-manager'
 import { tmpdir } from 'node:os'
@@ -21,11 +22,17 @@ const hasUserBus =
     timeout: 2_000,
   }).status === 0
 
+// Prefixo próprio: guardas da máquina que vigiam app-pitwall-session-* (e sobem
+// MemoryMax/oom_score_adj) não alcançam as units destes testes.
+const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
+beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
+afterAll(() => setScopeUnitPrefixForTests())
+
 // 512 MB tocando cada página, num scope de 64M sem swap: o kernel mata. Espera
 // 1s antes de alocar, para o detector registrar o pid (e o baseline) antes.
 const HOG =
   'setTimeout(()=>{const a=[];for(let i=0;i<64;i++){a.push(Buffer.alloc(8*1024*1024,1))};setInterval(()=>{},1e6)},1000)'
-const LIMITS = { max: '64M', high: null, swapMax: '0' }
+const LIMITS = { max: '64M', swapMax: '0' }
 const MAX_GB = 64 / 1024
 
 function commOf(pid: number): string | null {
@@ -154,6 +161,107 @@ describe.skipIf(!hasUserBus)('OOM dentro do scope da sessão × systemd real', (
     source.emit('exit', { sessionId: 's-dead', signal: 9 })
     expect(events).toEqual([{ sessionId: 's-dead', maxGB: MAX_GB, claudeAlive: false }])
     expect(watch.stats().bySession['s-dead']).toBeGreaterThanOrEqual(1)
+  }, 40_000)
+})
+
+// O claude é o maior do scope: um node com 40M além do próprio runtime. O filho
+// é um perl magro que, 2s depois de nascer (tempo de o watcher marcá-lo), aloca
+// 512M em blocos de 8M e anuncia cada bloco. O kernel mata quando o scope passa
+// de 96M, com o filho ainda bem menor que o principal.
+// O principal herda o oom_score_adj do worker do vitest, que um guarda da máquina
+// pode ter subido a 1000 (teto: o filho não teria como ficar acima). Volta ao
+// menor valor que um processo sem privilégio aceita, como o claude real.
+const PRINCIPAL = `
+const fs = require('fs')
+for (let v = 0; v < 1000; v += 50) { try { fs.writeFileSync('/proc/self/oom_score_adj', String(v)); break } catch {} }
+const keep = Buffer.alloc(40 * 1024 * 1024, 1)
+const rss = () => Number(/VmRSS:\\s+(\\d+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))[1]) >> 10
+const child = require('child_process').spawn('perl', ['-e', process.env.PERL_HOG], { stdio: ['ignore', 'inherit', 'inherit'] })
+console.log('CHILD_PID:' + child.pid + ' PRINCIPAL_RSS_MB:' + rss())
+child.on('exit', (code, sig) => console.log('CHILD_EXIT:' + sig + ' PRINCIPAL_RSS_MB:' + rss() + ' keep:' + keep.length))
+setInterval(() => {}, 1e6)
+`
+const PERL_HOG =
+  'select STDOUT; $|=1; sleep 2; my @a; for my $i (1..64) { push @a, "x" x (8*1024*1024); print "HOG_MB:".($i*8)."\\n" } sleep 100'
+const SMALL = { max: '96M', swapMax: '0' }
+
+function launchPrincipal(unit: string): Launched {
+  const argv = wrapInScope(process.execPath, ['-e', PRINCIPAL], unit, SMALL)
+  const child = spawn(argv.command, argv.args, {
+    env: { ...process.env, PERL_HOG },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let out = ''
+  let done = false
+  child.stdout!.on('data', (d) => (out += String(d)))
+  child.on('exit', () => (done = true))
+  const l = { child, unit, stdout: () => out, exited: () => done }
+  launched.push(l)
+  return l
+}
+
+function lastHogMB(out: string): number {
+  const all = [...out.matchAll(/HOG_MB:(\d+)/g)]
+  return all.length ? Number(all[all.length - 1][1]) : 0
+}
+
+function childPidOf(out: string): number | null {
+  const m = /CHILD_PID:(\d+)/.exec(out)
+  return m ? Number(m[1]) : null
+}
+
+describe.skipIf(!hasUserBus)('oom_score_adj dos filhos × systemd real (MemoryMax=96M)', () => {
+  afterEach(() => {
+    for (const l of launched.splice(0)) {
+      if (!l.exited()) l.child.kill('SIGKILL')
+      spawnSync('systemctl', ['--user', 'stop', `${l.unit}.scope`])
+    }
+  })
+
+  it('com o ajuste: o filho morre e o principal (maior) sobrevive', async () => {
+    const unit = scopeUnitName('oom-adj', Date.now())
+    const l = launchPrincipal(unit)
+    const pid = l.child.pid!
+    await until(() => scopeCgroupDir(pid)?.includes(unit) === true, 5_000)
+    const watch = new ScopeOomWatch(60_000, 200)
+    const source = new EventEmitter()
+    watch.attach(source)
+    source.emit('scope-exec', { sessionId: 's-adj', pid, maxGB: 96 / 1024 })
+
+    await until(() => childPidOf(l.stdout()) !== null, 5_000)
+    const childPid = childPidOf(l.stdout())!
+    const principalAdj = Number(readFileSync(`/proc/${pid}/oom_score_adj`, 'utf8'))
+    await until(
+      () =>
+        Number(readFileSync(`/proc/${childPid}/oom_score_adj`, 'utf8')) ===
+        Math.min(1000, principalAdj + 500),
+      2_000,
+    )
+
+    await until(() => l.stdout().includes('CHILD_EXIT:'), 20_000)
+    const out = l.stdout()
+    console.log(
+      `[com ajuste] principal adj=${principalAdj}; ${out.match(/CHILD_EXIT:.*/)?.[0]}; filho chegou a ${lastHogMB(out)}MB`,
+    )
+    expect(out).toContain('CHILD_EXIT:SIGKILL')
+    // O principal era o maior no instante do kill: é o caso que o ajuste resolve.
+    const principalMB = Number(/CHILD_EXIT:\S+ PRINCIPAL_RSS_MB:(\d+)/.exec(out)![1])
+    expect(principalMB).toBeGreaterThan(lastHogMB(out))
+    await new Promise((r) => setTimeout(r, 1_000))
+    expect(l.exited()).toBe(false)
+    watch.stopAll()
+  }, 40_000)
+
+  it('sem o ajuste (controle): o kernel mata o principal, que é o maior', async () => {
+    const unit = scopeUnitName('oom-noadj', Date.now())
+    const l = launchPrincipal(unit)
+    await until(() => l.exited(), 20_000)
+    const out = l.stdout()
+    console.log(
+      `[sem ajuste] principal saiu por ${l.child.signalCode}; filho chegou a ${lastHogMB(out)}MB`,
+    )
+    expect(l.child.signalCode).toBe('SIGKILL')
+    expect(out).not.toContain('CHILD_EXIT:')
   }, 40_000)
 })
 

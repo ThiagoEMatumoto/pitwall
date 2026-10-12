@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { draftReferencesFile } from './composer-drafts'
 
 // Remove de `dir` os temporários de imagem que casam com `shouldRemove`, poupando
-// os que `isKept` protege. Best-effort: diretório inexistente ou arquivo sumindo
-// numa corrida não derruba boot/exit.
+// os que `isKept` protege (rascunho persistido ou item da fila durável).
+// Best-effort: diretório inexistente ou arquivo sumindo numa corrida não derruba
+// boot/exit.
 export function sweepImageTempDir(
   dir: string,
   shouldRemove: (filename: string) => boolean,

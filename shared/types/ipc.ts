@@ -1534,6 +1534,9 @@ export interface ScopeOomEvent {
   sessionId: string
   maxGB: number
   claudeAlive: boolean
+  // Claude morto por memória e dentro da cota de resume automático: o renderer
+  // retoma esta conversa sozinho.
+  resumeCcSessionId?: string
 }
 
 // oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
