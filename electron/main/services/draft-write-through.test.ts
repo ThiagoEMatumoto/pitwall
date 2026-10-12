@@ -18,8 +18,8 @@ const KEY = 'pane:p-wt'
 let dir: string
 let dbPath: string
 let db: Database.Database
-// Janela controlada: o teste decide quando a janela de coalescência do main fecha
-// ("tick" abaixo = uma janela).
+// Agendador controlado: o teste decide quando o flush agendado pelo handler roda
+// ("tick" abaixo = um flush).
 let ticks: Array<() => void>
 const endTick = () => ticks.splice(0).forEach((fn) => fn())
 
@@ -57,9 +57,12 @@ afterEach(() => {
 })
 
 describe('write-through do rascunho no main', () => {
-  it('a primeira mudança do tick é commitada na hora, sem esperar o tick acabar', () => {
+  it('o handler não grava: a mudança sai no flush agendado', () => {
     const main = newMain()
     main.write(draft('a', 1))
+    expect(committedText()).toBeNull()
+    expect(ticks).toHaveLength(1)
+    endTick()
     expect(committedText()).toBe('a')
     expect(db.pragma('synchronous', { simple: true })).toBe(1) // NORMAL
   })
@@ -67,7 +70,8 @@ describe('write-through do rascunho no main', () => {
   it('mudanças no mesmo tick viram um commit só, com a última versão', () => {
     const main = newMain()
     for (let i = 1; i <= 50; i++) main.write(draft(`v${i}`, i))
-    expect(committedText()).toBe('v1')
+    expect(committedText()).toBeNull()
+    expect(ticks).toHaveLength(1)
     endTick()
     expect(committedText()).toBe('v50')
   })
@@ -79,7 +83,7 @@ describe('write-through do rascunho no main', () => {
     endTick()
     expect(committedText()).toBe('v5')
 
-    main.write(draft('v4', 4)) // tick novo: borda de subida, mas antiga
+    main.write(draft('v4', 4)) // tick novo, mas antiga
     endTick()
     expect(committedText()).toBe('v5')
 
@@ -106,6 +110,7 @@ describe('write-through do rascunho no main', () => {
     main.write(draft('antigo 40', 40, 'w1'))
     endTick()
     main.write(draft('novo 1', 1, 'w2'))
+    endTick()
     expect(committedText()).toBe('novo 1')
   })
 
@@ -114,6 +119,8 @@ describe('write-through do rascunho no main', () => {
     main.write(draft('algo', 1))
     endTick()
     main.write(draft('', 2))
+    expect(committedText()).toBe('algo')
+    endTick()
     expect(committedText()).toBeNull()
   })
 
@@ -156,9 +163,9 @@ describe('write-through do rascunho no main', () => {
   })
 })
 
-// Com o defer padrão (setTimeout da janela), contando commits NORMAL pelo getDb,
-// que só é chamado quando há algo novo a gravar.
-describe('coalescência no tempo (janela padrão)', () => {
+// Com o agendador padrão (setImmediate / setTimeout), contando commits NORMAL
+// pelo getDb, que só é chamado quando há algo novo a gravar.
+describe('coalescência no tempo (agendador padrão)', () => {
   function countingMain() {
     let commits = 0
     const main = createDraftWriteThrough(() => {
@@ -171,28 +178,39 @@ describe('coalescência no tempo (janela padrão)', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it('100 mudanças em 10ms: 1 escrita imediata + 1 final, com o último texto', () => {
+  it('sem commit recente, o flush sai no próximo setImmediate, fora do handler', () => {
+    const { main, commits } = countingMain()
+    main.write(draft('v1', 1))
+    expect(commits()).toBe(0)
+    vi.advanceTimersByTime(0)
+    expect(commits()).toBe(1)
+    expect(committedText()).toBe('v1')
+  })
+
+  it('100 mudanças em 10ms: 1 commit logo + 1 depois de DRAFT_COALESCE_MS, com o último texto', () => {
     const { main, commits } = countingMain()
     for (let i = 1; i <= 100; i++) {
       main.write(draft(`v${i}`, i))
       if (i % 10 === 0) vi.advanceTimersByTime(1) // ticks distintos, 10ms no total
     }
     expect(commits()).toBe(1)
-    expect(committedText()).toBe('v1')
+    expect(committedText()).toBe('v10')
 
     vi.advanceTimersByTime(DRAFT_COALESCE_MS)
     expect(commits()).toBe(2)
     expect(committedText()).toBe('v100')
 
-    vi.advanceTimersByTime(DRAFT_COALESCE_MS * 4) // nada pendente: a janela fecha
+    vi.advanceTimersByTime(DRAFT_COALESCE_MS * 4) // nada pendente: nada agendado
     expect(commits()).toBe(2)
 
-    main.write(draft('v101', 101)) // janela fechada: borda de subida, na hora
+    main.write(draft('v101', 101)) // último commit há mais de 100ms: próximo tick
+    expect(commits()).toBe(2)
+    vi.advanceTimersByTime(0)
     expect(commits()).toBe(3)
     expect(committedText()).toBe('v101')
   })
 
-  it('digitação contínua mais rápida que a janela: no máximo 1 commit por janela', () => {
+  it('digitação contínua mais rápida que a janela: no máximo 1 commit a cada DRAFT_COALESCE_MS', () => {
     const { main, commits } = countingMain()
     const windows = 20
     let seq = 0
@@ -205,11 +223,21 @@ describe('coalescência no tempo (janela padrão)', () => {
     expect(committedText()).toBe(`v${seq}`)
   })
 
-  it('drain (flush/save FULL) grava o pendente na hora, sem esperar a janela', () => {
+  it('várias panes pendentes saem no mesmo commit', () => {
+    const { main, commits } = countingMain()
+    main.write(draft('a', 1))
+    main.write({ ...draft('b', 1), key: 'pane:p-other', paneId: 'p-other' })
+    vi.advanceTimersByTime(0)
+    expect(commits()).toBe(1)
+    expect(committedText()).toBe('a')
+    expect(getComposerDraft(db, 'pane:p-other')?.text).toBe('b')
+  })
+
+  it('drain (flush/save FULL) grava o pendente na hora, sem esperar o agendado', () => {
     const { main } = countingMain()
     main.write(draft('v1', 1))
     main.write(draft('v2', 2))
-    expect(committedText()).toBe('v1')
+    expect(committedText()).toBeNull()
     main.drain()
     expect(committedText()).toBe('v2')
     main.saveDurable(draft('v3', 3))
