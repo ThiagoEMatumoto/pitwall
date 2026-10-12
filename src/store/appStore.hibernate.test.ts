@@ -185,7 +185,7 @@ describe('sessions:hibernated', () => {
     const id = await useAppStore.getState().wakeDormantPane('pane-a')
 
     expect(id).toBe('sess-new')
-    expect(calls.resume).toEqual([{ repoId: 'r1', ccSessionId: 'cc-a' }])
+    expect(calls.resume).toEqual([{ repoId: 'r1', ccSessionId: 'cc-a', fromHibernation: true }])
     const a = useAppStore.getState().panes.find((p) => p.paneId === 'pane-a')!
     expect(a.dormant).toBeUndefined()
     expect(a.dormantReason).toBeUndefined()

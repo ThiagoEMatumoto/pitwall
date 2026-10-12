@@ -1174,6 +1174,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const { session, reattached } = await sessionsApi.resume({
           repoId: pane.repo?.id ?? null,
           ccSessionId,
+          fromHibernation: pane.dormantReason === 'hibernated',
         })
         if (reattached) cancelPendingEnd(session.id)
         if (endedWhileWaking.delete(paneId)) {

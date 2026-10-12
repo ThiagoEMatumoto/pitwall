@@ -1336,6 +1336,9 @@ export interface ResumeSessionInput {
   ccSessionId: string
   cols?: number
   rows?: number
+  // Wake de uma pane hibernada: reaplica as flags do spawn (modelo, modo de
+  // permissão etc.). O main só honra se a conversa saiu mesmo pela hibernação.
+  fromHibernation?: boolean
 }
 
 export interface SessionSummary {

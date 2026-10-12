@@ -86,6 +86,21 @@ export function latestSpawnArgs(db: Database.Database, ccSessionId: string): Spa
   return parseSpawnArgs(row?.spawn_args ?? null)
 }
 
+// Registro de um resume que subiu sem as flags: só o cwd (carimbado pelo
+// startSession) segue valendo.
+export function withoutFlags(args: SpawnArgs | null): SpawnArgs | null {
+  if (!args) return null
+  return {
+    model: null,
+    effort: null,
+    advisorModel: null,
+    permissionMode: null,
+    disallowedTools: null,
+    systemPromptText: null,
+    handoffChild: false,
+  }
+}
+
 // Flags do relançamento, revalidadas como no spawn. Sem registro (sessão de antes
 // da 061, ou nunca spawnada pelo Pitwall), relança como antes: sem flags.
 export function relaunchFlags(args: SpawnArgs | null): RelaunchFlags {

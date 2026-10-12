@@ -7,7 +7,12 @@ import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
 import { requestDraftFlush } from './composer-drafts'
-import { latestSpawnArgs, relaunchFlags, type SpawnArgs } from '../services/spawn-args'
+import {
+  latestSpawnArgs,
+  relaunchFlags,
+  withoutFlags,
+  type SpawnArgs,
+} from '../services/spawn-args'
 import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
@@ -431,7 +436,8 @@ function startSession(opts: {
   rows?: number
   provider?: AgentProvider
   env?: Record<string, string>
-  // Flags do spawn original (sessions.spawn_args): o próximo resume as reaplica.
+  // Flags com que este processo subiu (sessions.spawn_args): o wake de uma
+  // hibernação as reaplica.
   spawnArgs?: SpawnArgs | null
 }): Session {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
@@ -891,6 +897,10 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 }
 
 let listenersAttached = false
+// cc das conversas que saíram pelo /exit da hibernação e ainda não voltaram. É a
+// conferência do main para o fromHibernation do sessions:resume: o renderer pede,
+// mas só uma conversa hibernada de fato volta com as flags do spawn.
+const hibernatedConversations = new Set<string>()
 
 // Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
 // provider com menus na TUI ganha o espelho headless do tui-menu-watch.
@@ -971,7 +981,10 @@ export function registerSessionIpc(): void {
       // Saiu pelo /exit da hibernação: o renderer precisa do evento ANTES do
       // pty:exit para virar a pane dormant em vez de fechá-la com o toast.
       const hibernated = getIdleHibernator()?.onExit(e.sessionId)
-      if (hibernated) broadcast('sessions:hibernated', hibernated)
+      if (hibernated) {
+        hibernatedConversations.add(hibernated.ccSessionId)
+        broadcast('sessions:hibernated', hibernated)
+      }
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
@@ -1182,16 +1195,19 @@ export function registerSessionIpc(): void {
     const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
-    // O --resume não guarda as flags do spawn: sem reaplicá-las, a sessão acordada
-    // da hibernação (ou retomada à mão) voltava no modo de permissão, modelo e
-    // denylist default, e a filha de handoff já terminada, sem o --settings. São
-    // as mesmas que o spawn validou para esta conversa, revalidadas pelas
-    // whitelists: retomar não dá à sessão nada que ela não tinha.
+    // O --resume não guarda as flags do spawn. Só o wake de uma hibernada as
+    // reaplica: o usuário não pediu para a sessão sair, então ela volta como
+    // estava (modo de permissão, modelo, denylist, --settings da filha). No
+    // resume manual quem escolhe é o usuário, e as flags ficam no default. As
+    // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
     const spawned = latestSpawnArgs(db, input.ccSessionId)
-    const original = relaunchFlags(spawned)
-    // Volta no diretório em que a conversa rodou: o feature_id pode ter mudado
-    // depois do spawn, e o cwd recalculado pelo vínculo levaria a sessão acordada
-    // para outro checkout. Diretório removido: fica o recalculado.
+    const fromHibernation =
+      input.fromHibernation === true && hibernatedConversations.has(input.ccSessionId)
+    const original = relaunchFlags(fromHibernation ? spawned : null)
+    // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
+    // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
+    // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
+    // conversa). Diretório removido: fica o recalculado.
     if (spawned?.cwd && spawned.cwd !== cwd) {
       if (isDirectory(spawned.cwd)) {
         cwd = spawned.cwd
@@ -1237,8 +1253,11 @@ export function registerSessionIpc(): void {
       featureSource,
       cols: input.cols,
       rows: input.rows,
-      spawnArgs: spawned,
+      // A linha grava o que ESTE processo recebeu: um resume manual sem flags
+      // que depois hibernasse não pode acordar com as de um spawn anterior.
+      spawnArgs: fromHibernation ? spawned : withoutFlags(spawned),
     })
+    hibernatedConversations.delete(input.ccSessionId)
     transferLeadershipToResumed(priorSessionIds, session, 'renderer')
     return { session, reattached: false }
   })

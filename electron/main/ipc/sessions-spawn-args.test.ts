@@ -1,7 +1,8 @@
 /** @vitest-environment node */
 // O wake da hibernação é um sessions:resume. Contra os produtores reais (SQLite com
-// as migrations do app, spawnSession e o handler sessions:resume), o comando que
-// chega ao ptyManager.spawn no wake tem as MESMAS flags do spawn original.
+// as migrations do app, spawnSession, o handler de exit da PTY e o sessions:resume),
+// o comando que chega ao ptyManager.spawn no wake tem as MESMAS flags do spawn
+// original. O resume manual só herda o cwd.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -19,6 +20,8 @@ const seam = vi.hoisted(() => ({
   // Linha de comando de cada spawn real (o que o login shell executa).
   spawns: [] as { sessionId: string; argv: string; cwd: string }[],
   live: new Set<string>(),
+  // Registrado uma vez por módulo (listenersAttached): não se limpa entre testes.
+  exitHandlers: [] as ((e: { sessionId: string; exitCode: number }) => void)[],
 }))
 
 vi.mock('node:os', async () => {
@@ -44,7 +47,9 @@ vi.mock('../services/db', () => ({
 }))
 vi.mock('../services/pty-manager', () => ({
   ptyManager: {
-    on: () => {},
+    on: (event: string, fn: (e: { sessionId: string; exitCode: number }) => void) => {
+      if (event === 'exit') seam.exitHandlers.push(fn)
+    },
     off: () => {},
     write: () => {},
     isRunning: (id: string) => seam.live.has(id),
@@ -72,6 +77,7 @@ vi.mock('../services/mcp/config', () => ({
 vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 
 import { registerSessionIpc, spawnSession } from './sessions'
+import { setIdleHibernator } from '../services/hibernate/idle-hibernator'
 
 const REPO_DIR = join(HOME, 'repo')
 const MODEL = SPAWNABLE_MODEL_ALIASES[0]
@@ -131,22 +137,36 @@ function ccOf(sessionId: string): string {
   ).cc_session_id
 }
 
-// O /exit da hibernação: a PTY sai e o handler de exit marca a linha.
-function exitPty(sessionId: string): void {
+// A PTY sai pelo handler de exit real (ele marca a linha e consulta o hibernator).
+// hibernated = o exit foi o /exit da hibernação: o hibernator devolve o evento.
+function exitPty(sessionId: string, opts: { hibernated: boolean; cc?: string }): void {
+  const cc = opts.cc ?? ccOf(sessionId)
+  setIdleHibernator({
+    onExit: (id: string) =>
+      opts.hibernated && id === sessionId ? { sessionId, ccSessionId: cc, paneId: 'pane-1' } : null,
+  } as never)
   seam.live.delete(sessionId)
-  seam.db
-    .prepare("UPDATE sessions SET status = 'exited', ended_at = ? WHERE id = ?")
-    .run(Date.now(), sessionId)
+  for (const fn of seam.exitHandlers) fn({ sessionId, exitCode: 0 })
+  setIdleHibernator(null)
 }
 
-// O wake (wakeDormantPane) chama sessions:resume com o repo e o cc da pane.
-function wake(cc: string): string {
+function hibernate(sessionId: string, cc?: string): void {
+  exitPty(sessionId, { hibernated: true, cc })
+}
+
+function resume(cc: string, fromHibernation?: boolean): string {
   const res = seam.handlers.get('sessions:resume')!(null, {
     repoId: 'r1',
     ccSessionId: cc,
+    ...(fromHibernation === undefined ? {} : { fromHibernation }),
   } as never) as { session: { id: string }; reattached: boolean }
   expect(res.reattached).toBe(false)
   return res.session.id
+}
+
+// O wake (wakeDormantPane) de uma pane hibernada.
+function wake(cc: string): string {
+  return resume(cc, true)
 }
 
 beforeEach(() => {
@@ -215,7 +235,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     ])
     expect(relevantFlags(before)).toContain("'Bash(rm:*)'")
 
-    exitPty(spawned.id)
+    hibernate(spawned.id)
     const woke = wake(cc)
     const after = argvOf(woke)
     expect(after).toContain(`--resume ${cc}`)
@@ -223,7 +243,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     expect(systemPromptOf(after)).toContain('Responda sempre em inglês.')
 
     // Segunda hibernação: a linha do wake guardou as flags, a cadeia não as perde.
-    exitPty(woke)
+    hibernate(woke)
     expect(relevantFlags(argvOf(wake(cc)))).toEqual(relevantFlags(before))
   })
 
@@ -238,7 +258,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     const before = relevantFlags(argvOf(spawned.id))
     expect(before).toContain("'bypassPermissions'")
     expect(before.length).toBeGreaterThan(4)
-    exitPty(spawned.id)
+    hibernate(spawned.id)
     expect(relevantFlags(argvOf(wake(cc)))).toEqual(before)
   })
 
@@ -254,7 +274,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
     const before = relevantFlags(argvOf(spawned.id))
     expect(before).toContain('--settings')
     expect(before).toContain("'plan'")
-    exitPty(spawned.id)
+    hibernate(spawned.id)
     expect(relevantFlags(argvOf(wake(cc)))).toEqual(before)
   })
 
@@ -267,6 +287,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
          VALUES ('old', 'r1', ?, 'exited', 1)`,
       )
       .run(cc)
+    hibernate('old', cc)
     expect(relevantFlags(argvOf(wake(cc)))).toEqual([])
   })
 
@@ -279,6 +300,7 @@ describe('wake da hibernação reaplica as flags do spawn', () => {
          VALUES ('old', 'r1', ?, 'exited', 1, ?)`,
       )
       .run(cc, JSON.stringify({ model: "x'; rm -rf ~", permissionMode: 'yolo', effort: 'high' }))
+    hibernate('old', cc)
     expect(relevantFlags(argvOf(wake(cc)))).toEqual(['--effort', "'high'"])
   })
 })
@@ -310,11 +332,11 @@ describe('wake da hibernação volta no cwd do spawn', () => {
     writeTranscript(cc)
     relinkToFeatureWithWorktree(spawned.id)
 
-    exitPty(spawned.id)
+    hibernate(spawned.id)
     const woke = wake(cc)
     expect(cwdOf(woke)).toBe(REPO_DIR)
     // A linha do wake carimba o mesmo cwd: a segunda hibernação também volta em A.
-    exitPty(woke)
+    hibernate(woke)
     expect(cwdOf(wake(cc))).toBe(REPO_DIR)
   })
 
@@ -328,7 +350,87 @@ describe('wake da hibernação volta no cwd do spawn', () => {
       .prepare(`UPDATE sessions SET spawn_args = json_set(spawn_args, '$.cwd', ?) WHERE id = ?`)
       .run(gone, spawned.id)
 
-    exitPty(spawned.id)
+    hibernate(spawned.id)
     expect(cwdOf(wake(cc))).toBe(WORKTREE)
+  })
+})
+
+describe('resume manual: só o cwd do spawn volta', () => {
+  const WORKTREE = join(HOME, 'worktree-m')
+
+  function spawnWithFlags(name: string): { id: string; cc: string } {
+    const spawned = spawnSession({
+      repoId: 'r1',
+      name,
+      permissionMode: 'acceptEdits',
+      model: MODEL,
+      effort: 'high',
+      systemPromptText: 'Responda sempre em inglês.',
+    } as never)
+    const cc = ccOf(spawned.id)
+    writeTranscript(cc)
+    expect(argvOf(spawned.id)).toContain("--permission-mode 'acceptEdits'")
+    expect(argvOf(spawned.id)).toContain(`--model '${MODEL}'`)
+    // O vínculo muda para um worktree: o cwd recalculado não seria o da conversa.
+    mkdirSync(WORKTREE, { recursive: true })
+    seam.db
+      .prepare(
+        `INSERT INTO features (id, project_id, slug, title, status, doc_path, created_at, updated_at)
+         VALUES ('fm', 'p1', 'fm', 'FM', 'in-progress', 'fm.md', 1, 1)`,
+      )
+      .run()
+    seam.db
+      .prepare(
+        `INSERT INTO feature_repos (feature_id, repo_id, worktree_path) VALUES ('fm', 'r1', ?)`,
+      )
+      .run(WORKTREE)
+    seam.db.prepare(`UPDATE sessions SET feature_id = 'fm' WHERE id = ?`).run(spawned.id)
+    return { id: spawned.id, cc }
+  }
+
+  function expectDefaultFlags(sessionId: string): void {
+    const argv = argvOf(sessionId)
+    expect(argv).not.toContain('acceptEdits')
+    expect(argv).not.toContain(`--model '${MODEL}'`)
+    expect(relevantFlags(argv)).toEqual([])
+    expect(systemPromptOf(argv) ?? '').not.toContain('Responda sempre em inglês.')
+  }
+
+  it('--permission-mode X --model Y: o argv do resume não tem X/Y, mas usa o cwd gravado', () => {
+    const { id, cc } = spawnWithFlags('manual')
+    exitPty(id, { hibernated: false })
+    const resumed = resume(cc)
+    expect(argvOf(resumed)).toContain(`--resume ${cc}`)
+    expectDefaultFlags(resumed)
+    expect(cwdOf(resumed)).toBe(REPO_DIR)
+  })
+
+  it('fromHibernation sem hibernação de fato: o main não reaplica as flags', () => {
+    const { id, cc } = spawnWithFlags('forjado')
+    exitPty(id, { hibernated: false })
+    expectDefaultFlags(wake(cc))
+  })
+
+  it('hibernada retomada à mão (aba fechada): sem flags, e a hibernação seguinte não as ressuscita', () => {
+    const { id, cc } = spawnWithFlags('fechada')
+    hibernate(id)
+    const resumed = resume(cc)
+    expectDefaultFlags(resumed)
+    expect(cwdOf(resumed)).toBe(REPO_DIR)
+    // A linha do resume manual grava o que o processo recebeu: nada além do cwd.
+    hibernate(resumed)
+    const woke = wake(cc)
+    expectDefaultFlags(woke)
+    expect(cwdOf(woke)).toBe(REPO_DIR)
+  })
+
+  it('wake da hibernada: o argv tem X/Y e o cwd gravado', () => {
+    const { id, cc } = spawnWithFlags('acorda')
+    hibernate(id)
+    const woke = wake(cc)
+    expect(argvOf(woke)).toContain("--permission-mode 'acceptEdits'")
+    expect(argvOf(woke)).toContain(`--model '${MODEL}'`)
+    expect(systemPromptOf(argvOf(woke))).toContain('Responda sempre em inglês.')
+    expect(cwdOf(woke)).toBe(REPO_DIR)
   })
 })
