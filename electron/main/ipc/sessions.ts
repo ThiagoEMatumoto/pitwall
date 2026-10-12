@@ -43,6 +43,7 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { scopeOomWatch } from '../services/scope-oom-watch'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   mcpClientConfigPath,
@@ -949,6 +950,8 @@ export function registerSessionIpc(): void {
       }
     })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
+    scopeOomWatch.attach(ptyManager)
+    scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', e))
     ptyManager.on('exit', (e) => {
       const db = getDb()
       db.prepare(
@@ -1517,6 +1520,7 @@ export function registerSessionIpc(): void {
     tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
   )
   ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+  ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)

@@ -217,7 +217,16 @@ export function wrapInScope(
   memory: ScopeMemoryLimits | null = null,
 ): { command: string; args: string[] } {
   const props = memory
-    ? ['-p', `MemoryMax=${memory.max}`, '-p', `MemorySwapMax=${memory.swapMax}`]
+    ? [
+        '-p',
+        `MemoryMax=${memory.max}`,
+        '-p',
+        `MemorySwapMax=${memory.swapMax}`,
+        // O padrão (stop) para o scope inteiro quando o kernel mata UM processo
+        // por MemoryMax: um teste que estoura levaria o claude junto e o turno.
+        '-p',
+        'OOMPolicy=continue',
+      ]
     : []
   return {
     command: 'systemd-run',
