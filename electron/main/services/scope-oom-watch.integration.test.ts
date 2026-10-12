@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
@@ -10,6 +10,7 @@ import {
   wrapInScope,
   ensureScopeProbe,
   resetScopeProbeForTests,
+  setScopeUnitPrefixForTests,
 } from './systemd-scope'
 import { ptyManager } from './pty-manager'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,12 @@ const hasUserBus =
   spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--', 'true'], {
     timeout: 2_000,
   }).status === 0
+
+// Prefixo próprio: guardas da máquina que vigiam app-pitwall-session-* (e sobem
+// MemoryMax/oom_score_adj) não alcançam as units destes testes.
+const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
+beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
+afterAll(() => setScopeUnitPrefixForTests())
 
 // 512 MB tocando cada página, num scope de 64M sem swap: o kernel mata. Espera
 // 1s antes de alocar, para o detector registrar o pid (e o baseline) antes.
@@ -161,8 +168,12 @@ describe.skipIf(!hasUserBus)('OOM dentro do scope da sessão × systemd real', (
 // é um perl magro que, 2s depois de nascer (tempo de o watcher marcá-lo), aloca
 // 512M em blocos de 8M e anuncia cada bloco. O kernel mata quando o scope passa
 // de 96M, com o filho ainda bem menor que o principal.
+// O principal herda o oom_score_adj do worker do vitest, que um guarda da máquina
+// pode ter subido a 1000 (teto: o filho não teria como ficar acima). Volta ao
+// menor valor que um processo sem privilégio aceita, como o claude real.
 const PRINCIPAL = `
 const fs = require('fs')
+for (let v = 0; v < 1000; v += 50) { try { fs.writeFileSync('/proc/self/oom_score_adj', String(v)); break } catch {} }
 const keep = Buffer.alloc(40 * 1024 * 1024, 1)
 const rss = () => Number(/VmRSS:\\s+(\\d+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))[1]) >> 10
 const child = require('child_process').spawn('perl', ['-e', process.env.PERL_HOG], { stdio: ['ignore', 'inherit', 'inherit'] })

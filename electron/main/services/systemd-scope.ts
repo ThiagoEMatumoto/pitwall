@@ -13,6 +13,9 @@ const PROBE_TIMEOUT_MS = 2_000
 // direto, e o probe é refeito depois disto.
 export const SCOPE_RETRY_BACKOFF_MS = 60_000
 const UNIT_PREFIX = 'app-pitwall-session-'
+// Testes de integração criam units reais: com prefixo próprio, nada que vigie as
+// app-pitwall-session-* da máquina (guarda, sweep de outra instância) as alcança.
+let unitPrefix = UNIT_PREFIX
 
 // ok = wrapper em uso; unavailable = não existe nesta máquina/sessão (vale até o
 // app fechar); backoff = falhou agora, tenta de novo depois de retryAt.
@@ -152,10 +155,10 @@ export function scopeWrapEnabled(now = Date.now()): boolean {
 export function scopeUnitName(sessionId: string, now = Date.now(), ownerPid = process.pid): string {
   const id8 = sessionId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) || 'session'
   // O timestamp evita colisão com a unit de um resume do mesmo id ainda coletando.
-  return `${UNIT_PREFIX}${ownerPid}-${id8}-${now}`
+  return `${unitPrefix}${ownerPid}-${id8}-${now}`
 }
 
-export function unitOwnerPid(unit: string, prefix = UNIT_PREFIX): number | null {
+export function unitOwnerPid(unit: string, prefix = unitPrefix): number | null {
   if (!unit.startsWith(prefix)) return null
   const m = /^(\d+)-/.exec(unit.slice(prefix.length))
   return m ? Number(m[1]) : null
@@ -273,7 +276,7 @@ function ownerAlive(pid: number): boolean {
 // Se o main morreu (oomd no Electron, kill -9), o claude sai pelo SIGHUP da PTY,
 // mas o que ele deixou em background fica preso no scope para sempre. No boot,
 // para as units de instâncias que não existem mais.
-export function sweepOrphanScopes(prefix = UNIT_PREFIX): Promise<string[]> {
+export function sweepOrphanScopes(prefix = unitPrefix): Promise<string[]> {
   assertUnitPrefix(prefix)
   if (state.kind !== 'ok') return Promise.resolve([])
   return new Promise((resolve) => {
@@ -306,6 +309,12 @@ export function sweepOrphanScopes(prefix = UNIT_PREFIX): Promise<string[]> {
       },
     )
   })
+}
+
+// Sem argumento, volta ao prefixo de produção.
+export function setScopeUnitPrefixForTests(prefix: string = UNIT_PREFIX): void {
+  assertUnitPrefix(prefix)
+  unitPrefix = prefix
 }
 
 export function resetScopeProbeForTests(): void {

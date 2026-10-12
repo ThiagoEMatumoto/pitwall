@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -31,6 +31,7 @@ import {
   scopeWrapEnabled,
   sweepOrphanScopes,
   scopeUnitName,
+  setScopeUnitPrefixForTests,
   wrapInScope,
 } from './systemd-scope'
 
@@ -40,6 +41,11 @@ const hasUserBus =
   spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--', 'true'], {
     timeout: 2_000,
   }).status === 0
+// Prefixo próprio: guardas da máquina que vigiam app-pitwall-session-* (e sobem
+// MemoryMax/oom_score_adj) não alcançam as units destes testes.
+const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
+beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
+afterAll(() => setScopeUnitPrefixForTests())
 const SESSION = 'sc0pe-it-session'
 const SHELL = process.env.SHELL || '/bin/sh'
 const originalBus = process.env.DBUS_SESSION_BUS_ADDRESS
@@ -149,7 +155,7 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
-    expect(unit).toMatch(new RegExp(`^app-pitwall-session-${process.pid}-sc0peits-\\d+$`))
+    expect(unit).toMatch(new RegExp(`^${TEST_UNIT_PREFIX}${process.pid}-sc0peits-\\d+$`))
     expect(cgroupOf(pid)).toContain(`/app.slice/${unit}.scope`)
   }, 15_000)
 
@@ -297,7 +303,7 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     await killAndWait()
   })
 
-  it('o scope da sessão nasce com MemoryMax 18G, sem MemoryHigh e sem swap', async () => {
+  it('o scope da sessão nasce com MemoryMax da pref (14G no mock), sem MemoryHigh e sem swap', async () => {
     expect(await ensureScopeProbe()).toBe(true)
     spawnLogin('sleep 300')
     const pid = ptyPid()
@@ -306,7 +312,7 @@ describe.skipIf(!hasUserBus)('teto de memória do scope × systemd real', () => 
     // Sob carga o systemctl show pode ler a unit antes de ela estar ativa.
     await until(() => unitActive(unit), 5_000)
     const gib = 1024 ** 3
-    expect(unitProp(unit, 'MemoryMax')).toBe(String(18 * gib))
+    expect(unitProp(unit, 'MemoryMax')).toBe(String(14 * gib))
     expect(unitProp(unit, 'MemoryHigh')).toBe('infinity')
     expect(unitProp(unit, 'MemorySwapMax')).toBe('0')
   }, 15_000)
