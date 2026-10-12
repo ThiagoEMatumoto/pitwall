@@ -6,7 +6,7 @@
 // o DB e o disco reais. Fakes só na borda: a PTY, o espelho da tela e a janela,
 // que responde ao wake-request como o renderer.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const seam = vi.hoisted(() => ({
@@ -136,6 +136,7 @@ import { formatPtyInjection } from '../services/handoff/inject'
 import { LAZY_RESTORE_PREF } from '../../../shared/lazy-restore'
 import { registerSessionIpc, sweepOrphanImageTemps } from './sessions'
 import { promptQueue, registerSendPromptIpc } from './send-prompt'
+import { CONFIRM_GIVEUP_MS, POLL_MS } from '../services/prompt-queue'
 import { registerDormantPanesIpc } from './dormant-panes'
 import { registerHibernateIpc } from './hibernate'
 
@@ -250,10 +251,28 @@ describe('exit da hibernação pelos handlers reais', () => {
     await vi.waitFor(() => expect(existsSync(otherImage)).toBe(false))
     expect(existsSync(image)).toBe(true)
 
-    // A sweep do boot recolhe os temps de imagem (num processo fresco todos são
-    // órfãos) e nada além deles.
+    // A sweep do boot poupa a imagem enquanto a entrega espera a prova no
+    // transcript: sem ela o item volta como 'talvez não entregue' e o reenvio cita o path.
     const notImage = join(tmp(), 'system-prompt-x.md')
     writeFileSync(notImage, 'x')
+    expect(promptQueue.references(basename(image))).toBe(true)
+    sweepOrphanImageTemps()
+    expect(existsSync(image)).toBe(true)
+    expect(existsSync(notImage)).toBe(true)
+
+    // Sem prova até o giveup, o item volta estacionado; cancelado pelo usuário, nada
+    // mais cita a imagem e o próximo sweep a recolhe (e nada além dela).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + CONFIRM_GIVEUP_MS + 1)
+      await vi.waitFor(() => expect(promptQueue.snapshot().items).toHaveLength(1), {
+        timeout: 2 * POLL_MS,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(promptQueue.cancel(promptQueue.snapshot().items[0].id)).toBe(true)
+    expect(promptQueue.references(basename(image))).toBe(false)
     sweepOrphanImageTemps()
     expect(existsSync(image)).toBe(false)
     expect(existsSync(notImage)).toBe(true)
