@@ -155,9 +155,16 @@ export function scopeUnitName(sessionId: string, now = Date.now(), ownerPid = pr
   return `${UNIT_PREFIX}${ownerPid}-${id8}-${now}`
 }
 
-export function unitOwnerPid(unit: string): number | null {
-  const m = new RegExp(`^${UNIT_PREFIX}(\\d+)-`).exec(unit)
+export function unitOwnerPid(unit: string, prefix = UNIT_PREFIX): number | null {
+  if (!unit.startsWith(prefix)) return null
+  const m = /^(\d+)-/.exec(unit.slice(prefix.length))
   return m ? Number(m[1]) : null
+}
+
+// O prefixo vira glob do list-units: só [a-z0-9-] e terminando em '-', para que
+// um prefixo de teste nunca alcance as units app-pitwall-session-* reais.
+function assertUnitPrefix(prefix: string): void {
+  if (!/^[a-z0-9-]+-$/.test(prefix)) throw new Error(`prefixo de unit inválido: ${prefix}`)
 }
 
 // Teto de memória por sessão. Em 10/10 uma sessão (suítes de teste em paralelo)
@@ -222,6 +229,10 @@ export function wrapInScope(
         `MemoryMax=${memory.max}`,
         '-p',
         `MemorySwapMax=${memory.swapMax}`,
+        // O padrão (stop) para o scope inteiro quando o kernel mata UM processo
+        // por MemoryMax: um teste que estoura levaria o claude junto e o turno.
+        '-p',
+        'OOMPolicy=continue',
       ]
     : []
   return {
@@ -262,12 +273,13 @@ function ownerAlive(pid: number): boolean {
 // Se o main morreu (oomd no Electron, kill -9), o claude sai pelo SIGHUP da PTY,
 // mas o que ele deixou em background fica preso no scope para sempre. No boot,
 // para as units de instâncias que não existem mais.
-export function sweepOrphanScopes(): Promise<string[]> {
+export function sweepOrphanScopes(prefix = UNIT_PREFIX): Promise<string[]> {
+  assertUnitPrefix(prefix)
   if (state.kind !== 'ok') return Promise.resolve([])
   return new Promise((resolve) => {
     execFile(
       'systemctl',
-      ['--user', 'list-units', '--plain', '--no-legend', `${UNIT_PREFIX}*.scope`],
+      ['--user', 'list-units', '--plain', '--no-legend', `${prefix}*.scope`],
       { timeout: PROBE_TIMEOUT_MS },
       (err, stdout) => {
         if (err) {
@@ -281,8 +293,9 @@ export function sweepOrphanScopes(): Promise<string[]> {
             .trim()
             .split(/\s+/)[0]
             ?.replace(/\.scope$/, '')
-          if (!unit) continue
-          const owner = unitOwnerPid(unit)
+          // Defesa em profundidade: nunca para unit fora do prefixo pedido.
+          if (!unit?.startsWith(prefix)) continue
+          const owner = unitOwnerPid(unit, prefix)
           if (owner === null || ownerAlive(owner)) continue
           stopScopeUnit(unit)
           stopped.push(unit)

@@ -10,6 +10,7 @@ import type {
   ResumeSessionInput,
   WakeRequest,
   DormantBecameLiveEvent,
+  ScopeOomEvent,
   PtyDataEvent,
   PtyExitEvent,
   SessionFeatureChangedEvent,
@@ -223,6 +224,8 @@ const api: Api = {
       subscribe<PaneCheckRequest>('sessions:pane-check-request', handler),
     paneCheckResult: (result) => invoke('sessions:pane-check-result', result),
     paneClosed: (sessionId) => invoke('sessions:pane-closed', sessionId),
+    onOom: (handler) => subscribe<ScopeOomEvent>('sessions:oom', handler),
+    scopeStats: () => invoke('sessions:scope-stats'),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),

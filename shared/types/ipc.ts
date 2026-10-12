@@ -1528,6 +1528,22 @@ export interface AttentionReasonCounters {
   lastUnparsedAt: number | null
 }
 
+// main → renderer: o kernel matou um processo da sessão por MemoryMax.
+// claudeAlive false = o morto foi o próprio claude (a sessão acabou).
+export interface ScopeOomEvent {
+  sessionId: string
+  maxGB: number
+  claudeAlive: boolean
+}
+
+// oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
+// boot; watching = sessões com scope sendo observadas agora.
+export interface ScopeStats {
+  total: number
+  bySession: Record<string, number>
+  watching: number
+}
+
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'
 
 export interface GithubAsset {
@@ -2968,6 +2984,10 @@ export interface Api {
     paneCheckResult(result: PaneCheckResult): Promise<void>
     /** A aba de uma PTY viva foi fechada pelo X: um /exit da hibernação em curso não a recria. */
     paneClosed(sessionId: string): Promise<void>
+    /** O kernel matou um processo da sessão por passar do teto de memória. */
+    onOom(handler: (event: ScopeOomEvent) => void): () => void
+    /** Contador de oom-kills por sessão/total (scopes do systemd). */
+    scopeStats(): Promise<ScopeStats>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */
