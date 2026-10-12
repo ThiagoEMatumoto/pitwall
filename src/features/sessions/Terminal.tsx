@@ -72,6 +72,9 @@ let liveWebglCount = 0
 
 interface Props {
   session: Session
+  // Pane do dockview que hospeda este terminal: identidade durável do rascunho
+  // do Composer. Ausente fora das abas (quick look).
+  paneId?: string
   repoLabel: string
   repoPath: string
   projectName: string
@@ -238,6 +241,7 @@ export function LeasedPlaceholder({
 
 function TerminalHost({
   session,
+  paneId,
   repoLabel,
   repoPath,
   projectName,
@@ -738,13 +742,15 @@ function TerminalHost({
   // (quando o TUI tem o modo ativo) pra preservar multilinha sem auto-submeter;
   // write() manda direto pro PTY. O xterm fica display-only permanente. sendPrompt
   // adiciona o \r final que submete.
-  function insertPrompt(text: string) {
+  // Resolvem só quando o PTY aceitou as escritas: o Composer limpa o rascunho
+  // durável depois disso, nunca antes.
+  async function insertPrompt(text: string): Promise<void> {
     const bracketed = xtermRef.current?.modes.bracketedPasteMode ?? true
-    write(buildPromptBytes(text, bracketed))
+    await write(buildPromptBytes(text, bracketed))
   }
-  function sendPrompt(text: string) {
-    insertPrompt(text)
-    write('\r')
+  async function sendPrompt(text: string): Promise<void> {
+    await insertPrompt(text)
+    await write('\r')
     // Eco otimista: em modo chat, a bolha do usuário aparece na hora; o ChatView
     // a reconcilia quando o transcript de disco alcança (ver chat-logic).
     if (mode === 'chat') chatViewRef.current?.pushEcho(text)
@@ -1429,6 +1435,8 @@ function TerminalHost({
       {!exited && (
         <Composer
           sessionId={session.id}
+          paneId={paneId ?? null}
+          ccSessionId={ccSessionId}
           ref={composerRef}
           onSend={sendPrompt}
           onInsert={insertPrompt}

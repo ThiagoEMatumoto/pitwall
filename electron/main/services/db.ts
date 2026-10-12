@@ -12,19 +12,27 @@ export function handoffsInterruptedAtOpen(): string[] {
   return [...interruptedAtOpen]
 }
 
+// Abre o app.db com os pragmas e as migrations de produção. Separado do getDb
+// (que depende do electron) para o teste de durabilidade abrir o banco por este
+// mesmo caminho num processo Node comum.
+export function openAppDb(dbPath: string): Database.Database {
+  const db = new Database(dbPath)
+  db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
+  // NORMAL em WAL: commit sobrevive a kill -9, não a queda de energia. Escritas
+  // que precisam sobreviver à energia sobem para FULL na própria transação
+  // (ver composer-drafts.ts).
+  db.pragma('synchronous = NORMAL')
+  runMigrations(db)
+  return db
+}
+
 export function getDb(): Database.Database {
   if (dbInstance) return dbInstance
 
   const userDataDir = app.getPath('userData')
   mkdirSync(userDataDir, { recursive: true })
-  const dbPath = join(userDataDir, 'app.db')
-
-  const db = new Database(dbPath)
-  db.pragma('journal_mode = WAL')
-  db.pragma('foreign_keys = ON')
-  db.pragma('synchronous = NORMAL')
-
-  runMigrations(db)
+  const db = openAppDb(join(userDataDir, 'app.db'))
 
   // Sessões marcadas 'running' de um boot anterior são órfãs: o processo claude
   // morre junto com o app, então nenhuma está realmente viva ao iniciar.

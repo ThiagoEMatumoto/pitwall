@@ -1,11 +1,14 @@
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
+import { draftReferencesFile } from '../services/composer-drafts'
+import { requestDraftFlush } from './composer-drafts'
+import { sweepAfterDraftFlush, sweepImageTempDir } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
@@ -331,29 +334,23 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
-// Remove temporários de imagem que casam com o predicado. Best-effort: se o
-// diretório não existe ainda (nenhuma imagem foi colada) ou um arquivo some numa
-// corrida, ignora — limpeza nunca pode derrubar o boot/exit.
+// Remove temporários de imagem que casam com o predicado, menos os referenciados
+// por um rascunho persistido do Composer (o rascunho sobrevive ao reboot e ao
+// exit da PTY; a imagem dele também precisa). Sem conseguir ler os rascunhos,
+// não apaga nada: perder a imagem de um rascunho é pior que um temp a mais.
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let names: string[]
-  const dir = tempDir()
+  let isKept: (filename: string) => boolean
   try {
-    names = readdirSync(dir)
-  } catch {
+    isKept = draftReferencesFile(getDb())
+  } catch (err) {
+    console.error('[sessions] sweep de imagens adiado: rascunhos ilegíveis', err)
     return
   }
-  for (const name of names) {
-    if (!predicate(name)) continue
-    try {
-      unlinkSync(join(dir, name))
-    } catch {
-      // já removido / em uso — segue
-    }
-  }
+  sweepImageTempDir(tempDir(), predicate, isKept)
 }
 
-// Sweep de boot: num processo fresco nenhum compose referencia temps de imagem,
-// então todos são órfãos. Chamado uma vez no app.whenReady (index.ts).
+// Sweep de boot: num processo fresco só os rascunhos persistidos referenciam
+// temps de imagem; o resto é órfão. Chamado uma vez no app.whenReady (index.ts).
 export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }
@@ -1005,7 +1002,11 @@ export function registerSessionIpc(): void {
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
       // as anexou na entrega; o path injetado não serve depois do exit.
-      sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+      // Antes, o flush dos rascunhos: a imagem colada ainda no debounce do
+      // renderer não está no app.db e o sweep a apagaria.
+      void sweepAfterDraftFlush(requestDraftFlush, () =>
+        sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId)),
+      )
 
       // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
@@ -1582,6 +1583,7 @@ export function registerSessionIpc(): void {
     (_e, sessionId: string, bytes: ArrayBuffer | Uint8Array, mime: string): string =>
       saveImageTemp(sessionId, bytes, mime),
   )
+
 
   ipcMain.handle('sessions:resize', (_e, sessionId: string, cols: number, rows: number) => {
     ptyManager.resize(sessionId, cols, rows)
