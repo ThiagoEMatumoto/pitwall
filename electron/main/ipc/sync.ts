@@ -2,6 +2,7 @@ import { app, dialog, ipcMain } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDb } from '../services/db'
+import { backupBeforeImport } from '../services/db-maintenance'
 import { startFeatureWatcher, stopFeatureWatcher } from '../services/feature-store'
 import { exportBackup, importBackup } from '../services/sync/backup'
 import {
@@ -40,6 +41,18 @@ function workdir(): string {
 
 function isConfigured(): boolean {
   return existsSync(join(workdir(), '.git'))
+}
+
+// Rede de segurança dos imports: TODO import (sync ou backup .zip) é replace-all
+// DESTRUTIVO — troca o estado sincronizável inteiro por um bundle que pode estar
+// ruim (o caso real: paths relativos vindos de um run de teste). Snapshot com
+// VACUUM INTO no userData, guardando os 3 últimos.
+//
+// Falhar aqui ABORTA o import de propósito: sem rede, não se sobrescreve o banco
+// do usuário. No boot o erro é capturado e vira status "stale" (não derruba).
+function backupBeforeDestructiveImport(): void {
+  const path = backupBeforeImport(getDb(), app.getPath('userData'))
+  console.log(`[sync] backup pré-import em ${path}`)
 }
 
 // ---- estado persistente de sync (sobrevive a reabrir o dialog) ----
@@ -168,6 +181,7 @@ async function syncNow(): Promise<SyncNowResult> {
 
     if (st.behind > 0 && st.ahead === 0) {
       await applyRemote(workdir())
+      backupBeforeDestructiveImport()
       let imp: { unresolvedPaths: number }
       try {
         imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
@@ -280,6 +294,7 @@ export function registerSyncIpc(): void {
     return withSyncLock(async () => {
       await pull(workdir())
       await applyRemote(workdir())
+      backupBeforeDestructiveImport()
       let imp: { unresolvedPaths: number }
       try {
         imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
@@ -316,6 +331,7 @@ export function registerSyncIpc(): void {
         // keep === 'remote'
         await pull(workdir())
         await applyRemote(workdir())
+        backupBeforeDestructiveImport()
         let imp: { unresolvedPaths: number }
         try {
           imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
@@ -357,6 +373,7 @@ export function registerSyncIpc(): void {
     })
     if (res.canceled || res.filePaths.length === 0) return { state: 'canceled' }
     const path = res.filePaths[0]
+    backupBeforeDestructiveImport()
     // Mesmos hooks de watcher do import normal (pausa/reinicia o chokidar) +
     // projectsRoot local (resolve <CM_ROOT>/... do backup contra esta máquina).
     importBackup(getDb(), path, watcherHooks())
@@ -392,6 +409,7 @@ export async function syncOnBoot(timeoutMs = 8000): Promise<boolean> {
     // Só importa no caminho fast-forward limpo (sem trabalho local pendente).
     if (st.behind > 0 && st.ahead === 0 && !st.diverged) {
       await applyRemote(dir)
+      backupBeforeDestructiveImport()
       let imp: { unresolvedPaths: number }
       try {
         // Watcher ainda não iniciado no boot → active=false (o boot o inicia depois).

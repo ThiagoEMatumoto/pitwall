@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  backupBeforeImport,
   backupBeforeSecretsMigration,
+  IMPORT_BACKUP_PREFIX,
   pruneSecretsBackups,
   reclaimFreeSpace,
   removeSecretsBackups,
@@ -133,5 +135,37 @@ describe('reclaimFreeSpace', () => {
     const result = reclaimFreeSpace(db)
     expect(result.freelistBefore).toBeGreaterThanOrEqual(0)
     expect(result.ms).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('backupBeforeImport', () => {
+  it('usa prefixo próprio, captura o WAL e poda os antigos', () => {
+    db.prepare('INSERT INTO app_prefs (key, value) VALUES (?, ?)').run('k', 'antes-do-import')
+    for (const ts of [1, 2, 3]) writeFileSync(join(dir, `${IMPORT_BACKUP_PREFIX}${ts}`), 'x')
+
+    const path = backupBeforeImport(db, dir, 4)
+
+    expect(path).toBe(join(dir, `${IMPORT_BACKUP_PREFIX}4`))
+    const backup = new Database(path, { readonly: true })
+    expect(backup.prepare('SELECT value FROM app_prefs WHERE key = ?').get('k')).toEqual({
+      value: 'antes-do-import',
+    })
+    backup.close()
+    expect(
+      readdirSync(dir)
+        .filter((n) => n.startsWith(IMPORT_BACKUP_PREFIX))
+        .sort(),
+    ).toEqual([
+      `${IMPORT_BACKUP_PREFIX}2`,
+      `${IMPORT_BACKUP_PREFIX}3`,
+      `${IMPORT_BACKUP_PREFIX}4`,
+    ])
+  })
+
+  it('não confunde com o backup pré-segredos (prefixos independentes)', () => {
+    writeFileSync(join(dir, `${SECRETS_BACKUP_PREFIX}1`), 'x')
+    backupBeforeImport(db, dir, 1)
+    expect(removeSecretsBackups(dir)).toBe(1)
+    expect(readdirSync(dir)).toContain(`${IMPORT_BACKUP_PREFIX}1`)
   })
 })
