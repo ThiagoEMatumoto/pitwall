@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
 import { TABLE_PRIMARY_KEYS, SYNCED_TABLES } from './bundle-format'
 import {
   applyRemote,
+  applyRemoteAndImport,
   bundleDirFor,
   ensureRepo,
   pull,
@@ -72,6 +73,10 @@ function dumpTable(db: Database.Database, table: string): unknown[] {
   const pk = (TABLE_PRIMARY_KEYS as Record<string, readonly string[]>)[table]
   const orderBy = pk.map((c) => `"${c}" ASC`).join(', ')
   return db.prepare(`SELECT * FROM "${table}" ORDER BY ${orderBy}`).all()
+}
+
+function dbDump(db: Database.Database, table: string): string {
+  return JSON.stringify(dumpTable(db, table))
 }
 
 const noopWatcher = {
@@ -275,6 +280,80 @@ describe('git-sync', () => {
       'projectsRoot',
       'repoUrl',
     ])
+  })
+
+  // B está atrás do remoto (que A avançou), sem commit local: o caminho
+  // fast-forward limpo em que boot/syncNow/import-force chamam applyRemote.
+  async function behindRemote() {
+    const { dir, url } = makeBareRemote()
+    const wkSeed = tmp('cm-wk-seed-')
+    await ensureRepo(wkSeed, url)
+    const dbSeed = newDb()
+    seed(dbSeed, 'BASE')
+    await pushBundle(wkSeed, dbSeed, 'base', { exportOpts: exportOpts(tmp('cm-feat-seed-')) })
+    dbSeed.close()
+
+    const wkA = tmp('cm-wk-a-')
+    await ensureRepo(wkA, url)
+    const wkB = tmp('cm-wk-b-')
+    await ensureRepo(wkB, url)
+
+    const dbA = newDb()
+    seed(dbA, 'A-REMOTE')
+    await pushBundle(wkA, dbA, 'A advances', { exportOpts: exportOpts(tmp('cm-feat-a-')) })
+    dbA.close()
+
+    const st = await pull(wkB)
+    expect(st.behind).toBeGreaterThan(0)
+    expect(st.ahead).toBe(0)
+    return { dir, wkB }
+  }
+
+  const headOf = (gitDir: string, ref: string): string =>
+    execFileSync('git', ['-C', gitDir, 'rev-parse', ref]).toString().trim()
+
+  it('6. applyRemoteAndImport: import ok → clone no HEAD do remoto e devolve o resultado do import', async () => {
+    const { wkB } = await behindRemote()
+    const dbB = newDb()
+
+    const res = await applyRemoteAndImport(wkB, () =>
+      importBundle(dbB, bundleDirFor(wkB), { featuresRoot: tmp('cm-feat-b-'), ...noopWatcher }),
+    )
+
+    expect(res).toEqual({ unresolvedPaths: 0 })
+    expect(headOf(wkB, 'HEAD')).toBe(headOf(wkB, 'origin/main'))
+    expect(dbDump(dbB, 'projects')).toContain('A-REMOTE')
+    dbB.close()
+  })
+
+  it('7. applyRemoteAndImport: import falha → HEAD do clone restaurado, erro original relançado, push seguinte rejeitado', async () => {
+    const { dir, wkB } = await behindRemote()
+    const headBefore = headOf(wkB, 'HEAD')
+    const remoteBefore = headOf(dir, 'main')
+    expect(headBefore).not.toBe(remoteBefore)
+
+    await expect(
+      applyRemoteAndImport(wkB, () => {
+        throw new Error('[sync] import deixou 2 violação(ões) de FK')
+      }),
+    ).rejects.toThrow('import deixou 2 violação(ões) de FK')
+
+    expect(headOf(wkB, 'HEAD')).toBe(headBefore)
+    expect(
+      readFileSync(join(bundleDirFor(wkB), 'tables', 'projects.ndjson'), 'utf8'),
+    ).not.toContain('A-REMOTE')
+
+    // O coordinator empurra o DB local (velho) logo depois: com o clone no HEAD
+    // antigo isso vira non-fast-forward em vez de sobrescrever o backup remoto.
+    const dbB = newDb()
+    seed(dbB, 'B-OLD')
+    const push = await pushBundle(wkB, dbB, 'coordinator auto-push', {
+      exportOpts: exportOpts(tmp('cm-feat-b-')),
+    })
+    expect(push.rejected).toBe(true)
+    expect(push.pushed).toBe(false)
+    expect(headOf(dir, 'main')).toBe(remoteBefore)
+    dbB.close()
   })
 
   it('status reporta ahead após commit local não-empurrado', async () => {

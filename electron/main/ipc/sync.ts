@@ -5,7 +5,7 @@ import { getDb } from '../services/db'
 import { startFeatureWatcher, stopFeatureWatcher } from '../services/feature-store'
 import { exportBackup, importBackup } from '../services/sync/backup'
 import {
-  applyRemote,
+  applyRemoteAndImport,
   bundleDirFor,
   ensureRepo,
   pull,
@@ -167,10 +167,11 @@ async function syncNow(): Promise<SyncNowResult> {
     }
 
     if (st.behind > 0 && st.ahead === 0) {
-      await applyRemote(workdir())
       let imp: { unresolvedPaths: number }
       try {
-        imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
+        imp = await applyRemoteAndImport(workdir(), () =>
+          importBundle(getDb(), bundleDirFor(workdir()), watcherHooks()),
+        )
       } catch (err) {
         if (isSchemaMismatch(err)) {
           setSyncState('schema-mismatch', String((err as Error)?.message ?? err))
@@ -279,10 +280,11 @@ export function registerSyncIpc(): void {
     if (!isConfigured()) return { state: 'not-configured' }
     return withSyncLock(async () => {
       await pull(workdir())
-      await applyRemote(workdir())
       let imp: { unresolvedPaths: number }
       try {
-        imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
+        imp = await applyRemoteAndImport(workdir(), () =>
+          importBundle(getDb(), bundleDirFor(workdir()), watcherHooks()),
+        )
       } catch (err) {
         if (isSchemaMismatch(err)) {
           setSyncState('schema-mismatch', String((err as Error)?.message ?? err))
@@ -315,10 +317,11 @@ export function registerSyncIpc(): void {
         }
         // keep === 'remote'
         await pull(workdir())
-        await applyRemote(workdir())
         let imp: { unresolvedPaths: number }
         try {
-          imp = importBundle(getDb(), bundleDirFor(workdir()), watcherHooks())
+          imp = await applyRemoteAndImport(workdir(), () =>
+            importBundle(getDb(), bundleDirFor(workdir()), watcherHooks()),
+          )
         } catch (err) {
           if (isSchemaMismatch(err))
             setSyncState('schema-mismatch', String((err as Error)?.message ?? err))
@@ -391,11 +394,12 @@ export async function syncOnBoot(timeoutMs = 8000): Promise<boolean> {
     const st = await pull(dir)
     // Só importa no caminho fast-forward limpo (sem trabalho local pendente).
     if (st.behind > 0 && st.ahead === 0 && !st.diverged) {
-      await applyRemote(dir)
       let imp: { unresolvedPaths: number }
       try {
         // Watcher ainda não iniciado no boot → active=false (o boot o inicia depois).
-        imp = importBundle(getDb(), bundleDirFor(dir), watcherHooks(false))
+        imp = await applyRemoteAndImport(dir, () =>
+          importBundle(getDb(), bundleDirFor(dir), watcherHooks(false)),
+        )
       } catch (err) {
         // Bundle remoto exige app mais novo → registra schema-mismatch (a UI
         // mostra "atualize o app"), NÃO derruba o boot, mantém dados locais.
