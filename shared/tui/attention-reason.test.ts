@@ -6,10 +6,12 @@ import {
   deriveAttentionReason,
   handoffAsking,
   hasInputPrompt,
+  inputBoxRows,
   isUnparsedWaiting,
   scanScreen,
   type ScreenScan,
 } from './attention-reason'
+import { isInputRule } from './input-rule'
 
 const { Terminal } = xtermHeadless as unknown as {
   Terminal: typeof import('@xterm/headless').Terminal
@@ -21,8 +23,8 @@ function fixture(name: string): string {
   return readFileSync(join(__dirname, '__fixtures__', name), 'utf8')
 }
 
-async function render(raw: string): Promise<(n: number) => string> {
-  const term = new Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+async function render(raw: string, cols = 80, rows = 24): Promise<(n: number) => string> {
+  const term = new Terminal({ cols, rows, allowProposedApi: true })
   await new Promise<void>((resolve) => term.write(raw, resolve))
   return (n: number) => {
     const buf = term.buffer.active
@@ -34,8 +36,8 @@ async function render(raw: string): Promise<(n: number) => string> {
   }
 }
 
-async function scanFixture(name: string): Promise<ScreenScan> {
-  const readTail = await render(fixture(name))
+async function scanFixture(name: string, cols?: number, rows?: number): Promise<ScreenScan> {
+  const readTail = await render(fixture(name), cols, rows)
   return scanScreen(readTail, 1000)
 }
 
@@ -52,6 +54,14 @@ describe('scanScreen — capturas reais do claude 2.1.286', () => {
     ])
     expect(scan.menu?.context).toContain('touch permissao-fixture.txt')
     expect(scan.inputPrompt).toBe(false)
+  })
+
+  it('2.1.295: caixa de input de sessão nomeada e sem nome', async () => {
+    for (const name of ['claude-2.1.295-named-idle-45x50.ansi', 'claude-2.1.295-unnamed-idle-45x50.ansi']) {
+      const scan = await scanFixture(name, 45, 50)
+      expect(scan.menu, name).toBeNull()
+      expect(scan.inputPrompt, name).toBe(true)
+    }
   })
 
   it('reconhece a caixa de input ociosa como prompt, sem menu', async () => {
@@ -79,6 +89,33 @@ describe('hasInputPrompt', () => {
     expect(hasInputPrompt(`${RULE}\n❯ \n${RULE}\n  ? for shortcuts\n`)).toBe(true)
     expect(hasInputPrompt('❯ 1. Yes\n  2. No\n')).toBe(false)
     expect(hasInputPrompt('texto qualquer\n')).toBe(false)
+  })
+
+  // claude 2.1.295 com -n desenha o nome da sessão na régua de cima.
+  it('aceita a régua de cima com o nome da sessão embutido', () => {
+    const named = `${'─'.repeat(28)} kzprobe-b-7731 ─`
+    expect(hasInputPrompt(`${named}\n❯ \n${RULE}\n`)).toBe(true)
+    expect(inputBoxRows([named, '❯ oi', 'segunda', RULE])).toEqual({ start: 1, end: 3 })
+  })
+})
+
+describe('isInputRule', () => {
+  it('régua cheia e régua com rótulo', () => {
+    expect(isInputRule('─'.repeat(10))).toBe(true)
+    expect(isInputRule(`${'─'.repeat(28)} kzprobe-b-7731 ─`)).toBe(true)
+    expect(isInputRule(`${'─'.repeat(9)} Pitwall ─`)).toBe(true)
+  })
+
+  it('rejeita o que não é a régua da caixa de input', () => {
+    expect(isInputRule('─'.repeat(9))).toBe(false)
+    expect(isInputRule('─── a ─')).toBe(false) // poucos traços no total
+    expect(isInputRule(`texto do usuário ${'─'.repeat(20)}`)).toBe(false)
+    expect(isInputRule(`${'─'.repeat(20)} texto solto`)).toBe(false)
+    expect(isInputRule(`${'─'.repeat(10)}${'─'.repeat(10)}x`)).toBe(false)
+    expect(isInputRule(`${'─'.repeat(10)}┼${'─'.repeat(10)}`)).toBe(false) // tabela markdown
+    expect(isInputRule(`${'─'.repeat(10)} a │ b ${'─'.repeat(10)}`)).toBe(false)
+    expect(isInputRule(`${'-'.repeat(20)} nome -`)).toBe(false)
+    expect(isInputRule(`${'╌'.repeat(20)}`)).toBe(false)
   })
 })
 

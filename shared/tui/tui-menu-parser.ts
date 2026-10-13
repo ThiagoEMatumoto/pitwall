@@ -27,6 +27,8 @@
 // FAIL-CLOSED em tudo: qualquer dúvida no parse → null (a UI degrada pro banner
 // "responda no terminal"). Nunca renderizar clique sobre um parse incerto.
 
+import { isInputRule } from './input-rule'
+
 export interface TuiMenuOption {
   // Índice 0-based da opção; o dígito exibido na TUI (e enviado no clique) é
   // index + 1 — o handler de dígito da CLI seleciona E submete (single-select
@@ -149,8 +151,7 @@ const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep
 // ╌ é a moldura tracejada do comando no prompt de permissão do 2.1.286.
 const BOX_EDGE_RE = /^[\s│╭╮╰╯─╌]+|[\s│╭╮╰╯─╌]+$/g
 // No 2.1.286 o prompt não tem box ╭: começa numa régua cheia de ─ (captura real
-// em shared/tui/__fixtures__) — acima dela é conversa.
-const PROMPT_TOP_RULE_RE = /^─{10,}$/
+// em shared/tui/__fixtures__) — acima dela é conversa. Pode trazer o nome da sessão.
 
 // Bloco de contexto do prompt de permissão/trust: linhas ACIMA da pergunta (o
 // box com o diff/comando/config que o usuário está aprovando). Sobe no máximo
@@ -162,7 +163,7 @@ function extractContext(lines: string[], questionLine: number, max = 15): string
     const cleaned = raw.replace(BOX_EDGE_RE, '')
     if (cleaned !== '') parts.unshift(cleaned)
     if (raw.includes('╭')) break // topo do box — acima é conversa antiga
-    if (PROMPT_TOP_RULE_RE.test(raw.trim())) break
+    if (isInputRule(raw.trim())) break
   }
   return parts.length > 0 ? parts.join('\n') : undefined
 }
@@ -188,7 +189,7 @@ function extractRequest(
     if (DASHED_RULE_RE.test(t)) rules.unshift(i)
     const header = TOOL_HEADER_RE.exec(t.replace(BOX_EDGE_RE, ''))
     if (header && !tool) tool = header[1]
-    if (lines[i].includes('╭') || PROMPT_TOP_RULE_RE.test(t)) break
+    if (lines[i].includes('╭') || isInputRule(t)) break
   }
   let command: string | undefined
   if (rules.length >= 2) {
