@@ -4,6 +4,7 @@ import type { ScopeOomEvent } from '../../../shared/types/ipc'
 import {
   OOM_AUTO_RESUME_WINDOW_MS,
   OOM_RESUME_GAP_MS,
+  OOM_RESUME_MAX_WAIT_MS,
   OOM_RESUME_PRESSURE_MAX,
   OOM_RESUME_RETRY_MS,
   OomAutoResume,
@@ -100,6 +101,20 @@ describe('OomAutoResume', () => {
     pressure = 0.5
     vi.advanceTimersByTime(OOM_RESUME_RETRY_MS)
     expect(dispatched.map((x) => x.resumeCcSessionId)).toEqual([CC])
+  })
+
+  // Fila presa por pressão que não baixa: depois do prazo o item sai e o renderer
+  // recebe o evento sem resume, como no caso não enfileirado (toast "retome").
+  it('item que espera mais que o prazo sai da fila e vira aviso sem resume', () => {
+    expect(OOM_RESUME_MAX_WAIT_MS).toBe(5 * 60_000)
+    const { dead, dispatched } = policy(() => 0.95)
+    expect(dead('a').resumeQueued).toBe(true)
+    vi.advanceTimersByTime(OOM_RESUME_MAX_WAIT_MS)
+    expect(dispatched).toEqual([])
+    vi.advanceTimersByTime(OOM_RESUME_RETRY_MS)
+    expect(dispatched).toEqual([{ sessionId: 'a', maxGB: 18, claudeAlive: false }])
+    vi.advanceTimersByTime(10 * OOM_RESUME_RETRY_MS)
+    expect(dispatched).toHaveLength(1)
   })
 
   it('sem leitura do slice (null), não segura', () => {

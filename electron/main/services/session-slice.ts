@@ -101,7 +101,28 @@ export function sliceCgroupDir(selfCgroup?: string): string | null {
   return m ? `${CGROUP_ROOT}${m[1]}/${sliceRelPath(sliceName)}` : null
 }
 
-// Uso do slice em fração do teto; null = sem teto ou sem leitura.
+function statField(stat: string, key: string): number | null {
+  const m = new RegExp(`^${key} (\\d+)$`, 'm').exec(stat)
+  return m ? Number(m[1]) : null
+}
+
+// Page cache reclamável (file − shmem) do slice; null = memory.stat ilegível.
+// Sem swap no slice, o shmem não sai da RAM e conta como uso.
+function reclaimableFile(dir: string, read: (path: string) => string): number | null {
+  try {
+    const stat = read(`${dir}/memory.stat`)
+    const file = statField(stat, 'file')
+    const shmem = statField(stat, 'shmem')
+    return file === null || shmem === null ? null : Math.max(0, file - shmem)
+  } catch {
+    return null
+  }
+}
+
+// Uso não-reclamável do slice em fração do teto; null = sem teto ou sem leitura.
+// O memory.current inclui o page cache de builds, que o kernel devolve sob
+// pressão: medido cru, o slice ficava acima de 85% para sempre e a fila de
+// resume pós-OOM nunca andava.
 export function sliceMemoryFraction(
   dir: string | null = sliceCgroupDir(),
   read: (path: string) => string = (p) => readFileSync(p, 'utf8'),
@@ -110,7 +131,9 @@ export function sliceMemoryFraction(
   try {
     const max = read(`${dir}/memory.max`).trim()
     if (max === 'max') return null
-    return Number(read(`${dir}/memory.current`)) / Number(max)
+    const current = Number(read(`${dir}/memory.current`))
+    const used = current - (reclaimableFile(dir, read) ?? 0)
+    return Math.max(0, used) / Number(max)
   } catch {
     return null
   }

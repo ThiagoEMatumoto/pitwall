@@ -146,6 +146,72 @@ describe('cgroup do slice', () => {
     expect(sliceMemoryFraction('/nao-existe', read)).toBeNull()
     expect(sliceMemoryFraction(null, read)).toBeNull()
   })
+
+  // Valores reais de app.slice (cat .../app.slice/memory.stat e memory.current,
+  // 14/10/2026): 14 GB de page cache, 5,6 GB dele em shmem.
+  const REAL_CURRENT = 27223539712
+  const REAL_STAT = [
+    'anon 11993808896',
+    'file 14136983552',
+    'kernel 1051267072',
+    'kernel_stack 34881536',
+    'pagetables 254287872',
+    'sec_pagetables 0',
+    'percpu 2617264',
+    'sock 98304',
+    'vmalloc 483328',
+    'shmem 5640232960',
+    'zswap 0',
+    'zswapped 0',
+    'file_mapped 1431617536',
+    'file_dirty 46039040',
+    'file_writeback 0',
+    'swapcached 95178752',
+    'anon_thp 46137344',
+    'file_thp 10485760',
+    'shmem_thp 564133888',
+    'inactive_anon 4439588864',
+    'active_anon 12581453824',
+    'inactive_file 5938110464',
+    'active_file 2558894080',
+    'unevictable 627019776',
+    'slab_reclaimable 674717160',
+    'slab_unreclaimable 80316248',
+    'slab 755033408',
+    'pgfault 752822194',
+    '',
+  ].join('\n')
+
+  it('page cache reclamável não conta como pressão: só o shmem do file fica', () => {
+    const files: Record<string, string> = {
+      '/s/memory.current': `${REAL_CURRENT}\n`,
+      '/s/memory.max': `${22 * GIB}\n`,
+      '/s/memory.stat': REAL_STAT,
+    }
+    const read = (p: string) => {
+      if (!(p in files)) throw new Error('ENOENT')
+      return files[p]!
+    }
+    // memory.current sozinho passa de 100% do teto e seguraria a fila para sempre.
+    expect(REAL_CURRENT / (22 * GIB)).toBeGreaterThan(1)
+    const fraction = sliceMemoryFraction('/s', read)!
+    expect(fraction).toBeCloseTo((REAL_CURRENT - (14136983552 - 5640232960)) / (22 * GIB), 6)
+    expect(fraction).toBeLessThan(0.85)
+  })
+
+  it('sem memory.stat legível, cai no memory.current', () => {
+    const files: Record<string, string> = {
+      '/s/memory.current': `${11 * GIB}\n`,
+      '/s/memory.max': `${22 * GIB}\n`,
+    }
+    const read = (p: string) => {
+      if (!(p in files)) throw new Error('ENOENT')
+      return files[p]!
+    }
+    expect(sliceMemoryFraction('/s', read)).toBe(0.5)
+    files['/s/memory.stat'] = 'anon 1\n'
+    expect(sliceMemoryFraction('/s', read)).toBe(0.5)
+  })
 })
 
 describe('SliceOomLog', () => {

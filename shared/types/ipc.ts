@@ -1538,7 +1538,8 @@ export interface ScopeOomEvent {
   // retoma esta conversa sozinho.
   resumeCcSessionId?: string
   // O resume vale, mas espera a vez na fila global (outro resume recente ou o
-  // slice das sessões ainda cheio): chega depois um evento com resumeCcSessionId.
+  // slice das sessões ainda cheio): chega depois um evento com resumeCcSessionId,
+  // ou, se a fila passar do prazo, um sem ele (o usuário retoma).
   resumeQueued?: boolean
 }
 

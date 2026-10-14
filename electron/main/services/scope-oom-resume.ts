@@ -11,20 +11,29 @@ export const OOM_AUTO_RESUME_WINDOW_MS = 10 * 60_000
 export const OOM_RESUME_GAP_MS = 30_000
 export const OOM_RESUME_PRESSURE_MAX = 0.85
 export const OOM_RESUME_RETRY_MS = 15_000
+// Pressão que não baixa não pode prender a conversa na fila: depois disso o
+// renderer recebe o aviso sem resume ("retome"), como fora da fila.
+export const OOM_RESUME_MAX_WAIT_MS = 5 * 60_000
 
 interface Deps {
   // cc_session_id da sessão que morreu; null = sem conversa para retomar.
   ccOf(sessionId: string): string | null
-  // memory.current / MemoryMax do slice das sessões; null = sem leitura (não segura).
+  // Uso não-reclamável / MemoryMax do slice das sessões; null = sem leitura (não segura).
   slicePressure(): number | null
   // Entrega o resume que saiu da fila depois do evento original.
   dispatch(event: ScopeOomEvent): void
 }
 
+interface Queued {
+  event: ScopeOomEvent
+  cc: string
+  queuedAt: number
+}
+
 export class OomAutoResume {
   // Por conversa, não por sessions.id: o resume gera um sessions.id novo.
   private lastAt = new Map<string, number>()
-  private queue: ScopeOomEvent[] = []
+  private queue: Queued[] = []
   private lastDispatchAt = -Infinity
   private timer: ReturnType<typeof setTimeout> | null = null
 
@@ -40,12 +49,11 @@ export class OomAutoResume {
     const last = this.lastAt.get(cc)
     if (last !== undefined && now - last < OOM_AUTO_RESUME_WINDOW_MS) return event
     this.lastAt.set(cc, now)
-    const resume = { ...event, resumeCcSessionId: cc }
     if (this.queue.length === 0 && this.canDispatch(now)) {
       this.lastDispatchAt = now
-      return resume
+      return { ...event, resumeCcSessionId: cc }
     }
-    this.queue.push(resume)
+    this.queue.push({ event, cc, queuedAt: now })
     this.schedule()
     return { ...event, resumeQueued: true }
   }
@@ -70,11 +78,14 @@ export class OomAutoResume {
 
   private pump(): void {
     const now = Date.now()
+    const expired = this.queue.filter((q) => now - q.queuedAt > OOM_RESUME_MAX_WAIT_MS)
+    this.queue = this.queue.filter((q) => !expired.includes(q))
+    for (const q of expired) this.deps.dispatch(q.event)
     const next = this.queue[0]
     if (next && this.canDispatch(now)) {
       this.queue.shift()
       this.lastDispatchAt = now
-      this.deps.dispatch(next)
+      this.deps.dispatch({ ...next.event, resumeCcSessionId: next.cc })
     }
     this.schedule()
   }
