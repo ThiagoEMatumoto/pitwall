@@ -106,6 +106,18 @@ function sliceRelPath(name: string): string {
   return parts.map((_, i) => `${parts.slice(0, i + 1).join('-')}.slice`).join('/')
 }
 
+let warnedNoCgroup = false
+
+// Sem o caminho, a fila de resume pós-OOM despacha sem olhar a pressão e o
+// oom_kill do slice não vai para o log: um aviso basta para explicar os dois.
+function warnNoCgroupOnce(): void {
+  if (warnedNoCgroup) return
+  warnedNoCgroup = true
+  console.warn(
+    `[session-slice] o main não roda sob user@UID.service: a pressão do ${sliceName} não pode ser medida`,
+  )
+}
+
 // O main roda sob o mesmo user manager (user@UID.service) que cria os scopes.
 export function sliceCgroupDir(selfCgroup?: string): string | null {
   let content = selfCgroup
@@ -113,12 +125,17 @@ export function sliceCgroupDir(selfCgroup?: string): string | null {
     try {
       content = readFileSync('/proc/self/cgroup', 'utf8')
     } catch {
+      warnNoCgroupOnce()
       return null
     }
   }
   const line = content.split('\n').find((l) => l.startsWith('0::'))
   const m = line ? /^0::(.*\/user@\d+\.service)(?:\/|$)/.exec(line) : null
-  return m ? `${CGROUP_ROOT}${m[1]}/${sliceRelPath(sliceName)}` : null
+  if (!m) {
+    warnNoCgroupOnce()
+    return null
+  }
+  return `${CGROUP_ROOT}${m[1]}/${sliceRelPath(sliceName)}`
 }
 
 function statField(stat: string, key: string): number | null {
@@ -211,6 +228,7 @@ export function setSessionSliceForTests(name: string = SESSION_SLICE): void {
   appliedGB = null
   inflight = null
   failedAt = null
+  warnedNoCgroup = false
 }
 
 export function resetSessionSliceForTests(): void {

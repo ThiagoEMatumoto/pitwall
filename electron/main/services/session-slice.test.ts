@@ -160,8 +160,18 @@ describe('cgroup do slice', () => {
     )
   })
 
-  it('fora de um user manager não há caminho', () => {
+  it('fora de um user manager não há caminho, e o aviso sai uma vez só', () => {
     expect(sliceCgroupDir('0::/system.slice/foo.service\n')).toBeNull()
+    expect(sliceCgroupDir('0::/system.slice/foo.service\n')).toBeNull()
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(console.warn).mock.calls[0]![0])).toMatch(
+      /pressão do pitwall-sessions\.slice não pode ser medida/,
+    )
+  })
+
+  it('dentro do user manager, nenhum aviso', () => {
+    sliceCgroupDir(SELF)
+    expect(console.warn).not.toHaveBeenCalled()
   })
 
   it('fração de uso = memory.current / memory.max; sem teto ou sem leitura → null', () => {
