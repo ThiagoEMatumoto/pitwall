@@ -12,6 +12,7 @@ const seam = vi.hoisted(() => ({
   writes: [] as string[],
   scan: null as unknown,
   oomCancels: [] as string[],
+  backlogReleases: [] as string[],
 }))
 
 vi.mock('electron', async () => {
@@ -35,6 +36,7 @@ vi.mock('../services/pty-manager', () => ({
     runningIds: () => [...seam.running],
     getLastIoAt: () => null,
     sessionIdByPid: () => null,
+    releaseBacklogIfExited: (id: string) => seam.backlogReleases.push(id),
   },
 }))
 vi.mock('../services/notifications', () => ({ getMainWindow: () => null }))
@@ -127,6 +129,7 @@ beforeEach(() => {
   seam.running = []
   seam.writes.length = 0
   seam.oomCancels.length = 0
+  seam.backlogReleases.length = 0
 })
 
 afterEach(() => {
@@ -230,5 +233,13 @@ describe('sessions:pane-closed', () => {
     boot({ lazy: true, afterMin: 30 })
     await seam.handlers.get('sessions:pane-closed')!(null, 's-morta')
     expect(seam.oomCancels).toEqual(['s-morta'])
+  })
+
+  // exitAction fecha a pane da sessão encerrada por aqui, não por sessions:kill:
+  // sem isso o backlog dela ficava na memória até o app sair.
+  it('libera o backlog da sessão cuja pane foi fechada', async () => {
+    boot({ lazy: true, afterMin: 30 })
+    await seam.handlers.get('sessions:pane-closed')!(null, 's-morta')
+    expect(seam.backlogReleases).toEqual(['s-morta'])
   })
 })

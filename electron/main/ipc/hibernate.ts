@@ -140,6 +140,7 @@ export function registerHibernateIpc(): void {
   ipcMain.handle('sessions:pane-closed', (_e, raw: unknown) => {
     const sessionId = z.string().min(1).parse(raw)
     cancelOomAutoResume(sessionId)
+    ptyManager.releaseBacklogIfExited(sessionId)
     getIdleHibernator()?.onPaneClosed(sessionId)
   })
 }

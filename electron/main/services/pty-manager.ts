@@ -327,6 +327,11 @@ class PtyManager extends TypedEmitter {
     this.lastIoAt.clear()
   }
 
+  // Pane fechada: com a PTY já morta, o backlog só servia para remontar a pane.
+  releaseBacklogIfExited(sessionId: string): void {
+    if (!this.ptys.has(sessionId)) this.backlog.delete(sessionId)
+  }
+
   isRunning(sessionId: string): boolean {
     return this.ptys.has(sessionId)
   }

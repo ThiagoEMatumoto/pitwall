@@ -33,6 +33,9 @@ describe.skipIf(process.platform !== 'linux')('ptyManager lastIoAt (PTY real)', 
     const afterWrite = ptyManager.getLastIoAt(ID)!
     expect(afterWrite).toBeGreaterThan(atSpawn)
     await waitFor(() => ptyManager.getBacklog(ID).includes('io-marker\r\n'))
+    // Fechar a pane de uma sessão viva não pode apagar o backlog dela.
+    ptyManager.releaseBacklogIfExited(ID)
+    expect(ptyManager.getBacklog(ID)).toContain('io-marker')
 
     await new Promise((r) => setTimeout(r, 30))
     ptyManager.resize(ID, 100, 30)
@@ -45,9 +48,10 @@ describe.skipIf(process.platform !== 'linux')('ptyManager lastIoAt (PTY real)', 
     await exited
     expect(ptyManager.getLastIoAt(ID)).toBeNull()
     expect(ptyManager.getPid(ID)).toBeNull()
-    // A pane morta remonta a partir do backlog; só fechá-la (kill) o libera.
+    // A pane morta remonta a partir do backlog; só fechá-la o libera. O caminho
+    // comum é sessions:pane-closed (exitAction fecha a pane), não sessions:kill.
     expect(ptyManager.getBacklog(ID)).toContain('io-marker')
-    ptyManager.kill(ID)
+    ptyManager.releaseBacklogIfExited(ID)
     expect(ptyManager.getBacklog(ID)).toBe('')
   })
 })
