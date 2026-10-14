@@ -58,7 +58,7 @@ import { broadcast } from '../services/notify'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
-import { SliceOomLog, appliedSliceCapGB } from '../services/session-slice'
+import { SliceOomLog, appliedSliceCapGB, sliceMemoryFraction } from '../services/session-slice'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   buildSessionSettings,
@@ -1025,6 +1025,8 @@ export function registerSessionIpc(): void {
             | { cc_session_id: string | null }
             | undefined
         )?.cc_session_id ?? null,
+      slicePressure: () => sliceMemoryFraction(),
+      dispatch: (e) => broadcast('sessions:oom', e),
     })
     scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', oomAutoResume.annotate(e)))
     ptyManager.on('exit', (e) => {

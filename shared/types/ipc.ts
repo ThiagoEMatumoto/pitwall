@@ -1537,6 +1537,9 @@ export interface ScopeOomEvent {
   // Claude morto por memória e dentro da cota de resume automático: o renderer
   // retoma esta conversa sozinho.
   resumeCcSessionId?: string
+  // O resume vale, mas espera a vez na fila global (outro resume recente ou o
+  // slice das sessões ainda cheio): chega depois um evento com resumeCcSessionId.
+  resumeQueued?: boolean
 }
 
 // oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
