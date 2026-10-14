@@ -58,6 +58,14 @@ export class OomAutoResume {
     return { ...event, resumeQueued: true }
   }
 
+  // A sessão morta foi encerrada/fechada: o resume na fila não sai mais.
+  cancel(sessionId: string): void {
+    this.queue = this.queue.filter((q) => q.event.sessionId !== sessionId)
+    if (this.queue.length > 0 || !this.timer) return
+    clearTimeout(this.timer)
+    this.timer = null
+  }
+
   private canDispatch(now: number): boolean {
     if (now - this.lastDispatchAt < OOM_RESUME_GAP_MS) return false
     const pressure = this.deps.slicePressure()

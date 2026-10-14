@@ -26,7 +26,7 @@ import {
   sessionFileFor,
 } from '../services/hibernate/hibernate-sources'
 import { promptQueue } from './send-prompt'
-import { findAliveByCc } from './sessions'
+import { cancelOomAutoResume, findAliveByCc } from './sessions'
 import { lazyRestoreAtBoot } from './dormant-panes'
 import {
   HIBERNATE_AFTER_MIN_PREF,
@@ -138,6 +138,8 @@ export function registerHibernateIpc(): void {
     paneConfirmer.onResult(paneCheckResultSchema.parse(raw))
   })
   ipcMain.handle('sessions:pane-closed', (_e, raw: unknown) => {
-    getIdleHibernator()?.onPaneClosed(z.string().min(1).parse(raw))
+    const sessionId = z.string().min(1).parse(raw)
+    cancelOomAutoResume(sessionId)
+    getIdleHibernator()?.onPaneClosed(sessionId)
   })
 }

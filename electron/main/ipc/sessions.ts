@@ -944,6 +944,22 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 
 let listenersAttached = false
 const sliceOomLog = new SliceOomLog()
+const oomAutoResume = new OomAutoResume({
+  ccOf: (id) =>
+    (
+      getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as
+        | { cc_session_id: string | null }
+        | undefined
+    )?.cc_session_id ?? null,
+  slicePressure: () => sliceMemoryFraction(),
+  dispatch: (e) => broadcast('sessions:oom', e),
+})
+
+// Pane morta fechada (pane-closed) ou encerrada (sessions:kill) com o resume
+// pós-OOM na fila: o dispatch depois reabriria a conversa sem repo.
+export function cancelOomAutoResume(sessionId: string): void {
+  oomAutoResume.cancel(sessionId)
+}
 
 // Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
 // provider com menus na TUI ganha o espelho headless do tui-menu-watch.
@@ -1018,16 +1034,6 @@ export function registerSessionIpc(): void {
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     scopeOomWatch.attach(ptyManager)
     sliceOomLog.start()
-    const oomAutoResume = new OomAutoResume({
-      ccOf: (id) =>
-        (
-          getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as
-            | { cc_session_id: string | null }
-            | undefined
-        )?.cc_session_id ?? null,
-      slicePressure: () => sliceMemoryFraction(),
-      dispatch: (e) => broadcast('sessions:oom', e),
-    })
     scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', oomAutoResume.annotate(e)))
     ptyManager.on('exit', (e) => {
       const db = getDb()
@@ -1695,6 +1701,7 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:kill', (_e, sessionId: string) => {
+    cancelOomAutoResume(sessionId)
     ptyManager.kill(sessionId)
     getDb()
       .prepare(

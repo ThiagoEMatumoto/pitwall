@@ -117,6 +117,31 @@ describe('OomAutoResume', () => {
     expect(dispatched).toHaveLength(1)
   })
 
+  // A pane morta fechada com o resume na fila: o dispatch depois reabriria a
+  // conversa sem repo, numa pane que o usuário já descartou.
+  it('cancel tira da fila o resume da sessão encerrada', () => {
+    const { auto, dead, dispatched } = policy(() => 0.95)
+    dead('a')
+    dead('b')
+    auto.cancel('a')
+    auto.cancel('nao-enfileirada')
+    vi.advanceTimersByTime(OOM_RESUME_RETRY_MS)
+    expect(dispatched).toEqual([])
+    vi.advanceTimersByTime(OOM_RESUME_MAX_WAIT_MS + OOM_RESUME_RETRY_MS)
+    expect(dispatched).toEqual([{ sessionId: 'b', maxGB: 18, claudeAlive: false }])
+  })
+
+  it('cancel do único item: nenhum dispatch nem com a pressão baixa', () => {
+    let pressure = 0.95
+    const { auto, dead, dispatched } = policy(() => pressure)
+    dead('a')
+    auto.cancel('a')
+    pressure = 0.1
+    vi.advanceTimersByTime(OOM_RESUME_MAX_WAIT_MS + 10 * OOM_RESUME_RETRY_MS)
+    expect(dispatched).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('sem leitura do slice (null), não segura', () => {
     const { dead } = policy(() => null)
     expect(dead('a').resumeCcSessionId).toBe(CC)
