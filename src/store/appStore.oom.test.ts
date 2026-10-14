@@ -55,7 +55,7 @@ describe('sessions:oom → toast', () => {
     const handler = await watching()
     handler({ sessionId: 's1', maxGB: 14, claudeAlive: true })
     expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
-      'um processo da sessão refactor auth passou de 14 GB e foi encerrado; a conversa continua',
+      'um processo da sessão refactor auth foi encerrado por memória; a conversa continua',
     ])
   })
 

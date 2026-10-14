@@ -2,10 +2,12 @@ import type { ScopeOomEvent } from '@shared/types/ipc'
 
 export function oomToastText(
   title: string,
-  event: Pick<ScopeOomEvent, 'maxGB' | 'claudeAlive' | 'resumeCcSessionId' | 'resumeQueued'>,
+  event: Pick<ScopeOomEvent, 'claudeAlive' | 'resumeCcSessionId' | 'resumeQueued'>,
 ): string {
+  // Sem citar o teto: o kill pode vir do cap da sessão ou do cap do conjunto
+  // (pitwall-sessions.slice), e o evento não distingue os dois.
   if (event.claudeAlive) {
-    return `um processo da sessão ${title} passou de ${event.maxGB} GB e foi encerrado; a conversa continua`
+    return `um processo da sessão ${title} foi encerrado por memória; a conversa continua`
   }
   if (event.resumeCcSessionId) return `sessão ${title} encerrada por memória — retomando a conversa`
   return event.resumeQueued
