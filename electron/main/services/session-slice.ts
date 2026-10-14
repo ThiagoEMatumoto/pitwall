@@ -13,7 +13,10 @@ export const SESSION_SLICE = 'pitwall-sessions.slice'
 let sliceName = SESSION_SLICE
 
 export const SESSION_MEMORY_RESERVE_PREF = 'sessions.memoryReserveGB'
-export const DEFAULT_SESSION_MEMORY_RESERVE_GB = 8
+// Sem pref gravada: 25% da RAM, no máximo 8 GB. Fixos, os 8 GB deixavam uma
+// máquina de 8 GB com o teto no piso.
+export const MAX_DEFAULT_SESSION_MEMORY_RESERVE_GB = 8
+const DEFAULT_RESERVE_RAM_FRACTION = 0.25
 const GIB = 1024 ** 3
 const MIN_SLICE_GB = 2
 const SYSTEMCTL_TIMEOUT_MS = 5_000
@@ -23,19 +26,27 @@ export function sessionSliceName(): string {
   return sliceName
 }
 
-// Reserva inválida cai no default (o teto nunca some por engano). 0 = sem reserva.
+function defaultReserveGB(totalMemBytes: number): number {
+  return Math.min(
+    MAX_DEFAULT_SESSION_MEMORY_RESERVE_GB,
+    Math.ceil((totalMemBytes / GIB) * DEFAULT_RESERVE_RAM_FRACTION),
+  )
+}
+
+// Reserva ausente ou inválida cai no default (o teto nunca some por engano).
+// 0 = sem reserva.
 export function sliceCapGBFromReserve(reserveGB: unknown, totalMemBytes = totalmem()): number {
   const reserve =
     typeof reserveGB === 'number' && Number.isFinite(reserveGB) && reserveGB >= 0
       ? reserveGB
-      : DEFAULT_SESSION_MEMORY_RESERVE_GB
+      : defaultReserveGB(totalMemBytes)
   return Math.max(MIN_SLICE_GB, Math.floor(totalMemBytes / GIB - reserve))
 }
 
 export function sessionSliceCapGB(totalMemBytes = totalmem()): number {
-  let raw: unknown = DEFAULT_SESSION_MEMORY_RESERVE_GB
+  let raw: unknown
   try {
-    raw = getPref<unknown>(SESSION_MEMORY_RESERVE_PREF, DEFAULT_SESSION_MEMORY_RESERVE_GB)
+    raw = getPref<unknown>(SESSION_MEMORY_RESERVE_PREF, undefined)
   } catch {
     // Sem DB (testes, boot muito cedo): o default protege.
   }

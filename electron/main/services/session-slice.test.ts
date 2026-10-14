@@ -14,7 +14,7 @@ vi.mock('node:child_process', () => {
 })
 
 import {
-  DEFAULT_SESSION_MEMORY_RESERVE_GB,
+  MAX_DEFAULT_SESSION_MEMORY_RESERVE_GB,
   SESSION_MEMORY_RESERVE_PREF,
   SESSION_SLICE,
   SliceOomLog,
@@ -43,10 +43,30 @@ afterEach(() => {
 })
 
 describe('teto do slice das sessões', () => {
-  it('RAM total menos a reserva do desktop (default 8 GB)', () => {
-    expect(DEFAULT_SESSION_MEMORY_RESERVE_GB).toBe(8)
+  it('RAM total menos a reserva do desktop', () => {
     expect(sliceCapGBFromReserve(8, RAM30)).toBe(22)
     expect(sliceCapGBFromReserve(4, RAM30)).toBe(26)
+  })
+
+  // 8 GB fixos numa máquina de 8 GB deixariam as sessões com o piso de 2 GB.
+  it('sem pref, a reserva é 25% da RAM, no máximo 8 GB', () => {
+    expect(MAX_DEFAULT_SESSION_MEMORY_RESERVE_GB).toBe(8)
+    expect(sliceCapGBFromReserve(undefined, 8 * GIB)).toBe(6)
+    expect(sliceCapGBFromReserve(undefined, 16 * GIB)).toBe(12)
+    expect(sliceCapGBFromReserve(undefined, 30 * GIB)).toBe(22)
+    expect(sliceCapGBFromReserve(undefined, RAM30)).toBe(22)
+    expect(sliceCapGBFromReserve(undefined, 64 * GIB)).toBe(56)
+  })
+
+  it('pref gravada vale mesmo acima do default; o piso de 2 GB continua', () => {
+    getPref.mockImplementation((k: string, fallback: unknown) =>
+      k === SESSION_MEMORY_RESERVE_PREF ? 7 : fallback,
+    )
+    expect(sessionSliceCapGB(8 * GIB)).toBe(2)
+    expect(sessionSliceCapGB(16 * GIB)).toBe(9)
+    getPref.mockImplementation((_k: string, fallback: unknown) => fallback)
+    expect(sessionSliceCapGB(8 * GIB)).toBe(6)
+    expect(sessionSliceCapGB(16 * GIB)).toBe(12)
   })
 
   it('reserva inválida cai no default; o teto nunca fica abaixo de 2 GB', () => {
