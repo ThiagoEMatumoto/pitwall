@@ -45,5 +45,9 @@ describe.skipIf(process.platform !== 'linux')('ptyManager lastIoAt (PTY real)', 
     await exited
     expect(ptyManager.getLastIoAt(ID)).toBeNull()
     expect(ptyManager.getPid(ID)).toBeNull()
+    // A pane morta remonta a partir do backlog; só fechá-la (kill) o libera.
+    expect(ptyManager.getBacklog(ID)).toContain('io-marker')
+    ptyManager.kill(ID)
+    expect(ptyManager.getBacklog(ID)).toBe('')
   })
 })

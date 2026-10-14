@@ -298,13 +298,15 @@ class PtyManager extends TypedEmitter {
   }
 
   kill(sessionId: string): void {
+    // O backlog sobrevive ao exit natural (a pane morta remonta mostrando a saída
+    // final), então fechar a pane precisa apagá-lo mesmo sem PTY viva.
+    this.backlog.delete(sessionId)
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     this.killed.add(pty)
     pty.kill()
     const unit = this.scopeUnits.get(sessionId)
     if (unit) setTimeout(() => stopScopeUnit(unit), SCOPE_STOP_GRACE_MS).unref?.()
-    this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
     this.lastIoAt.delete(sessionId)
