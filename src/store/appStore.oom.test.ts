@@ -55,7 +55,7 @@ describe('sessions:oom → toast', () => {
     const handler = await watching()
     handler({ sessionId: 's1', maxGB: 14, claudeAlive: true })
     expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
-      'um processo da sessão refactor auth passou de 14 GB e foi encerrado; a conversa continua',
+      'um processo da sessão refactor auth foi encerrado por memória; a conversa continua',
     ])
   })
 
@@ -102,6 +102,24 @@ describe('sessions:oom → toast', () => {
     handler({ sessionId: 's1', maxGB: 18, claudeAlive: false })
     await new Promise((r) => setTimeout(r, 0))
     expect(resume).not.toHaveBeenCalled()
+  })
+
+  it('resume na fila global: avisa que volta depois e só retoma quando o evento adiado chega', async () => {
+    const handler = await watching()
+    handler({ sessionId: 's1', maxGB: 18, claudeAlive: false, resumeQueued: true })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(resume).not.toHaveBeenCalled()
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
+      'sessão refactor auth encerrada por memória — a conversa volta quando houver memória livre',
+    ])
+    resume.mockResolvedValueOnce({
+      session: { id: 's2', ccSessionId: 'cc-s1', title: 'refactor auth' },
+      reattached: false,
+    })
+    live.mockResolvedValue([])
+    handler({ sessionId: 's1', maxGB: 18, claudeAlive: false, resumeCcSessionId: 'cc-s1' })
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1))
+    expect(resume).toHaveBeenCalledWith({ repoId: null, ccSessionId: 'cc-s1' })
   })
 
   it('para de escutar no stopLiveWatch', async () => {

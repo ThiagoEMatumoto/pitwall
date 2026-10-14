@@ -34,6 +34,7 @@ import {
   setScopeUnitPrefixForTests,
   wrapInScope,
 } from './systemd-scope'
+import { setSessionSliceForTests } from './session-slice'
 
 // Contra o systemd --user real: só roda onde o próprio probe passa.
 const hasUserBus =
@@ -46,6 +47,16 @@ const hasUserBus =
 const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
 beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
 afterAll(() => setScopeUnitPrefixForTests())
+
+// Slice próprio (sem hífen: não aninha em nenhum slice real): os scopes destes
+// testes não entram no slice nem no teto das sessões do usuário.
+const TEST_SLICE = `pwtest${Math.random().toString(36).slice(2, 10)}.slice`
+beforeAll(() => setSessionSliceForTests(TEST_SLICE))
+afterAll(() => {
+  setSessionSliceForTests()
+  spawnSync('systemctl', ['--user', 'stop', TEST_SLICE])
+  spawnSync('systemctl', ['--user', 'revert', TEST_SLICE])
+})
 const SESSION = 'sc0pe-it-session'
 const SHELL = process.env.SHELL || '/bin/sh'
 const originalBus = process.env.DBUS_SESSION_BUS_ADDRESS
@@ -149,14 +160,14 @@ describe.skipIf(!hasUserBus)('scope systemd por sessão × ptyManager.spawn real
     await killAndWait()
   })
 
-  it('pty.pid é o processo final, dentro do scope da sessão em app.slice', async () => {
+  it('pty.pid é o processo final, dentro do scope da sessão no slice das sessões', async () => {
     expect(await ensureScopeProbe()).toBe(true)
     spawnLogin('sleep 300')
     const pid = ptyPid()
     await until(() => commOf(pid) === 'sleep', 5_000)
     const unit = ptyManager.scopeUnitFor(SESSION)!
     expect(unit).toMatch(new RegExp(`^${TEST_UNIT_PREFIX}${process.pid}-sc0peits-\\d+$`))
-    expect(cgroupOf(pid)).toContain(`/app.slice/${unit}.scope`)
+    expect(cgroupOf(pid)).toContain(`/${TEST_SLICE}/${unit}.scope`)
   }, 15_000)
 
   it('kill encerra o processo e, depois do grace, a árvore que sobrou no scope', async () => {

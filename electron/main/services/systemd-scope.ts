@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { totalmem } from 'node:os'
 import { getPref } from './prefs-store'
+import { sessionSliceCapGB, sessionSliceName } from './session-slice'
 
 // Cada sessão roda no próprio scope transiente do systemd --user (Linux). Em
 // 09/10 o systemd-oomd matou o scope inteiro do Pitwall (25G) e levou todas as
@@ -193,17 +194,22 @@ const MIN_MAX_GB = 2
 
 // Só 0 explícito desliga. Valor não numérico, negativo ou NaN cai no default (o
 // teto nunca some por engano); o resto vira inteiro entre 2 GB e 90% da RAM, para
-// nada fora de faixa chegar ao systemd-run.
+// nada fora de faixa chegar ao systemd-run. Nunca acima do teto do slice das
+// sessões: o do scope segura uma sessão desgovernada, o do slice segura a máquina.
 export function memoryLimitsFromGB(
   maxGB: unknown,
   totalMemBytes = totalmem(),
+  sliceCapGB = Infinity,
 ): ScopeMemoryLimits | null {
   if (maxGB === 0) return null
   const wanted =
     typeof maxGB === 'number' && Number.isFinite(maxGB) && maxGB > 0
       ? maxGB
       : DEFAULT_SESSION_MEMORY_MAX_GB
-  const ceiling = Math.max(MIN_MAX_GB, Math.floor((totalMemBytes * 0.9) / GIB))
+  const ceiling = Math.max(
+    MIN_MAX_GB,
+    Math.min(sliceCapGB, Math.floor((totalMemBytes * 0.9) / GIB)),
+  )
   const max = Math.min(ceiling, Math.max(MIN_MAX_GB, Math.round(wanted)))
   return { max: `${max}G`, swapMax: SWAP_MAX }
 }
@@ -216,7 +222,7 @@ export function sessionMemoryLimits(): ScopeMemoryLimits | null {
   } catch {
     // Sem DB (testes, boot muito cedo): o default protege.
   }
-  return memoryLimitsFromGB(raw)
+  return memoryLimitsFromGB(raw, totalmem(), sessionSliceCapGB())
 }
 
 // --scope faz exec in-place: o pid da PTY continua sendo o do processo final.
@@ -226,18 +232,14 @@ export function wrapInScope(
   unit: string,
   memory: ScopeMemoryLimits | null = null,
 ): { command: string; args: string[] } {
-  const props = memory
-    ? [
-        '-p',
-        `MemoryMax=${memory.max}`,
-        '-p',
-        `MemorySwapMax=${memory.swapMax}`,
-        // O padrão (stop) para o scope inteiro quando o kernel mata UM processo
-        // por MemoryMax: um teste que estoura levaria o claude junto e o turno.
-        '-p',
-        'OOMPolicy=continue',
-      ]
-    : []
+  const props = [
+    ...(memory ? ['-p', `MemoryMax=${memory.max}`, '-p', `MemorySwapMax=${memory.swapMax}`] : []),
+    // O padrão (stop) para o scope inteiro quando o kernel mata UM processo por
+    // memória: um teste que estoura levaria o claude junto e o turno. Vale mesmo
+    // sem teto no scope: o OOM do slice das sessões também mata aqui dentro.
+    '-p',
+    'OOMPolicy=continue',
+  ]
   return {
     command: 'systemd-run',
     args: [
@@ -245,7 +247,7 @@ export function wrapInScope(
       '--scope',
       '--quiet',
       '--collect',
-      '--slice=app.slice',
+      `--slice=${sessionSliceName()}`,
       `--unit=${unit}`,
       ...props,
       '--',

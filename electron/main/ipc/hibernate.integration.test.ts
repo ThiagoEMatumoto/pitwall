@@ -11,6 +11,8 @@ const seam = vi.hoisted(() => ({
   running: [] as string[],
   writes: [] as string[],
   scan: null as unknown,
+  oomCancels: [] as string[],
+  backlogReleases: [] as string[],
 }))
 
 vi.mock('electron', async () => {
@@ -34,6 +36,7 @@ vi.mock('../services/pty-manager', () => ({
     runningIds: () => [...seam.running],
     getLastIoAt: () => null,
     sessionIdByPid: () => null,
+    releaseBacklogIfExited: (id: string) => seam.backlogReleases.push(id),
   },
 }))
 vi.mock('../services/notifications', () => ({ getMainWindow: () => null }))
@@ -50,6 +53,7 @@ vi.mock('../services/meetings/meeting-detector', () => ({
 vi.mock('./sessions', () => ({
   setResumedSessionHook: () => {},
   findAliveByCc: () => null,
+  cancelOomAutoResume: (id: string) => seam.oomCancels.push(id),
 }))
 // A fila real, com a guarda de verdade (tela relida pelo espelho headless).
 vi.mock('./send-prompt', async () => {
@@ -124,6 +128,8 @@ beforeEach(() => {
   seam.handlers.clear()
   seam.running = []
   seam.writes.length = 0
+  seam.oomCancels.length = 0
+  seam.backlogReleases.length = 0
 })
 
 afterEach(() => {
@@ -217,5 +223,23 @@ describe('sessions:hibernate-stats reflete os contadores do hibernator', () => {
     expect(view.refusals['no-pane']).toBe(1)
     expect(view.refusals).toEqual(hibernator().getStats().refused)
     expect(view.enabled).toBe(true)
+  })
+})
+
+// Fechar a pane morta com o resume pós-OOM na fila: sem o cancel, o dispatch
+// depois reabriria a conversa que o usuário descartou.
+describe('sessions:pane-closed', () => {
+  it('cancela o resume pós-OOM enfileirado da sessão', async () => {
+    boot({ lazy: true, afterMin: 30 })
+    await seam.handlers.get('sessions:pane-closed')!(null, 's-morta')
+    expect(seam.oomCancels).toEqual(['s-morta'])
+  })
+
+  // exitAction fecha a pane da sessão encerrada por aqui, não por sessions:kill:
+  // sem isso o backlog dela ficava na memória até o app sair.
+  it('libera o backlog da sessão cuja pane foi fechada', async () => {
+    boot({ lazy: true, afterMin: 30 })
+    await seam.handlers.get('sessions:pane-closed')!(null, 's-morta')
+    expect(seam.backlogReleases).toEqual(['s-morta'])
   })
 })

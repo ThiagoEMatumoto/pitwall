@@ -1537,6 +1537,10 @@ export interface ScopeOomEvent {
   // Claude morto por memória e dentro da cota de resume automático: o renderer
   // retoma esta conversa sozinho.
   resumeCcSessionId?: string
+  // O resume vale, mas espera a vez na fila global (outro resume recente ou o
+  // slice das sessões ainda cheio): chega depois um evento com resumeCcSessionId,
+  // ou, se a fila passar do prazo, um sem ele (o usuário retoma).
+  resumeQueued?: boolean
 }
 
 // oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
@@ -1545,6 +1549,9 @@ export interface ScopeStats {
   total: number
   bySession: Record<string, number>
   watching: number
+  // oom-kills no slice de todas as sessões (contador do memory.events) e o teto
+  // aplicado nele; subindo sem parar = teto do slice pequeno demais.
+  slice?: { oomKills: number; capGB: number | null }
 }
 
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'

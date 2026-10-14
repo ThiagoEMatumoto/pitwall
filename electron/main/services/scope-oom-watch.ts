@@ -76,7 +76,8 @@ export function readScopePids(cgroupDir: string): number[] {
 }
 
 // Só sobe: um filho que já pediu para morrer primeiro (adj maior) fica como está.
-// false = o pid já saiu ou recusou; true = o valor final é >= target.
+// true = nada mais a fazer neste pid (valor final >= target, ou não aplicável);
+// false = o pid já saiu ou falhou de um jeito que vale tentar de novo.
 export function raiseOomScoreAdj(pid: number, target: number): boolean {
   const current = readOomScoreAdj(pid)
   if (current === null) return false
@@ -86,6 +87,13 @@ export function raiseOomScoreAdj(pid: number, target: number): boolean {
     return true
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
+    // Processo saindo (já sem mm, entre o cgroup.procs e a escrita) ou
+    // não-dumpable (setuid, prctl): o kernel passa /proc/<pid> para root e a
+    // escrita dá EACCES. Não é aplicável, e repetir a cada poll só gera ruído.
+    if (code === 'EACCES') {
+      console.debug(`[scope-oom-watch] oom_score_adj do pid ${pid} não aplicável (EACCES)`)
+      return true
+    }
     if (code !== 'ENOENT' && code !== 'ESRCH') {
       console.warn(`[scope-oom-watch] oom_score_adj do pid ${pid} falhou: ${code}`)
     }

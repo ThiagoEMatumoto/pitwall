@@ -88,6 +88,7 @@ vi.mock('../services/pty-manager', async () => {
     },
     off: () => {},
     write: () => {},
+    kill: () => {},
     isRunning: (sessionId: string) => seam.liveSessionIds.includes(sessionId),
     runningIds: () => [],
     // Sem pid: o índice não desmente a linha (o desmentido é coberto em
@@ -165,6 +166,7 @@ import {
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { handoffChildSettings } from '../services/spawn-flags'
 import { buildHandoffAlias } from '../services/handoff/alias'
+import { OomAutoResume } from '../services/scope-oom-resume'
 
 describe('formatPtyInjection', () => {
   const START = '\x1b[200~'
@@ -723,5 +725,17 @@ describe('sessions:resume — re-attach quando a conversa já tem PTY viva', () 
     resume()
 
     expect(seam.transfers).toEqual([])
+  })
+})
+
+// Encerrar a sessão morta com o resume pós-OOM na fila: sem o cancel, o dispatch
+// depois reabriria a conversa que o usuário encerrou.
+describe('sessions:kill', () => {
+  it('cancela o resume pós-OOM enfileirado da sessão', () => {
+    const cancel = vi.spyOn(OomAutoResume.prototype, 'cancel')
+    registerSessionIpc()
+    seam.handlers.get('sessions:kill')!(null, 's-morta' as never)
+    expect(cancel).toHaveBeenCalledWith('s-morta')
+    cancel.mockRestore()
   })
 })

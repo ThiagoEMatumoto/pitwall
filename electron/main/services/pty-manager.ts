@@ -11,6 +11,7 @@ import {
   wrapInScope,
 } from './systemd-scope'
 import type { ScopeExecEvent } from './scope-oom-watch'
+import { syncSessionSlice } from './session-slice'
 
 export interface SpawnOptions {
   sessionId: string
@@ -124,6 +125,9 @@ class PtyManager extends TypedEmitter {
     const rows = opts.rows ?? 24
     const unit = inScope ? scopeUnitName(opts.sessionId) : null
     const memory = unit ? sessionMemoryLimits() : null
+    // Antes do systemd-run, que cria o slice se preciso: reaplica o teto quando a
+    // pref mudou ou depois de um reboot (o drop-in --runtime some com o /run).
+    if (unit) void syncSessionSlice()
     const target = unit
       ? wrapInScope(opts.command, opts.args ?? [], unit, memory)
       : { command: opts.command, args: opts.args ?? [] }
@@ -294,13 +298,15 @@ class PtyManager extends TypedEmitter {
   }
 
   kill(sessionId: string): void {
+    // O backlog sobrevive ao exit natural (a pane morta remonta mostrando a saída
+    // final), então fechar a pane precisa apagá-lo mesmo sem PTY viva.
+    this.backlog.delete(sessionId)
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     this.killed.add(pty)
     pty.kill()
     const unit = this.scopeUnits.get(sessionId)
     if (unit) setTimeout(() => stopScopeUnit(unit), SCOPE_STOP_GRACE_MS).unref?.()
-    this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
     this.lastIoAt.delete(sessionId)
@@ -319,6 +325,11 @@ class PtyManager extends TypedEmitter {
     this.samples.clear()
     this.lastInputAt.clear()
     this.lastIoAt.clear()
+  }
+
+  // Pane fechada: com a PTY já morta, o backlog só servia para remontar a pane.
+  releaseBacklogIfExited(sessionId: string): void {
+    if (!this.ptys.has(sessionId)) this.backlog.delete(sessionId)
   }
 
   isRunning(sessionId: string): boolean {

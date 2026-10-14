@@ -12,6 +12,7 @@ import {
   resetScopeProbeForTests,
   setScopeUnitPrefixForTests,
 } from './systemd-scope'
+import { setSessionSliceForTests } from './session-slice'
 import { ptyManager } from './pty-manager'
 import { tmpdir } from 'node:os'
 
@@ -27,6 +28,16 @@ const hasUserBus =
 const TEST_UNIT_PREFIX = `app-pitwall-test-${Math.random().toString(36).slice(2, 10)}-`
 beforeAll(() => setScopeUnitPrefixForTests(TEST_UNIT_PREFIX))
 afterAll(() => setScopeUnitPrefixForTests())
+
+// Slice próprio (sem hífen: não aninha em nenhum slice real): os scopes destes
+// testes não entram no slice nem no teto das sessões do usuário.
+const TEST_SLICE = `pwtest${Math.random().toString(36).slice(2, 10)}.slice`
+beforeAll(() => setSessionSliceForTests(TEST_SLICE))
+afterAll(() => {
+  setSessionSliceForTests()
+  spawnSync('systemctl', ['--user', 'stop', TEST_SLICE])
+  spawnSync('systemctl', ['--user', 'revert', TEST_SLICE])
+})
 
 // 512 MB tocando cada página, num scope de 64M sem swap: o kernel mata. Espera
 // 1s antes de alocar, para o detector registrar o pid (e o baseline) antes.
