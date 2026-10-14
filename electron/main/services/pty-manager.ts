@@ -11,6 +11,7 @@ import {
   wrapInScope,
 } from './systemd-scope'
 import type { ScopeExecEvent } from './scope-oom-watch'
+import { syncSessionSlice } from './session-slice'
 
 export interface SpawnOptions {
   sessionId: string
@@ -124,6 +125,9 @@ class PtyManager extends TypedEmitter {
     const rows = opts.rows ?? 24
     const unit = inScope ? scopeUnitName(opts.sessionId) : null
     const memory = unit ? sessionMemoryLimits() : null
+    // Antes do systemd-run, que cria o slice se preciso: reaplica o teto quando a
+    // pref mudou ou depois de um reboot (o drop-in --runtime some com o /run).
+    if (unit) void syncSessionSlice()
     const target = unit
       ? wrapInScope(opts.command, opts.args ?? [], unit, memory)
       : { command: opts.command, args: opts.args ?? [] }

@@ -12,6 +12,8 @@ vi.mock('node:child_process', () => {
   return { ...mod, default: mod }
 })
 
+import { totalmem } from 'node:os'
+import { SESSION_MEMORY_RESERVE_PREF } from './session-slice'
 import {
   SESSION_MEMORY_MAX_PREF,
   sessionMemoryLimits,
@@ -88,8 +90,10 @@ describe('wrapInScope', () => {
         '--scope',
         '--quiet',
         '--collect',
-        '--slice=app.slice',
+        '--slice=pitwall-sessions.slice',
         '--unit=app-pitwall-session-1-abc-1',
+        '-p',
+        'OOMPolicy=continue',
         '--',
         '/usr/bin/zsh',
         ...shellArgs,
@@ -396,7 +400,7 @@ describe('teto de memória por sessão', () => {
       '--scope',
       '--quiet',
       '--collect',
-      '--slice=app.slice',
+      '--slice=pitwall-sessions.slice',
       '--unit=app-u',
       '-p',
       'MemoryMax=18G',
@@ -410,7 +414,39 @@ describe('teto de memória por sessão', () => {
     ])
   })
 
-  it('sem limites, o argv é o de antes', () => {
-    expect(wrapInScope('sh', [], 'u').args).not.toContain('-p')
+  it('sem teto por scope, ainda OOMPolicy=continue: o OOM do slice também mata dentro dele', () => {
+    const { args } = wrapInScope('sh', [], 'u')
+    expect(args.slice(0, args.indexOf('--'))).toEqual([
+      '--user',
+      '--scope',
+      '--quiet',
+      '--collect',
+      '--slice=pitwall-sessions.slice',
+      '--unit=u',
+      '-p',
+      'OOMPolicy=continue',
+    ])
+  })
+
+  it('o teto do scope nunca passa do teto do slice das sessões', () => {
+    const ram32 = 32 * 1024 ** 3
+    expect(memoryLimitsFromGB(18, ram32, 22)?.max).toBe('18G')
+    expect(memoryLimitsFromGB(26, ram32, 22)?.max).toBe('22G')
+    expect(memoryLimitsFromGB(0, ram32, 22)).toBeNull()
+  })
+
+  it('a pref do scope é limitada pelo teto do slice (RAM − sessions.memoryReserveGB)', () => {
+    getPref.mockImplementation((k: string, fallback: unknown) => {
+      if (k === SESSION_MEMORY_MAX_PREF) return 1e3
+      if (k === SESSION_MEMORY_RESERVE_PREF) return 0
+      return fallback
+    })
+    const expected = Math.max(2, Math.floor(totalmem() / 1024 ** 3))
+    const ninety = Math.floor((totalmem() * 0.9) / 1024 ** 3)
+    expect(sessionMemoryLimits()?.max).toBe(`${Math.min(expected, ninety)}G`)
+    getPref.mockImplementation((k: string, fallback: unknown) =>
+      k === SESSION_MEMORY_RESERVE_PREF ? Math.floor(totalmem() / 1024 ** 3) - 3 : fallback,
+    )
+    expect(sessionMemoryLimits()?.max).toBe('3G')
   })
 })

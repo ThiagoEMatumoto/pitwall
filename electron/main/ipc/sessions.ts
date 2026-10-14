@@ -58,6 +58,7 @@ import { broadcast } from '../services/notify'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
+import { SliceOomLog, appliedSliceCapGB } from '../services/session-slice'
 import { getMcpRuntime } from '../services/mcp/server'
 import {
   buildSessionSettings,
@@ -942,6 +943,7 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
 }
 
 let listenersAttached = false
+const sliceOomLog = new SliceOomLog()
 
 // Só sessão de agente do Pitwall (linha em sessions com cc_session_id) de
 // provider com menus na TUI ganha o espelho headless do tui-menu-watch.
@@ -1015,6 +1017,7 @@ export function registerSessionIpc(): void {
     })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
     scopeOomWatch.attach(ptyManager)
+    sliceOomLog.start()
     const oomAutoResume = new OomAutoResume({
       ccOf: (id) =>
         (
@@ -1662,7 +1665,10 @@ export function registerSessionIpc(): void {
     tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
   )
   ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
-  ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
+  ipcMain.handle('sessions:scope-stats', () => ({
+    ...scopeOomWatch.stats(),
+    slice: { oomKills: sliceOomLog.count(), capGB: appliedSliceCapGB() },
+  }))
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)

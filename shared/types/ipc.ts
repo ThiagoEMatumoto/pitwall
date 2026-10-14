@@ -1545,6 +1545,9 @@ export interface ScopeStats {
   total: number
   bySession: Record<string, number>
   watching: number
+  // oom-kills no slice de todas as sessões (contador do memory.events) e o teto
+  // aplicado nele; subindo sem parar = teto do slice pequeno demais.
+  slice?: { oomKills: number; capGB: number | null }
 }
 
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'
