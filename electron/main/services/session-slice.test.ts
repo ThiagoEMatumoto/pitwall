@@ -17,7 +17,9 @@ import {
   MAX_DEFAULT_SESSION_MEMORY_RESERVE_GB,
   SESSION_MEMORY_RESERVE_PREF,
   SESSION_SLICE,
+  SLICE_SYNC_RETRY_MS,
   SliceOomLog,
+  appliedSliceCapGB,
   resetSessionSliceForTests,
   sessionSliceCapGB,
   sessionSliceName,
@@ -123,15 +125,26 @@ describe('syncSessionSlice', () => {
     expect((execFile.mock.calls[1] as [string, string[]])[1]).toContain('MemoryMax=20G')
   })
 
-  it('falha do systemctl não marca como aplicado: a próxima sessão tenta de novo', async () => {
+  // Sem backoff, cada spawn rodava o systemctl de novo e logava um warn.
+  it('falha do systemctl: nada aplicado e nova tentativa só depois de 5 min', async () => {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
     execFile.mockImplementationOnce((_c: string, _a: string[], _o: unknown, cb: ExecCb) =>
       setImmediate(() => cb(new Error('Failed to connect'), '', '')),
     )
     expect(await syncSessionSlice(22)).toBe(false)
-    expect(console.warn).toHaveBeenCalled()
+    expect(console.warn).toHaveBeenCalledTimes(1)
     systemctlOk()
+    now += SLICE_SYNC_RETRY_MS - 1
+    expect(await syncSessionSlice(22)).toBe(false)
+    expect(await syncSessionSlice(20)).toBe(false)
+    expect(execFile).toHaveBeenCalledTimes(1)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+    expect(appliedSliceCapGB()).toBeNull()
+    now += 1
     expect(await syncSessionSlice(22)).toBe(true)
     expect(execFile).toHaveBeenCalledTimes(2)
+    expect(appliedSliceCapGB()).toBe(22)
   })
 })
 

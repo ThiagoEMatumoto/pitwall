@@ -20,6 +20,9 @@ const DEFAULT_RESERVE_RAM_FRACTION = 0.25
 const GIB = 1024 ** 3
 const MIN_SLICE_GB = 2
 const SYSTEMCTL_TIMEOUT_MS = 5_000
+// Falha do set-property (sem bus do user manager, por exemplo) quase nunca se
+// resolve sozinha entre um spawn e outro: espera antes de tentar de novo.
+export const SLICE_SYNC_RETRY_MS = 5 * 60_000
 const CGROUP_ROOT = '/sys/fs/cgroup'
 
 export function sessionSliceName(): string {
@@ -55,6 +58,7 @@ export function sessionSliceCapGB(totalMemBytes = totalmem()): number {
 
 let appliedGB: number | null = null
 let inflight: { gb: number; done: Promise<boolean> } | null = null
+let failedAt: number | null = null
 
 export function appliedSliceCapGB(): number | null {
   return appliedGB
@@ -67,6 +71,9 @@ export function appliedSliceCapGB(): number | null {
 export function syncSessionSlice(capGB = sessionSliceCapGB()): Promise<boolean> {
   if (capGB === appliedGB) return Promise.resolve(true)
   if (inflight?.gb === capGB) return inflight.done
+  if (failedAt !== null && Date.now() - failedAt < SLICE_SYNC_RETRY_MS) {
+    return Promise.resolve(false)
+  }
   const done = new Promise<boolean>((resolve) => {
     execFile(
       'systemctl',
@@ -75,6 +82,7 @@ export function syncSessionSlice(capGB = sessionSliceCapGB()): Promise<boolean> 
       (err, _stdout, stderr) => {
         if (inflight?.done === done) inflight = null
         if (err) {
+          failedAt = Date.now()
           console.warn(
             `[session-slice] teto do ${sliceName} não aplicado: ${`${err.message} ${stderr}`.trim()}`,
           )
@@ -82,6 +90,7 @@ export function syncSessionSlice(capGB = sessionSliceCapGB()): Promise<boolean> 
           return
         }
         appliedGB = capGB
+        failedAt = null
         console.info(`[session-slice] ${sliceName} MemoryMax=${capGB}G`)
         resolve(true)
       },
@@ -201,6 +210,7 @@ export function setSessionSliceForTests(name: string = SESSION_SLICE): void {
   sliceName = name
   appliedGB = null
   inflight = null
+  failedAt = null
 }
 
 export function resetSessionSliceForTests(): void {
