@@ -30,16 +30,17 @@ export function DesignBreadcrumb() {
         Designs
       </button>
       <Icon as={ChevronRight} size={11} aria-hidden className="shrink-0 opacity-60" />
+      {/* The folder keeps its name (up to 40%); the document title truncates. */}
       <button
         type="button"
         onClick={() => back(folder ? folder.id : 'unfiled')}
-        className={`flex min-w-0 max-w-[45%] items-center gap-1.5 ${crumbClass}`}
+        className={`flex max-w-[40%] shrink-0 items-center gap-1.5 ${crumbClass}`}
       >
         {folder && <FolderDot color={folder.color} />}
-        <span className="truncate">{folder?.name ?? (doc.folderId ? 'Pasta' : 'Sem pasta')}</span>
+        <span className="min-w-0 truncate">{folder?.name ?? (doc.folderId ? 'Pasta' : 'Sem pasta')}</span>
       </button>
       <Icon as={ChevronRight} size={11} aria-hidden className="shrink-0 opacity-60" />
-      <span aria-current="page" className="min-w-0 truncate px-1 font-medium text-[var(--color-text)]">
+      <span aria-current="page" className="min-w-0 flex-1 truncate px-1 font-medium text-[var(--color-text)]">
         {doc.title}
       </span>
     </nav>

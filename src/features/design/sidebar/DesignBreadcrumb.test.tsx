@@ -62,6 +62,18 @@ describe('DesignBreadcrumb', () => {
     expect(screen.getByText('Landing')).toHaveAttribute('aria-current', 'page')
   })
 
+  // jsdom has no layout: the classes are the contract that keeps a short
+  // folder name whole in the 288px panel while a long title truncates.
+  it('the folder crumb does not shrink; the document title absorbs the truncation', () => {
+    openDoc('f1')
+    render(<DesignBreadcrumb />)
+    const folder = screen.getByRole('button', { name: 'Cliente Acme' })
+    expect(folder).toHaveClass('shrink-0', 'max-w-[40%]')
+    expect(folder).not.toHaveClass('min-w-0')
+    expect(screen.getByText('Cliente Acme')).toHaveClass('min-w-0', 'truncate')
+    expect(screen.getByText('Landing')).toHaveClass('min-w-0', 'flex-1', 'truncate')
+  })
+
   it('the folder crumb closes the document and lands on that folder', async () => {
     openDoc('f1')
     render(<DesignBreadcrumb />)
