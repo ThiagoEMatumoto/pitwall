@@ -1,0 +1,464 @@
+import { describe, expect, it } from "vitest";
+import {
+  applyPatch,
+  skeletonToElements,
+} from "../electron/main/services/diagram-layout";
+import {
+  buildElements,
+  elementsToSkeleton,
+  isLayoutNode,
+  pinMovedNodes,
+  positionsOf,
+  type DiagramSkeletonElement,
+  type ExElement,
+  type ExLinear,
+} from "./diagram-skeleton";
+import { formatField, parseField } from "./diagram-shapes";
+import { routeCrossings } from "./diagram-route";
+import { measureText } from "./text-measure";
+
+type AnyEl = Record<string, any>;
+
+const users: DiagramSkeletonElement = {
+  id: "users",
+  type: "entity",
+  name: "users",
+  fields: [
+    { name: "id", type: "uuid", pk: true },
+    { name: "email", type: "text" },
+    { name: "org_id", type: "uuid", fk: true },
+  ],
+};
+
+const er4: DiagramSkeletonElement[] = [
+  users,
+  {
+    id: "orgs",
+    type: "entity",
+    name: "orgs",
+    fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "name", type: "text" },
+    ],
+  },
+  {
+    id: "orders",
+    type: "entity",
+    name: "orders",
+    fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "user_id", type: "uuid", fk: true },
+      { name: "total_cents", type: "integer" },
+    ],
+  },
+  {
+    id: "items",
+    type: "entity",
+    name: "order_items",
+    fields: [
+      { name: "id", type: "uuid", pk: true },
+      { name: "order_id", type: "uuid", fk: true },
+    ],
+  },
+  {
+    id: "r1",
+    type: "arrow",
+    start: { id: "orgs" },
+    end: { id: "users" },
+    relation: "1:N",
+  },
+  {
+    id: "r2",
+    type: "arrow",
+    start: { id: "users" },
+    end: { id: "orders" },
+    relation: "1:N",
+  },
+  {
+    id: "r3",
+    type: "arrow",
+    start: { id: "orders" },
+    end: { id: "items" },
+    relation: "1:N",
+  },
+];
+
+const classes: DiagramSkeletonElement[] = [
+  {
+    id: "animal",
+    type: "class",
+    name: "Animal",
+    attributes: ["+ name: string"],
+    methods: ["+ speak(): void"],
+  },
+  {
+    id: "dog",
+    type: "class",
+    name: "Dog",
+    attributes: [],
+    methods: ["+ fetch(): void"],
+  },
+  {
+    id: "i1",
+    type: "arrow",
+    start: { id: "dog" },
+    end: { id: "animal" },
+    relation: "inheritance",
+  },
+];
+
+const byId = (els: unknown[], id: string) =>
+  (els as AnyEl[]).find((e) => e.id === id)!;
+
+/** Os textos são bound text: Excalidraw quebra linha acima de width - 10. */
+function textFits(els: AnyEl[], text: AnyEl): boolean {
+  const cell = els.find((e) => e.id === text.containerId)!;
+  const m = measureText(text.text, text.fontSize, text.lineHeight);
+  return m.width <= cell.width - 10 && text.width >= m.width - 0.01;
+}
+
+const disjoint = (a: AnyEl, b: AnyEl) =>
+  a.x + a.width <= b.x ||
+  b.x + b.width <= a.x ||
+  a.y + a.height <= b.y ||
+  b.y + b.height <= a.y;
+
+const absRoute = (a: AnyEl): [number, number][] =>
+  a.points.map(([x, y]: [number, number]) => [a.x + x, a.y + y]);
+
+describe("entity", () => {
+  it("3 campos geram 1 grupo com header e 3 linhas, larguras comportam o texto", async () => {
+    const els = (await skeletonToElements([users])) as AnyEl[];
+    const groups = new Set(els.map((e) => e.groupIds.join(",")));
+    expect(groups).toEqual(new Set(["users"]));
+    const cells = els.filter((e) => e.type === "rectangle" && e.id !== "users");
+    expect(cells.map((c) => c.id)).toEqual([
+      "users__header",
+      "users__f0",
+      "users__f1",
+      "users__f2",
+    ]);
+    const header = byId(els, "users__header");
+    expect(header.backgroundColor).not.toBe("transparent");
+    const texts = els.filter((e) => e.type === "text");
+    expect(texts.map((t) => t.text)).toEqual([
+      "users",
+      "PK id: uuid",
+      "email: text",
+      "FK org_id: uuid",
+    ]);
+    for (const t of texts) expect(textFits(els, t)).toBe(true);
+    // Linhas empilhadas sem vão dentro do dono.
+    const owner = byId(els, "users");
+    expect(cells[0].y).toBe(owner.y);
+    for (let i = 1; i < cells.length; i++) {
+      expect(cells[i].y).toBeCloseTo(cells[i - 1].y + cells[i - 1].height, 5);
+    }
+    const last = cells[cells.length - 1];
+    expect(last.y + last.height).toBeCloseTo(owner.y + owner.height, 5);
+    expect(cells.every((c) => c.width === owner.width)).toBe(true);
+    // Só o dono é nó de layout.
+    expect((els as ExElement[]).filter(isLayoutNode).map((e) => e.id)).toEqual([
+      "users",
+    ]);
+    expect(owner.customData.pitwall.kind).toBe("entity");
+  });
+
+  it("formatField/parseField são inversos", () => {
+    for (const f of users.fields!)
+      expect(parseField(formatField(f))).toEqual(f);
+  });
+});
+
+describe("class", () => {
+  it("3 compartimentos: nome, atributos, métodos", async () => {
+    const els = (await skeletonToElements(classes)) as AnyEl[];
+    const cells = els.filter(
+      (e) => e.groupIds[0] === "animal" && e.type === "rectangle",
+    );
+    expect(cells.map((c) => c.id)).toEqual([
+      "animal",
+      "animal__header",
+      "animal__attrs",
+      "animal__methods",
+    ]);
+    // Compartimento vazio existe, sem texto.
+    expect(byId(els, "dog__attrs")).toBeDefined();
+    expect(els.find((e) => e.id === "dog__attrs__text")).toBeUndefined();
+  });
+
+  it("inheritance gera triangle_outline no destino", async () => {
+    const els = await skeletonToElements(classes);
+    const arrow = byId(els, "i1");
+    expect(arrow.startArrowhead).toBeNull();
+    expect(arrow.endArrowhead).toBe("triangle_outline");
+    expect(arrow.startBinding.elementId).toBe("dog");
+    expect(arrow.endBinding.elementId).toBe("animal");
+  });
+});
+
+describe("relations", () => {
+  it("1:N gera crowfoot", async () => {
+    const els = await skeletonToElements(er4);
+    const r = byId(els, "r1");
+    expect(r.startArrowhead).toBe("crowfoot_one");
+    expect(r.endArrowhead).toBe("crowfoot_many");
+  });
+});
+
+describe("round-trip", () => {
+  it("skeleton → elements → skeleton preserva entity/class/group/frame/relation", async () => {
+    const skeleton: DiagramSkeletonElement[] = [
+      ...er4,
+      ...classes,
+      {
+        id: "g",
+        type: "group",
+        label: { text: "Domínio" },
+        children: ["orders", "items"],
+      },
+      { id: "f", type: "frame", name: "Modelo", children: ["animal", "dog"] },
+    ];
+    const els = await skeletonToElements(skeleton);
+    const back = elementsToSkeleton(els);
+    const sortById = (xs: DiagramSkeletonElement[]) =>
+      [...xs].sort((a, b) => a.id.localeCompare(b.id));
+    const strip = (xs: DiagramSkeletonElement[]) =>
+      sortById(xs).map((s) =>
+        s.children ? { ...s, children: [...s.children].sort() } : s,
+      );
+    expect(strip(back)).toEqual(strip(skeleton));
+    // E o skeleton reconstruído gera a mesma cena estrutural.
+    const again = await skeletonToElements(back);
+    expect(
+      elementsToSkeleton(again)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(back.map((s) => s.id).sort());
+  });
+
+  it("texto de campo editado no editor vence o customData", async () => {
+    const els = (await skeletonToElements([users])) as AnyEl[];
+    const edited = els.map((e) =>
+      e.id === "users__f1__text"
+        ? { ...e, text: "email: citext", originalText: "email: citext" }
+        : e,
+    );
+    const [skel] = elementsToSkeleton(edited);
+    expect(skel.fields![1]).toEqual({ name: "email", type: "citext" });
+  });
+});
+
+describe("group e frame", () => {
+  const skeleton: DiagramSkeletonElement[] = [
+    { id: "a", type: "rectangle", label: { text: "Gateway" } },
+    { id: "b", type: "rectangle", label: { text: "Auth" } },
+    { id: "c", type: "rectangle", label: { text: "Billing" } },
+    { id: "e1", type: "arrow", start: { id: "a" }, end: { id: "b" } },
+    { id: "e2", type: "arrow", start: { id: "a" }, end: { id: "c" } },
+    { id: "f", type: "frame", name: "Backend", children: ["b", "c"] },
+  ];
+
+  it("filhos do frame ficam dentro da caixa do frame e têm frameId", async () => {
+    const els = (await skeletonToElements(skeleton)) as AnyEl[];
+    const frame = byId(els, "f");
+    expect(frame.type).toBe("frame");
+    expect(frame.name).toBe("Backend");
+    for (const id of ["b", "c", "b__label", "c__label"]) {
+      const el = byId(els, id);
+      expect(el.frameId).toBe("f");
+      expect(el.x).toBeGreaterThanOrEqual(frame.x);
+      expect(el.y).toBeGreaterThanOrEqual(frame.y);
+      expect(el.x + el.width).toBeLessThanOrEqual(frame.x + frame.width);
+      expect(el.y + el.height).toBeLessThanOrEqual(frame.y + frame.height);
+    }
+    expect(byId(els, "a").frameId).toBeNull();
+    expect(disjoint(byId(els, "a"), frame)).toBe(true);
+    // Frame por cima dos filhos na ordem z.
+    const order = els.map((e) => e.id);
+    expect(order.indexOf("f")).toBeGreaterThan(order.indexOf("c"));
+  });
+
+  it("rota da aresta que entra no frame termina na borda do filho", async () => {
+    const els = (await skeletonToElements(skeleton)) as AnyEl[];
+    for (const id of ["e1", "e2"]) {
+      const arrow = byId(els, id);
+      const route = absRoute(arrow);
+      const target = byId(els, arrow.endBinding.elementId);
+      const [ex, ey] = route[route.length - 1];
+      const onBorder =
+        Math.abs(ex - target.x) < 1 ||
+        Math.abs(ex - (target.x + target.width)) < 1 ||
+        Math.abs(ey - target.y) < 1 ||
+        Math.abs(ey - (target.y + target.height)) < 1;
+      expect(onBorder).toBe(true);
+    }
+  });
+
+  it("group recebe groupIds, caixa tracejada com label envolve os filhos", async () => {
+    const els = (await skeletonToElements([
+      users,
+      { id: "x", type: "rectangle", label: { text: "Cache" } },
+      {
+        id: "g",
+        type: "group",
+        label: { text: "Core" },
+        children: ["users", "x"],
+      },
+    ])) as AnyEl[];
+    const box = byId(els, "g");
+    expect(box.strokeStyle).toBe("dashed");
+    expect(byId(els, "g__label").containerId).toBe("g");
+    for (const e of els.filter((e) => e.id !== "g" && e.id !== "g__label")) {
+      expect(e.groupIds[e.groupIds.length - 1]).toBe("g");
+    }
+    // Bloco: grupo próprio primeiro (interno → externo).
+    expect(byId(els, "users__f0").groupIds).toEqual(["users", "g"]);
+    for (const id of ["users", "x"]) {
+      const el = byId(els, id);
+      expect(el.x).toBeGreaterThan(box.x);
+      expect(el.y).toBeGreaterThan(box.y + 20);
+      expect(el.x + el.width).toBeLessThan(box.x + box.width);
+      expect(el.y + el.height).toBeLessThan(box.y + box.height);
+    }
+  });
+});
+
+describe("patch", () => {
+  it("trocar fields de entity pinada mantém a posição e reconstrói o bloco", async () => {
+    const els = (await skeletonToElements(er4)) as AnyEl[];
+    const baseline = positionsOf(els);
+    // Arrasta o bloco inteiro (o editor move o grupo junto).
+    const moved = els.map((e) =>
+      e.groupIds.includes("users") ? { ...e, x: e.x + 400, y: e.y + 300 } : e,
+    );
+    const pinned = pinMovedNodes(moved, baseline) as AnyEl[];
+    const before = byId(pinned, "users");
+    expect(before.customData.pitwall.auto).toBe(false);
+
+    const out = (await applyPatch(pinned, [
+      {
+        op: "update",
+        id: "users",
+        fields: [
+          { name: "id", type: "uuid", pk: true },
+          { name: "display_name_for_the_profile_page", type: "text" },
+        ],
+      },
+    ])) as AnyEl[];
+    const after = byId(out, "users");
+    expect(after.x).toBe(before.x);
+    expect(after.y).toBe(before.y);
+    expect(after.customData.pitwall.auto).toBe(false);
+    expect(byId(out, "users__f1__text").text).toBe(
+      "display_name_for_the_profile_page: text",
+    );
+    expect(byId(out, "users__f2").isDeleted).toBe(true);
+    expect(byId(out, "users__f2__text").isDeleted).toBe(true);
+    // Bloco mais largo pro campo novo; linha ainda cabe.
+    expect(after.width).toBeGreaterThan(before.width);
+    const live = out.filter((e) => !e.isDeleted);
+    expect(textFits(live, byId(out, "users__f1__text"))).toBe(true);
+    // Setas continuam ligadas ao dono.
+    expect(after.boundElements.map((b: AnyEl) => b.id).sort()).toEqual([
+      "r1",
+      "r2",
+    ]);
+    const [skel] = elementsToSkeleton(out).filter((s) => s.id === "users");
+    expect(skel.fields).toHaveLength(2);
+  });
+
+  it("delete de entity apaga as partes; delete de grupo solta os filhos", async () => {
+    const els = await skeletonToElements([
+      ...er4,
+      { id: "g", type: "group", children: ["orders", "items"] },
+    ]);
+    const out = (await applyPatch(els, [
+      { op: "delete", id: "items" },
+      { op: "delete", id: "g" },
+    ])) as AnyEl[];
+    expect(
+      out.filter((e) => e.id.startsWith("items")).every((e) => e.isDeleted),
+    ).toBe(true);
+    expect(byId(out, "orders").groupIds).toEqual(["orders"]);
+  });
+
+  it("add de group via patch adota filhos existentes e a caixa os envolve", async () => {
+    const els = await skeletonToElements(er4);
+    const out = (await applyPatch(els, [
+      {
+        op: "add",
+        element: {
+          id: "g",
+          type: "group",
+          label: { text: "Pedidos" },
+          children: ["orders", "items"],
+        },
+      },
+    ])) as AnyEl[];
+    const box = byId(out, "g");
+    for (const id of ["orders", "items"]) {
+      const el = byId(out, id);
+      expect(el.groupIds).toContain("g");
+      expect(el.x).toBeGreaterThan(box.x);
+      expect(el.x + el.width).toBeLessThan(box.x + box.width);
+      expect(el.y + el.height).toBeLessThan(box.y + box.height);
+    }
+    expect(
+      elementsToSkeleton(out)
+        .find((s) => s.id === "g")
+        ?.children?.sort(),
+    ).toEqual(["items", "orders"]);
+  });
+
+  it("update de relation troca as pontas", async () => {
+    const els = await skeletonToElements(er4);
+    const out = await applyPatch(els, [
+      { op: "update", id: "r1", relation: "N:M" },
+    ]);
+    const r = byId(out, "r1");
+    expect(r.startArrowhead).toBe("crowfoot_one_or_many");
+    expect(elementsToSkeleton(out).find((s) => s.id === "r1")?.relation).toBe(
+      "N:M",
+    );
+  });
+});
+
+describe("layout ER", () => {
+  it("4 entidades e 3 relações: sem sobreposição e sem seta cruzando nó", async () => {
+    for (const direction of ["LR", "TB"] as const) {
+      const els = (await skeletonToElements(er4, { direction })) as AnyEl[];
+      const owners = els.filter((e) =>
+        (isLayoutNode as (e: AnyEl) => boolean)(e),
+      );
+      expect(owners).toHaveLength(4);
+      for (let i = 0; i < owners.length; i++) {
+        for (let j = i + 1; j < owners.length; j++) {
+          expect(disjoint(owners[i], owners[j])).toBe(true);
+        }
+      }
+      for (const arrow of els.filter((e) => e.type === "arrow") as ExLinear[]) {
+        const others = owners.filter(
+          (o) =>
+            o.id !== arrow.startBinding!.elementId &&
+            o.id !== arrow.endBinding!.elementId,
+        );
+        expect(routeCrossings(absRoute(arrow), others as any)).toBe(0);
+      }
+    }
+  });
+
+  it("buildElements é síncrono e isomórfico para blocos (sem layout)", () => {
+    const els = buildElements(
+      [{ ...users, x: 10, y: 20 }],
+      {
+        positions: new Map(),
+        routes: new Map(),
+      },
+      { layout: "keep" },
+    ) as AnyEl[];
+    expect(byId(els, "users").x).toBe(10);
+    expect(byId(els, "users__header").y).toBe(20);
+    expect(byId(els, "users").customData.pitwall.auto).toBe(false);
+  });
+});
