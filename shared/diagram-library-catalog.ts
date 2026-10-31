@@ -54,8 +54,8 @@ export const DIAGRAM_LIBRARY_CATALOG: readonly DiagramLibraryCatalogEntry[] = [
     'aws-architecture',
     'AWS Architecture Icons',
     'cloud',
-    'narhari-motivaras/aws-architecture-icons.excalidrawlib',
-    'Ícones dos serviços AWS para diagramas de arquitetura.',
+    'childishgirl/aws-architecture-icons.excalidrawlib',
+    'Cerca de 250 ícones de serviços AWS para diagramas de arquitetura.',
   ),
   entry(
     'aws-serverless',
