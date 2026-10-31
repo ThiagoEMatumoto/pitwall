@@ -159,7 +159,8 @@ export interface DesignState {
   stopWatch: () => void
 
   loadFolders: () => Promise<void>
-  createFolder: (name: string, color?: string | null) => Promise<DesignFolder>
+  // Folder mutations report failures through `error`; null = not created.
+  createFolder: (name: string, color?: string | null) => Promise<DesignFolder | null>
   renameFolder: (id: string, name: string) => Promise<void>
   recolorFolder: (id: string, color: string | null) => Promise<void>
   // Folders' documents end up without a folder (main moves them).

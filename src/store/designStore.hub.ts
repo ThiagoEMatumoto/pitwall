@@ -2,7 +2,12 @@
 // (section, search, sort). Own file so designStore.ts stays the editor.
 
 import { api } from '@/lib/ipc'
-import type { DesignDocumentMeta, DesignFolder } from '@shared/types/design'
+import type {
+  DesignDocument,
+  DesignDocumentMeta,
+  DesignFolder,
+  UpdateDesignFolderInput,
+} from '@shared/types/design'
 import { toMeta, upsertMeta, type DesignStore } from './designStore.internal'
 import type { DesignState, HubSection, HubSort } from './designStore.types'
 
@@ -93,6 +98,14 @@ export function createHubSlice(store: DesignStore): HubSlice {
   const { getState: get, setState: set } = store
   const prefs = loadHubPrefs()
   const savePrefs = () => persistHubPrefs({ hubFolder: get().hubFolder, hubSort: get().hubSort })
+  const updateFolder = async (id: string, input: UpdateDesignFolderInput) => {
+    try {
+      const folder = await api.design.folderUpdate(id, input)
+      set((s) => ({ folders: replaceFolder(s.folders, folder) }))
+    } catch (err) {
+      set({ error: `Não foi possível alterar a pasta: ${errorText(err)}` })
+    }
+  }
 
   return {
     folders: [],
@@ -115,23 +128,27 @@ export function createHubSlice(store: DesignStore): HubSlice {
     },
 
     createFolder: async (name, color) => {
-      const folder = await api.design.folderCreate({ name, color })
-      set((s) => ({ folders: replaceFolder(s.folders, folder) }))
-      return folder
+      try {
+        const folder = await api.design.folderCreate({ name, color })
+        set((s) => ({ folders: replaceFolder(s.folders, folder) }))
+        return folder
+      } catch (err) {
+        set({ error: `Não foi possível criar a pasta: ${errorText(err)}` })
+        return null
+      }
     },
 
-    renameFolder: async (id, name) => {
-      const folder = await api.design.folderUpdate(id, { name })
-      set((s) => ({ folders: replaceFolder(s.folders, folder) }))
-    },
+    renameFolder: (id, name) => updateFolder(id, { name }),
 
-    recolorFolder: async (id, color) => {
-      const folder = await api.design.folderUpdate(id, { color })
-      set((s) => ({ folders: replaceFolder(s.folders, folder) }))
-    },
+    recolorFolder: (id, color) => updateFolder(id, { color }),
 
     deleteFolder: async (id) => {
-      await api.design.folderDelete(id)
+      try {
+        await api.design.folderDelete(id)
+      } catch (err) {
+        set({ error: `Não foi possível excluir a pasta: ${errorText(err)}` })
+        return
+      }
       set((s) => ({
         folders: s.folders.filter((f) => f.id !== id),
         // Main already moved its documents out of the folder.
@@ -169,8 +186,13 @@ export function createHubSlice(store: DesignStore): HubSlice {
 
     retitleDoc: async (docId, title) => {
       if (docId === get().docId) return get().renameDoc(title)
-      const doc = await api.design.documentUpdate({ id: docId, title })
-      const meta = toMeta(doc)
+      let meta: DesignDocumentMeta
+      try {
+        meta = toMeta(await api.design.documentUpdate({ id: docId, title }))
+      } catch (err) {
+        set({ error: `Não foi possível renomear o design: ${errorText(err)}` })
+        return
+      }
       set((s) =>
         meta.status === 'archived'
           ? { archivedDocs: upsertMeta(s.archivedDocs, meta) }
@@ -188,7 +210,13 @@ export function createHubSlice(store: DesignStore): HubSlice {
     },
 
     unarchiveDoc: async (docId) => {
-      const doc = await api.design.documentUnarchive(docId)
+      let doc: DesignDocument
+      try {
+        doc = await api.design.documentUnarchive(docId)
+      } catch (err) {
+        set({ error: `Não foi possível desarquivar o design: ${errorText(err)}` })
+        return
+      }
       set((s) => ({
         archivedDocs: s.archivedDocs.filter((d) => d.id !== docId),
         docs: upsertMeta(s.docs, toMeta(doc)),
