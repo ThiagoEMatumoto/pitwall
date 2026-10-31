@@ -6,6 +6,7 @@ import { activeMarker } from '@/features/brand'
 import { api } from '@/lib/ipc'
 import { useDesignStore } from '@/store/designStore'
 import { customPreset } from '@shared/types/design'
+import { AgentWorkingDot } from '../AgentWorkingDot'
 import { ArtboardSizeDialog } from '../ArtboardSizeDialog'
 import { formatArtboardSize, formatPresetSize, groupPresets } from '../artboard-format'
 
@@ -159,6 +160,7 @@ export function DocsPanel() {
               <button type="button" onClick={() => void openDoc(d.id)} className="flex min-w-0 flex-1 items-center gap-2">
                 <Icon as={FileText} size={12} className="shrink-0 opacity-70" />
                 <span className="truncate">{d.title}</span>
+                <AgentWorkingDot docId={d.id} />
               </button>
               <Menu
                 open={menuFor === d.id}
