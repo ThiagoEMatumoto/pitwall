@@ -7,7 +7,7 @@ import { cx } from '@/features/brand'
 import { useDesignStore } from '@/store/designStore'
 import type { DesignFolder } from '@shared/types/design'
 import { InlineInput } from '../InlineInput'
-import { FOLDER_COLORS, folderColorCss } from './folder-colors'
+import { FOLDER_COLORS, folderColorCss, folderDotStyle } from './folder-colors'
 import { dropId } from './hub-filter'
 import { NavRow } from './NavRow'
 
@@ -20,8 +20,9 @@ export function FolderDot({ color }: { color: string | null }) {
   return (
     <span
       aria-hidden
+      data-folder-color={color ?? 'none'}
       className="h-2 w-2 shrink-0 rounded-full"
-      style={{ background: folderColorCss(color) }}
+      style={folderDotStyle(color)}
     />
   )
 }

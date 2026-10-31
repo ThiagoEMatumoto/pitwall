@@ -12,7 +12,7 @@ import { AgentWorkingDot } from '../AgentWorkingDot'
 import { InlineInput } from '../InlineInput'
 import { moveSection } from './doc-menu'
 import { DocThumb } from './DocThumb'
-import { folderColorCss } from './folder-colors'
+import { folderDotStyle } from './folder-colors'
 
 // Entrance stagger stops growing after a dozen cards: a long grid would
 // otherwise keep the last rows invisible for seconds.
@@ -35,7 +35,7 @@ export function FolderChip({ folder }: { folder: DesignFolder }) {
       <span
         aria-hidden
         className="h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ background: folderColorCss(folder.color) }}
+        style={folderDotStyle(folder.color)}
       />
       <span className="truncate">{folder.name}</span>
     </span>
