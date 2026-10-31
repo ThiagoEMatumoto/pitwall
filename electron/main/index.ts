@@ -66,8 +66,6 @@ import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerDesignIpc } from './ipc/design'
-import { registerVideoIpc } from './ipc/video'
-import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
 import {
@@ -364,7 +362,6 @@ app.whenReady().then(async () => {
   registerTasksIpc()
   registerDiagramsIpc()
   registerDesignIpc()
-  registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
   registerSyncIpc()
@@ -493,8 +490,6 @@ function runFinalShutdown(): void {
   // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.
   promptQueue.suspendForShutdown()
   ptyManager.killAll()
-  // Render do Remotion é processo filho e não morre sozinho com o app.
-  killAllVideoRenders()
   sessionActivityService.closeAll()
   getDb()
     .prepare("UPDATE sessions SET status = 'exited', ended_at = ? WHERE status = 'running'")

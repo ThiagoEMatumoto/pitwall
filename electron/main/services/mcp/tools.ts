@@ -8,7 +8,6 @@
 // confirmação).
 import * as z from 'zod/v4'
 import { serviceTools } from './service-tools'
-import { videoTools } from './video-tools'
 import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
 import { canvasTools } from './canvas-tools'
@@ -1914,7 +1913,6 @@ export function buildTools(
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
-    ...videoTools(notify),
     ...canvasTools(notify, ctx),
     ...agentTools(ctx),
     ...serviceTools(ctx),

@@ -1,7 +1,6 @@
 import {
   BarChart3,
   Blocks,
-  Clapperboard,
   DoorOpen,
   ClipboardList,
   Folder,
@@ -46,7 +45,6 @@ const AREAS: AreaDef[] = [
   { id: 'architecture', icon: Network, label: 'Arquitetura' },
   { id: 'diagrams', icon: Workflow, label: 'Diagramas' },
   { id: 'design', icon: PenTool, label: 'Design' },
-  { id: 'videos', icon: Clapperboard, label: 'Vídeos' },
   { id: 'handoffs', icon: Inbox, label: 'Handoffs' },
   { id: 'features', icon: ClipboardList, label: 'Features' },
   { id: 'objectives', icon: Target, label: 'Objetivos' },

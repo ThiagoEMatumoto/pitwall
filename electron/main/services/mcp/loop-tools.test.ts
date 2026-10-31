@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 // Unit das tools MCP do loop contra um better-sqlite3 real (tmp dir), com
-// electron mockado e o notify espiado — mesma estratégia de video-tools.test.
+// electron mockado e o notify espiado — mesma estratégia de canvas-tools.test.
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
