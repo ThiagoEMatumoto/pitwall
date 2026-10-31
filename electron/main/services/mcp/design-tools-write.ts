@@ -14,7 +14,12 @@ import {
   clampArtboardSizeReport,
 } from '../../../../shared/design/safety'
 import { nextArtboardX as placeAfterLast } from '../../../../shared/design/artboard-layout'
-import type { DesignDocument, DesignTokens } from '../../../../shared/types/design'
+import type {
+  DesignDocument,
+  DesignDocumentMovedEvent,
+  DesignFoldersUpdatedEvent,
+  DesignTokens,
+} from '../../../../shared/types/design'
 
 // Artboards created without x land to the right of the page's last one; the
 // agent should not have to lay out the canvas.
@@ -45,6 +50,10 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
   const origin = () => claudeOrigin(deps)
   const send = deps.notify.broadcast.bind(deps.notify)
   const base = { author: 'claude' as const, send }
+  const foldersUpdated = (folderId: string | null) => {
+    const event: DesignFoldersUpdatedEvent = { folderId }
+    deps.notify.broadcast('design:folders-updated', event)
+  }
 
   const wrap = (def: ToolDef, pick: Parameters<typeof withActivity>[2]): ToolDef =>
     withActivity(deps, def, pick)
@@ -69,13 +78,31 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
       name: 'design_document_create',
       title: 'Create design document',
       description:
-        'Create a document with one empty page. Optional tokens/fonts/globalCss and links to a feature/task/objective. Then add artboards with design_artboard_create. See design_guide §2.',
+        'Create a document with one empty page. Optional tokens/fonts/globalCss, links to a feature/task/objective and a folder by name (reused case-insensitively, created if missing). Then add artboards with design_artboard_create. See design_guide §2.',
       inputSchema: schemas.documentCreate,
       handler: (args) => {
-        const input = schemas.documentCreate.parse(args)
-        const doc = designStore.createDocument(input)
+        const { folder, ...input } = schemas.documentCreate.parse(args)
+        const folderId = folder ? designStore.ensureFolder(folder).id : undefined
+        const doc = designStore.createDocument({ ...input, folderId })
         deps.notify.broadcast('design:document-updated', { docId: doc.id })
+        if (folderId) foldersUpdated(folderId)
         return ok({ document: doc })
+      },
+    },
+    {
+      name: 'design_document_move',
+      title: 'Move document to a folder',
+      description:
+        'File a document into a folder by name (reused case-insensitively, created if missing); folder null takes it out of any folder. Does not count as an edit. See design_guide §2.',
+      inputSchema: schemas.documentMove,
+      handler: (args) => {
+        const { documentId, folder } = schemas.documentMove.parse(args)
+        const folderId = folder === null ? null : designStore.ensureFolder(folder).id
+        designStore.moveDocument(documentId, folderId)
+        const event: DesignDocumentMovedEvent = { docId: documentId, folderId, moved: true }
+        deps.notify.broadcast('design:document-updated', event)
+        foldersUpdated(folderId)
+        return ok({ document: designStore.getDocumentMeta(documentId) })
       },
     },
     wrap(

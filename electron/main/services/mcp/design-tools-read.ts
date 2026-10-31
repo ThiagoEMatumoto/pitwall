@@ -102,13 +102,25 @@ export function readTools(deps: DesignToolDeps): ToolDef[] {
       name: 'design_document_list',
       title: 'List design documents',
       description:
-        'List Design Studio documents (metas only). Filters: status (active default | archived | all), parent (parentType + parentId), search on title. See design_guide §1.',
+        'List Design Studio documents (metas only, each with its folderId). Filters: status (active default | archived | all), parent (parentType + parentId), search on title, folder by name (null = documents without a folder). See design_guide §1.',
       inputSchema: schemas.documentList,
       handler: (args) => {
-        const filter = schemas.documentList.parse(args)
-        const items = designStore.listDocuments(filter)
-        return ok({ items })
+        const { folder, ...filter } = schemas.documentList.parse(args)
+        if (folder === undefined || folder === null) {
+          return ok({ items: designStore.listDocuments({ ...filter, folderId: folder }) })
+        }
+        const match = designStore.findFolderByName(folder)
+        if (!match) return ok({ items: [], note: `no folder named "${folder}"` })
+        return ok({ items: designStore.listDocuments({ ...filter, folderId: match.id }) })
       },
+    },
+    {
+      name: 'design_folder_list',
+      title: 'List design folders',
+      description:
+        'List the folders of the design hub (one level) with how many active documents each holds. See design_guide §2.',
+      inputSchema: schemas.folderList,
+      handler: () => ok({ items: designStore.listFolders() }),
     },
     {
       name: 'design_document_get',
