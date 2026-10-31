@@ -99,7 +99,12 @@ describe('design folders', () => {
 
     expect(store.listDocuments({ folderId: f.id }).map((d) => d.id)).toEqual([inside.id])
     expect(store.listDocuments({ folderId: null }).map((d) => d.id)).toEqual([loose.id])
-    expect(store.listDocuments().map((d) => d.id).sort()).toEqual([inside.id, loose.id].sort())
+    expect(
+      store
+        .listDocuments()
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual([inside.id, loose.id].sort())
   })
 
   it('ensureFolder matches case-insensitively and creates when missing', () => {

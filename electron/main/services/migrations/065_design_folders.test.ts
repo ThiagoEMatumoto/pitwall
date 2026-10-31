@@ -41,9 +41,9 @@ describe('065_design_folders', () => {
 
     db.transaction(() => up065(db))()
 
-    expect(
-      db.prepare('SELECT id, folder_id, thumbnail_at FROM design_documents').all(),
-    ).toEqual([{ id: 'd1', folder_id: null, thumbnail_at: null }])
+    expect(db.prepare('SELECT id, folder_id, thumbnail_at FROM design_documents').all()).toEqual([
+      { id: 'd1', folder_id: null, thumbnail_at: null },
+    ])
     expect(db.pragma('foreign_key_check')).toEqual([])
   })
 

@@ -249,9 +249,8 @@ export function setThumbnail(docId: string, dataUrl: string, at: number): boolea
 }
 
 export function getThumbnail(docId: string): string | null {
-  const row = getDb()
-    .prepare('SELECT thumbnail FROM design_documents WHERE id = ?')
-    .get(docId) as { thumbnail: string | null } | undefined
+  const row = getDb().prepare('SELECT thumbnail FROM design_documents WHERE id = ?').get(docId) as
+    { thumbnail: string | null } | undefined
   return row?.thumbnail ?? null
 }
 

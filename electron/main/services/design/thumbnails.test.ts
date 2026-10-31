@@ -33,11 +33,7 @@ vi.mock('./screenshot', () => ({ captureArtboard: (...a: unknown[]) => captureAr
 
 import * as store from './design-store'
 import { broadcast } from '../notify'
-import {
-  THUMBNAIL_DEBOUNCE_MS,
-  backfillThumbnails,
-  installThumbnailScheduler,
-} from './thumbnails'
+import { THUMBNAIL_DEBOUNCE_MS, backfillThumbnails, installThumbnailScheduler } from './thumbnails'
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -72,7 +68,12 @@ describe('thumbnail scheduler', () => {
     sent.length = 0
     Object.assign(imageState, { width: 1440, height: 900, pngBytes: 10 })
     captureArtboard.mockReset()
-    captureArtboard.mockResolvedValue({ png: Buffer.from('png'), width: 1440, height: 900, tiles: 1 })
+    captureArtboard.mockResolvedValue({
+      png: Buffer.from('png'),
+      width: 1440,
+      height: 900,
+      tiles: 1,
+    })
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
     uninstall = installThumbnailScheduler()
@@ -180,9 +181,11 @@ describe('thumbnail scheduler', () => {
     await vi.advanceTimersByTimeAsync(200)
 
     expect(maxInFlight).toBe(1)
-    expect(thumbEvents().map(([, p]) => (p as { docId: string }).docId).sort()).toEqual(
-      [a.docId, b.docId].sort(),
-    )
+    expect(
+      thumbEvents()
+        .map(([, p]) => (p as { docId: string }).docId)
+        .sort(),
+    ).toEqual([a.docId, b.docId].sort())
     expect(store.getThumbnail(archived.docId)).toBeNull()
   })
 })
