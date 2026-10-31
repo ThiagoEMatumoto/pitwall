@@ -25,47 +25,6 @@ import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
 // Re-export: os consumidores continuam importando tudo de '@shared/types/ipc'.
 export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
-// Reuniões v2: tipos moram em ./meetings e são re-exportados aqui.
-export type {
-  Meeting,
-  MeetingActionItem,
-  MeetingActionItemBatch,
-  MeetingActionItemOwnerKind,
-  MeetingActionItemStatus,
-  MeetingCaptureMode,
-  MeetingDetail,
-  MeetingDetection,
-  MeetingDetectionAction,
-  MeetingDiarizationLiveStatus,
-  MeetingDiarizationStatus,
-  MeetingEvent,
-  MeetingFloatingAction,
-  MeetingLiveState,
-  MeetingSegment,
-  MeetingSetupStatus,
-  MeetingSpeaker,
-  MeetingSpeakerTrack,
-  MeetingStatus,
-  MeetingVoice,
-  RenameMeetingSpeakerInput,
-  StartMeetingInput,
-  UpdateMeetingInput,
-} from './meetings'
-import type {
-  Meeting,
-  MeetingActionItem,
-  MeetingActionItemBatch,
-  MeetingDetail,
-  MeetingDetectionAction,
-  MeetingEvent,
-  MeetingFloatingAction,
-  MeetingLiveState,
-  MeetingSetupStatus,
-  MeetingVoice,
-  RenameMeetingSpeakerInput,
-  StartMeetingInput,
-  UpdateMeetingInput,
-} from './meetings'
 // Design Studio: tipos em ./design (o contrato é grande), re-exportados aqui
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
@@ -2857,36 +2816,6 @@ export interface VideoApi {
   }
 }
 
-export interface MeetingsApi {
-  /** Inicia gravação (sistema + mic) e devolve a reunião em status 'recording'. */
-  start(input?: StartMeetingInput): Promise<Meeting>
-  /** Para a gravação; resumo e extração seguem em background (processing → done). */
-  stop(): Promise<Meeting>
-  state(): Promise<MeetingLiveState>
-  list(): Promise<Meeting[]>
-  get(id: string): Promise<MeetingDetail>
-  update(input: UpdateMeetingInput): Promise<Meeting>
-  /** Anexa "- [mm:ss] texto" às notas no main (sem clobber do editor). */
-  quickNote(meetingId: string, text: string): Promise<Meeting>
-  delete(id: string): Promise<void>
-  /** Re-roda resumo + extração de tarefas. */
-  resummarize(id: string): Promise<Meeting>
-  /** Decisão em lote: 'create' cria as tasks (com overrides de dono/título), 'dismiss' descarta. Devolve a lista completa. */
-  actionItemsBatch(input: MeetingActionItemBatch): Promise<MeetingActionItem[]>
-  /** Renomeia o speaker, reescreve os segmentos e cria/atualiza a voz conhecida. */
-  renameSpeaker(input: RenameMeetingSpeakerInput): Promise<Meeting>
-  listVoices(): Promise<MeetingVoice[]>
-  deleteVoice(id: string): Promise<void>
-  /** Baixa o modelo de embedding; progresso chega por onEvent ('model_progress'). */
-  downloadModels(): Promise<void>
-  floating(action: MeetingFloatingAction): Promise<void>
-  /** Decide sobre a reunião detectada: gravar ou ignorar até o stream acabar. */
-  detection(action: MeetingDetectionAction): Promise<void>
-  checkSetup(): Promise<MeetingSetupStatus>
-  /** Estado ao vivo, segmentos, reunião e action items — um canal só. */
-  onEvent(handler: (event: MeetingEvent) => void): () => void
-}
-
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -3422,6 +3351,5 @@ export interface Api {
     onMaximizeChange(handler: (maximized: boolean) => void): () => void
   }
   video: VideoApi
-  meetings: MeetingsApi
   design: DesignApi
 }

@@ -1,5 +1,4 @@
 import {
-  AudioLines,
   BarChart3,
   Blocks,
   Clapperboard,
@@ -43,7 +42,6 @@ const AREAS: AreaDef[] = [
   // Home primeiro: é a área default no boot.
   { id: 'overview', icon: Home, label: 'Home' },
   { id: 'room', icon: DoorOpen, label: 'Room' },
-  { id: 'meetings', icon: AudioLines, label: 'Reuniões' },
   { id: 'projects', icon: Folder, label: 'Projetos' },
   { id: 'architecture', icon: Network, label: 'Arquitetura' },
   { id: 'diagrams', icon: Workflow, label: 'Diagramas' },

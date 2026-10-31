@@ -11,7 +11,6 @@ import { serviceTools } from './service-tools'
 import { videoTools } from './video-tools'
 import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
-import { meetingTools } from './meeting-tools'
 import { canvasTools } from './canvas-tools'
 import { agentTools } from './agent-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
@@ -1916,7 +1915,6 @@ export function buildTools(
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
     ...videoTools(notify),
-    ...meetingTools(notify),
     ...canvasTools(notify, ctx),
     ...agentTools(ctx),
     ...serviceTools(ctx),

@@ -43,10 +43,6 @@ vi.mock('../services/repo-pull-scheduler', () => ({
   rescheduleAutoPull: () => {},
   runAutoPullNow: async () => {},
 }))
-vi.mock('../services/meetings/meeting-detector', () => ({
-  AUTO_DETECT_KEY: 'meetings.autoDetect',
-  rescheduleDetector: () => {},
-}))
 vi.mock('./sessions', () => ({
   setResumedSessionHook: () => {},
   findAliveByCc: () => null,
