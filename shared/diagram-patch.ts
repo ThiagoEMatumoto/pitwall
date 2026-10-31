@@ -10,7 +10,6 @@ import {
   isLayoutNode,
   makeTextElement,
   labelIdFor,
-  orthogonalRoute,
   polylineMidpoint,
   randInt,
   sizeFor,
@@ -26,7 +25,9 @@ import {
   type ExLinear,
   type ExText,
   type LayoutResult,
+  type Point,
 } from "./diagram-skeleton";
+import { avoidingRoute, pointOnBorder, routeCrossings } from "./diagram-route";
 
 const GRID_GAP = 80;
 // Distância base pra posicionar nós novos de patch e margem anti-colisão.
@@ -509,6 +510,61 @@ function moveNode(
   result[labelIdx] = bump(label, { x: label.x + dx, y: label.y + dy });
 }
 
+const absoluteRoute = (lin: ExLinear): Point[] =>
+  (lin.points ?? []).map(([x, y]) => [lin.x + x, lin.y + y] as Point);
+
+/**
+ * O ELK centraliza o pai num frame que não sabe dos nós pinados; quando um
+ * filho foi arrastado (ou deslocado), o pai auto fica descentrado em relação
+ * aos irmãos que continuam auto. Recentra no eixo transversal pela média dos
+ * filhos auto, se o lugar novo não colidir. Devolve os ids movidos.
+ */
+function recenterParents(
+  result: ExElement[],
+  indexOf: Map<string, number>,
+  displaced: Set<string>,
+  direction: DiagramDirection,
+): string[] {
+  const children = new Map<string, ExElement[]>();
+  for (const el of result) {
+    if (el.isDeleted || el.type !== "arrow") continue;
+    const lin = el as ExLinear;
+    const from = result[indexOf.get(lin.startBinding?.elementId ?? "") ?? -1];
+    const to = result[indexOf.get(lin.endBinding?.elementId ?? "") ?? -1];
+    if (!from || !to || from.isDeleted || to.isDeleted) continue;
+    children.set(from.id, [...(children.get(from.id) ?? []), to]);
+  }
+  const moved: string[] = [];
+  for (const [parentId, kids] of children) {
+    const idx = indexOf.get(parentId)!;
+    const parent = result[idx];
+    if (!isLayoutNode(parent) || !isAutoPlaced(parent)) continue;
+    if (displaced.has(parentId)) continue;
+    const disturbed = kids.some((k) => !isAutoPlaced(k) || displaced.has(k.id));
+    const autoKids = kids.filter((k) => isAutoPlaced(k));
+    if (!disturbed || autoKids.length < 2) continue;
+    const mean =
+      direction === "LR"
+        ? autoKids.reduce((s, k) => s + k.y + k.height / 2, 0) / autoKids.length
+        : autoKids.reduce((s, k) => s + k.x + k.width / 2, 0) / autoKids.length;
+    const to =
+      direction === "LR"
+        ? { x: parent.x, y: mean - parent.height / 2 }
+        : { x: mean - parent.width / 2, y: parent.y };
+    if (Math.abs(to.x - parent.x) < 0.5 && Math.abs(to.y - parent.y) < 0.5) {
+      continue;
+    }
+    const box = { ...to, width: parent.width, height: parent.height };
+    const solids = result.filter(
+      (el) => el.id !== parentId && !el.isDeleted && isLayoutNode(el),
+    );
+    if (collides(box, solids)) continue;
+    moveNode(result, idx, to, direction);
+    moved.push(parentId);
+  }
+  return moved;
+}
+
 const sameGeometry = (a: Partial<ExLinear>, b: Partial<ExLinear>) =>
   JSON.stringify([a.x, a.y, a.points, a.startBinding, a.endBinding]) ===
   JSON.stringify([b.x, b.y, b.points, b.startBinding, b.endBinding]);
@@ -516,9 +572,10 @@ const sameGeometry = (a: Partial<ExLinear>, b: Partial<ExLinear>) =>
 /**
  * Fecha o patch: com layout (modo "auto"), nós com auto=true vão pra posição
  * do ELK e nós pinados ficam onde estão; depois as setas afetadas são
- * reroteadas — rota do ELK quando as duas pontas são auto, rota ortogonal
- * própria quando alguma ponta está pinada. layout=null (modo "keep") só
- * reroteia o que o patch tocou.
+ * reroteadas — rota do ELK quando as duas pontas são auto e ela não cruza
+ * nenhum nó, senão rota ortogonal própria que desvia de obstáculos. Afetada =
+ * tocada pelo patch, com ponta solta, ou cujo caminho cruza um nó que não é
+ * origem nem destino (vale também no modo "keep", layout=null).
  */
 export function finalizePatchLayout(
   patched: PatchOpsResult,
@@ -541,6 +598,15 @@ export function finalizePatchLayout(
     }
   }
 
+  if (layout) {
+    for (const id of recenterParents(result, indexOf, displaced, direction)) {
+      touched.add(id);
+      displaced.add(id);
+    }
+  }
+
+  const nodes = result.filter((el) => !el.isDeleted && isLayoutNode(el));
+
   result.forEach((el, i) => {
     if (el.isDeleted || el.type !== "arrow") return;
     const lin = el as ExLinear;
@@ -550,6 +616,11 @@ export function finalizePatchLayout(
     const startEl = result[startIdx];
     const endEl = result[endIdx];
     if (startEl.isDeleted || endEl.isDeleted) return;
+    // Nós que não são as pontas: a seta não pode atravessar nenhum deles.
+    const others = nodes.filter(
+      (n) => n.id !== startEl.id && n.id !== endEl.id,
+    );
+    const crosses = (route: Point[]) => routeCrossings(route, others) > 0;
     const elkRoute =
       layout &&
       isAutoPlaced(startEl) &&
@@ -558,14 +629,25 @@ export function finalizePatchLayout(
       !displaced.has(endEl.id)
         ? layout.routes.get(lin.id)
         : undefined;
+    const current = absoluteRoute(lin);
+    // Ponta solta: o nó mudou de lugar sem a seta acompanhar.
+    const detached =
+      current.length < 2 ||
+      !pointOnBorder(current[0], startEl) ||
+      !pointOnBorder(current[current.length - 1], endEl);
     const affected =
-      touched.has(lin.id) || touched.has(startEl.id) || touched.has(endEl.id);
-    if (!elkRoute && !affected) return;
-    const geometry = elbowGeometry(
-      elkRoute ?? orthogonalRoute(startEl, endEl),
-      startEl,
-      endEl,
-    );
+      touched.has(lin.id) ||
+      touched.has(startEl.id) ||
+      touched.has(endEl.id) ||
+      detached;
+    // O ELK não conhece os nós pinados: a rota dele pode passar por cima deles.
+    let route: Point[] | undefined =
+      elkRoute && !crosses(elkRoute) ? elkRoute : undefined;
+    if (!route && (elkRoute || affected || crosses(current))) {
+      route = avoidingRoute(startEl, endEl, others);
+    }
+    if (!route) return;
+    const geometry = elbowGeometry(route, startEl, endEl);
     if (sameGeometry(lin, geometry)) return;
     const next = bump(lin, geometry);
     result[i] = next;
