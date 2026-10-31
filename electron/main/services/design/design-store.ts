@@ -143,6 +143,11 @@ export function listDocuments(filter?: DesignListFilter): DesignDocumentMeta[] {
   return rows.map(rowToMeta)
 }
 
+export function getDocumentMeta(id: string): DesignDocumentMeta | null {
+  const row = getDocumentRow(id)
+  return row ? rowToMeta(row) : null
+}
+
 export function getDocument(id: string): DesignDocument | null {
   const row = getDocumentRow(id)
   return row ? rowToDocument(row) : null

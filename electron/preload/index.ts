@@ -88,6 +88,8 @@ import type {
   DesignPdfInput,
   DesignPngBatchInput,
   DesignAskInput,
+  CreateDesignFolderInput,
+  UpdateDesignFolderInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
 import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
@@ -574,6 +576,14 @@ const api: Api = {
     pdfExport: (input: DesignPdfInput) => invoke('design:pdf-export', input),
     pngBatchExport: (input: DesignPngBatchInput) => invoke('design:png-batch', input),
     askSession: (input: DesignAskInput) => invoke('design:ask-session', input),
+    foldersList: () => invoke('design:folders-list'),
+    folderCreate: (input: CreateDesignFolderInput) => invoke('design:folder-create', input),
+    folderUpdate: (id: string, input: UpdateDesignFolderInput) =>
+      invoke('design:folder-update', id, input),
+    folderDelete: (id: string) => invoke('design:folder-delete', id),
+    documentMove: (docId: string, folderId: string | null) =>
+      invoke('design:document-move', docId, folderId),
+    thumbnailsBackfill: () => invoke('design:thumbnails-backfill'),
     onDocumentUpdated: (handler) => subscribe<unknown>('design:document-updated', handler),
     onDocumentDeleted: (handler) => subscribe<unknown>('design:document-deleted', handler),
     onArtboardUpdated: (handler) => subscribe<unknown>('design:artboard-updated', handler),
@@ -581,6 +591,8 @@ const api: Api = {
     onAgentActivity: (handler) => subscribe<unknown>('design:agent-activity', handler),
     onLinksUpdated: (handler) => subscribe<unknown>('design:links-updated', handler),
     onAssetsUpdated: (handler) => subscribe<unknown>('design:assets-updated', handler),
+    onFoldersUpdated: (handler) => subscribe<unknown>('design:folders-updated', handler),
+    onThumbnailUpdated: (handler) => subscribe<unknown>('design:thumbnail-updated', handler),
   },
   window: {
     minimize: () => invoke('window:minimize'),

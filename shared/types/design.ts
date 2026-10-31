@@ -100,7 +100,7 @@ export interface DesignPage {
 }
 
 // Header without pages: what documentsList() returns. The thumbnail bytes never
-// ride along: render `thumbUrl(id, thumbnailVersion)` (pitwall-design://thumb/…).
+// ride along: render `thumbUrl(id, thumbnailVersion)` from shared/design/thumb-url.
 export interface DesignDocumentMeta {
   id: string
   title: string
@@ -384,6 +384,20 @@ export interface UpdateDesignFolderInput {
   sortOrder?: number
 }
 
+// Payload of design:folders-updated: a reload signal for folders (and their
+// docCount). folderId = the folder touched, null when only counts moved.
+export interface DesignFoldersUpdatedEvent {
+  folderId: string | null
+}
+
+// design:document-move also broadcasts design:document-updated with this
+// payload; `moved` tells listeners nothing rendered changed.
+export interface DesignDocumentMovedEvent {
+  docId: string
+  folderId: string | null
+  moved: true
+}
+
 // Payload of design:thumbnail-updated.
 export interface DesignThumbnailUpdatedEvent {
   docId: string
@@ -451,6 +465,20 @@ export interface DesignApi {
   pngBatchExport(input: DesignPngBatchInput): Promise<DesignPngBatchResult>
   // design:ask-session — injects the prompt into a running Claude Code session.
   askSession(input: DesignAskInput): Promise<void>
+  // design:folders-list — sortOrder, then name. docCount is computed per call:
+  // reload on onFoldersUpdated, onDocumentUpdated and onDocumentDeleted.
+  foldersList(): Promise<DesignFolder[]>
+  // design:folder-create — appended at the end (max sortOrder + 1).
+  folderCreate(input: CreateDesignFolderInput): Promise<DesignFolder>
+  // design:folder-update
+  folderUpdate(id: string, input: UpdateDesignFolderInput): Promise<DesignFolder>
+  // design:folder-delete — its documents stay, without a folder.
+  folderDelete(id: string): Promise<void>
+  // design:document-move — folderId null = no folder. Does not bump updatedAt.
+  documentMove(docId: string, folderId: string | null): Promise<DesignDocumentMeta>
+  // design:thumbnails-backfill — queues active docs without a thumbnail; each
+  // one lands as onThumbnailUpdated. Returns how many were queued.
+  thumbnailsBackfill(): Promise<number>
 
   // Payload = { docId } — tokens/fonts/css changed: reload the frames.
   onDocumentUpdated(handler: (payload: unknown) => void): () => void
@@ -466,6 +494,10 @@ export interface DesignApi {
   onLinksUpdated(handler: (payload: unknown) => void): () => void
   // Payload = { docId }.
   onAssetsUpdated(handler: (payload: unknown) => void): () => void
+  // Payload = DesignFoldersUpdatedEvent.
+  onFoldersUpdated(handler: (payload: unknown) => void): () => void
+  // Payload = DesignThumbnailUpdatedEvent. Image: thumbUrl(docId, thumbnailVersion).
+  onThumbnailUpdated(handler: (payload: unknown) => void): () => void
 }
 
 // Stable selectors for the e2e (drive-app).

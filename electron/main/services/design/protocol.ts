@@ -11,6 +11,8 @@ import {
 } from '../../../../shared/design/html-render'
 import type { DesignArtboard, DesignAsset, DesignDocument } from '../../../../shared/types/design'
 
+export { thumbUrl } from '../../../../shared/design/thumb-url'
+
 // pitwall-design:// serves artboard documents and asset bytes to the sandboxed
 // iframes (opaque origin) and to the offscreen screenshot window. The scheme is
 // registered as standard so `url.host` routes and relative URLs resolve.
@@ -84,12 +86,6 @@ export function artboardUrl(
 
 export function assetUrl(assetId: string): string {
   return `${DESIGN_SCHEME}://asset/${encodeURIComponent(assetId)}`
-}
-
-// The version (?v=) only busts the cache: the handler always serves the
-// current thumbnail, so the response can be cached as immutable per URL.
-export function thumbUrl(docId: string, version: string): string {
-  return `${DESIGN_SCHEME}://thumb/${encodeURIComponent(docId)}?v=${encodeURIComponent(version)}`
 }
 
 const THUMB_DATA_URL = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)$/
