@@ -13,7 +13,9 @@ const FONT_DIR = join(
 describe("excalifont metrics", () => {
   it("tabela gerada bate com os woff2 instalados (rode scripts/gen-excalifont-metrics.mjs se falhar)", () => {
     const h = createHash("sha256");
-    for (const f of readdirSync(FONT_DIR).filter((f) => f.endsWith(".woff2")).sort()) {
+    for (const f of readdirSync(FONT_DIR)
+      .filter((f) => f.endsWith(".woff2"))
+      .sort()) {
       h.update(f);
       h.update(readFileSync(join(FONT_DIR, f)));
     }
@@ -22,7 +24,10 @@ describe("excalifont metrics", () => {
 
   it("largura é a soma dos advances da tabela", () => {
     const text = "Hello World";
-    const units = [...text].reduce((s, c) => s + advanceOf(c.codePointAt(0)!), 0);
+    const units = [...text].reduce(
+      (s, c) => s + advanceOf(c.codePointAt(0)!),
+      0,
+    );
     expect(measureText(text, 16).width).toBeCloseTo((units * 16) / 1000, 6);
     // Fonte proporcional: "i" é bem mais estreito que "W".
     expect(advanceOf(105)).toBeLessThan(advanceOf(87));

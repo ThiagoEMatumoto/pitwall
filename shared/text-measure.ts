@@ -38,6 +38,9 @@ export function measureText(
   lineHeight = EXCALIFONT_LINE_HEIGHT,
 ): { width: number; height: number } {
   const lines = text.split("\n");
-  const width = lines.reduce((m, l) => Math.max(m, measureLine(l, fontSize)), 0);
+  const width = lines.reduce(
+    (m, l) => Math.max(m, measureLine(l, fontSize)),
+    0,
+  );
   return { width, height: lines.length * fontSize * lineHeight };
 }
