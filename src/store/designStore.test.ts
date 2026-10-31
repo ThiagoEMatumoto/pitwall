@@ -20,6 +20,7 @@ const mockApi = {
   artboardApplyOps: vi.fn(),
   selectionSet: vi.fn().mockResolvedValue(undefined),
   activeDocSet: vi.fn().mockResolvedValue(undefined),
+  liveState: vi.fn().mockResolvedValue([]),
   onArtboardUpdated: vi.fn((h: (payload: unknown) => void) => {
     updatedHandler = h
     return () => {
