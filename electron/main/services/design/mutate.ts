@@ -88,6 +88,21 @@ function isNoopPatch(artboard: DesignArtboard, patch: ArtboardPatch): boolean {
   )
 }
 
+// A flow artboard's height follows its content and the renderer re-measures
+// it on every open (font metrics move it by a pixel or two). Persisting that
+// measurement is not an edit: it must not bump the document's updated_at.
+function isMeasuredHeightOnly(
+  artboard: DesignArtboard,
+  patch: ArtboardPatch,
+  treeOps: DesignOp[],
+  snapshot: boolean,
+): boolean {
+  if (treeOps.length > 0 || snapshot || artboard.sizing !== 'flow') return false
+  return (Object.keys(patch) as (keyof ArtboardPatch)[]).every(
+    (key) => key === 'height' || patch[key] === undefined || patch[key] === artboard[key],
+  )
+}
+
 function clampPatch(patch: ArtboardPatch, warnings: string[]): ArtboardPatch {
   const next = { ...patch }
   for (const key of ['width', 'height'] as const) {
@@ -139,14 +154,21 @@ export function applyArtboardOps(params: ApplyArtboardOpsParams): ApplyResult {
   const errors = validateTree(tree)
   if (errors.length > 0) throw new Error(`invalid design tree: ${errors.join('; ')}`)
 
+  const touchDocument = !isMeasuredHeightOnly(
+    artboard,
+    artboardPatch,
+    treeOps,
+    params.snapshot ?? false,
+  )
   if (Object.keys(artboardPatch).length > 0)
-    designStore.updateArtboard(params.artboardId, artboardPatch)
+    designStore.updateArtboard(params.artboardId, artboardPatch, { touchDocument })
   // setTree always bumps `version`, even for a setArtboard-only change: the
   // renderer orders every event of an artboard by that single counter.
   const saved = designStore.setTree(params.artboardId, tree, {
     snapshot: params.snapshot ?? false,
     author: params.author,
     summary: params.summary,
+    touchDocument,
   })
 
   const event: ArtboardUpdatedEvent = {
