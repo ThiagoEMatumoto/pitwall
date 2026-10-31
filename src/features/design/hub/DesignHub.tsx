@@ -16,6 +16,7 @@ import { DragChip } from './DocCard'
 import { HubGrid } from './HubGrid'
 import { HubHeader } from './HubHeader'
 import { HubSidebar } from './HubSidebar'
+import { chipFollowsCursor, hubCollisionDetection } from './hub-drag'
 import { parseDropId, sectionDocs, sectionTitle, visibleDocs } from './hub-filter'
 
 const DEFAULT_DOC_TITLE = 'Sem título'
@@ -97,6 +98,7 @@ export function DesignHub() {
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={hubCollisionDetection}
       accessibility={{ announcements }}
       onDragStart={(e) => setDragId(String(e.active.id))}
       onDragEnd={onDragEnd}
@@ -137,7 +139,7 @@ export function DesignHub() {
         </div>
         <AskClaudeComposer />
       </main>
-      <DragOverlay dropAnimation={null}>{dragged ? <DragChip doc={dragged} /> : null}</DragOverlay>
+      <DragOverlay dropAnimation={null} modifiers={[chipFollowsCursor]}>{dragged ? <DragChip doc={dragged} /> : null}</DragOverlay>
     </DndContext>
   )
 }
