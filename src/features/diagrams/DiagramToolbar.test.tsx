@@ -1,11 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Diagram } from "../../../shared/types/ipc";
 
-// A lib real do Excalidraw não roda em jsdom (canvas/fonts).
+// A lib real do Excalidraw não roda em jsdom (canvas/fonts). Os utils ficam
+// pendentes por padrão; o teste do "Inserir" troca por um restore identidade.
+const utilsMock = vi.hoisted(() => ({
+  load: (): Promise<unknown> => new Promise(() => {}),
+}));
 vi.mock("./excalidraw-lazy", () => ({
   loadExcalidraw: () => new Promise(() => {}),
-  loadExcalidrawUtils: () => new Promise(() => {}),
+  loadExcalidrawUtils: () => utilsMock.load(),
 }));
 
 vi.mock("@/lib/ipc", () => ({
@@ -116,5 +120,83 @@ describe("DiagramToolbar — chip de sync + botão Salvar", () => {
     });
     fireEvent.click(screen.getByTitle("Salvar (Ctrl+S)"));
     expect(onSaveNow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DiagramToolbar — Inserir", () => {
+  function fakeApi(existing: unknown[] = [{ id: "old", type: "rectangle" }]) {
+    return {
+      getAppState: () => ({
+        scrollX: -100,
+        scrollY: -50,
+        width: 1000,
+        height: 600,
+        zoom: { value: 2 },
+      }),
+      getSceneElementsIncludingDeleted: () => existing,
+      updateScene: vi.fn(),
+    };
+  }
+
+  async function insert(label: string) {
+    const restoreElements = vi.fn((els: unknown[]) => els);
+    utilsMock.load = async () => ({
+      restoreElements,
+      CaptureUpdateAction: { IMMEDIATELY: "IMMEDIATELY" },
+    });
+    const api = fakeApi();
+    render(
+      <DiagramToolbar
+        diagram={makeDiagram()}
+        excalidrawAPI={api as never}
+        syncState={{ status: "saved", lastRemoteAt: null, version: 3 }}
+        onSaveNow={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTitle("Inserir"));
+    fireEvent.click(screen.getByText(label));
+    await waitFor(() => expect(api.updateScene).toHaveBeenCalledTimes(1));
+    return { api, restoreElements };
+  }
+
+  it("Nova entidade insere o bloco no centro do viewport, pinado e selecionado", async () => {
+    const { api, restoreElements } = await insert("Nova entidade");
+    // Sem refreshDimensions (ver restore-scene.ts).
+    expect(restoreElements.mock.calls[0][2]).toEqual({ repairBindings: true });
+    const call = api.updateScene.mock.calls[0][0];
+    const els = call.elements as Array<Record<string, any>>;
+    expect(els[0].id).toBe("old");
+    const owner = els[1];
+    expect(owner.customData.pitwall).toMatchObject({
+      kind: "entity",
+      auto: false,
+    });
+    // Centro do viewport em coordenadas de cena: -scroll + tamanho/2/zoom.
+    expect(owner.x + owner.width / 2).toBeCloseTo(100 + 250, 5);
+    expect(owner.y + owner.height / 2).toBeCloseTo(50 + 150, 5);
+    const added = els.slice(1);
+    expect(added.every((e) => e.groupIds[0] === owner.id)).toBe(true);
+    expect(added.some((e) => e.text === "PK id: uuid")).toBe(true);
+    expect(added.every((e) => e.index === null)).toBe(true);
+    expect(call.appState.selectedGroupIds).toEqual({ [owner.id]: true });
+    expect(call.captureUpdate).toBe("IMMEDIATELY");
+  });
+
+  it("Nova classe insere 3 compartimentos", async () => {
+    const { api } = await insert("Nova classe");
+    const els = api.updateScene.mock.calls[0][0].elements as Array<
+      Record<string, any>
+    >;
+    const owner = els[1];
+    expect(owner.customData.pitwall.kind).toBe("class");
+    expect(
+      els.filter((e) => /__(header|attrs|methods)$/.test(e.id)),
+    ).toHaveLength(3);
+  });
+
+  it("sem editor carregado os itens ficam desabilitados", () => {
+    renderToolbar({ status: "saved", lastRemoteAt: null, version: 3 });
+    fireEvent.click(screen.getByTitle("Inserir"));
+    expect(screen.getByText("Nova entidade").closest("button")).toBeDisabled();
   });
 });
