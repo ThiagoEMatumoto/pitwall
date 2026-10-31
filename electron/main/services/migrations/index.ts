@@ -63,6 +63,7 @@ import * as sessionsSpawnArgs from './061_sessions_spawn_args'
 import * as promptQueueItems from './062_prompt_queue_items'
 import * as sessionsHibernatedAt from './063_sessions_hibernated_at'
 import * as dropMeetingsVideo from './064_drop_meetings_video'
+import * as designFolders from './065_design_folders'
 
 interface Migration {
   version: number
@@ -141,6 +142,7 @@ export const migrations: Migration[] = [
   promptQueueItems,
   sessionsHibernatedAt,
   dropMeetingsVideo,
+  designFolders,
 ]
 
 export function runMigrations(db: Database.Database): void {
