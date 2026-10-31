@@ -15,14 +15,18 @@ for (const run of EXCALIFONT_ADVANCE_RUNS) {
 }
 
 // Codepoint fora dos subsets (emoji, CJK) cai pra fonte de fallback do
-// browser; a largura média dos glyphs é a melhor aproximação sem DOM.
-const AVERAGE_ADVANCE = Math.round(
-  [...advanceByCodepoint.values()].reduce((a, b) => a + b, 0) /
-    advanceByCodepoint.size,
-);
+// browser, que desenha esses glyphs com ~1em. Superestimar só sobra folga no
+// box; a média latina (~0,58em) fazia o label transbordar.
+const FALLBACK_ADVANCE = EXCALIFONT_UNITS_PER_EM;
+
+// ZWJ e seletores de variação compõem o glyph anterior, sem largura própria.
+const isZeroWidth = (cp: number) =>
+  cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f);
 
 export function advanceOf(codepoint: number): number {
-  return advanceByCodepoint.get(codepoint) ?? AVERAGE_ADVANCE;
+  const known = advanceByCodepoint.get(codepoint);
+  if (known !== undefined) return known;
+  return isZeroWidth(codepoint) ? 0 : FALLBACK_ADVANCE;
 }
 
 export function measureLine(line: string, fontSize: number): number {

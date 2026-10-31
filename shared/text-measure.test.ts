@@ -33,6 +33,13 @@ describe("excalifont metrics", () => {
     expect(advanceOf(105)).toBeLessThan(advanceOf(87));
   });
 
+  it("codepoint fora da Excalifont (emoji, CJK) conta 1em, não a média latina", () => {
+    expect(advanceOf(0x1f680)).toBe(1000);
+    expect(measureText("認証サーバー", 16).width).toBeCloseTo(6 * 16, 6);
+    // Seletor de variação e ZWJ não ocupam largura própria.
+    expect(measureText("\u2764\ufe0f", 16).width).toBeCloseTo(16, 6);
+  });
+
   it("altura = linhas × fontSize × 1.25; largura = linha mais larga", () => {
     const m = measureText("ab\nlonger line", 20);
     expect(m.height).toBe(2 * 20 * 1.25);
