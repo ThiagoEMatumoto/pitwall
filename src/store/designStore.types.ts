@@ -62,8 +62,16 @@ export interface DesignState {
   tool: DesignTool
   viewport: Viewport
   textEditing: { artboardId: string; nodeId: string } | null
-  // Keyed by artboardId; '*' holds document-level activity.
+  // The open document's slice of activityByDoc. Keyed by artboardId; '*'
+  // holds document-level activity.
   agentActivity: Record<string, DesignAgentActivity[]>
+  // Every document, open or not (the docs list shows who Claude is on).
+  activityByDoc: Record<string, Record<string, DesignAgentActivity[]>>
+  // Per document, persisted: when the human last left or dismissed it.
+  lastSeenAt: Record<string, number>
+  // design_nodes_finish events of the open document newer than its lastSeenAt,
+  // captured on entry; live finishes while it is open are seen, not listed.
+  unseenChanges: DesignAgentActivity[]
   conflict: { artboardId: string } | null
   loading: boolean
   error: string | null
@@ -85,6 +93,11 @@ export interface DesignState {
   loadDocs: (filter?: DesignListFilter) => Promise<void>
   openDoc: (docId: string) => Promise<void>
   closeDoc: () => Promise<void>
+  // Re-reads the open document after the area was away (broadcasts unwatched).
+  resyncDoc: () => Promise<void>
+  // Re-reads main's live-state: one document, or all of them.
+  hydrateLive: (docId?: string) => Promise<void>
+  markSeen: (docId: string) => void
   selectPage: (pageId: string) => void
   createDoc: (title: string) => Promise<DesignDocument>
   renameDoc: (title: string) => Promise<void>

@@ -21,6 +21,7 @@ import {
   upsertMeta,
   type DesignStore,
 } from './designStore.internal'
+import { reduceActivity, setDocActivity } from './designStore.live'
 
 // The artboard's frame intersects the mounted stage on the current page. No
 // stage (canvas not mounted) counts as not visible. A visible artboard already
@@ -34,12 +35,16 @@ export function artboardInView(store: DesignStore, artboard: DesignArtboard): bo
 }
 
 export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEvent): void {
+  if (evt.docId !== store.getState().docId) {
+    touchDocMeta(store, evt.docId)
+    return
+  }
   const ab = store.getState().artboards[evt.artboardId]
   if (!ab) {
     // Claude created an artboard while this doc is open: the broadcast is the
     // only signal, so pull the fresh document and adopt it instead of waiting
     // for a remount.
-    if (evt.docId === store.getState().docId) void adoptNewArtboard(store, evt.artboardId)
+    void adoptNewArtboard(store, evt.artboardId)
     return
   }
   // My own write coming back: the tree already has it, only the version moves.
@@ -63,6 +68,16 @@ export function handleArtboardUpdated(store: DesignStore, evt: ArtboardUpdatedEv
   }
 }
 
+// A closed document only moves in the list: its tree is fetched when opened.
+// The event has no timestamp; main stamped updatedAt at write time, so now is
+// close enough for ordering.
+function touchDocMeta(store: DesignStore, docId: string): void {
+  store.setState((s) => {
+    const meta = s.docs.find((d) => d.id === docId)
+    return meta ? { docs: upsertMeta(s.docs, { ...meta, updatedAt: Date.now() }) } : {}
+  })
+}
+
 async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise<void> {
   const docId = store.getState().docId
   if (!docId) return
@@ -81,30 +96,8 @@ async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise
 }
 
 export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity): void {
-  if (a.docId !== store.getState().docId) return
-  const key = a.artboardId ?? '*'
-  store.setState((s) => {
-    if (a.phase === 'finish') {
-      if (a.artboardId === null) return { agentActivity: {} }
-      const { [key]: _gone, ...rest } = s.agentActivity
-      return { agentActivity: rest }
-    }
-    // 'end' replaces the matching 'start' so the overlay keeps one row per
-    // call. A call may end on a different key than it started (an artboard
-    // create starts at the document and ends on the artboard it made), so the
-    // start is retired wherever it lives — else it veils every artboard until
-    // it goes stale.
-    const sameCall = (x: DesignAgentActivity) => x.tool === a.tool && x.sessionId === a.sessionId
-    const next: Record<string, DesignAgentActivity[]> = {}
-    for (const [k, list] of Object.entries(s.agentActivity)) {
-      const kept = list.filter((x) => !(sameCall(x) && (k === key || x.phase === 'start')))
-      if (kept.length) next[k] = kept
-    }
-    // Document-level writes are instantaneous and nothing waits for
-    // design_nodes_finish on them (main clears them on 'end' too).
-    if (a.phase === 'end' && a.artboardId === null) return { agentActivity: next }
-    return { agentActivity: { ...next, [key]: [...(next[key] ?? []), a] } }
-  })
+  const current = store.getState().activityByDoc[a.docId] ?? {}
+  setDocActivity(store, a.docId, reduceActivity(current, a))
 }
 
 export async function handleDocumentUpdated(store: DesignStore, docId: string): Promise<void> {

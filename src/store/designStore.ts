@@ -29,7 +29,9 @@ import {
   duplicateArtboardAction,
   releaseTransientAction,
   resyncAction,
+  resyncDocAction,
 } from './designStore.actions'
+import { hydrateLiveState, loadLastSeen, markSeen } from './designStore.live'
 import {
   handleAgentActivity,
   handleArtboardDeleted,
@@ -103,6 +105,9 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     viewport: { x: 0, y: 0, zoom: 1 },
     textEditing: null,
     agentActivity: {},
+    activityByDoc: {},
+    lastSeenAt: loadLastSeen(),
+    unseenChanges: [],
     conflict: null,
     loading: false,
     error: null,
@@ -134,6 +139,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         set({ loading: false, error: 'Documento não encontrado' })
         return
       }
+      const prevDocId = get().docId
+      if (prevDocId && prevDocId !== docId) markSeen(store, prevDocId)
       resetLocalState()
       const page = doc.pages[0] ?? null
       set({
@@ -145,7 +152,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         scopeId: null,
         hover: null,
         textEditing: null,
-        agentActivity: {},
+        agentActivity: get().activityByDoc[docId] ?? {},
+        unseenChanges: [],
         conflict: null,
         viewport: page?.viewport ?? { x: 0, y: 0, zoom: 1 },
         previewArtboardId: null,
@@ -153,10 +161,12 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         interaction: false,
         loading: false,
       })
-      await api.design.activeDocSet(docId)
+      await Promise.all([api.design.activeDocSet(docId), hydrateLiveState(store, docId)])
     },
 
     closeDoc: async () => {
+      const prevDocId = get().docId
+      if (prevDocId) markSeen(store, prevDocId)
       resetLocalState()
       set({
         docId: null,
@@ -164,10 +174,18 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         pageId: null,
         artboards: {},
         selection: EMPTY_SELECTION,
+        agentActivity: {},
+        unseenChanges: [],
         conflict: null,
       })
       await api.design.activeDocSet(null)
     },
+
+    resyncDoc: () => resyncDocAction(store),
+
+    hydrateLive: (docId) => hydrateLiveState(store, docId),
+
+    markSeen: (docId) => markSeen(store, docId),
 
     selectPage: (pageId) => {
       const page = get().doc?.pages.find((p) => p.id === pageId)

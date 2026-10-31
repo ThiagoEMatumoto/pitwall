@@ -698,6 +698,7 @@ const api: Api = {
     unlink: (input: DesignLink) => invoke('design:unlink', input),
     selectionSet: (input: DesignSelection) => invoke('design:selection-set', input),
     activeDocSet: (docId: string | null) => invoke('design:active-doc-set', docId),
+    liveState: (docId?: string) => invoke('design:live-state', docId),
     export: (input: DesignExportInput) => invoke('design:export', input),
     pdfExport: (input: DesignPdfInput) => invoke('design:pdf-export', input),
     pngBatchExport: (input: DesignPngBatchInput) => invoke('design:png-batch', input),

@@ -20,7 +20,8 @@ function viewArtboard(artboardId: string): () => void {
 // A visible artboard already shows "Claude terminou" in its pill: no toast.
 export function watchAgentFinish(): () => void {
   return useDesignStore.subscribe((s, prev) => {
-    if (s.agentActivity === prev.agentActivity) return
+    // Switching documents swaps the whole slice: nothing finished.
+    if (s.agentActivity === prev.agentActivity || s.docId !== prev.docId) return
     for (const key of Object.keys(prev.agentActivity)) {
       if (key === '*' || s.agentActivity[key] || (prev.agentActivity[key]?.length ?? 0) === 0)
         continue

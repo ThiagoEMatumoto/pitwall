@@ -326,6 +326,9 @@ describe('design tools — Breads do Breno authoring flow', () => {
     expect(liveState.listActivity(docId)).toEqual([])
     const finish = activities('design_nodes_finish')
     expect(finish.at(-1)?.phase).toBe('finish')
+    // The same payload the canvas got is what a returning human is shown.
+    expect(liveState.listChanges(docId).at(-1)).toEqual(finish.at(-1))
+    expect(finish.at(-1)?.summary).toBe('Home first pass')
     const versions = designStore.listVersions(home.id)
     expect(versions[0].version).toBe(result.version)
     expect(versions[0].summary).toBe('Home first pass')
