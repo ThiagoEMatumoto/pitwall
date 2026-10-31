@@ -235,10 +235,12 @@ export function removeDocument(id: string): void {
 // ---- thumbnails ----
 
 // Not an edit: updated_at is left alone (same rule as diagrams' setThumbnail).
-export function setThumbnail(docId: string, dataUrl: string, at: number): void {
-  getDb()
+// False when the document is gone (deleted while its capture ran).
+export function setThumbnail(docId: string, dataUrl: string, at: number): boolean {
+  const res = getDb()
     .prepare('UPDATE design_documents SET thumbnail = ?, thumbnail_at = ? WHERE id = ?')
     .run(dataUrl, at, docId)
+  return res.changes > 0
 }
 
 export function getThumbnail(docId: string): string | null {
