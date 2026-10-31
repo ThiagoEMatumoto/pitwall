@@ -399,7 +399,7 @@ export function CanvasStage() {
       {docId && pageArtboardIds.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="pointer-events-auto">
-            <EmptyState variant="no-artboards" />
+            <EmptyState />
           </div>
         </div>
       )}
