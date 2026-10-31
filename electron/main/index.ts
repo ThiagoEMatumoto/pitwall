@@ -382,6 +382,7 @@ app.whenReady().then(async () => {
     getDocument: (id) => designStore.getDocument(id),
     getArtboard: (id) => designStore.getArtboard(id),
     getAsset: (id) => designAssets.get(id),
+    getThumbnail: (id) => designStore.getThumbnail(id),
   })
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta
