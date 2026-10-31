@@ -25,6 +25,7 @@ import {
   toExcalidrawLibraryItems,
 } from "./library-convert";
 import { KIND_LABEL, PARENT_TYPE_LABEL } from "./diagram-labels";
+import { LibraryCatalogDialog } from "./LibraryCatalogDialog";
 
 function formatWhen(ts: number): string {
   return new Date(ts).toLocaleString("pt-BR", {
@@ -100,6 +101,7 @@ export function DiagramToolbar({
   const [libraryUrlOpen, setLibraryUrlOpen] = useState(false);
   const [libraryUrl, setLibraryUrl] = useState("");
   const [installingLibrary, setInstallingLibrary] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   // Rename externo (ex.: via MCP) atualiza o campo se o usuário não editou.
   useEffect(() => {
@@ -348,9 +350,8 @@ export function DiagramToolbar({
             onClick: () => setLibraryUrlOpen(true),
           },
           {
-            label: "Explorar catálogo",
-            // O main abre https em browser externo (setWindowOpenHandler).
-            onClick: () => window.open("https://libraries.excalidraw.com"),
+            label: "Catálogo de bibliotecas…",
+            onClick: () => setCatalogOpen(true),
           },
           archived
             ? {
@@ -388,6 +389,19 @@ export function DiagramToolbar({
         }}
       />
 
+      <LibraryCatalogDialog
+        open={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        onLibraryChanged={(items) => {
+          if (!excalidrawAPI) return;
+          void excalidrawAPI.updateLibrary({
+            libraryItems: toExcalidrawLibraryItems(items),
+            merge: false,
+            openLibraryMenu: true,
+          });
+        }}
+      />
+
       <Dialog
         open={libraryUrlOpen}
         onClose={() => setLibraryUrlOpen(false)}
@@ -418,8 +432,8 @@ export function DiagramToolbar({
             autoFocus
           />
           <p className="text-[11px] text-[var(--color-text-dim)]">
-            Bibliotecas prontas em libraries.excalidraw.com (menu “Explorar
-            catálogo”).
+            Para AWS, GCP, Azure, UML e C4, use o “Catálogo de bibliotecas”.
+            Outras estão em libraries.excalidraw.com.
           </p>
         </div>
       </Dialog>

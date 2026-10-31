@@ -27,6 +27,9 @@ vi.mock("@/lib/ipc", () => ({
       replace: vi.fn().mockResolvedValue([]),
       remove: vi.fn().mockResolvedValue([]),
       installUrl: vi.fn(),
+      catalog: vi.fn().mockResolvedValue({ entries: [], installedIds: [] }),
+      installCatalog: vi.fn(),
+      removeCatalog: vi.fn(),
       onUpdated: vi.fn(() => () => {}),
     },
   },
@@ -116,5 +119,16 @@ describe("DiagramToolbar — chip de sync + botão Salvar", () => {
     });
     fireEvent.click(screen.getByTitle("Salvar (Ctrl+S)"));
     expect(onSaveNow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DiagramToolbar — catálogo de bibliotecas", () => {
+  it("o item do menu abre o dialog do catálogo", async () => {
+    renderToolbar({ status: "saved", lastRemoteAt: null, version: 3 });
+    fireEvent.click(screen.getByTitle("Mais ações"));
+    fireEvent.click(screen.getByText("Catálogo de bibliotecas…"));
+    expect(
+      await screen.findByRole("heading", { name: "Catálogo de bibliotecas" }),
+    ).toBeInTheDocument();
   });
 });
