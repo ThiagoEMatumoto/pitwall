@@ -1581,14 +1581,14 @@ describe('mcp tools — diagram library', () => {
 
   it('diagram_library_install exige exatamente um de url|library_json', async () => {
     await expect(tool('diagram_library_install').handler({})).rejects.toThrow(
-      /exactly one of url or library_json/,
+      /exactly one of catalogId, url or library_json/,
     )
     await expect(
       tool('diagram_library_install').handler({
         url: 'https://example.com/lib.excalidrawlib',
         library_json: LIB_V2,
       }),
-    ).rejects.toThrow(/exactly one of url or library_json/)
+    ).rejects.toThrow(/exactly one of catalogId, url or library_json/)
     // JSON que não é .excalidrawlib falha no parser, não grava nada.
     await expect(
       tool('diagram_library_install').handler({
@@ -1621,5 +1621,41 @@ describe('mcp tools — diagram library', () => {
       .prepare(`SELECT COUNT(*) AS n FROM diagram_library_items WHERE id = 'li-1'`)
       .get() as { n: number }
     expect(n).toBe(0)
+  })
+
+  it('diagram_library_install por catalogId baixa a URL raw do catálogo e list mostra instalada', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            type: 'excalidrawlib',
+            version: 2,
+            libraryItems: [{ id: 'c4-1', status: 'published', elements: [{ id: 'x' }] }],
+          }),
+          { status: 200 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const out = (await tool('diagram_library_install').handler({ catalogId: 'c4-architecture' }))
+        .structuredContent as { added: number; items: LibraryItemMetaOut[] }
+      expect(String(fetchMock.mock.calls[0][0])).toMatch(
+        /^https:\/\/raw\.githubusercontent\.com\/excalidraw\/excalidraw-libraries\/.*c4-architecture\.excalidrawlib$/,
+      )
+      expect(out.added).toBe(1)
+      expect(notify.calls.at(-1)?.[0]).toBe('diagramLibrary:updated')
+
+      const { catalog } = call<{ catalog: Array<{ id: string; installed: boolean }> }>(
+        'diagram_library_list',
+        { includeCatalog: true },
+      )
+      expect(catalog.find((e) => e.id === 'c4-architecture')?.installed).toBe(true)
+      expect(catalog.find((e) => e.id === 'gcp-icons')?.installed).toBe(false)
+      await expect(
+        tool('diagram_library_install').handler({ catalogId: 'nope' }),
+      ).rejects.toThrow(/não está no catálogo/)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

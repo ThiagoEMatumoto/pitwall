@@ -30,7 +30,13 @@ import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
-import { installLibraryFromUrl, installLibraryJson } from '../diagram-library-install'
+import {
+  installCatalogLibrary,
+  installedCatalogIds,
+  installLibraryFromUrl,
+  installLibraryJson,
+} from '../diagram-library-install'
+import { DIAGRAM_LIBRARY_CATALOG } from '../../../../shared/diagram-library-catalog'
 import {
   applyPatch,
   elementsToSkeleton,
@@ -1833,12 +1839,19 @@ function diagramTools(notify: McpNotify): ToolDef[] {
 
 const diagramLibraryInstallSchema = z
   .object({
+    catalogId: z.string().min(1).optional(),
     url: z.url().optional(),
     library_json: z.record(z.string(), z.unknown()).optional(),
   })
-  .refine((v) => (v.url !== undefined) !== (v.library_json !== undefined), {
-    message: 'provide exactly one of url or library_json',
-  })
+  .refine(
+    (v) =>
+      [v.catalogId, v.url, v.library_json].filter((x) => x !== undefined).length === 1,
+    { message: 'provide exactly one of catalogId, url or library_json' },
+  )
+
+const diagramLibraryListSchema = z.object({
+  includeCatalog: z.boolean().optional(),
+})
 
 function libraryItemMeta(item: DiagramLibraryItem): Record<string, unknown> {
   return {
@@ -1855,11 +1868,22 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_library_list',
       title: 'List shape library items',
       description:
-        'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out.',
-      inputSchema: z.object({}),
-      handler: () => {
+        'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out. includeCatalog: true also returns the curated catalog (id, name, category, description, installed) — install an entry with diagram_library_install { catalogId }.',
+      inputSchema: diagramLibraryListSchema,
+      handler: (args) => {
+        const { includeCatalog } = diagramLibraryListSchema.parse(args ?? {})
+        const items = diagramLibraryStore.getItems()
+        if (!includeCatalog) return ok({ items: items.map(libraryItemMeta) })
+        const installed = new Set(installedCatalogIds(items))
         return ok({
-          items: diagramLibraryStore.getItems().map(libraryItemMeta),
+          items: items.map(libraryItemMeta),
+          catalog: DIAGRAM_LIBRARY_CATALOG.map((e) => ({
+            id: e.id,
+            name: e.name,
+            category: e.category,
+            description: e.description,
+            installed: installed.has(e.id),
+          })),
         })
       },
     },
@@ -1867,14 +1891,16 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_library_install',
       title: 'Install shape library',
       description:
-        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL), or library_json = the .excalidrawlib content as a JSON object. Items merge by id: re-installing the same library updates items instead of duplicating them. Returns how many items the file brought (added) plus the full library.',
+        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: catalogId = id from the curated catalog (diagram_library_list { includeCatalog: true }; e.g. aws-architecture, gcp-icons, uml-er, c4-architecture) — preferred; url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL); or library_json = the .excalidrawlib content as a JSON object. Items merge by id: re-installing the same library updates items instead of duplicating them. Returns how many items the file brought (added) plus the full library.',
       inputSchema: diagramLibraryInstallSchema,
       handler: async (args) => {
         const input = diagramLibraryInstallSchema.parse(args)
         const result =
-          input.url !== undefined
-            ? await installLibraryFromUrl(input.url)
-            : installLibraryJson(input.library_json)
+          input.catalogId !== undefined
+            ? await installCatalogLibrary(input.catalogId)
+            : input.url !== undefined
+              ? await installLibraryFromUrl(input.url)
+              : installLibraryJson(input.library_json)
         notify.broadcast('diagramLibrary:updated', { items: result.items })
         return ok({
           added: result.added,
