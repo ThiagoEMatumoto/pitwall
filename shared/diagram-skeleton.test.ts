@@ -799,6 +799,99 @@ describe("regressão: desalinhamento do auto-layout", () => {
     expect(c4.x).toBe(result.find((e) => e.id === "c1")!.x);
   });
 
+  const solidsOf = (els: AnyEl[]) =>
+    els.filter(
+      (e) =>
+        !e.isDeleted &&
+        e.type !== "arrow" &&
+        e.type !== "line" &&
+        !(e.type === "text" && e.containerId),
+    );
+  const addLinked = (id: string, from: string) => [
+    {
+      op: "add" as const,
+      element: { id, type: "rectangle" as const, label: { text: id } },
+    },
+    {
+      op: "add" as const,
+      element: {
+        id: `${from}_${id}`,
+        type: "arrow" as const,
+        start: { id: from },
+        end: { id },
+      },
+    },
+  ];
+
+  it("cena legada (sem customData): add auto não cai sobre nó existente nem sai do lugar", async () => {
+    const legacy = (
+      (await skeletonToElements(
+        [
+          { id: "a", type: "rectangle", x: 0, y: 0, label: { text: "A" } },
+          { id: "b", type: "rectangle", x: 300, y: 0, label: { text: "B" } },
+          { id: "c", type: "rectangle", x: 300, y: 260, label: { text: "C" } },
+        ],
+        { layout: "keep" },
+      )) as AnyEl[]
+    ).map(({ customData, ...rest }) => rest);
+    const result = (await applyPatch(legacy, addLinked("d", "a"))) as AnyEl[];
+    const d = result.find((e) => e.id === "d")!;
+    for (const el of solidsOf(result)) {
+      if (el.id === "d" || el.id === "d__label") continue;
+      expect(disjoint(d, el)).toBe(true);
+    }
+
+    // Cadeia vertical antiga: o nó ligado a c fica junto de c, não no frame do ELK.
+    const vertical = (
+      (await skeletonToElements(
+        [
+          { id: "a", type: "rectangle", x: 0, y: 0, label: { text: "A" } },
+          { id: "b", type: "rectangle", x: 0, y: 200, label: { text: "B" } },
+          { id: "c", type: "rectangle", x: 0, y: 400, label: { text: "C" } },
+          { id: "ab", type: "arrow", start: { id: "a" }, end: { id: "b" } },
+          { id: "bc", type: "arrow", start: { id: "b" }, end: { id: "c" } },
+        ],
+        { layout: "keep" },
+      )) as AnyEl[]
+    ).map(({ customData, ...rest }) => rest);
+    const after = (await applyPatch(vertical, addLinked("d", "c"))) as AnyEl[];
+    const c = after.find((e) => e.id === "c")!;
+    const d2 = after.find((e) => e.id === "d")!;
+    expect(d2.x).toBe(c.x);
+    expect(d2.y).toBeGreaterThan(c.y + c.height);
+  });
+
+  it("nó pinado pelo usuário: nó auto do ELK não cai em cima dele", async () => {
+    const els = (await skeletonToElements(chain(3))) as AnyEl[];
+    const baseline = positionsOf(els);
+    const n2 = els.find((e) => e.id === "n2")!;
+    const n0 = els.find((e) => e.id === "n0")!;
+    // Arrasta n2 pra logo abaixo de n0, onde o ELK poria o filho novo de n0.
+    const dx = n0.x + 280 - n2.x;
+    const dy = n0.y + 130 - n2.y;
+    const dragged = els.map((e) =>
+      e.id === "n2" || e.id === "n2__label"
+        ? { ...e, x: e.x + dx, y: e.y + dy }
+        : e,
+    );
+    const pinned = pinMovedNodes(dragged, baseline) as AnyEl[];
+    const result = (await applyPatch(pinned, addLinked("d", "n0"))) as AnyEl[];
+    const solids = solidsOf(result).filter((e) => e.type !== "text");
+    for (let i = 0; i < solids.length; i++) {
+      for (let j = i + 1; j < solids.length; j++) {
+        expect(disjoint(solids[i], solids[j])).toBe(true);
+      }
+    }
+    // Seta pro nó deslocado termina nele (rota própria, não a do ELK).
+    const d = result.find((e) => e.id === "d")!;
+    const arrow = result.find((e) => e.id === "n0_d")!;
+    const last = arrow.points[arrow.points.length - 1];
+    expect(arrow.x + last[0]).toBeGreaterThanOrEqual(d.x - 0.5);
+    expect(arrow.x + last[0]).toBeLessThanOrEqual(d.x + d.width + 0.5);
+    expect(arrow.y + last[1]).toBeGreaterThanOrEqual(d.y - 0.5);
+    expect(arrow.y + last[1]).toBeLessThanOrEqual(d.y + d.height + 0.5);
+  });
+
   it("layout keep: nenhum nó existente se move no patch", async () => {
     const els = (await skeletonToElements(fanOut)) as AnyEl[];
     const result = (await applyPatch(els, [{ op: "delete", id: "c2" }], {

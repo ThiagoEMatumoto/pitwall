@@ -49,7 +49,7 @@ function bump<T extends ExElement>(el: T, changes: Partial<T>): T {
 const isSolid = (el: ExElement) =>
   !el.isDeleted && el.type !== "arrow" && el.type !== "line";
 
-function collides(box: Box, solids: ExElement[]): boolean {
+function collides(box: Box, solids: readonly Box[]): boolean {
   return solids.some(
     (o) =>
       box.x < o.x + o.width + COLLISION_MARGIN &&
@@ -415,6 +415,78 @@ export function applyPatchOps(
   return { elements: result, touched };
 }
 
+/**
+ * O ELK não sabe onde estão os nós pinados: a posição dele vale num frame
+ * virtual e pode cair em cima de um nó que o humano arrastou. Desliza o nó
+ * pelo eixo transversal (fica na mesma camada) até sair de cima dos
+ * obstáculos; sem espaço, devolve null.
+ */
+const SLIDE_STEP = 20;
+const SLIDE_MAX_STEPS = 200;
+
+function slideClear(
+  box: Box,
+  obstacles: readonly Box[],
+  direction: DiagramDirection,
+): { x: number; y: number } | null {
+  for (let k = 0; k <= SLIDE_MAX_STEPS; k++) {
+    const off = k * SLIDE_STEP;
+    const candidate =
+      direction === "LR"
+        ? { ...box, y: box.y + off }
+        : { ...box, x: box.x + off };
+    if (!collides(candidate, obstacles)) {
+      return { x: candidate.x, y: candidate.y };
+    }
+  }
+  return null;
+}
+
+/** Destino final de cada nó auto: posição do ELK, salvo colisão com pinados. */
+function resolveAutoTargets(
+  result: ExElement[],
+  layout: LayoutResult,
+  direction: DiagramDirection,
+): {
+  targets: Map<number, { x: number; y: number }>;
+  displaced: Set<string>;
+} {
+  const pinned: Box[] = result.filter(
+    (el) => isLayoutNode(el) && !isAutoPlaced(el),
+  );
+  const targets = new Map<number, { x: number; y: number }>();
+  const conflicted: number[] = [];
+  result.forEach((el, i) => {
+    if (!isLayoutNode(el) || !isAutoPlaced(el)) return;
+    const to = layout.positions.get(el.id);
+    if (!to) return;
+    const box = { x: to.x, y: to.y, width: el.width, height: el.height };
+    if (collides(box, pinned)) conflicted.push(i);
+    else targets.set(i, to);
+  });
+  const displaced = new Set<string>();
+  for (const i of conflicted) {
+    const el = result[i];
+    const to = layout.positions.get(el.id)!;
+    const obstacles: Box[] = [
+      ...pinned,
+      ...[...targets].map(([j, p]) => ({
+        ...p,
+        width: result[j].width,
+        height: result[j].height,
+      })),
+    ];
+    const box = { x: to.x, y: to.y, width: el.width, height: el.height };
+    // Sem espaço na camada: fica onde estava (posição provisória já livre).
+    targets.set(
+      i,
+      slideClear(box, obstacles, direction) ?? { x: el.x, y: el.y },
+    );
+    displaced.add(el.id);
+  }
+  return { targets, displaced };
+}
+
 /** Desloca o nó (e o label dele) pro ponto do layout. */
 function moveNode(
   result: ExElement[],
@@ -457,15 +529,16 @@ export function finalizePatchLayout(
   const touched = new Set(patched.touched);
   const indexOf = new Map(result.map((el, i) => [el.id, i]));
 
+  let displaced = new Set<string>();
   if (layout) {
-    result.forEach((el, i) => {
-      if (!isLayoutNode(el) || !isAutoPlaced(el)) return;
-      const to = layout.positions.get(el.id);
-      if (!to) return;
-      if (Math.abs(to.x - el.x) < 0.5 && Math.abs(to.y - el.y) < 0.5) return;
+    const resolved = resolveAutoTargets(result, layout, direction);
+    displaced = resolved.displaced;
+    for (const [i, to] of resolved.targets) {
+      const el = result[i];
+      if (Math.abs(to.x - el.x) < 0.5 && Math.abs(to.y - el.y) < 0.5) continue;
       moveNode(result, i, to, direction);
       touched.add(el.id);
-    });
+    }
   }
 
   result.forEach((el, i) => {
@@ -478,7 +551,11 @@ export function finalizePatchLayout(
     const endEl = result[endIdx];
     if (startEl.isDeleted || endEl.isDeleted) return;
     const elkRoute =
-      layout && isAutoPlaced(startEl) && isAutoPlaced(endEl)
+      layout &&
+      isAutoPlaced(startEl) &&
+      isAutoPlaced(endEl) &&
+      !displaced.has(startEl.id) &&
+      !displaced.has(endEl.id)
         ? layout.routes.get(lin.id)
         : undefined;
     const affected =

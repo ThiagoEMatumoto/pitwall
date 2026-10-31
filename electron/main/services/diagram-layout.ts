@@ -98,7 +98,8 @@ function sceneDirection(elements: unknown[]): DiagramDirection {
 
 /**
  * Patch incremental. layout "auto" (default): ELK roda no grafo inteiro, mas
- * só nós com customData.pitwall.auto=true se movem; pinados ficam. "keep":
+ * só nós com customData.pitwall.auto=true se movem; pinados ficam e nenhum nó
+ * auto é posto em cima deles (finalizePatchLayout). "keep":
  * nada se move, só as setas tocadas são reroteadas.
  */
 export async function applyPatch(
@@ -111,6 +112,17 @@ export async function applyPatch(
   if (options.layout === 'keep') return finalizePatchLayout(patched, null, direction)
   const live = patched.elements
   const hasAuto = live.some((el) => isLayoutNode(el) && isAutoPlaced(el))
-  const layout = hasAuto ? await runElkLayout(elementsLayoutGraph(live, direction)) : null
+  // Cena só com pinados (legada sem customData, ou tudo arrastado): o frame do
+  // ELK não tem relação com o desenho, então os nós novos ficam na posição
+  // livre de colisão que o applyPatchOps escolheu.
+  const priorAuto = new Set(
+    (elements as ExElement[])
+      .filter((el) => isLayoutNode(el) && isAutoPlaced(el))
+      .map((el) => el.id),
+  )
+  const hasPinned = live.some((el) => isLayoutNode(el) && !isAutoPlaced(el))
+  const elkFrameValid = !hasPinned || live.some((el) => priorAuto.has(el.id) && isLayoutNode(el))
+  const layout =
+    hasAuto && elkFrameValid ? await runElkLayout(elementsLayoutGraph(live, direction)) : null
   return finalizePatchLayout(patched, layout, direction)
 }
