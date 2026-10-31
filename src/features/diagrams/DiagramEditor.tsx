@@ -18,6 +18,7 @@ import { diagramsApi } from "@/lib/ipc";
 import { showToast } from "@/features/notifications/toast-store";
 import { Button } from "@/components/ui/Button";
 import { LazyExcalidraw, loadExcalidrawUtils } from "./excalidraw-lazy";
+import { restoreSceneElements } from "./restore-scene";
 import {
   fromExcalidrawLibraryItems,
   toExcalidrawLibraryItems,
@@ -158,12 +159,8 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     libraryHashRef.current = utils.getLibraryItemsHash(libraryItems);
     return {
       // Rede de segurança pra cenas geradas fora do editor: refaz bindings
-      // seta↔shape e remede os textos com a fonte real.
-      elements: utils.restoreElements(
-        diagram.scene.elements as Parameters<typeof utils.restoreElements>[0],
-        null,
-        { repairBindings: true, refreshDimensions: true },
-      ),
+      // seta↔shape (sem remedir texto — ver restore-scene.ts).
+      elements: restoreSceneElements(utils, diagram.scene.elements),
       libraryItems,
       // Sem viewBackgroundColor custom: o theme="dark" do Excalidraw INVERTE
       // as cores do canvas — um bg escuro aqui viraria claro na tela. Os
@@ -337,11 +334,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     const api = apiRef.current;
     if (!api) return false;
     const utils = await loadExcalidrawUtils();
-    const restored = utils.restoreElements(
-      remote.scene.elements as Parameters<typeof utils.restoreElements>[0],
-      null,
-      { repairBindings: true, refreshDimensions: true },
-    );
+    const restored = restoreSceneElements(utils, remote.scene.elements);
     // Compara APÓS o restore: o fingerprint dos elementos crus do banco
     // difere dos restaurados (restoreElements normaliza campos), então um
     // echo de rename/thumbnail chegaria aqui como "mudança" e causaria
