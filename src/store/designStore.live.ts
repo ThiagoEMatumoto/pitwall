@@ -62,6 +62,19 @@ function groupActivity(list: DesignAgentActivity[]): ActivityMap {
   return out
 }
 
+// Mutates `map`: callers pass their own fresh copy.
+function noteFinish(map: Record<string, number>, a: DesignAgentActivity): void {
+  if (a.phase === 'finish' && a.at > (map[a.docId] ?? 0)) map[a.docId] = a.at
+}
+
+export function recordFinish(store: DesignStore, a: DesignAgentActivity): void {
+  store.setState((s) => {
+    const lastFinishAt = { ...s.lastFinishAt }
+    noteFinish(lastFinishAt, a)
+    return { lastFinishAt }
+  })
+}
+
 // `agentActivity` stays the open document's slice so the canvas components
 // keep reading one flat map.
 export function setDocActivity(store: DesignStore, docId: string, next: ActivityMap): void {
@@ -84,16 +97,19 @@ export async function hydrateLiveState(store: DesignStore, docId?: string): Prom
   store.setState((s) => {
     const activityByDoc: Record<string, ActivityMap> = docId ? { ...s.activityByDoc } : {}
     if (docId) delete activityByDoc[docId]
+    const lastFinishAt = { ...s.lastFinishAt }
     for (const st of states) {
       const grouped = groupActivity(st.activity)
       if (Object.keys(grouped).length) activityByDoc[st.docId] = grouped
+      for (const c of st.changes) noteFinish(lastFinishAt, c)
     }
     const open = s.docId
-    if (!open || (docId && docId !== open)) return { activityByDoc }
+    if (!open || (docId && docId !== open)) return { activityByDoc, lastFinishAt }
     const seen = s.lastSeenAt[open] ?? 0
     const changes = states.find((st) => st.docId === open)?.changes ?? []
     return {
       activityByDoc,
+      lastFinishAt,
       agentActivity: activityByDoc[open] ?? {},
       unseenChanges: changes.filter((c) => c.at > seen),
     }

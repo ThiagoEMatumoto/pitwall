@@ -21,7 +21,7 @@ import {
   upsertMeta,
   type DesignStore,
 } from './designStore.internal'
-import { reduceActivity, setDocActivity } from './designStore.live'
+import { recordFinish, reduceActivity, setDocActivity } from './designStore.live'
 
 // The artboard's frame intersects the mounted stage on the current page. No
 // stage (canvas not mounted) counts as not visible. A visible artboard already
@@ -98,6 +98,7 @@ async function adoptNewArtboard(store: DesignStore, artboardId: string): Promise
 export function handleAgentActivity(store: DesignStore, a: DesignAgentActivity): void {
   const current = store.getState().activityByDoc[a.docId] ?? {}
   setDocActivity(store, a.docId, reduceActivity(current, a))
+  if (a.phase === 'finish') recordFinish(store, a)
 }
 
 export async function handleDocumentUpdated(store: DesignStore, docId: string): Promise<void> {
