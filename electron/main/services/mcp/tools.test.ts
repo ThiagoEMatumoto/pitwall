@@ -1625,7 +1625,7 @@ describe('mcp tools — diagram library', () => {
 
   it('diagram_library_install por catalogId baixa a URL raw do catálogo e list mostra instalada', async () => {
     const fetchMock = vi.fn(
-      async () =>
+      async (_url: string) =>
         new Response(
           JSON.stringify({
             type: 'excalidrawlib',
