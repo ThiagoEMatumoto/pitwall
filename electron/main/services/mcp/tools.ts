@@ -1513,7 +1513,43 @@ const diagramParentType = z.enum([
 ])
 
 // Espelha DiagramSkeletonElement (shared/diagram-skeleton.ts).
-const skeletonElementType = z.enum(['rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line'])
+const skeletonElementType = z.enum([
+  'rectangle',
+  'ellipse',
+  'diamond',
+  'text',
+  'arrow',
+  'line',
+  'entity',
+  'class',
+  'group',
+  'frame',
+])
+
+// ER/UML (shared/diagram-shapes.ts): entity = tabela, class = 3 compartimentos;
+// relation vira as pontas da seta.
+const entityFieldSchema = z.object({
+  name: z.string().min(1),
+  type: z.string().optional(),
+  pk: z.boolean().optional(),
+  fk: z.boolean().optional(),
+})
+const diagramRelation = z.enum([
+  '1:1',
+  '1:N',
+  'N:M',
+  'association',
+  'inheritance',
+  'composition',
+  'aggregation',
+])
+const blockFields = {
+  name: z.string().optional(),
+  fields: z.array(entityFieldSchema).optional(),
+  attributes: z.array(z.string()).optional(),
+  methods: z.array(z.string()).optional(),
+  relation: diagramRelation.optional(),
+}
 
 const skeletonElementSchema = z.object({
   id: z.string().min(1),
@@ -1528,6 +1564,8 @@ const skeletonElementSchema = z.object({
   end: z.object({ id: z.string().min(1) }).optional(),
   strokeColor: z.string().optional(),
   backgroundColor: z.string().optional(),
+  ...blockFields,
+  children: z.array(z.string().min(1)).optional(),
 })
 
 // Layout ELK (electron/main/services/diagram-layout.ts). auto: o layout
@@ -1596,6 +1634,7 @@ const diagramPatchOpSchema = z.discriminatedUnion('op', [
     end: z.object({ id: z.string().min(1) }).optional(),
     strokeColor: z.string().optional(),
     backgroundColor: z.string().optional(),
+    ...blockFields,
   }),
   z.object({ op: z.literal('delete'), id: z.string().min(1) }),
 ])
@@ -1643,7 +1682,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
+        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
       inputSchema: diagramCreateSchema,
       handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
@@ -1708,7 +1747,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_patch',
       title: 'Patch diagram (preferred edit)',
       description:
-        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene. With layout "auto" (default) ELK re-lays out the graph, but only nodes the layout placed move: nodes the human dragged, or that a patch gave x/y, are PINNED and stay put (their arrows are rerouted). An update with x/y pins that node. layout "keep" moves nothing. direction "LR" | "TB" overrides the scene\'s direction. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
+        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene. With layout "auto" (default) ELK re-lays out the graph, but only nodes the layout placed move: nodes the human dragged, or that a patch gave x/y, are PINNED and stay put (their arrows are rerouted). An update with x/y pins that node. An update with fields/attributes/methods/name rebuilds an entity/class block in place; relation swaps an arrow\'s heads; deleting a group/frame keeps its children. layout "keep" moves nothing. direction "LR" | "TB" overrides the scene\'s direction. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
       inputSchema: diagramPatchSchema,
       handler: async (args) => {
         const { id, summary, ops, direction, layout } = diagramPatchSchema.parse(args)

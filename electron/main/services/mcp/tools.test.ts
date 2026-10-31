@@ -1586,6 +1586,65 @@ describe('mcp tools — diagrams', () => {
       db.prepare('SELECT COUNT(*) AS n FROM diagram_links WHERE diagram_id = ?').get(diagram.id),
     ).toEqual({ n: 0 })
   })
+
+  it('diagram_create/patch aceitam entity, class, group, frame e relation (round-trip)', async () => {
+    const { diagram, skeleton } = await callAsync<{
+      diagram: DiagramMetaOut
+      skeleton: Array<SkeletonOut & Record<string, unknown>>
+    }>('diagram_create', {
+      title: 'Schema',
+      kind: 'er',
+      summary: 'ER',
+      elements: [
+        {
+          id: 'users',
+          type: 'entity',
+          name: 'users',
+          fields: [{ name: 'id', type: 'uuid', pk: true }],
+        },
+        {
+          id: 'orders',
+          type: 'entity',
+          name: 'orders',
+          fields: [{ name: 'user_id', type: 'uuid', fk: true }],
+        },
+        { id: 'base', type: 'class', name: 'Base', attributes: [], methods: ['+ save()'] },
+        { id: 'r1', type: 'arrow', start: { id: 'users' }, end: { id: 'orders' }, relation: '1:N' },
+        { id: 'g', type: 'group', label: { text: 'Core' }, children: ['users', 'orders'] },
+        { id: 'f', type: 'frame', name: 'Model', children: ['base'] },
+      ],
+    })
+    const byId = (id: string) => skeleton.find((s) => s.id === id)!
+    expect(byId('users')).toMatchObject({ type: 'entity', name: 'users' })
+    expect(byId('base')).toMatchObject({ type: 'class', methods: ['+ save()'] })
+    expect(byId('r1')).toMatchObject({ relation: '1:N' })
+    expect((byId('g').children as string[]).sort()).toEqual(['orders', 'users'])
+    expect(byId('f')).toMatchObject({ type: 'frame', name: 'Model', children: ['base'] })
+    // Partes internas do bloco não vazam pro skeleton.
+    expect(skeleton.some((s) => s.id.includes('__'))).toBe(false)
+
+    const patched = await callAsync<{ skeleton: Array<SkeletonOut & Record<string, unknown>> }>(
+      'diagram_patch',
+      {
+        id: diagram.id,
+        summary: 'nova coluna',
+        ops: [
+          {
+            op: 'update',
+            id: 'users',
+            fields: [
+              { name: 'id', type: 'uuid', pk: true },
+              { name: 'email', type: 'text' },
+            ],
+          },
+        ],
+      },
+    )
+    expect(patched.skeleton.find((s) => s.id === 'users')?.fields).toEqual([
+      { name: 'id', type: 'uuid', pk: true },
+      { name: 'email', type: 'text' },
+    ])
+  })
 })
 
 describe('mcp tools — diagram library', () => {
