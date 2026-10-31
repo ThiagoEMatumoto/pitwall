@@ -32,6 +32,7 @@ import type {
   DesignExportScale,
   DesignLink,
   DesignListFilter,
+  DesignLiveState,
   DesignPage,
   DesignPdfInput,
   DesignPdfResult,
@@ -152,7 +153,7 @@ export function registerDesignIpc(): void {
   ipcMain.handle('design:document-delete', (_e, rawId: unknown): void => {
     const id = requireId(rawId, 'id')
     designStore.removeDocument(id)
-    liveState.clearActivity(id)
+    liveState.forgetDoc(id)
     if (liveState.getActiveDoc() === id) liveState.setActiveDoc(null)
     broadcast('design:document-deleted', { docId: id })
   })
@@ -331,6 +332,10 @@ export function registerDesignIpc(): void {
   ipcMain.handle('design:active-doc-set', (_e, docId: unknown): void => {
     liveState.setActiveDoc(optionalId(docId, 'docId'))
   })
+
+  ipcMain.handle('design:live-state', (_e, docId: unknown): DesignLiveState[] =>
+    liveState.snapshot(optionalId(docId, 'docId') ?? undefined),
+  )
 
   // ---- export ----
 

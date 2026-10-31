@@ -187,6 +187,15 @@ export interface DesignAgentActivity {
   summary?: string
 }
 
+// design:live-state — what main remembers in memory for a document: the
+// in-flight agent calls ('start' entries) and the latest design_nodes_finish
+// events (summary + artboard), both bounded by the activity TTL.
+export interface DesignLiveState {
+  docId: string
+  activity: DesignAgentActivity[]
+  changes: DesignAgentActivity[]
+}
+
 export interface DesignNodeSummary {
   id: string
   tag: string
@@ -396,6 +405,8 @@ export interface DesignApi {
   selectionSet(input: DesignSelection): Promise<void>
   // design:active-doc-set
   activeDocSet(docId: string | null): Promise<void>
+  // design:live-state — no docId: every document with fresh activity/changes.
+  liveState(docId?: string): Promise<DesignLiveState[]>
   // design:export
   export(input: DesignExportInput): Promise<DesignExportResult>
   // design:pdf-export — one artboard per page; opens a save dialog.
