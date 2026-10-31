@@ -24,17 +24,26 @@ export function installLibraryJson(json: unknown): InstallDiagramLibraryResult {
   return installParsed(json).result
 }
 
-function installParsed(json: unknown): { result: InstallDiagramLibraryResult; ids: string[] } {
+// `replacing`: ids de uma instalação anterior a apagar antes do merge — só
+// depois do parse, pra um arquivo quebrado não destruir a cópia que funciona.
+function installParsed(
+  json: unknown,
+  replacing: string[] = [],
+): { result: InstallDiagramLibraryResult; ids: string[] } {
   const parsed = parseExcalidrawLibrary(json)
+  if (replacing.length > 0) libraryStore.removeItems(replacing)
   const items = libraryStore.addItems(parsed)
   return { result: { items, added: parsed.length }, ids: parsed.map((i) => i.id) }
 }
 
 export async function installLibraryFromUrl(url: string): Promise<InstallDiagramLibraryResult> {
   const json = await fetchLibraryJson(url)
-  const { result, ids } = installParsed(json)
   // Instalar a URL de uma entrada do catálogo à mão conta como instalar a entrada.
+  // Reinstalar SUBSTITUI o lote anterior: arquivos v1 (uml-er, database) não têm
+  // id por item, o parser gera ids novos a cada vez e o merge por id duplicaria.
   const entry = findCatalogEntryByUrl(url)
+  const previous = entry ? (readCatalogInstalls()[entry.id] ?? []) : []
+  const { result, ids } = installParsed(json, previous)
   if (entry) recordCatalogInstall(entry.id, ids)
   return result
 }

@@ -1891,7 +1891,7 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_library_install',
       title: 'Install shape library',
       description:
-        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: catalogId = id from the curated catalog (diagram_library_list { includeCatalog: true }; e.g. aws-architecture, gcp-icons, uml-er, c4-architecture) — preferred; url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL); or library_json = the .excalidrawlib content as a JSON object. Items merge by id: re-installing the same library updates items instead of duplicating them. Returns how many items the file brought (added) plus the full library.',
+        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: catalogId = id from the curated catalog (diagram_library_list { includeCatalog: true }; e.g. aws-architecture, gcp-icons, uml-er, c4-architecture) — preferred; url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL); or library_json = the .excalidrawlib content as a JSON object. Re-installing a catalog entry replaces its previous items; other sources merge by item id (legacy v1 files have no ids and duplicate on re-install). Returns how many items the file brought (added) plus the full library.',
       inputSchema: diagramLibraryInstallSchema,
       handler: async (args) => {
         const input = diagramLibraryInstallSchema.parse(args)

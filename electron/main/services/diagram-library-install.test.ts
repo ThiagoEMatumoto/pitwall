@@ -105,4 +105,38 @@ describe('diagram-library-install (catálogo)', () => {
     expect(items.map((i) => i.id)).toEqual(['mine'])
     expect(installedCatalogIds()).toEqual([])
   })
+
+  // uml-er e database do catálogo são .excalidrawlib v1: itens sem id, e o parser
+  // gera um id novo a cada parse. Reinstalar não pode duplicar nem orfanar itens.
+  const LIB_V1 = {
+    type: 'excalidrawlib',
+    version: 1,
+    library: [[{ id: 'e1', type: 'rectangle' }], [{ id: 'e2', type: 'ellipse' }]],
+  }
+
+  it('reinstalar uma entrada v1 substitui os itens em vez de duplicar', async () => {
+    store.addItems([
+      { id: 'mine', name: 'Meu', status: 'unpublished', elements: [], created: 1 },
+    ])
+    mockFetchOk(LIB_V1)
+    await installCatalogLibrary('uml-er')
+    await installCatalogLibrary('uml-er')
+    await installLibraryFromUrl(findCatalogEntry('uml-er')!.url)
+
+    expect(store.getItems()).toHaveLength(3)
+    expect(installedCatalogIds()).toEqual(['uml-er'])
+
+    const items = removeCatalogLibrary('uml-er')
+    expect(items.map((i) => i.id)).toEqual(['mine'])
+  })
+
+  it('reinstalação que falha no parse não apaga a instalação anterior', async () => {
+    mockFetchOk(LIB_V1)
+    await installCatalogLibrary('uml-er')
+    mockFetchOk({ type: 'excalidrawlib', version: 1, library: ['quebrado'] })
+    await expect(installCatalogLibrary('uml-er')).rejects.toThrow(/inválida/)
+
+    expect(store.getItems()).toHaveLength(2)
+    expect(installedCatalogIds()).toEqual(['uml-er'])
+  })
 })
