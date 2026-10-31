@@ -66,15 +66,8 @@ import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerDesignIpc } from './ipc/design'
-import { registerVideoIpc } from './ipc/video'
-import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
-import {
-  initMeetings,
-  onAppReady as meetingsOnAppReady,
-  onWillQuit as meetingsOnWillQuit,
-} from './services/meetings'
 import {
   forgetSessionSummaries,
   scheduleTurnSummary,
@@ -110,7 +103,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const isDev = !app.isPackaged
 
 // Instância única: o auto-update relança o app sem derrubar o antigo, e duas
-// instâncias viram dois ícones no tray e dois PTYs brigando pelo mesmo banco.
+// instâncias viram duas janelas e dois PTYs brigando pelo mesmo banco.
 // A segunda só acorda a janela da primeira e sai — antes de abrir o DB.
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -369,10 +362,8 @@ app.whenReady().then(async () => {
   registerTasksIpc()
   registerDiagramsIpc()
   registerDesignIpc()
-  registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
-  initMeetings()
   registerSyncIpc()
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via
@@ -397,9 +388,6 @@ app.whenReady().then(async () => {
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o
   // watcher via watcherHooks internamente quando importa.
   createMainWindow()
-  // Tray, atalho global e janela flutuante das reuniões dependem do ready e da
-  // janela principal (o menu do tray a foca).
-  meetingsOnAppReady()
   initUpdater()
   startUsageMonitor()
   startFeatureWatcher()
@@ -502,8 +490,6 @@ function runFinalShutdown(): void {
   // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.
   promptQueue.suspendForShutdown()
   ptyManager.killAll()
-  // Render do Remotion é processo filho e não morre sozinho com o app.
-  killAllVideoRenders()
   sessionActivityService.closeAll()
   getDb()
     .prepare("UPDATE sessions SET status = 'exited', ended_at = ? WHERE status = 'running'")
@@ -544,12 +530,6 @@ app.on('before-quit', (event) => {
     runFinalShutdown()
     app.quit() // re-dispara o quit; didShutdown=true → before-quit é no-op agora
   })
-})
-
-// Atalho global e tray precisam sair antes do processo morrer (globalShortcut
-// não limpa sozinho no Linux).
-app.on('will-quit', () => {
-  meetingsOnWillQuit()
 })
 
 app.on('window-all-closed', () => {

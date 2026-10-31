@@ -83,13 +83,9 @@ These clips show real screens with a fictional dataset.
 
 **Ingest and dossiers _(experimental)_.** A staged research pipeline with human approval gates and checkpoints, fed by a Tavily source provider with source classification.
 
-**Meetings.** Recording and live transcription of calls without leaving the desk: start from the Meetings area, the tray or `Ctrl+Shift+R`, and a floating always-on-top window shows the timer, audio levels and the last lines while you take quick notes. System audio and microphone are captured through PipeWire (`pw-record`) and transcribed in chunks by the same OpenAI-compatible STT endpoint the voice mode uses (`~/.config/voz/voz.env`). When you stop, `claude -p` writes the summary (decisions, next steps, open questions, your notes folded in) and extracts action items — each one grounded on a literal transcript quote before it becomes a task. Exposed to agents as `meeting_*` MCP tools.
-
 **Claude Code configuration.** Read and edit `CLAUDE.md`, rules, CLI settings, hooks, keybindings, MCP servers, plugins/marketplace and the statusline script from the app.
 
 **Usage metrics.** A local dashboard built from your Claude Code JSONL transcripts: token usage and cost, top tools and an agent-orchestration KPI.
-
-**Video Lab _(in development)_.** A Remotion project for producing the product videos. It lives on a branch and is not part of a release yet.
 
 ## Install
 
@@ -141,7 +137,7 @@ electron/
       handoff/    # alias, prepare, spawn-child, compose-prompt, adopt
       baton/      # distill, compose-baton-prompt
       mcp/        # MCP server, tools, service-tools, session-identity
-      meetings/, video/, sync/, architecture/
+      sync/, architecture/
   preload/        # contextIsolation bridge (window.api.*)
 shared/
   types/          # types shared across main ↔ renderer
@@ -149,7 +145,7 @@ shared/
 src/
   app/            # App root, IconRail navigation, theme
   features/       # sessions (chat, voice), diagrams, handoffs, jobs,
-                  # content, cc-configs, projects, architecture, meetings,
+                  # content, cc-configs, projects, architecture,
                   # dossiers, objectives, tasks, features, metrics, files,
                   # settings, brand
   lib/            # renderer-side IPC helpers

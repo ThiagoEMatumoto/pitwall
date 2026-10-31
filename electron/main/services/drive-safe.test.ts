@@ -21,10 +21,10 @@ describe('driveSafeBlocks', () => {
     const env = { CM_DRIVE_SAFE: '1' }
     expect(driveSafeBlocks('repo auto-pull', env)).toBe(true)
     expect(driveSafeBlocks('repo auto-pull', env)).toBe(true)
-    expect(driveSafeBlocks('meeting detector', env)).toBe(true)
+    expect(driveSafeBlocks('repo auto-clone', env)).toBe(true)
     expect(log.mock.calls.map((c) => c[0])).toEqual([
       '[drive-safe] repo auto-pull disabled',
-      '[drive-safe] meeting detector disabled',
+      '[drive-safe] repo auto-clone disabled',
     ])
   })
 

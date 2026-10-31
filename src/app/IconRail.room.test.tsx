@@ -20,7 +20,6 @@ vi.mock('@/lib/ipc', () => ({
   },
 }))
 vi.mock('@/features/titlebar/UsageWidget', () => ({ UsageWidget: () => null }))
-vi.mock('@/features/meetings/RecordingPill', () => ({ RecordingPill: () => null }))
 
 const store = await import('../../electron/main/services/handoff-store')
 const { readRequestInput, readTransitions, toAttentionLive } =

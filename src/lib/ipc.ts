@@ -2,8 +2,6 @@
 // Always prefer importing from here so we have a single chokepoint
 // for cross-cutting concerns (logging, error wrapping) later.
 
-import type { VideoApi } from '../../shared/types/ipc'
-
 const api = window.api
 
 export const projectsApi = api.projects
@@ -44,12 +42,6 @@ export const notificationsApi = api.notifications
 export const mcpApi = api.mcp
 export const syncApi = api.sync
 export const voiceApi = api.voice
-export const meetingsApi = api.meetings
-
-// Video Lab: a chave `video` entra em `Api` no commit que implementa o preload.
-// Até lá o acesso é por cast pro tipo já declarado na fundação — a UI programa
-// contra o contrato, não contra o que já existe em runtime.
-export const videoApi = (api as unknown as { video: VideoApi }).video
 
 export { api }
 

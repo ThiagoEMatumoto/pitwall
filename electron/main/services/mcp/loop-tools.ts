@@ -6,7 +6,7 @@ import { loopSnapshot } from '../loop-snapshot'
 import { exportLoopDoc } from '../loop-export'
 import { ok, type McpNotify, type ToolDef } from './tools'
 
-// Tools MCP do loop da feature. Arquivo próprio (precedente: video-tools.ts) e
+// Tools MCP do loop da feature. Arquivo próprio (precedente: canvas-tools.ts) e
 // mesmo contrato das demais: handler fino (zod → store → notify → retorno), sem
 // regra de negócio, e o broadcast espelha 1:1 o canal que ipc/loop.ts emite
 // ('loop:updated'), pra a UI atualizar ao vivo quando quem escreveu foi a sessão.

@@ -15,11 +15,8 @@ export default defineConfig({
     build: {
       outDir: "out/main",
       lib: {
-        // Segunda entrada: o diarizer-worker roda em utilityProcess.fork e
-        // precisa ser um arquivo próprio em out/main.
         entry: {
           index: resolve("electron/main/index.ts"),
-          "diarizer-worker": resolve("electron/main/services/meetings/diarizer-worker.ts"),
         },
       },
     },
@@ -61,7 +58,6 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve("src/index.html"),
-          floating: resolve("src/floating.html"),
         },
       },
     },

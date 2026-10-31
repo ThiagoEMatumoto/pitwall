@@ -37,8 +37,6 @@ export type Area =
   | 'handoffs'
   | 'diagrams'
   | 'design'
-  | 'videos'
-  | 'meetings'
   | 'room'
 
 // Persistência leve do estado colapsado da sidebar (mesmo padrão do

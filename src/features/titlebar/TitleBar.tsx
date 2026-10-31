@@ -6,7 +6,6 @@ import { AttentionQueueButton } from '@/features/session-switcher/AttentionPopov
 import { cycleAttention, useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
 import { formatCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
-import { RecordingPill } from '@/features/meetings/RecordingPill'
 import { UsageWidget } from './UsageWidget'
 
 const drag = { WebkitAppRegion: 'drag' } as CSSProperties
@@ -69,7 +68,6 @@ export function TitleBar() {
           </button>
         )}
         <AttentionQueueButton queue={queue} />
-        <RecordingPill />
       </div>
 
       <div className="flex items-center gap-2" style={noDrag}>

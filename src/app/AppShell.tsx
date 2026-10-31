@@ -24,8 +24,6 @@ import { OverviewArea } from '@/features/overview/OverviewArea'
 import { TasksArea } from '@/features/tasks/TasksArea'
 import { DiagramsArea } from '@/features/diagrams/DiagramsArea'
 import { DesignArea } from '@/features/design/DesignArea'
-import { VideosArea } from '@/features/videos/VideosArea'
-import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
 import { DormantPane } from '@/features/sessions/DormantPane'
 import { createActivationWaker } from '@/features/sessions/dormant-wake'
@@ -1001,7 +999,6 @@ export function AppShell() {
 
       {area === 'overview' && <OverviewArea />}
 
-      {area === 'meetings' && <MeetingsArea />}
 
       {area === 'objectives' && <ObjectivesArea />}
 
@@ -1011,7 +1008,6 @@ export function AppShell() {
 
       {area === 'diagrams' && <DiagramsArea />}
       {area === 'design' && <DesignArea />}
-      {area === 'videos' && <VideosArea />}
 
       {area === 'tasks' && <TasksArea />}
 
