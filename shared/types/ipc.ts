@@ -29,6 +29,7 @@ export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-lo
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { DiagramLibraryCatalogEntry } from '../diagram-library-catalog'
 import type {
   HibernateStatsView,
   PaneCheckRequest,
@@ -2191,6 +2192,12 @@ export interface InstallDiagramLibraryResult {
   added: number
 }
 
+// Catálogo curado + quais entradas já estão instaladas (derivado da biblioteca).
+export interface DiagramLibraryCatalogState {
+  entries: DiagramLibraryCatalogEntry[]
+  installedIds: string[]
+}
+
 // Resultado da transcrição de um ditado. Erros já vêm em PT, prontos pra tela
 // (porte das mensagens de vozapp/stt.py).
 export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
@@ -2732,6 +2739,9 @@ export interface Api {
       replace(items: DiagramLibraryItem[]): Promise<DiagramLibraryItem[]>
       remove(id: string): Promise<DiagramLibraryItem[]>
       installUrl(url: string): Promise<InstallDiagramLibraryResult>
+      catalog(): Promise<DiagramLibraryCatalogState>
+      installCatalog(catalogId: string): Promise<InstallDiagramLibraryResult>
+      removeCatalog(catalogId: string): Promise<DiagramLibraryItem[]>
       // Payload = { items: DiagramLibraryItem[] }.
       onUpdated(handler: (payload: unknown) => void): () => void
     }

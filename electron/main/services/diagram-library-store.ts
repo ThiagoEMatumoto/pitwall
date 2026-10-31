@@ -83,6 +83,15 @@ export function removeItem(id: string): DiagramLibraryItem[] {
   return getItems()
 }
 
+export function removeItems(ids: string[]): DiagramLibraryItem[] {
+  const db = getDb()
+  const del = db.prepare('DELETE FROM diagram_library_items WHERE id = ?')
+  db.transaction(() => {
+    for (const id of ids) del.run(id)
+  })()
+  return getItems()
+}
+
 export function addItems(items: DiagramLibraryItem[]): DiagramLibraryItem[] {
   const db = getDb()
   const now = Date.now()

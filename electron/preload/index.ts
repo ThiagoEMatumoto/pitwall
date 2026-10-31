@@ -518,6 +518,10 @@ const api: Api = {
       replace: (items: DiagramLibraryItem[]) => invoke('diagrams:library-replace', items),
       remove: (id: string) => invoke('diagrams:library-remove', id),
       installUrl: (url: string) => invoke('diagrams:library-install-url', url),
+      catalog: () => invoke('diagrams:library-catalog'),
+      installCatalog: (catalogId: string) =>
+        invoke('diagrams:library-install-catalog', catalogId),
+      removeCatalog: (catalogId: string) => invoke('diagrams:library-remove-catalog', catalogId),
       onUpdated: (handler) => subscribe<unknown>('diagramLibrary:updated', handler),
     },
   },
