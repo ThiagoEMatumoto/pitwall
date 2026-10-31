@@ -193,8 +193,8 @@ export function upsertMeta(
 }
 
 export function toMeta(doc: DesignDocument): DesignDocumentMeta {
-  const { id, title, status, thumbnail, createdAt, updatedAt } = doc
-  return { id, title, status, thumbnail, createdAt, updatedAt }
+  const { id, title, status, folderId, thumbnailVersion, createdAt, updatedAt } = doc
+  return { id, title, status, folderId, thumbnailVersion, createdAt, updatedAt }
 }
 
 // Canvas-space bounds of the selection: node rects come from the iframe,

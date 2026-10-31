@@ -106,7 +106,7 @@ export function readTools(deps: DesignToolDeps): ToolDef[] {
       inputSchema: schemas.documentList,
       handler: (args) => {
         const filter = schemas.documentList.parse(args)
-        const items = designStore.listDocuments(filter).map(({ thumbnail: _t, ...meta }) => meta)
+        const items = designStore.listDocuments(filter)
         return ok({ items })
       },
     },
@@ -120,7 +120,7 @@ export function readTools(deps: DesignToolDeps): ToolDef[] {
         const { docId, depth } = schemas.documentGet.parse(args)
         const doc = designStore.getDocument(docId)
         if (!doc) return ok({ document: null })
-        const { thumbnail: _t, pages, ...rest } = doc
+        const { pages, ...rest } = doc
         return ok({
           document: {
             ...rest,

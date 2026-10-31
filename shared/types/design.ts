@@ -99,12 +99,27 @@ export interface DesignPage {
   updatedAt: number
 }
 
-// Header without pages: what documentsList() returns.
+// Header without pages: what documentsList() returns. The thumbnail bytes never
+// ride along: render `thumbUrl(id, thumbnailVersion)` (pitwall-design://thumb/…).
 export interface DesignDocumentMeta {
   id: string
   title: string
   status: DesignDocumentStatus
-  thumbnail: string | null
+  folderId: string | null
+  // Changes whenever a new thumbnail is stored; null = none yet (placeholder).
+  thumbnailVersion: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+// One level only: a document is in at most one folder.
+export interface DesignFolder {
+  id: string
+  name: string
+  color: string | null
+  sortOrder: number
+  // Active (non-archived) documents in the folder.
+  docCount: number
   createdAt: number
   updatedAt: number
 }
@@ -223,10 +238,13 @@ export interface DesignListFilter {
   parentType?: DesignParentType
   parentId?: string
   search?: string
+  // Omitted = every folder; null = only documents without a folder.
+  folderId?: string | null
 }
 
 export interface CreateDesignDocumentInput {
   title: string
+  folderId?: string | null
   tokens?: DesignTokens
   fonts?: DesignFonts
   globalCss?: string
@@ -352,6 +370,24 @@ export interface DesignAskInput {
   prompt: string
   // false = only inserts into the session composer for the human to review.
   submit: boolean
+}
+
+export interface CreateDesignFolderInput {
+  name: string
+  color?: string | null
+}
+
+export interface UpdateDesignFolderInput {
+  name?: string
+  // null clears the color.
+  color?: string | null
+  sortOrder?: number
+}
+
+// Payload of design:thumbnail-updated.
+export interface DesignThumbnailUpdatedEvent {
+  docId: string
+  thumbnailVersion: string
 }
 
 // ---- API exposed by the preload (`design` key of Api) ----

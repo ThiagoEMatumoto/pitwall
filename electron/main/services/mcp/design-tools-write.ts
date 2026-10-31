@@ -75,8 +75,7 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
         const input = schemas.documentCreate.parse(args)
         const doc = designStore.createDocument(input)
         deps.notify.broadcast('design:document-updated', { docId: doc.id })
-        const { thumbnail: _t, ...rest } = doc
-        return ok({ document: rest })
+        return ok({ document: doc })
       },
     },
     wrap(
