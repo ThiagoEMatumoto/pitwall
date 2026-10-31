@@ -31,11 +31,8 @@ import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
 import { installLibraryFromUrl, installLibraryJson } from '../diagram-library-install'
-import {
-  applyPatch,
-  elementsToSkeleton,
-  skeletonToElements,
-} from '../../../../shared/diagram-skeleton'
+import { elementsToSkeleton } from '../../../../shared/diagram-skeleton'
+import { applyPatch, skeletonToElements } from '../diagram-layout'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
@@ -95,8 +92,9 @@ export interface ToolDef {
   title: string
   description: string
   inputSchema: z.ZodType
-  // Promise SÓ pra tools com IO real (hoje: o fetch de diagram_library_install
-  // e o proxy de service_call) — o registerTool do SDK aceita
+  // Promise SÓ pra tools com IO real ou trabalho async (hoje: o fetch de
+  // diagram_library_install, o proxy de service_call e o layout ELK dos
+  // diagramas) — o registerTool do SDK aceita
   // CallToolResult | Promise<CallToolResult>.
   handler: (args: unknown) => ToolResult | Promise<ToolResult>
 }
@@ -1532,6 +1530,12 @@ const skeletonElementSchema = z.object({
   backgroundColor: z.string().optional(),
 })
 
+// Layout ELK (electron/main/services/diagram-layout.ts). auto: o layout
+// posiciona todo nó não pinado (x/y do skeleton são ignorados); keep: nada se
+// move. direction: camadas LR (default) ou TB.
+const diagramDirection = z.enum(['LR', 'TB'])
+const diagramLayoutMode = z.enum(['auto', 'keep'])
+
 // Cena Excalidraw crua (shape do Excalidraw, não nosso — elementos ficam unknown).
 const diagramSceneSchema = z.object({
   elements: z.array(z.unknown()),
@@ -1556,12 +1560,16 @@ const diagramCreateSchema = z
     elements: z.array(skeletonElementSchema).optional(),
     scene: diagramSceneSchema.optional(),
     links: z.array(diagramLinkInputSchema).optional(),
+    direction: diagramDirection.optional(),
+    layout: diagramLayoutMode.optional(),
   })
   .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
 
 const diagramGetSchema = z.object({
   id: z.string().min(1),
   format: z.enum(['skeleton', 'full']).default('skeleton'),
+  // Geometria fora por padrão: coordenada lida tende a voltar velha num update.
+  includeGeometry: z.boolean().default(false),
 })
 
 const diagramListSchema = z.object({
@@ -1596,6 +1604,8 @@ const diagramPatchSchema = z.object({
   id: z.string().min(1),
   summary: z.string().min(1),
   ops: z.array(diagramPatchOpSchema).min(1),
+  direction: diagramDirection.optional(),
+  layout: diagramLayoutMode.optional(),
 })
 
 const diagramUpdateSchema = z
@@ -1604,6 +1614,8 @@ const diagramUpdateSchema = z
     summary: z.string().min(1),
     elements: z.array(skeletonElementSchema).optional(),
     scene: diagramSceneSchema.optional(),
+    direction: diagramDirection.optional(),
+    layout: diagramLayoutMode.optional(),
   })
   .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
 
@@ -1631,13 +1643,18 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows; omit x/y for auto-layout; arrows reference node ids via start/end and support label). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene.',
+        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
       inputSchema: diagramCreateSchema,
-      handler: (args) => {
+      handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
         const fromSkeleton = input.elements !== undefined
         const scene: DiagramScene = fromSkeleton
-          ? { elements: skeletonToElements(input.elements!) }
+          ? {
+              elements: await skeletonToElements(input.elements!, {
+                direction: input.direction,
+                layout: input.layout,
+              }),
+            }
           : (input.scene as DiagramScene)
         const diagram = diagramStore.create({
           title: input.title,
@@ -1660,16 +1677,16 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_get',
       title: 'Get diagram',
       description:
-        'Get one diagram by id. format "skeleton" (default) returns the meta, the semantic skeleton derived from the current scene, and the version history (metas); format "full" returns the raw Excalidraw scene. Returns { diagram: null } when not found.',
+        'Get one diagram by id. format "skeleton" (default) returns the meta, the semantic skeleton derived from the current scene, and the version history (metas); format "full" returns the raw Excalidraw scene. The skeleton omits x/y/width/height unless includeGeometry: true — never send coordinates back unless you mean to pin a node there. Returns { diagram: null } when not found.',
       inputSchema: diagramGetSchema,
       handler: (args) => {
-        const { id, format } = diagramGetSchema.parse(args)
+        const { id, format, includeGeometry } = diagramGetSchema.parse(args)
         const diagram = diagramStore.get(id)
         if (!diagram) return ok({ diagram: null })
         if (format === 'full') return ok({ diagram })
         return ok({
           diagram: diagramToMeta(diagram),
-          skeleton: elementsToSkeleton(diagram.scene.elements),
+          skeleton: elementsToSkeleton(diagram.scene.elements, { includeGeometry }),
           versions: diagramStore.listVersions(id),
         })
       },
@@ -1691,13 +1708,13 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_patch',
       title: 'Patch diagram (preferred edit)',
       description:
-        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene, so human refinements to layout/styling survive. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
+        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene. With layout "auto" (default) ELK re-lays out the graph, but only nodes the layout placed move: nodes the human dragged, or that a patch gave x/y, are PINNED and stay put (their arrows are rerouted). An update with x/y pins that node. layout "keep" moves nothing. direction "LR" | "TB" overrides the scene\'s direction. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
       inputSchema: diagramPatchSchema,
-      handler: (args) => {
-        const { id, summary, ops } = diagramPatchSchema.parse(args)
+      handler: async (args) => {
+        const { id, summary, ops, direction, layout } = diagramPatchSchema.parse(args)
         const existing = diagramStore.get(id)
         if (!existing) throw new Error(`diagram não encontrado: ${id}`)
-        const elements = applyPatch(existing.scene.elements, ops)
+        const elements = await applyPatch(existing.scene.elements, ops, { direction, layout })
         const diagram = diagramStore.updateScene({
           id,
           scene: { ...existing.scene, elements },
@@ -1716,13 +1733,18 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_update',
       title: 'Replace diagram scene',
       description:
-        'FULL replacement of the scene (exactly one of elements = skeleton | scene = raw Excalidraw). This DISCARDS any human layout/styling refinement of the current scene — prefer diagram_patch for edits; use this only when redrawing from scratch is intentional. Records a version snapshot (summary is the changelog line).',
+        'FULL replacement of the scene (exactly one of elements = skeleton | scene = raw Excalidraw). This DISCARDS any human layout/styling refinement of the current scene — prefer diagram_patch for edits; use this only when redrawing from scratch is intentional. direction and layout work as in diagram_create. Records a version snapshot (summary is the changelog line).',
       inputSchema: diagramUpdateSchema,
-      handler: (args) => {
+      handler: async (args) => {
         const input = diagramUpdateSchema.parse(args)
         const fromSkeleton = input.elements !== undefined
         const scene: DiagramScene = fromSkeleton
-          ? { elements: skeletonToElements(input.elements!) }
+          ? {
+              elements: await skeletonToElements(input.elements!, {
+                direction: input.direction,
+                layout: input.layout,
+              }),
+            }
           : (input.scene as DiagramScene)
         const diagram = diagramStore.updateScene({
           id: input.id,

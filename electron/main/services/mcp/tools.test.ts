@@ -63,6 +63,10 @@ function call<T>(name: string, args: unknown): T {
   return (tool(name).handler(args) as ToolResult).structuredContent as T
 }
 
+async function callAsync<T>(name: string, args: unknown): Promise<T> {
+  return ((await tool(name).handler(args)) as ToolResult).structuredContent as T
+}
+
 beforeEach(() => {
   notify = makeNotify()
   tools = buildTools(notify)
@@ -1143,8 +1147,8 @@ describe('mcp tools — diagrams', () => {
     end?: { id: string }
   }
 
-  function novoDiagrama(title = 'Fluxo de auth'): DiagramMetaOut {
-    const { diagram } = call<{ diagram: DiagramMetaOut }>('diagram_create', {
+  async function novoDiagrama(title = 'Fluxo de auth'): Promise<DiagramMetaOut> {
+    const { diagram } = await callAsync<{ diagram: DiagramMetaOut }>('diagram_create', {
       title,
       kind: 'flow',
       summary: 'esboço inicial',
@@ -1163,10 +1167,10 @@ describe('mcp tools — diagrams', () => {
     return diagram
   }
 
-  it('diagram_create converte skeleton, persiste, broadcasta e devolve skeleton derivado', () => {
+  it('diagram_create converte skeleton, persiste, broadcasta e devolve skeleton derivado', async () => {
     const antes = notify.calls.length
     const { diagram, skeleton } = (
-      tool('diagram_create').handler({
+      (await tool('diagram_create').handler({
         title: 'Fluxo de auth',
         kind: 'flow',
         summary: 'esboço inicial',
@@ -1182,7 +1186,7 @@ describe('mcp tools — diagrams', () => {
           },
         ],
         links: [{ parentType: 'feature', parentId: 'feat-1' }],
-      }) as ToolResult
+      })) as ToolResult
     ).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(diagram.id).toBeTruthy()
@@ -1217,34 +1221,38 @@ describe('mcp tools — diagrams', () => {
     expect((broadcast[0][1] as { id: string }).id).toBe(diagram.id)
   })
 
-  it('diagram_create exige exatamente um de elements|scene (zod refine)', () => {
-    expect(() => tool('diagram_create').handler({ title: 'X', summary: 's' })).toThrow()
-    expect(() =>
-      tool('diagram_create').handler({
-        title: 'X',
-        summary: 's',
-        elements: [{ id: 'a', type: 'rectangle' }],
-        scene: { elements: [] },
-      }),
-    ).toThrow()
+  it('diagram_create exige exatamente um de elements|scene (zod refine)', async () => {
+    await expect(tool('diagram_create').handler({ title: 'X', summary: 's' })).rejects.toThrow()
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: 'X',
+          summary: 's',
+          elements: [{ id: 'a', type: 'rectangle' }],
+          scene: { elements: [] },
+        }),
+      ),
+    ).rejects.toThrow()
   })
 
-  it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', () => {
-    expect(() =>
-      tool('diagram_create').handler({
-        title: '   ',
-        summary: 's',
-        elements: [{ id: 'a', type: 'rectangle' }],
-      }),
-    ).toThrow(/too small/i)
+  it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', async () => {
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: '   ',
+          summary: 's',
+          elements: [{ id: 'a', type: 'rectangle' }],
+        }),
+      ),
+    ).rejects.toThrow(/too small/i)
   })
 
-  it('diagram_patch aplica ops sobre a cena vigente e grava snapshot', () => {
-    const diagram = novoDiagrama()
+  it('diagram_patch aplica ops sobre a cena vigente e grava snapshot', async () => {
+    const diagram = await novoDiagrama()
     const antes = notify.calls.length
 
     const { diagram: depois, skeleton } = (
-      tool('diagram_patch').handler({
+      (await tool('diagram_patch').handler({
         id: diagram.id,
         summary: 'adiciona o banco',
         ops: [
@@ -1259,7 +1267,7 @@ describe('mcp tools — diagrams', () => {
           { op: 'update', id: 'ui', label: { text: 'Frontend' } },
           { op: 'delete', id: 'e1' },
         ],
-      }) as ToolResult
+      })) as ToolResult
     ).structuredContent as { diagram: DiagramMetaOut; skeleton: SkeletonOut[] }
 
     expect(depois.version).toBe(2)
@@ -1281,8 +1289,8 @@ describe('mcp tools — diagrams', () => {
     expect(broadcast[0][0]).toBe('diagram:updated')
   })
 
-  it('diagram_delete recusa diagrama ativo (two-step) e apaga após archive', () => {
-    const diagram = novoDiagrama('Pra apagar')
+  it('diagram_delete recusa diagrama ativo (two-step) e apaga após archive', async () => {
+    const diagram = await novoDiagrama('Pra apagar')
 
     expect(() => tool('diagram_delete').handler({ id: diagram.id, confirm: true })).toThrow(
       /archive first \(diagram_archive\), then delete/,
@@ -1293,9 +1301,9 @@ describe('mcp tools — diagrams', () => {
       getDb().prepare('SELECT COUNT(*) AS n FROM diagrams WHERE id = ?').get(diagram.id),
     ).toEqual({ n: 1 })
 
-    call('diagram_archive', { id: diagram.id })
+    await callAsync('diagram_archive', { id: diagram.id })
     const antes = notify.calls.length
-    const out = call<{ id: string; deleted: boolean }>('diagram_delete', {
+    const out = await callAsync<{ id: string; deleted: boolean }>('diagram_delete', {
       id: diagram.id,
       confirm: true,
     })
@@ -1306,11 +1314,11 @@ describe('mcp tools — diagrams', () => {
     expect(notify.calls.slice(antes)).toEqual([['diagram:deleted', { id: diagram.id }]])
   })
 
-  it('diagram_link/unlink devolvem o conjunto de links e broadcastam', () => {
-    const diagram = novoDiagrama('Com vínculos')
+  it('diagram_link/unlink devolvem o conjunto de links e broadcastam', async () => {
+    const diagram = await novoDiagrama('Com vínculos')
     const antes = notify.calls.length
 
-    const linked = call<{ links: unknown[] }>('diagram_link', {
+    const linked = await callAsync<{ links: unknown[] }>('diagram_link', {
       id: diagram.id,
       parentType: 'task',
       parentId: 'task-9',
@@ -1322,7 +1330,7 @@ describe('mcp tools — diagrams', () => {
       ['diagramLinks:updated', { diagramId: diagram.id, links: linked.links }],
     ])
 
-    const unlinked = call<{ links: unknown[] }>('diagram_unlink', {
+    const unlinked = await callAsync<{ links: unknown[] }>('diagram_unlink', {
       id: diagram.id,
       parentType: 'task',
       parentId: 'task-9',
@@ -1330,7 +1338,66 @@ describe('mcp tools — diagrams', () => {
     expect(unlinked.links).toEqual([])
   })
 
-  it('integração: create (4 nós/3 setas) → get → patch (move + rename) → archive → delete', () => {
+  it('diagram_create aplica direction TB e devolve skeleton sem geometria', async () => {
+    const { diagram, skeleton } = await callAsync<{
+      diagram: DiagramMetaOut
+      skeleton: Array<SkeletonOut & { x?: number }>
+    }>('diagram_create', {
+      title: 'Top-down',
+      summary: 's',
+      direction: 'TB',
+      elements: [
+        { id: 'a', type: 'rectangle', label: { text: 'A' }, x: 9999, y: 9999 },
+        { id: 'b', type: 'rectangle', label: { text: 'B' } },
+        { id: 'e', type: 'arrow', start: { id: 'a' }, end: { id: 'b' } },
+      ],
+    })
+    expect(skeleton.every((s) => s.x === undefined)).toBe(true)
+    const full = await callAsync<{
+      diagram: { scene: { elements: Array<Record<string, any>> } }
+    }>('diagram_get', { id: diagram.id, format: 'full' })
+    const els = full.diagram.scene.elements
+    const a = els.find((e) => e.id === 'a')!
+    const b = els.find((e) => e.id === 'b')!
+    const arrow = els.find((e) => e.id === 'e')!
+    // layout auto ignora o x/y velho; TB empilha a acima de b.
+    expect(a.x).not.toBe(9999)
+    expect(a.y + a.height).toBeLessThan(b.y)
+    expect(arrow.elbowed).toBe(true)
+    expect(a.customData.pitwall).toEqual({ auto: true, direction: 'TB' })
+  })
+
+  it('diagram_patch com layout keep não move nenhum nó existente', async () => {
+    const diagram = await novoDiagrama('Keep')
+    const before = await callAsync<{ skeleton: Array<SkeletonOut & { x: number; y: number }> }>(
+      'diagram_get',
+      { id: diagram.id, includeGeometry: true },
+    )
+    await callAsync('diagram_patch', {
+      id: diagram.id,
+      summary: 'add sem mexer',
+      layout: 'keep',
+      ops: [
+        { op: 'add', element: { id: 'db', type: 'ellipse', label: { text: 'DB' } } },
+        { op: 'add', element: { id: 'e2', type: 'arrow', start: { id: 'api' }, end: { id: 'db' } } },
+      ],
+    })
+    const after = await callAsync<{ skeleton: Array<SkeletonOut & { x: number; y: number }> }>(
+      'diagram_get',
+      { id: diagram.id, includeGeometry: true },
+    )
+    for (const id of ['ui', 'api']) {
+      const b = before.skeleton.find((s) => s.id === id)!
+      const a = after.skeleton.find((s) => s.id === id)!
+      expect([a.x, a.y]).toEqual([b.x, b.y])
+    }
+    expect(after.skeleton.find((s) => s.id === 'e2')).toMatchObject({
+      start: { id: 'api' },
+      end: { id: 'db' },
+    })
+  })
+
+  it('integração: create (4 nós/3 setas) → get → patch (move + rename) → archive → delete', async () => {
     interface SkeletonFull extends SkeletonOut {
       x?: number
       y?: number
@@ -1345,7 +1412,7 @@ describe('mcp tools — diagrams', () => {
       createdAt: number
     }
 
-    const { diagram } = call<{
+    const { diagram } = await callAsync<{
       diagram: DiagramMetaOut
       skeleton: SkeletonFull[]
     }>('diagram_create', {
@@ -1370,7 +1437,7 @@ describe('mcp tools — diagrams', () => {
     })
 
     // get (skeleton): meta + skeleton derivado + histórico de versões.
-    const got = call<{
+    const got = await callAsync<{
       diagram: DiagramMetaOut
       skeleton: SkeletonFull[]
       versions: VersionMetaOut[]
@@ -1400,7 +1467,7 @@ describe('mcp tools — diagrams', () => {
     })
 
     // patch: move o nó etl + renomeia o label da fonte.
-    const patched = call<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>('diagram_patch', {
+    const patched = await callAsync<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>('diagram_patch', {
       id: diagram.id,
       summary: 'move etl e renomeia fonte',
       ops: [
@@ -1409,7 +1476,14 @@ describe('mcp tools — diagrams', () => {
       ],
     })
     expect(patched.diagram.version).toBe(2)
-    expect(patched.skeleton.find((s) => s.id === 'etl')).toMatchObject({
+    // Skeleton sem geometria por padrão; includeGeometry mostra o nó pinado
+    // onde o patch mandou.
+    expect(patched.skeleton.find((s) => s.id === 'etl')).not.toHaveProperty('x')
+    const withGeometry = await callAsync<{ skeleton: SkeletonFull[] }>('diagram_get', {
+      id: diagram.id,
+      includeGeometry: true,
+    })
+    expect(withGeometry.skeleton.find((s) => s.id === 'etl')).toMatchObject({
       x: 520,
       y: 340,
     })
@@ -1423,7 +1497,7 @@ describe('mcp tools — diagrams', () => {
     })
 
     // get (full): a cena persistida tem os campos que o restoreElements espera.
-    const full = call<{
+    const full = await callAsync<{
       diagram: DiagramMetaOut & { scene: { elements: unknown[] } }
     }>('diagram_get', { id: diagram.id, format: 'full' })
     const elements = full.diagram.scene.elements as Array<Record<string, unknown>>
@@ -1492,11 +1566,11 @@ describe('mcp tools — diagrams', () => {
     expect(etlLabel.containerId).toBe('etl')
 
     // archive → delete (two-step) apaga diagrama, versões e links.
-    const archived = call<{ id: string; status: string }>('diagram_archive', {
+    const archived = await callAsync<{ id: string; status: string }>('diagram_archive', {
       id: diagram.id,
     })
     expect(archived.status).toBe('archived')
-    const deleted = call<{ id: string; deleted: boolean }>('diagram_delete', {
+    const deleted = await callAsync<{ id: string; deleted: boolean }>('diagram_delete', {
       id: diagram.id,
       confirm: true,
     })
