@@ -104,6 +104,81 @@ describe('mutate — setArtboard sizing and clamp warnings', () => {
     expect(store.listVersions(ab.id)[0]?.version).toBe(ab.version + 1)
   })
 
+  describe('measured flow height (what opening a document persists)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(1_000)
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    function flowArtboard() {
+      const ab = newArtboard()
+      applyArtboardOps({
+        artboardId: ab.id,
+        ops: [{ type: 'setArtboard', patch: { sizing: 'flow', height: 5782 } }],
+        author: 'human',
+        origin,
+        send: vi.fn(),
+      })
+      const docId = store.getArtboardDocumentId(ab.id)!
+      vi.setSystemTime(9_000)
+      return { ab: store.getArtboard(ab.id)!, docId }
+    }
+
+    // Same shape as reportFlowHeightAction's quiet write: height only, no
+    // baseVersion, no snapshot.
+    const measure = (artboardId: string, height: number) =>
+      applyArtboardOps({
+        artboardId,
+        ops: [{ type: 'setArtboard', patch: { height } }],
+        author: 'human',
+        origin,
+        snapshot: false,
+        send: vi.fn(),
+      })
+
+    it('stores the height and bumps the version without touching the document', () => {
+      const { ab, docId } = flowArtboard()
+      const result = measure(ab.id, 5780)
+      expect(result.artboard.height).toBe(5780)
+      expect(result.artboard.version).toBe(ab.version + 1)
+      expect(store.getDocument(docId)!.updatedAt).toBe(1_000)
+    })
+
+    it('a tree edit on the same flow artboard still touches the document', () => {
+      const { ab, docId } = flowArtboard()
+      applyArtboardOps({
+        artboardId: ab.id,
+        ops: [{ type: 'rename', id: ab.tree.id, name: 'Root' }],
+        author: 'human',
+        origin,
+        send: vi.fn(),
+      })
+      expect(store.getDocument(docId)!.updatedAt).toBe(9_000)
+    })
+
+    it('a height change on a fixed artboard, or a resize that also moves it, is an edit', () => {
+      const { ab, docId } = flowArtboard()
+      measure(ab.id, 5000)
+      applyArtboardOps({
+        artboardId: ab.id,
+        ops: [{ type: 'setArtboard', patch: { height: 5100, x: 40 } }],
+        author: 'human',
+        origin,
+        send: vi.fn(),
+      })
+      expect(store.getDocument(docId)!.updatedAt).toBe(9_000)
+
+      const fixed = newArtboard()
+      const fixedDoc = store.getArtboardDocumentId(fixed.id)!
+      vi.setSystemTime(12_000)
+      measure(fixed.id, 1200)
+      expect(store.getDocument(fixedDoc)!.updatedAt).toBe(12_000)
+    })
+  })
+
   it('persists sizing flow and ignores an unknown sizing with a warning', () => {
     const ab = newArtboard()
     const flow = applyArtboardOps({

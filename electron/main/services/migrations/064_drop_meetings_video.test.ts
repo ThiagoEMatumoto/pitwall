@@ -174,6 +174,6 @@ describe('064_drop_meetings_video', () => {
   it('está registrada no array depois da 063', () => {
     const versions = migrations.map((m) => m.version)
     expect(versions).toContain(63)
-    expect(versions.at(-1)).toBe(64)
+    expect(versions).toContain(64)
   })
 })

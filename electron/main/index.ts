@@ -96,6 +96,7 @@ import {
 } from './services/design/protocol'
 import * as designStore from './services/design/design-store'
 import * as designAssets from './services/design/asset-store'
+import { installThumbnailScheduler } from './services/design/thumbnails'
 import { armOrphanSweep, ensureScopeProbe } from './services/systemd-scope'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -382,7 +383,9 @@ app.whenReady().then(async () => {
     getDocument: (id) => designStore.getDocument(id),
     getArtboard: (id) => designStore.getArtboard(id),
     getAsset: (id) => designAssets.get(id),
+    getThumbnail: (id) => designStore.getThumbnail(id),
   })
+  installThumbnailScheduler()
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o

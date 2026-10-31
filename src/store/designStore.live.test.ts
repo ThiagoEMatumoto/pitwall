@@ -18,6 +18,10 @@ const mockApi = {
   onAgentActivity: vi.fn(() => () => {}),
   onDocumentUpdated: vi.fn(() => () => {}),
   onArtboardDeleted: vi.fn(() => () => {}),
+  onDocumentDeleted: vi.fn(() => () => {}),
+  onFoldersUpdated: vi.fn(() => () => {}),
+  onThumbnailUpdated: vi.fn(() => () => {}),
+  foldersList: vi.fn().mockResolvedValue([]),
 }
 
 vi.mock('@/lib/ipc', () => ({ api: { design: mockApi } }))
@@ -52,7 +56,8 @@ function doc(id: string, artboards: DesignArtboard[], updatedAt = 2): DesignDocu
     id,
     title: id,
     status: 'active',
-    thumbnail: null,
+    folderId: null,
+    thumbnailVersion: null,
     createdAt: 1,
     updatedAt,
     tokens: {},
@@ -123,14 +128,17 @@ describe('designStore live state', () => {
       activityByDoc: {},
       lastSeenAt: {},
       unseenChanges: [],
-      docs: [docs.docA, docs.docB].map(({ id, title, status, thumbnail, createdAt, updatedAt }) => ({
-        id,
-        title,
-        status,
-        thumbnail,
-        createdAt,
-        updatedAt,
-      })),
+      docs: [docs.docA, docs.docB].map(
+        ({ id, title, status, folderId, thumbnailVersion, createdAt, updatedAt }) => ({
+          id,
+          title,
+          status,
+          folderId,
+          thumbnailVersion,
+          createdAt,
+          updatedAt,
+        }),
+      ),
     })
   })
 

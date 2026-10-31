@@ -15,6 +15,7 @@ import {
   createDesignProtocolHandler,
   isAllowedFrameNavigation,
   routeDesignUrl,
+  thumbUrl,
 } from './protocol'
 
 describe('routeDesignUrl', () => {
@@ -66,6 +67,8 @@ describe('routeDesignUrl', () => {
       motion: 'final',
     })
     expect(routeDesignUrl(assetUrl('x/y'))).toEqual({ kind: 'asset', id: 'x/y' })
+    expect(thumbUrl('d 1', '1700')).toBe('pitwall-design://thumb/d%201?v=1700')
+    expect(routeDesignUrl(thumbUrl('d 1', '1700'))).toEqual({ kind: 'thumb', docId: 'd 1' })
   })
 })
 
@@ -89,6 +92,12 @@ describe('createDesignProtocolHandler', () => {
     getDocument: (id) => (id === 'doc-1' ? { tokens: {}, fonts: [], globalCss: '' } : null),
     getArtboard: (id) => (id === 'ab-1' ? artboard : null),
     getAsset: (id) => (id === 'as-1' ? { mime: 'image/png', bytes: Buffer.from([1, 2, 3]) } : null),
+    getThumbnail: (id) =>
+      ({
+        'doc-png': `data:image/png;base64,${Buffer.from([7, 8]).toString('base64')}`,
+        'doc-jpg': `data:image/jpeg;base64,${Buffer.from([9]).toString('base64')}`,
+        'doc-bad': 'data:text/html;base64,PHA+',
+      })[id] ?? null,
     readRuntimeJs: () => 'console.log("rt")',
   })
 
@@ -133,6 +142,23 @@ describe('createDesignProtocolHandler', () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 
+  it('serves the stored thumbnail decoded, immutable per ?v=', async () => {
+    const png = await handler(new Request(thumbUrl('doc-png', '1')))
+    expect(png.status).toBe(200)
+    expect(png.headers.get('Content-Type')).toBe('image/png')
+    expect(png.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+    expect(png.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(new Uint8Array(await png.arrayBuffer())).toEqual(new Uint8Array([7, 8]))
+
+    const jpg = await handler(new Request(thumbUrl('doc-jpg', '2')))
+    expect(jpg.headers.get('Content-Type')).toBe('image/jpeg')
+  })
+
+  it('404s a missing thumbnail or one that is not a png/jpeg data url', async () => {
+    expect((await handler(new Request(thumbUrl('nope', '1')))).status).toBe(404)
+    expect((await handler(new Request(thumbUrl('doc-bad', '1')))).status).toBe(404)
+  })
+
   it('returns 404 for unknown ids and routes', async () => {
     expect((await handler(new Request('pitwall-design://asset/nope'))).status).toBe(404)
     expect((await handler(new Request('pitwall-design://artboard/nope?doc=doc-1'))).status).toBe(
@@ -147,6 +173,7 @@ describe('isAllowedFrameNavigation', () => {
   it('only artboard documents may load in a sub-frame', () => {
     expect(isAllowedFrameNavigation(artboardUrl('ab', 'doc', 'preview', 't'))).toBe(true)
     expect(isAllowedFrameNavigation(assetUrl('as-1'))).toBe(false)
+    expect(isAllowedFrameNavigation(thumbUrl('d', '1'))).toBe(false)
     expect(isAllowedFrameNavigation('https://evil.example/')).toBe(false)
     expect(isAllowedFrameNavigation('about:blank')).toBe(false)
   })

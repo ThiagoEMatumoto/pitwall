@@ -3,46 +3,13 @@ import { FileText, LayoutTemplate, MoreHorizontal, Plus } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { activeMarker } from '@/features/brand'
-import { api } from '@/lib/ipc'
 import { useDesignStore } from '@/store/designStore'
 import { customPreset } from '@shared/types/design'
 import { AgentWorkingDot } from '../AgentWorkingDot'
+import { moveSection } from '../hub/doc-menu'
+import { InlineInput } from '../InlineInput'
 import { ArtboardSizeDialog } from '../ArtboardSizeDialog'
 import { formatArtboardSize, formatPresetSize, groupPresets } from '../artboard-format'
-
-function InlineInput({
-  placeholder,
-  initial = '',
-  onSubmit,
-  onCancel,
-}: {
-  placeholder: string
-  initial?: string
-  onSubmit: (value: string) => void
-  onCancel: () => void
-}) {
-  const [value, setValue] = useState(initial)
-  function submit(): void {
-    const v = value.trim()
-    if (v) onSubmit(v)
-    else onCancel()
-  }
-  return (
-    <input
-      autoFocus
-      type="text"
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={submit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') submit()
-        if (e.key === 'Escape') onCancel()
-      }}
-      className="mx-2 my-1 h-6 w-[calc(100%-16px)] rounded-md border border-[var(--color-accent)] bg-[var(--color-bg)] px-2 text-[11px] text-[var(--color-text)] outline-none"
-    />
-  )
-}
 
 function Header({ title, onAdd, addTitle }: { title: string; onAdd?: () => void; addTitle?: string }) {
   return (
@@ -72,7 +39,10 @@ const rowClass = (active: boolean) =>
   }`
 
 export function DocsPanel() {
-  const docs = useDesignStore((s) => s.docs)
+  const allDocs = useDesignStore((s) => s.docs)
+  const folders = useDesignStore((s) => s.folders)
+  const moveDoc = useDesignStore((s) => s.moveDoc)
+  const retitleDoc = useDesignStore((s) => s.retitleDoc)
   const docId = useDesignStore((s) => s.docId)
   const doc = useDesignStore((s) => s.doc)
   const pageId = useDesignStore((s) => s.pageId)
@@ -80,9 +50,7 @@ export function DocsPanel() {
   const selectedArtboard = useDesignStore((s) => s.selection.artboardId)
   const openDoc = useDesignStore((s) => s.openDoc)
   const createDoc = useDesignStore((s) => s.createDoc)
-  const renameDoc = useDesignStore((s) => s.renameDoc)
   const archiveDoc = useDesignStore((s) => s.archiveDoc)
-  const loadDocs = useDesignStore((s) => s.loadDocs)
   const selectPage = useDesignStore((s) => s.selectPage)
   const createPage = useDesignStore((s) => s.createPage)
   const createArtboard = useDesignStore((s) => s.createArtboard)
@@ -119,31 +87,35 @@ export function DocsPanel() {
     .filter((m) => m.pageId === pageId)
     .sort((a, b) => a.position - b.position)
 
-  async function rename(id: string, title: string): Promise<void> {
+  // Quick switch between the open document's siblings (same folder, or Sem pasta).
+  const folderId = doc?.folderId ?? null
+  const docs = allDocs.filter((d) => d.folderId === folderId)
+
+  function rename(id: string, title: string): void {
     setRenaming(null)
-    if (id === docId) await renameDoc(title)
-    else {
-      await api.design.documentUpdate({ id, title })
-      await loadDocs()
-    }
+    void retitleDoc(id, title)
   }
 
   return (
     <div className="flex flex-col border-b border-[var(--color-border)]">
-      <Header title="Documentos" onAdd={() => setCreating(true)} addTitle="Novo documento" />
+      <Header
+        title={folderId ? 'Nesta pasta' : 'Sem pasta'}
+        onAdd={() => setCreating(true)}
+        addTitle="Novo documento"
+      />
       {creating && (
         <InlineInput
           placeholder="Nome do documento"
           onSubmit={(title) => {
             setCreating(false)
-            void createDoc(title)
+            void createDoc(title, folderId)
           }}
           onCancel={() => setCreating(false)}
         />
       )}
       <ul className="max-h-48 overflow-y-auto">
         {docs.length === 0 && !creating && (
-          <li className="px-3 py-2 text-[11px] text-[var(--color-text-dim)]">Nenhum documento ainda.</li>
+          <li className="px-3 py-2 text-[11px] text-[var(--color-text-dim)]">Nenhum documento aqui.</li>
         )}
         {docs.map((d) =>
           renaming === d.id ? (
@@ -151,7 +123,7 @@ export function DocsPanel() {
               <InlineInput
                 placeholder="Nome"
                 initial={d.title}
-                onSubmit={(t) => void rename(d.id, t)}
+                onSubmit={(t) => rename(d.id, t)}
                 onCancel={() => setRenaming(null)}
               />
             </li>
@@ -166,16 +138,23 @@ export function DocsPanel() {
                 open={menuFor === d.id}
                 onClose={() => setMenuFor(null)}
                 portal
-                items={[
-                  { label: 'Renomear', onClick: () => setRenaming(d.id) },
-                  { label: 'Arquivar', onClick: () => void archiveDoc(d.id), danger: true },
+                sections={[
+                  {
+                    title: 'Documento',
+                    items: [
+                      { label: 'Renomear', onClick: () => setRenaming(d.id) },
+                      { label: 'Arquivar', onClick: () => void archiveDoc(d.id), danger: true },
+                    ],
+                  },
+                  moveSection(folders, d.folderId, (target) => void moveDoc(d.id, target)),
                 ]}
               >
                 <button
                   type="button"
                   title="Opções"
+                  aria-label={`Opções de ${d.title}`}
                   onClick={() => setMenuFor(menuFor === d.id ? null : d.id)}
-                  className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition group-hover:opacity-100 hover:bg-[var(--color-surface-2)]"
+                  className="flex h-5 w-5 items-center justify-center rounded opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-[var(--color-surface-2)]"
                 >
                   <Icon as={MoreHorizontal} size={12} />
                 </button>

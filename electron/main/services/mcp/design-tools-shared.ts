@@ -242,7 +242,10 @@ export const schemas = {
     parentType: parentType.optional(),
     parentId: z.string().optional(),
     search: z.string().optional(),
+    // Folder name (case-insensitive); null = only documents without a folder.
+    folder: name.nullable().optional(),
   }),
+  folderList: z.object({}),
   documentGet: z.object({
     docId,
     depth: z.number().int().min(0).max(8).default(2),
@@ -277,7 +280,9 @@ export const schemas = {
     fonts: z.array(z.string().url()).optional(),
     globalCss: globalCss.optional(),
     links: z.array(z.object({ parentType, parentId: z.string().min(1) })).optional(),
+    folder: name.optional(),
   }),
+  documentMove: z.object({ documentId: docId, folder: name.nullable() }),
   artboardCreate: z
     .object({
       docId,

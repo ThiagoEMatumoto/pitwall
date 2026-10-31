@@ -52,11 +52,12 @@ afterAll(() => {
 })
 
 describe('design tools — Breads do Breno authoring flow', () => {
-  it('registers the 25 tools (24 from F10 + design_motion_set)', () => {
+  it('registers the design tools (F10 + design_motion_set + folders)', () => {
     const names = tools.map((t) => t.name).sort()
     expect(names).toEqual(
       [
         'design_document_list',
+        'design_folder_list',
         'design_document_get',
         'design_selection_get',
         'design_node_get',
@@ -66,6 +67,7 @@ describe('design tools — Breads do Breno authoring flow', () => {
         'design_html_get',
         'design_computed_styles',
         'design_document_create',
+        'design_document_move',
         'design_artboard_create',
         'design_write_html',
         'design_text_set',

@@ -1,0 +1,102 @@
+import { Plus, Search, Sparkles, X } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { Icon } from '@/components/ui/Icon'
+import { cx } from '@/features/brand'
+import { useDesignStore, type HubSort } from '@/store/designStore'
+
+const SORTS: Array<{ value: HubSort; label: string }> = [
+  { value: 'recent', label: 'Recentes' },
+  { value: 'name', label: 'Nome' },
+]
+
+export function HubHeader({
+  title,
+  count,
+  creating,
+  onCreate,
+}: {
+  title: string
+  count: number
+  creating: boolean
+  onCreate: () => void
+}) {
+  const hubQuery = useDesignStore((s) => s.hubQuery)
+  const hubSort = useDesignStore((s) => s.hubSort)
+  const setHubQuery = useDesignStore((s) => s.setHubQuery)
+  const setHubSort = useDesignStore((s) => s.setHubSort)
+  const setAskOpen = useDesignStore((s) => s.setAskOpen)
+
+  return (
+    <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-3 border-b border-[var(--color-border)] px-6 py-4">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <h1 className="truncate text-lg font-semibold text-[var(--color-text)]">{title}</h1>
+        <span className="text-[12px] tabular-nums text-[var(--color-text-dim)]" aria-label={`${count} designs`}>
+          {count}
+        </span>
+      </div>
+
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <Icon
+            as={Search}
+            size={14}
+            aria-hidden
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-dim)]"
+          />
+          <input
+            type="text"
+            role="searchbox"
+            value={hubQuery}
+            placeholder="Buscar designs"
+            aria-label="Buscar designs"
+            onChange={(e) => setHubQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setHubQuery('')}
+            className="h-8 w-56 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] pl-8 pr-7 text-[12px] text-[var(--color-text)] outline-none transition placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-accent)]/70"
+          />
+          {hubQuery && (
+            <button
+              type="button"
+              aria-label="Limpar busca"
+              onClick={() => setHubQuery('')}
+              className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-text-dim)] outline-none hover:text-[var(--color-text)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            >
+              <Icon as={X} size={12} />
+            </button>
+          )}
+        </div>
+
+        <div
+          role="group"
+          aria-label="Ordenar por"
+          className="flex h-8 items-center rounded-full border border-[var(--color-border)] p-0.5"
+        >
+          {SORTS.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              aria-pressed={hubSort === s.value}
+              onClick={() => setHubSort(s.value)}
+              className={cx(
+                'h-full rounded-full px-3 text-[12px] outline-none transition focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]',
+                hubSort === s.value
+                  ? 'bg-[var(--color-surface-2)] text-[var(--color-text)]'
+                  : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]',
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        <Button variant="ghost" className="h-8 py-0" onClick={() => setAskOpen(true)}>
+          <Icon as={Sparkles} size={14} />
+          Pedir ao Claude
+        </Button>
+        <Button className="h-8 py-0" loading={creating} onClick={onCreate}>
+          <Icon as={Plus} size={14} />
+          Novo design
+        </Button>
+      </div>
+    </header>
+  )
+}

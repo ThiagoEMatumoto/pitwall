@@ -13,6 +13,10 @@ const mockApi = {
   onAgentActivity: vi.fn(() => () => {}),
   onDocumentUpdated: vi.fn(() => () => {}),
   onArtboardDeleted: vi.fn(() => () => {}),
+  onDocumentDeleted: vi.fn(() => () => {}),
+  onFoldersUpdated: vi.fn(() => () => {}),
+  onThumbnailUpdated: vi.fn(() => () => {}),
+  foldersList: vi.fn().mockResolvedValue([]),
 }
 vi.mock('@/lib/ipc', () => ({ api: { design: mockApi } }))
 vi.mock('@/features/notifications/toast-store', () => ({
@@ -28,10 +32,11 @@ vi.mock('./canvas/ChangesSinceVisit', () => ({ ChangesSinceVisit: none }))
 vi.mock('./canvas/useCanvasShortcuts', () => ({ useCanvasShortcuts: () => undefined }))
 vi.mock('./DeleteArtboardDialog', () => ({ DeleteArtboardDialog: none }))
 vi.mock('./DesignToolbar', () => ({ DesignToolbar: none }))
-vi.mock('./EmptyState', () => ({ EmptyState: none }))
+vi.mock('./hub/DesignHub', () => ({ DesignHub: none }))
 vi.mock('./inspector/Inspector', () => ({ Inspector: none }))
 vi.mock('./preview/PreviewMode', () => ({ PreviewMode: none }))
 vi.mock('./ShortcutsPanel', () => ({ ShortcutsPanel: none }))
+vi.mock('./sidebar/DesignBreadcrumb', () => ({ DesignBreadcrumb: none }))
 vi.mock('./sidebar/DocsPanel', () => ({ DocsPanel: none }))
 vi.mock('./sidebar/LayersPanel', () => ({ LayersPanel: none }))
 

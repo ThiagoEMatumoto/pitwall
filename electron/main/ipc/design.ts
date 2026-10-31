@@ -4,6 +4,7 @@ import * as designStore from '../services/design/design-store'
 import * as assetStore from '../services/design/asset-store'
 import * as liveState from '../services/design/live-state'
 import { applyArtboardOps, restoreArtboardVersion } from '../services/design/mutate'
+import { backfillThumbnails } from '../services/design/thumbnails'
 import { exportArtboardHtml, exportArtboardJsx, exportArtboardPng } from '../services/design/export'
 import {
   exportDocumentPdf,
@@ -20,6 +21,7 @@ import type {
   ArtboardUpdatedEvent,
   CreateDesignArtboardInput,
   CreateDesignDocumentInput,
+  CreateDesignFolderInput,
   CreateDesignPageInput,
   DesignArtboard,
   DesignAskInput,
@@ -27,9 +29,12 @@ import type {
   DesignAssetUploadInput,
   DesignDocument,
   DesignDocumentMeta,
+  DesignDocumentMovedEvent,
   DesignExportInput,
   DesignExportResult,
   DesignExportScale,
+  DesignFolder,
+  DesignFoldersUpdatedEvent,
   DesignLink,
   DesignListFilter,
   DesignLiveState,
@@ -43,6 +48,7 @@ import type {
   DesignVersionMeta,
   DuplicateDesignArtboardInput,
   UpdateDesignDocumentInput,
+  UpdateDesignFolderInput,
   UpdateDesignPageInput,
 } from '../../../shared/types/design'
 
@@ -106,6 +112,11 @@ function docUpdated(docId: string): void {
   broadcast('design:document-updated', { docId })
 }
 
+function foldersUpdated(folderId: string | null): void {
+  const event: DesignFoldersUpdatedEvent = { folderId }
+  broadcast('design:folders-updated', event)
+}
+
 function humanOrigin(sessionId: string | null = null) {
   return { kind: 'human' as const, sessionId, nonce: newNonce() }
 }
@@ -156,6 +167,44 @@ export function registerDesignIpc(): void {
     liveState.forgetDoc(id)
     if (liveState.getActiveDoc() === id) liveState.setActiveDoc(null)
     broadcast('design:document-deleted', { docId: id })
+  })
+
+  ipcMain.handle(
+    'design:document-move',
+    (_e, rawDocId: unknown, rawFolderId: unknown): DesignDocumentMeta => {
+      const docId = requireId(rawDocId, 'docId')
+      const folderId = optionalId(rawFolderId, 'folderId')
+      designStore.moveDocument(docId, folderId)
+      const event: DesignDocumentMovedEvent = { docId, folderId, moved: true }
+      broadcast('design:document-updated', event)
+      foldersUpdated(null)
+      return designStore.getDocumentMeta(docId)!
+    },
+  )
+
+  ipcMain.handle('design:thumbnails-backfill', (): number => backfillThumbnails())
+
+  // ---- folders ----
+
+  ipcMain.handle('design:folders-list', (): DesignFolder[] => designStore.listFolders())
+
+  ipcMain.handle('design:folder-create', (_e, raw: unknown): DesignFolder => {
+    const folder = designStore.createFolder(requireInput<CreateDesignFolderInput>(raw, 'input'))
+    foldersUpdated(folder.id)
+    return folder
+  })
+
+  ipcMain.handle('design:folder-update', (_e, rawId: unknown, raw: unknown): DesignFolder => {
+    const id = requireId(rawId, 'id')
+    const folder = designStore.updateFolder(id, requireInput<UpdateDesignFolderInput>(raw, 'input'))
+    foldersUpdated(id)
+    return folder
+  })
+
+  ipcMain.handle('design:folder-delete', (_e, rawId: unknown): void => {
+    const id = requireId(rawId, 'id')
+    designStore.deleteFolder(id)
+    foldersUpdated(id)
   })
 
   // ---- pages ----

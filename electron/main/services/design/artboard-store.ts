@@ -189,6 +189,7 @@ export function updateArtboard(
   patch: Partial<
     Pick<DesignArtboard, 'x' | 'y' | 'width' | 'height' | 'name' | 'sizing' | 'position'>
   >,
+  opts: { touchDocument?: boolean } = {},
 ): DesignArtboard {
   const row = getArtboardRow(id)
   if (!row) throw new Error(`design artboard not found: ${id}`)
@@ -212,7 +213,7 @@ export function updateArtboard(
       id,
     )
     const docId = getArtboardDocumentId(id)
-    if (docId) touchDocument(docId, now)
+    if (docId && opts.touchDocument !== false) touchDocument(docId, now)
   })
   tx()
   return getArtboard(id)!
@@ -256,6 +257,9 @@ export interface SetTreeOptions {
   snapshot: boolean
   author: DesignAuthor
   summary?: string
+  // false: the write is derived state (a measured flow height), not an edit,
+  // so the document's updated_at — the hub's "recent" order — stays put.
+  touchDocument?: boolean
 }
 
 // The only write path for the tree. Always bumps `version` (the client detects
@@ -289,7 +293,7 @@ export function setTree(
       pruneVersions(artboardId)
     }
     const docId = getArtboardDocumentId(artboardId)
-    if (docId) touchDocument(docId, now)
+    if (docId && opts.touchDocument !== false) touchDocument(docId, now)
   })
   tx()
   return getArtboard(artboardId)!

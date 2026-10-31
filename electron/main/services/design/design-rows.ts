@@ -24,6 +24,8 @@ export interface DocumentRow {
   fonts: string
   global_css: string
   thumbnail: string | null
+  folder_id: string | null
+  thumbnail_at: number | null
   created_at: number
   updated_at: number
 }
