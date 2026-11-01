@@ -35,6 +35,7 @@ import { ArtifactCard } from './artifacts/ArtifactCard'
 import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
 import { artifactRefKey, planArtifacts } from './artifacts/artifact-refs'
 import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
+import { useSidePanelFits } from './artifacts/useSidePanelFits'
 import {
   buildArrowKeys,
   buildCtrlTKey,
@@ -202,6 +203,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const sidePanel = useArtifactPanelStore((s) => s.sessions[sessionId])
   const showArtifactSide = useArtifactPanelStore((s) => s.show)
   const sideKey = sidePanel?.open ? artifactRefKey(sidePanel.ref) : null
+  const rootRef = useRef<HTMLDivElement>(null)
+  const sideFits = useSidePanelFits(rootRef)
+  const sideEnabled = artifactSide && sideFits
   const pendingPrompt = useMemo(() => pendingInteractive(messages), [messages])
 
   // Último subagente do transcript (nome + status) pra faixa de estado. Dado real
@@ -667,7 +671,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   return (
-    <div className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
+    <div ref={rootRef} className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
     <div className="relative flex min-w-0 flex-1 flex-col">
     <div
       ref={scrollRef}
@@ -689,7 +693,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
               <ArtifactCard
                 key={i}
                 plan={artifactCard}
-                onShowSide={artifactSide ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
                 sideActive={sideKey === artifactRefKey(artifactCard.ref)}
               />
             )
@@ -829,7 +833,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       subagentError={lastSubagent?.error}
     />
     </div>
-    {artifactSide && <ArtifactSidePanel sessionId={sessionId} />}
+    {sideEnabled && <ArtifactSidePanel sessionId={sessionId} />}
     </div>
   )
 })
