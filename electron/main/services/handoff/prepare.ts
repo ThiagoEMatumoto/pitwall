@@ -17,6 +17,8 @@ import * as repoDepStore from '../repo-dependency-store'
 import { buildHandoffAlias, roleForHandoffMode } from './alias'
 import { composeHandoffPrompt, type HandoffEdge } from './compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
+import { resolveHandoffWorkDir } from '../work-dir'
+import { ensureChildWorkspace } from './child-worktree'
 import type { Handoff, HandoffMode } from '../../../../shared/types/ipc'
 
 export interface PrepareHandoffInput {
@@ -33,6 +35,10 @@ export interface PrepareHandoffInput {
   context?: Record<string, unknown> | null
   // Substitui o handoff ativo do repo-alvo em vez de recusar (ver store.create).
   forceReason?: string
+  // Filha NOVA que escreve ganha worktree próprio quando o checkout está numa
+  // branch protegida (child-worktree.ts). Só a criação manual liga: a adoção
+  // relança a sessão no cwd que ela já tinha.
+  autoWorktree?: boolean
 }
 
 export interface PreparedHandoff {
@@ -94,7 +100,9 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
   // Id gerado ANTES do compose porque o briefing embute o handoffId (é por ele
   // que a filha reporta de volta).
   const id = randomUUID()
-  const mode = input.mode ?? 'interactive'
+  // Default 'auto-edits': quem cria filha quer que ela implemente. 'interactive'
+  // (pergunta tudo) e 'plan' continuam disponíveis explicitamente.
+  const mode = input.mode ?? 'auto-edits'
   // Alias resolvido AQUI (e não no create) porque a unicidade é contra as
   // sessões vivas AGORA — mesmo caminho do handoffs:spawn-context.
   const alias = buildHandoffAlias({
@@ -102,6 +110,11 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     task: input.task,
     taken: store.activeSessionNames(),
   })
+  const baseWorkDir = input.autoWorktree ? resolveHandoffWorkDir(target.id, featureId, db) : null
+  const workspace =
+    baseWorkDir && mode !== 'plan'
+      ? ensureChildWorkspace({ workDir: baseWorkDir, alias, handoffId: id })
+      : undefined
   // input.context NÃO vai pro briefing: aqui é metadado de procedência (adoção),
   // não instrução da mãe — diferente do context texto-livre do session_handoff.
   const composedPrompt = composeHandoffPrompt({
@@ -114,6 +127,7 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     handoffId: id,
     alias,
     mode,
+    workspace,
   })
 
   const handoff = store.create(
@@ -127,6 +141,7 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
       contextJson: input.context ? JSON.stringify(input.context) : null,
       composedPrompt,
       mode,
+      workDir: workspace?.workDir,
       // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
       // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
       // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.

@@ -342,6 +342,9 @@ export interface CreateHandoffInput {
   // Omitido = 'pending' (espera o gate). 'approved' = um humano já decidiu (criação
   // manual, adoção): nasce fora do loop de auto-aprovação, que spawnaria uma 2ª filha.
   status?: 'pending' | 'approved'
+  // cwd já decidido por quem cria (worktree automático da filha). Omitido = o
+  // store resolve (worktree da feature, senão a raiz do repo).
+  workDir?: string | null
 }
 
 // ---- Passagem de bastão (baton) ----

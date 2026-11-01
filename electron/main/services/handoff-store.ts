@@ -253,7 +253,8 @@ export function create(input: CreateHandoffInput, opts: CreateHandoffOptions = {
   const mode = input.mode ?? 'interactive'
   const db = getDb()
   db.transaction(() => {
-    const workDir = resolveHandoffWorkDir(input.targetRepoId, input.featureId ?? null, db)
+    const workDir =
+      input.workDir ?? resolveHandoffWorkDir(input.targetRepoId, input.featureId ?? null, db)
     const existing = workDir && isWriterMode(mode) ? findActiveWriterByWorkDir(workDir) : null
     if (existing && !forceReason) throw new HandoffDuplicateError(existing)
     if (existing && forceReason) {

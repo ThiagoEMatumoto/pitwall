@@ -316,6 +316,7 @@ export function registerHandoffsIpc(): void {
       featureId: input.featureId ?? null,
       mode: input.mode,
       forceReason: input.forceReason,
+      autoWorktree: true,
     })
   })
 

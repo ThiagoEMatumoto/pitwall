@@ -230,7 +230,9 @@ function prepareHandoffForAdoption(input: AdoptSessionInput, row: SessionRow) {
     motherSessionId: input.motherSessionId,
     task: input.task,
     featureId: input.featureId ?? null,
-    mode: input.mode,
+    // Sessão já aberta relançada: sem escolha explícita, não ganha permissão nova
+    // em silêncio (o default 'auto-edits' do prepare é para filha NOVA).
+    mode: input.mode ?? 'interactive',
     context: {
       adopted: true,
       adoptedAt: Date.now(),

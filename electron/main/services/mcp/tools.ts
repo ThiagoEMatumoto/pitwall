@@ -49,6 +49,8 @@ import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
+import { ensureChildWorkspace } from '../handoff/child-worktree'
+import { resolveHandoffWorkDir } from '../work-dir'
 import { getActivityFor, ptyStatusFor } from '../session-activity'
 import { emitSessionLinkPulse } from '../session-link-pulse'
 import { ptyManager } from '../pty-manager'
@@ -67,6 +69,7 @@ import type {
   DiagramScene,
   FeatureObjectiveLink,
   Handoff,
+  HandoffMode,
   RepoDependency,
   TaskLink,
 } from '../../../../shared/types/ipc'
@@ -679,6 +682,15 @@ const repoConnectionsGetSchema = z.object({ repo: z.string().min(1) })
 
 const handoffMode = z.enum(['plan', 'auto-edits', 'interactive'])
 
+// Sem mode explícito a filha implementa (auto-edits). Codex só sobe autônomo em
+// read-only (assertAutonomousSpawnGuarded): o default dele continua 'plan'.
+export function defaultHandoffMode(
+  mode: HandoffMode | undefined,
+  provider: AgentProviderId,
+): HandoffMode {
+  return mode ?? (provider === 'claude' ? 'auto-edits' : 'plan')
+}
+
 const sessionHandoffSchema = z.object({
   targetRepo: z.string().min(1),
   task: z.string().min(1),
@@ -687,7 +699,8 @@ const sessionHandoffSchema = z.object({
   context: z.string().optional(),
   // Modo de permissão da filha. 'plan' (read-only) p/ investigação; 'auto-edits'
   // (edita, com denylist destrutivo) p/ implementação; 'interactive' = pergunta
-  // tudo (legado). Default: 'plan' (seguro). O humano confirma no gate.
+  // tudo (legado). Default: 'auto-edits' — filha despachada é implementer; em
+  // branch protegida ela ganha worktree próprio (child-worktree.ts).
   mode: handoffMode.optional(),
   // Substitui a filha que escreve no mesmo diretório de trabalho (default: recusa
   // com erro, sem entregar o handle da filha que já está lá). Exige forceReason,
@@ -993,7 +1006,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to any other registered repo. Repo dependencies, when they exist, only add context to the child briefing. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (for investigation: starts in plan mode with Edit/Write/commit/push denied, but it is NOT a sandbox — if the user approves ExitPlanMode in the child, Bash can still write files via cp, sed -i, redirection, etc.; it does not hold the directory lock), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). Ownership is per WORKING DIRECTORY (the feature worktree of the target repo, else the repo root), and only children that WRITE count: several children may share a repo in different worktrees, and a "plan" child may share the same checkout with a writer. If another writing child is already active in the same directory the call is REFUSED with an error — either because you already dispatched it, or because it belongs to another mother session and you do not inherit it. force=true together with forceReason (required, recorded in the handoff trail) REPLACES that writer (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
+        'Delegate end-to-end work to any other registered repo. Repo dependencies, when they exist, only add context to the child briefing. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode (default "auto-edits"; "plan" only when passed explicitly): "plan" (for investigation: starts in plan mode with Edit/Write/commit/push denied, but it is NOT a sandbox — if the user approves ExitPlanMode in the child, Bash can still write files via cp, sed -i, redirection, etc.; it does not hold the directory lock), "auto-edits" (default — child edits files, runs installs/builds/tests and commits autonomously, destructive commands blocked; if the target checkout is on a protected branch (main/master/staging/develop) the child gets its own worktree at <repo>/.worktrees/child-<alias> on branch child/<alias>-<id> and may push it and open a PR), or "interactive" (asks for everything). Ownership is per WORKING DIRECTORY (the feature worktree of the target repo, else the repo root), and only children that WRITE count: several children may share a repo in different worktrees, and a "plan" child may share the same checkout with a writer. If another writing child is already active in the same directory the call is REFUSED with an error — either because you already dispatched it, or because it belongs to another mother session and you do not inherit it. force=true together with forceReason (required, recorded in the handoff trail) REPLACES that writer (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -1002,7 +1015,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         // nunca vira linha no inbox. O spawnSession repete a checagem (autoridade).
         assertAutonomousSpawnGuarded(
           provider,
-          resolvePermissionMode(permissionModeForHandoffMode(input.mode ?? 'plan')),
+          resolvePermissionMode(permissionModeForHandoffMode(defaultHandoffMode(input.mode, provider))),
           true,
         )
         // O gate humano spawna pelo renderer, que não sabe o provider (o handoff
@@ -1070,7 +1083,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           : null
 
         const handoffId = randomUUID()
-        const mode = input.mode ?? 'plan'
+        const mode = defaultHandoffMode(input.mode, provider)
         // Alias = identidade endereçável da filha. Resolvido ANTES do compose
         // porque o briefing anuncia à filha o próprio apelido, e antes do spawn
         // porque é o `-n <name>` — o endereço do SendMessage.
@@ -1079,6 +1092,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           task: input.task,
           taken: handoffStore.activeSessionNames(),
         })
+        // Filha que escreve não cai numa branch protegida: ganha worktree próprio
+        // (child-worktree.ts). plan e codex (só sobe em plan) ficam onde estão.
+        const baseWorkDir = resolveHandoffWorkDir(target.id, featureId)
+        const workspace =
+          mode !== 'plan' && provider === 'claude' && baseWorkDir
+            ? ensureChildWorkspace({ workDir: baseWorkDir, alias, handoffId })
+            : undefined
         const composed = composeHandoffPrompt({
           targetRepoLabel: target.label,
           targetRepoPath: target.path,
@@ -1091,6 +1111,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           alias,
           mode,
           provider: input.provider,
+          workspace,
         })
 
         // Posse do diretório de trabalho decidida DENTRO do create, numa
@@ -1113,6 +1134,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
               contextJson: input.context ?? null,
               composedPrompt: composed,
               mode,
+              workDir: workspace?.workDir,
             },
             input.force && input.forceReason ? { force: { reason: input.forceReason } } : {},
           )

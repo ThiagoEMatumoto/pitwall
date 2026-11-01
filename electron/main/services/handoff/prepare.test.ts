@@ -89,3 +89,10 @@ describe('prepareHandoff — posse do repo-alvo', () => {
     })
   })
 })
+
+describe('prepareHandoff — default de modo', () => {
+  it('sem mode explícito a filha nasce auto-edits', () => {
+    const { handoff } = prepareHandoff({ targetRepoId: 'r1', motherSessionId: 'm-a', task: 'A' })
+    expect(handoff.mode).toBe('auto-edits')
+  })
+})

@@ -307,3 +307,34 @@ describe('composeHandoffPrompt — briefing alinhado à política de permissões
     }
   })
 })
+
+describe('composeHandoffPrompt — workspace da filha', () => {
+  const baseArgs = {
+    targetRepoLabel: 'r',
+    targetRepoPath: '/r',
+    task: 't',
+    edges: [],
+    handoffId: 'h',
+    alias: 'a',
+  }
+
+  it('plan não ganha linhas de workspace nem permissão de publicar', () => {
+    const p = composeHandoffPrompt({
+      ...baseArgs,
+      mode: 'plan',
+      workspace: { workDir: '/r/.worktrees/child-a', branch: 'child/a-h', created: true },
+    })
+    expect(p).not.toContain('worktree próprio')
+    expect(p).toContain('Proibido: commit')
+  })
+
+  it('falha ao criar o worktree vira aviso no briefing', () => {
+    const p = composeHandoffPrompt({
+      ...baseArgs,
+      mode: 'auto-edits',
+      workspace: { workDir: '/r', branch: 'main', created: false, warning: 'falhou X' },
+    })
+    expect(p).toContain('Seu diretório de trabalho: /r (branch `main`)')
+    expect(p).toContain('Aviso: falhou X')
+  })
+})
