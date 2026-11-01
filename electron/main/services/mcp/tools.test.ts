@@ -172,10 +172,10 @@ describe('mcp tools — objectives/KRs', () => {
     // diagram_delete é a exceção documentada: exige archive prévio + confirm.
     // design_nodes_delete apaga nós dentro de um artboard (não um recurso raiz)
     // e cada versão fica no histórico, então o undo é possível.
-    expect(names.filter((n) => n.includes('delete'))).toEqual([
-      'diagram_delete',
-      'design_nodes_delete',
-    ])
+    // *_folder_delete só desfaz o agrupamento: os itens ficam, sem pasta.
+    expect(names.filter((n) => n.includes('delete')).sort()).toEqual(
+      ['diagram_delete', 'diagram_folder_delete', 'design_nodes_delete', 'design_folder_delete'].sort(),
+    )
   })
 
   it('key_result_update altera o KR e broadcasta o marcador', () => {

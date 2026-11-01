@@ -110,4 +110,32 @@ describe('design tools — folders', () => {
       call('design_document_move', { documentId: 'nope', folder: null }),
     ).rejects.toThrow(/document not found/)
   })
+
+  it('design_folder_create / rename / delete: CRUD by name, docs unfiled on delete', async () => {
+    const created = await call<{ folder: DesignFolder; created: boolean }>('design_folder_create', {
+      name: 'Clientes',
+      color: 'warning',
+    })
+    expect(created).toMatchObject({ created: true, folder: { name: 'Clientes', color: 'warning' } })
+    const dup = await call<{ created: boolean }>('design_folder_create', { name: 'CLIENTES' })
+    expect(dup.created).toBe(false)
+
+    const renamed = await call<{ folder: DesignFolder }>('design_folder_rename', {
+      folder: 'clientes',
+      name: 'Clientes 2026',
+      color: null,
+    })
+    expect(renamed.folder).toMatchObject({ id: created.folder.id, name: 'Clientes 2026', color: null })
+
+    const { document } = await call<CreateResult>('design_document_create', {
+      title: 'Proposta',
+      folder: 'Clientes 2026',
+    })
+    notify.calls.length = 0
+    const out = await call('design_folder_delete', { folder: created.folder.id })
+
+    expect(out).toMatchObject({ deleted: true, unfiled: 1 })
+    expect(designStore.getDocumentMeta(document.id)!.folderId).toBeNull()
+    expect(notify.calls).toEqual([['design:folders-updated', { folderId: null }]])
+  })
 })
