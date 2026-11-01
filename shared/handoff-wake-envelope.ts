@@ -3,8 +3,17 @@
 // quem escreveu foi o Pitwall, não o usuário.
 export const HANDOFF_WAKE_TAG = 'pitwall-handoff-update'
 
+// O REPL (2.1.316) grava no transcript a colagem do envelope embrulhada:
+// "\n\n<pasted_content id=\"N\">\n…\n</pasted_content id=\"N\">\n". A fila guarda o
+// texto cru; o chat e a Room leem o embrulhado.
+const PASTED_WRAP_RE = /^\s*<pasted_content\b[^>]*>\n?([\s\S]*?)\n?<\/pasted_content\b[^>]*>\s*$/
+
+function unwrapPasted(text: string): string {
+  return PASTED_WRAP_RE.exec(text)?.[1] ?? text
+}
+
 export function isHandoffWakeEnvelope(text: string): boolean {
-  return text.trimStart().startsWith(`<${HANDOFF_WAKE_TAG}`)
+  return unwrapPasted(text).trimStart().startsWith(`<${HANDOFF_WAKE_TAG}`)
 }
 
 export interface HandoffWakeUpdate {
@@ -35,9 +44,10 @@ function attrsOf(raw: string): Record<string, string> {
 // Lê o bloco montado por formatWakeEnvelope (electron/main/services/handoff/handoff-wake.ts).
 // O corpo sai como o produtor escapou (`<\/update`): é exibição, não reinjeção.
 export function parseHandoffWakeEnvelope(text: string): HandoffWakeEnvelope | null {
-  if (!isHandoffWakeEnvelope(text)) return null
+  const raw = unwrapPasted(text)
+  if (!isHandoffWakeEnvelope(raw)) return null
   const updates: HandoffWakeUpdate[] = []
-  for (const m of text.matchAll(UPDATE_RE)) {
+  for (const m of raw.matchAll(UPDATE_RE)) {
     const a = attrsOf(m[1])
     if (!a['handoff-id']) continue
     updates.push({
@@ -49,6 +59,6 @@ export function parseHandoffWakeEnvelope(text: string): HandoffWakeEnvelope | nu
       truncated: a.truncated === 'true',
     })
   }
-  const overflow = Number(OVERFLOW_RE.exec(text)?.[1] ?? 0)
+  const overflow = Number(OVERFLOW_RE.exec(raw)?.[1] ?? 0)
   return { updates, overflow }
 }
