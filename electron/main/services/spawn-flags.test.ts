@@ -7,6 +7,10 @@ import {
   HANDOFF_CHILD_RELAXED_FROM_DESTRUCTIVE,
   HANDOFF_CHILD_PLAN_DENY,
   HANDOFF_CHILD_SETTINGS_JSON,
+  HANDOFF_CHILD_WRITE_ALLOW,
+  deriveChildAllowRule,
+  handoffChildSettings,
+  isLearnableChildRule,
   handoffChildSettingsJson,
   permissionModeForHandoffMode,
   resolvePermissionMode,
@@ -42,7 +46,10 @@ describe('HANDOFF_CHILD permissions', () => {
 
   it('mantém crossSessionInbound=accept (canal peer) ao lado das permissões', () => {
     expect(settings.crossSessionInbound).toBe('accept')
-    expect(settings.permissions.allow).toEqual(HANDOFF_CHILD_ALLOW)
+    expect(settings.permissions.allow).toEqual([
+      ...HANDOFF_CHILD_ALLOW,
+      ...HANDOFF_CHILD_WRITE_ALLOW,
+    ])
     expect(settings.permissions.ask).toEqual(HANDOFF_CHILD_ASK)
     expect(settings.permissions.deny).toEqual(HANDOFF_CHILD_DENY)
   })
@@ -176,5 +183,155 @@ describe('handoffChildSettingsJson', () => {
 
   it('não leva aspa simples (vai inline num argumento shell-quoted)', () => {
     expect(handoffChildSettingsJson('plan')).not.toContain("'")
+  })
+})
+
+// Filha que implementa: allow de escrita local (forense: `cd … &&`, stash, install,
+// mkdir/cp eram os pedidos que paravam a filha). plan não ganha nada disso.
+describe('handoffChildSettings — escrita por modo', () => {
+  const WRITE_SAMPLES = [
+    'Bash(cd:*)',
+    'Bash(mkdir:*)',
+    'Bash(npm install:*)',
+    'Bash(npx:*)',
+    'Bash(git add:*)',
+    'Bash(git commit:*)',
+    'Bash(git stash push:*)',
+    'Bash(git worktree add:*)',
+    'Bash(sed:*)',
+    'Bash(make:*)',
+  ]
+
+  it('acceptEdits, interactive (null) e auto recebem o allow de escrita', () => {
+    for (const mode of ['acceptEdits', null, 'auto']) {
+      const allow = handoffChildSettings(mode).permissions.allow
+      for (const r of WRITE_SAMPLES) expect(allow, `${mode}: ${r}`).toContain(r)
+    }
+  })
+
+  it('plan NÃO recebe o allow de escrita e mantém o deny de escrita', () => {
+    const { allow, deny } = handoffChildSettings('plan').permissions
+    for (const r of HANDOFF_CHILD_WRITE_ALLOW) expect(allow).not.toContain(r)
+    for (const r of ['Edit', 'Write', 'Bash(git commit:*)', 'Bash(git add:*)']) {
+      expect(deny).toContain(r)
+    }
+  })
+
+  it('o deny destrutivo continua igual em modo de escrita', () => {
+    const { deny, ask } = handoffChildSettings('acceptEdits').permissions
+    for (const r of [
+      'Bash(rm -r*)',
+      'Bash(git push * main)',
+      'Bash(git push * --force)',
+      'Bash(gcloud * delete*)',
+      'Bash(gcloud * add-iam-policy-binding*)',
+    ]) {
+      expect(deny).toContain(r)
+    }
+    for (const r of [
+      'Bash(git merge:*)',
+      'Bash(gh pr merge:*)',
+      'Bash(npm run migrate:*)',
+      'Bash(psql:*)',
+      'Bash(chmod *-R*)',
+      'Bash(git commit *--no-verify*)',
+    ]) {
+      expect(ask).toContain(r)
+    }
+  })
+
+  it('nenhuma regra de escrita é anulada por deny exato (estaria morta)', () => {
+    const { deny } = handoffChildSettings('acceptEdits').permissions
+    for (const r of HANDOFF_CHILD_WRITE_ALLOW) expect(deny).not.toContain(r)
+  })
+
+  it('libera push da branch do worktree automático (child/*)', () => {
+    expect(HANDOFF_CHILD_ALLOW).toContain('Bash(git push -u origin child/*)')
+  })
+})
+
+describe('regras aprendidas ("Sempre permitir para filhas")', () => {
+  it('entram no allow de todos os modos', () => {
+    for (const mode of ['acceptEdits', 'plan', null]) {
+      const allow = handoffChildSettings(mode, [
+        'Bash(bq ls *)',
+        'Bash(terraform fmt *)',
+        'Bash(jest *)',
+      ]).permissions.allow
+      expect(allow).toContain('Bash(jest *)')
+    }
+  })
+
+  it('regra adulterada na pref (deny/ask, curinga solto, wrapper) é descartada', () => {
+    const allow = handoffChildSettings('acceptEdits', [
+      'Bash(rm *)',
+      'Bash(git push *)',
+      'Bash(git *)',
+      'Bash(*)',
+      'Bash(sudo *)',
+      'Bash(bq query *)',
+      'Edit',
+      42,
+    ]).permissions.allow
+    for (const r of [
+      'Bash(rm *)',
+      'Bash(git push *)',
+      'Bash(git *)',
+      'Bash(*)',
+      'Bash(sudo *)',
+      'Bash(bq query *)',
+    ]) {
+      expect(allow).not.toContain(r)
+    }
+  })
+
+  it('isLearnableChildRule: aceita prefixo de comando seguro e MCP', () => {
+    expect(isLearnableChildRule('Bash(jest *)')).toBe(true)
+    expect(isLearnableChildRule('Bash(docker-compose *)')).toBe(true)
+    expect(isLearnableChildRule('mcp__linear__get_issue')).toBe(true)
+    expect(isLearnableChildRule('mcp__*')).toBe(false)
+    expect(isLearnableChildRule('Bash(gh api *)')).toBe(true)
+    expect(isLearnableChildRule('Bash(gh pr *)')).toBe(false) // gh pr merge é ask
+    expect(isLearnableChildRule('Bash(gcloud run *)')).toBe(false) // família com deny
+  })
+})
+
+describe('deriveChildAllowRule', () => {
+  it('composto com cd: ignora o cd e usa o primeiro comando real', () => {
+    expect(deriveChildAllowRule('Bash', 'cd /home/u/repo && jest --watch=false')).toBe(
+      'Bash(jest *)',
+    )
+  })
+
+  it('ferramenta com subcomando leva dois tokens', () => {
+    expect(deriveChildAllowRule('Bash', 'gh api repos/x/y')).toBe('Bash(gh api *)')
+    expect(deriveChildAllowRule('Bash', 'cargo clippy --all')).toBe('Bash(cargo clippy *)')
+  })
+
+  it('nunca deriva regra para comando do deny/ask ou wrapper', () => {
+    for (const cmd of [
+      'rm -rf node_modules',
+      'git push origin main',
+      'git stash drop',
+      'bq query "select 1"',
+      'gcloud run deploy x',
+      'sudo apt install x',
+      'bash -c "rm -rf /"',
+      'echo $(rm x)',
+      './scripts/deploy.sh',
+      'FOO=1 jest',
+    ]) {
+      expect(deriveChildAllowRule('Bash', cmd), cmd).toBeNull()
+    }
+  })
+
+  it('MCP: a regra é o nome exato da tool', () => {
+    expect(deriveChildAllowRule(undefined, 'linear - get_issue (MCP) mcp__linear__get_issue')).toBe(
+      'mcp__linear__get_issue',
+    )
+  })
+
+  it('Edit/Write não viram regra', () => {
+    expect(deriveChildAllowRule('Edit', 'src/a.ts')).toBeNull()
   })
 })

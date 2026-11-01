@@ -91,7 +91,11 @@ export function latestSpawnArgs(db: Database.Database, ccSessionId: string): Spa
 
 // Flags do relançamento, revalidadas como no spawn. Sem registro (sessão de antes
 // da 061, ou nunca spawnada pelo Pitwall), relança como antes: sem flags.
-export function relaunchFlags(args: SpawnArgs | null): RelaunchFlags {
+// `learnedAllow`: regras do "Sempre permitir para filhas" (só valem na filha).
+export function relaunchFlags(
+  args: SpawnArgs | null,
+  learnedAllow: readonly string[] = [],
+): RelaunchFlags {
   if (!args) return NO_FLAGS
   const permissionMode = resolvePermissionMode(args.permissionMode)
   return {
@@ -102,7 +106,7 @@ export function relaunchFlags(args: SpawnArgs | null): RelaunchFlags {
     disallowedTools: resolveDisallowedTools(permissionMode, args.disallowedTools, {
       handoffChild: args.handoffChild,
     }),
-    settings: args.handoffChild ? handoffChildSettings(permissionMode) : null,
+    settings: args.handoffChild ? handoffChildSettings(permissionMode, learnedAllow) : null,
     systemPromptText: args.systemPromptText,
   }
 }
