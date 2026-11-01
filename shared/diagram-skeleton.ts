@@ -238,6 +238,19 @@ export function fractionalIndexAt(position: number): string {
   return `b${B62[hi]}${B62[lo]}`;
 }
 
+const LABELED_TYPES = new Set(["rectangle", "ellipse", "diamond", "arrow", "line"]);
+
+/**
+ * Shapes e setas desenham o rótulo a partir de label; "text" só vale no nó
+ * type "text". Sessões reais mandam text nos nós (validação v0.84) e o
+ * diagrama saía só com as setas rotuladas.
+ */
+export function textAsLabel(skel: DiagramSkeletonElement): DiagramSkeletonElement {
+  if (!LABELED_TYPES.has(skel.type) || skel.text === undefined || skel.label) return skel;
+  const { text, ...rest } = skel;
+  return { ...rest, label: { text } };
+}
+
 export function textMetrics(text: string): { width: number; height: number } {
   const m = measureText(text, FONT_SIZE, LINE_HEIGHT);
   return { width: Math.max(1, m.width), height: m.height };
