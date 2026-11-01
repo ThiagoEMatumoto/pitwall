@@ -60,16 +60,18 @@ describe('scanScreen — capturas reais do claude 2.1.286', () => {
     expect(scan.inputPrompt).toBe(true)
   })
 
-  // O trust do 2.1.286 perdeu a numeração ("❯ No, exit / Yes, I trust this
-  // folder") — o parser, fail-closed, não reconhece. E a captura real registra que
-  // o sessions/<pid>.json AINDA NÃO EXISTE nessa tela: sem arquivo não há 'waiting'
-  // (a sessão é 'starting'), então nem o contador nem a fila enxergam o trust —
-  // Confiar/Sair pelo popover não tem caminho no 2.1.286 (pendência conhecida).
-  it('trust sem numeração: não parseia e, com o status real (starting), não conta', async () => {
+  // O trust do 2.1.286+ perdeu a numeração ("❯ No, exit / Yes, I trust this
+  // folder") e a captura real registra que o sessions/<pid>.json AINDA NÃO EXISTE
+  // nessa tela: a sessão é 'starting'. Antes o parser não reconhecia e a filha
+  // parada aqui não entrava na fila; agora o trust vira motivo de atenção.
+  it('trust sem numeração: reconhecido como trust e, com o status real (starting), pede atenção', async () => {
     const scan = await scanFixture('claude-2.1.286-trust-unnumbered.ansi')
-    expect(scan.menu).toBeNull()
+    expect(scan.menu?.kind).toBe('trust')
+    expect(scan.menu?.options).toEqual([])
+    expect(scan.menu?.question).toMatch(/^Quick safety check: Is this a project/)
+    expect(scan.menu?.context).toContain('cwd-1790802817529')
     expect(scan.inputPrompt).toBe(false)
-    expect(isUnparsedWaiting('starting', scan)).toBe(false)
+    expect(deriveAttentionReason({ status: 'starting', scan, handoffAsking: false })).toBe('trust')
   })
 })
 

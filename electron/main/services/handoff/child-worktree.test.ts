@@ -1,7 +1,7 @@
 // Repo git REAL em tmpdir: o worktree automático é git de verdade (branch, base,
 // check-ignore), nada mockado.
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -15,9 +15,14 @@ function sh(cwd: string, ...args: string[]): string {
 let base: string
 let origin: string
 let repo: string
+// HOME temporário: o worktree criado pré-aceita o trust no ~/.claude.json, e o
+// teste nunca pode tocar o arquivo real do usuário.
+const realHome = process.env.HOME
 
 beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'child-wt-')))
+  process.env.HOME = base
+  writeFileSync(join(base, '.claude.json'), JSON.stringify({ projects: {} }))
   origin = join(base, 'origin.git')
   repo = join(base, 'repo')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])
@@ -32,6 +37,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  process.env.HOME = realHome
   rmSync(base, { recursive: true, force: true })
 })
 
@@ -50,6 +56,13 @@ describe('ensureChildWorkspace', () => {
     expect(sh(ws.workDir, 'rev-parse', 'HEAD')).toBe(sh(repo, 'rev-parse', 'origin/main'))
     // A raiz continua na main, intocada.
     expect(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+  })
+
+  it('worktree criado → trust pré-aceito no ~/.claude.json para ele e para a raiz', () => {
+    const ws = ensureChildWorkspace({ workDir: repo, alias: 'trust', handoffId: 'h-trust' })
+    const projects = JSON.parse(readFileSync(join(base, '.claude.json'), 'utf8')).projects
+    expect(projects[ws.workDir]).toEqual({ hasTrustDialogAccepted: true })
+    expect(projects[repo]).toEqual({ hasTrustDialogAccepted: true })
   })
 
   it('branch de trabalho → não cria nada e usa o work_dir como está', () => {

@@ -46,6 +46,8 @@ const seam = vi.hoisted(() => ({
 
 const SESSION_CONFIG_DIR = '/tmp/cm-test-userdata/mcp-sessions'
 
+// Nunca tocar o ~/.claude.json real: o spawn de filha claude pré-aceita o trust.
+vi.mock('../services/handoff/claude-trust', () => ({ preTrustClaudeDirs: vi.fn(() => true) }))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
   BrowserWindow: { getAllWindows: () => [] },

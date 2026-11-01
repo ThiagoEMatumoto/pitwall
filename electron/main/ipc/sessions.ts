@@ -84,6 +84,7 @@ import {
 } from '../services/spawn-flags'
 import { getChildLearnedAllow } from '../services/handoff/child-learned-rules'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { preTrustClaudeDirs } from '../services/handoff/claude-trust'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
 import type { AgentProvider, LaunchOpts } from '../services/providers/types'
@@ -554,6 +555,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // Sessão avulsa (repoId null): roda no scratch dir, sem vínculo com repo.
   let cwd: string
   let defaultName: string
+  let repoPath: string | null = null
   if (repoId) {
     const repo = db
       .prepare('SELECT path, label FROM repos WHERE id = ?')
@@ -561,7 +563,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
     if (!repo) throw new Error(`repo not found: ${repoId}`)
     // repos.path legado pode ser RELATIVO (bug do importer do sync antigo):
     // resolve contra o vault root antes do guard e do cwd do spawn.
-    const repoPath = resolveRepoPath(repo.path)
+    repoPath = resolveRepoPath(repo.path)
     assertRepoDirExists(repoPath)
     // Filha de handoff: o diretório gravado no create (a posse), sem recalcular.
     // Senão, feature com worktree registrado pra ESTE repo manda no cwd; sem
@@ -590,6 +592,11 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // de handoff num provider sem trava equivalente é recusada antes do spawn.
   const permissionMode = resolvePermissionMode(input.permissionMode)
   assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
+  // Filha não tem humano olhando o terminal: o diálogo de trust de um repo nunca
+  // aberto a deixaria parada antes do 1º turno. Falha aqui não bloqueia o spawn.
+  if (input.handoffChild && provider.id === 'claude' && repoPath) {
+    preTrustClaudeDirs([cwd, repoPath])
+  }
   const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools, {
     handoffChild: Boolean(input.handoffChild),
   })

@@ -31,8 +31,8 @@ type LiveById = Map<string, AttentionLiveSession>
 // Tela não reconhecida entra ('unrecognized'): suprimir em silêncio é pior que
 // contar a mais. Só o fim de turno reconhecido fica de fora. Fora de 'waiting',
 // vale o menu que gateMenuByStatus já aceitou (permissão/trust com o session file
-// ainda em 'starting'/'idle'). O trust do 2.1.286+ não tem numeração e o parser
-// não o reconhece — continua fora da fila (pendência conhecida).
+// ainda em 'starting'/'idle'). O trust do 2.1.286+ (sem numeração) entra como
+// trust sem opções clicáveis — ver parseUnnumberedTrust.
 export function liveNeedsYou(s: AttentionLiveSession): boolean {
   if (s.status === 'waiting') return s.screenReason !== 'turn-end'
   return s.screenReason === 'trust' || s.screenReason === 'permission'
