@@ -32,6 +32,7 @@ import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
 import { installLibraryFromUrl, installLibraryJson } from '../diagram-library-install'
 import { elementsToSkeleton } from '../../../../shared/diagram-skeleton'
+import { directlyNestedFrames } from '../../../../shared/diagram-compound'
 import { applyPatch, skeletonToElements } from '../diagram-layout'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
@@ -1568,6 +1569,16 @@ const skeletonElementSchema = z.object({
   children: z.array(z.string().min(1)).optional(),
 })
 
+const skeletonSchema = z.array(skeletonElementSchema).superRefine((els, ctx) => {
+  const nested = directlyNestedFrames(els)
+  if (nested.length > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `a frame cannot contain another frame (Excalidraw does not nest frames): ${nested.join(', ')}. Put a group between them or place the frame beside it.`,
+    })
+  }
+})
+
 // Layout ELK (electron/main/services/diagram-layout.ts). auto: o layout
 // posiciona todo nó não pinado (x/y do skeleton são ignorados); keep: nada se
 // move. direction: camadas LR (default) ou TB.
@@ -1595,7 +1606,7 @@ const diagramCreateSchema = z
     title: z.string().trim().min(1),
     kind: diagramKind.optional(),
     summary: z.string().min(1),
-    elements: z.array(skeletonElementSchema).optional(),
+    elements: skeletonSchema.optional(),
     scene: diagramSceneSchema.optional(),
     links: z.array(diagramLinkInputSchema).optional(),
     direction: diagramDirection.optional(),
@@ -1651,7 +1662,7 @@ const diagramUpdateSchema = z
   .object({
     id: z.string().min(1),
     summary: z.string().min(1),
-    elements: z.array(skeletonElementSchema).optional(),
+    elements: skeletonSchema.optional(),
     scene: diagramSceneSchema.optional(),
     direction: diagramDirection.optional(),
     layout: diagramLayoutMode.optional(),
@@ -1682,7 +1693,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
+        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
       inputSchema: diagramCreateSchema,
       handler: async (args) => {
         const input = diagramCreateSchema.parse(args)

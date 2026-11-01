@@ -44,6 +44,18 @@ export function compoundPadding(
 
 export const EMPTY_COMPOUND_SIZE = { width: 240, height: 140 };
 
+/** Frames listados como filho direto de outro frame (não suportado). */
+export function directlyNestedFrames(
+  skeleton: readonly Pick<DiagramSkeletonElement, "id" | "type" | "children">[],
+): string[] {
+  const frames = new Set(
+    skeleton.filter((s) => s.type === "frame").map((s) => s.id),
+  );
+  return skeleton
+    .filter((s) => s.type === "frame")
+    .flatMap((s) => (s.children ?? []).filter((c) => c !== s.id && frames.has(c)));
+}
+
 /**
  * Pai de cada filho declarado no skeleton. O primeiro compound que reclama um
  * filho vence; filho inexistente, seta ou ciclo é ignorado.
@@ -59,6 +71,8 @@ export function skeletonParents(
       const child = byId.get(childId);
       if (!child || childId === s.id || parent.has(childId)) continue;
       if (child.type === "arrow" || child.type === "line") continue;
+      // O Excalidraw não aninha frames (frameId de frame é sempre null).
+      if (s.type === "frame" && child.type === "frame") continue;
       let cycle = false;
       for (
         let a: string | undefined = s.id;
@@ -101,9 +115,22 @@ export function sceneParents(
     }
     return out;
   };
-  const depth = new Map(
-    [...compounds].map(([id, el]) => [id, candidates(el).length]),
-  );
+  // Profundidade real (cadeia de ancestrais), não a contagem de candidatos:
+  // em frame > grupo > frame, o frame interno e o grupo têm 1 candidato cada.
+  const depth = new Map<string, number>();
+  const depthOf = (id: string, seen: Set<string>): number => {
+    const known = depth.get(id);
+    if (known !== undefined) return known;
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const d = Math.max(
+      0,
+      ...candidates(compounds.get(id)!).map((c) => 1 + depthOf(c, seen)),
+    );
+    depth.set(id, d);
+    return d;
+  };
+  for (const id of compounds.keys()) depthOf(id, new Set());
   const parents = new Map<string, string>();
   for (const el of elements) {
     if (el.isDeleted) continue;

@@ -1587,6 +1587,22 @@ describe('mcp tools — diagrams', () => {
     ).toEqual({ n: 0 })
   })
 
+  it('diagram_create recusa frame filho direto de frame', async () => {
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: 'X',
+          summary: 's',
+          elements: [
+            { id: 'a', type: 'rectangle' },
+            { id: 'inner', type: 'frame', children: ['a'] },
+            { id: 'outer', type: 'frame', children: ['inner'] },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/frame/)
+  })
+
   it('diagram_create/patch aceitam entity, class, group, frame e relation (round-trip)', async () => {
     const { diagram, skeleton } = await callAsync<{
       diagram: DiagramMetaOut

@@ -26,7 +26,7 @@ diagram_create({ title: "Auth flow", kind: "flow", summary: "initial sketch", el
   { "id": "e1", "type": "arrow", "start": { "id": "ui" }, "end": { "id": "api" }, "label": { "text": "POST /login" } },
   { "id": "e2", "type": "arrow", "start": { "id": "api" }, "end": { "id": "db" }, "label": { "text": "create session" } }
 ] })
-ER and UML: use type "entity" (a table: one row per field, pk/fk marked) and "class" (name, attributes, methods), and set relation on arrows instead of drawing crow's feet by hand; wrap related nodes in { "type": "group", "label": {...}, "children": [ids] } or { "type": "frame", "name": "...", "children": [ids] }. Example — ER, 3 entities, 1:N:
+ER and UML: use type "entity" (a table: one row per field, pk/fk marked) and "class" (name, attributes, methods), and set relation on arrows instead of drawing crow's feet by hand; wrap related nodes in { "type": "group", "label": {...}, "children": [ids] } or { "type": "frame", "name": "...", "children": [ids] } (frames do not nest: put a group between two frames). Example — ER, 3 entities, 1:N:
 diagram_create({ title: "Orders schema", kind: "er", summary: "ER", direction: "TB", elements: [
   { "id": "users", "type": "entity", "name": "users", "fields": [{ "name": "id", "type": "uuid", "pk": true }, { "name": "email", "type": "text" }] },
   { "id": "orders", "type": "entity", "name": "orders", "fields": [{ "name": "id", "type": "uuid", "pk": true }, { "name": "user_id", "type": "uuid", "fk": true }] },

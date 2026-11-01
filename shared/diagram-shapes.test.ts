@@ -647,3 +647,38 @@ describe("frame nativo do editor (sem customData)", () => {
     }
   });
 });
+
+describe("frame dentro de frame (o Excalidraw não aninha frames)", () => {
+  const boxOf = (els: AnyEl[], id: string) => byId(els, id);
+  const nested: DiagramSkeletonElement[] = [
+    { id: "a", type: "rectangle", label: { text: "A" } },
+    { id: "b", type: "rectangle", label: { text: "B" } },
+    { id: "inner", type: "frame", name: "Inner", children: ["a"] },
+    { id: "outer", type: "frame", name: "Outer", children: ["inner", "b"] },
+  ];
+
+  it("primeiro desenho e round-trip concordam: o frame interno fica ao lado", async () => {
+    const els = (await skeletonToElements(nested)) as AnyEl[];
+    expect(disjoint(boxOf(els, "inner"), boxOf(els, "outer"))).toBe(true);
+    const back = elementsToSkeleton(els);
+    expect(back.find((s) => s.id === "outer")?.children).toEqual(["b"]);
+    expect(back.find((s) => s.id === "inner")?.children).toEqual(["a"]);
+    const again = (await skeletonToElements(back)) as AnyEl[];
+    expect(disjoint(boxOf(again, "inner"), boxOf(again, "outer"))).toBe(true);
+    expect(byId(again, "a").frameId).toBe("inner");
+    expect(byId(again, "b").frameId).toBe("outer");
+  });
+
+  it("frame dentro de grupo dentro de frame continua aninhado no round-trip", async () => {
+    const skeleton: DiagramSkeletonElement[] = [
+      { id: "a", type: "rectangle", label: { text: "A" } },
+      { id: "inner", type: "frame", name: "Inner", children: ["a"] },
+      { id: "g", type: "group", children: ["inner"] },
+      { id: "outer", type: "frame", name: "Outer", children: ["g"] },
+    ];
+    const els = (await skeletonToElements(skeleton)) as AnyEl[];
+    const back = elementsToSkeleton(els);
+    expect(back.find((s) => s.id === "outer")?.children).toEqual(["g"]);
+    expect(back.find((s) => s.id === "g")?.children).toEqual(["inner"]);
+  });
+});
