@@ -72,6 +72,22 @@ describe('mcp tools — diagram folders', () => {
     expect(again.folderId).toBe(items[0].id)
   })
 
+  it('diagram_create com folder: se o insert do diagrama falhar, a pasta nova não sobra', async () => {
+    const db = getDb()
+    db.exec(
+      "CREATE TEMP TRIGGER fail_diagram_insert BEFORE INSERT ON diagrams BEGIN SELECT RAISE(ABORT, 'boom'); END",
+    )
+    try {
+      await expect(createDiagram('Quebra', 'Orfa')).rejects.toThrow(/boom/)
+    } finally {
+      db.exec('DROP TRIGGER fail_diagram_insert')
+    }
+
+    expect(diagramStore.findFolderByName('Orfa')).toBeFalsy()
+    expect(await call('diagram_folder_list', {})).toEqual(expect.objectContaining({ items: [] }))
+    expect(calls).toEqual([])
+  })
+
   it('diagram_list filtra por nome de pasta e por null; pasta inexistente vira note', async () => {
     const inside = await createDiagram('Dentro', 'Infra')
     const loose = await createDiagram('Solto')

@@ -1733,20 +1733,23 @@ function diagramTools(notify: McpNotify): ToolDef[] {
               }),
             }
           : (input.scene as DiagramScene)
-        const folderId = input.folder ? diagramStore.ensureFolder(input.folder).id : undefined
-        const diagram = diagramStore.create({
-          title: input.title,
-          kind: input.kind,
-          scene,
-          sourceFormat: fromSkeleton ? 'skeleton' : 'scene',
-          source: fromSkeleton ? JSON.stringify(input.elements) : null,
-          author: 'claude',
-          summary: input.summary,
-          links: input.links,
-          folderId,
-        })
+        // Pasta e diagrama na mesma transação: se o create falhar, a pasta recém-criada
+        // não pode sobrar vazia no hub.
+        const diagram = getDb().transaction(() =>
+          diagramStore.create({
+            title: input.title,
+            kind: input.kind,
+            scene,
+            sourceFormat: fromSkeleton ? 'skeleton' : 'scene',
+            source: fromSkeleton ? JSON.stringify(input.elements) : null,
+            author: 'claude',
+            summary: input.summary,
+            links: input.links,
+            folderId: input.folder ? diagramStore.ensureFolder(input.folder).id : undefined,
+          }),
+        )()
         notify.broadcast('diagram:updated', diagram)
-        if (folderId) foldersUpdated(folderId)
+        if (diagram.folderId) foldersUpdated(diagram.folderId)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
