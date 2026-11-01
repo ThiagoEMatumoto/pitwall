@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getDb, handoffsInterruptedAtOpen } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
+import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import * as requests from './handoff-requests'
 import type { CreateRequestInput, HandoffRequest } from '../../../shared/types/handoff-request'
@@ -683,11 +684,30 @@ function killFailedChildren(killChildPty: (childSessionId: string) => void): num
 }
 
 // Busca o handoff cuja filha é esta sessão (pra reconciliar no PTY exit). NULL se
-// a sessão não veio de um handoff.
+// a sessão não veio de um handoff. Uma sessão readotada tem vários: vale o mais
+// recente (sem ORDER BY o SQLite devolvia qualquer um).
 export function getByChildSession(childSessionId: string): Handoff | null {
   const row = getDb()
-    .prepare(`${SELECT_HANDOFF} WHERE h.child_session_id = ?`)
+    .prepare(
+      `${SELECT_HANDOFF} WHERE h.child_session_id = ? ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1`,
+    )
     .get(childSessionId) as HandoffRow | undefined
+  return row ? toEntity(row) : null
+}
+
+// O handoff da CONVERSA desta sessão: a própria linha ou qualquer outra com o mesmo
+// cc_session_id. Um resume que não passou pelo relink (ex.: filha dispensada,
+// retomada pelo switcher antes deste fix) cria linha nova que o handoff não
+// conhece; sem casar pelo cc, a UI oferecia "Tornar sessão filha" e o clique
+// criava um 2º handoff pra mesma conversa.
+export function getByChildConversation(sessionId: string): Handoff | null {
+  const row = getDb()
+    .prepare(
+      `${SELECT_HANDOFF} JOIN sessions cs ON cs.id = h.child_session_id
+        WHERE ${CHILD_CONVERSATION_MATCH}
+        ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1`,
+    )
+    .get(...childConversationParams([sessionId])) as HandoffRow | undefined
   return row ? toEntity(row) : null
 }
 
@@ -808,6 +828,78 @@ export function release(id: string): Handoff {
     ).run(now, now, id)
   }
   logEvent(id, 'release', live ? 'interrupted' : row.status, row.status, row.child_session_id)
+  return fresh(id)
+}
+
+// Re-vínculo: reativa o MESMO handoff de uma filha interrompida/dispensada, em vez
+// de criar outro (que daria dois cards pro mesmo processo e reiniciaria a sessão).
+// Limpa a dispensa, aponta child_session_id pra linha viva, troca a mãe se pedido e
+// deixa o status coerente com o processo: viva → running (needs_input preserva a
+// pergunta aberta); morta → interrupted (retomável pelo Crew Dock), porque um
+// running sem PTY é exatamente a mentira que o reconcileStuck varre.
+export function relink(
+  id: string,
+  opts: { childSessionId: string; childAlive: boolean; motherSessionId?: string | null },
+): Handoff {
+  const db = getDb()
+  const row = db.prepare('SELECT status, mother_session_id FROM handoffs WHERE id = ?').get(id) as
+    { status: string; mother_session_id: string | null } | undefined
+  if (!row) throw new Error(`handoff not found: ${id}`)
+  if (opts.motherSessionId === opts.childSessionId) {
+    throw new Error('Uma sessão não pode ser mãe de si mesma.')
+  }
+  const live = row.status === 'running' || row.status === 'needs_input'
+  const to = opts.childAlive
+    ? row.status === 'needs_input'
+      ? 'needs_input'
+      : 'running'
+    : live
+      ? 'interrupted'
+      : row.status
+  const mother = opts.motherSessionId ?? row.mother_session_id
+  const now = Date.now()
+  try {
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE handoffs SET status = ?, child_session_id = ?, mother_session_id = ?,
+                dismissed_at = NULL, updated_at = ? WHERE id = ?`,
+      ).run(to, opts.childSessionId, mother, now, id)
+      if (mother !== row.mother_session_id) {
+        const detail = JSON.stringify({ from: row.mother_session_id, to: mother })
+        logEvent(id, 'mother_changed', to, row.status, detail)
+      }
+      logEvent(id, 'relink', to, row.status, opts.childSessionId)
+    })()
+  } catch (err) {
+    rethrowAsDuplicate(err, id)
+  }
+  return fresh(id)
+}
+
+// Troca a mãe de UMA filha (o transferMother move todas as filhas de uma mãe; aqui
+// o humano escolhe outra mãe pra este handoff só). Evento próprio, 'mother_changed':
+// o 'mother_transferred' é o bastão da mãe, que o grafo desenha como sucessão.
+export function setMother(id: string, motherSessionId: string): Handoff {
+  const row = getDb()
+    .prepare('SELECT status, mother_session_id, child_session_id FROM handoffs WHERE id = ?')
+    .get(id) as
+    | { status: string; mother_session_id: string | null; child_session_id: string | null }
+    | undefined
+  if (!row) throw new Error(`handoff not found: ${id}`)
+  if (row.child_session_id === motherSessionId) {
+    throw new Error('Uma sessão não pode ser mãe de si mesma.')
+  }
+  if (row.mother_session_id === motherSessionId) return fresh(id)
+  getDb()
+    .prepare('UPDATE handoffs SET mother_session_id = ?, updated_at = ? WHERE id = ?')
+    .run(motherSessionId, Date.now(), id)
+  logEvent(
+    id,
+    'mother_changed',
+    row.status,
+    row.status,
+    JSON.stringify({ from: row.mother_session_id, to: motherSessionId }),
+  )
   return fresh(id)
 }
 

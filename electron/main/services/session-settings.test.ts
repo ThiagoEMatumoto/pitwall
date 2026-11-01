@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  acceptsCrossSessionInbound,
   buildSessionSettings,
   removeSessionSettings,
   sessionSettingsPath,
@@ -42,6 +43,17 @@ describe('buildSessionSettings', () => {
 })
 
 describe('arquivo de settings por sessão', () => {
+  it('accept-inbound só para o exec que recebeu o settings de filha', () => {
+    const dir = tmpDir()
+    const other = '3f2504e0-4f89-11d3-9a0c-0305e82c3302'
+    writeSessionSettings(ID, buildSessionSettings({ crossSessionInbound: 'accept' }, ['A'])!, dir)
+    writeSessionSettings(other, buildSessionSettings(null, ['A'])!, dir)
+    expect(acceptsCrossSessionInbound(ID, dir)).toBe(true)
+    expect(acceptsCrossSessionInbound(other, dir)).toBe(false)
+    removeSessionSettings(ID, dir)
+    expect(acceptsCrossSessionInbound(ID, dir)).toBe(false)
+  })
+
   it('grava atômico em <dir>/<id>.json com 0600, sem sobra de .tmp', () => {
     const dir = tmpDir()
     const path = writeSessionSettings(ID, { permissions: { deny: ['Bash(pkill:*)'] } }, dir)

@@ -9,7 +9,15 @@
 // <userData>/session-settings/<sessions.id>.json, escrito antes do spawn, removido
 // no exit da PTY e varrido no boot.
 import { app } from 'electron'
-import { chmodSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 export interface SessionSettings {
@@ -62,6 +70,22 @@ export function writeSessionSettings(
   chmodSync(tmp, 0o600)
   renameSync(tmp, path)
   return path
+}
+
+// O processo VIVO desta linha aceita SendMessage de outra sessão? O arquivo é o
+// que o exec recebeu (escrito antes do spawn, apagado no exit) — diferente de
+// sessions.spawn_args, que o resume comum copia da linha anterior mesmo subindo
+// sem as flags de filha.
+export function acceptsCrossSessionInbound(
+  sessionId: string,
+  dir: string = sessionSettingsDir(),
+): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(sessionSettingsPath(sessionId, dir), 'utf8')) as unknown
+    return (raw as SessionSettings | null)?.crossSessionInbound === 'accept'
+  } catch {
+    return false
+  }
 }
 
 // Best-effort, chamado no exit da PTY junto com removeSessionMcpConfig.

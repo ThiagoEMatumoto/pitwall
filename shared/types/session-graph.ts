@@ -56,6 +56,15 @@ export interface SessionGraphNode {
   // Passou o bastão de mãe (handoff_events 'mother_transferred') e não lidera
   // mais ninguém: segue viva até o humano encerrar.
   batonPassed?: boolean
+  // Hierarquia mãe/filha pra EXIBIÇÃO (tela de projeto, barra, seletor): de quem
+  // esta sessão é filha, por QUALQUER handoff histórico da conversa (dispensado,
+  // encerrado, antigo; casado pelo cc_session_id da filha ou da antecessora do
+  // bastão). Uma vez filha, ela não volta ao nível de mãe até ser desvinculada
+  // (evento 'release'). Diferente de childOfHandoffId, que é só o vínculo vivo.
+  // hierarchyMotherId é resolvido pra linha mais atual da conversa da mãe.
+  hierarchyMotherId?: string | null
+  hierarchyMotherTitle?: string | null
+  hierarchyHandoffId?: string | null
 }
 
 export interface SessionGraphLaneRepo {

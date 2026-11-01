@@ -63,7 +63,7 @@ vi.mock('../handoff-store', () => ({
     return fakeHandoff(input)
   },
   activeSessionNames: () => [],
-  getByChildSession: () => existingChildHandoff,
+  getByChildConversation: () => existingChildHandoff,
   markRunning: (id: string, childSessionId: string): Handoff => {
     trail.push('mark-running')
     markRunningCalls.push({ id, childSessionId })
@@ -196,9 +196,35 @@ describe('adoptSession — gate', () => {
   })
 
   it('sessão que já é filha ativa não é adotada de novo', async () => {
-    existingChildHandoff = { status: 'running' } as Handoff
+    existingChildHandoff = {
+      status: 'running',
+      childSessionId: 'sess-alvo',
+      dismissedAt: null,
+    } as Handoff
     await expect(adoptSession(input)).rejects.toThrow(/já é filha/)
     expect(created).toHaveLength(0)
+  })
+
+  // Mesma régua do botão (childLinkState): vínculo interrompido ou dispensado não
+  // vira handoff NOVO (dois cards, um processo) — a saída é re-vincular.
+  it.each([
+    ['interrompida', { status: 'interrupted', dismissedAt: null }],
+    ['dispensada', { status: 'running', dismissedAt: 123 }],
+  ] as const)('filha %s aponta para Re-vincular, sem criar handoff', async (_l, h) => {
+    existingChildHandoff = { ...h, childSessionId: 'sess-alvo' } as Handoff
+    await expect(adoptSession(input)).rejects.toThrow(/Re-vincular/)
+    expect(created).toHaveLength(0)
+    expect(trail).not.toContain('kill-pty')
+  })
+
+  it('handoff encerrado não bloqueia uma adoção nova', async () => {
+    existingChildHandoff = {
+      status: 'done',
+      childSessionId: 'sess-alvo',
+      dismissedAt: null,
+    } as Handoff
+    await adoptSession(input)
+    expect(created).toHaveLength(1)
   })
 
   it('sessão não pode ser mãe de si mesma', async () => {

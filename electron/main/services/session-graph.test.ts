@@ -708,3 +708,104 @@ describe('session graph — mãe transferível (F3)', () => {
     expect(baton[0]).toMatchObject({ from: 'm', to: 'm2' })
   })
 })
+
+// Hierarquia de exibição (tela de projeto, barra, seletor): fixtures pelo
+// produtor real (handoff-store + readSessionGraphInput num SQLite migrado).
+describe('session-graph — hierarquia mãe/filha (hierarchyMotherId)', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedBase(testDb)
+  })
+
+  afterEach(() => {
+    testDb.close()
+  })
+
+  const node = (g: ReturnType<typeof graphFor>, id: string) =>
+    g.nodes.find((n) => n.sessionId === id)
+  const setCc = (id: string, cc: string) =>
+    testDb.prepare('UPDATE sessions SET cc_session_id = ? WHERE id = ?').run(cc, id)
+
+  it('filha dispensada e encerrada há semanas continua filha (não volta ao nível de mãe)', () => {
+    addSession('mae', 'r-web', { title: 'orquestra', titleSource: 'manual' })
+    addSession('kid', 'r-api')
+    const h = dispatch('mae', 'kid', 'Refatorar auth')
+    handoffStore.report(h, 'feito')
+    handoffStore.dismiss(h)
+    testDb.prepare('UPDATE handoffs SET updated_at = ? WHERE id = ?').run(1, h)
+
+    const g = graphFor(live({ mae: {}, kid: {} }))
+    expect(node(g, 'kid')?.childOfHandoffId).toBeNull()
+    expect(node(g, 'kid')).toMatchObject({
+      hierarchyMotherId: 'mae',
+      hierarchyMotherTitle: 'orquestra',
+      hierarchyHandoffId: h,
+    })
+    expect(node(g, 'mae')?.hierarchyMotherId).toBeNull()
+  })
+
+  it('linha retomada da filha (mesmo cc) herda a mãe, e a mãe retomada vira a nova linha', () => {
+    addSession('mae', 'r-web')
+    addSession('kid', 'r-api')
+    const h = dispatch('mae', 'kid', 'Investigar lentidão')
+    handoffStore.dismiss(h)
+    addSession('kid-2', 'r-api')
+    setCc('kid-2', 'cc-kid')
+    addSession('mae-2', 'r-web', { title: 'mãe de hoje', titleSource: 'manual' })
+    setCc('mae-2', 'cc-mae')
+
+    const g = graphFor(live({ 'kid-2': {}, 'mae-2': {} }))
+    expect(node(g, 'kid-2')).toMatchObject({
+      hierarchyMotherId: 'mae-2',
+      hierarchyMotherTitle: 'mãe de hoje',
+    })
+  })
+
+  // Mesmo critério da régua de vínculo (getByChildConversation): a árvore não
+  // pode mostrar como filha uma sessão que o "Desvincular" não alcança.
+  it('antecessora do bastão sai da hierarquia; a sucessora é a filha', () => {
+    addSession('mae', 'r-web')
+    addSession('kid', 'r-api')
+    addSession('kid-b', 'r-api')
+    const h = dispatch('mae', 'kid', 'Migrar schema')
+    passBaton(h, 'kid', 'kid-b')
+
+    const g = graphFor(live({ mae: {}, kid: {}, 'kid-b': {} }))
+    expect(node(g, 'kid')?.hierarchyMotherId).toBeNull()
+    expect(handoffStore.getByChildConversation('kid')).toBeNull()
+    expect(node(g, 'kid-b')?.hierarchyMotherId).toBe('mae')
+    expect(handoffStore.getByChildConversation('kid-b')?.id).toBe(h)
+  })
+
+  it('desvincular (release) devolve ao nível de mãe; readotar depois volta a ser filha', () => {
+    addSession('mae', 'r-web')
+    addSession('kid', 'r-api')
+    const old = dispatch('mae', 'kid', 'Antiga')
+    handoffStore.report(old, 'feito')
+    const h = dispatch('mae', 'kid', 'Atual')
+    handoffStore.release(h)
+
+    expect(node(graphFor(live({ mae: {}, kid: {} })), 'kid')?.hierarchyMotherId).toBeNull()
+
+    addSession('mae-b', 'r-site')
+    const again = dispatch('mae-b', 'kid', 'Readotada')
+    testDb.prepare('UPDATE handoffs SET created_at = created_at + 60000 WHERE id = ?').run(again)
+    expect(node(graphFor(live({ mae: {}, 'mae-b': {}, kid: {} })), 'kid')?.hierarchyMotherId).toBe(
+      'mae-b',
+    )
+  })
+
+  it('handoff com a filha re-vinculada a outra mãe (setMother) segue a mãe nova', () => {
+    addSession('mae', 'r-web')
+    addSession('mae-b', 'r-site')
+    addSession('kid', 'r-api')
+    const h = dispatch('mae', 'kid', 'Trocar de mãe')
+    handoffStore.setMother(h, 'mae-b')
+    const g = graphFor(live({ mae: {}, 'mae-b': {}, kid: {} }))
+    expect(node(g, 'kid')?.hierarchyMotherId).toBe('mae-b')
+    // Troca de mãe de UMA filha não é bastão da mãe: nada de fio de sucessão.
+    expect(edgesOf(g.edges, 'baton')).toHaveLength(0)
+  })
+})

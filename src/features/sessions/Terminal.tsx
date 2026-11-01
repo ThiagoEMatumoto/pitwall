@@ -7,7 +7,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { gpuApi, sessionsApi } from '@/lib/ipc'
+import { gpuApi, handoffsApi, sessionsApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useAppStore, type PaneMode } from '@/store/appStore'
@@ -20,7 +20,9 @@ import { SessionHeader } from './SessionHeader'
 import { useSessionFeature } from './useSessionFeature'
 import { BatonDialog } from './BatonDialog'
 import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
-import { childSessionIds, useHandoffsStore } from '@/store/handoffsStore'
+import { ChildLinkDialog } from '@/features/handoffs/ChildLinkDialog'
+import { useHandoffsStore } from '@/store/handoffsStore'
+import type { ChildLinkInfo } from '../../../shared/types/ipc'
 import { AgentHud } from './AgentHud'
 import { SummaryChip } from './voice/SummaryChip'
 import { useAutoSummary } from './voice/useAutoSummary'
@@ -337,9 +339,26 @@ function TerminalHost({
   // por --resume jogaria a conversa fora — então a ação aparece desabilitada
   // com o motivo, em vez de sumir sem explicar.
   const [hasTranscript, setHasTranscript] = useState(false)
-  // Já é filha de um handoff ativo? Adotar de novo criaria um 2º card pro mesmo
-  // processo. Boolean derivado (não Set) pra não re-renderizar à toa.
-  const isCrewChild = useHandoffsStore((s) => childSessionIds(s.handoffs).has(session.id))
+  // Vínculo de filha na régua ÚNICA do main (childLinkState, a mesma do adopt):
+  // decide se o botão adota, re-vincula ou abre trocar mãe/desvincular. Relido a
+  // cada mudança na lista de handoffs (handoff:updated).
+  const handoffsVersion = useHandoffsStore((s) => s.handoffs)
+  const [childLink, setChildLink] = useState<ChildLinkInfo | null>(null)
+  const [linkOpen, setLinkOpen] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void handoffsApi
+      .childLink(session.id)
+      .then((info) => alive && setChildLink(info))
+      .catch(() => alive && setChildLink(null))
+    return () => {
+      alive = false
+    }
+  }, [session.id, handoffsVersion])
+  const linkState = childLink?.state ?? 'none'
+  // Foi filha de um handoff encerrado (done/failed): a árvore ainda a aninha sob a
+  // mãe, então o botão abre o diálogo de vínculo (com "Desvincular"), não a adoção.
+  const endedLink = linkState === 'none' && !!childLink?.handoff
   const composerRef = useRef<ComposerHandle>(null)
   const chatViewRef = useRef<ChatViewHandle>(null)
   // WebGL addon vivo deste mount (null = DOM renderer). Ref (não var local do
@@ -1226,9 +1245,10 @@ function TerminalHost({
     }
   }, [session.ccSessionId])
 
-  const adoptDisabledReason = isCrewChild
-    ? 'Esta sessão já é filha de um handoff — ela já vive no painel da equipe'
-    : !session.ccSessionId || !hasTranscript
+  const adoptDisabledReason =
+    linkState !== 'none' || endedLink
+      ? null
+      : !session.ccSessionId || !hasTranscript
       ? 'Sem transcript no disco ainda — relançar como filha perderia o histórico'
       : null
 
@@ -1280,8 +1300,19 @@ function TerminalHost({
           // resposta ainda) — a ação some em vez de abrir um diálogo que já
           // nasceria em erro.
           onPassBaton={session.ccSessionId ? () => setBatonOpen(true) : undefined}
-          onAdopt={() => setAdoptOpen(true)}
+          onAdopt={() =>
+            linkState === 'none' && !endedLink ? setAdoptOpen(true) : setLinkOpen(true)
+          }
           adoptDisabledReason={adoptDisabledReason}
+          adoptLabel={
+            linkState === 'relinkable'
+              ? 'Re-vincular à mãe — reativa o vínculo existente, sem reiniciar a sessão'
+              : linkState === 'active'
+                ? 'Vínculo com a mãe — trocar mãe ou desvincular'
+                : endedLink
+                  ? 'Vínculo encerrado — desvincular ou tornar filha de novo'
+                  : undefined
+          }
           feature={sessionFeature}
           sessionId={session.id}
           repoId={session.repoId}
@@ -1298,6 +1329,17 @@ function TerminalHost({
         displayTitle={displayTitle}
         onAdopted={() => onClose()}
       />
+
+      {childLink && (childLink.state !== 'none' || endedLink) && (
+        <ChildLinkDialog
+          open={linkOpen}
+          onClose={() => setLinkOpen(false)}
+          sessionId={session.id}
+          displayTitle={displayTitle}
+          link={childLink}
+          onAdoptNew={() => setAdoptOpen(true)}
+        />
+      )}
 
       <BatonDialog
         open={batonOpen}

@@ -13,11 +13,14 @@ vi.mock('@/lib/nav', () => ({
 vi.mock('@/lib/ipc', () => ({
   featuresApi: { get: vi.fn(), listWithStats: vi.fn().mockResolvedValue([]) },
   sessionsApi: { listByFeature: vi.fn().mockResolvedValue([]) },
+  prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
+  sessionGraphApi: { onUpdated: () => () => {}, get: () => new Promise(() => {}) },
 }))
 
 const sessions: LiveSessionInfo[] = []
 const openSession = vi.fn()
-vi.mock('./useGlobalSessions', () => ({
+vi.mock('./useGlobalSessions', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useVisibleLiveSessions: () => sessions,
   useEndedSessions: () => null,
 }))

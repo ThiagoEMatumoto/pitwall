@@ -924,7 +924,11 @@ export function defaultResumeKickoff(id: string): string {
 
 // O vínculo mãe→filha mora SÓ em handoffs.child_session_id. Dado o cc_session_id
 // que o usuário pediu pra retomar, descobre se ele é a filha de um handoff ainda
-// vinculado (não dispensado no Crew Dock) e recuperável. Consulta local (com
+// vinculado e recuperável. Dispensado CONTA: dispensar tira o card de vista, não
+// desfaz o vínculo — sem relink, a filha dispensada voltava do resume como sessão
+// comum (sem apelido, sem --settings) e reaparecia no nível de mãe. Quem foi
+// SOLTO (release) não casa: o child_session_id foi zerado. O handoff mais recente
+// da conversa decide (mesma ordem do getByChildSession). Consulta local (com
 // getDb) pra não alargar a superfície do handoff-store.
 function findRelinkableHandoff(ccSessionId: string): { id: string; status: HandoffStatus } | null {
   const row = getDb()
@@ -932,8 +936,8 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
       `SELECT h.id AS id, h.status AS status
          FROM handoffs h
          JOIN sessions s ON s.id = h.child_session_id
-        WHERE s.cc_session_id = ? AND h.dismissed_at IS NULL
-        ORDER BY h.updated_at DESC
+        WHERE s.cc_session_id = ?
+        ORDER BY h.created_at DESC, h.rowid DESC
         LIMIT 1`,
     )
     .get(ccSessionId) as { id: string; status: string } | undefined
