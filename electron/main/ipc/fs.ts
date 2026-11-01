@@ -1,7 +1,14 @@
 import { ipcMain } from 'electron'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { readdirSync, statSync, readFileSync, writeFileSync, realpathSync } from 'node:fs'
+import {
+  readdirSync,
+  statSync,
+  lstatSync,
+  readFileSync,
+  writeFileSync,
+  realpathSync,
+} from 'node:fs'
 import { z } from 'zod'
 import { getDb } from '../services/db'
 import { isInsideVault } from './git'
@@ -37,7 +44,33 @@ function allowedRoots(): string[] {
   roots.add(path.join(homedir(), '.claude'))
   roots.add(path.resolve(tmpdir()))
   roots.add('/tmp')
+  const scratch = claudeScratchRoot()
+  if (scratch) roots.add(scratch)
   return [...roots]
+}
+
+// Scratchpad do claude fora do tmpfs (CLAUDE_CODE_TMPDIR): sem esta raiz, clicar
+// num path de scratch no terminal dá "fora do permitido". Libera só o diretório
+// per-uid que o claude cria (claude-<uid>), e nunca '/', o home ou um ancestral
+// dele — a env vem do ambiente da sessão gráfica e não é validada por ninguém.
+function claudeScratchRoot(): string | null {
+  const base = process.env.CLAUDE_CODE_TMPDIR
+  if (!base || !path.isAbsolute(base)) return null
+  const uid = process.getuid?.() ?? 0
+  const dir = path.join(base, `claude-${uid}`)
+  let real: string
+  try {
+    // O claude cria o diretório per-uid como diretório real do usuário (0700); um
+    // symlink ou um diretório de outro dono ali não é o scratch dele.
+    const st = lstatSync(dir)
+    if (!st.isDirectory() || st.uid !== uid) return null
+    real = realpathSync(dir)
+  } catch {
+    return null
+  }
+  const home = realpathSync(homedir())
+  if (real === path.parse(real).root || real === home || isInsideVault(real, home)) return null
+  return real
 }
 
 // Resolve symlinks ANTES de comparar para impedir escape via link simbólico.

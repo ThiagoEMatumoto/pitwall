@@ -8,6 +8,7 @@ import { buildIndex } from '@shared/design/ops'
 import type { ArtboardPreset, DesignArtboard } from '@shared/types/design'
 import type { ArtboardPlacement } from '@/features/design/canvas/geometry'
 import {
+  artboardsOf,
   bridges,
   indexes,
   pageArtboards,
@@ -115,4 +116,36 @@ export async function resyncAction(store: DesignStore, artboardId: string): Prom
   setLocal(store, artboardId, fresh.tree, fresh, fresh.version)
   // The bridge's own getter (ArtboardFrame) reads the store just updated.
   bridges.get(artboardId)?.reinit()
+}
+
+// Back in the Design area: broadcasts went unwatched while it was away, so
+// the open document is re-read once (rather than resyncAction per artboard)
+// and artboards created or deleted meanwhile are adopted or dropped too.
+export async function resyncDocAction(store: DesignStore): Promise<void> {
+  const { docId } = store.getState()
+  if (!docId) return
+  const doc = await api.design.documentGet(docId)
+  if (store.getState().docId !== docId) return
+  if (!doc) {
+    await store.getState().closeDoc()
+    return
+  }
+  const fresh = new Map(doc.pages.flatMap((p) => p.artboards).map((a) => [a.id, a]))
+  for (const id of Object.keys(store.getState().artboards)) {
+    if (!fresh.has(id)) handleArtboardDeleted(store, id)
+  }
+  const known = store.getState().artboards
+  const added = artboardsOf(doc, (id) => !known[id])
+  store.setState((s) => ({
+    doc,
+    docs: upsertMeta(s.docs, toMeta(doc)),
+    artboards: { ...s.artboards, ...added },
+  }))
+  for (const [id, ab] of Object.entries(known)) {
+    const next = fresh.get(id)
+    if (!next || next.version === ab.version) continue
+    transientBase.delete(id)
+    setLocal(store, id, next.tree, next, next.version)
+    bridges.get(id)?.reinit()
+  }
 }

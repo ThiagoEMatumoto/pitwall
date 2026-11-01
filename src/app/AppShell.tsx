@@ -10,7 +10,7 @@ import {
   type IDockviewPanelHeaderProps,
   type IDockviewPanelProps,
 } from 'dockview'
-import { FolderTree, PanelLeftOpen } from 'lucide-react'
+import { FolderTree, Moon, PanelLeftOpen } from 'lucide-react'
 import { IconRail } from './IconRail'
 import { Icon } from '@/components/ui/Icon'
 import { ProjectsSidebar } from '@/features/projects/ProjectsSidebar'
@@ -24,9 +24,10 @@ import { OverviewArea } from '@/features/overview/OverviewArea'
 import { TasksArea } from '@/features/tasks/TasksArea'
 import { DiagramsArea } from '@/features/diagrams/DiagramsArea'
 import { DesignArea } from '@/features/design/DesignArea'
-import { VideosArea } from '@/features/videos/VideosArea'
-import { MeetingsArea } from '@/features/meetings/MeetingsArea'
 import { Terminal } from '@/features/sessions/Terminal'
+import { DormantPane } from '@/features/sessions/DormantPane'
+import { createActivationWaker } from '@/features/sessions/dormant-wake'
+import { noteActivePane } from '@/features/sessions/pane-activity'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { SettingsDialog } from '@/features/settings/SettingsDialog'
 import { CommandPalette } from '@/features/command-palette/CommandPalette'
@@ -42,11 +43,13 @@ import {
   useUpdateToastShown,
 } from '@/features/updates/UpdateToast'
 import { NotificationToast } from '@/features/notifications/NotificationToast'
+import { useMaybeUndeliveredToasts } from '@/features/quick-composer/maybe-undelivered-toasts'
 import { useAppStore, setDefaultPaneModeFallback, type ActivePane } from '@/store/appStore'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
+import { layoutRestoreStep } from '../../shared/dock-layout-restore'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
@@ -88,6 +91,7 @@ import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
+import { flushAllDraftsSync } from '@/features/sessions/composer-draft-persister'
 
 interface PaneParams {
   pane: ActivePane
@@ -99,23 +103,50 @@ function requestOpenSettings() {
   window.dispatchEvent(new CustomEvent('cm:open-settings'))
 }
 
+// Rótulo atual da aba (o Terminal o atualiza via setTitle; o fromJSON traz o salvo).
+function usePanelTitle(api: IDockviewPanelProps['api']): string | undefined {
+  const [title, setTitle] = useState(api.title)
+  useEffect(() => {
+    setTitle(api.title)
+    const sub = api.onDidTitleChange((e) => setTitle(e.title))
+    return () => sub.dispose()
+  }, [api])
+  return title
+}
+
 function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
   const closePane = useAppStore((s) => s.closePane)
   const openSession = useAppStore((s) => s.openSession)
   const endSession = useAppStore((s) => s.endSession)
   const setPaneMode = useAppStore((s) => s.setPaneMode)
+  const wakeDormantPane = useAppStore((s) => s.wakeDormantPane)
+  const tabTitle = usePanelTitle(props.api)
   // Busca a pane no store pelo id do painel (= paneId). Após api.fromJSON do
   // restore, os params serializados no JSON podem estar stale (session/repo são
   // recriados pelo resume), então a fonte da verdade é sempre o store. Fallback
   // para os params se ainda não estiver no store (transição de addPanel).
   const fromStore = useAppStore((s) => s.panes.find((p) => p.paneId === props.api.id))
   const pane = fromStore ?? props.params.pane
+  const dormantTitle = pane?.dormant ? pane.session.title : null
+  // O título do sync chega depois de o painel existir: leva para a aba.
+  useEffect(() => {
+    if (dormantTitle && props.api.title !== dormantTitle) props.api.setTitle(dormantTitle)
+  }, [dormantTitle, props.api])
   // Painel órfão: existe no dockview mas a pane sumiu do store (resume falhou ou
   // foi fechada). Nada a renderizar — o effect de restore/reconcile vai removê-lo.
   if (!pane) return null
+  if (pane.dormant)
+    return (
+      <DormantPane
+        pane={pane}
+        tabTitle={tabTitle}
+        onWake={() => void wakeDormantPane(pane.paneId)}
+      />
+    )
   return (
     <Terminal
       session={pane.session}
+      paneId={pane.paneId}
       repoLabel={pane.repo?.label ?? 'Avulsa'}
       repoPath={pane.repo?.path ?? ''}
       projectName={pane.projectName ?? ''}
@@ -157,14 +188,39 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
       <DockviewDefaultTab {...props} />
-      <SessionFeatureChip sessionId={pane?.session.id} density="dot" className="mr-1.5" />
+      {pane?.dormant && !pane.restoreError && (
+        <span
+          role="img"
+          title={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          aria-label={pane.dormantReason === 'hibernated' ? 'Hibernada' : 'Dormindo'}
+          className="mr-1 flex"
+        >
+          <Icon as={Moon} size={11} className="text-[var(--color-text-dim)]" />
+        </span>
+      )}
+      <SessionFeatureChip
+        sessionId={pane?.session.id}
+        ccSessionId={pane?.dormant ? pane.session.ccSessionId : null}
+        density="dot"
+        className="mr-1.5"
+      />
     </div>
   )
 }
 
+// Quais painéis o dockview tem, sem a ordem nem o arranjo.
+function panelSetKey(api: DockviewApi): string {
+  return api.panels
+    .map((p) => p.id)
+    .sort()
+    .join('|')
+}
+
 // Título inicial legível pra aba (nunca o paneId). O Terminal sobrescreve ao vivo
 // via onTitleChange assim que o nome do CC chega.
+// Dormindo não tem Terminal para mandar o nome: o título é o do store (DB via sync).
 function paneTabTitle(pane: ActivePane): string {
+  if (pane.dormant && pane.session.title) return pane.session.title
   const repoLabel = pane.repo?.label ?? 'Avulsa'
   if (!pane.projectName) return repoLabel
   return `${pane.projectIcon ?? ''} ${repoLabel}`.trim()
@@ -174,6 +230,7 @@ const components = { terminal: TerminalPanel }
 const tabComponents = { terminal: TerminalTab }
 
 export function AppShell() {
+  useMaybeUndeliveredToasts()
   const area = useAppStore((s) => s.area)
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
@@ -183,6 +240,7 @@ export function AppShell() {
   const restoreBlocked = useAppStore((s) => s.restoreBlocked)
   const retryRestore = useAppStore((s) => s.retryRestore)
   const pendingLayout = useAppStore((s) => s.pendingLayout)
+  const restoreComplete = useAppStore((s) => s.restoreComplete)
   const clearPendingLayout = useAppStore((s) => s.clearPendingLayout)
   const focusPaneId = useAppStore((s) => s.focusPaneId)
   const clearFocusPane = useAppStore((s) => s.clearFocusPane)
@@ -242,6 +300,18 @@ export function AppShell() {
   // Guard: true enquanto api.fromJSON do restore roda — suprime persist e a
   // reconciliação store→dockview (que duplicaria/removeria painéis).
   const applyingLayout = useRef(false)
+  // true enquanto a reconciliação adiciona/remove painéis: o addPanel ativa o
+  // painel novo, e isso não é o usuário escolhendo acordar uma aba dormindo.
+  const reconciling = useRef(false)
+  // Wake por ativação só depois do dwell, e nunca pela reativação que o dockview
+  // faz ao remover/mover um painel (X, arrastar entre grupos).
+  const activationWaker = useRef(
+    createActivationWaker((paneId) => apiRef.current?.activePanel?.id === paneId),
+  )
+  useEffect(() => {
+    const waker = activationWaker.current
+    return () => waker.dispose()
+  }, [])
   // false até o fluxo de restore concluir (ou se não houver restore pendente).
   // Enquanto false, NÃO persistimos layout (evita sobrescrever o salvo com vazio
   // antes das panes voltarem).
@@ -251,6 +321,29 @@ export function AppShell() {
 
   // Debounce do persist de layout: onDidLayoutChange dispara a cada drag/resize.
   const layoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Conjunto de painéis do último layout gravado. Mudou (aba aberta/fechada) =
+  // grava já, junto do open_panes que o store gravou no mesmo tick; drag/resize
+  // segue no debounce.
+  const savedLayoutPanels = useRef<string | null>(null)
+
+  const saveLayoutNow = useCallback(() => {
+    if (layoutTimer.current) clearTimeout(layoutTimer.current)
+    layoutTimer.current = null
+    const api = apiRef.current
+    if (!api) return
+    savedLayoutPanels.current = panelSetKey(api)
+    const layout = api.panels.length > 0 ? JSON.stringify(api.toJSON()) : null
+    void workspaceApi.saveLayout(layout)
+  }, [])
+
+  // Quit/reload com um drag ainda no debounce: grava antes de a janela sumir.
+  useEffect(() => {
+    const flush = () => {
+      if (layoutTimer.current) saveLayoutNow()
+    }
+    window.addEventListener('beforeunload', flush)
+    return () => window.removeEventListener('beforeunload', flush)
+  }, [saveLayoutNow])
 
   // Alinha o seletor do painel de arquivos ao repo do pane ATIVO do dockview.
   // Preserva a escolha manual enquanto o pane ativo não muda (só re-seleciona
@@ -272,10 +365,18 @@ export function AppShell() {
       // Default contextual: ao trocar o pane ativo, o seletor de arquivos segue
       // o repo daquele terminal (quando está entre os roots).
       event.api.onDidActivePanelChange(() => {
+        // Troca de pane: o rascunho da que perdeu o foco vai para o disco já.
+        flushAllDraftsSync()
         syncFilesRepoToActivePane()
-        setActivePanelId(event.api.activePanel?.id ?? null)
+        const id = event.api.activePanel?.id ?? null
+        setActivePanelId(id)
+        noteActivePane(id)
+        const userChoice = !applyingLayout.current && !reconciling.current
+        activationWaker.current.activated(userChoice ? id : null)
       })
+      event.api.onDidMovePanel(() => activationWaker.current.panelRemovedOrMoved())
       event.api.onDidRemovePanel((panel) => {
+        activationWaker.current.panelRemovedOrMoved()
         // Loop guard: se a remoção partiu do store (api.removePanel nosso), ignora.
         if (removingFromStore.current.delete(panel.id)) return
         // Veio do usuário (botão X do dockview / move). closePane é idempotente.
@@ -287,17 +388,16 @@ export function AppShell() {
         // Não persiste enquanto aplicamos o layout do restore (evita salvar estados
         // intermediários da reconstrução) nem antes do restore ter terminado.
         if (applyingLayout.current || !restoreDone.current) return
+        if (panelSetKey(event.api) !== savedLayoutPanels.current) {
+          saveLayoutNow()
+          return
+        }
         if (layoutTimer.current) clearTimeout(layoutTimer.current)
-        layoutTimer.current = setTimeout(() => {
-          const api = apiRef.current
-          if (!api) return
-          const layout = api.panels.length > 0 ? JSON.stringify(api.toJSON()) : null
-          void workspaceApi.saveLayout(layout)
-        }, 500)
+        layoutTimer.current = setTimeout(saveLayoutNow, 500)
       })
       setReady(true)
     },
-    [closePane, syncFilesRepoToActivePane],
+    [closePane, syncFilesRepoToActivePane, saveLayoutNow],
   )
 
   // Bastão da mãe: filha que não recebeu a nota do endereço novo segue escrevendo
@@ -337,23 +437,23 @@ export function AppShell() {
       return
     }
 
-    const storeIds = new Set(panes.map((p) => p.paneId))
-    const restored = wantedIds.filter((id) => storeIds.has(id))
     // Ainda faltam panes do layout voltando do resume: espera o próximo render.
-    // Timeout de fallback aplica o parcial (remove órfãos) caso algum resume falhe.
-    const allBack = wantedIds.every((id) => storeIds.has(id))
-    if (!allBack && restored.length === 0) return
+    // O fallback aplica o parcial (remove órfãos) se algum resume falhar, ou
+    // desiste do layout se o restore terminou sem nenhuma delas.
+    const step = layoutRestoreStep(wantedIds, new Set(panes.map((p) => p.paneId)), restoreComplete)
+    if (step === 'wait') return
 
     const apply = () => {
       if (!pendingLayout) return
       applyingLayout.current = true
       try {
-        // Remove do JSON os painéis cujas panes não voltaram (resume falhou),
-        // pra fromJSON não tentar materializar painéis órfãos.
-        const orphans = wantedIds.filter((id) => !storeIds.has(id))
-        if (orphans.length > 0) {
-          for (const id of orphans) delete layout.panels[id]
-        }
+        // O fallback dispara depois: confere as panes de agora, não as do render
+        // que o armou. Órfãs saem do JSON pra fromJSON não materializá-las.
+        const back = new Set(useAppStore.getState().panes.map((p) => p.paneId))
+        const orphans = wantedIds.filter((id) => !back.has(id))
+        for (const id of orphans) delete layout.panels[id]
+        // Nenhuma voltou: o layout não serve; a reconciliação monta o grid padrão.
+        if (orphans.length === wantedIds.length) return
         api.fromJSON(layout)
         // Sincroniza params de cada painel com a pane do store (id = paneId).
         for (const panel of api.panels) {
@@ -378,14 +478,14 @@ export function AppShell() {
       }
     }
 
-    if (allBack) {
+    if (step === 'apply') {
       apply()
     } else if (!fallbackTimer.current) {
       // Algumas panes ainda não voltaram; dá um tempo extra antes de aplicar o
       // parcial. Se chegarem antes, o ramo allBack acima dispara e limpa o timer.
       fallbackTimer.current = setTimeout(apply, 1500)
     }
-  }, [ready, panes, pendingLayout, clearPendingLayout])
+  }, [ready, panes, pendingLayout, clearPendingLayout, restoreComplete])
 
   // Reconciliação store → dockview. O store é a fonte da verdade: criamos painéis
   // pra panes novas e removemos painéis órfãos, SEM tocar nos painéis existentes
@@ -405,39 +505,43 @@ export function AppShell() {
     if (pendingLayout || gridRequest || applyingLayout.current) return
 
     const storeIds = new Set(panes.map((p) => p.paneId))
-
-    for (const panel of api.panels) {
-      if (!storeIds.has(panel.id)) {
-        removingFromStore.current.add(panel.id)
-        api.removePanel(panel)
+    reconciling.current = true
+    try {
+      for (const panel of api.panels) {
+        if (!storeIds.has(panel.id)) {
+          removingFromStore.current.add(panel.id)
+          api.removePanel(panel)
+        }
       }
-    }
 
-    for (const pane of panes) {
-      const existing = api.getPanel(pane.paneId)
-      if (existing) {
-        // Atualiza os params caso o objeto pane tenha sido recriado (ex: rename).
-        existing.api.updateParameters({ pane })
-        continue
+      for (const pane of panes) {
+        const existing = api.getPanel(pane.paneId)
+        if (existing) {
+          // Atualiza os params caso o objeto pane tenha sido recriado (ex: rename).
+          existing.api.updateParameters({ pane })
+          continue
+        }
+        const active = api.activePanel
+        const intent = nextPosition.current
+        // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
+        // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.
+        const position = active
+          ? intent === 'tab'
+            ? { referenceGroup: active.group.id }
+            : { referencePanel: active.id, direction: intent ?? 'right' }
+          : undefined
+        api.addPanel<PaneParams>({
+          id: pane.paneId,
+          component: 'terminal',
+          tabComponent: 'terminal',
+          title: paneTabTitle(pane),
+          params: { pane },
+          position,
+        })
+        nextPosition.current = undefined
       }
-      const active = api.activePanel
-      const intent = nextPosition.current
-      // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
-      // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.
-      const position = active
-        ? intent === 'tab'
-          ? { referenceGroup: active.group.id }
-          : { referencePanel: active.id, direction: intent ?? 'right' }
-        : undefined
-      api.addPanel<PaneParams>({
-        id: pane.paneId,
-        component: 'terminal',
-        tabComponent: 'terminal',
-        title: paneTabTitle(pane),
-        params: { pane },
-        position,
-      })
-      nextPosition.current = undefined
+    } finally {
+      reconciling.current = false
     }
   }, [panes, ready, pendingLayout, gridRequest])
 
@@ -523,6 +627,21 @@ export function AppShell() {
           position,
         })
       })
+      // O que ficou no store fora da seleção (abas dormindo): aba INATIVA no grupo
+      // da última célula. Ativa, ela acordaria a pane (onDidActivePanelChange).
+      const lastId = ids[ids.length - 1]
+      for (const pane of panes) {
+        if (ids.includes(pane.paneId) || !api.getPanel(lastId)) continue
+        api.addPanel<PaneParams>({
+          id: pane.paneId,
+          component: 'terminal',
+          tabComponent: 'terminal',
+          title: paneTabTitle(pane),
+          params: { pane },
+          position: { referencePanel: lastId, direction: 'within' },
+          inactive: true,
+        })
+      }
     } finally {
       applyingLayout.current = false
       clearGridRequest()
@@ -641,7 +760,10 @@ export function AppShell() {
         if (e.repeat) return
         const activeId = apiRef.current?.activePanel?.id
         const pane = useAppStore.getState().panes.find((p) => p.paneId === activeId)
-        useMotherDockStore.getState().requestFromOutside(pane?.session.id ?? null)
+        // Pane dormindo não tem sessão viva no mapa: o id sintético não casa com nó nenhum.
+        useMotherDockStore
+          .getState()
+          .requestFromOutside(pane && !pane.dormant ? pane.session.id : null)
         useAppStore.getState().setArea('projects')
         useProjectsViewStore.getState().setView('map')
         return
@@ -877,7 +999,6 @@ export function AppShell() {
 
       {area === 'overview' && <OverviewArea />}
 
-      {area === 'meetings' && <MeetingsArea />}
 
       {area === 'objectives' && <ObjectivesArea />}
 
@@ -887,7 +1008,6 @@ export function AppShell() {
 
       {area === 'diagrams' && <DiagramsArea />}
       {area === 'design' && <DesignArea />}
-      {area === 'videos' && <VideosArea />}
 
       {area === 'tasks' && <TasksArea />}
 

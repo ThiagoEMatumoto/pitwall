@@ -2,7 +2,6 @@ import { useAppStore } from "@/store/appStore";
 import { useDesignStore } from "@/store/designStore";
 import { useDiagramsStore } from "@/store/diagramsStore";
 import { useFeaturesStore } from "@/store/featuresStore";
-import { useMeetingsStore } from "@/store/meetingsStore";
 import { useObjectivesStore } from "@/store/objectivesStore";
 import { useTasksStore } from "@/store/tasksStore";
 
@@ -27,11 +26,6 @@ export function navigateToFeature(id: string): void {
 export function navigateToTask(id: string): void {
   useTasksStore.getState().focusTask(id);
   useAppStore.getState().setArea("tasks");
-}
-
-export function navigateToMeeting(id: string): void {
-  void useMeetingsStore.getState().select(id);
-  useAppStore.getState().setArea("meetings");
 }
 
 export function navigateToProject(id: string): void {

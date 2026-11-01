@@ -13,6 +13,7 @@
 // Sem electron e sem ipc/: a fila chega por setter (como notify-mother-alias).
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db'
+import { getDormantPanes } from '../dormant-panes'
 import * as handoffStore from '../handoff-store'
 import { MAX_WAIT_SECONDS, attr, sanitizeBody } from '../agent-bus'
 import { handoffAsking } from '../../../../shared/tui/attention-reason'
@@ -44,6 +45,8 @@ export type WakeOutcome =
   | 'capped' // teto anti-loop estourado, não foi enfileirado
   | 'cancelled' // humano tirou da fila pela UI
   | 'fetched' // a mãe puxou por handoff_wait antes de a fila entregar; o item saiu da fila
+  | 'woke_dormant' // a mãe dormia (lazy restore): pane acordada, liderança transferida, reenvio segue em outra linha
+  | 'wake_failed' // a mãe dormia e não acordou (sem janela, resume falhou, não ficou pronta)
 
 export const WAKE_TEXT_CAP = 1500
 export const WAKE_MAX_BLOCKS = 10
@@ -92,7 +95,9 @@ let queue: WakeQueue | null = null
 const pending = new Map<string, Pending>()
 const waiters = new Map<string, Set<() => void>>()
 // Wakes da mesma mãe em série: dois eventos simultâneos não podem criar dois itens
-// na fila (o send() só devolve o id do item depois de reler a tela).
+// na fila (o send() só devolve o id do item depois de reler a tela). A chave é a
+// CONVERSA da mãe (cc), não o sessions.id: o wake da mãe dormindo troca o id no
+// meio do caminho e o reenvio dos wake_failed chega pelo id novo.
 const chains = new Map<string, Promise<void>>()
 let lastEventId: string | null = null
 
@@ -150,7 +155,10 @@ function renderPending(p: Pending): string {
 
 function bodyFor(h: Handoff, reason: WakeReason): { body: string; truncated: boolean } {
   if (reason === 'answered' || reason === 'rejected') {
-    return { body: 'Resposta a um pedido registrada: veja handoff_result.requests.', truncated: false }
+    return {
+      body: 'Resposta a um pedido registrada: veja handoff_result.requests.',
+      truncated: false,
+    }
   }
   const raw =
     (reason === 'asked' ? h.pendingQuestion : reason === 'reported' ? h.summary : h.error) ?? ''
@@ -193,11 +201,13 @@ export function insertRow(args: {
     )
 }
 
+// wake_failed não conta: não chegou à mãe, e contar faria o reenvio dele (quando
+// ela volta) estourar o teto que existe contra loop de entregas.
 function wakesInLastHour(handoffId: string): number {
   const row = getDb()
     .prepare(
       `SELECT COUNT(DISTINCT wake_id) AS n FROM handoff_wake_deliveries
-        WHERE handoff_id = ? AND created_at > ? AND outcome <> 'capped'
+        WHERE handoff_id = ? AND created_at > ? AND outcome NOT IN ('capped','woke_dormant','wake_failed')
           AND reason NOT IN ('answered','rejected')`,
     )
     .get(handoffId, Date.now() - HOUR_MS) as { n: number }
@@ -214,14 +224,81 @@ function siblingState(wakeId: string): { outcome: WakeOutcome; heldAt: number | 
   return row ? { outcome: row.outcome, heldAt: row.held_at } : null
 }
 
-// Linhas queued/held de antes do restart: a fila é em memória, o item sumiu com ela.
-export function sweepOrphansOnBoot(): number {
-  return getDb()
+// Item da fila restaurado do app.db é envelope de wake/resposta (o ledger o liga
+// pelo wake_id = id do item) e todos os handoffs dele já terminaram (ou sumiram)?
+// Entregá-lo depois do restart chegaria fora de contexto; o estado final segue no
+// handoff_result.
+export function queuedEnvelopeObsolete(queueId: string): boolean {
+  const rows = getDb()
     .prepare(
-      `UPDATE handoff_wake_deliveries SET outcome = 'expired', detail = 'app-restart', finished_at = ?
-        WHERE outcome IN ('queued','held','attention')`,
+      `SELECT h.status AS status FROM handoff_wake_deliveries d
+         LEFT JOIN handoffs h ON h.id = d.handoff_id
+        WHERE d.wake_id = ? GROUP BY d.handoff_id`,
     )
-    .run(Date.now()).changes
+    .all(queueId) as Array<{ status: string | null }>
+  return rows.length > 0 && rows.every((r) => r.status == null || !ACTIVE_HANDOFF.has(r.status))
+}
+
+const ACTIVE_HANDOFF = new Set(['pending', 'approved', 'running', 'needs_input'])
+
+// Linhas queued/held de antes do restart cujo item NÃO voltou do app.db (fila
+// durável, prompt_queue_items): esse item sumiu de vez. As do item restaurado
+// seguem transitórias — o snapshot da fila resolve o desfecho delas.
+export function sweepOrphansOnBoot(restoredQueueIds: ReadonlySet<string> = new Set()): number {
+  const stmt = getDb().prepare(
+    `UPDATE handoff_wake_deliveries SET outcome = 'expired', detail = 'app-restart', finished_at = ?
+      WHERE wake_id = ? AND outcome IN ${TRANSIENT_SQL}`,
+  )
+  const orphans = getDb()
+    .prepare(
+      `SELECT DISTINCT wake_id FROM handoff_wake_deliveries WHERE outcome IN ${TRANSIENT_SQL}`,
+    )
+    .all() as Array<{ wake_id: string }>
+  const now = Date.now()
+  let changes = 0
+  for (const { wake_id } of orphans) {
+    if (!restoredQueueIds.has(wake_id)) changes += stmt.run(now, wake_id).changes
+  }
+  return changes
+}
+
+// Boot: o envelope à mãe que voltou do app.db volta a ser o pending dela, para o
+// snapshot resolver o desfecho no ledger e um evento novo coalescer no mesmo item.
+// Os blocos são refeitos do ledger (handoff + reasons em ordem) com o estado atual
+// de cada handoff; handoff que sumiu fica de fora.
+export function rehydrateWakePending(queueId: string): boolean {
+  const rows = getDb()
+    .prepare(
+      `SELECT handoff_id, mother_session_id, reason, outcome FROM handoff_wake_deliveries
+        WHERE wake_id = ? ORDER BY created_at, rowid`,
+    )
+    .all(queueId) as Array<{
+    handoff_id: string
+    mother_session_id: string | null
+    reason: WakeReason
+    outcome: WakeOutcome
+  }>
+  const mother = rows.find((r) => r.mother_session_id)?.mother_session_id
+  if (!mother || !rows.some((r) => ['queued', 'held', 'attention'].includes(r.outcome))) {
+    return false
+  }
+  const blocks: WakeBlock[] = []
+  for (const handoffId of [...new Set(rows.map((r) => r.handoff_id))]) {
+    const h = handoffStore.get(handoffId)
+    if (!h) continue
+    const reasons = rows.filter((r) => r.handoff_id === handoffId).map((r) => r.reason)
+    const { body, truncated } = bodyFor(h, reasons[reasons.length - 1])
+    blocks.push({
+      handoffId,
+      alias: handoffStore.childAlias(h.childSessionId),
+      status: h.status,
+      reasons,
+      body,
+      truncated,
+    })
+  }
+  pending.set(mother, { queueId, blocks })
+  return true
 }
 
 // ---- waiters do handoff_wait ----
@@ -251,21 +328,33 @@ function waitFor(mother: string, ms: number): Promise<void> {
 export function wakeMotherFor(
   handoffId: string,
   reason: WakeReason,
-  opts: { actorSessionId?: string | null } = {},
+  // toSessionId: entrega a esta sessão em vez da mãe gravada no handoff (o
+  // reenvio para a mãe retomada; handoff terminal não tem a liderança transferida).
+  opts: WakeOpts = {},
 ): Promise<void> {
   // Nunca lança, nem síncrono: o chamador está no meio de outra transição (ex.: o
   // erro original da adoção) e um throw aqui o mascararia.
-  let mother: string | null = null
+  let key: string
   try {
-    mother = handoffStore.get(handoffId)?.motherSessionId ?? null
+    const mother = opts.toSessionId ?? handoffStore.get(handoffId)?.motherSessionId ?? null
+    key = mother ? chainKey(mother) : `no-mother:${handoffId}`
   } catch (err) {
     console.error('[handoff-wake] wake da mãe falhou:', err)
     return Promise.resolve()
   }
-  const key = mother ?? `no-mother:${handoffId}`
+  return inChain(key, () => wakeNow(handoffId, reason, opts))
+}
+
+function chainKey(mother: string): string {
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
+    { cc_session_id: string | null } | undefined
+  return row?.cc_session_id ? `cc:${row.cc_session_id}` : `session:${mother}`
+}
+
+function inChain(key: string, task: () => Promise<void>): Promise<void> {
   const prev = chains.get(key) ?? Promise.resolve()
   const next = prev
-    .then(() => wakeNow(handoffId, reason, opts))
+    .then(task)
     .catch((err) => console.error('[handoff-wake] wake da mãe falhou:', err))
   chains.set(key, next)
   void next.then(() => {
@@ -274,14 +363,17 @@ export function wakeMotherFor(
   return next
 }
 
-async function wakeNow(
-  handoffId: string,
-  reason: WakeReason,
-  opts: { actorSessionId?: string | null },
-): Promise<void> {
+interface WakeOpts {
+  actorSessionId?: string | null
+  toSessionId?: string
+  // Reenvio de um wake_failed: fora do teto, que já o barrou ou o contaria de novo.
+  redelivery?: boolean
+}
+
+async function wakeNow(handoffId: string, reason: WakeReason, opts: WakeOpts): Promise<void> {
   const h = handoffStore.get(handoffId)
   if (!h) return
-  const mother = h.motherSessionId
+  let mother = opts.toSessionId ?? h.motherSessionId
   // Eco: a mãe é a autora (ex.: spawn falhou dentro do session_handoff dela) e já
   // soube pelo retorno da própria tool.
   if (opts.actorSessionId && opts.actorSessionId === mother) return
@@ -297,10 +389,20 @@ async function wakeNow(
     return
   }
   try {
-    const total = wakesInLastHour(handoffId)
+    const total = opts.redelivery ? 0 : wakesInLastHour(handoffId)
     if (total >= WAKE_CAP_PER_HANDOFF_PER_HOUR) {
-      insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome: 'capped' })
-      console.warn(JSON.stringify({ event: 'handoff_wake_capped', handoffId, total }))
+      // Mãe dormindo: o update não chegaria agora de qualquer jeito. wake_failed é
+      // reenviado quando ela volta; capped se perderia.
+      const asleep = dormantMotherCc(mother) !== null
+      insertRow({
+        wakeId: randomUUID(),
+        handoffId,
+        mother,
+        reason,
+        outcome: asleep ? 'wake_failed' : 'capped',
+        detail: asleep ? 'capped-while-dormant' : null,
+      })
+      console.warn(JSON.stringify({ event: 'handoff_wake_capped', handoffId, total, asleep }))
       return
     }
     const { body, truncated } = bodyFor(h, reason)
@@ -364,52 +466,182 @@ async function wakeNow(
       return
     }
     const fresh: Pending = { queueId: '', blocks: [block] }
-    const sent = await queue.send({
-      sessionId: mother,
-      text: renderPending(fresh),
-      when: 'on-idle',
-      fromSessionId: h.childSessionId ?? undefined,
-    })
-    if (sent.ok && sent.delivered) {
-      const now = Date.now()
-      insertRow({
-        wakeId: randomUUID(),
-        handoffId,
-        mother,
-        reason,
-        outcome: 'delivered',
-        deliveredAt: now,
+    const text = renderPending(fresh)
+    const q = queue
+    const sendTo = (sessionId: string) =>
+      q.send({
+        sessionId,
+        text,
+        when: 'on-idle',
+        fromSessionId: h.childSessionId ?? undefined,
       })
-      return
+    let sent = await sendTo(mother)
+    if (!sent.ok && sent.error === 'not-running') {
+      const woke = await wakeDormantMother(mother)
+      if (woke) {
+        if (!woke.ok) {
+          insertRow({
+            wakeId: randomUUID(),
+            handoffId,
+            mother,
+            reason,
+            outcome: 'wake_failed',
+            detail: woke.error,
+          })
+          return
+        }
+        insertRow({
+          wakeId: randomUUID(),
+          handoffId,
+          mother,
+          reason,
+          outcome: 'woke_dormant',
+          detail: JSON.stringify({ from: mother, to: woke.sessionId }),
+        })
+        // Os waiters do handoff_wait da mãe antiga não têm mais quem os chame.
+        resolveWaiters(mother)
+        mother = woke.sessionId
+        sent = await sendTo(mother)
+      }
     }
-    if (sent.ok) {
-      const q = sent.queued
-      const outcome: WakeOutcome = q.heldReason ? 'held' : unheldOutcome(mother)
-      pending.set(mother, { queueId: q.id, blocks: fresh.blocks })
-      insertRow({
-        wakeId: q.id,
-        handoffId,
-        mother,
-        reason,
-        outcome,
-        detail: q.heldReason,
-        heldAt: q.heldReason ? Date.now() : null,
-      })
-      return
-    }
-    const outcome: WakeOutcome =
-      sent.error === 'no-screen'
-        ? 'no_screen'
-        : sent.error === 'cancelled'
-          ? 'cancelled'
-          : sent.error === 'not-running'
-            ? 'not_running'
-            : // 'on-idle' não recusa por menu/attention (segura na fila); defensivo.
-              'not_running'
-    insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome, detail: sent.error })
+    recordSent(sent, { handoffId, mother, reason, blocks: fresh.blocks })
   } finally {
     resolveWaiters(mother)
   }
+}
+
+// wake_failed é terminal: a notificação que não chegou à mãe dormindo se perderia
+// mesmo depois de ela acordar. Quando a conversa da mãe volta a ter PTY pronta
+// (wake ou resume dela), o que ficou para trás vai de novo, on-idle, para a sessão
+// retomada. "Para trás" = wake_failed de qualquer linha da mesma conversa sem
+// entrega, item na fila ou handoff_wait posterior para o mesmo handoff (o envelope
+// relê o estado atual do handoff, então uma entrega posterior já o cobre).
+// Resposta a pedido (answered/rejected) fica de fora: o envelope daqui é o de
+// update das filhas; a resposta segue legível em handoff_result/handoff_wait.
+//
+// Na MESMA cadeia (por cc) dos wakes: um wake em curso que acordou a mãe e vai
+// entregar precisa gravar a entrega antes de a consulta abaixo decidir o que
+// "ficou para trás"; senão o mesmo update sai duas vezes.
+export async function redeliverFailedWakes(motherSessionId: string): Promise<number> {
+  let count = 0
+  let key: string
+  try {
+    key = chainKey(motherSessionId)
+  } catch (err) {
+    console.error('[handoff-wake] reenvio de wake_failed falhou:', err)
+    return 0
+  }
+  await inChain(key, async () => {
+    const todo = failedWakesFor(motherSessionId)
+    count = todo.length
+    for (const r of todo) {
+      try {
+        await wakeNow(r.handoff_id, r.reason, { toSessionId: motherSessionId, redelivery: true })
+      } catch (err) {
+        console.error('[handoff-wake] reenvio de wake_failed falhou:', err)
+      }
+    }
+  })
+  return count
+}
+
+function failedWakesFor(
+  motherSessionId: string,
+): Array<{ handoff_id: string; reason: WakeReason }> {
+  const rows = getDb()
+    .prepare(
+      `SELECT d.handoff_id, d.reason FROM handoff_wake_deliveries d
+        WHERE d.outcome = 'wake_failed' AND d.fetched_at IS NULL
+          AND d.reason NOT IN ('answered','rejected')
+          AND d.mother_session_id IN (
+            SELECT s.id FROM sessions s
+             WHERE s.cc_session_id = (SELECT cc_session_id FROM sessions WHERE id = ?))
+          AND NOT EXISTS (
+            SELECT 1 FROM handoff_wake_deliveries x
+             WHERE x.handoff_id = d.handoff_id
+               AND (x.created_at > d.created_at OR (x.created_at = d.created_at AND x.rowid > d.rowid))
+               AND (x.outcome IN ('delivered','queued','held','attention') OR x.fetched_at IS NOT NULL))
+        ORDER BY d.created_at, d.rowid`,
+    )
+    .all(motherSessionId) as Array<{ handoff_id: string; reason: WakeReason }>
+  const seen = new Set<string>()
+  return rows.filter((r) => {
+    const key = `${r.handoff_id}:${r.reason}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+// A mãe sem PTY pode só estar dormindo (lazy restore): acorda a pane dela e passa a
+// liderança dos handoffs para a sessão retomada (mesma conversa, sessions.id novo).
+// null = não estava dormindo; o not_running segue.
+async function wakeDormantMother(
+  mother: string,
+): Promise<{ ok: true; sessionId: string } | { ok: false; error: string } | null> {
+  const panes = getDormantPanes()
+  const cc = dormantMotherCc(mother)
+  if (!panes || !cc) return null
+  const woke = await panes.wakeDormant(cc, 'handoff-wake')
+  if (!woke.ok) return { ok: false, error: woke.error }
+  // O sessions:resume já transferiu; repetir é no-op (a mãe antiga não lidera mais
+  // nada). Fica para o caso de o renderer retomar por outro caminho.
+  handoffStore.transferMother(mother, woke.sessionId)
+  return { ok: true, sessionId: woke.sessionId }
+}
+
+// cc da conversa da mãe se ela está numa pane dormindo; null com a pref desligada.
+function dormantMotherCc(mother: string): string | null {
+  const panes = getDormantPanes()
+  if (!panes) return null
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(mother) as
+    { cc_session_id: string | null } | undefined
+  const cc = row?.cc_session_id
+  return cc && panes.findDormantByCc(cc) ? cc : null
+}
+
+function recordSent(
+  sent: SendPromptResult,
+  ctx: { handoffId: string; mother: string; reason: WakeReason; blocks: WakeBlock[] },
+): void {
+  const { handoffId, mother, reason } = ctx
+  if (sent.ok && sent.delivered) {
+    const now = Date.now()
+    insertRow({
+      wakeId: randomUUID(),
+      handoffId,
+      mother,
+      reason,
+      outcome: 'delivered',
+      deliveredAt: now,
+    })
+    return
+  }
+  if (sent.ok) {
+    const q = sent.queued
+    const outcome: WakeOutcome = q.heldReason ? 'held' : unheldOutcome(mother)
+    pending.set(mother, { queueId: q.id, blocks: ctx.blocks })
+    insertRow({
+      wakeId: q.id,
+      handoffId,
+      mother,
+      reason,
+      outcome,
+      detail: q.heldReason,
+      heldAt: q.heldReason ? Date.now() : null,
+    })
+    return
+  }
+  const outcome: WakeOutcome =
+    sent.error === 'no-screen'
+      ? 'no_screen'
+      : sent.error === 'cancelled'
+        ? 'cancelled'
+        : sent.error === 'wake-failed'
+          ? 'wake_failed'
+          : // 'on-idle' não recusa por menu/attention (segura na fila); defensivo.
+            'not_running'
+  insertRow({ wakeId: randomUUID(), handoffId, mother, reason, outcome, detail: sent.error })
 }
 
 // Na fila e sem hold: a mãe que é filha em needs_input só sai pelo handoff_wait.
@@ -426,6 +658,16 @@ export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
   for (const [mother, p] of pending) {
     const item = snapshot.items.find((i) => i.id === p.queueId)
     if (!item) continue
+    // Talvez não entregue (kill no meio da entrega, transcript inconclusivo): não é
+    // desfecho. Fica 'held' com o motivo, visível no ledger, até o Reenviar
+    // (delivered) ou o Descartar (cancelled) do toast da fila.
+    if (item.recovery === 'maybe-undelivered') {
+      db.prepare(
+        `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = 'maybe-undelivered'
+          WHERE wake_id = ? AND outcome IN ('queued','held','attention')`,
+      ).run(now, p.queueId)
+      continue
+    }
     if (item.heldReason) {
       db.prepare(
         `UPDATE handoff_wake_deliveries SET outcome = 'held', held_at = COALESCE(held_at, ?), detail = ?
@@ -440,10 +682,14 @@ export function onQueueSnapshot(snapshot: PromptQueueSnapshot): void {
     }
   }
   const ev = snapshot.lastEvent
-  if (!ev || ev.id === lastEventId) return
-  lastEventId = ev.id
+  // Por tipo + id: o mesmo item emite 'maybe-undelivered' e depois o desfecho.
+  const evKey = ev && `${ev.kind}:${ev.id}`
+  if (!ev || evKey === lastEventId) return
+  lastEventId = evKey
   const owner = [...pending].find(([, p]) => p.queueId === ev.id)
   if (!owner) return
+  // Não terminal: o pending fica para o delivered/cancelled que vier depois.
+  if (ev.kind === 'maybe-undelivered') return
   pending.delete(owner[0])
   const outcome: WakeOutcome =
     ev.kind === 'delivered'
@@ -575,6 +821,7 @@ const UNDELIVERED_TERMINAL = new Set<WakeOutcome>([
   'no_screen',
   'capped',
   'cancelled',
+  'wake_failed',
 ])
 const TRANSIENT = new Set<WakeOutcome>(['queued', 'held', 'attention'])
 // Eventos que acordam a mãe. `fail` de pending/approved fica de fora: no
@@ -592,8 +839,7 @@ function ledgerStartedAt(): number | null {
     .get()
   if (!hasRunner) return null
   const row = db.prepare('SELECT applied_at FROM _migrations WHERE version = 55').get() as
-    | { applied_at: number }
-    | undefined
+    { applied_at: number } | undefined
   return row?.applied_at ?? null
 }
 

@@ -8,10 +8,8 @@
 // confirmação).
 import * as z from 'zod/v4'
 import { serviceTools } from './service-tools'
-import { videoTools } from './video-tools'
 import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
-import { meetingTools } from './meeting-tools'
 import { canvasTools } from './canvas-tools'
 import { agentTools } from './agent-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
@@ -32,12 +30,16 @@ import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
-import { installLibraryFromUrl, installLibraryJson } from '../diagram-library-install'
 import {
-  applyPatch,
-  elementsToSkeleton,
-  skeletonToElements,
-} from '../../../../shared/diagram-skeleton'
+  installCatalogLibrary,
+  installedCatalogIds,
+  installLibraryFromUrl,
+  installLibraryJson,
+} from '../diagram-library-install'
+import { DIAGRAM_LIBRARY_CATALOG } from '../../../../shared/diagram-library-catalog'
+import { elementsToSkeleton } from '../../../../shared/diagram-skeleton'
+import { directlyNestedFrames } from '../../../../shared/diagram-compound'
+import { applyPatch, skeletonToElements } from '../diagram-layout'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
@@ -97,8 +99,9 @@ export interface ToolDef {
   title: string
   description: string
   inputSchema: z.ZodType
-  // Promise SÓ pra tools com IO real (hoje: o fetch de diagram_library_install
-  // e o proxy de service_call) — o registerTool do SDK aceita
+  // Promise SÓ pra tools com IO real ou trabalho async (hoje: o fetch de
+  // diagram_library_install, o proxy de service_call e o layout ELK dos
+  // diagramas) — o registerTool do SDK aceita
   // CallToolResult | Promise<CallToolResult>.
   handler: (args: unknown) => ToolResult | Promise<ToolResult>
 }
@@ -1502,6 +1505,9 @@ function repoPullTools(): ToolDef[] {
 // substitui a cena inteira e só deve ser usado quando o redesenho é intencional.
 // Delete é a exceção documentada no topo: two-step archive → delete + confirm.
 
+// Espelha o CHECK de diagrams.kind (migration 038). Não há kind de UML: um
+// valor novo exigiria migration recriando a tabela, então diagrama de classes
+// usa 'other' (documentado na descrição do diagram_create).
 const diagramKind = z.enum(['architecture', 'flow', 'sequence', 'er', 'mindmap', 'other'])
 
 // Espelha DiagramParentType (shared/types/ipc.ts).
@@ -1517,7 +1523,43 @@ const diagramParentType = z.enum([
 ])
 
 // Espelha DiagramSkeletonElement (shared/diagram-skeleton.ts).
-const skeletonElementType = z.enum(['rectangle', 'ellipse', 'diamond', 'text', 'arrow', 'line'])
+const skeletonElementType = z.enum([
+  'rectangle',
+  'ellipse',
+  'diamond',
+  'text',
+  'arrow',
+  'line',
+  'entity',
+  'class',
+  'group',
+  'frame',
+])
+
+// ER/UML (shared/diagram-shapes.ts): entity = tabela, class = 3 compartimentos;
+// relation vira as pontas da seta.
+const entityFieldSchema = z.object({
+  name: z.string().min(1),
+  type: z.string().optional(),
+  pk: z.boolean().optional(),
+  fk: z.boolean().optional(),
+})
+const diagramRelation = z.enum([
+  '1:1',
+  '1:N',
+  'N:M',
+  'association',
+  'inheritance',
+  'composition',
+  'aggregation',
+])
+const blockFields = {
+  name: z.string().optional(),
+  fields: z.array(entityFieldSchema).optional(),
+  attributes: z.array(z.string()).optional(),
+  methods: z.array(z.string()).optional(),
+  relation: diagramRelation.optional(),
+}
 
 const skeletonElementSchema = z.object({
   id: z.string().min(1),
@@ -1532,7 +1574,25 @@ const skeletonElementSchema = z.object({
   end: z.object({ id: z.string().min(1) }).optional(),
   strokeColor: z.string().optional(),
   backgroundColor: z.string().optional(),
+  ...blockFields,
+  children: z.array(z.string().min(1)).optional(),
 })
+
+const skeletonSchema = z.array(skeletonElementSchema).superRefine((els, ctx) => {
+  const nested = directlyNestedFrames(els)
+  if (nested.length > 0) {
+    ctx.addIssue({
+      code: 'custom',
+      message: `a frame cannot contain another frame (Excalidraw does not nest frames): ${nested.join(', ')}. Put a group between them or place the frame beside it.`,
+    })
+  }
+})
+
+// Layout ELK (electron/main/services/diagram-layout.ts). auto: o layout
+// posiciona todo nó não pinado (x/y do skeleton são ignorados); keep: nada se
+// move. direction: camadas LR (default) ou TB.
+const diagramDirection = z.enum(['LR', 'TB'])
+const diagramLayoutMode = z.enum(['auto', 'keep'])
 
 // Cena Excalidraw crua (shape do Excalidraw, não nosso — elementos ficam unknown).
 const diagramSceneSchema = z.object({
@@ -1555,15 +1615,19 @@ const diagramCreateSchema = z
     title: z.string().trim().min(1),
     kind: diagramKind.optional(),
     summary: z.string().min(1),
-    elements: z.array(skeletonElementSchema).optional(),
+    elements: skeletonSchema.optional(),
     scene: diagramSceneSchema.optional(),
     links: z.array(diagramLinkInputSchema).optional(),
+    direction: diagramDirection.optional(),
+    layout: diagramLayoutMode.optional(),
   })
   .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
 
 const diagramGetSchema = z.object({
   id: z.string().min(1),
   format: z.enum(['skeleton', 'full']).default('skeleton'),
+  // Geometria fora por padrão: coordenada lida tende a voltar velha num update.
+  includeGeometry: z.boolean().default(false),
 })
 
 const diagramListSchema = z.object({
@@ -1590,6 +1654,7 @@ const diagramPatchOpSchema = z.discriminatedUnion('op', [
     end: z.object({ id: z.string().min(1) }).optional(),
     strokeColor: z.string().optional(),
     backgroundColor: z.string().optional(),
+    ...blockFields,
   }),
   z.object({ op: z.literal('delete'), id: z.string().min(1) }),
 ])
@@ -1598,14 +1663,18 @@ const diagramPatchSchema = z.object({
   id: z.string().min(1),
   summary: z.string().min(1),
   ops: z.array(diagramPatchOpSchema).min(1),
+  direction: diagramDirection.optional(),
+  layout: diagramLayoutMode.optional(),
 })
 
 const diagramUpdateSchema = z
   .object({
     id: z.string().min(1),
     summary: z.string().min(1),
-    elements: z.array(skeletonElementSchema).optional(),
+    elements: skeletonSchema.optional(),
     scene: diagramSceneSchema.optional(),
+    direction: diagramDirection.optional(),
+    layout: diagramLayoutMode.optional(),
   })
   .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
 
@@ -1633,13 +1702,18 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows; omit x/y for auto-layout; arrows reference node ids via start/end and support label). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene.',
+        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
       inputSchema: diagramCreateSchema,
-      handler: (args) => {
+      handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
         const fromSkeleton = input.elements !== undefined
         const scene: DiagramScene = fromSkeleton
-          ? { elements: skeletonToElements(input.elements!) }
+          ? {
+              elements: await skeletonToElements(input.elements!, {
+                direction: input.direction,
+                layout: input.layout,
+              }),
+            }
           : (input.scene as DiagramScene)
         const diagram = diagramStore.create({
           title: input.title,
@@ -1662,16 +1736,16 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_get',
       title: 'Get diagram',
       description:
-        'Get one diagram by id. format "skeleton" (default) returns the meta, the semantic skeleton derived from the current scene, and the version history (metas); format "full" returns the raw Excalidraw scene. Returns { diagram: null } when not found.',
+        'Get one diagram by id. format "skeleton" (default) returns the meta, the semantic skeleton derived from the current scene, and the version history (metas); format "full" returns the raw Excalidraw scene. The skeleton omits x/y/width/height unless includeGeometry: true — never send coordinates back unless you mean to pin a node there. Returns { diagram: null } when not found.',
       inputSchema: diagramGetSchema,
       handler: (args) => {
-        const { id, format } = diagramGetSchema.parse(args)
+        const { id, format, includeGeometry } = diagramGetSchema.parse(args)
         const diagram = diagramStore.get(id)
         if (!diagram) return ok({ diagram: null })
         if (format === 'full') return ok({ diagram })
         return ok({
           diagram: diagramToMeta(diagram),
-          skeleton: elementsToSkeleton(diagram.scene.elements),
+          skeleton: elementsToSkeleton(diagram.scene.elements, { includeGeometry }),
           versions: diagramStore.listVersions(id),
         })
       },
@@ -1693,13 +1767,13 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_patch',
       title: 'Patch diagram (preferred edit)',
       description:
-        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene, so human refinements to layout/styling survive. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
+        'PREFERRED way to edit a diagram: applies incremental ops (add | update | delete, addressing elements by skeleton id) on top of the CURRENT scene. With layout "auto" (default) ELK re-lays out the graph, but only nodes the layout placed move: nodes the human dragged, or that a patch gave x/y, are PINNED and stay put (their arrows are rerouted). An update with x/y pins that node. An update with fields/attributes/methods/name rebuilds an entity/class block in place; relation swaps an arrow\'s heads; deleting a group/frame keeps its children. layout "keep" moves nothing. direction "LR" | "TB" overrides the scene\'s direction. Records a version snapshot (summary is the changelog line). Use diagram_update only for an intentional full redraw.',
       inputSchema: diagramPatchSchema,
-      handler: (args) => {
-        const { id, summary, ops } = diagramPatchSchema.parse(args)
+      handler: async (args) => {
+        const { id, summary, ops, direction, layout } = diagramPatchSchema.parse(args)
         const existing = diagramStore.get(id)
         if (!existing) throw new Error(`diagram não encontrado: ${id}`)
-        const elements = applyPatch(existing.scene.elements, ops)
+        const elements = await applyPatch(existing.scene.elements, ops, { direction, layout })
         const diagram = diagramStore.updateScene({
           id,
           scene: { ...existing.scene, elements },
@@ -1718,13 +1792,18 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_update',
       title: 'Replace diagram scene',
       description:
-        'FULL replacement of the scene (exactly one of elements = skeleton | scene = raw Excalidraw). This DISCARDS any human layout/styling refinement of the current scene — prefer diagram_patch for edits; use this only when redrawing from scratch is intentional. Records a version snapshot (summary is the changelog line).',
+        'FULL replacement of the scene (exactly one of elements = skeleton | scene = raw Excalidraw). This DISCARDS any human layout/styling refinement of the current scene — prefer diagram_patch for edits; use this only when redrawing from scratch is intentional. direction and layout work as in diagram_create. Records a version snapshot (summary is the changelog line).',
       inputSchema: diagramUpdateSchema,
-      handler: (args) => {
+      handler: async (args) => {
         const input = diagramUpdateSchema.parse(args)
         const fromSkeleton = input.elements !== undefined
         const scene: DiagramScene = fromSkeleton
-          ? { elements: skeletonToElements(input.elements!) }
+          ? {
+              elements: await skeletonToElements(input.elements!, {
+                direction: input.direction,
+                layout: input.layout,
+              }),
+            }
           : (input.scene as DiagramScene)
         const diagram = diagramStore.updateScene({
           id: input.id,
@@ -1835,12 +1914,19 @@ function diagramTools(notify: McpNotify): ToolDef[] {
 
 const diagramLibraryInstallSchema = z
   .object({
+    catalogId: z.string().min(1).optional(),
     url: z.url().optional(),
     library_json: z.record(z.string(), z.unknown()).optional(),
   })
-  .refine((v) => (v.url !== undefined) !== (v.library_json !== undefined), {
-    message: 'provide exactly one of url or library_json',
-  })
+  .refine(
+    (v) =>
+      [v.catalogId, v.url, v.library_json].filter((x) => x !== undefined).length === 1,
+    { message: 'provide exactly one of catalogId, url or library_json' },
+  )
+
+const diagramLibraryListSchema = z.object({
+  includeCatalog: z.boolean().optional(),
+})
 
 function libraryItemMeta(item: DiagramLibraryItem): Record<string, unknown> {
   return {
@@ -1857,11 +1943,22 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_library_list',
       title: 'List shape library items',
       description:
-        'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out.',
-      inputSchema: z.object({}),
-      handler: () => {
+        'List the items installed in the global Excalidraw shape library (shared by every diagram canvas). Returns id, name, status and elementCount per item — element payloads stay out. includeCatalog: true also returns the curated catalog (id, name, category, description, installed) — install an entry with diagram_library_install { catalogId }.',
+      inputSchema: diagramLibraryListSchema,
+      handler: (args) => {
+        const { includeCatalog } = diagramLibraryListSchema.parse(args ?? {})
+        const items = diagramLibraryStore.getItems()
+        if (!includeCatalog) return ok({ items: items.map(libraryItemMeta) })
+        const installed = new Set(installedCatalogIds(items))
         return ok({
-          items: diagramLibraryStore.getItems().map(libraryItemMeta),
+          items: items.map(libraryItemMeta),
+          catalog: DIAGRAM_LIBRARY_CATALOG.map((e) => ({
+            id: e.id,
+            name: e.name,
+            category: e.category,
+            description: e.description,
+            installed: installed.has(e.id),
+          })),
         })
       },
     },
@@ -1869,14 +1966,16 @@ function diagramLibraryTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_library_install',
       title: 'Install shape library',
       description:
-        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL), or library_json = the .excalidrawlib content as a JSON object. Items merge by id: re-installing the same library updates items instead of duplicating them. Returns how many items the file brought (added) plus the full library.',
+        'Install an Excalidraw shape library (.excalidrawlib) into the global library. Exactly one of: catalogId = id from the curated catalog (diagram_library_list { includeCatalog: true }; e.g. aws-architecture, gcp-icons, uml-er, c4-architecture) — preferred; url = direct link to a .excalidrawlib file (the public catalog at https://libraries.excalidraw.com hosts many — pass the library file URL); or library_json = the .excalidrawlib content as a JSON object. Re-installing a catalog entry replaces its previous items; other sources merge by item id (legacy v1 files have no ids and duplicate on re-install). Returns how many items the file brought (added) plus the full library.',
       inputSchema: diagramLibraryInstallSchema,
       handler: async (args) => {
         const input = diagramLibraryInstallSchema.parse(args)
         const result =
-          input.url !== undefined
-            ? await installLibraryFromUrl(input.url)
-            : installLibraryJson(input.library_json)
+          input.catalogId !== undefined
+            ? await installCatalogLibrary(input.catalogId)
+            : input.url !== undefined
+              ? await installLibraryFromUrl(input.url)
+              : installLibraryJson(input.library_json)
         notify.broadcast('diagramLibrary:updated', { items: result.items })
         return ok({
           added: result.added,
@@ -1915,8 +2014,6 @@ export function buildTools(
     ...diagramTools(notify),
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
-    ...videoTools(notify),
-    ...meetingTools(notify),
     ...canvasTools(notify, ctx),
     ...agentTools(ctx),
     ...serviceTools(ctx),

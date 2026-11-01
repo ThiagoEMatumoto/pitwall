@@ -36,11 +36,10 @@ function buildClaudeInnerCmd(opts: LaunchOpts): string {
   if (opts.permissionMode) {
     innerCmd += ` --permission-mode ${shquote(opts.permissionMode)}`
   }
-  if (opts.disallowedTools && opts.disallowedTools.length > 0) {
-    innerCmd += ` --disallowedTools ${opts.disallowedTools.map(shquote).join(' ')}`
-  }
-  if (opts.settingsJson) {
-    innerCmd += ` --settings ${shquote(opts.settingsJson)}`
+  // O denylist vai DENTRO do arquivo (permissions.deny), não em --disallowedTools:
+  // padrões como `Bash(rm:*)` no argv fazem `pkill -f rm` matar a sessão.
+  if (opts.settingsFilePath) {
+    innerCmd += ` --settings ${shquote(opts.settingsFilePath)}`
   }
   if (opts.systemPromptFilePath) {
     innerCmd += ` --append-system-prompt-file ${shquote(opts.systemPromptFilePath)}`

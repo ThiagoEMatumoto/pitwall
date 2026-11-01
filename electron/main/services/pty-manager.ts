@@ -1,7 +1,16 @@
 import { spawn, IPty } from 'node-pty'
 import { EventEmitter } from 'node:events'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { nextPtySample, type PtySample } from './providers/pty-status'
+import {
+  reportScopeFailure,
+  scopeUnitName,
+  scopeWrapEnabled,
+  stopScopeUnit,
+  sessionMemoryLimits,
+  wrapInScope,
+} from './systemd-scope'
+import type { ScopeExecEvent } from './scope-oom-watch'
 
 export interface SpawnOptions {
   sessionId: string
@@ -40,6 +49,9 @@ interface PtyEvents {
   resize: (e: PtySizeEvent) => void
   data: (e: PtyDataEvent) => void
   exit: (e: PtyExitEvent) => void
+  // O pid virou o comando dentro do scope (só com teto de memória): quem observa
+  // o cgroup começa daqui.
+  'scope-exec': (e: ScopeExecEvent) => void
 }
 
 class TypedEmitter extends EventEmitter {
@@ -57,6 +69,21 @@ class TypedEmitter extends EventEmitter {
 const BACKLOG_CAP = 256 * 1024
 // Janela em que a saída é tratada como eco/reflow de input do app.
 const INPUT_ECHO_MS = 300
+// Até o pid deixar de ser o systemd-run, uma saída é falha do wrapper (bus caiu,
+// unit duplicada), não do comando. O teto cobre o timeout de 25s do D-Bus.
+const SCOPE_EXEC_POLL_MS = 25
+const SCOPE_EXEC_WATCH_MAX_MS = 30_000
+// Depois do SIGHUP no pid da PTY, o que sobrou no scope (MCPs, processos em
+// background) é parado junto.
+const SCOPE_STOP_GRACE_MS = 3_000
+
+function procComm(pid: number): string | null {
+  try {
+    return readFileSync(`/proc/${pid}/comm`, 'utf8').trim()
+  } catch {
+    return null
+  }
+}
 
 class PtyManager extends TypedEmitter {
   private ptys = new Map<string, IPty>()
@@ -69,6 +96,16 @@ class PtyManager extends TypedEmitter {
   // Última escrita/resize vinda do app: o eco da tecla e o reflow que vêm logo
   // depois não são o agente trabalhando.
   private lastInputAt = new Map<string, number>()
+  // Último I/O de qualquer lado (saída do processo, escrita ou resize do app),
+  // para TODA PTY: a hibernação por ociosidade só considera quem está parado.
+  private lastIoAt = new Map<string, number>()
+  // Unit .scope de cada sessão spawnada via systemd-run.
+  private scopeUnits = new Map<string, string>()
+  // Sessões com teto que já fizeram exec: quem passa a observar depois (watcher
+  // recriado, ligado após o restore) as readota por aqui.
+  private scopeExecs = new Map<string, ScopeExecEvent>()
+  // Saída pedida pelo app não é falha do systemd-run.
+  private killed = new WeakSet<IPty>()
 
   spawn(opts: SpawnOptions): void {
     if (this.ptys.has(opts.sessionId)) {
@@ -79,9 +116,18 @@ class PtyManager extends TypedEmitter {
       throw new Error(`cwd does not exist or is not a directory: ${opts.cwd}`)
     }
 
+    this.spawnPty(opts, scopeWrapEnabled())
+  }
+
+  private spawnPty(opts: SpawnOptions, inScope: boolean): void {
     const cols = opts.cols ?? 80
     const rows = opts.rows ?? 24
-    const pty = spawn(opts.command, opts.args ?? [], {
+    const unit = inScope ? scopeUnitName(opts.sessionId) : null
+    const memory = unit ? sessionMemoryLimits() : null
+    const target = unit
+      ? wrapInScope(opts.command, opts.args ?? [], unit, memory)
+      : { command: opts.command, args: opts.args ?? [] }
+    const pty = spawn(target.command, target.args, {
       name: 'xterm-256color',
       cols,
       rows,
@@ -95,17 +141,21 @@ class PtyManager extends TypedEmitter {
     })
 
     this.ptys.set(opts.sessionId, pty)
-    this.backlog.set(opts.sessionId, '')
+    if (unit) this.scopeUnits.set(opts.sessionId, unit)
+    else this.scopeUnits.delete(opts.sessionId)
+    if (!this.backlog.has(opts.sessionId)) this.backlog.set(opts.sessionId, '')
+    this.lastIoAt.set(opts.sessionId, Date.now())
     if (opts.sampleActivity) {
       this.samples.set(opts.sessionId, { lastByteAt: null, tailHash: null, hashChangedAt: null })
     }
     this.emit('spawn', { sessionId: opts.sessionId, cols, rows })
 
-    pty.onData((data) => {
+    const deliver = (data: string): void => {
       const prev = this.backlog.get(opts.sessionId) ?? ''
       const next = prev + data
       const capped = next.length > BACKLOG_CAP ? next.slice(next.length - BACKLOG_CAP) : next
       this.backlog.set(opts.sessionId, capped)
+      this.lastIoAt.set(opts.sessionId, Date.now())
       const sample = this.samples.get(opts.sessionId)
       if (sample) {
         const now = Date.now()
@@ -113,19 +163,113 @@ class PtyManager extends TypedEmitter {
         this.samples.set(opts.sessionId, nextPtySample(sample, capped, now, { echo }))
       }
       this.emit('data', { sessionId: opts.sessionId, data })
+    }
+
+    // Até o exec, a saída é do systemd-run: segurada, para o erro dele não virar o
+    // "primeiro data" que arma a injeção do comando inicial (sessions.ts) nem
+    // aparecer no terminal quando o spawn cai para o direto.
+    let held: string[] = []
+    // O que o pid escreveu antes do exec: decide se a saída foi falha do wrapper.
+    let preExec = ''
+    const flushHeld = (): void => {
+      const chunks = held
+      held = []
+      for (const c of chunks) deliver(c)
+    }
+    const execWatch = unit
+      ? this.watchScopeExec(pty.pid, (execSeen) => {
+          flushHeld()
+          if (execSeen && memory && this.ptys.get(opts.sessionId) === pty) {
+            // memoryLimitsFromGB sempre devolve o teto em G.
+            const maxGB = Number.parseFloat(memory.max)
+            const exec = { sessionId: opts.sessionId, pid: pty.pid, maxGB }
+            this.scopeExecs.set(opts.sessionId, exec)
+            this.emit('scope-exec', exec)
+          }
+        })
+      : null
+
+    pty.onData((data) => {
+      if (execWatch && !execWatch.execSeen() && preExec.length < 4096) preExec += data
+      if (execWatch && !execWatch.released()) held.push(data)
+      else deliver(data)
     })
 
     pty.onExit(({ exitCode, signal }) => {
+      execWatch?.stop()
+      const current = this.ptys.get(opts.sessionId)
+      if (current && current !== pty) return
+      if (
+        current &&
+        execWatch &&
+        !execWatch.execSeen() &&
+        exitCode === 1 &&
+        /Failed to /.test(preExec) &&
+        !this.killed.has(pty)
+      ) {
+        // O systemd-run morreu sem virar o comando: refaz direto, uma vez, no
+        // tamanho atual (pode ter havido resize no meio).
+        reportScopeFailure(preExec.trim().split('\n')[0] ?? `exit ${exitCode}`)
+        this.ptys.delete(opts.sessionId)
+        this.spawnPty({ ...opts, cols: pty.cols, rows: pty.rows }, false)
+        return
+      }
+      flushHeld()
       this.ptys.delete(opts.sessionId)
+      this.scopeUnits.delete(opts.sessionId)
+      this.scopeExecs.delete(opts.sessionId)
       this.samples.delete(opts.sessionId)
       this.lastInputAt.delete(opts.sessionId)
+      this.lastIoAt.delete(opts.sessionId)
       this.emit('exit', { sessionId: opts.sessionId, exitCode, signal: signal ?? null })
     })
+  }
+
+  // execSeen = o pid foi visto como outro processo que não o systemd-run nem o
+  // fork do próprio app antes do exec (mesmo comm do pai). released = a saída
+  // segurada já foi liberada: no exec ou, sem ele, no teto.
+  private watchScopeExec(
+    pid: number,
+    onRelease: (execSeen: boolean) => void,
+  ): { execSeen: () => boolean; released: () => boolean; stop: () => void } {
+    const ownComm = procComm(process.pid)
+    let execSeen = false
+    let released = false
+    const startedAt = Date.now()
+    const timer = setInterval(() => {
+      const comm = procComm(pid)
+      execSeen = comm !== null && comm !== 'systemd-run' && comm !== ownComm
+      // No teto, para de segurar a saída: um terminal mudo é pior que um fallback perdido.
+      if (execSeen || Date.now() - startedAt > SCOPE_EXEC_WATCH_MAX_MS) {
+        released = true
+        clearInterval(timer)
+        onRelease(execSeen)
+      }
+    }, SCOPE_EXEC_POLL_MS)
+    timer.unref?.()
+    return {
+      execSeen: () => execSeen,
+      released: () => released,
+      stop: () => clearInterval(timer),
+    }
+  }
+
+  scopedSessions(): ScopeExecEvent[] {
+    return [...this.scopeExecs.values()].filter((e) => this.ptys.has(e.sessionId))
+  }
+
+  scopeUnitFor(sessionId: string): string | null {
+    return this.scopeUnits.get(sessionId) ?? null
   }
 
   // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
   getActivitySample(sessionId: string): PtySample | null {
     return this.samples.get(sessionId) ?? null
+  }
+
+  // null = PTY desconhecida (nunca spawnada aqui ou já encerrada).
+  getLastIoAt(sessionId: string): number | null {
+    return this.lastIoAt.get(sessionId) ?? null
   }
 
   getBacklog(sessionId: string): string {
@@ -136,6 +280,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) throw new Error(`session ${sessionId} not running`)
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.write(data)
   }
 
@@ -143,6 +288,7 @@ class PtyManager extends TypedEmitter {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     if (this.samples.has(sessionId)) this.lastInputAt.set(sessionId, Date.now())
+    this.lastIoAt.set(sessionId, Date.now())
     pty.resize(cols, rows)
     this.emit('resize', { sessionId, cols, rows })
   }
@@ -150,18 +296,29 @@ class PtyManager extends TypedEmitter {
   kill(sessionId: string): void {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
+    this.killed.add(pty)
     pty.kill()
+    const unit = this.scopeUnits.get(sessionId)
+    if (unit) setTimeout(() => stopScopeUnit(unit), SCOPE_STOP_GRACE_MS).unref?.()
     this.backlog.delete(sessionId)
     this.samples.delete(sessionId)
     this.lastInputAt.delete(sessionId)
+    this.lastIoAt.delete(sessionId)
   }
 
   killAll(): void {
-    for (const pty of this.ptys.values()) pty.kill()
+    for (const pty of this.ptys.values()) {
+      this.killed.add(pty)
+      pty.kill()
+    }
+    // Quit: só o SIGHUP, como antes; um stop agora mandaria SIGTERM junto e
+    // poderia cortar o flush do transcript.
+    this.scopeUnits.clear()
     this.ptys.clear()
     this.backlog.clear()
     this.samples.clear()
     this.lastInputAt.clear()
+    this.lastIoAt.clear()
   }
 
   isRunning(sessionId: string): boolean {
@@ -170,6 +327,17 @@ class PtyManager extends TypedEmitter {
 
   runningIds(): string[] {
     return Array.from(this.ptys.keys())
+  }
+
+  // pid da PTY. No Linux é o próprio claude (o wrapper faz exec); no Windows é o
+  // shell que o lançou, e por isso não casa com o pid de ~/.claude/sessions.
+  getPid(sessionId: string): number | null {
+    return this.ptys.get(sessionId)?.pid ?? null
+  }
+
+  sessionIdByPid(pid: number): string | null {
+    for (const [sessionId, pty] of this.ptys) if (pty.pid === pid) return sessionId
+    return null
   }
 }
 

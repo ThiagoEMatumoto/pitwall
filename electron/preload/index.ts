@@ -8,6 +8,9 @@ import type {
   ReorderReposInput,
   SpawnSessionInput,
   ResumeSessionInput,
+  WakeRequest,
+  DormantBecameLiveEvent,
+  ScopeOomEvent,
   PtyDataEvent,
   PtyExitEvent,
   SessionFeatureChangedEvent,
@@ -70,36 +73,6 @@ import type {
   McpRemoveInput,
   VoiceSummaryEvent,
   ImportSelection,
-  CreateVideoBrandKitInput,
-  UpdateVideoBrandKitInput,
-  CreateVideoCharacterInput,
-  UpdateVideoCharacterInput,
-  SetVideoCharacterRefsInput,
-  CreateVideoTemplateInput,
-  UpdateVideoTemplateInput,
-  SaveVideoTemplateFromProjectInput,
-  CreateVideoProjectInput,
-  UpdateVideoProjectInput,
-  SetVideoProjectCastInput,
-  UpsertVideoSceneInput,
-  ReorderVideoScenesInput,
-  SetVideoScriptInput,
-  RegisterVideoAssetInput,
-  GenerateVideoAudioInput,
-  GenerateVideoImageInput,
-  StartVideoRenderInput,
-  VideoAssetListFilter,
-  VideoCharacterListFilter,
-  VideoProjectListFilter,
-  VideoRenderListFilter,
-  VideoTemplateListFilter,
-  MeetingActionItemBatch,
-  RenameMeetingSpeakerInput,
-  MeetingEvent,
-  MeetingDetectionAction,
-  MeetingFloatingAction,
-  StartMeetingInput,
-  UpdateMeetingInput,
   DesignListFilter,
   CreateDesignDocumentInput,
   UpdateDesignDocumentInput,
@@ -115,6 +88,8 @@ import type {
   DesignPdfInput,
   DesignPngBatchInput,
   DesignAskInput,
+  CreateDesignFolderInput,
+  UpdateDesignFolderInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
 import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
@@ -122,6 +97,7 @@ import type { AttentionItem } from '../../shared/types/attention'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
+import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
   PromptQueueSnapshot,
   ScreenTailUpdate,
@@ -130,6 +106,15 @@ import type {
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
+
+// Rascunho síncrono: o main devolve {ok, value} ou {ok:false, error}; aqui vira
+// retorno ou throw, como o invoke.
+function draftSync<T>(channel: string, arg: unknown): T {
+  const res = ipcRenderer.sendSync(channel, arg) as
+    { ok: true; value: T } | { ok: false; error: string }
+  if (!res.ok) throw new Error(res.error)
+  return res.value
+}
 
 function subscribe<T>(channel: string, handler: (event: T) => void): () => void {
   const listener = (_e: IpcRendererEvent, payload: T) => handler(payload)
@@ -160,6 +145,17 @@ const api: Api = {
     getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
     write: (sessionId, data) => invoke('sessions:write', sessionId, data),
     saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
+    getDraft: (key) => invoke('sessions:get-draft', key),
+    saveDraft: (draft) => invoke('sessions:save-draft', draft),
+    writeDraft: (draft) => ipcRenderer.send('sessions:write-draft', draft),
+    clearDraft: (key) => invoke('sessions:clear-draft', key),
+    adoptDraft: (target) => invoke('sessions:adopt-draft', target),
+    clearSessionDrafts: (target) => invoke('sessions:clear-session-drafts', target),
+    gcDrafts: (openPanes) => invoke('sessions:gc-drafts', openPanes),
+    getDraftSync: (key) => draftSync('sessions:get-draft-sync', key),
+    saveDraftSync: (draft) => draftSync('sessions:save-draft-sync', draft),
+    onDraftFlushRequest: (handler) => subscribe<string>('composer:flush-request', handler),
+    draftFlushDone: (requestId) => ipcRenderer.send('composer:flush-done', requestId),
     resize: (sessionId, cols, rows) => invoke('sessions:resize', sessionId, cols, rows),
     kill: (sessionId) => invoke('sessions:kill', sessionId),
     rename: (sessionId, title) => invoke('sessions:rename', sessionId, title),
@@ -188,6 +184,20 @@ const api: Api = {
     setRendererFocus: (ccSessionId) => {
       void invoke('sessions:renderer-focus', ccSessionId)
     },
+    restorePlan: (ccSessionIds) => invoke('sessions:restore-plan', ccSessionIds),
+    dormantSync: (panes) => invoke('sessions:dormant-sync', panes),
+    onWakeRequest: (handler) => subscribe<WakeRequest>('sessions:wake-request', handler),
+    wakeResult: (result) => invoke('sessions:wake-result', result),
+    onDormantBecameLive: (handler) =>
+      subscribe<DormantBecameLiveEvent>('sessions:dormant-became-live', handler),
+    hibernateStats: () => invoke('sessions:hibernate-stats'),
+    onHibernated: (handler) => subscribe<SessionHibernatedEvent>('sessions:hibernated', handler),
+    onPaneCheckRequest: (handler) =>
+      subscribe<PaneCheckRequest>('sessions:pane-check-request', handler),
+    paneCheckResult: (result) => invoke('sessions:pane-check-result', result),
+    paneClosed: (sessionId) => invoke('sessions:pane-closed', sessionId),
+    onOom: (handler) => subscribe<ScopeOomEvent>('sessions:oom', handler),
+    scopeStats: () => invoke('sessions:scope-stats'),
   },
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),
@@ -451,6 +461,7 @@ const api: Api = {
   sendTo: {
     send: (input: SendPromptInput) => invoke('sessions:send-prompt', input),
     cancel: (id: string) => invoke('prompt-queue:cancel', { id }),
+    resend: (id: string) => invoke('prompt-queue:resend', { id }),
     queue: () => invoke('prompt-queue:list'),
     preview: (sessionId: string) => invoke('sessions:screen-preview', { sessionId }),
     subscribeTail: (sessionIds: string[]) => invoke('sessions:tail-subscribe', { sessionIds }),
@@ -507,6 +518,10 @@ const api: Api = {
       replace: (items: DiagramLibraryItem[]) => invoke('diagrams:library-replace', items),
       remove: (id: string) => invoke('diagrams:library-remove', id),
       installUrl: (url: string) => invoke('diagrams:library-install-url', url),
+      catalog: () => invoke('diagrams:library-catalog'),
+      installCatalog: (catalogId: string) =>
+        invoke('diagrams:library-install-catalog', catalogId),
+      removeCatalog: (catalogId: string) => invoke('diagrams:library-remove-catalog', catalogId),
       onUpdated: (handler) => subscribe<unknown>('diagramLibrary:updated', handler),
     },
   },
@@ -530,105 +545,6 @@ const api: Api = {
     resolveConflict: (input: SyncResolveConflictInput) => invoke('sync:resolve-conflict', input),
     backupExport: () => invoke('sync:backup-export'),
     backupImport: () => invoke('sync:backup-import'),
-  },
-  // Video Lab. Canais `video:<dominio>-<acao>`; eventos por entidade
-  // (`videoProject:updated`, ...) — os mesmos que o MCP emitirá.
-  video: {
-    brandKits: {
-      list: () => invoke('video:brand-kits-list'),
-      get: (id: string) => invoke('video:brand-kits-get', id),
-      create: (input: CreateVideoBrandKitInput) => invoke('video:brand-kits-create', input),
-      update: (input: UpdateVideoBrandKitInput) => invoke('video:brand-kits-update', input),
-      remove: (id: string) => invoke('video:brand-kits-delete', id),
-      onUpdated: (handler) => subscribe<unknown>('videoBrandKit:updated', handler),
-    },
-    characters: {
-      list: (filter?: VideoCharacterListFilter) => invoke('video:characters-list', filter),
-      get: (id: string) => invoke('video:characters-get', id),
-      create: (input: CreateVideoCharacterInput) => invoke('video:characters-create', input),
-      update: (input: UpdateVideoCharacterInput) => invoke('video:characters-update', input),
-      setRefs: (input: SetVideoCharacterRefsInput) => invoke('video:characters-set-refs', input),
-      archive: (id: string) => invoke('video:characters-archive', id),
-      unarchive: (id: string) => invoke('video:characters-unarchive', id),
-      onUpdated: (handler) => subscribe<unknown>('videoCharacter:updated', handler),
-    },
-    templates: {
-      list: (filter?: VideoTemplateListFilter) => invoke('video:templates-list', filter),
-      get: (id: string) => invoke('video:templates-get', id),
-      create: (input: CreateVideoTemplateInput) => invoke('video:templates-create', input),
-      update: (input: UpdateVideoTemplateInput) => invoke('video:templates-update', input),
-      remove: (id: string) => invoke('video:templates-delete', id),
-      saveFromProject: (input: SaveVideoTemplateFromProjectInput) =>
-        invoke('video:templates-save-from-project', input),
-      onUpdated: (handler) => subscribe<unknown>('videoTemplate:updated', handler),
-    },
-    projects: {
-      list: (filter?: VideoProjectListFilter) => invoke('video:projects-list', filter),
-      get: (id: string) => invoke('video:projects-get', id),
-      create: (input: CreateVideoProjectInput) => invoke('video:projects-create', input),
-      update: (input: UpdateVideoProjectInput) => invoke('video:projects-update', input),
-      setCast: (input: SetVideoProjectCastInput) => invoke('video:projects-set-cast', input),
-      archive: (id: string) => invoke('video:projects-archive', id),
-      unarchive: (id: string) => invoke('video:projects-unarchive', id),
-      remove: (id: string) => invoke('video:projects-delete', id),
-      onUpdated: (handler) => subscribe<unknown>('videoProject:updated', handler),
-      onDeleted: (handler) => subscribe<unknown>('videoProject:deleted', handler),
-    },
-    scenes: {
-      list: (projectId: string) => invoke('video:scenes-list', projectId),
-      upsert: (input: UpsertVideoSceneInput) => invoke('video:scenes-upsert', input),
-      reorder: (input: ReorderVideoScenesInput) => invoke('video:scenes-reorder', input),
-      remove: (projectId: string, sceneId: string) =>
-        invoke('video:scenes-delete', projectId, sceneId),
-      onUpdated: (handler) => subscribe<unknown>('videoScenes:updated', handler),
-    },
-    script: {
-      list: (projectId: string, locale: string) =>
-        invoke('video:script-list', projectId, locale),
-      set: (input: SetVideoScriptInput) => invoke('video:script-set', input),
-      onUpdated: (handler) => subscribe<unknown>('videoScript:updated', handler),
-    },
-    assets: {
-      list: (filter?: VideoAssetListFilter) => invoke('video:assets-list', filter),
-      get: (id: string) => invoke('video:assets-get', id),
-      register: (input: RegisterVideoAssetInput) => invoke('video:assets-register', input),
-      generateAudio: (input: GenerateVideoAudioInput) =>
-        invoke('video:assets-generate-audio', input),
-      generateImage: (input: GenerateVideoImageInput) =>
-        invoke('video:assets-generate-image', input),
-      remove: (id: string) => invoke('video:assets-delete', id),
-      onUpdated: (handler) => subscribe<unknown>('videoAsset:updated', handler),
-      onJobEvent: (handler) => subscribe<unknown>('videoAsset:job', handler),
-    },
-    renders: {
-      list: (filter?: VideoRenderListFilter) => invoke('video:renders-list', filter),
-      get: (id: string) => invoke('video:renders-get', id),
-      start: (input: StartVideoRenderInput) => invoke('video:renders-start', input),
-      cancel: (id: string) => invoke('video:renders-cancel', id),
-      reveal: (id: string) => invoke('video:renders-reveal', id),
-      onProgress: (handler) => subscribe<unknown>('videoRender:progress', handler),
-      onUpdated: (handler) => subscribe<unknown>('videoRender:updated', handler),
-    },
-  },
-  meetings: {
-    start: (input?: StartMeetingInput) => invoke('meetings:start', input ?? {}),
-    stop: () => invoke('meetings:stop'),
-    state: () => invoke('meetings:state'),
-    list: () => invoke('meetings:list'),
-    get: (id: string) => invoke('meetings:get', id),
-    update: (input: UpdateMeetingInput) => invoke('meetings:update', input),
-    quickNote: (meetingId: string, text: string) => invoke('meetings:quickNote', { meetingId, text }),
-    delete: (id: string) => invoke('meetings:delete', id),
-    resummarize: (id: string) => invoke('meetings:resummarize', id),
-    actionItemsBatch: (input: MeetingActionItemBatch) => invoke('meetings:actionItems:batch', input),
-    renameSpeaker: (input: RenameMeetingSpeakerInput) => invoke('meetings:renameSpeaker', input),
-    listVoices: () => invoke('meetings:voices:list'),
-    deleteVoice: (id: string) => invoke('meetings:voices:delete', id),
-    downloadModels: () => invoke('meetings:models:download'),
-    floating: (action: MeetingFloatingAction) => invoke('meetings:floating', { action }),
-    detection: (action: MeetingDetectionAction) => invoke('meetings:detection', { action }),
-    checkSetup: () => invoke('meetings:checkSetup'),
-    onEvent: (handler) => subscribe<MeetingEvent>('meetings:event', handler),
   },
   // Design Studio. Canais `design:<entidade>-<acao>`; broadcasts `design:<entidade>-<evento>`.
   design: {
@@ -659,10 +575,19 @@ const api: Api = {
     unlink: (input: DesignLink) => invoke('design:unlink', input),
     selectionSet: (input: DesignSelection) => invoke('design:selection-set', input),
     activeDocSet: (docId: string | null) => invoke('design:active-doc-set', docId),
+    liveState: (docId?: string) => invoke('design:live-state', docId),
     export: (input: DesignExportInput) => invoke('design:export', input),
     pdfExport: (input: DesignPdfInput) => invoke('design:pdf-export', input),
     pngBatchExport: (input: DesignPngBatchInput) => invoke('design:png-batch', input),
     askSession: (input: DesignAskInput) => invoke('design:ask-session', input),
+    foldersList: () => invoke('design:folders-list'),
+    folderCreate: (input: CreateDesignFolderInput) => invoke('design:folder-create', input),
+    folderUpdate: (id: string, input: UpdateDesignFolderInput) =>
+      invoke('design:folder-update', id, input),
+    folderDelete: (id: string) => invoke('design:folder-delete', id),
+    documentMove: (docId: string, folderId: string | null) =>
+      invoke('design:document-move', docId, folderId),
+    thumbnailsBackfill: () => invoke('design:thumbnails-backfill'),
     onDocumentUpdated: (handler) => subscribe<unknown>('design:document-updated', handler),
     onDocumentDeleted: (handler) => subscribe<unknown>('design:document-deleted', handler),
     onArtboardUpdated: (handler) => subscribe<unknown>('design:artboard-updated', handler),
@@ -670,6 +595,8 @@ const api: Api = {
     onAgentActivity: (handler) => subscribe<unknown>('design:agent-activity', handler),
     onLinksUpdated: (handler) => subscribe<unknown>('design:links-updated', handler),
     onAssetsUpdated: (handler) => subscribe<unknown>('design:assets-updated', handler),
+    onFoldersUpdated: (handler) => subscribe<unknown>('design:folders-updated', handler),
+    onThumbnailUpdated: (handler) => subscribe<unknown>('design:thumbnail-updated', handler),
   },
   window: {
     minimize: () => invoke('window:minimize'),

@@ -244,7 +244,11 @@ export class TuiMenuWatch extends EventEmitter {
     // write() do xterm é assíncrono: drena o que está na fila antes de ler a tela.
     await new Promise<void>((resolve) => entry.term.write('', resolve))
     if (this.entries.get(sessionId) !== entry) return null
-    const base = scanScreen((n) => readTail(entry.term, n), entry.term.buffer.active.length)
+    const base = scanScreen(
+      (n) => readTail(entry.term, n),
+      entry.term.buffer.active.length,
+      entry.term.rows,
+    )
     const scan = base.inputPrompt ? { ...base, inputDirty: readInputDirty(entry.term) } : base
     const key = scanKey(scan)
     entry.scan = scan

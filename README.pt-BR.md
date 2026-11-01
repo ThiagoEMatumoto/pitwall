@@ -83,13 +83,9 @@ Estes clipes mostram telas reais com dataset fictício.
 
 **Ingest e dossiês _(experimental)_.** Um pipeline de pesquisa em etapas, com gates de aprovação humana e checkpoints, alimentado por um provedor de fontes Tavily com classificação de fonte.
 
-**Reuniões.** Gravação e transcrição ao vivo de chamadas sem sair da mesa: inicie pela área Reuniões, pela bandeja ou por `Ctrl+Shift+R`, e uma janela flutuante sempre no topo mostra o timer, os níveis de áudio e as últimas falas enquanto você faz anotações rápidas. Áudio do sistema e microfone são capturados pelo PipeWire (`pw-record`) e transcritos em chunks pelo mesmo endpoint STT compatível com OpenAI do modo voz (`~/.config/voz/voz.env`). Ao parar, o `claude -p` escreve o resumo (decisões, próximos passos, perguntas em aberto, suas anotações incorporadas) e extrai itens de ação — cada um ancorado numa citação literal do transcript antes de virar task. Exposto aos agentes como tools MCP `meeting_*`.
-
 **Configuração do Claude Code.** Ler e editar `CLAUDE.md`, rules, settings da CLI, hooks, keybindings, servidores MCP, plugins/marketplace e o script de statusline pelo app.
 
 **Métricas de uso.** Um dashboard local construído a partir dos seus transcripts JSONL do Claude Code: consumo de tokens e custo, tools mais usadas e um KPI de orquestração de agentes.
-
-**Video Lab _(em desenvolvimento)_.** Um projeto Remotion para produzir os vídeos do produto. Vive numa branch e ainda não faz parte de uma release.
 
 ## Instalação
 
@@ -108,6 +104,8 @@ O app se atualiza sozinho via `electron-updater`.
 ## Desenvolvimento
 
 Requisitos: **Node 20+**.
+
+A suíte de testes roda no Node fixado em `.nvmrc` (24.18.1). O Node 24.19+ aborta o processo quando objetos do better-sqlite3 são coletados pelo GC ([nodejs/node#65446](https://github.com/nodejs/node/issues/65446)); remova a fixação quando isso for corrigido. Depois de trocar de Node, rode `npm rebuild better-sqlite3` antes de `npm run test:unit`.
 
 ```bash
 npm install
@@ -139,7 +137,7 @@ electron/
       handoff/    # alias, prepare, spawn-child, compose-prompt, adopt
       baton/      # distill, compose-baton-prompt
       mcp/        # servidor MCP, tools, service-tools, session-identity
-      meetings/, video/, sync/, architecture/
+      sync/, architecture/
   preload/        # ponte de contextIsolation (window.api.*)
 shared/
   types/          # tipos compartilhados main ↔ renderer
@@ -147,7 +145,7 @@ shared/
 src/
   app/            # raiz do App, navegação IconRail, tema
   features/       # sessions (chat, voice), diagrams, handoffs, jobs,
-                  # content, cc-configs, projects, architecture, meetings,
+                  # content, cc-configs, projects, architecture,
                   # dossiers, objectives, tasks, features, metrics, files,
                   # settings, brand
   lib/            # helpers de IPC no renderer

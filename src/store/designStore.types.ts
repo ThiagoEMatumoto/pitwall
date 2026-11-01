@@ -6,6 +6,7 @@ import type {
   DesignArtboard,
   DesignDocument,
   DesignDocumentMeta,
+  DesignFolder,
   DesignListFilter,
   DesignNode,
   DesignOp,
@@ -45,6 +46,10 @@ export interface CommitOptions {
   quiet?: boolean
 }
 
+// Hub section: a fixed view or a folder id.
+export type HubSection = 'recent' | 'unfiled' | 'archived' | (string & {})
+export type HubSort = 'recent' | 'name'
+
 export interface TextEditEnd {
   text: string
   reason: 'commit' | 'escape' | 'blur'
@@ -62,8 +67,25 @@ export interface DesignState {
   tool: DesignTool
   viewport: Viewport
   textEditing: { artboardId: string; nodeId: string } | null
-  // Keyed by artboardId; '*' holds document-level activity.
+  // The open document's slice of activityByDoc. Keyed by artboardId; '*'
+  // holds document-level activity.
   agentActivity: Record<string, DesignAgentActivity[]>
+  // Every document, open or not (the docs list shows who Claude is on).
+  activityByDoc: Record<string, Record<string, DesignAgentActivity[]>>
+  // Per document, persisted: when the human last left or dismissed it.
+  lastSeenAt: Record<string, number>
+  // design_nodes_finish events of the open document newer than its lastSeenAt,
+  // captured on entry; live finishes while it is open are seen, not listed.
+  unseenChanges: DesignAgentActivity[]
+  // Per document, the newest design_nodes_finish seen (live or hydrated): the
+  // hub's "novo" badge is lastFinishAt > lastSeenAt.
+  lastFinishAt: Record<string, number>
+  folders: DesignFolder[]
+  // Loaded on demand by the hub's Arquivados section; `docs` is active only.
+  archivedDocs: DesignDocumentMeta[]
+  hubFolder: HubSection
+  hubQuery: string
+  hubSort: HubSort
   conflict: { artboardId: string } | null
   loading: boolean
   error: string | null
@@ -85,8 +107,13 @@ export interface DesignState {
   loadDocs: (filter?: DesignListFilter) => Promise<void>
   openDoc: (docId: string) => Promise<void>
   closeDoc: () => Promise<void>
+  // Re-reads the open document after the area was away (broadcasts unwatched).
+  resyncDoc: () => Promise<void>
+  // Re-reads main's live-state: one document, or all of them.
+  hydrateLive: (docId?: string) => Promise<void>
+  markSeen: (docId: string) => void
   selectPage: (pageId: string) => void
-  createDoc: (title: string) => Promise<DesignDocument>
+  createDoc: (title: string, folderId?: string | null) => Promise<DesignDocument>
   renameDoc: (title: string) => Promise<void>
   archiveDoc: (docId: string) => Promise<void>
   createPage: (name: string) => Promise<void>
@@ -130,4 +157,21 @@ export interface DesignState {
   setAskOpen: (open: boolean) => void
   startWatch: () => void
   stopWatch: () => void
+
+  loadFolders: () => Promise<void>
+  // Folder mutations report failures through `error`; null = not created.
+  createFolder: (name: string, color?: string | null) => Promise<DesignFolder | null>
+  renameFolder: (id: string, name: string) => Promise<void>
+  recolorFolder: (id: string, color: string | null) => Promise<void>
+  // Folders' documents end up without a folder (main moves them).
+  deleteFolder: (id: string) => Promise<void>
+  // Optimistic; reverts and sets `error` when main refuses.
+  moveDoc: (docId: string, folderId: string | null) => Promise<void>
+  // Renames any document, open or not.
+  retitleDoc: (docId: string, title: string) => Promise<void>
+  loadArchived: () => Promise<void>
+  unarchiveDoc: (docId: string) => Promise<void>
+  setHubFolder: (section: HubSection) => void
+  setHubQuery: (query: string) => void
+  setHubSort: (sort: HubSort) => void
 }

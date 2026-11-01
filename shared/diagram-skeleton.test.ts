@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPatch,
-  elementsToSkeleton,
   skeletonToElements,
+} from "../electron/main/services/diagram-layout";
+import {
+  elementsToSkeleton,
+  pinMovedNodes,
+  positionsOf,
   type DiagramSkeletonElement,
 } from "./diagram-skeleton";
+import { measureText } from "./text-measure";
 
 type AnyEl = Record<string, any>;
 
@@ -68,13 +73,13 @@ const flowSkeleton: DiagramSkeletonElement[] = [
 ];
 
 describe("skeletonToElements", () => {
-  it("golden: 3 nós + 2 setas com labels (snapshot estrutural)", () => {
-    const elements = skeletonToElements(flowSkeleton);
+  it("golden: 3 nós + 2 setas com labels (snapshot estrutural)", async () => {
+    const elements = await skeletonToElements(flowSkeleton);
     expect(normalize(elements)).toMatchSnapshot();
   });
 
-  it("gera elementos completos e válidos", () => {
-    const elements = skeletonToElements(flowSkeleton) as AnyEl[];
+  it("gera elementos completos e válidos", async () => {
+    const elements = (await skeletonToElements(flowSkeleton)) as AnyEl[];
     // 3 shapes + 3 labels + 2 arrows + 2 labels de arrow
     expect(elements).toHaveLength(10);
     for (const el of elements) {
@@ -102,8 +107,12 @@ describe("skeletonToElements", () => {
     expect(ellipse.roundness).toBeNull();
 
     const arrow = elements.find((e) => e.id === "a1")!;
-    expect(arrow.roundness).toEqual({ type: 2 });
-    expect(arrow.elbowed).toBe(false);
+    // Seta entre dois nós = elbow nativa (ortogonal, sem roundness).
+    expect(arrow.roundness).toBeNull();
+    expect(arrow.elbowed).toBe(true);
+    expect(arrow.fixedSegments).toBeNull();
+    expect(arrow.startIsSpecial).toBeNull();
+    expect(arrow.endIsSpecial).toBeNull();
     expect(arrow.startArrowhead).toBeNull();
     expect(arrow.endArrowhead).toBe("arrow");
     expect(arrow.lastCommittedPoint).toBeNull();
@@ -114,8 +123,8 @@ describe("skeletonToElements", () => {
     expect([...indexes].sort()).toEqual(indexes);
   });
 
-  it("labels viram text bound com containerId e boundElements no dono", () => {
-    const elements = skeletonToElements(flowSkeleton) as AnyEl[];
+  it("labels viram text bound com containerId e boundElements no dono", async () => {
+    const elements = (await skeletonToElements(flowSkeleton)) as AnyEl[];
     const label = elements.find((e) => e.id === "work__label")!;
     expect(label.type).toBe("text");
     expect(label.containerId).toBe("work");
@@ -135,15 +144,25 @@ describe("skeletonToElements", () => {
     });
   });
 
-  it("bindings são simétricos entre arrow e shapes", () => {
-    const elements = skeletonToElements(flowSkeleton) as AnyEl[];
+  it("bindings são simétricos entre arrow e shapes", async () => {
+    const elements = (await skeletonToElements(flowSkeleton)) as AnyEl[];
     const arrow = elements.find((e) => e.id === "a1")!;
-    expect(arrow.startBinding).toEqual({
+    expect(arrow.startBinding).toMatchObject({
       elementId: "start",
       focus: 0,
       gap: 4,
     });
-    expect(arrow.endBinding).toEqual({ elementId: "work", focus: 0, gap: 4 });
+    expect(arrow.endBinding).toMatchObject({
+      elementId: "work",
+      focus: 0,
+      gap: 4,
+    });
+    for (const b of [arrow.startBinding, arrow.endBinding]) {
+      for (const v of b.fixedPoint) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
+    }
 
     const start = elements.find((e) => e.id === "start")!;
     const work = elements.find((e) => e.id === "work")!;
@@ -152,9 +171,9 @@ describe("skeletonToElements", () => {
     expect(work.boundElements).toContainEqual({ id: "a2", type: "arrow" });
   });
 
-  it("auto-layout é determinístico e em camadas topológicas", () => {
-    const first = skeletonToElements(flowSkeleton) as AnyEl[];
-    const second = skeletonToElements(flowSkeleton) as AnyEl[];
+  it("auto-layout é determinístico e em camadas topológicas", async () => {
+    const first = (await skeletonToElements(flowSkeleton)) as AnyEl[];
+    const second = (await skeletonToElements(flowSkeleton)) as AnyEl[];
     const pos = (els: AnyEl[]) =>
       els.map((e) => ({ id: e.id, x: e.x, y: e.y, points: e.points ?? null }));
     expect(pos(first)).toEqual(pos(second));
@@ -162,18 +181,20 @@ describe("skeletonToElements", () => {
     const start = first.find((e) => e.id === "start")!;
     const work = first.find((e) => e.id === "work")!;
     const done = first.find((e) => e.id === "done")!;
-    // Setas com label → gap de 320 entre colunas de nós com 180 de largura.
-    expect(start.x).toBe(0);
-    expect(work.x).toBe(500);
-    expect(done.x).toBe(1000);
+    // LR: uma camada por nó, da esquerda pra direita, centros alinhados.
+    expect(start.x + start.width).toBeLessThan(work.x);
+    expect(work.x + work.width).toBeLessThan(done.x);
+    const cy = (e: AnyEl) => e.y + e.height / 2;
+    expect(Math.abs(cy(start) - cy(work))).toBeLessThanOrEqual(1);
+    expect(Math.abs(cy(work) - cy(done))).toBeLessThanOrEqual(1);
   });
 
-  it("shape cresce pro label longo; diamond cresce mais que rectangle", () => {
+  it("shape cresce pro label longo; diamond cresce mais que rectangle", async () => {
     const text = "Gate humano (aprovação)";
-    const elements = skeletonToElements([
+    const elements = (await skeletonToElements([
       { id: "r", type: "rectangle", label: { text } },
       { id: "d", type: "diamond", label: { text } },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     const rect = elements.find((e) => e.id === "r")!;
     const diamond = elements.find((e) => e.id === "d")!;
     const label = elements.find((e) => e.id === "r__label")!;
@@ -185,8 +206,8 @@ describe("skeletonToElements", () => {
     expect(rect.height).toBe(70);
   });
 
-  it("width/height explícitos do autor são respeitados mesmo com label longo", () => {
-    const elements = skeletonToElements([
+  it("width/height explícitos do autor são respeitados mesmo com label longo", async () => {
+    const elements = (await skeletonToElements([
       {
         id: "r",
         type: "rectangle",
@@ -194,28 +215,29 @@ describe("skeletonToElements", () => {
         height: 50,
         label: { text: "Gate humano (aprovação)" },
       },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     expect(elements[0].width).toBe(120);
     expect(elements[0].height).toBe(50);
   });
 
-  it("colunas usam a largura real: nó largo não encosta no vizinho", () => {
+  it("colunas usam a largura real: nó largo não encosta no vizinho", async () => {
     const wideLabel = "a very very very long label";
     const base: DiagramSkeletonElement[] = [
       { id: "wide", type: "rectangle", label: { text: wideLabel } },
       { id: "next", type: "rectangle", label: { text: "ok" } },
     ];
-    const plain = skeletonToElements([
+    const plain = (await skeletonToElements([
       ...base,
       { id: "e", type: "arrow", start: { id: "wide" }, end: { id: "next" } },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     const wide = plain.find((e) => e.id === "wide")!;
     const next = plain.find((e) => e.id === "next")!;
     expect(wide.width).toBeGreaterThan(180);
-    expect(next.x).toBe(wide.x + wide.width + 260);
+    const plainGap = next.x - (wide.x + wide.width);
+    expect(plainGap).toBeGreaterThanOrEqual(80);
 
     // Seta com label entre as colunas → gap maior pro label caber.
-    const labeled = skeletonToElements([
+    const labeled = (await skeletonToElements([
       ...base,
       {
         id: "e",
@@ -224,67 +246,70 @@ describe("skeletonToElements", () => {
         end: { id: "next" },
         label: { text: "pede tarefa" },
       },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
+    const wideL = labeled.find((e) => e.id === "wide")!;
     const nextLabeled = labeled.find((e) => e.id === "next")!;
-    expect(nextLabeled.x).toBe(wide.x + wide.width + 320);
+    const label = labeled.find((e) => e.id === "e__label")!;
+    expect(nextLabeled.x - (wideL.x + wideL.width)).toBeGreaterThanOrEqual(
+      plainGap,
+    );
+    // O label cabe no vão entre os dois nós.
+    expect(label.x).toBeGreaterThanOrEqual(wideL.x + wideL.width);
+    expect(label.x + label.width).toBeLessThanOrEqual(nextLabeled.x);
   });
 
-  it("auditoria: gap real entre colunas adjacentes fica em 260-320px (±40)", () => {
-    // Cadeia de 8 nós com labels nas setas: mede a distância borda direita do
-    // nó N → borda esquerda do nó N+1 pra pegar inflação de gap (soma de
-    // larguras em vez de max, ou gap somado por aresta).
-    const elements = skeletonToElements(
+  it("cadeia de 8 nós: gaps entre camadas uniformes e sem sobreposição", async () => {
+    const elements = (await skeletonToElements(
       chain(8, (i) => `passo ${i}`),
-    ) as AnyEl[];
+    )) as AnyEl[];
     const node = (i: number) => elements.find((e) => e.id === `n${i}`)!;
-    let measured = 0;
+    const gaps: number[] = [];
     for (let i = 0; i < 7; i++) {
       const a = node(i);
       const b = node(i + 1);
-      // Par que atravessa fronteira de banda (serpentina) não é lado a lado.
-      if (b.y !== a.y) continue;
-      const gap = b.x - (a.x + a.width);
-      expect(gap).toBeGreaterThanOrEqual(220);
-      expect(gap).toBeLessThanOrEqual(360);
-      measured++;
+      expect(disjoint(a, b)).toBe(true);
+      expect(
+        Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)),
+      ).toBeLessThanOrEqual(1);
+      gaps.push(b.x - (a.x + a.width));
     }
-    expect(measured).toBeGreaterThanOrEqual(5);
+    expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(40);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(80);
   });
 
-  it("serpentina: cadeia de 12 nós quebra em 2 bandas e reduz a largura", () => {
-    const twelve = chain(12);
-    const first = skeletonToElements(twelve) as AnyEl[];
-    const second = skeletonToElements(twelve) as AnyEl[];
-    const posOf = (els: AnyEl[]) =>
-      els
-        .filter((e) => e.type === "rectangle")
-        .map((e) => ({ id: e.id, x: e.x, y: e.y }));
-    expect(posOf(first)).toEqual(posOf(second));
-
-    const rects = first.filter((e) => e.type === "rectangle");
-    const width =
-      Math.max(...rects.map((e) => e.x + e.width)) -
-      Math.min(...rects.map((e) => e.x));
-    const height =
-      Math.max(...rects.map((e) => e.y + e.height)) -
-      Math.min(...rects.map((e) => e.y));
-
-    // 2 bandas: colunas 0-5 na banda de cima, 6-11 na de baixo (gap 200).
-    expect(new Set(rects.map((e) => e.y)).size).toBe(2);
-    expect(height).toBeGreaterThanOrEqual(2 * 70 + 200);
-    const n6 = first.find((e) => e.id === "n6")!;
-    expect(n6.x).toBe(0);
-    expect(n6.y).toBe(70 + 200);
-
-    // Sem serpentina seriam 12 colunas em linha: 12×180 + 11 gaps de 260.
-    const flatWidth = 12 * 180 + 11 * 260;
-    expect(width).toBeLessThanOrEqual(flatWidth / 2);
+  it("direction TB empilha as camadas de cima pra baixo", async () => {
+    const elements = (await skeletonToElements(chain(3), {
+      direction: "TB",
+    })) as AnyEl[];
+    const [n0, n1, n2] = [0, 1, 2].map((i) =>
+      elements.find((e) => e.id === `n${i}`)!,
+    );
+    expect(n0.y + n0.height).toBeLessThan(n1.y);
+    expect(n1.y + n1.height).toBeLessThan(n2.y);
+    expect(n0.x).toBe(n1.x);
+    expect(n0.customData.pitwall.direction).toBe("TB");
   });
 
-  it("text solto usa align left/top e containerId null", () => {
-    const elements = skeletonToElements([
-      { id: "t1", type: "text", text: "nota", x: 10, y: 20 },
-    ]) as AnyEl[];
+  it("layout auto ignora x/y do skeleton (coordenadas velhas não colidem com o layout)", async () => {
+    const skel = chain(2);
+    const fresh = (await skeletonToElements(skel)) as AnyEl[];
+    const stale = (await skeletonToElements(
+      skel.map((s) =>
+        s.type === "rectangle" ? { ...s, x: 5000, y: -900 } : s,
+      ),
+    )) as AnyEl[];
+    const pos = (els: AnyEl[]) => els.map((e) => [e.id, e.x, e.y]);
+    expect(pos(stale)).toEqual(pos(fresh));
+    expect(fresh.find((e) => e.id === "n0")!.customData.pitwall.auto).toBe(
+      true,
+    );
+  });
+
+  it("text solto usa align left/top e containerId null", async () => {
+    const elements = (await skeletonToElements(
+      [{ id: "t1", type: "text", text: "nota", x: 10, y: 20 }],
+      { layout: "keep" },
+    )) as AnyEl[];
     expect(elements).toHaveLength(1);
     const t = elements[0];
     expect(t.textAlign).toBe("left");
@@ -292,25 +317,27 @@ describe("skeletonToElements", () => {
     expect(t.containerId).toBeNull();
     expect(t.x).toBe(10);
     expect(t.y).toBe(20);
+    // Coordenada explícita em "keep" = nó pinado.
+    expect(t.customData.pitwall.auto).toBe(false);
   });
 
-  it("respeita cores custom do skeleton", () => {
-    const elements = skeletonToElements([
+  it("respeita cores custom do skeleton", async () => {
+    const elements = (await skeletonToElements([
       {
         id: "r",
         type: "rectangle",
         strokeColor: "#ff0000",
         backgroundColor: "#00ff00",
       },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     expect(elements[0].strokeColor).toBe("#ff0000");
     expect(elements[0].backgroundColor).toBe("#00ff00");
   });
 });
 
 describe("elementsToSkeleton", () => {
-  it("roundtrip preserva a semântica", () => {
-    const elements = skeletonToElements(flowSkeleton);
+  it("roundtrip preserva a semântica", async () => {
+    const elements = await skeletonToElements(flowSkeleton);
     const back = elementsToSkeleton(elements);
 
     expect(back).toHaveLength(5);
@@ -330,22 +357,35 @@ describe("elementsToSkeleton", () => {
     expect(byId.get("work")!.backgroundColor).toBeUndefined();
   });
 
-  it("ignora deletados e elementos fora do vocabulário", () => {
-    const elements = skeletonToElements([
+  it("ignora deletados e elementos fora do vocabulário", async () => {
+    const elements = (await skeletonToElements([
       { id: "r", type: "rectangle" },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     elements.push({ id: "sel", type: "selection", isDeleted: false });
     elements.push({ ...elements[0], id: "gone", isDeleted: true });
     const back = elementsToSkeleton(elements);
     expect(back.map((s) => s.id)).toEqual(["r"]);
   });
 
-  it("inclui cores só quando diferentes do default e ordena por y,x", () => {
-    const elements = skeletonToElements([
-      { id: "b", type: "rectangle", x: 0, y: 200, strokeColor: "#ff0000" },
-      { id: "a", type: "rectangle", x: 0, y: 0 },
-    ]);
+  it("inclui cores só quando diferentes do default e ordena por y,x", async () => {
+    const elements = await skeletonToElements(
+      [
+        { id: "b", type: "rectangle", x: 0, y: 200, strokeColor: "#ff0000" },
+        { id: "a", type: "rectangle", x: 0, y: 0 },
+      ],
+      { layout: "keep" },
+    );
     const back = elementsToSkeleton(elements);
+    // Sem geometria por padrão; includeGeometry devolve x/y/width/height.
+    expect(back[0].x).toBeUndefined();
+    expect(
+      elementsToSkeleton(elements, { includeGeometry: true })[1],
+    ).toMatchObject({
+      x: 0,
+      y: 200,
+      width: 180,
+      height: 70,
+    });
     expect(back.map((s) => s.id)).toEqual(["a", "b"]);
     expect(back[0].strokeColor).toBeUndefined();
     expect(back[1].strokeColor).toBe("#ff0000");
@@ -353,12 +393,12 @@ describe("elementsToSkeleton", () => {
 });
 
 describe("applyPatch", () => {
-  it("update muda só os campos citados e não altera os demais elementos", () => {
-    const elements = skeletonToElements(flowSkeleton) as AnyEl[];
+  it("update muda só os campos citados e não altera os demais elementos", async () => {
+    const elements = (await skeletonToElements(flowSkeleton)) as AnyEl[];
     const before = structuredClone(elements);
-    const result = applyPatch(elements, [
+    const result = (await applyPatch(elements, [
       { op: "update", id: "work", x: 300, y: 50 },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
 
     // Imutável: array novo, input intocado.
     expect(result).not.toBe(elements);
@@ -380,30 +420,52 @@ describe("applyPatch", () => {
     expect(label.x - labelBefore.x).toBe(300 - original.x);
     expect(label.y - labelBefore.y).toBe(50 - original.y);
 
-    // Todos os outros elementos intactos (deep-equal, mesmas referências).
+    // x/y explícito pina o nó.
+    expect(updated.customData.pitwall.auto).toBe(false);
+
+    // Só as setas ligadas a "work" (e seus labels) são reroteadas; o resto
+    // fica intacto (mesmas referências) — o ELK não move nada que já estava
+    // no lugar.
+    const rerouted = new Set([
+      "work",
+      "work__label",
+      "a1",
+      "a1__label",
+      "a2",
+      "a2__label",
+    ]);
     for (const el of result) {
-      if (el.id === "work" || el.id === "work__label") continue;
+      if (rerouted.has(el.id)) continue;
       const orig = elements.find((e) => e.id === el.id)!;
       expect(el).toBe(orig);
     }
   });
 
-  it("update de end religa a arrow: bindings, geometria e backlinks", () => {
-    const elements = skeletonToElements(flowSkeleton);
+  it("update de end religa a arrow: bindings, geometria e backlinks", async () => {
+    const elements = await skeletonToElements(flowSkeleton);
     // a1 era start→work; religa pra start→done.
-    const result = applyPatch(elements, [
+    const result = (await applyPatch(elements, [
       { op: "update", id: "a1", end: { id: "done" } },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
 
     const a1 = result.find((e) => e.id === "a1")!;
-    expect(a1.startBinding).toEqual({ elementId: "start", focus: 0, gap: 4 });
-    expect(a1.endBinding).toEqual({ elementId: "done", focus: 0, gap: 4 });
+    expect(a1.startBinding).toMatchObject({
+      elementId: "start",
+      focus: 0,
+      gap: 4,
+    });
+    expect(a1.endBinding).toMatchObject({
+      elementId: "done",
+      focus: 0,
+      gap: 4,
+    });
 
     // Geometria refeita borda-a-borda: o ponto final cai dentro do bbox
     // expandido do novo alvo, não do antigo.
     const done = result.find((e) => e.id === "done")!;
-    const endX = a1.x + a1.points[1][0];
-    const endY = a1.y + a1.points[1][1];
+    const last = a1.points[a1.points.length - 1];
+    const endX = a1.x + last[0];
+    const endY = a1.y + last[1];
     expect(endX).toBeGreaterThanOrEqual(done.x - 1);
     expect(endX).toBeLessThanOrEqual(done.x + done.width + 1);
     expect(endY).toBeGreaterThanOrEqual(done.y - 1);
@@ -416,24 +478,28 @@ describe("applyPatch", () => {
 
     // Input intocado (imutabilidade preservada pelo rewire).
     const origA1 = (elements as AnyEl[]).find((e) => e.id === "a1")!;
-    expect(origA1.endBinding).toEqual({ elementId: "work", focus: 0, gap: 4 });
+    expect(origA1.endBinding).toMatchObject({
+      elementId: "work",
+      focus: 0,
+      gap: 4,
+    });
   });
 
-  it("update de label.text reescreve o bound text e originalText", () => {
-    const elements = skeletonToElements(flowSkeleton);
-    const result = applyPatch(elements, [
+  it("update de label.text reescreve o bound text e originalText", async () => {
+    const elements = await skeletonToElements(flowSkeleton);
+    const result = (await applyPatch(elements, [
       { op: "update", id: "work", label: { text: "New label" } },
-    ]) as AnyEl[];
+    ])) as AnyEl[];
     const label = result.find((e) => e.id === "work__label")!;
     expect(label.text).toBe("New label");
     expect(label.originalText).toBe("New label");
   });
 
-  it("delete marca isDeleted no elemento e label e limpa bindings alheios", () => {
-    const elements = skeletonToElements(flowSkeleton);
-    const result = applyPatch(elements, [
-      { op: "delete", id: "work" },
-    ]) as AnyEl[];
+  it("delete marca isDeleted no elemento e label e limpa bindings alheios", async () => {
+    const elements = await skeletonToElements(flowSkeleton);
+    const result = (await applyPatch(elements, [{ op: "delete", id: "work" }], {
+      layout: "keep",
+    })) as AnyEl[];
 
     expect(result.find((e) => e.id === "work")!.isDeleted).toBe(true);
     expect(result.find((e) => e.id === "work__label")!.isDeleted).toBe(true);
@@ -442,7 +508,11 @@ describe("applyPatch", () => {
     const a1 = result.find((e) => e.id === "a1")!;
     const a2 = result.find((e) => e.id === "a2")!;
     expect(a1.endBinding).toBeNull();
-    expect(a1.startBinding).toEqual({ elementId: "start", focus: 0, gap: 4 });
+    expect(a1.startBinding).toMatchObject({
+      elementId: "start",
+      focus: 0,
+      gap: 4,
+    });
     expect(a2.startBinding).toBeNull();
 
     // Nenhum boundElements alheio referencia o deletado.
@@ -457,18 +527,25 @@ describe("applyPatch", () => {
     expect(done).toBe((elements as AnyEl[]).find((e) => e.id === "done"));
   });
 
-  it("add sem x/y não colide: vai abaixo do bounding box existente", () => {
-    const elements = skeletonToElements([
-      { id: "a", type: "rectangle", x: 0, y: 0 },
-      { id: "b", type: "rectangle", x: 300, y: 0 },
-      { id: "c2", type: "rectangle", x: 0, y: 200 },
-    ]);
-    const result = applyPatch(elements, [
-      {
-        op: "add",
-        element: { id: "n", type: "rectangle", label: { text: "Novo" } },
-      },
-    ]) as AnyEl[];
+  it("add sem x/y não colide: vai abaixo do bounding box existente", async () => {
+    const elements = await skeletonToElements(
+      [
+        { id: "a", type: "rectangle", x: 0, y: 0 },
+        { id: "b", type: "rectangle", x: 300, y: 0 },
+        { id: "c2", type: "rectangle", x: 0, y: 200 },
+      ],
+      { layout: "keep" },
+    );
+    const result = (await applyPatch(
+      elements,
+      [
+        {
+          op: "add",
+          element: { id: "n", type: "rectangle", label: { text: "Novo" } },
+        },
+      ],
+      { layout: "keep" },
+    )) as AnyEl[];
     const added = result.find((e) => e.id === "n")!;
     // Abaixo do maxY (270) + 120.
     expect(added.y).toBe(390);
@@ -481,14 +558,19 @@ describe("applyPatch", () => {
     expect(result.find((e) => e.id === "n__label")).toBeDefined();
   });
 
-  it("múltiplos adds no mesmo patch empilham lado a lado sem colidir", () => {
-    const elements = skeletonToElements([
-      { id: "a", type: "rectangle", x: 0, y: 0 },
-    ]);
-    const result = applyPatch(elements, [
-      { op: "add", element: { id: "n1", type: "rectangle" } },
-      { op: "add", element: { id: "n2", type: "rectangle" } },
-    ]) as AnyEl[];
+  it("múltiplos adds no mesmo patch empilham lado a lado sem colidir", async () => {
+    const elements = await skeletonToElements(
+      [{ id: "a", type: "rectangle", x: 0, y: 0 }],
+      { layout: "keep" },
+    );
+    const result = (await applyPatch(
+      elements,
+      [
+        { op: "add", element: { id: "n1", type: "rectangle" } },
+        { op: "add", element: { id: "n2", type: "rectangle" } },
+      ],
+      { layout: "keep" },
+    )) as AnyEl[];
     const n1 = result.find((e) => e.id === "n1")!;
     const n2 = result.find((e) => e.id === "n2")!;
     expect(n1.y).toBe(190);
@@ -500,25 +582,30 @@ describe("applyPatch", () => {
     expect(disjoint(n2, a)).toBe(true);
   });
 
-  it("add ligado por seta fica perto do nó existente e sem sobreposição", () => {
-    const elements = skeletonToElements([
-      { id: "a", type: "rectangle", x: 0, y: 0 },
-    ]);
-    const result = applyPatch(elements, [
-      {
-        op: "add",
-        element: { id: "c", type: "rectangle", label: { text: "Filho" } },
-      },
-      {
-        op: "add",
-        element: {
-          id: "e1",
-          type: "arrow",
-          start: { id: "a" },
-          end: { id: "c" },
+  it("add ligado por seta fica perto do nó existente e sem sobreposição", async () => {
+    const elements = await skeletonToElements(
+      [{ id: "a", type: "rectangle", x: 0, y: 0 }],
+      { layout: "keep" },
+    );
+    const result = (await applyPatch(
+      elements,
+      [
+        {
+          op: "add",
+          element: { id: "c", type: "rectangle", label: { text: "Filho" } },
         },
-      },
-    ]) as AnyEl[];
+        {
+          op: "add",
+          element: {
+            id: "e1",
+            type: "arrow",
+            start: { id: "a" },
+            end: { id: "c" },
+          },
+        },
+      ],
+      { layout: "keep" },
+    )) as AnyEl[];
     const a = result.find((e) => e.id === "a")!;
     const c = result.find((e) => e.id === "c")!;
     expect(disjoint(a, c)).toBe(true);
@@ -528,29 +615,52 @@ describe("applyPatch", () => {
     );
     expect(dist).toBeLessThan(500);
     const arrow = result.find((e) => e.id === "e1")!;
-    expect(arrow.startBinding).toEqual({ elementId: "a", focus: 0, gap: 4 });
-    expect(arrow.endBinding).toEqual({ elementId: "c", focus: 0, gap: 4 });
+    expect(arrow.startBinding).toMatchObject({
+      elementId: "a",
+      focus: 0,
+      gap: 4,
+    });
+    expect(arrow.endBinding).toMatchObject({
+      elementId: "c",
+      focus: 0,
+      gap: 4,
+    });
   });
 
-  it("add de arrow liga shapes existentes com bindings simétricos", () => {
-    const elements = skeletonToElements([
-      { id: "a", type: "rectangle", x: 0, y: 0 },
-      { id: "b", type: "rectangle", x: 400, y: 0 },
-    ]);
-    const result = applyPatch(elements, [
-      {
-        op: "add",
-        element: {
-          id: "e1",
-          type: "arrow",
-          start: { id: "a" },
-          end: { id: "b" },
+  it("add de arrow liga shapes existentes com bindings simétricos", async () => {
+    const elements = await skeletonToElements(
+      [
+        { id: "a", type: "rectangle", x: 0, y: 0 },
+        { id: "b", type: "rectangle", x: 400, y: 0 },
+      ],
+      { layout: "keep" },
+    );
+    const result = (await applyPatch(
+      elements,
+      [
+        {
+          op: "add",
+          element: {
+            id: "e1",
+            type: "arrow",
+            start: { id: "a" },
+            end: { id: "b" },
+          },
         },
-      },
-    ]) as AnyEl[];
+      ],
+      { layout: "keep" },
+    )) as AnyEl[];
     const arrow = result.find((e) => e.id === "e1")!;
-    expect(arrow.startBinding).toEqual({ elementId: "a", focus: 0, gap: 4 });
-    expect(arrow.endBinding).toEqual({ elementId: "b", focus: 0, gap: 4 });
+    expect(arrow.startBinding).toMatchObject({
+      elementId: "a",
+      focus: 0,
+      gap: 4,
+    });
+    expect(arrow.endBinding).toMatchObject({
+      elementId: "b",
+      focus: 0,
+      gap: 4,
+    });
     expect(result.find((e) => e.id === "a")!.boundElements).toContainEqual({
       id: "e1",
       type: "arrow",
@@ -562,5 +672,248 @@ describe("applyPatch", () => {
     // Seta borda-a-borda: começa na borda direita de 'a'.
     expect(arrow.x).toBe(180);
     expect(arrow.points[1][0]).toBe(220);
+  });
+});
+
+describe("regressão: desalinhamento do auto-layout", () => {
+  const fanOut: DiagramSkeletonElement[] = [
+    { id: "p", type: "rectangle", label: { text: "Parent" } },
+    { id: "c1", type: "rectangle", label: { text: "Child one" } },
+    {
+      id: "c2",
+      type: "rectangle",
+      label: { text: "Child two with a long label" },
+    },
+    { id: "c3", type: "rectangle", label: { text: "C3" } },
+    { id: "e1", type: "arrow", start: { id: "p" }, end: { id: "c1" } },
+    { id: "e2", type: "arrow", start: { id: "p" }, end: { id: "c2" } },
+    { id: "e3", type: "arrow", start: { id: "p" }, end: { id: "c3" } },
+  ];
+  const cy = (e: AnyEl) => e.y + e.height / 2;
+  const cx = (e: AnyEl) => e.x + e.width / 2;
+
+  it("fan-out 1→3: centro do pai = centro médio dos filhos (±1px)", async () => {
+    const els = (await skeletonToElements(fanOut)) as AnyEl[];
+    const get = (id: string) => els.find((e) => e.id === id)!;
+    const kids = ["c1", "c2", "c3"].map(get);
+    const mean = kids.reduce((s, k) => s + cy(k), 0) / kids.length;
+    expect(Math.abs(cy(get("p")) - mean)).toBeLessThanOrEqual(1);
+
+    const tb = (await skeletonToElements(fanOut, {
+      direction: "TB",
+    })) as AnyEl[];
+    const getTb = (id: string) => tb.find((e) => e.id === id)!;
+    const meanX =
+      ["c1", "c2", "c3"].map(getTb).reduce((s, k) => s + cx(k), 0) / 3;
+    expect(Math.abs(cx(getTb("p")) - meanX)).toBeLessThanOrEqual(1);
+  });
+
+  it("largura do label sai da tabela da Excalifont, não de 0.6em por char", async () => {
+    const els = (await skeletonToElements([
+      { id: "r", type: "rectangle", label: { text: "Hello World" } },
+    ])) as AnyEl[];
+    const label = els.find((e) => e.id === "r__label")!;
+    expect(label.width).toBeCloseTo(measureText("Hello World", 16).width, 6);
+    expect(label.width).not.toBe(Math.round(0.6 * 16 * 11));
+  });
+
+  it("label fica centralizado no shape (rectangle, ellipse, diamond)", async () => {
+    const els = (await skeletonToElements([
+      {
+        id: "r",
+        type: "rectangle",
+        label: { text: "Gate humano (aprovação)" },
+      },
+      { id: "o", type: "ellipse", label: { text: "Start" } },
+      { id: "d", type: "diamond", label: { text: "Done?\nyes or no" } },
+    ])) as AnyEl[];
+    for (const id of ["r", "o", "d"]) {
+      const shape = els.find((e) => e.id === id)!;
+      const label = els.find((e) => e.id === `${id}__label`)!;
+      expect(Math.abs(cx(label) - cx(shape))).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(cy(label) - cy(shape))).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it("setas elbow: todos os segmentos são ortogonais e as pontas tocam os nós", async () => {
+    const els = (await skeletonToElements(fanOut)) as AnyEl[];
+    for (const id of ["e1", "e2", "e3"]) {
+      const a = els.find((e) => e.id === id)!;
+      expect(a.elbowed).toBe(true);
+      expect(a.points[0]).toEqual([0, 0]);
+      for (let i = 1; i < a.points.length; i++) {
+        const [x0, y0] = a.points[i - 1];
+        const [x1, y1] = a.points[i];
+        expect(x0 === x1 || y0 === y1).toBe(true);
+      }
+      const end = els.find((e) => e.id === a.endBinding.elementId)!;
+      const last = a.points[a.points.length - 1];
+      // Entra pela borda esquerda do filho (LR).
+      expect(a.x + last[0]).toBeCloseTo(end.x, 6);
+      expect(a.endBinding.fixedPoint[0]).toBe(0);
+    }
+  });
+
+  it("nó arrastado no editor vira pinado e o patch não o move", async () => {
+    const els = (await skeletonToElements(fanOut)) as AnyEl[];
+    const baseline = positionsOf(els);
+    // Simula o arrasto do usuário em c2.
+    const dragged = els.map((e) =>
+      e.id === "c2" ? { ...e, x: e.x + 333, y: e.y + 222 } : e,
+    );
+    const pinned = pinMovedNodes(dragged, baseline) as AnyEl[];
+    const c2 = pinned.find((e) => e.id === "c2")!;
+    expect(c2.customData.pitwall.auto).toBe(false);
+    expect(pinMovedNodes(els, baseline)).toBe(els);
+
+    const result = (await applyPatch(pinned, [
+      {
+        op: "add",
+        element: { id: "c4", type: "rectangle", label: { text: "C4" } },
+      },
+      {
+        op: "add",
+        element: {
+          id: "e4",
+          type: "arrow",
+          start: { id: "p" },
+          end: { id: "c4" },
+        },
+      },
+    ])) as AnyEl[];
+    const after = result.find((e) => e.id === "c2")!;
+    expect([after.x, after.y]).toEqual([c2.x, c2.y]);
+    // Seta pro nó pinado foi reroteada até ele (rota própria, ortogonal).
+    const e2 = result.find((e) => e.id === "e2")!;
+    const last = e2.points[e2.points.length - 1];
+    const endX = e2.x + last[0];
+    const endY = e2.y + last[1];
+    expect(endX).toBeGreaterThanOrEqual(after.x - 0.5);
+    expect(endX).toBeLessThanOrEqual(after.x + after.width + 0.5);
+    expect(endY).toBeGreaterThanOrEqual(after.y - 0.5);
+    expect(endY).toBeLessThanOrEqual(after.y + after.height + 0.5);
+    // O nó novo entrou na camada dos filhos (auto) e o pai segue centralizado
+    // entre os filhos auto do layout.
+    const c4 = result.find((e) => e.id === "c4")!;
+    expect(c4.customData.pitwall.auto).toBe(true);
+    expect(c4.x).toBe(result.find((e) => e.id === "c1")!.x);
+  });
+
+  const solidsOf = (els: AnyEl[]) =>
+    els.filter(
+      (e) =>
+        !e.isDeleted &&
+        e.type !== "arrow" &&
+        e.type !== "line" &&
+        !(e.type === "text" && e.containerId),
+    );
+  const addLinked = (id: string, from: string) => [
+    {
+      op: "add" as const,
+      element: { id, type: "rectangle" as const, label: { text: id } },
+    },
+    {
+      op: "add" as const,
+      element: {
+        id: `${from}_${id}`,
+        type: "arrow" as const,
+        start: { id: from },
+        end: { id },
+      },
+    },
+  ];
+
+  it("cena legada (sem customData): add auto não cai sobre nó existente nem sai do lugar", async () => {
+    const legacy = (
+      (await skeletonToElements(
+        [
+          { id: "a", type: "rectangle", x: 0, y: 0, label: { text: "A" } },
+          { id: "b", type: "rectangle", x: 300, y: 0, label: { text: "B" } },
+          { id: "c", type: "rectangle", x: 300, y: 260, label: { text: "C" } },
+        ],
+        { layout: "keep" },
+      )) as AnyEl[]
+    ).map(({ customData, ...rest }) => rest);
+    const result = (await applyPatch(legacy, addLinked("d", "a"))) as AnyEl[];
+    const d = result.find((e) => e.id === "d")!;
+    for (const el of solidsOf(result)) {
+      if (el.id === "d" || el.id === "d__label") continue;
+      expect(disjoint(d, el)).toBe(true);
+    }
+
+    // Cadeia vertical antiga: o nó ligado a c fica junto de c, não no frame do ELK.
+    const vertical = (
+      (await skeletonToElements(
+        [
+          { id: "a", type: "rectangle", x: 0, y: 0, label: { text: "A" } },
+          { id: "b", type: "rectangle", x: 0, y: 200, label: { text: "B" } },
+          { id: "c", type: "rectangle", x: 0, y: 400, label: { text: "C" } },
+          { id: "ab", type: "arrow", start: { id: "a" }, end: { id: "b" } },
+          { id: "bc", type: "arrow", start: { id: "b" }, end: { id: "c" } },
+        ],
+        { layout: "keep" },
+      )) as AnyEl[]
+    ).map(({ customData, ...rest }) => rest);
+    const after = (await applyPatch(vertical, addLinked("d", "c"))) as AnyEl[];
+    const c = after.find((e) => e.id === "c")!;
+    const d2 = after.find((e) => e.id === "d")!;
+    expect(d2.x).toBe(c.x);
+    expect(d2.y).toBeGreaterThan(c.y + c.height);
+  });
+
+  it("nó pinado pelo usuário: nó auto do ELK não cai em cima dele", async () => {
+    const els = (await skeletonToElements(chain(3))) as AnyEl[];
+    const baseline = positionsOf(els);
+    const n2 = els.find((e) => e.id === "n2")!;
+    const n0 = els.find((e) => e.id === "n0")!;
+    // Arrasta n2 pra logo abaixo de n0, onde o ELK poria o filho novo de n0.
+    const dx = n0.x + 280 - n2.x;
+    const dy = n0.y + 130 - n2.y;
+    const dragged = els.map((e) =>
+      e.id === "n2" || e.id === "n2__label"
+        ? { ...e, x: e.x + dx, y: e.y + dy }
+        : e,
+    );
+    const pinned = pinMovedNodes(dragged, baseline) as AnyEl[];
+    const result = (await applyPatch(pinned, addLinked("d", "n0"))) as AnyEl[];
+    const solids = solidsOf(result).filter((e) => e.type !== "text");
+    for (let i = 0; i < solids.length; i++) {
+      for (let j = i + 1; j < solids.length; j++) {
+        expect(disjoint(solids[i], solids[j])).toBe(true);
+      }
+    }
+    // Seta pro nó deslocado termina nele (rota própria, não a do ELK).
+    const d = result.find((e) => e.id === "d")!;
+    const arrow = result.find((e) => e.id === "n0_d")!;
+    const last = arrow.points[arrow.points.length - 1];
+    expect(arrow.x + last[0]).toBeGreaterThanOrEqual(d.x - 0.5);
+    expect(arrow.x + last[0]).toBeLessThanOrEqual(d.x + d.width + 0.5);
+    expect(arrow.y + last[1]).toBeGreaterThanOrEqual(d.y - 0.5);
+    expect(arrow.y + last[1]).toBeLessThanOrEqual(d.y + d.height + 0.5);
+  });
+
+  it("layout keep: nenhum nó existente se move no patch", async () => {
+    const els = (await skeletonToElements(fanOut)) as AnyEl[];
+    const result = (await applyPatch(els, [{ op: "delete", id: "c2" }], {
+      layout: "keep",
+    })) as AnyEl[];
+    for (const id of ["p", "c1", "c3"]) {
+      const before = els.find((e) => e.id === id)!;
+      const after = result.find((e) => e.id === id)!;
+      expect([after.x, after.y]).toEqual([before.x, before.y]);
+    }
+  });
+
+  it("patch com x/y pina o nó e um patch seguinte não o devolve ao layout", async () => {
+    const els = (await skeletonToElements(fanOut)) as AnyEl[];
+    const moved = (await applyPatch(els, [
+      { op: "update", id: "c1", x: 1200, y: 40 },
+    ])) as AnyEl[];
+    const again = (await applyPatch(moved, [
+      { op: "update", id: "c3", label: { text: "C3 renamed" } },
+    ])) as AnyEl[];
+    const c1 = again.find((e) => e.id === "c1")!;
+    expect([c1.x, c1.y]).toEqual([1200, 40]);
+    expect(c1.customData.pitwall.auto).toBe(false);
   });
 });

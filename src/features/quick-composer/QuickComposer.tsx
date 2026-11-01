@@ -77,7 +77,7 @@ export function resultNotice(
   if (res.error === 'not-running') return `@${t.alias} encerrou — a mensagem não foi enviada.`
   if (res.error === 'input-dirty')
     return `@${t.alias} tem texto não enviado no prompt — envie ou apague lá, ou use “Quando terminar”.`
-  return `Não enviado para @${t.alias}: ${sendRefusalReason(res.error)}.`
+  return `Não enviado para @${t.alias}: ${sendRefusalReason(res.error, res.detail)}.`
 }
 
 function Preview({

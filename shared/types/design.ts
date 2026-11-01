@@ -99,12 +99,27 @@ export interface DesignPage {
   updatedAt: number
 }
 
-// Header without pages: what documentsList() returns.
+// Header without pages: what documentsList() returns. The thumbnail bytes never
+// ride along: render `thumbUrl(id, thumbnailVersion)` from shared/design/thumb-url.
 export interface DesignDocumentMeta {
   id: string
   title: string
   status: DesignDocumentStatus
-  thumbnail: string | null
+  folderId: string | null
+  // Changes whenever a new thumbnail is stored; null = none yet (placeholder).
+  thumbnailVersion: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+// One level only: a document is in at most one folder.
+export interface DesignFolder {
+  id: string
+  name: string
+  color: string | null
+  sortOrder: number
+  // Active (non-archived) documents in the folder.
+  docCount: number
   createdAt: number
   updatedAt: number
 }
@@ -187,6 +202,15 @@ export interface DesignAgentActivity {
   summary?: string
 }
 
+// design:live-state — what main remembers in memory for a document: the
+// in-flight agent calls ('start' entries) and the latest design_nodes_finish
+// events (summary + artboard), both bounded by the activity TTL.
+export interface DesignLiveState {
+  docId: string
+  activity: DesignAgentActivity[]
+  changes: DesignAgentActivity[]
+}
+
 export interface DesignNodeSummary {
   id: string
   tag: string
@@ -214,10 +238,13 @@ export interface DesignListFilter {
   parentType?: DesignParentType
   parentId?: string
   search?: string
+  // Omitted = every folder; null = only documents without a folder.
+  folderId?: string | null
 }
 
 export interface CreateDesignDocumentInput {
   title: string
+  folderId?: string | null
   tokens?: DesignTokens
   fonts?: DesignFonts
   globalCss?: string
@@ -345,6 +372,38 @@ export interface DesignAskInput {
   submit: boolean
 }
 
+export interface CreateDesignFolderInput {
+  name: string
+  color?: string | null
+}
+
+export interface UpdateDesignFolderInput {
+  name?: string
+  // null clears the color.
+  color?: string | null
+  sortOrder?: number
+}
+
+// Payload of design:folders-updated: a reload signal for folders (and their
+// docCount). folderId = the folder touched, null when only counts moved.
+export interface DesignFoldersUpdatedEvent {
+  folderId: string | null
+}
+
+// design:document-move also broadcasts design:document-updated with this
+// payload; `moved` tells listeners nothing rendered changed.
+export interface DesignDocumentMovedEvent {
+  docId: string
+  folderId: string | null
+  moved: true
+}
+
+// Payload of design:thumbnail-updated.
+export interface DesignThumbnailUpdatedEvent {
+  docId: string
+  thumbnailVersion: string
+}
+
 // ---- API exposed by the preload (`design` key of Api) ----
 
 export interface DesignApi {
@@ -396,6 +455,8 @@ export interface DesignApi {
   selectionSet(input: DesignSelection): Promise<void>
   // design:active-doc-set
   activeDocSet(docId: string | null): Promise<void>
+  // design:live-state — no docId: every document with fresh activity/changes.
+  liveState(docId?: string): Promise<DesignLiveState[]>
   // design:export
   export(input: DesignExportInput): Promise<DesignExportResult>
   // design:pdf-export — one artboard per page; opens a save dialog.
@@ -404,6 +465,20 @@ export interface DesignApi {
   pngBatchExport(input: DesignPngBatchInput): Promise<DesignPngBatchResult>
   // design:ask-session — injects the prompt into a running Claude Code session.
   askSession(input: DesignAskInput): Promise<void>
+  // design:folders-list — sortOrder, then name. docCount is computed per call:
+  // reload on onFoldersUpdated, onDocumentUpdated and onDocumentDeleted.
+  foldersList(): Promise<DesignFolder[]>
+  // design:folder-create — appended at the end (max sortOrder + 1).
+  folderCreate(input: CreateDesignFolderInput): Promise<DesignFolder>
+  // design:folder-update
+  folderUpdate(id: string, input: UpdateDesignFolderInput): Promise<DesignFolder>
+  // design:folder-delete — its documents stay, without a folder.
+  folderDelete(id: string): Promise<void>
+  // design:document-move — folderId null = no folder. Does not bump updatedAt.
+  documentMove(docId: string, folderId: string | null): Promise<DesignDocumentMeta>
+  // design:thumbnails-backfill — queues active docs without a thumbnail; each
+  // one lands as onThumbnailUpdated. Returns how many were queued.
+  thumbnailsBackfill(): Promise<number>
 
   // Payload = { docId } — tokens/fonts/css changed: reload the frames.
   onDocumentUpdated(handler: (payload: unknown) => void): () => void
@@ -419,6 +494,10 @@ export interface DesignApi {
   onLinksUpdated(handler: (payload: unknown) => void): () => void
   // Payload = { docId }.
   onAssetsUpdated(handler: (payload: unknown) => void): () => void
+  // Payload = DesignFoldersUpdatedEvent.
+  onFoldersUpdated(handler: (payload: unknown) => void): () => void
+  // Payload = DesignThumbnailUpdatedEvent. Image: thumbUrl(docId, thumbnailVersion).
+  onThumbnailUpdated(handler: (payload: unknown) => void): () => void
 }
 
 // Stable selectors for the e2e (drive-app).

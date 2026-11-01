@@ -24,6 +24,7 @@ beforeEach(() => {
   hydrate.mockClear()
   useSessionFeatureStore.setState({
     bySessionId: { 's-1': 'f-42' },
+    sessionIdsByCc: { 'cc-1': ['s-1'] },
     featureTitles: { 'f-42': 'Extração TRF4' },
     hydrated: true,
     hydrate,
@@ -125,5 +126,19 @@ describe('SessionFeatureChip', () => {
     })
     fireEvent.click(screen.getByTestId('session-feature-chip'))
     expect(navigateToFeature).toHaveBeenCalledWith('f-42')
+  })
+})
+
+describe('SessionFeatureChip de pane dormindo', () => {
+  it('id sintético fora do índice: resolve a feature pelo cc', () => {
+    render(<SessionFeatureChip sessionId="dormant:cc-1" ccSessionId="cc-1" density="dot" />)
+    expect(screen.getByTestId('session-feature-chip')).toHaveAttribute('data-feature-id', 'f-42')
+  })
+
+  it('cc sem linha vinculada: nada', () => {
+    const { container } = render(
+      <SessionFeatureChip sessionId="dormant:cc-2" ccSessionId="cc-2" density="dot" />,
+    )
+    expect(container).toBeEmptyDOMElement()
   })
 })

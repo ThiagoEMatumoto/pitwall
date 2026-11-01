@@ -20,6 +20,7 @@ const mockApi = {
   artboardApplyOps: vi.fn(),
   selectionSet: vi.fn().mockResolvedValue(undefined),
   activeDocSet: vi.fn().mockResolvedValue(undefined),
+  liveState: vi.fn().mockResolvedValue([]),
   onArtboardUpdated: vi.fn((h: (payload: unknown) => void) => {
     updatedHandler = h
     return () => {
@@ -29,6 +30,10 @@ const mockApi = {
   onAgentActivity: vi.fn(() => () => {}),
   onDocumentUpdated: vi.fn(() => () => {}),
   onArtboardDeleted: vi.fn(() => () => {}),
+  onDocumentDeleted: vi.fn(() => () => {}),
+  onFoldersUpdated: vi.fn(() => () => {}),
+  onThumbnailUpdated: vi.fn(() => () => {}),
+  foldersList: vi.fn().mockResolvedValue([]),
 }
 
 vi.mock('@/lib/ipc', () => ({ api: { design: mockApi } }))

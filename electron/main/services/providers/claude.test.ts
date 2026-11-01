@@ -5,7 +5,6 @@
 import { describe, expect, it } from 'vitest'
 import { claudeProvider } from './claude'
 import { getProvider } from './registry'
-import { DESTRUCTIVE_DENYLIST, HANDOFF_CHILD_SETTINGS_JSON } from '../spawn-flags'
 
 const base = {
   command: 'claude',
@@ -29,37 +28,34 @@ describe('claudeProvider.buildLaunch', () => {
     )
   })
 
-  it('com modelo, effort, advisor, permission-mode, denylist e system-prompt', () => {
+  it('com modelo, effort, advisor, permission-mode, settings e system-prompt', () => {
     const cmd = claudeProvider.buildLaunch({
       ...base,
       model: 'opus',
       effort: 'high',
       advisorModel: 'sonnet',
       permissionMode: 'acceptEdits',
-      disallowedTools: ['Bash(rm:*)', 'Bash(git push:*)'],
+      settingsFilePath: '/tmp/cm/session-settings/s1.json',
       systemPromptFilePath: '/tmp/cm/feat-1.md',
     })
     expect(cmd).toBe(
-      "claude --session-id 11111111-1111-1111-1111-111111111111 -n 'repo do Thiago'\\''s' --mcp-config '/tmp/mcp.json' --model 'opus' --effort 'high' --advisor 'sonnet' --permission-mode 'acceptEdits' --disallowedTools 'Bash(rm:*)' 'Bash(git push:*)' --append-system-prompt-file '/tmp/cm/feat-1.md'",
+      "claude --session-id 11111111-1111-1111-1111-111111111111 -n 'repo do Thiago'\\''s' --mcp-config '/tmp/mcp.json' --model 'opus' --effort 'high' --advisor 'sonnet' --permission-mode 'acceptEdits' --settings '/tmp/cm/session-settings/s1.json' --append-system-prompt-file '/tmp/cm/feat-1.md'",
     )
   })
 
-  it('filha de handoff: denylist destrutivo, --settings e posicional aparado no fim', () => {
-    // O snapshot abaixo quota o JSON como literal — só vale se ele não tem aspa simples.
-    expect(HANDOFF_CHILD_SETTINGS_JSON).not.toContain("'")
+  // O denylist e a política da filha vão no ARQUIVO: o argv só leva o path.
+  it('filha de handoff: --settings <path> e posicional aparado no fim', () => {
     const cmd = claudeProvider.buildLaunch({
       ...base,
       name: 'mauricio-auth-refactor',
       permissionMode: 'acceptEdits',
-      disallowedTools: [...DESTRUCTIVE_DENYLIST],
-      settingsJson: HANDOFF_CHILD_SETTINGS_JSON,
+      settingsFilePath: '/tmp/cm/session-settings/s1.json',
       systemPromptFilePath: '/tmp/cm/handoff-1.md',
       initialPrompt: '  Comece a tarefa\n',
     })
     expect(cmd).toBe(
       "claude --session-id 11111111-1111-1111-1111-111111111111 -n 'mauricio-auth-refactor' --mcp-config '/tmp/mcp.json' --permission-mode 'acceptEdits'" +
-        " --disallowedTools 'Bash(rm:*)' 'Bash(git push:*)' 'Bash(git reset --hard:*)' 'Bash(git push --force:*)' 'Bash(git push -f:*)' 'Bash(git clean:*)'" +
-        ` --settings '${HANDOFF_CHILD_SETTINGS_JSON}'` +
+        " --settings '/tmp/cm/session-settings/s1.json'" +
         " --append-system-prompt-file '/tmp/cm/handoff-1.md' 'Comece a tarefa'",
     )
   })

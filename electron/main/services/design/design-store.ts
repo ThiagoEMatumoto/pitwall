@@ -26,6 +26,7 @@ import {
   touchDocument,
 } from './design-rows'
 import { listArtboards, listLinks } from './artboard-store'
+import { assertFolderExists } from './folder-store'
 
 // Design Studio store: documents and pages. Modelled on diagram-store: loose
 // functions, snake_case rows ⇄ camelCase entities, `db.transaction` on
@@ -35,6 +36,7 @@ import { listArtboards, listLinks } from './artboard-store'
 // here so callers keep a single `designStore` import.
 
 export * from './artboard-store'
+export * from './folder-store'
 export { defaultTree } from './design-rows'
 
 // ---- input limits (IPC and MCP both land here) ----
@@ -57,7 +59,8 @@ function rowToMeta(row: DocumentRow): DesignDocumentMeta {
     id: row.id,
     title: row.title,
     status: row.status as DesignDocumentStatus,
-    thumbnail: row.thumbnail,
+    folderId: row.folder_id,
+    thumbnailVersion: row.thumbnail_at === null ? null : String(row.thumbnail_at),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -119,6 +122,12 @@ export function listDocuments(filter?: DesignListFilter): DesignDocumentMeta[] {
     }
     where.push(`EXISTS (SELECT 1 FROM design_links WHERE ${linkWhere.join(' AND ')})`)
   }
+  if (filter?.folderId === null) {
+    where.push('folder_id IS NULL')
+  } else if (filter?.folderId) {
+    where.push('folder_id = ?')
+    params.push(filter.folderId)
+  }
   if (filter?.search?.trim()) {
     where.push("title LIKE ? ESCAPE '\\'")
     params.push(`%${escapeLike(filter.search.trim())}%`)
@@ -127,11 +136,16 @@ export function listDocuments(filter?: DesignListFilter): DesignDocumentMeta[] {
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const rows = getDb()
     .prepare(
-      `SELECT id, title, status, thumbnail, created_at, updated_at
+      `SELECT id, title, status, folder_id, thumbnail_at, created_at, updated_at
        FROM design_documents ${clause} ORDER BY updated_at DESC, title ASC`,
     )
     .all(...params) as DocumentRow[]
   return rows.map(rowToMeta)
+}
+
+export function getDocumentMeta(id: string): DesignDocumentMeta | null {
+  const row = getDocumentRow(id)
+  return row ? rowToMeta(row) : null
 }
 
 export function getDocument(id: string): DesignDocument | null {
@@ -141,17 +155,19 @@ export function getDocument(id: string): DesignDocument | null {
 
 export function createDocument(input: CreateDesignDocumentInput): DesignDocument {
   assertDocumentLimits(input)
+  assertFolderExists(input.folderId)
   const now = Date.now()
   const id = randomUUID()
   const db = getDb()
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT INTO design_documents
-        (id, title, status, tokens, fonts, global_css, thumbnail, created_at, updated_at)
-       VALUES (?, ?, 'active', ?, ?, ?, NULL, ?, ?)`,
+        (id, title, status, folder_id, tokens, fonts, global_css, thumbnail, created_at, updated_at)
+       VALUES (?, ?, 'active', ?, ?, ?, ?, NULL, ?, ?)`,
     ).run(
       id,
       clampName(input.title),
+      input.folderId ?? null,
       JSON.stringify(input.tokens ?? {}),
       JSON.stringify(input.fonts ?? []),
       input.globalCss ?? '',
@@ -219,6 +235,33 @@ export function removeDocument(id: string): void {
   if (!getDocumentRow(id)) throw new Error(`design document not found: ${id}`)
   // Pages, artboards, versions, assets and links go with ON DELETE CASCADE.
   getDb().prepare('DELETE FROM design_documents WHERE id = ?').run(id)
+}
+
+// ---- thumbnails ----
+
+// Not an edit: updated_at is left alone (same rule as diagrams' setThumbnail).
+// False when the document is gone (deleted while its capture ran).
+export function setThumbnail(docId: string, dataUrl: string, at: number): boolean {
+  const res = getDb()
+    .prepare('UPDATE design_documents SET thumbnail = ?, thumbnail_at = ? WHERE id = ?')
+    .run(dataUrl, at, docId)
+  return res.changes > 0
+}
+
+export function getThumbnail(docId: string): string | null {
+  const row = getDb().prepare('SELECT thumbnail FROM design_documents WHERE id = ?').get(docId) as
+    { thumbnail: string | null } | undefined
+  return row?.thumbnail ?? null
+}
+
+export function listDocumentsWithoutThumbnail(): string[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id FROM design_documents
+        WHERE status = 'active' AND thumbnail IS NULL ORDER BY updated_at DESC`,
+    )
+    .all() as Array<{ id: string }>
+  return rows.map((r) => r.id)
 }
 
 // ---- pages ----

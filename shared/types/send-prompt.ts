@@ -16,6 +16,12 @@ export interface SendPromptInput {
   // filha em needs_input espera, então passa pelo gate 'attention'. O IPC do
   // renderer não aceita o campo (o schema zod o descarta).
   bypassAttention?: boolean
+  // Só o main liga (hibernação): bytes que o app escreveu no PTY depois do /exit,
+  // reentregues como foram escritos (sem o bracketed-paste + \r da injeção).
+  raw?: boolean
+  // Só o main liga (o /exit da hibernação): não vai para o app.db. Reentregue no
+  // boot, encerraria a conversa que o usuário acabou de retomar.
+  ephemeral?: boolean
 }
 
 export type SendPromptError =
@@ -36,11 +42,15 @@ export type SendPromptError =
   | 'input-dirty'
   // Cancelada da fila enquanto o próprio envio ainda relia a tela.
   | 'cancelled'
+  // O destino dormia (lazy restore) e não acordou; detail diz por quê.
+  | 'wake-failed'
 
 export type SendPromptResult =
   | { ok: true; delivered: true }
-  | { ok: true; delivered: false; queued: QueuedPrompt }
-  | { ok: false; error: SendPromptError }
+  // durable: false = o app.db recusou a gravação: o item está só em memória (um kill
+  // o perde) e só é entregue depois que gravar (persistFailed conta).
+  | { ok: true; delivered: false; queued: QueuedPrompt; durable?: false }
+  | { ok: false; error: SendPromptError; detail?: string }
 
 export interface QueuedPrompt {
   id: string
@@ -52,9 +62,23 @@ export interface QueuedPrompt {
   heldByMenu: number
   // Por que a entrega está segurada agora (null = só esperando o fim do turno).
   heldReason: 'menu-open' | 'unparsed' | 'input-dirty' | null
+  // Só em item que sobreviveu a um kill/reboot do app:
+  // 'awaiting-session' = espera a conversa ter PTY viva de novo (resume/wake);
+  // 'maybe-undelivered' = o app morreu no meio da entrega e o transcript não
+  // provou nem que entrou nem que não entrou. Não sai sozinho: o usuário reenvia
+  // (prompt-queue:resend) ou cancela.
+  // 'needs-confirmation' = velho demais para sair sozinho (STALE_RESTORE_MS), ou o
+  // wake da conversa falhou: espera Enviar/Descartar do usuário.
+  // Nenhum dos três expira.
+  recovery?: 'awaiting-session' | 'maybe-undelivered' | 'needs-confirmation'
+  // 'awaiting-session' que passou de AWAITING_NOTICE_MS sem a conversa voltar:
+  // o renderer mostra (enviar quando ela voltar / descartar).
+  waitingNotice?: true
 }
 
-export type PromptQueueEventKind = 'delivered' | 'expired' | 'session-gone' | 'cancelled'
+// 'maybe-undelivered' não é terminal: o item segue no snapshot, marcado.
+export type PromptQueueEventKind =
+  'delivered' | 'expired' | 'session-gone' | 'cancelled' | 'maybe-undelivered'
 
 export interface PromptQueueEvent {
   kind: PromptQueueEventKind
@@ -76,6 +100,22 @@ export interface PromptQueueCounters {
   refusedUnparsed: number
   // Entregas recusadas/seguradas por texto não enviado na caixa de input do destino.
   refusedInputDirty: number
+  // Envios para uma sessão dormindo cujo wake falhou (nada foi escrito).
+  wakeFailed: number
+  // Itens carregados do app.db no boot (sobreviveram a kill/reboot).
+  restored: number
+  // Dos restaurados em 'delivering', os que o transcript provou entregues.
+  restoredDelivered: number
+  // Restaurados em 'delivering' sem prova: marcados para o usuário decidir.
+  maybeUndelivered: number
+  // Gravações no app.db que falharam (o item seguiu só em memória).
+  persistFailed?: number
+  // Restaurados que passaram a pedir confirmação antes de sair (velhos ou sem wake).
+  needsConfirmation: number
+  // Envelopes de handoff restaurados descartados porque os handoffs já terminaram.
+  discardedObsolete: number
+  // Restaurados que passaram a aparecer por esperar a conversa voltar.
+  awaitingNoticed: number
 }
 
 export interface PromptQueueSnapshot {

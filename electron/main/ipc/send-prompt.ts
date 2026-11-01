@@ -8,6 +8,12 @@ import { broadcast } from '../services/notify'
 import { notify } from '../services/notifications'
 import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { PromptQueue } from '../services/prompt-queue'
+import { createPromptQueueStore, deliveryProof } from '../services/prompt-queue-store'
+import { getDormantPanes, setDormantSyncHook } from '../services/dormant-panes'
+import { liveConversationOf } from '../services/conversation-holder'
+import { setWorkspaceRestoredHook } from './workspace'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { hibernateExitRedirect } from '../services/hibernate/hibernate-redirect'
 import { emitSessionLinkPulse, setSendMessageObserver } from '../services/session-link-pulse'
 import { MAX_TAIL_SUBSCRIPTIONS, ScreenTailFeed } from '../services/screen-tail'
 import {
@@ -18,7 +24,11 @@ import {
   sessionActivityService,
   setPromptQueueTurnHook,
 } from '../services/session-activity'
-import { handoffAsking, type LiveStatus } from '../../../shared/tui/attention-reason'
+import {
+  handoffAsking,
+  type LiveStatus,
+  type ScreenScan,
+} from '../../../shared/tui/attention-reason'
 import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
 import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
@@ -26,15 +36,18 @@ import { answerCitedRequests } from '../services/handoff/cited-answer'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import { onAnswerQueueSnapshot } from '../services/handoff/answer-delivery'
+import { restoreQueueWithLedger } from '../services/handoff/boot-ledger'
 import {
   onQueueSnapshot,
+  queuedEnvelopeObsolete,
   setHandoffWakeQueue,
-  sweepOrphansOnBoot,
 } from '../services/handoff/handoff-wake'
+import { registerImageKeeper } from '../services/image-temp-sweep'
 import type {
   PromptQueueSnapshot,
   ScreenPreview,
   SendPromptInput,
+  SendPromptResult,
 } from '../../../shared/types/send-prompt'
 
 // Mandar prompt pra qualquer sessão viva sem abri-la. A escrita é a mesma do
@@ -67,6 +80,37 @@ function statusOf(ptyId: string): LiveStatus | null {
   const entry = buildSessionsFileIndex().get(row.cc_session_id)
   if (!entry) return null
   return isPidAlive(entry.pid) ? mapStatus(entry.status) : 'ended'
+}
+
+// Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
+// tela parada parece 'idle' — um \r ali aprovaria. null + status não nativo recusa
+// os dois modos; quem quer falar com o Codex usa o terminal dele.
+export function screenOf(id: string): Promise<ScreenScan | null> {
+  return tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)
+}
+
+// O sessions.id de uma conversa que está dormindo no renderer não tem PTY: acorda
+// a pane e manda para o id novo. Sem pane dormindo, o 'not-running' segue.
+function ccOf(sessionId: string): string | null {
+  const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
+    { cc_session_id: string | null } | undefined
+  return row?.cc_session_id ?? null
+}
+
+export async function sendWakingDormant(input: SendPromptInput): Promise<SendPromptResult> {
+  const sent = await promptQueue.send(input)
+  if (sent.ok || sent.error !== 'not-running') return sent
+  const panes = getDormantPanes()
+  const cc = ccOf(input.sessionId)
+  if (!panes || !cc || !panes.findDormantByCc(cc)) return sent
+  const woke = await panes.wakeDormant(cc, 'send-prompt')
+  if (!woke.ok) {
+    promptQueue.recordWakeFailed(input.sessionId, woke.error)
+    return { ok: false, error: 'wake-failed', detail: woke.error }
+  }
+  // Recém-acordada ainda pode estar no turno do --resume: 'now' escreveria no meio
+  // dele. A fila on-idle espera o idle/waiting certo.
+  return promptQueue.send({ ...input, sessionId: woke.sessionId, when: 'on-idle' })
 }
 
 let lastNotifiedEventId: string | null = null
@@ -108,16 +152,13 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
 export const promptQueue = new PromptQueue({
   isRunning: (id) => ptyManager.isRunning(id),
   status: statusOf,
-  // Sem espelho headless (Codex) não há tela: o Codex abre overlay de aprovação e a
-  // tela parada parece 'idle' — um \r ali aprovaria. null + status não nativo recusa
-  // os dois modos; quem quer falar com o Codex usa o terminal dele.
-  screen: (id) => (tuiMenuWatch.has(id) ? tuiMenuWatch.rescan(id) : Promise.resolve(null)),
+  screen: screenOf,
   nativeStatus: (id) => !sessionActivityService.isPtyTracked(id),
   handoffAsking: (id) => {
     const h = getByChildSession(id)
     return h ? handoffAsking(h) : false
   },
-  write: (id, text) => injectIntoSession(id, text),
+  write: (id, text, raw) => (raw ? ptyManager.write(id, text) : injectIntoSession(id, text)),
   // Origem que já morreu não tem cartão vivo no mapa para a bolinha sair.
   delivered: (to, from) => {
     if (from && ptyManager.isRunning(from)) {
@@ -135,7 +176,58 @@ export const promptQueue = new PromptQueue({
     }
   },
   warn: (event) => console.warn(JSON.stringify(event)),
+  redirectOnExit: (id) =>
+    hibernateExitRedirect({
+      wasHibernatedExit: (sid) => getIdleHibernator()?.wasHibernatedExit(sid) ?? false,
+      panes: getDormantPanes,
+      ccOf,
+      wakeFailed: (sid, error) => promptQueue.recordWakeFailed(sid, error),
+    })(id),
+  isHibernating: (id) => getIdleHibernator()?.isHibernating(id) ?? false,
+  // O estado do input relido do espelho no instante do write: o eco de uma tecla
+  // pode ter chegado depois da releitura que deu 'deliver'.
+  beforeWrite: (id, text) =>
+    getIdleHibernator()?.beforeWrite(id, text, tuiMenuWatch.current(id)?.inputDirty === true) ??
+    true,
+  store: createPromptQueueStore(getDb),
+  deliveryProof,
+  liveCcOf: (id) => liveConversationOf(id),
+  isObsolete: (id, text) =>
+    (isHandoffWakeEnvelope(text) || isHandoffAnswerEnvelope(text)) && queuedEnvelopeObsolete(id),
 })
+// Imagem colada citada por um item na fila: nem o sweep do exit da PTY nem o do
+// boot (que roda depois do restore da fila) a apagam antes da entrega.
+registerImageKeeper((name) => promptQueue.references(name))
+
+// Itens restaurados esperando uma conversa que está dormindo no renderer: acorda a
+// pane (o spawn os traz por onSessionLive). Wake que falha deixa os itens visíveis
+// (Enviar/Descartar) em vez de esperar calados.
+export function wakeParkedTargets(): void {
+  const panes = getDormantPanes()
+  if (!panes) return
+  for (const cc of promptQueue.wakeTargets()) {
+    if (!panes.findDormantByCc(cc)) continue
+    void panes
+      .wakeDormant(cc, 'send-prompt')
+      .then((woke) => {
+        if (woke.ok) return
+        promptQueue.recordWakeFailed(cc, woke.error)
+        promptQueue.surfaceTarget(cc)
+      })
+      .catch((err) => console.error('[prompt-queue] wake do item restaurado falhou:', err))
+  }
+}
+
+// A PTY que acabou de subir é de uma conversa com itens de antes do kill/reboot?
+// É o mesmo ponto em que o espelho da tela nasce (spawn): resume e wake passam por ele.
+// A fila resolve a conversa pela mesma fonte do enqueue (liveCcOf + linha sessions).
+function onPtySpawn(sessionId: string): void {
+  try {
+    promptQueue.onSessionLive(sessionId)
+  } catch (err) {
+    console.error('[prompt-queue] reentrega no spawn falhou:', err)
+  }
+}
 
 const tailFeed = new ScreenTailFeed({
   read: (id) => tuiMenuWatch.styledTail(id, TAIL_LINES),
@@ -165,7 +257,11 @@ export function registerSendPromptIpc(): void {
     replaceText: (id, text) => promptQueue.replaceText(id, text),
     cancel: (id) => promptQueue.cancel(id),
   })
-  sweepOrphansOnBoot()
+  // Antes de qualquer PTY: as que subirem já acham os itens.
+  restoreQueueWithLedger(promptQueue)
+  ptyManager.on('spawn', (e) => onPtySpawn(e.sessionId))
+  setDormantSyncHook(wakeParkedTargets)
+  setWorkspaceRestoredHook(() => promptQueue.onWorkspaceRestored())
   setSendMessageObserver((e) => {
     recordChildDirectMessage(e)
     const answered = answerCitedRequests(e)
@@ -176,11 +272,17 @@ export function registerSendPromptIpc(): void {
 
   ipcMain.handle('sessions:send-prompt', (_e, raw: unknown) => {
     const input: SendPromptInput = sendSchema.parse(raw)
-    return promptQueue.send(input)
+    return sendWakingDormant(input)
   })
   ipcMain.handle('prompt-queue:cancel', (_e, raw: unknown) => {
     const { id } = idSchema.parse(raw)
     return promptQueue.cancel(id)
+  })
+  ipcMain.handle('prompt-queue:resend', (_e, raw: unknown) => {
+    const { id } = idSchema.parse(raw)
+    const ok = promptQueue.resend(id)
+    if (ok) wakeParkedTargets()
+    return ok
   })
   ipcMain.handle('prompt-queue:list', () => promptQueue.snapshot())
   // A janela diz quais cartões estão abertos E visíveis; cada chamada substitui a

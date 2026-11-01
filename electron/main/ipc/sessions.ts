@@ -1,17 +1,34 @@
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
+import {
+  clearConversationHibernated,
+  isConversationHibernated,
+  markHibernated,
+} from '../services/hibernate/hibernated-store'
+import { requestDraftFlush } from './composer-drafts'
+import {
+  latestSpawnArgs,
+  relaunchFlags,
+  type SpawnArgs,
+} from '../services/spawn-args'
+import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
 import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
+import {
+  assertNotOpenElsewhere,
+  ptyMovedToOtherConversation,
+} from '../services/conversation-holder'
 import { sessionSpawnEnv } from '../services/custom-env'
 import * as handoffStore from '../services/handoff-store'
+import * as requestStore from '../services/handoff-requests'
 import { wakeMotherFor } from '../services/handoff/handoff-wake'
 // formatPtyInjection vive em services/handoff/inject.ts (fonte canônica, sem
 // dependência de electron). Reexportado abaixo para não quebrar quem importa
@@ -38,7 +55,16 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { scopeOomWatch } from '../services/scope-oom-watch'
+import { OomAutoResume } from '../services/scope-oom-resume'
 import { getMcpRuntime } from '../services/mcp/server'
+import {
+  buildSessionSettings,
+  removeSessionSettings,
+  writeSessionSettings,
+  type SessionSettings,
+} from '../services/session-settings'
 import {
   mcpClientConfigPath,
   removeSessionMcpConfig,
@@ -52,7 +78,7 @@ import {
   resolveEffort,
   resolveAdvisor,
   permissionModeForHandoffMode,
-  handoffChildSettingsJson,
+  handoffChildSettings,
   assertAutonomousSpawnGuarded,
   resolveCodexModel,
 } from '../services/spawn-flags'
@@ -70,6 +96,7 @@ import type {
   Session,
   SpawnSessionInput,
   ResumeSessionInput,
+  ResumeSessionResult,
   SessionSummary,
   FeatureSessionSummary,
   LiveSessionInfo,
@@ -253,6 +280,18 @@ function mcpLaunch(
   }
 }
 
+// Settings da sessão (denylist + política da filha) gravado em ARQUIVO antes do
+// spawn; o argv leva só o path. Devolve null quando não há nada a entregar. Falha
+// de escrita PROPAGA: subir sem o denylist abriria a sessão em silêncio.
+function sessionSettingsFile(
+  internalSessionId: string,
+  base: SessionSettings | null,
+  deny: readonly string[] | null,
+): string | null {
+  const settings = buildSessionSettings(base, deny)
+  return settings ? writeSessionSettings(internalSessionId, settings) : null
+}
+
 // O claude vive em ~/.local/bin e o env do Electron GUI não herda o PATH do rc.
 // Subimos o shell de login+interativo (-l -i carrega .zprofile/.zshrc) e damos
 // `exec claude` para que o PTY encerre quando o claude sair.
@@ -305,29 +344,16 @@ function saveImageTemp(sessionId: string, bytes: ArrayBuffer | Uint8Array, mime:
   return tmpPath
 }
 
-// Remove temporários de imagem que casam com o predicado. Best-effort: se o
-// diretório não existe ainda (nenhuma imagem foi colada) ou um arquivo some numa
-// corrida, ignora — limpeza nunca pode derrubar o boot/exit.
+// Remove temporários de imagem que casam com o predicado, poupando os citados por
+// um rascunho persistido ou por um item da fila durável (registerImageKeeper em
+// send-prompt.ts).
 function sweepImageTemps(predicate: (filename: string) => boolean): void {
-  let names: string[]
-  const dir = tempDir()
-  try {
-    names = readdirSync(dir)
-  } catch {
-    return
-  }
-  for (const name of names) {
-    if (!predicate(name)) continue
-    try {
-      unlinkSync(join(dir, name))
-    } catch {
-      // já removido / em uso — segue
-    }
-  }
+  sweepImageTempsKeepingDrafts(getDb, tempDir(), predicate)
 }
 
-// Sweep de boot: num processo fresco nenhum compose referencia temps de imagem,
-// então todos são órfãos. Chamado uma vez no app.whenReady (index.ts).
+// Sweep de boot: num processo fresco só os rascunhos persistidos e os itens que a
+// fila restaurou do app.db referenciam temps de imagem; o resto é órfão. Chamado
+// uma vez no app.whenReady (index.ts).
 export function sweepOrphanImageTemps(): void {
   sweepImageTemps(isImageTempFile)
 }
@@ -438,6 +464,9 @@ function startSession(opts: {
   rows?: number
   provider?: AgentProvider
   env?: Record<string, string>
+  // Flags com que este processo subiu (sessions.spawn_args): o wake de uma
+  // hibernação as reaplica.
+  spawnArgs?: SpawnArgs | null
 }): Session {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
@@ -454,26 +483,31 @@ function startSession(opts: {
     ended_at: null,
     provider: provider.id,
   }
-  db.prepare(
-    `INSERT INTO sessions
-     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    row.id,
-    row.repo_id,
-    row.cc_session_id,
-    row.title,
-    row.pane_id,
-    row.status,
-    row.started_at,
-    row.ended_at,
-    opts.featureId ?? null,
-    row.provider,
-    opts.featureSource ?? null,
-  )
-  if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
-
+  // O settings da sessão já foi gravado pelo chamador: qualquer falha daqui até
+  // a PTY existir (INSERT ou spawn) precisa removê-lo, senão fica órfão até o boot.
+  let inserted = false
   try {
+    db.prepare(
+      `INSERT INTO sessions
+     (id, repo_id, cc_session_id, title, pane_id, status, started_at, ended_at, feature_id, provider, feature_source, spawn_args)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.id,
+      row.repo_id,
+      row.cc_session_id,
+      row.title,
+      row.pane_id,
+      row.status,
+      row.started_at,
+      row.ended_at,
+      opts.featureId ?? null,
+      row.provider,
+      opts.featureSource ?? null,
+      opts.spawnArgs ? JSON.stringify({ ...opts.spawnArgs, cwd: opts.cwd }) : null,
+    )
+    inserted = true
+    if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
+
     const { command, args } = loginShellSpawn(opts.innerCmd)
     ptyManager.spawn({
       sessionId: row.id,
@@ -486,10 +520,14 @@ function startSession(opts: {
       sampleActivity: !provider.supports.nativeTranscript,
     })
   } catch (err) {
-    db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
-      Date.now(),
-      row.id,
-    )
+    if (inserted) {
+      db.prepare("UPDATE sessions SET status = 'crashed', ended_at = ? WHERE id = ?").run(
+        Date.now(),
+        row.id,
+      )
+    }
+    // Sem PTY não haverá exit para limpar o settings gravado no pré-spawn.
+    removeSessionSettings(row.id)
     throw err
   }
 
@@ -594,10 +632,16 @@ export function spawnSession(input: SpawnSessionInput): Session {
     advisorModel,
     systemPromptFilePath,
     permissionMode,
-    disallowedTools,
-    // Só a filha de handoff recebe --settings; o valor é a constante canônica do
-    // main (o renderer não escolhe settings — só sinaliza que é filha).
-    settingsJson: input.handoffChild ? handoffChildSettingsJson(permissionMode) : null,
+    // Denylist + (só na filha de handoff) a política canônica do main — o renderer
+    // não escolhe settings, só sinaliza que é filha. Só o claude lê o arquivo.
+    settingsFilePath:
+      provider.id === 'claude'
+        ? sessionSettingsFile(
+            internalSessionId,
+            input.handoffChild ? handoffChildSettings(permissionMode) : null,
+            disallowedTools,
+          )
+        : null,
     initialPrompt: input.initialPrompt,
     systemPromptText,
   })
@@ -615,6 +659,15 @@ export function spawnSession(input: SpawnSessionInput): Session {
     rows: input.rows,
     provider,
     env: mcp.env,
+    spawnArgs: {
+      model,
+      effort,
+      advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: input.systemPromptText?.trim() || null,
+      handoffChild: Boolean(input.handoffChild),
+    },
   })
 
   // Sem `-n` na CLI (Codex): o nome só existe aqui, e é dele que a lista viva
@@ -675,7 +728,8 @@ export function resumeHandoffChild(
   // a trabalhar sozinha. Quem pede trabalho passa o texto — o painel manda o
   // defaultResumeKickoff, e a adoção manda o dela (quem foi adotada nunca viu
   // briefing nenhum, e este é o único turno onde ela descobre o próprio apelido).
-  opts: { cols?: number; rows?: number; kickoff?: string } = {},
+  // origin 'renderer' = veio do sessions:resume (a pane já sabe que retomou).
+  opts: { cols?: number; rows?: number; kickoff?: string; origin?: ResumeOrigin } = {},
 ): ResumeHandoffChildResult {
   const db = getDb()
   const handoff = handoffStore.get(id)
@@ -725,6 +779,19 @@ export function resumeHandoffChild(
     throw new Error('Sessão-filha do handoff sem cc_session_id válido — não há o que retomar.')
   }
 
+  // A conversa já tem PTY viva em OUTRA linha (a pane foi retomada pelo
+  // switcher, ou acordada): um 2º --resume escreveria no mesmo JSONL. O handoff
+  // passa a apontar para a linha viva, sem spawn.
+  const alive = findAliveByCc(ccSessionId)
+  if (alive) {
+    const relinked = handoffStore.markRunning(id, alive.id)
+    broadcast('handoff:updated', relinked)
+    return { handoff: relinked, session: toSession(alive), alreadyRunning: true }
+  }
+
+  assertNotOpenElsewhere(ccSessionId)
+  const priorSessionIds = sessionIdsOfCc(ccSessionId)
+
   // Gate de resumibilidade: o transcript JSONL precisa existir no disco.
   const transcript = findTranscriptPath(ccSessionId)
   if (!transcript) {
@@ -755,6 +822,10 @@ export function resumeHandoffChild(
   // spawnSession (whitelist + merge do HANDOFF_CHILD_DENY em modo autônomo).
   const permissionMode = resolvePermissionMode(permissionModeForHandoffMode(handoff.mode))
   const disallowedTools = resolveDisallowedTools(permissionMode, null, { handoffChild: true })
+  // Model/effort/advisor do spawn da filha voltam também; a permissão segue do
+  // modo do handoff (a autoridade sobre o que a filha pode fazer).
+  const spawned = latestSpawnArgs(db, ccSessionId)
+  const original = relaunchFlags(spawned)
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -764,11 +835,16 @@ export function resumeHandoffChild(
     resume: true,
     name,
     mcpConfigArg: mcpConfigArg(internalSessionId),
-    model: null,
+    model: original.model,
+    effort: original.effort,
+    advisorModel: original.advisorModel,
     systemPromptFilePath: null,
     permissionMode,
-    disallowedTools,
-    settingsJson: handoffChildSettingsJson(permissionMode),
+    settingsFilePath: sessionSettingsFile(
+      internalSessionId,
+      handoffChildSettings(permissionMode),
+      disallowedTools,
+    ),
   })
 
   const session = startSession({
@@ -781,6 +857,15 @@ export function resumeHandoffChild(
     initialCommand: opts.kickoff,
     cols: opts.cols,
     rows: opts.rows,
+    spawnArgs: {
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode,
+      disallowedTools,
+      systemPromptText: spawned?.systemPromptText ?? null,
+      handoffChild: true,
+    },
   })
 
   // O apelido é o ENDEREÇO do peer, e o relance cria uma LINHA NOVA em `sessions`
@@ -803,7 +888,31 @@ export function resumeHandoffChild(
   // RELINKA o handoff, sem o que a filha sumiria do painel.
   const updated = handoffStore.markRunning(id, namedSession.id)
   broadcast('handoff:updated', updated)
+  // A filha também pode ser mãe: o que as linhas antigas lideravam vem junto, e
+  // os wake_failed dela saem de novo (vale para handoffs:resume, adopt e relink).
+  transferLeadershipToResumed(priorSessionIds, namedSession, opts.origin ?? 'main')
   return { handoff: updated, session: namedSession, alreadyRunning: false }
+}
+
+// PTY viva do Pitwall com esta conversa, em qualquer linha de sessions (cada
+// resume abre uma linha nova com o mesmo cc_session_id). A linha não acompanha
+// /clear nem /resume dentro da TUI: se o índice diz que o pid daquela PTY está em
+// outra conversa, ela não é desta, e reanexá-la mostraria a conversa errada.
+export function findAliveByCc(ccSessionId: string): SessionRow | null {
+  const rows = getDb()
+    .prepare('SELECT * FROM sessions WHERE cc_session_id = ? ORDER BY started_at DESC')
+    .all(ccSessionId) as SessionRow[]
+  const running = rows.filter((row) => ptyManager.isRunning(row.id))
+  if (running.length === 0) return null
+  const index = buildSessionsFileIndex()
+  return running.find((row) => !ptyMovedToOtherConversation(row.id, ccSessionId, index)) ?? null
+}
+
+function sessionIdsOfCc(ccSessionId: string): string[] {
+  const rows = getDb()
+    .prepare('SELECT id FROM sessions WHERE cc_session_id = ?')
+    .all(ccSessionId) as Array<{ id: string }>
+  return rows.map((row) => row.id)
 }
 
 // Kickoff do resume pelo PAINEL (Crew Dock): retomar a tarefa e reportar via MCP.
@@ -860,6 +969,37 @@ function recordResponded(e: AttentionRespondedEvent): void {
   }
 }
 
+// Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
+// PTY) lideravam passam a responder a esta, venha o resume de clique,
+// agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
+// filha chegaria a um id morto.
+export function transferLeadershipToResumed(
+  priorSessionIds: string[],
+  resumed: Session,
+  origin: ResumeOrigin,
+): void {
+  for (const id of priorSessionIds) {
+    if (ptyManager.isRunning(id)) continue
+    handoffStore.transferMother(id, resumed.id)
+    // A resposta a um pedido aberto vai para quem perguntou/escalou: a retomada.
+    requestStore.transferRequester(id, resumed.id)
+  }
+  resumedHook(resumed, origin)
+}
+
+// Quem pediu o resume: o renderer (sessions:resume, a pane já é dele) ou o
+// próprio main (handoffs:resume, adopt), que a pane dormindo não viu acontecer.
+export type ResumeOrigin = 'renderer' | 'main'
+
+// Conversa que voltou a ter PTY (resume spawnou). Injetável (padrão do
+// setTurnEndedHook): quem reenvia os wakes perdidos precisa da tela, que mora no
+// ipc/send-prompt; importá-lo daqui puxaria a fila inteira para este módulo.
+let resumedHook: (session: Session, origin: ResumeOrigin) => void = () => {}
+
+export function setResumedSessionHook(fn: (session: Session, origin: ResumeOrigin) => void): void {
+  resumedHook = fn
+}
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
@@ -874,21 +1014,53 @@ export function registerSessionIpc(): void {
       }
     })
     ptyManager.on('data', (e) => broadcast('pty:data', e))
+    scopeOomWatch.attach(ptyManager)
+    const oomAutoResume = new OomAutoResume({
+      ccOf: (id) =>
+        (
+          getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as
+            | { cc_session_id: string | null }
+            | undefined
+        )?.cc_session_id ?? null,
+    })
+    scopeOomWatch.on('oom', (e) => broadcast('sessions:oom', oomAutoResume.annotate(e)))
     ptyManager.on('exit', (e) => {
       const db = getDb()
       db.prepare(
         "UPDATE sessions SET status = ?, ended_at = ? WHERE id = ? AND status = 'running'",
       ).run(e.exitCode === 0 ? 'exited' : 'crashed', Date.now(), e.sessionId)
+      // Saiu pelo /exit da hibernação: o renderer precisa do evento ANTES do
+      // pty:exit para virar a pane dormant em vez de fechá-la com o toast.
+      const hibernated = getIdleHibernator()?.onExit(e.sessionId)
+      if (hibernated) {
+        // O hibernator já gravou antes do /exit; regravar cobre o exit que chegou
+        // antes do beforeWrite. Falha aqui não pode impedir a pane de virar dormant.
+        try {
+          markHibernated(db, e.sessionId)
+        } catch (err) {
+          console.error('[hibernate] failed to persist hibernated state', err)
+        }
+        broadcast('sessions:hibernated', hibernated)
+      }
       broadcast('pty:exit', e)
 
       // Limpa as imagens temporárias coladas/arrastadas nesta sessão — a CLI já
-      // as anexou na entrega; o path injetado não serve depois do exit.
-      sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId))
+      // as anexou na entrega; o path injetado não serve depois do exit. Antes, o
+      // flush dos rascunhos: a imagem colada ainda no debounce do renderer não
+      // está no app.db e o sweep a apagaria. Vale também para a hibernada: a pane
+      // dormant mantém o paneId, então o rascunho 'pane:<id>' (com o path) segue
+      // no app.db e o sweep poupa a imagem que ele referencia.
+      void sweepAfterDraftFlush(requestDraftFlush, () =>
+        sweepImageTemps((name) => isSessionImageTempFile(name, e.sessionId)),
+      )
 
       // Config MCP desta sessão (<userData>/mcp-sessions/<sessions.id>.json):
       // o e.sessionId é o próprio nome do arquivo. Contém o token — não fica
       // sobrando depois que a PTY morre.
       removeSessionMcpConfig(e.sessionId)
+      // Settings da sessão (<userData>/session-settings/<sessions.id>.json): mesmo
+      // ciclo de vida do mcp-config.
+      removeSessionSettings(e.sessionId)
 
       // Para o watcher do transcript do Chat View desta sessão (evita leak de
       // chokidar/interval após a PTY morrer). No-op se ninguém estava observando.
@@ -1002,9 +1174,17 @@ export function registerSessionIpc(): void {
     }),
   )
 
-  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput) => {
+  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput): ResumeSessionResult => {
     const db = getDb()
     const repoId = input.repoId ?? null
+
+    // Re-attach: a conversa já tem PTY viva (wake do main e clique no mesmo
+    // instante, duas janelas, restore eager + ativação). Um segundo --resume do
+    // mesmo id escreveria no mesmo JSONL com dois processos.
+    const alive = findAliveByCc(input.ccSessionId)
+    if (alive) return { session: toSession(alive), reattached: true }
+    assertNotOpenElsewhere(input.ccSessionId)
+    const priorSessionIds = sessionIdsOfCc(input.ccSessionId)
 
     // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
     // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
@@ -1060,7 +1240,12 @@ export function registerSessionIpc(): void {
     // acontece igual — o que não acontece é o disparo automático de trabalho.
     const linked = findRelinkableHandoff(input.ccSessionId)
     if (linked) {
-      return resumeHandoffChild(linked.id, { cols: input.cols, rows: input.rows }).session
+      const resumed = resumeHandoffChild(linked.id, {
+        cols: input.cols,
+        rows: input.rows,
+        origin: 'renderer',
+      })
+      return { session: resumed.session, reattached: resumed.alreadyRunning }
     }
 
     // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.
@@ -1070,19 +1255,61 @@ export function registerSessionIpc(): void {
     const command = resolveAgentCommand()
     // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
     const internalSessionId = randomUUID()
+    // O --resume não guarda as flags do spawn. Só o wake de uma hibernada as
+    // reaplica: o usuário não pediu para a sessão sair, então ela volta como
+    // estava (modo de permissão, modelo, denylist, --settings da filha). No
+    // resume manual quem escolhe é o usuário, e as flags ficam no default. As
+    // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
+    // A fonte da verdade é sessions.hibernated_at, não o fromHibernation do
+    // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
+    const spawned = latestSpawnArgs(db, input.ccSessionId)
+    const fromHibernation = isConversationHibernated(db, input.ccSessionId)
+    const original = relaunchFlags(fromHibernation ? spawned : null)
+    // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
+    // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
+    // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
+    // conversa). Diretório removido: fica o recalculado.
+    if (spawned?.cwd && spawned.cwd !== cwd) {
+      if (isDirectory(spawned.cwd)) {
+        cwd = spawned.cwd
+      } else {
+        console.warn(
+          JSON.stringify({
+            event: 'resume_spawn_cwd_missing',
+            ccSessionId: input.ccSessionId,
+            spawnCwd: spawned.cwd,
+            cwd,
+          }),
+        )
+      }
+    }
     const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
       command,
       sessionId: input.ccSessionId,
       resume: true,
       name,
       mcpConfigArg: mcpConfigArg(internalSessionId),
-      model: null,
+      model: original.model,
+      effort: original.effort,
+      advisorModel: original.advisorModel,
+      permissionMode: original.permissionMode,
+      // Arquivo NOVO a cada wake, carimbado com o id desta linha: o da sessão
+      // anterior foi apagado no exit dela.
+      settingsFilePath: sessionSettingsFile(
+        internalSessionId,
+        original.settings,
+        original.disallowedTools,
+      ),
       // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
       // compartilhada — é isso que impede spawn e resume de divergirem de novo.
-      systemPromptFilePath: writeSessionSystemPromptFile({ repoId, featureId }),
+      systemPromptFilePath: writeSessionSystemPromptFile({
+        repoId,
+        featureId,
+        systemPromptText: original.systemPromptText,
+      }),
     })
 
-    return startSession({
+    const session = startSession({
       id: internalSessionId,
       ccSessionId: input.ccSessionId,
       repoId,
@@ -1092,7 +1319,15 @@ export function registerSessionIpc(): void {
       featureSource,
       cols: input.cols,
       rows: input.rows,
+      // Copia o registro como está: um resume sem flags não pode apagar as do
+      // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
+      // novas grava outras.
+      spawnArgs: spawned,
     })
+    // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
+    clearConversationHibernated(db, input.ccSessionId)
+    transferLeadershipToResumed(priorSessionIds, session, 'renderer')
+    return { session, reattached: false }
   })
 
   ipcMain.handle('sessions:is-resumable', (_e, ccSessionId: string): boolean => {
@@ -1427,12 +1662,16 @@ export function registerSessionIpc(): void {
     tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
   )
   ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+  ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
     return ptyManager.getBacklog(sessionId)
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
+    // Com o /exit da hibernação já escrito, o texto vai para a fila e chega na
+    // sessão acordada; escrito aqui, cairia num claude saindo.
+    if (getIdleHibernator()?.onUserInput(sessionId, data)) return
     ptyManager.write(sessionId, data)
   })
 
@@ -1441,6 +1680,7 @@ export function registerSessionIpc(): void {
     (_e, sessionId: string, bytes: ArrayBuffer | Uint8Array, mime: string): string =>
       saveImageTemp(sessionId, bytes, mime),
   )
+
 
   ipcMain.handle('sessions:resize', (_e, sessionId: string, cols: number, rows: number) => {
     ptyManager.resize(sessionId, cols, rows)

@@ -11,6 +11,7 @@ import { gpuApi, sessionsApi } from '@/lib/ipc'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useAppStore, type PaneMode } from '@/store/appStore'
+import { exitAction } from './hibernate-exit'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSession } from './useSession'
 import { Composer, type ComposerHandle } from './Composer'
@@ -72,6 +73,9 @@ let liveWebglCount = 0
 
 interface Props {
   session: Session
+  // Pane do dockview que hospeda este terminal: identidade durável do rascunho
+  // do Composer. Ausente fora das abas (quick look).
+  paneId?: string
   repoLabel: string
   repoPath: string
   projectName: string
@@ -158,7 +162,7 @@ function readFooterText(term: Xterm): string {
 export function Terminal(props: Props) {
   const owner = useTerminalLease((s) => s.leases[props.session.id])
   const blocked = leaseBlocks(owner, props.leaseHost)
-  useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose)
+  useCloseOnExitWhileLeased(props.session.id, blocked, props.onClose, props.leaseHost)
   if (blocked) return <LeasedPlaceholder host={props.leaseHost} owner={owner!} />
   return <TerminalHost {...props} />
 }
@@ -166,15 +170,21 @@ export function Terminal(props: Props) {
 // Com a lease fora, o useSession desta aba não está montado e perde o exit da
 // PTY; ao remontar nasceria exited=false e ficaria como pane morta. O toast de
 // "Sessão encerrada" é da modal (o Terminal dela viu o exit) — aqui só fecha.
-function useCloseOnExitWhileLeased(sessionId: string, blocked: boolean, onClose: () => void) {
+function useCloseOnExitWhileLeased(
+  sessionId: string,
+  blocked: boolean,
+  onClose: () => void,
+  leaseHost: TerminalLeaseHost | undefined,
+) {
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   useEffect(() => {
     if (!blocked) return
     return sessionsApi.onExit((e) => {
-      if (e.sessionId === sessionId) onCloseRef.current()
+      if (e.sessionId !== sessionId) return
+      if (exitAction(sessionId, leaseHost) !== 'keep') onCloseRef.current()
     })
-  }, [sessionId, blocked])
+  }, [sessionId, blocked, leaseHost])
 }
 
 // Quem cedeu a PTY: sem xterm montado, nada disputa o resize. Nenhum host puxa a
@@ -238,6 +248,7 @@ export function LeasedPlaceholder({
 
 function TerminalHost({
   session,
+  paneId,
   repoLabel,
   repoPath,
   projectName,
@@ -254,6 +265,7 @@ function TerminalHost({
   onTitleChange,
   onReopen,
   onOpenSettings,
+  leaseHost,
 }: Props) {
   // Provider sem Chat View (Codex) fica no terminal cru, seja qual for o modo
   // lembrado; sem parser de menu, nada de card/pill que digita na TUI do claude.
@@ -720,6 +732,11 @@ function TerminalHost({
   useEffect(() => {
     if (!exited || claudeNotFound || autoClosedRef.current) return
     autoClosedRef.current = true
+    const action = exitAction(session.id, leaseHost)
+    if (action !== 'toast-and-close') {
+      if (action === 'close') onClose()
+      return
+    }
     showToast({
       title: 'Sessão encerrada',
       body: `${displayTitle}${exitCode != null && exitCode !== 0 ? ` (código ${exitCode})` : ''} — retome pelo seletor de sessões, em Encerradas.`,
@@ -738,13 +755,15 @@ function TerminalHost({
   // (quando o TUI tem o modo ativo) pra preservar multilinha sem auto-submeter;
   // write() manda direto pro PTY. O xterm fica display-only permanente. sendPrompt
   // adiciona o \r final que submete.
-  function insertPrompt(text: string) {
+  // Resolvem só quando o PTY aceitou as escritas: o Composer limpa o rascunho
+  // durável depois disso, nunca antes.
+  async function insertPrompt(text: string): Promise<void> {
     const bracketed = xtermRef.current?.modes.bracketedPasteMode ?? true
-    write(buildPromptBytes(text, bracketed))
+    await write(buildPromptBytes(text, bracketed))
   }
-  function sendPrompt(text: string) {
-    insertPrompt(text)
-    write('\r')
+  async function sendPrompt(text: string): Promise<void> {
+    await insertPrompt(text)
+    await write('\r')
     // Eco otimista: em modo chat, a bolha do usuário aparece na hora; o ChatView
     // a reconcilia quando o transcript de disco alcança (ver chat-logic).
     if (mode === 'chat') chatViewRef.current?.pushEcho(text)
@@ -1429,6 +1448,8 @@ function TerminalHost({
       {!exited && (
         <Composer
           sessionId={session.id}
+          paneId={paneId ?? null}
+          ccSessionId={ccSessionId}
           ref={composerRef}
           onSend={sendPrompt}
           onInsert={insertPrompt}

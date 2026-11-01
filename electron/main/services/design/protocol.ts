@@ -11,6 +11,8 @@ import {
 } from '../../../../shared/design/html-render'
 import type { DesignArtboard, DesignAsset, DesignDocument } from '../../../../shared/types/design'
 
+export { thumbUrl } from '../../../../shared/design/thumb-url'
+
 // pitwall-design:// serves artboard documents and asset bytes to the sandboxed
 // iframes (opaque origin) and to the offscreen screenshot window. The scheme is
 // registered as standard so `url.host` routes and relative URLs resolve.
@@ -29,6 +31,7 @@ export type DesignRoute =
       motion: ArtboardMotionPose
     }
   | { kind: 'asset'; id: string }
+  | { kind: 'thumb'; docId: string }
   | { kind: 'notFound' }
 
 function singleSegment(pathname: string): string | null {
@@ -61,6 +64,8 @@ export function routeDesignUrl(raw: string): DesignRoute {
     }
     case 'asset':
       return { kind: 'asset', id }
+    case 'thumb':
+      return { kind: 'thumb', docId: id }
     default:
       return { kind: 'notFound' }
   }
@@ -81,6 +86,14 @@ export function artboardUrl(
 
 export function assetUrl(assetId: string): string {
   return `${DESIGN_SCHEME}://asset/${encodeURIComponent(assetId)}`
+}
+
+const THUMB_DATA_URL = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)$/
+
+export function decodeThumbnail(dataUrl: string): DesignAssetBytes | null {
+  const match = THUMB_DATA_URL.exec(dataUrl)
+  if (!match) return null
+  return { mime: match[1] as DesignAsset['mime'], bytes: Buffer.from(match[2], 'base64') }
 }
 
 // An asset can also be navigated to (a click on <area>/<a> pointing at it):
@@ -112,6 +125,8 @@ export interface DesignProtocolDeps {
   ): MaybePromise<Pick<DesignDocument, 'tokens' | 'fonts' | 'globalCss'> | null>
   getArtboard(artboardId: string): MaybePromise<DesignArtboard | null>
   getAsset(assetId: string): MaybePromise<DesignAssetBytes | null>
+  // Stored data URL (design_documents.thumbnail) or null.
+  getThumbnail(docId: string): MaybePromise<string | null>
   // Test seam; defaults to the built bundle on disk.
   readRuntimeJs?: () => string
 }
@@ -145,6 +160,20 @@ function notFound(): Response {
   return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } })
 }
 
+function imageResponse(image: DesignAssetBytes): Response {
+  return new Response(new Uint8Array(image.bytes), {
+    status: 200,
+    headers: {
+      'Content-Type': image.mime,
+      'Content-Length': String(image.bytes.byteLength),
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Content-Security-Policy': ASSET_CSP,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': 'inline',
+    },
+  })
+}
+
 export function createDesignProtocolHandler(
   deps: DesignProtocolDeps,
 ): (request: Request) => Promise<Response> {
@@ -153,18 +182,12 @@ export function createDesignProtocolHandler(
     const route = routeDesignUrl(request.url)
     if (route.kind === 'asset') {
       const asset = await deps.getAsset(route.id)
-      if (!asset) return notFound()
-      return new Response(new Uint8Array(asset.bytes), {
-        status: 200,
-        headers: {
-          'Content-Type': asset.mime,
-          'Content-Length': String(asset.bytes.byteLength),
-          'Cache-Control': 'public, max-age=31536000, immutable',
-          'Content-Security-Policy': ASSET_CSP,
-          'X-Content-Type-Options': 'nosniff',
-          'Content-Disposition': 'inline',
-        },
-      })
+      return asset ? imageResponse(asset) : notFound()
+    }
+    if (route.kind === 'thumb') {
+      const dataUrl = await deps.getThumbnail(route.docId)
+      const image = dataUrl ? decodeThumbnail(dataUrl) : null
+      return image ? imageResponse(image) : notFound()
     }
     if (route.kind !== 'artboard') return notFound()
     const [doc, artboard] = await Promise.all([

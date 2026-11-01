@@ -3,7 +3,14 @@
 // de órfãos) + RELINK no 'sessions:resume' (etapa A — permanência da crew).
 // Não exercita o claude real: captura os callbacks que registerSessionIpc passa a
 // ipcMain.handle e o que o ptyManager receberia, e valida GATES e innerCmd.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+
+// O denylist e a política da filha vivem no ARQUIVO apontado por --settings.
+function settingsOf(cmd: string): { permissions?: { deny?: string[] } } {
+  const m = cmd.match(/--settings '([^']+)'/)
+  if (!m) throw new Error(`sem --settings no comando: ${cmd}`)
+  return JSON.parse(readFileSync(m[1], 'utf8'))
+}
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -377,10 +384,12 @@ describe('sessions:resume — relink da filha de handoff', () => {
   })
 
   function sessionsResume() {
-    return handlers.get('sessions:resume')!(null, {
-      repoId: 'r1',
-      ccSessionId: VALID_CC,
-    }) as { id: string; ccSessionId: string | null }
+    return (
+      handlers.get('sessions:resume')!(null, {
+        repoId: 'r1',
+        ccSessionId: VALID_CC,
+      }) as { session: { id: string; ccSessionId: string | null } }
+    ).session
   }
 
   function linkedChild(status: string, over: Partial<Handoff> = {}): void {
@@ -518,10 +527,10 @@ describe('resumeHandoffChild — kickoff do relance', () => {
   // O bug: o usuário abre pelo switcher uma sessão que um dia foi filha e ela
   // começa a trabalhar sozinha, sem ele ter pedido nada.
   it('relink pelo switcher: relinka a identidade mas NÃO injeta kickoff', () => {
-    const session = handlers.get('sessions:resume')!(null, {
+    const { session } = handlers.get('sessions:resume')!(null, {
       repoId: 'r1',
       ccSessionId: VALID_CC,
-    }) as { id: string }
+    }) as { session: { id: string } }
 
     expect(injectedCommands(session.id)).toHaveLength(0)
     // A identidade continua sendo restaurada: apelido, settings e relink.
@@ -605,21 +614,22 @@ describe('resumeHandoffChild — permissões preservadas no relance', () => {
     resumeHandoffChild('h1')
     expect(spawns[0].innerCmd).toContain("--permission-mode 'plan'")
     // Read-only no settings do processo: sobrevive ao ExitPlanMode aprovado.
-    expect(spawns[0].innerCmd).toContain('"Edit","Write","NotebookEdit"')
+    expect(settingsOf(spawns[0].innerCmd).permissions?.deny).toEqual(
+      expect.arrayContaining(['Edit', 'Write', 'NotebookEdit']),
+    )
   })
 
   it('modo auto-edits volta com acceptEdits + denylist da filha', () => {
     handoff = baseHandoff({ mode: 'auto-edits' })
     resumeHandoffChild('h1')
     expect(spawns[0].innerCmd).toContain("--permission-mode 'acceptEdits'")
-    expect(spawns[0].innerCmd).toContain('--disallowedTools')
-    // Filha recebe o deny PRÓPRIO (coerente com o --settings): sem `git push:*`
-    // nem `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
-    for (const spec of HANDOFF_CHILD_DENY) {
-      expect(spawns[0].innerCmd).toContain(`'${spec}'`)
-    }
-    expect(spawns[0].innerCmd).not.toContain("'Bash(git push:*)'")
-    expect(spawns[0].innerCmd).not.toContain("'Bash(rm:*)'")
+    expect(spawns[0].innerCmd).not.toContain('--disallowedTools')
+    // Filha recebe o deny PRÓPRIO no arquivo de settings: sem `git push:*` nem
+    // `rm:*`, que anulariam o allow de push de feat/* e o ask de rm.
+    const deny = settingsOf(spawns[0].innerCmd).permissions?.deny ?? []
+    expect(deny).toEqual(expect.arrayContaining(HANDOFF_CHILD_DENY))
+    expect(deny).not.toContain('Bash(git push:*)')
+    expect(deny).not.toContain('Bash(rm:*)')
   })
 
   it('modo interactive fica sem flag (default do claude) e sem denylist', () => {

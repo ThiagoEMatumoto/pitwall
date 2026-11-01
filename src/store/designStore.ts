@@ -3,7 +3,13 @@ import { api } from '@/lib/ipc'
 import { centerViewport, fitViewport, unionRects, zoomAt } from '@/features/design/canvas/geometry'
 import { scopeAfterSelect } from '@/features/design/canvas/scope-path'
 import { invertOps } from '@shared/design/ops'
-import type { ArtboardUpdatedEvent, DesignAgentActivity, DesignOp } from '@shared/types/design'
+import type {
+  ArtboardUpdatedEvent,
+  DesignAgentActivity,
+  DesignDocumentMovedEvent,
+  DesignOp,
+  DesignThumbnailUpdatedEvent,
+} from '@shared/types/design'
 import type { DesignState } from './designStore.types'
 import {
   applyHistoryEntry,
@@ -29,7 +35,10 @@ import {
   duplicateArtboardAction,
   releaseTransientAction,
   resyncAction,
+  resyncDocAction,
 } from './designStore.actions'
+import { createHubSlice, handleDocumentMoved, handleThumbnailUpdated } from './designStore.hub'
+import { hydrateLiveState, loadLastSeen, markSeen } from './designStore.live'
 import {
   handleAgentActivity,
   handleArtboardDeleted,
@@ -44,6 +53,8 @@ export type {
   DesignState,
   DesignTool,
   HoverState,
+  HubSection,
+  HubSort,
   TextEditEnd,
 } from './designStore.types'
 export {
@@ -103,6 +114,10 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     viewport: { x: 0, y: 0, zoom: 1 },
     textEditing: null,
     agentActivity: {},
+    activityByDoc: {},
+    lastSeenAt: loadLastSeen(),
+    unseenChanges: [],
+    lastFinishAt: {},
     conflict: null,
     loading: false,
     error: null,
@@ -113,6 +128,7 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     artboardToDelete: null,
     reloadNonce: 0,
     lockedIds: {},
+    ...createHubSlice(store),
 
     loadDocs: async (filter) => {
       set({ loading: true, error: null })
@@ -134,6 +150,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         set({ loading: false, error: 'Documento não encontrado' })
         return
       }
+      const prevDocId = get().docId
+      if (prevDocId && prevDocId !== docId) markSeen(store, prevDocId)
       resetLocalState()
       const page = doc.pages[0] ?? null
       set({
@@ -145,7 +163,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         scopeId: null,
         hover: null,
         textEditing: null,
-        agentActivity: {},
+        agentActivity: get().activityByDoc[docId] ?? {},
+        unseenChanges: [],
         conflict: null,
         viewport: page?.viewport ?? { x: 0, y: 0, zoom: 1 },
         previewArtboardId: null,
@@ -153,10 +172,12 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         interaction: false,
         loading: false,
       })
-      await api.design.activeDocSet(docId)
+      await Promise.all([api.design.activeDocSet(docId), hydrateLiveState(store, docId)])
     },
 
     closeDoc: async () => {
+      const prevDocId = get().docId
+      if (prevDocId) markSeen(store, prevDocId)
       resetLocalState()
       set({
         docId: null,
@@ -164,10 +185,18 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
         pageId: null,
         artboards: {},
         selection: EMPTY_SELECTION,
+        agentActivity: {},
+        unseenChanges: [],
         conflict: null,
       })
       await api.design.activeDocSet(null)
     },
+
+    resyncDoc: () => resyncDocAction(store),
+
+    hydrateLive: (docId) => hydrateLiveState(store, docId),
+
+    markSeen: (docId) => markSeen(store, docId),
 
     selectPage: (pageId) => {
       const page = get().doc?.pages.find((p) => p.id === pageId)
@@ -181,8 +210,8 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
       })
     },
 
-    createDoc: async (title) => {
-      const doc = await api.design.documentCreate({ title })
+    createDoc: async (title, folderId) => {
+      const doc = await api.design.documentCreate({ title, folderId })
       set((s) => ({ docs: upsertMeta(s.docs, toMeta(doc)) }))
       await get().openDoc(doc.id)
       return doc
@@ -196,8 +225,12 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
     },
 
     archiveDoc: async (docId) => {
-      await api.design.documentArchive(docId)
-      set((s) => ({ docs: s.docs.filter((d) => d.id !== docId) }))
+      const archived = await api.design.documentArchive(docId)
+      set((s) => ({
+        docs: s.docs.filter((d) => d.id !== docId),
+        archivedDocs: upsertMeta(s.archivedDocs, toMeta(archived)),
+      }))
+      void get().loadFolders()
       if (get().docId === docId) await get().closeDoc()
     },
 
@@ -391,8 +424,23 @@ export const useDesignStore = create<DesignState>((set, get, store) => {
           if (a?.docId) handleAgentActivity(store, a)
         }),
         api.design.onDocumentUpdated((payload) => {
-          const { docId } = (payload ?? {}) as { docId?: string }
-          if (docId) void handleDocumentUpdated(store, docId)
+          const evt = (payload ?? {}) as Partial<DesignDocumentMovedEvent>
+          if (!evt.docId) return
+          if (evt.moved) handleDocumentMoved(store, evt.docId, evt.folderId ?? null)
+          else void handleDocumentUpdated(store, evt.docId)
+          // docCount has no event of its own.
+          void get().loadFolders()
+        }),
+        api.design.onDocumentDeleted(() => {
+          void get().loadDocs()
+          void get().loadFolders()
+        }),
+        api.design.onFoldersUpdated(() => void get().loadFolders()),
+        api.design.onThumbnailUpdated((payload) => {
+          const evt = (payload ?? {}) as Partial<DesignThumbnailUpdatedEvent>
+          if (evt.docId && evt.thumbnailVersion) {
+            handleThumbnailUpdated(store, evt.docId, evt.thumbnailVersion)
+          }
         }),
         api.design.onArtboardDeleted((payload) => {
           const { artboardId } = (payload ?? {}) as { artboardId?: string }

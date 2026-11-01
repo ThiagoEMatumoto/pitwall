@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { getDb } from '../services/db'
+import { saveDockLayout, saveOpenPanes } from '../services/workspace-state'
 import type { PaneSnapshot, WorkspaceBootState } from '../../../shared/types/ipc'
 
 interface ActiveRow {
@@ -28,6 +29,14 @@ function ensureRow(): void {
     .run(Date.now())
 }
 
+// Fim do restore do workspace no renderer (a fila conta o prazo dos itens que
+// esperam a conversa a partir daqui).
+let workspaceRestoredHook: (() => void) | null = null
+
+export function setWorkspaceRestoredHook(hook: (() => void) | null): void {
+  workspaceRestoredHook = hook
+}
+
 export function markWorkspaceRunning(): void {
   ensureRow()
   const row = getDb()
@@ -35,6 +44,11 @@ export function markWorkspaceRunning(): void {
     .get() as Pick<BootRow, 'clean_shutdown'> | undefined
   prevCleanShutdown = row?.clean_shutdown === 1
   getDb().prepare('UPDATE workspace_state SET clean_shutdown = 0 WHERE id = 1').run()
+}
+
+// O boot anterior terminou por quit normal? Só vale depois de markWorkspaceRunning.
+export function previousShutdownWasClean(): boolean {
+  return prevCleanShutdown
 }
 
 export function markWorkspaceCleanShutdown(): void {
@@ -60,15 +74,11 @@ export function registerWorkspaceIpc(): void {
   })
 
   ipcMain.handle('workspace:save-panes', (_e, { panes }: { panes: PaneSnapshot[] }) => {
-    ensureRow()
-    getDb()
-      .prepare('UPDATE workspace_state SET open_panes = ? WHERE id = 1')
-      .run(JSON.stringify(panes))
+    saveOpenPanes(getDb(), panes)
   })
 
   ipcMain.handle('workspace:save-layout', (_e, { layout }: { layout: string | null }) => {
-    ensureRow()
-    getDb().prepare('UPDATE workspace_state SET dock_layout = ? WHERE id = 1').run(layout)
+    saveDockLayout(getDb(), layout)
   })
 
   ipcMain.handle('workspace:get-boot-state', (): WorkspaceBootState => {
@@ -97,7 +107,9 @@ export function registerWorkspaceIpc(): void {
       .run()
   })
 
+  // O renderer chama isto ao terminar o restore das panes.
   ipcMain.handle('workspace:reset-restore-attempts', () => {
     getDb().prepare('UPDATE workspace_state SET restore_attempts = 0 WHERE id = 1').run()
+    workspaceRestoredHook?.()
   })
 }

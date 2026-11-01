@@ -185,9 +185,10 @@ function LocalToastCard({ toast }: { toast: LocalToast }) {
   const dismiss = useToastStore((s) => s.dismiss)
 
   useEffect(() => {
+    if (toast.persistent) return
     const timer = setTimeout(() => dismiss(toast.id), toast.durationMs)
     return () => clearTimeout(timer)
-  }, [toast.id, toast.durationMs, dismiss])
+  }, [toast.id, toast.durationMs, toast.persistent, dismiss])
 
   return (
     <ToastFrame onDismiss={() => dismiss(toast.id)}>
@@ -198,17 +199,33 @@ function LocalToastCard({ toast }: { toast: LocalToast }) {
           {toast.body}
         </div>
       )}
-      {toast.actionLabel && (
-        <button
-          type="button"
-          onClick={() => {
-            toast.onAction?.()
-            dismiss(toast.id)
-          }}
-          className="mt-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-accent)] transition hover:bg-[var(--color-surface-2)]"
-        >
-          {toast.actionLabel}
-        </button>
+      {(toast.actionLabel || toast.secondaryActionLabel) && (
+        <div className="mt-1 flex gap-2">
+          {toast.actionLabel && (
+            <button
+              type="button"
+              onClick={() => {
+                toast.onAction?.()
+                dismiss(toast.id)
+              }}
+              className="rounded border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-accent)] transition hover:bg-[var(--color-surface-2)]"
+            >
+              {toast.actionLabel}
+            </button>
+          )}
+          {toast.secondaryActionLabel && (
+            <button
+              type="button"
+              onClick={() => {
+                toast.onSecondaryAction?.()
+                dismiss(toast.id)
+              }}
+              className="rounded px-2 py-0.5 text-xs text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)]"
+            >
+              {toast.secondaryActionLabel}
+            </button>
+          )}
+        </div>
       )}
     </ToastFrame>
   )

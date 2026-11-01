@@ -10,6 +10,7 @@ export type {
   ChatTranscriptTail,
   ChatTranscriptUpdate,
 } from './chat'
+import type { ComposerDraft, VersionedDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
 import type { AttentionCounters, AttentionItem } from './attention'
@@ -24,51 +25,17 @@ import type { ServiceId } from '../service-registry'
 import type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
 // Re-export: os consumidores continuam importando tudo de '@shared/types/ipc'.
 export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-loop'
-// Reuniões v2: tipos moram em ./meetings e são re-exportados aqui.
-export type {
-  Meeting,
-  MeetingActionItem,
-  MeetingActionItemBatch,
-  MeetingActionItemOwnerKind,
-  MeetingActionItemStatus,
-  MeetingCaptureMode,
-  MeetingDetail,
-  MeetingDetection,
-  MeetingDetectionAction,
-  MeetingDiarizationLiveStatus,
-  MeetingDiarizationStatus,
-  MeetingEvent,
-  MeetingFloatingAction,
-  MeetingLiveState,
-  MeetingSegment,
-  MeetingSetupStatus,
-  MeetingSpeaker,
-  MeetingSpeakerTrack,
-  MeetingStatus,
-  MeetingVoice,
-  RenameMeetingSpeakerInput,
-  StartMeetingInput,
-  UpdateMeetingInput,
-} from './meetings'
-import type {
-  Meeting,
-  MeetingActionItem,
-  MeetingActionItemBatch,
-  MeetingDetail,
-  MeetingDetectionAction,
-  MeetingEvent,
-  MeetingFloatingAction,
-  MeetingLiveState,
-  MeetingSetupStatus,
-  MeetingVoice,
-  RenameMeetingSpeakerInput,
-  StartMeetingInput,
-  UpdateMeetingInput,
-} from './meetings'
 // Design Studio: tipos em ./design (o contrato é grande), re-exportados aqui
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { DiagramLibraryCatalogEntry } from '../diagram-library-catalog'
+import type {
+  HibernateStatsView,
+  PaneCheckRequest,
+  PaneCheckResult,
+  SessionHibernatedEvent,
+} from '../hibernate'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
 import type { AgentBusSnapshot } from './agent-bus'
@@ -1282,12 +1249,59 @@ export interface OverviewData {
   handoffRequests: HandoffRequestHealth
 }
 
+// Lazy restore: no boot as panes persistidas voltam dormindo (sem spawn), menos
+// as eager. O main decide pelo estado durável (handoff ativo, pref); a pane
+// ativa do layout e snapshots sem JSONL o renderer acrescenta sozinho.
+export interface RestorePlan {
+  mode: 'lazy' | 'eager'
+  eagerCcSessionIds: string[]
+}
+
+// Pane dormindo no renderer, espelhada no main para a entrega cross-process
+// (agent-bus, wake da mãe, send-prompt) conseguir acordá-la.
+export interface DormantPaneInfo {
+  ccSessionId: string
+  paneId: string
+  title: string | null
+  repoId: string | null
+}
+
+// main → renderer: retome esta pane dormindo. Resposta por sessions:wake-result.
+export interface WakeRequest {
+  requestId: string
+  ccSessionId: string
+}
+
+// sessionId = sessions.id da sessão retomada; null = não deu (error diz por quê).
+export interface WakeResult {
+  requestId: string
+  sessionId: string | null
+  error?: string
+}
+
+// main → renderer: o main retomou (handoffs:resume, adopt) a conversa de uma
+// pane que está dormindo; a pane deve passar a mostrar esta sessão viva.
+export interface DormantBecameLiveEvent {
+  ccSessionId: string
+  session: Session
+}
+
+// reattached = a conversa já tinha PTY viva e a guarda do main devolveu essa
+// sessão; nada foi spawnado por esta chamada.
+export interface ResumeSessionResult {
+  session: Session
+  reattached: boolean
+}
+
 export interface ResumeSessionInput {
   // null = sessão avulsa: retoma no scratch dir.
   repoId: string | null
   ccSessionId: string
   cols?: number
   rows?: number
+  // Wake de uma pane hibernada. Informativo: quem decide se as flags do spawn
+  // voltam é o sessions.hibernated_at no main (sobrevive a restart; isto não).
+  fromHibernation?: boolean
 }
 
 export interface SessionSummary {
@@ -1475,6 +1489,25 @@ export type AttentionRespondResult =
 export interface AttentionReasonCounters {
   attentionReasonUnparsed: number
   lastUnparsedAt: number | null
+}
+
+// main → renderer: o kernel matou um processo da sessão por MemoryMax.
+// claudeAlive false = o morto foi o próprio claude (a sessão acabou).
+export interface ScopeOomEvent {
+  sessionId: string
+  maxGB: number
+  claudeAlive: boolean
+  // Claude morto por memória e dentro da cota de resume automático: o renderer
+  // retoma esta conversa sozinho.
+  resumeCcSessionId?: string
+}
+
+// oom-kills por sessão (sessions.id, inclusive das encerradas) e total desde o
+// boot; watching = sessões com scope sendo observadas agora.
+export interface ScopeStats {
+  total: number
+  bySession: Record<string, number>
+  watching: number
 }
 
 export type UpdateFormat = 'appimage' | 'deb' | 'dmg' | 'nsis' | 'zip'
@@ -2162,6 +2195,12 @@ export interface InstallDiagramLibraryResult {
   added: number
 }
 
+// Catálogo curado + quais entradas já estão instaladas (derivado da biblioteca).
+export interface DiagramLibraryCatalogState {
+  entries: DiagramLibraryCatalogEntry[]
+  installedIds: string[]
+}
+
 // Resultado da transcrição de um ditado. Erros já vêm em PT, prontos pra tela
 // (porte das mensagens de vozapp/stt.py).
 export type VoiceTranscribeResult = { ok: true; text: string } | { ok: false; error: string }
@@ -2205,618 +2244,6 @@ export interface VoiceSummaryEvent {
 // broadcast voice:summary; erros já vêm em PT, prontos pra tela.
 export type VoiceSummarizeNowResult = { ok: true } | { ok: false; error: string }
 
-// ---------------------------------------------------------------------------
-// Video Lab (migration 041_video_lab)
-// ---------------------------------------------------------------------------
-//
-// O eixo da área é REUSO: uma peça nunca nasce do zero, ela nasce de um TEMPLATE
-// de uma categoria, herdando estilo (brand kit), elenco e blueprint de cenas.
-// Brand kit, personagem e template NÃO pertencem a peça nenhuma — por isso não
-// têm projectId aqui nem project_id no schema.
-//
-// O problema difícil da área é CONSISTÊNCIA, não geração: o personagem precisa
-// parecer o mesmo em oito cenas geradas separadamente. Daí `VideoVisualSpec`
-// (texto canônico injetado em TODO prompt) + `VideoCharacterRef` (imagens
-// aprovadas passadas como referência ao gerador), e daí todo asset registrar
-// `provider`/`model`/`prompt`/`refIds`: a peça é reproduzível, não sorteada.
-
-/** Paleta e tipografia do brand kit. Leitura defensiva no store: a coluna é TEXT. */
-export interface VideoBrandTokens {
-  /** Nome do token → cor (ex: `accent`, `bg`, `text-dim`). */
-  palette: Record<string, string>
-  typography: { display?: string; mono?: string; body?: string }
-}
-
-export interface VideoBrandDoDont {
-  do: string[]
-  dont: string[]
-}
-
-export interface VideoBrandKit {
-  id: string
-  name: string
-  tokens: VideoBrandTokens
-  toneOfVoice: string
-  doDont: VideoBrandDoDont
-  /** Asset COMPARTILHADO (projectId null) — o logo não morre com uma peça. */
-  logoAssetId: string | null
-  /** locale → voiceId de TTS preferida (ex: `{'pt-BR': 'x6uRgOliu4lpcrqMH3s1'}`). */
-  ttsVoices: Record<string, string>
-  createdAt: number
-  updatedAt: number
-}
-
-/** Os traços que NÃO podem variar entre cenas. É o que sustenta a consistência. */
-export interface VideoVisualSpec {
-  /** Texto canônico injetado, literal, em TODO prompt de imagem do personagem. */
-  canonical: string
-  /** Traços item a item (cabelo, roupa, idade aparente) — o checklist da revisão. */
-  invariants: string[]
-  /** O que nunca deve aparecer (negative prompt). */
-  negative: string[]
-}
-
-/** Imagem aprovada do personagem, passada como referência ao gerador. */
-export interface VideoCharacterRef {
-  id: string
-  characterId: string
-  assetId: string
-  /** Só ref aprovada entra no prompt; o resto é histórico de tentativa. */
-  isApproved: boolean
-  ord: number
-}
-
-/** Sem as refs: é o que o list() devolve. */
-export interface VideoCharacterMeta {
-  id: string
-  name: string
-  canonicalDescription: string
-  visualSpec: VideoVisualSpec
-  voiceId: string | null
-  createdAt: number
-  updatedAt: number
-  archivedAt: number | null
-}
-
-export type VideoCharacter = VideoCharacterMeta & {
-  refs: VideoCharacterRef[]
-}
-
-/**
- * Papel + duração-alvo de uma cena no template. SEM roteiro: narração e texto
- * de tela são da PEÇA (`VideoScriptLine`), não do template — é o que permite o
- * mesmo blueprint gerar peças diferentes.
- */
-export interface VideoSceneBlueprint {
-  /** Id textual da cena ('cold-open', 'logo') — o mesmo do motor Remotion. */
-  sceneId: string
-  role: string
-  targetSec: number
-  /** Direção de arte genérica da cena, quando o template já a fixa. */
-  visualHint?: string
-}
-
-/** Personagem escalado num papel (no elenco default do template ou na peça). */
-export interface VideoCastSlot {
-  characterId: string
-  roleInPiece: string
-}
-
-export interface VideoTemplate {
-  id: string
-  /** Categoria ABERTA ('promo', 'character-story', ...): não é enum no banco. */
-  kind: string
-  name: string
-  description: string
-  sceneBlueprint: VideoSceneBlueprint[]
-  brandKitId: string | null
-  defaultCast: VideoCastSlot[]
-  createdAt: number
-  updatedAt: number
-}
-
-/** Etapa da esteira. Arquivar é `archivedAt` — as duas coisas são ortogonais. */
-export type VideoProjectStatus = 'draft' | 'scripting' | 'assets' | 'rendering' | 'done'
-
-/** Cabeçalho da peça, sem cenas nem elenco: é o que o list() devolve. */
-export interface VideoProjectMeta {
-  id: string
-  slug: string
-  title: string
-  description: string
-  kind: string
-  templateId: string | null
-  brandKitId: string | null
-  locales: string[]
-  /** Preset de tema do app usado na direção de arte (ex: 'slate'). */
-  themePreset: string | null
-  status: VideoProjectStatus
-  createdAt: number
-  updatedAt: number
-  archivedAt: number | null
-}
-
-/**
- * A peça com o que é barato carregar junto. O ROTEIRO fica de fora de
- * propósito: é por locale e cresce sem teto — vem por `script.list`.
- */
-export type VideoProject = VideoProjectMeta & {
-  cast: VideoProjectCastEntry[]
-  scenes: VideoScene[]
-}
-
-export interface VideoProjectCastEntry {
-  projectId: string
-  characterId: string
-  roleInPiece: string
-}
-
-export interface VideoScene {
-  id: string
-  projectId: string
-  /** Id textual, único dentro da peça — é a chave que roteiro e assets citam. */
-  sceneId: string
-  ord: number
-  role: string
-  targetSec: number
-  /** Direção de arte desta cena nesta peça. */
-  visual: string
-  createdAt: number
-  updatedAt: number
-}
-
-export type VideoScriptLineKind = 'narration' | 'on_screen'
-
-export interface VideoScriptLine {
-  id: string
-  projectId: string
-  sceneId: string
-  locale: string
-  kind: VideoScriptLineKind
-  text: string
-  /** sha256 do texto: a chave que casa a linha com o áudio já gerado. */
-  textHash: string
-  ord: number
-}
-
-export type VideoAssetKind = 'audio' | 'texture' | 'keyvisual' | 'character' | 'sfx' | 'music'
-
-/**
- * Arquivo no disco + a PROCEDÊNCIA que o gerou. `projectId` null = asset
- * COMPARTILHADO (logo, ref de personagem): não morre quando uma peça é apagada.
- * `path` viaja como caminho, nunca data-url — payload de mídia não passa por IPC.
- */
-export interface VideoAsset {
-  id: string
-  projectId: string | null
-  sceneId: string | null
-  kind: VideoAssetKind
-  locale: string | null
-  path: string
-  /** Chave de idempotência (ex: sha256(text+voiceId+modelId) no TTS). */
-  hash: string | null
-  provider: string | null
-  model: string | null
-  /** Prompt exato que produziu o asset — sem ele a peça não é reproduzível. */
-  prompt: string | null
-  /** Ids dos assets passados como REFERÊNCIA na geração (as refs do personagem). */
-  refIds: string[]
-  costCents: number
-  bytes: number | null
-  durationSec: number | null
-  createdAt: number
-}
-
-export type VideoRenderStatus = 'queued' | 'running' | 'done' | 'failed'
-
-/** Sem o log (que cresce com a saída do Remotion): é o que o list() devolve. */
-export interface VideoRenderMeta {
-  id: string
-  projectId: string
-  locale: string
-  status: VideoRenderStatus
-  outPath: string | null
-  bytes: number | null
-  durationSec: number | null
-  createdAt: number
-  startedAt: number | null
-  finishedAt: number | null
-}
-
-export type VideoRender = VideoRenderMeta & {
-  log: string | null
-}
-
-// --- Filtros -------------------------------------------------------------
-
-export interface VideoProjectListFilter {
-  /** Default no store: só não-arquivadas. */
-  includeArchived?: boolean
-  status?: VideoProjectStatus
-  kind?: string
-  templateId?: string
-  brandKitId?: string
-  search?: string
-}
-
-export interface VideoCharacterListFilter {
-  includeArchived?: boolean
-  search?: string
-}
-
-export interface VideoTemplateListFilter {
-  kind?: string
-  search?: string
-}
-
-export interface VideoAssetListFilter {
-  /** null explícito = só os COMPARTILHADOS; omitido = todos. */
-  projectId?: string | null
-  sceneId?: string
-  kind?: VideoAssetKind
-  locale?: string
-  hash?: string
-}
-
-export interface VideoRenderListFilter {
-  projectId?: string
-  locale?: string
-  status?: VideoRenderStatus
-}
-
-// --- Inputs de escrita ---------------------------------------------------
-
-export interface CreateVideoBrandKitInput {
-  name: string
-  tokens?: VideoBrandTokens
-  toneOfVoice?: string
-  doDont?: VideoBrandDoDont
-  logoAssetId?: string | null
-  ttsVoices?: Record<string, string>
-}
-
-export type UpdateVideoBrandKitInput = Partial<CreateVideoBrandKitInput> & { id: string }
-
-export interface CreateVideoCharacterInput {
-  name: string
-  canonicalDescription?: string
-  visualSpec?: VideoVisualSpec
-  voiceId?: string | null
-}
-
-export type UpdateVideoCharacterInput = Partial<CreateVideoCharacterInput> & { id: string }
-
-/** Substitui o conjunto inteiro de refs (a ordem do array vira `ord`). */
-export interface SetVideoCharacterRefsInput {
-  characterId: string
-  refs: Array<{ assetId: string; isApproved: boolean }>
-}
-
-export interface CreateVideoTemplateInput {
-  kind: string
-  name: string
-  description?: string
-  sceneBlueprint?: VideoSceneBlueprint[]
-  brandKitId?: string | null
-  defaultCast?: VideoCastSlot[]
-}
-
-export type UpdateVideoTemplateInput = Partial<CreateVideoTemplateInput> & { id: string }
-
-/**
- * Criar peça É instanciar template: o store copia blueprint → cenas, brand kit
- * e elenco default numa transação. Sem `templateId` a peça nasce vazia (caminho
- * de exceção, não o normal).
- */
-export interface CreateVideoProjectInput {
-  slug: string
-  title: string
-  description?: string
-  kind?: string
-  templateId?: string | null
-  /** Omitido: herda o do template. */
-  brandKitId?: string | null
-  locales: string[]
-  themePreset?: string | null
-}
-
-export interface UpdateVideoProjectInput {
-  id: string
-  title?: string
-  description?: string
-  kind?: string
-  brandKitId?: string | null
-  locales?: string[]
-  themePreset?: string | null
-  status?: VideoProjectStatus
-}
-
-/** Substitui o elenco inteiro da peça. */
-export interface SetVideoProjectCastInput {
-  projectId: string
-  cast: VideoCastSlot[]
-}
-
-/** Cria ou atualiza a cena (chave: projectId + sceneId). */
-export interface UpsertVideoSceneInput {
-  projectId: string
-  sceneId: string
-  ord?: number
-  role?: string
-  targetSec?: number
-  visual?: string
-}
-
-export interface ReorderVideoScenesInput {
-  projectId: string
-  /** Ids textuais na ordem final. */
-  sceneIds: string[]
-}
-
-/**
- * Grava o roteiro de UM locale de uma vez (o store calcula `textHash` e
- * substitui as linhas daquele locale). Batch porque roteiro se edita inteiro.
- */
-export interface SetVideoScriptInput {
-  projectId: string
-  locale: string
-  lines: Array<{
-    sceneId: string
-    kind: VideoScriptLineKind
-    text: string
-    ord?: number
-  }>
-}
-
-/** Registra um arquivo já existente no disco (import manual ou saída de job). */
-export interface RegisterVideoAssetInput {
-  projectId?: string | null
-  sceneId?: string | null
-  kind: VideoAssetKind
-  locale?: string | null
-  path: string
-  hash?: string | null
-  provider?: string | null
-  model?: string | null
-  prompt?: string | null
-  refIds?: string[]
-  costCents?: number
-  bytes?: number | null
-  durationSec?: number | null
-}
-
-/**
- * Gera a narração das cenas de um locale via TTS. Idempotente por `textHash`:
- * cena cujo áudio já existe com o mesmo hash é REUSADA, não re-paga.
- */
-export interface GenerateVideoAudioInput {
-  projectId: string
-  locale: string
-  /** Omitido: todas as cenas da peça. */
-  sceneIds?: string[]
-  /** Omitido: a voz do brand kit para o locale. */
-  voiceId?: string
-  /** Regera mesmo com hash igual (o usuário trocou a voz e quer ouvir). */
-  force?: boolean
-  /**
-   * DRY-RUN é o default (porte de `video/scripts/tts.mjs`): sem `go: true`
-   * nenhuma chamada à API é feita e `costCents` no resultado é a ESTIMATIVA do
-   * que seria gasto. Quem gasta dinheiro diz que quer gastar.
-   */
-  go?: boolean
-}
-
-/**
- * Gera imagem via Gemini. `characterId` é o que injeta `visualSpec.canonical` no
- * prompt e passa as refs aprovadas — é o caminho da CONSISTÊNCIA.
- */
-export interface GenerateVideoImageInput {
-  projectId: string
-  sceneId?: string
-  kind: Extract<VideoAssetKind, 'keyvisual' | 'texture' | 'character'>
-  prompt: string
-  characterId?: string
-  /** Refs extras além das aprovadas do personagem. */
-  refAssetIds?: string[]
-  force?: boolean
-  /** DRY-RUN é o default: sem `go: true` nada é gerado e nada é cobrado. */
-  go?: boolean
-  /**
-   * TETO DE CUSTO em centavos, OBRIGATÓRIO quando `go: true` — gerar sem
-   * orçamento declarado é proibido por construção. Comparado contra o que a
-   * peça JÁ gastou; estourou, aborta ANTES da chamada em vez de rebaixar o
-   * modelo em silêncio (rebaixar quebra a consistência visual da série).
-   */
-  budgetCents?: number
-}
-
-/** Resultado de um lote de geração — `reused` é a prova de que a idempotência pegou. */
-export interface GenerateVideoAssetsResult {
-  assets: VideoAsset[]
-  generated: number
-  reused: number
-  failed: number
-  costCents: number
-}
-
-/**
- * "Salvar peça como template": promove a ESTRUTURA da peça a molde (cenas,
- * brand kit, elenco). O ROTEIRO fica de fora — narração é da peça, não do
- * molde, e é isso que deixa o mesmo blueprint gerar peças diferentes.
- */
-export interface SaveVideoTemplateFromProjectInput {
-  projectId: string
-  name: string
-  /** Omitido: herda a categoria da própria peça. */
-  kind?: string
-  description?: string
-}
-
-export interface StartVideoRenderInput {
-  projectId: string
-  locale: string
-}
-
-// --- Eventos de processo longo -------------------------------------------
-
-/** Progresso do render (Remotion): um evento por linha lida do stdout. */
-export interface VideoRenderProgressEvent {
-  renderId: string
-  projectId: string
-  locale: string
-  status: VideoRenderStatus
-  /** 0..1; null enquanto nenhum frame foi reportado. */
-  progress: number | null
-  renderedFrames: number | null
-  totalFrames: number | null
-  message: string | null
-}
-
-/** Progresso da geração de assets. `reused` = achou pelo hash e não pagou API. */
-export interface VideoAssetJobEvent {
-  projectId: string
-  kind: VideoAssetKind
-  sceneId: string | null
-  locale: string | null
-  status: 'started' | 'reused' | 'done' | 'failed'
-  assetId: string | null
-  error: string | null
-}
-
-/**
- * Superfície IPC da área. Declarada separada de `Api` por legibilidade (o bloco
- * é grande), e ligada lá embaixo por `video: VideoApi` — a chave e a
- * implementação no preload entraram juntas, como `const api: Api` exige.
- */
-export interface VideoApi {
-  brandKits: {
-    list(): Promise<VideoBrandKit[]>
-    get(id: string): Promise<VideoBrandKit | null>
-    create(input: CreateVideoBrandKitInput): Promise<VideoBrandKit>
-    update(input: UpdateVideoBrandKitInput): Promise<VideoBrandKit>
-    remove(id: string): Promise<void>
-    /** Payload = VideoBrandKit completo ou marcador { id, deleted }. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-  characters: {
-    /** Sem as refs: lista leve. */
-    list(filter?: VideoCharacterListFilter): Promise<VideoCharacterMeta[]>
-    get(id: string): Promise<VideoCharacter | null>
-    create(input: CreateVideoCharacterInput): Promise<VideoCharacter>
-    update(input: UpdateVideoCharacterInput): Promise<VideoCharacter>
-    /** Substitui o conjunto inteiro de refs; devolve o personagem atualizado. */
-    setRefs(input: SetVideoCharacterRefsInput): Promise<VideoCharacter>
-    archive(id: string): Promise<VideoCharacter>
-    unarchive(id: string): Promise<VideoCharacter>
-    /** Payload = VideoCharacter completo. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-  templates: {
-    list(filter?: VideoTemplateListFilter): Promise<VideoTemplate[]>
-    get(id: string): Promise<VideoTemplate | null>
-    create(input: CreateVideoTemplateInput): Promise<VideoTemplate>
-    update(input: UpdateVideoTemplateInput): Promise<VideoTemplate>
-    remove(id: string): Promise<void>
-    /** Fecha o ciclo de reuso: a peça que ficou boa vira molde da próxima. */
-    saveFromProject(input: SaveVideoTemplateFromProjectInput): Promise<VideoTemplate>
-    /** Payload = VideoTemplate completo ou marcador { id, deleted }. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-  projects: {
-    /** Sem cenas nem elenco: lista leve. */
-    list(filter?: VideoProjectListFilter): Promise<VideoProjectMeta[]>
-    get(id: string): Promise<VideoProject | null>
-    /** Instancia o template (blueprint → cenas, brand kit, elenco) numa transação. */
-    create(input: CreateVideoProjectInput): Promise<VideoProject>
-    update(input: UpdateVideoProjectInput): Promise<VideoProject>
-    setCast(input: SetVideoProjectCastInput): Promise<VideoProject>
-    archive(id: string): Promise<VideoProject>
-    unarchive(id: string): Promise<VideoProject>
-    /** Apaga a peça e o que é dela (cenas, roteiro, assets, renders). */
-    remove(id: string): Promise<void>
-    /** Payload = VideoProject completo. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-    /** Payload = { id }. */
-    onDeleted(handler: (payload: unknown) => void): () => void
-  }
-  scenes: {
-    list(projectId: string): Promise<VideoScene[]>
-    upsert(input: UpsertVideoSceneInput): Promise<VideoScene>
-    reorder(input: ReorderVideoScenesInput): Promise<VideoScene[]>
-    /** Apagar a cena leva as linhas de roteiro e os assets dela (FK composta). */
-    remove(projectId: string, sceneId: string): Promise<void>
-    /** Payload = { projectId, scenes }. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-  script: {
-    list(projectId: string, locale: string): Promise<VideoScriptLine[]>
-    /** Substitui o roteiro daquele locale; o store calcula os textHash. */
-    set(input: SetVideoScriptInput): Promise<VideoScriptLine[]>
-    /** Payload = { projectId, locale }. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-  assets: {
-    list(filter?: VideoAssetListFilter): Promise<VideoAsset[]>
-    get(id: string): Promise<VideoAsset | null>
-    register(input: RegisterVideoAssetInput): Promise<VideoAsset>
-    /** TTS por cena, idempotente por textHash. */
-    generateAudio(input: GenerateVideoAudioInput): Promise<GenerateVideoAssetsResult>
-    /** Imagem via Gemini, com visualSpec + refs aprovadas do personagem. */
-    generateImage(input: GenerateVideoImageInput): Promise<GenerateVideoAssetsResult>
-    /** Apaga a linha; o arquivo em disco é do serviço, não da UI. */
-    remove(id: string): Promise<void>
-    /** Payload = VideoAsset completo ou marcador { id, deleted }. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-    /** Payload = VideoAssetJobEvent — progresso de lote, inclusive 'reused'. */
-    onJobEvent(handler: (payload: unknown) => void): () => void
-  }
-  renders: {
-    /** Sem o log: lista leve. */
-    list(filter?: VideoRenderListFilter): Promise<VideoRenderMeta[]>
-    get(id: string): Promise<VideoRender | null>
-    /** Enfileira o render; o progresso chega por onProgress. Nunca lança por
-     *  falha do render: a row gravada com status 'failed' É o resultado. */
-    start(input: StartVideoRenderInput): Promise<VideoRenderMeta>
-    cancel(id: string): Promise<VideoRenderMeta>
-    /** Abre o MP4 no player do sistema. */
-    reveal(id: string): Promise<void>
-    /** Payload = VideoRenderProgressEvent. */
-    onProgress(handler: (payload: unknown) => void): () => void
-    /** Payload = VideoRenderMeta — transição de status persistida. */
-    onUpdated(handler: (payload: unknown) => void): () => void
-  }
-}
-
-export interface MeetingsApi {
-  /** Inicia gravação (sistema + mic) e devolve a reunião em status 'recording'. */
-  start(input?: StartMeetingInput): Promise<Meeting>
-  /** Para a gravação; resumo e extração seguem em background (processing → done). */
-  stop(): Promise<Meeting>
-  state(): Promise<MeetingLiveState>
-  list(): Promise<Meeting[]>
-  get(id: string): Promise<MeetingDetail>
-  update(input: UpdateMeetingInput): Promise<Meeting>
-  /** Anexa "- [mm:ss] texto" às notas no main (sem clobber do editor). */
-  quickNote(meetingId: string, text: string): Promise<Meeting>
-  delete(id: string): Promise<void>
-  /** Re-roda resumo + extração de tarefas. */
-  resummarize(id: string): Promise<Meeting>
-  /** Decisão em lote: 'create' cria as tasks (com overrides de dono/título), 'dismiss' descarta. Devolve a lista completa. */
-  actionItemsBatch(input: MeetingActionItemBatch): Promise<MeetingActionItem[]>
-  /** Renomeia o speaker, reescreve os segmentos e cria/atualiza a voz conhecida. */
-  renameSpeaker(input: RenameMeetingSpeakerInput): Promise<Meeting>
-  listVoices(): Promise<MeetingVoice[]>
-  deleteVoice(id: string): Promise<void>
-  /** Baixa o modelo de embedding; progresso chega por onEvent ('model_progress'). */
-  downloadModels(): Promise<void>
-  floating(action: MeetingFloatingAction): Promise<void>
-  /** Decide sobre a reunião detectada: gravar ou ignorar até o stream acabar. */
-  detection(action: MeetingDetectionAction): Promise<void>
-  checkSetup(): Promise<MeetingSetupStatus>
-  /** Estado ao vivo, segmentos, reunião e action items — um canal só. */
-  onEvent(handler: (event: MeetingEvent) => void): () => void
-}
-
 export interface Api {
   projects: {
     list(): Promise<Project[]>
@@ -2834,7 +2261,7 @@ export interface Api {
   }
   sessions: {
     spawn(input: SpawnSessionInput): Promise<Session>
-    resume(input: ResumeSessionInput): Promise<Session>
+    resume(input: ResumeSessionInput): Promise<ResumeSessionResult>
     isResumable(ccSessionId: string): Promise<boolean>
     listByRepo(repoId: string): Promise<SessionSummary[]>
     /** Sessões de uma feature, da mais recente pra mais antiga. */
@@ -2843,6 +2270,37 @@ export interface Api {
     write(sessionId: string, data: string): Promise<void>
     /** Grava uma imagem (paste/drag) como binário em <userData>/tmp e devolve o path absoluto. */
     saveImage(sessionId: string, bytes: ArrayBuffer, mime: string): Promise<string>
+    /** Rascunho durável do Composer (app.db), por pane. null = sem rascunho. */
+    getDraft(key: string): Promise<ComposerDraft | null>
+    /** Grava o rascunho com fsync (FULL); vazio (sem texto nem anexos) remove. */
+    saveDraft(draft: VersionedDraftInput): Promise<void>
+    /** Write-through de cada mudança (send assíncrono, NORMAL): sobrevive a kill -9. */
+    writeDraft(draft: VersionedDraftInput): void
+    /** Remove o rascunho — só depois do envio confirmado. */
+    clearDraft(key: string): Promise<void>
+    /** Pane nova sem rascunho herda o das panes fechadas da mesma conversa. */
+    adoptDraft(target: {
+      paneId: string
+      ccSessionId: string
+      openPaneIds: string[]
+    }): Promise<ComposerDraft | null>
+    /** Encerrar confirmado: apaga os rascunhos da conversa, menos os de panes abertas. */
+    clearSessionDrafts(target: {
+      ccSessionId: string | null
+      paneId: string | null
+      openPaneIds: string[]
+    }): Promise<string[]>
+    /** GC dos rascunhos — só depois de um restore bem-sucedido. */
+    gcDrafts(
+      openPanes: Array<{ paneId: string | null; ccSessionId: string | null }>,
+    ): Promise<string[]>
+    /** getDraft síncrono (sendSync): só no flush, antes da hidratação terminar. */
+    getDraftSync(key: string): ComposerDraft | null
+    /** saveDraft síncrono (sendSync): retorna depois do commit; erro vira throw. */
+    saveDraftSync(draft: VersionedDraftInput): void
+    /** Main pede o flush dos rascunhos (quit, exit de sessão); responder com draftFlushDone. */
+    onDraftFlushRequest(handler: (requestId: string) => void): () => void
+    draftFlushDone(requestId: string): void
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     kill(sessionId: string): Promise<void>
     rename(sessionId: string, title: string): Promise<void>
@@ -2868,6 +2326,28 @@ export interface Api {
     attentionDebug(): Promise<AttentionReasonCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
+    /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
+    restorePlan(ccSessionIds: string[]): Promise<RestorePlan>
+    /** Substitui a lista de panes dormindo que o main pode acordar; devolve-a com title/repoId completados pelo DB. */
+    dormantSync(panes: DormantPaneInfo[]): Promise<DormantPaneInfo[]>
+    /** O main pede para retomar uma pane dormindo; responda com wakeResult. */
+    onWakeRequest(handler: (request: WakeRequest) => void): () => void
+    wakeResult(result: WakeResult): Promise<void>
+    /** O main retomou a conversa de uma pane dormindo (só com sessions.lazyRestore ligada). */
+    onDormantBecameLive(handler: (event: DormantBecameLiveEvent) => void): () => void
+    /** Contadores da hibernação por ociosidade e se o tick está ligado (e por que não). */
+    hibernateStats(): Promise<HibernateStatsView>
+    /** Uma PTY saiu pelo /exit da hibernação; chega ANTES do pty:exit da mesma PTY. */
+    onHibernated(handler: (event: SessionHibernatedEvent) => void): () => void
+    /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
+    onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
+    paneCheckResult(result: PaneCheckResult): Promise<void>
+    /** A aba de uma PTY viva foi fechada pelo X: um /exit da hibernação em curso não a recria. */
+    paneClosed(sessionId: string): Promise<void>
+    /** O kernel matou um processo da sessão por passar do teto de memória. */
+    onOom(handler: (event: ScopeOomEvent) => void): () => void
+    /** Contador de oom-kills por sessão/total (scopes do systemd). */
+    scopeStats(): Promise<ScopeStats>
   }
   chat: {
     /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */
@@ -3186,6 +2666,8 @@ export interface Api {
   sendTo: {
     send(input: SendPromptInput): Promise<SendPromptResult>
     cancel(id: string): Promise<boolean>
+    // Item 'maybe-undelivered' (o app morreu no meio da entrega): o usuário confirma o reenvio.
+    resend(id: string): Promise<boolean>
     queue(): Promise<PromptQueueSnapshot>
     // Fim da tela espelhada da PTY; null = sem espelho (shell, codex).
     preview(sessionId: string): Promise<ScreenPreview | null>
@@ -3260,6 +2742,9 @@ export interface Api {
       replace(items: DiagramLibraryItem[]): Promise<DiagramLibraryItem[]>
       remove(id: string): Promise<DiagramLibraryItem[]>
       installUrl(url: string): Promise<InstallDiagramLibraryResult>
+      catalog(): Promise<DiagramLibraryCatalogState>
+      installCatalog(catalogId: string): Promise<InstallDiagramLibraryResult>
+      removeCatalog(catalogId: string): Promise<DiagramLibraryItem[]>
       // Payload = { items: DiagramLibraryItem[] }.
       onUpdated(handler: (payload: unknown) => void): () => void
     }
@@ -3296,7 +2781,5 @@ export interface Api {
     isMaximized(): Promise<boolean>
     onMaximizeChange(handler: (maximized: boolean) => void): () => void
   }
-  video: VideoApi
-  meetings: MeetingsApi
   design: DesignApi
 }

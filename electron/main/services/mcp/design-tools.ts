@@ -105,6 +105,7 @@ function utilTools(deps: DesignToolDeps): ToolDef[] {
           at: Date.now(),
           summary: input.summary,
         }
+        liveState.recordChange(activity)
         deps.notify.broadcast('design:agent-activity', activity)
         return ok({
           artboardId: input.artboardId,

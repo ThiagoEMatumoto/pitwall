@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { getDb } from './db'
+import { getDb, handoffsInterruptedAtOpen } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
 import { isLedByMother } from '../../../shared/handoff-lead'
@@ -912,6 +912,46 @@ export function findActiveByTarget(
           .get(targetRepoId)
   ) as HandoffRow | undefined
   return row ? toEntity(row) : null
+}
+
+// cc_session_id das mães e filhas de handoff ativo: o que o lazy restore sobe
+// eager no boot (uma mãe dormindo não recebe o wake; uma filha dormindo não
+// trabalha). Mesmo predicado de "ativo" do findActiveByTarget, MAIS os handoffs
+// que o sweep do getDb acabou de marcar 'interrupted' (estavam em voo quando o app
+// fechou) e seguem assim: sem eles, o critério nunca casaria no boot.
+export function activeHandoffCcSessionIds(): string[] {
+  const db = getDb()
+  const swept = handoffsInterruptedAtOpen()
+  const sweptSql = swept.length
+    ? ` OR (h.dismissed_at IS NULL AND h.status = 'interrupted' AND h.id IN (${swept.map(() => '?').join(', ')}))`
+    : ''
+  const live = `((${ACTIVE_TARGET_PREDICATE})${sweptSql})`
+  const rows = db
+    .prepare(
+      `SELECT s.cc_session_id AS cc FROM handoffs h
+         JOIN sessions s ON s.id = h.mother_session_id
+        WHERE ${live} AND s.cc_session_id IS NOT NULL
+       UNION
+       SELECT s.cc_session_id AS cc FROM handoffs h
+         JOIN sessions s ON s.id = h.child_session_id
+        WHERE ${live} AND s.cc_session_id IS NOT NULL`,
+    )
+    .all(...swept, ...swept) as Array<{ cc: string }>
+  return rows.map((r) => r.cc)
+}
+
+// A conversa é (ou foi) filha de algum handoff, em qualquer status. Casa pelo cc:
+// o relink re-aponta child_session_id para a linha nova da mesma conversa.
+export function isHandoffChildCc(ccSessionId: string): boolean {
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM handoffs h
+         JOIN sessions s ON s.id = h.child_session_id
+        WHERE s.cc_session_id = ?
+        LIMIT 1`,
+    )
+    .get(ccSessionId)
+  return row !== undefined
 }
 
 // O que o bastão da MÃE carrega: as filhas que ela lidera (isLedByMother) — o

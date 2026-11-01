@@ -8,7 +8,9 @@ import {
   runAutoPullNow,
 } from '../services/repo-pull-scheduler'
 import { CUSTOM_ENV_VARS_KEY } from '../services/custom-env'
-import { AUTO_DETECT_KEY, rescheduleDetector } from '../services/meetings/meeting-detector'
+import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import { HIBERNATE_AFTER_MIN_PREF } from '../../../shared/hibernate'
+import { LAZY_RESTORE_PREF } from '../../../shared/lazy-restore'
 
 const getSchema = z.object({ key: z.string().min(1) })
 const setSchema = z.object({ key: z.string().min(1), value: z.unknown() })
@@ -42,6 +44,9 @@ export function registerPrefsIpc(): void {
       rescheduleAutoPull()
       if (key === AUTO_PULL_ENABLED_KEY && value === true) void runAutoPullNow()
     }
-    if (key === AUTO_DETECT_KEY) rescheduleDetector()
+    // A hibernação exige as duas prefs: qualquer uma liga ou desliga o tick.
+    if (key === HIBERNATE_AFTER_MIN_PREF || key === LAZY_RESTORE_PREF) {
+      getIdleHibernator()?.reschedule()
+    }
   })
 }

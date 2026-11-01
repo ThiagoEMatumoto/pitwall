@@ -19,10 +19,12 @@ const SHIMMER_CSS = `
   animation: pw-design-shimmer 1.6s linear infinite;
 }`
 
-function useLiveEntries(): DesignAgentActivity[] {
-  const activity = useDesignStore((s) => s.agentActivity)
+// Non-stale entries of one document's activity map, re-checked on a tick.
+export function useFreshActivity(
+  activity: Record<string, DesignAgentActivity[]> | undefined,
+): DesignAgentActivity[] {
   const [now, setNow] = useState(() => Date.now())
-  const all = useMemo(() => Object.values(activity).flat(), [activity])
+  const all = useMemo(() => Object.values(activity ?? {}).flat(), [activity])
 
   useEffect(() => {
     if (all.length === 0) return
@@ -48,7 +50,7 @@ function targetName(a: DesignAgentActivity, artboardName: string | undefined): s
 // flight; click jumps to what it is touching. Vanishes on finish (the store
 // drops the entries) or when they go stale.
 export function AgentActivityBadge() {
-  const entries = useLiveEntries()
+  const entries = useFreshActivity(useDesignStore((s) => s.agentActivity))
   const artboards = useDesignStore((s) => s.artboards)
 
   if (entries.length === 0) return null

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal, Save } from "lucide-react";
+import { MoreHorizontal, Plus, Save } from "lucide-react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
   Diagram,
@@ -25,6 +25,35 @@ import {
   toExcalidrawLibraryItems,
 } from "./library-convert";
 import { KIND_LABEL, PARENT_TYPE_LABEL } from "./diagram-labels";
+import { LibraryCatalogDialog } from "./LibraryCatalogDialog";
+import { restoreSceneElements } from "./restore-scene";
+import {
+  buildElements,
+  type DiagramSkeletonElement,
+} from "../../../shared/diagram-skeleton";
+import { blockSize, type BlockKind } from "../../../shared/diagram-shapes";
+
+/** Bloco padrão inserido pelo menu "Inserir": o usuário edita depois. */
+function defaultBlock(kind: BlockKind): DiagramSkeletonElement {
+  const id = `${kind}-${crypto.randomUUID().slice(0, 8)}`;
+  return kind === "entity"
+    ? {
+        id,
+        type: "entity",
+        name: "nova_entidade",
+        fields: [
+          { name: "id", type: "uuid", pk: true },
+          { name: "nome", type: "text" },
+        ],
+      }
+    : {
+        id,
+        type: "class",
+        name: "NovaClasse",
+        attributes: ["+ nome: string"],
+        methods: ["+ executar(): void"],
+      };
+}
 
 function formatWhen(ts: number): string {
   return new Date(ts).toLocaleString("pt-BR", {
@@ -91,6 +120,7 @@ export function DiagramToolbar({
 
   const [title, setTitle] = useState(diagram.title);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [insertOpen, setInsertOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [versions, setVersions] = useState<DiagramVersionMeta[]>([]);
@@ -100,6 +130,7 @@ export function DiagramToolbar({
   const [libraryUrlOpen, setLibraryUrlOpen] = useState(false);
   const [libraryUrl, setLibraryUrl] = useState("");
   const [installingLibrary, setInstallingLibrary] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   // Rename externo (ex.: via MCP) atualiza o campo se o usuário não editou.
   useEffect(() => {
@@ -209,6 +240,48 @@ export function DiagramToolbar({
       });
     } finally {
       setInstallingLibrary(false);
+    }
+  };
+
+  // Insere um bloco no centro do viewport, já selecionado. Fica pinado
+  // (layout "keep"): um patch do Claude não o tira de onde o usuário pôs.
+  const insertBlock = async (kind: BlockKind) => {
+    if (!excalidrawAPI) return;
+    try {
+      const utils = await loadExcalidrawUtils();
+      const skel = defaultBlock(kind);
+      const { width, height } = blockSize(skel);
+      const app = excalidrawAPI.getAppState();
+      const zoom = app.zoom.value;
+      const cx = -app.scrollX + app.width / 2 / zoom;
+      const cy = -app.scrollY + app.height / 2 / zoom;
+      const built = buildElements(
+        [{ ...skel, x: cx - width / 2, y: cy - height / 2 }],
+        { positions: new Map(), routes: new Map() },
+        { layout: "keep" },
+      ).map((el) => ({ ...(el as object), index: null }));
+      const restored = restoreSceneElements(utils, built);
+      excalidrawAPI.updateScene({
+        elements: [
+          ...excalidrawAPI.getSceneElementsIncludingDeleted(),
+          ...restored,
+        ],
+        appState: {
+          selectedElementIds: Object.fromEntries(
+            restored.map((el) => [el.id, true as const]),
+          ),
+          selectedGroupIds: { [skel.id]: true },
+        },
+        captureUpdate: utils.CaptureUpdateAction.IMMEDIATELY,
+      });
+    } catch (err) {
+      showToast({
+        title:
+          kind === "entity"
+            ? "Falha ao inserir entidade"
+            : "Falha ao inserir classe",
+        body: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -323,6 +396,39 @@ export function DiagramToolbar({
       </button>
 
       <Menu
+        open={insertOpen}
+        onClose={() => setInsertOpen(false)}
+        items={[
+          {
+            label: "Nova entidade",
+            onClick: () => void insertBlock("entity"),
+            disabled: !excalidrawAPI,
+            title: excalidrawAPI
+              ? "Tabela ER no centro da tela"
+              : "Editor ainda carregando",
+          },
+          {
+            label: "Nova classe",
+            onClick: () => void insertBlock("class"),
+            disabled: !excalidrawAPI,
+            title: excalidrawAPI
+              ? "Classe UML no centro da tela"
+              : "Editor ainda carregando",
+          },
+        ]}
+      >
+        <button
+          type="button"
+          onClick={() => setInsertOpen((o) => !o)}
+          title="Inserir"
+          aria-label="Inserir"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+        >
+          <Icon as={Plus} />
+        </button>
+      </Menu>
+
+      <Menu
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         items={[
@@ -348,9 +454,8 @@ export function DiagramToolbar({
             onClick: () => setLibraryUrlOpen(true),
           },
           {
-            label: "Explorar catálogo",
-            // O main abre https em browser externo (setWindowOpenHandler).
-            onClick: () => window.open("https://libraries.excalidraw.com"),
+            label: "Catálogo de bibliotecas…",
+            onClick: () => setCatalogOpen(true),
           },
           archived
             ? {
@@ -388,6 +493,19 @@ export function DiagramToolbar({
         }}
       />
 
+      <LibraryCatalogDialog
+        open={catalogOpen}
+        onClose={() => setCatalogOpen(false)}
+        onLibraryChanged={(items) => {
+          if (!excalidrawAPI) return;
+          void excalidrawAPI.updateLibrary({
+            libraryItems: toExcalidrawLibraryItems(items),
+            merge: false,
+            openLibraryMenu: true,
+          });
+        }}
+      />
+
       <Dialog
         open={libraryUrlOpen}
         onClose={() => setLibraryUrlOpen(false)}
@@ -418,8 +536,8 @@ export function DiagramToolbar({
             autoFocus
           />
           <p className="text-[11px] text-[var(--color-text-dim)]">
-            Bibliotecas prontas em libraries.excalidraw.com (menu “Explorar
-            catálogo”).
+            Para AWS, GCP, Azure, UML e C4, use o “Catálogo de bibliotecas”.
+            Outras estão em libraries.excalidraw.com.
           </p>
         </div>
       </Dialog>

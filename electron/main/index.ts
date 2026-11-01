@@ -18,13 +18,18 @@ import {
 } from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
 import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
+import { registerComposerDraftIpc, requestDraftFlush } from './ipc/composer-drafts'
+import { flushBeforeQuit } from './services/draft-flush'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
 import { registerAttentionIpc } from './ipc/attention'
 import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerRoomMotherIpc } from './ipc/room-mother'
 import { registerCanvasIpc } from './ipc/canvas'
-import { registerSendPromptIpc } from './ipc/send-prompt'
+import { promptQueue, registerSendPromptIpc } from './ipc/send-prompt'
+import { registerDormantPanesIpc } from './ipc/dormant-panes'
+import { registerHibernateIpc } from './ipc/hibernate'
+import { getIdleHibernator } from './services/hibernate/idle-hibernator'
 import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
@@ -61,15 +66,8 @@ import { registerObjectivesIpc } from './ipc/objectives'
 import { registerTasksIpc } from './ipc/tasks'
 import { registerDiagramsIpc } from './ipc/diagrams'
 import { registerDesignIpc } from './ipc/design'
-import { registerVideoIpc } from './ipc/video'
-import { killAll as killAllVideoRenders } from './services/video/render'
 import { registerMcpIpc } from './ipc/mcp'
 import { registerVoiceIpc } from './ipc/voice'
-import {
-  initMeetings,
-  onAppReady as meetingsOnAppReady,
-  onWillQuit as meetingsOnWillQuit,
-} from './services/meetings'
 import {
   forgetSessionSummaries,
   scheduleTurnSummary,
@@ -82,9 +80,11 @@ import { featureMemory } from './services/feature-memory'
 import {
   registerWorkspaceIpc,
   markWorkspaceRunning,
+  previousShutdownWasClean,
   markWorkspaceCleanShutdown,
 } from './ipc/workspace'
 import { startMcpServer, stopMcpServer } from './services/mcp/server'
+import { sweepSessionSettings } from './services/session-settings'
 import { initUpdater } from './services/updater'
 import { startUsageMonitor, stopUsageMonitor } from './services/usage-monitor'
 import { registerWindowIpc, wireWindowMaximizeBroadcast } from './ipc/window'
@@ -96,13 +96,15 @@ import {
 } from './services/design/protocol'
 import * as designStore from './services/design/design-store'
 import * as designAssets from './services/design/asset-store'
+import { installThumbnailScheduler } from './services/design/thumbnails'
+import { armOrphanSweep, ensureScopeProbe } from './services/systemd-scope'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const isDev = !app.isPackaged
 
 // Instância única: o auto-update relança o app sem derrubar o antigo, e duas
-// instâncias viram dois ícones no tray e dois PTYs brigando pelo mesmo banco.
+// instâncias viram duas janelas e dois PTYs brigando pelo mesmo banco.
 // A segunda só acorda a janela da primeira e sai — antes de abrir o DB.
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -308,12 +310,21 @@ app.whenReady().then(async () => {
   // MCP server local (writes externos via Claude Code). Async e fire-and-forget:
   // EADDRINUSE etc. são logados dentro do start — nunca derrubam o boot.
   void startMcpServer()
+  // Settings por sessão órfãos (nenhuma PTY sobrevive ao quit), antes de
+  // qualquer spawn. Fora do
+  // startMcpServer de propósito: o settings existe mesmo sem MCP no ar.
+  sweepSessionSettings()
   // Captura o clean_shutdown do boot anterior e o zera; deve rodar antes da
   // janela para que o renderer leia o valor correto via workspace:get-boot-state.
   markWorkspaceRunning()
   registerProjectIpc()
   registerRepoDependenciesIpc()
   registerHandoffsIpc()
+  // Antes das sessões: o restore do renderer spawna logo depois da janela, e o
+  // probe (≤2s) decide se cada sessão ganha o próprio scope systemd. Depois de um
+  // boot que não veio de quit limpo, o primeiro probe ok varre os scopes órfãos.
+  armOrphanSweep(previousShutdownWasClean())
+  await ensureScopeProbe()
   registerSessionIpc()
   registerBatonIpc()
   registerSessionGraphIpc()
@@ -322,8 +333,14 @@ app.whenReady().then(async () => {
   registerRoomMotherIpc()
   registerCanvasIpc()
   registerSendPromptIpc()
+  registerComposerDraftIpc()
+  registerDormantPanesIpc()
+  registerHibernateIpc()
   registerAgentBusIpc()
   registerRepoFilesIpc()
+  // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
+  // bem-sucedido (sessions:gc-drafts). As imagens dos rascunhos coletados saem no
+  // sweep do boot seguinte.
   // Boot reconcile: apaga temporários de imagem órfãos (pasted/dropped no
   // composer) deixados por sessões de execuções anteriores.
   sweepOrphanImageTemps()
@@ -346,10 +363,8 @@ app.whenReady().then(async () => {
   registerTasksIpc()
   registerDiagramsIpc()
   registerDesignIpc()
-  registerVideoIpc()
   registerMcpIpc()
   registerVoiceIpc()
-  initMeetings()
   registerSyncIpc()
   // Wire o ponto único de mutação → coordinator (auto-sync on-idle). Cobre
   // objectives/tasks/features (via notify.broadcast) e projects/repos (via
@@ -368,15 +383,14 @@ app.whenReady().then(async () => {
     getDocument: (id) => designStore.getDocument(id),
     getArtboard: (id) => designStore.getArtboard(id),
     getAsset: (id) => designAssets.get(id),
+    getThumbnail: (id) => designStore.getThumbnail(id),
   })
+  installThumbnailScheduler()
 
   // A janela é criada PRIMEIRO (sem await no sync) para não pintar tela preta
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o
   // watcher via watcherHooks internamente quando importa.
   createMainWindow()
-  // Tray, atalho global e janela flutuante das reuniões dependem do ready e da
-  // janela principal (o menu do tray a foca).
-  meetingsOnAppReady()
   initUpdater()
   startUsageMonitor()
   startFeatureWatcher()
@@ -469,15 +483,16 @@ function runFinalShutdown(): void {
     handoffReconcileTimer = null
   }
   stopAutoPull()
+  getIdleHibernator()?.dispose()
   if (autoPullBootTimer) {
     clearTimeout(autoPullBootTimer)
     autoPullBootTimer = null
   }
   syncCoordinator.stop()
   featureMemory.close()
+  // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.
+  promptQueue.suspendForShutdown()
   ptyManager.killAll()
-  // Render do Remotion é processo filho e não morre sozinho com o app.
-  killAllVideoRenders()
   sessionActivityService.closeAll()
   getDb()
     .prepare("UPDATE sessions SET status = 'exited', ended_at = ? WHERE status = 'running'")
@@ -506,24 +521,18 @@ app.on('before-quit', (event) => {
   // então DEVE rodar antes do closeDb (em runFinalShutdown).
   event.preventDefault()
 
-  const flushDone = syncCoordinator.flush().catch((err) => {
-    console.warn('[sync] flush no quit falhou (não-fatal):', String((err as Error)?.message ?? err))
+  // Junto, o flush dos rascunhos do Composer: o renderer grava o debounce
+  // pendente e confirma (teto de 1,5s), antes do closeDb.
+  const flushed = flushBeforeQuit({
+    flushDrafts: () => requestDraftFlush(),
+    flushSync: () => syncCoordinator.flush(),
+    syncTimeoutMs: QUIT_FLUSH_TIMEOUT_MS,
   })
-  const bounded = Promise.race([
-    flushDone,
-    new Promise<void>((resolve) => setTimeout(resolve, QUIT_FLUSH_TIMEOUT_MS)),
-  ])
 
-  void bounded.then(() => {
+  void flushed.then(() => {
     runFinalShutdown()
     app.quit() // re-dispara o quit; didShutdown=true → before-quit é no-op agora
   })
-})
-
-// Atalho global e tray precisam sair antes do processo morrer (globalShortcut
-// não limpa sozinho no Linux).
-app.on('will-quit', () => {
-  meetingsOnWillQuit()
 })
 
 app.on('window-all-closed', () => {
