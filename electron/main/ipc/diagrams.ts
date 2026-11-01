@@ -1,12 +1,19 @@
 import { ipcMain } from 'electron'
 import * as diagramStore from '../services/diagram-store'
 import * as libraryStore from '../services/diagram-library-store'
-import { installLibraryFromUrl } from '../services/diagram-library-install'
+import {
+  installCatalogLibrary,
+  installedCatalogIds,
+  installLibraryFromUrl,
+  removeCatalogLibrary,
+} from '../services/diagram-library-install'
+import { DIAGRAM_LIBRARY_CATALOG } from '../../../shared/diagram-library-catalog'
 import { broadcast } from '../services/notify'
 import type {
   CreateDiagramInput,
   Diagram,
   DiagramAuthor,
+  DiagramLibraryCatalogState,
   DiagramLibraryItem,
   DiagramLink,
   DiagramListFilter,
@@ -153,6 +160,28 @@ export function registerDiagramsIpc(): void {
       const result = await installLibraryFromUrl(url)
       broadcast('diagramLibrary:updated', { items: result.items })
       return result
+    },
+  )
+
+  ipcMain.handle('diagrams:library-catalog', (): DiagramLibraryCatalogState => {
+    return { entries: [...DIAGRAM_LIBRARY_CATALOG], installedIds: installedCatalogIds() }
+  })
+
+  ipcMain.handle(
+    'diagrams:library-install-catalog',
+    async (_e, catalogId: string): Promise<InstallDiagramLibraryResult> => {
+      const result = await installCatalogLibrary(catalogId)
+      broadcast('diagramLibrary:updated', { items: result.items })
+      return result
+    },
+  )
+
+  ipcMain.handle(
+    'diagrams:library-remove-catalog',
+    (_e, catalogId: string): DiagramLibraryItem[] => {
+      const items = removeCatalogLibrary(catalogId)
+      broadcast('diagramLibrary:updated', { items })
+      return items
     },
   )
 }
