@@ -31,7 +31,7 @@ export function ArtifactThumb({
 }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-md border border-[var(--color-border)] bg-white ${className}`}
+      className={`relative overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] ${className}`}
     >
       {src ? (
         <img
