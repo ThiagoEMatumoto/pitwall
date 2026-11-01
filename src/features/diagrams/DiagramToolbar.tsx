@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { MoreHorizontal, Plus, Save } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Plus, Save } from "lucide-react";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
   Diagram,
@@ -117,6 +117,7 @@ export function DiagramToolbar({
   const archive = useDiagramsStore((s) => s.archive);
   const unarchive = useDiagramsStore((s) => s.unarchive);
   const remove = useDiagramsStore((s) => s.remove);
+  const select = useDiagramsStore((s) => s.select);
 
   const [title, setTitle] = useState(diagram.title);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -343,6 +344,16 @@ export function DiagramToolbar({
 
   return (
     <header className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2">
+      {/* Fechar o editor dispara o flush com snapshot do unmount. */}
+      <button
+        type="button"
+        onClick={() => void select(null)}
+        aria-label="Voltar para diagramas"
+        title="Voltar para diagramas"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-dim)] outline-none transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+      >
+        <Icon as={ArrowLeft} size={16} />
+      </button>
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
