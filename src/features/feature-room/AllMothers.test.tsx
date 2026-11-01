@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Nível "Todas as mães" sobre o estado que os PRODUTORES escrevem: handoffStore em
@@ -41,6 +41,14 @@ const special: Record<string, Record<string, unknown>> = {
     write: api.write,
   },
   sendTo: { send: api.send, subscribeTail: api.subscribeTail },
+  // O pin é do main (mother_pins): mesma store, mesmo banco do teste.
+  motherPins: {
+    list: () => Promise.resolve(pinsStore.listMotherPins()),
+    set: ({ sessionId, pinned }: { sessionId: string; pinned: boolean }) => {
+      pinsStore.setMotherPin(pinsStore.motherPinKeyOf(sessionId)!, pinned)
+      return Promise.resolve(pinsStore.listMotherPins())
+    },
+  },
   chat: {
     watch: api.watch,
     watchTail: api.watchTail,
@@ -100,6 +108,7 @@ class FakeIO {
 vi.stubGlobal('IntersectionObserver', FakeIO)
 
 const store = await import('../../../electron/main/services/handoff-store')
+const pinsStore = await import('../../../electron/main/services/mother-pins-store')
 const harness = await import('../../../electron/main/services/attention/attention-test-harness')
 const { roomWorld } = await import('../../../electron/main/services/attention/room-world')
 const { menuFingerprint } = await import('../../../shared/tui/tui-menu-parser')
@@ -107,7 +116,7 @@ const { countAttentionSubjects, humanQueue } = await import('../../../shared/att
 const { FeatureRoom } = await import('./FeatureRoom')
 const { MAX_LIVE_TILES } = await import('./AllMothers')
 const { useFeatureRoomStore } = await import('./feature-room-store')
-const { useMotherPins } = await import('./mother-pins-store')
+const { useMotherPinsStore } = await import('@/features/sessions/mother-pins-store')
 const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
 const { useAttentionListStore } = await import('@/store/attentionStore')
 const { useHandoffsStore } = await import('@/store/handoffsStore')
@@ -195,7 +204,7 @@ describe('AllMothers', () => {
     api.tails.clear()
     io.hidden.clear()
     localStorage.clear()
-    useMotherPins.setState({ order: [] })
+    useMotherPinsStore.setState({ keys: [], loaded: false })
     permission = await harness.scanFixture('permission-bash')
   })
   afterEach(() => testDb.close())
@@ -341,13 +350,13 @@ describe('AllMothers', () => {
     expect(room.selectedMotherId.F1).toBe('nori')
   })
 
-  it('fixar põe o tile primeiro, com aria-pressed', () => {
+  it('fixar põe o tile primeiro, com aria-pressed', async () => {
     seed()
     mount(lives(BASE))
     const last = tiles().at(-1)!
     const id = last.dataset.tile!
     fireEvent.click(within(last).getByTestId('mother-tile-pin'))
-    expect(tiles()[0].dataset.tile).toBe(id)
+    await waitFor(() => expect(tiles()[0].dataset.tile).toBe(id))
     expect(within(tiles()[0]).getByTestId('mother-tile-pin')).toHaveAttribute(
       'aria-pressed',
       'true',

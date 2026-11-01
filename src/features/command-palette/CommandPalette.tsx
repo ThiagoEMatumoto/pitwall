@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import {
+  groupStatusUnderMother,
+  motherOfChildMap,
+  nestUnderMothers,
+} from '@/features/sessions/conversation-hierarchy'
+import { useMotherPinsStore } from '@/features/sessions/mother-pins-store'
+import {
   Blocks,
   CheckSquare,
+  Crown,
   Folder,
   MessageSquareText,
   Mic,
@@ -123,6 +130,11 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     [graphNodes],
   )
   const endedSessions = useEndedSessions(open)
+  const motherOfChild = useMemo(() => motherOfChildMap(graphNodes), [graphNodes])
+  const pinnedMotherIds = useMemo(
+    () => new Set(graphNodes.filter((n) => n.isPinnedMother).map((n) => n.sessionId)),
+    [graphNodes],
+  )
 
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -269,6 +281,26 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     // então a palette só avisa — o Terminal daquela sessão liga o mic.
     if (activeCcSessionId) {
       const cc = activeCcSessionId
+      const activeLive = liveSessions.find((s) => s.ccSessionId === cc)
+      if (activeLive) {
+        const pinned = pinnedMotherIds.has(activeLive.id)
+        list.push({
+          id: 'session-mother-pin',
+          label: pinned ? 'Desmarcar como mãe' : 'Marcar como mãe',
+          icon: <Icon as={Crown} />,
+          group: ACTIVE_SESSION_GROUP,
+          run: () => void useMotherPinsStore.getState().setPinned(activeLive.id, !pinned),
+        })
+        if (motherOfChild.has(activeLive.id)) {
+          list.push({
+            id: 'session-promote-mother',
+            label: 'Tornar mãe (soltar da mãe atual)',
+            icon: <Icon as={Crown} />,
+            group: ACTIVE_SESSION_GROUP,
+            run: () => void useMotherPinsStore.getState().promote(activeLive.id, 'when-idle'),
+          })
+        }
+      }
       list.push(
         {
           id: 'session-summarize-now',
@@ -301,14 +333,16 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
 
     // Sessões vivas — mesmo fluxo do SessionSwitcher: foca a pane se já exibida,
     // senão abre. Ordenadas por urgência pro corte do cap manter as acionáveis.
-    for (const s of sortByUrgency(liveSessions)) {
+    // Filha logo abaixo da mãe (régua única), no grupo de status da mãe.
+    const groupStatus = groupStatusUnderMother(liveSessions, motherOfChild)
+    for (const { item: s, depth } of nestUnderMothers(sortByUrgency(liveSessions), motherOfChild)) {
       list.push({
         id: `live-session-${s.ccSessionId}`,
-        label: sessionLabel(s),
+        label: depth > 0 ? `↳ ${sessionLabel(s)}` : sessionLabel(s),
         searchText: sessionSearchText(s),
         icon: sessionIcon(s),
         hint: sessionHint(s),
-        group: liveSessionGroup(s.status),
+        group: liveSessionGroup(groupStatus.get(s.id) ?? s.status),
         run: () => void focusOrOpenSession(s),
       })
     }
@@ -403,6 +437,8 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     tasks,
     query,
     liveSessions,
+    motherOfChild,
+    pinnedMotherIds,
     sessionFeatureIds,
     endedSessions,
     activeCcSessionId,

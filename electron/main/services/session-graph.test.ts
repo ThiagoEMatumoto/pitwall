@@ -385,14 +385,16 @@ describe('session-graph', () => {
     expect(g.nodes.some((n) => n.sessionId === `done-${TERMINAL_HANDOFFS_PER_MOTHER}`)).toBe(false)
   })
 
-  it('handoff dispensado do Crew Dock não gera fio', () => {
+  // Dispensar arquiva o CARD (sai do Crew Dock), não o parentesco: a filha
+  // dispensada continua sob a mãe no mapa e na Room. Só o Desvincular a solta.
+  it('handoff dispensado do Crew Dock mantém o fio mãe→filha, sem quick look de crew', () => {
     addSession('mother', 'r-web')
     addSession('kid', 'r-api')
     const h = dispatch('mother', 'kid', 't')
     handoffStore.dismiss(h)
 
     const g = graphFor(live({ mother: {}, kid: {} }))
-    expect(edgesOf(g.edges, 'handoff')).toEqual([])
+    expect(edgesOf(g.edges, 'handoff').map((e) => [e.from, e.to])).toEqual([['mother', 'kid']])
     expect(g.nodes.find((n) => n.sessionId === 'kid')?.childOfHandoffId).toBeNull()
   })
 

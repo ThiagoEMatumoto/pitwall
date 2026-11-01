@@ -22,6 +22,7 @@ import { registerComposerDraftIpc, requestDraftFlush } from './ipc/composer-draf
 import { flushBeforeQuit } from './services/draft-flush'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
+import { registerMotherPinsIpc } from './ipc/mother-pins'
 import { registerAttentionIpc } from './ipc/attention'
 import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerRoomMotherIpc } from './ipc/room-mother'
@@ -328,6 +329,7 @@ app.whenReady().then(async () => {
   registerSessionIpc()
   registerBatonIpc()
   registerSessionGraphIpc()
+  registerMotherPinsIpc()
   registerAttentionIpc()
   registerFeatureRoomIpc()
   registerRoomMotherIpc()

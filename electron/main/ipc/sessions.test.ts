@@ -132,6 +132,7 @@ vi.mock('../services/handoff-store', () => ({
     seam.transfers.push({ from, to })
     return []
   },
+  adoptResumedConversation: () => [],
 }))
 vi.mock('../services/mcp/server', () => ({ getMcpRuntime: () => seam.runtime }))
 vi.mock('../services/mcp/config', () => ({

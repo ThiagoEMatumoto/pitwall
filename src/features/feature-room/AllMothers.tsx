@@ -26,7 +26,7 @@ import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { allMothers, childIdsByMother, needYouFor, orderTiles, pinKey } from './all-mothers-model'
 import { useFeatureRoomStore } from './feature-room-store'
 import { GlobalAttentionStrip } from './GlobalAttentionStrip'
-import { useMotherPins } from './mother-pins-store'
+import { useMotherPinKeys, useMotherPinsStore } from '@/features/sessions/mother-pins-store'
 import { MotherTile } from './MotherTile'
 import { COMPACT, ROOM_FOCUS, useNow } from './room-ui'
 import { StartMotherCard, focusMotherComposerWhenReady } from './StartMotherCard'
@@ -118,7 +118,7 @@ export function AllMothers() {
   const graph = useSessionGraph()
   const liveSessions = useAppStore((s) => s.liveSessions)
   const attention = useAttentionListStore((s) => s.items)
-  const pins = useMotherPins((s) => s.order)
+  const pins = useMotherPinKeys()
   const now = useNow()
   const [startOpen, setStartOpen] = useState(false)
   const rootRef = useRef<HTMLElement>(null)
@@ -184,12 +184,6 @@ export function AllMothers() {
     }
   }, [])
 
-  // Poda dos pins: só com o nó fora do grafo ou encerrado (não por sair do inUse).
-  useEffect(() => {
-    const alive = new Set(graph.nodes.filter((n) => n.status !== 'ended').map(pinKey))
-    useMotherPins.getState().prune(alive)
-  }, [graph])
-
   const featureTitleOf = useCallback(
     (featureId: string | null) => {
       if (!featureId) return null
@@ -210,8 +204,10 @@ export function AllMothers() {
     room.openRoom(node.featureId)
     focusMotherComposerWhenReady(undefined, node.sessionId)
   }, [])
+  // Fixar o tile É marcar "essa é a mãe" (fonte única, por conversa).
   const pinTile = useCallback((node: SessionGraphNode) => {
-    useMotherPins.getState().toggle(pinKey(node))
+    const store = useMotherPinsStore.getState()
+    void store.setPinned(node.sessionId, !store.keys.includes(pinKey(node)))
   }, [])
   const openRoom = useCallback((featureId: string) => {
     useFeatureRoomStore.getState().openRoom(featureId)

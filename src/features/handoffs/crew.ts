@@ -74,11 +74,20 @@ export function hiddenCrewSessionIds(
   liveSessions: LiveSessionInfo[],
   // Chaves de openPaneKeys.
   openPaneKeys: Set<string>,
+  // sessions.id → handoff do vínculo pela CONVERSA (hierarchyHandoffMap do grafo).
+  // Sem ele, a filha cuja linha mudou (resume, wake) e que o handoff ainda aponta
+  // pelo id antigo escapava do dock para a barra.
+  hierarchyHandoffOf: ReadonlyMap<string, string> = new Map(),
 ): Set<string> {
   const childIds = childSessionIds(handoffs)
+  const activeHandoffIds = new Set(
+    handoffs.filter((h) => h.childSessionId && childIds.has(h.childSessionId)).map((h) => h.id),
+  )
   const hidden = new Set<string>()
   for (const s of liveSessions) {
-    if (childIds.has(s.id) && !openPaneKeys.has(s.ccSessionId)) hidden.add(s.id)
+    if (openPaneKeys.has(s.ccSessionId)) continue
+    const viaConversation = activeHandoffIds.has(hierarchyHandoffOf.get(s.id) ?? '')
+    if (childIds.has(s.id) || viaConversation) hidden.add(s.id)
   }
   return hidden
 }

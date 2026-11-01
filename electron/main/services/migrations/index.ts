@@ -65,6 +65,7 @@ import * as sessionsHibernatedAt from './063_sessions_hibernated_at'
 import * as dropMeetingsVideo from './064_drop_meetings_video'
 import * as designFolders from './065_design_folders'
 import * as diagramFolders from './066_diagram_folders'
+import * as motherPins from './067_mother_pins'
 
 interface Migration {
   version: number
@@ -145,6 +146,7 @@ export const migrations: Migration[] = [
   dropMeetingsVideo,
   designFolders,
   diagramFolders,
+  motherPins,
 ]
 
 export function runMigrations(db: Database.Database): void {

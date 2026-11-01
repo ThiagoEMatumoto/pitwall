@@ -52,6 +52,10 @@ export interface SessionGraphNode {
   // Mãe = tem handoffs vivos (com filha atrelada) apontando pra ela. Vem do
   // mother_session_id atual, então o bastão da mãe move os três de nó.
   isMother?: boolean
+  // "Essa é a mãe" (mother_pins, por conversa): o humano marcou. NÃO entra em
+  // isMother, que segue significando "lidera filhas" pro badge e pro bastão; as
+  // superfícies de mãe (Room, Dock, Ctrl+Shift+O, filtro) leem isMotherLike.
+  isPinnedMother?: boolean
   childCount?: number
   // Passou o bastão de mãe (handoff_events 'mother_transferred') e não lidera
   // mais ninguém: segue viva até o humano encerrar.

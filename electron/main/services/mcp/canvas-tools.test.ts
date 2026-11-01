@@ -52,7 +52,7 @@ afterAll(() => {
 beforeEach(() => {
   broadcasts.length = 0
   const db = getDb()
-  db.exec('DELETE FROM canvas_notes; DELETE FROM sessions;')
+  db.exec('DELETE FROM canvas_notes; DELETE FROM mother_pins; DELETE FROM sessions;')
   db.prepare(
     `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, 'cc-x', 'running', 1)`,
   ).run(CALLER)
@@ -101,5 +101,26 @@ describe('canvas tools (MCP)', () => {
 
   it('as instructions do servidor pedem que a sessão declare o propósito', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/session_purpose_set/)
+  })
+})
+
+describe('session_mother_pin', () => {
+  it('marca e desmarca A SESSÃO QUE CHAMOU, pela conversa, e avisa a UI', async () => {
+    const out = await call<{ pinnedMother: boolean }>(toolsFor(CALLER), 'session_mother_pin', {
+      pinned: true,
+    })
+    expect(out.pinnedMother).toBe(true)
+    const keys = () =>
+      (getDb().prepare('SELECT cc_session_id FROM mother_pins').all() as Array<{
+        cc_session_id: string
+      }>).map((r) => r.cc_session_id)
+    expect(keys()).toEqual(['cc-x'])
+    expect(broadcasts.some(([c]) => c === 'mother-pins:updated')).toBe(true)
+    await call(toolsFor(CALLER), 'session_mother_pin', { pinned: false })
+    expect(keys()).toEqual([])
+  })
+
+  it('sem identidade de sessão recusa', async () => {
+    await expect(call(toolsFor(null), 'session_mother_pin', { pinned: true })).rejects.toThrow()
   })
 })

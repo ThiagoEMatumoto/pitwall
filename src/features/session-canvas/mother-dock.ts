@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
+import { isMotherLike } from '../sessions/conversation-hierarchy'
 
 // O painel da mãe: a mãe da feature em foco num painel grande à esquerda do
 // mapa, com o terminal real (fora do transform do ReactFlow: legível em qualquer
@@ -102,7 +103,7 @@ export function motherOfFocus(
   // na mais recente do mapa.
   opts: { strict?: boolean } = {},
 ): string | null {
-  const mothers = nodes.filter((n) => n.isMother && inUse.has(n.sessionId))
+  const mothers = nodes.filter((n) => isMotherLike(n) && inUse.has(n.sessionId))
   const byId = new Map(mothers.map((n) => [n.sessionId, n]))
   if (focus.sessionId) {
     if (byId.has(focus.sessionId)) return focus.sessionId

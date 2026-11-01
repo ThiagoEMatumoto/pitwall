@@ -144,6 +144,7 @@ vi.mock('../services/handoff-store', () => ({
   workDirOf: () => workDir,
   findActiveWriterByWorkDir: vi.fn(() => activeOwner),
   setWorkDir: vi.fn(),
+  adoptResumedConversation: vi.fn(() => []),
   HandoffDuplicateError: class extends Error {
     readonly code = 'HANDOFF_DUPLICATE'
     constructor(readonly existing: Handoff) {

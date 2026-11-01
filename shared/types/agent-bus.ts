@@ -26,6 +26,8 @@ export interface AgentPeer {
   purpose: string | null
   lastActivityAt: number | null
   startedAt: number | null
+  // Marcada "essa é a mãe" pelo humano (ou pela própria sessão via session_mother_pin).
+  pinnedMother?: boolean
 }
 
 export interface AgentMessage {

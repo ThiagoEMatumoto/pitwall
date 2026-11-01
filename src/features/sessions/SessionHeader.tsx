@@ -14,6 +14,7 @@ import { Icon } from '@/components/ui/Icon'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureLink } from './SessionFeatureLink'
 import { ConnectedChips } from './ConnectedChips'
+import { HeaderMotherPin } from './HeaderMotherPin'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
@@ -297,6 +298,7 @@ export function SessionHeader({
             {ctxCritical && <span>bastão</span>}
           </button>
         )}
+        {tier !== 'narrow' && sessionId && <HeaderMotherPin sessionId={sessionId} />}
         {/* Adotar: a sessão vira filha de outra e passa a viver no painel da
             equipe. Reinicia o processo (o apelido e o accept-inbound só se fixam
             no exec) — o diálogo avisa antes de confirmar. */}

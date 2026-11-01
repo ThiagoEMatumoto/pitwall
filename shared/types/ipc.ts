@@ -1,3 +1,11 @@
+import type {
+  ImportMotherPinsInput,
+  MotherPin,
+  MotherRestartEvent,
+  PromoteMotherInput,
+  PromoteMotherResult,
+  SetMotherPinInput,
+} from './mother-pins'
 // Tipos compartilhados main ↔ renderer via contextBridge.
 // Toda feature nova adiciona seus tipos aqui e estende `Api` no preload.
 
@@ -2673,6 +2681,16 @@ export interface Api {
   }
   // Sessões como sistema conectado (mãe→filha, bastão, repos ligados, feature).
   // onUpdated recebe o grafo inteiro já recalculado pelo main.
+  // "Essa é a mãe" por conversa (mother_pins) e "Tornar mãe" (promover filha).
+  motherPins: {
+    list(): Promise<MotherPin[]>
+    set(input: SetMotherPinInput): Promise<MotherPin[]>
+    importLegacy(input: ImportMotherPinsInput): Promise<MotherPin[]>
+    promote(input: PromoteMotherInput): Promise<PromoteMotherResult>
+    restartNow(sessionId: string): Promise<void>
+    onUpdated(handler: (pins: MotherPin[]) => void): () => void
+    onRestart(handler: (event: MotherRestartEvent) => void): () => void
+  }
   sessionGraph: {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>
