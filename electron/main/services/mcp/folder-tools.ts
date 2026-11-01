@@ -22,6 +22,8 @@ export interface FolderToolsConfig {
   // Broadcast after every mutation; folderId = the folder touched, null when
   // only counts/assignments moved (delete).
   onChange: (folderId: string | null) => void
+  // Appended to every description (design tools point at design_guide).
+  guideRef?: string
 }
 
 const folderName = z.string().trim().min(1).max(200)
@@ -57,12 +59,19 @@ export function folderListTool({ prefix, items, store }: FolderToolsConfig): Too
   }
 }
 
-export function folderCrudTools({ prefix, items, store, onChange }: FolderToolsConfig): ToolDef[] {
+export function folderCrudTools({
+  prefix,
+  items,
+  store,
+  onChange,
+  guideRef,
+}: FolderToolsConfig): ToolDef[] {
+  const ref = guideRef ? ` ${guideRef}` : ''
   return [
     {
       name: `${prefix}_folder_create`,
       title: `Create ${prefix} folder`,
-      description: `Create a folder in the ${prefix} hub (one level). Reuse an existing folder with the same name instead of creating a near-duplicate — ${prefix}_folder_list shows them. ${COLOR_HINT}`,
+      description: `Create a folder in the ${prefix} hub (one level). Reuse an existing folder with the same name instead of creating a near-duplicate — ${prefix}_folder_list shows them. ${COLOR_HINT}${ref}`,
       inputSchema: createSchema,
       handler: (args) => {
         const { name, color } = createSchema.parse(args)
@@ -76,7 +85,7 @@ export function folderCrudTools({ prefix, items, store, onChange }: FolderToolsC
     {
       name: `${prefix}_folder_rename`,
       title: `Rename / recolor ${prefix} folder`,
-      description: `Rename and/or recolor a ${prefix} folder. folder = its id or current name (case-insensitive). ${COLOR_HINT}`,
+      description: `Rename and/or recolor a ${prefix} folder. folder = its id or current name (case-insensitive). ${COLOR_HINT}${ref}`,
       inputSchema: renameSchema,
       handler: (args) => {
         const { folder: ref, name, color } = renameSchema.parse(args)
@@ -89,7 +98,7 @@ export function folderCrudTools({ prefix, items, store, onChange }: FolderToolsC
     {
       name: `${prefix}_folder_delete`,
       title: `Delete ${prefix} folder`,
-      description: `Delete a ${prefix} folder (id or name). Not destructive: its ${items} stay and become "no folder". Returns how many active ${items} were unfiled.`,
+      description: `Delete a ${prefix} folder (id or name). Not destructive: its ${items} stay and become "no folder". Returns how many active ${items} were unfiled.${ref}`,
       inputSchema: deleteSchema,
       handler: (args) => {
         const { folder: ref } = deleteSchema.parse(args)

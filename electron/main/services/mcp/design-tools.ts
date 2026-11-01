@@ -124,6 +124,7 @@ export function designTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[
     prefix: 'design',
     items: 'documents',
     store: designStore,
+    guideRef: 'See design_guide §2.',
     onChange: (folderId) => {
       const event: DesignFoldersUpdatedEvent = { folderId }
       notify.broadcast('design:folders-updated', event)
