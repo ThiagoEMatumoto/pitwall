@@ -4,10 +4,17 @@
 //
 // `source` é o caminho da entrada em libraries.json do repo oficial; a URL raw
 // deriva dele. Entradas conferidas contra o índice em 2026-10-31 (todas 200 e
-// abaixo do teto de 5 MB do instalador). Se um arquivo sumir do repo, o
+// abaixo do teto de 5 MB do instalador); as de arquitetura de software e ML &
+// dados conferidas em 2026-11-01 (baixadas, JSON válido, itens > 0). Se um arquivo sumir do repo, o
 // download falha com HTTP 404 e a UI mostra o erro + o link do catálogo.
 
-export type DiagramLibraryCategory = 'cloud' | 'uml-er' | 'flow' | 'architecture'
+export type DiagramLibraryCategory =
+  | 'cloud'
+  | 'uml-er'
+  | 'flow'
+  | 'architecture'
+  | 'software'
+  | 'ml-data'
 
 export interface DiagramLibraryCatalogEntry {
   id: string
@@ -29,6 +36,8 @@ export const DIAGRAM_LIBRARY_CATEGORY_LABELS: Record<DiagramLibraryCategory, str
   'uml-er': 'UML/ER',
   flow: 'Fluxo',
   architecture: 'Arquitetura',
+  software: 'Arquitetura de software',
+  'ml-data': 'ML & dados',
 }
 
 function entry(
@@ -133,6 +142,90 @@ export const DIAGRAM_LIBRARY_CATALOG: readonly DiagramLibraryCatalogEntry[] = [
     'architecture',
     'oehrlis/db-eng.excalidrawlib',
     'Ícones para desenhar infraestrutura de banco de dados.',
+  ),
+  entry(
+    'system-design',
+    'System Design Components',
+    'software',
+    'rohanp/system-design.excalidrawlib',
+    'Componentes de system design: cliente, load balancer, cache, fila, banco.',
+  ),
+  entry(
+    'software-architecture',
+    'Software Architecture',
+    'software',
+    'youritjang/software-architecture.excalidrawlib',
+    'Microsserviço, banco, cache, event bus e outros blocos de arquitetura.',
+  ),
+  entry(
+    'architecture-diagram-components',
+    'Architecture diagram components',
+    'software',
+    'anna-pastushko/architecture-diagram-components.excalidrawlib',
+    'Componentes comuns de diagramas de arquitetura.',
+  ),
+  entry(
+    'basic-system-design',
+    'Basic system design',
+    'software',
+    'pratheeshpm/basic-system-design.excalidrawlib',
+    'Modelos prontos de system design para adaptar.',
+  ),
+  entry(
+    'it-icons',
+    'IT icons',
+    'software',
+    'mateuszbaransanok/it-icons.excalidrawlib',
+    'Ícones para arquitetura de sistemas de TI: servidores, apps, serviços.',
+  ),
+  entry(
+    'kubernetes-icons',
+    'Kubernetes icons',
+    'software',
+    'boemska-nik/kubernetes-icons.excalidrawlib',
+    'Conjunto completo de ícones de arquitetura Kubernetes.',
+  ),
+  entry(
+    'network-topology',
+    'Network topology icons',
+    'software',
+    'dwelle/network-topology-icons.excalidrawlib',
+    'Ícones de topologia de rede: roteador, switch, firewall, servidor.',
+  ),
+  entry(
+    'deep-learning',
+    'Deep learning',
+    'ml-data',
+    'yuelfei/deep-learning.excalidrawlib',
+    'Camadas e blocos para desenhar redes neurais.',
+  ),
+  entry(
+    'data-science',
+    'Data Science logos',
+    'ml-data',
+    'farisology/data-science.excalidrawlib',
+    'Logos de ferramentas de dados: Airflow, Jupyter, Pandas, NumPy, TensorFlow.',
+  ),
+  entry(
+    'data-platform',
+    'Data Platform',
+    'ml-data',
+    'chuqbach/data-platform.excalidrawlib',
+    'Ícones do stack de dados: ingestão, warehouse, orquestração, BI.',
+  ),
+  entry(
+    'databricks-architecture',
+    'Databricks Architecture Icons',
+    'ml-data',
+    'lukethorp/databricks-architecture-icons.excalidrawlib',
+    'Ícones da plataforma Databricks (arquivo grande, ~4 MB).',
+  ),
+  entry(
+    'data-processing',
+    'Data processing',
+    'ml-data',
+    'erlina/data-processing.excalidrawlib',
+    'Itens para visualizar as etapas de processamento de dados.',
   ),
 ]
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DIAGRAM_LIBRARY_CATALOG,
+  DIAGRAM_LIBRARY_CATEGORY_LABELS,
   DIAGRAM_LIBRARY_RAW_BASE,
   findCatalogEntry,
   findCatalogEntryByUrl,
@@ -26,9 +27,22 @@ describe('diagram-library-catalog', () => {
     expect(new Set(urls).size).toBe(urls.length)
   })
 
-  it('cobre as quatro categorias da UI', () => {
+  it('cobre todas as categorias da UI, com rótulo', () => {
     const cats = new Set(DIAGRAM_LIBRARY_CATALOG.map((e) => e.category))
-    expect([...cats].sort()).toEqual(['architecture', 'cloud', 'flow', 'uml-er'])
+    expect([...cats].sort()).toEqual(
+      ['architecture', 'cloud', 'flow', 'ml-data', 'software', 'uml-er'].sort(),
+    )
+    for (const c of cats) expect(DIAGRAM_LIBRARY_CATEGORY_LABELS[c]).toBeTruthy()
+  })
+
+  it('tem bibliotecas de arquitetura de software e de ML & dados', () => {
+    const of = (c: string) => DIAGRAM_LIBRARY_CATALOG.filter((e) => e.category === c).map((e) => e.id)
+    expect(of('software')).toEqual(
+      expect.arrayContaining(['system-design', 'software-architecture', 'kubernetes-icons']),
+    )
+    expect(of('ml-data')).toEqual(
+      expect.arrayContaining(['deep-learning', 'data-science', 'data-platform']),
+    )
   })
 
   it('busca por id e por url', () => {

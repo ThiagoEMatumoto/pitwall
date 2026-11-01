@@ -13,7 +13,14 @@ import { Button } from '@/components/ui/Button'
 import { Dialog } from '@/components/ui/Dialog'
 import { Icon } from '@/components/ui/Icon'
 
-const CATEGORY_ORDER: DiagramLibraryCategory[] = ['cloud', 'uml-er', 'flow', 'architecture']
+const CATEGORY_ORDER: DiagramLibraryCategory[] = [
+  'software',
+  'ml-data',
+  'cloud',
+  'architecture',
+  'uml-er',
+  'flow',
+]
 
 // Estado por entrada só para o que é transitório; "instalada" vem do main
 // (derivado da biblioteca), então sobrevive a install feito pelo MCP.
