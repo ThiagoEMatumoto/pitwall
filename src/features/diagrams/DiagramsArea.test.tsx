@@ -228,30 +228,25 @@ describe("DiagramsArea — editor", () => {
   });
 
   it("ação \"Novo a partir de modelo\" cria o diagrama pelo IPC e o seleciona", async () => {
-    listMock.mockResolvedValue([]);
-    useDiagramsStore.setState({ diagrams: [], selected: null, loading: false, error: null });
     const created = makeDiagram({ id: "t1", title: "Pipeline de ML", links: [] });
-    const fromTemplate = diagramsApi.createFromTemplate as ReturnType<typeof vi.fn>;
-    fromTemplate.mockResolvedValue(created);
+    api.createFromTemplate.mockResolvedValue(created);
 
-    render(<DiagramsArea />);
+    await renderHub([]);
     fireEvent.click(screen.getByTitle("Novo a partir de modelo"));
     expect(screen.getByTestId("template-software-architecture")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Usar modelo Pipeline de ML"));
 
     await waitFor(() => expect(useDiagramsStore.getState().selected?.id).toBe("t1"));
-    expect(fromTemplate).toHaveBeenCalledWith("ml-pipeline");
+    expect(api.createFromTemplate).toHaveBeenCalledWith("ml-pipeline");
     expect(useDiagramsStore.getState().diagrams.map((d) => d.id)).toContain("t1");
   });
 
   it("botão Bibliotecas abre o catálogo sem diagrama aberto, com arquitetura de software e ML", async () => {
-    listMock.mockResolvedValue([]);
-    useDiagramsStore.setState({ diagrams: [], selected: null, loading: false, error: null });
     const lib = diagramsApi.library as unknown as Record<string, ReturnType<typeof vi.fn>>;
     lib.catalog.mockResolvedValue({ entries: [...DIAGRAM_LIBRARY_CATALOG], installedIds: [] });
     lib.installCatalog.mockResolvedValue({ added: 24, items: [] });
 
-    render(<DiagramsArea />);
+    await renderHub([]);
     fireEvent.click(screen.getByLabelText("Bibliotecas"));
     expect(await screen.findByRole("region", { name: "Arquitetura de software" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "ML & dados" })).toBeInTheDocument();
