@@ -74,7 +74,7 @@ function EnterKey() {
   return <Icon as={CornerDownLeft} size={10} aria-label="Enter" />
 }
 
-function DiffBlock({ lines }: { lines: DiffLine[] }) {
+export function DiffBlock({ lines }: { lines: DiffLine[] }) {
   const long = lines.length > DIFF_PREVIEW_LINES
   const [all, setAll] = useState(!long)
   const shown = all ? lines : lines.slice(0, DIFF_PREVIEW_LINES)

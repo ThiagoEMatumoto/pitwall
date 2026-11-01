@@ -338,3 +338,37 @@ html, body, #root {
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 8px 24px rgba(0, 0, 0, 0.35);
 }
+
+/* Visão Chat — movimento de estado, nunca decorativo. Ease-out-quart curto: a
+   linha nova chega, o detalhe aberto desliza 4px. Sem fill-mode "both": se a
+   animação não rodar (aba oculta, captura headless), o conteúdo já está visível. */
+@keyframes chat-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.chat-row-in { animation: chat-in 220ms cubic-bezier(0.25, 1, 0.5, 1); }
+.chat-reveal { animation: chat-in 180ms cubic-bezier(0.25, 1, 0.5, 1); }
+
+/* Prosa do agente: parágrafos sem órfãs e títulos com quebra equilibrada. */
+.chat-prose p,
+.chat-prose li { text-wrap: pretty; }
+.chat-prose h1,
+.chat-prose h2,
+.chat-prose h3 { text-wrap: balance; letter-spacing: -0.01em; }
+.chat-prose h1 { font-size: 1.3em; }
+.chat-prose h2 { font-size: 1.18em; }
+
+/* Skeleton do carregamento: pulso lento de opacidade, não spinner. */
+@keyframes chat-skeleton {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+.chat-skeleton { animation: chat-skeleton 1.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-in,
+  .chat-reveal,
+  .chat-skeleton {
+    animation: none;
+  }
+}

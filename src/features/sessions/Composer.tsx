@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
-import { ChevronRight, CornerDownLeft, Image as ImageIcon, TextCursorInput, X } from 'lucide-react'
+import { ChevronRight, CornerDownLeft, Image as ImageIcon, Loader, TextCursorInput, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
 import { sendToApi, sessionsApi } from '@/lib/ipc'
@@ -136,6 +136,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // @alias no início manda pra outra sessão; #arquivo vira @arquivo do destino.
   const [caret, setCaret] = useState(0)
   const [routeNotice, setRouteNotice] = useState<string | null>(null)
+  // Envio em voo: o botão mostra "Enviando" e um segundo Enter não duplica o prompt.
+  const [sending, setSending] = useState(false)
   // Só os #arquivos escolhidos no menu viram @arquivo; o resto do texto vai como está.
   const [pickedFiles, setPickedFiles] = useState<ReadonlySet<string>>(new Set())
   const targets = useSendTargets()
@@ -458,12 +460,15 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // Envia por `send` e só limpa o rascunho (memória + app.db) se o envio foi
   // confirmado. Falha mantém tudo como está.
   function sendThenClear(value: string, send: () => Promise<boolean>): Promise<boolean> {
+    setSending(true)
     const persister = persisterRef.current
-    if (persister) return persister.sendThenClear(value, send)
-    return send().catch((err) => {
-      console.error('[composer] envio falhou; rascunho mantido:', err)
-      return false
-    })
+    const done = persister
+      ? persister.sendThenClear(value, send)
+      : send().catch((err) => {
+          console.error('[composer] envio falhou; rascunho mantido:', err)
+          return false
+        })
+    return done.finally(() => setSending(false))
   }
 
   // Chamado depois do envio confirmado. Se o usuário digitou durante o envio, o
@@ -504,7 +509,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
 
   function submit() {
     const value = text
-    if (value.trim().length === 0) return
+    if (sending || value.trim().length === 0) return
     // @palavra que não é sessão viva (@Makefile, @src) é menção do próprio claude.
     if (parsed.kind === 'no-match') return void sendHere(value)
     if (parsed.kind === 'ambiguous') {
@@ -527,7 +532,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
 
   async function insertOnly() {
     const value = text
-    if (value.trim().length === 0) return
+    if (sending || value.trim().length === 0) return
     const ok = await sendThenClear(value, async () => {
       await onInsert(value)
       return true
@@ -620,6 +625,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
       )}
       {!collapsed && (
         <>
+          {/* Anel de foco por fora da borda da marca: diz onde o teclado está sem
+              mudar a altura do dock (o xterm por baixo refaria o fit). */}
+          <div className="rounded-[12px] transition-shadow duration-200 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-accent)_22%,transparent)] motion-reduce:transition-none">
           <GradientBorder
             radius={12}
             innerBg="var(--color-bg)"
@@ -751,12 +759,24 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   <Icon as={TextCursorInput} size={13} />
                 </Button>
               )}
-              <Button variant="primary" size="sm" onClick={submit} title={hint}>
-                <Icon as={CornerDownLeft} size={13} />
-                Enviar
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={submit}
+                title={hint}
+                disabled={sending || text.trim().length === 0}
+                aria-busy={sending}
+              >
+                <Icon
+                  as={sending ? Loader : CornerDownLeft}
+                  size={13}
+                  className={sending ? 'animate-spin motion-reduce:animate-none' : undefined}
+                />
+                {sending ? 'Enviando' : 'Enviar'}
               </Button>
             </div>
           </GradientBorder>
+          </div>
         </>
       )}
     </div>
