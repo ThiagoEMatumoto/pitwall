@@ -27,6 +27,7 @@ import { DocumentExportMenu } from './DocumentExportMenu'
 import { STAGE_MAX_ZOOM, STAGE_MIN_ZOOM, clampStageZoom } from './canvas/CanvasStage'
 import { SHORTCUTS_PANEL_TOGGLE_EVENT } from './canvas/useCanvasShortcuts'
 import { VersionsButton } from './versions/VersionsPanel'
+import { SessionDrawerButton } from '@/features/sessions/chat/artifacts/SessionDrawer'
 
 interface ToolDef {
   id: DesignTool
@@ -203,6 +204,8 @@ export function DesignToolbar() {
         <AgentActivityBadge />
       </div>
 
+      {hasDoc && <DesignSessionButton />}
+
       {hasDoc && (
         <Button
           variant="ghost"
@@ -268,4 +271,11 @@ export function DesignToolbar() {
       </button>
     </div>
   )
+}
+
+function DesignSessionButton() {
+  const docId = useDesignStore((s) => s.docId)
+  const title = useDesignStore((s) => s.doc?.title ?? 'Design')
+  if (!docId) return null
+  return <SessionDrawerButton artifact={{ kind: 'design', id: docId }} title={title} />
 }

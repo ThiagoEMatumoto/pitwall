@@ -33,6 +33,11 @@ import { ThemePickerCard } from './ThemePickerCard'
 import { ThinkingCard } from './ThinkingCard'
 import { ToolResultCard, ToolUseCard } from './ToolCard'
 import { useChatTranscript, usePlanFile } from './useChatTranscript'
+import { ArtifactCard } from './artifacts/ArtifactCard'
+import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
+import { artifactRefKey, planArtifacts } from './artifacts/artifact-refs'
+import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
+import { useSidePanelFits } from './artifacts/useSidePanelFits'
 import {
   buildArrowKeys,
   buildCtrlTKey,
@@ -105,6 +110,9 @@ interface Props {
   isChild?: boolean
   // Sem xterm (quick look em chat): o pedido de permissão vem do espelho do main.
   menuFromMain?: boolean
+  // false = sem painel lateral de artefato (a gaveta "Sessão" dos editores já
+  // está ao lado do artefato); os cards abrem direto no editor.
+  artifactSide?: boolean
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
@@ -130,7 +138,7 @@ function TranscriptPlanCard({
   return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
 }
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
@@ -198,6 +206,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // ambos no mesmo card e não renderizar a mensagem de resposta solta. Sobre as
   // mensagens de disco: ecos otimistas são só texto do usuário.
   const interactive = useMemo(() => resolveInteractive(messages), [messages])
+  const artifactPlan = useMemo(() => planArtifacts(rendered), [rendered])
+  const sidePanel = useArtifactPanelStore((s) => s.sessions[sessionId])
+  const showArtifactSide = useArtifactPanelStore((s) => s.show)
+  const sideKey = sidePanel?.open ? artifactRefKey(sidePanel.ref) : null
+  const rootRef = useRef<HTMLDivElement>(null)
+  const sideFits = useSidePanelFits(rootRef)
+  const sideEnabled = artifactSide && sideFits
   const pendingPrompt = useMemo(() => pendingInteractive(messages), [messages])
 
   // Último subagente do transcript (nome + status) pra faixa de estado. Dado real
@@ -645,7 +660,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-[var(--color-bg)]">
+    <div ref={rootRef} className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
+    <div className="relative flex min-w-0 flex-1 flex-col">
     <PendingElsewhereChip sessionId={sessionId} />
     <div
       ref={scrollRef}
@@ -660,6 +676,18 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         {rendered.map((m, i) => {
           // Ecos otimistas vêm DEPOIS das mensagens de disco; marcamos como pendentes.
           const echoPending = i >= messages.length
+          if (artifactPlan.hidden.has(i)) return null
+          const artifactCard = artifactPlan.cards.get(i)
+          if (artifactCard) {
+            return (
+              <ArtifactCard
+                key={i}
+                plan={artifactCard}
+                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+                sideActive={sideKey === artifactRefKey(artifactCard.ref)}
+              />
+            )
+          }
           switch (m.kind) {
             case 'user':
               return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
@@ -794,6 +822,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       subagentName={lastSubagent?.name}
       subagentError={lastSubagent?.error}
     />
+    </div>
+    {sideEnabled && <ArtifactSidePanel sessionId={sessionId} />}
     </div>
   )
 })

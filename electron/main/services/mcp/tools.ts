@@ -31,6 +31,7 @@ import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
 import { folderCrudTools, folderListTool } from './folder-tools'
+import { recordDiagramAuthorship, withAuthorLinks } from './artifact-authorship'
 import {
   installCatalogLibrary,
   installedCatalogIds,
@@ -1736,7 +1737,7 @@ function diagramToMeta(diagram: Diagram): Record<string, unknown> {
   return meta
 }
 
-function diagramTools(notify: McpNotify): ToolDef[] {
+function diagramTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
   const foldersUpdated = (folderId: string | null) =>
     notify.broadcast('diagram:folders-updated', { folderId })
   const folderTools = {
@@ -1777,7 +1778,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
             source: skeleton ? JSON.stringify(skeleton) : null,
             author: 'claude',
             summary: input.summary,
-            links: input.links,
+            links: withAuthorLinks(input.links, ctx),
             folderId: input.folder ? diagramStore.ensureFolder(input.folder).id : undefined,
           }),
         )()
@@ -1866,6 +1867,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
           author: 'claude',
         })
         notify.broadcast('diagram:updated', diagram)
+        recordDiagramAuthorship(notify, ctx, diagram.id)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -1897,6 +1899,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
           author: 'claude',
         })
         notify.broadcast('diagram:updated', diagram)
+        recordDiagramAuthorship(notify, ctx, diagram.id)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -2095,7 +2098,7 @@ export function buildTools(
     ...loopTools(notify),
     ...handoffTools(notify, ctx),
     ...repoPullTools(),
-    ...diagramTools(notify),
+    ...diagramTools(notify, ctx),
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
     ...canvasTools(notify, ctx),
