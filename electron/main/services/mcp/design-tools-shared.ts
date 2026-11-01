@@ -23,7 +23,7 @@ import {
   LOOP_PRESETS,
   MOTION_RANGES,
 } from '../../../../shared/design/motion'
-import type { McpNotify, McpRequestContext, ToolDef } from './tools'
+import type { McpNotify, McpRequestContext, ToolDef, ToolResult } from './tools'
 import { recordDesignAuthorship } from './artifact-authorship'
 import type {
   DesignAgentActivity,
@@ -106,6 +106,19 @@ function touched(result: unknown): Touched | null {
   return null
 }
 
+// Artboard writes answer with artboardId only; the chat transcript needs the
+// document to show the artifact card, so the result carries it too.
+function withDocId(result: ToolResult, docId: string): ToolResult {
+  const sc = result.structuredContent
+  if (!sc || 'docId' in sc) return result
+  const structured = { ...sc, docId }
+  return {
+    ...result,
+    structuredContent: structured,
+    content: [{ type: 'text', text: JSON.stringify(structured) }],
+  }
+}
+
 // Wraps a write tool: 'start' before the handler, 'end' in a finally, both
 // broadcast on design:agent-activity and remembered by live-state until
 // design_nodes_finish (or the TTL) clears them.
@@ -149,7 +162,7 @@ export function withActivity(
       emit('start', startIds)
       let result: unknown
       try {
-        result = await def.handler(args)
+        result = withDocId(await def.handler(args), scope.docId)
         recordDesignAuthorship(deps.notify, deps.ctx, scope.docId)
         return result as Awaited<ReturnType<ToolDef['handler']>>
       } finally {

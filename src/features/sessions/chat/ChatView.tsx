@@ -31,6 +31,10 @@ import { ThemePickerCard } from './ThemePickerCard'
 import { ThinkingCard } from './ThinkingCard'
 import { ToolResultCard, ToolUseCard } from './ToolCard'
 import { useChatTranscript, usePlanFile } from './useChatTranscript'
+import { ArtifactCard } from './artifacts/ArtifactCard'
+import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
+import { artifactRefKey, planArtifacts } from './artifacts/artifact-refs'
+import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
 import {
   buildArrowKeys,
   buildCtrlTKey,
@@ -191,6 +195,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // ambos no mesmo card e não renderizar a mensagem de resposta solta. Sobre as
   // mensagens de disco: ecos otimistas são só texto do usuário.
   const interactive = useMemo(() => resolveInteractive(messages), [messages])
+  const artifactPlan = useMemo(() => planArtifacts(rendered), [rendered])
+  const sidePanel = useArtifactPanelStore((s) => s.sessions[sessionId])
+  const showArtifactSide = useArtifactPanelStore((s) => s.show)
+  const sideKey = sidePanel?.open ? artifactRefKey(sidePanel.ref) : null
   const pendingPrompt = useMemo(() => pendingInteractive(messages), [messages])
 
   // Último subagente do transcript (nome + status) pra faixa de estado. Dado real
@@ -656,7 +664,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-[var(--color-bg)]">
+    <div className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
+    <div className="relative flex min-w-0 flex-1 flex-col">
     <div
       ref={scrollRef}
       onScroll={onScroll}
@@ -670,6 +679,18 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         {rendered.map((m, i) => {
           // Ecos otimistas vêm DEPOIS das mensagens de disco; marcamos como pendentes.
           const echoPending = i >= messages.length
+          if (artifactPlan.hidden.has(i)) return null
+          const artifactCard = artifactPlan.cards.get(i)
+          if (artifactCard) {
+            return (
+              <ArtifactCard
+                key={i}
+                plan={artifactCard}
+                onShowSide={(ref) => showArtifactSide(sessionId, ref)}
+                sideActive={sideKey === artifactRefKey(artifactCard.ref)}
+              />
+            )
+          }
           switch (m.kind) {
             case 'user':
               return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
@@ -804,6 +825,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       subagentName={lastSubagent?.name}
       subagentError={lastSubagent?.error}
     />
+    </div>
+    <ArtifactSidePanel sessionId={sessionId} />
     </div>
   )
 })
