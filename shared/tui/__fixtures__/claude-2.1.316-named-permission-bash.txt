@@ -1,0 +1,38 @@
+  ⎿  Wrote 7 lines to test/greet.test.js
+      1 import { test } from 'node:test'
+      2 import assert from 'node:assert'
+      3 import { greet } from '../src/greet.js'
+      4 
+      5 test('greet retorna saudação com o nome', () => {
+      6   assert.equal(greet('Ana'), 'Olá, Ana!')
+      7 })
+
+  Ran 1 shell command 
+
+● RED confirmado: o teste falha por src/greet.js não existir. Agora a implementação mínima.
+
+● Write(src/greet.js)
+  ⎿  Wrote 3 lines to src/greet.js
+      1 export function greet(name) {
+      2   return `Olá, ${name}!`
+      3 }
+
+● Calling pitwall, running 1 shell command…
+  ⎿  $ npm test 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tail -n 12; echo "EXIT=${PIPESTATUS[0]}"
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Run test suite to verify GREEN
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ npm test 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tail -n 12; echo "EXIT=${PIPESTATUS[0]}"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ A variable in braces in this command can't be checked before it runs
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and switch to auto mode · auto mode handles these prompts for you
+   3. No
+
+ Esc to cancel · Tab to amend
+──────────────────────────────────────────────────────────────────────────────── mauricio-crie-src-greet ─

@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { parseTuiMenu } from '../../../shared/tui/tui-menu-parser'
 import {
   DESTRUCTIVE_DENYLIST,
   HANDOFF_CHILD_ALLOW,
@@ -299,6 +302,15 @@ describe('regras aprendidas ("Sempre permitir para filhas")', () => {
 })
 
 describe('deriveChildAllowRule', () => {
+  it('deriva a regra do comando que o parser lê da tela real de uma filha (2.1.316)', () => {
+    const screen = readFileSync(
+      join(__dirname, '../../../shared/tui/__fixtures__/claude-2.1.316-named-permission-bash.txt'),
+      'utf8',
+    )
+    const req = parseTuiMenu(screen)?.request
+    expect(deriveChildAllowRule(req?.tool, req?.command)).toBe('Bash(npm test *)')
+  })
+
   it('composto com cd: ignora o cd e usa o primeiro comando real', () => {
     expect(deriveChildAllowRule('Bash', 'cd /home/u/repo && jest --watch=false')).toBe(
       'Bash(jest *)',
