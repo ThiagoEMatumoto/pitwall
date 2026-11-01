@@ -177,6 +177,21 @@ describe('dockCrew', () => {
     expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set(['s2']))
   })
 
+  it('filha viva cuja linha mudou (resume/wake) segue no dock pelo vínculo da conversa', () => {
+    // O handoff ativo ainda aponta para a linha antiga 's-old'; a viva é 's-new'.
+    const handoffs = [hf({ id: 'a', status: 'running', childSessionId: 's-old' })]
+    const sessions = [live({ id: 's-new', ccSessionId: 'cc1' })]
+    const byConversation = new Map([['s-new', 'a']])
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set())
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set(), byConversation)).toEqual(
+      new Set(['s-new']),
+    )
+    // Com a aba aberta ela volta a ser sessão de primeira classe; handoff done não esconde.
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set(['cc1']), byConversation).size).toBe(0)
+    const done = [hf({ id: 'a', status: 'done', childSessionId: 's-old' })]
+    expect(hiddenCrewSessionIds(done, sessions, new Set(), byConversation).size).toBe(0)
+  })
+
   // A INVARIANTE: sair do dock (dismissedAt) OBRIGA a sessão a voltar pras
   // superfícies normais — um handoff com filha viva não pode estar invisível em
   // todas ao mesmo tempo. A pausada é o caso simétrico: continua no dock e nem

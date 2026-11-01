@@ -9,13 +9,15 @@ import {
   useVisibleLiveSessions,
 } from '@/features/session-switcher/useGlobalSessions'
 import { useAppStore } from '@/store/appStore'
+import { motherOfChildMap, nestUnderMothers } from '@/features/sessions/conversation-hierarchy'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { CardDot, CardEmpty, HomeCard } from './HomeGrid'
 
-type Row = { item: LiveSessionInfo; kind: 'waiting' | 'working' | 'idle' }
+type Row = { item: LiveSessionInfo; kind: 'waiting' | 'working' | 'idle'; depth: number }
 
-// Card "Sessões agora" (design Pitwall): lista plana ordenada aguardando →
+// Card "Sessões agora" (design Pitwall): lista ordenada aguardando →
 // trabalhando → ociosas. Aguardando ("sua vez") ganha destaque accent; as
 // demais seguem a voz da casa (em pista / na garagem). São as sessões DELE —
 // filhas de handoff vivem no Crew Dock (ver useVisibleLiveSessions); clique
@@ -24,14 +26,24 @@ export function SessionsCard() {
   const liveSessions = useVisibleLiveSessions()
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
 
+  const graph = useSessionGraphStore((s) => s.graph)
+
+  // Raízes por status (aguardando → trabalhando → ociosas); cada filha logo abaixo
+  // da mãe, pela régua única por conversa.
   const rows = useMemo<Row[]>(() => {
     const g = groupLiveSessions(liveSessions)
-    return [
-      ...g.waiting.map((item): Row => ({ item, kind: 'waiting' })),
-      ...g.working.map((item): Row => ({ item, kind: 'working' })),
-      ...g.idle.map((item): Row => ({ item, kind: 'idle' })),
-    ]
-  }, [liveSessions])
+    const kindOf = new Map<string, Row['kind']>([
+      ...g.waiting.map((s) => [s.id, 'waiting'] as const),
+      ...g.working.map((s) => [s.id, 'working'] as const),
+      ...g.idle.map((s) => [s.id, 'idle'] as const),
+    ])
+    const flat = [...g.waiting, ...g.working, ...g.idle]
+    return nestUnderMothers(flat, motherOfChildMap(graph.nodes)).map(({ item, depth }) => ({
+      item,
+      depth,
+      kind: kindOf.get(item.id) ?? 'idle',
+    }))
+  }, [liveSessions, graph])
 
   const crewCount = useCrewOnlyCount()
   const crew = crewOnlyLabel(crewCount)
@@ -56,9 +68,14 @@ export function SessionsCard() {
         <CardEmpty>Nenhuma sessão viva.</CardEmpty>
       ) : (
         <ul className="flex flex-col gap-1">
-          {rows.map(({ item, kind }) => (
-            <li key={item.ccSessionId}>
-              <SessionRow item={item} kind={kind} onOpen={() => void focusOrOpenSession(item)} />
+          {rows.map(({ item, kind, depth }) => (
+            <li key={item.ccSessionId} style={depth ? { paddingLeft: depth * 16 } : undefined}>
+              <SessionRow
+                item={item}
+                kind={kind}
+                nested={depth > 0}
+                onOpen={() => void focusOrOpenSession(item)}
+              />
             </li>
           ))}
         </ul>
@@ -70,10 +87,12 @@ export function SessionsCard() {
 function SessionRow({
   item,
   kind,
+  nested = false,
   onOpen,
 }: {
   item: LiveSessionInfo
   kind: Row['kind']
+  nested?: boolean
   onOpen: () => void
 }) {
   const title = (item.title ?? item.name ?? item.repo?.label) || (item.repo?.label ?? 'Avulsa')
@@ -96,6 +115,16 @@ function SessionRow({
           : { border: '1px solid transparent' }
       }
     >
+      {nested && (
+        <span
+          data-testid="home-session-nested"
+          aria-hidden
+          title="Filha da sessão acima"
+          className="-mr-1 shrink-0 text-[11px] text-[var(--color-text-dim)]"
+        >
+          ↳
+        </span>
+      )}
       <Icon
         as={waiting ? Zap : kind === 'working' ? Loader : Circle}
         size={13}

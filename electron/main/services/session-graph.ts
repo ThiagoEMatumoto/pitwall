@@ -17,6 +17,7 @@ import { resolvePurpose } from './session-purpose'
 import { isResumableChild } from './handoff-store'
 import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
+import { readMotherPinKeys } from './mother-pins-store'
 import { humanQueue, isAskItem } from '../../../shared/attention/selectors'
 import type { AttentionItem } from '../../../shared/types/attention'
 
@@ -124,12 +125,18 @@ export interface SessionGraphInput {
   attention?: AttentionItem[]
   // De quem cada sessão é filha na hierarquia de exibição (readHierarchyLinks).
   hierarchy?: Map<string, GraphHierarchyLink>
+  // Chaves de conversa (cc_session_id ?? sessions.id) marcadas "essa é a mãe".
+  motherPins?: ReadonlySet<string>
 }
 
 export interface GraphHierarchyLink {
   motherSessionId: string
   motherTitle: string | null
   handoffId: string
+  // Estado do handoff do vínculo: é o que o fio mãe→filha do mapa mostra.
+  status?: HandoffStatus
+  currentStep?: string | null
+  createdAt?: number
 }
 
 const LOOSE_LABEL = 'Avulsas'
@@ -264,6 +271,7 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
       lastPrompt: input.lastPrompts?.get(s.id) ?? null,
       childOfHandoffId: handoff?.id ?? null,
       isMother: (children.get(s.id) ?? 0) > 0,
+      isPinnedMother: input.motherPins?.has(s.cc_session_id ?? s.id) ?? false,
       childCount: children.get(s.id) ?? 0,
       batonPassed: gaveMotherBaton.has(s.id) && !children.has(s.id),
       hierarchyMotherId: input.hierarchy?.get(s.id)?.motherSessionId ?? null,
@@ -311,8 +319,48 @@ function lineageEdges(
   handoffs: GraphHandoffRow[],
   ids: Set<string>,
   childHandoff: Map<string, GraphHandoffRow>,
+  hierarchy: Map<string, GraphHierarchyLink> | undefined,
 ): SessionGraphEdge[] {
   const byCreation = [...handoffs].sort((a, b) => a.created_at - b.created_at)
+  const out: SessionGraphEdge[] = hierarchy
+    ? hierarchyEdges(hierarchy, ids, handoffs)
+    : directHandoffEdges(byCreation, ids, childHandoff)
+  return [...out, ...batonLineageEdges(byCreation, ids)]
+}
+
+// Fio mãe→filha pela MESMA régua da tela de projeto (readHierarchyLinks, casada
+// pela conversa): filha retomada (linha nova), com handoff done/dispensado ou com a
+// mãe retomada continua ligada à mãe viva. Pelo id exato do handoff, cada um desses
+// casos soltava a filha no topo da Room e do mapa.
+function hierarchyEdges(
+  hierarchy: Map<string, GraphHierarchyLink>,
+  ids: Set<string>,
+  handoffs: GraphHandoffRow[],
+): SessionGraphEdge[] {
+  const byId = new Map(handoffs.map((h) => [h.id, h]))
+  const out: Array<Extract<SessionGraphEdge, { kind: 'handoff' }>> = []
+  for (const [child, link] of hierarchy) {
+    const mother = link.motherSessionId
+    if (mother === child || !ids.has(child) || !ids.has(mother)) continue
+    const h = byId.get(link.handoffId)
+    out.push({
+      kind: 'handoff',
+      from: mother,
+      to: child,
+      handoffId: link.handoffId,
+      handoffStatus: h?.status ?? link.status ?? 'done',
+      currentStep: h?.current_step ?? link.currentStep ?? null,
+      createdAt: h?.created_at ?? link.createdAt ?? 0,
+    })
+  }
+  return out.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+}
+
+function directHandoffEdges(
+  byCreation: GraphHandoffRow[],
+  ids: Set<string>,
+  childHandoff: Map<string, GraphHandoffRow>,
+): SessionGraphEdge[] {
   const out: SessionGraphEdge[] = []
   for (const h of byCreation) {
     const child = h.child_session_id
@@ -330,6 +378,11 @@ function lineageEdges(
       })
     }
   }
+  return out
+}
+
+function batonLineageEdges(byCreation: GraphHandoffRow[], ids: Set<string>): SessionGraphEdge[] {
+  const out: SessionGraphEdge[] = []
   const batonPairs = new Set<string>()
   for (const h of byCreation) {
     const pred = h.predecessor_session_id
@@ -494,7 +547,7 @@ export function buildSessionGraph(input: SessionGraphInput): SessionGraph {
   const childHandoff = childHandoffIndex(input.handoffs)
   const nodes = buildNodes(input, childHandoff)
   const ids = new Set(nodes.map((n) => n.sessionId))
-  const lineage = lineageEdges(input.handoffs, ids, childHandoff)
+  const lineage = lineageEdges(input.handoffs, ids, childHandoff, input.hierarchy)
   return {
     nodes,
     lanes: buildLanes(input, nodes),
@@ -600,6 +653,8 @@ interface HierarchyHandoffRow {
   mother_session_id: string | null
   child_session_id: string
   created_at: number
+  status: HandoffStatus
+  current_step: string | null
   child_cc: string | null
 }
 
@@ -634,8 +689,8 @@ export function readHierarchyLinks(
   const ccs = JSON.stringify(sessions.flatMap((s) => (s.cc_session_id ? [s.cc_session_id] : [])))
   const handoffs = db
     .prepare(
-      `SELECT h.id, h.mother_session_id, h.child_session_id, h.created_at,
-              cs.cc_session_id AS child_cc
+      `SELECT h.id, h.mother_session_id, h.child_session_id, h.created_at, h.status,
+              h.current_step, cs.cc_session_id AS child_cc
          FROM handoffs h
          JOIN sessions cs ON cs.id = h.child_session_id
         WHERE h.mother_session_id IS NOT NULL
@@ -708,6 +763,9 @@ export function readHierarchyLinks(
         liveName: live.get(mother.id)?.name ?? null,
       }),
       handoffId: h.id,
+      status: h.status,
+      currentStep: h.current_step,
+      createdAt: h.created_at,
     })
   }
   return out
@@ -788,6 +846,7 @@ export function readSessionGraphInput(
     sessions,
     handoffs,
     hierarchy: readHierarchyLinks(db, sessions, live),
+    motherPins: readMotherPinKeys(db),
     motherTransfers: readMotherTransfers(db, handoffs),
     features,
     featureRepos,

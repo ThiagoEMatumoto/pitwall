@@ -107,6 +107,20 @@ describe('all-mothers-model sobre o grafo e a fila do main', () => {
     expect(new Set(ids)).toEqual(new Set(['lume', 'nori', 'sora', 'solo']))
   })
 
+  it('mãe sem feature cujo vínculo foi dispensado continua tile com a filha embaixo', () => {
+    seedScenario()
+    const soloHandoff = handoffStore.getByChildConversation('solo-kid')!
+    handoffStore.dismiss(soloHandoff.id)
+    testDb.prepare("UPDATE sessions SET feature_id = 'F2' WHERE id = 'solo-kid'").run()
+    const { graph, inUse } = produce(liveAll())
+    const solo = graph.nodes.find((n) => n.sessionId === 'solo')
+    expect(solo?.isMother).toBeFalsy()
+    const ids = allMothers(graph.nodes, graph.edges, inUse).map((n) => n.sessionId)
+    expect(ids).toContain('solo')
+    expect(ids).not.toContain('solo-kid')
+    expect(childIdsByMother(graph.edges, inUse).get('solo')).toEqual(new Set(['solo-kid']))
+  })
+
   it('mãe recém-criada com 0 filhas (isMother false) entra pela feature', () => {
     seedScenario()
     const { graph, inUse } = produce(liveAll())

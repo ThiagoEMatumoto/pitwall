@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { openSessionByCc } from '@/features/sessions/open-session'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
 import { useAttentionListStore } from '@/store/attentionStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -33,7 +34,7 @@ export function getAttentionQueue(): AttentionItem[] {
   const { liveSessions, panes } = useAppStore.getState()
   const { handoffs } = useHandoffsStore.getState()
   return buildAttentionQueue({
-    visibleSessions: visibleLiveSessions(liveSessions, panes, handoffs),
+    visibleSessions: visibleLiveSessions(liveSessions, panes, handoffs, useSessionGraphStore.getState().graph.nodes),
     liveSessions,
     handoffs,
     attention: useAttentionListStore.getState().items,
@@ -127,7 +128,7 @@ export function goBackSession(): void {
   const { liveSessions, panes } = useAppStore.getState()
   const { handoffs } = useHandoffsStore.getState()
   const target = planBackTarget(useSessionMruStore.getState().order, activeCc, {
-    visibleSessions: visibleLiveSessions(liveSessions, panes, handoffs),
+    visibleSessions: visibleLiveSessions(liveSessions, panes, handoffs, useSessionGraphStore.getState().graph.nodes),
     liveSessions,
     handoffs,
   })

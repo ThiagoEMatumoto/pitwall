@@ -61,6 +61,17 @@ export function setPromptQueueTurnHook(fn: TurnEndedHook): void {
   promptQueueTurnHook = fn
 }
 
+// Consumidores extras da borda de fim de turno (ex.: relançar como mãe quando a
+// filha promovida terminar o turno). Set: vários podem ouvir sem disputar slot.
+const turnEndedListeners = new Set<TurnEndedHook>()
+
+export function onTurnEnded(fn: TurnEndedHook): () => void {
+  turnEndedListeners.add(fn)
+  return () => {
+    turnEndedListeners.delete(fn)
+  }
+}
+
 // Sessão que sumiu do índice (PID morreu / arquivo removido) — sinal de
 // limpeza pra quem guarda estado por ccSessionId (ex.: dedupe do resumo por
 // voz). Mesmo padrão injetável do turnEndedHook.
@@ -829,6 +840,7 @@ class SessionActivityService extends EventEmitter {
       if (prev === 'working' && (current === 'waiting' || current === 'idle')) {
         turnEndedHook(sessionId)
         promptQueueTurnHook(sessionId)
+        for (const fn of turnEndedListeners) fn(sessionId)
       }
       // "Sessão aguardando" é a borda working→waiting especificamente (não
       // qualquer não-busy). Só notifica com o app fora de foco, pra não spammar

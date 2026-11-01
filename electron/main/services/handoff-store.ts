@@ -1082,6 +1082,42 @@ export function transferMother(fromSessionId: string, toSessionId: string): Hand
   return ids.map(fresh)
 }
 
+// Resume (linha nova da MESMA conversa): o que a transferMother não move.
+// - child_session_id: a conversa retomada que foi filha de um handoff fora do
+//   estado vivo (done/failed/rejected/interrupted) volta a ser apontada pelo
+//   registro. Sem isso o fio, o quick look e o "Desvincular" miravam um id morto.
+// - mother_session_id: os handoffs terminais da mãe antiga também passam para a
+//   retomada, para o fio mãe→filha seguir a linha viva.
+// updated_at fica intacto de propósito: ele é a janela do grafo (7 dias), e
+// reescrevê-lo traria de volta handoffs antigos. Release (child NULL) não casa.
+export function adoptResumedConversation(
+  priorSessionIds: readonly string[],
+  resumedSessionId: string,
+): string[] {
+  const prior = JSON.stringify(priorSessionIds.filter((id) => id !== resumedSessionId))
+  const db = getDb()
+  return db.transaction(() => {
+    const touched = db
+      .prepare(
+        `SELECT id FROM handoffs
+          WHERE (child_session_id IN (SELECT value FROM json_each(?))
+                 AND status NOT IN ('running', 'needs_input'))
+             OR mother_session_id IN (SELECT value FROM json_each(?))`,
+      )
+      .all(prior, prior) as Array<{ id: string }>
+    db.prepare(
+      `UPDATE handoffs SET child_session_id = ?
+        WHERE child_session_id IN (SELECT value FROM json_each(?))
+          AND status NOT IN ('running', 'needs_input')`,
+    ).run(resumedSessionId, prior)
+    db.prepare(
+      `UPDATE handoffs SET mother_session_id = ?
+        WHERE mother_session_id IN (SELECT value FROM json_each(?))`,
+    ).run(resumedSessionId, prior)
+    return touched.map((r) => r.id)
+  })()
+}
+
 interface HandoffEventRow {
   id: string
   handoff_id: string
