@@ -2,13 +2,15 @@
 // mostra ~10 linhas; metade delas eram réguas "────", o separador "╌╌╌" do menu
 // e o prompt vazio "›" — sobravam 2-3 linhas úteis.
 
+import { isInputRule } from './input-rule'
+
 // Só caracteres de caixa/régua (e espaço): uma linha que é só moldura.
 const RULE_RE = /^[\s─━│┃┄┅┆┇┈┉┊┋╌╍╎╏═║┌┐└┘├┤┬┴┼╭╮╯╰╴╵╶╷▔▁]+$/
 // O prompt vazio da caixa de input (claude "❯", codex "›", shell ">").
 const EMPTY_PROMPT_RE = /^\s*[›>❯]\s*$/
 
 export function isTailChrome(text: string): boolean {
-  return RULE_RE.test(text) || EMPTY_PROMPT_RE.test(text)
+  return RULE_RE.test(text) || isInputRule(text.trim()) || EMPTY_PROMPT_RE.test(text)
 }
 
 // Tira a moldura, junta linhas em branco seguidas numa só (`blank`) e apara as
