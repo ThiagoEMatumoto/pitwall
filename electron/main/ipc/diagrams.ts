@@ -10,9 +10,11 @@ import {
 import { DIAGRAM_LIBRARY_CATALOG } from '../../../shared/diagram-library-catalog'
 import { broadcast } from '../services/notify'
 import type {
+  CreateDiagramFolderInput,
   CreateDiagramInput,
   Diagram,
   DiagramAuthor,
+  DiagramFolder,
   DiagramLibraryCatalogState,
   DiagramLibraryItem,
   DiagramLink,
@@ -21,6 +23,7 @@ import type {
   DiagramVersion,
   DiagramVersionMeta,
   InstallDiagramLibraryResult,
+  UpdateDiagramFolderInput,
   UpdateDiagramSceneInput,
 } from '../../../shared/types/ipc'
 
@@ -125,6 +128,44 @@ export function registerDiagramsIpc(): void {
     diagramStore.setThumbnail(id, dataUrl)
     const diagram = diagramStore.get(id)
     if (diagram) broadcast('diagram:updated', diagram)
+  })
+
+  // ---- pastas do hub ----
+  // Toda mutação de pasta (e todo move, que muda as contagens) emite
+  // diagram:folders-updated; o renderer recarrega a lista de pastas.
+
+  const foldersUpdated = (folderId: string | null) =>
+    broadcast('diagram:folders-updated', { folderId })
+
+  ipcMain.handle('diagrams:folders-list', (): DiagramFolder[] => diagramStore.listFolders())
+
+  ipcMain.handle('diagrams:folder-create', (_e, input: CreateDiagramFolderInput): DiagramFolder => {
+    const folder = diagramStore.createFolder(input)
+    foldersUpdated(folder.id)
+    return folder
+  })
+
+  ipcMain.handle(
+    'diagrams:folder-update',
+    (_e, id: string, input: UpdateDiagramFolderInput): DiagramFolder => {
+      const folder = diagramStore.updateFolder(id, input)
+      foldersUpdated(id)
+      return folder
+    },
+  )
+
+  // Os diagramas da pasta voltam pra "sem pasta" no schema; o renderer
+  // recarrega a lista para refletir o folderId novo.
+  ipcMain.handle('diagrams:folder-delete', (_e, id: string): void => {
+    diagramStore.deleteFolder(id)
+    foldersUpdated(null)
+  })
+
+  ipcMain.handle('diagrams:move', (_e, id: string, folderId: string | null): Diagram => {
+    const diagram = diagramStore.move(id, folderId ?? null)
+    broadcast('diagram:updated', diagram)
+    foldersUpdated(null)
+    return diagram
   })
 
   // ---- biblioteca de shapes (.excalidrawlib) ----

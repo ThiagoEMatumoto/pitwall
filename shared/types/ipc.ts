@@ -2754,8 +2754,17 @@ export interface Api {
     restoreVersion(diagramId: string, version: number, author?: DiagramAuthor): Promise<Diagram>
     // Só o preview: não versiona nem bumpa updated_at.
     setThumbnail(id: string, dataUrl: string): Promise<void>
+    // Arquiva numa pasta do hub (null = sem pasta). Não bumpa updated_at.
+    move(id: string, folderId: string | null): Promise<Diagram>
+    foldersList(): Promise<DiagramFolder[]>
+    folderCreate(input: CreateDiagramFolderInput): Promise<DiagramFolder>
+    folderUpdate(id: string, input: UpdateDiagramFolderInput): Promise<DiagramFolder>
+    // Os diagramas da pasta ficam sem pasta (ON DELETE SET NULL).
+    folderDelete(id: string): Promise<void>
     // Payload = Diagram completo.
     onUpdated(handler: (payload: unknown) => void): () => void
+    // Payload = { folderId: string | null } — sinal de recarga das pastas.
+    onFoldersUpdated(handler: (payload: unknown) => void): () => void
     // Payload = { id }.
     onDeleted(handler: (payload: unknown) => void): () => void
     // Payload = { diagramId, links }.
