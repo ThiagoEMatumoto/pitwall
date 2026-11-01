@@ -31,6 +31,9 @@ export function orderByFeature<T extends { id: string }>(
   const features = [...new Set(items.map(keyOf).filter((f): f is string => !!f))]
   for (const f of features)
     for (const s of items) if (keyOf(s) === f && !childOf.has(s.id)) place(s)
-  for (const s of items) if (!childOf.has(s.id) || !placed.has(childOf.get(s.id)!)) place(s)
+  // Raízes primeiro: a filha sai junto da mãe, mesmo vindo antes dela na recência.
+  for (const s of items) if (!childOf.has(s.id)) place(s)
+  // Sobra só filha em ciclo (dado sujo): entra onde estava.
+  for (const s of items) place(s)
   return { items: out, childOf }
 }
