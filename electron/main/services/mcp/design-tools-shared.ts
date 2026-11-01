@@ -24,6 +24,7 @@ import {
   MOTION_RANGES,
 } from '../../../../shared/design/motion'
 import type { McpNotify, McpRequestContext, ToolDef } from './tools'
+import { recordDesignAuthorship } from './artifact-authorship'
 import type {
   DesignAgentActivity,
   DesignArtboard,
@@ -149,6 +150,7 @@ export function withActivity(
       let result: unknown
       try {
         result = await def.handler(args)
+        recordDesignAuthorship(deps.notify, deps.ctx, scope.docId)
         return result as Awaited<ReturnType<ToolDef['handler']>>
       } finally {
         const done = END_ON_START_IDS.has(def.name) ? null : touched(result)
