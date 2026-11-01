@@ -34,7 +34,7 @@ describe('anotações das tools de reporte da filha', () => {
     return configs
   }
 
-  it.each(['handoff_report', 'handoff_progress', 'handoff_ask'])('%s tem readOnlyHint', (name) => {
+  it.each(['handoff_report', 'handoff_progress', 'handoff_ask', 'handoff_wait'])('%s tem readOnlyHint', (name) => {
     expect(registered().get(name)?.annotations?.readOnlyHint).toBe(true)
   })
 

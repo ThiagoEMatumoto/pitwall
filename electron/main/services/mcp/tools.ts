@@ -2111,10 +2111,13 @@ export function buildTools(
 // plan o claude (2.1.316) pede permissão para MCP tool sem readOnlyHint, e o allow
 // do --settings não vale ali (sonda com `claude -p --permission-mode plan`: allow →
 // negado; readOnlyHint → passa). Só escrevem no registro do próprio handoff.
+// handoff_wait entra porque a filha em needs_input só recebe a resposta por ele
+// (o Pitwall não digita nela); sem a anotação, em plan ela trava num menu.
 const CHILD_REPORT_TOOLS: ReadonlySet<string> = new Set([
   'handoff_report',
   'handoff_progress',
   'handoff_ask',
+  'handoff_wait',
 ])
 
 export function registerTools(
