@@ -11,7 +11,7 @@ import {
   type Point,
 } from '../../../shared/diagram-skeleton'
 import { contentBounds, frameViewport, VIEWPORT_TOP_INSET } from '../../../src/features/diagrams/frame-viewport'
-import { labelBox, renderedLabelCenter, segmentHitsBox } from '../../../shared/diagram-arrow-label'
+import { boxEdges, labelBox, renderedLabelCenter, segmentHitsBox } from '../../../shared/diagram-arrow-label'
 import { skeletonToElements } from './diagram-layout'
 
 const SHAPES = new Set(['rectangle', 'ellipse', 'diamond'])
@@ -109,8 +109,15 @@ describe('diagram templates', () => {
         labels.push({ arrow: a, box })
       }
       expect(labels.length).toBeGreaterThan(0)
+      const frames = elements.filter((el) => el.type === 'frame')
       for (const { arrow, box } of labels) {
         for (const n of nodes) expect(overlaps(box as ExElement, n), `${arrow.id} × ${n.id}`).toBe(false)
+        // A borda do frame cortando o label (o "deploy" do pipeline de ML).
+        for (const f of frames) {
+          for (const [p, q] of boxEdges(f)) {
+            expect(segmentHitsBox(p, q, box), `label de ${arrow.id} × borda de ${f.id}`).toBe(false)
+          }
+        }
         for (const other of labels) {
           if (other.arrow === arrow) continue
           expect(overlaps(box as ExElement, other.box as ExElement), `${arrow.id} × ${other.arrow.id}`).toBe(false)

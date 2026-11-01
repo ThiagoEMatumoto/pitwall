@@ -47,6 +47,20 @@ export function segmentHitsBox(a: Point, b: Point, box: Box): boolean {
   )
 }
 
+/** As quatro bordas de uma caixa, como segmentos. */
+export function boxEdges(b: Box): [Point, Point][] {
+  const tl: Point = [b.x, b.y]
+  const tr: Point = [b.x + b.width, b.y]
+  const br: Point = [b.x + b.width, b.y + b.height]
+  const bl: Point = [b.x, b.y + b.height]
+  return [
+    [tl, tr],
+    [tr, br],
+    [br, bl],
+    [bl, tl],
+  ]
+}
+
 export interface LabelObstacles {
   boxes: readonly Box[]
   segments: readonly (readonly [Point, Point])[]
@@ -67,6 +81,20 @@ function isFree(box: Box, obstacles: LabelObstacles): boolean {
 
 const mid = (a: Point, b: Point): Point => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
 const len = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1])
+
+const SLIDE_STEP = 8
+
+/** Centros possíveis do label num segmento: o meio primeiro, depois deslizando até as pontas. */
+function centersAlong(a: Point, b: Point, need: number): Point[] {
+  const L = len(a, b)
+  const out: Point[] = [mid(a, b)]
+  for (let d = SLIDE_STEP; d <= (L - need) / 2; d += SLIDE_STEP) {
+    for (const t of [0.5 + d / L, 0.5 - d / L]) {
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+    }
+  }
+  return out
+}
 
 /** Insere vértices colineares até `at` (índice de vértice) ficar no meio. */
 function centerVertex(route: Point[], at: number): Point[] {
@@ -89,8 +117,8 @@ function centerVertex(route: Point[], at: number): Point[] {
 
 /**
  * Rota em que o label renderizado não encosta em nenhum obstáculo. Fica a
- * rota original quando o lugar padrão já está livre; senão tenta o meio de
- * cada segmento que comporta o label (horizontais e mais longos primeiro).
+ * rota original quando o lugar padrão já está livre; senão tenta cada segmento
+ * que comporta o label (horizontais e mais longos primeiro), do meio às pontas.
  * Os segmentos da própria seta, exceto o que recebe o label, também contam.
  */
 export function placeLabelOnRoute(
@@ -118,22 +146,22 @@ export function placeLabelOnRoute(
   })
   if (currentFree) return [...route]
 
+  const needOf = (a: Point, b: Point) =>
+    (a[1] === b[1] ? size.width : size.height) + 2 * LABEL_MARGIN
   const candidates = route
     .slice(1)
     .map((p, i) => ({ i, a: route[i], b: p }))
-    .filter(({ a, b }) => {
-      const horizontal = a[1] === b[1]
-      const need = (horizontal ? size.width : size.height) + 2 * LABEL_MARGIN
-      return len(a, b) >= need
-    })
+    .filter(({ a, b }) => len(a, b) >= needOf(a, b))
     .sort((s, t) => {
       const sh = s.a[1] === s.b[1] ? 0 : 1
       const th = t.a[1] === t.b[1] ? 0 : 1
       return sh - th || len(t.a, t.b) - len(s.a, s.b)
     })
   for (const { i, a, b } of candidates) {
-    const center = mid(a, b)
-    if (!isFree(labelBox(center, size), withOwn(i))) continue
+    const center = centersAlong(a, b, needOf(a, b)).find((c) =>
+      isFree(labelBox(c, size), withOwn(i)),
+    )
+    if (!center) continue
     const split = [...route.slice(0, i + 1), center, ...route.slice(i + 1)]
     return centerVertex(split, i + 1)
   }

@@ -35,6 +35,7 @@ import {
 } from "./diagram-compound";
 import { withArrowheadStubs } from "./diagram-route";
 import {
+  boxEdges,
   labelBox,
   placeLabelOnRoute,
   renderedLabelCenter,
@@ -955,7 +956,7 @@ export const frameTitleBand = (frame: Box): Box => ({
 /**
  * Posiciona os labels das setas onde o Excalidraw vai desenhá-los, mudando a
  * rota (vértices colineares) quando o lugar padrão encosta em nó, label já
- * posicionado, outra seta ou na faixa do título de um frame.
+ * posicionado, outra seta, na faixa do título ou na borda de um frame.
  */
 function placeArrowLabels(
   labeled: readonly { arrow: ExLinear; label: ExText }[],
@@ -974,7 +975,7 @@ function placeArrowLabels(
     const route = absolutePoints(arrow);
     const next = placeLabelOnRoute(route, label, {
       boxes: [...nodeBoxes, ...placed, ...frames.map(frameTitleBand)],
-      segments,
+      segments: [...segments, ...frames.flatMap(boxEdges)],
     });
     if (next.length !== route.length) {
       arrow.points = next.map(([x, y]) => [x - arrow.x, y - arrow.y] as Point);
