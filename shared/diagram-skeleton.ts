@@ -21,9 +21,11 @@ import {
 import {
   compoundKind,
   compoundPadding,
+  layoutPadding,
   deepestFirst,
   EMPTY_COMPOUND_SIZE,
   fitBox,
+  FRAME_TITLE_BAND,
   isCompoundElement,
   isCompoundType,
   membershipFor,
@@ -32,6 +34,11 @@ import {
   type CompoundKind,
 } from "./diagram-compound";
 import { withArrowheadStubs } from "./diagram-route";
+import {
+  labelBox,
+  placeLabelOnRoute,
+  renderedLabelCenter,
+} from "./diagram-arrow-label";
 
 export type { DiagramRelation, EntityField } from "./diagram-shapes";
 
@@ -634,7 +641,7 @@ export function skeletonLayoutGraph(
       compounds.push({
         id: s.id,
         ...(parent ? { parent } : {}),
-        padding: compoundPadding(s.type, Boolean(s.label?.text)),
+        padding: layoutPadding(s.type, Boolean(s.label?.text)),
       });
       continue;
     }
@@ -676,7 +683,7 @@ export function elementsLayoutGraph(
       return {
         id: el.id,
         ...(parent ? { parent } : {}),
-        padding: compoundPadding(
+        padding: layoutPadding(
           compoundKind(el)!,
           (el.boundElements ?? []).some((b) => b.type === "text"),
         ),
@@ -848,6 +855,7 @@ export function buildElements(
     .filter((s) => !isLinearType(s.type) && !isCompoundType(s.type))
     .map((s) => byId.get(s.id))
     .filter((el): el is ExElement => el !== undefined);
+  const labeled: { arrow: ExLinear; label: ExText }[] = [];
   for (const skel of skeleton) {
     if (!isLinearType(skel.type)) continue;
     const startEl = skel.start ? byId.get(skel.start.id) : undefined;
@@ -904,19 +912,19 @@ export function buildElements(
     }
 
     if (skel.label) {
-      const metrics = textMetrics(skel.label.text);
-      const mid = polylineMidpoint(el);
       const label = makeTextElement(
         labelIdFor(skel.id),
         skel.label.text,
-        mid.x - metrics.width / 2,
-        mid.y - metrics.height / 2,
+        0,
+        0,
         skel.id,
       );
       el.boundElements!.push({ id: label.id, type: "text" });
       linears.push(label);
+      labeled.push({ arrow: el, label });
     }
   }
+  placeArrowLabels(labeled, linears, nodeBoxes, frames);
 
   // Caixa de grupo por baixo dos filhos (externa primeiro); frames por cima,
   // como o editor ordena ao embrulhar uma seleção num frame.
@@ -930,6 +938,52 @@ export function buildElements(
     el.index = fractionalIndexAt(i);
   });
   return elements;
+}
+
+/** Pontos absolutos da polilinha. */
+export const absolutePoints = (lin: Pick<ExLinear, "x" | "y" | "points">): Point[] =>
+  lin.points.map(([px, py]) => [lin.x + px, lin.y + py] as Point);
+
+/** Faixa acima do frame onde o Excalidraw desenha o nome. */
+export const frameTitleBand = (frame: Box): Box => ({
+  x: frame.x,
+  y: frame.y - FRAME_TITLE_BAND,
+  width: frame.width,
+  height: FRAME_TITLE_BAND,
+});
+
+/**
+ * Posiciona os labels das setas onde o Excalidraw vai desenhá-los, mudando a
+ * rota (vértices colineares) quando o lugar padrão encosta em nó, label já
+ * posicionado, outra seta ou na faixa do título de um frame.
+ */
+function placeArrowLabels(
+  labeled: readonly { arrow: ExLinear; label: ExText }[],
+  linears: readonly ExElement[],
+  nodeBoxes: readonly Box[],
+  frames: readonly Box[],
+): void {
+  const placed: Box[] = [];
+  for (const { arrow, label } of labeled) {
+    const segments = linears
+      .filter((l): l is ExLinear => l !== arrow && (l.type === "arrow" || l.type === "line"))
+      .flatMap((l) => {
+        const pts = absolutePoints(l);
+        return pts.slice(1).map((p, i) => [pts[i], p] as const);
+      });
+    const route = absolutePoints(arrow);
+    const next = placeLabelOnRoute(route, label, {
+      boxes: [...nodeBoxes, ...placed, ...frames.map(frameTitleBand)],
+      segments,
+    });
+    if (next.length !== route.length) {
+      arrow.points = next.map(([x, y]) => [x - arrow.x, y - arrow.y] as Point);
+    }
+    const box = labelBox(renderedLabelCenter(next), label);
+    label.x = box.x;
+    label.y = box.y;
+    placed.push(box);
+  }
 }
 
 const GROUP_STROKE = "#868e96";
