@@ -25,22 +25,24 @@ export function childIdsByMother(
 
 // Mãe da Room = sessão de TOPO em uso, de qualquer feature. isMother
 // (session-graph.ts:247) só fica true com 1+ filha; a recém-criada tem 0.
-// Sessão de topo SEM feature só entra se já delegou ou foi marcada "essa é a
-// mãe" (isMotherLike): sem esse corte,
-// todo terminal avulso do usuário viraria tile.
+// Sessão de topo SEM feature só entra se tem filha embaixo, foi marcada "essa é
+// a mãe" ou delegou (isMotherLike): sem esse corte, todo terminal avulso viraria
+// tile. "Tem filha embaixo" vem da aresta, não do isMother: com o vínculo
+// dispensado/encerrado o isMother cai, mas a filha segue sob ela e, sem o tile
+// da mãe, sumiria da Room.
 export function allMothers(
   nodes: ReadonlyArray<SessionGraphNode>,
   edges: ReadonlyArray<EdgeLike>,
   inUse: ReadonlySet<string>,
 ): SessionGraphNode[] {
+  const kidsByMother = childIdsByMother(edges, inUse)
   const underMother = new Set<string>()
-  for (const kids of childIdsByMother(edges, inUse).values())
-    for (const k of kids) underMother.add(k)
+  for (const kids of kidsByMother.values()) for (const k of kids) underMother.add(k)
   return nodes.filter(
     (n) =>
       inUse.has(n.sessionId) &&
       !underMother.has(n.sessionId) &&
-      (n.featureId != null || isMotherLike(n)),
+      (n.featureId != null || isMotherLike(n) || kidsByMother.has(n.sessionId)),
   )
 }
 
