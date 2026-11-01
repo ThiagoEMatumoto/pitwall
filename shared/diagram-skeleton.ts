@@ -973,14 +973,6 @@ export function elementsToSkeleton(
     const label = labelByContainer.get(containerId);
     return label ? (label.originalText ?? label.text) : undefined;
   };
-  // Texto de parte: o id do text é derivado do id da célula (partIdFor).
-  const textById = new Map<string, string>();
-  for (const el of live) {
-    if (el.type === "text") {
-      const t = el as ExText;
-      textById.set(t.id, t.originalText ?? t.text);
-    }
-  }
   const parents = sceneParents(live);
   const childrenOf = new Map<string, string[]>();
   for (const el of live) {
@@ -1007,7 +999,7 @@ export function elementsToSkeleton(
     const kind = compoundKind(el);
     let skel: DiagramSkeletonElement;
     if (blockKindOf(el)) {
-      skel = blockToSkeleton(el, (id) => textById.get(id));
+      skel = blockToSkeleton(el, textOf);
     } else if (kind) {
       skel = { id: el.id, type: kind, children: childrenOf.get(el.id) ?? [] };
       if (kind === "frame") {

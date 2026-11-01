@@ -462,3 +462,87 @@ describe("layout ER", () => {
     expect(byId(els, "users").customData.pitwall.auto).toBe(false);
   });
 });
+
+describe("blocos editados no editor", () => {
+  const four: DiagramSkeletonElement = {
+    id: "a",
+    type: "entity",
+    name: "A",
+    fields: [0, 1, 2, 3].map((i) => ({ name: `campo_${i}`, type: "text" })),
+  };
+  const deleteIds = (els: unknown[], ids: string[]) =>
+    (els as AnyEl[]).map((e) =>
+      ids.includes(e.id) ? { ...e, isDeleted: true } : e,
+    );
+
+  it("linha do meio apagada não leva junto os campos seguintes", async () => {
+    const els = deleteIds(await skeletonToElements([four]), [
+      "a__f1",
+      "a__f1__text",
+    ]);
+    const [skel] = elementsToSkeleton(els);
+    expect(skel.fields!.map((f) => f.name)).toEqual([
+      "campo_0",
+      "campo_2",
+      "campo_3",
+    ]);
+    const out = (await applyPatch(els, [
+      { op: "update", id: "a", name: "A renomeada" },
+    ])) as AnyEl[];
+    const texts = out
+      .filter((e) => e.type === "text" && !e.isDeleted)
+      .map((e) => e.text);
+    expect(texts).toEqual([
+      "A renomeada",
+      "campo_0: text",
+      "campo_2: text",
+      "campo_3: text",
+    ]);
+  });
+
+  it("campo esvaziado (só o texto apagado) é pulado, não corta o resto", async () => {
+    const els = deleteIds(await skeletonToElements([users]), [
+      "users__f1__text",
+    ]);
+    const [skel] = elementsToSkeleton(els);
+    expect(skel.fields!.map((f) => f.name)).toEqual(["id", "org_id"]);
+  });
+
+  it("texto digitado num compartimento vazio entra no skeleton e sobrevive ao rebuild", async () => {
+    const base = (await skeletonToElements([
+      { id: "Animal", type: "class", name: "Animal", attributes: [], methods: [] },
+    ])) as AnyEl[];
+    const cell = byId(base, "Animal__methods");
+    const typed = {
+      ...byId(base, "Animal__header__text"),
+      id: "rnd123",
+      text: "run()",
+      originalText: "run()",
+      containerId: "Animal__methods",
+    };
+    const els = [
+      ...base.map((e) =>
+        e.id === cell.id
+          ? { ...e, boundElements: [{ id: "rnd123", type: "text" }] }
+          : e,
+      ),
+      typed,
+    ];
+    expect(elementsToSkeleton(els)[0].methods).toEqual(["run()"]);
+
+    const out = (await applyPatch(els, [
+      { op: "update", id: "Animal", attributes: ["+ name: string"] },
+    ])) as AnyEl[];
+    expect(elementsToSkeleton(out)[0]).toMatchObject({
+      attributes: ["+ name: string"],
+      methods: ["run()"],
+    });
+    // Nenhum bound text vivo fica apontando pra uma célula que não o lista.
+    for (const t of out.filter(
+      (e) => e.type === "text" && !e.isDeleted && e.containerId,
+    )) {
+      const container = byId(out, t.containerId);
+      expect(container.boundElements.map((b: AnyEl) => b.id)).toContain(t.id);
+    }
+  });
+});

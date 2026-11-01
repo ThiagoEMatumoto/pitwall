@@ -234,10 +234,15 @@ function rebuildBlock(
   const owner = result[idx];
   const texts = new Map(
     result
-      .filter((el) => el.type === "text" && !el.isDeleted)
-      .map((el) => [el.id, (el as ExText).originalText ?? (el as ExText).text]),
+      .filter(
+        (el) => el.type === "text" && !el.isDeleted && (el as ExText).containerId,
+      )
+      .map((el) => [
+        (el as ExText).containerId!,
+        (el as ExText).originalText ?? (el as ExText).text,
+      ]),
   );
-  const current = blockToSkeleton(owner, (id) => texts.get(id));
+  const current = blockToSkeleton(owner, (cellId) => texts.get(cellId));
   const header = result.find(
     (el) => el.id === `${owner.id}__header` && !el.isDeleted,
   );
@@ -280,9 +285,18 @@ function rebuildBlock(
     if (prev) out[prevIdx] = merged;
     else out.push(merged);
   });
-  // Linhas que sobraram (campo removido) saem da cena.
+  // Linhas que sobraram (campo removido) saem da cena, e também textos que o
+  // editor criou com id próprio nas células: o bloco novo traz os dele.
+  const cellIds = new Set(
+    out
+      .filter((el) => partOwner(el) === owner.id && el.type !== "text")
+      .map((el) => el.id),
+  );
   out.forEach((el, i) => {
-    if (!el.isDeleted && partOwner(el) === owner.id && !keepIds.has(el.id)) {
+    if (el.isDeleted || keepIds.has(el.id)) return;
+    const strayText =
+      el.type === "text" && cellIds.has((el as ExText).containerId ?? "");
+    if (partOwner(el) === owner.id || strayText) {
       out[i] = bump(el, { isDeleted: true });
     }
   });

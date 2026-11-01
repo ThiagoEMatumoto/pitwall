@@ -321,35 +321,41 @@ export function blockKind(el: {
 /**
  * Skeleton do bloco a partir da cena. Os textos das partes vencem o
  * customData: o humano pode ter editado um campo com duplo clique.
+ * `textOf(cellId)` devolve o bound text da célula pelo containerId — texto
+ * digitado num compartimento vazio ganha id aleatório do Excalidraw.
  */
 export function blockToSkeleton(
   owner: ExBase,
-  textOf: (partId: string) => string | undefined,
+  textOf: (cellId: string) => string | undefined,
 ): DiagramSkeletonElement {
   const meta = (owner.customData?.pitwall ?? {}) as Record<string, unknown>;
   const kind = blockKind(owner)!;
   const name =
-    textOf(partIdFor(owner.id, "header__text")) ??
+    textOf(partIdFor(owner.id, "header")) ??
     (typeof meta.name === "string" ? meta.name : owner.id);
   if (kind === "entity") {
     const stored = Array.isArray(meta.fields)
       ? (meta.fields as EntityField[])
       : [];
+    // Linha apagada ou esvaziada no editor é pulada, não corta as seguintes.
     const fields: EntityField[] = [];
+    let anyText = false;
     for (let i = 0; ; i++) {
-      const line = textOf(partIdFor(owner.id, `f${i}__text`));
-      if (line === undefined) break;
-      fields.push(parseField(line));
+      const line = textOf(partIdFor(owner.id, `f${i}`));
+      if (line === undefined && i >= stored.length) break;
+      if (line === undefined) continue;
+      anyText = true;
+      if (line.trim()) fields.push(parseField(line));
     }
     return {
       id: owner.id,
       type: "entity",
       name,
-      fields: fields.length > 0 ? fields : stored,
+      fields: anyText ? fields : stored,
     };
   }
   const lines = (key: string, fallback: unknown): string[] => {
-    const text = textOf(partIdFor(owner.id, `${key}__text`));
+    const text = textOf(partIdFor(owner.id, key));
     if (text !== undefined) return text.split("\n");
     return Array.isArray(fallback) ? (fallback as string[]) : [];
   };
