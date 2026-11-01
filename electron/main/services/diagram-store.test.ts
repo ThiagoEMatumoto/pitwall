@@ -222,4 +222,71 @@ describe('diagram-store', () => {
     expect(after.updatedAt).toBe(d.updatedAt)
     expect(store.listVersions(d.id)).toHaveLength(1)
   })
+
+  describe('pastas', () => {
+    it('cria pasta, arquiva diagrama nela e conta só ativos', () => {
+      const folder = store.createFolder({ name: 'Infra', color: 'info' })
+      const a = store.create({
+        title: 'A',
+        scene: scene('a'),
+        author: 'human',
+        folderId: folder.id,
+      })
+      const b = novoDiagrama('B')
+      store.move(b.id, folder.id)
+      store.archive(b.id)
+
+      expect(a.folderId).toBe(folder.id)
+      expect(store.getFolder(folder.id)).toMatchObject({ name: 'Infra', color: 'info', docCount: 1 })
+    })
+
+    it('list filtra por folderId e por null (sem pasta)', () => {
+      const folder = store.createFolder({ name: 'Fluxos' })
+      const inside = store.create({ title: 'Dentro', scene: scene('x'), author: 'human', folderId: folder.id })
+      const loose = novoDiagrama('Solto')
+
+      expect(store.list({ folderId: folder.id }).map((d) => d.id)).toEqual([inside.id])
+      expect(store.list({ folderId: null }).map((d) => d.id)).toEqual([loose.id])
+      expect(store.list().map((d) => d.folderId).sort()).toEqual([folder.id, null].sort())
+    })
+
+    it('move não bumpa updated_at e recusa pasta inexistente', () => {
+      const d = novoDiagrama()
+      const folder = store.createFolder({ name: 'X' })
+      const before = store.get(d.id)!.updatedAt
+
+      const moved = store.move(d.id, folder.id)
+      expect(moved.folderId).toBe(folder.id)
+      expect(moved.updatedAt).toBe(before)
+      expect(store.move(d.id, null).folderId).toBeNull()
+      expect(() => store.move(d.id, 'nope')).toThrow(/diagram folder not found/)
+      expect(() => store.move('nope', null)).toThrow(/diagram not found/)
+    })
+
+    it('create recusa folderId inexistente', () => {
+      expect(() =>
+        store.create({ title: 'Z', scene: scene('z'), author: 'human', folderId: 'nope' }),
+      ).toThrow(/diagram folder not found/)
+    })
+
+    it('apagar a pasta deixa os diagramas sem pasta', () => {
+      const folder = store.createFolder({ name: 'Temp' })
+      const d = store.create({ title: 'D', scene: scene('d'), author: 'human', folderId: folder.id })
+
+      store.deleteFolder(folder.id)
+
+      expect(store.get(d.id)!.folderId).toBeNull()
+      expect(store.listFolders()).toEqual([])
+    })
+
+    it('ensureFolder reaproveita por nome sem diferenciar caixa; rename e cor', () => {
+      const a = store.ensureFolder('Arquitetura')
+      expect(store.ensureFolder('arquitetura').id).toBe(a.id)
+
+      const renamed = store.updateFolder(a.id, { name: 'Arq', color: 'success' })
+      expect(renamed).toMatchObject({ name: 'Arq', color: 'success' })
+      expect(store.updateFolder(a.id, { color: null }).color).toBeNull()
+      expect(() => store.updateFolder(a.id, { name: '  ' })).toThrow(/non-empty/)
+    })
+  })
 })

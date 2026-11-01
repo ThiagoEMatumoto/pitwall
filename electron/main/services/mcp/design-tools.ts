@@ -13,9 +13,10 @@ import { exportDocumentPdf, fileSafeName } from '../design/document-export'
 import { ok, type McpNotify, type McpRequestContext, type ToolDef } from './tools'
 import { readTools } from './design-tools-read'
 import { writeTools } from './design-tools-write'
+import { folderCrudTools } from './folder-tools'
 import { DESIGN_GUIDE, guideSection } from './design-guide'
 import { claudeOrigin, loadArtboard, schemas, type DesignToolDeps } from './design-tools-shared'
-import type { DesignAgentActivity } from '../../../../shared/types/design'
+import type { DesignAgentActivity, DesignFoldersUpdatedEvent } from '../../../../shared/types/design'
 
 export { withActivity } from './design-tools-shared'
 
@@ -119,5 +120,15 @@ function utilTools(deps: DesignToolDeps): ToolDef[] {
 
 export function designTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
   const deps: DesignToolDeps = { notify, ctx }
-  return [...readTools(deps), ...writeTools(deps), ...utilTools(deps)]
+  const folderTools = folderCrudTools({
+    prefix: 'design',
+    items: 'documents',
+    store: designStore,
+    guideRef: 'See design_guide §2.',
+    onChange: (folderId) => {
+      const event: DesignFoldersUpdatedEvent = { folderId }
+      notify.broadcast('design:folders-updated', event)
+    },
+  })
+  return [...readTools(deps), ...writeTools(deps), ...folderTools, ...utilTools(deps)]
 }

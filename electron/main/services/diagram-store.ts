@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db'
+import { createFolderStore } from './folder-store-core'
 import type {
   CreateDiagramInput,
   Diagram,
@@ -43,6 +44,7 @@ interface DiagramRow {
   source_format: string | null
   source: string | null
   thumbnail: string | null
+  folder_id: string | null
   version: number
   created_at: number
   updated_at: number
@@ -90,6 +92,7 @@ function rowToMeta(row: DiagramRow): DiagramMeta {
     version: row.version,
     sourceFormat: row.source_format as DiagramSourceFormat | null,
     thumbnail: row.thumbnail,
+    folderId: row.folder_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -158,6 +161,12 @@ export function list(filter?: DiagramListFilter): DiagramMeta[] {
     }
     where.push(`EXISTS (SELECT 1 FROM diagram_links WHERE ${linkWhere.join(' AND ')})`)
   }
+  if (filter?.folderId === null) {
+    where.push('folder_id IS NULL')
+  } else if (filter?.folderId) {
+    where.push('folder_id = ?')
+    params.push(filter.folderId)
+  }
   if (filter?.search?.trim()) {
     where.push('title LIKE ?')
     params.push(`%${filter.search.trim()}%`)
@@ -167,7 +176,7 @@ export function list(filter?: DiagramListFilter): DiagramMeta[] {
   // Sem `scene` no SELECT: a lista não carrega cenas de megabytes.
   const rows = getDb()
     .prepare(
-      `SELECT id, title, kind, status, source_format, source, thumbnail, version,
+      `SELECT id, title, kind, status, source_format, source, thumbnail, folder_id, version,
               created_at, updated_at, '' AS scene
        FROM diagrams ${clause} ORDER BY updated_at DESC, title ASC`,
     )
@@ -184,6 +193,7 @@ export function create(input: CreateDiagramInput): Diagram {
   const now = Date.now()
   const id = randomUUID()
   const sceneJson = JSON.stringify(input.scene)
+  folders.assertFolderExists(input.folderId)
 
   const db = getDb()
   // Cabeça, versão 1 e links na MESMA transação: diagrama sem snapshot 1 não
@@ -191,9 +201,9 @@ export function create(input: CreateDiagramInput): Diagram {
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT INTO diagrams
-        (id, title, kind, status, scene, source_format, source, thumbnail, version,
+        (id, title, kind, status, scene, source_format, source, thumbnail, folder_id, version,
          created_at, updated_at)
-       VALUES (?, ?, ?, 'active', ?, ?, ?, NULL, 1, ?, ?)`,
+       VALUES (?, ?, ?, 'active', ?, ?, ?, NULL, ?, 1, ?, ?)`,
     ).run(
       id,
       input.title.trim(),
@@ -201,6 +211,7 @@ export function create(input: CreateDiagramInput): Diagram {
       sceneJson,
       input.sourceFormat ?? null,
       input.source ?? null,
+      input.folderId ?? null,
       now,
       now,
     )
@@ -317,6 +328,35 @@ export function remove(id: string, opts?: { force?: boolean }): void {
   }
   // Versões e links saem por ON DELETE CASCADE (foreign_keys = ON em db.ts).
   getDb().prepare('DELETE FROM diagrams WHERE id = ?').run(id)
+}
+
+// ---- API pública: pastas do hub ----
+//
+// SQL compartilhado com as pastas do Design (folder-store-core). Apagar a
+// pasta devolve os diagramas para "sem pasta" pelo ON DELETE SET NULL (066).
+
+const folders = createFolderStore({
+  folderTable: 'diagram_folders',
+  itemTable: 'diagrams',
+  label: 'diagram folder',
+})
+
+export const {
+  listFolders,
+  getFolder,
+  findFolderByName,
+  createFolder,
+  ensureFolder,
+  updateFolder,
+  deleteFolder,
+} = folders
+
+// Arquivar é organizar, não editar: updated_at fica, senão "Recentes"
+// reordenaria a cada arraste.
+export function move(id: string, folderId: string | null): Diagram {
+  if (!getRow(id)) throw new Error(`diagram not found: ${id}`)
+  folders.setItemFolder(id, folderId)
+  return get(id)!
 }
 
 // ---- API pública: diagram_links ----

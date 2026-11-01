@@ -62,7 +62,9 @@ import type {
   DiagramListFilter,
   DiagramLink,
   DiagramAuthor,
+  CreateDiagramFolderInput,
   CreateDiagramInput,
+  UpdateDiagramFolderInput,
   UpdateDiagramSceneInput,
   SyncConfigureInput,
   SyncResolveConflictInput,
@@ -511,7 +513,14 @@ const api: Api = {
     restoreVersion: (diagramId: string, version: number, author?: DiagramAuthor) =>
       invoke('diagrams:restore-version', diagramId, version, author),
     setThumbnail: (id: string, dataUrl: string) => invoke('diagrams:set-thumbnail', id, dataUrl),
+    move: (id: string, folderId: string | null) => invoke('diagrams:move', id, folderId),
+    foldersList: () => invoke('diagrams:folders-list'),
+    folderCreate: (input: CreateDiagramFolderInput) => invoke('diagrams:folder-create', input),
+    folderUpdate: (id: string, input: UpdateDiagramFolderInput) =>
+      invoke('diagrams:folder-update', id, input),
+    folderDelete: (id: string) => invoke('diagrams:folder-delete', id),
     onUpdated: (handler) => subscribe<unknown>('diagram:updated', handler),
+    onFoldersUpdated: (handler) => subscribe<unknown>('diagram:folders-updated', handler),
     onDeleted: (handler) => subscribe<unknown>('diagram:deleted', handler),
     onLinksUpdated: (handler) => subscribe<unknown>('diagramLinks:updated', handler),
     library: {

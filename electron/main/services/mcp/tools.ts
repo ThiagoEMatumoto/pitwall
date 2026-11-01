@@ -30,6 +30,7 @@ import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
+import { folderCrudTools, folderListTool } from './folder-tools'
 import {
   installCatalogLibrary,
   installedCatalogIds,
@@ -1623,6 +1624,8 @@ const diagramCreateSchema = z
     direction: diagramDirection.optional(),
     layout: diagramLayoutMode.optional(),
     template: z.string().min(1).optional(),
+    // Nome da pasta do hub: reaproveitada sem diferenciar caixa, criada se faltar.
+    folder: z.string().trim().min(1).max(200).optional(),
   })
   .refine(
     (v) => [v.elements, v.scene, v.template].filter((x) => x !== undefined).length === 1,
@@ -1642,6 +1645,13 @@ const diagramListSchema = z.object({
   parentType: diagramParentType.optional(),
   parentId: z.string().optional(),
   search: z.string().optional(),
+  // Nome da pasta (sem diferenciar caixa); null = só os diagramas sem pasta.
+  folder: z.string().trim().min(1).nullable().optional(),
+})
+
+const diagramMoveSchema = z.object({
+  diagramId: z.string().min(1),
+  folder: z.string().trim().min(1).max(200).nullable(),
 })
 
 // Espelha DiagramPatchOp: update = id + campos parciais do skeleton.
@@ -1703,12 +1713,20 @@ function diagramToMeta(diagram: Diagram): Record<string, unknown> {
 }
 
 function diagramTools(notify: McpNotify): ToolDef[] {
+  const foldersUpdated = (folderId: string | null) =>
+    notify.broadcast('diagram:folders-updated', { folderId })
+  const folderTools = {
+    prefix: 'diagram' as const,
+    items: 'diagrams',
+    store: diagramStore,
+    onChange: foldersUpdated,
+  }
   return [
     {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        `Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow's foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene, or template = a starter template id (${DIAGRAM_TEMPLATES.map((t) => `${t.id} (${t.name})`).join(', ')}) laid out the same way — kind defaults to the template's; refine it afterwards with diagram_patch. Exactly one of elements|scene|template. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).`,
+        `Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow's foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene, or template = a starter template id (${DIAGRAM_TEMPLATES.map((t) => `${t.id} (${t.name})`).join(', ')}) laid out the same way — kind defaults to the template's; refine it afterwards with diagram_patch. Exactly one of elements|scene|template. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Optional folder = hub folder name (reused case-insensitively, created if missing; see diagram_folder_list). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).`,
       inputSchema: diagramCreateSchema,
       handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
@@ -1724,17 +1742,23 @@ function diagramTools(notify: McpNotify): ToolDef[] {
                 }),
               }
             : (input.scene as DiagramScene)
-        const diagram = diagramStore.create({
-          title: input.title,
-          kind: input.kind ?? template?.kind,
-          scene,
-          sourceFormat: skeleton ? 'skeleton' : 'scene',
-          source: skeleton ? JSON.stringify(skeleton) : null,
-          author: 'claude',
-          summary: input.summary,
-          links: input.links,
-        })
+        // Pasta e diagrama na mesma transação: se o create falhar, a pasta recém-criada
+        // não pode sobrar vazia no hub.
+        const diagram = getDb().transaction(() =>
+          diagramStore.create({
+            title: input.title,
+            kind: input.kind ?? template?.kind,
+            scene,
+            sourceFormat: skeleton ? 'skeleton' : 'scene',
+            source: skeleton ? JSON.stringify(skeleton) : null,
+            author: 'claude',
+            summary: input.summary,
+            links: input.links,
+            folderId: input.folder ? diagramStore.ensureFolder(input.folder).id : undefined,
+          }),
+        )()
         notify.broadcast('diagram:updated', diagram)
+        if (diagram.folderId) foldersUpdated(diagram.folderId)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -1763,13 +1787,40 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_list',
       title: 'List diagrams',
       description:
-        'List diagrams (metas only, no scene). Optional filters: status (active default | archived | all), kind, parent (parentType + parentId), free-text search on title.',
+        'List diagrams (metas only, no scene; each with its folderId). Optional filters: status (active default | archived | all), kind, parent (parentType + parentId), free-text search on title, folder by name (null = diagrams without a folder).',
       inputSchema: diagramListSchema,
       handler: (args) => {
-        const filter = diagramListSchema.parse(args)
+        const { folder, ...filter } = diagramListSchema.parse(args)
+        let folderId: string | null | undefined = folder === null ? null : undefined
+        if (folder) {
+          const match = diagramStore.findFolderByName(folder)
+          if (!match) return ok({ items: [], note: `no folder named "${folder}"` })
+          folderId = match.id
+        }
         // Sem thumbnail: é um data-url de imagem, payload inútil pro agente.
-        const items = diagramStore.list(filter).map(({ thumbnail: _thumb, ...meta }) => meta)
+        const items = diagramStore
+          .list({ ...filter, folderId })
+          .map(({ thumbnail: _thumb, ...meta }) => meta)
         return ok({ items })
+      },
+    },
+    folderListTool(folderTools),
+    ...folderCrudTools(folderTools),
+    {
+      name: 'diagram_move',
+      title: 'Move diagram to a folder',
+      description:
+        'File a diagram into a hub folder by name (reused case-insensitively, created if missing); folder null takes it out of any folder. Does not count as an edit (no version, updatedAt unchanged).',
+      inputSchema: diagramMoveSchema,
+      handler: (args) => {
+        const { diagramId, folder } = diagramMoveSchema.parse(args)
+        // Antes do ensureFolder: id errado não pode deixar pasta vazia criada.
+        if (!diagramStore.get(diagramId)) throw new Error(`diagram not found: ${diagramId}`)
+        const folderId = folder === null ? null : diagramStore.ensureFolder(folder).id
+        const diagram = diagramStore.move(diagramId, folderId)
+        notify.broadcast('diagram:updated', diagram)
+        foldersUpdated(folderId)
+        return ok({ diagram: diagramToMeta(diagram) })
       },
     },
     {

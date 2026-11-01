@@ -24,9 +24,26 @@ import {
   toExcalidrawLibraryItems,
 } from "./library-convert";
 import { DiagramToolbar } from "./DiagramToolbar";
+import { renderThumbnail } from "./diagram-thumbnail";
 import { frameViewport } from "./frame-viewport";
 
 const SAVE_DEBOUNCE_MS = 800;
+
+// Preview do card do hub: falhar aqui não pode atrapalhar a edição — o card
+// só continua com o placeholder.
+async function refreshThumbnail(
+  diagramId: string,
+  elements: readonly unknown[],
+  api: ExcalidrawImperativeAPI | null,
+): Promise<void> {
+  try {
+    const utils = await loadExcalidrawUtils();
+    const dataUrl = await renderThumbnail(utils, elements, api?.getFiles() ?? null);
+    if (dataUrl) await diagramsApi.setThumbnail(diagramId, dataUrl);
+  } catch (err) {
+    console.warn("[diagrams] thumbnail falhou", err);
+  }
+}
 
 // Identidade barata da cena: id+version de cada elemento. É o que decide se um
 // onChange é edição real (Excalidraw bumpa version a cada mutação) e se um
@@ -227,6 +244,8 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
           // Edição nova durante o save em voo reagendou o debounce → o
           // conteúdo do canvas ainda não está persistido.
           setSyncStatus(timerRef.current ? "dirty" : "saved");
+          // Thumbnail só no snapshot: rascunho a cada 800 ms seria PNG demais.
+          if (snapshot) void refreshThumbnail(diagramId, elements, apiRef.current);
         })
         .catch((err) => {
           // Falha de save: reabre a janela de retry no próximo onChange.
@@ -317,6 +336,26 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     );
     return () => clearTimeout(t);
   }, [excalidrawAPI]);
+
+  // Diagrama sem preview (ex.: criado pelo Claude e nunca aberto) ganha um
+  // na primeira abertura, sem esperar uma edição.
+  // Parte da cena carregada (restaurada como no initialData), não do canvas:
+  // logo após o mount o canvas ainda pode estar vazio.
+  const hadThumbnail = diagram.thumbnail !== null;
+  useEffect(() => {
+    if (hadThumbnail) return;
+    let cancelled = false;
+    void loadExcalidrawUtils().then((utils) => {
+      if (cancelled) return;
+      const elements = restoreSceneElements(utils, diagram.scene.elements);
+      void refreshThumbnail(diagramId, elements, apiRef.current);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Remontado por key={diagram.id}: roda uma vez com a cena da abertura.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Flush com snapshot no blur da janela e no unmount (troca de diagrama).
   useEffect(() => {

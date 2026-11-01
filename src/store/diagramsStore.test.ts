@@ -6,6 +6,7 @@ import type { Diagram, DiagramMeta } from "../../shared/types/ipc";
 let updatedHandler: ((payload: unknown) => void) | null = null;
 let deletedHandler: ((payload: unknown) => void) | null = null;
 let linksHandler: ((payload: unknown) => void) | null = null;
+let foldersHandler: ((payload: unknown) => void) | null = null;
 let subscribeCount = 0;
 
 const mockApi = {
@@ -18,6 +19,17 @@ const mockApi = {
   unarchive: vi.fn(),
   delete: vi.fn(),
   listVersions: vi.fn(),
+  move: vi.fn(),
+  foldersList: vi.fn(),
+  folderCreate: vi.fn(),
+  folderUpdate: vi.fn(),
+  folderDelete: vi.fn(),
+  onFoldersUpdated: vi.fn((h: (payload: unknown) => void) => {
+    foldersHandler = h;
+    return () => {
+      foldersHandler = null;
+    };
+  }),
   onUpdated: vi.fn((h: (payload: unknown) => void) => {
     subscribeCount++;
     updatedHandler = h;
@@ -68,6 +80,7 @@ function makeMeta(over: Partial<DiagramMeta> = {}): DiagramMeta {
     version: 1,
     sourceFormat: "skeleton",
     thumbnail: null,
+    folderId: null,
     createdAt: 1000,
     updatedAt: 2000,
     ...over,
@@ -87,8 +100,10 @@ beforeEach(() => {
   useDiagramsStore.getState().stopWatch();
   useDiagramsStore.setState({
     diagrams: [],
+    archivedDiagrams: [],
+    folders: [],
+    hubSection: "recent",
     selected: null,
-    showArchived: false,
     loading: false,
     error: null,
     remoteScene: null,
@@ -98,6 +113,7 @@ beforeEach(() => {
   updatedHandler = null;
   deletedHandler = null;
   linksHandler = null;
+  foldersHandler = null;
 });
 
 describe("load", () => {
@@ -109,10 +125,11 @@ describe("load", () => {
     expect(useDiagramsStore.getState().loading).toBe(false);
   });
 
-  it("showArchived → filtro all", async () => {
-    mockApi.list.mockResolvedValue([]);
-    await useDiagramsStore.getState().setShowArchived(true);
-    expect(mockApi.list).toHaveBeenCalledWith({ status: "all" });
+  it("loadArchived carrega os arquivados à parte", async () => {
+    mockApi.list.mockResolvedValue([makeMeta({ status: "archived" })]);
+    await useDiagramsStore.getState().loadArchived();
+    expect(mockApi.list).toHaveBeenCalledWith({ status: "archived" });
+    expect(useDiagramsStore.getState().archivedDiagrams).toHaveLength(1);
   });
 
   it("erro vira state.error, sem lançar", async () => {
@@ -226,6 +243,28 @@ describe("watch", () => {
     expect(useDiagramsStore.getState().remoteScene!.nonce).toBe(firstNonce + 1);
   });
 
+  it("onUpdated sem bump (thumbnail/move) não repassa cena ao editor", () => {
+    useDiagramsStore.setState({
+      selected: makeDiagram(),
+      diagrams: [makeMeta()],
+    });
+    useDiagramsStore.getState().startWatch();
+    // Cena do banco atrás do canvas (save em voo), mesma version/updatedAt.
+    updatedHandler!(
+      makeDiagram({
+        thumbnail: "data:image/png;base64,AAA",
+        folderId: "f1",
+        scene: { elements: [{ id: "old", version: 1 }] },
+      }),
+    );
+    const s = useDiagramsStore.getState();
+    expect(s.remoteScene).toBeNull();
+    expect(s.selected?.thumbnail).toBe("data:image/png;base64,AAA");
+    expect(s.selected?.folderId).toBe("f1");
+    expect(s.selected?.scene.elements).toEqual([{ id: "a", version: 1 }]);
+    expect(s.diagrams[0].thumbnail).toBe("data:image/png;base64,AAA");
+  });
+
   it("onUpdated de outro diagrama não mexe na seleção", () => {
     useDiagramsStore.setState({
       selected: makeDiagram(),
@@ -239,11 +278,12 @@ describe("watch", () => {
     expect(s.remoteScene).toBeNull();
   });
 
-  it("diagrama arquivado some da lista quando showArchived está desligado", () => {
+  it("diagrama arquivado sai dos ativos e entra nos arquivados", () => {
     useDiagramsStore.setState({ diagrams: [makeMeta()] });
     useDiagramsStore.getState().startWatch();
     updatedHandler!(makeDiagram({ status: "archived" }));
     expect(useDiagramsStore.getState().diagrams).toHaveLength(0);
+    expect(useDiagramsStore.getState().archivedDiagrams.map((d) => d.id)).toEqual(["d1"]);
   });
 
   it("onDeleted remove da lista e limpa seleção", () => {
@@ -363,5 +403,91 @@ describe("saveScene", () => {
     const s = useDiagramsStore.getState();
     expect(s.diagrams[0].version).toBe(2);
     expect(s.selected?.scene.elements).toEqual([{ id: "a", version: 1 }]);
+  });
+});
+
+describe("hub: pastas", () => {
+  const folder = (over: Record<string, unknown> = {}) => ({
+    id: "f1",
+    name: "Infra",
+    color: null,
+    sortOrder: 0,
+    docCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  });
+
+  it("move é otimista: muda a pasta e as contagens antes do IPC", async () => {
+    useDiagramsStore.setState({
+      diagrams: [makeMeta()],
+      folders: [folder({ docCount: 0 })],
+    });
+    let resolve!: () => void;
+    mockApi.move.mockReturnValue(new Promise<void>((r) => (resolve = r)));
+
+    const pending = useDiagramsStore.getState().move("d1", "f1");
+    expect(useDiagramsStore.getState().diagrams[0].folderId).toBe("f1");
+    expect(useDiagramsStore.getState().folders[0].docCount).toBe(1);
+    resolve();
+    await pending;
+    expect(mockApi.move).toHaveBeenCalledWith("d1", "f1");
+  });
+
+  it("move que falha desfaz e mostra erro", async () => {
+    useDiagramsStore.setState({
+      diagrams: [makeMeta({ folderId: "f1" })],
+      folders: [folder({ docCount: 1 })],
+    });
+    mockApi.move.mockRejectedValue(new Error("boom"));
+
+    await useDiagramsStore.getState().move("d1", null);
+
+    const s = useDiagramsStore.getState();
+    expect(s.diagrams[0].folderId).toBe("f1");
+    expect(s.folders[0].docCount).toBe(1);
+    expect(s.error).toMatch(/mover o diagrama: boom/);
+  });
+
+  it("create dentro de uma seção de pasta cria na pasta", async () => {
+    useDiagramsStore.setState({ hubSection: "f1", folders: [folder()] });
+    mockApi.create.mockResolvedValue(makeDiagram({ folderId: "f1" }));
+
+    await useDiagramsStore.getState().create();
+
+    expect(mockApi.create).toHaveBeenCalledWith(expect.objectContaining({ folderId: "f1" }));
+    expect(useDiagramsStore.getState().folders[0].docCount).toBe(1);
+  });
+
+  it("deleteFolder tira os diagramas da pasta e volta para Recentes", async () => {
+    useDiagramsStore.setState({
+      hubSection: "f1",
+      diagrams: [makeMeta({ folderId: "f1" })],
+      folders: [folder({ docCount: 1 })],
+    });
+    mockApi.folderDelete.mockResolvedValue(undefined);
+
+    await useDiagramsStore.getState().deleteFolder("f1");
+
+    const s = useDiagramsStore.getState();
+    expect(s.folders).toEqual([]);
+    expect(s.diagrams[0].folderId).toBeNull();
+    expect(s.hubSection).toBe("recent");
+  });
+
+  it("diagram:folders-updated recarrega as pastas e deixa sem pasta os órfãos (pasta apagada via MCP)", async () => {
+    useDiagramsStore.setState({
+      hubSection: "gone",
+      diagrams: [makeMeta({ folderId: "gone" }), makeMeta({ id: "d2", folderId: "f1" })],
+    });
+    mockApi.foldersList.mockResolvedValue([folder()]);
+    useDiagramsStore.getState().startWatch();
+
+    foldersHandler!({ folderId: null });
+    await vi.waitFor(() => expect(useDiagramsStore.getState().folders).toHaveLength(1));
+
+    const s = useDiagramsStore.getState();
+    expect(s.diagrams.map((d) => d.folderId)).toEqual([null, "f1"]);
+    expect(s.hubSection).toBe("recent");
   });
 });

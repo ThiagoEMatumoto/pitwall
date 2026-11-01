@@ -58,6 +58,9 @@ describe('design tools — Breads do Breno authoring flow', () => {
       [
         'design_document_list',
         'design_folder_list',
+        'design_folder_create',
+        'design_folder_rename',
+        'design_folder_delete',
         'design_document_get',
         'design_selection_get',
         'design_node_get',
