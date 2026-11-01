@@ -1,4 +1,5 @@
 import { app, ipcMain } from 'electron'
+import { currentSessionIds } from '../services/session-conversation'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
@@ -1371,6 +1372,15 @@ export function registerSessionIpc(): void {
   ipcMain.handle('sessions:is-resumable', (_e, ccSessionId: string): boolean => {
     return findTranscriptPath(ccSessionId) !== null
   })
+
+  ipcMain.handle('sessions:current-ids', (_e, sessionIds: unknown): string[] =>
+    Array.isArray(sessionIds)
+      ? currentSessionIds(
+          getDb(),
+          sessionIds.filter((id): id is string => typeof id === 'string'),
+        )
+      : [],
+  )
 
   // Gate de UI: um handoff interrompido só é retomável se o transcript da filha
   // ainda existe no disco. Resolve o cc_session_id internamente (o renderer só tem

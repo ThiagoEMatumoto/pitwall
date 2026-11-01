@@ -18,6 +18,7 @@ import {
   type LayoutGraph,
   type LayoutResult,
   type Point,
+  textAsLabel,
 } from '../../../shared/diagram-skeleton'
 import { applyPatchOps, finalizePatchLayout } from '../../../shared/diagram-patch'
 
@@ -136,8 +137,9 @@ export async function skeletonToElements(
   options: DiagramLayoutOptions = {},
 ): Promise<unknown[]> {
   const direction = options.direction ?? 'LR'
-  const layout = await runElkLayout(skeletonLayoutGraph(skeleton, direction))
-  return buildElements(skeleton, layout, { ...options, direction })
+  const normalized = skeleton.map(textAsLabel)
+  const layout = await runElkLayout(skeletonLayoutGraph(normalized, direction))
+  return buildElements(normalized, layout, { ...options, direction })
 }
 
 /** Direção gravada nos nós auto da cena (a do último layout); LR se nenhum. */

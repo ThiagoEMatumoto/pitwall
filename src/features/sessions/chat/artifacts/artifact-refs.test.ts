@@ -115,6 +115,10 @@ beforeAll(async () => {
     html: '<section style="display:flex"><h1>Oi</h1></section>',
   })
   await toolCall('design_guide', {})
+  humanSays('confere o que ficou')
+  await toolCall('diagram_get', { id: diagramId })
+  await toolCall('design_document_get', { docId })
+  await toolCall('design_tree_summary', { artboardId })
   messages = parseChatMessages(lines.join('\n'))
 })
 
@@ -152,10 +156,49 @@ describe('planArtifacts — transcript produzido pelas tools reais', () => {
     const plan = planArtifacts(messages)
     const visible = messages
       .map((m, i) => ({ m, i }))
-      .filter(({ i }) => !plan.hidden.has(i) && !plan.cards.has(i))
+      .filter(({ i }) => !plan.hidden.has(i) && !plan.cards.has(i) && !plan.consults.has(i))
       .map(({ m }) => (m.kind === 'tool_use' ? m.name : m.kind))
     // design_guide não tem artefato: segue no card genérico, com o resultado.
-    expect(visible).toEqual(['user', 'user', 'mcp__pitwall__design_guide', 'tool_result'])
+    // Consultas viram chip, e o resultado delas continua à vista.
+    expect(visible).toEqual([
+      'user',
+      'user',
+      'mcp__pitwall__design_guide',
+      'tool_result',
+      'user',
+      'tool_result',
+      'tool_result',
+      'tool_result',
+    ])
+  })
+
+  it('tools só de leitura viram chip de consulta, não card de edição', () => {
+    const plan = planArtifacts(messages)
+    const consults = [...plan.consults.entries()].map(([idx, c]) => ({
+      name: (messages[idx] as { name: string }).name,
+      ...c,
+    }))
+    expect(consults).toEqual([
+      {
+        name: 'mcp__pitwall__diagram_get',
+        ref: { kind: 'diagram', id: diagramId },
+        title: 'Arquitetura',
+        lastTool: 'diagram_get',
+      },
+      {
+        name: 'mcp__pitwall__design_document_get',
+        ref: { kind: 'design', id: docId },
+        title: 'Landing',
+        lastTool: 'design_document_get',
+      },
+      {
+        name: 'mcp__pitwall__design_tree_summary',
+        ref: { kind: 'design', id: docId },
+        title: 'Landing',
+        lastTool: 'design_tree_summary',
+      },
+    ])
+    expect(plan.cards.size).toBe(2)
   })
 
   it('write de artboard criado fora da conversa resolve o doc pelo docId do resultado', () => {

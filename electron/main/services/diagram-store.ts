@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { sessionParentClause } from './session-conversation'
 import { getDb } from './db'
 import { createFolderStore } from './folder-store-core'
 import type {
@@ -155,7 +156,11 @@ export function list(filter?: DiagramListFilter): DiagramMeta[] {
       linkWhere.push('parent_type = ?')
       params.push(filter.parentType)
     }
-    if (filter.parentId) {
+    if (filter.parentId && filter.parentType === 'session') {
+      const clause = sessionParentClause(filter.parentId)
+      linkWhere.push(clause.sql)
+      params.push(...clause.params)
+    } else if (filter.parentId) {
       linkWhere.push('parent_id = ?')
       params.push(filter.parentId)
     }

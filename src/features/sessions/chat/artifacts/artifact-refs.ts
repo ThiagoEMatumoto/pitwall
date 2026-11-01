@@ -20,9 +20,18 @@ export interface ArtifactCardPlan {
   lastTool: string
 }
 
+// Leitura não é edição: vira um chip "consultou <título>" e o resultado fica.
+export interface ArtifactConsultPlan {
+  ref: ArtifactRef
+  title: string | null
+  lastTool: string
+}
+
 export interface ArtifactPlan {
   // índice da mensagem → card a renderizar no lugar do tool_use
   cards: Map<number, ArtifactCardPlan>
+  // índice do tool_use de leitura → chip de consulta
+  consults: Map<number, ArtifactConsultPlan>
   // tool_use fundidos num card posterior e tool_result já representados pelo card
   hidden: Set<number>
 }
@@ -37,6 +46,13 @@ export function artifactKindOf(toolName: string): ArtifactKind | null {
   if (tool.startsWith('diagram_')) return 'diagram'
   if (tool.startsWith('design_')) return 'design'
   return null
+}
+
+const READ_ONLY_TOOL =
+  /_(get|list|summary|screenshot|export|pdf_export|guide|children_get|node_get|selection_get|computed_styles)$/
+
+export function isReadOnlyArtifactTool(tool: string): boolean {
+  return READ_ONLY_TOOL.test(tool)
 }
 
 export function artifactRefKey(ref: ArtifactRef): string {
@@ -114,6 +130,7 @@ export function planArtifacts(messages: readonly ChatMessage[]): ArtifactPlan {
   })
 
   const cards = new Map<number, ArtifactCardPlan>()
+  const consults = new Map<number, ArtifactConsultPlan>()
   const hidden = new Set<number>()
   const docOfArtboard = new Map<string, string>()
   const titles = new Map<string, string>()
@@ -141,6 +158,11 @@ export function planArtifacts(messages: readonly ChatMessage[]): ArtifactPlan {
     const ref: ArtifactRef = { kind, id: resolved.id }
     const key = artifactRefKey(ref)
     if (resolved.title) titles.set(key, resolved.title)
+    const tool = m.name.slice(PREFIX.length)
+    if (isReadOnlyArtifactTool(tool)) {
+      consults.set(idx, { ref, title: titles.get(key) ?? null, lastTool: tool })
+      return
+    }
     const previous = turn.get(key)
     const calls = previous !== undefined ? (cards.get(previous)?.calls ?? 0) + 1 : 1
     if (previous !== undefined) {
@@ -151,7 +173,7 @@ export function planArtifacts(messages: readonly ChatMessage[]): ArtifactPlan {
       ref,
       title: titles.get(key) ?? null,
       calls,
-      lastTool: m.name.slice(PREFIX.length),
+      lastTool: tool,
     })
     turn.set(key, idx)
     // Erro continua visível: é a única pista do que falhou.
@@ -159,8 +181,8 @@ export function planArtifacts(messages: readonly ChatMessage[]): ArtifactPlan {
   })
 
   // Um título aprendido depois (ex.: create no fim do turno) vale para os cards anteriores.
-  for (const card of cards.values()) {
+  for (const card of [...cards.values(), ...consults.values()]) {
     card.title = titles.get(artifactRefKey(card.ref)) ?? card.title
   }
-  return { cards, hidden }
+  return { cards, consults, hidden }
 }

@@ -64,6 +64,18 @@ function activity(docId: string, phase: DesignAgentActivity['phase']): DesignAge
 beforeEach(() => handlers.clear())
 
 describe('ArtifactCard', () => {
+  it('coluna estreita: ações não quebram linha e viram só ícone com nome acessível', async () => {
+    render(<ArtifactCard plan={plan} onShowSide={() => {}} />)
+    await screen.findByText('Landing')
+    const side = screen.getByRole('button', { name: 'Ver ao lado' })
+    const open = screen.getByRole('button', { name: 'Abrir' })
+    for (const btn of [side, open]) expect(btn.className).toContain('whitespace-nowrap')
+    // O rótulo some por container query da coluna do chat (@container/chat).
+    expect(side.querySelector('span')?.className).toMatch(/@max-\[\d+rem\]\/chat:sr-only/)
+    expect(open.querySelector('span')?.className).toMatch(/@max-\[\d+rem\]\/chat:sr-only/)
+    expect(screen.getByTestId('artifact-card').className).toContain('min-w-0')
+  })
+
   it('mostra o título ao vivo e a contagem do turno', async () => {
     render(<ArtifactCard plan={plan} />)
     expect(await screen.findByText('Landing')).toBeInTheDocument()

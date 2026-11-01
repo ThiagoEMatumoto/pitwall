@@ -3,6 +3,7 @@ import { RotateCw } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { designApi, diagramsApi } from '@/lib/ipc'
 import { loadExcalidrawUtils } from '@/features/diagrams/excalidraw-lazy'
+import { DIAGRAM_EXPORT_APP_STATE } from '@/features/diagrams/diagram-thumbnail'
 import type { DesignArtboard } from '@shared/types/design'
 import type { ArtifactLive } from './useArtifactLive'
 
@@ -60,8 +61,12 @@ export function DiagramPreview({ id, live }: { id: string; live: ArtifactLive })
         }
         const svg = await utils.exportToSvg({
           elements: elements as never,
-          appState: { exportBackground: true, viewBackgroundColor: '#ffffff' },
+          appState: DIAGRAM_EXPORT_APP_STATE,
           files: null,
+          // O SVG vai para o DOM, onde as fontes do Excalidraw já estão
+          // carregadas. Inlinar faria subset de glifos, que cai num new
+          // Function bloqueado pela CSP (4 erros no console por preview).
+          skipInliningFonts: true,
         })
         if (cancelled || !hostRef.current) return
         svg.removeAttribute('width')
@@ -97,7 +102,7 @@ export function DiagramPreview({ id, live }: { id: string; live: ArtifactLive })
       )}
       <div
         ref={hostRef}
-        className={`m-4 flex items-start justify-center rounded-lg bg-white p-3 shadow-sm motion-safe:transition-opacity motion-safe:duration-200 ${
+        className={`m-4 flex items-start justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 motion-safe:transition-opacity motion-safe:duration-200 ${
           state === 'ready' ? 'opacity-100' : 'pointer-events-none absolute inset-0 opacity-0'
         }`}
       />

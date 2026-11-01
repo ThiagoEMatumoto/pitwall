@@ -7,6 +7,14 @@ import type { ExcalidrawUtils } from "./excalidraw-lazy";
 export const THUMBNAIL_MAX_PX = 480;
 export const MAX_THUMBNAIL_DATAURL_BYTES = 512 * 1024;
 
+// O editor roda sempre em theme="dark" (os 4 temas do app são escuros), que
+// inverte as cores da cena na tela. Exportar com exportWithDarkMode dá o mesmo
+// desenho; sem fundo, quem mostra põe o "papel" com token do tema.
+export const DIAGRAM_EXPORT_APP_STATE = {
+  exportBackground: false,
+  exportWithDarkMode: true,
+} as const;
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -26,9 +34,7 @@ export async function renderThumbnail(
   if (visible.length === 0) return null;
   const blob = await utils.exportToBlob({
     elements: visible as never,
-    // Fundo branco fixo: o canvas usa os defaults claros da lib (o tema dark
-    // do editor só inverte na tela), e o card mostra o PNG como está.
-    appState: { exportBackground: true, viewBackgroundColor: "#ffffff" },
+    appState: DIAGRAM_EXPORT_APP_STATE,
     files,
     mimeType: "image/png",
     maxWidthOrHeight: THUMBNAIL_MAX_PX,

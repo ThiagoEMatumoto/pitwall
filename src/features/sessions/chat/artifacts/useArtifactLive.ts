@@ -37,6 +37,28 @@ const DIAGRAM_EDITING_MS = 3_000
 // Rede de segurança para um 'start' sem 'end' (main reiniciado no meio).
 const DESIGN_EDITING_TTL_MS = 30_000
 
+// Cada card/painel do mesmo diagrama recebe o mesmo diagram:updated: sem cache,
+// N cards = N exportações por escrita. Chave id+versão, compartilhada.
+const THUMB_CACHE_MAX = 64
+const thumbCache = new Map<string, Promise<string | null>>()
+
+function diagramThumb(diagram: Diagram): Promise<string | null> {
+  const key = `${diagram.id}:${diagram.version}`
+  const hit = thumbCache.get(key)
+  if (hit) return hit
+  const job = loadExcalidrawUtils()
+    .then((utils) => renderThumbnail(utils, diagram.scene.elements, null))
+    .catch(() => {
+      thumbCache.delete(key)
+      return null
+    })
+  thumbCache.set(key, job)
+  if (thumbCache.size > THUMB_CACHE_MAX) {
+    thumbCache.delete(thumbCache.keys().next().value as string)
+  }
+  return job
+}
+
 export function useArtifactLive(ref: ArtifactRef): ArtifactLive {
   const [live, setLive] = useState<ArtifactLive>(INITIAL)
   useEffect(() => {
@@ -65,13 +87,10 @@ function watchDiagram(id: string, setLive: Setter): () => void {
     }))
     // Diagrama criado pelo Claude nasce sem thumbnail (só o editor grava uma):
     // o card desenha a cena atual.
-    void loadExcalidrawUtils()
-      .then((utils) => renderThumbnail(utils, diagram.scene.elements, null))
-      .then((url) => {
-        if (disposed || seq !== renderSeq || !url) return
-        setLive((prev) => ({ ...prev, thumbnail: url }))
-      })
-      .catch(() => {})
+    void diagramThumb(diagram).then((url) => {
+      if (disposed || seq !== renderSeq || !url) return
+      setLive((prev) => (prev.thumbnail === url ? prev : { ...prev, thumbnail: url }))
+    })
   }
 
   void diagramsApi.get(id).then((diagram) => {

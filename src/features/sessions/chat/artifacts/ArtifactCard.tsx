@@ -12,14 +12,9 @@ export function openArtifactInEditor(ref: ArtifactRef): void {
   else navigateToDesign(ref.id)
 }
 
+// Leituras não chegam aqui (viram ArtifactConsultChip).
 function actionLabel(tool: string, calls: number): string {
-  const verb = /_(create|artboard_create)$/.test(tool)
-    ? 'Criado'
-    : /_(get|list|summary|screenshot|export|html_get|children_get|node_get|selection_get|computed_styles|tree_summary)$/.test(
-          tool,
-        )
-      ? 'Consultado'
-      : 'Editado'
+  const verb = /_(create|artboard_create)$/.test(tool) ? 'Criado' : 'Editado'
   return calls > 1 ? `${verb} · ${calls} chamadas neste turno` : `${verb} pelo Claude`
 }
 
@@ -36,7 +31,7 @@ export function ArtifactThumb({
 }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-md border border-[var(--color-border)] bg-white ${className}`}
+      className={`relative overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] ${className}`}
     >
       {src ? (
         <img
@@ -96,7 +91,7 @@ export function ArtifactCard({
   return (
     <div
       data-testid="artifact-card"
-      className={`group flex items-center gap-3 rounded-lg border bg-[var(--color-surface)] p-2 pr-3 motion-safe:transition-colors motion-safe:duration-200 ${
+      className={`group flex min-w-0 items-center gap-3 rounded-lg border bg-[var(--color-surface)] p-2 pr-3 motion-safe:transition-colors motion-safe:duration-200 ${
         live.editing
           ? 'border-[var(--color-accent)]/50'
           : 'border-[var(--color-border)] hover:border-[color-mix(in_srgb,var(--color-text-dim)_45%,var(--color-border))]'
@@ -107,7 +102,7 @@ export function ArtifactCard({
         disabled={missing}
         onClick={() => (onShowSide ? onShowSide(ref) : openArtifactInEditor(ref))}
         aria-label={`Ver ${KIND_LABEL[ref.kind].toLowerCase()} ${title}`}
-        className="shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-default"
+        className="shrink-0 rounded-md @max-[26rem]/chat:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:cursor-default"
       >
         <ArtifactThumb
           kind={ref.kind}
@@ -144,22 +139,25 @@ export function ArtifactCard({
               type="button"
               onClick={() => onShowSide(ref)}
               aria-pressed={sideActive}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
+              title="Ver ao lado"
+              className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
                 sideActive
                   ? 'bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]'
                   : 'text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
               }`}
             >
               <Icon as={PanelRight} size={13} />
-              Ver ao lado
+              {/* Coluna estreita: só o ícone; o nome acessível continua. */}
+              <span className="@max-[34rem]/chat:sr-only">Ver ao lado</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => openArtifactInEditor(ref)}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            title="Abrir no editor"
+            className="flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           >
-            Abrir
+            <span className="@max-[22rem]/chat:sr-only">Abrir</span>
             <Icon as={ArrowUpRight} size={13} />
           </button>
         </div>

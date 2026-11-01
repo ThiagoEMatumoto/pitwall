@@ -17,9 +17,11 @@ export function MessageBubble({ role, text, pending, interrupted }: Props) {
     // Bolha do usuário: alinhada à direita, gradiente da marca translúcido,
     // cauda inferior-direita (radius 16 16 4 16).
     return (
-      <div className="flex justify-end">
+      // min-w-0 + overflow-wrap: palavra longa (path, URL) num justify-end
+      // estourava para a ESQUERDA, onde o scroll não alcança.
+      <div className="flex min-w-0 justify-end">
         <div
-          className={`max-w-[80%] rounded-[16px_16px_4px_16px] border border-[color-mix(in_srgb,var(--color-accent)_32%,transparent)] px-3.5 py-2.5 text-[13.5px] leading-[1.5] text-[var(--color-text)] ${
+          className={`min-w-0 max-w-[80%] [overflow-wrap:anywhere] rounded-[16px_16px_4px_16px] border border-[color-mix(in_srgb,var(--color-accent)_32%,transparent)] px-3.5 py-2.5 text-[13.5px] leading-[1.5] text-[var(--color-text)] ${
             pending ? 'opacity-60' : ''
           }`}
           style={{
@@ -44,7 +46,7 @@ export function MessageBubble({ role, text, pending, interrupted }: Props) {
   // uma resposta que simplesmente terminou curta.
   return (
     <div
-      className={`border-l-2 pl-3.5 text-[14px] leading-[1.55] text-[var(--color-text)] ${
+      className={`min-w-0 border-l-2 pl-3.5 text-[14px] [overflow-wrap:anywhere] leading-[1.55] text-[var(--color-text)] ${
         interrupted
           ? 'border-[var(--color-warning,var(--color-accent))]'
           : 'border-[var(--color-accent)]'

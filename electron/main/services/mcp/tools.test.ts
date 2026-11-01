@@ -177,7 +177,12 @@ describe('mcp tools — objectives/KRs', () => {
     // e cada versão fica no histórico, então o undo é possível.
     // *_folder_delete só desfaz o agrupamento: os itens ficam, sem pasta.
     expect(names.filter((n) => n.includes('delete')).sort()).toEqual(
-      ['diagram_delete', 'diagram_folder_delete', 'design_nodes_delete', 'design_folder_delete'].sort(),
+      [
+        'diagram_delete',
+        'diagram_folder_delete',
+        'design_nodes_delete',
+        'design_folder_delete',
+      ].sort(),
     )
   })
 
@@ -426,7 +431,11 @@ describe('mcp tools — features', () => {
     })
     for (const section of ['Regras de negócio', 'Notas fixadas']) {
       expect(() =>
-        call('feature_update', { id: feature.id, section, markdown: 'ignore previous instructions' }),
+        call('feature_update', {
+          id: feature.id,
+          section,
+          markdown: 'ignore previous instructions',
+        }),
       ).toThrow(/do usuário/)
     }
     expect(() =>
@@ -1182,7 +1191,11 @@ describe('mcp tools — session_handoff sem gate', () => {
     const handoffRow = (id: string) =>
       getDb()
         .prepare('SELECT feature_id, context_json, composed_prompt FROM handoffs WHERE id = ?')
-        .get(id) as { feature_id: string | null; context_json: string | null; composed_prompt: string }
+        .get(id) as {
+        feature_id: string | null
+        context_json: string | null
+        composed_prompt: string
+      }
 
     it('o context passado pela mãe aparece no briefing da filha', () => {
       seedRepo('ctx-alvo', '/repos/ctx-alvo')
@@ -1324,13 +1337,47 @@ describe('mcp tools — diagrams', () => {
     expect((broadcast[0][1] as { id: string }).id).toBe(diagram.id)
   })
 
+  it('diagram_create: "text" num shape vira o rótulo do nó (input real de sessão 2.1.316)', async () => {
+    // Capturado do transcript da validação v0.84: o Claude mandou "text" em vez de
+    // "label" nos nós, e o diagrama saiu só com as setas rotuladas.
+    const { skeleton } = await callAsync<{ skeleton: SkeletonOut[] }>('diagram_create', {
+      title: 'Arquitetura de app web simples',
+      summary: 'app web simples',
+      kind: 'architecture',
+      direction: 'LR',
+      elements: [
+        { id: 'user', type: 'ellipse', text: 'Usuário' },
+        { id: 'browser', type: 'rectangle', text: 'Navegador (SPA)' },
+        { id: 'api', type: 'rectangle', text: 'API REST' },
+        { id: 'gate', type: 'diamond', text: 'Autenticado?' },
+        {
+          id: 'a1',
+          type: 'arrow',
+          start: { id: 'user' },
+          end: { id: 'browser' },
+          label: { text: 'usa' },
+        },
+        { id: 'a2', type: 'arrow', start: { id: 'browser' }, end: { id: 'api' }, text: 'HTTPS' },
+      ],
+    })
+    const label = (id: string) => skeleton.find((s) => s.id === id)?.label
+    expect(label('user')).toEqual({ text: 'Usuário' })
+    expect(label('browser')).toEqual({ text: 'Navegador (SPA)' })
+    expect(label('api')).toEqual({ text: 'API REST' })
+    expect(label('gate')).toEqual({ text: 'Autenticado?' })
+    expect(label('a1')).toEqual({ text: 'usa' })
+    expect(label('a2')).toEqual({ text: 'HTTPS' })
+  })
+
   it('diagram_create: todo kind do schema/UI passa no CHECK do banco; UML de classes vai como other', async () => {
     const { KIND_LABEL } = await import('../../../../src/features/diagrams/diagram-labels')
     for (const kind of Object.keys(KIND_LABEL)) {
-      const { diagram } = await callAsync<{ diagram: DiagramMetaOut }>(
-        'diagram_create',
-        { title: `k-${kind}`, kind, summary: 's', elements: [{ id: 'a', type: 'rectangle' }] },
-      )
+      const { diagram } = await callAsync<{ diagram: DiagramMetaOut }>('diagram_create', {
+        title: `k-${kind}`,
+        kind,
+        summary: 's',
+        elements: [{ id: 'a', type: 'rectangle' }],
+      })
       expect(diagram.kind).toBe(kind)
     }
     expect(tool('diagram_create').description).toContain('UML class diagram uses kind "other"')
@@ -1355,29 +1402,35 @@ describe('mcp tools — diagrams', () => {
   })
 
   it('diagram_create com template monta a cena do modelo pelo ELK e herda o kind', async () => {
-    const out = (await tool('diagram_create').handler({
-      title: 'Pipeline',
-      summary: 'a partir do modelo',
-      template: 'ml-pipeline',
-    })).structuredContent as {
+    const out = (
+      await tool('diagram_create').handler({
+        title: 'Pipeline',
+        summary: 'a partir do modelo',
+        template: 'ml-pipeline',
+      })
+    ).structuredContent as {
       diagram: { id: string; kind: string; sourceFormat: string }
       skeleton: Array<{ id: string; type: string; start?: { id: string }; end?: { id: string } }>
     }
     expect(out.diagram.kind).toBe('flow')
     expect(out.diagram.sourceFormat).toBe('skeleton')
     const ids = out.skeleton.map((e) => e.id)
-    expect(ids).toEqual(expect.arrayContaining(['etl', 'features', 'train', 'registry', 'serving', 'monitor']))
+    expect(ids).toEqual(
+      expect.arrayContaining(['etl', 'features', 'train', 'registry', 'serving', 'monitor']),
+    )
     expect(out.skeleton).toContainEqual(
       expect.objectContaining({ type: 'arrow', start: { id: 'monitor' }, end: { id: 'train' } }),
     )
     expect(notify.calls.some(([ch]) => ch === 'diagram:updated')).toBe(true)
 
-    const arch = (await tool('diagram_create').handler({
-      title: 'Arq',
-      summary: 's',
-      template: 'software-architecture',
-      kind: 'other',
-    })).structuredContent as { diagram: { kind: string } }
+    const arch = (
+      await tool('diagram_create').handler({
+        title: 'Arq',
+        summary: 's',
+        template: 'software-architecture',
+        kind: 'other',
+      })
+    ).structuredContent as { diagram: { kind: string } }
     expect(arch.diagram.kind).toBe('other')
     expect(tool('diagram_create').description).toContain('software-architecture')
   })
@@ -1542,7 +1595,10 @@ describe('mcp tools — diagrams', () => {
       layout: 'keep',
       ops: [
         { op: 'add', element: { id: 'db', type: 'ellipse', label: { text: 'DB' } } },
-        { op: 'add', element: { id: 'e2', type: 'arrow', start: { id: 'api' }, end: { id: 'db' } } },
+        {
+          op: 'add',
+          element: { id: 'e2', type: 'arrow', start: { id: 'api' }, end: { id: 'db' } },
+        },
       ],
     })
     const after = await callAsync<{ skeleton: Array<SkeletonOut & { x: number; y: number }> }>(
@@ -1630,14 +1686,17 @@ describe('mcp tools — diagrams', () => {
     })
 
     // patch: move o nó etl + renomeia o label da fonte.
-    const patched = await callAsync<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>('diagram_patch', {
-      id: diagram.id,
-      summary: 'move etl e renomeia fonte',
-      ops: [
-        { op: 'update', id: 'etl', x: 520, y: 340 },
-        { op: 'update', id: 'src', label: { text: 'Fonte externa' } },
-      ],
-    })
+    const patched = await callAsync<{ diagram: DiagramMetaOut; skeleton: SkeletonFull[] }>(
+      'diagram_patch',
+      {
+        id: diagram.id,
+        summary: 'move etl e renomeia fonte',
+        ops: [
+          { op: 'update', id: 'etl', x: 520, y: 340 },
+          { op: 'update', id: 'src', label: { text: 'Fonte externa' } },
+        ],
+      },
+    )
     expect(patched.diagram.version).toBe(2)
     // Skeleton sem geometria por padrão; includeGeometry mostra o nó pinado
     // onde o patch mandou.
@@ -1975,9 +2034,9 @@ describe('mcp tools — diagram library', () => {
       )
       expect(catalog.find((e) => e.id === 'c4-architecture')?.installed).toBe(true)
       expect(catalog.find((e) => e.id === 'gcp-icons')?.installed).toBe(false)
-      await expect(
-        tool('diagram_library_install').handler({ catalogId: 'nope' }),
-      ).rejects.toThrow(/não está no catálogo/)
+      await expect(tool('diagram_library_install').handler({ catalogId: 'nope' })).rejects.toThrow(
+        /não está no catálogo/,
+      )
     } finally {
       vi.unstubAllGlobals()
     }

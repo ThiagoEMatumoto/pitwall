@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useDesignStore } from '@/store/designStore'
+import { SessionDrawerDock } from '@/features/sessions/chat/artifacts/SessionDrawer'
 import { watchAgentFinish } from './AgentActivityToasts'
 import { AskClaudeComposer } from './ask-claude/AskClaudeComposer'
 import { CanvasStage } from './canvas/CanvasStage'
@@ -91,9 +92,16 @@ export function DesignArea() {
         <Inspector />
       </aside>
 
+      <DesignSessionDock docId={docId} />
+
       {overlays}
     </>
   )
+}
+
+function DesignSessionDock({ docId }: { docId: string }) {
+  const title = useDesignStore((s) => s.doc?.title ?? 'Design')
+  return <SessionDrawerDock artifact={{ kind: 'design', id: docId }} title={title} />
 }
 
 function CanvasHost() {

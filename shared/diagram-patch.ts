@@ -28,6 +28,7 @@ import {
   type ExText,
   type LayoutResult,
   type Point,
+  textAsLabel,
 } from "./diagram-skeleton";
 import {
   avoidingRoute,
@@ -427,7 +428,7 @@ export function applyPatchOps(
 
   for (const op of ops) {
     if (op.op === "add") {
-      const skel = { ...op.element };
+      const skel = textAsLabel({ ...op.element });
       if (isCompoundType(skel.type)) {
         result = adoptChildren(result, skel.id, skel.type, skel.children);
       }
