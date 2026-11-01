@@ -65,18 +65,22 @@ export function usePendingMotherProgress(): void {
   const liveStatus = useAppStore((s) =>
     sessionId ? (s.liveSessions.find((l) => l.id === sessionId)?.status ?? null) : null,
   )
-  const isLive = liveStatus !== null && liveStatus !== 'ended'
+  // 'starting' é PTY viva sem o sessions/<pid>.json: o CLI ainda não se registrou.
+  // Não avança o passo (senão o prazo do chat corre antes do terminal subir) e
+  // também não é morte.
+  const isLive = liveStatus !== null && liveStatus !== 'ended' && liveStatus !== 'starting'
+  const isGone = liveStatus === null || liveStatus === 'ended'
   const gotUpdate = useRef(false)
   const seenLive = useRef<string | null>(null)
 
-  // Recém-nascida, a mãe vem do list-live-global como 'ended' (o sessions/<pid>.json
-  // ainda não existe) ou nem vem: isso é "ainda não apareceu", não morte. Só conta
-  // como morta depois de ter sido vista viva; antes disso quem decide é o prazo.
+  // Recém-nascida, a mãe vem do list-live-global como 'starting' (ou 'ended' em
+  // versões antigas do produtor) ou nem vem: isso é "ainda não apareceu", não morte.
+  // Só conta como morta depois de ter sido vista viva; antes disso quem decide é o prazo.
   useEffect(() => {
     if (!sessionId || failed) return
     if (isLive) seenLive.current = sessionId
-    else if (seenLive.current === sessionId) failPending(sessionId, MOTHER_DIED_TEXT)
-  }, [sessionId, isLive, failed])
+    else if (isGone && seenLive.current === sessionId) failPending(sessionId, MOTHER_DIED_TEXT)
+  }, [sessionId, isLive, isGone, failed])
 
   useEffect(() => {
     if (step === 'terminal' && isLive && !failed) {

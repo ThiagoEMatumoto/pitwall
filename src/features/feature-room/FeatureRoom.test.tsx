@@ -510,7 +510,7 @@ describe('FeatureRoom', () => {
       }
     ).cc_session_id
 
-  it('recém-nascida (ended no list-live-global): os passos esperam e o foco chega ao composer quando ele monta', async () => {
+  it('recém-nascida (starting no list-live-global): os passos esperam e o foco chega ao composer quando ele monta', async () => {
     await mount([])
     harness.seedSession(testDb, 'M', { repoId: 'r1', featureId: F })
     rt.running = ['M']
@@ -522,8 +522,8 @@ describe('FeatureRoom', () => {
       expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'terminal' }),
     )
 
-    // A PTY roda mas o sessions/<pid>.json ainda não existe: o main diz 'ended'.
-    expect((await liveFromMain()).find((l) => l.id === 'M')?.status).toBe('ended')
+    // A PTY roda mas o sessions/<pid>.json ainda não existe: o main diz 'starting'.
+    expect((await liveFromMain()).find((l) => l.id === 'M')?.status).toBe('starting')
     expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'terminal' })
     expect(screen.getByTestId('start-mother-steps')).toBeInTheDocument()
     expect(screen.queryByTestId('start-mother-failure')).toBeNull()
