@@ -1221,6 +1221,22 @@ describe('mcp tools — diagrams', () => {
     expect((broadcast[0][1] as { id: string }).id).toBe(diagram.id)
   })
 
+  it('diagram_create: todo kind do schema/UI passa no CHECK do banco; UML de classes vai como other', async () => {
+    const { KIND_LABEL } = await import('../../../../src/features/diagrams/diagram-labels')
+    for (const kind of Object.keys(KIND_LABEL)) {
+      const { diagram } = await callAsync<{ diagram: DiagramMetaOut }>(
+        'diagram_create',
+        { title: `k-${kind}`, kind, summary: 's', elements: [{ id: 'a', type: 'rectangle' }] },
+      )
+      expect(diagram.kind).toBe(kind)
+    }
+    expect(tool('diagram_create').description).toContain('UML class diagram uses kind "other"')
+    // Sem migration não há kind novo: o zod barra antes do CHECK do SQLite.
+    await expect(
+      tool('diagram_create').handler({ title: 'X', kind: 'class', summary: 's', elements: [] }),
+    ).rejects.toThrow()
+  })
+
   it('diagram_create exige exatamente um de elements|scene (zod refine)', async () => {
     await expect(tool('diagram_create').handler({ title: 'X', summary: 's' })).rejects.toThrow()
     await expect(
