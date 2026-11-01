@@ -12,6 +12,7 @@ import {
   makeTextElement,
   labelIdFor,
   polylineMidpoint,
+  selfLoopRoute,
   randInt,
   sizeFor,
   textMetrics,
@@ -941,7 +942,11 @@ export function finalizePatchLayout(
       detached;
     // O ELK não conhece os nós pinados: a rota dele pode passar por cima deles.
     let route: Point[] | undefined =
-      elkRoute && !crosses(elkRoute) ? elkRoute : undefined;
+      startEl === endEl
+        ? selfLoopRoute(startEl)
+        : elkRoute && !crosses(elkRoute)
+          ? elkRoute
+          : undefined;
     if (!route && (elkRoute || affected || crosses(current))) {
       route = avoidingRoute(startEl, endEl, others);
     }

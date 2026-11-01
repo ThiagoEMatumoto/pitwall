@@ -517,6 +517,28 @@ export function orthogonalRoute(a: Box, b: Box): Point[] {
   ];
 }
 
+const SELF_LOOP_GAP = 48;
+
+/**
+ * Laço de uma relação do nó com ele mesmo: sai pela direita perto do topo,
+ * contorna por fora com folga e entra pelo topo. Os trechos das pontas têm
+ * SELF_LOOP_GAP (cabe crowfoot) e o meio da polilinha cai no trecho de cima,
+ * então o label fica acima do nó.
+ */
+export function selfLoopRoute(a: Box): Point[] {
+  const right = a.x + a.width;
+  const sy = a.y + Math.min(16, a.height / 2);
+  const top = a.y - SELF_LOOP_GAP;
+  const cx = a.x + a.width / 2;
+  return [
+    [right, sy],
+    [right + SELF_LOOP_GAP, sy],
+    [right + SELF_LOOP_GAP, top],
+    [cx, top],
+    [cx, a.y],
+  ];
+}
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 // O Excalidraw desloca 0.5 exato pra 0.5001 (normalizeFixedPoint) pra não
@@ -852,8 +874,10 @@ export function buildElements(
     if (skel.type === "arrow" && startEl && endEl) {
       const bothAuto = isAutoPlaced(startEl) && isAutoPlaced(endEl);
       const route =
-        (bothAuto ? layout.routes.get(skel.id) : undefined) ??
-        orthogonalRoute(startEl, endEl);
+        startEl === endEl
+          ? selfLoopRoute(startEl)
+          : ((bothAuto ? layout.routes.get(skel.id) : undefined) ??
+            orthogonalRoute(startEl, endEl));
       el = { ...el, ...elbowGeometry(route, startEl, endEl) };
     }
     linears.push(el);

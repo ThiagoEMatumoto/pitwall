@@ -682,3 +682,59 @@ describe("frame dentro de frame (o Excalidraw não aninha frames)", () => {
     expect(back.find((s) => s.id === "g")?.children).toEqual(["inner"]);
   });
 });
+
+describe("relação auto-referente", () => {
+  const selfRel: DiagramSkeletonElement[] = [
+    {
+      id: "a",
+      type: "entity",
+      name: "Funcionario",
+      fields: [
+        { name: "id", pk: true },
+        { name: "nome" },
+        { name: "gerente_id", fk: true },
+      ],
+    },
+    {
+      id: "r",
+      type: "arrow",
+      start: { id: "a" },
+      end: { id: "a" },
+      relation: "1:N",
+      label: { text: "gerencia" },
+    },
+  ];
+
+  function expectRoomyLoop(els: AnyEl[]) {
+    const block = byId(els, "a");
+    const route = absRoute(byId(els, "r"));
+    const seg = (p: number[], q: number[]) =>
+      Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]);
+    // Trechos das pontas crowfoot: longe o bastante pra não se sobreporem.
+    expect(seg(route[0], route[1])).toBeGreaterThanOrEqual(40);
+    expect(seg(route.at(-2)!, route.at(-1)!)).toBeGreaterThanOrEqual(40);
+    // As pontas saem por lados diferentes do bloco.
+    const side = ([x, y]: number[]) =>
+      Math.abs(x - block.x) < 0.5
+        ? "left"
+        : Math.abs(x - block.x - block.width) < 0.5
+          ? "right"
+          : Math.abs(y - block.y) < 0.5
+            ? "top"
+            : "bottom";
+    expect(side(route[0])).not.toBe(side(route.at(-1)!));
+    expect(disjoint(byId(els, "r__label"), block)).toBe(true);
+  }
+
+  it("sai por um lado, contorna com folga e entra por outro; label fora do bloco", async () => {
+    expectRoomyLoop((await skeletonToElements(selfRel)) as AnyEl[]);
+  });
+
+  it("continua com folga depois de um patch que muda os campos", async () => {
+    const els = await skeletonToElements(selfRel);
+    const out = (await applyPatch(els, [
+      { op: "update", id: "a", fields: [{ name: "id", pk: true }, { name: "nome" }] },
+    ])) as AnyEl[];
+    expectRoomyLoop(out);
+  });
+});
