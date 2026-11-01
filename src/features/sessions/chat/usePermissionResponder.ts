@@ -3,7 +3,7 @@ import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import type { AttentionAction, TuiMenu } from '../../../../shared/types/ipc'
 import { deriveChildAllowRule } from '../../../../electron/main/services/spawn-flags'
 import { buildDigitKey } from './respond-keys'
-import { menuFingerprint } from '../tui-menu-parser'
+import { gateMenuByStatus, menuFingerprint } from '../tui-menu-parser'
 import type { PermissionDecision } from './PermissionCard'
 import { RESPOND_NOTICE, respondGuarded, sameDecision } from './permission-respond'
 
@@ -107,7 +107,9 @@ export function useMainPermissionMenu(
 ): TuiMenu | null {
   const [menu, setMenu] = useState<TuiMenu | null>(null)
   useEffect(() => {
-    if (!enabled || status !== 'waiting') {
+    // Mesmos status do gate do card: trust e permissão também aparecem em
+    // starting/idle, e o quick look não tem outro lugar que os mostre.
+    if (!enabled || (status !== 'waiting' && status !== 'starting' && status !== 'idle')) {
       setMenu(null)
       return
     }
@@ -115,8 +117,8 @@ export function useMainPermissionMenu(
     const read = () =>
       void sessionsApi.attentionMenu(sessionId).then((snap) => {
         if (!alive) return
-        const next =
-          snap && (snap.menu.kind === 'permission' || snap.menu.kind === 'trust') ? snap.menu : null
+        const gated = snap ? gateMenuByStatus(snap.menu, status) : null
+        const next = gated && (gated.kind === 'permission' || gated.kind === 'trust') ? gated : null
         setMenu((prev) =>
           prev && next && menuFingerprint(prev) === menuFingerprint(next) ? prev : next,
         )
