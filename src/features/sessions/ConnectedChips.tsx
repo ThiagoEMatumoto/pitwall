@@ -163,7 +163,15 @@ function childrenChips(children: ChildLink[], openCtx: OpenContext): ReactNode[]
 // Faixa discreta de relações no header do pane: de onde a sessão saiu, quem ela
 // delegou, o bastão e as sessões dos repos ligados. O tooltip de cada chip diz do
 // que a outra sessão trata — é o que evita ter que lembrar ou perguntar.
-export function ConnectedChips({ sessionId }: { sessionId: string }) {
+// `shrink`: painel estreito — sem o piso, os chips truncam em vez de empurrar o
+// resto do header por cima das ações.
+export function ConnectedChips({
+  sessionId,
+  shrink = false,
+}: {
+  sessionId: string
+  shrink?: boolean
+}) {
   const graph = useSessionGraph()
   const links = useMemo(() => sessionLinks(graph, sessionId), [graph, sessionId])
   const self = graph.nodes.find((n) => n.sessionId === sessionId)
@@ -251,7 +259,7 @@ export function ConnectedChips({ sessionId }: { sessionId: string }) {
       aria-label="Sessões relacionadas"
       // Piso de largura: sem ele o título (que também trunca) espreme a faixa até
       // sobrar só o prefixo do 1º chip, sem nome nenhum.
-      className="flex min-w-[min(100%,11.5rem)] shrink items-center gap-1 overflow-hidden"
+      className={`flex ${shrink ? 'min-w-0' : 'min-w-[min(100%,11.5rem)]'} shrink items-center gap-1 overflow-hidden`}
     >
       {chips}
     </div>
