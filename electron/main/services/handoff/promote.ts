@@ -17,6 +17,7 @@ import { buildSessionsFileIndex, onTurnEnded } from '../session-activity'
 import { liveSessionStates } from '../live-session-states'
 import { listMotherPins, motherPinKeyOf, setMotherPin } from '../mother-pins-store'
 import { resumeConversation } from '../../ipc/sessions'
+import { latestSpawnArgs, type SpawnArgs } from '../spawn-args'
 import { killAndWaitExit } from './kill-and-wait'
 import type {
   MotherRestartEvent,
@@ -94,24 +95,46 @@ function emit(e: MotherRestartEvent): void {
 
 export async function restartAsMother(sessionId: string): Promise<string> {
   // "Reiniciar agora" com relance agendado: o agendado não dispara de novo.
-  for (const [cc, id] of pendingRestarts) if (id === sessionId) pendingRestarts.delete(cc)
+  cancelPendingOf(sessionId)
   const row = sessionRow(sessionId)
   if (!row.cc_session_id || !findTranscriptPath(row.cc_session_id)) {
     throw new Error(
       'Transcript da sessão não foi encontrado no disco — reiniciar perderia o histórico.',
     )
   }
+  const relaunchAs = motherSpawnArgs(latestSpawnArgs(getDb(), row.cc_session_id))
   await killAndWaitExit(sessionId)
   const { session } = resumeConversation(
     { repoId: row.repo_id, ccSessionId: row.cc_session_id },
     'main',
+    { relaunchAs },
   )
   return session.id
+}
+
+// O resume manual volta com as flags default: a mãe promovida perdia o modelo e o
+// modo de permissão. Mantém os da sessão e tira só o que é de filha: o --settings
+// (handoffChild), o briefing do handoff e o 'plan' imposto pelo modo de investigação.
+export function motherSpawnArgs(args: SpawnArgs | null): SpawnArgs | null {
+  if (!args) return null
+  return {
+    ...args,
+    handoffChild: false,
+    systemPromptText: null,
+    permissionMode: args.permissionMode === 'plan' ? null : args.permissionMode,
+  }
 }
 
 // ccSessionId → sessions.id com relance pendente até o fim do turno.
 const pendingRestarts = new Map<string, string>()
 let offTurnEnded: (() => void) | null = null
+let exitWatch: ((e: { sessionId: string }) => void) | null = null
+
+// Sessão encerrada antes do fim do turno: o relance agendado morre junto (senão um
+// turn-ended tardio, de outra linha da conversa, relançaria quem o humano fechou).
+function cancelPendingOf(sessionId: string): void {
+  for (const [cc, id] of pendingRestarts) if (id === sessionId) pendingRestarts.delete(cc)
+}
 
 function runRestart(sessionId: string): void {
   restartAsMother(sessionId)
@@ -129,6 +152,10 @@ function scheduleRestart(sessionId: string, cc: string): void {
     pendingRestarts.delete(ccSessionId)
     runRestart(pending)
   })
+  if (!exitWatch) {
+    exitWatch = (e) => cancelPendingOf(e.sessionId)
+    ptyManager.on('exit', exitWatch)
+  }
   emit({ sessionId, state: 'scheduled' })
 }
 
@@ -138,7 +165,9 @@ export function pendingMotherRestart(sessionId: string): boolean {
 
 function isWorking(sessionId: string): boolean {
   const status = liveSessionStates(buildSessionsFileIndex()).get(sessionId)?.status
-  return status === 'working' || status === 'starting'
+  // waiting = parada num prompt de permissão/pergunta NO MEIO do turno: matar agora
+  // perderia o pedido. Só idle (fim de turno) relança na hora.
+  return status === 'working' || status === 'starting' || status === 'waiting'
 }
 
 export function promoteToMother(input: PromoteMotherInput): PromoteMotherResult {

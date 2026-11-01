@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,7 +12,14 @@ const broadcasts: Array<[string, unknown]> = []
 vi.mock('../db', () => ({ getDb: () => testDb }))
 vi.mock('../notify', () => ({ broadcast: (c: string, p: unknown) => broadcasts.push([c, p]) }))
 vi.mock('../transcript-path', () => ({ findTranscriptPath: () => '/tmp/t.jsonl' }))
-vi.mock('../pty-manager', () => ({ ptyManager: { isRunning: (id: string) => running.has(id) } }))
+const ptyExit = new EventEmitter()
+vi.mock('../pty-manager', () => ({
+  ptyManager: {
+    isRunning: (id: string) => running.has(id),
+    on: (ev: string, fn: (p: { sessionId: string }) => void) => ptyExit.on(ev, fn),
+    off: (ev: string, fn: (p: { sessionId: string }) => void) => ptyExit.off(ev, fn),
+  },
+}))
 vi.mock('../session-settings', () => ({
   acceptsCrossSessionInbound: (id: string) => inbound.has(id),
 }))
@@ -33,9 +41,11 @@ vi.mock('./kill-and-wait', () => ({
   },
 }))
 const resumed: string[] = []
+const resumeOpts: unknown[] = []
 vi.mock('../../ipc/sessions', () => ({
-  resumeConversation: (input: { ccSessionId: string }) => {
+  resumeConversation: (input: { ccSessionId: string }, _origin: string, opts?: unknown) => {
     resumed.push(input.ccSessionId)
+    resumeOpts.push(opts)
     return { session: { id: 'novo' }, reattached: false }
   },
 }))
@@ -43,7 +53,7 @@ vi.mock('../../ipc/sessions', () => ({
 import * as store from '../handoff-store'
 import { applyAllMigrations, seedRepos, seedSession } from '../attention/attention-test-harness'
 import { readMotherPinKeys } from '../mother-pins-store'
-import { promoteInDb, promoteToMother } from './promote'
+import { pendingMotherRestart, promoteInDb, promoteToMother } from './promote'
 
 function ccOf(id: string): string {
   return (testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as {
@@ -73,6 +83,7 @@ describe('Tornar mãe', () => {
     status.clear()
     killed.length = 0
     resumed.length = 0
+    resumeOpts.length = 0
     broadcasts.length = 0
   })
   afterEach(() => testDb.close())
@@ -136,5 +147,74 @@ describe('Tornar mãe', () => {
     expect(promoteToMother({ sessionId: 'filha', restart: 'now' }).restart).toBe('restarting')
     await flush()
     expect(killed).toEqual(['filha'])
+  })
+  it('waiting (prompt de permissão) conta como turno em andamento: agenda', () => {
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    status.set('filha', 'waiting')
+    expect(promoteToMother({ sessionId: 'filha', restart: 'when-idle' }).restart).toBe('scheduled')
+    expect(killed).toEqual([])
+  })
+
+  it('relance agendado é cancelado se a sessão encerrar antes do fim do turno', async () => {
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    status.set('filha', 'working')
+    promoteToMother({ sessionId: 'filha', restart: 'when-idle' })
+    expect(pendingMotherRestart('filha')).toBe(true)
+    running.delete('filha')
+    ptyExit.emit('exit', { sessionId: 'filha' })
+    expect(pendingMotherRestart('filha')).toBe(false)
+    turnEnded!(ccOf('filha'))
+    await flush()
+    expect(killed).toEqual([])
+    expect(resumed).toEqual([])
+  })
+
+  it('relança preservando modelo, effort e modo de permissão, sem as flags de filha', async () => {
+    testDb
+      .prepare(`UPDATE sessions SET spawn_args = ? WHERE id = 'filha'`)
+      .run(
+        JSON.stringify({
+          model: 'claude-opus-5-5',
+          effort: 'high',
+          advisorModel: null,
+          permissionMode: 'acceptEdits',
+          disallowedTools: null,
+          systemPromptText: 'Você é filha do handoff X',
+          handoffChild: true,
+          cwd: '/tmp/x',
+        }),
+      )
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    promoteToMother({ sessionId: 'filha', restart: 'now' })
+    await flush()
+    expect(resumeOpts[0]).toEqual({
+      relaunchAs: expect.objectContaining({
+        model: 'claude-opus-5-5',
+        effort: 'high',
+        permissionMode: 'acceptEdits',
+        handoffChild: false,
+        systemPromptText: null,
+      }),
+    })
+  })
+
+  it('modo plan da filha não vira modo da mãe', async () => {
+    testDb
+      .prepare(`UPDATE sessions SET spawn_args = ? WHERE id = 'filha'`)
+      .run(JSON.stringify({ model: 'm', permissionMode: 'plan', handoffChild: true }))
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    promoteToMother({ sessionId: 'filha', restart: 'now' })
+    await flush()
+    expect(resumeOpts[0]).toEqual({
+      relaunchAs: expect.objectContaining({ model: 'm', permissionMode: null, handoffChild: false }),
+    })
   })
 })

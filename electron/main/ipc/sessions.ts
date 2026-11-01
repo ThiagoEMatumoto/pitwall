@@ -1029,6 +1029,9 @@ export function setResumedSessionHook(fn: (session: Session, origin: ResumeOrigi
 export function resumeConversation(
   input: ResumeSessionInput,
   origin: ResumeOrigin = 'renderer',
+  // Só do main ("Tornar mãe"): relança com estas flags em vez do default do resume
+  // manual. Revalidadas pelas mesmas whitelists do wake.
+  opts: { relaunchAs?: SpawnArgs | null } = {},
 ): ResumeSessionResult {
   const db = getDb()
   const repoId = input.repoId ?? null
@@ -1119,7 +1122,8 @@ export function resumeConversation(
   // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
   const spawned = latestSpawnArgs(db, input.ccSessionId)
   const fromHibernation = isConversationHibernated(db, input.ccSessionId)
-  const original = relaunchFlags(fromHibernation ? spawned : null, getChildLearnedAllow())
+  const relaunch = opts.relaunchAs ?? (fromHibernation ? spawned : null)
+  const original = relaunchFlags(relaunch, getChildLearnedAllow())
   // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
   // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
   // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
@@ -1177,7 +1181,7 @@ export function resumeConversation(
     // Copia o registro como está: um resume sem flags não pode apagar as do
     // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
     // novas grava outras.
-    spawnArgs: spawned,
+    spawnArgs: opts.relaunchAs ?? spawned,
   })
   // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
   clearConversationHibernated(db, input.ccSessionId)
