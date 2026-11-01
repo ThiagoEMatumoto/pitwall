@@ -60,7 +60,8 @@ vi.mock('../ChatView', () => ({
   }),
 }))
 
-import { SessionDrawerButton, artifactPrompt } from './SessionDrawer'
+import { SessionDrawerButton, SessionDrawerDock, artifactPrompt } from './SessionDrawer'
+import { DRAWER_DEFAULT_WIDTH, useSessionDrawerStore } from './sessionDrawerStore'
 
 const ref = { kind: 'diagram' as const, id: 'd1' }
 
@@ -69,11 +70,37 @@ beforeEach(() => {
   askSession.mockClear()
   pushEcho.mockClear()
   state.links = []
+  useSessionDrawerStore.setState({ openKey: null, width: DRAWER_DEFAULT_WIDTH })
 })
 
+// Como nos editores: botão na toolbar, dock como coluna irmã do canvas.
+function Editor() {
+  return (
+    <div className="flex">
+      <SessionDrawerButton artifact={ref} title="Arq" />
+      <div data-testid="canvas" />
+      <SessionDrawerDock artifact={ref} title="Arq" />
+    </div>
+  )
+}
+
 describe('SessionDrawer', () => {
+  it('abre como coluna ao lado do canvas (empurra, não cobre) e redimensiona', () => {
+    render(<Editor />)
+    fireEvent.click(screen.getByRole('button', { name: /Sessão/ }))
+    const drawer = screen.getByRole('complementary', { name: 'Sessão de Arq' })
+    expect(drawer.className).not.toMatch(/\bfixed\b|\babsolute\b/)
+    expect(drawer.className).toContain('shrink-0')
+    expect(screen.getByTestId('canvas').nextElementSibling).toBe(drawer)
+    const handle = screen.getByRole('separator', { name: 'Redimensionar gaveta da sessão' })
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(useSessionDrawerStore.getState().width).toBe(DRAWER_DEFAULT_WIDTH + 24)
+    fireEvent.click(screen.getByRole('button', { name: /Sessão/ }))
+    expect(screen.queryByRole('complementary')).toBeNull()
+  })
+
   it('sem sessão vinculada oferece escolher uma aberta', async () => {
-    render(<SessionDrawerButton artifact={ref} title="Arq" />)
+    render(<Editor />)
     fireEvent.click(screen.getByRole('button', { name: /Sessão/ }))
     expect(
       await screen.findByText('Nenhuma sessão escreveu este diagrama ainda.'),
@@ -85,14 +112,14 @@ describe('SessionDrawer', () => {
 
   it('abre na sessão autora, vinda do link; encerrada fica só leitura', async () => {
     state.links = [{ parentType: 'session', parentId: 's-author' }]
-    render(<SessionDrawerButton artifact={ref} title="Arq" />)
+    render(<Editor />)
     fireEvent.click(screen.getByRole('button', { name: /Sessão/ }))
     expect(await screen.findByTestId('chat')).toHaveTextContent('s-author')
     expect(screen.getByLabelText('Mensagem para a sessão')).toBeDisabled()
   })
 
   it('link novo chega ao vivo e o envio passa pelo ask-session com o artefato', async () => {
-    render(<SessionDrawerButton artifact={ref} title="Arq" />)
+    render(<Editor />)
     fireEvent.click(screen.getByRole('button', { name: /Sessão/ }))
     await screen.findByText('Nenhuma sessão escreveu este diagrama ainda.')
     act(() =>

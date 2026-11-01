@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { createPortal } from 'react-dom'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+} from 'react'
 import { ArrowUp, MessagesSquare, TerminalSquare, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuSection } from '@/components/ui/Menu'
@@ -9,7 +17,12 @@ import { useAppStore } from '@/store/appStore'
 import { useSessionTargets } from '@/features/design/ask-claude/useSessionTargets'
 import { ChatView, type ChatViewHandle } from '../ChatView'
 import { KIND_LABEL } from './ArtifactCard'
-import type { ArtifactRef } from './artifact-refs'
+import { artifactRefKey, type ArtifactRef } from './artifact-refs'
+import {
+  DRAWER_CANVAS_MIN_WIDTH,
+  DRAWER_MIN_WIDTH,
+  useSessionDrawerStore,
+} from './sessionDrawerStore'
 import { useLinkedSessions } from './useLinkedSessions'
 
 // "Sessão" dentro dos editores de Diagramas e Design: a conversa da sessão que
@@ -20,44 +33,93 @@ import { useLinkedSessions } from './useLinkedSessions'
 // gaveta não disputa a PTY com a aba (não precisa de lease, como o CrewPeek em
 // chat). O envio usa design:ask-session, que passa pelo injetor com guarda.
 
-export function SessionDrawerButton({ artifact, title }: { artifact: ArtifactRef; title: string }) {
-  const [open, setOpen] = useState(false)
+export function SessionDrawerButton({ artifact }: { artifact: ArtifactRef; title?: string }) {
+  const open = useSessionDrawerStore((s) => s.openKey === artifactRefKey(artifact))
+  const toggle = useSessionDrawerStore((s) => s.toggle)
   const linked = useLinkedSessions(artifact)
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-pressed={open}
-        title={
-          linked.length
-            ? 'Conversar com a sessão que escreve este artefato'
-            : 'Conversar com uma sessão'
-        }
-        className={`relative inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-          open
-            ? 'bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]'
-            : 'text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
-        }`}
-      >
-        <Icon as={MessagesSquare} size={14} />
-        Sessão
-        {linked.length > 0 && !open && (
-          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
-        )}
-      </button>
-      {open &&
-        createPortal(
-          <SessionDrawer
-            artifact={artifact}
-            title={title}
-            linked={linked}
-            onClose={() => setOpen(false)}
-          />,
-          document.body,
-        )}
-    </>
+    <button
+      type="button"
+      onClick={() => toggle(artifact)}
+      aria-pressed={open}
+      title={
+        linked.length
+          ? 'Conversar com a sessão que escreve este artefato'
+          : 'Conversar com uma sessão'
+      }
+      className={`relative inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
+        open
+          ? 'bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]'
+          : 'text-[var(--color-text)] hover:bg-[var(--color-surface-2)]'
+      }`}
+    >
+      <Icon as={MessagesSquare} size={14} />
+      Sessão
+      {linked.length > 0 && !open && (
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
+      )}
+    </button>
   )
+}
+
+// Coluna à direita do editor, irmã do canvas no mesmo flex: abrir a gaveta
+// empurra o layout (canvas e painel de propriedades continuam visíveis) em vez
+// de cobrir. Redimensionável pela borda esquerda.
+export function SessionDrawerDock({ artifact, title }: { artifact: ArtifactRef; title: string }) {
+  const open = useSessionDrawerStore((s) => s.openKey === artifactRefKey(artifact))
+  const close = useSessionDrawerStore((s) => s.close)
+  const linked = useLinkedSessions(open ? artifact : null)
+  if (!open) return null
+  return <SessionDrawer artifact={artifact} title={title} linked={linked} onClose={close} />
+}
+
+const KEY_STEP_PX = 24
+
+// Largura que a gaveta pode ocupar sem espremer o canvas abaixo do mínimo.
+// Colunas fixas irmãs (camadas, propriedades) não cedem espaço, então saem da
+// conta. 0 = contêiner ainda sem layout: não limita.
+function roomFor(el: HTMLElement | null): number {
+  const host = el?.parentElement
+  if (!host?.clientWidth) return Infinity
+  const fixed = [...host.children]
+    .filter((c) => c !== el && getComputedStyle(c).flexShrink === '0')
+    .reduce((sum, c) => sum + (c as HTMLElement).offsetWidth, 0)
+  return host.clientWidth - fixed - DRAWER_CANVAS_MIN_WIDTH
+}
+
+function useDrawerResize(ref: RefObject<HTMLElement | null>) {
+  const width = useSessionDrawerStore((s) => s.width)
+  const setWidth = useSessionDrawerStore((s) => s.setWidth)
+  const drag = useRef<{ startX: number; startW: number } | null>(null)
+  const clamp = useCallback(
+    (w: number) => {
+      return Math.max(DRAWER_MIN_WIDTH, Math.min(w, roomFor(ref.current)))
+    },
+    [ref],
+  )
+  return {
+    width: clamp(width),
+    handle: {
+      onPointerDown: (e: PointerEvent<HTMLDivElement>) => {
+        e.currentTarget.setPointerCapture(e.pointerId)
+        drag.current = { startX: e.clientX, startW: ref.current?.offsetWidth ?? width }
+      },
+      onPointerMove: (e: PointerEvent<HTMLDivElement>) => {
+        if (!drag.current || !ref.current) return
+        ref.current.style.width = `${clamp(drag.current.startW + drag.current.startX - e.clientX)}px`
+      },
+      onPointerUp: () => {
+        if (!drag.current) return
+        drag.current = null
+        setWidth(ref.current?.offsetWidth ?? width)
+      },
+      onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+        e.preventDefault()
+        setWidth(clamp(width + (e.key === 'ArrowLeft' ? KEY_STEP_PX : -KEY_STEP_PX)))
+      },
+    },
+  }
 }
 
 interface Option {
@@ -117,13 +179,14 @@ function SessionDrawer({
     options.find((o) => o.linked) ??
     null
   const live = useAppStore((s) => s.liveSessions.find((l) => l.id === current?.sessionId))
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useRef<HTMLElement>(null)
+  const resize = useDrawerResize(dialogRef)
 
   useEffect(() => {
     requestAnimationFrame(() => dialogRef.current?.focus())
   }, [])
 
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key === 'Escape' && !e.defaultPrevented) {
       e.stopPropagation()
       onClose()
@@ -154,14 +217,23 @@ function SessionDrawer({
   ].filter((s) => s.items.length > 0)
 
   return (
-    <div
+    <aside
       ref={dialogRef}
-      role="dialog"
       aria-label={`Sessão de ${title}`}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="pw-panel-in fixed bottom-0 right-0 top-10 z-40 flex w-[min(480px,calc(100vw-2rem))] flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl outline-none"
+      style={{ width: resize.width }}
+      className="pw-panel-in relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)] outline-none"
     >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Redimensionar gaveta da sessão"
+        aria-valuenow={Math.round(resize.width)}
+        tabIndex={0}
+        {...resize.handle}
+        className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-transparent hover:after:bg-[var(--color-accent)]/60 focus-visible:outline-none focus-visible:after:bg-[var(--color-accent)]"
+      />
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3">
         <Icon as={MessagesSquare} size={14} className="shrink-0 text-[var(--color-text-dim)]" />
         {sections.length > 0 ? (
@@ -217,7 +289,7 @@ function SessionDrawer({
           </p>
         </div>
       )}
-    </div>
+    </aside>
   )
 }
 

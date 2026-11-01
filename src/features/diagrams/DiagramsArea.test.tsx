@@ -53,6 +53,7 @@ vi.mock("@/lib/ipc", () => ({
 // A gaveta "Sessão" tem teste próprio (SessionDrawer.test.tsx).
 vi.mock("@/features/sessions/chat/artifacts/SessionDrawer", () => ({
   SessionDrawerButton: () => null,
+  SessionDrawerDock: () => null,
 }));
 
 vi.mock("@/lib/nav", () => ({
