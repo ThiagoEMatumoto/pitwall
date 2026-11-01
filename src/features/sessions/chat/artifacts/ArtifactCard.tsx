@@ -12,14 +12,9 @@ export function openArtifactInEditor(ref: ArtifactRef): void {
   else navigateToDesign(ref.id)
 }
 
+// Leituras não chegam aqui (viram ArtifactConsultChip).
 function actionLabel(tool: string, calls: number): string {
-  const verb = /_(create|artboard_create)$/.test(tool)
-    ? 'Criado'
-    : /_(get|list|summary|screenshot|export|html_get|children_get|node_get|selection_get|computed_styles|tree_summary)$/.test(
-          tool,
-        )
-      ? 'Consultado'
-      : 'Editado'
+  const verb = /_(create|artboard_create)$/.test(tool) ? 'Criado' : 'Editado'
   return calls > 1 ? `${verb} · ${calls} chamadas neste turno` : `${verb} pelo Claude`
 }
 

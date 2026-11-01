@@ -37,6 +37,7 @@ import { ToolResultCard, ToolUseCard } from './ToolCard'
 import { useChatTranscript, usePlanFile } from './useChatTranscript'
 import { ArtifactCard } from './artifacts/ArtifactCard'
 import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
+import { ArtifactConsultChip } from './artifacts/ArtifactConsultChip'
 import { artifactRefKey, planArtifacts } from './artifacts/artifact-refs'
 import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
 import { useSidePanelFits } from './artifacts/useSidePanelFits'
@@ -667,6 +668,16 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
                 plan={artifactCard}
                 onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
                 sideActive={sideKey === artifactRefKey(artifactCard.ref)}
+              />
+            )
+          }
+          const consult = artifactPlan.consults.get(i)
+          if (consult) {
+            return (
+              <ArtifactConsultChip
+                key={i}
+                plan={consult}
+                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
               />
             )
           }
