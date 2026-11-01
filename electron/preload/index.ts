@@ -413,6 +413,8 @@ const api: Api = {
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
     undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
+    learnChildRule: (input: { tool?: string; command?: string }) =>
+      invoke('handoffs:learn-child-rule', input),
     resume: (id: string) => invoke('handoffs:resume', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),

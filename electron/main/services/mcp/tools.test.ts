@@ -2,7 +2,10 @@
 // Unit dos handlers MCP contra um DB better-sqlite3 real (tmp dir), com o
 // electron mockado (app.getPath → tmp) e o notify espiado. Mesma estratégia
 // dos testes de migration: schema real via runMigrations, sem janela.
-import { rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -612,6 +615,106 @@ describe('mcp tools — session_handoff sem gate', () => {
       }
     })
     setPref('handoffs.requireApproval', false)
+  })
+
+  it('sem mode: a filha nasce em auto-edits (acceptEdits), não em plan', () => {
+    seedRepo('backend', '/repos/backend')
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'backend',
+      task: 'Implementar X',
+    })
+    expect(res.status).toBe('running')
+    expect(spawned[0].permissionMode).toBe('acceptEdits')
+    const row = getDb().prepare('SELECT mode FROM handoffs WHERE id = ?').get(res.handoffId) as {
+      mode: string
+    }
+    expect(row.mode).toBe('auto-edits')
+    expect(spawned[0].systemPromptText).toContain('Modo auto-edits')
+  })
+
+  it('sem mode com provider codex: continua plan (codex não sobe autônomo editando)', () => {
+    seedRepo('backend', '/repos/backend')
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'backend',
+      task: 'Investigar Y',
+      provider: 'codex',
+    })
+    expect(res.error).toBeUndefined()
+    expect(spawned[0].permissionMode).toBe('plan')
+  })
+
+  it('repo-alvo com checkout na main: work_dir vira worktree próprio child/* (git real)', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'tools-child-wt-')))
+    try {
+      const repo = join(base, 'svc')
+      const git = (...a: string[]) =>
+        execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim()
+      execFileSync('git', ['init', '-q', '-b', 'main', repo])
+      git('config', 'user.email', 't@t')
+      git('config', 'user.name', 't')
+      writeFileSync(join(repo, '.gitignore'), '.worktrees/\n')
+      git('add', '.gitignore')
+      git('commit', '-q', '-m', 'init')
+      seedRepo('svc', repo)
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'svc',
+        task: 'Implementar Z',
+      })
+      expect(res.status).toBe('running')
+      const row = getDb()
+        .prepare('SELECT work_dir FROM handoffs WHERE id = ?')
+        .get(res.handoffId) as {
+        work_dir: string
+      }
+      expect(row.work_dir.startsWith(join(repo, '.worktrees', 'child-'))).toBe(true)
+      const branch = execFileSync(
+        'git',
+        ['-C', row.work_dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+        {
+          encoding: 'utf8',
+        },
+      ).trim()
+      expect(branch).toMatch(/^child\//)
+      expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+      expect(spawned[0].systemPromptText).toContain(`git push -u origin ${branch}`)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('mode plan explícito em repo na main: fica na raiz, sem worktree', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'tools-child-plan-')))
+    try {
+      const repo = join(base, 'svc2')
+      execFileSync('git', ['init', '-q', '-b', 'main', repo])
+      execFileSync('git', [
+        '-C',
+        repo,
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'user.name=t',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'i',
+      ])
+      seedRepo('svc2', repo)
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'svc2',
+        task: 'Ler',
+        mode: 'plan',
+      })
+      const row = getDb()
+        .prepare('SELECT work_dir FROM handoffs WHERE id = ?')
+        .get(res.handoffId) as {
+        work_dir: string
+      }
+      expect(row.work_dir).toBe(repo)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 
   it('spawna direto (running, sem pending) e devolve o alias endereçável', () => {

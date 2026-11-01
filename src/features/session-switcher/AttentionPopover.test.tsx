@@ -7,6 +7,7 @@ import { menuFingerprint, parseTuiMenu } from '../../../shared/tui/tui-menu-pars
 
 const attentionMenu = vi.fn()
 const attentionRespond = vi.fn()
+const learnChildRule = vi.fn()
 const noop = new Proxy({}, { get: () => () => undefined })
 vi.stubGlobal(
   'window',
@@ -27,7 +28,9 @@ vi.stubGlobal(
                         : () => undefined,
                 },
               )
-            : noop,
+            : ns === 'handoffs'
+              ? { learnChildRule }
+              : noop,
       },
     ),
   }),
@@ -85,6 +88,7 @@ const item: AttentionItem = {
 beforeEach(() => {
   attentionMenu.mockReset()
   attentionRespond.mockReset()
+  learnChildRule.mockReset()
 })
 
 describe('menuActions', () => {
@@ -299,5 +303,63 @@ describe('AttentionPopover', () => {
     expect(screen.getByText('Terminou o turno')).toBeInTheDocument()
     expect(screen.getByTestId('attention-open')).toBeInTheDocument()
     expect(screen.queryByTestId('attention-action-approve')).toBeNull()
+  })
+})
+
+describe('Sempre permitir para filhas', () => {
+  // O main deriva e valida com a MESMA função pura; o mock delega a ela.
+  async function setup(over: Partial<AttentionItem> = {}) {
+    const { deriveChildAllowRule } = await import('../../../electron/main/services/spawn-flags')
+    learnChildRule.mockImplementation(async ({ tool, command }) => {
+      const rule = deriveChildAllowRule(tool, command)
+      return rule ? { ok: true, rule, added: true } : { ok: false, reason: 'não vira regra' }
+    })
+    const menu = await realPermissionMenu()
+    attentionMenu.mockResolvedValue({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 1,
+      menu,
+    })
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={{ ...item, ...over }} />)
+    await screen.findByText('Quer continuar?')
+    return menu
+  }
+
+  it('filha + pedido real de Bash: grava a regra derivada e aprova o menu atual', async () => {
+    const menu = await setup()
+    await act(async () =>
+      fireEvent.click(screen.getByTestId('attention-action-always-children')),
+    )
+    expect(learnChildRule).toHaveBeenCalledWith({
+      tool: 'Bash',
+      command: 'touch permissao-fixture.txt',
+    })
+    expect(attentionRespond).toHaveBeenCalledWith({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 1,
+      action: { kind: 'select', optionIndex: 0 },
+    })
+    expect(screen.getByTestId('attention-notice')).toHaveTextContent(
+      'Regra Bash(touch *) vale para as próximas filhas',
+    )
+  })
+
+  it('sessão comum (não filha) não oferece a ação', async () => {
+    await setup({ kind: 'session', key: 'session:s', handoffId: undefined })
+    expect(screen.getByTestId('attention-action-approve')).toBeInTheDocument()
+    expect(screen.queryByTestId('attention-action-always-children')).toBeNull()
+  })
+
+  it('main recusa: mostra o motivo e NÃO responde o menu', async () => {
+    await setup()
+    learnChildRule.mockResolvedValueOnce({ ok: false, reason: 'não vira regra' })
+    await act(async () =>
+      fireEvent.click(screen.getByTestId('attention-action-always-children')),
+    )
+    expect(attentionRespond).not.toHaveBeenCalled()
+    expect(screen.getByTestId('attention-notice')).toHaveTextContent('não vira regra')
   })
 })

@@ -342,6 +342,9 @@ export interface CreateHandoffInput {
   // Omitido = 'pending' (espera o gate). 'approved' = um humano já decidiu (criação
   // manual, adoção): nasce fora do loop de auto-aprovação, que spawnaria uma 2ª filha.
   status?: 'pending' | 'approved'
+  // cwd já decidido por quem cria (worktree automático da filha). Omitido = o
+  // store resolve (worktree da feature, senão a raiz do repo).
+  workDir?: string | null
 }
 
 // ---- Passagem de bastão (baton) ----
@@ -2621,6 +2624,12 @@ export interface Api {
     // — o vínculo mãe→filha deixa de existir e a sessão volta a ser uma sessão
     // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz
     // as permissões restritas com que a filha foi lançada.
+    // "Sempre permitir para filhas": deriva a regra do pedido lido da TUI e grava
+    // na pref (o main valida; ok:false = comando que não vira regra).
+    learnChildRule(input: {
+      tool?: string
+      command?: string
+    }): Promise<{ ok: true; rule: string; added: boolean } | { ok: false; reason: string }>
     release(id: string): Promise<Handoff>
     // Retoma um handoff INTERROMPIDO: re-spawna a filha via `claude --resume`,
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não

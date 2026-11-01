@@ -232,6 +232,10 @@ const CHILD_ALLOW_PUBLISH = [
   'Bash(git push origin feat/*)',
   'Bash(git push origin fix/*)',
   'Bash(git push origin chore/*)',
+  // Branch do worktree automático da filha (child-worktree.ts).
+  'Bash(git push -u origin child/*)',
+  'Bash(git push --set-upstream origin child/*)',
+  'Bash(git push origin child/*)',
   'Bash(gh pr create:*)',
 ]
 
@@ -242,6 +246,89 @@ export const HANDOFF_CHILD_ALLOW = [
   ...CHILD_ALLOW_CLOUD_READ,
   ...CHILD_ALLOW_MCP,
   ...CHILD_ALLOW_PUBLISH,
+]
+
+// Escrita local da filha que IMPLEMENTA (todo modo menos plan). Forense de 4
+// dias no banco real: os pedidos que paravam a filha eram compostos com `cd`
+// (`cd /repo && npm test` — o CLI casa CADA segmento do composto, e o `cd` não
+// casava nada), git stash/commit, install e mkdir/cp. Tudo aqui fica no
+// checkout da filha (worktree próprio quando o repo está numa protegida, ver
+// handoff/child-worktree.ts); publicação segue CHILD_ALLOW_PUBLISH e o que é
+// destrutivo continua no deny/ask abaixo (deny > ask > allow).
+// Verificado com claude 2.1.316 (`claude -p --settings`, acceptEdits): com esta
+// lista passam `git stash push`, `cd <cwd> && <cmd liberado>` e regra aprendida;
+// `git push origin main` segue negado. LIMITE: `cd` para FORA do cwd da sessão é
+// barrado pelo próprio CLI mesmo com `Bash(cd:*)` (guarda de diretório, não
+// regra) — por isso a filha precisa nascer no checkout certo (worktree próprio).
+export const HANDOFF_CHILD_WRITE_ALLOW = [
+  'Bash(cd:*)',
+  'Bash(mkdir:*)',
+  'Bash(cp:*)',
+  'Bash(mv:*)',
+  'Bash(touch:*)',
+  'Bash(ln -s:*)',
+  'Bash(chmod +x:*)',
+  'Bash(sed:*)',
+  'Bash(tee:*)',
+  'Bash(npm install:*)',
+  'Bash(npm i:*)',
+  'Bash(npm ci:*)',
+  'Bash(npm run:*)',
+  'Bash(npm exec:*)',
+  'Bash(npm x:*)',
+  'Bash(pnpm install:*)',
+  'Bash(pnpm i:*)',
+  'Bash(pnpm run:*)',
+  'Bash(pnpm exec:*)',
+  'Bash(pnpm dlx:*)',
+  'Bash(yarn install:*)',
+  'Bash(yarn run:*)',
+  'Bash(yarn test:*)',
+  'Bash(yarn exec:*)',
+  'Bash(bun install:*)',
+  'Bash(bun run:*)',
+  'Bash(bun x:*)',
+  'Bash(bunx:*)',
+  'Bash(npx:*)',
+  'Bash(node:*)',
+  'Bash(tsx:*)',
+  'Bash(python:*)',
+  'Bash(python3:*)',
+  'Bash(uv run:*)',
+  'Bash(uv sync:*)',
+  'Bash(uv venv:*)',
+  'Bash(uv pip install:*)',
+  'Bash(.venv/bin/pip install:*)',
+  'Bash(.venv/bin/python:*)',
+  'Bash(make:*)',
+  'Bash(cargo build:*)',
+  'Bash(go build:*)',
+  'Bash(mix test:*)',
+  'Bash(git add:*)',
+  'Bash(git commit:*)',
+  'Bash(git stash)',
+  'Bash(git stash push:*)',
+  'Bash(git stash apply:*)',
+  'Bash(git switch:*)',
+  'Bash(git checkout -b:*)',
+  'Bash(git worktree add:*)',
+]
+
+// O que o allow de escrita casaria mas não é "trabalho local comum": chmod
+// recursivo e commit pulando hooks (regra do usuário: nunca --no-verify sem pedido).
+const CHILD_WRITE_ASK = [
+  'Bash(chmod *-R*)',
+  'Bash(chmod *--recursive*)',
+  'Bash(git commit *--no-verify*)',
+  'Bash(git commit -n*)',
+  // descartam trabalho sem volta
+  'Bash(git stash drop:*)',
+  'Bash(git stash clear:*)',
+  'Bash(git checkout -- *)',
+  'Bash(git checkout .)',
+  'Bash(git switch *--discard-changes*)',
+  'Bash(git switch *--force*)',
+  'Bash(git switch -f*)',
 ]
 
 // `ask` = continua pedindo confirmação (é o "NÃO PODE" reversível da regra: o
@@ -299,6 +386,7 @@ export const HANDOFF_CHILD_ASK = [
   'Bash(git push --set-upstream origin * *)',
   // delete de arquivo simples pergunta; recursivo é deny.
   'Bash(rm:*)',
+  ...CHILD_WRITE_ASK,
 ]
 
 // O que a filha herda do DESTRUCTIVE_DENYLIST e NÃO fica em deny: `rm` simples
@@ -402,20 +490,32 @@ export const HANDOFF_CHILD_PLAN_DENY = [
   'Bash(rm:*)',
 ]
 
-// Settings da filha a partir do --permission-mode resolvido. Só 'plan' muda a
-// política; o resto recebe a política comum.
-export function handoffChildSettings(permissionMode: string | null): {
+// Settings da filha a partir do --permission-mode resolvido. 'plan' recebe o
+// deny de escrita e NÃO recebe o allow de escrita; o resto recebe os dois allows.
+// `learnedAllow` = regras do "Sempre permitir para filhas" (pref
+// CHILD_LEARNED_ALLOW_PREF), revalidadas aqui: só entra o que
+// isLearnableChildRule aceita — uma pref adulterada não abre o deny.
+export function handoffChildSettings(
+  permissionMode: string | null,
+  learnedAllow: readonly unknown[] = [],
+): {
   crossSessionInbound: string
   permissions: { allow: string[]; ask: string[]; deny: string[] }
 } {
-  const deny =
-    permissionMode === 'plan'
-      ? Array.from(new Set([...HANDOFF_CHILD_DENY, ...HANDOFF_CHILD_PLAN_DENY]))
-      : HANDOFF_CHILD_DENY
+  const plan = permissionMode === 'plan'
+  const deny = plan
+    ? Array.from(new Set([...HANDOFF_CHILD_DENY, ...HANDOFF_CHILD_PLAN_DENY]))
+    : HANDOFF_CHILD_DENY
+  const learned = learnedAllow.filter(
+    (r): r is string => typeof r === 'string' && isLearnableChildRule(r),
+  )
+  const allow = Array.from(
+    new Set([...HANDOFF_CHILD_ALLOW, ...(plan ? [] : HANDOFF_CHILD_WRITE_ALLOW), ...learned]),
+  )
   return {
     crossSessionInbound: 'accept',
     permissions: {
-      allow: [...HANDOFF_CHILD_ALLOW],
+      allow,
       ask: [...HANDOFF_CHILD_ASK],
       deny: [...deny],
     },
@@ -424,6 +524,218 @@ export function handoffChildSettings(permissionMode: string | null): {
 
 export function handoffChildSettingsJson(permissionMode: string | null): string {
   return JSON.stringify(handoffChildSettings(permissionMode))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Sempre permitir para filhas" — regras aprendidas
+// ─────────────────────────────────────────────────────────────────────────────
+// Lista de regras extra (app_prefs) somada ao allow de TODA filha. Derivação
+// conservadora: a regra é sempre um prefixo de comando (`Bash(<cmd> *)`), nunca
+// um curinga solto, e é recusada quando a família do comando tem qualquer regra
+// no deny/ask (o `*` do allow aprendido engoliria as variantes que o deny/ask
+// existem pra pegar — `git` aprendido cobriria `git push`, por exemplo).
+export const CHILD_LEARNED_ALLOW_PREF = 'handoffs.childLearnedAllow'
+
+// Comandos que embrulham OUTRO comando, escalam privilégio ou destroem: o prefixo
+// não diz nada sobre o que roda de verdade. Nunca viram regra.
+const NEVER_LEARN = new Set([
+  'sudo',
+  'su',
+  'doas',
+  'env',
+  'eval',
+  'exec',
+  'xargs',
+  'nohup',
+  'time',
+  'timeout',
+  'watch',
+  'bash',
+  'sh',
+  'zsh',
+  'fish',
+  'dash',
+  'ssh',
+  'scp',
+  'dd',
+  'mkfs',
+  'kill',
+  'chown',
+  'curl',
+  'wget',
+  'source',
+  '.',
+  'kubectl',
+  'helm',
+  'docker',
+  'podman',
+  'firebase',
+  'vercel',
+  'fly',
+  // interpretadores/runners genéricos: o prefixo não diz o que roda
+  'perl',
+  'ruby',
+  'awk',
+  'gawk',
+  'parallel',
+  'mise',
+  'just',
+  'task',
+  // destroem/sobrescrevem dado por fora do ask de `rm`
+  'unlink',
+  'truncate',
+  'rsync',
+  'docker-compose',
+  // infra: apply/import mexem em recurso real
+  'terraform',
+  'pulumi',
+])
+
+// Subcomandos cujo `*` engoliria destruição ou contornaria o ask/deny:
+// `gh api -X PUT .../merge` = merge sem o ask de `gh pr merge`; `git restore .`
+// descarta trabalho como o `checkout --` (ask); `git branch -D`, `git tag -d` etc.
+const NEVER_LEARN_PREFIX = new Set([
+  'gh api',
+  'gh repo',
+  'gh release',
+  'gh secret',
+  'gh variable',
+  'gh workflow',
+  'git restore',
+  'git branch',
+  'git tag',
+  'git rm',
+  'git remote',
+  'git config',
+  'git update-ref',
+  'git reflog',
+  'git gc',
+  'git prune',
+  'git filter-branch',
+  'git filter-repo',
+  'git submodule',
+  'git worktree',
+])
+
+// Ferramentas com subcomando: a regra leva os dois tokens (`git stash *`), nunca
+// só o primeiro (`git *` abriria push/reset).
+const TWO_TOKEN_TOOLS = new Set([
+  'git',
+  'gh',
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'cargo',
+  'go',
+  'uv',
+  'pip',
+  'pip3',
+  'mix',
+  'gcloud',
+  'aws',
+  'bq',
+  'terraform',
+  'brew',
+  'apt',
+  'poetry',
+  'rails',
+  'dotnet',
+])
+
+const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
+const LEARNED_BASH_RE =
+  /^Bash\(([A-Za-z0-9][A-Za-z0-9._+-]*(?: [A-Za-z0-9][A-Za-z0-9._+-]*)?) \*\)$/
+const LEARNED_MCP_RE = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/
+
+// Prefixo (`git stash`) do comando de uma regra do deny/ask, para a checagem de
+// família. `Bash(git push * main)` → 'git push'; `Bash(rm:*)` → 'rm'.
+function rulePrefix(rule: string): string | null {
+  const m = /^Bash\(([^)]*)\)$/.exec(rule)
+  if (!m) return null
+  const prefix = m[1].replace(/:\*$/, '').split('*')[0].trim()
+  return prefix === '' ? null : prefix
+}
+
+function familyBlocked(prefix: string): boolean {
+  const tokens = prefix.split(' ')
+  return [...HANDOFF_CHILD_DENY, ...HANDOFF_CHILD_ASK, ...HANDOFF_CHILD_PLAN_DENY].some((rule) => {
+    const p = rulePrefix(rule)
+    if (!p) return false
+    const ruleTokens = p.split(' ')
+    // Mesma família = um prefixo é prefixo do outro, token a token.
+    const n = Math.min(tokens.length, ruleTokens.length)
+    return tokens.slice(0, n).join(' ') === ruleTokens.slice(0, n).join(' ')
+  })
+}
+
+// Verbos de tool MCP que destroem, escrevem ou falam com terceiros: um "sempre
+// permitir" aprendido valeria para TODA filha futura, sem ninguém ver o pedido.
+// Casa por token do nome (snake/kebab/camel), então `slack_send_message`,
+// `deleteIssue` e `write_db` caem; `get_issue`/`search_docs` passam.
+const NEVER_LEARN_MCP_VERBS = new Set([
+  'delete', 'remove', 'rm', 'destroy', 'archive', 'trash', 'purge', 'drop', 'truncate',
+  'send', 'post', 'publish', 'reply', 'comment', 'share', 'invite', 'notify', 'email',
+  'merge', 'deploy', 'release', 'rollback',
+  'write', 'update', 'upsert', 'create', 'insert', 'edit', 'set', 'patch', 'put',
+  'move', 'rename', 'transfer', 'cancel', 'revoke', 'approve', 'pay', 'refund', 'charge',
+  'exec', 'execute', 'run', 'apply', 'push', 'close', 'kill',
+])
+
+function mcpToolTokens(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[_-]+/)
+    .filter(Boolean)
+}
+
+function isLearnableMcpRule(rule: string): boolean {
+  const [, server, tool] = rule.split('__')
+  // O próprio Pitwall já é allow inteiro (CHILD_ALLOW_MCP): aprender é redundante e inofensivo.
+  if (server === 'pitwall') return true
+  return !mcpToolTokens(tool).some((t) => NEVER_LEARN_MCP_VERBS.has(t))
+}
+
+export function isLearnableChildRule(rule: string): boolean {
+  if (LEARNED_MCP_RE.test(rule)) return isLearnableMcpRule(rule)
+  const m = LEARNED_BASH_RE.exec(rule)
+  if (!m) return false
+  const tokens = m[1].split(' ')
+  if (NEVER_LEARN.has(tokens[0])) return false
+  if (TWO_TOKEN_TOOLS.has(tokens[0]) && tokens.length < 2) return false
+  if (tokens.length >= 2 && NEVER_LEARN_PREFIX.has(`${tokens[0]} ${tokens[1]}`)) return false
+  return !familyBlocked(m[1])
+}
+
+// Deriva a regra a partir do pedido de permissão lido da TUI (PermissionRequest
+// do tui-menu-parser). Composto: descarta os segmentos `cd` (já liberados) e usa
+// o PRIMEIRO segmento restante — se outro segmento também pedir, o próximo pedido
+// mostra. null = não há regra segura; a UI não oferece a ação.
+export function deriveChildAllowRule(
+  tool: string | undefined,
+  command: string | undefined,
+): string | null {
+  const cmd = command?.trim()
+  if (!cmd) return null
+  const mcp = /\bmcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+\b/.exec(`${tool ?? ''} ${cmd}`)
+  if (mcp) return isLearnableChildRule(mcp[0]) ? mcp[0] : null
+  if (tool && tool !== 'Bash') return null
+  // Substituição de comando/subshell esconde o que roda: nada a aprender.
+  if (/[`]|\$\(/.test(cmd)) return null
+  const segment = cmd
+    .split(/&&|\|\||;|\|/)
+    .map((s) => s.trim())
+    .find((s) => s !== '' && !/^cd(\s|$)/.test(s))
+  if (!segment) return null
+  const tokens = segment.split(/\s+/)
+  if (!TOKEN_RE.test(tokens[0])) return null
+  const prefix =
+    TWO_TOKEN_TOOLS.has(tokens[0]) && tokens[1] && TOKEN_RE.test(tokens[1])
+      ? `${tokens[0]} ${tokens[1]}`
+      : tokens[0]
+  const rule = `Bash(${prefix} *)`
+  return isLearnableChildRule(rule) ? rule : null
 }
 
 export const HANDOFF_CHILD_SETTINGS_JSON = handoffChildSettingsJson(null)

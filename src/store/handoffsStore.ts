@@ -163,7 +163,7 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
           // O prompt completo (editado pelo humano no gate) é o briefing da filha.
           systemPromptText: editedPrompt,
           featureId: handoff?.featureId ?? undefined,
-          permissionMode: permissionModeFor(handoff?.mode ?? 'interactive'),
+          permissionMode: permissionModeFor(handoff?.mode ?? 'auto-edits'),
         }
       })
       await get().load()
