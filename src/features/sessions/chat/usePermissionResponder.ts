@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import type { AttentionAction, TuiMenu } from '../../../../shared/types/ipc'
 import { deriveChildAllowRule } from '../../../../electron/main/services/spawn-flags'
-import { buildDigitKey } from './respond-keys'
+import { buildSelectKeys } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint } from '../tui-menu-parser'
 import type { PermissionDecision } from './PermissionCard'
 import { RESPOND_NOTICE, respondGuarded, sameDecision } from './permission-respond'
@@ -60,7 +60,7 @@ export function usePermissionResponder({
     if (res.error === 'no-watch' && action.kind === 'select' && onRespond) {
       const fresh = reparseMenu?.() ?? null
       if (fresh && sameDecision(shown, fresh, action.optionIndex)) {
-        const keys = buildDigitKey(action.optionIndex)
+        const keys = buildSelectKeys(fresh, action.optionIndex)
         if (keys.length > 0) {
           onRespond(keys)
           return true

@@ -139,6 +139,31 @@ describe('buildSelectKeys — clique numa opção single-select', () => {
   })
 })
 
+describe('buildSelectKeys — menu navegado por seta (trust sem número do 2.1.316)', () => {
+  const trust = (cursorIndex?: number): TuiMenu => ({
+    kind: 'trust',
+    options: [
+      { index: 0, label: 'No, exit' },
+      { index: 1, label: 'Yes, I trust this folder' },
+    ],
+    multiSelect: false,
+    submitOnDigit: false,
+    navigation: 'arrows',
+    cursorIndex,
+  })
+
+  it('anda do cursor atual até a opção e confirma com Enter, sem dígito', () => {
+    expect(buildSelectKeys(trust(0), 1)).toEqual([DOWN, '\r'])
+    expect(buildSelectKeys(trust(1), 0)).toEqual(['\x1b[A', '\r'])
+    expect(buildSelectKeys(trust(1), 1)).toEqual(['\r'])
+  })
+
+  it('sem cursor lido ou opção inexistente: não digita (Enter cego sairia da sessão)', () => {
+    expect(buildSelectKeys(trust(undefined), 1)).toEqual([])
+    expect(buildSelectKeys(trust(0), 2)).toEqual([])
+  })
+})
+
 describe('buildToggleKeys — checkbox de multi-select', () => {
   it('dígito faz toggle, nunca Enter (submeter é só via aba Submit/revisão)', () => {
     expect(buildToggleKeys(0)).toEqual(['1'])

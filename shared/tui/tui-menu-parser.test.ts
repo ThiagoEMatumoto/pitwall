@@ -731,13 +731,31 @@ const UNNUMBERED_TRUST = `──────────────────
 `
 
 describe('parseTuiMenu — trust sem numeração', () => {
-  it('classifica como trust, sem opções clicáveis', () => {
+  // Validado ao vivo no 2.1.316 (sandbox-084): dígito não faz nada nesta tela; a
+  // seta move o ❯ e Enter confirma. As opções saem na ordem da tela com o cursor.
+  it('classifica como trust, com opções navegáveis por seta e o cursor atual', () => {
     const menu = parseTuiMenu(UNNUMBERED_TRUST)
     expect(menu).not.toBeNull()
     expect(menu!.kind).toBe('trust')
-    expect(menu!.options).toEqual([])
+    expect(menu!.options.map((o) => [o.index, o.label])).toEqual([
+      [0, 'No, exit'],
+      [1, 'Yes, I trust this folder'],
+    ])
+    expect(menu!.navigation).toBe('arrows')
+    expect(menu!.cursorIndex).toBe(0)
+    expect(menu!.submitOnDigit).toBe(false)
     expect(menu!.context).toBe('Accessing workspace: /home/u/repo/.worktrees/child-foo')
     expect(menu!.question).toMatch(/one you trust\? .* review what's in this folder first\.$/)
+  })
+
+  it('cursor já em "Yes" (seta para baixo dada no terminal): cursorIndex 1, mesmo fingerprint', () => {
+    const moved = UNNUMBERED_TRUST.replace(' ❯ No, exit', '   No, exit').replace(
+      '   Yes, I trust this folder',
+      ' ❯ Yes, I trust this folder',
+    )
+    const menu = parseTuiMenu(moved)
+    expect(menu!.cursorIndex).toBe(1)
+    expect(menuFingerprint(menu!)).toBe(menuFingerprint(parseTuiMenu(UNNUMBERED_TRUST)!))
   })
 
   it('passa no gate pré-transcript (starting) como permission/trust', () => {

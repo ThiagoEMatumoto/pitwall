@@ -29,6 +29,7 @@ export function buildDigitKey(index: number): string[] {
 // dígito só move o cursor — precisa de Enter separado, senão a opção fica
 // destacada mas nada é enviado.
 export function buildSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
+  if (menu.navigation === 'arrows') return buildArrowSelectKeys(menu, optionIndex)
   const digit = buildDigitKey(optionIndex)
   if (digit.length === 0) return []
   return menu.submitOnDigit ? digit : [...digit, '\r']
@@ -151,6 +152,15 @@ export function buildArrowKeys(direction: 'up' | 'down' | 'left' | 'right', time
   if (!Number.isInteger(times) || times <= 0) return []
   const seq = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' }[direction]
   return Array(times).fill(seq)
+}
+
+// Menu sem número (trust do 2.1.286+): do cursor lido até a opção, depois Enter.
+// Sem cursor não há como saber onde o Enter cairia — fail-closed.
+function buildArrowSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
+  const from = menu.cursorIndex
+  if (from == null || !menu.options.some((o) => o.index === optionIndex)) return []
+  const delta = optionIndex - from
+  return [...buildArrowKeys(delta > 0 ? 'down' : 'up', Math.abs(delta)), '\r']
 }
 
 // Enter aplica o picker de /model ou /theme (validado: seleciona o destacado).

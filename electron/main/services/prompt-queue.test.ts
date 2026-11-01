@@ -79,7 +79,7 @@ it('as capturas reais dão o shape esperado pelo gate', () => {
   expect(SCANS.permission.menu?.kind).toBe('permission')
   expect(SCANS.idle.menu).toBeNull()
   expect(SCANS.idle.inputPrompt).toBe(true)
-  expect(SCANS.trust.menu).toMatchObject({ kind: 'trust', options: [] })
+  expect(SCANS.trust.menu).toMatchObject({ kind: 'trust', navigation: 'arrows', cursorIndex: 0 })
   expect(SCANS.trust.inputPrompt).toBe(false)
   expect(UNPARSED).not.toBe(TRUST)
   expect(SCANS.unparsed.menu).toBeNull()

@@ -90,6 +90,9 @@ export interface TuiMenu {
   cursorIndex?: number
   // Rodapé "Tab to amend" (2.1.316): a opção sob o cursor aceita um texto junto.
   amendable?: boolean
+  // 'arrows': opções sem número — responder é andar do cursorIndex até a opção e
+  // dar Enter (dígito não faz nada). Ausente = dígito, o padrão dos menus numerados.
+  navigation?: 'arrows'
   // permission/trust: a janela lida acabou antes da régua do topo do prompt, então
   // o context é só o fim do diff. Quem lê o buffer amplia a janela (parseTuiMenuFull).
   contextClipped?: boolean
@@ -362,12 +365,10 @@ export function parseTuiMenu(text: string): TuiMenu | null {
 
 // Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
 // unnumbered.ansi): as opções perderam o número ("❯ No, exit" / "Yes, I trust
-// this folder") e o rodapé é "Enter to confirm · Esc to cancel". Suposição: o
-// 2.1.316 desenha a mesma tela (não há captura dele no repo). Sem isto a filha
-// num diretório nunca aberto ficava parada aqui fora da fila de atenção.
-// `options` vazio DE PROPÓSITO: nenhum dígito foi validado nesta tela e o destaque
-// inicial é "No, exit" — Enter cego encerraria a sessão. A fila mostra o trust; a
-// resposta é no terminal (respond recusa: não há opção para escolher).
+// this folder") e o rodapé é "Enter to confirm · Esc to cancel". O 2.1.316 desenha
+// a mesma tela; validado ao vivo (sandbox-084): dígito não faz nada, a seta move o
+// ❯ e Enter confirma. O destaque inicial é "No, exit" — Enter cego encerraria a
+// sessão —, então o menu leva o cursor lido e a resposta anda a partir dele.
 const UNNUMBERED_TRUST_OPTION_RE = /^(?:❯\s*)?(?:Yes, I trust this folder|No, exit)$/
 const TRUST_SAFETY_RE = /Quick safety check|one you trust/i
 const ACCESSING_RE = /^Accessing workspace:?$/i
@@ -383,6 +384,7 @@ function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
     i--
   }
   if (!optionLines.some((l) => /I trust this folder/.test(l))) return null
+  const cursor = optionLines.findIndex((l) => l.startsWith('❯'))
 
   const above = lines.slice(Math.max(0, i - 20), i + 1).map((l) => l.trim())
   const qStart = above.findIndex((l) => TRUST_SAFETY_RE.test(l))
@@ -403,9 +405,11 @@ function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
     kind: 'trust',
     ...(question ? { question } : {}),
     ...(workspace ? { context: `Accessing workspace: ${workspace}` } : {}),
-    options: [],
+    options: optionLines.map((l, index) => ({ index, label: l.replace(/^❯\s*/, '') })),
     multiSelect: false,
     submitOnDigit: false,
+    navigation: 'arrows',
+    ...(cursor >= 0 ? { cursorIndex: cursor } : {}),
   }
 }
 
