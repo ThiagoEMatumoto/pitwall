@@ -626,6 +626,14 @@ describe('transcriptVerdict (formato real do JSONL do claude)', () => {
     ).toBe('found')
   })
 
+  // Forma gravada pelo claude 2.1.316 para o wake da mãe (colagem multi-linha):
+  // o fechamento repete o id.
+  it('colagem embrulhada em <pasted_content id> = found', () => {
+    const body = '<pitwall-handoff-update count="1">\nfilha concluiu\n</pitwall-handoff-update>'
+    const pasted = `\n\n<pasted_content id="1578">\n${body}\n</pasted_content id="1578">\n`
+    expect(transcriptVerdict(user(pasted, after), body, since)).toBe('found')
+  })
+
   it('texto idêntico só na folga de 2s (a mensagem anterior igual) é ambíguo = unknown', () => {
     const before = '2026-10-11T11:59:59.000Z'
     expect(transcriptVerdict(user('ok', before), 'ok', since)).toBe('unknown')
