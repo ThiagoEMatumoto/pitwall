@@ -135,10 +135,10 @@ describe('handoffs:create-manual', () => {
     expect(created[0]!.composedPrompt).toContain('vindo do repo origem')
   })
 
-  it('sem mode explícito cai em interactive (papel operator no apelido)', () => {
+  it('sem mode explícito cai em auto-edits (papel implementer no apelido)', () => {
     const out = createManual({ ...input, mode: undefined })
-    expect(created[0]!.mode).toBe('interactive')
-    expect(out.alias).toBe('renata-refatorar-auth-gateway')
+    expect(created[0]!.mode).toBe('auto-edits')
+    expect(out.alias).toBe('mauricio-refatorar-auth-gateway')
   })
 
   it('repo-alvo inexistente é erro (não cria handoff órfão)', () => {
