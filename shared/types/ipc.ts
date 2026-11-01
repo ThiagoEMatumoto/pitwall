@@ -1487,6 +1487,8 @@ export interface AttentionMenuSnapshot {
 export type AttentionAction =
   | { kind: 'select'; optionIndex: number }
   | { kind: 'other'; optionIndex: number; text: string }
+  // "Tab to amend": a opção vai junto de um texto (negar explicando o porquê).
+  | { kind: 'amend'; optionIndex: number; text: string }
 
 export interface AttentionRespondInput {
   sessionId: string

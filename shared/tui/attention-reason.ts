@@ -1,6 +1,5 @@
-import { gateMenuByStatus, parseTuiMenu, type TuiMenu } from './tui-menu-parser'
+import { gateMenuByStatus, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
 import { isInputRule } from './input-rule'
-import { parseWithGrowingWindow } from './tui-read-window'
 
 // POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
 // sessão entra/sai da fila nem se notifica — isso continua no status do
@@ -71,7 +70,7 @@ export function scanScreen(
   bufferLines: number,
   viewportRows = 0,
 ): ScreenScan {
-  const menu = parseWithGrowingWindow(readTail, parseTuiMenu, bufferLines)
+  const menu = parseTuiMenuFull(readTail, bufferLines)
   const tail = readTail(Math.max(PROMPT_WINDOW, viewportRows))
   return {
     menu,

@@ -22,6 +22,8 @@ import { MetaCard } from './MetaCard'
 import { ModelChangeChip } from './ModelChangeChip'
 import { ModelPickerCard } from './ModelPickerCard'
 import { PermissionCard } from './PermissionCard'
+import { PendingElsewhereChip } from './PendingElsewhereChip'
+import { useMainPermissionMenu, usePermissionResponder } from './usePermissionResponder'
 import { PlanCard } from './PlanCard'
 import { QuestionCard } from './QuestionCard'
 import { QuestionReviewCard } from './QuestionReviewCard'
@@ -34,7 +36,6 @@ import { useChatTranscript, usePlanFile } from './useChatTranscript'
 import {
   buildArrowKeys,
   buildCtrlTKey,
-  buildDigitKey,
   buildEnterKey,
   buildEscKey,
   buildFilterKeys,
@@ -100,6 +101,10 @@ interface Props {
   menuAnsweredElsewhere?: boolean
   // Sem ele no mount o main não arma o watch; quando chega, o watch é refeito.
   ccSessionId?: string | null
+  // Sessão filha ativa: o card oferece "Sempre permitir para filhas".
+  isChild?: boolean
+  // Sem xterm (quick look em chat): o pedido de permissão vem do espelho do main.
+  menuFromMain?: boolean
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
@@ -125,7 +130,9 @@ function TranscriptPlanCard({
   return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
 }
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain }, ref) {
+  const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
+  const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -273,6 +280,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // as opções vão inteiras pro card (não há sentinelas nesses menus).
   const tuiPermission =
     tuiMenu && (tuiMenu.kind === 'permission' || tuiMenu.kind === 'trust') ? tuiMenu : null
+  const permission = usePermissionResponder({
+    sessionId,
+    menu: tuiPermission,
+    isChild,
+    reparseMenu,
+    onRespond,
+  })
 
   // Tela final de revisão ("Review your answers") do multi-select/multi-
   // pergunta — kind próprio no parser, card dedicado (QuestionReviewCard).
@@ -308,17 +322,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     return fresh
   }
 
-  // Single-select (com ou sem preview): buildSelectKeys decide dígito-só ou
-  // dígito+Enter conforme submitOnDigit — resposta FINAL, marca sent. USA o
-  // menu do RE-PARSE fresco (não o `tuiMenu` do estado): `submitOnDigit` NÃO
-  // entra no fingerprint (menuFingerprint), então o dedup de applyTuiMenu
-  // (Terminal.tsx) pode reter no estado um `submitOnDigit` desatualizado de um
-  // parse anterior enquanto kind/opções ficam iguais — usar o estado aqui
-  // mandaria dígito-só quando a TUI já exige dígito+Enter (ou vice-versa), e o
-  // clique "seleciona mas não envia" (Bug 2). `target.index` continua vindo do
-  // memo (tuiQuestion) porque freshMenuMatches() já garante fingerprint igual
-  // ao do estado — mesmas opções/índices, só os campos fora do fingerprint
-  // (submitOnDigit/preview/context) podem ter mudado.
+  // Single-select: buildSelectKeys decide dígito-só ou dígito+Enter conforme
+  // submitOnDigit, que fica FORA do fingerprint — por isso lê o re-parse fresco,
+  // não o estado (senão o clique "seleciona mas não envia", Bug 2).
   function respondTuiQuestion(clickIndex: number, label: string) {
     if (!canRespondTui || !tuiQuestion || menuFp == null || tuiMenu?.multiSelect) return
     const target = tuiQuestion.clickable[clickIndex]
@@ -389,18 +395,6 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     const keys = buildReviewKeys(fresh, decision)
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
-  }
-
-  // Permissão/trust: mesmo caminho da F3b — re-parse fresco + dígito da opção.
-  // Diferente do respondTuiQuestion, os índices são diretos (sem sentinelas).
-  function respondTuiPermission(clickIndex: number, label: string) {
-    if (!canRespondTui || !tuiPermission || menuFp == null) return
-    const target = tuiPermission.options[clickIndex]
-    if (!target || !freshMenuMatches()) return
-    const keys = buildDigitKey(target.index)
-    if (keys.length === 0) return
-    setTuiSent({ fp: menuFp, label, resolvedCount })
     onRespond?.(keys)
   }
 
@@ -577,9 +571,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     </>
   ) : null
 
-  // Espera que o chat não consegue representar (provável prompt de permissão
-  // y/n / menu TTY): status 'waiting' sem card conhecido — nem do transcript,
-  // nem sintetizado do menu TUI (que tem precedência sobre o banner).
+  // Espera que o chat não consegue representar: 'waiting' sem card do transcript
+  // nem do menu TUI (que tem precedência sobre o banner).
   const waitInTerminal =
     showTerminalWaitBanner({
       status,
@@ -593,12 +586,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     messageCount: rendered.length,
   })
 
-  /* Card pendente sintetizado do menu TUI parseado do buffer (o transcript não
-     expõe o momento pendente — a CLI só grava após a resposta; permission/trust
-     nunca chegam ao JSONL). O clique envia o DÍGITO da opção, que seleciona e
-     submete na TUI. Extraído em variável porque renderiza TAMBÉM no estado
-     pré-transcript (loading/waiting/empty) — o trust prompt aparece antes de
-     existir qualquer mensagem. */
+  /* Card pendente sintetizado do menu TUI do buffer (permission/trust nunca chegam
+     ao JSONL). Renderiza também pré-transcript: o trust aparece antes da 1ª mensagem. */
   const tuiCardNode = showTuiCard ? (
     <>
       {tuiMenu?.kind === 'question' && tuiQuestion && (
@@ -631,13 +620,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         />
       )}
       {tuiPermission && (
+        // Resposta pelo caminho guardado do main (não depende do xterm desta view).
         <PermissionCard
-          kind={tuiPermission.kind === 'trust' ? 'trust' : 'permission'}
-          question={tuiPermission.question}
-          context={tuiPermission.context}
-          options={tuiPermission.options}
-          onRespond={canRespondTui ? respondTuiPermission : undefined}
-          sentLabel={tuiSent && tuiSent.fp === menuFp ? tuiSent.label : undefined}
+          menu={tuiPermission}
+          onDecide={permission.decide}
+          sentLabel={permission.sentLabel}
+          notice={permission.notice}
+          childRule={permission.childRule}
         />
       )}
     </>
@@ -657,6 +646,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col bg-[var(--color-bg)]">
+    <PendingElsewhereChip sessionId={sessionId} />
     <div
       ref={scrollRef}
       onScroll={onScroll}

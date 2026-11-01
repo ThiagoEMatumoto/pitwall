@@ -95,40 +95,6 @@ function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status
   return render(<CrewPeek />)
 }
 
-// Menu do produtor real: a captura do claude 2.1.286 renderizada no xterm
-// headless e parseada como o tui-menu-watch faz no main.
-async function realPermissionMenu() {
-  const { readFileSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  const xtermHeadless = (await import('@xterm/headless')).default as unknown as {
-    Terminal: typeof import('@xterm/headless').Terminal
-  }
-  const { scanScreen } = await import('../../../shared/tui/attention-reason')
-  const raw = readFileSync(
-    join(
-      __dirname,
-      '..',
-      '..',
-      '..',
-      'shared',
-      'tui',
-      '__fixtures__',
-      'claude-2.1.286-permission-bash.ansi',
-    ),
-    'utf8',
-  )
-  const term = new xtermHeadless.Terminal({ cols: 80, rows: 24, allowProposedApi: true })
-  await new Promise<void>((resolve) => term.write(raw, resolve))
-  return scanScreen((n) => {
-    const buf = term.buffer.active
-    let text = ''
-    for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
-      text += (buf.getLine(y)?.translateToString(true) ?? '') + '\n'
-    }
-    return text
-  }, 1000).menu!
-}
-
 describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
   beforeEach(() => {
     useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
@@ -139,15 +105,7 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
     useAttentionListStore.setState({ items: [] })
   })
 
-  it('no chat, pedido de permissão vira botões que respondem pelo main', async () => {
-    const menu = await realPermissionMenu()
-    sessionsApiMock.attentionMenu.mockResolvedValue({
-      sessionId: 's-child',
-      fingerprint: 'fp',
-      menuSeq: 3,
-      menu,
-    })
-    sessionsApiMock.attentionRespond.mockResolvedValue({ ok: true })
+  it('no chat, pedido de permissão vira o card de decisão do próprio chat, lido do main', () => {
     useHandoffsStore.setState({ handoffs: [handoff] })
     useAppStore.setState({
       liveSessions: [{ ...live, status: 'waiting', attentionReason: 'permission' }],
@@ -155,36 +113,12 @@ describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
     useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
     render(<CrewPeek />)
 
-    expect(sessionsApiMock.attentionMenu).toHaveBeenCalledWith('s-child')
-    fireEvent.click(await screen.findByTestId('attention-action-approve'))
-    await waitFor(() =>
-      expect(sessionsApiMock.attentionRespond).toHaveBeenCalledWith({
-        sessionId: 's-child',
-        fingerprint: 'fp',
-        menuSeq: 3,
-        action: { kind: 'select', optionIndex: 0 },
-      }),
-    )
-  })
-
-  it('com o painel Aprovar/Negar, nada manda responder só no terminal', async () => {
-    const menu = await realPermissionMenu()
-    sessionsApiMock.attentionMenu.mockResolvedValue({
-      sessionId: 's-child',
-      fingerprint: 'fp',
-      menuSeq: 3,
-      menu,
-    })
-    useHandoffsStore.setState({ handoffs: [handoff] })
-    useAppStore.setState({
-      liveSessions: [{ ...live, status: 'waiting', attentionReason: 'permission' }],
-    })
-    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
-    render(<CrewPeek />)
-
-    await screen.findByTestId('attention-action-approve')
+    expect(screen.queryByTestId('crew-peek-menu')).toBeNull()
     expect(screen.queryByTestId('crew-peek-terminal-only')).toBeNull()
-    expect(chatViewProps.at(-1)?.menuAnsweredElsewhere).toBe(true)
+    const props = chatViewProps.at(-1)
+    expect(props?.menuFromMain).toBe(true)
+    expect(props?.isChild).toBe(true)
+    expect(props?.menuAnsweredElsewhere).toBe(false)
   })
 
   it('esperando sem menu respondível, o aviso de terminal continua', () => {
