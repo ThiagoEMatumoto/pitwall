@@ -205,6 +205,9 @@ const TOOL_HEADER_RE = /^(\S+) (command|file)$/i
 // MCP no 2.1.316 (captura real …permission-mcp): cabeçalho "Tool use" e, logo
 // abaixo, "<servidor> — <Ferramenta> Tool: (MCP)"; os argumentos ficam entre as ╌.
 const MCP_TOOL_RE = /^(.+?) Tool: \(MCP\)$/
+// Fica logo acima da pergunta: identifica o MCP quando o argumento longo empurrou
+// o cabeçalho para fora da tela lida.
+const MCP_ABOUT_RE = /^About the (.+? — .+?) Tool:$/
 const DASHED_RULE_RE = /^╌{10,}$/
 const EDIT_TARGET_RE = /^Do you want to make this edit to (.+)\?$/i
 
@@ -218,6 +221,7 @@ function extractRequest(
   max = CONTEXT_MAX_LINES,
 ): PermissionRequest | undefined {
   let tool: string | undefined
+  let aboutTool: string | undefined
   let filePath: string | undefined
   const rules: number[] = []
   for (let i = questionLine - 1; i >= 0 && i >= questionLine - max; i--) {
@@ -233,8 +237,11 @@ function extractRequest(
     }
     const mcp = MCP_TOOL_RE.exec(cleaned)
     if (mcp && !tool) tool = mcp[1]
+    const about = MCP_ABOUT_RE.exec(cleaned)
+    if (about && !aboutTool) aboutTool = about[1]
     if (isContextTop(lines[i])) break
   }
+  tool ??= aboutTool
   let command: string | undefined = filePath
   if (!command && rules.length >= 2) {
     const body = lines

@@ -56,6 +56,17 @@ describe('permissão 2.1.316 — Create e MCP', () => {
     const menu = parseTuiMenu(fixture('permission-mcp'))!
     expect(menu.request).toEqual({ tool: 'echo — Shout', command: 'text: "oi"' })
   })
+
+  // Visto ao vivo (sandbox-084, handoff_report de filha): argumento longo empurra
+  // "Tool use" e a linha "(MCP)" para fora da tela lida; o card virava "Claude pede
+  // permissão" genérico. A linha "About the … Tool:" fica colada na pergunta.
+  it('MCP com argumento longo: sem o cabeçalho na tela, a ferramenta vem do "About the … Tool:"', () => {
+    const lines = fixture('permission-mcp').split('\n')
+    const clipped = lines.slice(lines.findIndex((l) => l.includes('text: "oi"'))).join('\n')
+    const menu = parseTuiMenu(clipped)!
+    expect(menu.kind).toBe('permission')
+    expect(menu.request?.tool).toBe('echo — Shout')
+  })
 })
 
 describe('permissão 2.1.316 — Bash e Tab-to-amend', () => {
