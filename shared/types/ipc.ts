@@ -2595,6 +2595,12 @@ export interface Api {
     // — o vínculo mãe→filha deixa de existir e a sessão volta a ser uma sessão
     // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz
     // as permissões restritas com que a filha foi lançada.
+    // "Sempre permitir para filhas": deriva a regra do pedido lido da TUI e grava
+    // na pref (o main valida; ok:false = comando que não vira regra).
+    learnChildRule(input: {
+      tool?: string
+      command?: string
+    }): Promise<{ ok: true; rule: string; added: boolean } | { ok: false; reason: string }>
     release(id: string): Promise<Handoff>
     // Retoma um handoff INTERROMPIDO: re-spawna a filha via `claude --resume`,
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não

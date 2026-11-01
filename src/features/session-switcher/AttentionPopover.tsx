@@ -11,11 +11,12 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
-import { sessionsApi } from '@/lib/ipc'
+import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { deriveChildAllowRule } from '../../../electron/main/services/spawn-flags'
 import type { AttentionDetail, AttentionItem } from './attention-queue'
 import {
   claimAttentionPopover,
@@ -294,6 +295,11 @@ export function questionPt(question: string): string {
   return question
 }
 
+// Item de sessão-filha: o card da crew ou qualquer item amarrado a um handoff.
+function isChildItem(item: AttentionItem): boolean {
+  return item.kind === 'crew' || Boolean(item.handoffId)
+}
+
 export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useAttentionMenu(item, () => setNotice(null))
@@ -307,8 +313,32 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
     ? alwaysHintText(alwaysAction.optionLabel, alwaysOption?.description)
     : undefined
 
-  async function send(act: AttentionAction) {
-    if (!snapshot || !item.sessionId) return
+  // "Sempre permitir para filhas": só em filha, só em pedido de permissão com
+  // regra derivável (o main revalida) e só se dá pra aprovar o menu atual.
+  const approveAction = actions.find((a) => a.key === 'approve')
+  const childRule =
+    isChildItem(item) && menu?.kind === 'permission' && approveAction
+      ? deriveChildAllowRule(menu.request?.tool, menu.request?.command)
+      : null
+
+  async function alwaysForChildren() {
+    if (!menu || !approveAction) return
+    setSending(true)
+    const learned = await handoffsApi.learnChildRule({
+      tool: menu.request?.tool,
+      command: menu.request?.command,
+    })
+    setSending(false)
+    if (!learned.ok) {
+      setNotice(learned.reason)
+      return
+    }
+    const sent = await send({ kind: 'select', optionIndex: approveAction.optionIndex })
+    if (sent) setNotice(`Aprovado. Regra ${learned.rule} vale para as próximas filhas.`)
+  }
+
+  async function send(act: AttentionAction): Promise<boolean> {
+    if (!snapshot || !item.sessionId) return false
     setSending(true)
     const res = await sessionsApi.attentionRespond({
       sessionId: item.sessionId,
@@ -321,10 +351,11 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
       // Sem snapshot, sem botões: um 2º clique no menu velho iria pro PRÓXIMO prompt.
       setSnapshot(null)
       setNotice('Resposta enviada.')
-      return
+      return true
     }
     setSnapshot(res.snapshot)
     setNotice(ERROR_NOTICE[res.error] ?? 'Não deu pra responder daqui.')
+    return false
   }
 
   return (
@@ -357,6 +388,18 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
               {a.label}
             </Button>
           ))}
+          {childRule && (
+            <Button
+              data-testid="attention-action-always-children"
+              variant="ghost"
+              disabled={sending}
+              className="!px-3 !py-1 text-xs"
+              title={`Aprova agora e grava ${childRule} no allow de todas as filhas`}
+              onClick={() => void alwaysForChildren()}
+            >
+              Sempre permitir para filhas
+            </Button>
+          )}
         </div>
       )}
       {alwaysHint && (

@@ -13,6 +13,7 @@ import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { prepareHandoff } from '../services/handoff/prepare'
 import { adoptSession } from '../services/handoff/adopt'
+import { learnChildRule, type LearnChildRuleResult } from '../services/handoff/child-learned-rules'
 import type {
   AdoptedSession,
   HandoffSpawnContext,
@@ -131,6 +132,11 @@ const adoptSessionSchema = z.object({
   task: z.string().min(1),
   featureId: z.string().min(1).optional(),
   mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
+})
+
+const learnChildRuleSchema = z.object({
+  tool: z.string().max(200).optional(),
+  command: z.string().max(4096).optional(),
 })
 
 const setOutcomeSchema = z.object({
@@ -297,6 +303,14 @@ export function registerHandoffsIpc(): void {
     const handoff = store.release(id)
     broadcast('handoff:updated', handoff)
     return handoff
+  })
+
+  // "Sempre permitir para filhas" (CrewPeek/AttentionPopover). Só grava a regra;
+  // a resposta ao menu atual segue pelo sessions:attention-respond do renderer.
+  // Vale a partir do PRÓXIMO spawn/relance de filha: o --settings é do processo.
+  ipcMain.handle('handoffs:learn-child-rule', (_e, raw: unknown): LearnChildRuleResult => {
+    const { tool, command } = learnChildRuleSchema.parse(raw)
+    return learnChildRule(tool, command)
   })
 
   // Criação MANUAL de filha (diálogo de nova sessão), sem sessão-mãe pedindo por

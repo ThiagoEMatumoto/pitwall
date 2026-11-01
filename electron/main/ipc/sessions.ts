@@ -82,6 +82,7 @@ import {
   assertAutonomousSpawnGuarded,
   resolveCodexModel,
 } from '../services/spawn-flags'
+import { getChildLearnedAllow } from '../services/handoff/child-learned-rules'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
@@ -638,7 +639,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
       provider.id === 'claude'
         ? sessionSettingsFile(
             internalSessionId,
-            input.handoffChild ? handoffChildSettings(permissionMode) : null,
+            input.handoffChild ? handoffChildSettings(permissionMode, getChildLearnedAllow()) : null,
             disallowedTools,
           )
         : null,
@@ -825,7 +826,7 @@ export function resumeHandoffChild(
   // Model/effort/advisor do spawn da filha voltam também; a permissão segue do
   // modo do handoff (a autoridade sobre o que a filha pode fazer).
   const spawned = latestSpawnArgs(db, ccSessionId)
-  const original = relaunchFlags(spawned)
+  const original = relaunchFlags(spawned, getChildLearnedAllow())
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -842,7 +843,7 @@ export function resumeHandoffChild(
     permissionMode,
     settingsFilePath: sessionSettingsFile(
       internalSessionId,
-      handoffChildSettings(permissionMode),
+      handoffChildSettings(permissionMode, getChildLearnedAllow()),
       disallowedTools,
     ),
   })
@@ -1264,7 +1265,7 @@ export function registerSessionIpc(): void {
     // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
     const spawned = latestSpawnArgs(db, input.ccSessionId)
     const fromHibernation = isConversationHibernated(db, input.ccSessionId)
-    const original = relaunchFlags(fromHibernation ? spawned : null)
+    const original = relaunchFlags(fromHibernation ? spawned : null, getChildLearnedAllow())
     // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
     // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
     // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
