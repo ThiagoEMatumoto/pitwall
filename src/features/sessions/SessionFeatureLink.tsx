@@ -16,12 +16,14 @@ interface Props {
   sessionId?: string
   /** Recorte do picker; sessão avulsa (sem repo) vê todas as frentes. */
   repoId?: string | null
+  /** Painel estreito: a ação de vincular vira só o ícone (o texto fica no tooltip). */
+  iconOnly?: boolean
 }
 
 // Identidade de frente da sessão no header: o chip de volta pro dossiê (quando
 // há vínculo) e a ação de vincular/trocar — o meio da sessão é justamente onde a
 // pessoa descobre a qual frente aquilo pertence.
-export function SessionFeatureLink({ feature, sessionId, repoId = null }: Props) {
+export function SessionFeatureLink({ feature, sessionId, repoId = null, iconOnly = false }: Props) {
   const [open, setOpen] = useState(false)
   const [features, setFeatures] = useState<FeatureWithActivity[]>([])
   const note = useSessionFeatureStore((s) => s.note)
@@ -61,7 +63,7 @@ export function SessionFeatureLink({ feature, sessionId, repoId = null }: Props)
           className="flex min-w-0 shrink items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[10px] text-[var(--color-text-dim)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text)]"
         >
           <Icon as={Target} size={10} />
-          <span className="max-w-32 truncate">{feature.title}</span>
+          <span className={`${iconOnly ? 'max-w-20' : 'max-w-32'} truncate`}>{feature.title}</span>
           {feature.liveness && (
             <LivenessChip
               liveness={feature.liveness}
@@ -99,7 +101,7 @@ export function SessionFeatureLink({ feature, sessionId, repoId = null }: Props)
             }`}
           >
             <Icon as={Link2} size={10} />
-            <span>vincular a uma frente</span>
+            {!iconOnly && <span>vincular a uma frente</span>}
           </button>
         ))}
       {open && (

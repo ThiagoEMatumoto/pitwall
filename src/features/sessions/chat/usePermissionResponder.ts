@@ -13,6 +13,17 @@ const SENT_HOLD_MS = 3000
 // Sem PTY local (quick look em chat), o menu vem do espelho headless do main.
 const MAIN_POLL_MS = 1200
 
+// Identidade do pedido que o "Enviado" segura. No amend a TUI reescreve o label
+// da opção negada com o texto digitado ("No, use wget…"): só ela sai da conta.
+// Qualquer outra mudança é um pedido novo, e o "Enviado" do anterior não vale nele.
+export function sentHoldKey(menu: TuiMenu, amendedIndex?: number): string {
+  if (amendedIndex == null) return menuFingerprint(menu)
+  return menuFingerprint({
+    ...menu,
+    options: menu.options.map((o) => (o.index === amendedIndex ? { ...o, label: '' } : o)),
+  })
+}
+
 interface Options {
   sessionId: string
   menu: TuiMenu | null
@@ -30,7 +41,12 @@ export function usePermissionResponder({
   onRespond,
 }: Options) {
   const fp = menu ? menuFingerprint(menu) : null
-  const [sent, setSent] = useState<{ label: string; until: number } | null>(null)
+  const [sent, setSent] = useState<{
+    label: string
+    until: number
+    key: string
+    amendedIndex?: number
+  } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const inflight = useRef(false)
 
@@ -75,7 +91,13 @@ export function usePermissionResponder({
     if (!menu || inflight.current) return
     inflight.current = true
     setNotice(null)
-    setSent({ label: d.label, until: Date.now() + SENT_HOLD_MS })
+    const amendedIndex = d.type === 'amend' ? d.optionIndex : undefined
+    setSent({
+      label: d.label,
+      until: Date.now() + SENT_HOLD_MS,
+      key: sentHoldKey(menu, amendedIndex),
+      amendedIndex,
+    })
     try {
       let ok: boolean
       if (d.type === 'children') {
@@ -96,7 +118,8 @@ export function usePermissionResponder({
     }
   }
 
-  return { sentLabel: sent?.label, notice, childRule, decide }
+  const sentHere = sent != null && menu != null && sentHoldKey(menu, sent.amendedIndex) === sent.key
+  return { sentLabel: sentHere ? sent.label : undefined, notice, childRule, decide }
 }
 
 // Menu de permissão/trust lido do main, para o chat que não monta xterm.

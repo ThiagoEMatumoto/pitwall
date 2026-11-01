@@ -26,7 +26,35 @@ describe('PermissionCard', () => {
     expect(screen.getByTestId('permission-always-scope').textContent).toBe(
       'Sempre permitir: não perguntar de novo para curl *.',
     )
-    expect(screen.getByText(/Ou: ligar o modo automático/)).toBeTruthy()
+    expect(screen.queryByText(/Ou: ligar o modo automático/)).toBeNull()
+    expect(screen.getByTestId('permission-auto-mode')).toBeTruthy()
+  })
+
+  // Captura real: o único "sempre" do menu é "Yes, and switch to auto mode".
+  it('SEGURANÇA: Sempre permitir nunca liga o modo automático', () => {
+    const onDecide = vi.fn()
+    render(<PermissionCard menu={menuOf('named-permission-bash')} onDecide={onDecide} />)
+    expect(screen.queryByTestId('permission-always')).toBeNull()
+    expect(screen.queryByTestId('permission-always-scope')).toBeNull()
+    const card = screen.getByTestId('permission-card')
+    fireEvent.keyDown(card, { key: 'Enter', ctrlKey: true })
+    expect(onDecide.mock.calls.map((c) => c[0].optionIndex)).toEqual([0])
+    onDecide.mockClear()
+    fireEvent.click(screen.getByTestId('permission-auto-mode'))
+    expect(onDecide).not.toHaveBeenCalled()
+    expect(screen.getByTestId('permission-auto-mode-warning').textContent).toMatch(/sem perguntar/)
+    fireEvent.click(screen.getByTestId('permission-auto-mode-confirm'))
+    expect(onDecide).toHaveBeenCalledWith({
+      type: 'select',
+      optionIndex: 1,
+      label: 'Yes, and switch to auto mode · auto mode handles these prompts for you',
+    })
+  })
+
+  it('atalhos usam kbd estilizado, nunca o glifo ⏎ (sem glifo na fonte)', () => {
+    render(<PermissionCard menu={menuOf('permission-bash-curl')} onDecide={() => {}} />)
+    expect(screen.getByTestId('permission-card').textContent).not.toContain('⏎')
+    expect(screen.getByTestId('permission-approve').querySelector('kbd svg')).toBeTruthy()
   })
 
   it('Edit: diff inteiro com + e − marcados, começando colapsado quando longo', () => {

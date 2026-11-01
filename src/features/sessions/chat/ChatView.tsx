@@ -18,6 +18,8 @@ import { CompactSummaryCard } from './CompactSummaryCard'
 import { ConfigCard } from './ConfigCard'
 import { HistorySearchCard } from './HistorySearchCard'
 import { MessageBubble } from './MessageBubble'
+import { HandoffUpdateCard } from './HandoffUpdateCard'
+import { parseHandoffWakeEnvelope } from '../../../../shared/handoff-wake-envelope'
 import { MetaCard } from './MetaCard'
 import { ModelChangeChip } from './ModelChangeChip'
 import { ModelPickerCard } from './ModelPickerCard'
@@ -671,8 +673,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             )
           }
           switch (m.kind) {
-            case 'user':
+            case 'user': {
+              const wake = parseHandoffWakeEnvelope(m.text)
+              if (wake) return <HandoffUpdateCard key={i} envelope={wake} />
               return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
+            }
             case 'assistant':
               return (
                 <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />

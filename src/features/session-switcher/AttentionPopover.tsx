@@ -15,7 +15,7 @@ import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
-import { ALWAYS_RE, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { alwaysHintText, contextLines } from '@/features/sessions/chat/permission-view'
 import { deriveChildAllowRule } from '../../../electron/main/services/spawn-flags'
 import type { AttentionDetail, AttentionItem } from './attention-queue'
@@ -92,7 +92,7 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
         'always',
         'Sempre',
         'ghost',
-        findOption(menu, ALWAYS_RE),
+        menu.options.find((o) => isScopedAlwaysLabel(o.label))?.index ?? null,
       ),
       ...action(menu, 'deny', 'Negar', 'danger', findOption(menu, /^No\b/i)),
     ]

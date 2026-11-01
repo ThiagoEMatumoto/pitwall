@@ -92,6 +92,23 @@ beforeEach(() => {
 })
 
 describe('menuActions', () => {
+  // Captura real do 2.1.316: o único "sempre" é "Yes, and switch to auto mode".
+  it('SEGURANÇA: Sempre nunca aponta para o modo automático', () => {
+    const named = parseTuiMenu(
+      readFileSync(
+        join(
+          __dirname,
+          '../../../shared/tui/__fixtures__/claude-2.1.316-named-permission-bash.txt',
+        ),
+        'utf8',
+      ),
+    )!
+    expect(menuActions(named).map((a) => [a.key, a.optionIndex])).toEqual([
+      ['approve', 0],
+      ['deny', 2],
+    ])
+  })
+
   it('permissão real do 2.1.286: Aprovar=Yes, Sempre=always allow, Negar=No', async () => {
     const menu = await realPermissionMenu()
     expect(menuActions(menu).map((a) => [a.key, a.optionIndex])).toEqual([

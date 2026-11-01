@@ -1,6 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import {
   ChevronRight,
+  CornerDownLeft,
+  Zap,
   FileDiff,
   FolderLock,
   Plug,
@@ -51,12 +61,17 @@ function isEditable(el: Element | null): boolean {
   )
 }
 
-function Kbd({ children }: { children: string }) {
+function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded border border-[var(--color-border)] px-1 font-mono text-[10px] leading-4 text-[var(--color-text-dim)]">
+    <kbd className="inline-flex items-center gap-0.5 rounded border border-[var(--color-border)] px-1 font-mono text-[10px] leading-4 text-[var(--color-text-dim)]">
       {children}
     </kbd>
   )
+}
+
+// O glifo ⏎ não existe nas fontes da UI e vira um quadrado: ícone no lugar.
+function EnterKey() {
+  return <Icon as={CornerDownLeft} size={10} aria-label="Enter" />
 }
 
 function DiffBlock({ lines }: { lines: DiffLine[] }) {
@@ -165,6 +180,7 @@ export function PermissionCard({
   const titleId = useId()
   const rootRef = useRef<HTMLElement>(null)
   const [explaining, setExplaining] = useState(false)
+  const [confirmAuto, setConfirmAuto] = useState(false)
   const [reason, setReason] = useState('')
   // Pedido novo na mesma sessão: o motivo digitado era para o anterior.
   const fp = menuFingerprint(menu)
@@ -173,6 +189,7 @@ export function PermissionCard({
     setReasonFp(fp)
     setExplaining(false)
     setReason('')
+    setConfirmAuto(false)
   }
   const sent = sentLabel != null
   const live = onDecide != null && !sent
@@ -216,6 +233,7 @@ export function PermissionCard({
       e.preventDefault()
       e.stopPropagation()
       if (explaining) setExplaining(false)
+      else if (confirmAuto) setConfirmAuto(false)
       else deny()
       return
     }
@@ -252,7 +270,9 @@ export function PermissionCard({
   }
 
   const mapped = new Set(
-    [view.approve, view.deny, ...view.always].filter(Boolean).map((c) => c!.optionIndex),
+    [view.approve, view.deny, view.autoMode, ...view.always]
+      .filter(Boolean)
+      .map((c) => c!.optionIndex),
   )
   const unmapped = menu.options.filter((o) => !mapped.has(o.index))
 
@@ -296,7 +316,10 @@ export function PermissionCard({
                 title={view.approve.optionLabel}
                 onClick={approve}
               >
-                {isTrust ? 'Confiar' : 'Aprovar'} <Kbd>⏎</Kbd>
+                {isTrust ? 'Confiar' : 'Aprovar'}{' '}
+                <Kbd>
+                  <EnterKey />
+                </Kbd>
               </Button>
             )}
             {always && (
@@ -313,7 +336,11 @@ export function PermissionCard({
                   })
                 }
               >
-                Sempre permitir <Kbd>⌘⏎</Kbd>
+                Sempre permitir{' '}
+                <Kbd>
+                  Ctrl
+                  <EnterKey />
+                </Kbd>
               </Button>
             )}
             {view.deny && (
@@ -336,7 +363,11 @@ export function PermissionCard({
               Sempre permitir: {always.scope}.
             </p>
           )}
-          {(view.always.length > 1 || unmapped.length > 0 || childRule || view.canExplainDeny) && (
+          {(view.always.length > 1 ||
+            unmapped.length > 0 ||
+            childRule ||
+            view.canExplainDeny ||
+            view.autoMode) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
               {view.always.slice(1).map((a) => (
                 <button
@@ -390,6 +421,60 @@ export function PermissionCard({
                   Negar e explicar…
                 </button>
               )}
+              {view.autoMode && !confirmAuto && (
+                <button
+                  type="button"
+                  data-testid="permission-auto-mode"
+                  // Na Room a tecla do número só abre a confirmação, nunca liga direto.
+                  data-permission-option={view.autoMode.optionIndex + 1}
+                  title={view.autoMode.optionLabel}
+                  onClick={() => setConfirmAuto(true)}
+                  className="inline-flex items-center gap-1 text-[var(--color-text-dim)] underline-offset-2 transition-colors hover:text-[var(--color-warning)] hover:underline"
+                >
+                  <Icon as={Zap} size={11} />
+                  Aprovar e ligar modo automático…
+                </button>
+              )}
+            </div>
+          )}
+          {view.autoMode && confirmAuto && (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-2"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--color-warning) 45%, var(--color-border))',
+                background: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
+              }}
+            >
+              <p
+                data-testid="permission-auto-mode-warning"
+                className="min-w-0 flex-1 basis-56 text-xs leading-relaxed text-[var(--color-text)]"
+              >
+                Aprova este pedido e liga o modo automático: daqui em diante o Claude decide os
+                próximos pedidos desta sessão sem perguntar.
+              </p>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="ghost"
+                  className="!px-3 !py-1 text-xs"
+                  onClick={() => setConfirmAuto(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  variant="danger"
+                  className="!px-3 !py-1 text-xs"
+                  data-testid="permission-auto-mode-confirm"
+                  onClick={() =>
+                    decide({
+                      type: 'select',
+                      optionIndex: view.autoMode!.optionIndex,
+                      label: view.autoMode!.optionLabel,
+                    })
+                  }
+                >
+                  Ligar modo automático
+                </Button>
+              </div>
             </div>
           )}
           {explaining && (

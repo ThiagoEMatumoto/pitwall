@@ -1,5 +1,9 @@
 import type { TuiMenu, TuiMenuOption } from '../tui-menu-parser'
-import { ALWAYS_RE, stripUnsafeDisplay } from '../../../../shared/tui/permission-request'
+import {
+  AUTO_MODE_RE,
+  isScopedAlwaysLabel,
+  stripUnsafeDisplay,
+} from '../../../../shared/tui/permission-request'
 
 // Modelo do card de decisão de permissão, derivado do menu parseado da TUI. Puro:
 // o shape de entrada vem das capturas reais do 2.1.316 em shared/tui/__fixtures__.
@@ -33,6 +37,9 @@ export interface PermissionView {
   notes: string[]
   approve?: PermissionChoice
   always: AlwaysChoice[]
+  // "Yes, and switch to auto mode": nunca vira "Sempre"; o card o oferece à
+  // parte, com aviso e confirmação.
+  autoMode?: PermissionChoice
   deny?: PermissionChoice
   // "Negar e explicar" usa o Tab-to-amend da TUI: só quando o rodapé o oferece.
   canExplainDeny: boolean
@@ -118,17 +125,22 @@ function choice(option: TuiMenuOption | undefined): PermissionChoice | undefined
 
 function choices(menu: TuiMenu) {
   const deny = menu.options.find((o) => /^No\b/i.test(o.label))
+  const auto = menu.options.find((o) => o !== deny && AUTO_MODE_RE.test(o.label))
   const always = menu.options
-    .filter((o) => o !== deny && ALWAYS_RE.test(o.label))
+    .filter((o) => o !== deny && isScopedAlwaysLabel(o.label))
     .map((o) => ({
       optionIndex: o.index,
       optionLabel: o.label,
       scope: alwaysHintText(o.label, o.description),
     }))
   const approve = menu.options.find(
-    (o) => o !== deny && /^Yes\b/i.test(o.label) && !always.some((a) => a.optionIndex === o.index),
+    (o) =>
+      o !== deny &&
+      o !== auto &&
+      /^Yes\b/i.test(o.label) &&
+      !always.some((a) => a.optionIndex === o.index),
   )
-  return { approve: choice(approve), always, deny: choice(deny) }
+  return { approve: choice(approve), always, autoMode: choice(auto), deny: choice(deny) }
 }
 
 const FILE_TOOLS: Record<string, string> = { Edit: 'editar', Create: 'criar', Write: 'escrever em' }

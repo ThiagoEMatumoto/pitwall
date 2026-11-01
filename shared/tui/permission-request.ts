@@ -38,6 +38,14 @@ export function permissionSummary(menu: TuiMenu): string | null {
 export const ALWAYS_RE =
   /always allow|don[’']t ask again|allow all edits|accept edits|remember this directory|auto mode/i
 
+// "Yes, and switch to auto mode" casa o ALWAYS_RE, mas não é lembrar um escopo:
+// entrega TODOS os próximos pedidos ao Claude. Nenhum botão "Sempre" pode cair nele.
+export const AUTO_MODE_RE = /auto mode/i
+
+export function isScopedAlwaysLabel(label: string): boolean {
+  return ALWAYS_RE.test(label) && !AUTO_MODE_RE.test(label)
+}
+
 function optionLabel(menu: TuiMenu, action: AttentionAction): string {
   return menu.options.find((o) => o.index === action.optionIndex)?.label ?? ''
 }

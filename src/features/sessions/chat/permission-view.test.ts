@@ -23,8 +23,16 @@ describe('permissionView (capturas 2.1.316)', () => {
     expect(v.notes.map((n) => n.trim())).toEqual(['This command requires approval'])
     expect(v.approve?.optionIndex).toBe(0)
     expect(v.deny?.optionIndex).toBe(3)
-    expect(v.always.map((a) => a.optionIndex)).toEqual([1, 2])
+    expect(v.always.map((a) => a.optionIndex)).toEqual([1])
+    expect(v.autoMode?.optionIndex).toBe(2)
     expect(v.canExplainDeny).toBe(true)
+  })
+
+  it('auto mode nunca entra na lista do Sempre', () => {
+    const v = permissionView(menuOf('named-permission-bash'))
+    expect(v.always).toEqual([])
+    expect(v.autoMode?.optionIndex).toBe(1)
+    expect(v.approve?.optionIndex).toBe(0)
   })
 
   it('Create: arquivo novo vira diff só de adições', () => {
