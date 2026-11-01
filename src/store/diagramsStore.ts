@@ -392,6 +392,15 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => {
       set((s) => {
         const lists = placeByStatus(s, toMeta(diagram));
         if (s.selected?.id !== diagram.id) return lists;
+        // Thumbnail e move não bumpam version nem updated_at: a cena que vem
+        // junto é a do banco, que pode estar atrás de um save em voo — repassar
+        // ao editor reverteria o canvas.
+        if (
+          diagram.version === s.selected.version &&
+          diagram.updatedAt === s.selected.updatedAt
+        ) {
+          return { ...lists, selected: { ...diagram, scene: s.selected.scene } };
+        }
         // Diagrama aberto: repassa a cena nova pro editor via remoteScene.
         // O editor decide se aplica (sem edição local pendente), mostra o
         // banner (com pendência) ou ignora (eco do próprio save).

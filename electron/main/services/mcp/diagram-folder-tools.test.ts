@@ -108,6 +108,14 @@ describe('mcp tools — diagram folders', () => {
     )
   })
 
+  it('diagram_move com id inexistente não cria a pasta', async () => {
+    await expect(call('diagram_move', { diagramId: 'nope', folder: 'Fantasma' })).rejects.toThrow(
+      /diagram not found/,
+    )
+    const { items } = await call<{ items: Array<{ name: string }> }>('diagram_folder_list', {})
+    expect(items.map((f) => f.name)).not.toContain('Fantasma')
+  })
+
   it('diagram_folder_create não duplica nome existente e aceita cor', async () => {
     const first = await call<{ folder: DiagramFolder; created: boolean }>('diagram_folder_create', {
       name: 'Fluxos',

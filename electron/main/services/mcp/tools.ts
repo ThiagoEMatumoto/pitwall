@@ -1802,6 +1802,8 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       inputSchema: diagramMoveSchema,
       handler: (args) => {
         const { diagramId, folder } = diagramMoveSchema.parse(args)
+        // Antes do ensureFolder: id errado não pode deixar pasta vazia criada.
+        if (!diagramStore.get(diagramId)) throw new Error(`diagram not found: ${diagramId}`)
         const folderId = folder === null ? null : diagramStore.ensureFolder(folder).id
         const diagram = diagramStore.move(diagramId, folderId)
         notify.broadcast('diagram:updated', diagram)

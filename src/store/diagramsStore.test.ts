@@ -243,6 +243,28 @@ describe("watch", () => {
     expect(useDiagramsStore.getState().remoteScene!.nonce).toBe(firstNonce + 1);
   });
 
+  it("onUpdated sem bump (thumbnail/move) não repassa cena ao editor", () => {
+    useDiagramsStore.setState({
+      selected: makeDiagram(),
+      diagrams: [makeMeta()],
+    });
+    useDiagramsStore.getState().startWatch();
+    // Cena do banco atrás do canvas (save em voo), mesma version/updatedAt.
+    updatedHandler!(
+      makeDiagram({
+        thumbnail: "data:image/png;base64,AAA",
+        folderId: "f1",
+        scene: { elements: [{ id: "old", version: 1 }] },
+      }),
+    );
+    const s = useDiagramsStore.getState();
+    expect(s.remoteScene).toBeNull();
+    expect(s.selected?.thumbnail).toBe("data:image/png;base64,AAA");
+    expect(s.selected?.folderId).toBe("f1");
+    expect(s.selected?.scene.elements).toEqual([{ id: "a", version: 1 }]);
+    expect(s.diagrams[0].thumbnail).toBe("data:image/png;base64,AAA");
+  });
+
   it("onUpdated de outro diagrama não mexe na seleção", () => {
     useDiagramsStore.setState({
       selected: makeDiagram(),
