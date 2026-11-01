@@ -150,5 +150,14 @@ describe('tela de projeto — mães no topo, filhas aninhadas', () => {
     expect(kept.items.map((s) => s.id)).toContain('k1')
     expect(focusFilteredSessions(live, graph.nodes, { enabled: false }).hiddenCount).toBe(0)
     expect(motherTitleBySession(graph.nodes).get('k3')).toBe('Mãe A')
+
+    // Mãe fora da lista (encerrada/sem aba): a filha quieta não pode sumir da barra.
+    const orphans = focusFilteredSessions(
+      live.filter((s) => s.id !== 'mae-a'),
+      graph.nodes,
+      { enabled: true },
+    )
+    expect(orphans.items.map((s) => s.id).sort()).toEqual(['k1', 'k2', 'k3', 'mae-b'])
+    expect(orphans.hiddenCount).toBe(0)
   })
 })

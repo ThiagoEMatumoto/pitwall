@@ -356,6 +356,9 @@ function TerminalHost({
     }
   }, [session.id, handoffsVersion])
   const linkState = childLink?.state ?? 'none'
+  // Foi filha de um handoff encerrado (done/failed): a árvore ainda a aninha sob a
+  // mãe, então o botão abre o diálogo de vínculo (com "Desvincular"), não a adoção.
+  const endedLink = linkState === 'none' && !!childLink?.handoff
   const composerRef = useRef<ComposerHandle>(null)
   const chatViewRef = useRef<ChatViewHandle>(null)
   // WebGL addon vivo deste mount (null = DOM renderer). Ref (não var local do
@@ -1243,7 +1246,7 @@ function TerminalHost({
   }, [session.ccSessionId])
 
   const adoptDisabledReason =
-    linkState !== 'none'
+    linkState !== 'none' || endedLink
       ? null
       : !session.ccSessionId || !hasTranscript
       ? 'Sem transcript no disco ainda — relançar como filha perderia o histórico'
@@ -1297,14 +1300,18 @@ function TerminalHost({
           // resposta ainda) — a ação some em vez de abrir um diálogo que já
           // nasceria em erro.
           onPassBaton={session.ccSessionId ? () => setBatonOpen(true) : undefined}
-          onAdopt={() => (linkState === 'none' ? setAdoptOpen(true) : setLinkOpen(true))}
+          onAdopt={() =>
+            linkState === 'none' && !endedLink ? setAdoptOpen(true) : setLinkOpen(true)
+          }
           adoptDisabledReason={adoptDisabledReason}
           adoptLabel={
             linkState === 'relinkable'
               ? 'Re-vincular à mãe — reativa o vínculo existente, sem reiniciar a sessão'
               : linkState === 'active'
                 ? 'Vínculo com a mãe — trocar mãe ou desvincular'
-                : undefined
+                : endedLink
+                  ? 'Vínculo encerrado — desvincular ou tornar filha de novo'
+                  : undefined
           }
           feature={sessionFeature}
           sessionId={session.id}
@@ -1323,13 +1330,14 @@ function TerminalHost({
         onAdopted={() => onClose()}
       />
 
-      {childLink && childLink.state !== 'none' && (
+      {childLink && (childLink.state !== 'none' || endedLink) && (
         <ChildLinkDialog
           open={linkOpen}
           onClose={() => setLinkOpen(false)}
           sessionId={session.id}
           displayTitle={displayTitle}
           link={childLink}
+          onAdoptNew={() => setAdoptOpen(true)}
         />
       )}
 

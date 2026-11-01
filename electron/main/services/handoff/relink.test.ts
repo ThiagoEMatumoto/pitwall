@@ -41,12 +41,13 @@ function addSession(id: string, cc: string): void {
     .run(id, cc, Date.now())
 }
 
-function dispatch(mother: string, child: string): string {
+function dispatch(mother: string, child: string, mode?: 'plan'): string {
   const h = store.create({
     motherSessionId: mother,
     targetRepoId: 'r1',
     task: 't',
     composedPrompt: 'p',
+    ...(mode ? { mode } : {}),
   })
   store.markRunning(h.id, child)
   return h.id
@@ -123,5 +124,31 @@ describe('relink de filha (sem relançar, sem handoff novo)', () => {
     const released = detachChild({ sessionId: 'kid' })
     expect(released.childSessionId).toBeNull()
     expect(childLink('kid').state).toBe('none')
+  })
+
+  it('desvincular solta TODOS os handoffs da conversa, inclusive o encerrado', () => {
+    const old = dispatch('mae', 'kid')
+    store.report(old, 'ok')
+    // Encerrado ainda aponta pra filha: childLink devolve o handoff (a UI oferece
+    // Desvincular) com estado 'none'.
+    expect(childLink('kid')).toMatchObject({ state: 'none', handoff: { id: old } })
+    addSession('kid-2', 'cc-kid')
+    dispatch('mae-b', 'kid-2')
+
+    detachChild({ sessionId: 'kid-2' })
+
+    expect(childLink('kid-2').handoff).toBeNull()
+    expect(childLink('kid').handoff).toBeNull()
+  })
+
+  it('recusa mãe descendente da filha (ciclo)', () => {
+    const id = dispatch('mae', 'kid')
+    addSession('neta', 'cc-neta')
+    // plan: só leitura, não disputa o diretório com a filha que escreve.
+    dispatch('kid', 'neta', 'plan')
+    expect(() => setChildMother({ handoffId: id, motherSessionId: 'neta' })).toThrow(/ciclo/)
+    store.dismiss(id)
+    expect(() => relinkChild({ sessionId: 'kid', motherSessionId: 'neta' })).toThrow(/ciclo/)
+    expect(store.get(id)?.motherSessionId).toBe('mae')
   })
 })

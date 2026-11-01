@@ -206,10 +206,14 @@ export function focusFilteredSessions<T extends { id: string }>(
 ): { items: T[]; hiddenCount: number } {
   if (!opts.enabled) return { items, hiddenCount: 0 }
   const byId = new Map(nodes.map((n) => [n.sessionId, n]))
+  const listed = new Set(items.map((s) => s.id))
   const out = items.filter((s) => {
     if (opts.keepIds?.has(s.id)) return true
     const n = byId.get(s.id)
-    return !n?.hierarchyMotherId || n.attentionReason != null
+    // Mãe fora da lista (encerrada, ou filha sem aba): esconder a filha a deixaria
+    // sem caminho nenhum pela barra — ela ocupa o lugar da mãe.
+    if (!n?.hierarchyMotherId || !listed.has(n.hierarchyMotherId)) return true
+    return n.attentionReason != null
   })
   return { items: out, hiddenCount: items.length - out.length }
 }

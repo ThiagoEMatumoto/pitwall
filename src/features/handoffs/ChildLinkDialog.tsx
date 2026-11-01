@@ -17,6 +17,9 @@ interface Props {
   displayTitle: string
   link: ChildLinkInfo
   onChanged?: () => void
+  // Vínculo ENCERRADO (state 'none' com handoff): a árvore ainda aninha a sessão
+  // sob a mãe; aqui o humano desvincula ou cria um vínculo novo (adoção).
+  onAdoptNew?: () => void
 }
 
 export function ChildLinkDialog({
@@ -26,6 +29,7 @@ export function ChildLinkDialog({
   displayTitle,
   link,
   onChanged,
+  onAdoptNew,
 }: Props) {
   const current = link.handoff?.motherSessionId ?? null
   const [motherSessionId, setMotherSessionId] = useState<string | null>(current)
@@ -40,6 +44,7 @@ export function ChildLinkDialog({
   }, [open, current])
 
   const relinkable = link.state === 'relinkable'
+  const ended = link.state === 'none'
 
   async function run(action: () => Promise<unknown>) {
     if (busy) return
@@ -76,7 +81,7 @@ export function ChildLinkDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title={relinkable ? 'Re-vincular à mãe' : 'Vínculo com a mãe'}
+      title={relinkable ? 'Re-vincular à mãe' : ended ? 'Vínculo encerrado' : 'Vínculo com a mãe'}
       footer={
         <>
           <Button
@@ -90,13 +95,26 @@ export function ChildLinkDialog({
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancelar
           </Button>
-          <Button
-            data-testid="child-link-confirm"
-            onClick={() => void confirm()}
-            disabled={busy || (!relinkable && !changedMother)}
-          >
-            {relinkable ? 'Re-vincular' : 'Trocar mãe'}
-          </Button>
+          {ended ? (
+            <Button
+              data-testid="child-link-adopt-new"
+              onClick={() => {
+                onClose()
+                onAdoptNew?.()
+              }}
+              disabled={busy || !onAdoptNew}
+            >
+              Tornar filha de novo
+            </Button>
+          ) : (
+            <Button
+              data-testid="child-link-confirm"
+              onClick={() => void confirm()}
+              disabled={busy || (!relinkable && !changedMother)}
+            >
+              {relinkable ? 'Re-vincular' : 'Trocar mãe'}
+            </Button>
+          )}
         </>
       }
     >
@@ -105,13 +123,17 @@ export function ChildLinkDialog({
           <span className="text-[var(--color-text)]">{displayTitle}</span>{' '}
           {relinkable
             ? 'tem um vínculo interrompido ou dispensado. Re-vincular reativa o MESMO handoff — sem criar outro e sem reiniciar a sessão.'
-            : 'é filha de um handoff ativo. Dá pra trocar a mãe só desta filha, ou desvincular (ela volta a ser uma sessão comum).'}
+            : ended
+              ? 'foi filha de um handoff já encerrado e segue aninhada sob a mãe. Desvincular a devolve ao nível de mãe; tornar filha de novo cria um vínculo novo (reinicia a sessão).'
+              : 'é filha de um handoff ativo. Dá pra trocar a mãe só desta filha, ou desvincular (ela volta a ser uma sessão comum).'}
         </div>
-        <MotherSessionPicker
-          value={motherSessionId}
-          onChange={setMotherSessionId}
-          excludeSessionId={sessionId}
-        />
+        {!ended && (
+          <MotherSessionPicker
+            value={motherSessionId}
+            onChange={setMotherSessionId}
+            excludeSessionId={sessionId}
+          />
+        )}
         {error && (
           <div data-testid="child-link-error" className="text-xs text-[var(--color-danger)]">
             {error}
