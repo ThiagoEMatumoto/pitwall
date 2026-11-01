@@ -94,6 +94,7 @@ import {
   isSessionImageTempFile,
 } from '../services/image-temp'
 import { mapLiveSessionRepo, type LiveSessionJoinRow } from './live-session-mapping'
+import { unregisteredPtyStatus } from '../services/unregistered-pty-status'
 import type {
   Session,
   SpawnSessionInput,
@@ -1575,7 +1576,8 @@ export function registerSessionIpc(): void {
         name = indexed!.name ?? (transcript ? readTranscriptTitle(transcript) : null) ?? row.session_title
         lastActivityAt = indexed!.updatedAt
       } else {
-        status = 'ended'
+        // A PTY está viva (runningIds): sem session file é trust/subindo, nunca encerrada.
+        status = unregisteredPtyStatus(sessionId)
         name = (transcript ? readTranscriptTitle(transcript) : null) ?? row.session_title
         lastActivityAt = null
       }
@@ -1614,7 +1616,7 @@ export function registerSessionIpc(): void {
         tokens,
         isResumable: transcript !== null,
         titleSource: row.session_title_source,
-        attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
+        attentionReason: attentionReasonForPty(sessionId, status),
         cwd: isLive ? indexed!.cwd : null,
         provider: row.provider ?? 'claude',
       })

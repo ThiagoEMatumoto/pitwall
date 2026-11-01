@@ -22,6 +22,7 @@ import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
 import { getByChildSession, isActiveCrewChild } from './handoff-store'
 import { broadcast } from './notify'
+import { unregisteredPtyStatus } from './unregistered-pty-status'
 import { tuiMenuWatch } from './tui-menu-watch'
 import {
   deriveAttentionReason,
@@ -888,7 +889,12 @@ class SessionActivityService extends EventEmitter {
     let name: string | null = null
     let lastActivityAt: number | null = null
 
-    if (!indexed) {
+    const livePty = tuiMenuWatch.ptyForCc(ccSessionId)
+    if (!indexed && livePty && ptyManager.isRunning(livePty)) {
+      // PTY viva sem session file: trust (antes do registro) ou subindo. Uma
+      // conversa retomada já tem JSONL, e o ramo abaixo a dava por encerrada.
+      status = unregisteredPtyStatus(livePty)
+    } else if (!indexed) {
       // Sem arquivo: ou a sessão ainda não nasceu (starting) ou já encerrou.
       // Se já vimos o JSONL antes (transcriptPath), tratamos como encerrada.
       status = entry.transcriptPath ? 'ended' : 'starting'
