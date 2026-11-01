@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  Crown,
   Loader,
   Maximize2,
   Pin,
@@ -17,7 +18,13 @@ import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { relativeTime } from '@/lib/time'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
-import { useVisibleLiveSessions } from './useGlobalSessions'
+import {
+  focusFilteredSessions,
+  motherTitleBySession,
+  useVisibleLiveSessions,
+} from './useGlobalSessions'
+import { useSessionGraph } from '@/features/sessions/session-graph-store'
+import { useFocusFilterStore } from '@/lib/focus-filter-store'
 import { useWaitingCount } from './useWaitingCount'
 import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
@@ -73,6 +80,10 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   // usuário fica com N chips pra monitorar. Abriu o terminal de uma, ela ganha
   // chip aqui como qualquer sessão (ver useVisibleLiveSessions).
   const visibleSessions = useVisibleLiveSessions()
+  const graph = useSessionGraph()
+  const focusOnly = useFocusFilterStore((s) => s.enabled)
+  const loadFocusFilter = useFocusFilterStore((s) => s.load)
+  const setFocusOnly = useFocusFilterStore((s) => s.setEnabled)
   const waitingCount = useWaitingCount()
   const pinnedIds = useStripPinsStore((s) => s.pinnedIds)
   const pinsLoaded = useStripPinsStore((s) => s.loaded)
@@ -91,6 +102,23 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     void loadPins()
   }, [loadPins])
 
+  useEffect(() => {
+    void loadFocusFilter()
+  }, [loadFocusFilter])
+
+  // "Mães + quem precisa de mim": filha quieta sai da barra. A aba focada e as
+  // fixadas ficam sempre — sumir com o que está na tela confunde.
+  const focusedSessionId = panes.find((p) => p.paneId === focusPaneId)?.session.id
+  const { items: focusedSessions, hiddenCount: hiddenChildren } = useMemo(
+    () =>
+      focusFilteredSessions(visibleSessions, graph.nodes, {
+        enabled: focusOnly,
+        keepIds: new Set([...pinnedIds, ...(focusedSessionId ? [focusedSessionId] : [])]),
+      }),
+    [visibleSessions, graph, focusOnly, pinnedIds, focusedSessionId],
+  )
+  const motherTitles = useMemo(() => motherTitleBySession(graph.nodes), [graph])
+
   // Higiene: descarta pins de sessões que não existem mais. Poda contra TODAS
   // as liveSessions (não só as visíveis) pra não perder pin de filha de handoff
   // temporariamente oculta. Lista vazia = provável boot antes do 1º broadcast —
@@ -108,10 +136,10 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   const orderedSessions = useMemo(
     () =>
       orderSessions(
-        visibleSessions.filter((item) => item.status !== 'ended'),
+        focusedSessions.filter((item) => item.status !== 'ended'),
         pinnedIds,
       ),
-    [visibleSessions, pinnedIds],
+    [focusedSessions, pinnedIds],
   )
 
   // ccSessionId → paneId das sessões exibidas no split (destaque "aberta").
@@ -204,6 +232,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                 isOpen={isOpen}
                 isFocused={isFocused}
                 isPinned={pinnedIds.includes(item.id)}
+                motherTitle={motherTitles.get(item.id) ?? null}
                 // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
                 // lugar (a medição seguinte não oscila).
                 hidden={clipped.hidden.includes(index)}
@@ -243,6 +272,24 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
 
       <button
         type="button"
+        data-testid="session-strip-focus-toggle"
+        aria-pressed={focusOnly}
+        onClick={() => void setFocusOnly(!focusOnly)}
+        title={
+          focusOnly
+            ? `Mostrando só mães + quem precisa de você${hiddenChildren ? ` (${hiddenChildren} filhas ocultas)` : ''} — clique para mostrar todas`
+            : 'Mostrando todas as sessões — clique para ver só mães + quem precisa de você'
+        }
+        className={`ml-1 flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] transition hover:bg-[var(--color-surface-2)] ${
+          focusOnly ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-dim)]'
+        }`}
+      >
+        <Icon as={Crown} size={12} />
+        {focusOnly && hiddenChildren > 0 && <span>+{hiddenChildren}</span>}
+      </button>
+
+      <button
+        type="button"
         onClick={onOpenSwitcher}
         title={
           waitingCount > 0
@@ -277,13 +324,25 @@ interface ChipProps {
   isOpen: boolean
   isFocused: boolean
   isPinned: boolean
+  // Alias da mãe quando esta aba é filha (chip "↳ mãe").
+  motherTitle?: string | null
   hidden?: boolean
   onOpen: () => void
   onEnd: () => void
   onTogglePin: () => void
 }
 
-function Chip({ item, isOpen, isFocused, isPinned, hidden = false, onOpen, onEnd, onTogglePin }: ChipProps) {
+function Chip({
+  item,
+  isOpen,
+  isFocused,
+  isPinned,
+  motherTitle = null,
+  hidden = false,
+  onOpen,
+  onEnd,
+  onTogglePin,
+}: ChipProps) {
   const title = liveSessionLabel(item)
   const preview = item.lastText?.replace(/\s+/g, ' ').trim()
   const tooltip = `${statusLabel(item.status)} · ${relativeTime(item.lastActivityAt)}${
@@ -342,6 +401,15 @@ function Chip({ item, isOpen, isFocused, isPinned, hidden = false, onOpen, onEnd
           />
         )}
         <span className="max-w-40 truncate">{title}</span>
+        {motherTitle && (
+          <span
+            data-testid="tab-mother-chip"
+            title={`Filha de ${motherTitle}`}
+            className="max-w-24 shrink-0 truncate rounded bg-[var(--color-surface-2)] px-1 text-[10px] text-[var(--color-text-dim)]"
+          >
+            ↳ {motherTitle}
+          </span>
+        )}
         <ProviderBadge provider={item.provider} />
       </button>
       <SessionFeatureChip sessionId={item.id} density="dot" />

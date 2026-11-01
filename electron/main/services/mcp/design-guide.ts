@@ -31,7 +31,7 @@ If the human asked from inside the Design Studio, the prompt carries docId/artbo
     n: 2,
     title: 'Mental model',
     body: `document > pages > artboards > nodes.
-- Folders (one level, no nesting) group documents in the hub. design_folder_list shows them; pass folder (a name, reused case-insensitively or created) to design_document_create, and re-file with design_document_move (null = no folder). Use the folder the human named instead of creating a near-duplicate.
+- Folders (one level, no nesting) group documents in the hub. design_folder_list shows them; pass folder (a name, reused case-insensitively or created) to design_document_create, and re-file with design_document_move (null = no folder). design_folder_create / design_folder_rename (name and/or color) / design_folder_delete (documents stay, unfiled) manage the folders themselves. Use the folder the human named instead of creating a near-duplicate.
 - An artboard is a canvas rendered in an isolated iframe. Its tree is real HTML: a root frame (div) with children.
 - sizing "fixed": width × height in px, content past the bottom is clipped. sizing "flow": the width is fixed and the height follows the content — reads return it as measuredHeight (updated by the runtime and by design_screenshot). Max 16384 px per side; larger values are clamped and reported in warnings.
 - Node = { id, tag, kind (frame|text|image|svg|element), style (inline CSS), attrs, text?, children, name? }.

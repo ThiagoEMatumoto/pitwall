@@ -3,7 +3,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { handoffsApi, projectsApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
-import { dispatchHandoffChild } from '@/features/handoffs/spawn-child'
+import { dispatchHandoffChild, permissionModeFor } from '@/features/handoffs/spawn-child'
 
 export interface DelegateTarget {
   motherSessionId: string
@@ -81,13 +81,15 @@ export function DelegateDialog({
         repoId,
         motherSessionId: target.motherSessionId,
         task: task.trim(),
-        mode: 'interactive',
+        // Delegar = a filha implementa (mesmo default do session_handoff).
+        mode: 'auto-edits',
       })
       onClose()
       await dispatchHandoffChild(handoff.id, () => ({
         repoId,
         alias,
         systemPromptText: handoff.composedPrompt,
+        permissionMode: permissionModeFor('auto-edits'),
       }))
     } catch (err) {
       showToast({

@@ -432,16 +432,16 @@ describe('sessions:resume — relink da filha de handoff', () => {
     expect(markRunning).toHaveBeenCalledWith('h1', session.id)
   })
 
-  it('handoff DISPENSADO no Crew Dock não relinka — segue o caminho normal', () => {
+  // Dispensar tira o card de vista, não desfaz o vínculo: a filha dispensada volta
+  // como filha (apelido + --settings), não como sessão comum no nível de mãe.
+  it('handoff DISPENSADO no Crew Dock também relinka', () => {
     linkedChild('interrupted', { dismissedAt: 1700000000000 })
     const session = sessionsResume()
 
-    expect(markRunning).not.toHaveBeenCalled()
-    expect(session.id).not.toBe('child-internal-1')
+    expect(markRunning).toHaveBeenCalledWith('h1', session.id)
     expect(spawns).toHaveLength(1)
-    expect(spawns[0].innerCmd).not.toContain('--settings')
-    // Sem alias da filha: o nome cai no label do repo.
-    expect(spawns[0].innerCmd).toContain("-n 'Repo 1'")
+    expect(spawns[0].innerCmd).toContain("-n 'alias-filha'")
+    expect(spawns[0].innerCmd).toContain('--settings')
   })
 
   it('handoff TERMINAL não relinka — segue o caminho normal', () => {

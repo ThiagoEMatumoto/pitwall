@@ -29,6 +29,7 @@ export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-lo
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { ChildLinkState } from '../handoff-lead'
 import type { DiagramLibraryCatalogEntry } from '../diagram-library-catalog'
 import type {
   HibernateStatsView,
@@ -342,6 +343,9 @@ export interface CreateHandoffInput {
   // Omitido = 'pending' (espera o gate). 'approved' = um humano já decidiu (criação
   // manual, adoção): nasce fora do loop de auto-aprovação, que spawnaria uma 2ª filha.
   status?: 'pending' | 'approved'
+  // cwd já decidido por quem cria (worktree automático da filha). Omitido = o
+  // store resolve (worktree da feature, senão a raiz do repo).
+  workDir?: string | null
 }
 
 // ---- Passagem de bastão (baton) ----
@@ -438,6 +442,14 @@ export interface AdoptSessionInput {
   task: string
   featureId?: string
   mode?: HandoffMode
+}
+
+export interface ChildLinkInfo {
+  state: ChildLinkState
+  handoff: Handoff | null
+  // Re-vincular REINICIA a sessão: ela está viva, mas foi retomada como sessão
+  // comum (sem apelido nem canal de entrada), e só o relance devolve os dois.
+  relinkRestarts: boolean
 }
 
 export interface AdoptedSession {
@@ -1216,6 +1228,9 @@ export interface HandoffWakeHealth {
   delivered: number
   undelivered: number
   missing: number
+  // Subconjunto de undelivered segurado por 'unparsed': a fila não reconheceu a
+  // caixa de input da sessão alvo (wake da mãe ou resposta à filha).
+  stuckUnparsed: number
   byOutcome: Partial<Record<string, number>>
   lastUndeliveredAt: number | null
 }
@@ -2112,8 +2127,34 @@ export interface DiagramMeta {
   version: number
   sourceFormat: DiagramSourceFormat | null
   thumbnail: string | null
+  // Pasta do hub (um nível); null = sem pasta.
+  folderId: string | null
   createdAt: number
   updatedAt: number
+}
+
+// Pasta do hub de diagramas. Mesmo shape de DesignFolder de propósito: o hub
+// reaproveita os componentes de pasta do Design. docCount = diagramas ativos.
+export interface DiagramFolder {
+  id: string
+  name: string
+  color: string | null
+  sortOrder: number
+  docCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateDiagramFolderInput {
+  name: string
+  color?: string | null
+}
+
+export interface UpdateDiagramFolderInput {
+  name?: string
+  // null limpa a cor.
+  color?: string | null
+  sortOrder?: number
 }
 
 export type Diagram = DiagramMeta & {
@@ -2142,6 +2183,8 @@ export interface DiagramListFilter {
   parentType?: DiagramParentType
   parentId?: string
   search?: string
+  // undefined = qualquer pasta; null = só os sem pasta.
+  folderId?: string | null
 }
 
 export interface CreateDiagramInput {
@@ -2154,6 +2197,7 @@ export interface CreateDiagramInput {
   // Linha de changelog da versão 1 (o store aplica default quando omitida).
   summary?: string
   links?: Array<{ parentType: DiagramParentType; parentId: string }>
+  folderId?: string | null
 }
 
 // snapshot=false: salva rascunho (só a cabeça). snapshot=true: bump de versão
@@ -2592,7 +2636,23 @@ export interface Api {
     // — o vínculo mãe→filha deixa de existir e a sessão volta a ser uma sessão
     // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz
     // as permissões restritas com que a filha foi lançada.
+    // "Sempre permitir para filhas": deriva a regra do pedido lido da TUI e grava
+    // na pref (o main valida; ok:false = comando que não vira regra).
+    learnChildRule(input: {
+      tool?: string
+      command?: string
+    }): Promise<{ ok: true; rule: string; added: boolean } | { ok: false; reason: string }>
     release(id: string): Promise<Handoff>
+    // Vínculo mãe/filha da sessão na régua única (childLinkState): decide entre
+    // "Tornar filha", "Re-vincular", "Trocar mãe" e "Desvincular".
+    childLink(sessionId: string): Promise<ChildLinkInfo>
+    // Reativa o MESMO handoff de uma filha interrompida/dispensada (opcionalmente
+    // com outra mãe), sem criar handoff novo nem reiniciar a sessão viva.
+    relinkChild(input: { sessionId: string; motherSessionId?: string }): Promise<Handoff>
+    // Troca a mãe de UMA filha (o bastão da mãe move todas).
+    setMother(input: { id: string; motherSessionId: string }): Promise<Handoff>
+    // Desvincula: o release do painel, resolvido pela sessão; ela volta a ser mãe.
+    detachChild(sessionId: string): Promise<Handoff>
     // Retoma um handoff INTERROMPIDO: re-spawna a filha via `claude --resume`,
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não
     // for 'interrupted' ou se o transcript da filha não existir mais.
@@ -2708,6 +2768,8 @@ export interface Api {
     get(id: string): Promise<Diagram | null>
     // Cria a cabeça + versão 1 numa transação.
     create(input: CreateDiagramInput): Promise<Diagram>
+    // Modelo de shared/diagram-templates; o main posiciona com ELK.
+    createFromTemplate(templateId: string): Promise<Diagram>
     // Sempre atualiza a cabeça; snapshot=true bumpa versão e grava histórico
     // (cap de 30 snapshots por diagrama).
     updateScene(input: UpdateDiagramSceneInput): Promise<Diagram>
@@ -2725,8 +2787,17 @@ export interface Api {
     restoreVersion(diagramId: string, version: number, author?: DiagramAuthor): Promise<Diagram>
     // Só o preview: não versiona nem bumpa updated_at.
     setThumbnail(id: string, dataUrl: string): Promise<void>
+    // Arquiva numa pasta do hub (null = sem pasta). Não bumpa updated_at.
+    move(id: string, folderId: string | null): Promise<Diagram>
+    foldersList(): Promise<DiagramFolder[]>
+    folderCreate(input: CreateDiagramFolderInput): Promise<DiagramFolder>
+    folderUpdate(id: string, input: UpdateDiagramFolderInput): Promise<DiagramFolder>
+    // Os diagramas da pasta ficam sem pasta (ON DELETE SET NULL).
+    folderDelete(id: string): Promise<void>
     // Payload = Diagram completo.
     onUpdated(handler: (payload: unknown) => void): () => void
+    // Payload = { folderId: string | null } — sinal de recarga das pastas.
+    onFoldersUpdated(handler: (payload: unknown) => void): () => void
     // Payload = { id }.
     onDeleted(handler: (payload: unknown) => void): () => void
     // Payload = { diagramId, links }.

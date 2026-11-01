@@ -579,6 +579,26 @@ describe('sessions:resume da filha de handoff (ramo linked)', () => {
       .get(h2.id) as { mother_session_id: string }
     expect(row.mother_session_id).toBe(session.id)
   })
+
+  // Dispensar tira o card de vista, não desfaz o vínculo: sem o relink a filha
+  // voltava do switcher como sessão comum e reaparecia no nível de mãe.
+  it('filha DISPENSADA também é relinkada (e volta ao dock)', () => {
+    const { h1 } = childThatIsAlsoMother()
+    handoffStore.dismiss(h1)
+
+    const { session } = resumeResult()
+
+    expect(handoffStore.get(h1)).toMatchObject({ childSessionId: session.id, dismissedAt: null })
+  })
+
+  it('filha SOLTA (release) não é relinkada: o vínculo foi cortado de propósito', () => {
+    const { h1 } = childThatIsAlsoMother()
+    handoffStore.release(h1)
+
+    resumeResult()
+
+    expect(handoffStore.get(h1)?.childSessionId).toBeNull()
+  })
 })
 
 // H1: C é a filha (interrompida, retomável). H2: C é a mãe de outra filha (r2).

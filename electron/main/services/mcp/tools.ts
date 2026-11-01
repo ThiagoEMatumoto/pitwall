@@ -30,6 +30,7 @@ import { MAX_WAIT_SECONDS } from '../agent-bus'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
+import { folderCrudTools, folderListTool } from './folder-tools'
 import {
   installCatalogLibrary,
   installedCatalogIds,
@@ -40,6 +41,8 @@ import { DIAGRAM_LIBRARY_CATALOG } from '../../../../shared/diagram-library-cata
 import { elementsToSkeleton } from '../../../../shared/diagram-skeleton'
 import { directlyNestedFrames } from '../../../../shared/diagram-compound'
 import { applyPatch, skeletonToElements } from '../diagram-layout'
+import { requireDiagramTemplate, templateScene } from '../diagram-template-scene'
+import { DIAGRAM_TEMPLATES } from '../../../../shared/diagram-templates'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
@@ -49,6 +52,8 @@ import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
+import { discardChildWorkspace, ensureChildWorkspace } from '../handoff/child-worktree'
+import { resolveHandoffWorkDir } from '../work-dir'
 import { getActivityFor, ptyStatusFor } from '../session-activity'
 import { emitSessionLinkPulse } from '../session-link-pulse'
 import { ptyManager } from '../pty-manager'
@@ -67,6 +72,7 @@ import type {
   DiagramScene,
   FeatureObjectiveLink,
   Handoff,
+  HandoffMode,
   RepoDependency,
   TaskLink,
 } from '../../../../shared/types/ipc'
@@ -679,6 +685,15 @@ const repoConnectionsGetSchema = z.object({ repo: z.string().min(1) })
 
 const handoffMode = z.enum(['plan', 'auto-edits', 'interactive'])
 
+// Sem mode explícito a filha implementa (auto-edits). Codex só sobe autônomo em
+// read-only (assertAutonomousSpawnGuarded): o default dele continua 'plan'.
+export function defaultHandoffMode(
+  mode: HandoffMode | undefined,
+  provider: AgentProviderId,
+): HandoffMode {
+  return mode ?? (provider === 'claude' ? 'auto-edits' : 'plan')
+}
+
 const sessionHandoffSchema = z.object({
   targetRepo: z.string().min(1),
   task: z.string().min(1),
@@ -687,7 +702,8 @@ const sessionHandoffSchema = z.object({
   context: z.string().optional(),
   // Modo de permissão da filha. 'plan' (read-only) p/ investigação; 'auto-edits'
   // (edita, com denylist destrutivo) p/ implementação; 'interactive' = pergunta
-  // tudo (legado). Default: 'plan' (seguro). O humano confirma no gate.
+  // tudo (legado). Default: 'auto-edits' — filha despachada é implementer; em
+  // branch protegida ela ganha worktree próprio (child-worktree.ts).
   mode: handoffMode.optional(),
   // Substitui a filha que escreve no mesmo diretório de trabalho (default: recusa
   // com erro, sem entregar o handle da filha que já está lá). Exige forceReason,
@@ -993,7 +1009,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'session_handoff',
       title: 'Hand off work to another repo',
       description:
-        'Delegate end-to-end work to any other registered repo. Repo dependencies, when they exist, only add context to the child briefing. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode: "plan" (for investigation: starts in plan mode with Edit/Write/commit/push denied, but it is NOT a sandbox — if the user approves ExitPlanMode in the child, Bash can still write files via cp, sed -i, redirection, etc.; it does not hold the directory lock), "auto-edits" (child edits files autonomously, destructive commands blocked — for implementation), or "interactive" (asks for everything). Ownership is per WORKING DIRECTORY (the feature worktree of the target repo, else the repo root), and only children that WRITE count: several children may share a repo in different worktrees, and a "plan" child may share the same checkout with a writer. If another writing child is already active in the same directory the call is REFUSED with an error — either because you already dispatched it, or because it belongs to another mother session and you do not inherit it. force=true together with forceReason (required, recorded in the handoff trail) REPLACES that writer (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
+        'Delegate end-to-end work to any other registered repo. Repo dependencies, when they exist, only add context to the child briefing. Spawns the child session immediately — no human approval step. Pass fromRepo = the repo you are working in (orients the context). Choose mode (default "auto-edits"; "plan" only when passed explicitly): "plan" (for investigation: starts in plan mode with Edit/Write/commit/push denied, but it is NOT a sandbox — if the user approves ExitPlanMode in the child, Bash can still write files via cp, sed -i, redirection, etc.; it does not hold the directory lock), "auto-edits" (default — child edits files, runs installs/builds/tests and commits autonomously, destructive commands blocked; if the target checkout is on a protected branch (main/master/staging/develop) the child gets its own worktree at <repo>/.worktrees/child-<alias> on branch child/<alias>-<id> and may push it and open a PR), or "interactive" (asks for everything). Ownership is per WORKING DIRECTORY (the feature worktree of the target repo, else the repo root), and only children that WRITE count: several children may share a repo in different worktrees, and a "plan" child may share the same checkout with a writer. If another writing child is already active in the same directory the call is REFUSED with an error — either because you already dispatched it, or because it belongs to another mother session and you do not inherit it. force=true together with forceReason (required, recorded in the handoff trail) REPLACES that writer (it becomes interrupted; its child session is not killed). Returns { handoffId, alias, status }. `alias` is the child session name and the ADDRESS for cross-session messaging: send it the first SendMessage({ to: alias, message: ... }) right after this call — that message establishes the channel back to you (the child answers whoever wrote first). Durable state stays in handoff_list / handoff_result. Optional provider: "claude" (default) or "codex" (experimental, only with mode "plan" — Codex has no destructive-command denylist, so editing modes are refused).',
       inputSchema: sessionHandoffSchema,
       handler: (args) => {
         const input = sessionHandoffSchema.parse(args)
@@ -1002,7 +1018,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         // nunca vira linha no inbox. O spawnSession repete a checagem (autoridade).
         assertAutonomousSpawnGuarded(
           provider,
-          resolvePermissionMode(permissionModeForHandoffMode(input.mode ?? 'plan')),
+          resolvePermissionMode(permissionModeForHandoffMode(defaultHandoffMode(input.mode, provider))),
           true,
         )
         // O gate humano spawna pelo renderer, que não sabe o provider (o handoff
@@ -1070,7 +1086,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           : null
 
         const handoffId = randomUUID()
-        const mode = input.mode ?? 'plan'
+        const mode = defaultHandoffMode(input.mode, provider)
         // Alias = identidade endereçável da filha. Resolvido ANTES do compose
         // porque o briefing anuncia à filha o próprio apelido, e antes do spawn
         // porque é o `-n <name>` — o endereço do SendMessage.
@@ -1079,6 +1095,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           task: input.task,
           taken: handoffStore.activeSessionNames(),
         })
+        // Filha que escreve não cai numa branch protegida: ganha worktree próprio
+        // (child-worktree.ts). plan e codex (só sobe em plan) ficam onde estão.
+        const baseWorkDir = resolveHandoffWorkDir(target.id, featureId)
+        const workspace =
+          mode !== 'plan' && provider === 'claude' && baseWorkDir
+            ? ensureChildWorkspace({ workDir: baseWorkDir, alias, handoffId })
+            : undefined
         const composed = composeHandoffPrompt({
           targetRepoLabel: target.label,
           targetRepoPath: target.path,
@@ -1091,6 +1114,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
           alias,
           mode,
           provider: input.provider,
+          workspace,
         })
 
         // Posse do diretório de trabalho decidida DENTRO do create, numa
@@ -1113,10 +1137,13 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
               contextJson: input.context ?? null,
               composedPrompt: composed,
               mode,
+              workDir: workspace?.workDir,
             },
             input.force && input.forceReason ? { force: { reason: input.forceReason } } : {},
           )
         } catch (err) {
+          // Recusado (posse) ou falhou: o worktree recém-criado não tem dono.
+          discardChildWorkspace(workspace)
           if (!handoffStore.isHandoffDuplicateError(err)) throw err
           return ok({
             duplicate: true,
@@ -1620,8 +1647,14 @@ const diagramCreateSchema = z
     links: z.array(diagramLinkInputSchema).optional(),
     direction: diagramDirection.optional(),
     layout: diagramLayoutMode.optional(),
+    template: z.string().min(1).optional(),
+    // Nome da pasta do hub: reaproveitada sem diferenciar caixa, criada se faltar.
+    folder: z.string().trim().min(1).max(200).optional(),
   })
-  .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
+  .refine(
+    (v) => [v.elements, v.scene, v.template].filter((x) => x !== undefined).length === 1,
+    { message: 'provide exactly one of elements (skeleton), scene (raw Excalidraw scene) or template (starter template id)' },
+  )
 
 const diagramGetSchema = z.object({
   id: z.string().min(1),
@@ -1636,6 +1669,13 @@ const diagramListSchema = z.object({
   parentType: diagramParentType.optional(),
   parentId: z.string().optional(),
   search: z.string().optional(),
+  // Nome da pasta (sem diferenciar caixa); null = só os diagramas sem pasta.
+  folder: z.string().trim().min(1).nullable().optional(),
+})
+
+const diagramMoveSchema = z.object({
+  diagramId: z.string().min(1),
+  folder: z.string().trim().min(1).max(200).nullable(),
 })
 
 // Espelha DiagramPatchOp: update = id + campos parciais do skeleton.
@@ -1697,35 +1737,52 @@ function diagramToMeta(diagram: Diagram): Record<string, unknown> {
 }
 
 function diagramTools(notify: McpNotify): ToolDef[] {
+  const foldersUpdated = (folderId: string | null) =>
+    notify.broadcast('diagram:folders-updated', { folderId })
+  const folderTools = {
+    prefix: 'diagram' as const,
+    items: 'diagrams',
+    store: diagramStore,
+    onChange: foldersUpdated,
+  }
   return [
     {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
+        `Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow's foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene, or template = a starter template id (${DIAGRAM_TEMPLATES.map((t) => `${t.id} (${t.name})`).join(', ')}) laid out the same way — kind defaults to the template's; refine it afterwards with diagram_patch. Exactly one of elements|scene|template. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Optional folder = hub folder name (reused case-insensitively, created if missing; see diagram_folder_list). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).`,
       inputSchema: diagramCreateSchema,
       handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
-        const fromSkeleton = input.elements !== undefined
-        const scene: DiagramScene = fromSkeleton
-          ? {
-              elements: await skeletonToElements(input.elements!, {
-                direction: input.direction,
-                layout: input.layout,
-              }),
-            }
-          : (input.scene as DiagramScene)
-        const diagram = diagramStore.create({
-          title: input.title,
-          kind: input.kind,
-          scene,
-          sourceFormat: fromSkeleton ? 'skeleton' : 'scene',
-          source: fromSkeleton ? JSON.stringify(input.elements) : null,
-          author: 'claude',
-          summary: input.summary,
-          links: input.links,
-        })
+        const template = input.template ? requireDiagramTemplate(input.template) : null
+        const skeleton = input.elements ?? template?.skeleton
+        const scene: DiagramScene = template
+          ? await templateScene(template, { direction: input.direction, layout: input.layout })
+          : skeleton
+            ? {
+                elements: await skeletonToElements(skeleton, {
+                  direction: input.direction,
+                  layout: input.layout,
+                }),
+              }
+            : (input.scene as DiagramScene)
+        // Pasta e diagrama na mesma transação: se o create falhar, a pasta recém-criada
+        // não pode sobrar vazia no hub.
+        const diagram = getDb().transaction(() =>
+          diagramStore.create({
+            title: input.title,
+            kind: input.kind ?? template?.kind,
+            scene,
+            sourceFormat: skeleton ? 'skeleton' : 'scene',
+            source: skeleton ? JSON.stringify(skeleton) : null,
+            author: 'claude',
+            summary: input.summary,
+            links: input.links,
+            folderId: input.folder ? diagramStore.ensureFolder(input.folder).id : undefined,
+          }),
+        )()
         notify.broadcast('diagram:updated', diagram)
+        if (diagram.folderId) foldersUpdated(diagram.folderId)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -1754,13 +1811,40 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_list',
       title: 'List diagrams',
       description:
-        'List diagrams (metas only, no scene). Optional filters: status (active default | archived | all), kind, parent (parentType + parentId), free-text search on title.',
+        'List diagrams (metas only, no scene; each with its folderId). Optional filters: status (active default | archived | all), kind, parent (parentType + parentId), free-text search on title, folder by name (null = diagrams without a folder).',
       inputSchema: diagramListSchema,
       handler: (args) => {
-        const filter = diagramListSchema.parse(args)
+        const { folder, ...filter } = diagramListSchema.parse(args)
+        let folderId: string | null | undefined = folder === null ? null : undefined
+        if (folder) {
+          const match = diagramStore.findFolderByName(folder)
+          if (!match) return ok({ items: [], note: `no folder named "${folder}"` })
+          folderId = match.id
+        }
         // Sem thumbnail: é um data-url de imagem, payload inútil pro agente.
-        const items = diagramStore.list(filter).map(({ thumbnail: _thumb, ...meta }) => meta)
+        const items = diagramStore
+          .list({ ...filter, folderId })
+          .map(({ thumbnail: _thumb, ...meta }) => meta)
         return ok({ items })
+      },
+    },
+    folderListTool(folderTools),
+    ...folderCrudTools(folderTools),
+    {
+      name: 'diagram_move',
+      title: 'Move diagram to a folder',
+      description:
+        'File a diagram into a hub folder by name (reused case-insensitively, created if missing); folder null takes it out of any folder. Does not count as an edit (no version, updatedAt unchanged).',
+      inputSchema: diagramMoveSchema,
+      handler: (args) => {
+        const { diagramId, folder } = diagramMoveSchema.parse(args)
+        // Antes do ensureFolder: id errado não pode deixar pasta vazia criada.
+        if (!diagramStore.get(diagramId)) throw new Error(`diagram not found: ${diagramId}`)
+        const folderId = folder === null ? null : diagramStore.ensureFolder(folder).id
+        const diagram = diagramStore.move(diagramId, folderId)
+        notify.broadcast('diagram:updated', diagram)
+        foldersUpdated(folderId)
+        return ok({ diagram: diagramToMeta(diagram) })
       },
     },
     {

@@ -13,21 +13,28 @@ import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
 
 const PERMISSION = fixture('claude-2.1.286-permission-bash.ansi')
 const IDLE_PROMPT = fixture('claude-2.1.286-idle-prompt.ansi')
-// Menu real que o parser NÃO reconhece (trust sem numeração): sem menu e sem a
-// caixa de input — o caso de drift da CLI em que o \r responderia às cegas.
-const UNPARSED = fixture('claude-2.1.286-trust-unnumbered.ansi')
+// Trust sem numeração real: o parser reconhece (opções vazias) e o gate segura
+// como menu aberto.
+const TRUST = fixture('claude-2.1.286-trust-unnumbered.ansi')
+// Menu que o parser NÃO reconhece: a mesma captura com o texto da opção mudado
+// ("folder" → "directory"), simulando drift da CLI. Sem menu e sem a caixa de
+// input — o caso em que o \r responderia às cegas.
+const UNPARSED = TRUST.replace('\x1b[22Gfolder', '\x1b[22Gdirectory')
 // Caixa de input vazia (placeholder esmaecido) × com rascunho digitado sem Enter:
 // o texto puro das duas é "❯ <algo>"; só o atributo dim das células separa.
 const PLACEHOLDER = fixture('claude-2.1.286-input-placeholder.ansi')
 const DIRTY = fixture('claude-2.1.286-input-dirty.ansi')
 const SID = 's1'
 
-const SCANS: Record<'permission' | 'idle' | 'unparsed' | 'placeholder' | 'dirty', ScreenScan> =
-  {} as never
+const SCANS: Record<
+  'permission' | 'idle' | 'trust' | 'unparsed' | 'placeholder' | 'dirty',
+  ScreenScan
+> = {} as never
 
 beforeAll(async () => {
   SCANS.permission = await scanOf(PERMISSION)
   SCANS.idle = await scanOf(IDLE_PROMPT)
+  SCANS.trust = await scanOf(TRUST)
   SCANS.unparsed = await scanOf(UNPARSED)
   SCANS.placeholder = await scanOf(PLACEHOLDER)
   SCANS.dirty = await scanOf(DIRTY)
@@ -72,6 +79,9 @@ it('as capturas reais dão o shape esperado pelo gate', () => {
   expect(SCANS.permission.menu?.kind).toBe('permission')
   expect(SCANS.idle.menu).toBeNull()
   expect(SCANS.idle.inputPrompt).toBe(true)
+  expect(SCANS.trust.menu).toMatchObject({ kind: 'trust', options: [] })
+  expect(SCANS.trust.inputPrompt).toBe(false)
+  expect(UNPARSED).not.toBe(TRUST)
   expect(SCANS.unparsed.menu).toBeNull()
   expect(SCANS.unparsed.inputPrompt).toBe(false)
   expect(SCANS.idle.inputDirty).toBe(false)
@@ -337,6 +347,13 @@ describe('PromptQueue — envio para qualquer sessão', () => {
       expect(writes).toEqual([`${SID}:rode 1 teste`])
     },
   )
+
+  it("'now' com o trust sem numeração real na tela recusa como menu aberto", async () => {
+    const { queue, writes } = setup({ screen: 'trust', status: 'starting' })
+    const res = await queue.send({ sessionId: SID, text: 'oi', when: 'now' })
+    expect(res).toEqual({ ok: false, error: 'menu-open' })
+    expect(writes).toEqual([])
+  })
 
   it("'now' com menu não reconhecido na tela real recusa em vez de escrever", async () => {
     const { queue, writes } = setup({ screen: 'unparsed', status: 'waiting' })

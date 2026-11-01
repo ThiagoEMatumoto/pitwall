@@ -82,7 +82,9 @@ import {
   assertAutonomousSpawnGuarded,
   resolveCodexModel,
 } from '../services/spawn-flags'
+import { getChildLearnedAllow } from '../services/handoff/child-learned-rules'
 import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { preTrustClaudeDirs } from '../services/handoff/claude-trust'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
 import type { AgentProvider, LaunchOpts } from '../services/providers/types'
@@ -553,6 +555,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // Sessão avulsa (repoId null): roda no scratch dir, sem vínculo com repo.
   let cwd: string
   let defaultName: string
+  let repoPath: string | null = null
   if (repoId) {
     const repo = db
       .prepare('SELECT path, label FROM repos WHERE id = ?')
@@ -560,7 +563,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
     if (!repo) throw new Error(`repo not found: ${repoId}`)
     // repos.path legado pode ser RELATIVO (bug do importer do sync antigo):
     // resolve contra o vault root antes do guard e do cwd do spawn.
-    const repoPath = resolveRepoPath(repo.path)
+    repoPath = resolveRepoPath(repo.path)
     assertRepoDirExists(repoPath)
     // Filha de handoff: o diretório gravado no create (a posse), sem recalcular.
     // Senão, feature com worktree registrado pra ESTE repo manda no cwd; sem
@@ -589,6 +592,11 @@ export function spawnSession(input: SpawnSessionInput): Session {
   // de handoff num provider sem trava equivalente é recusada antes do spawn.
   const permissionMode = resolvePermissionMode(input.permissionMode)
   assertAutonomousSpawnGuarded(provider.id, permissionMode, Boolean(input.handoffChild))
+  // Filha não tem humano olhando o terminal: o diálogo de trust de um repo nunca
+  // aberto a deixaria parada antes do 1º turno. Falha aqui não bloqueia o spawn.
+  if (input.handoffChild && provider.id === 'claude' && repoPath) {
+    preTrustClaudeDirs([cwd, repoPath])
+  }
   const disallowedTools = resolveDisallowedTools(permissionMode, input.disallowedTools, {
     handoffChild: Boolean(input.handoffChild),
   })
@@ -638,7 +646,7 @@ export function spawnSession(input: SpawnSessionInput): Session {
       provider.id === 'claude'
         ? sessionSettingsFile(
             internalSessionId,
-            input.handoffChild ? handoffChildSettings(permissionMode) : null,
+            input.handoffChild ? handoffChildSettings(permissionMode, getChildLearnedAllow()) : null,
             disallowedTools,
           )
         : null,
@@ -825,7 +833,7 @@ export function resumeHandoffChild(
   // Model/effort/advisor do spawn da filha voltam também; a permissão segue do
   // modo do handoff (a autoridade sobre o que a filha pode fazer).
   const spawned = latestSpawnArgs(db, ccSessionId)
-  const original = relaunchFlags(spawned)
+  const original = relaunchFlags(spawned, getChildLearnedAllow())
 
   // --settings também no resume: a filha retomada precisa continuar aceitando
   // SendMessage (sem isso as mensagens da mãe voltariam a ficar `held`).
@@ -842,7 +850,7 @@ export function resumeHandoffChild(
     permissionMode,
     settingsFilePath: sessionSettingsFile(
       internalSessionId,
-      handoffChildSettings(permissionMode),
+      handoffChildSettings(permissionMode, getChildLearnedAllow()),
       disallowedTools,
     ),
   })
@@ -923,7 +931,11 @@ export function defaultResumeKickoff(id: string): string {
 
 // O vínculo mãe→filha mora SÓ em handoffs.child_session_id. Dado o cc_session_id
 // que o usuário pediu pra retomar, descobre se ele é a filha de um handoff ainda
-// vinculado (não dispensado no Crew Dock) e recuperável. Consulta local (com
+// vinculado e recuperável. Dispensado CONTA: dispensar tira o card de vista, não
+// desfaz o vínculo — sem relink, a filha dispensada voltava do resume como sessão
+// comum (sem apelido, sem --settings) e reaparecia no nível de mãe. Quem foi
+// SOLTO (release) não casa: o child_session_id foi zerado. O handoff mais recente
+// da conversa decide (mesma ordem do getByChildSession). Consulta local (com
 // getDb) pra não alargar a superfície do handoff-store.
 function findRelinkableHandoff(ccSessionId: string): { id: string; status: HandoffStatus } | null {
   const row = getDb()
@@ -931,8 +943,8 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
       `SELECT h.id AS id, h.status AS status
          FROM handoffs h
          JOIN sessions s ON s.id = h.child_session_id
-        WHERE s.cc_session_id = ? AND h.dismissed_at IS NULL
-        ORDER BY h.updated_at DESC
+        WHERE s.cc_session_id = ?
+        ORDER BY h.created_at DESC, h.rowid DESC
         LIMIT 1`,
     )
     .get(ccSessionId) as { id: string; status: string } | undefined
@@ -1264,7 +1276,7 @@ export function registerSessionIpc(): void {
     // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
     const spawned = latestSpawnArgs(db, input.ccSessionId)
     const fromHibernation = isConversationHibernated(db, input.ccSessionId)
-    const original = relaunchFlags(fromHibernation ? spawned : null)
+    const original = relaunchFlags(fromHibernation ? spawned : null, getChildLearnedAllow())
     // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
     // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
     // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a

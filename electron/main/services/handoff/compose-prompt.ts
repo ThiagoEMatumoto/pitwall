@@ -32,6 +32,8 @@ export interface ComposeHandoffArgs {
   mode?: HandoffMode
   // Codex sobe sem -n e sem inbox cross-session: não há SendMessage.
   provider?: AgentProviderId
+  // Onde a filha trabalha (child-worktree.ts). Ausente = não resolvido.
+  workspace?: { workDir: string; branch: string | null; created: boolean; warning?: string }
 }
 
 const PEER_CHANNELS = [
@@ -62,6 +64,22 @@ const PUBLISH_FORBIDDEN = `- [ ] Proibido: push em branch protegida (${PROTECTED
 // em read-only (assertAutonomousSpawnGuarded): nada para publicar.
 const READ_ONLY_FORBIDDEN =
   '- [ ] Proibido: commit, git push, criar PR, deploy, migration destrutiva, alterar config global.'
+
+// Onde a filha escreve. Worktree criado pelo app → a branch é dela: commit, push
+// dessa branch e PR são o fluxo esperado (o allow do settings libera child/*).
+function workspaceLines(ws: NonNullable<ComposeHandoffArgs['workspace']>): string[] {
+  const lines: string[] = []
+  if (ws.created && ws.branch) {
+    lines.push(
+      `- [ ] Seu diretório de trabalho é um worktree próprio: ${ws.workDir} (branch \`${ws.branch}\`, criada a partir da branch padrão). Trabalhe só nele.`,
+      `- [ ] A branch é sua: commite à vontade, publique com \`git push -u origin ${ws.branch}\` e abra o PR com \`gh pr create\`. Não faça merge.`,
+    )
+  } else if (ws.branch) {
+    lines.push(`- [ ] Seu diretório de trabalho: ${ws.workDir} (branch \`${ws.branch}\`).`)
+  }
+  if (ws.warning) lines.push(`- [ ] Aviso: ${ws.warning}`)
+  return lines
+}
 
 export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
   const motherLabel = args.motherRepoLabel ?? 'origem'
@@ -111,6 +129,8 @@ export function composeHandoffPrompt(args: ComposeHandoffArgs): string {
       '- [ ] Modo auto-edits: edições são aplicadas automaticamente; `rm` pede confirmação; `rm -r`, `git reset --hard`, `git clean` e force push estão bloqueados.',
     )
   }
+  const writes = args.mode !== 'plan' && provider === 'claude'
+  if (writes && args.workspace) restricoes.push(...workspaceLines(args.workspace))
 
   const reporte = [
     '## Reporte',

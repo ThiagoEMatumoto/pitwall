@@ -62,7 +62,9 @@ import type {
   DiagramListFilter,
   DiagramLink,
   DiagramAuthor,
+  CreateDiagramFolderInput,
   CreateDiagramInput,
+  UpdateDiagramFolderInput,
   UpdateDiagramSceneInput,
   SyncConfigureInput,
   SyncResolveConflictInput,
@@ -411,6 +413,14 @@ const api: Api = {
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
     undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
+    learnChildRule: (input: { tool?: string; command?: string }) =>
+      invoke('handoffs:learn-child-rule', input),
+    childLink: (sessionId: string) => invoke('handoffs:child-link', sessionId),
+    relinkChild: (input: { sessionId: string; motherSessionId?: string }) =>
+      invoke('handoffs:relink-child', input),
+    setMother: (input: { id: string; motherSessionId: string }) =>
+      invoke('handoffs:set-mother', input),
+    detachChild: (sessionId: string) => invoke('handoffs:detach-child', sessionId),
     resume: (id: string) => invoke('handoffs:resume', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),
@@ -497,6 +507,7 @@ const api: Api = {
     list: (filter?: DiagramListFilter) => invoke('diagrams:list', filter),
     get: (id: string) => invoke('diagrams:get', id),
     create: (input: CreateDiagramInput) => invoke('diagrams:create', input),
+    createFromTemplate: (templateId: string) => invoke('diagrams:create-from-template', templateId),
     updateScene: (input: UpdateDiagramSceneInput) => invoke('diagrams:update-scene', input),
     rename: (id: string, title: string) => invoke('diagrams:rename', id, title),
     archive: (id: string) => invoke('diagrams:archive', id),
@@ -510,7 +521,14 @@ const api: Api = {
     restoreVersion: (diagramId: string, version: number, author?: DiagramAuthor) =>
       invoke('diagrams:restore-version', diagramId, version, author),
     setThumbnail: (id: string, dataUrl: string) => invoke('diagrams:set-thumbnail', id, dataUrl),
+    move: (id: string, folderId: string | null) => invoke('diagrams:move', id, folderId),
+    foldersList: () => invoke('diagrams:folders-list'),
+    folderCreate: (input: CreateDiagramFolderInput) => invoke('diagrams:folder-create', input),
+    folderUpdate: (id: string, input: UpdateDiagramFolderInput) =>
+      invoke('diagrams:folder-update', id, input),
+    folderDelete: (id: string) => invoke('diagrams:folder-delete', id),
     onUpdated: (handler) => subscribe<unknown>('diagram:updated', handler),
+    onFoldersUpdated: (handler) => subscribe<unknown>('diagram:folders-updated', handler),
     onDeleted: (handler) => subscribe<unknown>('diagram:deleted', handler),
     onLinksUpdated: (handler) => subscribe<unknown>('diagramLinks:updated', handler),
     library: {

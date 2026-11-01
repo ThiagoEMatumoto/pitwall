@@ -61,6 +61,9 @@ interface Props {
   // motivo, o botão aparece DESABILITADO e explica no tooltip — some sem dizer
   // por quê é o que faz o usuário achar que o app está quebrado.
   adoptDisabledReason?: string | null
+  // Rótulo quando a sessão já é (ou foi) filha: o mesmo botão vira "Re-vincular"
+  // ou "Vínculo com a mãe". Ausente = "Tornar sessão filha".
+  adoptLabel?: string
   // Feature desta sessão. Presente = o header ganha o chip de volta pro dossiê
   // (Features e terminais são áreas exclusivas; sem isto a ida é só de ida).
   feature?: SessionFeature | null
@@ -103,6 +106,7 @@ export function SessionHeader({
   onEndSession,
   onPassBaton,
   onAdopt,
+  adoptLabel,
   adoptDisabledReason = null,
   feature = null,
   sessionId,
@@ -303,9 +307,10 @@ export function SessionHeader({
             disabled={!!adoptDisabledReason}
             title={
               adoptDisabledReason ??
+              adoptLabel ??
               'Tornar sessão filha — adota esta sessão sob uma mãe e a manda pro painel da equipe (reinicia a sessão; o histórico volta)'
             }
-            aria-label="Tornar sessão filha"
+            aria-label={adoptLabel ? adoptLabel.split(' — ')[0] : 'Tornar sessão filha'}
             className="rounded p-1 hover:bg-[var(--color-surface-2)] enabled:hover:text-[var(--color-accent)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Icon as={Users} size={13} />

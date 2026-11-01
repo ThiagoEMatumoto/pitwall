@@ -9,6 +9,7 @@ import { openPaneKeys } from '@/features/handoffs/crew'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
+import { useFocusFilterStore } from '@/lib/focus-filter-store'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import { matchesSession } from './session-search'
@@ -19,6 +20,8 @@ import {
   useCrewOnlyCount,
   useEndedSessions,
   useVisibleLiveSessions,
+  focusFilteredSessions,
+  motherTitleBySession,
   orderByFeature,
   showRowStatus,
   withCrewSessions,
@@ -85,14 +88,26 @@ export function SessionSwitcher({ open, onClose }: Props) {
     () => new Map(graph.nodes.map((n) => [n.sessionId, n.featureId ?? null])),
     [graph],
   )
-  // Filha → mãe (fio de handoff do grafo): a filha vem logo abaixo da mãe, com "↳".
+  // Filha → mãe: a filha vem logo abaixo da mãe, com "↳". O fio de handoff do
+  // grafo cobre o vínculo vivo; a hierarquia (hierarchyMotherId) cobre a filha
+  // dispensada/antiga, que não deve voltar a parecer mãe.
   const motherOfChild = useMemo(
     () =>
-      new Map(
-        graph.edges.flatMap((e) => (e.kind === 'handoff' ? [[e.to, e.from] as const] : [])),
-      ),
+      new Map([
+        ...graph.nodes.flatMap((n) =>
+          n.hierarchyMotherId ? [[n.sessionId, n.hierarchyMotherId] as const] : [],
+        ),
+        ...graph.edges.flatMap((e) => (e.kind === 'handoff' ? [[e.to, e.from] as const] : [])),
+      ]),
     [graph],
   )
+  const motherTitles = useMemo(() => motherTitleBySession(graph.nodes), [graph])
+  const focusOnly = useFocusFilterStore((s) => s.enabled)
+  const setFocusOnly = useFocusFilterStore((s) => s.setEnabled)
+  const loadFocusFilter = useFocusFilterStore((s) => s.load)
+  useEffect(() => {
+    void loadFocusFilter()
+  }, [loadFocusFilter])
   const [query, setQuery] = useState('')
   const crewListed = listsCrew(showCrew, query)
   const { items: liveSessions, crewIds } = useMemo(
@@ -129,9 +144,16 @@ export function SessionSwitcher({ open, onClose }: Props) {
   // Chaves (ccSessionId da lista viva) das sessões exibidas no split ("na tela").
   const onScreen = useMemo(() => openPaneKeys(panes), [panes])
 
-  const filtered = useMemo(
-    () => liveSessions.filter((s) => matchesSession(query, s)),
-    [liveSessions, query],
+  // "Mães + quem precisa de mim" vale sem busca: quem digita o nome de uma filha
+  // espera achá-la (mesma regra do toggle da equipe).
+  const { items: filtered, hiddenCount: hiddenChildren } = useMemo(
+    () =>
+      focusFilteredSessions(
+        liveSessions.filter((s) => matchesSession(query, s)),
+        graph.nodes,
+        { enabled: focusOnly && query.trim().length === 0 },
+      ),
+    [liveSessions, query, graph, focusOnly],
   )
 
   const grouped = useMemo(() => {
@@ -321,6 +343,32 @@ export function SessionSwitcher({ open, onClose }: Props) {
                 </div>
               )}
 
+              <div className="mb-2 flex justify-end px-2">
+                <button
+                  type="button"
+                  data-testid="switcher-focus-toggle"
+                  aria-pressed={focusOnly}
+                  onClick={() => {
+                    void setFocusOnly(!focusOnly)
+                    inputRef.current?.focus()
+                  }}
+                  title="Mostrar só mães + filhas que precisam de você"
+                  className={`flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px] transition ${
+                    focusOnly
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  <Icon as={focusOnly ? Check : Crown} size={10} />
+                  Mães + quem precisa de mim
+                  {focusOnly && hiddenChildren > 0 && (
+                    <span data-testid="switcher-focus-hidden">
+                      · {hiddenChildren} filhas ocultas
+                    </span>
+                  )}
+                </button>
+              </div>
+
               {grouped.map(({ def, items, childOf }) => (
                 <div key={def.id} className="mb-4">
                   <div className="mb-1 flex items-center gap-2 px-2">
@@ -375,6 +423,7 @@ export function SessionSwitcher({ open, onClose }: Props) {
                         featureId={featureOf.get(item.id) ?? null}
                         motherOf={motherOf.get(item.id) ?? null}
                         nested={childOf.has(item.id)}
+                        motherTitle={motherTitles.get(item.id) ?? null}
                         dataIdx={idxByCc.get(item.ccSessionId) ?? -1}
                         keyboardActive={idxByCc.get(item.ccSessionId) === activeIdx}
                         onToggle={() => toggleSelected(item.ccSessionId)}
@@ -436,6 +485,8 @@ interface RowProps {
   motherOf?: number | null
   // Filha posta logo abaixo da mãe (ordem por feature): recuo + "↳".
   nested?: boolean
+  // Alias da mãe quando é filha e a mãe não está logo acima (chip "↳ mãe").
+  motherTitle?: string | null
   // Posição na lista achatada (âncora do scrollIntoView) + destaque do teclado.
   dataIdx: number
   keyboardActive: boolean
@@ -454,6 +505,7 @@ function SessionRow({
   featureId = null,
   motherOf = null,
   nested = false,
+  motherTitle = null,
   dataIdx,
   keyboardActive,
   onToggle,
@@ -503,6 +555,15 @@ function SessionRow({
             </span>
           )}
           <span className="truncate text-sm text-[var(--color-text)]">{name}</span>
+          {motherTitle && !nested && (
+            <span
+              data-testid="switcher-row-mother-of-child"
+              className="max-w-32 shrink-0 truncate rounded bg-[var(--color-surface-2)] px-1 py-0.5 text-[9px] text-[var(--color-text-dim)]"
+              title={`Filha de ${motherTitle}`}
+            >
+              ↳ {motherTitle}
+            </span>
+          )}
           {motherOf !== null && (
             <span
               data-testid="switcher-row-mother"

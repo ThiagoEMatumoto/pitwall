@@ -2,7 +2,10 @@
 // Unit dos handlers MCP contra um DB better-sqlite3 real (tmp dir), com o
 // electron mockado (app.getPath → tmp) e o notify espiado. Mesma estratégia
 // dos testes de migration: schema real via runMigrations, sem janela.
-import { rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -172,10 +175,10 @@ describe('mcp tools — objectives/KRs', () => {
     // diagram_delete é a exceção documentada: exige archive prévio + confirm.
     // design_nodes_delete apaga nós dentro de um artboard (não um recurso raiz)
     // e cada versão fica no histórico, então o undo é possível.
-    expect(names.filter((n) => n.includes('delete'))).toEqual([
-      'diagram_delete',
-      'design_nodes_delete',
-    ])
+    // *_folder_delete só desfaz o agrupamento: os itens ficam, sem pasta.
+    expect(names.filter((n) => n.includes('delete')).sort()).toEqual(
+      ['diagram_delete', 'diagram_folder_delete', 'design_nodes_delete', 'design_folder_delete'].sort(),
+    )
   })
 
   it('key_result_update altera o KR e broadcasta o marcador', () => {
@@ -612,6 +615,106 @@ describe('mcp tools — session_handoff sem gate', () => {
       }
     })
     setPref('handoffs.requireApproval', false)
+  })
+
+  it('sem mode: a filha nasce em auto-edits (acceptEdits), não em plan', () => {
+    seedRepo('backend', '/repos/backend')
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'backend',
+      task: 'Implementar X',
+    })
+    expect(res.status).toBe('running')
+    expect(spawned[0].permissionMode).toBe('acceptEdits')
+    const row = getDb().prepare('SELECT mode FROM handoffs WHERE id = ?').get(res.handoffId) as {
+      mode: string
+    }
+    expect(row.mode).toBe('auto-edits')
+    expect(spawned[0].systemPromptText).toContain('Modo auto-edits')
+  })
+
+  it('sem mode com provider codex: continua plan (codex não sobe autônomo editando)', () => {
+    seedRepo('backend', '/repos/backend')
+    const res = call<HandoffResult>('session_handoff', {
+      targetRepo: 'backend',
+      task: 'Investigar Y',
+      provider: 'codex',
+    })
+    expect(res.error).toBeUndefined()
+    expect(spawned[0].permissionMode).toBe('plan')
+  })
+
+  it('repo-alvo com checkout na main: work_dir vira worktree próprio child/* (git real)', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'tools-child-wt-')))
+    try {
+      const repo = join(base, 'svc')
+      const git = (...a: string[]) =>
+        execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim()
+      execFileSync('git', ['init', '-q', '-b', 'main', repo])
+      git('config', 'user.email', 't@t')
+      git('config', 'user.name', 't')
+      writeFileSync(join(repo, '.gitignore'), '.worktrees/\n')
+      git('add', '.gitignore')
+      git('commit', '-q', '-m', 'init')
+      seedRepo('svc', repo)
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'svc',
+        task: 'Implementar Z',
+      })
+      expect(res.status).toBe('running')
+      const row = getDb()
+        .prepare('SELECT work_dir FROM handoffs WHERE id = ?')
+        .get(res.handoffId) as {
+        work_dir: string
+      }
+      expect(row.work_dir.startsWith(join(repo, '.worktrees', 'child-'))).toBe(true)
+      const branch = execFileSync(
+        'git',
+        ['-C', row.work_dir, 'rev-parse', '--abbrev-ref', 'HEAD'],
+        {
+          encoding: 'utf8',
+        },
+      ).trim()
+      expect(branch).toMatch(/^child\//)
+      expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('main')
+      expect(spawned[0].systemPromptText).toContain(`git push -u origin ${branch}`)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('mode plan explícito em repo na main: fica na raiz, sem worktree', () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'tools-child-plan-')))
+    try {
+      const repo = join(base, 'svc2')
+      execFileSync('git', ['init', '-q', '-b', 'main', repo])
+      execFileSync('git', [
+        '-C',
+        repo,
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'user.name=t',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'i',
+      ])
+      seedRepo('svc2', repo)
+      const res = call<HandoffResult>('session_handoff', {
+        targetRepo: 'svc2',
+        task: 'Ler',
+        mode: 'plan',
+      })
+      const row = getDb()
+        .prepare('SELECT work_dir FROM handoffs WHERE id = ?')
+        .get(res.handoffId) as {
+        work_dir: string
+      }
+      expect(row.work_dir).toBe(repo)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 
   it('spawna direto (running, sem pending) e devolve o alias endereçável', () => {
@@ -1251,6 +1354,50 @@ describe('mcp tools — diagrams', () => {
     ).rejects.toThrow()
   })
 
+  it('diagram_create com template monta a cena do modelo pelo ELK e herda o kind', async () => {
+    const out = (await tool('diagram_create').handler({
+      title: 'Pipeline',
+      summary: 'a partir do modelo',
+      template: 'ml-pipeline',
+    })).structuredContent as {
+      diagram: { id: string; kind: string; sourceFormat: string }
+      skeleton: Array<{ id: string; type: string; start?: { id: string }; end?: { id: string } }>
+    }
+    expect(out.diagram.kind).toBe('flow')
+    expect(out.diagram.sourceFormat).toBe('skeleton')
+    const ids = out.skeleton.map((e) => e.id)
+    expect(ids).toEqual(expect.arrayContaining(['etl', 'features', 'train', 'registry', 'serving', 'monitor']))
+    expect(out.skeleton).toContainEqual(
+      expect.objectContaining({ type: 'arrow', start: { id: 'monitor' }, end: { id: 'train' } }),
+    )
+    expect(notify.calls.some(([ch]) => ch === 'diagram:updated')).toBe(true)
+
+    const arch = (await tool('diagram_create').handler({
+      title: 'Arq',
+      summary: 's',
+      template: 'software-architecture',
+      kind: 'other',
+    })).structuredContent as { diagram: { kind: string } }
+    expect(arch.diagram.kind).toBe('other')
+    expect(tool('diagram_create').description).toContain('software-architecture')
+  })
+
+  it('diagram_create recusa template desconhecido e template junto de elements', async () => {
+    await expect(
+      tool('diagram_create').handler({ title: 'X', summary: 's', template: 'nope' }),
+    ).rejects.toThrow(/modelo "nope"/)
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: 'X',
+          summary: 's',
+          template: 'ml-pipeline',
+          elements: [{ id: 'a', type: 'rectangle' }],
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
   it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', async () => {
     await expect(
       Promise.resolve().then(() =>
@@ -1771,6 +1918,18 @@ describe('mcp tools — diagram library', () => {
       status: 'unpublished',
       elementCount: 1,
     })
+  })
+
+  it('diagram_library_list com includeCatalog expõe as categorias de arquitetura de software e ML', () => {
+    const { catalog } = call<{ catalog: Array<{ id: string; category: string }> }>(
+      'diagram_library_list',
+      { includeCatalog: true },
+    )
+    const cat = (id: string) => catalog.find((e) => e.id === id)?.category
+    expect(cat('system-design')).toBe('software')
+    expect(cat('kubernetes-icons')).toBe('software')
+    expect(cat('deep-learning')).toBe('ml-data')
+    expect(cat('data-platform')).toBe('ml-data')
   })
 
   it('diagram_library_remove apaga o item, broadcasta e devolve o restante', () => {

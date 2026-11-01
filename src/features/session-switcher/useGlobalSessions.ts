@@ -5,6 +5,7 @@ import { pendingEndSessionIds, useAppStore, type ActivePane } from '@/store/appS
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
+import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
 // Sessões vivas "visíveis" pro usuário — fonte ÚNICA da regra, lida pela barra,
 // pelos seletores (SessionSwitcher/CommandPalette) e pela Home. Filha de handoff
@@ -191,4 +192,44 @@ export function orderByFeature<T extends { id: string }>(
     for (const s of items) if (keyOf(s) === f && !childOf.has(s.id)) place(s)
   for (const s of items) if (!childOf.has(s.id) || !placed.has(childOf.get(s.id)!)) place(s)
   return { items: out, childOf }
+}
+
+// "Mães + quem precisa de mim": tira da lista as filhas (hierarchyMotherId do
+// grafo, que vale para qualquer handoff histórico) que não precisam de você.
+// `keepIds` nunca some (aba focada, fixadas): esconder o que está na tela confunde.
+export function focusFilteredSessions<T extends { id: string }>(
+  items: T[],
+  nodes: ReadonlyArray<
+    Pick<SessionGraphNode, 'sessionId' | 'hierarchyMotherId' | 'attentionReason'>
+  >,
+  opts: { enabled: boolean; keepIds?: ReadonlySet<string> },
+): { items: T[]; hiddenCount: number } {
+  if (!opts.enabled) return { items, hiddenCount: 0 }
+  const byId = new Map(nodes.map((n) => [n.sessionId, n]))
+  const listed = new Set(items.map((s) => s.id))
+  const out = items.filter((s) => {
+    if (opts.keepIds?.has(s.id)) return true
+    const n = byId.get(s.id)
+    // Mãe fora da lista (encerrada, ou filha sem aba): esconder a filha a deixaria
+    // sem caminho nenhum pela barra — ela ocupa o lugar da mãe.
+    if (!n?.hierarchyMotherId || !listed.has(n.hierarchyMotherId)) return true
+    return n.attentionReason != null
+  })
+  return { items: out, hiddenCount: items.length - out.length }
+}
+
+// Alias da mãe por filha: o chip "↳ mãe" da barra e do seletor.
+export function motherTitleBySession(
+  nodes: ReadonlyArray<
+    Pick<SessionGraphNode, 'sessionId' | 'title' | 'hierarchyMotherId' | 'hierarchyMotherTitle'>
+  >,
+): Map<string, string> {
+  const titleOf = new Map(nodes.map((n) => [n.sessionId, n.title]))
+  const out = new Map<string, string>()
+  for (const n of nodes) {
+    if (!n.hierarchyMotherId) continue
+    const title = titleOf.get(n.hierarchyMotherId) ?? n.hierarchyMotherTitle
+    if (title) out.set(n.sessionId, title)
+  }
+  return out
 }

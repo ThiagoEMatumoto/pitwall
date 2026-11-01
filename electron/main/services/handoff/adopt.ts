@@ -11,31 +11,16 @@
 
 import { getDb } from '../db'
 import { broadcast } from '../notify'
-import { ptyManager } from '../pty-manager'
+import { killAndWaitExit } from './kill-and-wait'
 import { findTranscriptPath } from '../transcript-path'
 import * as store from '../handoff-store'
 import { wakeMotherFor } from './handoff-wake'
 import { prepareHandoff } from './prepare'
 import { resumeHandoffChild } from '../../ipc/sessions'
-import type { AdoptedSession, AdoptSessionInput, HandoffStatus } from '../../../../shared/types/ipc'
+import { childLinkState } from '../../../../shared/handoff-lead'
+import type { AdoptedSession, AdoptSessionInput } from '../../../../shared/types/ipc'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-// Statuses em que uma sessão já pertence à equipe — adotar de novo criaria um 2º
-// handoff apontando pra mesma sessão (dois cards, um só processo).
-const LIVE_HANDOFF_STATUSES: ReadonlySet<HandoffStatus> = new Set<HandoffStatus>([
-  'pending',
-  'approved',
-  'running',
-  'needs_input',
-  'interrupted',
-])
-
-// Teto de espera pelo exit da PTY antiga. O ptyManager só remove a sessão do mapa
-// no evento `exit` (assíncrono), e resumeHandoffChild tem um guard de "filha
-// viva" que devolveria alreadyRunning sem relançar nada — sem esta espera, a
-// adoção viraria um no-op silencioso.
-const PTY_EXIT_TIMEOUT_MS = 5000
 
 interface SessionRow {
   id: string
@@ -62,26 +47,6 @@ export function adoptionKickoff(args: { alias: string; handoffId: string; task: 
     'Seu interlocutor é o remetente da primeira <cross-session-message> que chegar; responda copiando o `from` dela para o `to` do SendMessage.',
     `Ao terminar, chame a MCP tool handoff_report com handoffId="${args.handoffId}" e um summary com evidência positiva.`,
   ].join('\n')
-}
-
-// Mata a PTY e ESPERA o exit. Ver PTY_EXIT_TIMEOUT_MS: sem esperar, o resume
-// enxergaria a sessão como viva e não relançaria.
-function killAndWaitExit(sessionId: string): Promise<void> {
-  if (!ptyManager.isRunning(sessionId)) return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const onExit = (e: { sessionId: string }) => {
-      if (e.sessionId !== sessionId) return
-      clearTimeout(timer)
-      ptyManager.off('exit', onExit)
-      resolve()
-    }
-    const timer = setTimeout(() => {
-      ptyManager.off('exit', onExit)
-      reject(new Error('A sessão não encerrou a tempo para ser relançada como filha.'))
-    }, PTY_EXIT_TIMEOUT_MS)
-    ptyManager.on('exit', onExit)
-    ptyManager.kill(sessionId)
-  })
 }
 
 // Ordem deliberada (o estado intermediário é escolhido, não acidental):
@@ -118,9 +83,16 @@ export async function adoptSession(input: AdoptSessionInput): Promise<AdoptedSes
     )
   }
 
-  const existing = store.getByChildSession(input.sessionId)
-  if (existing && LIVE_HANDOFF_STATUSES.has(existing.status)) {
+  // Mesma régua do botão na UI (childLinkState): adotar de novo criaria um 2º
+  // handoff apontando pra mesma sessão (dois cards, um só processo).
+  const linkState = childLinkState(store.getByChildConversation(input.sessionId))
+  if (linkState === 'active') {
     throw new Error('Esta sessão já é filha de um handoff ativo.')
+  }
+  if (linkState === 'relinkable') {
+    throw new Error(
+      'Esta sessão já tem um vínculo interrompido ou dispensado — use "Re-vincular à mãe".',
+    )
   }
 
   // Gate de adotabilidade: sem cc_session_id + transcript no disco, o `--resume`
@@ -230,7 +202,9 @@ function prepareHandoffForAdoption(input: AdoptSessionInput, row: SessionRow) {
     motherSessionId: input.motherSessionId,
     task: input.task,
     featureId: input.featureId ?? null,
-    mode: input.mode,
+    // Sessão já aberta relançada: sem escolha explícita, não ganha permissão nova
+    // em silêncio (o default 'auto-edits' do prepare é para filha NOVA).
+    mode: input.mode ?? 'interactive',
     context: {
       adopted: true,
       adoptedAt: Date.now(),

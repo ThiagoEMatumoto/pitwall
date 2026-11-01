@@ -146,7 +146,13 @@ const tag = (s: string, name: string): string | null =>
 // vira <command-name>/cmd</command-name>…<command-args>args</command-args> (com
 // ou sem a barra, skill com <command-message> antes), e '!cmd' vira
 // <bash-input>cmd</bash-input>. Volta ao texto digitado para comparar.
-function typedForm(content: string): string {
+// Colagem: o claude 2.1.316 grava o texto colado (o wake da mãe, por exemplo) como
+// <pasted_content id="N">\n…\n</pasted_content id="N">. Volta ao texto colado.
+const PASTE_OPEN_RE = /<pasted_content\b[^>]*>\n?/g
+const PASTE_CLOSE_RE = /\n?<\/pasted_content\b[^>]*>/g
+
+function typedForm(raw: string): string {
+  const content = raw.replace(PASTE_OPEN_RE, '').replace(PASTE_CLOSE_RE, '')
   const name = tag(content, 'command-name')
   if (name != null) {
     const cmd = name.trim().startsWith('/') ? name.trim() : `/${name.trim()}`

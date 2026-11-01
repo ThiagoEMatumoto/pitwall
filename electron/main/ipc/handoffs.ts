@@ -13,8 +13,11 @@ import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { prepareHandoff } from '../services/handoff/prepare'
 import { adoptSession } from '../services/handoff/adopt'
+import { learnChildRule, type LearnChildRuleResult } from '../services/handoff/child-learned-rules'
+import { childLink, detachChild, relinkChild, setChildMother } from '../services/handoff/relink'
 import type {
   AdoptedSession,
+  ChildLinkInfo,
   HandoffSpawnContext,
   LinkKind,
   Handoff,
@@ -131,6 +134,21 @@ const adoptSessionSchema = z.object({
   task: z.string().min(1),
   featureId: z.string().min(1).optional(),
   mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
+})
+
+const learnChildRuleSchema = z.object({
+  tool: z.string().max(200).optional(),
+  command: z.string().max(4096).optional(),
+})
+
+const relinkChildSchema = z.object({
+  sessionId: z.string().min(1),
+  motherSessionId: z.string().min(1).optional(),
+})
+
+const setMotherSchema = z.object({
+  id: z.string().min(1),
+  motherSessionId: z.string().min(1),
 })
 
 const setOutcomeSchema = z.object({
@@ -299,6 +317,14 @@ export function registerHandoffsIpc(): void {
     return handoff
   })
 
+  // "Sempre permitir para filhas" (CrewPeek/AttentionPopover). Só grava a regra;
+  // a resposta ao menu atual segue pelo sessions:attention-respond do renderer.
+  // Vale a partir do PRÓXIMO spawn/relance de filha: o --settings é do processo.
+  ipcMain.handle('handoffs:learn-child-rule', (_e, raw: unknown): LearnChildRuleResult => {
+    const { tool, command } = learnChildRuleSchema.parse(raw)
+    return learnChildRule(tool, command)
+  })
+
   // Criação MANUAL de filha (diálogo de nova sessão), sem sessão-mãe pedindo por
   // MCP. Faz o que a tool session_handoff faz do lado dos dados — compõe o mesmo
   // briefing, resolve o mesmo tipo de apelido e persiste o handoff —, mas não
@@ -316,6 +342,7 @@ export function registerHandoffsIpc(): void {
       featureId: input.featureId ?? null,
       mode: input.mode,
       forceReason: input.forceReason,
+      autoWorktree: true,
     })
   })
 
@@ -324,6 +351,21 @@ export function registerHandoffsIpc(): void {
   // (é a única forma de fixar o apelido e o accept-inbound, que são flags de exec).
   ipcMain.handle('handoffs:adopt-session', (_e, raw: unknown): Promise<AdoptedSession> => {
     return adoptSession(adoptSessionSchema.parse(raw))
+  })
+
+  // Vínculo mãe/filha de UMA sessão; só relança a filha retomada como comum (ver relink.ts).
+  ipcMain.handle('handoffs:child-link', (_e, sessionId: unknown): ChildLinkInfo => {
+    return childLink(z.string().min(1).parse(sessionId))
+  })
+  ipcMain.handle('handoffs:relink-child', (_e, raw: unknown): Promise<Handoff> => {
+    return relinkChild(relinkChildSchema.parse(raw))
+  })
+  ipcMain.handle('handoffs:set-mother', (_e, raw: unknown): Handoff => {
+    const { id, motherSessionId } = setMotherSchema.parse(raw)
+    return setChildMother({ handoffId: id, motherSessionId })
+  })
+  ipcMain.handle('handoffs:detach-child', (_e, sessionId: unknown): Handoff => {
+    return detachChild({ sessionId: z.string().min(1).parse(sessionId) })
   })
 
   // Resolve o repo-alvo + metadados do projeto pra UI conseguir chamar openSession.

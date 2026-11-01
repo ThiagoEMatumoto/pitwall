@@ -27,6 +27,8 @@
 // FAIL-CLOSED em tudo: qualquer dúvida no parse → null (a UI degrada pro banner
 // "responda no terminal"). Nunca renderizar clique sobre um parse incerto.
 
+import { isInputRule } from './input-rule'
+
 export interface TuiMenuOption {
   // Índice 0-based da opção; o dígito exibido na TUI (e enviado no clique) é
   // index + 1 — o handler de dígito da CLI seleciona E submete (single-select
@@ -122,7 +124,10 @@ const NOTES_HINT_RE = /to add notes/i
 // Separador horizontal sem indentação, tolerado DEPOIS da última opção —
 // apareceu na validação live (claude 2.1.215) antes de "Chat about this"
 // quando o menu tem preview/notes; CONTINUATION_RE não cobre (0 indentação).
-const SEPARATOR_RE = /^─{3,}$/
+// Em sessão nomeada (claude 2.1.295+, toda filha de handoff) a régua da caixa de
+// input logo abaixo do menu embute o nome: "──────── nome ─". Mesmo shape do
+// isInputRule do PR #310; o rótulo não pode ter caractere de caixa.
+const SEPARATOR_RE = /^─{3,}(?:\s+[^\s─│┼┬┴├┤╭╮╰╯](?:[^─│┼┬┴├┤╭╮╰╯]*[^\s─│┼┬┴├┤╭╮╰╯])?\s+─+)?$/
 // "Chat about this" às vezes perde o número quando o menu tem preview/notes
 // (artefato de layout observado ao vivo — o box de preview desloca a
 // numeração) — tolerado sem dígito na zona pós-última-opção; não é clicável
@@ -149,8 +154,7 @@ const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep
 // ╌ é a moldura tracejada do comando no prompt de permissão do 2.1.286.
 const BOX_EDGE_RE = /^[\s│╭╮╰╯─╌]+|[\s│╭╮╰╯─╌]+$/g
 // No 2.1.286 o prompt não tem box ╭: começa numa régua cheia de ─ (captura real
-// em shared/tui/__fixtures__) — acima dela é conversa.
-const PROMPT_TOP_RULE_RE = /^─{10,}$/
+// em shared/tui/__fixtures__) — acima dela é conversa. Pode trazer o nome da sessão.
 
 // Bloco de contexto do prompt de permissão/trust: linhas ACIMA da pergunta (o
 // box com o diff/comando/config que o usuário está aprovando). Sobe no máximo
@@ -162,7 +166,7 @@ function extractContext(lines: string[], questionLine: number, max = 15): string
     const cleaned = raw.replace(BOX_EDGE_RE, '')
     if (cleaned !== '') parts.unshift(cleaned)
     if (raw.includes('╭')) break // topo do box — acima é conversa antiga
-    if (PROMPT_TOP_RULE_RE.test(raw.trim())) break
+    if (isInputRule(raw.trim())) break
   }
   return parts.length > 0 ? parts.join('\n') : undefined
 }
@@ -188,13 +192,14 @@ function extractRequest(
     if (DASHED_RULE_RE.test(t)) rules.unshift(i)
     const header = TOOL_HEADER_RE.exec(t.replace(BOX_EDGE_RE, ''))
     if (header && !tool) tool = header[1]
-    if (lines[i].includes('╭') || PROMPT_TOP_RULE_RE.test(t)) break
+    if (lines[i].includes('╭') || isInputRule(t)) break
   }
   let command: string | undefined
   if (rules.length >= 2) {
     const body = lines
       .slice(rules[rules.length - 2] + 1, rules[rules.length - 1])
-      .map((l) => l.trim())
+      // 2.1.316: cada linha do comando vem com a calha "│ " dentro das réguas ╌.
+      .map((l) => l.trim().replace(/^│\s?/, ''))
       .filter((l) => l !== '')
     if (body.length > 0) command = body.join(' ')
   }
@@ -314,6 +319,60 @@ export function parseTuiMenu(text: string): TuiMenu | null {
   let end = lines.length
   while (end > 0 && lines[end - 1].trim() === '') end--
   if (end === 0) return null
+  return parseNumberedMenu(lines, end) ?? parseUnnumberedTrust(lines, end)
+}
+
+// Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
+// unnumbered.ansi): as opções perderam o número ("❯ No, exit" / "Yes, I trust
+// this folder") e o rodapé é "Enter to confirm · Esc to cancel". Suposição: o
+// 2.1.316 desenha a mesma tela (não há captura dele no repo). Sem isto a filha
+// num diretório nunca aberto ficava parada aqui fora da fila de atenção.
+// `options` vazio DE PROPÓSITO: nenhum dígito foi validado nesta tela e o destaque
+// inicial é "No, exit" — Enter cego encerraria a sessão. A fila mostra o trust; a
+// resposta é no terminal (respond recusa: não há opção para escolher).
+const UNNUMBERED_TRUST_OPTION_RE = /^(?:❯\s*)?(?:Yes, I trust this folder|No, exit)$/
+const TRUST_SAFETY_RE = /Quick safety check|one you trust/i
+const ACCESSING_RE = /^Accessing workspace:?$/i
+
+function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
+  let i = end - 1
+  if (!FOOTER_RE.test(lines[i])) return null
+  i--
+  while (i >= 0 && lines[i].trim() === '') i--
+  const optionLines: string[] = []
+  while (i >= 0 && UNNUMBERED_TRUST_OPTION_RE.test(lines[i].trim())) {
+    optionLines.unshift(lines[i].trim())
+    i--
+  }
+  if (!optionLines.some((l) => /I trust this folder/.test(l))) return null
+
+  const above = lines.slice(Math.max(0, i - 20), i + 1).map((l) => l.trim())
+  const qStart = above.findIndex((l) => TRUST_SAFETY_RE.test(l))
+  let question: string | undefined
+  if (qStart >= 0) {
+    const qEnd = above.indexOf('', qStart)
+    question = above.slice(qStart, qEnd < 0 ? undefined : qEnd).join(' ')
+  }
+  const aStart = above.findIndex((l) => ACCESSING_RE.test(l))
+  const workspace =
+    aStart >= 0
+      ? above
+          .slice(aStart + 1, qStart > aStart ? qStart : undefined)
+          .filter((l) => l !== '')
+          .join('')
+      : ''
+  return {
+    kind: 'trust',
+    ...(question ? { question } : {}),
+    ...(workspace ? { context: `Accessing workspace: ${workspace}` } : {}),
+    options: [],
+    multiSelect: false,
+    submitOnDigit: false,
+  }
+}
+
+function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
+  const text = lines.join('\n')
 
   // Todas as linhas numeradas do tail (pointer ❯ capturado pra achar a opção
   // destacada, dona do preview quando presente).

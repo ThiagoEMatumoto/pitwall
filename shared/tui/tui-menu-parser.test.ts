@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenu, questionPositionLabel } from './tui-menu-parser'
 
@@ -301,6 +303,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     expect(menu).not.toBeNull()
     expect(menu!.kind).toBe('question')
     expect(menu!.context).toBeUndefined()
+  })
+})
+
+// Tela real (buffer do xterm) de uma filha nomeada no claude 2.1.316: o nome da
+// sessão vem na régua ABAIXO do menu ("──── nome ─") e o comando no box ╌ traz a
+// calha "│ ". Toda filha de handoff tem apelido, então é o shape de produção.
+const NAMED_PERMISSION_2_1_316 = readFileSync(
+  join(__dirname, '__fixtures__', 'claude-2.1.316-named-permission-bash.txt'),
+  'utf8',
+)
+
+describe('parseTuiMenu — sessão nomeada (claude 2.1.316)', () => {
+  it('reconhece o prompt de permissão com o nome da sessão na régua de baixo', () => {
+    const menu = parseTuiMenu(NAMED_PERMISSION_2_1_316)
+    expect(menu).not.toBeNull()
+    expect(menu!.kind).toBe('permission')
+    expect(menu!.options.map((o) => o.label)).toEqual([
+      'Yes',
+      'Yes, and switch to auto mode · auto mode handles these prompts for you',
+      'No',
+    ])
+  })
+
+  it('tira a calha │ do comando do box', () => {
+    const menu = parseTuiMenu(NAMED_PERMISSION_2_1_316)
+    expect(menu!.request).toEqual({
+      tool: 'Bash',
+      command: `npm test 2>&1 | sed 's/\\x1b\\[[0-9;]*m//g' | tail -n 12; echo "EXIT=\${PIPESTATUS[0]}"`,
+    })
+  })
+
+  it('régua seguida de texto solto depois das opções continua fail-closed', () => {
+    const lines = NAMED_PERMISSION_2_1_316.trimEnd().split('\n')
+    lines[lines.length - 1] = '──────────── nome ─ e mais conversa'
+    expect(parseTuiMenu(lines.join('\n'))).toBeNull()
   })
 })
 
@@ -667,5 +704,49 @@ describe('questionPositionLabel — Fase 2 (multi-pergunta numa só chamada)', (
       { label: 'Submit', done: true },
     ]
     expect(questionPositionLabel(tabs, false)).toBe('Pergunta 2 de 2')
+  })
+})
+
+// Trust do 2.1.286+ sem numeração (texto do buffer da captura real
+// __fixtures__/claude-2.1.286-trust-unnumbered.ansi; suposição: o 2.1.316 é igual).
+const UNNUMBERED_TRUST = `────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/u/repo/.worktrees/child-foo
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+
+
+`
+
+describe('parseTuiMenu — trust sem numeração', () => {
+  it('classifica como trust, sem opções clicáveis', () => {
+    const menu = parseTuiMenu(UNNUMBERED_TRUST)
+    expect(menu).not.toBeNull()
+    expect(menu!.kind).toBe('trust')
+    expect(menu!.options).toEqual([])
+    expect(menu!.context).toBe('Accessing workspace: /home/u/repo/.worktrees/child-foo')
+    expect(menu!.question).toMatch(/one you trust\? .* review what's in this folder first\.$/)
+  })
+
+  it('passa no gate pré-transcript (starting) como permission/trust', () => {
+    expect(gateMenuByStatus(parseTuiMenu(UNNUMBERED_TRUST), 'starting')?.kind).toBe('trust')
+  })
+
+  it('sem o rodapé no fim (tela já mudou) ou sem a opção de trust: null', () => {
+    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Enter to confirm · Esc to cancel', ''))).toBeNull()
+    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Yes, I trust this folder', 'Yes'))).toBeNull()
+    expect(parseTuiMenu(`${UNNUMBERED_TRUST}\nconversa depois\n`)).toBeNull()
   })
 })

@@ -6,12 +6,16 @@ import { Menu } from '@/components/ui/Menu'
 import { cx } from '@/features/brand'
 import { useDesignStore } from '@/store/designStore'
 import type { DesignFolder } from '@shared/types/design'
+import type { DiagramFolder } from '@shared/types/ipc'
 import { InlineInput } from '../InlineInput'
 import { FOLDER_COLORS, folderColorCss, folderDotStyle } from './folder-colors'
 import { dropId } from './hub-filter'
 import { NavRow } from './NavRow'
 
 type Mode = 'idle' | 'renaming' | 'color' | 'confirm-delete'
+
+// Design and Diagrams folders share one shape (folder-store-core).
+type HubFolder = DesignFolder | DiagramFolder
 
 export const SIDEBAR_INPUT_CLASS =
   'my-0.5 h-7 w-full rounded-md border border-[var(--color-accent)] bg-[var(--color-bg)] px-2 text-[12px] text-[var(--color-text)] outline-none'
@@ -32,7 +36,7 @@ function ColorPicker({
   onPick,
   onClose,
 }: {
-  folder: DesignFolder
+  folder: HubFolder
   onPick: (color: string | null) => void
   onClose: () => void
 }) {
@@ -70,10 +74,12 @@ function ColorPicker({
 
 function DeleteConfirm({
   folder,
+  itemsLabel,
   onConfirm,
   onCancel,
 }: {
-  folder: DesignFolder
+  folder: HubFolder
+  itemsLabel: string
   onConfirm: () => void
   onCancel: () => void
 }) {
@@ -86,7 +92,7 @@ function DeleteConfirm({
     >
       <p className="text-[var(--color-text)]">Excluir “{folder.name}”?</p>
       <p className="mt-0.5">
-        {folder.docCount > 0 ? 'Os designs dela vão para Sem pasta.' : 'A pasta está vazia.'}
+        {folder.docCount > 0 ? `Os ${itemsLabel} dela vão para Sem pasta.` : 'A pasta está vazia.'}
       </p>
       <div className="mt-2 flex gap-1.5">
         <Button variant="danger" className="px-2.5 py-0.5 text-[11px]" onClick={onConfirm}>
@@ -106,6 +112,37 @@ export function FolderItem({ folder }: { folder: DesignFolder }) {
   const renameFolder = useDesignStore((s) => s.renameFolder)
   const recolorFolder = useDesignStore((s) => s.recolorFolder)
   const deleteFolder = useDesignStore((s) => s.deleteFolder)
+  return (
+    <FolderRow
+      folder={folder}
+      itemsLabel="designs"
+      active={hubFolder === folder.id}
+      onSelect={() => setHubFolder(folder.id)}
+      onRename={(name) => void renameFolder(folder.id, name)}
+      onRecolor={(color) => void recolorFolder(folder.id, color)}
+      onDelete={() => void deleteFolder(folder.id)}
+    />
+  )
+}
+
+// Store-agnostic folder entry: the Diagrams hub binds it to its own store.
+export function FolderRow({
+  folder,
+  itemsLabel,
+  active,
+  onSelect,
+  onRename,
+  onRecolor,
+  onDelete,
+}: {
+  folder: HubFolder
+  itemsLabel: string
+  active: boolean
+  onSelect: () => void
+  onRename: (name: string) => void
+  onRecolor: (color: string | null) => void
+  onDelete: () => void
+}) {
   const [mode, setMode] = useState<Mode>('idle')
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -118,7 +155,7 @@ export function FolderItem({ folder }: { folder: DesignFolder }) {
           className={SIDEBAR_INPUT_CLASS}
           onSubmit={(name) => {
             setMode('idle')
-            if (name !== folder.name) void renameFolder(folder.id, name)
+            if (name !== folder.name) onRename(name)
           }}
           onCancel={() => setMode('idle')}
         />
@@ -130,8 +167,8 @@ export function FolderItem({ folder }: { folder: DesignFolder }) {
     <li>
       <NavRow
         dropId={dropId(folder.id)}
-        active={hubFolder === folder.id}
-        onSelect={() => setHubFolder(folder.id)}
+        active={active}
+        onSelect={onSelect}
         leading={<FolderDot color={folder.color} />}
         label={folder.name}
         count={folder.docCount}
@@ -164,7 +201,7 @@ export function FolderItem({ folder }: { folder: DesignFolder }) {
           folder={folder}
           onPick={(color) => {
             setMode('idle')
-            void recolorFolder(folder.id, color)
+            onRecolor(color)
           }}
           onClose={() => setMode('idle')}
         />
@@ -172,9 +209,10 @@ export function FolderItem({ folder }: { folder: DesignFolder }) {
       {mode === 'confirm-delete' && (
         <DeleteConfirm
           folder={folder}
+          itemsLabel={itemsLabel}
           onConfirm={() => {
             setMode('idle')
-            void deleteFolder(folder.id)
+            onDelete()
           }}
           onCancel={() => setMode('idle')}
         />

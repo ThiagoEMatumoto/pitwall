@@ -410,6 +410,127 @@ describe('handoff-store', () => {
       expect(store.getByChildSession('s-child-xyz')?.id).toBe(h.id)
       expect(store.getByChildSession('inexistente')).toBeNull()
     })
+
+    // Sessão readotada: dois handoffs apontam pra ela. Sem ORDER BY o SQLite
+    // devolvia o primeiro da tabela (o antigo, já encerrado).
+    it('readotada: devolve o handoff mais recente', () => {
+      const old = newHandoff('r1')
+      store.markRunning(old.id, 's-re')
+      store.report(old.id, 'feito')
+      const recent = newHandoff('r2')
+      testDb
+        .prepare('UPDATE handoffs SET created_at = created_at + 1000 WHERE id = ?')
+        .run(recent.id)
+      store.markRunning(recent.id, 's-re')
+      expect(store.getByChildSession('s-re')?.id).toBe(recent.id)
+    })
+  })
+
+  describe('getByChildConversation (casa a linha retomada pelo cc)', () => {
+    it('acha o handoff de outra linha da MESMA conversa', () => {
+      testDb
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at)
+           VALUES ('s-old','r1','cc-conv','ended',1), ('s-new','r1','cc-conv','running',2),
+                  ('s-other','r1','cc-x','running',3)`,
+        )
+        .run()
+      const h = newHandoff()
+      store.markRunning(h.id, 's-old')
+      store.dismiss(h.id)
+      expect(store.getByChildConversation('s-new')?.id).toBe(h.id)
+      expect(store.getByChildConversation('s-old')?.id).toBe(h.id)
+      expect(store.getByChildConversation('s-other')).toBeNull()
+    })
+  })
+
+  describe('relink (re-vincular o MESMO handoff)', () => {
+    function interruptedChild(): string {
+      const h = newHandoff()
+      store.markRunning(h.id, 's-kid')
+      store.failIfRunning(h.id, 'caiu')
+      store.dismiss(h.id)
+      return h.id
+    }
+
+    it('filha viva: volta a running, sem dispensa, sem handoff novo', () => {
+      const id = interruptedChild()
+      const before = store.list().length
+      const h = store.relink(id, { childSessionId: 's-kid', childAlive: true })
+      expect(h.status).toBe('running')
+      expect(h.dismissedAt).toBeNull()
+      expect(h.childSessionId).toBe('s-kid')
+      expect(store.list()).toHaveLength(before)
+      expect(store.listEvents(id).at(-1)?.event).toBe('relink')
+    })
+
+    it('filha morta: fica interrupted (retomável), sem mentir running', () => {
+      const h = newHandoff()
+      store.markRunning(h.id, 's-kid')
+      store.dismiss(h.id)
+      const out = store.relink(h.id, { childSessionId: 's-kid', childAlive: false })
+      expect(out.status).toBe('interrupted')
+      expect(out.dismissedAt).toBeNull()
+    })
+
+    it('needs_input vivo preserva a pergunta aberta', () => {
+      const h = newHandoff()
+      store.markRunning(h.id, 's-kid')
+      store.ask(h.id, 'qual branch?')
+      store.dismiss(h.id)
+      const out = store.relink(h.id, { childSessionId: 's-kid', childAlive: true })
+      expect(out.status).toBe('needs_input')
+      expect(out.pendingQuestion).toBe('qual branch?')
+    })
+
+    it('troca a mãe quando pedido, com evento mother_changed (não o do bastão)', () => {
+      const id = interruptedChild()
+      const out = store.relink(id, {
+        childSessionId: 's-kid',
+        childAlive: true,
+        motherSessionId: 'mae-nova',
+      })
+      expect(out.motherSessionId).toBe('mae-nova')
+      const events = store.listEvents(id).map((e) => e.event)
+      expect(events).toContain('mother_changed')
+      expect(events).not.toContain('mother_transferred')
+    })
+
+    it('recusa a sessão como mãe de si mesma', () => {
+      const id = interruptedChild()
+      expect(() =>
+        store.relink(id, { childSessionId: 's-kid', childAlive: true, motherSessionId: 's-kid' }),
+      ).toThrow(/si mesma/)
+    })
+  })
+
+  describe('setMother (trocar a mãe de UMA filha)', () => {
+    it('move só este handoff e loga mother_changed', () => {
+      const a = store.create({
+        motherSessionId: 'mae-1',
+        targetRepoId: 'r1',
+        task: 'a',
+        composedPrompt: 'a',
+      })
+      const b = store.create({
+        motherSessionId: 'mae-1',
+        targetRepoId: 'r2',
+        task: 'b',
+        composedPrompt: 'b',
+      })
+      store.markRunning(a.id, 'kid-a')
+      store.markRunning(b.id, 'kid-b')
+      expect(store.setMother(a.id, 'mae-2').motherSessionId).toBe('mae-2')
+      expect(store.get(b.id)?.motherSessionId).toBe('mae-1')
+      const ev = store.listEvents(a.id).find((e) => e.event === 'mother_changed')
+      expect(JSON.parse(ev!.detail!)).toEqual({ from: 'mae-1', to: 'mae-2' })
+    })
+
+    it('recusa a própria filha como mãe', () => {
+      const a = newHandoff()
+      store.markRunning(a.id, 'kid-a')
+      expect(() => store.setMother(a.id, 'kid-a')).toThrow(/si mesma/)
+    })
   })
 
   // Helper: cria uma session-filha viva/morta na tabela sessions e atrela ao

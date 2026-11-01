@@ -3,6 +3,10 @@
 // é decidida dentro do store.create (migration 057): aqui se trava que esse
 // caminho também é recusado — antes dele só o MCP tinha dedup.
 import Database from 'better-sqlite3'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations } from '../migrations/index'
 
@@ -87,5 +91,59 @@ describe('prepareHandoff — posse do repo-alvo', () => {
       superseded: first.handoff.id,
       reason: 'refazer do zero',
     })
+  })
+})
+
+describe('prepareHandoff — default de modo', () => {
+  it('sem mode explícito a filha nasce auto-edits', () => {
+    const { handoff } = prepareHandoff({ targetRepoId: 'r1', motherSessionId: 'm-a', task: 'A' })
+    expect(handoff.mode).toBe('auto-edits')
+  })
+})
+
+describe('prepareHandoff — worktree órfão', () => {
+  let base: string
+  let repo: string
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'prepare-wt-')))
+    repo = join(base, 'repo')
+    execFileSync('git', ['init', '-q', '-b', 'main', repo])
+    git('config', 'user.email', 't@t')
+    git('config', 'user.name', 't')
+    writeFileSync(join(repo, '.gitignore'), '.worktrees/\n')
+    git('add', '.gitignore')
+    git('commit', '-q', '-m', 'init')
+    testDb.prepare(`UPDATE repos SET path = ? WHERE id = 'r1'`).run(repo)
+  })
+
+  afterEach(() => rmSync(base, { recursive: true, force: true }))
+
+  it('create falha depois de criar o worktree → worktree e branch child/* removidos', () => {
+    expect(() =>
+      prepareHandoff({
+        targetRepoId: 'r1',
+        motherSessionId: 'm-a',
+        task: 'A',
+        autoWorktree: true,
+        forceReason: '   ',
+      }),
+    ).toThrow(/forceReason/)
+    expect(git('worktree', 'list', '--porcelain')).not.toContain('.worktrees')
+    expect(git('branch', '--list', 'child/*')).toBe('')
+  })
+
+  it('create OK → worktree da filha permanece', () => {
+    const { handoff } = prepareHandoff({
+      targetRepoId: 'r1',
+      motherSessionId: 'm-a',
+      task: 'A',
+      autoWorktree: true,
+    })
+    expect(git('worktree', 'list', '--porcelain')).toContain('.worktrees/child-')
+    expect(git('branch', '--list', 'child/*')).not.toBe('')
+    expect(handoff.status).toBe('approved')
   })
 })
