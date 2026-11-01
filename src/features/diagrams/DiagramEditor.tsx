@@ -24,6 +24,7 @@ import {
   toExcalidrawLibraryItems,
 } from "./library-convert";
 import { DiagramToolbar } from "./DiagramToolbar";
+import { frameViewport } from "./frame-viewport";
 
 const SAVE_DEBOUNCE_MS = 800;
 
@@ -34,7 +35,8 @@ const SAVE_DEBOUNCE_MS = 800;
 // onChange sem serializar a cena. NÃO é estável entre canvas e banco
 // (restoreElements reseta version) — nunca usar pra comparar os dois lados.
 // Enquadra o conteúdo com zoom no máximo em 100% (fitToViewport nativo
-// aplica num frame posterior e estoura 100% em cenas pequenas).
+// aplica num frame posterior e estoura 100% em cenas pequenas), abaixo da
+// toolbar do Excalidraw.
 function frameContent(
   api: ExcalidrawImperativeAPI,
   elements: readonly unknown[],
@@ -59,13 +61,14 @@ function frameContent(
     maxY = Math.max(maxY, e.y + e.height);
   }
   if (!Number.isFinite(minX)) return;
-  const bw = Math.max(1, maxX - minX);
-  const bh = Math.max(1, maxY - minY);
-  const zoom = Math.min(1, 0.85 * Math.min(st.width / bw, st.height / bh));
+  const { scrollX, scrollY, zoom } = frameViewport(
+    { minX, minY, maxX, maxY },
+    st,
+  );
   api.updateScene({
     appState: {
-      scrollX: st.width / (2 * zoom) - (minX + bw / 2),
-      scrollY: st.height / (2 * zoom) - (minY + bh / 2),
+      scrollX,
+      scrollY,
       zoom: { value: zoom as unknown as never },
     },
   });
