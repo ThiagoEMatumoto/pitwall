@@ -46,6 +46,27 @@ export function setMotherPin(
   return res.changes > 0
 }
 
+// A pane marcada como mãe que nunca teve conversa (nenhum transcript) volta do
+// reinício como conversa nova: o pin passa para ela, mantendo o pinned_at (a ordem
+// da Room). Conversa que existe não cede o pin: ela ainda é retomável.
+export function inheritMotherPin(
+  fromKey: string,
+  toSessionId: string,
+  deps: { hasTranscript: (ccSessionId: string) => boolean },
+  db: Database.Database = getDb(),
+): boolean {
+  const toKey = motherPinKeyOf(toSessionId, db)
+  if (!toKey || toKey === fromKey || deps.hasTranscript(fromKey)) return false
+  const res = db
+    .prepare(
+      `UPDATE mother_pins SET cc_session_id = ?
+        WHERE cc_session_id = ?
+          AND NOT EXISTS (SELECT 1 FROM mother_pins WHERE cc_session_id = ?)`,
+    )
+    .run(toKey, fromKey, toKey)
+  return res.changes > 0
+}
+
 // Import one-shot dos pins antigos (Room em localStorage, Dock): só acrescenta,
 // na ordem recebida, sem desmarcar nada.
 export function importMotherPins(

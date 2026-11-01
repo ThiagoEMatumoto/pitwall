@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
@@ -604,13 +604,18 @@ async function restoreFromSnapshots(
             current.paneId,
           )
         } else {
-          await open(
+          const newId = await open(
             current.repo,
             current.projectName,
             current.projectIcon,
             current.projectColor ?? null,
             current.paneId,
           )
+          // Marcada como mãe antes da 1ª mensagem: a conversa nova herda o pin.
+          if (current.ccSessionId && newId)
+            void motherPinsApi
+              .inherit({ fromKey: current.ccSessionId, sessionId: newId })
+              .catch((err: unknown) => console.warn('[mother-pins] inherit failed', err))
         }
         // Fechada com o spawn em voo: o processo fica em background, como no closePane.
         if (current.paneId && closedDuringRestore(current)) {

@@ -444,6 +444,8 @@ const api: Api = {
     importLegacy: (input: ImportMotherPinsInput) => invoke('mother-pins:import', input),
     promote: (input: PromoteMotherInput) => invoke('mother-pins:promote', input),
     restartNow: (sessionId: string) => invoke('mother-pins:restart-now', sessionId),
+    inherit: (input: { fromKey: string; sessionId: string }) =>
+      invoke('mother-pins:inherit', input),
     onUpdated: (handler) => subscribe<MotherPin[]>('mother-pins:updated', handler),
     onRestart: (handler) => subscribe<MotherRestartEvent>('mother-pins:restart', handler),
   },

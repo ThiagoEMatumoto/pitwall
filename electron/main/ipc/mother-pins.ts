@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
 import { z } from 'zod'
+import { findTranscriptPath } from '../services/transcript-path'
 import {
   importMotherPins,
+  inheritMotherPin,
   listMotherPins,
   motherPinKeyOf,
   setMotherPin,
@@ -14,6 +16,7 @@ const importSchema = z.object({
   keys: z.array(z.string().min(1)).max(500),
   sessionIds: z.array(z.string().min(1)).max(500),
 })
+const inheritSchema = z.object({ fromKey: z.string().min(1), sessionId: z.string().min(1) })
 const promoteSchema = z.object({
   sessionId: z.string().min(1),
   restart: z.enum(['now', 'when-idle']),
@@ -39,6 +42,12 @@ export function registerMotherPinsIpc(): void {
       return k ? [k] : []
     })
     if (importMotherPins([...keys, ...resolved]) > 0) broadcastMotherPins()
+    return listMotherPins()
+  })
+  ipcMain.handle('mother-pins:inherit', (_e, raw: unknown): MotherPin[] => {
+    const { fromKey, sessionId } = inheritSchema.parse(raw)
+    const hasTranscript = (cc: string) => findTranscriptPath(cc) !== null
+    if (inheritMotherPin(fromKey, sessionId, { hasTranscript })) broadcastMotherPins()
     return listMotherPins()
   })
   ipcMain.handle('mother-pins:promote', (_e, raw: unknown): PromoteMotherResult =>

@@ -2690,6 +2690,8 @@ export interface Api {
     importLegacy(input: ImportMotherPinsInput): Promise<MotherPin[]>
     promote(input: PromoteMotherInput): Promise<PromoteMotherResult>
     restartNow(sessionId: string): Promise<void>
+    // Pane sem conversa reaberta como conversa nova: o pin do cc que não nasceu passa a ela.
+    inherit(input: { fromKey: string; sessionId: string }): Promise<MotherPin[]>
     onUpdated(handler: (pins: MotherPin[]) => void): () => void
     onRestart(handler: (event: MotherRestartEvent) => void): () => void
   }

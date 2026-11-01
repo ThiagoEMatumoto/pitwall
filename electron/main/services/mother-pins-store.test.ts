@@ -4,6 +4,7 @@ import { migrations } from './migrations'
 import { applyAllMigrations, seedRepos, seedSession } from './attention/attention-test-harness'
 import {
   importMotherPins,
+  inheritMotherPin,
   listMotherPins,
   motherPinKeyOf,
   readMotherPinKeys,
@@ -60,5 +61,23 @@ describe('067_mother_pins + mother-pins-store', () => {
     setMotherPin('b', true, db, 1)
     expect(importMotherPins(['x', 'b', 'y', ' '], db, 100)).toBe(2)
     expect(listMotherPins(db).map((p) => p.key)).toEqual(['b', 'x', 'y'])
+  })
+  // Sessão marcada que ainda não teve conversa: no reinício não há o que retomar e
+  // a pane sobe uma conversa NOVA (cc novo). Sem herdar, o pin ficava no cc morto.
+  it('pane sem conversa reaberta no reinício herda o pin da conversa que não nasceu', () => {
+    setMotherPin('cc-velho', true, db, 5)
+    seedSession(db, 'nova')
+    const cc = motherPinKeyOf('nova', db)!
+    expect(inheritMotherPin('cc-velho', 'nova', { hasTranscript: () => false }, db)).toBe(true)
+    expect(listMotherPins(db)).toEqual([{ key: cc, pinnedAt: 5 }])
+  })
+
+  it('não herda de conversa que existe (transcript no disco) nem de cc sem pin', () => {
+    setMotherPin('cc-real', true, db)
+    seedSession(db, 'nova')
+    expect(inheritMotherPin('cc-real', 'nova', { hasTranscript: () => true }, db)).toBe(false)
+    expect(readMotherPinKeys(db).has('cc-real')).toBe(true)
+    expect(inheritMotherPin('cc-sem-pin', 'nova', { hasTranscript: () => false }, db)).toBe(false)
+    expect(readMotherPinKeys(db).has(motherPinKeyOf('nova', db)!)).toBe(false)
   })
 })
