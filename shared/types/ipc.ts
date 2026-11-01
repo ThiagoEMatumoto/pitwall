@@ -2112,8 +2112,34 @@ export interface DiagramMeta {
   version: number
   sourceFormat: DiagramSourceFormat | null
   thumbnail: string | null
+  // Pasta do hub (um nível); null = sem pasta.
+  folderId: string | null
   createdAt: number
   updatedAt: number
+}
+
+// Pasta do hub de diagramas. Mesmo shape de DesignFolder de propósito: o hub
+// reaproveita os componentes de pasta do Design. docCount = diagramas ativos.
+export interface DiagramFolder {
+  id: string
+  name: string
+  color: string | null
+  sortOrder: number
+  docCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateDiagramFolderInput {
+  name: string
+  color?: string | null
+}
+
+export interface UpdateDiagramFolderInput {
+  name?: string
+  // null limpa a cor.
+  color?: string | null
+  sortOrder?: number
 }
 
 export type Diagram = DiagramMeta & {
@@ -2142,6 +2168,8 @@ export interface DiagramListFilter {
   parentType?: DiagramParentType
   parentId?: string
   search?: string
+  // undefined = qualquer pasta; null = só os sem pasta.
+  folderId?: string | null
 }
 
 export interface CreateDiagramInput {
@@ -2154,6 +2182,7 @@ export interface CreateDiagramInput {
   // Linha de changelog da versão 1 (o store aplica default quando omitida).
   summary?: string
   links?: Array<{ parentType: DiagramParentType; parentId: string }>
+  folderId?: string | null
 }
 
 // snapshot=false: salva rascunho (só a cabeça). snapshot=true: bump de versão
