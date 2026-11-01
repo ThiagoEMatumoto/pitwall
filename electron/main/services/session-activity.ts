@@ -434,8 +434,17 @@ export function currentModel(
   return stale ? spawn.model : enrichment.model
 }
 
+// A PTY herda o env do app: sem --model, o claude usa o ANTHROPIC_MODEL (mesma
+// precedência da CLI).
+export function spawnModel(
+  argsModel: string | null,
+  env: Partial<Record<string, string>>,
+): string | null {
+  return argsModel ?? env.ANTHROPIC_MODEL ?? null
+}
+
 function spawnModelOf(ccSessionId: string): string | null {
-  return latestSpawnArgs(getDb(), ccSessionId)?.model ?? null
+  return spawnModel(latestSpawnArgs(getDb(), ccSessionId)?.model ?? null, process.env)
 }
 
 // Versão síncrona de readTail: lê só os últimos TAIL_BYTES. Usada por consumidores

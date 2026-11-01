@@ -6,7 +6,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./db', () => ({ getDb: () => ({}) }))
 
-import { currentModel, deriveEnrichment } from './session-activity'
+import { currentModel, deriveEnrichment, spawnModel } from './session-activity'
 
 // Forma real (2.1.316) da última resposta de uma filha antes do "Tornar mãe": o
 // relance subiu com --model haiku, mas até a 1ª resposta nova o transcript só tem
@@ -53,5 +53,13 @@ describe('modelo da sessão no chip', () => {
   it('sem resposta nenhuma ainda: o --model do spawn', () => {
     const e = deriveEnrichment('')
     expect(currentModel(e, { model: 'haiku', startedAt: 1 })).toBe('haiku')
+  })
+
+  // Relance sem --model: o claude herda o ANTHROPIC_MODEL do app (mesma precedência
+  // da CLI: --model > ANTHROPIC_MODEL). Visto no drive-app: chip Sonnet, claude Haiku.
+  it('sem --model, o ANTHROPIC_MODEL herdado é o modelo do processo', () => {
+    expect(spawnModel(null, { ANTHROPIC_MODEL: 'haiku' })).toBe('haiku')
+    expect(spawnModel('opus', { ANTHROPIC_MODEL: 'haiku' })).toBe('opus')
+    expect(spawnModel(null, {})).toBeNull()
   })
 })
