@@ -35,6 +35,8 @@ import { derivePtyStatus } from './providers/pty-status'
 import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
 import { scanTranscriptForSendMessage } from './session-link-pulse'
+import { getDb } from './db'
+import { latestSpawnArgs } from './spawn-args'
 
 // Re-export: findTranscriptPath/PROJECTS_ROOT moraram aqui e são importados daqui
 // por meio mundo (metrics-service, feature-memory, chat-transcript-service, ipc).
@@ -344,6 +346,7 @@ interface ContentItem {
 
 interface TranscriptLine {
   type?: string
+  timestamp?: string
   aiTitle?: string
   message?: {
     role?: string
@@ -362,6 +365,8 @@ interface TranscriptEnrichment {
   lastText: string | null
   tokens: SessionActivity['tokens']
   model: string | null
+  // Epoch ms da última resposta (a que deu o model); null sem resposta no tail.
+  modelAt: number | null
 }
 
 // Enriquecimento secundário: lastText, tokens e aiTitle (fallback do name).
@@ -404,7 +409,33 @@ export function deriveEnrichment(tail: string): TranscriptEnrichment {
 
   // Modelo em uso: a última msg assistant carrega message.model (mesmo formato
   // que o metrics-service lê). Null até a primeira resposta do assistant no tail.
-  return { title, lastText, tokens, model: lastAssistant?.message?.model ?? null }
+  const at = lastAssistant?.timestamp ? Date.parse(lastAssistant.timestamp) : NaN
+  return {
+    title,
+    lastText,
+    tokens,
+    model: lastAssistant?.message?.model ?? null,
+    modelAt: Number.isFinite(at) ? at : null,
+  }
+}
+
+// O modelo do processo que roda AGORA. A última resposta do transcript pode ser
+// de um processo anterior da conversa (resume/relance com outro --model): até a
+// primeira resposta nova, vale o --model do spawn. Resposta posterior ao início do
+// processo vence (cobre o /model no meio da sessão).
+export function currentModel(
+  enrichment: Pick<TranscriptEnrichment, 'model' | 'modelAt'>,
+  spawn: { model: string | null; startedAt: number | null } | null,
+): string | null {
+  if (!spawn?.model) return enrichment.model
+  const stale =
+    enrichment.modelAt == null ||
+    (spawn.startedAt != null && enrichment.modelAt < spawn.startedAt)
+  return stale ? spawn.model : enrichment.model
+}
+
+function spawnModelOf(ccSessionId: string): string | null {
+  return latestSpawnArgs(getDb(), ccSessionId)?.model ?? null
 }
 
 // Versão síncrona de readTail: lê só os últimos TAIL_BYTES. Usada por consumidores
@@ -578,7 +609,7 @@ class SessionActivityService extends EventEmitter {
     if (this.watched.has(ccSessionId)) return
     const entry: WatchEntry = {
       transcriptPath: findTranscriptPath(ccSessionId),
-      enrichment: { title: null, lastText: null, tokens: undefined, model: null },
+      enrichment: { title: null, lastText: null, tokens: undefined, model: null, modelAt: null },
       fileWatcher: null,
       fileTimer: null,
       subagentsWatched: false,
@@ -932,7 +963,10 @@ class SessionActivityService extends EventEmitter {
       lastText: entry.enrichment.lastText,
       lastActivityAt,
       tokens: entry.enrichment.tokens,
-      model: entry.enrichment.model,
+      model: currentModel(entry.enrichment, {
+        model: spawnModelOf(ccSessionId),
+        startedAt: indexed?.startedAt ?? null,
+      }),
       subagents,
     }
     broadcast('session:activity', activity)
