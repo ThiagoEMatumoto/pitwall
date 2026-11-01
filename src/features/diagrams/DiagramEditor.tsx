@@ -25,7 +25,7 @@ import {
 } from "./library-convert";
 import { DiagramToolbar } from "./DiagramToolbar";
 import { renderThumbnail } from "./diagram-thumbnail";
-import { frameViewport } from "./frame-viewport";
+import { contentBounds, frameViewport } from "./frame-viewport";
 
 const SAVE_DEBOUNCE_MS = 800;
 
@@ -60,28 +60,11 @@ function frameContent(
 ): void {
   if (elements.length === 0) return;
   const st = api.getAppState();
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const e of elements as Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    isDeleted?: boolean;
-  }>) {
-    if (e.isDeleted) continue;
-    minX = Math.min(minX, e.x);
-    minY = Math.min(minY, e.y);
-    maxX = Math.max(maxX, e.x + e.width);
-    maxY = Math.max(maxY, e.y + e.height);
-  }
-  if (!Number.isFinite(minX)) return;
-  const { scrollX, scrollY, zoom } = frameViewport(
-    { minX, minY, maxX, maxY },
-    st,
+  const bounds = contentBounds(
+    elements as Parameters<typeof contentBounds>[0],
   );
+  if (!bounds) return;
+  const { scrollX, scrollY, zoom } = frameViewport(bounds, st);
   api.updateScene({
     appState: {
       scrollX,

@@ -42,6 +42,18 @@ export function compoundPadding(
   return { top, left: 24, bottom: 24, right: 24 };
 }
 
+// O Excalidraw desenha o nome do frame acima da caixa, em tamanho fixo de tela
+// (cresce na cena quando o zoom cai). O ELK reserva essa faixa dentro do
+// compound pra nenhuma seta passar por cima do título; a caixa desenhada
+// continua com compoundPadding, então a faixa fica livre acima dela.
+export const FRAME_TITLE_BAND = 40;
+
+/** Padding do compound no ELK: o de compoundPadding + a faixa do título do frame. */
+export function layoutPadding(kind: CompoundKind, hasLabel: boolean): Padding {
+  const pad = compoundPadding(kind, hasLabel);
+  return kind === "frame" ? { ...pad, top: pad.top + FRAME_TITLE_BAND } : pad;
+}
+
 export const EMPTY_COMPOUND_SIZE = { width: 240, height: 140 };
 
 /** Frames listados como filho direto de outro frame (não suportado). */

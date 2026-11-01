@@ -53,6 +53,13 @@ const elkPadding = (p: { top: number; left: number; bottom: number; right: numbe
   `[top=${p.top},left=${p.left},bottom=${p.bottom},right=${p.right}]`
 
 export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
+  // Aresta que volta na ordem dos nós (retreino, "não" → treino, fila →
+  // worker) entra invertida no ELK e a rota é desvirada no fim. O cycle
+  // breaking do ELK (inclusive MODEL_ORDER, com INCLUDE_CHILDREN) escolhia o
+  // deploy como aresta de volta e o pipeline de ML saía Dados → Produção → Treino.
+  const order = new Map(graph.nodes.map((n, i) => [n.id, i]))
+  const isBack = (e: { source: string; target: string }) =>
+    (order.get(e.source) ?? 0) > (order.get(e.target) ?? 0)
   const root: ElkNode = {
     id: '__root__',
     layoutOptions: {
@@ -64,8 +71,8 @@ export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
     children: [],
     edges: graph.edges.map((e): ElkExtendedEdge => ({
       id: e.id,
-      sources: [e.source],
-      targets: [e.target],
+      sources: [isBack(e) ? e.target : e.source],
+      targets: [isBack(e) ? e.source : e.target],
       ...(e.label ? { labels: [{ id: `${e.id}__elk_label`, ...e.label }] } : {}),
     })),
   }
@@ -116,6 +123,10 @@ export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
     for (const child of node.children ?? []) collectEdges(child)
   }
   collectEdges(out)
+  for (const e of graph.edges) {
+    const route = routes.get(e.id)
+    if (route && isBack(e)) routes.set(e.id, [...route].reverse())
+  }
   return { positions, routes }
 }
 
