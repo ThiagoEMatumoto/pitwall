@@ -33,6 +33,15 @@ export function permissionSummary(menu: TuiMenu): string | null {
   return summary === '' ? null : summary
 }
 
+// O 2.1.316 escreve "don’t" com apóstrofo tipográfico no Bash e reto no MCP
+// (capturas reais em __fixtures__); "accept edits" é o "sempre" dos prompts de arquivo.
+export const ALWAYS_RE =
+  /always allow|don[’']t ask again|allow all edits|accept edits|remember this directory|auto mode/i
+
+function optionLabel(menu: TuiMenu, action: AttentionAction): string {
+  return menu.options.find((o) => o.index === action.optionIndex)?.label ?? ''
+}
+
 export type AttentionChoice = 'approve' | 'always' | 'deny' | 'answer' | 'other'
 
 // Classe da opção escolhida, pelo label REAL (mesmas âncoras do menuActions do
@@ -40,9 +49,10 @@ export type AttentionChoice = 'approve' | 'always' | 'deny' | 'answer' | 'other'
 export function classifyChoice(menu: TuiMenu, action: AttentionAction): AttentionChoice {
   if (action.kind === 'other') return 'other'
   if (menu.kind !== 'permission' && menu.kind !== 'trust') return 'answer'
-  const label = menu.options.find((o) => o.index === action.optionIndex)?.label ?? ''
+  if (action.kind === 'amend') return /^No\b/i.test(optionLabel(menu, action)) ? 'deny' : 'approve'
+  const label = optionLabel(menu, action)
   if (/^No\b/i.test(label)) return 'deny'
-  if (/always allow|don't ask again|allow all edits|remember this directory|auto mode/i.test(label)) {
+  if (ALWAYS_RE.test(label)) {
     return 'always'
   }
   if (/^Yes\b/i.test(label)) return 'approve'

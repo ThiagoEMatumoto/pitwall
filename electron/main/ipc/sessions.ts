@@ -135,6 +135,11 @@ const attentionActionSchema = z.discriminatedUnion('kind', [
     optionIndex: z.number().int().nonnegative(),
     text: z.string().min(1).max(4000),
   }),
+  z.object({
+    kind: z.literal('amend'),
+    optionIndex: z.number().int().nonnegative(),
+    text: z.string().min(1).max(4000),
+  }),
 ])
 const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
   sessionId: z.string().min(1),
