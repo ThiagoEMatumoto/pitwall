@@ -1547,6 +1547,41 @@ function adoptLiveSession(paneId: string, session: Session): void {
   void useAppStore.getState().refreshLiveSessions()
 }
 
+// "Tornar mãe" relança a conversa (kill + resume = sessions.id novo). O main avisa
+// antes do kill: a pane vira dormant no lugar e o pty:exit (129) segue a regra da
+// hibernação ('keep'), em vez de fechar a aba. A sessão relançada entra no mesmo
+// paneId; se o relance falhar, a pane dormindo ainda acorda pelo clique.
+export function holdPaneForRelaunch(sessionId: string, ccSessionId: string): void {
+  const { panes } = useAppStore.getState()
+  if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) return
+  hibernatedSessionIds.add(sessionId)
+  useAppStore.setState({
+    panes: panes.map((p) =>
+      p.dormant || p.session.id !== sessionId
+        ? p
+        : {
+            ...p,
+            session: {
+              ...p.session,
+              id: `${DORMANT_ID_PREFIX}${ccSessionId}`,
+              ccSessionId,
+              status: 'exited',
+              endedAt: null,
+            },
+            dormant: true,
+          },
+    ),
+  })
+  schedulePersist(useAppStore.getState().panes)
+}
+
+export function adoptRelaunchedSession(session: Session): void {
+  const pane = useAppStore
+    .getState()
+    .panes.find((p) => p.dormant && p.session.ccSessionId === session.ccSessionId)
+  if (pane) adoptLiveSession(pane.paneId, session)
+}
+
 const OOM_TOAST_MS = 12_000
 
 // O kernel matou um processo da sessão por passar do teto de memória do scope.

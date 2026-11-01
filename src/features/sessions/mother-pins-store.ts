@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { motherPinsApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
+import { adoptRelaunchedSession, holdPaneForRelaunch } from '@/store/appStore'
 import type { MotherPin, MotherRestartEvent } from '../../../shared/types/mother-pins'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
@@ -126,6 +127,8 @@ function onRestartEvent(
   if (e.state === 'scheduled') pending.add(e.sessionId)
   else pending.delete(e.sessionId)
   set({ restartPending: pending })
+  if (e.state === 'relaunching' && e.ccSessionId) holdPaneForRelaunch(e.sessionId, e.ccSessionId)
+  if (e.state === 'restarted' && e.session) adoptRelaunchedSession(e.session)
   if (e.state === 'restarted') showToast({ title: 'Mãe reiniciada sem as travas de filha' })
   if (e.state === 'failed')
     showToast({ title: 'Não foi possível reiniciar a mãe', body: e.error ?? '' })

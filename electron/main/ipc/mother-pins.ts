@@ -8,7 +8,7 @@ import {
   motherPinKeyOf,
   setMotherPin,
 } from '../services/mother-pins-store'
-import { broadcastMotherPins, promoteToMother, restartAsMother } from '../services/handoff/promote'
+import { broadcastMotherPins, promoteToMother, runRestart } from '../services/handoff/promote'
 import type { MotherPin, PromoteMotherResult } from '../../../shared/types/mother-pins'
 
 const setSchema = z.object({ sessionId: z.string().min(1), pinned: z.boolean() })
@@ -54,6 +54,6 @@ export function registerMotherPinsIpc(): void {
     promoteToMother(promoteSchema.parse(raw)),
   )
   ipcMain.handle('mother-pins:restart-now', async (_e, raw: unknown): Promise<void> => {
-    await restartAsMother(z.string().min(1).parse(raw))
+    await runRestart(z.string().min(1).parse(raw))
   })
 }

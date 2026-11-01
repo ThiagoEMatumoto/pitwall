@@ -1,3 +1,5 @@
+import type { Session } from './ipc'
+
 // "Essa é a mãe": papel marcado pelo humano, por conversa (cc_session_id ?? sessions.id).
 export interface MotherPin {
   key: string
@@ -29,9 +31,13 @@ export interface PromoteMotherResult {
   restart: 'not-needed' | 'restarting' | 'scheduled'
 }
 
+// 'relaunching' sai ANTES do kill (a aba fica no lugar em vez de fechar com o exit);
+// 'restarted' leva a sessão relançada, que a mesma aba adota.
 export interface MotherRestartEvent {
   sessionId: string
-  state: 'scheduled' | 'restarted' | 'failed'
+  state: 'scheduled' | 'relaunching' | 'restarted' | 'failed'
+  ccSessionId?: string
   newSessionId?: string
+  session?: Session
   error?: string
 }

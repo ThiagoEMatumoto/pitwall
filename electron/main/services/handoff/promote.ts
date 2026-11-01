@@ -24,6 +24,7 @@ import type {
   PromoteMotherInput,
   PromoteMotherResult,
 } from '../../../../shared/types/mother-pins'
+import type { Session } from '../../../../shared/types/ipc'
 
 interface SessionRowLite {
   id: string
@@ -93,7 +94,7 @@ function emit(e: MotherRestartEvent): void {
   broadcast('mother-pins:restart', e)
 }
 
-export async function restartAsMother(sessionId: string): Promise<string> {
+export async function restartAsMother(sessionId: string): Promise<Session> {
   // "Reiniciar agora" com relance agendado: o agendado não dispara de novo.
   cancelPendingOf(sessionId)
   const row = sessionRow(sessionId)
@@ -103,13 +104,14 @@ export async function restartAsMother(sessionId: string): Promise<string> {
     )
   }
   const relaunchAs = motherSpawnArgs(latestSpawnArgs(getDb(), row.cc_session_id))
+  emit({ sessionId, state: 'relaunching', ccSessionId: row.cc_session_id })
   await killAndWaitExit(sessionId)
   const { session } = resumeConversation(
     { repoId: row.repo_id, ccSessionId: row.cc_session_id },
     'main',
     { relaunchAs },
   )
-  return session.id
+  return session
 }
 
 // O resume manual volta com as flags default: a mãe promovida perdia o modelo e o
@@ -138,9 +140,13 @@ function cancelPendingOf(sessionId: string): void {
   for (const [cc, id] of pendingRestarts) if (id === sessionId) pendingRestarts.delete(cc)
 }
 
-function runRestart(sessionId: string): void {
-  restartAsMother(sessionId)
-    .then((newId) => emit({ sessionId, state: 'restarted', newSessionId: newId }))
+// Todo relance passa por aqui (inclusive "Reiniciar agora"): é o 'restarted' que
+// leva a sessão nova para a aba que ficou esperando no 'relaunching'.
+export function runRestart(sessionId: string): Promise<void> {
+  return restartAsMother(sessionId)
+    .then((session) =>
+      emit({ sessionId, state: 'restarted', newSessionId: session.id, session }),
+    )
     .catch((err: unknown) =>
       emit({ sessionId, state: 'failed', error: err instanceof Error ? err.message : String(err) }),
     )
@@ -152,7 +158,7 @@ function scheduleRestart(sessionId: string, cc: string): void {
     const pending = pendingRestarts.get(ccSessionId)
     if (!pending) return
     pendingRestarts.delete(ccSessionId)
-    runRestart(pending)
+    void runRestart(pending)
   })
   if (!exitWatch) {
     exitWatch = (e) => cancelPendingOf(e.sessionId)
@@ -178,7 +184,7 @@ export function promoteToMother(input: PromoteMotherInput): PromoteMotherResult 
   if (!needsMotherRestart(input.sessionId)) return { ...base, restart: 'not-needed' }
   const cc = sessionRow(input.sessionId).cc_session_id
   if (input.restart === 'now' || !cc || !isWorking(input.sessionId)) {
-    runRestart(input.sessionId)
+    void runRestart(input.sessionId)
     return { ...base, restart: 'restarting' }
   }
   scheduleRestart(input.sessionId, cc)

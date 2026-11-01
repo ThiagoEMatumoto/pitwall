@@ -34,8 +34,12 @@ vi.mock('../live-session-states', () => ({
   liveSessionStates: () => new Map([...status].map(([id, s]) => [id, { status: s }])),
 }))
 const killed: string[] = []
+// Canais já transmitidos quando o kill acontece: o aviso de relance tem que chegar
+// ao renderer ANTES do pty:exit, senão o Terminal fecha a aba.
+const broadcastsAtKill: string[][] = []
 vi.mock('./kill-and-wait', () => ({
   killAndWaitExit: async (id: string) => {
+    broadcastsAtKill.push(broadcasts.map(([c, p]) => `${c}:${(p as { state?: string })?.state ?? ''}`))
     killed.push(id)
     running.delete(id)
   },
@@ -46,14 +50,14 @@ vi.mock('../../ipc/sessions', () => ({
   resumeConversation: (input: { ccSessionId: string }, _origin: string, opts?: unknown) => {
     resumed.push(input.ccSessionId)
     resumeOpts.push(opts)
-    return { session: { id: 'novo' }, reattached: false }
+    return { session: { id: 'novo', ccSessionId: input.ccSessionId }, reattached: false }
   },
 }))
 
 import * as store from '../handoff-store'
 import { applyAllMigrations, seedRepos, seedSession } from '../attention/attention-test-harness'
 import { readMotherPinKeys } from '../mother-pins-store'
-import { pendingMotherRestart, promoteInDb, promoteToMother } from './promote'
+import { pendingMotherRestart, promoteInDb, promoteToMother, runRestart } from './promote'
 
 function ccOf(id: string): string {
   return (testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as {
@@ -135,7 +139,12 @@ describe('Tornar mãe', () => {
     expect(resumed).toEqual([ccOf('filha')])
     expect(broadcasts).toContainEqual([
       'mother-pins:restart',
-      { sessionId: 'filha', state: 'restarted', newSessionId: 'novo' },
+      {
+        sessionId: 'filha',
+        state: 'restarted',
+        newSessionId: 'novo',
+        session: { id: 'novo', ccSessionId: ccOf('filha') },
+      },
     ])
   })
 
@@ -147,6 +156,28 @@ describe('Tornar mãe', () => {
     expect(promoteToMother({ sessionId: 'filha', restart: 'now' }).restart).toBe('restarting')
     await flush()
     expect(killed).toEqual(['filha'])
+  })
+
+  it('"Reiniciar agora" também entrega a sessão relançada (restarted)', async () => {
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    await runRestart('filha')
+    expect(broadcasts.map(([, p]) => (p as { state?: string }).state)).toContain('restarted')
+  })
+
+  it('avisa o relance (com a conversa) antes do kill, para a aba ficar', async () => {
+    dispatch('avo', 'filha', 'r2')
+    running.add('filha')
+    inbound.add('filha')
+    broadcastsAtKill.length = 0
+    promoteToMother({ sessionId: 'filha', restart: 'now' })
+    await flush()
+    expect(broadcastsAtKill[0]).toContain('mother-pins:restart:relaunching')
+    expect(broadcasts).toContainEqual([
+      'mother-pins:restart',
+      { sessionId: 'filha', state: 'relaunching', ccSessionId: ccOf('filha') },
+    ])
   })
   it('waiting (prompt de permissão) conta como turno em andamento: agenda', () => {
     dispatch('avo', 'filha', 'r2')
