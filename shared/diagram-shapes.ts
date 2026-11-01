@@ -311,6 +311,22 @@ export function partOwner(el: { customData?: Record<string, unknown> }) {
   return typeof meta?.part === "string" ? meta.part : undefined;
 }
 
+/**
+ * Id que uma seta ligada a `id` deve ver: o dono, quando `id` é uma célula.
+ * O dono é transparente e as células ficam por cima, então o hit-test de
+ * binding do editor costuma escolher a célula.
+ */
+export function bindingTargetResolver(
+  elements: readonly { id: string; customData?: Record<string, unknown> }[],
+): (id: string) => string {
+  const owners = new Map<string, string>();
+  for (const el of elements) {
+    const owner = partOwner(el);
+    if (owner !== undefined) owners.set(el.id, owner);
+  }
+  return (id) => owners.get(id) ?? id;
+}
+
 export function blockKind(el: {
   customData?: Record<string, unknown>;
 }): BlockKind | undefined {

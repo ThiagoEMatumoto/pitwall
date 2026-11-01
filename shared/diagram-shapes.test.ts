@@ -5,6 +5,7 @@ import {
 } from "../electron/main/services/diagram-layout";
 import {
   buildElements,
+  elementsLayoutGraph,
   elementsToSkeleton,
   isLayoutNode,
   pinMovedNodes,
@@ -544,5 +545,46 @@ describe("blocos editados no editor", () => {
       const container = byId(out, t.containerId);
       expect(container.boundElements.map((b: AnyEl) => b.id)).toContain(t.id);
     }
+  });
+});
+
+describe("seta ligada a uma célula do bloco", () => {
+  /** O hit-test do editor pega a célula (por cima do dono transparente). */
+  async function boundToCell() {
+    const els = (await skeletonToElements(er4)) as AnyEl[];
+    return els.map((e) => {
+      if (e.id === "r2") {
+        return { ...e, endBinding: { ...e.endBinding, elementId: "orders__f1" } };
+      }
+      if (e.id === "orders") {
+        return {
+          ...e,
+          boundElements: e.boundElements.filter((b: AnyEl) => b.id !== "r2"),
+        };
+      }
+      if (e.id === "orders__f1") {
+        return { ...e, boundElements: [...(e.boundElements ?? []), { id: "r2", type: "arrow" }] };
+      }
+      return e;
+    });
+  }
+
+  it("diagram_get e o grafo do ELK enxergam o dono", async () => {
+    const els = await boundToCell();
+    expect(elementsToSkeleton(els).find((s) => s.id === "r2")?.end).toEqual({
+      id: "orders",
+    });
+    const edge = elementsLayoutGraph(els, "LR").edges.find((e) => e.id === "r2");
+    expect(edge).toMatchObject({ source: "users", target: "orders" });
+  });
+
+  it("patch que remove o campo religa a seta ao dono", async () => {
+    const out = (await applyPatch(await boundToCell(), [
+      { op: "update", id: "orders", fields: [{ name: "id", pk: true }] },
+    ])) as AnyEl[];
+    const r2 = byId(out, "r2");
+    expect(r2.endBinding.elementId).toBe("orders");
+    expect(byId(out, "orders").boundElements.map((b: AnyEl) => b.id)).toContain("r2");
+    expect(byId(out, "orders__f1").isDeleted).toBe(true);
   });
 });

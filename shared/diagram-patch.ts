@@ -31,6 +31,7 @@ import {
 import { avoidingRoute, pointOnBorder, routeCrossings } from "./diagram-route";
 import {
   blockKind,
+  bindingTargetResolver,
   blockToSkeleton,
   boundTextPosition,
   buildBlock,
@@ -354,6 +355,46 @@ export interface PatchOpsResult {
 }
 
 /**
+ * Setas que o editor prendeu a uma célula de bloco passam a apontar pro dono
+ * (com boundElements simétrico). Sem isto o patch trata a célula como ponta:
+ * a seta some do layout e fica presa a uma linha que o rebuild apaga.
+ */
+function rebindPartArrows(
+  elements: ExElement[],
+  touched: Set<string>,
+): ExElement[] {
+  const targetOf = bindingTargetResolver(elements);
+  const moves: { arrow: string; from: string; to: string }[] = [];
+  const out = elements.map((el) => {
+    if (el.isDeleted || el.type !== "arrow") return el;
+    const lin = el as ExLinear;
+    const rebind = (b: ExLinear["startBinding"]) => {
+      if (!b || targetOf(b.elementId) === b.elementId) return b;
+      moves.push({ arrow: el.id, from: b.elementId, to: targetOf(b.elementId) });
+      return { ...b, elementId: targetOf(b.elementId) };
+    };
+    const startBinding = rebind(lin.startBinding);
+    const endBinding = rebind(lin.endBinding);
+    if (startBinding === lin.startBinding && endBinding === lin.endBinding) {
+      return el;
+    }
+    touched.add(el.id);
+    return bump(lin, { startBinding, endBinding });
+  });
+  if (moves.length === 0) return elements;
+  return out.map((el) => {
+    const away = moves.filter((m) => m.from === el.id).map((m) => m.arrow);
+    const into = moves.filter((m) => m.to === el.id).map((m) => m.arrow);
+    if (away.length === 0 && into.length === 0) return el;
+    const list = (el.boundElements ?? []).filter((b) => !away.includes(b.id));
+    for (const id of into) {
+      if (!list.some((b) => b.id === id)) list.push({ id, type: "arrow" });
+    }
+    return bump(el, { boundElements: list });
+  });
+}
+
+/**
  * Aplica as ops na cena sem calcular layout. Imutável: o array de entrada e
  * os elementos não tocados saem intactos (mesmas referências).
  */
@@ -361,8 +402,8 @@ export function applyPatchOps(
   elements: unknown[],
   ops: DiagramPatchOp[],
 ): PatchOpsResult {
-  let result = (elements as ExElement[]).slice();
   const touched = new Set<string>();
+  let result = rebindPartArrows(elements as ExElement[], touched).slice();
   // Estado da linha de empilhamento pros adds sem posição deste patch.
   const stack: { x: number | null; y: number } = { x: null, y: 0 };
 

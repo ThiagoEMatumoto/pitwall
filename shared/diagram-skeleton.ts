@@ -7,6 +7,7 @@
 import { measureText } from "./text-measure";
 import {
   blockSize,
+  bindingTargetResolver,
   blockToSkeleton,
   boundTextPosition,
   buildBlock,
@@ -669,12 +670,13 @@ export function elementsLayoutGraph(
   });
   const nodeIds = new Set(nodes.map((n) => n.id));
   const byId = new Map(els.map((el) => [el.id, el]));
+  const targetOf = bindingTargetResolver(els);
   const edges: LayoutGraph["edges"] = [];
   for (const el of els) {
     if (el.isDeleted || el.type !== "arrow") continue;
     const lin = el as ExLinear;
-    const source = lin.startBinding?.elementId;
-    const target = lin.endBinding?.elementId;
+    const source = lin.startBinding && targetOf(lin.startBinding.elementId);
+    const target = lin.endBinding && targetOf(lin.endBinding.elementId);
     if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) {
       continue;
     }
@@ -973,6 +975,7 @@ export function elementsToSkeleton(
     const label = labelByContainer.get(containerId);
     return label ? (label.originalText ?? label.text) : undefined;
   };
+  const targetOf = bindingTargetResolver(els);
   const parents = sceneParents(live);
   const childrenOf = new Map<string, string[]>();
   for (const el of live) {
@@ -1027,8 +1030,10 @@ export function elementsToSkeleton(
 
     if (isLinearType(el.type)) {
       const lin = el as ExLinear;
-      if (lin.startBinding) skel.start = { id: lin.startBinding.elementId };
-      if (lin.endBinding) skel.end = { id: lin.endBinding.elementId };
+      if (lin.startBinding) {
+        skel.start = { id: targetOf(lin.startBinding.elementId) };
+      }
+      if (lin.endBinding) skel.end = { id: targetOf(lin.endBinding.elementId) };
       const relation = relationFromArrowheads(
         lin.startArrowhead,
         lin.endArrowhead,
