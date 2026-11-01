@@ -29,7 +29,12 @@ import {
   type LayoutResult,
   type Point,
 } from "./diagram-skeleton";
-import { avoidingRoute, pointOnBorder, routeCrossings } from "./diagram-route";
+import {
+  avoidingRoute,
+  pointOnBorder,
+  routeCrossings,
+  withArrowheadStubs,
+} from "./diagram-route";
 import {
   blockKind,
   bindingTargetResolver,
@@ -951,6 +956,15 @@ export function finalizePatchLayout(
       route = avoidingRoute(startEl, endEl, others);
     }
     if (!route) return;
+    if (startEl !== endEl) {
+      route = withArrowheadStubs(
+        route,
+        startEl,
+        endEl,
+        { start: Boolean(lin.startArrowhead), end: Boolean(lin.endArrowhead) },
+        others,
+      );
+    }
     const geometry = elbowGeometry(route, startEl, endEl);
     if (sameGeometry(lin, geometry)) return;
     const next = bump(lin, geometry);

@@ -35,6 +35,9 @@ const LAYOUT_OPTIONS: Record<string, string> = {
   'elk.spacing.nodeNode': '60',
   'elk.layered.spacing.nodeNodeBetweenLayers': '100',
   'elk.spacing.edgeNode': '30',
+  // Default 10: a primeira dobra ficava a 10px do nó e a ponta da seta
+  // (crowfoot, losango) sumia na curva. Casa com MIN_ARROWHEAD_STUB.
+  'elk.layered.spacing.edgeNodeBetweenLayers': '32',
   'elk.spacing.edgeEdge': '20',
   'elk.spacing.edgeLabel': '8',
   'elk.spacing.componentComponent': '100',

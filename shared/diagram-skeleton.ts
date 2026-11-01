@@ -31,6 +31,7 @@ import {
   skeletonParents,
   type CompoundKind,
 } from "./diagram-compound";
+import { withArrowheadStubs } from "./diagram-route";
 
 export type { DiagramRelation, EntityField } from "./diagram-shapes";
 
@@ -841,7 +842,12 @@ export function buildElements(
     byId.set(id, groupBox);
   }
 
-  // 3) Arrows e lines.
+  // 3) Arrows e lines. Compounds ficam fora dos obstáculos: setas cruzam a
+  // borda de grupo/frame de propósito.
+  const nodeBoxes = skeleton
+    .filter((s) => !isLinearType(s.type) && !isCompoundType(s.type))
+    .map((s) => byId.get(s.id))
+    .filter((el): el is ExElement => el !== undefined);
   for (const skel of skeleton) {
     if (!isLinearType(skel.type)) continue;
     const startEl = skel.start ? byId.get(skel.start.id) : undefined;
@@ -876,8 +882,14 @@ export function buildElements(
       const route =
         startEl === endEl
           ? selfLoopRoute(startEl)
-          : ((bothAuto ? layout.routes.get(skel.id) : undefined) ??
-            orthogonalRoute(startEl, endEl));
+          : withArrowheadStubs(
+              (bothAuto ? layout.routes.get(skel.id) : undefined) ??
+                orthogonalRoute(startEl, endEl),
+              startEl,
+              endEl,
+              { start: Boolean(el.startArrowhead), end: Boolean(el.endArrowhead) },
+              nodeBoxes.filter((b) => b !== startEl && b !== endEl),
+            );
       el = { ...el, ...elbowGeometry(route, startEl, endEl) };
     }
     linears.push(el);
