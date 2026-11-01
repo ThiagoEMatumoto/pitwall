@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { PROTECTED_BRANCHES } from '../spawn-flags'
 import { canonicalDir } from '../work-dir'
+import { preTrustClaudeDirs } from './claude-trust'
 
 export interface ChildWorkspace {
   // cwd efetivo da filha (worktree novo, ou o work_dir original se não criou).
@@ -107,8 +108,10 @@ export function ensureChildWorkspace(args: {
     }
   }
   const ignored = tryGit(root, ['check-ignore', '-q', '.worktrees/x']) !== null
+  const childDir = canonicalDir(path)
+  preTrustClaudeDirs([childDir, canonicalDir(root)])
   return {
-    workDir: canonicalDir(path),
+    workDir: childDir,
     branch: newBranch,
     created: true,
     ...(ignored

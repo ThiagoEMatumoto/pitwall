@@ -36,6 +36,8 @@ vi.mock('node:os', async () => {
   const actual = await vi.importActual<typeof import('node:os')>('node:os')
   return { ...actual, homedir: () => HOME }
 })
+// Nunca tocar o ~/.claude.json real: o spawn de filha claude pré-aceita o trust.
+vi.mock('../services/handoff/claude-trust', () => ({ preTrustClaudeDirs: vi.fn(() => true) }))
 vi.mock('electron', () => ({
   app: { getPath: () => `${HOME}/userdata`, getVersion: () => '0.0.0-test' },
   BrowserWindow: { getAllWindows: () => [] },

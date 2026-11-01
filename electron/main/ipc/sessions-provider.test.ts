@@ -15,6 +15,8 @@ const seam = vi.hoisted(() => ({
   prefs: new Map<string, string>(),
 }))
 
+// Nunca tocar o ~/.claude.json real: o spawn de filha claude pré-aceita o trust.
+vi.mock('../services/handoff/claude-trust', () => ({ preTrustClaudeDirs: vi.fn(() => true) }))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
   BrowserWindow: { getAllWindows: () => [] },

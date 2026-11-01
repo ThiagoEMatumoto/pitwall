@@ -20,6 +20,9 @@ const TRUST_UNNUMBERED = readFileSync(
   'utf8',
 )
 const IDLE_PROMPT = readFileSync(join(FIXTURES, 'claude-2.1.286-idle-prompt.ansi'), 'utf8')
+// Tela com conteúdo que nenhum parser reconhece (o trust sem número era este papel
+// até o parser passar a reconhecê-lo).
+const UNRECOGNIZED = 'linha um\r\nlinha dois\r\nlinha tres\r\nlinha quatro\r\nlinha cinco\r\n'
 // Limpa tela + scrollback e volta ao topo: o que a TUI faz ao trocar de tela.
 const CLEAR = '\x1b[2J\x1b[3J\x1b[H'
 
@@ -124,7 +127,7 @@ describe('TuiMenuWatch — contador attention_reason_unparsed', () => {
   }
 
   it('conta waiting com tela não reconhecida estável por 1,5s, uma vez por tela', async () => {
-    const { watch } = setup(TRUST_UNNUMBERED)
+    const { watch } = setup(UNRECOGNIZED)
     await rescanNow(watch)
     watch.noteUnparsed('s1', 'waiting')
     await vi.advanceTimersByTimeAsync(UNPARSED_STABLE_MS - 100)
@@ -145,7 +148,7 @@ describe('TuiMenuWatch — contador attention_reason_unparsed', () => {
     expect(watch.current('s1')?.menu?.kind).toBe('permission')
     watch.noteUnparsed('s1', 'waiting')
     // Usuário respondeu: o menu sai da tela, o sessions/<pid>.json ainda diz waiting.
-    pty.emit('data', { sessionId: 's1', data: CLEAR + TRUST_UNNUMBERED })
+    pty.emit('data', { sessionId: 's1', data: CLEAR + UNRECOGNIZED })
     await rescanNow(watch)
     expect(watch.current('s1')?.menu).toBeNull()
     watch.noteUnparsed('s1', 'waiting')
@@ -159,7 +162,7 @@ describe('TuiMenuWatch — contador attention_reason_unparsed', () => {
   })
 
   it('status sai de waiting antes de 1,5s: não conta', async () => {
-    const { watch } = setup(TRUST_UNNUMBERED)
+    const { watch } = setup(UNRECOGNIZED)
     await rescanNow(watch)
     watch.noteUnparsed('s1', 'waiting')
     await vi.advanceTimersByTimeAsync(500)
@@ -172,7 +175,7 @@ describe('TuiMenuWatch — contador attention_reason_unparsed', () => {
     const { watch } = setup(PERMISSION)
     await rescanNow(watch)
     watch.noteUnparsed('s1', 'waiting')
-    const other = setup(TRUST_UNNUMBERED).watch
+    const other = setup(UNRECOGNIZED).watch
     await rescanNow(other)
     other.noteUnparsed('s1', 'working')
     await vi.advanceTimersByTimeAsync(UNPARSED_STABLE_MS * 2)
@@ -279,7 +282,7 @@ describe('TuiMenuWatch.respond — checagem de menu-mudou', () => {
   })
 
   it('sem menu na tela ou PTY desconhecida: recusa sem digitar', async () => {
-    const { pty, watch } = setup(TRUST_UNNUMBERED)
+    const { pty, watch } = setup(UNRECOGNIZED)
     const noMenu = await watch.respond({
       sessionId: 's1',
       fingerprint: 'qualquer',
@@ -305,6 +308,21 @@ describe('TuiMenuWatch.respond — checagem de menu-mudou', () => {
       fingerprint: snap!.fingerprint,
       menuSeq: snap!.menuSeq,
       action: { kind: 'select', optionIndex: 7 },
+    })
+    expect(res).toMatchObject({ ok: false, error: 'invalid-action' })
+    expect(pty.writes).toEqual([])
+  })
+
+  it('trust sem numeração (2.1.286+): aparece como menu trust, mas nenhum clique digita', async () => {
+    const { pty, watch } = setup(TRUST_UNNUMBERED)
+    const snap = await watch.snapshot('s1')
+    expect(snap?.menu.kind).toBe('trust')
+    expect(snap?.menu.options).toEqual([])
+    const res = await watch.respond({
+      sessionId: 's1',
+      fingerprint: snap!.fingerprint,
+      menuSeq: snap!.menuSeq,
+      action: { kind: 'select', optionIndex: 0 },
     })
     expect(res).toMatchObject({ ok: false, error: 'invalid-action' })
     expect(pty.writes).toEqual([])

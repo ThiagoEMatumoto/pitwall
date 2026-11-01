@@ -13,6 +13,8 @@ let testDb: Database.Database
 vi.mock('../services/db', () => ({ getDb: () => testDb }))
 vi.mock('../services/transcript-path', () => ({ findTranscriptPath: () => null }))
 
+// Nunca tocar o ~/.claude.json real: o spawn de filha claude pré-aceita o trust.
+vi.mock('../services/handoff/claude-trust', () => ({ preTrustClaudeDirs: vi.fn(() => true) }))
 vi.mock('electron', () => ({
   app: { getPath: () => join(tmpdir(), 'cm-test-userdata') },
   BrowserWindow: { getAllWindows: () => [] },
@@ -45,6 +47,7 @@ vi.mock('../services/notify', () => ({ broadcast: () => {} }))
 
 import * as handoffStore from '../services/handoff-store'
 import { spawnSession } from './sessions'
+import { preTrustClaudeDirs } from '../services/handoff/claude-trust'
 
 // O denylist e a política da filha vivem no ARQUIVO apontado por --settings.
 function settingsOf(cmd: string): { permissions?: { deny?: string[] } } {
@@ -142,6 +145,8 @@ describe('spawnSession — cwd da filha vem do work_dir do create', () => {
     })
 
     expect(spawns[0].cwd).toBe(wtA)
+    // Filha claude: o trust do diretório possuído e da raiz é pré-aceito antes do PTY.
+    expect(vi.mocked(preTrustClaudeDirs)).toHaveBeenCalledWith([wtA, repoDir])
   })
 
   it('sem handoffId segue a regra do worktree atual (sessão comum)', () => {

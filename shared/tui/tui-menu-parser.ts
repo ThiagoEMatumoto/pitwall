@@ -318,6 +318,60 @@ export function parseTuiMenu(text: string): TuiMenu | null {
   let end = lines.length
   while (end > 0 && lines[end - 1].trim() === '') end--
   if (end === 0) return null
+  return parseNumberedMenu(lines, end) ?? parseUnnumberedTrust(lines, end)
+}
+
+// Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
+// unnumbered.ansi): as opções perderam o número ("❯ No, exit" / "Yes, I trust
+// this folder") e o rodapé é "Enter to confirm · Esc to cancel". Suposição: o
+// 2.1.316 desenha a mesma tela (não há captura dele no repo). Sem isto a filha
+// num diretório nunca aberto ficava parada aqui fora da fila de atenção.
+// `options` vazio DE PROPÓSITO: nenhum dígito foi validado nesta tela e o destaque
+// inicial é "No, exit" — Enter cego encerraria a sessão. A fila mostra o trust; a
+// resposta é no terminal (respond recusa: não há opção para escolher).
+const UNNUMBERED_TRUST_OPTION_RE = /^(?:❯\s*)?(?:Yes, I trust this folder|No, exit)$/
+const TRUST_SAFETY_RE = /Quick safety check|one you trust/i
+const ACCESSING_RE = /^Accessing workspace:?$/i
+
+function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
+  let i = end - 1
+  if (!FOOTER_RE.test(lines[i])) return null
+  i--
+  while (i >= 0 && lines[i].trim() === '') i--
+  const optionLines: string[] = []
+  while (i >= 0 && UNNUMBERED_TRUST_OPTION_RE.test(lines[i].trim())) {
+    optionLines.unshift(lines[i].trim())
+    i--
+  }
+  if (!optionLines.some((l) => /I trust this folder/.test(l))) return null
+
+  const above = lines.slice(Math.max(0, i - 20), i + 1).map((l) => l.trim())
+  const qStart = above.findIndex((l) => TRUST_SAFETY_RE.test(l))
+  let question: string | undefined
+  if (qStart >= 0) {
+    const qEnd = above.indexOf('', qStart)
+    question = above.slice(qStart, qEnd < 0 ? undefined : qEnd).join(' ')
+  }
+  const aStart = above.findIndex((l) => ACCESSING_RE.test(l))
+  const workspace =
+    aStart >= 0
+      ? above
+          .slice(aStart + 1, qStart > aStart ? qStart : undefined)
+          .filter((l) => l !== '')
+          .join('')
+      : ''
+  return {
+    kind: 'trust',
+    ...(question ? { question } : {}),
+    ...(workspace ? { context: `Accessing workspace: ${workspace}` } : {}),
+    options: [],
+    multiSelect: false,
+    submitOnDigit: false,
+  }
+}
+
+function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
+  const text = lines.join('\n')
 
   // Todas as linhas numeradas do tail (pointer ❯ capturado pra achar a opção
   // destacada, dona do preview quando presente).

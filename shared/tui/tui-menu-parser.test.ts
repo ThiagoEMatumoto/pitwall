@@ -706,3 +706,47 @@ describe('questionPositionLabel — Fase 2 (multi-pergunta numa só chamada)', (
     expect(questionPositionLabel(tabs, false)).toBe('Pergunta 2 de 2')
   })
 })
+
+// Trust do 2.1.286+ sem numeração (texto do buffer da captura real
+// __fixtures__/claude-2.1.286-trust-unnumbered.ansi; suposição: o 2.1.316 é igual).
+const UNNUMBERED_TRUST = `────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/u/repo/.worktrees/child-foo
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+
+
+`
+
+describe('parseTuiMenu — trust sem numeração', () => {
+  it('classifica como trust, sem opções clicáveis', () => {
+    const menu = parseTuiMenu(UNNUMBERED_TRUST)
+    expect(menu).not.toBeNull()
+    expect(menu!.kind).toBe('trust')
+    expect(menu!.options).toEqual([])
+    expect(menu!.context).toBe('Accessing workspace: /home/u/repo/.worktrees/child-foo')
+    expect(menu!.question).toMatch(/one you trust\? .* review what's in this folder first\.$/)
+  })
+
+  it('passa no gate pré-transcript (starting) como permission/trust', () => {
+    expect(gateMenuByStatus(parseTuiMenu(UNNUMBERED_TRUST), 'starting')?.kind).toBe('trust')
+  })
+
+  it('sem o rodapé no fim (tela já mudou) ou sem a opção de trust: null', () => {
+    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Enter to confirm · Esc to cancel', ''))).toBeNull()
+    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Yes, I trust this folder', 'Yes'))).toBeNull()
+    expect(parseTuiMenu(`${UNNUMBERED_TRUST}\nconversa depois\n`)).toBeNull()
+  })
+})
