@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
+import { SessionArtifactChips } from '@/features/sessions/chat/artifacts/SessionArtifactChips'
 import {
   buildSessionTree,
   childrenSummary,
@@ -47,7 +48,10 @@ function SessionTreeRow({ item, depth }: { item: SessionTreeItem; depth: number 
   return (
     <li data-testid="sidebar-session-item" data-session-id={item.sessionId} data-depth={depth}>
       {item.node ? (
-        <SessionButton node={item.node} needsYou={item.needsYou} />
+        <>
+          <SessionButton node={item.node} needsYou={item.needsYou} />
+          <SessionArtifactChips sessionId={item.sessionId} />
+        </>
       ) : (
         <div
           data-testid="sidebar-session-ghost-mother"

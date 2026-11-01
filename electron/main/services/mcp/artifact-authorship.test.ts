@@ -94,6 +94,10 @@ describe('artifact authorship — diagrams', () => {
       links: [{ parentType: 'feature', parentId: 'f1' }],
     })) as { diagram: DiagramMeta & { links: Array<{ parentType: string; parentId: string }> } }
     expect(linkPairs(diagramStore.listLinks(diagram.id))).toEqual(['feature:f1', 'session:s-main'])
+    // O filtro que os chips da sidebar usam (diagrams:list por parent).
+    expect(
+      diagramStore.list({ parentType: 'session', parentId: 's-main' }).map((d) => d.id),
+    ).toEqual([diagram.id])
   })
 
   it('filha de handoff liga sessão e handoff', async () => {
@@ -168,5 +172,8 @@ describe('artifact authorship — design', () => {
       summary: 'hero',
     })
     expect(linkPairs(designStore.listLinks(document.id))).toContain('session:s-other')
+    expect(
+      designStore.listDocuments({ parentType: 'session', parentId: 's-other' }).map((d) => d.id),
+    ).toEqual([document.id])
   })
 })
