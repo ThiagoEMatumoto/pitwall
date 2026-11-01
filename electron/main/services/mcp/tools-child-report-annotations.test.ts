@@ -38,9 +38,47 @@ describe('anotações das tools de reporte da filha', () => {
     expect(registered().get(name)?.annotations?.readOnlyHint).toBe(true)
   })
 
+  // Filha em plan lê o estado (handoff_result, agent_check…) e travava num menu de
+  // permissão: toda tool que só lê precisa da anotação.
+  it.each([
+    'handoff_result',
+    'handoff_list',
+    'agent_list',
+    'agent_check',
+    'overview_get',
+    'repo_connections_get',
+    'service_list',
+    'design_guide',
+    'design_tree_summary',
+    'design_html_get',
+    'design_computed_styles',
+    'feature_pulse_history',
+  ])('%s (só lê) tem readOnlyHint', (name) => {
+    expect(registered().get(name)?.annotations?.readOnlyHint).toBe(true)
+  })
+
+  it('toda tool *_list / *_get tem readOnlyHint', () => {
+    const missing = [...registered()]
+      .filter(([name]) => /_(list|get)$/.test(name))
+      .filter(([, config]) => config.annotations?.readOnlyHint !== true)
+      .map(([name]) => name)
+    expect(missing).toEqual([])
+  })
+
   it('tools que escrevem fora do handoff não ganham readOnlyHint', () => {
     const configs = registered()
-    for (const name of ['session_handoff', 'task_create', 'diagram_create']) {
+    for (const name of [
+      'session_handoff',
+      'task_create',
+      'diagram_create',
+      // Persiste a altura medida do artboard.
+      'design_screenshot',
+      // Escrevem arquivos em disco.
+      'design_export',
+      'feature_loop_export',
+      'service_call',
+      'agent_ask',
+    ]) {
       expect(configs.get(name)?.annotations?.readOnlyHint).not.toBe(true)
     }
   })
