@@ -1251,6 +1251,50 @@ describe('mcp tools — diagrams', () => {
     ).rejects.toThrow()
   })
 
+  it('diagram_create com template monta a cena do modelo pelo ELK e herda o kind', async () => {
+    const out = (await tool('diagram_create').handler({
+      title: 'Pipeline',
+      summary: 'a partir do modelo',
+      template: 'ml-pipeline',
+    })).structuredContent as {
+      diagram: { id: string; kind: string; sourceFormat: string }
+      skeleton: Array<{ id: string; type: string; start?: { id: string }; end?: { id: string } }>
+    }
+    expect(out.diagram.kind).toBe('flow')
+    expect(out.diagram.sourceFormat).toBe('skeleton')
+    const ids = out.skeleton.map((e) => e.id)
+    expect(ids).toEqual(expect.arrayContaining(['etl', 'features', 'train', 'registry', 'serving', 'monitor']))
+    expect(out.skeleton).toContainEqual(
+      expect.objectContaining({ type: 'arrow', start: { id: 'monitor' }, end: { id: 'train' } }),
+    )
+    expect(notify.calls.some(([ch]) => ch === 'diagram:updated')).toBe(true)
+
+    const arch = (await tool('diagram_create').handler({
+      title: 'Arq',
+      summary: 's',
+      template: 'software-architecture',
+      kind: 'other',
+    })).structuredContent as { diagram: { kind: string } }
+    expect(arch.diagram.kind).toBe('other')
+    expect(tool('diagram_create').description).toContain('software-architecture')
+  })
+
+  it('diagram_create recusa template desconhecido e template junto de elements', async () => {
+    await expect(
+      tool('diagram_create').handler({ title: 'X', summary: 's', template: 'nope' }),
+    ).rejects.toThrow(/modelo "nope"/)
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: 'X',
+          summary: 's',
+          template: 'ml-pipeline',
+          elements: [{ id: 'a', type: 'rectangle' }],
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
   it('diagram_create rejeita title só-espaços na validação zod (não chega no sqlite)', async () => {
     await expect(
       Promise.resolve().then(() =>
@@ -1771,6 +1815,18 @@ describe('mcp tools — diagram library', () => {
       status: 'unpublished',
       elementCount: 1,
     })
+  })
+
+  it('diagram_library_list com includeCatalog expõe as categorias de arquitetura de software e ML', () => {
+    const { catalog } = call<{ catalog: Array<{ id: string; category: string }> }>(
+      'diagram_library_list',
+      { includeCatalog: true },
+    )
+    const cat = (id: string) => catalog.find((e) => e.id === id)?.category
+    expect(cat('system-design')).toBe('software')
+    expect(cat('kubernetes-icons')).toBe('software')
+    expect(cat('deep-learning')).toBe('ml-data')
+    expect(cat('data-platform')).toBe('ml-data')
   })
 
   it('diagram_library_remove apaga o item, broadcasta e devolve o restante', () => {
