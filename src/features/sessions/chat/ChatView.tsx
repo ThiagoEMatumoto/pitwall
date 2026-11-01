@@ -8,8 +8,6 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Loader } from 'lucide-react'
-import { Icon } from '@/components/ui/Icon'
 import type { ChatMessage, SessionActivity } from '../../../../shared/types/ipc'
 import { ChatStatusStrip } from './ChatStatusStrip'
 import { CommandCard, CommandOutputCard } from './CommandCard'
@@ -35,7 +33,9 @@ import { SubagentCard } from './SubagentCard'
 import { SystemCard } from './SystemCard'
 import { ThemePickerCard } from './ThemePickerCard'
 import { ThinkingCard } from './ThinkingCard'
-import { ToolResultCard, ToolUseCard } from './ToolCard'
+import { ToolGroup, ToolResultCard } from './ToolCard'
+import { buildChatRows, rowRhythm, rowSpacing, type RowRhythm } from './chat-rows'
+import { JumpToLatest, WorkingIndicator } from './ChatLiveIndicators'
 import { useChatTranscript, usePlanFile } from './useChatTranscript'
 import { ArtifactCard } from './artifacts/ArtifactCard'
 import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
@@ -71,6 +71,7 @@ import {
   resolveChatViewState,
   resolveInteractive,
   showTerminalWaitBanner,
+  type ChatViewState,
   type Echo,
 } from './chat-logic'
 
@@ -154,9 +155,39 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     })
   }, [diskUserCount])
 
+  // Espelho em estado do stickRef, só pra mostrar o atalho "Ir para o fim".
+  const [stuck, setStuck] = useState(true)
+  const [unseen, setUnseen] = useState(false)
+  // Salto suave em andamento: os scroll events intermediários ainda não estão no
+  // fim e não podem desengatar o "colado" (o botão piscaria e o auto-scroll pararia).
+  const jumpingRef = useRef(false)
   function onScroll() {
     const el = scrollRef.current
-    if (el) stickRef.current = isAtBottom(el)
+    if (!el) return
+    const at = isAtBottom(el)
+    if (jumpingRef.current) {
+      if (at) jumpingRef.current = false
+      return
+    }
+    stickRef.current = at
+    setStuck(at)
+    if (at) setUnseen(false)
+  }
+  function jumpToLatest() {
+    const el = scrollRef.current
+    if (!el) return
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    stickRef.current = true
+    jumpingRef.current = true
+    setStuck(true)
+    setUnseen(false)
+    const done = () => {
+      jumpingRef.current = false
+    }
+    el.addEventListener('scrollend', done, { once: true })
+    // Sem scrollend (ou salto interrompido): não deixa a trava presa.
+    window.setTimeout(done, 1500)
+    el.scrollTo({ top: el.scrollHeight, behavior: reduce ? 'auto' : 'smooth' })
   }
 
   const rendered = useMemo<ChatMessage[]>(
@@ -164,9 +195,42 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     [messages, echoes],
   )
 
+  // Conteúdo novo com o usuário lendo lá em cima: não puxamos a rolagem, avisamos.
+  const prevCountRef = useRef(0)
+
+  // Troca de sessão na mesma instância (peek/gaveta): no 1º render o hook ainda
+  // devolve as mensagens da sessão anterior (e loading=false). Até elas serem
+  // trocadas a vista é 'loading' e a contagem de "já pintado" recomeça — senão a
+  // conversa nova entraria em cascata animada a partir do tamanho da antiga.
+  const firstCountRef = useRef<number | null>(null)
+  const sessionRef = useRef(sessionId)
+  const lastMessagesRef = useRef(messages)
+  const staleRef = useRef<{ messages: ChatMessage[]; sawLoading: boolean } | null>(null)
+  if (sessionRef.current !== sessionId) {
+    sessionRef.current = sessionId
+    staleRef.current = { messages: lastMessagesRef.current, sawLoading: false }
+    firstCountRef.current = null
+    prevCountRef.current = 0
+    stickRef.current = true
+  }
+  if (staleRef.current) {
+    if (loading) staleRef.current.sawLoading = true
+    // Chegou outro transcript, ou a carga terminou sem trocar (falha de leitura).
+    if (messages !== staleRef.current.messages || (staleRef.current.sawLoading && !loading)) {
+      staleRef.current = null
+    }
+  }
+  lastMessagesRef.current = messages
+  const stale = staleRef.current !== null
+  useEffect(() => {
+    setStuck(true)
+    setUnseen(false)
+  }, [sessionId])
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && stickRef.current) el.scrollTop = el.scrollHeight
+    else if (rendered.length > prevCountRef.current) setUnseen(true)
+    prevCountRef.current = rendered.length
   }, [rendered])
 
   // Re-pina no fim quando a ALTURA do conteúdo cresce de forma assíncrona (syntax
@@ -199,6 +263,35 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const sideFits = useSidePanelFits(rootRef)
   const sideEnabled = artifactSide && sideFits
   const pendingPrompt = useMemo(() => pendingInteractive(messages), [messages])
+  // Chamadas pareadas com o resultado e sequências agrupadas. Índices com card
+  // de artefato ficam fora dos grupos (o despacho deles é do ArtifactCard).
+  const rows = useMemo(() => {
+    const own = new Set<number>([...artifactPlan.cards.keys(), ...artifactPlan.consults.keys()])
+    return buildChatRows(rendered, artifactPlan.hidden, own)
+  }, [rendered, artifactPlan])
+  // Grupo do turno em andamento: o último, desde que nenhuma resposta ou mensagem
+  // do disco tenha vindo depois (linhas que não renderizam e ecos não contam).
+  const runningRow = useMemo(() => {
+    if (status !== 'working') return -1
+    for (let r = rows.length - 1; r >= 0; r--) {
+      const row = rows[r]
+      if (row.type === 'tools') return r
+      const kind = rendered[row.index].kind
+      const fromDisk = row.index < messages.length
+      if (kind === 'assistant' || (fromDisk && (kind === 'user' || kind === 'command'))) return -1
+    }
+    return -1
+  }, [status, rows, rendered, messages.length])
+
+  // Acabou de mandar ou está raciocinando: "Pensando"; senão está agindo.
+  const lastKind = rendered[rendered.length - 1]?.kind
+  const lastIsThinking = lastKind === 'user' || lastKind === 'thinking'
+
+  // Início do turno em andamento, pro tempo decorrido do indicador.
+  const [workingSince, setWorkingSince] = useState<number | null>(null)
+  useEffect(() => {
+    setWorkingSince((cur) => (status === 'working' ? (cur ?? Date.now()) : null))
+  }, [status])
 
   // Último subagente do transcript (nome + status) pra faixa de estado. Dado real
   // do transcript; o status vem do mesmo mapa que o SubagentCard consome.
@@ -580,7 +673,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       answeredElsewhere: menuAnsweredElsewhere,
     }) && !showTuiCard
 
-  const viewState = resolveChatViewState({
+  const viewState: ChatViewState = stale ? 'loading' : resolveChatViewState({
     loading,
     transcriptExists,
     messageCount: rendered.length,
@@ -632,6 +725,126 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     </>
   ) : null
 
+  // Só o que chega DEPOIS da primeira pintura entra animado: abrir uma conversa
+  // longa não pode virar uma cascata de 500 linhas subindo.
+  if (viewState === 'ready' && firstCountRef.current === null)
+    firstCountRef.current = rendered.length
+
+  function renderMessage(m: ChatMessage, i: number) {
+    // Ecos otimistas vêm DEPOIS das mensagens de disco; marcamos como pendentes.
+    const echoPending = i >= messages.length
+    if (artifactPlan.hidden.has(i)) return null
+    const artifactCard = artifactPlan.cards.get(i)
+    if (artifactCard) {
+      return (
+        <ArtifactCard
+          key={i}
+          plan={artifactCard}
+          onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+          sideActive={sideKey === artifactRefKey(artifactCard.ref)}
+        />
+      )
+    }
+    const consult = artifactPlan.consults.get(i)
+    if (consult) {
+      return (
+        <ArtifactConsultChip
+          key={i}
+          plan={consult}
+          onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+        />
+      )
+    }
+    switch (m.kind) {
+      case 'user': {
+        const wake = parseHandoffWakeEnvelope(m.text)
+        if (wake) return <HandoffUpdateCard key={i} envelope={wake} />
+        return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
+      }
+      case 'assistant':
+        return <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />
+      case 'thinking':
+        return <ThinkingCard key={i} text={m.text} />
+      case 'system':
+        return (
+          <SystemCard
+            key={i}
+            label={m.label}
+            detail={m.detail}
+            level={m.level}
+            trigger={m.trigger}
+            preTokens={m.preTokens}
+            postTokens={m.postTokens}
+          />
+        )
+      case 'compact_summary':
+        return <CompactSummaryCard key={i} text={m.text} />
+      case 'model_change':
+        return <ModelChangeChip key={i} from={m.from} to={m.to} />
+      case 'command':
+        return <CommandCard key={i} name={m.name} args={m.args} />
+      case 'command_output':
+        return <CommandOutputCard key={i} text={m.text} />
+      case 'meta':
+        return <MetaCard key={i} text={m.text} label={m.label} />
+      // tool_use comum vira linha de grupo (buildChatRows); aqui só chega o que
+      // tem card de artefato, já despachado acima.
+      case 'tool_use':
+        return null
+      case 'subagent':
+        return (
+          <SubagentCard
+            key={i}
+            name={m.name}
+            description={m.description}
+            turnCount={m.turnCount}
+            turns={m.turns}
+            status={
+              interactive.subagents.has(m.id)
+                ? interactive.subagents.get(m.id)
+                  ? 'error'
+                  : 'ok'
+                : undefined
+            }
+          />
+        )
+      case 'tool_result':
+        return (
+          <ToolResultCard
+            key={i}
+            content={m.content}
+            isError={m.isError}
+            interrupted={m.interrupted}
+          />
+        )
+      // Cards de transcript são PÓS-resposta por natureza: a CLI só grava o
+      // tool_use no JSONL junto com a resposta, então nunca estão pendentes.
+      // O momento pendente (clicável) vem do menu TUI parseado do buffer.
+      case 'ask_user_question':
+        return (
+          <QuestionCard key={i} questions={m.questions} answers={interactive.answers.get(m.id)} />
+        )
+      case 'exit_plan_mode':
+        return (
+          <TranscriptPlanCard
+            key={i}
+            plan={m.plan}
+            planFilePath={m.planFilePath}
+            decision={interactive.plans.get(m.id)}
+          />
+        )
+
+      // Resposta/decisão/status são fundidos no card acima (por forId) — não
+      // renderizam sozinhos.
+      case 'ask_user_question_answered':
+      case 'plan_decision':
+      case 'subagent_result':
+        return null
+    }
+  }
+
+  let prevRhythm: RowRhythm | null = null
+
   if (viewState !== 'ready') {
     return (
       <ChatEmptyState viewState={viewState} hint={emptyHint}>
@@ -646,156 +859,69 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   return (
     <div ref={rootRef} className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
-    <div className="relative flex min-w-0 flex-1 flex-col">
-    <PendingElsewhereChip sessionId={sessionId} />
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      className="min-h-0 flex-1 overflow-y-auto py-[18px]"
-      style={{
-        background:
-          'radial-gradient(90% 40% at 50% 0%, color-mix(in srgb, var(--color-accent) 5%, transparent), transparent 60%)',
-      }}
-    >
-      <div ref={contentRef} className="mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-3.5 px-6 @container/chat">
-        {rendered.map((m, i) => {
-          // Ecos otimistas vêm DEPOIS das mensagens de disco; marcamos como pendentes.
-          const echoPending = i >= messages.length
-          if (artifactPlan.hidden.has(i)) return null
-          const artifactCard = artifactPlan.cards.get(i)
-          if (artifactCard) {
-            return (
-              <ArtifactCard
-                key={i}
-                plan={artifactCard}
-                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
-                sideActive={sideKey === artifactRefKey(artifactCard.ref)}
-              />
-            )
-          }
-          const consult = artifactPlan.consults.get(i)
-          if (consult) {
-            return (
-              <ArtifactConsultChip
-                key={i}
-                plan={consult}
-                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
-              />
-            )
-          }
-          switch (m.kind) {
-            case 'user': {
-              const wake = parseHandoffWakeEnvelope(m.text)
-              if (wake) return <HandoffUpdateCard key={i} envelope={wake} />
-              return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
-            }
-            case 'assistant':
-              return (
-                <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />
-              )
-            case 'thinking':
-              return <ThinkingCard key={i} text={m.text} />
-            case 'system':
-              return (
-                <SystemCard
-                  key={i}
-                  label={m.label}
-                  detail={m.detail}
-                  level={m.level}
-                  trigger={m.trigger}
-                  preTokens={m.preTokens}
-                  postTokens={m.postTokens}
-                />
-              )
-            case 'compact_summary':
-              return <CompactSummaryCard key={i} text={m.text} />
-            case 'model_change':
-              return <ModelChangeChip key={i} from={m.from} to={m.to} />
-            case 'command':
-              return <CommandCard key={i} name={m.name} args={m.args} />
-            case 'command_output':
-              return <CommandOutputCard key={i} text={m.text} />
-            case 'meta':
-              return <MetaCard key={i} text={m.text} label={m.label} />
-            case 'tool_use':
-              return (
-                <ToolUseCard key={i} name={m.name} input={m.input} interrupted={m.interrupted} />
-              )
-            case 'subagent':
-              return (
-                <SubagentCard
-                  key={i}
-                  name={m.name}
-                  description={m.description}
-                  turnCount={m.turnCount}
-                  turns={m.turns}
-                  status={
-                    interactive.subagents.has(m.id)
-                      ? interactive.subagents.get(m.id)
-                        ? 'error'
-                        : 'ok'
-                      : undefined
-                  }
-                />
-              )
-            case 'tool_result':
-              return (
-                <ToolResultCard
-                  key={i}
-                  content={m.content}
-                  isError={m.isError}
-                  interrupted={m.interrupted}
-                />
-              )
-            // Cards de transcript são PÓS-resposta por natureza: a CLI só grava o
-            // tool_use no JSONL junto com a resposta, então nunca estão pendentes.
-            // O momento pendente (clicável) vem do menu TUI parseado do buffer.
-            case 'ask_user_question':
-              return (
-                <QuestionCard key={i} questions={m.questions} answers={interactive.answers.get(m.id)} />
-              )
-            case 'exit_plan_mode':
-              return (
-                <TranscriptPlanCard
-                  key={i}
-                  plan={m.plan}
-                  planFilePath={m.planFilePath}
-                  decision={interactive.plans.get(m.id)}
-                />
-              )
-
-            // Resposta/decisão/status são fundidos no card acima (por forId) — não
-            // renderizam sozinhos.
-            case 'ask_user_question_answered':
-            case 'plan_decision':
-            case 'subagent_result':
-              return null
-          }
-        })}
-        {tuiCardNode}
-        {tuiPickerCardNode}
-        <ChatWaitBanners
-          pendingPrompt={pendingPrompt}
-          waitInTerminal={waitInTerminal}
-          onToggleMode={onToggleMode}
-        />
-        {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <PendingElsewhereChip sessionId={sessionId} />
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="min-h-0 flex-1 overflow-y-auto py-[18px]"
+          style={{
+            background:
+              'radial-gradient(90% 40% at 50% 0%, color-mix(in srgb, var(--color-accent) 5%, transparent), transparent 60%)',
+          }}
+        >
+          <div
+            ref={contentRef}
+            className="mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-3.5 px-6 @container/chat"
+          >
+            <div className="flex min-w-0 flex-col">
+              {rows.map((row, r) => {
+                const node =
+                  row.type === 'tools' ? (
+                    <ToolGroup
+                      entries={row.entries}
+                      running={r === runningRow}
+                    />
+                  ) : (
+                    renderMessage(rendered[row.index], row.index)
+                  )
+                if (node == null) return null
+                const rhythm = rowRhythm(row, rendered)
+                const spacing = rowSpacing(prevRhythm, rhythm)
+                prevRhythm = rhythm
+                const isNew = firstCountRef.current != null && row.index >= firstCountRef.current
+                return (
+                  <div
+                    key={row.index}
+                    className={`min-w-0 ${spacing} ${isNew ? 'chat-row-in' : ''}`}
+                  >
+                    {node}
+                  </div>
+                )
+              })}
+            </div>
+            {tuiCardNode}
+            {tuiPickerCardNode}
+            <ChatWaitBanners
+              pendingPrompt={pendingPrompt}
+              waitInTerminal={waitInTerminal}
+              onToggleMode={onToggleMode}
+            />
+            {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente
             (status 'waiting'), pra não competir com o banner acima. */}
-        {status === 'working' && !pendingPrompt && (
-          <div className="flex items-center gap-2 px-1 text-xs text-[var(--color-text-dim)]">
-            <Icon as={Loader} size={13} className="animate-spin text-[var(--color-accent)]" />
-            Claude está trabalhando…
+            {status === 'working' && !pendingPrompt && workingSince != null && (
+              <WorkingIndicator since={workingSince} thinking={lastIsThinking} />
+            )}
           </div>
-        )}
+        </div>
+        {!stuck && <JumpToLatest unseen={unseen} onClick={jumpToLatest} />}
+        <ChatStatusStrip
+          status={status}
+          subagentName={lastSubagent?.name}
+          subagentError={lastSubagent?.error}
+        />
       </div>
-    </div>
-    <ChatStatusStrip
-      status={status}
-      subagentName={lastSubagent?.name}
-      subagentError={lastSubagent?.error}
-    />
-    </div>
-    {sideEnabled && <ArtifactSidePanel sessionId={sessionId} />}
+      {sideEnabled && <ArtifactSidePanel sessionId={sessionId} />}
     </div>
   )
 })

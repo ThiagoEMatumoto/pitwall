@@ -1,33 +1,36 @@
 import { useState } from 'react'
-import { Brain, ChevronRight } from 'lucide-react'
+import { Brain } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
+import { Chevron, ROW_BUTTON } from './chat-row-ui'
+import { oneLine } from './tool-view'
 
 interface Props {
   text: string
 }
 
-// Bloco de raciocínio (extended thinking). Colapsado por padrão — o raciocínio é
-// longo e secundário à conversa; o usuário expande sob demanda.
+// Bloco de raciocínio (extended thinking). Colapsado por padrão — é longo e
+// secundário à conversa; a primeira frase fica visível pra dizer do que se trata.
 export function ThinkingCard({ text }: Props) {
   const [open, setOpen] = useState(false)
+  const preview = oneLine(text, 120)
   return (
-    <div className="rounded-lg font-mono text-[11px] transition-colors hover:bg-[var(--color-surface-2)]">
+    <div className="min-w-0">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-1.5 py-1 text-left text-[var(--color-text-dim)]"
+        className={ROW_BUTTON}
       >
-        <Icon
-          as={ChevronRight}
-          size={11}
-          className={`shrink-0 transition ${open ? 'rotate-90' : ''}`}
-        />
-        <Icon as={Brain} size={11} className="shrink-0" />
-        <span>pensou</span>
+        <Chevron open={open} />
+        <Icon as={Brain} size={13} className="shrink-0 text-[var(--color-text-dim)]" />
+        <span className="shrink-0 font-medium text-[var(--color-text-dim)]">Raciocínio</span>
+        {!open && preview && (
+          <span className="min-w-0 truncate italic text-[var(--color-text-dim)]/80">{preview}</span>
+        )}
       </button>
       {open && (
-        <div className="px-3 py-2 font-sans italic text-[var(--color-text-dim)]">
+        <div className="chat-reveal mb-2 ml-6 mt-1 max-w-[68ch] text-[13px] italic leading-relaxed text-[var(--color-text-dim)]">
           <MarkdownViewer content={text} />
         </div>
       )}

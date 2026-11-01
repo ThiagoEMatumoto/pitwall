@@ -16,6 +16,9 @@ describe('ChatEmptyState', () => {
 
   it('mantém o estado transitório de loading distinto do hero', () => {
     render(<ChatEmptyState viewState="loading" />)
+    expect(screen.getByRole('status', { name: 'Carregando conversa…' })).toBe(
+      screen.getByTestId('chat-loading'),
+    )
     expect(screen.getByText('Carregando conversa…')).toBeInTheDocument()
     expect(screen.queryByText('Pronto quando você estiver.')).not.toBeInTheDocument()
   })
