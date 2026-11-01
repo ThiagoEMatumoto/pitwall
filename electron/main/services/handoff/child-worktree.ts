@@ -118,3 +118,18 @@ export function ensureChildWorkspace(args: {
         }),
   }
 }
+
+// Desfaz o worktree de ensureChildWorkspace quando o handoff não chega a existir
+// (store.create recusou por posse ou falhou): sem isto sobravam .worktrees/child-*
+// e branches child/* órfãos a cada despacho rejeitado. Só remove se o worktree
+// estiver limpo — nunca descarta trabalho. Nunca lança; devolve se removeu.
+export function discardChildWorkspace(ws: ChildWorkspace | undefined): boolean {
+  if (!ws?.created || !ws.branch) return false
+  const status = tryGit(ws.workDir, ['status', '--porcelain'])
+  if (status === null || status !== '') return false
+  const root = mainRepoRoot(ws.workDir)
+  if (!root) return false
+  if (tryGit(root, ['worktree', 'remove', ws.workDir]) === null) return false
+  tryGit(root, ['branch', '-D', ws.branch])
+  return true
+}

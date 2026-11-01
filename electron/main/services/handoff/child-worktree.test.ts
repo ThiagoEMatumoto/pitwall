@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { childSlug, ensureChildWorkspace } from './child-worktree'
+import { childSlug, discardChildWorkspace, ensureChildWorkspace } from './child-worktree'
 import { composeHandoffPrompt } from './compose-prompt'
 
 function sh(cwd: string, ...args: string[]): string {
@@ -114,5 +114,32 @@ describe('childSlug', () => {
   it('normaliza o alias', () => {
     expect(childSlug('Ágata / UI--fix!')).toBe('gata-ui-fix')
     expect(childSlug('***')).toBe('child')
+  })
+})
+
+describe('discardChildWorkspace', () => {
+  const handoffId = 'abcd1234-ef00-0000-0000-000000000000'
+
+  it('worktree limpo → remove o worktree e apaga a branch child/*', () => {
+    const ws = ensureChildWorkspace({ workDir: repo, alias: 'Orfa', handoffId })
+    expect(ws.created).toBe(true)
+    expect(discardChildWorkspace(ws)).toBe(true)
+    expect(existsSync(ws.workDir)).toBe(false)
+    expect(sh(repo, 'branch', '--list', ws.branch!)).toBe('')
+    expect(sh(repo, 'worktree', 'list', '--porcelain')).not.toContain(ws.workDir)
+  })
+
+  it('worktree sujo → não remove nada (nunca descarta trabalho)', () => {
+    const ws = ensureChildWorkspace({ workDir: repo, alias: 'Suja', handoffId })
+    writeFileSync(join(ws.workDir, 'wip.txt'), 'x')
+    expect(discardChildWorkspace(ws)).toBe(false)
+    expect(existsSync(join(ws.workDir, 'wip.txt'))).toBe(true)
+    expect(sh(repo, 'branch', '--list', ws.branch!)).toContain(ws.branch!)
+  })
+
+  it('não criou worktree → no-op', () => {
+    expect(discardChildWorkspace({ workDir: repo, branch: 'main', created: false })).toBe(false)
+    expect(discardChildWorkspace(undefined)).toBe(false)
+    expect(existsSync(repo)).toBe(true)
   })
 })

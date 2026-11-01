@@ -669,8 +669,36 @@ function familyBlocked(prefix: string): boolean {
   })
 }
 
+// Verbos de tool MCP que destroem, escrevem ou falam com terceiros: um "sempre
+// permitir" aprendido valeria para TODA filha futura, sem ninguém ver o pedido.
+// Casa por token do nome (snake/kebab/camel), então `slack_send_message`,
+// `deleteIssue` e `write_db` caem; `get_issue`/`search_docs` passam.
+const NEVER_LEARN_MCP_VERBS = new Set([
+  'delete', 'remove', 'rm', 'destroy', 'archive', 'trash', 'purge', 'drop', 'truncate',
+  'send', 'post', 'publish', 'reply', 'comment', 'share', 'invite', 'notify', 'email',
+  'merge', 'deploy', 'release', 'rollback',
+  'write', 'update', 'upsert', 'create', 'insert', 'edit', 'set', 'patch', 'put',
+  'move', 'rename', 'transfer', 'cancel', 'revoke', 'approve', 'pay', 'refund', 'charge',
+  'exec', 'execute', 'run', 'apply', 'push', 'close', 'kill',
+])
+
+function mcpToolTokens(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[_-]+/)
+    .filter(Boolean)
+}
+
+function isLearnableMcpRule(rule: string): boolean {
+  const [, server, tool] = rule.split('__')
+  // O próprio Pitwall já é allow inteiro (CHILD_ALLOW_MCP): aprender é redundante e inofensivo.
+  if (server === 'pitwall') return true
+  return !mcpToolTokens(tool).some((t) => NEVER_LEARN_MCP_VERBS.has(t))
+}
+
 export function isLearnableChildRule(rule: string): boolean {
-  if (LEARNED_MCP_RE.test(rule)) return true
+  if (LEARNED_MCP_RE.test(rule)) return isLearnableMcpRule(rule)
   const m = LEARNED_BASH_RE.exec(rule)
   if (!m) return false
   const tokens = m[1].split(' ')

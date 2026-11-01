@@ -49,7 +49,7 @@ import { injectIntoChildGuarded } from '../handoff/guarded-inject'
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
 import { buildHandoffAlias, roleForHandoffMode } from '../handoff/alias'
-import { ensureChildWorkspace } from '../handoff/child-worktree'
+import { discardChildWorkspace, ensureChildWorkspace } from '../handoff/child-worktree'
 import { resolveHandoffWorkDir } from '../work-dir'
 import { getActivityFor, ptyStatusFor } from '../session-activity'
 import { emitSessionLinkPulse } from '../session-link-pulse'
@@ -1139,6 +1139,8 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
             input.force && input.forceReason ? { force: { reason: input.forceReason } } : {},
           )
         } catch (err) {
+          // Recusado (posse) ou falhou: o worktree recém-criado não tem dono.
+          discardChildWorkspace(workspace)
           if (!handoffStore.isHandoffDuplicateError(err)) throw err
           return ok({
             duplicate: true,

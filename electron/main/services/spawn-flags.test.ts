@@ -338,6 +338,26 @@ describe('deriveChildAllowRule', () => {
     }
   })
 
+  it('MCP destrutiva ou de comunicação externa não vira regra', () => {
+    for (const tool of [
+      'mcp__linear__delete_issue',
+      'mcp__plugin_slack_slack__slack_send_message',
+      'mcp__github__merge_pull_request',
+      'mcp__brain__archive_entry',
+      'mcp__db__write_db',
+      'mcp__linear__update_issue',
+      'mcp__x__createPost',
+      'mcp__posthog__exec',
+    ]) {
+      expect(isLearnableChildRule(tool), tool).toBe(false)
+      expect(deriveChildAllowRule(undefined, `x (MCP) ${tool}`), tool).toBeNull()
+    }
+    expect(isLearnableChildRule('mcp__linear__search_issues')).toBe(true)
+    expect(isLearnableChildRule('mcp__context7__get_library_docs')).toBe(true)
+    // mcp__pitwall já é allow inteiro: aprender uma tool dele continua permitido.
+    expect(isLearnableChildRule('mcp__pitwall__task_update')).toBe(true)
+  })
+
   it('MCP: a regra é o nome exato da tool', () => {
     expect(deriveChildAllowRule(undefined, 'linear - get_issue (MCP) mcp__linear__get_issue')).toBe(
       'mcp__linear__get_issue',

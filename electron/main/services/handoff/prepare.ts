@@ -18,7 +18,7 @@ import { buildHandoffAlias, roleForHandoffMode } from './alias'
 import { composeHandoffPrompt, type HandoffEdge } from './compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
 import { resolveHandoffWorkDir } from '../work-dir'
-import { ensureChildWorkspace } from './child-worktree'
+import { discardChildWorkspace, ensureChildWorkspace } from './child-worktree'
 import type { Handoff, HandoffMode } from '../../../../shared/types/ipc'
 
 export interface PrepareHandoffInput {
@@ -130,25 +130,32 @@ export function prepareHandoff(input: PrepareHandoffInput): PreparedHandoff {
     workspace,
   })
 
-  const handoff = store.create(
-    {
-      id,
-      motherSessionId: input.motherSessionId,
-      targetRepoId: target.id,
-      fromRepoId,
-      featureId,
-      task: input.task,
-      contextJson: input.context ? JSON.stringify(input.context) : null,
-      composedPrompt,
-      mode,
-      workDir: workspace?.workDir,
-      // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
-      // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
-      // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.
-      status: 'approved',
-    },
-    input.forceReason ? { force: { reason: input.forceReason } } : {},
-  )
+  let handoff: Handoff
+  try {
+    handoff = store.create(
+      {
+        id,
+        motherSessionId: input.motherSessionId,
+        targetRepoId: target.id,
+        fromRepoId,
+        featureId,
+        task: input.task,
+        contextJson: input.context ? JSON.stringify(input.context) : null,
+        composedPrompt,
+        mode,
+        workDir: workspace?.workDir,
+        // Quem chama já spawna a filha (dispatchHandoffChild / relance da adoção).
+        // Nascer 'pending' fazia o useHandoffs (gate desligado) aprovar e spawnar
+        // OUTRA filha em paralelo: "Nova filha" no mapa subia duas sessões.
+        status: 'approved',
+      },
+      input.forceReason ? { force: { reason: input.forceReason } } : {},
+    )
+  } catch (err) {
+    // Recusado (posse) ou falhou: o worktree recém-criado não tem dono.
+    discardChildWorkspace(workspace)
+    throw err
+  }
   broadcast('handoff:updated', handoff)
   return { handoff, alias }
 }
