@@ -120,7 +120,19 @@ export function createHubSlice(store: DesignStore): HubSlice {
         const { hubFolder } = get()
         // A remembered folder that no longer exists falls back to Recentes.
         const gone = isFolderSection(hubFolder) && !folders.some((f) => f.id === hubFolder)
-        set(gone ? { folders, hubFolder: 'recent' } : { folders })
+        // A folder deleted elsewhere (Claude via MCP) leaves its documents
+        // pointing at nothing: count them as unfiled.
+        const known = new Set(folders.map((f) => f.id))
+        const unfile = (list: DesignDocumentMeta[]) =>
+          list.some((d) => d.folderId && !known.has(d.folderId))
+            ? list.map((d) => (d.folderId && !known.has(d.folderId) ? { ...d, folderId: null } : d))
+            : list
+        set((s) => ({
+          folders,
+          docs: unfile(s.docs),
+          archivedDocs: unfile(s.archivedDocs),
+          ...(gone ? { hubFolder: 'recent' } : {}),
+        }))
         if (gone) savePrefs()
       } catch (err) {
         set({ error: errorText(err) })

@@ -194,6 +194,15 @@ describe('broadcasts', () => {
     await flush()
     expect(useDesignStore.getState().folders[0].docCount).toBe(3)
   })
+
+  it('unfiles documents whose folder vanished (deleted via MCP)', async () => {
+    useDesignStore.setState({ docs: [meta('d1', 'gone'), meta('d2', 'x')] })
+    useDesignStore.getState().startWatch()
+    mockApi.foldersList.mockResolvedValue([folder('x', 1)])
+    handlers.foldersUpdated({ folderId: null })
+    await flush()
+    expect(useDesignStore.getState().docs.map((d) => d.folderId)).toEqual([null, 'x'])
+  })
 })
 
 describe('hub view state', () => {
