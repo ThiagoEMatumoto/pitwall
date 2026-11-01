@@ -213,3 +213,77 @@ export function avoidingRoute(
   }
   return best;
 }
+
+// Toco mínimo entre o nó e a primeira dobra quando há ponta naquele lado:
+// abaixo disso o crowfoot/losango some espremido na curva da seta elbow.
+export const MIN_ARROWHEAD_STUB = 32;
+// Último segmento sem ponta: não pode zerar (a seta entraria pelo lado errado).
+const MIN_PLAIN_STUB = 8;
+
+/**
+ * Alonga o primeiro segmento até `min` empurrando o segundo segmento pra
+ * longe do nó; o terceiro encolhe, mas não abaixo de `reserve`. Rota de 1
+ * dobra só cede se o ponto final continuar na mesma borda de `endBox`.
+ */
+function stretchFirst(
+  route: Point[],
+  min: number,
+  reserve: number,
+  endBox: Box,
+): Point[] | null {
+  const [p0, p1, p2, p3] = route;
+  const k = Math.abs(p1[0] - p0[0]) >= Math.abs(p1[1] - p0[1]) ? 0 : 1;
+  const len = Math.abs(p1[k] - p0[k]);
+  if (len >= min) return route;
+  if (len < EPS) return null;
+  const s = Math.sign(p1[k] - p0[k]);
+  let delta = min - len;
+  if (route.length === 3) {
+    const lo = k === 0 ? endBox.x : endBox.y;
+    const hi = lo + (k === 0 ? endBox.width : endBox.height);
+    const next = p2[k] + s * delta;
+    if (next < lo + EPS || next > hi - EPS) return null;
+  } else {
+    const ext = (p3[k] - p2[k]) * s;
+    if (ext > 0) delta = Math.min(delta, ext - reserve);
+    if (delta < EPS) return null;
+  }
+  const shift = (p: Point): Point =>
+    k === 0 ? [p[0] + s * delta, p[1]] : [p[0], p[1] + s * delta];
+  return [p0, shift(p1), shift(p2), ...route.slice(3)];
+}
+
+/**
+ * Garante MIN_ARROWHEAD_STUB no primeiro/último segmento da rota elbow que
+ * tem ponta naquele lado, mantendo a ortogonalidade. Se o ajuste fizer a
+ * rota cruzar mais caixas que a original, fica a original.
+ */
+export function withArrowheadStubs(
+  route: Point[],
+  start: Box,
+  end: Box,
+  heads: { start: boolean; end: boolean },
+  obstacles: readonly Box[],
+): Point[] {
+  if (route.length < 3 || (!heads.start && !heads.end)) return route;
+  const endReserve = heads.end ? MIN_ARROWHEAD_STUB : MIN_PLAIN_STUB;
+  const startReserve = heads.start ? MIN_ARROWHEAD_STUB : MIN_PLAIN_STUB;
+  let out = route;
+  if (heads.start) {
+    out = stretchFirst(out, MIN_ARROWHEAD_STUB, endReserve, end) ?? out;
+  }
+  if (heads.end) {
+    const rev = stretchFirst(
+      [...out].reverse(),
+      MIN_ARROWHEAD_STUB,
+      startReserve,
+      start,
+    );
+    if (rev) out = rev.reverse();
+  }
+  if (out === route) return route;
+  const boxes = [start, end, ...obstacles];
+  return routeCrossings(out, boxes) > routeCrossings(route, boxes)
+    ? route
+    : out;
+}

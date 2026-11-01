@@ -26,6 +26,15 @@ diagram_create({ title: "Auth flow", kind: "flow", summary: "initial sketch", el
   { "id": "e1", "type": "arrow", "start": { "id": "ui" }, "end": { "id": "api" }, "label": { "text": "POST /login" } },
   { "id": "e2", "type": "arrow", "start": { "id": "api" }, "end": { "id": "db" }, "label": { "text": "create session" } }
 ] })
+ER and UML: use type "entity" (a table: one row per field, pk/fk marked) and "class" (name, attributes, methods), and set relation on arrows instead of drawing crow's feet by hand; wrap related nodes in { "type": "group", "label": {...}, "children": [ids] } or { "type": "frame", "name": "...", "children": [ids] } (frames do not nest: put a group between two frames). Example — ER, 3 entities, 1:N:
+diagram_create({ title: "Orders schema", kind: "er", summary: "ER", direction: "TB", elements: [
+  { "id": "users", "type": "entity", "name": "users", "fields": [{ "name": "id", "type": "uuid", "pk": true }, { "name": "email", "type": "text" }] },
+  { "id": "orders", "type": "entity", "name": "orders", "fields": [{ "name": "id", "type": "uuid", "pk": true }, { "name": "user_id", "type": "uuid", "fk": true }] },
+  { "id": "items", "type": "entity", "name": "order_items", "fields": [{ "name": "order_id", "type": "uuid", "fk": true }, { "name": "qty", "type": "int" }] },
+  { "id": "r1", "type": "arrow", "start": { "id": "users" }, "end": { "id": "orders" }, "relation": "1:N" },
+  { "id": "r2", "type": "arrow", "start": { "id": "orders" }, "end": { "id": "items" }, "relation": "1:N" }
+] })
+Class hierarchy: { "id": "animal", "type": "class", "name": "Animal", "attributes": ["+ name: string"], "methods": ["+ speak(): void"] }, { "id": "dog", "type": "class", "name": "Dog", "methods": ["+ fetch(): void"] }, { "id": "i1", "type": "arrow", "start": { "id": "dog" }, "end": { "id": "animal" }, "relation": "inheritance" } (start = subclass; composition/aggregation put the diamond on start = the whole). To change columns, patch { "op": "update", "id": "users", "fields": [...] } — the block is rebuilt in place.
 To edit, ALWAYS prefer diagram_patch (incremental add/update/delete ops by element id): it edits on top of the current scene and re-lays out only nodes the layout placed — nodes the human dragged stay pinned, and an update with x/y pins a node on purpose. diagram_update replaces the whole scene and throws that refinement away — use it only for an intentional redraw. Deletion is two-step by design: diagram_archive first, then diagram_delete with confirm: true (an active diagram cannot be deleted).
 
 **Shape libraries (canvas):** The canvas also has ONE global Excalidraw shape library shared by all diagrams. diagram_library_list shows what is installed (id, name, elementCount); diagram_library_install adds a .excalidrawlib — pass url (the public catalog at https://libraries.excalidraw.com hosts ready-made libraries; use the direct .excalidrawlib file URL) or library_json (the file content inline); diagram_library_remove deletes one item by id. Installs merge by item id, so re-installing updates instead of duplicating.

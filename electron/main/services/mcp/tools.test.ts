@@ -1221,6 +1221,22 @@ describe('mcp tools — diagrams', () => {
     expect((broadcast[0][1] as { id: string }).id).toBe(diagram.id)
   })
 
+  it('diagram_create: todo kind do schema/UI passa no CHECK do banco; UML de classes vai como other', async () => {
+    const { KIND_LABEL } = await import('../../../../src/features/diagrams/diagram-labels')
+    for (const kind of Object.keys(KIND_LABEL)) {
+      const { diagram } = await callAsync<{ diagram: DiagramMetaOut }>(
+        'diagram_create',
+        { title: `k-${kind}`, kind, summary: 's', elements: [{ id: 'a', type: 'rectangle' }] },
+      )
+      expect(diagram.kind).toBe(kind)
+    }
+    expect(tool('diagram_create').description).toContain('UML class diagram uses kind "other"')
+    // Sem migration não há kind novo: o zod barra antes do CHECK do SQLite.
+    await expect(
+      tool('diagram_create').handler({ title: 'X', kind: 'class', summary: 's', elements: [] }),
+    ).rejects.toThrow()
+  })
+
   it('diagram_create exige exatamente um de elements|scene (zod refine)', async () => {
     await expect(tool('diagram_create').handler({ title: 'X', summary: 's' })).rejects.toThrow()
     await expect(
@@ -1585,6 +1601,81 @@ describe('mcp tools — diagrams', () => {
     expect(
       db.prepare('SELECT COUNT(*) AS n FROM diagram_links WHERE diagram_id = ?').get(diagram.id),
     ).toEqual({ n: 0 })
+  })
+
+  it('diagram_create recusa frame filho direto de frame', async () => {
+    await expect(
+      Promise.resolve().then(() =>
+        tool('diagram_create').handler({
+          title: 'X',
+          summary: 's',
+          elements: [
+            { id: 'a', type: 'rectangle' },
+            { id: 'inner', type: 'frame', children: ['a'] },
+            { id: 'outer', type: 'frame', children: ['inner'] },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/frame/)
+  })
+
+  it('diagram_create/patch aceitam entity, class, group, frame e relation (round-trip)', async () => {
+    const { diagram, skeleton } = await callAsync<{
+      diagram: DiagramMetaOut
+      skeleton: Array<SkeletonOut & Record<string, unknown>>
+    }>('diagram_create', {
+      title: 'Schema',
+      kind: 'er',
+      summary: 'ER',
+      elements: [
+        {
+          id: 'users',
+          type: 'entity',
+          name: 'users',
+          fields: [{ name: 'id', type: 'uuid', pk: true }],
+        },
+        {
+          id: 'orders',
+          type: 'entity',
+          name: 'orders',
+          fields: [{ name: 'user_id', type: 'uuid', fk: true }],
+        },
+        { id: 'base', type: 'class', name: 'Base', attributes: [], methods: ['+ save()'] },
+        { id: 'r1', type: 'arrow', start: { id: 'users' }, end: { id: 'orders' }, relation: '1:N' },
+        { id: 'g', type: 'group', label: { text: 'Core' }, children: ['users', 'orders'] },
+        { id: 'f', type: 'frame', name: 'Model', children: ['base'] },
+      ],
+    })
+    const byId = (id: string) => skeleton.find((s) => s.id === id)!
+    expect(byId('users')).toMatchObject({ type: 'entity', name: 'users' })
+    expect(byId('base')).toMatchObject({ type: 'class', methods: ['+ save()'] })
+    expect(byId('r1')).toMatchObject({ relation: '1:N' })
+    expect((byId('g').children as string[]).sort()).toEqual(['orders', 'users'])
+    expect(byId('f')).toMatchObject({ type: 'frame', name: 'Model', children: ['base'] })
+    // Partes internas do bloco não vazam pro skeleton.
+    expect(skeleton.some((s) => s.id.includes('__'))).toBe(false)
+
+    const patched = await callAsync<{ skeleton: Array<SkeletonOut & Record<string, unknown>> }>(
+      'diagram_patch',
+      {
+        id: diagram.id,
+        summary: 'nova coluna',
+        ops: [
+          {
+            op: 'update',
+            id: 'users',
+            fields: [
+              { name: 'id', type: 'uuid', pk: true },
+              { name: 'email', type: 'text' },
+            ],
+          },
+        ],
+      },
+    )
+    expect(patched.skeleton.find((s) => s.id === 'users')?.fields).toEqual([
+      { name: 'id', type: 'uuid', pk: true },
+      { name: 'email', type: 'text' },
+    ])
   })
 })
 

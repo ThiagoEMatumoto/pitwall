@@ -5,9 +5,47 @@
 // Formato dos elementos baseado em
 // node_modules/@excalidraw/excalidraw/dist/types/excalidraw/element/types.d.ts.
 import { measureText } from "./text-measure";
+import {
+  blockSize,
+  bindingTargetResolver,
+  blockToSkeleton,
+  boundTextPosition,
+  buildBlock,
+  isBlockType,
+  partOwner,
+  relationFromArrowheads,
+  RELATION_ARROWHEADS,
+  type DiagramRelation,
+  type EntityField,
+} from "./diagram-shapes";
+import {
+  compoundKind,
+  compoundPadding,
+  deepestFirst,
+  EMPTY_COMPOUND_SIZE,
+  fitBox,
+  isCompoundElement,
+  isCompoundType,
+  membershipFor,
+  sceneParents,
+  skeletonParents,
+  type CompoundKind,
+} from "./diagram-compound";
+import { withArrowheadStubs } from "./diagram-route";
+
+export type { DiagramRelation, EntityField } from "./diagram-shapes";
 
 export type DiagramSkeletonElementType =
-  "rectangle" | "ellipse" | "diamond" | "text" | "arrow" | "line";
+  | "rectangle"
+  | "ellipse"
+  | "diamond"
+  | "text"
+  | "arrow"
+  | "line"
+  | "entity"
+  | "class"
+  | "group"
+  | "frame";
 
 export interface DiagramSkeletonElement {
   id: string;
@@ -26,6 +64,17 @@ export interface DiagramSkeletonElement {
   end?: { id: string };
   strokeColor?: string;
   backgroundColor?: string;
+  /** entity/class: título do bloco; frame: nome do frame. */
+  name?: string;
+  /** entity: uma linha por campo. */
+  fields?: EntityField[];
+  /** class: compartimentos de atributos e métodos (uma string por linha). */
+  attributes?: string[];
+  methods?: string[];
+  /** group/frame: ids dos nós contidos. */
+  children?: string[];
+  /** Arrows: semântica ER/UML, mapeada pras pontas da seta. */
+  relation?: DiagramRelation;
 }
 
 export type DiagramPatchOp =
@@ -51,9 +100,17 @@ export interface DiagramLayoutOptions {
 
 export type Point = [number, number];
 
+export interface LayoutCompound {
+  id: string;
+  parent?: string;
+  padding: { top: number; left: number; bottom: number; right: number };
+}
+
 export interface LayoutGraph {
   direction: DiagramDirection;
-  nodes: Array<{ id: string; width: number; height: number }>;
+  nodes: Array<{ id: string; width: number; height: number; parent?: string }>;
+  /** group/frame com filhos: compound nodes do ELK (filhos via parent). */
+  compounds?: LayoutCompound[];
   edges: Array<{
     id: string;
     source: string;
@@ -138,7 +195,12 @@ export interface ExLinear extends ExBase {
   endIsSpecial?: boolean | null;
 }
 
-export type ExElement = ExBase | ExText | ExLinear;
+export interface ExFrame extends ExBase {
+  type: "frame";
+  name: string | null;
+}
+
+export type ExElement = ExBase | ExText | ExLinear | ExFrame;
 
 export const DEFAULT_STROKE = "#1e1e1e";
 export const DEFAULT_BACKGROUND = "transparent";
@@ -190,6 +252,13 @@ export function sizeFor(skel: DiagramSkeletonElement): {
   }
   if (isLinearType(skel.type)) {
     return { width: skel.width ?? 100, height: skel.height ?? 0 };
+  }
+  if (isBlockType(skel.type)) return blockSize(skel);
+  if (isCompoundType(skel.type)) {
+    return {
+      width: skel.width ?? EMPTY_COMPOUND_SIZE.width,
+      height: skel.height ?? EMPTY_COMPOUND_SIZE.height,
+    };
   }
   let width = skel.width;
   let height = skel.height;
@@ -250,10 +319,16 @@ export function withPitwallMeta<T extends ExBase>(
   };
 }
 
+/**
+ * Nó folha do layout. Partes de bloco (header/linhas) andam com o dono e
+ * compounds (grupo/frame) envolvem os filhos — nenhum dos dois é nó solto.
+ */
 export const isLayoutNode = (el: ExElement) =>
   !el.isDeleted &&
   !isLinearType(el.type) &&
-  !(el.type === "text" && (el as ExText).containerId);
+  !(el.type === "text" && (el as ExText).containerId) &&
+  partOwner(el) === undefined &&
+  compoundKind(el) === undefined;
 
 /**
  * Marca como pinado (auto=false) todo nó auto cuja posição divergiu da
@@ -443,6 +518,28 @@ export function orthogonalRoute(a: Box, b: Box): Point[] {
   ];
 }
 
+const SELF_LOOP_GAP = 48;
+
+/**
+ * Laço de uma relação do nó com ele mesmo: sai pela direita perto do topo,
+ * contorna por fora com folga e entra pelo topo. Os trechos das pontas têm
+ * SELF_LOOP_GAP (cabe crowfoot) e o meio da polilinha cai no trecho de cima,
+ * então o label fica acima do nó.
+ */
+export function selfLoopRoute(a: Box): Point[] {
+  const right = a.x + a.width;
+  const sy = a.y + Math.min(16, a.height / 2);
+  const top = a.y - SELF_LOOP_GAP;
+  const cx = a.x + a.width / 2;
+  return [
+    [right, sy],
+    [right + SELF_LOOP_GAP, sy],
+    [right + SELF_LOOP_GAP, top],
+    [cx, top],
+    [cx, a.y],
+  ];
+}
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 // O Excalidraw desloca 0.5 exato pra 0.5001 (normalizeFixedPoint) pra não
@@ -526,9 +623,24 @@ export function skeletonLayoutGraph(
   skeleton: DiagramSkeletonElement[],
   direction: DiagramDirection,
 ): LayoutGraph {
-  const nodes = skeleton
-    .filter((s) => !isLinearType(s.type))
-    .map((s) => ({ id: s.id, ...sizeFor(s) }));
+  const parents = skeletonParents(skeleton);
+  const withChildren = new Set(parents.values());
+  const compounds: LayoutCompound[] = [];
+  const nodes: LayoutGraph["nodes"] = [];
+  for (const s of skeleton) {
+    if (isLinearType(s.type)) continue;
+    const parent = parents.get(s.id);
+    if (isCompoundType(s.type) && withChildren.has(s.id)) {
+      compounds.push({
+        id: s.id,
+        ...(parent ? { parent } : {}),
+        padding: compoundPadding(s.type, Boolean(s.label?.text)),
+      });
+      continue;
+    }
+    nodes.push({ id: s.id, ...sizeFor(s), ...(parent ? { parent } : {}) });
+  }
+  // Setas só entre folhas: aresta pra compound o ELK não roteia bem.
   const nodeIds = new Set(nodes.map((n) => n.id));
   const edges: LayoutGraph["edges"] = [];
   for (const s of skeleton) {
@@ -541,7 +653,7 @@ export function skeletonLayoutGraph(
       ...(s.label?.text ? { label: textMetrics(s.label.text) } : {}),
     });
   }
-  return { direction, nodes, edges };
+  return { direction, nodes, edges, compounds };
 }
 
 /** Grafo da cena viva (nós = shapes e textos soltos; arestas = setas ligadas). */
@@ -550,17 +662,44 @@ export function elementsLayoutGraph(
   direction: DiagramDirection,
 ): LayoutGraph {
   const els = elements as ExElement[];
-  const nodes = els
-    .filter(isLayoutNode)
-    .map((el) => ({ id: el.id, width: el.width, height: el.height }));
+  const parents = sceneParents(els);
+  const withChildren = new Set<string>();
+  for (const el of els) {
+    if (!isLayoutNode(el) && !isCompoundElement(el)) continue;
+    const parent = parents.get(el.id);
+    if (parent) withChildren.add(parent);
+  }
+  const compounds: LayoutCompound[] = els
+    .filter((el) => isCompoundElement(el) && withChildren.has(el.id))
+    .map((el) => {
+      const parent = parents.get(el.id);
+      return {
+        id: el.id,
+        ...(parent ? { parent } : {}),
+        padding: compoundPadding(
+          compoundKind(el)!,
+          (el.boundElements ?? []).some((b) => b.type === "text"),
+        ),
+      };
+    });
+  const nodes = els.filter(isLayoutNode).map((el) => {
+    const parent = parents.get(el.id);
+    return {
+      id: el.id,
+      width: el.width,
+      height: el.height,
+      ...(parent ? { parent } : {}),
+    };
+  });
   const nodeIds = new Set(nodes.map((n) => n.id));
   const byId = new Map(els.map((el) => [el.id, el]));
+  const targetOf = bindingTargetResolver(els);
   const edges: LayoutGraph["edges"] = [];
   for (const el of els) {
     if (el.isDeleted || el.type !== "arrow") continue;
     const lin = el as ExLinear;
-    const source = lin.startBinding?.elementId;
-    const target = lin.endBinding?.elementId;
+    const source = lin.startBinding && targetOf(lin.startBinding.elementId);
+    const target = lin.endBinding && targetOf(lin.endBinding.elementId);
     if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) {
       continue;
     }
@@ -575,7 +714,7 @@ export function elementsLayoutGraph(
         : {}),
     });
   }
-  return { direction, nodes, edges };
+  return { direction, nodes, edges, compounds };
 }
 
 // ---------------------------------------------------------------------------
@@ -595,62 +734,129 @@ export function buildElements(
 ): unknown[] {
   const mode = options.layout ?? "auto";
   const direction = options.direction ?? "LR";
-  const elements: ExElement[] = [];
+  const parents = skeletonParents(skeleton);
+  const kindById = new Map<string, CompoundKind>();
+  for (const s of skeleton) {
+    if (isCompoundType(s.type)) kindById.set(s.id, s.type);
+  }
+  const membership = (id: string) =>
+    membershipFor(id, parents, (a) => kindById.get(a));
+  const leaves: ExElement[] = [];
+  const linears: ExElement[] = [];
   const byId = new Map<string, ExElement>();
-  const push = (el: ExElement) => {
-    elements.push(el);
-    byId.set(el.id, el);
-  };
-
-  // 1) Shapes e textos soltos primeiro (arrows precisam das caixas prontas).
-  for (const skel of skeleton) {
-    if (isLinearType(skel.type)) continue;
+  const positionOf = (skel: DiagramSkeletonElement) => {
     const explicit =
       mode === "keep" && skel.x !== undefined && skel.y !== undefined;
     const pos = explicit
       ? { x: skel.x!, y: skel.y! }
       : (layout.positions.get(skel.id) ?? { x: skel.x ?? 0, y: skel.y ?? 0 });
-    const meta = { auto: !explicit, direction };
+    return { pos, meta: { auto: !explicit, direction } };
+  };
 
-    if (skel.type === "text") {
-      const content = skel.text ?? skel.label?.text ?? "";
-      const el = withPitwallMeta(
-        makeTextElement(skel.id, content, pos.x, pos.y, null),
-        meta,
-      );
-      if (skel.strokeColor) el.strokeColor = skel.strokeColor;
-      push(el);
-      continue;
-    }
-
-    const { width, height } = sizeFor(skel);
-    const el = withPitwallMeta(
-      baseElement(skel, pos.x, pos.y, width, height),
-      meta,
-    );
-    push(el);
-
-    if (skel.label) {
-      const metrics = textMetrics(skel.label.text);
-      const at = centeredIn(el, metrics);
-      const label = makeTextElement(
-        labelIdFor(skel.id),
-        skel.label.text,
-        at.x,
-        at.y,
-        skel.id,
-      );
-      el.boundElements!.push({ id: label.id, type: "text" });
-      push(label);
+  // 1) Nós folha (shapes, textos soltos, blocos); setas precisam das caixas.
+  for (const skel of skeleton) {
+    if (isLinearType(skel.type) || isCompoundType(skel.type)) continue;
+    const { pos, meta } = positionOf(skel);
+    const group = buildNode(skel, pos, meta);
+    const { groupIds, frameId } = membership(skel.id);
+    for (const el of group) {
+      el.groupIds = [...el.groupIds, ...groupIds];
+      el.frameId = frameId;
+      leaves.push(el);
+      byId.set(el.id, el);
     }
   }
 
-  // 2) Arrows e lines.
+  // 2) Compounds, do mais interno pro mais externo: a caixa envolve os filhos
+  // já posicionados com o mesmo padding que o ELK reservou.
+  const groupBoxes: ExElement[][] = [];
+  const frames: ExElement[] = [];
+  const compoundSkels = new Map(
+    skeleton.filter((s) => isCompoundType(s.type)).map((s) => [s.id, s]),
+  );
+  for (const id of deepestFirst([...compoundSkels.keys()], parents)) {
+    const skel = compoundSkels.get(id)!;
+    const kind = skel.type as CompoundKind;
+    const labelText = kind === "group" ? skel.label?.text : undefined;
+    const members = skeleton
+      .filter((c) => parents.get(c.id) === id)
+      .map((c) => byId.get(c.id))
+      .filter((el): el is ExElement => el !== undefined);
+    const { pos, meta } = positionOf(skel);
+    const box =
+      members.length > 0
+        ? fitBox(members, compoundPadding(kind, Boolean(labelText)))
+        : { ...pos, ...sizeFor(skel) };
+    const { groupIds, frameId } = membership(id);
+    const pitwall =
+      kind === "group"
+        ? { kind, ...(labelText ? { label: labelText } : {}) }
+        : { kind, name: skel.name ?? skel.label?.text ?? null };
+    const base = withPitwallMeta(
+      {
+        ...baseElement(
+          { ...skel, type: kind === "group" ? "rectangle" : "frame" },
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+        ),
+        customData: { pitwall },
+      },
+      meta,
+    );
+    if (kind === "frame") {
+      const frame: ExFrame = {
+        ...base,
+        type: "frame",
+        name: (pitwall as { name: string | null }).name,
+        roundness: null,
+        groupIds,
+        frameId: null,
+      };
+      frames.push(frame);
+      byId.set(id, frame);
+      continue;
+    }
+    const groupBox: ExBase = {
+      ...base,
+      strokeColor: skel.strokeColor ?? GROUP_STROKE,
+      strokeStyle: "dashed",
+      groupIds: [id, ...groupIds],
+      frameId,
+    };
+    const out: ExElement[] = [groupBox];
+    if (labelText) {
+      const label: ExText = {
+        ...makeTextElement(labelIdFor(id), labelText, 0, 0, id),
+        textAlign: "left",
+        verticalAlign: "top",
+        groupIds: groupBox.groupIds,
+        frameId,
+      };
+      Object.assign(label, boundTextPosition(groupBox, label));
+      groupBox.boundElements = [{ id: label.id, type: "text" }];
+      out.push(label);
+    }
+    groupBoxes.push(out);
+    byId.set(id, groupBox);
+  }
+
+  // 3) Arrows e lines. Compounds ficam fora dos obstáculos: setas cruzam a
+  // borda de grupo/frame de propósito.
+  const nodeBoxes = skeleton
+    .filter((s) => !isLinearType(s.type) && !isCompoundType(s.type))
+    .map((s) => byId.get(s.id))
+    .filter((el): el is ExElement => el !== undefined);
   for (const skel of skeleton) {
     if (!isLinearType(skel.type)) continue;
     const startEl = skel.start ? byId.get(skel.start.id) : undefined;
     const endEl = skel.end ? byId.get(skel.end.id) : undefined;
     const base = baseElement(skel, skel.x ?? 0, skel.y ?? 0, 0, 0);
+    const heads =
+      skel.type === "arrow" && skel.relation
+        ? RELATION_ARROWHEADS[skel.relation]
+        : null;
     let el: ExLinear = {
       ...base,
       type: skel.type as ExLinear["type"],
@@ -663,19 +869,30 @@ export function buildElements(
       lastCommittedPoint: null,
       startBinding: null,
       endBinding: null,
-      startArrowhead: null,
-      endArrowhead: skel.type === "arrow" ? "arrow" : null,
+      startArrowhead: heads ? heads[0] : null,
+      endArrowhead: heads ? heads[1] : skel.type === "arrow" ? "arrow" : null,
+      ...(heads
+        ? { customData: { pitwall: { relation: skel.relation } } }
+        : {}),
     };
     if (skel.type === "arrow") el.elbowed = false;
 
     if (skel.type === "arrow" && startEl && endEl) {
       const bothAuto = isAutoPlaced(startEl) && isAutoPlaced(endEl);
       const route =
-        (bothAuto ? layout.routes.get(skel.id) : undefined) ??
-        orthogonalRoute(startEl, endEl);
+        startEl === endEl
+          ? selfLoopRoute(startEl)
+          : withArrowheadStubs(
+              (bothAuto ? layout.routes.get(skel.id) : undefined) ??
+                orthogonalRoute(startEl, endEl),
+              startEl,
+              endEl,
+              { start: Boolean(el.startArrowhead), end: Boolean(el.endArrowhead) },
+              nodeBoxes.filter((b) => b !== startEl && b !== endEl),
+            );
       el = { ...el, ...elbowGeometry(route, startEl, endEl) };
     }
-    push(el);
+    linears.push(el);
 
     // Bindings simétricos: shapes referenciados apontam de volta pra arrow.
     for (const bound of [startEl, endEl]) {
@@ -697,14 +914,60 @@ export function buildElements(
         skel.id,
       );
       el.boundElements!.push({ id: label.id, type: "text" });
-      push(label);
+      linears.push(label);
     }
   }
 
+  // Caixa de grupo por baixo dos filhos (externa primeiro); frames por cima,
+  // como o editor ordena ao embrulhar uma seleção num frame.
+  const elements = [
+    ...groupBoxes.reverse().flat(),
+    ...leaves,
+    ...linears,
+    ...frames,
+  ];
   elements.forEach((el, i) => {
     el.index = fractionalIndexAt(i);
   });
   return elements;
+}
+
+const GROUP_STROKE = "#868e96";
+
+/** Elementos de um nó folha: o nó primeiro, depois label/partes. */
+export function buildNode(
+  skel: DiagramSkeletonElement,
+  pos: { x: number; y: number },
+  meta: { auto: boolean; direction?: DiagramDirection },
+): ExElement[] {
+  if (skel.type === "text") {
+    const content = skel.text ?? skel.label?.text ?? "";
+    const el = withPitwallMeta(
+      makeTextElement(skel.id, content, pos.x, pos.y, null),
+      meta,
+    );
+    if (skel.strokeColor) el.strokeColor = skel.strokeColor;
+    return [el];
+  }
+  if (isBlockType(skel.type)) return buildBlock(skel, pos, meta);
+
+  const { width, height } = sizeFor(skel);
+  const el = withPitwallMeta(
+    baseElement(skel, pos.x, pos.y, width, height),
+    meta,
+  );
+  if (!skel.label) return [el];
+  const metrics = textMetrics(skel.label.text);
+  const at = centeredIn(el, metrics);
+  const label = makeTextElement(
+    labelIdFor(skel.id),
+    skel.label.text,
+    at.x,
+    at.y,
+    skel.id,
+  );
+  el.boundElements!.push({ id: label.id, type: "text" });
+  return [el, label];
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +981,7 @@ const SKELETON_TYPES = new Set([
   "text",
   "arrow",
   "line",
+  "frame",
 ]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -727,6 +991,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * Skeleton semântico da cena. Sem geometria por padrão: x/y/width/height que
  * o agente lê tendem a voltar como coordenadas velhas num próximo update.
+ * Blocos (entity/class) e compounds (group/frame) voltam como um elemento só;
+ * as partes internas não aparecem.
  */
 export function elementsToSkeleton(
   elements: unknown[],
@@ -741,9 +1007,26 @@ export function elementsToSkeleton(
       if (t.containerId) labelByContainer.set(t.containerId, t);
     }
   }
+  const textOf = (containerId: string) => {
+    const label = labelByContainer.get(containerId);
+    return label ? (label.originalText ?? label.text) : undefined;
+  };
+  const targetOf = bindingTargetResolver(els);
+  const parents = sceneParents(live);
+  const childrenOf = new Map<string, string[]>();
+  for (const el of live) {
+    if (!isLayoutNode(el) && !isCompoundElement(el)) continue;
+    const parent = parents.get(el.id);
+    if (parent)
+      childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), el.id]);
+  }
 
   const ordered = live
-    .filter((el) => !(el.type === "text" && (el as ExText).containerId))
+    .filter(
+      (el) =>
+        !(el.type === "text" && (el as ExText).containerId) &&
+        partOwner(el) === undefined,
+    )
     .sort(
       (a, b) =>
         Math.round(a.y) - Math.round(b.y) ||
@@ -752,10 +1035,28 @@ export function elementsToSkeleton(
     );
 
   return ordered.map((el) => {
-    const skel: DiagramSkeletonElement = {
-      id: el.id,
-      type: el.type as DiagramSkeletonElementType,
-    };
+    const kind = compoundKind(el);
+    let skel: DiagramSkeletonElement;
+    if (blockKindOf(el)) {
+      skel = blockToSkeleton(el, textOf);
+    } else if (kind) {
+      skel = { id: el.id, type: kind, children: childrenOf.get(el.id) ?? [] };
+      if (kind === "frame") {
+        const name = (el as ExFrame).name;
+        if (name) skel.name = name;
+      } else {
+        const text = textOf(el.id);
+        if (text) skel.label = { text };
+      }
+    } else {
+      skel = { id: el.id, type: el.type as DiagramSkeletonElementType };
+      if (el.type === "text") {
+        skel.text = (el as ExText).text;
+      } else {
+        const text = textOf(el.id);
+        if (text !== undefined) skel.label = { text };
+      }
+    }
     if (options.includeGeometry) {
       skel.x = Math.round(el.x);
       skel.y = Math.round(el.y);
@@ -763,20 +1064,34 @@ export function elementsToSkeleton(
       skel.height = Math.round(el.height);
     }
 
-    if (el.type === "text") {
-      skel.text = (el as ExText).text;
-    } else {
-      const label = labelByContainer.get(el.id);
-      if (label) skel.label = { text: label.text };
-    }
-
     if (isLinearType(el.type)) {
       const lin = el as ExLinear;
-      if (lin.startBinding) skel.start = { id: lin.startBinding.elementId };
-      if (lin.endBinding) skel.end = { id: lin.endBinding.elementId };
+      if (lin.startBinding) {
+        skel.start = { id: targetOf(lin.startBinding.elementId) };
+      }
+      if (lin.endBinding) skel.end = { id: targetOf(lin.endBinding.elementId) };
+      const relation = relationFromArrowheads(
+        lin.startArrowhead,
+        lin.endArrowhead,
+        (lin.customData?.pitwall as { relation?: unknown } | undefined)
+          ?.relation,
+      );
+      if (relation) skel.relation = relation;
     }
 
-    if (el.strokeColor && el.strokeColor !== DEFAULT_STROKE) {
+    if (blockKindOf(el)) {
+      // Cor do bloco mora nas partes; o dono tem contorno invisível.
+      const header = els.find((p) => p.id === `${el.id}__header`);
+      if (header?.strokeColor && header.strokeColor !== DEFAULT_STROKE) {
+        skel.strokeColor = header.strokeColor;
+      }
+      return skel;
+    }
+    if (
+      el.strokeColor &&
+      el.strokeColor !== DEFAULT_STROKE &&
+      !(kind === "group" && el.strokeColor === GROUP_STROKE)
+    ) {
       skel.strokeColor = el.strokeColor;
     }
     if (el.backgroundColor && el.backgroundColor !== DEFAULT_BACKGROUND) {
@@ -785,3 +1100,6 @@ export function elementsToSkeleton(
     return skel;
   });
 }
+
+const blockKindOf = (el: ExElement) =>
+  isBlockType(String((el.customData?.pitwall as { kind?: unknown })?.kind));

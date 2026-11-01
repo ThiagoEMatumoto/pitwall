@@ -4,6 +4,7 @@
 import {
   buildElements,
   centeredIn,
+  directionOf,
   elbowGeometry,
   fractionalIndexAt,
   isAutoPlaced,
@@ -11,6 +12,7 @@ import {
   makeTextElement,
   labelIdFor,
   polylineMidpoint,
+  selfLoopRoute,
   randInt,
   sizeFor,
   textMetrics,
@@ -27,7 +29,30 @@ import {
   type LayoutResult,
   type Point,
 } from "./diagram-skeleton";
-import { avoidingRoute, pointOnBorder, routeCrossings } from "./diagram-route";
+import {
+  avoidingRoute,
+  pointOnBorder,
+  routeCrossings,
+  withArrowheadStubs,
+} from "./diagram-route";
+import {
+  blockKind,
+  bindingTargetResolver,
+  blockToSkeleton,
+  boundTextPosition,
+  buildBlock,
+  partOwner,
+  RELATION_ARROWHEADS,
+} from "./diagram-shapes";
+import {
+  compoundKind,
+  compoundPadding,
+  deepestFirst,
+  fitBox,
+  isCompoundElement,
+  isCompoundType,
+  sceneParents,
+} from "./diagram-compound";
 
 const GRID_GAP = 80;
 // Distância base pra posicionar nós novos de patch e margem anti-colisão.
@@ -144,10 +169,235 @@ const plainBinding = (elementId: string) => ({
   gap: BINDING_GAP,
 });
 
+/** Label centralizado, ou alinhado como o Excalidraw faz (label de grupo). */
+function labelPosition(
+  container: Box,
+  label: Pick<ExText, "width" | "height" | "textAlign" | "verticalAlign">,
+): { x: number; y: number } {
+  return label.textAlign === "center" && label.verticalAlign === "middle"
+    ? centeredIn(container, label)
+    : boundTextPosition(container, label);
+}
+
+/** O elemento pertence ao nó `id` (o nó, label, partes ou membros dele)? */
+function belongsTo(el: ExElement, id: string): boolean {
+  return (
+    el.id === id ||
+    partOwner(el) === id ||
+    (el.type === "text" && (el as ExText).containerId === id) ||
+    (el.groupIds ?? []).includes(id) ||
+    el.frameId === id
+  );
+}
+
+/** Patch que cria grupo/frame: os filhos existentes entram nele. */
+function adoptChildren(
+  result: ExElement[],
+  compoundId: string,
+  kind: "group" | "frame",
+  children: readonly string[] = [],
+): ExElement[] {
+  if (children.length === 0) return result;
+  return result.map((el) => {
+    if (el.isDeleted || !children.some((c) => belongsTo(el, c))) return el;
+    if (kind === "group") {
+      if (el.groupIds.includes(compoundId)) return el;
+      return bump(el, { groupIds: [...el.groupIds, compoundId] });
+    }
+    if (el.frameId || el.type === "frame") return el;
+    return bump(el, { frameId: compoundId });
+  });
+}
+
+/** Grupo/frame apagado: os filhos ficam, sem o groupId/frameId dele. */
+function releaseChildren(
+  result: ExElement[],
+  compoundId: string,
+  kind: "group" | "frame",
+): ExElement[] {
+  return result.map((el) => {
+    if (el.isDeleted) return el;
+    if (kind === "group" && el.groupIds.includes(compoundId)) {
+      return bump(el, {
+        groupIds: el.groupIds.filter((g) => g !== compoundId),
+      });
+    }
+    if (kind === "frame" && el.frameId === compoundId) {
+      return bump(el, { frameId: null });
+    }
+    return el;
+  });
+}
+
+/**
+ * Update de entity/class: refaz o bloco inteiro (campos mudam a altura e a
+ * largura) no mesmo canto. Mantém pin, setas ligadas e pertença a grupos.
+ */
+function rebuildBlock(
+  result: ExElement[],
+  idx: number,
+  op: Extract<DiagramPatchOp, { op: "update" }>,
+): { elements: ExElement[]; changedBox: boolean } {
+  const owner = result[idx];
+  const texts = new Map(
+    result
+      .filter(
+        (el) => el.type === "text" && !el.isDeleted && (el as ExText).containerId,
+      )
+      .map((el) => [
+        (el as ExText).containerId!,
+        (el as ExText).originalText ?? (el as ExText).text,
+      ]),
+  );
+  const current = blockToSkeleton(owner, (cellId) => texts.get(cellId));
+  const header = result.find(
+    (el) => el.id === `${owner.id}__header` && !el.isDeleted,
+  );
+  const skel: DiagramSkeletonElement = {
+    ...current,
+    ...(op.label?.text !== undefined ? { name: op.label.text } : {}),
+    ...(op.name !== undefined ? { name: op.name } : {}),
+    ...(op.fields !== undefined ? { fields: op.fields } : {}),
+    ...(op.attributes !== undefined ? { attributes: op.attributes } : {}),
+    ...(op.methods !== undefined ? { methods: op.methods } : {}),
+    strokeColor: op.strokeColor ?? header?.strokeColor,
+    backgroundColor: op.backgroundColor ?? header?.backgroundColor,
+  };
+  const moved = op.x !== undefined || op.y !== undefined;
+  const pos = { x: op.x ?? owner.x, y: op.y ?? owner.y };
+  const built = buildBlock(skel, pos, {
+    auto: isAutoPlaced(owner) && !moved,
+    ...(directionOf(owner) ? { direction: directionOf(owner) } : {}),
+  });
+  const outerGroups = owner.groupIds.filter((g) => g !== owner.id);
+  const out = result.slice();
+  const keepIds = new Set(built.map((el) => el.id));
+  built.forEach((fresh, i) => {
+    const prevIdx = i === 0 ? idx : out.findIndex((el) => el.id === fresh.id);
+    const prev = prevIdx >= 0 ? out[prevIdx] : undefined;
+    const merged: ExElement = {
+      ...fresh,
+      groupIds: [...fresh.groupIds, ...outerGroups],
+      frameId: owner.frameId,
+      ...(i === 0 ? { boundElements: owner.boundElements } : {}),
+      ...(prev
+        ? {
+            index: prev.index,
+            seed: prev.seed,
+            version: prev.version + 1,
+            isDeleted: false,
+          }
+        : { index: fractionalIndexAt(out.length) }),
+    };
+    if (prev) out[prevIdx] = merged;
+    else out.push(merged);
+  });
+  // Linhas que sobraram (campo removido) saem da cena, e também textos que o
+  // editor criou com id próprio nas células: o bloco novo traz os dele.
+  const cellIds = new Set(
+    out
+      .filter((el) => partOwner(el) === owner.id && el.type !== "text")
+      .map((el) => el.id),
+  );
+  out.forEach((el, i) => {
+    if (el.isDeleted || keepIds.has(el.id)) return;
+    const strayText =
+      el.type === "text" && cellIds.has((el as ExText).containerId ?? "");
+    if (partOwner(el) === owner.id || strayText) {
+      out[i] = bump(el, { isDeleted: true });
+    }
+  });
+  const next = out[idx];
+  const changedBox =
+    moved ||
+    Math.abs(next.width - owner.width) > 0.5 ||
+    Math.abs(next.height - owner.height) > 0.5;
+  return { elements: out, changedBox };
+}
+
+/**
+ * Caixas de grupo/frame voltam a envolver os filhos (do mais interno pro mais
+ * externo) depois que os nós se moveram ou cresceram.
+ */
+function refitCompounds(result: ExElement[]): void {
+  const parents = sceneParents(result);
+  const indexOf = new Map(result.map((el, i) => [el.id, i]));
+  const ids = result.filter(isCompoundElement).map((el) => el.id);
+  for (const id of deepestFirst(ids, parents)) {
+    const idx = indexOf.get(id)!;
+    const box = result[idx];
+    const members = result.filter(
+      (el) =>
+        parents.get(el.id) === id &&
+        (isLayoutNode(el) || isCompoundElement(el)),
+    );
+    if (members.length === 0) continue;
+    const labelRef = (box.boundElements ?? []).find((b) => b.type === "text");
+    const fit = fitBox(
+      members,
+      compoundPadding(compoundKind(box)!, labelRef !== undefined),
+    );
+    if (
+      Math.abs(fit.x - box.x) < 0.5 &&
+      Math.abs(fit.y - box.y) < 0.5 &&
+      Math.abs(fit.width - box.width) < 0.5 &&
+      Math.abs(fit.height - box.height) < 0.5
+    ) {
+      continue;
+    }
+    result[idx] = bump(box, fit);
+    const labelIdx = labelRef ? indexOf.get(labelRef.id) : undefined;
+    if (labelIdx !== undefined) {
+      const label = result[labelIdx] as ExText;
+      result[labelIdx] = bump(label, labelPosition(fit, label));
+    }
+  }
+}
+
 export interface PatchOpsResult {
   elements: ExElement[];
   /** Nós movidos/redimensionados e setas novas/religadas: rota a refazer. */
   touched: Set<string>;
+}
+
+/**
+ * Setas que o editor prendeu a uma célula de bloco passam a apontar pro dono
+ * (com boundElements simétrico). Sem isto o patch trata a célula como ponta:
+ * a seta some do layout e fica presa a uma linha que o rebuild apaga.
+ */
+function rebindPartArrows(
+  elements: ExElement[],
+  touched: Set<string>,
+): ExElement[] {
+  const targetOf = bindingTargetResolver(elements);
+  const moves: { arrow: string; from: string; to: string }[] = [];
+  const out = elements.map((el) => {
+    if (el.isDeleted || el.type !== "arrow") return el;
+    const lin = el as ExLinear;
+    const rebind = (b: ExLinear["startBinding"]) => {
+      if (!b || targetOf(b.elementId) === b.elementId) return b;
+      moves.push({ arrow: el.id, from: b.elementId, to: targetOf(b.elementId) });
+      return { ...b, elementId: targetOf(b.elementId) };
+    };
+    const startBinding = rebind(lin.startBinding);
+    const endBinding = rebind(lin.endBinding);
+    if (startBinding === lin.startBinding && endBinding === lin.endBinding) {
+      return el;
+    }
+    touched.add(el.id);
+    return bump(lin, { startBinding, endBinding });
+  });
+  if (moves.length === 0) return elements;
+  return out.map((el) => {
+    const away = moves.filter((m) => m.from === el.id).map((m) => m.arrow);
+    const into = moves.filter((m) => m.to === el.id).map((m) => m.arrow);
+    if (away.length === 0 && into.length === 0) return el;
+    const list = (el.boundElements ?? []).filter((b) => !away.includes(b.id));
+    for (const id of into) {
+      if (!list.some((b) => b.id === id)) list.push({ id, type: "arrow" });
+    }
+    return bump(el, { boundElements: list });
+  });
 }
 
 /**
@@ -158,8 +408,8 @@ export function applyPatchOps(
   elements: unknown[],
   ops: DiagramPatchOp[],
 ): PatchOpsResult {
-  let result = (elements as ExElement[]).slice();
   const touched = new Set<string>();
+  let result = rebindPartArrows(elements as ExElement[], touched).slice();
   // Estado da linha de empilhamento pros adds sem posição deste patch.
   const stack: { x: number | null; y: number } = { x: null, y: 0 };
 
@@ -178,6 +428,9 @@ export function applyPatchOps(
   for (const op of ops) {
     if (op.op === "add") {
       const skel = { ...op.element };
+      if (isCompoundType(skel.type)) {
+        result = adoptChildren(result, skel.id, skel.type, skel.children);
+      }
       const isNode = skel.type !== "arrow" && skel.type !== "line";
       const explicit = skel.x !== undefined && skel.y !== undefined;
       if (isNode && !explicit) {
@@ -220,6 +473,12 @@ export function applyPatchOps(
       const idx = findIndex(op.id);
       if (idx < 0) continue;
       const el = result[idx];
+      if (blockKind(el)) {
+        const rebuilt = rebuildBlock(result, idx, op);
+        result = rebuilt.elements;
+        if (rebuilt.changedBox) touched.add(el.id);
+        continue;
+      }
       const changes: Partial<ExElement> = {};
       let dx = 0;
       let dy = 0;
@@ -237,7 +496,8 @@ export function applyPatchOps(
         el.type === "rectangle" ||
         el.type === "ellipse" ||
         el.type === "diamond";
-      if (op.label?.text !== undefined && isShape) {
+      // Caixa de grupo não cresce pro label: ela se ajusta aos filhos.
+      if (op.label?.text !== undefined && isShape && !compoundKind(el)) {
         // Label novo pode não caber: cresce o shape quando o patch não fixa
         // tamanho (grow-only pra não encolher shape já dimensionado).
         const fitted = sizeFor({
@@ -255,6 +515,32 @@ export function applyPatchOps(
       if (op.strokeColor !== undefined) changes.strokeColor = op.strokeColor;
       if (op.backgroundColor !== undefined) {
         changes.backgroundColor = op.backgroundColor;
+      }
+      if (op.relation !== undefined && el.type === "arrow") {
+        const [startHead, endHead] = RELATION_ARROWHEADS[op.relation];
+        Object.assign(changes as Partial<ExLinear>, {
+          startArrowhead: startHead,
+          endArrowhead: endHead,
+          customData: {
+            ...el.customData,
+            pitwall: {
+              ...(el.customData?.pitwall as object),
+              relation: op.relation,
+            },
+          },
+        });
+      }
+      if (op.name !== undefined && el.type === "frame") {
+        Object.assign(changes, {
+          name: op.name,
+          customData: {
+            ...el.customData,
+            pitwall: {
+              ...(el.customData?.pitwall as object),
+              name: op.name,
+            },
+          },
+        });
       }
       if (op.text !== undefined && el.type === "text") {
         (changes as Partial<ExText>).text = op.text;
@@ -289,8 +575,11 @@ export function applyPatchOps(
             labelChanges.width = metrics.width;
             labelChanges.height = metrics.height;
             if (isShape) {
-              // Recentraliza no shape já atualizado (move + resize inclusos).
-              Object.assign(labelChanges, centeredIn(result[idx], metrics));
+              // Reposiciona no shape já atualizado (move + resize inclusos).
+              Object.assign(
+                labelChanges,
+                labelPosition(result[idx], { ...label, ...metrics }),
+              );
             } else if (dx !== 0 || dy !== 0) {
               labelChanges.x = label.x + dx;
               labelChanges.y = label.y + dy;
@@ -299,7 +588,7 @@ export function applyPatchOps(
             isShape &&
             (changes.width !== undefined || changes.height !== undefined)
           ) {
-            Object.assign(labelChanges, centeredIn(result[idx], label));
+            Object.assign(labelChanges, labelPosition(result[idx], label));
           } else if (dx !== 0 || dy !== 0) {
             labelChanges.x = label.x + dx;
             labelChanges.y = label.y + dy;
@@ -377,6 +666,15 @@ export function applyPatchOps(
     const el = result[idx];
     const deletedIds = new Set([el.id]);
     result[idx] = bump(el, { isDeleted: true });
+    // Bloco: as partes (células e textos) vão junto.
+    result = result.map((other) => {
+      if (other.isDeleted || partOwner(other) !== el.id) return other;
+      deletedIds.add(other.id);
+      return bump(other, { isDeleted: true });
+    });
+    // Compound: os filhos ficam, só saem do grupo/frame.
+    const kind = compoundKind(el);
+    if (kind) result = releaseChildren(result, el.id, kind);
 
     const boundText = (el.boundElements ?? []).find((b) => b.type === "text");
     if (boundText) {
@@ -502,6 +800,11 @@ function moveNode(
     auto: true,
     direction,
   });
+  result.forEach((other, j) => {
+    if (partOwner(other) === el.id && !other.isDeleted) {
+      result[j] = bump(other, { x: other.x + dx, y: other.y + dy });
+    }
+  });
   const labelRef = (el.boundElements ?? []).find((b) => b.type === "text");
   if (!labelRef) return;
   const labelIdx = result.findIndex((e) => e.id === labelRef.id);
@@ -605,6 +908,8 @@ export function finalizePatchLayout(
     }
   }
 
+  refitCompounds(result);
+
   const nodes = result.filter((el) => !el.isDeleted && isLayoutNode(el));
 
   result.forEach((el, i) => {
@@ -642,11 +947,24 @@ export function finalizePatchLayout(
       detached;
     // O ELK não conhece os nós pinados: a rota dele pode passar por cima deles.
     let route: Point[] | undefined =
-      elkRoute && !crosses(elkRoute) ? elkRoute : undefined;
+      startEl === endEl
+        ? selfLoopRoute(startEl)
+        : elkRoute && !crosses(elkRoute)
+          ? elkRoute
+          : undefined;
     if (!route && (elkRoute || affected || crosses(current))) {
       route = avoidingRoute(startEl, endEl, others);
     }
     if (!route) return;
+    if (startEl !== endEl) {
+      route = withArrowheadStubs(
+        route,
+        startEl,
+        endEl,
+        { start: Boolean(lin.startArrowhead), end: Boolean(lin.endArrowhead) },
+        others,
+      );
+    }
     const geometry = elbowGeometry(route, startEl, endEl);
     if (sameGeometry(lin, geometry)) return;
     const next = bump(lin, geometry);

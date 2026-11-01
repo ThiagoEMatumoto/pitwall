@@ -35,13 +35,22 @@ const LAYOUT_OPTIONS: Record<string, string> = {
   'elk.spacing.nodeNode': '60',
   'elk.layered.spacing.nodeNodeBetweenLayers': '100',
   'elk.spacing.edgeNode': '30',
+  // Default 10: a primeira dobra ficava a 10px do nó e a ponta da seta
+  // (crowfoot, losango) sumia na curva. Casa com MIN_ARROWHEAD_STUB.
+  'elk.layered.spacing.edgeNodeBetweenLayers': '32',
   'elk.spacing.edgeEdge': '20',
   'elk.spacing.edgeLabel': '8',
   'elk.spacing.componentComponent': '100',
   'elk.edgeLabels.placement': 'CENTER',
 }
 
-const toPoint = (p: { x: number; y: number }): Point => [p.x, p.y]
+// Opções de espaçamento valem por nó no ELK: compound repete as da raiz.
+const SPACING_OPTIONS = Object.fromEntries(
+  Object.entries(LAYOUT_OPTIONS).filter(([k]) => k.startsWith('elk.spacing') || k.includes('.spacing.'))
+)
+
+const elkPadding = (p: { top: number; left: number; bottom: number; right: number }) =>
+  `[top=${p.top},left=${p.left},bottom=${p.bottom},right=${p.right}]`
 
 export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
   const root: ElkNode = {
@@ -49,8 +58,10 @@ export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
     layoutOptions: {
       ...LAYOUT_OPTIONS,
       'elk.direction': graph.direction === 'TB' ? 'DOWN' : 'RIGHT',
+      // Grupos/frames: um layout só pro grafo todo, arestas cruzando níveis.
+      'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
     },
-    children: graph.nodes.map((n) => ({ id: n.id, width: n.width, height: n.height })),
+    children: [],
     edges: graph.edges.map((e): ElkExtendedEdge => ({
       id: e.id,
       sources: [e.source],
@@ -58,21 +69,53 @@ export async function runElkLayout(graph: LayoutGraph): Promise<LayoutResult> {
       ...(e.label ? { labels: [{ id: `${e.id}__elk_label`, ...e.label }] } : {}),
     })),
   }
+  const byId = new Map<string, ElkNode>([[root.id, root]])
+  for (const c of graph.compounds ?? []) {
+    byId.set(c.id, {
+      id: c.id,
+      layoutOptions: { ...SPACING_OPTIONS, 'elk.padding': elkPadding(c.padding) },
+      children: [],
+    })
+  }
+  const attach = (node: ElkNode, parent?: string) => {
+    const host = (parent && byId.get(parent)) || root
+    host.children!.push(node)
+  }
+  for (const c of graph.compounds ?? []) attach(byId.get(c.id)!, c.parent)
+  for (const n of graph.nodes) {
+    attach({ id: n.id, width: n.width, height: n.height }, n.parent)
+  }
+
   const out = await elk.layout(root)
+  // ELK devolve filhos relativos ao pai e rotas relativas ao container da aresta.
   const positions = new Map<string, { x: number; y: number }>()
-  for (const child of out.children ?? []) {
-    positions.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 })
+  const offsets = new Map<string, { x: number; y: number }>([[root.id, { x: 0, y: 0 }]])
+  const walk = (node: ElkNode, ox: number, oy: number) => {
+    for (const child of node.children ?? []) {
+      const at = { x: ox + (child.x ?? 0), y: oy + (child.y ?? 0) }
+      positions.set(child.id, at)
+      offsets.set(child.id, at)
+      walk(child, at.x, at.y)
+    }
   }
+  walk(out, 0, 0)
   const routes = new Map<string, Point[]>()
-  for (const edge of out.edges ?? []) {
-    const section = edge.sections?.[0]
-    if (!section) continue
-    routes.set(edge.id, [
-      toPoint(section.startPoint),
-      ...(section.bendPoints ?? []).map(toPoint),
-      toPoint(section.endPoint),
-    ])
+  const collectEdges = (node: ElkNode) => {
+    for (const edge of node.edges ?? []) {
+      const section = edge.sections?.[0]
+      if (!section) continue
+      const container = (edge as { container?: string }).container ?? node.id
+      const o = offsets.get(container) ?? { x: 0, y: 0 }
+      const abs = (p: { x: number; y: number }): Point => [p.x + o.x, p.y + o.y]
+      routes.set(edge.id, [
+        abs(section.startPoint),
+        ...(section.bendPoints ?? []).map(abs),
+        abs(section.endPoint),
+      ])
+    }
+    for (const child of node.children ?? []) collectEdges(child)
   }
+  collectEdges(out)
   return { positions, routes }
 }
 
