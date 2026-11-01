@@ -444,6 +444,9 @@ export interface AdoptSessionInput {
 export interface ChildLinkInfo {
   state: ChildLinkState
   handoff: Handoff | null
+  // Re-vincular REINICIA a sessão: ela está viva, mas foi retomada como sessão
+  // comum (sem apelido nem canal de entrada), e só o relance devolve os dois.
+  relinkRestarts: boolean
 }
 
 export interface AdoptedSession {

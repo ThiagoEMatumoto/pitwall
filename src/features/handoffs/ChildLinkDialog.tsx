@@ -1,7 +1,8 @@
 // Vínculo de uma sessão que JÁ é (ou foi) filha: re-vincular o mesmo handoff,
-// trocar a mãe ou desvincular. Nada aqui reinicia o processo — diferente da adoção,
-// que relança pra fixar apelido e canal. Quem decide o que é oferecido é a régua
-// única childLinkState (a mesma do backend), vinda em `link`.
+// trocar a mãe ou desvincular. Em geral nada aqui reinicia o processo — diferente da
+// adoção, que relança pra fixar apelido e canal. Exceção: `link.relinkRestarts`
+// (filha viva retomada como sessão comum), que o texto e o botão avisam. Quem
+// decide o que é oferecido é a régua única childLinkState (a mesma do backend).
 
 import { useEffect, useState } from 'react'
 import { Dialog } from '@/components/ui/Dialog'
@@ -44,6 +45,7 @@ export function ChildLinkDialog({
   }, [open, current])
 
   const relinkable = link.state === 'relinkable'
+  const restarts = relinkable && link.relinkRestarts
   const ended = link.state === 'none'
 
   async function run(action: () => Promise<unknown>) {
@@ -112,7 +114,7 @@ export function ChildLinkDialog({
               onClick={() => void confirm()}
               disabled={busy || (!relinkable && !changedMother)}
             >
-              {relinkable ? 'Re-vincular' : 'Trocar mãe'}
+              {restarts ? 'Reiniciar e re-vincular' : relinkable ? 'Re-vincular' : 'Trocar mãe'}
             </Button>
           )}
         </>
@@ -121,11 +123,13 @@ export function ChildLinkDialog({
       <div className="flex flex-col gap-4">
         <div className="text-xs text-[var(--color-text-dim)]">
           <span className="text-[var(--color-text)]">{displayTitle}</span>{' '}
-          {relinkable
-            ? 'tem um vínculo interrompido ou dispensado. Re-vincular reativa o MESMO handoff — sem criar outro e sem reiniciar a sessão.'
-            : ended
-              ? 'foi filha de um handoff já encerrado e segue aninhada sob a mãe. Desvincular a devolve ao nível de mãe; tornar filha de novo cria um vínculo novo (reinicia a sessão).'
-              : 'é filha de um handoff ativo. Dá pra trocar a mãe só desta filha, ou desvincular (ela volta a ser uma sessão comum).'}
+          {restarts
+            ? 'tem um vínculo interrompido ou dispensado e foi retomada como sessão comum — sem apelido e sem canal de entrada, a mãe não consegue falar com ela. Re-vincular REINICIA a sessão (o histórico volta por --resume; o turno em andamento se perde) para devolver os dois.'
+            : relinkable
+              ? 'tem um vínculo interrompido ou dispensado. Re-vincular reativa o MESMO handoff — sem criar outro e sem reiniciar a sessão.'
+              : ended
+                ? 'foi filha de um handoff já encerrado e segue aninhada sob a mãe. Desvincular a devolve ao nível de mãe; tornar filha de novo cria um vínculo novo (reinicia a sessão).'
+                : 'é filha de um handoff ativo. Dá pra trocar a mãe só desta filha, ou desvincular (ela volta a ser uma sessão comum).'}
         </div>
         {!ended && (
           <MotherSessionPicker

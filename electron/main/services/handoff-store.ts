@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { getDb, handoffsInterruptedAtOpen } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
+import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import * as requests from './handoff-requests'
 import type { CreateRequestInput, HandoffRequest } from '../../../shared/types/handoff-request'
@@ -702,12 +703,10 @@ export function getByChildConversation(sessionId: string): Handoff | null {
   const row = getDb()
     .prepare(
       `${SELECT_HANDOFF} JOIN sessions cs ON cs.id = h.child_session_id
-        WHERE h.child_session_id = ?
-           OR (cs.cc_session_id IS NOT NULL
-               AND cs.cc_session_id = (SELECT cc_session_id FROM sessions WHERE id = ?))
+        WHERE ${CHILD_CONVERSATION_MATCH}
         ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1`,
     )
-    .get(sessionId, sessionId) as HandoffRow | undefined
+    .get(...childConversationParams([sessionId])) as HandoffRow | undefined
   return row ? toEntity(row) : null
 }
 

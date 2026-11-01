@@ -763,7 +763,9 @@ describe('session-graph — hierarquia mãe/filha (hierarchyMotherId)', () => {
     })
   })
 
-  it('antecessora do bastão segue filha da mesma mãe', () => {
+  // Mesmo critério da régua de vínculo (getByChildConversation): a árvore não
+  // pode mostrar como filha uma sessão que o "Desvincular" não alcança.
+  it('antecessora do bastão sai da hierarquia; a sucessora é a filha', () => {
     addSession('mae', 'r-web')
     addSession('kid', 'r-api')
     addSession('kid-b', 'r-api')
@@ -771,8 +773,10 @@ describe('session-graph — hierarquia mãe/filha (hierarchyMotherId)', () => {
     passBaton(h, 'kid', 'kid-b')
 
     const g = graphFor(live({ mae: {}, kid: {}, 'kid-b': {} }))
-    expect(node(g, 'kid')?.hierarchyMotherId).toBe('mae')
+    expect(node(g, 'kid')?.hierarchyMotherId).toBeNull()
+    expect(handoffStore.getByChildConversation('kid')).toBeNull()
     expect(node(g, 'kid-b')?.hierarchyMotherId).toBe('mae')
+    expect(handoffStore.getByChildConversation('kid-b')?.id).toBe(h)
   })
 
   it('desvincular (release) devolve ao nível de mãe; readotar depois volta a ser filha', () => {

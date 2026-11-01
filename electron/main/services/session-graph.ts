@@ -15,6 +15,7 @@ import type {
 } from '../../../shared/types/session-graph'
 import { resolvePurpose } from './session-purpose'
 import { isResumableChild } from './handoff-store'
+import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import { humanQueue, isAskItem } from '../../../shared/attention/selectors'
 import type { AttentionItem } from '../../../shared/types/attention'
@@ -597,11 +598,9 @@ function readPastTasks(db: Database.Database, sessionIds: string[]): Map<string,
 interface HierarchyHandoffRow {
   id: string
   mother_session_id: string | null
-  child_session_id: string | null
-  predecessor_session_id: string | null
+  child_session_id: string
   created_at: number
   child_cc: string | null
-  pred_cc: string | null
 }
 
 interface HierarchySessionRow {
@@ -617,7 +616,8 @@ interface HierarchySessionRow {
 const convKey = (id: string, cc: string | null) => cc ?? `id:${id}`
 
 // Hierarquia de exibição: pra cada sessão do grafo, o handoff MAIS RECENTE em que
-// a conversa dela foi filha (ou antecessora no bastão), sem filtro de dispensa,
+// a conversa dela foi filha (critério único de child-conversation.ts, o mesmo da
+// régua de vínculo: a antecessora do bastão não entra), sem filtro de dispensa,
 // status ou idade — o readGraphHandoffs corta tudo isso, e a filha antiga voltava
 // ao topo como se fosse mãe. Só o 'release' (Desvincular/Soltar) posterior ao
 // vínculo devolve a sessão ao nível de mãe. A mãe é resolvida pra linha mais
@@ -634,31 +634,20 @@ export function readHierarchyLinks(
   const ccs = JSON.stringify(sessions.flatMap((s) => (s.cc_session_id ? [s.cc_session_id] : [])))
   const handoffs = db
     .prepare(
-      `SELECT h.id, h.mother_session_id, h.child_session_id, h.predecessor_session_id,
-              h.created_at, cs.cc_session_id AS child_cc, ps.cc_session_id AS pred_cc
+      `SELECT h.id, h.mother_session_id, h.child_session_id, h.created_at,
+              cs.cc_session_id AS child_cc
          FROM handoffs h
-         LEFT JOIN sessions cs ON cs.id = h.child_session_id
-         LEFT JOIN sessions ps ON ps.id = h.predecessor_session_id
+         JOIN sessions cs ON cs.id = h.child_session_id
         WHERE h.mother_session_id IS NOT NULL
-          AND (h.child_session_id IN (SELECT value FROM json_each(?))
-            OR h.predecessor_session_id IN (SELECT value FROM json_each(?))
-            OR cs.cc_session_id IN (SELECT value FROM json_each(?))
-            OR ps.cc_session_id IN (SELECT value FROM json_each(?)))
+          AND ${CHILD_CONVERSATION_MATCH}
         ORDER BY h.created_at, h.rowid`,
     )
-    .all(ids, ids, ccs, ccs) as HierarchyHandoffRow[]
+    .all(...childConversationParams(sessions.map((s) => s.id))) as HierarchyHandoffRow[]
   if (handoffs.length === 0) return out
 
   // ORDER BY created_at: o mais recente sobrescreve.
   const linkByConv = new Map<string, HierarchyHandoffRow>()
-  for (const h of handoffs) {
-    if (h.child_session_id) linkByConv.set(convKey(h.child_session_id, h.child_cc), h)
-    if (h.predecessor_session_id && h.predecessor_session_id !== h.child_session_id) {
-      const key = convKey(h.predecessor_session_id, h.pred_cc)
-      const prev = linkByConv.get(key)
-      if (!prev || prev.created_at <= h.created_at) linkByConv.set(key, h)
-    }
-  }
+  for (const h of handoffs) linkByConv.set(convKey(h.child_session_id, h.child_cc), h)
 
   // O release grava a filha solta no detail (o ponteiro foi zerado).
   const releases = db

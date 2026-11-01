@@ -338,11 +338,11 @@ export function registerHandoffsIpc(): void {
     return adoptSession(adoptSessionSchema.parse(raw))
   })
 
-  // Vínculo mãe/filha de UMA sessão, sem relançar o processo (ver relink.ts).
+  // Vínculo mãe/filha de UMA sessão; só relança a filha retomada como comum (ver relink.ts).
   ipcMain.handle('handoffs:child-link', (_e, sessionId: unknown): ChildLinkInfo => {
     return childLink(z.string().min(1).parse(sessionId))
   })
-  ipcMain.handle('handoffs:relink-child', (_e, raw: unknown): Handoff => {
+  ipcMain.handle('handoffs:relink-child', (_e, raw: unknown): Promise<Handoff> => {
     return relinkChild(relinkChildSchema.parse(raw))
   })
   ipcMain.handle('handoffs:set-mother', (_e, raw: unknown): Handoff => {
