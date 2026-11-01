@@ -100,6 +100,15 @@ describe('hasInputPrompt', () => {
 })
 
 describe('isInputRule', () => {
+  // Captura real do xterm de uma filha nomeada no 2.1.316: a régua logo abaixo do
+  // menu de permissão traz o apelido da sessão.
+  it('régua com rótulo do claude 2.1.316 (captura real)', () => {
+    const lines = fixture('claude-2.1.316-named-permission-bash.txt').trimEnd().split('\n')
+    const rule = lines[lines.length - 1].trim()
+    expect(rule).toMatch(/ mauricio-crie-src-greet ─$/)
+    expect(isInputRule(rule)).toBe(true)
+  })
+
   it('régua cheia e régua com rótulo', () => {
     expect(isInputRule('─'.repeat(10))).toBe(true)
     expect(isInputRule(`${'─'.repeat(28)} kzprobe-b-7731 ─`)).toBe(true)
