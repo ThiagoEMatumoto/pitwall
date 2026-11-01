@@ -11,12 +11,14 @@ import type {
   LibraryItems,
 } from "@excalidraw/excalidraw/types";
 import type { Diagram } from "../../../shared/types/ipc";
+import { pinMovedNodes, positionsOf } from "../../../shared/diagram-skeleton";
 import type { RemoteScene } from "@/store/diagramsStore";
 import { useDiagramsStore } from "@/store/diagramsStore";
 import { diagramsApi } from "@/lib/ipc";
 import { showToast } from "@/features/notifications/toast-store";
 import { Button } from "@/components/ui/Button";
 import { LazyExcalidraw, loadExcalidrawUtils } from "./excalidraw-lazy";
+import { restoreSceneElements } from "./restore-scene";
 import {
   fromExcalidrawLibraryItems,
   toExcalidrawLibraryItems,
@@ -124,6 +126,11 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
 
   // Fingerprint do que está persistido (head). Começa na cena carregada.
   const savedFpRef = useRef(fingerprint(diagram.scene.elements));
+  // Posições persistidas por id: baseline pra reconhecer o arrasto de um nó
+  // posicionado pelo layout e pinar ele (customData.pitwall.auto=false) antes
+  // do save — senão o próximo diagram_patch o devolveria pro lugar do ELK.
+  const baselinePosRef = useRef(positionsOf(diagram.scene.elements));
+  const unmountingRef = useRef(false);
   // Houve edição desde o último snapshot? (draft salvo ainda conta como dirty
   // até o próximo flush com snapshot:true, que grava a linha de histórico.)
   const dirtySinceSnapshotRef = useRef(false);
@@ -151,10 +158,9 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     );
     libraryHashRef.current = utils.getLibraryItemsHash(libraryItems);
     return {
-      elements: utils.restoreElements(
-        diagram.scene.elements as Parameters<typeof utils.restoreElements>[0],
-        null,
-      ),
+      // Rede de segurança pra cenas geradas fora do editor: refaz bindings
+      // seta↔shape (sem remedir texto — ver restore-scene.ts).
+      elements: restoreSceneElements(utils, diagram.scene.elements),
       libraryItems,
       // Sem viewBackgroundColor custom: o theme="dark" do Excalidraw INVERTE
       // as cores do canvas — um bg escuro aqui viraria claro na tela. Os
@@ -178,14 +184,33 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
       // NUNCA usar getSceneElements() aqui: no flush do unmount o Excalidraw
       // já desmontou e retorna [] — persistir isso apagaria a cena inteira.
       // lastElementsRef guarda o último onChange e sobrevive ao teardown.
-      const elements =
+      const raw =
         pendingElementsRef.current ?? lastElementsRef.current ?? null;
-      if (!elements) return;
+      if (!raw) return;
+      const elements = pinMovedNodes(raw, baselinePosRef.current);
+      if (elements !== raw) {
+        const api = apiRef.current;
+        if (!unmountingRef.current && api) {
+          // Arrasto em curso: espera soltar pra não trocar a cena sob o
+          // ponteiro.
+          if (api.getAppState().selectedElementsAreBeingDragged) {
+            timerRef.current = setTimeout(
+              () => flushRef.current(snapshot),
+              SAVE_DEBOUNCE_MS,
+            );
+            return;
+          }
+          // O canvas também precisa do pin: o próximo save partiria dele.
+          api.updateScene({ elements: elements as never });
+        }
+        lastElementsRef.current = elements;
+      }
       const fp = fingerprint(elements);
       const headStale = fp !== savedFpRef.current;
       const needsSnapshot = snapshot && dirtySinceSnapshotRef.current;
       if (!headStale && !needsSnapshot) return;
       savedFpRef.current = fp;
+      baselinePosRef.current = positionsOf(elements);
       if (snapshot) dirtySinceSnapshotRef.current = false;
       pendingElementsRef.current = null;
       setSyncStatus("saving");
@@ -296,6 +321,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("blur", onBlur);
+      unmountingRef.current = true;
       flushRef.current(true);
     };
   }, []);
@@ -308,10 +334,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     const api = apiRef.current;
     if (!api) return false;
     const utils = await loadExcalidrawUtils();
-    const restored = utils.restoreElements(
-      remote.scene.elements as Parameters<typeof utils.restoreElements>[0],
-      null,
-    );
+    const restored = restoreSceneElements(utils, remote.scene.elements);
     // Compara APÓS o restore: o fingerprint dos elementos crus do banco
     // difere dos restaurados (restoreElements normaliza campos), então um
     // echo de rename/thumbnail chegaria aqui como "mudança" e causaria
@@ -326,6 +349,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     // Marca como "persistido" ANTES do updateScene: o onChange disparado pela
     // aplicação não deve reagendar save (seria eco local do estado remoto).
     savedFpRef.current = restoredFp;
+    baselinePosRef.current = positionsOf(restored);
     dirtySinceSnapshotRef.current = false;
     pendingElementsRef.current = null;
     if (timerRef.current) {

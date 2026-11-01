@@ -1,7 +1,7 @@
 import { launchApp } from "../driver/launch";
 import { captureLogs, screenshot } from "../driver/capture";
 import { goToArea, waitReady } from "../driver/nav";
-import { skeletonToElements } from "../../shared/diagram-skeleton";
+import { skeletonToElements } from "../../electron/main/services/diagram-layout";
 
 const { app, page } = await launchApp();
 const { logFile, stop } = captureLogs(app, page);
@@ -19,7 +19,7 @@ page.on("pageerror", (e) => consoleErrors.push(e.message));
 
 // Cena Excalidraw válida gerada pelo conversor real (mesmo caminho do MCP):
 // 2 shapes + 1 arrow com labels.
-const sceneV1 = skeletonToElements([
+const sceneV1 = await skeletonToElements([
   {
     id: "renderer",
     type: "rectangle",
@@ -45,10 +45,10 @@ const sceneV1 = skeletonToElements([
     end: { id: "main" },
     label: { text: "IPC" },
   },
-]);
+], { layout: "keep" });
 
 // Segunda versão: um nó a mais — é o "update ao vivo" vindo de fora.
-const sceneV2 = skeletonToElements([
+const sceneV2 = await skeletonToElements([
   {
     id: "renderer",
     type: "rectangle",
@@ -90,7 +90,7 @@ const sceneV2 = skeletonToElements([
     end: { id: "db" },
     label: { text: "sql" },
   },
-]);
+], { layout: "keep" });
 
 try {
   await waitReady(page);
