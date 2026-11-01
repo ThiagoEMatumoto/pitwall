@@ -1,4 +1,5 @@
 import { SessionDrawerDock } from "@/features/sessions/chat/artifacts/SessionDrawer";
+import { observeCanvasResize, type CanvasSize } from "./reframe-on-resize";
 import {
   Suspense,
   useCallback,
@@ -55,17 +56,22 @@ async function refreshThumbnail(
 // Enquadra o conteúdo com zoom no máximo em 100% (fitToViewport nativo
 // aplica num frame posterior e estoura 100% em cenas pequenas), abaixo da
 // toolbar do Excalidraw.
+// `size`: tamanho medido da área (no resize o appState do Excalidraw ainda pode
+// ter a largura antiga).
 function frameContent(
   api: ExcalidrawImperativeAPI,
   elements: readonly unknown[],
+  size?: CanvasSize,
 ): void {
   if (elements.length === 0) return;
-  const st = api.getAppState();
   const bounds = contentBounds(
     elements as Parameters<typeof contentBounds>[0],
   );
   if (!bounds) return;
-  const { scrollX, scrollY, zoom } = frameViewport(bounds, st);
+  const { scrollX, scrollY, zoom } = frameViewport(
+    bounds,
+    size ?? api.getAppState(),
+  );
   api.updateScene({
     appState: {
       scrollX,
@@ -321,6 +327,16 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     return () => clearTimeout(t);
   }, [excalidrawAPI]);
 
+  // Gaveta "Sessão" abrindo/fechando muda a largura do canvas: reenquadra.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!excalidrawAPI || !el) return;
+    return observeCanvasResize(el, (size) =>
+      frameContent(excalidrawAPI, excalidrawAPI.getSceneElements(), size),
+    );
+  }, [excalidrawAPI]);
+
   // Diagrama sem preview (ex.: criado pelo Claude e nunca aberto) ganha um
   // na primeira abertura, sem esperar uma edição.
   // Parte da cena carregada (restaurada como no initialData), não do canvas:
@@ -484,7 +500,7 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
           </div>
         )}
 
-        <div className="relative min-h-0 flex-1">
+        <div ref={canvasRef} className="relative min-h-0 flex-1">
           <Suspense
             fallback={
               <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-dim)]">
