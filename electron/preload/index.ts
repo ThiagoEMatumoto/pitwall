@@ -149,6 +149,7 @@ const api: Api = {
     spawn: (input: SpawnSessionInput) => invoke('sessions:spawn', input),
     resume: (input: ResumeSessionInput) => invoke('sessions:resume', input),
     isResumable: (ccSessionId) => invoke('sessions:is-resumable', ccSessionId),
+    currentIds: (sessionIds) => invoke('sessions:current-ids', sessionIds),
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
     listByFeature: (featureId) => invoke('sessions:list-by-feature', featureId),
     getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),

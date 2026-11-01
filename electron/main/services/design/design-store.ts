@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { sessionParentClause } from '../session-conversation'
 import { getDb } from '../db'
 import { MAX_GLOBAL_CSS_BYTES, MAX_TOKEN_KEYS } from '../../../../shared/design/safety'
 import type {
@@ -116,7 +117,11 @@ export function listDocuments(filter?: DesignListFilter): DesignDocumentMeta[] {
       linkWhere.push('parent_type = ?')
       params.push(filter.parentType)
     }
-    if (filter.parentId) {
+    if (filter.parentId && filter.parentType === 'session') {
+      const clause = sessionParentClause(filter.parentId)
+      linkWhere.push(clause.sql)
+      params.push(...clause.params)
+    } else if (filter.parentId) {
       linkWhere.push('parent_id = ?')
       params.push(filter.parentId)
     }

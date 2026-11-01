@@ -2314,6 +2314,8 @@ export interface Api {
     spawn(input: SpawnSessionInput): Promise<Session>
     resume(input: ResumeSessionInput): Promise<ResumeSessionResult>
     isResumable(ccSessionId: string): Promise<boolean>
+    /** Cada id trocado pela linha mais recente da mesma conversa (resume abre linha nova). */
+    currentIds(sessionIds: string[]): Promise<string[]>
     listByRepo(repoId: string): Promise<SessionSummary[]>
     /** Sessões de uma feature, da mais recente pra mais antiga. */
     listByFeature(featureId: string): Promise<FeatureSessionSummary[]>

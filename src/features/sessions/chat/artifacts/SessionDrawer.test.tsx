@@ -18,6 +18,7 @@ const { on, emit, handlers, askSession, pushEcho, state } = vi.hoisted(() => {
 })
 
 vi.mock('@/lib/ipc', () => ({
+  sessionsApi: { currentIds: async (ids: string[]) => ids },
   diagramsApi: {
     get: vi.fn(async (id: string) => ({ id, title: 'Arq', links: state.links })),
     onLinksUpdated: on('diagramLinks:updated'),
