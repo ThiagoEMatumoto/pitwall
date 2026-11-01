@@ -13,8 +13,10 @@ import { emitSessionLinkPulse } from '../services/session-link-pulse'
 import { buildHandoffAlias, roleForHandoffMode } from '../services/handoff/alias'
 import { prepareHandoff } from '../services/handoff/prepare'
 import { adoptSession } from '../services/handoff/adopt'
+import { childLink, detachChild, relinkChild, setChildMother } from '../services/handoff/relink'
 import type {
   AdoptedSession,
+  ChildLinkInfo,
   HandoffSpawnContext,
   LinkKind,
   Handoff,
@@ -131,6 +133,16 @@ const adoptSessionSchema = z.object({
   task: z.string().min(1),
   featureId: z.string().min(1).optional(),
   mode: z.enum(['plan', 'auto-edits', 'interactive']).optional(),
+})
+
+const relinkChildSchema = z.object({
+  sessionId: z.string().min(1),
+  motherSessionId: z.string().min(1).optional(),
+})
+
+const setMotherSchema = z.object({
+  id: z.string().min(1),
+  motherSessionId: z.string().min(1),
 })
 
 const setOutcomeSchema = z.object({
@@ -324,6 +336,21 @@ export function registerHandoffsIpc(): void {
   // (é a única forma de fixar o apelido e o accept-inbound, que são flags de exec).
   ipcMain.handle('handoffs:adopt-session', (_e, raw: unknown): Promise<AdoptedSession> => {
     return adoptSession(adoptSessionSchema.parse(raw))
+  })
+
+  // Vínculo mãe/filha de UMA sessão, sem relançar o processo (ver relink.ts).
+  ipcMain.handle('handoffs:child-link', (_e, sessionId: unknown): ChildLinkInfo => {
+    return childLink(z.string().min(1).parse(sessionId))
+  })
+  ipcMain.handle('handoffs:relink-child', (_e, raw: unknown): Handoff => {
+    return relinkChild(relinkChildSchema.parse(raw))
+  })
+  ipcMain.handle('handoffs:set-mother', (_e, raw: unknown): Handoff => {
+    const { id, motherSessionId } = setMotherSchema.parse(raw)
+    return setChildMother({ handoffId: id, motherSessionId })
+  })
+  ipcMain.handle('handoffs:detach-child', (_e, sessionId: unknown): Handoff => {
+    return detachChild({ sessionId: z.string().min(1).parse(sessionId) })
   })
 
   // Resolve o repo-alvo + metadados do projeto pra UI conseguir chamar openSession.

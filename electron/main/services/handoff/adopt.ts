@@ -17,19 +17,10 @@ import * as store from '../handoff-store'
 import { wakeMotherFor } from './handoff-wake'
 import { prepareHandoff } from './prepare'
 import { resumeHandoffChild } from '../../ipc/sessions'
-import type { AdoptedSession, AdoptSessionInput, HandoffStatus } from '../../../../shared/types/ipc'
+import { childLinkState } from '../../../../shared/handoff-lead'
+import type { AdoptedSession, AdoptSessionInput } from '../../../../shared/types/ipc'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-// Statuses em que uma sessão já pertence à equipe — adotar de novo criaria um 2º
-// handoff apontando pra mesma sessão (dois cards, um só processo).
-const LIVE_HANDOFF_STATUSES: ReadonlySet<HandoffStatus> = new Set<HandoffStatus>([
-  'pending',
-  'approved',
-  'running',
-  'needs_input',
-  'interrupted',
-])
 
 // Teto de espera pelo exit da PTY antiga. O ptyManager só remove a sessão do mapa
 // no evento `exit` (assíncrono), e resumeHandoffChild tem um guard de "filha
@@ -118,9 +109,16 @@ export async function adoptSession(input: AdoptSessionInput): Promise<AdoptedSes
     )
   }
 
-  const existing = store.getByChildSession(input.sessionId)
-  if (existing && LIVE_HANDOFF_STATUSES.has(existing.status)) {
+  // Mesma régua do botão na UI (childLinkState): adotar de novo criaria um 2º
+  // handoff apontando pra mesma sessão (dois cards, um só processo).
+  const linkState = childLinkState(store.getByChildConversation(input.sessionId))
+  if (linkState === 'active') {
     throw new Error('Esta sessão já é filha de um handoff ativo.')
+  }
+  if (linkState === 'relinkable') {
+    throw new Error(
+      'Esta sessão já tem um vínculo interrompido ou dispensado — use "Re-vincular à mãe".',
+    )
   }
 
   // Gate de adotabilidade: sem cc_session_id + transcript no disco, o `--resume`

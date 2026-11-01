@@ -411,6 +411,12 @@ const api: Api = {
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
     undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
+    childLink: (sessionId: string) => invoke('handoffs:child-link', sessionId),
+    relinkChild: (input: { sessionId: string; motherSessionId?: string }) =>
+      invoke('handoffs:relink-child', input),
+    setMother: (input: { id: string; motherSessionId: string }) =>
+      invoke('handoffs:set-mother', input),
+    detachChild: (sessionId: string) => invoke('handoffs:detach-child', sessionId),
     resume: (id: string) => invoke('handoffs:resume', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),

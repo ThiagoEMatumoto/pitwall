@@ -29,6 +29,7 @@ export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-lo
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { ChildLinkState } from '../handoff-lead'
 import type { DiagramLibraryCatalogEntry } from '../diagram-library-catalog'
 import type {
   HibernateStatsView,
@@ -438,6 +439,11 @@ export interface AdoptSessionInput {
   task: string
   featureId?: string
   mode?: HandoffMode
+}
+
+export interface ChildLinkInfo {
+  state: ChildLinkState
+  handoff: Handoff | null
 }
 
 export interface AdoptedSession {
@@ -2593,6 +2599,16 @@ export interface Api {
     // normal (strip/switcher, notificações próprias). Não encerra a PTY nem desfaz
     // as permissões restritas com que a filha foi lançada.
     release(id: string): Promise<Handoff>
+    // Vínculo mãe/filha da sessão na régua única (childLinkState): decide entre
+    // "Tornar filha", "Re-vincular", "Trocar mãe" e "Desvincular".
+    childLink(sessionId: string): Promise<ChildLinkInfo>
+    // Reativa o MESMO handoff de uma filha interrompida/dispensada (opcionalmente
+    // com outra mãe), sem criar handoff novo nem reiniciar a sessão viva.
+    relinkChild(input: { sessionId: string; motherSessionId?: string }): Promise<Handoff>
+    // Troca a mãe de UMA filha (o bastão da mãe move todas).
+    setMother(input: { id: string; motherSessionId: string }): Promise<Handoff>
+    // Desvincula: o release do painel, resolvido pela sessão; ela volta a ser mãe.
+    detachChild(sessionId: string): Promise<Handoff>
     // Retoma um handoff INTERROMPIDO: re-spawna a filha via `claude --resume`,
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não
     // for 'interrupted' ou se o transcript da filha não existir mais.
