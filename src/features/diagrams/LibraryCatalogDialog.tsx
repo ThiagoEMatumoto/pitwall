@@ -30,7 +30,9 @@ interface Props {
   open: boolean
   onClose: () => void
   // O editor aplica a biblioteca nova (updateLibrary) — o dialog não conhece o Excalidraw.
-  onLibraryChanged: (items: DiagramLibraryItem[]) => void
+  // Fora do editor (lista de diagramas) é omitido: o install grava no store do
+  // main e o editor carrega a biblioteca ao abrir.
+  onLibraryChanged?: (items: DiagramLibraryItem[]) => void
 }
 
 function openCatalogPage() {
@@ -73,7 +75,7 @@ export function LibraryCatalogDialog({ open, onClose, onLibraryChanged }: Props)
       const { added, items } = await diagramsApi.library.installCatalog(entry.id)
       setInstalled((prev) => new Set(prev).add(entry.id))
       setEntryPending(entry.id, null)
-      onLibraryChanged(items)
+      onLibraryChanged?.(items)
       showToast({ title: `${entry.name}: ${added} shapes adicionados`, durationMs: 2500 })
     } catch (err) {
       setEntryPending(entry.id, {
@@ -93,7 +95,7 @@ export function LibraryCatalogDialog({ open, onClose, onLibraryChanged }: Props)
         return next
       })
       setEntryPending(entry.id, null)
-      onLibraryChanged(items)
+      onLibraryChanged?.(items)
     } catch (err) {
       setEntryPending(entry.id, {
         kind: 'error',

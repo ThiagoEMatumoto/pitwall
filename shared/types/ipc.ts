@@ -2708,6 +2708,8 @@ export interface Api {
     get(id: string): Promise<Diagram | null>
     // Cria a cabeça + versão 1 numa transação.
     create(input: CreateDiagramInput): Promise<Diagram>
+    // Modelo de shared/diagram-templates; o main posiciona com ELK.
+    createFromTemplate(templateId: string): Promise<Diagram>
     // Sempre atualiza a cabeça; snapshot=true bumpa versão e grava histórico
     // (cap de 30 snapshots por diagrama).
     updateScene(input: UpdateDiagramSceneInput): Promise<Diagram>

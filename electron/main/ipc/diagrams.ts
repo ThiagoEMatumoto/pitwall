@@ -9,6 +9,7 @@ import {
 } from '../services/diagram-library-install'
 import { DIAGRAM_LIBRARY_CATALOG } from '../../../shared/diagram-library-catalog'
 import { broadcast } from '../services/notify'
+import { requireDiagramTemplate, templateScene } from '../services/diagram-template-scene'
 import type {
   CreateDiagramInput,
   Diagram,
@@ -48,6 +49,25 @@ export function registerDiagramsIpc(): void {
     broadcast('diagram:updated', diagram)
     return diagram
   })
+
+  // "Novo a partir de modelo": o layout ELK só roda no main.
+  ipcMain.handle(
+    'diagrams:create-from-template',
+    async (_e, templateId: string): Promise<Diagram> => {
+      const template = requireDiagramTemplate(templateId)
+      const diagram = diagramStore.create({
+        title: template.name,
+        kind: template.kind,
+        scene: await templateScene(template),
+        sourceFormat: 'skeleton',
+        source: JSON.stringify(template.skeleton),
+        author: 'human',
+        summary: `criado a partir do modelo ${template.name}`,
+      })
+      broadcast('diagram:updated', diagram)
+      return diagram
+    },
+  )
 
   // author default 'human': quem chama este canal é a UI. O MCP declara
   // 'claude' explicitamente pelo caminho dele.

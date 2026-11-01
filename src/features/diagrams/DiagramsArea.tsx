@@ -1,10 +1,17 @@
-import { useEffect } from "react";
-import { Plus, Workflow } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LayoutTemplate, Library, Plus, Workflow } from "lucide-react";
 import { Icon } from "@/components/ui/Icon";
 import { activeMarker } from "@/features/brand";
 import { useDiagramsStore } from "@/store/diagramsStore";
 import { KIND_LABEL, relativeTime } from "./diagram-labels";
 import { DiagramEditor } from "./DiagramEditor";
+import { LibraryCatalogDialog } from "./LibraryCatalogDialog";
+import { TemplatePickerDialog } from "./TemplatePickerDialog";
+
+const headerButton =
+  "flex h-6 w-6 items-center justify-center rounded-md text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]";
+const textButton =
+  "inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]";
 
 export function DiagramsArea() {
   const diagrams = useDiagramsStore((s) => s.diagrams);
@@ -16,6 +23,9 @@ export function DiagramsArea() {
   const load = useDiagramsStore((s) => s.load);
   const select = useDiagramsStore((s) => s.select);
   const create = useDiagramsStore((s) => s.create);
+  const createFromTemplate = useDiagramsStore((s) => s.createFromTemplate);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [librariesOpen, setLibrariesOpen] = useState(false);
   const setShowArchived = useDiagramsStore((s) => s.setShowArchived);
   const startWatch = useDiagramsStore((s) => s.startWatch);
   const stopWatch = useDiagramsStore((s) => s.stopWatch);
@@ -33,14 +43,35 @@ export function DiagramsArea() {
           <span className="text-sm font-semibold text-[var(--color-text)]">
             Diagramas
           </span>
-          <button
-            type="button"
-            onClick={() => void create()}
-            title="Novo diagrama"
-            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-          >
-            <Icon as={Plus} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => setLibrariesOpen(true)}
+              title="Bibliotecas de shapes"
+              aria-label="Bibliotecas"
+              className={headerButton}
+            >
+              <Icon as={Library} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setTemplatesOpen(true)}
+              title="Novo a partir de modelo"
+              aria-label="Novo a partir de modelo"
+              className={headerButton}
+            >
+              <Icon as={LayoutTemplate} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void create()}
+              title="Novo diagrama"
+              aria-label="Novo diagrama"
+              className={headerButton}
+            >
+              <Icon as={Plus} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -54,8 +85,9 @@ export function DiagramsArea() {
             </p>
           ) : diagrams.length === 0 ? (
             <p className="px-4 py-6 text-sm text-[var(--color-text-dim)]">
-              Nenhum diagrama ainda. Peça a uma sessão do Claude para criar um —
-              ou comece um em branco no “+” acima.
+              Nenhum diagrama ainda. Peça a uma sessão do Claude para criar um,
+              comece em branco no “+” acima ou parta de um modelo de
+              arquitetura de software ou pipeline de ML.
             </p>
           ) : (
             <ul>
@@ -116,6 +148,29 @@ export function DiagramsArea() {
                 Selecione um diagrama — ou peça ao Claude para criar um (ex.:
                 “desenha a arquitetura desse repo”).
               </span>
+              <div className="mt-2 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTemplatesOpen(true)}
+                  className={textButton}
+                >
+                  <Icon as={LayoutTemplate} size={14} />
+                  Novo a partir de modelo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLibrariesOpen(true)}
+                  className={textButton}
+                >
+                  <Icon as={Library} size={14} />
+                  Bibliotecas de shapes
+                </button>
+              </div>
+              <span className="text-xs">
+                Modelos: arquitetura de software, pipeline de ML,
+                microsserviços. Bibliotecas: ícones de system design,
+                Kubernetes, deep learning, stack de dados e cloud.
+              </span>
             </div>
           </div>
         ) : (
@@ -126,6 +181,16 @@ export function DiagramsArea() {
           />
         )}
       </main>
+
+      <TemplatePickerDialog
+        open={templatesOpen}
+        onClose={() => setTemplatesOpen(false)}
+        onPick={createFromTemplate}
+      />
+      <LibraryCatalogDialog
+        open={librariesOpen}
+        onClose={() => setLibrariesOpen(false)}
+      />
     </>
   );
 }

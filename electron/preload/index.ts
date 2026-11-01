@@ -497,6 +497,7 @@ const api: Api = {
     list: (filter?: DiagramListFilter) => invoke('diagrams:list', filter),
     get: (id: string) => invoke('diagrams:get', id),
     create: (input: CreateDiagramInput) => invoke('diagrams:create', input),
+    createFromTemplate: (templateId: string) => invoke('diagrams:create-from-template', templateId),
     updateScene: (input: UpdateDiagramSceneInput) => invoke('diagrams:update-scene', input),
     rename: (id: string, title: string) => invoke('diagrams:rename', id, title),
     archive: (id: string) => invoke('diagrams:archive', id),

@@ -88,6 +88,7 @@ interface DiagramsState {
   select: (id: string | null) => Promise<void>;
   setShowArchived: (show: boolean) => Promise<void>;
   create: () => Promise<void>;
+  createFromTemplate: (templateId: string) => Promise<void>;
   rename: (id: string, title: string) => Promise<void>;
   archive: (id: string) => Promise<void>;
   unarchive: (id: string) => Promise<void>;
@@ -149,6 +150,15 @@ export const useDiagramsStore = create<DiagramsState>((set, get) => ({
       author: "human",
       sourceFormat: "scene",
     });
+    set((s) => ({
+      diagrams: upsertMeta(s.diagrams, toMeta(diagram)),
+      selected: diagram,
+      remoteScene: null,
+    }));
+  },
+
+  createFromTemplate: async (templateId) => {
+    const diagram = await diagramsApi.createFromTemplate(templateId);
     set((s) => ({
       diagrams: upsertMeta(s.diagrams, toMeta(diagram)),
       selected: diagram,
