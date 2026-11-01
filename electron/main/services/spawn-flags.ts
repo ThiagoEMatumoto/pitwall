@@ -326,6 +326,9 @@ const CHILD_WRITE_ASK = [
   'Bash(git stash clear:*)',
   'Bash(git checkout -- *)',
   'Bash(git checkout .)',
+  'Bash(git switch *--discard-changes*)',
+  'Bash(git switch *--force*)',
+  'Bash(git switch -f*)',
 ]
 
 // `ask` = continua pedindo confirmação (é o "NÃO PODE" reversível da regra: o
@@ -569,6 +572,49 @@ const NEVER_LEARN = new Set([
   'firebase',
   'vercel',
   'fly',
+  // interpretadores/runners genéricos: o prefixo não diz o que roda
+  'perl',
+  'ruby',
+  'awk',
+  'gawk',
+  'parallel',
+  'mise',
+  'just',
+  'task',
+  // destroem/sobrescrevem dado por fora do ask de `rm`
+  'unlink',
+  'truncate',
+  'rsync',
+  'docker-compose',
+  // infra: apply/import mexem em recurso real
+  'terraform',
+  'pulumi',
+])
+
+// Subcomandos cujo `*` engoliria destruição ou contornaria o ask/deny:
+// `gh api -X PUT .../merge` = merge sem o ask de `gh pr merge`; `git restore .`
+// descarta trabalho como o `checkout --` (ask); `git branch -D`, `git tag -d` etc.
+const NEVER_LEARN_PREFIX = new Set([
+  'gh api',
+  'gh repo',
+  'gh release',
+  'gh secret',
+  'gh variable',
+  'gh workflow',
+  'git restore',
+  'git branch',
+  'git tag',
+  'git rm',
+  'git remote',
+  'git config',
+  'git update-ref',
+  'git reflog',
+  'git gc',
+  'git prune',
+  'git filter-branch',
+  'git filter-repo',
+  'git submodule',
+  'git worktree',
 ])
 
 // Ferramentas com subcomando: a regra leva os dois tokens (`git stash *`), nunca
@@ -630,6 +676,7 @@ export function isLearnableChildRule(rule: string): boolean {
   const tokens = m[1].split(' ')
   if (NEVER_LEARN.has(tokens[0])) return false
   if (TWO_TOKEN_TOOLS.has(tokens[0]) && tokens.length < 2) return false
+  if (tokens.length >= 2 && NEVER_LEARN_PREFIX.has(`${tokens[0]} ${tokens[1]}`)) return false
   return !familyBlocked(m[1])
 }
 

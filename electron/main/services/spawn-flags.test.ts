@@ -235,6 +235,8 @@ describe('handoffChildSettings — escrita por modo', () => {
       'Bash(psql:*)',
       'Bash(chmod *-R*)',
       'Bash(git commit *--no-verify*)',
+      'Bash(git switch *--discard-changes*)',
+      'Bash(git switch -f*)',
     ]) {
       expect(ask).toContain(r)
     }
@@ -287,10 +289,10 @@ describe('regras aprendidas ("Sempre permitir para filhas")', () => {
 
   it('isLearnableChildRule: aceita prefixo de comando seguro e MCP', () => {
     expect(isLearnableChildRule('Bash(jest *)')).toBe(true)
-    expect(isLearnableChildRule('Bash(docker-compose *)')).toBe(true)
+    expect(isLearnableChildRule('Bash(docker-compose *)')).toBe(false) // down -v apaga volume
     expect(isLearnableChildRule('mcp__linear__get_issue')).toBe(true)
     expect(isLearnableChildRule('mcp__*')).toBe(false)
-    expect(isLearnableChildRule('Bash(gh api *)')).toBe(true)
+    expect(isLearnableChildRule('Bash(gh api *)')).toBe(false) // gh api -X PUT .../merge contorna o ask
     expect(isLearnableChildRule('Bash(gh pr *)')).toBe(false) // gh pr merge é ask
     expect(isLearnableChildRule('Bash(gcloud run *)')).toBe(false) // família com deny
   })
@@ -304,7 +306,7 @@ describe('deriveChildAllowRule', () => {
   })
 
   it('ferramenta com subcomando leva dois tokens', () => {
-    expect(deriveChildAllowRule('Bash', 'gh api repos/x/y')).toBe('Bash(gh api *)')
+    expect(deriveChildAllowRule('Bash', 'gh issue view 3')).toBe('Bash(gh issue *)')
     expect(deriveChildAllowRule('Bash', 'cargo clippy --all')).toBe('Bash(cargo clippy *)')
   })
 
@@ -320,6 +322,17 @@ describe('deriveChildAllowRule', () => {
       'echo $(rm x)',
       './scripts/deploy.sh',
       'FOO=1 jest',
+      // `*` aprendido contornaria ask/deny ou destruiria trabalho
+      'gh api -X PUT repos/a/b/pulls/1/merge',
+      'git restore .',
+      'git branch -D feat/x',
+      'git tag -d v1',
+      'unlink f.txt',
+      'truncate -s0 f.txt',
+      'rsync -a --delete a/ b/',
+      'terraform apply',
+      'perl -e 1',
+      'awk 1 f',
     ]) {
       expect(deriveChildAllowRule('Bash', cmd), cmd).toBeNull()
     }
