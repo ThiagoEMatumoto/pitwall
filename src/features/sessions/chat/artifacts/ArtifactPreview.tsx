@@ -63,6 +63,10 @@ export function DiagramPreview({ id, live }: { id: string; live: ArtifactLive })
           elements: elements as never,
           appState: DIAGRAM_EXPORT_APP_STATE,
           files: null,
+          // O SVG vai para o DOM, onde as fontes do Excalidraw já estão
+          // carregadas. Inlinar faria subset de glifos, que cai num new
+          // Function bloqueado pela CSP (4 erros no console por preview).
+          skipInliningFonts: true,
         })
         if (cancelled || !hostRef.current) return
         svg.removeAttribute('width')
