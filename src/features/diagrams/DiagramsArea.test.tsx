@@ -50,6 +50,11 @@ vi.mock("@/lib/ipc", () => ({
 
 // Evita puxar appStore/tasksStore/featuresStore (cadeia pesada de IPC) só pra
 // renderizar chips de vínculo.
+// A gaveta "Sessão" tem teste próprio (SessionDrawer.test.tsx).
+vi.mock("@/features/sessions/chat/artifacts/SessionDrawer", () => ({
+  SessionDrawerButton: () => null,
+}));
+
 vi.mock("@/lib/nav", () => ({
   navigateToFeature: vi.fn(),
   navigateToTask: vi.fn(),
