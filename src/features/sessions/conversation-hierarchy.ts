@@ -25,9 +25,12 @@ export function hierarchyHandoffMap(
 }
 
 // Superfícies de MÃE (Room, Dock, Ctrl+Shift+O, filtro): lidera filhas OU o humano
-// marcou "essa é a mãe". isMother sozinho segue sendo "lidera filhas" (badge, bastão).
-export function isMotherLike(n: Pick<SessionGraphNode, 'isMother' | 'isPinnedMother'>): boolean {
-  return n.isMother === true || n.isPinnedMother === true
+// marcou "essa é a mãe", ou tem filha pelo fio (hierarchyChildCount: filha done ou
+// dispensada continua filha). isMother sozinho segue sendo "lidera filhas" (badge, bastão).
+export function isMotherLike(
+  n: Pick<SessionGraphNode, 'isMother' | 'isPinnedMother' | 'hierarchyChildCount'>,
+): boolean {
+  return n.isMother === true || n.isPinnedMother === true || (n.hierarchyChildCount ?? 0) > 0
 }
 
 export interface NestedItem<T> {

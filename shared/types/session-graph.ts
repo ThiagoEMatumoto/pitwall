@@ -69,6 +69,9 @@ export interface SessionGraphNode {
   hierarchyMotherId?: string | null
   hierarchyMotherTitle?: string | null
   hierarchyHandoffId?: string | null
+  // Filhas pela régua por conversa (readHierarchyLinks), qualquer status/dispensa:
+  // só o release tira. Mantém a mãe como mãe quando todas as filhas encerraram.
+  hierarchyChildCount?: number
 }
 
 export interface SessionGraphLaneRepo {

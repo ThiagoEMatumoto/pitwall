@@ -88,9 +88,8 @@ describe('hierarquia por conversa (classes A/B/C)', () => {
       child,
     )
     expect(childIdsByMother(graph.edges, inUse).get(mother)?.has(child)).toBe(true)
-    expect(motherOfFocus(graph.nodes, graph.edges, inUse, { sessionId: child })).toBe(
-      graph.nodes.find((n) => n.sessionId === mother)?.isMother ? mother : null,
-    )
+    // Filha done/dispensada não tira a mãe do Dock nem do Ctrl+Shift+O.
+    expect(motherOfFocus(graph.nodes, graph.edges, inUse, { sessionId: child })).toBe(mother)
     const order = stripOrder(graph, [child, 'avulsa', mother])
     expect(order.indexOf(child)).toBe(order.indexOf(mother) + 1)
   }

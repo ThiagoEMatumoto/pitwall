@@ -29,6 +29,7 @@ import {
   readSessionGraphInput,
   TERMINAL_HANDOFF_WINDOW_MS,
   TERMINAL_HANDOFFS_PER_MOTHER,
+  LINKED_CHILDREN_PER_MOTHER,
   type LiveSessionState,
 } from './session-graph'
 
@@ -350,7 +351,10 @@ describe('session-graph', () => {
     ).toEqual([['Sem feature · Plataforma', [['solta', 'arq']]]])
   })
 
-  it('encerrados: só os últimos 7 dias e até 20 por mãe; ativo e needs_input sempre entram', () => {
+  // A janela de 7 dias / 20 por mãe só recorta o CARD (readGraphHandoffs). O
+  // parentesco não expira: filha antiga da mãe em vista continua sob ela (só o
+  // release solta), com teto próprio por mãe (LINKED_CHILDREN_PER_MOTHER).
+  it('encerrados: idade não solta a filha; o grafo segue com teto por mãe', () => {
     const now = 100 * TERMINAL_HANDOFF_WINDOW_MS
     const age = (id: string, ms: number) =>
       testDb.prepare('UPDATE handoffs SET updated_at = ? WHERE id = ?').run(now - ms, id)
@@ -379,10 +383,11 @@ describe('session-graph', () => {
     const ids = new Set(edgesOf(g.edges, 'handoff').map((e) => e.handoffId))
     expect(ids.has(asking)).toBe(true)
     expect(ids.has(busy)).toBe(true)
-    expect(ids.has(stale)).toBe(false)
-    expect(done.filter((h) => ids.has(h))).toEqual(done.slice(0, TERMINAL_HANDOFFS_PER_MOTHER))
-    expect(g.nodes.some((n) => n.sessionId === 'stale')).toBe(false)
-    expect(g.nodes.some((n) => n.sessionId === `done-${TERMINAL_HANDOFFS_PER_MOTHER}`)).toBe(false)
+    expect(ids.has(stale)).toBe(true)
+    expect(g.nodes.find((n) => n.sessionId === 'stale')?.hierarchyMotherId).toBe('mother')
+    expect(g.nodes.length).toBeLessThanOrEqual(
+      1 + TERMINAL_HANDOFFS_PER_MOTHER + LINKED_CHILDREN_PER_MOTHER,
+    )
   })
 
   // Dispensar arquiva o CARD (sai do Crew Dock), não o parentesco: a filha
