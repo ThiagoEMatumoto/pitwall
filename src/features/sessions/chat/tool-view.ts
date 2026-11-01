@@ -16,8 +16,8 @@ export interface ToolView {
   meta?: string
   // Comando completo do Bash, pro bloco "$ …" do card aberto.
   command?: string
-  // Diff de Edit/MultiEdit/Write, renderizado com o DiffBlock do PermissionCard.
-  diff?: DiffLine[]
+  // Edit/MultiEdit/Write: o diff existe, mas só é calculado (toolDiff) ao abrir.
+  hasDiff?: boolean
 }
 
 const CATEGORY: Record<string, ToolCategory> = {
@@ -126,7 +126,8 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   return out
 }
 
-function editDiff(name: string, input: unknown): DiffLine[] | undefined {
+// Diff de Edit/MultiEdit/Write para o DiffBlock. Caro (LCS): só com a linha aberta.
+export function toolDiff(name: string, input: unknown): DiffLine[] | undefined {
   if (name === 'Write') {
     const content = str(input, 'content')
     return splitLines(content).map((text, i) => ({ sign: '+', num: String(i + 1), text }))
@@ -150,10 +151,43 @@ function editDiff(name: string, input: unknown): DiffLine[] | undefined {
   return undefined
 }
 
-function diffMeta(diff: DiffLine[] | undefined): string | undefined {
-  if (!diff) return undefined
-  const added = diff.filter((l) => l.sign === '+').length
-  const removed = diff.filter((l) => l.sign === '-').length
+// +N −M da linha fechada sem LCS: linhas que sobram de cada lado na contagem
+// por multiconjunto. Bate com o diff quando a ordem não muda, que é o caso comum.
+function lineStats(before: string, after: string): { added: number; removed: number } {
+  const pool = new Map<string, number>()
+  for (const l of splitLines(before)) pool.set(l, (pool.get(l) ?? 0) + 1)
+  let added = 0
+  for (const l of splitLines(after)) {
+    const n = pool.get(l) ?? 0
+    if (n > 0) pool.set(l, n - 1)
+    else added++
+  }
+  let removed = 0
+  for (const n of pool.values()) removed += n
+  return { added, removed }
+}
+
+function editStats(name: string, input: unknown): string | undefined {
+  let added = 0
+  let removed = 0
+  if (name === 'Write') {
+    added = splitLines(str(input, 'content')).length
+  } else if (name === 'MultiEdit') {
+    const edits = (input as { edits?: unknown } | null)?.edits
+    if (!Array.isArray(edits)) return undefined
+    for (const e of edits) {
+      const st = lineStats(str(e, 'old_string'), str(e, 'new_string'))
+      added += st.added
+      removed += st.removed
+    }
+  } else if (name === 'Edit') {
+    const before = str(input, 'old_string')
+    const after = str(input, 'new_string')
+    if (!before && !after) return undefined
+    ;({ added, removed } = lineStats(before, after))
+  } else {
+    return undefined
+  }
   return removed === 0 ? `+${added}` : `+${added} −${removed}`
 }
 
@@ -176,13 +210,13 @@ export function toolView(name: string, input: unknown): ToolView {
     case 'MultiEdit':
     case 'Write':
     case 'NotebookEdit': {
-      const diff = editDiff(name, input)
+      const meta = editStats(name, input)
       return {
         category,
         label: name === 'Write' ? 'Escreveu' : 'Editou',
         target: shortPath(path),
-        meta: diffMeta(diff),
-        diff,
+        meta,
+        hasDiff: meta != null,
       }
     }
     case 'Bash': {

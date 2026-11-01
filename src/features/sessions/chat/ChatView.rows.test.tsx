@@ -102,4 +102,57 @@ describe('ChatView — linhas agrupadas', () => {
     render(<ChatView sessionId="s3" status="working" />)
     expect(screen.getByRole('status')).toHaveTextContent('Pensando…')
   })
+
+  it('salto suave: scroll intermediário não desengata e o conteúdo novo continua colado', () => {
+    transcript.messages = parseChatMessages([USER, TOOLS, RESULTS].join('\n'))
+    const { rerender } = render(<ChatView sessionId="s4" />)
+    const el = scroller()
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 })
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    act(() => fireEvent.click(screen.getByRole('button', { name: /Ir para o fim/ })))
+
+    // Primeiro quadro do smooth scroll: ainda longe do fim.
+    el.scrollTop = 900
+    fireEvent.scroll(el)
+    expect(screen.queryByRole('button', { name: /Ir para o fim|Novas mensagens/ })).not.toBeInTheDocument()
+
+    transcript.messages = parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n'))
+    rerender(<ChatView sessionId="s4" />)
+    expect(el.scrollTop).toBe(2000)
+  })
+})
+
+describe('ChatView — troca de sessão na mesma instância', () => {
+  const many = () =>
+    parseChatMessages(
+      Array.from({ length: 8 }, (_, i) =>
+        L({ type: 'user', message: { role: 'user', content: `pergunta ${i}` } }),
+      ).join('\n'),
+    )
+
+  it('o render com o transcript antigo vira loading e a conversa nova entra sem cascata', () => {
+    const first = parseChatMessages(USER)
+    transcript.messages = first
+    const { rerender } = render(<ChatView sessionId="a" />)
+    expect(screen.getByText('lê os dois arquivos')).toBeInTheDocument()
+
+    // O hook ainda devolve o MESMO array da sessão anterior.
+    rerender(<ChatView sessionId="b" />)
+    expect(screen.getByTestId('chat-loading')).toBeInTheDocument()
+
+    transcript.messages = many()
+    rerender(<ChatView sessionId="b" />)
+    expect(screen.getByText('pergunta 7')).toBeInTheDocument()
+    expect(document.querySelectorAll('.chat-row-in')).toHaveLength(0)
+  })
+
+  it('na mesma sessão, o que chega depois da 1ª pintura entra animado', () => {
+    transcript.messages = parseChatMessages(USER)
+    const { rerender } = render(<ChatView sessionId="c" />)
+    transcript.messages = parseChatMessages([USER, ANSWER].join('\n'))
+    rerender(<ChatView sessionId="c" />)
+    expect(document.querySelectorAll('.chat-row-in').length).toBeGreaterThan(0)
+  })
 })

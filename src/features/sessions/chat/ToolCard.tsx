@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import type { LucideProps } from 'lucide-react'
 import {
@@ -21,7 +21,7 @@ import { DiffBlock } from './PermissionCard'
 import { Chevron, ROW_BUTTON } from './chat-row-ui'
 import { ThinkingCard } from './ThinkingCard'
 import { toolEntries, type GroupEntry, type ToolEntry } from './chat-rows'
-import { oneLine, previewLines, summarizeTools, toolView, type ToolCategory } from './tool-view'
+import { oneLine, previewLines, summarizeTools, toolDiff, toolView, type ToolCategory } from './tool-view'
 
 const CATEGORY_ICON: Record<ToolCategory, ComponentType<LucideProps>> = {
   read: FileText,
@@ -138,14 +138,49 @@ function RowStatus({ entry, running }: { entry: ToolEntry; running?: boolean }) 
   return null
 }
 
+// O transcript é reparseado a cada broadcast: o input chega como objeto novo
+// mesmo sem mudar. A chave estável é o id do tool_use (o input serializado só
+// se a CLI não gravou id).
+function toolKey(use: ToolEntry['use']): string {
+  if (use.id) return `${use.name}:${use.id}`
+  try {
+    return `${use.name}:${JSON.stringify(use.input)}`
+  } catch {
+    return `${use.name}:${String(use.input)}`
+  }
+}
+
+function useCached<T>(key: string, compute: () => T): T {
+  const ref = useRef<{ key: string; value: T } | null>(null)
+  if (ref.current?.key !== key) ref.current = { key, value: compute() }
+  return ref.current.value
+}
+
 // Uma chamada de ferramenta com o seu resultado: linha fechada diz o que foi
-// feito e em quê; aberta mostra o comando/diff e a saída.
-export function ToolRow({ entry, running }: { entry: ToolEntry; running?: boolean }) {
-  const [open, setOpen] = useState(false)
+// feito e em quê; aberta mostra o comando/diff e a saída. `open`/`onToggle`
+// vêm do grupo (que guarda o estado por chamada); sozinha, a linha se vira.
+export function ToolRow({
+  entry,
+  running,
+  open: openProp,
+  onToggle,
+}: {
+  entry: ToolEntry
+  running?: boolean
+  open?: boolean
+  onToggle?: () => void
+}) {
+  const [openLocal, setOpenLocal] = useState(false)
+  const open = openProp ?? openLocal
+  const toggle = onToggle ?? (() => setOpenLocal((o) => !o))
   const { use, result } = entry
-  // O diff (LCS) é caro: só recalcula quando a chamada muda, não a cada render da lista.
-  const view = useMemo(() => toolView(use.name, use.input), [use.name, use.input])
-  const showInput = !view.command && !view.diff && view.category !== 'read'
+  const key = toolKey(use)
+  const view = useCached(key, () => toolView(use.name, use.input))
+  // LCS só com a linha aberta: a fechada mostra o +N −M da contagem linear.
+  const diff = useCached(open && view.hasDiff ? key : '', () =>
+    open && view.hasDiff ? toolDiff(use.name, use.input) : undefined,
+  )
+  const showInput = !view.command && !view.hasDiff && view.category !== 'read'
   // "The file … has been updated" não diz nada que o diff já não mostre.
   const showOutput = result != null && (view.category !== 'edit' || result.isError)
   return (
@@ -153,7 +188,7 @@ export function ToolRow({ entry, running }: { entry: ToolEntry; running?: boolea
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className={ROW_BUTTON}
         title={view.command ?? (view.target || undefined)}
       >
@@ -179,7 +214,7 @@ export function ToolRow({ entry, running }: { entry: ToolEntry; running?: boolea
       {open && (
         <div className="chat-reveal mb-2 ml-6 mt-1 flex flex-col gap-2">
           {view.command && <CommandBlock command={view.command} />}
-          {view.diff && view.diff.length > 0 && <DiffBlock lines={view.diff} />}
+          {diff && diff.length > 0 && <DiffBlock lines={diff} />}
           {showInput && <OutputBlock content={pretty(use.input)} />}
           {showOutput && <OutputBlock content={result.content} isError={result.isError} />}
           {!result && !running && (
@@ -193,74 +228,87 @@ export function ToolRow({ entry, running }: { entry: ToolEntry; running?: boolea
   )
 }
 
-function GroupEntries({ entries, running }: { entries: GroupEntry[]; running?: boolean }) {
-  // Chamadas paralelas: todas as que ainda não têm resultado estão rodando.
-  return (
-    <>
-      {entries.map((e) =>
-        e.kind === 'tool' ? (
-          <ToolRow key={e.index} entry={e} running={running} />
-        ) : (
-          <ThinkingCard key={e.index} text={e.text} />
-        ),
-      )}
-    </>
-  )
-}
-
 // Sequência de chamadas seguidas. Com uma só, a linha basta; com várias, um
 // resumo ("Leu 6 arquivos · rodou 3 comandos") que abre a lista sob demanda.
+// A árvore é a mesma nos dois casos (o resumo só entra acima da lista), então
+// quando a 2ª chamada chega a linha aberta não desmonta; e o grupo nasce
+// expandido se havia uma linha aberta, pra não esconder o que se estava lendo.
 export function ToolGroup({ entries, running }: { entries: GroupEntry[]; running?: boolean }) {
-  const [open, setOpen] = useState(false)
   const tools = toolEntries(entries)
-  if (tools.length < 2) {
-    return (
-      <div className="flex min-w-0 flex-col">
-        <GroupEntries entries={entries} running={running} />
-      </div>
-    )
+  const multi = tools.length >= 2
+  const [expanded, setExpanded] = useState(false)
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const [wasMulti, setWasMulti] = useState(multi)
+  if (wasMulti !== multi) {
+    setWasMulti(multi)
+    if (multi && openKeys.size > 0) setExpanded(true)
   }
+  const toggleRow = (key: string) =>
+    setOpenKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
   const errors = tools.filter((t) => t.result?.isError).length
-  const summary = summarizeTools(tools.map((t) => t.use.name))
   const pending = running ? tools.filter((t) => !t.result) : []
   const current = pending[pending.length - 1]
   const live = current ? toolView(current.use.name, current.use.input) : null
+  const showList = !multi || expanded
   return (
     <div className="min-w-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className={ROW_BUTTON}
-      >
-        <Chevron open={open} />
-        <Icon as={Layers} size={13} className="shrink-0 text-[var(--color-text-dim)]" />
-        <span className="shrink-0 font-medium text-[var(--color-text)]">{summary}</span>
-        {errors > 0 && (
-          <span className="shrink-0 text-[var(--color-danger)]">
-            · {errors === 1 ? '1 erro' : `${errors} erros`}
+      {multi && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((o) => !o)}
+          className={ROW_BUTTON}
+        >
+          <Chevron open={expanded} />
+          <Icon as={Layers} size={13} className="shrink-0 text-[var(--color-text-dim)]" />
+          <span className="shrink-0 font-medium text-[var(--color-text)]">
+            {summarizeTools(tools.map((t) => t.use.name))}
           </span>
-        )}
-        {live && (
-          <span className="min-w-0 truncate text-[var(--color-text-dim)]">
-            · agora: {live.label.toLowerCase()} <span className="font-mono">{live.target}</span>
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-[var(--color-text-dim)]">
-          {live && (
-            <Icon
-              as={Loader}
-              size={12}
-              aria-label="rodando"
-              className="animate-spin text-[var(--color-accent)] motion-reduce:animate-none"
-            />
+          {errors > 0 && (
+            <span className="shrink-0 text-[var(--color-danger)]">
+              · {errors === 1 ? '1 erro' : `${errors} erros`}
+            </span>
           )}
-          <span className="tabular-nums">{tools.length}</span>
-        </span>
-      </button>
-      {open && (
-        <div className="chat-reveal ml-4 mt-0.5 flex min-w-0 flex-col">
-          <GroupEntries entries={entries} running={running} />
+          {live && (
+            <span className="min-w-0 truncate text-[var(--color-text-dim)]">
+              · agora: {live.label.toLowerCase()} <span className="font-mono">{live.target}</span>
+            </span>
+          )}
+          <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 text-[var(--color-text-dim)]">
+            {live && (
+              <Icon
+                as={Loader}
+                size={12}
+                aria-label="rodando"
+                className="animate-spin text-[var(--color-accent)] motion-reduce:animate-none"
+              />
+            )}
+            <span className="tabular-nums">{tools.length}</span>
+          </span>
+        </button>
+      )}
+      {showList && (
+        <div className={`flex min-w-0 flex-col ${multi ? 'chat-reveal ml-4 mt-0.5' : ''}`}>
+          {/* Chamadas paralelas: todas as que ainda não têm resultado estão rodando. */}
+          {entries.map((e) => {
+            if (e.kind !== 'tool') return <ThinkingCard key={e.index} text={e.text} />
+            const key = toolKey(e.use)
+            return (
+              <ToolRow
+                key={e.index}
+                entry={e}
+                running={running}
+                open={openKeys.has(key)}
+                onToggle={() => toggleRow(key)}
+              />
+            )
+          })}
         </div>
       )}
     </div>

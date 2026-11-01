@@ -71,6 +71,7 @@ import {
   resolveChatViewState,
   resolveInteractive,
   showTerminalWaitBanner,
+  type ChatViewState,
   type Echo,
 } from './chat-logic'
 
@@ -157,10 +158,17 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Espelho em estado do stickRef, só pra mostrar o atalho "Ir para o fim".
   const [stuck, setStuck] = useState(true)
   const [unseen, setUnseen] = useState(false)
+  // Salto suave em andamento: os scroll events intermediários ainda não estão no
+  // fim e não podem desengatar o "colado" (o botão piscaria e o auto-scroll pararia).
+  const jumpingRef = useRef(false)
   function onScroll() {
     const el = scrollRef.current
     if (!el) return
     const at = isAtBottom(el)
+    if (jumpingRef.current) {
+      if (at) jumpingRef.current = false
+      return
+    }
     stickRef.current = at
     setStuck(at)
     if (at) setUnseen(false)
@@ -170,8 +178,15 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     if (!el) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     stickRef.current = true
+    jumpingRef.current = true
     setStuck(true)
     setUnseen(false)
+    const done = () => {
+      jumpingRef.current = false
+    }
+    el.addEventListener('scrollend', done, { once: true })
+    // Sem scrollend (ou salto interrompido): não deixa a trava presa.
+    window.setTimeout(done, 1500)
     el.scrollTo({ top: el.scrollHeight, behavior: reduce ? 'auto' : 'smooth' })
   }
 
@@ -182,6 +197,35 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   // Conteúdo novo com o usuário lendo lá em cima: não puxamos a rolagem, avisamos.
   const prevCountRef = useRef(0)
+
+  // Troca de sessão na mesma instância (peek/gaveta): no 1º render o hook ainda
+  // devolve as mensagens da sessão anterior (e loading=false). Até elas serem
+  // trocadas a vista é 'loading' e a contagem de "já pintado" recomeça — senão a
+  // conversa nova entraria em cascata animada a partir do tamanho da antiga.
+  const firstCountRef = useRef<number | null>(null)
+  const sessionRef = useRef(sessionId)
+  const lastMessagesRef = useRef(messages)
+  const staleRef = useRef<{ messages: ChatMessage[]; sawLoading: boolean } | null>(null)
+  if (sessionRef.current !== sessionId) {
+    sessionRef.current = sessionId
+    staleRef.current = { messages: lastMessagesRef.current, sawLoading: false }
+    firstCountRef.current = null
+    prevCountRef.current = 0
+    stickRef.current = true
+  }
+  if (staleRef.current) {
+    if (loading) staleRef.current.sawLoading = true
+    // Chegou outro transcript, ou a carga terminou sem trocar (falha de leitura).
+    if (messages !== staleRef.current.messages || (staleRef.current.sawLoading && !loading)) {
+      staleRef.current = null
+    }
+  }
+  lastMessagesRef.current = messages
+  const stale = staleRef.current !== null
+  useEffect(() => {
+    setStuck(true)
+    setUnseen(false)
+  }, [sessionId])
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (el && stickRef.current) el.scrollTop = el.scrollHeight
@@ -629,7 +673,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       answeredElsewhere: menuAnsweredElsewhere,
     }) && !showTuiCard
 
-  const viewState = resolveChatViewState({
+  const viewState: ChatViewState = stale ? 'loading' : resolveChatViewState({
     loading,
     transcriptExists,
     messageCount: rendered.length,
@@ -683,19 +727,6 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   // Só o que chega DEPOIS da primeira pintura entra animado: abrir uma conversa
   // longa não pode virar uma cascata de 500 linhas subindo.
-  const firstCountRef = useRef<number | null>(null)
-  // Mesma instância trocando de sessão (peek/gaveta): recomeça colado no fim.
-  const sessionRef = useRef(sessionId)
-  if (sessionRef.current !== sessionId) {
-    sessionRef.current = sessionId
-    firstCountRef.current = null
-    prevCountRef.current = 0
-    stickRef.current = true
-  }
-  useEffect(() => {
-    setStuck(true)
-    setUnseen(false)
-  }, [sessionId])
   if (viewState === 'ready' && firstCountRef.current === null)
     firstCountRef.current = rendered.length
 
