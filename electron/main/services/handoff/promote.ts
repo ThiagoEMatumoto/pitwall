@@ -115,13 +115,15 @@ export async function restartAsMother(sessionId: string): Promise<string> {
 // O resume manual volta com as flags default: a mãe promovida perdia o modelo e o
 // modo de permissão. Mantém os da sessão e tira só o que é de filha: o --settings
 // (handoffChild), o briefing do handoff e o 'plan' imposto pelo modo de investigação.
+// O 'plan' vira 'default' EXPLÍCITO: sem flag, o `claude --resume` restaura o modo
+// gravado no transcript e a mãe voltava em plan.
 export function motherSpawnArgs(args: SpawnArgs | null): SpawnArgs | null {
   if (!args) return null
   return {
     ...args,
     handoffChild: false,
     systemPromptText: null,
-    permissionMode: args.permissionMode === 'plan' ? null : args.permissionMode,
+    permissionMode: args.permissionMode === 'plan' ? 'default' : args.permissionMode,
   }
 }
 

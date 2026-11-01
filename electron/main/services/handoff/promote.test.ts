@@ -204,7 +204,9 @@ describe('Tornar mãe', () => {
     })
   })
 
-  it('modo plan da filha não vira modo da mãe', async () => {
+  // Sem flag, o `claude --resume` (2.1.316) restaura o modo gravado no transcript:
+  // a mãe promovida voltava em "plan mode on" (visto no app buildado, rodada r2).
+  it('modo plan da filha vira --permission-mode default explícito na mãe', async () => {
     testDb
       .prepare(`UPDATE sessions SET spawn_args = ? WHERE id = 'filha'`)
       .run(JSON.stringify({ model: 'm', permissionMode: 'plan', handoffChild: true }))
@@ -214,7 +216,11 @@ describe('Tornar mãe', () => {
     promoteToMother({ sessionId: 'filha', restart: 'now' })
     await flush()
     expect(resumeOpts[0]).toEqual({
-      relaunchAs: expect.objectContaining({ model: 'm', permissionMode: null, handoffChild: false }),
+      relaunchAs: expect.objectContaining({
+        model: 'm',
+        permissionMode: 'default',
+        handoffChild: false,
+      }),
     })
   })
 })
