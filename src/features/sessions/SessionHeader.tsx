@@ -5,15 +5,19 @@ import {
   Flag,
   MessageSquare,
   Minus,
+  MoreHorizontal,
   Pencil,
   Power,
   SquareTerminal,
   Users,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { Menu, type MenuItem } from '@/components/ui/Menu'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureLink } from './SessionFeatureLink'
 import { ConnectedChips } from './ConnectedChips'
+import { HeaderMotherPin, useHeaderMotherPin } from './HeaderMotherPin'
+import { headerLayout } from './header-layout'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
@@ -112,7 +116,10 @@ export function SessionHeader({
   sessionId,
   repoId = null,
 }: Props) {
-  const { ref, tier } = usePanelTier<HTMLDivElement>()
+  const { ref, tier, width } = usePanelTier<HTMLDivElement>()
+  const layout = headerLayout(width)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const motherPin = useHeaderMotherPin(sessionId ?? '')
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -137,6 +144,31 @@ export function SessionHeader({
   // usuário olha (o header é a única superfície de contexto que chega à tela),
   // então é aqui que o bastão sai do discreto e ganha realce ao lado do ctx.
   const ctxCritical = (ctxUsage?.pct ?? 0) >= 85
+  const live = !exited && tier !== 'narrow'
+  // Bastão crítico fica na linha: é o "o que fazer" ao lado do ctx quase cheio.
+  const batonInline = live && onPassBaton && (!layout.secondaryInMenu || ctxCritical)
+  const overflow: MenuItem[] = []
+  if (live && layout.secondaryInMenu) {
+    if (onPassBaton && !ctxCritical)
+      overflow.push({ label: 'Passar o bastão', onClick: onPassBaton })
+    if (sessionId)
+      overflow.push({
+        label: motherPin.pinned ? 'Desmarcar como mãe' : 'Marcar como mãe',
+        onClick: motherPin.toggle,
+      })
+    if (onAdopt)
+      overflow.push({
+        label: adoptLabel ? adoptLabel.split(' — ')[0] : 'Tornar sessão filha',
+        onClick: onAdopt,
+        disabled: !!adoptDisabledReason,
+        title: adoptDisabledReason ?? adoptLabel,
+      })
+  }
+  if (live && layout.toggleInMenu && onToggleMode)
+    overflow.push({
+      label: mode === 'terminal' ? 'Mudar para Chat' : 'Mudar para Terminal',
+      onClick: onToggleMode,
+    })
 
   return (
     <div
@@ -144,7 +176,10 @@ export function SessionHeader({
       className="group flex h-[33px] shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] border-b-white/[0.06] bg-gradient-to-b from-[var(--color-surface-2)]/70 to-[var(--color-surface)]/50 px-3.5 text-xs"
       style={{ boxShadow: `inset 2px 0 0 ${projectColor ?? 'var(--color-accent)'}` }}
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div
+        data-testid="header-identity"
+        className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden"
+      >
         {!exited && (
           <span
             role="status"
@@ -160,15 +195,17 @@ export function SessionHeader({
           </span>
         )}
         {projectName && (
-          <span
-            className="shrink-0"
-            style={{ color: projectColor ?? 'var(--color-accent)' }}
-          >
+          <span className="shrink-0" style={{ color: projectColor ?? 'var(--color-accent)' }}>
             {renderProjectIcon(projectIcon)}
           </span>
         )}
         {tier !== 'narrow' && (feature || sessionId) && (
-          <SessionFeatureLink feature={feature} sessionId={sessionId} repoId={repoId} />
+          <SessionFeatureLink
+            feature={feature}
+            sessionId={sessionId}
+            repoId={repoId}
+            iconOnly={layout.featureLinkIconOnly}
+          />
         )}
         {tier !== 'narrow' &&
           (editing ? (
@@ -192,7 +229,9 @@ export function SessionHeader({
                 onClick={() => {
                   if (repoPath) void navigator.clipboard.writeText(repoPath)
                 }}
-                title={repoPath ? `${repoPath} — clique para copiar` : undefined}
+                title={[displayTitle, repoPath && `${repoPath} — clique para copiar`]
+                  .filter(Boolean)
+                  .join('\n')}
                 className="min-w-0 truncate text-left font-medium hover:text-[var(--color-accent)]"
               >
                 {projectName && (
@@ -225,7 +264,9 @@ export function SessionHeader({
               </button>
             </>
           ))}
-        {tier !== 'narrow' && sessionId && <ConnectedChips sessionId={sessionId} />}
+        {tier !== 'narrow' && sessionId && (
+          <ConnectedChips sessionId={sessionId} shrink={layout.chipsShrink} />
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 text-[var(--color-text-dim)]">
         {exited &&
@@ -266,7 +307,7 @@ export function SessionHeader({
             Fica colado no ctx de propósito: acima de 85% os dois formam um par
             ("acabando" + "o que fazer a respeito"). O tooltip é o lugar onde a
             distinção pro /compact é lida, então ele muda com o estado. */}
-        {!exited && tier !== 'narrow' && onPassBaton && (
+        {batonInline && (
           <button
             type="button"
             onClick={onPassBaton}
@@ -297,10 +338,13 @@ export function SessionHeader({
             {ctxCritical && <span>bastão</span>}
           </button>
         )}
+        {tier !== 'narrow' && sessionId && !(live && layout.secondaryInMenu) && (
+          <HeaderMotherPin sessionId={sessionId} />
+        )}
         {/* Adotar: a sessão vira filha de outra e passa a viver no painel da
             equipe. Reinicia o processo (o apelido e o accept-inbound só se fixam
             no exec) — o diálogo avisa antes de confirmar. */}
-        {!exited && tier !== 'narrow' && onAdopt && (
+        {live && !layout.secondaryInMenu && onAdopt && (
           <button
             type="button"
             onClick={onAdopt}
@@ -317,7 +361,7 @@ export function SessionHeader({
           </button>
         )}
         {/* Toggle Terminal⇄Chat em 1 ícone: mostra o modo DESTINO. */}
-        {onToggleMode && tier !== 'narrow' && (
+        {onToggleMode && tier !== 'narrow' && !layout.toggleInMenu && (
           <button
             type="button"
             onClick={onToggleMode}
@@ -341,6 +385,21 @@ export function SessionHeader({
           >
             <Icon as={MessageSquare} size={13} />
           </span>
+        )}
+        {overflow.length > 0 && (
+          <Menu open={moreOpen} onClose={() => setMoreOpen(false)} items={overflow} portal>
+            <button
+              type="button"
+              data-testid="header-overflow"
+              onClick={() => setMoreOpen((v) => !v)}
+              title="Mais ações da sessão"
+              aria-label="Mais ações da sessão"
+              aria-expanded={moreOpen}
+              className="rounded p-1 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)]"
+            >
+              <Icon as={MoreHorizontal} size={13} />
+            </button>
+          </Menu>
         )}
         {/* Ícones consistentes com as tabs (lucide): Minus = minimizar, Power =
             encerrar (hover danger). Tooltip/aria-label preservam o texto antigo. */}

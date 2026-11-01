@@ -94,6 +94,13 @@ import type {
   UpdateDesignFolderInput,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
+import type {
+  ImportMotherPinsInput,
+  MotherPin,
+  MotherRestartEvent,
+  PromoteMotherInput,
+  SetMotherPinInput,
+} from '../../shared/types/mother-pins'
 import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
 import type { AttentionItem } from '../../shared/types/attention'
 import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
@@ -142,6 +149,7 @@ const api: Api = {
     spawn: (input: SpawnSessionInput) => invoke('sessions:spawn', input),
     resume: (input: ResumeSessionInput) => invoke('sessions:resume', input),
     isResumable: (ccSessionId) => invoke('sessions:is-resumable', ccSessionId),
+    currentIds: (sessionIds) => invoke('sessions:current-ids', sessionIds),
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
     listByFeature: (featureId) => invoke('sessions:list-by-feature', featureId),
     getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
@@ -430,6 +438,17 @@ const api: Api = {
     distill: (input: DistillBatonInput) => invoke('baton:distill', input),
     pass: (input: PassBatonInput) => invoke('baton:pass', input),
     onChildrenMissed: (handler) => subscribe<BatonChildrenMissed>('baton:children-missed', handler),
+  },
+  motherPins: {
+    list: () => invoke('mother-pins:list'),
+    set: (input: SetMotherPinInput) => invoke('mother-pins:set', input),
+    importLegacy: (input: ImportMotherPinsInput) => invoke('mother-pins:import', input),
+    promote: (input: PromoteMotherInput) => invoke('mother-pins:promote', input),
+    restartNow: (sessionId: string) => invoke('mother-pins:restart-now', sessionId),
+    inherit: (input: { fromKey: string; sessionId: string }) =>
+      invoke('mother-pins:inherit', input),
+    onUpdated: (handler) => subscribe<MotherPin[]>('mother-pins:updated', handler),
+    onRestart: (handler) => subscribe<MotherRestartEvent>('mother-pins:restart', handler),
   },
   sessionGraph: {
     get: () => invoke('session-graph:get'),

@@ -5,6 +5,8 @@ import { peekAttentionItem } from '@/features/handoffs/peek-attention'
 import { CardPromptBar } from '@/features/session-canvas/SessionCardLive'
 import { AttentionMenuPanel } from '@/features/session-switcher/AttentionPopover'
 import { useChatTail } from '@/features/sessions/chat/useChatTail'
+import { handoffWakeSummary } from '@/features/sessions/chat/HandoffUpdateCard'
+import { parseHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import { useAppStore } from '@/store/appStore'
 import type { ChatMessage } from '../../../shared/types/chat'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
@@ -35,9 +37,20 @@ function clip(text: string): string {
   return t.length > TEXT_MAX ? `${t.slice(0, TEXT_MAX)}…` : t
 }
 
-function TailLine({ m, title }: { m: ChatMessage; title: string }) {
-  if (m.kind === 'user')
+export function TailLine({ m, title }: { m: ChatMessage; title: string }) {
+  if (m.kind === 'user') {
+    const wake = parseHandoffWakeEnvelope(m.text)
+    if (wake)
+      return (
+        <div
+          className="text-[12.5px] text-[var(--color-text-dim)]"
+          data-testid="tile-handoff-update"
+        >
+          filhas: {clip(handoffWakeSummary(wake))}
+        </div>
+      )
     return <div className="text-[12.5px] text-[var(--color-text-dim)]">você: {clip(m.text)}</div>
+  }
   if (m.kind === 'assistant')
     return (
       <div className="text-[12.5px]">
@@ -269,7 +282,7 @@ export const MotherTile = memo(function MotherTile({
               {kidsNeed} {kidsNeed === 1 ? 'pedido' : 'pedidos'} das filhas · Abrir sala
             </button>
           ) : (
-            <span data-testid="mother-tile-kids">filhas 0</span>
+            <span data-testid="mother-tile-kids">pedidos das filhas 0</span>
           )}
         </div>
         <div

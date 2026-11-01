@@ -31,6 +31,7 @@ import {
   buildElements,
   type DiagramSkeletonElement,
 } from "../../../shared/diagram-skeleton";
+import { SessionDrawerButton } from "@/features/sessions/chat/artifacts/SessionDrawer";
 import { blockSize, type BlockKind } from "../../../shared/diagram-shapes";
 
 /** Bloco padrão inserido pelo menu "Inserir": o usuário edita depois. */
@@ -342,6 +343,10 @@ export function DiagramToolbar({
             }
           : { label: `Salvo · v${syncState.version}`, accent: false };
 
+  const visibleLinks = diagram.links.filter(
+    (l) => l.parentType !== "session" && l.parentType !== "handoff",
+  );
+
   return (
     <header className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2">
       {/* Fechar o editor dispara o flush com snapshot do unmount. */}
@@ -375,13 +380,16 @@ export function DiagramToolbar({
         </span>
       )}
 
-      {diagram.links.length > 0 && (
+      {/* Autoria (sessão/handoff) mora no botão "Sessão", não em chips de id. */}
+      {visibleLinks.length > 0 && (
         <div className="flex max-w-[40%] shrink-0 items-center gap-1.5 overflow-x-auto">
-          {diagram.links.map((link) => (
+          {visibleLinks.map((link) => (
             <LinkChip key={`${link.parentType}:${link.parentId}`} link={link} />
           ))}
         </div>
       )}
+
+      <SessionDrawerButton artifact={{ kind: "diagram", id: diagram.id }} title={diagram.title} />
 
       <span
         className={`shrink-0 whitespace-nowrap text-[11px] ${

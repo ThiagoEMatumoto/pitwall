@@ -77,7 +77,8 @@ describe('scanScreen — capturas reais do claude 2.1.286', () => {
   it('trust sem numeração: reconhecido como trust e, com o status real (starting), pede atenção', async () => {
     const scan = await scanFixture('claude-2.1.286-trust-unnumbered.ansi')
     expect(scan.menu?.kind).toBe('trust')
-    expect(scan.menu?.options).toEqual([])
+    expect(scan.menu?.options.map((o) => o.label)).toEqual(['No, exit', 'Yes, I trust this folder'])
+    expect(scan.menu?.cursorIndex).toBe(0)
     expect(scan.menu?.question).toMatch(/^Quick safety check: Is this a project/)
     expect(scan.menu?.context).toContain('cwd-1790802817529')
     expect(scan.inputPrompt).toBe(false)

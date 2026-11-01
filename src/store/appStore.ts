@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
@@ -604,13 +604,18 @@ async function restoreFromSnapshots(
             current.paneId,
           )
         } else {
-          await open(
+          const newId = await open(
             current.repo,
             current.projectName,
             current.projectIcon,
             current.projectColor ?? null,
             current.paneId,
           )
+          // Marcada como mãe antes da 1ª mensagem: a conversa nova herda o pin.
+          if (current.ccSessionId && newId)
+            void motherPinsApi
+              .inherit({ fromKey: current.ccSessionId, sessionId: newId })
+              .catch((err: unknown) => console.warn('[mother-pins] inherit failed', err))
         }
         // Fechada com o spawn em voo: o processo fica em background, como no closePane.
         if (current.paneId && closedDuringRestore(current)) {
@@ -1540,6 +1545,41 @@ function adoptLiveSession(paneId: string, session: Session): void {
   }
   schedulePersist(useAppStore.getState().panes)
   void useAppStore.getState().refreshLiveSessions()
+}
+
+// "Tornar mãe" relança a conversa (kill + resume = sessions.id novo). O main avisa
+// antes do kill: a pane vira dormant no lugar e o pty:exit (129) segue a regra da
+// hibernação ('keep'), em vez de fechar a aba. A sessão relançada entra no mesmo
+// paneId; se o relance falhar, a pane dormindo ainda acorda pelo clique.
+export function holdPaneForRelaunch(sessionId: string, ccSessionId: string): void {
+  const { panes } = useAppStore.getState()
+  if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) return
+  hibernatedSessionIds.add(sessionId)
+  useAppStore.setState({
+    panes: panes.map((p) =>
+      p.dormant || p.session.id !== sessionId
+        ? p
+        : {
+            ...p,
+            session: {
+              ...p.session,
+              id: `${DORMANT_ID_PREFIX}${ccSessionId}`,
+              ccSessionId,
+              status: 'exited',
+              endedAt: null,
+            },
+            dormant: true,
+          },
+    ),
+  })
+  schedulePersist(useAppStore.getState().panes)
+}
+
+export function adoptRelaunchedSession(session: Session): void {
+  const pane = useAppStore
+    .getState()
+    .panes.find((p) => p.dormant && p.session.ccSessionId === session.ccSessionId)
+  if (pane) adoptLiveSession(pane.paneId, session)
 }
 
 const OOM_TOAST_MS = 12_000

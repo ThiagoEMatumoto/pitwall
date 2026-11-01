@@ -1,3 +1,11 @@
+import type {
+  ImportMotherPinsInput,
+  MotherPin,
+  MotherRestartEvent,
+  PromoteMotherInput,
+  PromoteMotherResult,
+  SetMotherPinInput,
+} from './mother-pins'
 // Tipos compartilhados main ↔ renderer via contextBridge.
 // Toda feature nova adiciona seus tipos aqui e estende `Api` no preload.
 
@@ -1479,6 +1487,8 @@ export interface AttentionMenuSnapshot {
 export type AttentionAction =
   | { kind: 'select'; optionIndex: number }
   | { kind: 'other'; optionIndex: number; text: string }
+  // "Tab to amend": a opção vai junto de um texto (negar explicando o porquê).
+  | { kind: 'amend'; optionIndex: number; text: string }
 
 export interface AttentionRespondInput {
   sessionId: string
@@ -2304,6 +2314,8 @@ export interface Api {
     spawn(input: SpawnSessionInput): Promise<Session>
     resume(input: ResumeSessionInput): Promise<ResumeSessionResult>
     isResumable(ccSessionId: string): Promise<boolean>
+    /** Cada id trocado pela linha mais recente da mesma conversa (resume abre linha nova). */
+    currentIds(sessionIds: string[]): Promise<string[]>
     listByRepo(repoId: string): Promise<SessionSummary[]>
     /** Sessões de uma feature, da mais recente pra mais antiga. */
     listByFeature(featureId: string): Promise<FeatureSessionSummary[]>
@@ -2673,6 +2685,18 @@ export interface Api {
   }
   // Sessões como sistema conectado (mãe→filha, bastão, repos ligados, feature).
   // onUpdated recebe o grafo inteiro já recalculado pelo main.
+  // "Essa é a mãe" por conversa (mother_pins) e "Tornar mãe" (promover filha).
+  motherPins: {
+    list(): Promise<MotherPin[]>
+    set(input: SetMotherPinInput): Promise<MotherPin[]>
+    importLegacy(input: ImportMotherPinsInput): Promise<MotherPin[]>
+    promote(input: PromoteMotherInput): Promise<PromoteMotherResult>
+    restartNow(sessionId: string): Promise<void>
+    // Pane sem conversa reaberta como conversa nova: o pin do cc que não nasceu passa a ela.
+    inherit(input: { fromKey: string; sessionId: string }): Promise<MotherPin[]>
+    onUpdated(handler: (pins: MotherPin[]) => void): () => void
+    onRestart(handler: (event: MotherRestartEvent) => void): () => void
+  }
   sessionGraph: {
     get(): Promise<SessionGraph>
     handoffEvents(input: { handoffId: string }): Promise<HandoffEvent[]>

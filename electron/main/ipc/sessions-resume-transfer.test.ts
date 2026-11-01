@@ -124,7 +124,7 @@ describe('transferLeadershipToResumed (DB real)', () => {
     expect(handoffStore.get(h.id)?.motherSessionId).toBe('mother-new')
   })
 
-  it('linha antiga com PTY viva mantém a liderança; handoff encerrado também fica', () => {
+  it('linha antiga com PTY viva mantém a liderança; handoff encerrado da linha morta passa para a retomada', () => {
     insertSession('mother-alive', 5, 'running')
     live.add('mother-alive')
     insertSession('mother-dead', 10)
@@ -136,7 +136,8 @@ describe('transferLeadershipToResumed (DB real)', () => {
     transferLeadershipToResumed(priorIdsOfCc(), RESUMED, 'renderer')
 
     expect(motherOf(keptAlive.id)).toBe('mother-alive')
-    expect(motherOf(done.id)).toBe('mother-dead')
+    // A hierarquia é por conversa: a filha encerrada continua sob a mãe retomada.
+    expect(motherOf(done.id)).toBe('mother-new')
     expect(motherOf(moved.id)).toBe('mother-new')
   })
 

@@ -7,6 +7,7 @@ import * as assetStore from '../design/asset-store'
 import * as mutate from '../design/mutate'
 import { ok, type ToolDef } from './tools'
 import { claudeOrigin, schemas, withActivity, type DesignToolDeps } from './design-tools-shared'
+import { withAuthorLinks } from './artifact-authorship'
 import { prototypeTools } from './design-tools-write-prototype'
 import {
   ARTBOARD_MAX_PX,
@@ -83,7 +84,11 @@ export function writeTools(deps: DesignToolDeps): ToolDef[] {
       handler: (args) => {
         const { folder, ...input } = schemas.documentCreate.parse(args)
         const folderId = folder ? designStore.ensureFolder(folder).id : undefined
-        const doc = designStore.createDocument({ ...input, folderId })
+        const doc = designStore.createDocument({
+          ...input,
+          links: withAuthorLinks(input.links, deps.ctx),
+          folderId,
+        })
         deps.notify.broadcast('design:document-updated', { docId: doc.id })
         if (folderId) foldersUpdated(folderId)
         return ok({ document: doc })

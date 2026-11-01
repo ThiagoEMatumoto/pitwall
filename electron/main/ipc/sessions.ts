@@ -1,4 +1,5 @@
 import { app, ipcMain } from 'electron'
+import { currentSessionIds } from '../services/session-conversation'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { readFile, realpath } from 'node:fs/promises'
@@ -94,6 +95,7 @@ import {
   isSessionImageTempFile,
 } from '../services/image-temp'
 import { mapLiveSessionRepo, type LiveSessionJoinRow } from './live-session-mapping'
+import { unregisteredPtyStatus } from '../services/unregistered-pty-status'
 import type {
   Session,
   SpawnSessionInput,
@@ -132,6 +134,11 @@ const attentionActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('select'), optionIndex: z.number().int().nonnegative() }),
   z.object({
     kind: z.literal('other'),
+    optionIndex: z.number().int().nonnegative(),
+    text: z.string().min(1).max(4000),
+  }),
+  z.object({
+    kind: z.literal('amend'),
     optionIndex: z.number().int().nonnegative(),
     text: z.string().min(1).max(4000),
   }),
@@ -990,11 +997,18 @@ export function transferLeadershipToResumed(
   resumed: Session,
   origin: ResumeOrigin,
 ): void {
-  for (const id of priorSessionIds) {
-    if (ptyManager.isRunning(id)) continue
+  const dead = priorSessionIds.filter((id) => !ptyManager.isRunning(id))
+  for (const id of dead) {
     handoffStore.transferMother(id, resumed.id)
     // A resposta a um pedido aberto vai para quem perguntou/escalou: a retomada.
     requestStore.transferRequester(id, resumed.id)
+  }
+  // Filha de handoff encerrado e liderança terminal: a hierarquia é por conversa,
+  // mas o fio, o quick look e o Desvincular leem os ponteiros do registro.
+  const adopted = dead.length ? handoffStore.adoptResumedConversation(dead, resumed.id) : []
+  for (const id of adopted) {
+    const updated = handoffStore.get(id)
+    if (updated) broadcast('handoff:updated', updated)
   }
   resumedHook(resumed, origin)
 }
@@ -1010,6 +1024,171 @@ let resumedHook: (session: Session, origin: ResumeOrigin) => void = () => {}
 
 export function setResumedSessionHook(fn: (session: Session, origin: ResumeOrigin) => void): void {
   resumedHook = fn
+}
+
+// Corpo do sessions:resume, chamável pelo main (promoção a mãe relança a
+// conversa sem as flags de filha).
+export function resumeConversation(
+  input: ResumeSessionInput,
+  origin: ResumeOrigin = 'renderer',
+  // Só do main ("Tornar mãe"): relança com estas flags em vez do default do resume
+  // manual. Revalidadas pelas mesmas whitelists do wake.
+  opts: { relaunchAs?: SpawnArgs | null } = {},
+): ResumeSessionResult {
+  const db = getDb()
+  const repoId = input.repoId ?? null
+
+  // Re-attach: a conversa já tem PTY viva (wake do main e clique no mesmo
+  // instante, duas janelas, restore eager + ativação). Um segundo --resume do
+  // mesmo id escreveria no mesmo JSONL com dois processos.
+  const alive = findAliveByCc(input.ccSessionId)
+  if (alive) return { session: toSession(alive), reattached: true }
+  assertNotOpenElsewhere(input.ccSessionId)
+  const priorSessionIds = sessionIdsOfCc(input.ccSessionId)
+
+  // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
+  // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
+  // de contexto — e como retomar é o gesto mais comum, o loop nunca chegava.
+  // Pega a linha mais recente com vínculo: retomas anteriores deixam linhas
+  // antigas com o mesmo cc_session_id. "Sem feature" escolhido pelo usuário
+  // (feature_id NULL + manual) também é vínculo: pular essa linha reabria a
+  // feature antiga. A origem vem junto — sem ela o 'manual' virava NULL e o
+  // resolvedor contínuo voltava a mexer, e o vínculo dele virava permanente.
+  const featureRow = db
+    .prepare(
+      `SELECT feature_id, feature_source FROM sessions
+        WHERE cc_session_id = ? AND (feature_id IS NOT NULL OR feature_source = ?)
+        ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(input.ccSessionId, MANUAL_FEATURE_SOURCE) as
+    | { feature_id: string | null; feature_source: string | null }
+    | undefined
+  const featureId = featureRow?.feature_id ?? null
+  const featureSource = featureRow?.feature_source ?? null
+
+  let cwd: string
+  let defaultName: string
+  if (repoId) {
+    const repo = db
+      .prepare('SELECT path, label FROM repos WHERE id = ?')
+      .get(repoId) as RepoPathRow | undefined
+    if (!repo) throw new Error(`repo not found: ${repoId}`)
+    // Mesmo guard do spawn: repos.path legado relativo resolve contra o vault.
+    const repoPath = resolveRepoPath(repo.path)
+    assertRepoDirExists(repoPath)
+    cwd = resolveFeatureWorktree(featureId, repoId) ?? repoPath
+    defaultName = repo.label
+  } else {
+    cwd = resolveScratchDir()
+    defaultName = QUICK_SESSION_NAME
+  }
+  if (!UUID_RE.test(input.ccSessionId)) {
+    throw new Error(`invalid cc session id: ${input.ccSessionId}`)
+  }
+
+  // RELINK: se este cc_session_id é a filha de um handoff ainda vinculado, o
+  // caminho genérico abaixo geraria um sessions.id novo que o handoff nunca
+  // conheceria — child_session_id apontaria pra um id morto, a filha sumiria
+  // do painel e voltaria SEM apelido e SEM --settings (parando de aceitar
+  // mensagem da mãe, em silêncio), embora seguisse reportando pra ela.
+  // Delegar ao resumeHandoffChild devolve alias + settings + permissões e faz o
+  // markRunning re-apontar o vínculo. Sem match, segue o caminho normal.
+  //
+  // SEM kickoff de propósito: aqui quem retomou foi o USUÁRIO, pelo switcher.
+  // Injetar o "retome a tarefa" faria a sessão começar a trabalhar sozinha sem
+  // ninguém pedir. O relink de IDENTIDADE (apelido, --settings, markRunning)
+  // acontece igual — o que não acontece é o disparo automático de trabalho.
+  const linked = findRelinkableHandoff(input.ccSessionId)
+  if (linked) {
+    const resumed = resumeHandoffChild(linked.id, {
+      cols: input.cols,
+      rows: input.rows,
+      origin,
+    })
+    return { session: resumed.session, reattached: resumed.alreadyRunning }
+  }
+
+  // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.
+  const transcript = findTranscriptPath(input.ccSessionId)
+  const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
+
+  const command = resolveAgentCommand()
+  // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
+  const internalSessionId = randomUUID()
+  // O --resume não guarda as flags do spawn. Só o wake de uma hibernada as
+  // reaplica: o usuário não pediu para a sessão sair, então ela volta como
+  // estava (modo de permissão, modelo, denylist, --settings da filha). No
+  // resume manual quem escolhe é o usuário, e as flags ficam no default. As
+  // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
+  // A fonte da verdade é sessions.hibernated_at, não o fromHibernation do
+  // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
+  const spawned = latestSpawnArgs(db, input.ccSessionId)
+  const fromHibernation = isConversationHibernated(db, input.ccSessionId)
+  const relaunch = opts.relaunchAs ?? (fromHibernation ? spawned : null)
+  const original = relaunchFlags(relaunch, getChildLearnedAllow())
+  // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
+  // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
+  // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
+  // conversa). Diretório removido: fica o recalculado.
+  if (spawned?.cwd && spawned.cwd !== cwd) {
+    if (isDirectory(spawned.cwd)) {
+      cwd = spawned.cwd
+    } else {
+      console.warn(
+        JSON.stringify({
+          event: 'resume_spawn_cwd_missing',
+          ccSessionId: input.ccSessionId,
+          spawnCwd: spawned.cwd,
+          cwd,
+        }),
+      )
+    }
+  }
+  const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
+    command,
+    sessionId: input.ccSessionId,
+    resume: true,
+    name,
+    mcpConfigArg: mcpConfigArg(internalSessionId),
+    model: original.model,
+    effort: original.effort,
+    advisorModel: original.advisorModel,
+    permissionMode: original.permissionMode,
+    // Arquivo NOVO a cada wake, carimbado com o id desta linha: o da sessão
+    // anterior foi apagado no exit dela.
+    settingsFilePath: sessionSettingsFile(
+      internalSessionId,
+      original.settings,
+      original.disallowedTools,
+    ),
+    // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
+    // compartilhada — é isso que impede spawn e resume de divergirem de novo.
+    systemPromptFilePath: writeSessionSystemPromptFile({
+      repoId,
+      featureId,
+      systemPromptText: original.systemPromptText,
+    }),
+  })
+
+  const session = startSession({
+    id: internalSessionId,
+    ccSessionId: input.ccSessionId,
+    repoId,
+    cwd,
+    innerCmd,
+    featureId,
+    featureSource,
+    cols: input.cols,
+    rows: input.rows,
+    // Copia o registro como está: um resume sem flags não pode apagar as do
+    // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
+    // novas grava outras.
+    spawnArgs: opts.relaunchAs ?? spawned,
+  })
+  // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
+  clearConversationHibernated(db, input.ccSessionId)
+  transferLeadershipToResumed(priorSessionIds, session, origin)
+  return { session, reattached: false }
 }
 
 export function registerSessionIpc(): void {
@@ -1186,165 +1365,22 @@ export function registerSessionIpc(): void {
     }),
   )
 
-  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput): ResumeSessionResult => {
-    const db = getDb()
-    const repoId = input.repoId ?? null
-
-    // Re-attach: a conversa já tem PTY viva (wake do main e clique no mesmo
-    // instante, duas janelas, restore eager + ativação). Um segundo --resume do
-    // mesmo id escreveria no mesmo JSONL com dois processos.
-    const alive = findAliveByCc(input.ccSessionId)
-    if (alive) return { session: toSession(alive), reattached: true }
-    assertNotOpenElsewhere(input.ccSessionId)
-    const priorSessionIds = sessionIdsOfCc(input.ccSessionId)
-
-    // O vínculo com a feature vive na LINHA da sessão sendo retomada. Sem
-    // recuperá-lo aqui, a sessão nova nascia com feature_id NULL e SEM o bloco
-    // de contexto — e como retomar é o gesto mais comum, o loop nunca chegava.
-    // Pega a linha mais recente com vínculo: retomas anteriores deixam linhas
-    // antigas com o mesmo cc_session_id. "Sem feature" escolhido pelo usuário
-    // (feature_id NULL + manual) também é vínculo: pular essa linha reabria a
-    // feature antiga. A origem vem junto — sem ela o 'manual' virava NULL e o
-    // resolvedor contínuo voltava a mexer, e o vínculo dele virava permanente.
-    const featureRow = db
-      .prepare(
-        `SELECT feature_id, feature_source FROM sessions
-          WHERE cc_session_id = ? AND (feature_id IS NOT NULL OR feature_source = ?)
-          ORDER BY started_at DESC LIMIT 1`,
-      )
-      .get(input.ccSessionId, MANUAL_FEATURE_SOURCE) as
-      | { feature_id: string | null; feature_source: string | null }
-      | undefined
-    const featureId = featureRow?.feature_id ?? null
-    const featureSource = featureRow?.feature_source ?? null
-
-    let cwd: string
-    let defaultName: string
-    if (repoId) {
-      const repo = db
-        .prepare('SELECT path, label FROM repos WHERE id = ?')
-        .get(repoId) as RepoPathRow | undefined
-      if (!repo) throw new Error(`repo not found: ${repoId}`)
-      // Mesmo guard do spawn: repos.path legado relativo resolve contra o vault.
-      const repoPath = resolveRepoPath(repo.path)
-      assertRepoDirExists(repoPath)
-      cwd = resolveFeatureWorktree(featureId, repoId) ?? repoPath
-      defaultName = repo.label
-    } else {
-      cwd = resolveScratchDir()
-      defaultName = QUICK_SESSION_NAME
-    }
-    if (!UUID_RE.test(input.ccSessionId)) {
-      throw new Error(`invalid cc session id: ${input.ccSessionId}`)
-    }
-
-    // RELINK: se este cc_session_id é a filha de um handoff ainda vinculado, o
-    // caminho genérico abaixo geraria um sessions.id novo que o handoff nunca
-    // conheceria — child_session_id apontaria pra um id morto, a filha sumiria
-    // do painel e voltaria SEM apelido e SEM --settings (parando de aceitar
-    // mensagem da mãe, em silêncio), embora seguisse reportando pra ela.
-    // Delegar ao resumeHandoffChild devolve alias + settings + permissões e faz o
-    // markRunning re-apontar o vínculo. Sem match, segue o caminho normal.
-    //
-    // SEM kickoff de propósito: aqui quem retomou foi o USUÁRIO, pelo switcher.
-    // Injetar o "retome a tarefa" faria a sessão começar a trabalhar sozinha sem
-    // ninguém pedir. O relink de IDENTIDADE (apelido, --settings, markRunning)
-    // acontece igual — o que não acontece é o disparo automático de trabalho.
-    const linked = findRelinkableHandoff(input.ccSessionId)
-    if (linked) {
-      const resumed = resumeHandoffChild(linked.id, {
-        cols: input.cols,
-        rows: input.rows,
-        origin: 'renderer',
-      })
-      return { session: resumed.session, reattached: resumed.alreadyRunning }
-    }
-
-    // Nome preferido: o já gravado no JSONL (custom/ai-title), senão o default.
-    const transcript = findTranscriptPath(input.ccSessionId)
-    const name = (transcript ? readTranscriptTitle(transcript) : null) || defaultName
-
-    const command = resolveAgentCommand()
-    // Sessão retomada também é mãe em potencial: ganha carimbo próprio.
-    const internalSessionId = randomUUID()
-    // O --resume não guarda as flags do spawn. Só o wake de uma hibernada as
-    // reaplica: o usuário não pediu para a sessão sair, então ela volta como
-    // estava (modo de permissão, modelo, denylist, --settings da filha). No
-    // resume manual quem escolhe é o usuário, e as flags ficam no default. As
-    // gravadas são revalidadas pelas whitelists: acordar não dá nada novo.
-    // A fonte da verdade é sessions.hibernated_at, não o fromHibernation do
-    // renderer: depois de um restart a pane volta dormant sem saber que hibernou.
-    const spawned = latestSpawnArgs(db, input.ccSessionId)
-    const fromHibernation = isConversationHibernated(db, input.ccSessionId)
-    const original = relaunchFlags(fromHibernation ? spawned : null, getChildLearnedAllow())
-    // Volta no diretório em que a conversa rodou, em qualquer resume: o claude
-    // guarda o transcript por cwd, e o feature_id pode ter mudado depois do spawn
-    // (o cwd recalculado pelo vínculo levaria a outro checkout e perderia a
-    // conversa). Diretório removido: fica o recalculado.
-    if (spawned?.cwd && spawned.cwd !== cwd) {
-      if (isDirectory(spawned.cwd)) {
-        cwd = spawned.cwd
-      } else {
-        console.warn(
-          JSON.stringify({
-            event: 'resume_spawn_cwd_missing',
-            ccSessionId: input.ccSessionId,
-            spawnCwd: spawned.cwd,
-            cwd,
-          }),
-        )
-      }
-    }
-    const innerCmd = getProvider(SESSION_PROVIDER).buildLaunch({
-      command,
-      sessionId: input.ccSessionId,
-      resume: true,
-      name,
-      mcpConfigArg: mcpConfigArg(internalSessionId),
-      model: original.model,
-      effort: original.effort,
-      advisorModel: original.advisorModel,
-      permissionMode: original.permissionMode,
-      // Arquivo NOVO a cada wake, carimbado com o id desta linha: o da sessão
-      // anterior foi apagado no exit dela.
-      settingsFilePath: sessionSettingsFile(
-        internalSessionId,
-        original.settings,
-        original.disallowedTools,
-      ),
-      // Mesmo bloco do spawn (arquitetura + feature + loop), montado pela função
-      // compartilhada — é isso que impede spawn e resume de divergirem de novo.
-      systemPromptFilePath: writeSessionSystemPromptFile({
-        repoId,
-        featureId,
-        systemPromptText: original.systemPromptText,
-      }),
-    })
-
-    const session = startSession({
-      id: internalSessionId,
-      ccSessionId: input.ccSessionId,
-      repoId,
-      cwd,
-      innerCmd,
-      featureId,
-      featureSource,
-      cols: input.cols,
-      rows: input.rows,
-      // Copia o registro como está: um resume sem flags não pode apagar as do
-      // spawn (latestSpawnArgs lê a linha mais recente). Só um spawn com flags
-      // novas grava outras.
-      spawnArgs: spawned,
-    })
-    // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
-    clearConversationHibernated(db, input.ccSessionId)
-    transferLeadershipToResumed(priorSessionIds, session, 'renderer')
-    return { session, reattached: false }
-  })
+  ipcMain.handle('sessions:resume', (_e, input: ResumeSessionInput): ResumeSessionResult =>
+    resumeConversation(input),
+  )
 
   ipcMain.handle('sessions:is-resumable', (_e, ccSessionId: string): boolean => {
     return findTranscriptPath(ccSessionId) !== null
   })
+
+  ipcMain.handle('sessions:current-ids', (_e, sessionIds: unknown): string[] =>
+    Array.isArray(sessionIds)
+      ? currentSessionIds(
+          getDb(),
+          sessionIds.filter((id): id is string => typeof id === 'string'),
+        )
+      : [],
+  )
 
   // Gate de UI: um handoff interrompido só é retomável se o transcript da filha
   // ainda existe no disco. Resolve o cc_session_id internamente (o renderer só tem
@@ -1550,7 +1586,8 @@ export function registerSessionIpc(): void {
         name = indexed!.name ?? (transcript ? readTranscriptTitle(transcript) : null) ?? row.session_title
         lastActivityAt = indexed!.updatedAt
       } else {
-        status = 'ended'
+        // A PTY está viva (runningIds): sem session file é trust/subindo, nunca encerrada.
+        status = unregisteredPtyStatus(sessionId)
         name = (transcript ? readTranscriptTitle(transcript) : null) ?? row.session_title
         lastActivityAt = null
       }
@@ -1589,7 +1626,7 @@ export function registerSessionIpc(): void {
         tokens,
         isResumable: transcript !== null,
         titleSource: row.session_title_source,
-        attentionReason: isLive ? attentionReasonForPty(sessionId, status) : undefined,
+        attentionReason: attentionReasonForPty(sessionId, status),
         cwd: isLive ? indexed!.cwd : null,
         provider: row.provider ?? 'claude',
       })

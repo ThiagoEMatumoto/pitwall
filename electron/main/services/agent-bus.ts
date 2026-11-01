@@ -177,6 +177,7 @@ export function peersFromGraph(graph: SessionGraph): AgentPeer[] {
       purpose: n.purpose,
       lastActivityAt: n.lastActivityAt,
       startedAt: n.startedAt ?? null,
+      pinnedMother: n.isPinnedMother === true,
     }))
 }
 

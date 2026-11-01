@@ -31,6 +31,7 @@ import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
 import { folderCrudTools, folderListTool } from './folder-tools'
+import { recordDiagramAuthorship, withAuthorLinks } from './artifact-authorship'
 import {
   installCatalogLibrary,
   installedCatalogIds,
@@ -1736,7 +1737,7 @@ function diagramToMeta(diagram: Diagram): Record<string, unknown> {
   return meta
 }
 
-function diagramTools(notify: McpNotify): ToolDef[] {
+function diagramTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
   const foldersUpdated = (folderId: string | null) =>
     notify.broadcast('diagram:folders-updated', { folderId })
   const folderTools = {
@@ -1777,7 +1778,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
             source: skeleton ? JSON.stringify(skeleton) : null,
             author: 'claude',
             summary: input.summary,
-            links: input.links,
+            links: withAuthorLinks(input.links, ctx),
             folderId: input.folder ? diagramStore.ensureFolder(input.folder).id : undefined,
           }),
         )()
@@ -1866,6 +1867,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
           author: 'claude',
         })
         notify.broadcast('diagram:updated', diagram)
+        recordDiagramAuthorship(notify, ctx, diagram.id)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -1897,6 +1899,7 @@ function diagramTools(notify: McpNotify): ToolDef[] {
           author: 'claude',
         })
         notify.broadcast('diagram:updated', diagram)
+        recordDiagramAuthorship(notify, ctx, diagram.id)
         return ok({
           diagram: diagramToMeta(diagram),
           skeleton: elementsToSkeleton(diagram.scene.elements),
@@ -2095,13 +2098,43 @@ export function buildTools(
     ...loopTools(notify),
     ...handoffTools(notify, ctx),
     ...repoPullTools(),
-    ...diagramTools(notify),
+    ...diagramTools(notify, ctx),
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
     ...canvasTools(notify, ctx),
     ...agentTools(ctx),
     ...serviceTools(ctx),
   ]
+}
+
+// readOnlyHint: em --permission-mode plan o claude (2.1.316) pede permissão para MCP
+// tool sem a anotação, e o allow do --settings não vale ali (sonda com `claude -p
+// --permission-mode plan`: allow → negado; readOnlyHint → passa). Sem ela a filha em
+// plan trava num menu ao ler o próprio estado (handoff_result, agent_check…).
+//
+// Reporte da filha ao handoff: só escrevem no registro do próprio handoff.
+// handoff_wait entra porque a filha em needs_input só recebe a resposta por ele
+// (o Pitwall não digita nela).
+const CHILD_REPORT_TOOLS = ['handoff_report', 'handoff_progress', 'handoff_ask', 'handoff_wait']
+
+// Tools que só leem. handoff_result marca o done como consumido (recibo de leitura
+// no próprio handoff) e agent_check expira asks vencidos: bookkeeping, não escrita
+// do agente. Ficam de fora design_screenshot (persiste a altura medida) e os
+// exports (escrevem em disco). Todo *_list/*_get entra pelo sufixo; o teste guarda.
+const READ_ONLY_TOOLS = [
+  'handoff_result',
+  'agent_check',
+  'service_list',
+  'design_guide',
+  'design_tree_summary',
+  'design_computed_styles',
+  'feature_pulse_history',
+]
+
+function isReadOnlyTool(name: string): boolean {
+  return (
+    CHILD_REPORT_TOOLS.includes(name) || READ_ONLY_TOOLS.includes(name) || /_(list|get)$/.test(name)
+  )
 }
 
 export function registerTools(
@@ -2116,6 +2149,7 @@ export function registerTools(
         title: tool.title,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        ...(isReadOnlyTool(tool.name) ? { annotations: { readOnlyHint: true } } : {}),
       },
       (args: unknown) => tool.handler(args),
     )

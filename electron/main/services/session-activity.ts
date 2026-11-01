@@ -22,6 +22,7 @@ import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
 import { getByChildSession, isActiveCrewChild } from './handoff-store'
 import { broadcast } from './notify'
+import { unregisteredPtyStatus } from './unregistered-pty-status'
 import { tuiMenuWatch } from './tui-menu-watch'
 import {
   deriveAttentionReason,
@@ -34,6 +35,8 @@ import { derivePtyStatus } from './providers/pty-status'
 import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
 import { readSubagentMetas } from './subagent-turns'
 import { scanTranscriptForSendMessage } from './session-link-pulse'
+import { getDb } from './db'
+import { latestSpawnArgs } from './spawn-args'
 
 // Re-export: findTranscriptPath/PROJECTS_ROOT moraram aqui e são importados daqui
 // por meio mundo (metrics-service, feature-memory, chat-transcript-service, ipc).
@@ -59,6 +62,17 @@ let promptQueueTurnHook: TurnEndedHook = () => {}
 
 export function setPromptQueueTurnHook(fn: TurnEndedHook): void {
   promptQueueTurnHook = fn
+}
+
+// Consumidores extras da borda de fim de turno (ex.: relançar como mãe quando a
+// filha promovida terminar o turno). Set: vários podem ouvir sem disputar slot.
+const turnEndedListeners = new Set<TurnEndedHook>()
+
+export function onTurnEnded(fn: TurnEndedHook): () => void {
+  turnEndedListeners.add(fn)
+  return () => {
+    turnEndedListeners.delete(fn)
+  }
 }
 
 // Sessão que sumiu do índice (PID morreu / arquivo removido) — sinal de
@@ -332,6 +346,7 @@ interface ContentItem {
 
 interface TranscriptLine {
   type?: string
+  timestamp?: string
   aiTitle?: string
   message?: {
     role?: string
@@ -350,6 +365,8 @@ interface TranscriptEnrichment {
   lastText: string | null
   tokens: SessionActivity['tokens']
   model: string | null
+  // Epoch ms da última resposta (a que deu o model); null sem resposta no tail.
+  modelAt: number | null
 }
 
 // Enriquecimento secundário: lastText, tokens e aiTitle (fallback do name).
@@ -392,7 +409,42 @@ export function deriveEnrichment(tail: string): TranscriptEnrichment {
 
   // Modelo em uso: a última msg assistant carrega message.model (mesmo formato
   // que o metrics-service lê). Null até a primeira resposta do assistant no tail.
-  return { title, lastText, tokens, model: lastAssistant?.message?.model ?? null }
+  const at = lastAssistant?.timestamp ? Date.parse(lastAssistant.timestamp) : NaN
+  return {
+    title,
+    lastText,
+    tokens,
+    model: lastAssistant?.message?.model ?? null,
+    modelAt: Number.isFinite(at) ? at : null,
+  }
+}
+
+// O modelo do processo que roda AGORA. A última resposta do transcript pode ser
+// de um processo anterior da conversa (resume/relance com outro --model): até a
+// primeira resposta nova, vale o --model do spawn. Resposta posterior ao início do
+// processo vence (cobre o /model no meio da sessão).
+export function currentModel(
+  enrichment: Pick<TranscriptEnrichment, 'model' | 'modelAt'>,
+  spawn: { model: string | null; startedAt: number | null } | null,
+): string | null {
+  if (!spawn?.model) return enrichment.model
+  const stale =
+    enrichment.modelAt == null ||
+    (spawn.startedAt != null && enrichment.modelAt < spawn.startedAt)
+  return stale ? spawn.model : enrichment.model
+}
+
+// A PTY herda o env do app: sem --model, o claude usa o ANTHROPIC_MODEL (mesma
+// precedência da CLI).
+export function spawnModel(
+  argsModel: string | null,
+  env: Partial<Record<string, string>>,
+): string | null {
+  return argsModel ?? env.ANTHROPIC_MODEL ?? null
+}
+
+function spawnModelOf(ccSessionId: string): string | null {
+  return spawnModel(latestSpawnArgs(getDb(), ccSessionId)?.model ?? null, process.env)
 }
 
 // Versão síncrona de readTail: lê só os últimos TAIL_BYTES. Usada por consumidores
@@ -566,7 +618,7 @@ class SessionActivityService extends EventEmitter {
     if (this.watched.has(ccSessionId)) return
     const entry: WatchEntry = {
       transcriptPath: findTranscriptPath(ccSessionId),
-      enrichment: { title: null, lastText: null, tokens: undefined, model: null },
+      enrichment: { title: null, lastText: null, tokens: undefined, model: null, modelAt: null },
       fileWatcher: null,
       fileTimer: null,
       subagentsWatched: false,
@@ -829,6 +881,7 @@ class SessionActivityService extends EventEmitter {
       if (prev === 'working' && (current === 'waiting' || current === 'idle')) {
         turnEndedHook(sessionId)
         promptQueueTurnHook(sessionId)
+        for (const fn of turnEndedListeners) fn(sessionId)
       }
       // "Sessão aguardando" é a borda working→waiting especificamente (não
       // qualquer não-busy). Só notifica com o app fora de foco, pra não spammar
@@ -876,7 +929,12 @@ class SessionActivityService extends EventEmitter {
     let name: string | null = null
     let lastActivityAt: number | null = null
 
-    if (!indexed) {
+    const livePty = tuiMenuWatch.ptyForCc(ccSessionId)
+    if (!indexed && livePty && ptyManager.isRunning(livePty)) {
+      // PTY viva sem session file: trust (antes do registro) ou subindo. Uma
+      // conversa retomada já tem JSONL, e o ramo abaixo a dava por encerrada.
+      status = unregisteredPtyStatus(livePty)
+    } else if (!indexed) {
       // Sem arquivo: ou a sessão ainda não nasceu (starting) ou já encerrou.
       // Se já vimos o JSONL antes (transcriptPath), tratamos como encerrada.
       status = entry.transcriptPath ? 'ended' : 'starting'
@@ -914,7 +972,10 @@ class SessionActivityService extends EventEmitter {
       lastText: entry.enrichment.lastText,
       lastActivityAt,
       tokens: entry.enrichment.tokens,
-      model: entry.enrichment.model,
+      model: currentModel(entry.enrichment, {
+        model: spawnModelOf(ccSessionId),
+        startedAt: indexed?.startedAt ?? null,
+      }),
       subagents,
     }
     broadcast('session:activity', activity)

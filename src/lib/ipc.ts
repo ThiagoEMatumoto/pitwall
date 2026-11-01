@@ -29,6 +29,7 @@ export const objectivesApi = api.objectives
 export const handoffsApi = api.handoffs
 export const batonApi = api.baton
 export const sessionGraphApi = api.sessionGraph
+export const motherPinsApi = api.motherPins
 export const attentionApi = api.attention
 export const roomApi = api.room
 export const agentBusApi = api.agentBus

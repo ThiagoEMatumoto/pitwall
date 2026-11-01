@@ -13,6 +13,15 @@ import {
   type LucideProps,
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import { Menu, type MenuItem } from '@/components/ui/Menu'
+import {
+  motherOfChildMap,
+  nestUnderMothers,
+  pinnedMothersFirst,
+  type NestedItem,
+} from '@/features/sessions/conversation-hierarchy'
+import { useMotherPinKeys, useMotherPinsStore } from '@/features/sessions/mother-pins-store'
+import { MotherPinToggle } from '@/features/sessions/MotherPinToggle'
 import { ApexDot } from '@/features/brand'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
@@ -118,6 +127,11 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     [visibleSessions, graph, focusOnly, pinnedIds, focusedSessionId],
   )
   const motherTitles = useMemo(() => motherTitleBySession(graph.nodes), [graph])
+  const motherOfChild = useMemo(() => motherOfChildMap(graph.nodes), [graph])
+  const motherPinKeys = useMotherPinKeys()
+  const setMotherPinned = useMotherPinsStore((s) => s.setPinned)
+  const promoteToMother = useMotherPinsStore((s) => s.promote)
+  const restartPending = useMotherPinsStore((s) => s.restartPending)
 
   // Higiene: descarta pins de sessões que não existem mais. Poda contra TODAS
   // as liveSessions (não só as visíveis) pra não perder pin de filha de handoff
@@ -141,6 +155,18 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
       ),
     [focusedSessions, pinnedIds],
   )
+
+  // Filha logo depois da mãe (régua única por conversa) e as mães marcadas numa
+  // seção fixa no início, na ordem em que foram marcadas.
+  const layout = useMemo(() => {
+    const rank = new Map(motherPinKeys.map((k, i) => [k, i]))
+    const pinOrder = orderedSessions
+      .filter((s) => rank.has(s.ccSessionId ?? s.id))
+      .sort((a, b) => rank.get(a.ccSessionId ?? a.id)! - rank.get(b.ccSessionId ?? b.id)!)
+      .map((s) => s.id)
+    return pinnedMothersFirst(nestUnderMothers(orderedSessions, motherOfChild), pinOrder)
+  }, [orderedSessions, motherOfChild, motherPinKeys])
+  const pinnedMotherKeys = useMemo(() => new Set(motherPinKeys), [motherPinKeys])
 
   // ccSessionId → paneId das sessões exibidas no split (destaque "aberta").
   // Sessão sem id nativo (Codex) vem na lista viva chaveada pelo sessions.id.
@@ -200,7 +226,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
       window.removeEventListener('resize', checkOverflow)
       observer?.disconnect()
     }
-  }, [checkOverflow, orderedSessions])
+  }, [checkOverflow, layout])
 
   const scrollToWaiting = useCallback(() => {
     findOffscreenWaiting()?.scrollIntoView({ inline: 'nearest', behavior: 'smooth' })
@@ -221,25 +247,51 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
           // Fade na borda que tem chips além dela, no lugar da scrollbar.
           style={stripMask(clipped)}
         >
-          {orderedSessions.map((item, index) => {
+          {layout.pinned.length > 0 && (
+            <span
+              data-testid="strip-mothers-section"
+              className="flex shrink-0 items-center gap-1 pl-1 pr-0.5 text-[10px] font-medium text-[var(--color-text-dim)]"
+              title="Mães marcadas — ficam sempre no início da barra"
+            >
+              <Icon as={Crown} size={11} className="fill-current text-[var(--color-accent)]" />
+              Mães
+            </span>
+          )}
+          {[...layout.pinned, ...layout.rest].map((entry, index) => {
+            const item = entry.item
             const paneId = openByCc.get(item.ccSessionId)
             const isOpen = paneId !== undefined
             const isFocused = isOpen && paneId === focusPaneId
+            const isPinnedMother = pinnedMotherKeys.has(item.ccSessionId ?? item.id)
             return (
-              <Chip
+              <StripEntry
                 key={item.ccSessionId}
-                item={item}
-                isOpen={isOpen}
-                isFocused={isFocused}
-                isPinned={pinnedIds.includes(item.id)}
-                motherTitle={motherTitles.get(item.id) ?? null}
-                // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
-                // lugar (a medição seguinte não oscila).
-                hidden={clipped.hidden.includes(index)}
-                onOpen={() => void focusOrOpenSession(item)}
-                onEnd={() => endSession(item.id)}
-                onTogglePin={() => void togglePin(item.id)}
-              />
+                entry={entry}
+                dividerBefore={index === layout.pinned.length && layout.pinned.length > 0}
+                isChild={motherOfChild.has(item.id)}
+                isPinnedMother={isPinnedMother}
+                restartPending={restartPending.has(item.id)}
+                onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
+                onPromote={() => void promoteToMother(item.id, 'when-idle')}
+              >
+                <Chip
+                  item={item}
+                  depth={entry.depth}
+                  isOpen={isOpen}
+                  isFocused={isFocused}
+                  isPinned={pinnedIds.includes(item.id)}
+                  isPinnedMother={isPinnedMother}
+                  // Logo depois da mãe o "↳ mãe" é redundante: o recuo já diz.
+                  motherTitle={entry.depth > 0 ? null : (motherTitles.get(item.id) ?? null)}
+                  // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
+                  // lugar (a medição seguinte não oscila).
+                  hidden={clipped.hidden.includes(index)}
+                  onOpen={() => void focusOrOpenSession(item)}
+                  onEnd={() => endSession(item.id)}
+                  onTogglePin={() => void togglePin(item.id)}
+                  onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
+                />
+              </StripEntry>
             )
           })}
         </div>
@@ -321,9 +373,13 @@ function stripMask(clipped: { left: number; right: number }): CSSProperties | un
 
 interface ChipProps {
   item: LiveSessionInfo
+  // 0 = topo; 1+ = filha logo depois da mãe (recuada).
+  depth?: number
   isOpen: boolean
   isFocused: boolean
   isPinned: boolean
+  isPinnedMother?: boolean
+  onToggleMother?: () => void
   // Alias da mãe quando esta aba é filha (chip "↳ mãe").
   motherTitle?: string | null
   hidden?: boolean
@@ -334,9 +390,12 @@ interface ChipProps {
 
 function Chip({
   item,
+  depth = 0,
   isOpen,
   isFocused,
   isPinned,
+  isPinnedMother = false,
+  onToggleMother,
   motherTitle = null,
   hidden = false,
   onOpen,
@@ -354,10 +413,14 @@ function Chip({
   return (
     <div
       data-strip-chip
+      data-depth={depth || undefined}
+      data-pinned-mother={isPinnedMother || undefined}
       data-waiting={waiting || undefined}
       data-clipped-hidden={hidden || undefined}
       aria-hidden={hidden || undefined}
-      className={`group relative flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] transition ${
+      className={`group relative flex shrink-0 items-center gap-1.5 rounded-lg border text-[11px] transition ${
+        depth > 0 ? 'h-6 pl-1.5 pr-2' : 'h-7 px-2.5'
+      } ${
         isFocused
           ? 'border-[color-mix(in_srgb,var(--color-accent)_55%,transparent)] text-[var(--color-text)]'
           : isOpen
@@ -376,6 +439,24 @@ function Chip({
       title={tooltip}
     >
       <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2">
+        {depth > 0 && (
+          <span
+            data-testid="tab-child-nested"
+            aria-hidden
+            className="shrink-0 text-[10px] leading-none text-[var(--color-text-dim)]"
+            title="Filha da sessão anterior"
+          >
+            ↳
+          </span>
+        )}
+        {isPinnedMother && (
+          <Icon
+            as={Crown}
+            size={11}
+            aria-label="Mãe"
+            className="shrink-0 fill-current text-[var(--color-accent)]"
+          />
+        )}
         {/* Aguardando ("no box · sua vez") ganha O Ápice pulsante; demais estados
             mantêm o glifo cuja FORMA carrega o status e a COR o projeto. */}
         {waiting ? (
@@ -420,6 +501,9 @@ function Chip({
           aba crescia e empurrava as vizinhas. */}
       <span className="absolute inset-y-0 right-0 hidden items-center gap-1.5 rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 group-focus-within:flex group-hover:flex">
         {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
+        {onToggleMother && (
+          <MotherPinToggle pinned={isPinnedMother} onToggle={onToggleMother} size={11} className="!p-0" />
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -458,3 +542,59 @@ function PinButton({ isPinned, onTogglePin }: { isPinned: boolean; onTogglePin: 
     </button>
   )
 }
+
+// Menu de contexto (botão direito) e o divisor entre a seção "Mães" e o resto.
+function StripEntry({
+  entry,
+  dividerBefore,
+  isChild,
+  isPinnedMother,
+  restartPending,
+  onToggleMother,
+  onPromote,
+  children,
+}: {
+  entry: NestedItem<LiveSessionInfo>
+  dividerBefore: boolean
+  isChild: boolean
+  isPinnedMother: boolean
+  restartPending: boolean
+  onToggleMother: () => void
+  onPromote: () => void
+  children: React.ReactNode
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const items: MenuItem[] = [
+    { label: isPinnedMother ? 'Desmarcar como mãe' : 'Marcar como mãe', onClick: onToggleMother },
+    ...(isChild
+      ? [
+          {
+            label: restartPending ? 'Tornar mãe (reinicia ao fim do turno)' : 'Tornar mãe',
+            onClick: onPromote,
+            disabled: restartPending,
+            title:
+              'Solta da mãe atual, fixa como mãe e reinicia sem as travas de filha quando terminar o turno.',
+          },
+        ]
+      : []),
+  ]
+  return (
+    <>
+      {dividerBefore && (
+        <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-[var(--color-border)]" />
+      )}
+      <div
+        className={`flex shrink-0 ${entry.depth > 0 ? '-ml-0.5' : ''}`}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setMenuOpen(true)
+        }}
+      >
+        <Menu open={menuOpen} onClose={() => setMenuOpen(false)} items={items} portal align="left">
+          {children}
+        </Menu>
+      </div>
+    </>
+  )
+}
+

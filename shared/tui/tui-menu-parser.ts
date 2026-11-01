@@ -28,6 +28,7 @@
 // "responda no terminal"). Nunca renderizar clique sobre um parse incerto.
 
 import { isInputRule } from './input-rule'
+import { parseWithGrowingWindow, TAIL_WINDOWS } from './tui-read-window'
 
 export interface TuiMenuOption {
   // Índice 0-based da opção; o dígito exibido na TUI (e enviado no clique) é
@@ -85,6 +86,16 @@ export interface TuiMenu {
   // pré-existente (dígito seleciona E submete), preservado pra single-select
   // sem preview.
   submitOnDigit: boolean
+  // Opção com o pointer ❯ agora (0-based). Fora do fingerprint: muda ao navegar.
+  cursorIndex?: number
+  // Rodapé "Tab to amend" (2.1.316): a opção sob o cursor aceita um texto junto.
+  amendable?: boolean
+  // 'arrows': opções sem número — responder é andar do cursorIndex até a opção e
+  // dar Enter (dígito não faz nada). Ausente = dígito, o padrão dos menus numerados.
+  navigation?: 'arrows'
+  // permission/trust: a janela lida acabou antes da régua do topo do prompt, então
+  // o context é só o fim do diff. Quem lê o buffer amplia a janela (parseTuiMenuFull).
+  contextClipped?: boolean
 }
 
 // Linha de opção numerada: pointer opcional (❯), UM dígito, ponto, label.
@@ -141,7 +152,7 @@ const CHIP_RE = /^☐\s+\S/
 // …" / "Do you want to proceed?" / "run this command unsandboxed" etc. — todos
 // casam o genérico /Do you want/. Opções com strings exatas do binário 2.1.212.
 const PERMISSION_QUESTION_RE = /Do you want/i
-const PERMISSION_OPTION_RE = /don't ask again|allow all edits|No, and tell Claude/i
+const PERMISSION_OPTION_RE = /don[’']t ask again|allow all edits|No, and tell Claude/i
 // Trust prompt de diretório: heading real é "Only proceed if you trust this
 // configuration." (+ "This folder adds …"); opções exatas do binário.
 const TRUST_HEADING_RE = /trust this configuration|trust this folder/i
@@ -156,23 +167,47 @@ const BOX_EDGE_RE = /^[\s│╭╮╰╯─╌]+|[\s│╭╮╰╯─╌]+$/g
 // No 2.1.286 o prompt não tem box ╭: começa numa régua cheia de ─ (captura real
 // em shared/tui/__fixtures__) — acima dela é conversa. Pode trazer o nome da sessão.
 
+// Teto de linhas acima da pergunta. Era 15: um Edit de 10 linhas no 2.1.316 já
+// desenha ~35 (contexto + − + +), e o card mostrava só o fim do diff, sem o
+// arquivo (captura real __fixtures__/claude-2.1.316-permission-edit-long-diff).
+// O limite real é a régua do topo do prompt; o teto só protege de tela sem régua.
+const CONTEXT_MAX_LINES = 300
+
+function isContextTop(raw: string): boolean {
+  return raw.includes('╭') || isInputRule(raw.trim())
+}
+
 // Bloco de contexto do prompt de permissão/trust: linhas ACIMA da pergunta (o
-// box com o diff/comando/config que o usuário está aprovando). Sobe no máximo
-// `max` linhas e para na borda superior do box (╭). Fail-soft: pode vir vazio.
-function extractContext(lines: string[], questionLine: number, max = 15): string | undefined {
+// box com o diff/comando/config que o usuário está aprovando). Para na borda
+// superior do box (╭) ou na régua cheia. `clipped`: o texto acabou antes disso.
+function extractContext(
+  lines: string[],
+  questionLine: number,
+  max = CONTEXT_MAX_LINES,
+): { context?: string; clipped: boolean } {
   const parts: string[] = []
-  for (let i = questionLine - 1; i >= 0 && i >= questionLine - max; i--) {
+  let i = questionLine - 1
+  for (; i >= 0 && i >= questionLine - max; i--) {
     const raw = lines[i]
+    if (isContextTop(raw)) {
+      const cleaned = raw.replace(BOX_EDGE_RE, '')
+      if (cleaned !== '' && !isInputRule(raw.trim())) parts.unshift(cleaned)
+      break
+    }
     const cleaned = raw.replace(BOX_EDGE_RE, '')
     if (cleaned !== '') parts.unshift(cleaned)
-    if (raw.includes('╭')) break // topo do box — acima é conversa antiga
-    if (isInputRule(raw.trim())) break
   }
-  return parts.length > 0 ? parts.join('\n') : undefined
+  return { ...(parts.length > 0 ? { context: parts.join('\n') } : {}), clipped: i < 0 }
 }
 
 // Cabeçalho da caixa no 2.1.286 ("Bash command") e nos prompts de arquivo ("Edit file").
 const TOOL_HEADER_RE = /^(\S+) (command|file)$/i
+// MCP no 2.1.316 (captura real …permission-mcp): cabeçalho "Tool use" e, logo
+// abaixo, "<servidor> — <Ferramenta> Tool: (MCP)"; os argumentos ficam entre as ╌.
+const MCP_TOOL_RE = /^(.+?) Tool: \(MCP\)$/
+// Fica logo acima da pergunta: identifica o MCP quando o argumento longo empurrou
+// o cabeçalho para fora da tela lida.
+const MCP_ABOUT_RE = /^About the (.+? — .+?) Tool:$/
 const DASHED_RULE_RE = /^╌{10,}$/
 const EDIT_TARGET_RE = /^Do you want to make this edit to (.+)\?$/i
 
@@ -183,19 +218,32 @@ function extractRequest(
   lines: string[],
   questionLine: number,
   question: string | undefined,
-  max = 15,
+  max = CONTEXT_MAX_LINES,
 ): PermissionRequest | undefined {
   let tool: string | undefined
+  let aboutTool: string | undefined
+  let filePath: string | undefined
   const rules: number[] = []
   for (let i = questionLine - 1; i >= 0 && i >= questionLine - max; i--) {
     const t = lines[i].trim()
     if (DASHED_RULE_RE.test(t)) rules.unshift(i)
-    const header = TOOL_HEADER_RE.exec(t.replace(BOX_EDGE_RE, ''))
-    if (header && !tool) tool = header[1]
-    if (lines[i].includes('╭') || isInputRule(t)) break
+    const cleaned = t.replace(BOX_EDGE_RE, '')
+    const header = TOOL_HEADER_RE.exec(cleaned)
+    if (header && !tool) {
+      tool = header[1]
+      // "Edit file" / "Create file": o caminho vem na linha de baixo, e o que fica
+      // entre as réguas é o diff — não serve de "comando".
+      if (/^file$/i.test(header[2])) filePath = lines[i + 1]?.trim().replace(BOX_EDGE_RE, '') || undefined
+    }
+    const mcp = MCP_TOOL_RE.exec(cleaned)
+    if (mcp && !tool) tool = mcp[1]
+    const about = MCP_ABOUT_RE.exec(cleaned)
+    if (about && !aboutTool) aboutTool = about[1]
+    if (isContextTop(lines[i])) break
   }
-  let command: string | undefined
-  if (rules.length >= 2) {
+  tool ??= aboutTool
+  let command: string | undefined = filePath
+  if (!command && rules.length >= 2) {
     const body = lines
       .slice(rules[rules.length - 2] + 1, rules[rules.length - 1])
       // 2.1.316: cada linha do comando vem com a calha "│ " dentro das réguas ╌.
@@ -324,12 +372,10 @@ export function parseTuiMenu(text: string): TuiMenu | null {
 
 // Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
 // unnumbered.ansi): as opções perderam o número ("❯ No, exit" / "Yes, I trust
-// this folder") e o rodapé é "Enter to confirm · Esc to cancel". Suposição: o
-// 2.1.316 desenha a mesma tela (não há captura dele no repo). Sem isto a filha
-// num diretório nunca aberto ficava parada aqui fora da fila de atenção.
-// `options` vazio DE PROPÓSITO: nenhum dígito foi validado nesta tela e o destaque
-// inicial é "No, exit" — Enter cego encerraria a sessão. A fila mostra o trust; a
-// resposta é no terminal (respond recusa: não há opção para escolher).
+// this folder") e o rodapé é "Enter to confirm · Esc to cancel". O 2.1.316 desenha
+// a mesma tela; validado ao vivo (sandbox-084): dígito não faz nada, a seta move o
+// ❯ e Enter confirma. O destaque inicial é "No, exit" — Enter cego encerraria a
+// sessão —, então o menu leva o cursor lido e a resposta anda a partir dele.
 const UNNUMBERED_TRUST_OPTION_RE = /^(?:❯\s*)?(?:Yes, I trust this folder|No, exit)$/
 const TRUST_SAFETY_RE = /Quick safety check|one you trust/i
 const ACCESSING_RE = /^Accessing workspace:?$/i
@@ -345,6 +391,7 @@ function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
     i--
   }
   if (!optionLines.some((l) => /I trust this folder/.test(l))) return null
+  const cursor = optionLines.findIndex((l) => l.startsWith('❯'))
 
   const above = lines.slice(Math.max(0, i - 20), i + 1).map((l) => l.trim())
   const qStart = above.findIndex((l) => TRUST_SAFETY_RE.test(l))
@@ -365,9 +412,11 @@ function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
     kind: 'trust',
     ...(question ? { question } : {}),
     ...(workspace ? { context: `Accessing workspace: ${workspace}` } : {}),
-    options: [],
+    options: optionLines.map((l, index) => ({ index, label: l.replace(/^❯\s*/, '') })),
     multiSelect: false,
     submitOnDigit: false,
+    navigation: 'arrows',
+    ...(cursor >= 0 ? { cursorIndex: cursor } : {}),
   }
 }
 
@@ -502,12 +551,15 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
 
   // Contexto: box de diff/comando (permission/trust) ou resumo de respostas
   // (question_review). Nos demais kinds não faz sentido.
-  const context =
-    kind === 'permission' || kind === 'trust'
-      ? extractContext(lines, questionLine)
-      : kind === 'question_review'
-        ? extractReviewSummary(lines, questionLine)
-        : undefined
+  const boxed =
+    kind === 'permission' || kind === 'trust' ? extractContext(lines, questionLine) : null
+  const context = boxed
+    ? boxed.context
+    : kind === 'question_review'
+      ? extractReviewSummary(lines, questionLine)
+      : undefined
+  const cursorIdx = run.findIndex((e) => e.pointer)
+  const footer = lines.slice(last.line + 1, end).join('\n')
 
   const request =
     kind === 'permission' ? extractRequest(lines, questionLine, question ?? undefined) : undefined
@@ -526,7 +578,33 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
     multiSelect,
     ...(tabs != null ? { tabs } : {}),
     submitOnDigit,
+    ...(cursorIdx >= 0 ? { cursorIndex: options[cursorIdx].index } : {}),
+    ...(/Tab to amend/i.test(footer) ? { amendable: true } : {}),
+    ...(boxed?.clipped ? { contextClipped: true } : {}),
   }
+}
+
+// Parse de um buffer real: amplia a janela também quando o menu parseou mas o
+// diff/comando do prompt começa acima dela — senão o card (e o fingerprint, que
+// inclui o context) ficariam com só o fim do diff.
+export function parseTuiMenuFull(
+  readTail: (lines: number) => string,
+  bufferLines: number,
+  windows: readonly number[] = TAIL_WINDOWS,
+): TuiMenu | null {
+  let clipped: TuiMenu | null = null
+  const full = parseWithGrowingWindow(
+    readTail,
+    (text) => {
+      const menu = parseTuiMenu(text)
+      if (!menu?.contextClipped) return menu
+      clipped = menu
+      return null
+    },
+    bufferLines,
+    windows,
+  )
+  return full ?? clipped
 }
 
 // Gate PURO de status × kind: em qual status de sessão um menu parseado pode

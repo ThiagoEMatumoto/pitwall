@@ -189,6 +189,13 @@ describe('orderByFeature', () => {
     expect(r.childOf.size).toBe(0)
   })
 
+  // Visto ao vivo (sandbox-084, Ctrl+Shift+A após reiniciar): a filha, mais recente
+  // que a mãe e sem feature, aparecia acima dela com o ↳.
+  it('sem feature, filha mais recente que a mãe ainda vem logo abaixo dela', () => {
+    const r = orderByFeature([s('marina'), s('solta'), s('mae')], new Map(), motherOfChild)
+    expect(r.items.map((x) => x.id)).toEqual(['solta', 'mae', 'marina'])
+  })
+
   it('sem feature nenhuma, a ordem fica', () => {
     const items = [s('a'), s('b'), s('c')]
     expect(orderByFeature(items, new Map(), new Map()).items).toEqual(items)

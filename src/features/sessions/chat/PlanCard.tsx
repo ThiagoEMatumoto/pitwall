@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { CheckCircle2, Clock, XCircle } from 'lucide-react'
+import { CheckCircle2, Clock, CornerDownLeft, XCircle } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
+import { Kbd } from '@/components/ui/ShortcutHints'
 import { ApexDot, Button, GradientBorder, Ruler } from '@/features/brand'
 
 interface Props {
@@ -86,7 +87,9 @@ export function PlanCard({ plan, decision, onDecide, sent, canApprove = true }: 
               Aprovar plano
             </Button>
           ) : (
-            <span className="text-xs text-[var(--color-text-dim)]">Pra aprovar, use o terminal.</span>
+            <span className="text-xs text-[var(--color-text-dim)]">
+              Pra aprovar, use o terminal.
+            </span>
           )}
           <Button
             variant="ghost"
@@ -96,8 +99,21 @@ export function PlanCard({ plan, decision, onDecide, sent, canApprove = true }: 
           >
             Continuar planejando
           </Button>
-          <span className="font-mono text-[10px] text-[var(--color-text-dim)]/70">
-            {sent ? 'Decisão enviada…' : '⏎ aprova · esc rejeita'}
+          <span
+            data-testid="plan-shortcuts"
+            className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-dim)]"
+          >
+            {sent ? (
+              'Decisão enviada…'
+            ) : (
+              <>
+                {/* O glifo ⏎ não existe nas fontes da UI: tecla com ícone. */}
+                <Kbd>
+                  <Icon as={CornerDownLeft} size={10} aria-label="Enter" />
+                </Kbd>
+                aprova · <Kbd>esc</Kbd> rejeita
+              </>
+            )}
           </span>
         </div>
       )}

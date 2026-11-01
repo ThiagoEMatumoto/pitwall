@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Clock, Loader, TerminalSquare } from 'lucide-react'
+import { Loader } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import type { ChatMessage, SessionActivity } from '../../../../shared/types/ipc'
 import { ChatStatusStrip } from './ChatStatusStrip'
@@ -18,11 +18,17 @@ import { CompactSummaryCard } from './CompactSummaryCard'
 import { ConfigCard } from './ConfigCard'
 import { HistorySearchCard } from './HistorySearchCard'
 import { MessageBubble } from './MessageBubble'
+import { HandoffUpdateCard } from './HandoffUpdateCard'
+import { parseHandoffWakeEnvelope } from '../../../../shared/handoff-wake-envelope'
 import { MetaCard } from './MetaCard'
 import { ModelChangeChip } from './ModelChangeChip'
 import { ModelPickerCard } from './ModelPickerCard'
 import { PermissionCard } from './PermissionCard'
+import { PendingElsewhereChip } from './PendingElsewhereChip'
+import { useMainPermissionMenu, usePermissionResponder } from './usePermissionResponder'
 import { PlanCard } from './PlanCard'
+import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
+import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
 import { QuestionReviewCard } from './QuestionReviewCard'
 import { SubagentCard } from './SubagentCard'
@@ -31,10 +37,15 @@ import { ThemePickerCard } from './ThemePickerCard'
 import { ThinkingCard } from './ThinkingCard'
 import { ToolResultCard, ToolUseCard } from './ToolCard'
 import { useChatTranscript, usePlanFile } from './useChatTranscript'
+import { ArtifactCard } from './artifacts/ArtifactCard'
+import { ArtifactSidePanel } from './artifacts/ArtifactSidePanel'
+import { ArtifactConsultChip } from './artifacts/ArtifactConsultChip'
+import { artifactRefKey, planArtifacts } from './artifacts/artifact-refs'
+import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
+import { useSidePanelFits } from './artifacts/useSidePanelFits'
 import {
   buildArrowKeys,
   buildCtrlTKey,
-  buildDigitKey,
   buildEnterKey,
   buildEscKey,
   buildFilterKeys,
@@ -100,32 +111,21 @@ interface Props {
   menuAnsweredElsewhere?: boolean
   // Sem ele no mount o main não arma o watch; quando chega, o watch é refeito.
   ccSessionId?: string | null
+  // Sessão filha ativa: o card oferece "Sempre permitir para filhas".
+  isChild?: boolean
+  // Sem xterm (quick look em chat): o pedido de permissão vem do espelho do main.
+  menuFromMain?: boolean
+  // false = sem painel lateral de artefato (a gaveta "Sessão" dos editores já
+  // está ao lado do artefato); os cards abrem direto no editor.
+  artifactSide?: boolean
 }
 
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
 // Terminal); esta view só LÊ o transcript e adiciona ecos otimistas das mensagens
 // recém-enviadas até o disco alcançar.
-// Placeholder do card de plano pendente quando o conteúdo não pôde ser resolvido
-// (CLI antiga sem plan file, leitura falhou) — fail-safe, comportamento anterior.
-const PLAN_PLACEHOLDER = '_O plano está na conversa acima — revise antes de decidir._'
-
-// PlanCard de transcript (pós-fato) com fallback de robustez: se o input do
-// ExitPlanMode veio com plan vazio mas com planFilePath, busca o arquivo.
-// Componente próprio porque usePlanFile é um hook (não pode viver no map).
-function TranscriptPlanCard({
-  plan,
-  planFilePath,
-  decision,
-}: {
-  plan: string
-  planFilePath: string | null
-  decision?: boolean
-}) {
-  const fetched = usePlanFile(plan ? null : planFilePath)
-  return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
-}
-
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
+  const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
+  const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -191,6 +191,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // ambos no mesmo card e não renderizar a mensagem de resposta solta. Sobre as
   // mensagens de disco: ecos otimistas são só texto do usuário.
   const interactive = useMemo(() => resolveInteractive(messages), [messages])
+  const artifactPlan = useMemo(() => planArtifacts(rendered), [rendered])
+  const sidePanel = useArtifactPanelStore((s) => s.sessions[sessionId])
+  const showArtifactSide = useArtifactPanelStore((s) => s.show)
+  const sideKey = sidePanel?.open ? artifactRefKey(sidePanel.ref) : null
+  const rootRef = useRef<HTMLDivElement>(null)
+  const sideFits = useSidePanelFits(rootRef)
+  const sideEnabled = artifactSide && sideFits
   const pendingPrompt = useMemo(() => pendingInteractive(messages), [messages])
 
   // Último subagente do transcript (nome + status) pra faixa de estado. Dado real
@@ -273,6 +280,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // as opções vão inteiras pro card (não há sentinelas nesses menus).
   const tuiPermission =
     tuiMenu && (tuiMenu.kind === 'permission' || tuiMenu.kind === 'trust') ? tuiMenu : null
+  const permission = usePermissionResponder({
+    sessionId,
+    menu: tuiPermission,
+    isChild,
+    reparseMenu,
+    onRespond,
+  })
 
   // Tela final de revisão ("Review your answers") do multi-select/multi-
   // pergunta — kind próprio no parser, card dedicado (QuestionReviewCard).
@@ -308,17 +322,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     return fresh
   }
 
-  // Single-select (com ou sem preview): buildSelectKeys decide dígito-só ou
-  // dígito+Enter conforme submitOnDigit — resposta FINAL, marca sent. USA o
-  // menu do RE-PARSE fresco (não o `tuiMenu` do estado): `submitOnDigit` NÃO
-  // entra no fingerprint (menuFingerprint), então o dedup de applyTuiMenu
-  // (Terminal.tsx) pode reter no estado um `submitOnDigit` desatualizado de um
-  // parse anterior enquanto kind/opções ficam iguais — usar o estado aqui
-  // mandaria dígito-só quando a TUI já exige dígito+Enter (ou vice-versa), e o
-  // clique "seleciona mas não envia" (Bug 2). `target.index` continua vindo do
-  // memo (tuiQuestion) porque freshMenuMatches() já garante fingerprint igual
-  // ao do estado — mesmas opções/índices, só os campos fora do fingerprint
-  // (submitOnDigit/preview/context) podem ter mudado.
+  // Single-select: buildSelectKeys decide dígito-só ou dígito+Enter conforme
+  // submitOnDigit, que fica FORA do fingerprint — por isso lê o re-parse fresco,
+  // não o estado (senão o clique "seleciona mas não envia", Bug 2).
   function respondTuiQuestion(clickIndex: number, label: string) {
     if (!canRespondTui || !tuiQuestion || menuFp == null || tuiMenu?.multiSelect) return
     const target = tuiQuestion.clickable[clickIndex]
@@ -389,18 +395,6 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     const keys = buildReviewKeys(fresh, decision)
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
-  }
-
-  // Permissão/trust: mesmo caminho da F3b — re-parse fresco + dígito da opção.
-  // Diferente do respondTuiQuestion, os índices são diretos (sem sentinelas).
-  function respondTuiPermission(clickIndex: number, label: string) {
-    if (!canRespondTui || !tuiPermission || menuFp == null) return
-    const target = tuiPermission.options[clickIndex]
-    if (!target || !freshMenuMatches()) return
-    const keys = buildDigitKey(target.index)
-    if (keys.length === 0) return
-    setTuiSent({ fp: menuFp, label, resolvedCount })
     onRespond?.(keys)
   }
 
@@ -577,9 +571,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     </>
   ) : null
 
-  // Espera que o chat não consegue representar (provável prompt de permissão
-  // y/n / menu TTY): status 'waiting' sem card conhecido — nem do transcript,
-  // nem sintetizado do menu TUI (que tem precedência sobre o banner).
+  // Espera que o chat não consegue representar: 'waiting' sem card do transcript
+  // nem do menu TUI (que tem precedência sobre o banner).
   const waitInTerminal =
     showTerminalWaitBanner({
       status,
@@ -593,12 +586,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     messageCount: rendered.length,
   })
 
-  /* Card pendente sintetizado do menu TUI parseado do buffer (o transcript não
-     expõe o momento pendente — a CLI só grava após a resposta; permission/trust
-     nunca chegam ao JSONL). O clique envia o DÍGITO da opção, que seleciona e
-     submete na TUI. Extraído em variável porque renderiza TAMBÉM no estado
-     pré-transcript (loading/waiting/empty) — o trust prompt aparece antes de
-     existir qualquer mensagem. */
+  /* Card pendente sintetizado do menu TUI do buffer (permission/trust nunca chegam
+     ao JSONL). Renderiza também pré-transcript: o trust aparece antes da 1ª mensagem. */
   const tuiCardNode = showTuiCard ? (
     <>
       {tuiMenu?.kind === 'question' && tuiQuestion && (
@@ -631,13 +620,13 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         />
       )}
       {tuiPermission && (
+        // Resposta pelo caminho guardado do main (não depende do xterm desta view).
         <PermissionCard
-          kind={tuiPermission.kind === 'trust' ? 'trust' : 'permission'}
-          question={tuiPermission.question}
-          context={tuiPermission.context}
-          options={tuiPermission.options}
-          onRespond={canRespondTui ? respondTuiPermission : undefined}
-          sentLabel={tuiSent && tuiSent.fp === menuFp ? tuiSent.label : undefined}
+          menu={tuiPermission}
+          onDecide={permission.decide}
+          sentLabel={permission.sentLabel}
+          notice={permission.notice}
+          childRule={permission.childRule}
         />
       )}
     </>
@@ -656,7 +645,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-[var(--color-bg)]">
+    <div ref={rootRef} className="absolute inset-0 z-10 flex bg-[var(--color-bg)]">
+    <div className="relative flex min-w-0 flex-1 flex-col">
+    <PendingElsewhereChip sessionId={sessionId} />
     <div
       ref={scrollRef}
       onScroll={onScroll}
@@ -666,13 +657,38 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           'radial-gradient(90% 40% at 50% 0%, color-mix(in srgb, var(--color-accent) 5%, transparent), transparent 60%)',
       }}
     >
-      <div ref={contentRef} className="mx-auto flex max-w-[780px] flex-col gap-3.5 px-6">
+      <div ref={contentRef} className="mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-3.5 px-6 @container/chat">
         {rendered.map((m, i) => {
           // Ecos otimistas vêm DEPOIS das mensagens de disco; marcamos como pendentes.
           const echoPending = i >= messages.length
+          if (artifactPlan.hidden.has(i)) return null
+          const artifactCard = artifactPlan.cards.get(i)
+          if (artifactCard) {
+            return (
+              <ArtifactCard
+                key={i}
+                plan={artifactCard}
+                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+                sideActive={sideKey === artifactRefKey(artifactCard.ref)}
+              />
+            )
+          }
+          const consult = artifactPlan.consults.get(i)
+          if (consult) {
+            return (
+              <ArtifactConsultChip
+                key={i}
+                plan={consult}
+                onShowSide={sideEnabled ? (ref) => showArtifactSide(sessionId, ref) : undefined}
+              />
+            )
+          }
           switch (m.kind) {
-            case 'user':
+            case 'user': {
+              const wake = parseHandoffWakeEnvelope(m.text)
+              if (wake) return <HandoffUpdateCard key={i} envelope={wake} />
               return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
+            }
             case 'assistant':
               return (
                 <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />
@@ -758,37 +774,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         })}
         {tuiCardNode}
         {tuiPickerCardNode}
-        {pendingPrompt && (
-          <div className="sticky bottom-0 flex items-center gap-2 rounded-md border border-[var(--color-accent)]/50 bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] shadow-lg">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
-            <Icon as={Clock} size={14} className="shrink-0 text-[var(--color-accent)]" />
-            {pendingPrompt.kind === 'plan'
-              ? 'Claude está aguardando sua aprovação do plano — responda no compositor ou no terminal.'
-              : 'Claude está aguardando sua resposta — responda no compositor ou no terminal.'}
-          </div>
-        )}
-        {/* Espera genérica (TTY-only): o chat não tem card pra mostrar. Direciona ao
-            terminal, único lugar que renderiza o prompt (ex.: permissão y/n). */}
-        {waitInTerminal && (
-          <div className="sticky bottom-0 flex items-center gap-2 rounded-md border border-[var(--color-warning)]/60 bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] shadow-lg">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-warning)]" />
-            <Icon as={Clock} size={14} className="shrink-0 text-[var(--color-warning)]" />
-            <span className="flex-1">
-              Claude está aguardando sua resposta no terminal (ex.: permissão). Abra o Terminal pra
-              responder.
-            </span>
-            {onToggleMode && (
-              <button
-                type="button"
-                onClick={onToggleMode}
-                className="flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs font-medium hover:border-[var(--color-warning)]"
-              >
-                <Icon as={TerminalSquare} size={13} />
-                Ir pro Terminal
-              </button>
-            )}
-          </div>
-        )}
+        <ChatWaitBanners
+          pendingPrompt={pendingPrompt}
+          waitInTerminal={waitInTerminal}
+          onToggleMode={onToggleMode}
+        />
         {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente
             (status 'waiting'), pra não competir com o banner acima. */}
         {status === 'working' && !pendingPrompt && (
@@ -804,6 +794,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       subagentName={lastSubagent?.name}
       subagentError={lastSubagent?.error}
     />
+    </div>
+    {sideEnabled && <ArtifactSidePanel sessionId={sessionId} />}
     </div>
   )
 })

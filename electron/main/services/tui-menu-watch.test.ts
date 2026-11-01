@@ -313,19 +313,19 @@ describe('TuiMenuWatch.respond — checagem de menu-mudou', () => {
     expect(pty.writes).toEqual([])
   })
 
-  it('trust sem numeração (2.1.286+): aparece como menu trust, mas nenhum clique digita', async () => {
+  it('trust sem numeração (2.1.286+): "Confiar" anda do cursor até Yes e confirma, sem dígito', async () => {
     const { pty, watch } = setup(TRUST_UNNUMBERED)
     const snap = await watch.snapshot('s1')
     expect(snap?.menu.kind).toBe('trust')
-    expect(snap?.menu.options).toEqual([])
+    const yes = snap!.menu.options.find((o) => /I trust this folder/.test(o.label))!
     const res = await watch.respond({
       sessionId: 's1',
       fingerprint: snap!.fingerprint,
       menuSeq: snap!.menuSeq,
-      action: { kind: 'select', optionIndex: 0 },
+      action: { kind: 'select', optionIndex: yes.index },
     })
-    expect(res).toMatchObject({ ok: false, error: 'invalid-action' })
-    expect(pty.writes).toEqual([])
+    expect(res).toEqual({ ok: true })
+    expect(pty.writes).toEqual(['\x1b[B', '\r'])
   })
 })
 

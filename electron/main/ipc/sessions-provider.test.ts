@@ -190,6 +190,7 @@ describe('sessions:list-live-global', () => {
     const list = (await seam.handlers.get('sessions:list-live-global')!({})) as Array<
       Record<string, unknown>
     >
-    expect(list[0]).toMatchObject({ ccSessionId: 'cc-1', provider: 'claude', status: 'ended' })
+    // PTY viva sem session file (subindo ou no trust) nunca é 'ended'.
+    expect(list[0]).toMatchObject({ ccSessionId: 'cc-1', provider: 'claude', status: 'starting' })
   })
 })

@@ -9,6 +9,12 @@ import { openPaneKeys } from '@/features/handoffs/crew'
 import { renderProjectIcon } from '@/components/ui/projectIcon'
 import { SessionFeatureChip } from '@/features/sessions/SessionFeatureChip'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
+import {
+  groupStatusUnderMother,
+  motherOfChildMap,
+} from '@/features/sessions/conversation-hierarchy'
+import { useMotherPinsStore } from '@/features/sessions/mother-pins-store'
+import { MotherPinToggle } from '@/features/sessions/MotherPinToggle'
 import { useFocusFilterStore } from '@/lib/focus-filter-store'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
@@ -88,19 +94,16 @@ export function SessionSwitcher({ open, onClose }: Props) {
     () => new Map(graph.nodes.map((n) => [n.sessionId, n.featureId ?? null])),
     [graph],
   )
-  // Filha → mãe: a filha vem logo abaixo da mãe, com "↳". O fio de handoff do
-  // grafo cobre o vínculo vivo; a hierarquia (hierarchyMotherId) cobre a filha
-  // dispensada/antiga, que não deve voltar a parecer mãe.
-  const motherOfChild = useMemo(
-    () =>
-      new Map([
-        ...graph.nodes.flatMap((n) =>
-          n.hierarchyMotherId ? [[n.sessionId, n.hierarchyMotherId] as const] : [],
-        ),
-        ...graph.edges.flatMap((e) => (e.kind === 'handoff' ? [[e.to, e.from] as const] : [])),
-      ]),
+  // Filha → mãe pela régua única (conversa): a filha vem logo abaixo da mãe, com "↳".
+  const motherOfChild = useMemo(() => motherOfChildMap(graph.nodes), [graph])
+  const pinnedMotherIds = useMemo(
+    () => new Set(graph.nodes.filter((n) => n.isPinnedMother).map((n) => n.sessionId)),
     [graph],
   )
+  const setMotherPinned = useMotherPinsStore((s) => s.setPinned)
+  useEffect(() => {
+    void useMotherPinsStore.getState().load()
+  }, [])
   const motherTitles = useMemo(() => motherTitleBySession(graph.nodes), [graph])
   const focusOnly = useFocusFilterStore((s) => s.enabled)
   const setFocusOnly = useFocusFilterStore((s) => s.setEnabled)
@@ -159,11 +162,14 @@ export function SessionSwitcher({ open, onClose }: Props) {
   const grouped = useMemo(() => {
     const withRepo = filtered.filter((s) => s.repo !== null)
     const standalone = filtered.filter((s) => s.repo === null)
+    // A filha entra no grupo de status da mãe (se ela está na lista): só assim fica
+    // logo abaixo dela, em vez de cair noutro grupo.
+    const statusOf = groupStatusUnderMother(withRepo, motherOfChild)
     return [
       ...GROUPS.map((g) => ({
         def: g,
         ...orderByFeature(
-          withRepo.filter((s) => g.statuses.includes(s.status)),
+          withRepo.filter((s) => g.statuses.includes(statusOf.get(s.id) ?? s.status)),
           featureOf,
           motherOfChild,
         ),
@@ -255,6 +261,11 @@ export function SessionSwitcher({ open, onClose }: Props) {
     } else if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
+    } else if (e.altKey && e.key.toLowerCase() === 'm' && tab === 'active') {
+      // Alt+M: "Marcar como mãe" / "Desmarcar" na linha ativa.
+      e.preventDefault()
+      const item = flatItems[activeIdx]
+      if (item) void setMotherPinned(item.id, !pinnedMotherIds.has(item.id))
     }
   }
 
@@ -422,6 +433,10 @@ export function SessionSwitcher({ open, onClose }: Props) {
                         crew={crewIds.has(item.id)}
                         featureId={featureOf.get(item.id) ?? null}
                         motherOf={motherOf.get(item.id) ?? null}
+                        pinnedMother={pinnedMotherIds.has(item.id)}
+                        onTogglePinnedMother={() =>
+                          void setMotherPinned(item.id, !pinnedMotherIds.has(item.id))
+                        }
                         nested={childOf.has(item.id)}
                         motherTitle={motherTitles.get(item.id) ?? null}
                         dataIdx={idxByCc.get(item.ccSessionId) ?? -1}
@@ -483,6 +498,8 @@ interface RowProps {
   featureId?: string | null
   // Mãe: quantas filhas ela lidera (null = não é mãe).
   motherOf?: number | null
+  pinnedMother?: boolean
+  onTogglePinnedMother?: () => void
   // Filha posta logo abaixo da mãe (ordem por feature): recuo + "↳".
   nested?: boolean
   // Alias da mãe quando é filha e a mãe não está logo acima (chip "↳ mãe").
@@ -504,6 +521,8 @@ function SessionRow({
   crew = false,
   featureId = null,
   motherOf = null,
+  pinnedMother = false,
+  onTogglePinnedMother,
   nested = false,
   motherTitle = null,
   dataIdx,
@@ -626,6 +645,14 @@ function SessionRow({
           </div>
         )}
       </button>
+      {onTogglePinnedMother && (
+        <MotherPinToggle
+          pinned={pinnedMother}
+          onToggle={onTogglePinnedMother}
+          hint="Alt+M"
+          className={pinnedMother ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}
+        />
+      )}
     </li>
   )
 }

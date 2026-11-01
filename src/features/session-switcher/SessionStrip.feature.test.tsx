@@ -15,6 +15,11 @@ vi.mock('@/lib/ipc', () => ({
   sessionsApi: { listByFeature: vi.fn().mockResolvedValue([]) },
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
   sessionGraphApi: { onUpdated: () => () => {}, get: () => new Promise(() => {}) },
+  motherPinsApi: {
+    list: () => Promise.resolve([]),
+    onUpdated: () => () => {},
+    onRestart: () => () => {},
+  },
 }))
 
 const sessions: LiveSessionInfo[] = []
@@ -50,6 +55,9 @@ vi.mock('@/store/appStore', () => ({
 
 const { SessionStrip } = await import('./SessionStrip')
 const { useSessionFeatureStore } = await import('@/store/sessionFeatureStore')
+const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
+const { useMotherPinsStore } = await import('@/features/sessions/mother-pins-store')
+const { useFocusFilterStore } = await import('@/lib/focus-filter-store')
 
 function makeSession(over: Partial<LiveSessionInfo> = {}): LiveSessionInfo {
   return {
@@ -106,3 +114,38 @@ describe('SessionStrip — marca da feature', () => {
     expect(screen.queryByTestId('session-feature-chip')).not.toBeInTheDocument()
   })
 })
+
+describe('SessionStrip — mães e filhas', () => {
+  function node(sessionId: string, over: Record<string, unknown> = {}) {
+    return { sessionId, ccSessionId: `cc-${sessionId}`, hierarchyMotherId: null, ...over }
+  }
+
+  it('filha logo depois da mãe, recuada; mãe marcada abre a seção "Mães"', () => {
+    sessions.push(
+      makeSession({ id: 'filha', ccSessionId: 'cc-filha', name: 'filha' }),
+      makeSession({ id: 'outra', ccSessionId: 'cc-outra', name: 'outra' }),
+      makeSession({ id: 'mae', ccSessionId: 'cc-mae', name: 'mae' }),
+    )
+    useSessionGraphStore.setState({
+      graph: {
+        nodes: [node('mae'), node('outra'), node('filha', { hierarchyMotherId: 'mae' })] as never,
+        lanes: [],
+        edges: [],
+      },
+    })
+    useMotherPinsStore.setState({ keys: ['cc-mae'], loaded: true })
+    // Todas as sessões: com o filtro "Mães + quem precisa de mim" a filha quieta sai.
+    useFocusFilterStore.setState({ enabled: false, loaded: true, load: async () => {} } as never)
+    render(<SessionStrip onOpenSwitcher={() => {}} />)
+    const chips = [...document.querySelectorAll<HTMLElement>('[data-strip-chip]')]
+    expect(chips.map((c) => c.textContent?.match(/mae|filha|outra/)?.[0])).toEqual([
+      'mae',
+      'filha',
+      'outra',
+    ])
+    expect(chips[1].dataset.depth).toBe('1')
+    expect(chips[0].dataset.pinnedMother).toBe('true')
+    expect(screen.getByTestId('strip-mothers-section')).toHaveTextContent('Mães')
+  })
+})
+

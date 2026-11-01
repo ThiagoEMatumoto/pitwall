@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { sessionsApi } from '@/lib/ipc'
 import { hiddenCrewSessionIds, openPaneKeys } from '@/features/handoffs/crew'
 import { pendingEndSessionIds, useAppStore, type ActivePane } from '@/store/appStore'
-import { useSessionGraph } from '@/features/sessions/session-graph-store'
+import { useSessionGraph, useSessionGraphStore } from '@/features/sessions/session-graph-store'
+import { hierarchyHandoffMap } from '@/features/sessions/conversation-hierarchy'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
@@ -15,8 +16,14 @@ export function visibleLiveSessions(
   allLiveSessions: LiveSessionInfo[],
   panes: ActivePane[],
   handoffs: Handoff[],
+  nodes: ReadonlyArray<Pick<SessionGraphNode, 'sessionId' | 'hierarchyHandoffId'>> = [],
 ): LiveSessionInfo[] {
-  const hidden = hiddenCrewSessionIds(handoffs, allLiveSessions, openPaneKeys(panes))
+  const hidden = hiddenCrewSessionIds(
+    handoffs,
+    allLiveSessions,
+    openPaneKeys(panes),
+    hierarchyHandoffMap(nodes),
+  )
   return allLiveSessions.filter((s) => !hidden.has(s.id))
 }
 
@@ -24,9 +31,12 @@ export function useVisibleLiveSessions(): LiveSessionInfo[] {
   const allLiveSessions = useAppStore((s) => s.liveSessions)
   const panes = useAppStore((s) => s.panes)
   const handoffs = useHandoffsStore((s) => s.handoffs)
+  // Só lê: quem assina o grafo (strip, mapa) já o garante; buscar aqui faria cada
+  // leitor da lista disparar a carga.
+  const graph = useSessionGraphStore((s) => s.graph)
   return useMemo(
-    () => visibleLiveSessions(allLiveSessions, panes, handoffs),
-    [allLiveSessions, panes, handoffs],
+    () => visibleLiveSessions(allLiveSessions, panes, handoffs, graph.nodes),
+    [allLiveSessions, panes, handoffs, graph],
   )
 }
 
@@ -157,42 +167,7 @@ export function useEndedSessions(enabled: boolean): LiveSessionInfo[] | null {
   return ended
 }
 
-/**
- * Ordem dentro de um grupo do seletor: primeiro as sessões com feature,
- * agrupadas por feature (a feature da sessão mais recente primeiro), com a mãe
- * à frente e as filhas logo abaixo dela; depois as soltas, por recência. Só por
- * recência, a mãe da única feature ativa caía na última linha, abaixo de 8
- * sessões soltas. `childOf` marca as filhas postas sob a mãe (o "↳").
- */
-export function orderByFeature<T extends { id: string }>(
-  items: T[],
-  featureOf: ReadonlyMap<string, string | null>,
-  motherOfChild: ReadonlyMap<string, string>,
-): { items: T[]; childOf: ReadonlyMap<string, string> } {
-  const present = new Set(items.map((s) => s.id))
-  const childOf = new Map<string, string>()
-  for (const s of items) {
-    const mother = motherOfChild.get(s.id)
-    if (mother && mother !== s.id && present.has(mother)) childOf.set(s.id, mother)
-  }
-  const out: T[] = []
-  const placed = new Set<string>()
-  const place = (s: T) => {
-    if (placed.has(s.id)) return
-    placed.add(s.id)
-    out.push(s)
-    for (const c of items) if (childOf.get(c.id) === s.id) place(c)
-  }
-  const keyOf = (s: T): string | null => {
-    const mother = childOf.get(s.id)
-    return featureOf.get(s.id) ?? (mother ? (featureOf.get(mother) ?? null) : null)
-  }
-  const features = [...new Set(items.map(keyOf).filter((f): f is string => !!f))]
-  for (const f of features)
-    for (const s of items) if (keyOf(s) === f && !childOf.has(s.id)) place(s)
-  for (const s of items) if (!childOf.has(s.id) || !placed.has(childOf.get(s.id)!)) place(s)
-  return { items: out, childOf }
-}
+export { orderByFeature } from './order-by-feature'
 
 // "Mães + quem precisa de mim": tira da lista as filhas (hierarchyMotherId do
 // grafo, que vale para qualquer handoff histórico) que não precisam de você.
@@ -200,7 +175,9 @@ export function orderByFeature<T extends { id: string }>(
 export function focusFilteredSessions<T extends { id: string }>(
   items: T[],
   nodes: ReadonlyArray<
-    Pick<SessionGraphNode, 'sessionId' | 'hierarchyMotherId' | 'attentionReason'>
+    Pick<SessionGraphNode, 'sessionId' | 'hierarchyMotherId' | 'attentionReason'> & {
+      isPinnedMother?: boolean
+    }
   >,
   opts: { enabled: boolean; keepIds?: ReadonlySet<string> },
 ): { items: T[]; hiddenCount: number } {
@@ -210,6 +187,8 @@ export function focusFilteredSessions<T extends { id: string }>(
   const out = items.filter((s) => {
     if (opts.keepIds?.has(s.id)) return true
     const n = byId.get(s.id)
+    // "Essa é a mãe" vale mesmo para uma mãe que ainda é filha de outra.
+    if (n?.isPinnedMother) return true
     // Mãe fora da lista (encerrada, ou filha sem aba): esconder a filha a deixaria
     // sem caminho nenhum pela barra — ela ocupa o lugar da mãe.
     if (!n?.hierarchyMotherId || !listed.has(n.hierarchyMotherId)) return true

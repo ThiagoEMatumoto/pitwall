@@ -7,7 +7,8 @@ import { app, BrowserWindow, Menu, powerMonitor, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { getDb, closeDb } from './services/db'
+import { getDb, closeDb, handoffsInterruptedAtOpen } from './services/db'
+import { resumeSweptChildren } from './services/handoff/boot-resume'
 import { ptyManager } from './services/pty-manager'
 import * as handoffStore from './services/handoff-store'
 import { wakeMotherFor } from './services/handoff/handoff-wake'
@@ -17,11 +18,12 @@ import {
   setTurnEndedHook,
 } from './services/session-activity'
 import { registerProjectIpc } from './ipc/projects'
-import { registerSessionIpc, sweepOrphanImageTemps } from './ipc/sessions'
+import { registerSessionIpc, resumeHandoffChild, sweepOrphanImageTemps } from './ipc/sessions'
 import { registerComposerDraftIpc, requestDraftFlush } from './ipc/composer-drafts'
 import { flushBeforeQuit } from './services/draft-flush'
 import { registerBatonIpc } from './ipc/baton'
 import { registerSessionGraphIpc } from './ipc/session-graph'
+import { registerMotherPinsIpc } from './ipc/mother-pins'
 import { registerAttentionIpc } from './ipc/attention'
 import { registerFeatureRoomIpc } from './ipc/feature-room'
 import { registerRoomMotherIpc } from './ipc/room-mother'
@@ -309,7 +311,7 @@ app.whenReady().then(async () => {
   }
   // MCP server local (writes externos via Claude Code). Async e fire-and-forget:
   // EADDRINUSE etc. são logados dentro do start — nunca derrubam o boot.
-  void startMcpServer()
+  const mcpReady = startMcpServer()
   // Settings por sessão órfãos (nenhuma PTY sobrevive ao quit), antes de
   // qualquer spawn. Fora do
   // startMcpServer de propósito: o settings existe mesmo sem MCP no ar.
@@ -328,6 +330,7 @@ app.whenReady().then(async () => {
   registerSessionIpc()
   registerBatonIpc()
   registerSessionGraphIpc()
+  registerMotherPinsIpc()
   registerAttentionIpc()
   registerFeatureRoomIpc()
   registerRoomMotherIpc()
@@ -391,6 +394,13 @@ app.whenReady().then(async () => {
   // até 8s em rede lenta. O watcher inicia já — o syncOnBoot pausa/reinicia o
   // watcher via watcherHooks internamente quando importa.
   createMainWindow()
+  // Filhas em voo sem aba voltam vivas (a lazy restore só sobe quem tinha pane).
+  // Depois do MCP no ar (o --mcp-config da filha aponta pra ele) e do attach do
+  // tuiMenuWatch (registerSessionIpc), pra a tela dela ser vigiada desde o spawn.
+  void mcpReady.then(() => {
+    if (driveSafeBlocks('boot child resume')) return
+    resumeSweptChildren(handoffsInterruptedAtOpen(), resumeHandoffChild)
+  })
   initUpdater()
   startUsageMonitor()
   startFeatureWatcher()

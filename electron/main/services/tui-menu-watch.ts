@@ -9,7 +9,13 @@ import {
   type LiveStatus,
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
-import { buildOtherKeys, buildSelectKeys, playKeys } from '../../../shared/tui/respond-keys'
+import {
+  AMEND_KEY_DELAY_MS,
+  buildAmendKeys,
+  buildOtherKeys,
+  buildSelectKeys,
+  playKeys,
+} from '../../../shared/tui/respond-keys'
 import { menuFingerprint, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
 import type {
   AttentionAction,
@@ -125,6 +131,9 @@ function scanKey(scan: ScreenScan): string {
 function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
   const opt = menu.options.find((o) => o.index === action.optionIndex)
   if (!opt || opt.sentinel === 'chat' || menu.multiSelect || menu.tabs) return []
+  if (action.kind === 'amend') {
+    return opt.sentinel == null ? buildAmendKeys(menu, opt.index, action.text) : []
+  }
   if (action.kind === 'other') {
     return opt.sentinel === 'other' ? buildOtherKeys(opt.index, action.text) : []
   }
@@ -379,7 +388,11 @@ export class TuiMenuWatch extends EventEmitter {
     const keys = keysFor(snapshot.menu, input.action)
     if (keys.length === 0) return { ok: false, error: 'invalid-action', snapshot }
     const menuSince = this.entries.get(input.sessionId)?.menuSince ?? null
-    await playKeys(keys, (seq) => source.write(input.sessionId, seq))
+    await playKeys(
+      keys,
+      (seq) => source.write(input.sessionId, seq),
+      input.action.kind === 'amend' ? AMEND_KEY_DELAY_MS : undefined,
+    )
     const event: AttentionRespondedEvent = {
       sessionId: input.sessionId,
       menu: snapshot.menu,

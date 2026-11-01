@@ -29,6 +29,7 @@ export function buildDigitKey(index: number): string[] {
 // dígito só move o cursor — precisa de Enter separado, senão a opção fica
 // destacada mas nada é enviado.
 export function buildSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
+  if (menu.navigation === 'arrows') return buildArrowSelectKeys(menu, optionIndex)
   const digit = buildDigitKey(optionIndex)
   if (digit.length === 0) return []
   return menu.submitOnDigit ? digit : [...digit, '\r']
@@ -101,6 +102,24 @@ export function buildOtherKeys(optionIndex: number, text: string): string[] {
   return [...digit, text, '\r']
 }
 
+// "Tab to amend" do 2.1.316 (validado ao vivo, sonda probe-chat-permission-2316):
+// com o cursor numa opção, Tab abre um campo junto dela ("No, and tell Claude what
+// to do differently"), o texto entra ali e Enter envia opção + texto. Dígito não
+// serve: ele seleciona E submete. O cursor vem do pointer ❯ do parse fresco; sem
+// ele não dá pra saber quantas setas, então nada é digitado.
+export function buildAmendKeys(menu: TuiMenu, optionIndex: number, text: string): string[] {
+  const clean = text.replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').trim()
+  if (clean === '' || !menu.amendable || menu.cursorIndex == null) return []
+  if (!menu.options.some((o) => o.index === optionIndex)) return []
+  const delta = optionIndex - menu.cursorIndex
+  const arrow = delta > 0 ? '\x1b[B' : '\x1b[A'
+  return [...Array<string>(Math.abs(delta)).fill(arrow), '\t', clean, '\r']
+}
+
+// Entre as teclas do amend: o campo só existe depois que a TUI redesenha o Tab;
+// texto que chega antes cai no menu, onde letra pode ser atalho.
+export const AMEND_KEY_DELAY_MS = 250
+
 // Opção de aprovação MANUAL no menu de plano parseado. Prefixo estrito: não pode
 // casar "Yes, auto-accept edits" (evidência dos labels no binário da CLI).
 const MANUAL_APPROVE_RE = /^Yes, manually approve/i
@@ -133,6 +152,15 @@ export function buildArrowKeys(direction: 'up' | 'down' | 'left' | 'right', time
   if (!Number.isInteger(times) || times <= 0) return []
   const seq = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' }[direction]
   return Array(times).fill(seq)
+}
+
+// Menu sem número (trust do 2.1.286+): do cursor lido até a opção, depois Enter.
+// Sem cursor não há como saber onde o Enter cairia — fail-closed.
+function buildArrowSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
+  const from = menu.cursorIndex
+  if (from == null || !menu.options.some((o) => o.index === optionIndex)) return []
+  const delta = optionIndex - from
+  return [...buildArrowKeys(delta > 0 ? 'down' : 'up', Math.abs(delta)), '\r']
 }
 
 // Enter aplica o picker de /model ou /theme (validado: seleciona o destacado).

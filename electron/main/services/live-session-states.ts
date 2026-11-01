@@ -2,11 +2,12 @@ import { getDb } from './db'
 import { ptyManager } from './pty-manager'
 import { buildSessionsFileIndex, isPidAlive, mapStatus, ptyStatusFor } from './session-activity'
 import type { LiveSessionState } from './session-graph'
+import { unregisteredPtyStatus } from './unregistered-pty-status'
 
 export type SessionsFileIndex = ReturnType<typeof buildSessionsFileIndex>
 
 // PTY viva neste app = sessão viva; o status vem do session file do CLI. PTY sem
-// session file ainda é uma sessão que está subindo.
+// session file ainda está subindo ou parada no trust (unregisteredPtyStatus).
 export function liveSessionStates(index: SessionsFileIndex): Map<string, LiveSessionState> {
   const running = ptyManager.runningIds()
   const rows = getDb()
@@ -26,7 +27,7 @@ export function liveSessionStates(index: SessionsFileIndex): Map<string, LiveSes
     const entry = index.get(row.cc_session_id)
     const alive = entry ? isPidAlive(entry.pid) : false
     out.set(row.id, {
-      status: entry && alive ? mapStatus(entry.status) : 'starting',
+      status: entry && alive ? mapStatus(entry.status) : unregisteredPtyStatus(row.id),
       lastActivityAt: entry?.updatedAt ?? null,
       name: entry?.name ?? null,
     })

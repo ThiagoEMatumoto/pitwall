@@ -57,7 +57,7 @@ export function DiagramThumb({
       loading="lazy"
       draggable={false}
       onError={() => setFailedSrc(thumbnail)}
-      className="h-full w-full bg-white object-contain"
+      className="h-full w-full bg-[var(--color-surface-2)] object-contain"
     />
   );
 }

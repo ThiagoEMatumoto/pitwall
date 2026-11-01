@@ -31,6 +31,8 @@ const GRAPH_CHANNEL_PREFIXES = [
   // Título, status, foco e pulso do card da feature também viajam no grafo.
   'feature:updated',
   'loop:updated',
+  // "Essa é a mãe" viaja no nó (isPinnedMother).
+  'mother-pins:',
 ] as const
 export const GRAPH_PUSH_DELAY_MS = 300
 // A branch muda no transcript, que nem sempre acorda um broadcast: este tick

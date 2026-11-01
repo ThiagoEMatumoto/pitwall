@@ -15,7 +15,8 @@ import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
-import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { alwaysHintText, contextLines } from '@/features/sessions/chat/permission-view'
 import { deriveChildAllowRule } from '../../../electron/main/services/spawn-flags'
 import type { AttentionDetail, AttentionItem } from './attention-queue'
 import {
@@ -91,7 +92,7 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
         'always',
         'Sempre',
         'ghost',
-        findOption(menu, /always allow|don't ask again|allow all edits/i),
+        menu.options.find((o) => isScopedAlwaysLabel(o.label))?.index ?? null,
       ),
       ...action(menu, 'deny', 'Negar', 'danger', findOption(menu, /^No\b/i)),
     ]
@@ -122,48 +123,8 @@ function otherOptionIndex(menu: TuiMenu): number | null {
   return menu.options.find((o) => o.sentinel === 'other')?.index ?? null
 }
 
-// "Tip: … choose "switch to auto mode" below" aponta pra opção que o popover não
-// oferece; a TUI quebra a frase e o "below" sobra sozinho na linha seguinte.
-const TIP_LINE_RE = /^Tip:/
-const TIP_TAIL_RE = /^[a-z][^A-Z]{0,30}$/
-// Cabeçalho da caixa da TUI ("Bash command"): o popover já diz "Pede permissão".
-const TOOL_HEADER_RE = /^(Bash command|Edit file|Create file|Write file|Read file|Fetch|Web fetch|Web search)$/i
-
-export function contextLines(context: string): string[] {
-  const out: string[] = []
-  let afterTip = false
-  for (const raw of stripUnsafeDisplay(context).split('\n')) {
-    const line = raw.trim()
-    if (TIP_LINE_RE.test(line)) {
-      afterTip = !/[.!?]$/.test(line)
-      continue
-    }
-    if (afterTip && TIP_TAIL_RE.test(line)) {
-      afterTip = false
-      continue
-    }
-    afterTip = false
-    if (TOOL_HEADER_RE.test(line)) continue
-    out.push(raw)
-  }
-  return out
-}
-
-function shortPath(path: string): string {
-  const parts = path.replace(/\s+/g, '').split('/').filter(Boolean)
-  return parts.length <= 2 ? path : `…/${parts.slice(-2).join('/')}`
-}
-
-// O que o "Sempre" concede, em português. A TUI quebra o caminho longo entre o
-// label e a descrição da opção; os dois juntos refazem a frase.
-export function alwaysHintText(label: string, description?: string): string {
-  const full = `${label}${description ? ` ${description}` : ''}`
-  const access = /always allow access to (.+?) from this project/i.exec(full)
-  if (access) return `permitir acesso a ${shortPath(access[1])} em todo o projeto`
-  if (/don't ask again/i.test(full)) return 'não perguntar de novo por este comando'
-  if (/allow all edits/i.test(full)) return 'permitir todas as edições nesta sessão'
-  return label
-}
+// Mesma leitura do card de permissão do chat: um só lugar entende a caixa da TUI.
+export { alwaysHintText, contextLines }
 
 function MenuContext({ menu }: { menu: TuiMenu }) {
   if (!menu.context) return null

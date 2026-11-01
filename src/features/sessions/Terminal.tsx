@@ -38,7 +38,7 @@ import { mergePending, nextPendingApply, type PendingSelection } from './model-q
 import { detectFooterMode, shouldNotifyModeChange } from './permission-mode-parser'
 import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
-import { gateMenuByStatus, menuFingerprint, parseTuiMenu, type TuiMenu } from './tui-menu-parser'
+import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
 import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
@@ -437,7 +437,7 @@ function TerminalHost({
   // e o parser fail-closava, empurrando o usuário pro terminal.
   function readTuiMenuFrom(t: Xterm): TuiMenu | null {
     if (!caps.tuiMenus) return null
-    return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiMenu, t.buffer.active.length)
+    return parseTuiMenuFull((n) => readTailText(t, n), t.buffer.active.length)
   }
   function readTuiMenu(): TuiMenu | null {
     const t = xtermRef.current
@@ -1412,6 +1412,7 @@ function TerminalHost({
             reparseMenu={readTuiMenu}
             tuiPicker={pendingTuiPicker}
             reparsePicker={readTuiPicker}
+            isChild={linkState === 'active'}
           />
         )}
 

@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // nada de nó montado à mão com hierarchyMotherId inventado.
 let testDb: Database.Database
 vi.mock('../../../electron/main/services/db', () => ({ getDb: () => testDb }))
+// Chips de artefato têm teste próprio (SessionArtifactChips.test.tsx).
+vi.mock('@/features/sessions/chat/artifacts/SessionArtifactChips', () => ({
+  SessionArtifactChips: () => null,
+}))
 vi.mock('../../../electron/main/services/transcript-path', () => ({
   PROJECTS_ROOT: '/nonexistent-projects',
   findTranscriptPath: () => null,

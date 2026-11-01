@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { Dialog } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { handoffsApi } from '@/lib/ipc'
+import { useMotherPinsStore } from '@/features/sessions/mother-pins-store'
 import { MotherSessionPicker } from './MotherSessionPicker'
 import type { ChildLinkInfo } from '../../../shared/types/ipc'
 
@@ -93,6 +94,17 @@ export function ChildLinkDialog({
             disabled={busy}
           >
             Desvincular
+          </Button>
+          <Button
+            variant="ghost"
+            data-testid="child-link-promote"
+            title="Solta da mãe, traz as filhas dela, fixa como mãe e reinicia sem as travas de filha quando terminar o turno (o worktree fica)."
+            onClick={() =>
+              void run(() => useMotherPinsStore.getState().promote(sessionId, 'when-idle'))
+            }
+            disabled={busy}
+          >
+            Tornar mãe
           </Button>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancelar

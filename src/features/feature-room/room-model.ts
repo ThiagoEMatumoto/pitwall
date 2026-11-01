@@ -17,6 +17,7 @@ import type {
 } from '../../../shared/types/session-graph'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { HIDDEN_TIMELINE_EVENTS } from './room-labels'
+import { isMotherLike } from '../sessions/conversation-hierarchy'
 
 export interface RoomViewInput {
   featureId: string
@@ -132,7 +133,7 @@ export function roomMothers(
     .filter((n) => n.featureId === featureId)
     .sort(
       (a, b) =>
-        Number(!!b.isMother) - Number(!!a.isMother) ||
+        Number(isMotherLike(b)) - Number(isMotherLike(a)) ||
         (b.childCount ?? 0) - (a.childCount ?? 0) ||
         (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),
     )

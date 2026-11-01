@@ -3,6 +3,9 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { useAppStore } from '@/store/appStore'
+import { MotherPinToggle } from '@/features/sessions/MotherPinToggle'
+import { useMotherPinsStore } from '@/features/sessions/mother-pins-store'
+import { SessionArtifactChips } from '@/features/sessions/chat/artifacts/SessionArtifactChips'
 import {
   buildSessionTree,
   childrenSummary,
@@ -18,7 +21,14 @@ import type { SessionGraphNode } from '../../../shared/types/session-graph'
 // de você fica à vista mesmo com o grupo recolhido.
 export function ProjectSessionPurposes({ projectId }: { projectId: string }) {
   const graph = useSessionGraph()
-  const tree = useMemo(() => buildSessionTree(graph.nodes, projectId), [graph, projectId])
+  // Mães marcadas no topo; o resto na ordem da árvore.
+  const tree = useMemo(() => {
+    const roots = buildSessionTree(graph.nodes, projectId)
+    return [
+      ...roots.filter((r) => r.node?.isPinnedMother),
+      ...roots.filter((r) => !r.node?.isPinnedMother),
+    ]
+  }, [graph, projectId])
   const total = useMemo(
     () => tree.reduce((acc, r) => acc + Number(!!r.node) + r.descendants, 0),
     [tree],
@@ -47,7 +57,26 @@ function SessionTreeRow({ item, depth }: { item: SessionTreeItem; depth: number 
   return (
     <li data-testid="sidebar-session-item" data-session-id={item.sessionId} data-depth={depth}>
       {item.node ? (
-        <SessionButton node={item.node} needsYou={item.needsYou} />
+        <>
+          <div className="group flex min-w-0 items-start gap-0.5">
+            <SessionButton node={item.node} needsYou={item.needsYou} />
+            <MotherPinToggle
+              pinned={item.node.isPinnedMother === true}
+              onToggle={() =>
+                void useMotherPinsStore
+                  .getState()
+                  .setPinned(item.node!.sessionId, !item.node!.isPinnedMother)
+              }
+              size={11}
+              className={
+                item.node.isPinnedMother
+                  ? 'mt-0.5'
+                  : 'mt-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+              }
+            />
+          </div>
+          <SessionArtifactChips sessionId={item.sessionId} />
+        </>
       ) : (
         <div
           data-testid="sidebar-session-ghost-mother"

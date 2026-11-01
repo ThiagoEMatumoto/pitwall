@@ -290,3 +290,46 @@ describe('diagram-store', () => {
     })
   })
 })
+
+describe('list por sessão — régua por conversa', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+  })
+  afterEach(() => testDb.close())
+
+  // Cada resume abre uma linha nova em sessions com o mesmo cc_session_id; o
+  // link 'session' foi gravado pelo id da linha antiga.
+  function conversa(cc: string, ids: string[]): void {
+    testDb.pragma('foreign_keys = OFF')
+    ids.forEach((id, i) =>
+      testDb
+        .prepare(
+          `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at)
+           VALUES (?, 'r1', ?, ?, ?)`,
+        )
+        .run(id, cc, i === ids.length - 1 ? 'running' : 'exited', i + 1),
+    )
+    testDb.pragma('foreign_keys = ON')
+  }
+
+  it('acha o diagrama linkado pelo id antigo a partir da sessão retomada', () => {
+    conversa('cc-1', ['s-old', 's-new'])
+    conversa('cc-2', ['s-other'])
+    const d = store.create({
+      title: 'Arquitetura',
+      kind: 'architecture',
+      scene: scene('v1'),
+      author: 'claude',
+      links: [{ parentType: 'session', parentId: 's-old' }],
+    })
+    const ids = (parentId: string) =>
+      store.list({ parentType: 'session', parentId }).map((x) => x.id)
+    expect(ids('s-new')).toEqual([d.id])
+    expect(ids('s-old')).toEqual([d.id])
+    expect(ids('s-other')).toEqual([])
+    // Sessão sem linha em sessions (ou sem cc): só o id exato.
+    expect(ids('s-ghost')).toEqual([])
+  })
+})

@@ -85,6 +85,6 @@ describe('066_diagram_folders', () => {
   it('está registrada no array depois da 065', () => {
     const versions = migrations.map((m) => m.version)
     expect(versions).toContain(65)
-    expect(versions.at(-1)).toBe(66)
+    expect(versions.indexOf(66)).toBe(versions.indexOf(65) + 1)
   })
 })

@@ -31,6 +31,13 @@ describe("renderThumbnail", () => {
     );
   });
 
+  it("exporta no modo escuro do editor e sem fundo branco fixo (o card põe o papel do tema)", async () => {
+    const utils = utilsReturning(new Blob(["png"], { type: "image/png" }));
+    await renderThumbnail(utils as never, [{ id: "a" }], null);
+    const { appState } = utils.exportToBlob.mock.calls[0][0];
+    expect(appState).toMatchObject({ exportWithDarkMode: true, exportBackground: false });
+  });
+
   it("cena vazia (ou só deletados) não exporta", async () => {
     const utils = utilsReturning(new Blob([]));
     expect(await renderThumbnail(utils as never, [{ id: "x", isDeleted: true }], null)).toBeNull();

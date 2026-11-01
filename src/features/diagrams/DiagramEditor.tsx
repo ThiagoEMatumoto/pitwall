@@ -1,3 +1,5 @@
+import { SessionDrawerDock } from "@/features/sessions/chat/artifacts/SessionDrawer";
+import { observeCanvasResize, type CanvasSize } from "./reframe-on-resize";
 import {
   Suspense,
   useCallback,
@@ -54,17 +56,22 @@ async function refreshThumbnail(
 // Enquadra o conteúdo com zoom no máximo em 100% (fitToViewport nativo
 // aplica num frame posterior e estoura 100% em cenas pequenas), abaixo da
 // toolbar do Excalidraw.
+// `size`: tamanho medido da área (no resize o appState do Excalidraw ainda pode
+// ter a largura antiga).
 function frameContent(
   api: ExcalidrawImperativeAPI,
   elements: readonly unknown[],
+  size?: CanvasSize,
 ): void {
   if (elements.length === 0) return;
-  const st = api.getAppState();
   const bounds = contentBounds(
     elements as Parameters<typeof contentBounds>[0],
   );
   if (!bounds) return;
-  const { scrollX, scrollY, zoom } = frameViewport(bounds, st);
+  const { scrollX, scrollY, zoom } = frameViewport(
+    bounds,
+    size ?? api.getAppState(),
+  );
   api.updateScene({
     appState: {
       scrollX,
@@ -320,6 +327,16 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
     return () => clearTimeout(t);
   }, [excalidrawAPI]);
 
+  // Gaveta "Sessão" abrindo/fechando muda a largura do canvas: reenquadra.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!excalidrawAPI || !el) return;
+    return observeCanvasResize(el, (size) =>
+      frameContent(excalidrawAPI, excalidrawAPI.getSceneElements(), size),
+    );
+  }, [excalidrawAPI]);
+
   // Diagrama sem preview (ex.: criado pelo Claude e nunca aberto) ganha um
   // na primeira abertura, sem esperar uma edição.
   // Parte da cena carregada (restaurada como no initialData), não do canvas:
@@ -439,66 +456,72 @@ export function DiagramEditor({ diagram, remoteScene }: Props) {
   }, [remoteScene, applyRemote]);
 
   return (
-    <div
-      className="flex h-full flex-1 flex-col overflow-hidden"
-      onKeyDown={(e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-          e.preventDefault();
-          saveNow();
-        }
-      }}
-    >
-      <DiagramToolbar
-        diagram={diagram}
-        excalidrawAPI={excalidrawAPI}
-        syncState={{
-          status: syncStatus,
-          lastRemoteAt,
-          version: diagram.version,
-        }}
-        onSaveNow={saveNow}
-      />
-
-      {conflict && (
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-warning,#e0a458)_14%,transparent)] px-4 py-2 text-xs text-[var(--color-text)]">
-          <span>
-            O Claude atualizou este diagrama enquanto você editava. Recarregar
-            descarta suas mudanças locais.
-          </span>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" onClick={() => setConflict(null)}>
-              Manter as minhas
-            </Button>
-            <Button
-              onClick={() => {
-                const remote = conflict;
-                setConflict(null);
-                void applyRemote(remote);
-              }}
-            >
-              Recarregar
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className="relative min-h-0 flex-1">
-        <Suspense
-          fallback={
-            <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-dim)]">
-              <span className="animate-pulse">Carregando editor…</span>
-            </div>
+    <div className="flex h-full min-w-0 flex-1 overflow-hidden">
+      <div
+        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden"
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+            e.preventDefault();
+            saveNow();
           }
-        >
-          <LazyExcalidraw
-            excalidrawAPI={(api) => setExcalidrawAPI(api)}
-            theme="dark"
-            initialData={initialDataPromise}
-            onChange={handleChange}
-            onLibraryChange={handleLibraryChange}
-          />
-        </Suspense>
+        }}
+      >
+        <DiagramToolbar
+          diagram={diagram}
+          excalidrawAPI={excalidrawAPI}
+          syncState={{
+            status: syncStatus,
+            lastRemoteAt,
+            version: diagram.version,
+          }}
+          onSaveNow={saveNow}
+        />
+
+        {conflict && (
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-warning,#e0a458)_14%,transparent)] px-4 py-2 text-xs text-[var(--color-text)]">
+            <span>
+              O Claude atualizou este diagrama enquanto você editava. Recarregar
+              descarta suas mudanças locais.
+            </span>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="ghost" onClick={() => setConflict(null)}>
+                Manter as minhas
+              </Button>
+              <Button
+                onClick={() => {
+                  const remote = conflict;
+                  setConflict(null);
+                  void applyRemote(remote);
+                }}
+              >
+                Recarregar
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div ref={canvasRef} className="relative min-h-0 flex-1">
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-dim)]">
+                <span className="animate-pulse">Carregando editor…</span>
+              </div>
+            }
+          >
+            <LazyExcalidraw
+              excalidrawAPI={(api) => setExcalidrawAPI(api)}
+              theme="dark"
+              initialData={initialDataPromise}
+              onChange={handleChange}
+              onLibraryChange={handleLibraryChange}
+            />
+          </Suspense>
+        </div>
       </div>
+      <SessionDrawerDock
+        artifact={{ kind: "diagram", id: diagram.id }}
+        title={diagram.title}
+      />
     </div>
   );
 }
