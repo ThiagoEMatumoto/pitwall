@@ -122,7 +122,10 @@ const NOTES_HINT_RE = /to add notes/i
 // Separador horizontal sem indentação, tolerado DEPOIS da última opção —
 // apareceu na validação live (claude 2.1.215) antes de "Chat about this"
 // quando o menu tem preview/notes; CONTINUATION_RE não cobre (0 indentação).
-const SEPARATOR_RE = /^─{3,}$/
+// Em sessão nomeada (claude 2.1.295+, toda filha de handoff) a régua da caixa de
+// input logo abaixo do menu embute o nome: "──────── nome ─". Mesmo shape do
+// isInputRule do PR #310; o rótulo não pode ter caractere de caixa.
+const SEPARATOR_RE = /^─{3,}(?:\s+[^\s─│┼┬┴├┤╭╮╰╯](?:[^─│┼┬┴├┤╭╮╰╯]*[^\s─│┼┬┴├┤╭╮╰╯])?\s+─+)?$/
 // "Chat about this" às vezes perde o número quando o menu tem preview/notes
 // (artefato de layout observado ao vivo — o box de preview desloca a
 // numeração) — tolerado sem dígito na zona pós-última-opção; não é clicável
@@ -194,7 +197,8 @@ function extractRequest(
   if (rules.length >= 2) {
     const body = lines
       .slice(rules[rules.length - 2] + 1, rules[rules.length - 1])
-      .map((l) => l.trim())
+      // 2.1.316: cada linha do comando vem com a calha "│ " dentro das réguas ╌.
+      .map((l) => l.trim().replace(/^│\s?/, ''))
       .filter((l) => l !== '')
     if (body.length > 0) command = body.join(' ')
   }
