@@ -10,7 +10,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
-import type { TuiMenu } from '../tui-menu-parser'
+import { menuFingerprint, type TuiMenu } from '../tui-menu-parser'
 import { permissionView, type DiffLine, type PermissionView } from './permission-view'
 
 export type PermissionDecision =
@@ -166,6 +166,14 @@ export function PermissionCard({
   const rootRef = useRef<HTMLElement>(null)
   const [explaining, setExplaining] = useState(false)
   const [reason, setReason] = useState('')
+  // Pedido novo na mesma sessão: o motivo digitado era para o anterior.
+  const fp = menuFingerprint(menu)
+  const [reasonFp, setReasonFp] = useState(fp)
+  if (reasonFp !== fp) {
+    setReasonFp(fp)
+    setExplaining(false)
+    setReason('')
+  }
   const sent = sentLabel != null
   const live = onDecide != null && !sent
   const isTrust = view.kind === 'trust'

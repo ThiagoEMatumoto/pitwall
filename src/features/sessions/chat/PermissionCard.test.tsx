@@ -68,6 +68,22 @@ describe('PermissionCard', () => {
     expect(onDecide).toHaveBeenCalledTimes(1)
   })
 
+  // Visto ao vivo (sandbox-084): negar com motivo o handoff_progress e o próximo
+  // pedido (handoff_ask) chegou com o campo ainda aberto e o texto antigo — um Enter
+  // mandaria o motivo velho para outro pedido.
+  it('pedido novo fecha o campo de motivo e descarta o texto do pedido anterior', () => {
+    const onDecide = vi.fn()
+    const { rerender } = render(
+      <PermissionCard menu={menuOf('permission-bash-curl')} onDecide={onDecide} />,
+    )
+    fireEvent.click(screen.getByTestId('permission-explain'))
+    fireEvent.change(screen.getByTestId('permission-reason'), { target: { value: 'use wget' } })
+    rerender(<PermissionCard menu={menuOf('permission-mcp')} onDecide={onDecide} />)
+    expect(screen.queryByTestId('permission-reason')).toBeNull()
+    fireEvent.click(screen.getByTestId('permission-explain'))
+    expect((screen.getByTestId('permission-reason') as HTMLInputElement).value).toBe('')
+  })
+
   it('filha com regra derivável oferece Sempre permitir para filhas', () => {
     const onDecide = vi.fn()
     render(
