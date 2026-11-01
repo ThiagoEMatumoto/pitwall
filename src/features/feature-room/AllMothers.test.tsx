@@ -231,6 +231,11 @@ describe('AllMothers', () => {
     expect(within(tileOf('lume')).getByTestId('mother-tile-kids')).toHaveTextContent(
       'pedido das filhas · Abrir sala',
     )
+    // Sem pedidos das filhas o rótulo conta pedidos, não filhas ("filhas 0" lia
+    // como "não tem filhas" numa mãe que tem).
+    expect(within(tileOf('nori')).getByTestId('mother-tile-kids')).toHaveTextContent(
+      /^pedidos das filhas 0$/,
+    )
     expect(screen.getAllByTestId('all-mothers-strip-item')).toHaveLength(2)
   })
 

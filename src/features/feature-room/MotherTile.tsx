@@ -282,7 +282,7 @@ export const MotherTile = memo(function MotherTile({
               {kidsNeed} {kidsNeed === 1 ? 'pedido' : 'pedidos'} das filhas · Abrir sala
             </button>
           ) : (
-            <span data-testid="mother-tile-kids">filhas 0</span>
+            <span data-testid="mother-tile-kids">pedidos das filhas 0</span>
           )}
         </div>
         <div
