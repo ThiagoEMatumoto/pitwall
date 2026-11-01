@@ -588,3 +588,62 @@ describe("seta ligada a uma célula do bloco", () => {
     expect(byId(out, "orders__f1").isDeleted).toBe(true);
   });
 });
+
+describe("frame nativo do editor (sem customData)", () => {
+  async function withNativeFrame() {
+    const els = (await skeletonToElements([
+      { id: "a", type: "rectangle", label: { text: "A" } },
+      { id: "b", type: "rectangle", label: { text: "B" } },
+      { id: "e1", type: "arrow", start: { id: "a" }, end: { id: "b" } },
+    ])) as AnyEl[];
+    const a = byId(els, "a");
+    const b = byId(els, "b");
+    const x = Math.min(a.x, b.x) - 20;
+    const y = Math.min(a.y, b.y) - 20;
+    const frame = {
+      ...a,
+      id: "nf",
+      type: "frame",
+      name: "Mine",
+      x,
+      y,
+      width: Math.max(a.x + a.width, b.x + b.width) + 20 - x,
+      height: Math.max(a.y + a.height, b.y + b.height) + 20 - y,
+      boundElements: null,
+      groupIds: [],
+      customData: undefined,
+    };
+    const inFrame = new Set(["a", "b", "a__label", "b__label"]);
+    return [
+      ...els.map((e) =>
+        inFrame.has(e.id) || inFrame.has(e.containerId)
+          ? { ...e, frameId: "nf" }
+          : e,
+      ),
+      frame,
+    ];
+  }
+
+  it("diagram_get devolve nome e filhos", async () => {
+    const skel = elementsToSkeleton(await withNativeFrame());
+    const nf = skel.find((s) => s.id === "nf")!;
+    expect(nf).toMatchObject({ type: "frame", name: "Mine" });
+    expect([...nf.children!].sort()).toEqual(["a", "b"]);
+  });
+
+  it("patch que move os filhos leva a caixa do frame junto", async () => {
+    const out = (await applyPatch(await withNativeFrame(), [
+      { op: "add", element: { id: "c", type: "rectangle", label: { text: "C" } } },
+      { op: "add", element: { id: "e2", type: "arrow", start: { id: "c" }, end: { id: "a" } } },
+    ])) as AnyEl[];
+    const frame = byId(out, "nf");
+    for (const id of ["a", "b"]) {
+      const el = byId(out, id);
+      expect(el.frameId).toBe("nf");
+      expect(el.x).toBeGreaterThanOrEqual(frame.x);
+      expect(el.y).toBeGreaterThanOrEqual(frame.y);
+      expect(el.x + el.width).toBeLessThanOrEqual(frame.x + frame.width);
+      expect(el.y + el.height).toBeLessThanOrEqual(frame.y + frame.height);
+    }
+  });
+});

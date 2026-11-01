@@ -13,9 +13,12 @@ export type CompoundKind = "group" | "frame";
 export const isCompoundType = (type: string): type is CompoundKind =>
   type === "group" || type === "frame";
 
+/** Frame desenhado à mão no editor (sem customData) também é compound. */
 export function compoundKind(el: {
+  type?: string;
   customData?: Record<string, unknown>;
 }): CompoundKind | undefined {
+  if (el.type === "frame") return "frame";
   const kind = (el.customData?.pitwall as { kind?: unknown } | undefined)?.kind;
   return kind === "group" || kind === "frame" ? kind : undefined;
 }
