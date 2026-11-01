@@ -40,6 +40,8 @@ import { DIAGRAM_LIBRARY_CATALOG } from '../../../../shared/diagram-library-cata
 import { elementsToSkeleton } from '../../../../shared/diagram-skeleton'
 import { directlyNestedFrames } from '../../../../shared/diagram-compound'
 import { applyPatch, skeletonToElements } from '../diagram-layout'
+import { requireDiagramTemplate, templateScene } from '../diagram-template-scene'
+import { DIAGRAM_TEMPLATES } from '../../../../shared/diagram-templates'
 import { composeHandoffPrompt, type HandoffEdge } from '../handoff/compose-prompt'
 import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
@@ -1620,8 +1622,12 @@ const diagramCreateSchema = z
     links: z.array(diagramLinkInputSchema).optional(),
     direction: diagramDirection.optional(),
     layout: diagramLayoutMode.optional(),
+    template: z.string().min(1).optional(),
   })
-  .refine(exactlyOneSceneInput, { message: EXACTLY_ONE_MSG })
+  .refine(
+    (v) => [v.elements, v.scene, v.template].filter((x) => x !== undefined).length === 1,
+    { message: 'provide exactly one of elements (skeleton), scene (raw Excalidraw scene) or template (starter template id)' },
+  )
 
 const diagramGetSchema = z.object({
   id: z.string().min(1),
@@ -1702,25 +1708,28 @@ function diagramTools(notify: McpNotify): ToolDef[] {
       name: 'diagram_create',
       title: 'Create diagram',
       description:
-        'Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow\'s foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene. Exactly one of elements|scene. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).',
+        `Create a diagram on the Excalidraw canvas. Preferred input: elements = a SKELETON (semantic nodes/arrows WITHOUT coordinates; arrows reference node ids via start/end and support label). Node types: rectangle | ellipse | diamond | text, entity {name, fields:[{name,type,pk,fk}]} (ER table), class {name, attributes[], methods[]} (UML), group {label?, children[]} and frame {name, children[]} (containers laid out around their children; a frame cannot be a direct child of another frame). Arrow relation: 1:1 | 1:N | N:M (crow's foot) | association | inheritance (start = subclass) | composition | aggregation (start = the whole). The canvas lays it out with ELK: layered, orthogonal (elbow) arrows, parents centered on their children. direction = "LR" (default) | "TB". layout = "auto" (default; x/y in elements are IGNORED) | "keep" (honors x/y given in elements). Alternatively pass scene = a raw Excalidraw scene, or template = a starter template id (${DIAGRAM_TEMPLATES.map((t) => `${t.id} (${t.name})`).join(', ')}) laid out the same way — kind defaults to the template's; refine it afterwards with diagram_patch. Exactly one of elements|scene|template. kind = architecture | flow | sequence | er | mindmap | other; a UML class diagram uses kind "other" (there is no class/uml kind). Optional links attach it to parents (feature, task, objective, ...). Returns the diagram meta plus the skeleton derived from the stored scene (no geometry).`,
       inputSchema: diagramCreateSchema,
       handler: async (args) => {
         const input = diagramCreateSchema.parse(args)
-        const fromSkeleton = input.elements !== undefined
-        const scene: DiagramScene = fromSkeleton
-          ? {
-              elements: await skeletonToElements(input.elements!, {
-                direction: input.direction,
-                layout: input.layout,
-              }),
-            }
-          : (input.scene as DiagramScene)
+        const template = input.template ? requireDiagramTemplate(input.template) : null
+        const skeleton = input.elements ?? template?.skeleton
+        const scene: DiagramScene = template
+          ? await templateScene(template, { direction: input.direction, layout: input.layout })
+          : skeleton
+            ? {
+                elements: await skeletonToElements(skeleton, {
+                  direction: input.direction,
+                  layout: input.layout,
+                }),
+              }
+            : (input.scene as DiagramScene)
         const diagram = diagramStore.create({
           title: input.title,
-          kind: input.kind,
+          kind: input.kind ?? template?.kind,
           scene,
-          sourceFormat: fromSkeleton ? 'skeleton' : 'scene',
-          source: fromSkeleton ? JSON.stringify(input.elements) : null,
+          sourceFormat: skeleton ? 'skeleton' : 'scene',
+          source: skeleton ? JSON.stringify(skeleton) : null,
           author: 'claude',
           summary: input.summary,
           links: input.links,
