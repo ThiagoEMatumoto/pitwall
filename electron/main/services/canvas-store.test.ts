@@ -281,3 +281,52 @@ describe('canvas-store — retomar herda os campos da conversa', () => {
     expect(sessionRow('c')).toMatchObject({ purpose: null })
   })
 })
+
+describe('canvas-store — auto-título (068)', () => {
+  function autoRow(id: string) {
+    return testDb
+      .prepare('SELECT auto_title, auto_title_source, auto_title_at FROM sessions WHERE id = ?')
+      .get(id)
+  }
+
+  it('llm grava só onde não há auto-título; self sobrescreve e vence', () => {
+    seedSession('m')
+    expect(store.setSessionAutoTitle('m', 'Corrige login', 'llm', 10)).toBe(true)
+    expect(store.setSessionAutoTitle('m', 'Outro', 'llm', 11)).toBe(false)
+    expect(autoRow('m')).toEqual({
+      auto_title: 'Corrige login',
+      auto_title_source: 'llm',
+      auto_title_at: 10,
+    })
+    expect(store.setSessionAutoTitle('m', 'Migra checkout', 'self', 12)).toBe(true)
+    expect(store.setSessionAutoTitle('m', 'Tardio', 'llm', 13)).toBe(false)
+    expect(autoRow('m')).toEqual({
+      auto_title: 'Migra checkout',
+      auto_title_source: 'self',
+      auto_title_at: 12,
+    })
+  })
+
+  it('llm não grava em sessão com título manual', () => {
+    seedSession('n')
+    testDb.prepare("UPDATE sessions SET title = 'X', title_source = 'manual' WHERE id = 'n'").run()
+    expect(store.setSessionAutoTitle('n', 'Corrige login', 'llm', 10)).toBe(false)
+    expect(autoRow('n')).toMatchObject({ auto_title: null })
+  })
+
+  it('retomar herda o auto-título da conversa', () => {
+    seedSession('old')
+    store.setSessionAutoTitle('old', 'Corrige login', 'self', 7)
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('new', NULL, 'cc-old', 'running', 2)`,
+      )
+      .run()
+    store.inheritSessionCanvasFields('new', 'cc-old')
+    expect(autoRow('new')).toEqual({
+      auto_title: 'Corrige login',
+      auto_title_source: 'self',
+      auto_title_at: 7,
+    })
+  })
+})

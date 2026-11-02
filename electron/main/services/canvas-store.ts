@@ -20,6 +20,7 @@ import type {
   UpdateCanvasNoteInput,
   UpdateSessionGroupInput,
 } from '../../../shared/types/canvas'
+import type { AutoTitleSource } from '../../../shared/session-title'
 
 interface PositionRow {
   scope: string
@@ -302,14 +303,36 @@ export function setSessionSummary(sessionId: string, summary: string, at: number
   )
 }
 
+// 'llm' só preenche o vazio e nunca passa por cima de um rename manual; 'self'
+// (a própria sessão via MCP) sobrescreve — a tool recusa manual antes. true = gravou.
+export function setSessionAutoTitle(
+  sessionId: string,
+  title: string,
+  source: AutoTitleSource,
+  at: number,
+): boolean {
+  const guard =
+    source === 'llm'
+      ? " AND auto_title IS NULL AND (title_source IS NULL OR title_source <> 'manual')"
+      : ''
+  const res = getDb()
+    .prepare(
+      `UPDATE sessions SET auto_title = ?, auto_title_source = ?, auto_title_at = ?
+        WHERE id = ?${guard}`,
+    )
+    .run(title, source, at, sessionId)
+  return res.changes > 0
+}
+
 // Retomar cria outra linha em sessions (novo sessions.id) para o mesmo id nativo.
-// Propósito, grupo e "onde parei" são da conversa, não da linha: a nova herda os
+// Propósito, grupo, "onde parei" e auto-título são da conversa, não da linha: a nova herda os
 // da linha anterior mais recente desta conversa.
 export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
   const db = getDb()
   const prev = db
     .prepare(
-      `SELECT purpose, group_id, last_summary, last_summary_at FROM sessions
+      `SELECT purpose, group_id, last_summary, last_summary_at,
+              auto_title, auto_title_source, auto_title_at FROM sessions
         WHERE cc_session_id = ? AND id <> ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1`,
     )
@@ -319,13 +342,26 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
         group_id: string | null
         last_summary: string | null
         last_summary_at: number | null
+        auto_title: string | null
+        auto_title_source: AutoTitleSource | null
+        auto_title_at: number | null
       }
     | undefined
   if (!prev) return
   db.prepare(
-    `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?
+    `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?,
+            auto_title = ?, auto_title_source = ?, auto_title_at = ?
       WHERE id = ?`,
-  ).run(prev.purpose, prev.group_id, prev.last_summary, prev.last_summary_at, sessionId)
+  ).run(
+    prev.purpose,
+    prev.group_id,
+    prev.last_summary,
+    prev.last_summary_at,
+    prev.auto_title,
+    prev.auto_title_source,
+    prev.auto_title_at,
+    sessionId,
+  )
 }
 
 export function sessionCcId(sessionId: string): string | null {
