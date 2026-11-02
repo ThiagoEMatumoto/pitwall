@@ -282,6 +282,12 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
         autoTitle: s.auto_title ?? null,
         isChild,
       }),
+      alias: sessionNodeTitle({
+        title: s.title,
+        titleSource: s.title_source,
+        liveName: live?.name ?? null,
+        repoLabel: repo?.label ?? null,
+      }),
       titleSource: s.title_source,
       autoTitle: s.auto_title ?? null,
       autoTitleSource: s.auto_title_source ?? null,

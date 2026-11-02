@@ -154,9 +154,9 @@ export function formatAskEnvelope(args: {
 
 export class AgentBusError extends Error {}
 
-// Sessões vivas do grafo (o mesmo que o mapa desenha) no formato do bus. O título
-// do nó é o alias (rename manual > nome vivo do CLI); o `-n` vai em address — só
-// o claude tem SendMessage.
+// Sessões vivas do grafo (o mesmo que o mapa desenha) no formato do bus. O alias é
+// o nome próprio do nó (rename manual > nome vivo do CLI), nunca o auto-título; o
+// `-n` vai em address — só o claude tem SendMessage.
 export function peersFromGraph(graph: SessionGraph): AgentPeer[] {
   // O topo do mapa é a feature: o nome do projeto mora em cada lane de repo.
   const projectName = new Map(
@@ -166,7 +166,7 @@ export function peersFromGraph(graph: SessionGraph): AgentPeer[] {
     .filter((n) => n.status !== 'ended')
     .map((n) => ({
       sessionId: n.sessionId,
-      alias: n.title,
+      alias: n.alias ?? n.title,
       address: n.provider === 'claude' ? (n.cliName ?? null) : null,
       projectId: n.projectId,
       projectName: n.projectId ? (projectName.get(n.projectId) ?? null) : null,

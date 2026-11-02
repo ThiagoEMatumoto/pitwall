@@ -15,6 +15,10 @@ export interface SessionGraphNode {
   // Mesma precedência do nome da aba: rename manual > auto-título (não-filha) >
   // nome vivo do CLI > título salvo > label do repo.
   title: string
+  // Identidade no agent-bus (agent_list, fromAlias, resolução por apelido): a
+  // mesma precedência de `title` SEM o auto-título, que é só exibição e muda via
+  // session_title_set. Ausente em nós montados à mão: cai em `title`.
+  alias?: string
   // Nome vivo do CLI (o `-n`): o endereço do SendMessage, que o rename não muda.
   cliName?: string | null
   // sessions.title_source: 'manual' = o humano renomeou (vence o auto-título).

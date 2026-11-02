@@ -526,4 +526,19 @@ describe('peersFromGraph', () => {
     const [api] = peersFromGraph(buildSessionGraph(readSessionGraphInput(h.db, live, h.clock.now)))
     expect(api).toMatchObject({ alias: 'API pagamentos', address: 'api-contrato' })
   })
+
+  // auto_title é exibição e muda via session_title_set: virar alias quebraria quem
+  // guardou o apelido antigo.
+  it('auto-título não vira alias: alias segue o `-n`', () => {
+    h.db
+      .prepare(`UPDATE sessions SET auto_title = 'Corrige login', auto_title_source = 'self' WHERE id = ?`)
+      .run(FRONT)
+    const live = new Map([
+      [FRONT, { status: 'idle' as const, lastActivityAt: 5, name: 'web-front' }],
+    ])
+    const graph = buildSessionGraph(readSessionGraphInput(h.db, live, h.clock.now))
+    expect(graph.nodes.find((n) => n.sessionId === FRONT)?.title).toBe('Corrige login')
+    const [front] = peersFromGraph(graph)
+    expect(front).toMatchObject({ alias: 'web-front', address: 'web-front' })
+  })
 })
