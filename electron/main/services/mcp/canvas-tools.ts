@@ -7,7 +7,7 @@ import { listMotherPins, motherPinKeyOf, setMotherPin } from '../mother-pins-sto
 import { readHierarchyLinks } from '../session-graph'
 import { getDb } from '../db'
 import { GLOBAL_CANVAS_SCOPE } from '../../../../shared/types/canvas'
-import { AUTO_TITLE_MAX_CHARS } from '../../../../shared/session-title'
+import { AUTO_TITLE_MAX_CHARS, normalizeAutoTitle } from '../../../../shared/session-title'
 import { ok, type McpNotify, type McpRequestContext, type ToolDef } from './tools'
 
 const purposeSchema = z.object({
@@ -75,7 +75,8 @@ export function canvasTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[
         'Give THIS session a short display title (2-5 words), like a claude.ai conversation title, so the user tells sessions apart. Display only: your peer address (-n) does not change. Only for non-child sessions; refused if the user renamed the session or if you are a handoff child (you already have an alias).',
       inputSchema: titleSchema,
       handler: (args) => {
-        const { title } = titleSchema.parse(args)
+        const title = normalizeAutoTitle(titleSchema.parse(args).title)
+        if (!title) throw new Error('Título vazio depois de limpar aspas e pontuação.')
         const sessionId = requireCaller(ctx)
         const row = canvasStore.sessionTitleRow(sessionId)
         if (row.title_source === 'manual') {
@@ -83,8 +84,13 @@ export function canvasTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[
             'Esta sessão foi renomeada pelo usuário: o título manual vence, session_title_set não se aplica.',
           )
         }
-        // Mesma régua de "é filha" do mapa (por conversa; só o release solta).
-        if (readHierarchyLinks(getDb(), [row], new Map()).has(sessionId)) {
+        // Mesma régua de "é filha" do mapa (isChildSessionNode): hierarquia por
+        // conversa OU filha de qualquer handoff, inclusive sem mãe registrada.
+        const db = getDb()
+        const childOfHandoff = db
+          .prepare('SELECT 1 FROM handoffs WHERE child_session_id = ? LIMIT 1')
+          .get(sessionId)
+        if (childOfHandoff || readHierarchyLinks(db, [row], new Map()).has(sessionId)) {
           throw new Error(
             'Sessão filha de handoff já tem apelido: session_title_set não se aplica.',
           )

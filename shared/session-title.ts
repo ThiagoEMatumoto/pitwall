@@ -9,6 +9,9 @@ export const AUTO_TITLE_MAX_CHARS = 48
 const QUOTES_RE = /^["'`“”‘’«»]+|["'`“”‘’«»]+$/g
 const TRAILING_PUNCT_RE = /[\s.!?;:,…]+$/
 const LABEL_PREFIX_RE = /^(t[íi]tulo|title)\s*:\s*/i
+// Controle (ANSI, \r) e overrides bidi: um título que inverte o texto ou imita
+// outro nome na strip. \n fica de fora: ele separa linhas antes daqui.
+const UNSAFE_CHARS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g
 
 function cut(text: string, max: number): string {
   if (text.length <= max) return text
@@ -21,7 +24,9 @@ function cut(text: string, max: number): string {
 // Saída do modelo (ou da tool) → título de uma linha, ou null se não sobrar nada.
 export function normalizeAutoTitle(raw: string): string | null {
   const firstLine = raw
+    .replace(/\r/g, '\n')
     .split('\n')
+    .map((l) => l.replace(UNSAFE_CHARS_RE, ''))
     .map((l) => l.trim())
     .find((l) => l.length > 0)
   if (!firstLine) return null

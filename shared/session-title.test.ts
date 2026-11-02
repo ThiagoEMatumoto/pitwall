@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { AUTO_TITLE_MAX_CHARS, normalizeAutoTitle, preferredSessionTitle } from './session-title'
 
 describe('normalizeAutoTitle', () => {
+  it('tira controle/ANSI e overrides bidi; \\r quebra linha', () => {
+    expect(normalizeAutoTitle('\u001b[31mCorrige\u001b[0m login')).toBe('[31mCorrige[0m login')
+    expect(normalizeAutoTitle('\u202EnigoL\u202C arruma')).toBe('nigoL arruma')
+    expect(normalizeAutoTitle('Migra checkout\rlinha 2')).toBe('Migra checkout')
+  })
+
   it('tira aspas, ponto final e espaços', () => {
     expect(normalizeAutoTitle('  "Corrige login no Safari."  \n')).toBe('Corrige login no Safari')
     expect(normalizeAutoTitle('«Migra checkout»')).toBe('Migra checkout')
@@ -22,6 +28,7 @@ describe('normalizeAutoTitle', () => {
 
   it('vazio ou só pontuação vira null', () => {
     expect(normalizeAutoTitle('   ')).toBeNull()
+    expect(normalizeAutoTitle('\u202E\u0007\u001b')).toBeNull()
     expect(normalizeAutoTitle('"".')).toBeNull()
   })
 })

@@ -221,6 +221,37 @@ describe('session_title_set', () => {
     ).rejects.toThrow()
   })
 
+  it('recusa filha de handoff sem mãe registrada (régua do mapa: childOfHandoffId)', async () => {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO projects (id, name, color, position, created_at, updated_at) VALUES ('p-t', 'P', NULL, 0, 1, 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO repos (id, project_id, label, path, position, created_at) VALUES ('r-t', 'p-t', 'api', '/tmp/r-t', 0, 1)`,
+    ).run()
+    const { create, markRunning } = await import('../handoff-store')
+    const h = create({ targetRepoId: 'r-t', task: 'x', composedPrompt: 'x' })
+    markRunning(h.id, CALLER)
+    try {
+      await expect(
+        call(toolsFor(CALLER), 'session_title_set', { title: 'Corrige login' }),
+      ).rejects.toThrow(/filha/)
+      expect(autoRow(CALLER)).toMatchObject({ auto_title: null })
+    } finally {
+      db.exec(
+        "DELETE FROM handoff_events; DELETE FROM handoffs; DELETE FROM repos WHERE id = 'r-t'; DELETE FROM projects WHERE id = 'p-t';",
+      )
+    }
+  })
+
+  it('normaliza a entrada: sem quebra de linha, controle, bidi nem ponto final', async () => {
+    const out = await call(toolsFor(CALLER), 'session_title_set', {
+      title: '\u202E"Corrige login."\nsegunda linha',
+    })
+    expect(out).toEqual({ sessionId: CALLER, title: 'Corrige login' })
+    expect(autoRow(CALLER)).toMatchObject({ auto_title: 'Corrige login' })
+  })
+
   it('as instructions pedem session_title_set para sessões não-filhas', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/session_title_set/)
   })
