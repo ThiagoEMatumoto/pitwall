@@ -7,7 +7,9 @@ import { liveSessionStates } from '../services/live-session-states'
 import { projectAndCount, readAttentionInputFrom } from '../services/attention/attention-service'
 import * as handoffStore from '../services/handoff-store'
 import { buildSessionGraph, readSessionGraphInput } from '../services/session-graph'
-import { readFirstPrompt, readLastPrompt } from '../services/session-purpose'
+import { readFirstPrompt, readLastPrompt, summarizeSessionTitle } from '../services/session-purpose'
+import { createAutoTitler } from '../services/session-auto-title'
+import { setSessionAutoTitle } from '../services/canvas-store'
 import { transcriptIndex } from '../services/transcript-index'
 import { onSessionLinkPulse } from '../services/session-link-pulse'
 import { resolveLiveSessionFeatures } from '../services/feature-session-live'
@@ -81,6 +83,32 @@ export function watchSessionGraph(push: () => void, delayMs = GRAPH_PUSH_DELAY_M
   }
 }
 
+// Auto-título das sessões não-filhas: cada grafo novo é a chance de achar o 1º
+// prompt de uma sessão viva. Gravou → canvas:updated refaz o grafo e
+// session:auto-titled atualiza a lista viva do renderer sem refetch.
+const autoTitler = createAutoTitler({
+  readPrompt: (cc) => readFirstPrompt(cc, true),
+  summarize: (cc) => summarizeSessionTitle(cc),
+  save: (sessionId, title) => setSessionAutoTitle(sessionId, title, 'llm', Date.now()),
+  onSaved: (sessionId, ccSessionId, title) => {
+    broadcast('session:auto-titled', {
+      sessionId,
+      ccSessionId,
+      autoTitle: title,
+      autoTitleSource: 'llm',
+    })
+    broadcast('canvas:updated', { scope: null })
+  },
+})
+
+function considerAutoTitles(graph: SessionGraph): void {
+  try {
+    autoTitler.consider(graph.nodes)
+  } catch (err) {
+    console.error('[auto-title] falhou ao avaliar o grafo:', err)
+  }
+}
+
 const handoffEventsSchema = z.object({ handoffId: z.string().min(1) })
 
 export function registerSessionGraphIpc(): void {
@@ -101,6 +129,7 @@ export function registerSessionGraphIpc(): void {
     const index = buildSessionsFileIndex()
     resolveFeaturesSafely(index)
     const graph = loadSessionGraph(index)
+    considerAutoTitles(graph)
     const serialized = JSON.stringify(graph)
     if (serialized === last) return
     last = serialized
