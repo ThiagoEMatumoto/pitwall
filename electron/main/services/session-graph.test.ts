@@ -816,3 +816,52 @@ describe('session-graph — hierarquia mãe/filha (hierarchyMotherId)', () => {
     expect(edgesOf(g.edges, 'baton')).toHaveLength(0)
   })
 })
+
+describe('session-graph — auto-título de exibição (068)', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    applyAllMigrations(testDb)
+    seedBase(testDb)
+  })
+
+  afterEach(() => {
+    testDb.close()
+  })
+
+  const node = (g: ReturnType<typeof graphFor>, id: string) =>
+    g.nodes.find((n) => n.sessionId === id)
+  const setAuto = (id: string, title: string, source: 'llm' | 'self' = 'llm') =>
+    testDb
+      .prepare('UPDATE sessions SET auto_title = ?, auto_title_source = ? WHERE id = ?')
+      .run(title, source, id)
+
+  it('mãe mostra o auto-título; o endereço (cliName) segue o -n', () => {
+    addSession('m1', 'r-web')
+    addSession('m2', 'r-web')
+    setAuto('m1', 'Corrige login', 'self')
+    const g = graphFor(live({ m1: { name: 'web' }, m2: { name: 'web' } }))
+    expect(node(g, 'm1')).toMatchObject({
+      title: 'Corrige login',
+      cliName: 'web',
+      autoTitle: 'Corrige login',
+      autoTitleSource: 'self',
+    })
+    expect(node(g, 'm2')?.title).toBe('web')
+  })
+
+  it('rename manual vence o auto-título', () => {
+    addSession('m', 'r-web', { title: 'meu nome', titleSource: 'manual' })
+    setAuto('m', 'Corrige login')
+    expect(node(graphFor(live({ m: { name: 'web' } })), 'm')?.title).toBe('meu nome')
+  })
+
+  it('filha fica com o apelido mesmo com auto-título no banco', () => {
+    addSession('mae', 'r-web')
+    addSession('kid', 'r-api')
+    dispatch('mae', 'kid', 'Refatorar auth')
+    setAuto('kid', 'Refatora auth')
+    const g = graphFor(live({ mae: {}, kid: { name: 'zeca-api' } }))
+    expect(node(g, 'kid')?.title).toBe('zeca-api')
+  })
+})

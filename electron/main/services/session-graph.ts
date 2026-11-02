@@ -14,6 +14,7 @@ import type {
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
 import { resolvePurpose } from './session-purpose'
+import { preferredSessionTitle, type AutoTitleSource } from '../../../shared/session-title'
 import { isResumableChild } from './handoff-store'
 import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
@@ -43,6 +44,9 @@ export interface GraphSessionRow {
   group_id: string | null
   last_summary: string | null
   last_summary_at: number | null
+  // Título de exibição (migration 068); ausente nos leitores antigos = null.
+  auto_title?: string | null
+  auto_title_source?: AutoTitleSource | null
 }
 
 export interface GraphHandoffRow {
@@ -142,19 +146,31 @@ export interface GraphHierarchyLink {
 const LOOSE_LABEL = 'Avulsas'
 export const NO_FEATURE_PREFIX = 'Sem feature · '
 
-// Espelha o displayTitle do Terminal.tsx: rename manual > nome vivo do CLI >
-// título salvo > label do repo.
+// Espelha o displayTitle do Terminal.tsx: rename manual > auto-título (só
+// não-filha, shared/session-title) > nome vivo do CLI > título salvo > label do repo.
 export function sessionNodeTitle(args: {
   title: string | null
   titleSource: 'manual' | 'auto' | null
   liveName: string | null
   repoLabel: string | null
+  autoTitle?: string | null
+  isChild?: boolean
 }): string {
-  return sessionOwnTitle(args) || args.repoLabel || 'Avulsa'
+  return (
+    preferredSessionTitle({
+      manualTitle: args.titleSource === 'manual' ? args.title : null,
+      autoTitle: args.autoTitle,
+      isChild: args.isChild,
+    }) ||
+    sessionOwnTitle(args) ||
+    args.repoLabel ||
+    'Avulsa'
+  )
 }
 
 // O nome próprio da sessão, sem os fallbacks de exibição (repo/'Avulsa'): é o que
-// vira alias no agent-bus e o que a pane dormindo herda (dormant-enrich).
+// a pane dormindo herda (dormant-enrich) para o agent-bus achá-la pelo alias. O
+// auto-título fica de fora de propósito: ele é exibição, não identidade.
 export function sessionOwnTitle(args: {
   title: string | null
   titleSource: 'manual' | 'auto' | null
@@ -240,6 +256,8 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
     const live = input.live.get(s.id)
     const status = live?.status ?? 'ended'
     const handoff = childHandoff.get(s.id)
+    const hierarchyMother = input.hierarchy?.get(s.id)?.motherSessionId ?? null
+    const isChild = !!handoff || (!!hierarchyMother && hierarchyMother !== s.id)
     const purpose = resolvePurpose({
       userPurpose: s.purpose,
       handoffTask:
@@ -254,7 +272,12 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
         titleSource: s.title_source,
         liveName: live?.name ?? null,
         repoLabel: repo?.label ?? null,
+        autoTitle: s.auto_title ?? null,
+        isChild,
       }),
+      titleSource: s.title_source,
+      autoTitle: s.auto_title ?? null,
+      autoTitleSource: s.auto_title_source ?? null,
       cliName: live?.name ?? null,
       projectId: repo?.project_id ?? null,
       repoId: repo ? repo.id : null,
@@ -778,7 +801,8 @@ export function readHierarchyLinks(
 }
 
 const GRAPH_SESSION_COLUMNS = `id, repo_id, cc_session_id, title, title_source, provider, feature_id,
-       started_at, ended_at, purpose, group_id, last_summary, last_summary_at`
+       started_at, ended_at, purpose, group_id, last_summary, last_summary_at,
+       auto_title, auto_title_source`
 
 function readGraphSessions(db: Database.Database, ids: readonly string[]): GraphSessionRow[] {
   if (ids.length === 0) return []
