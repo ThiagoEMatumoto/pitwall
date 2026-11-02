@@ -364,6 +364,20 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
   )
 }
 
+// O que o session_title_set precisa saber da linha antes de gravar.
+export function sessionTitleRow(sessionId: string): {
+  id: string
+  cc_session_id: string | null
+  started_at: number
+  title_source: 'manual' | 'auto' | null
+} {
+  const row = getDb()
+    .prepare('SELECT id, cc_session_id, started_at, title_source FROM sessions WHERE id = ?')
+    .get(sessionId) as ReturnType<typeof sessionTitleRow> | undefined
+  if (!row) throw new Error(`Sessão não encontrada: ${sessionId}`)
+  return row
+}
+
 export function sessionCcId(sessionId: string): string | null {
   const row = getDb().prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sessionId) as
     { cc_session_id: string | null } | undefined

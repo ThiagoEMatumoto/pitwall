@@ -111,9 +111,11 @@ describe('session_mother_pin', () => {
     })
     expect(out.pinnedMother).toBe(true)
     const keys = () =>
-      (getDb().prepare('SELECT cc_session_id FROM mother_pins').all() as Array<{
-        cc_session_id: string
-      }>).map((r) => r.cc_session_id)
+      (
+        getDb().prepare('SELECT cc_session_id FROM mother_pins').all() as Array<{
+          cc_session_id: string
+        }>
+      ).map((r) => r.cc_session_id)
     expect(keys()).toEqual(['cc-x'])
     expect(broadcasts.some(([c]) => c === 'mother-pins:updated')).toBe(true)
     await call(toolsFor(CALLER), 'session_mother_pin', { pinned: false })
@@ -122,5 +124,104 @@ describe('session_mother_pin', () => {
 
   it('sem identidade de sessão recusa', async () => {
     await expect(call(toolsFor(null), 'session_mother_pin', { pinned: true })).rejects.toThrow()
+  })
+})
+
+describe('session_title_set', () => {
+  function autoRow(id: string) {
+    return getDb()
+      .prepare(
+        'SELECT auto_title, auto_title_source, title, title_source FROM sessions WHERE id = ?',
+      )
+      .get(id)
+  }
+
+  it("grava o auto-título 'self' DA SESSÃO QUE CHAMOU, sem tocar no título/endereço", async () => {
+    const out = await call<{ sessionId: string; title: string }>(
+      toolsFor(CALLER),
+      'session_title_set',
+      { title: '  Corrige login no Safari  ' },
+    )
+    expect(out).toEqual({ sessionId: CALLER, title: 'Corrige login no Safari' })
+    expect(autoRow(CALLER)).toEqual({
+      auto_title: 'Corrige login no Safari',
+      auto_title_source: 'self',
+      title: null,
+      title_source: null,
+    })
+    expect(broadcasts).toContainEqual(['canvas:updated', { scope: null }])
+    expect(broadcasts).toContainEqual([
+      'session:auto-titled',
+      {
+        sessionId: CALLER,
+        ccSessionId: 'cc-x',
+        autoTitle: 'Corrige login no Safari',
+        autoTitleSource: 'self',
+      },
+    ])
+  })
+
+  it("vence o título 'llm' já gravado", async () => {
+    getDb()
+      .prepare("UPDATE sessions SET auto_title = 'Gerado', auto_title_source = 'llm' WHERE id = ?")
+      .run(CALLER)
+    await call(toolsFor(CALLER), 'session_title_set', { title: 'Migra checkout' })
+    expect(autoRow(CALLER)).toMatchObject({
+      auto_title: 'Migra checkout',
+      auto_title_source: 'self',
+    })
+  })
+
+  it('recusa sessão com título manual', async () => {
+    getDb()
+      .prepare("UPDATE sessions SET title = 'meu nome', title_source = 'manual' WHERE id = ?")
+      .run(CALLER)
+    await expect(
+      call(toolsFor(CALLER), 'session_title_set', { title: 'Corrige login' }),
+    ).rejects.toThrow(/renomeada pelo usuário/)
+    expect(autoRow(CALLER)).toMatchObject({ auto_title: null })
+  })
+
+  it('recusa filha de handoff (já tem apelido)', async () => {
+    const db = getDb()
+    const MOTHER = '99999999-2222-4333-8444-555555555555'
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES (?, NULL, 'cc-mae', 'running', 1)`,
+    ).run(MOTHER)
+    db.prepare(
+      `INSERT INTO projects (id, name, color, position, created_at, updated_at) VALUES ('p-t', 'P', NULL, 0, 1, 1)`,
+    ).run()
+    db.prepare(
+      `INSERT INTO repos (id, project_id, label, path, position, created_at) VALUES ('r-t', 'p-t', 'api', '/tmp/r-t', 0, 1)`,
+    ).run()
+    const { create, markRunning } = await import('../handoff-store')
+    const h = create({
+      motherSessionId: MOTHER,
+      targetRepoId: 'r-t',
+      task: 'x',
+      composedPrompt: 'x',
+    })
+    markRunning(h.id, CALLER)
+    try {
+      await expect(
+        call(toolsFor(CALLER), 'session_title_set', { title: 'Corrige login' }),
+      ).rejects.toThrow(/filha/)
+      expect(autoRow(CALLER)).toMatchObject({ auto_title: null })
+    } finally {
+      db.exec(
+        "DELETE FROM handoff_events; DELETE FROM handoffs; DELETE FROM repos WHERE id = 'r-t'; DELETE FROM projects WHERE id = 'p-t';",
+      )
+    }
+  })
+
+  it('valida 1..48 caracteres', async () => {
+    await expect(call(toolsFor(CALLER), 'session_title_set', { title: '   ' })).rejects.toThrow()
+    await expect(
+      call(toolsFor(CALLER), 'session_title_set', { title: 'x'.repeat(49) }),
+    ).rejects.toThrow()
+  })
+
+  it('as instructions pedem session_title_set para sessões não-filhas', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/session_title_set/)
   })
 })
