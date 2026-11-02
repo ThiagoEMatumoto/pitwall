@@ -1545,6 +1545,8 @@ export function registerSessionIpc(): void {
              s.provider AS provider,
              s.title AS session_title,
              s.title_source AS session_title_source,
+             s.auto_title AS session_auto_title,
+             s.auto_title_source AS session_auto_title_source,
              r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
              r.path AS repo_path, r.role AS repo_role, r.link_kind AS repo_link_kind,
              r.source AS repo_source, r.position AS repo_position, r.created_at AS repo_created_at,
@@ -1629,6 +1631,8 @@ export function registerSessionIpc(): void {
         attentionReason: attentionReasonForPty(sessionId, status),
         cwd: isLive ? indexed!.cwd : null,
         provider: row.provider ?? 'claude',
+        autoTitle: row.session_auto_title ?? null,
+        autoTitleSource: row.session_auto_title_source ?? null,
       })
     }
 
@@ -1660,6 +1664,8 @@ export function registerSessionIpc(): void {
            s.cc_session_id AS cc_session_id,
            s.title AS session_title,
            s.title_source AS session_title_source,
+           s.auto_title AS session_auto_title,
+           s.auto_title_source AS session_auto_title_source,
            s.ended_at AS ended_at,
            r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
            r.path AS repo_path, r.role AS repo_role, r.link_kind AS repo_link_kind,
@@ -1696,6 +1702,8 @@ export function registerSessionIpc(): void {
         lastText: null,
         isResumable: true,
         titleSource: row.session_title_source,
+        autoTitle: row.session_auto_title ?? null,
+        autoTitleSource: row.session_auto_title_source ?? null,
       })
       if (out.length >= 50) break
     }

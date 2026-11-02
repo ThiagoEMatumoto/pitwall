@@ -32,5 +32,7 @@ export function livePtySessionInfo(sessionId: string, row: PtyOnlyRow): LiveSess
     titleSource: row.session_title_source,
     cwd: null,
     provider: row.provider ?? 'claude',
+    autoTitle: row.session_auto_title ?? null,
+    autoTitleSource: row.session_auto_title_source ?? null,
   }
 }

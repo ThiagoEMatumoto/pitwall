@@ -313,10 +313,13 @@ describe('sessions:resume preserva propósito, grupo e "onde parei"', () => {
       group_id: 'g-pag',
       last_summary: 'parei no webhook',
       last_summary_at: 42,
+      auto_title: 'Corrige login',
+      auto_title_source: 'self',
+      auto_title_at: 7,
     }
     const { id } = resume()
     expect(seam.canvasInherits).toEqual([
-      ['Migrar billing p/ Stripe', 'g-pag', 'parei no webhook', 42, id],
+      ['Migrar billing p/ Stripe', 'g-pag', 'parei no webhook', 42, 'Corrige login', 'self', 7, id],
     ])
   })
 

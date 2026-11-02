@@ -1456,6 +1456,18 @@ export interface LiveSessionInfo {
   // Ausente = 'claude'. Sessão sem id nativo (Codex) vem com ccSessionId = id
   // (sessions.id): é a chave com que o batch global a atualiza.
   provider?: AgentProviderId
+  // Título de exibição (sessions.auto_title, só não-filha): vence o nome do CLI,
+  // perde para o rename manual. Nunca é o endereço (`-n`).
+  autoTitle?: string | null
+  autoTitleSource?: 'llm' | 'self' | null
+}
+
+// Broadcast 'session:auto-titled': o rótulo troca sem refetch da lista viva.
+export interface SessionAutoTitledEvent {
+  sessionId: string
+  ccSessionId: string | null
+  autoTitle: string
+  autoTitleSource: 'llm' | 'self'
 }
 
 // Batch de atualização de atividade de TODAS as sessões indexadas, emitido pelo
@@ -2392,6 +2404,7 @@ export interface Api {
     hibernateStats(): Promise<HibernateStatsView>
     /** Uma PTY saiu pelo /exit da hibernação; chega ANTES do pty:exit da mesma PTY. */
     onHibernated(handler: (event: SessionHibernatedEvent) => void): () => void
+    onAutoTitled(handler: (event: SessionAutoTitledEvent) => void): () => void
     /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
     onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
     paneCheckResult(result: PaneCheckResult): Promise<void>

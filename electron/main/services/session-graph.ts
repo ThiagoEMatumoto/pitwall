@@ -14,7 +14,11 @@ import type {
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
 import { resolvePurpose } from './session-purpose'
-import { preferredSessionTitle, type AutoTitleSource } from '../../../shared/session-title'
+import {
+  isChildSessionNode,
+  preferredSessionTitle,
+  type AutoTitleSource,
+} from '../../../shared/session-title'
 import { isResumableChild } from './handoff-store'
 import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
 import { isLedByMother } from '../../../shared/handoff-lead'
@@ -256,8 +260,11 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
     const live = input.live.get(s.id)
     const status = live?.status ?? 'ended'
     const handoff = childHandoff.get(s.id)
-    const hierarchyMother = input.hierarchy?.get(s.id)?.motherSessionId ?? null
-    const isChild = !!handoff || (!!hierarchyMother && hierarchyMother !== s.id)
+    const isChild = isChildSessionNode({
+      sessionId: s.id,
+      hierarchyMotherId: input.hierarchy?.get(s.id)?.motherSessionId,
+      childOfHandoffId: handoff?.id,
+    })
     const purpose = resolvePurpose({
       userPurpose: s.purpose,
       handoffTask:

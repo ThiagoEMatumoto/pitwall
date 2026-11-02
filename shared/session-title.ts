@@ -33,6 +33,16 @@ export function normalizeAutoTitle(raw: string): string | null {
   return text.length > 0 ? text : null
 }
 
+// "É filha" para o auto-título, sobre os campos do nó do grafo: a régua por
+// conversa (hierarchyMotherId, readHierarchyLinks) ou o vínculo vivo do handoff.
+export function isChildSessionNode(n: {
+  sessionId: string
+  hierarchyMotherId?: string | null
+  childOfHandoffId?: string | null
+}): boolean {
+  return !!n.childOfHandoffId || (!!n.hierarchyMotherId && n.hierarchyMotherId !== n.sessionId)
+}
+
 // Regra ÚNICA de nome próprio de exibição: rename manual > auto-título (só
 // não-filha) > null. null = o chamador mantém o fallback que já tinha (nome do
 // CLI, título salvo, repo, 'Avulsa'). Filha segue com o apelido de sempre.

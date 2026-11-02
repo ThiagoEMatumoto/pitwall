@@ -9,6 +9,9 @@ export interface LiveSessionJoinRow {
   cc_session_id: string
   session_title: string | null
   session_title_source: 'manual' | 'auto' | null
+  // sessions.auto_title (068): título de exibição de sessão não-filha.
+  session_auto_title?: string | null
+  session_auto_title_source?: 'llm' | 'self' | null
   repo_id: string | null
   repo_project_id: string | null
   repo_label: string | null

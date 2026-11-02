@@ -92,6 +92,7 @@ import type {
   DesignAskInput,
   CreateDesignFolderInput,
   UpdateDesignFolderInput,
+  SessionAutoTitledEvent,
 } from '../../shared/types/ipc'
 import type { SessionGraph } from '../../shared/types/session-graph'
 import type {
@@ -202,6 +203,7 @@ const api: Api = {
       subscribe<DormantBecameLiveEvent>('sessions:dormant-became-live', handler),
     hibernateStats: () => invoke('sessions:hibernate-stats'),
     onHibernated: (handler) => subscribe<SessionHibernatedEvent>('sessions:hibernated', handler),
+    onAutoTitled: (handler) => subscribe<SessionAutoTitledEvent>('session:auto-titled', handler),
     onPaneCheckRequest: (handler) =>
       subscribe<PaneCheckRequest>('sessions:pane-check-request', handler),
     paneCheckResult: (result) => invoke('sessions:pane-check-result', result),

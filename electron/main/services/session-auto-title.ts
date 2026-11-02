@@ -12,6 +12,7 @@
 // aparece como attempts subindo com succeeded parado.
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import type { SessionTitleResult } from './session-purpose'
+import { isChildSessionNode } from '../../../shared/session-title'
 
 export const AUTO_TITLE_MAX_CONCURRENT = 2
 export const AUTO_TITLE_RETRY_MS = 5 * 60_000
@@ -29,13 +30,6 @@ export type AutoTitleNode = Pick<
   | 'childOfHandoffId'
 >
 
-// Filha = a régua do grafo (hierarchyMotherId, por conversa) ou o vínculo vivo.
-export function isAutoTitleChild(
-  n: Pick<AutoTitleNode, 'sessionId' | 'hierarchyMotherId' | 'childOfHandoffId'>,
-): boolean {
-  return !!n.childOfHandoffId || (!!n.hierarchyMotherId && n.hierarchyMotherId !== n.sessionId)
-}
-
 export function isAutoTitleCandidate(n: AutoTitleNode): boolean {
   return (
     n.status !== 'ended' &&
@@ -43,7 +37,7 @@ export function isAutoTitleCandidate(n: AutoTitleNode): boolean {
     !!n.ccSessionId &&
     n.titleSource !== 'manual' &&
     !n.autoTitle?.trim() &&
-    !isAutoTitleChild(n)
+    !isChildSessionNode(n)
   )
 }
 
