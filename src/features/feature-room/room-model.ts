@@ -107,8 +107,9 @@ export function groupBySubject(items: AttentionItem[]): RoomQueueRow[] {
 }
 
 // Nome próprio de exibição (rename manual > auto-título de não-filha) vence o
-// `-n`; sem ele, o `-n` de sempre.
-function nodeTitle(n: SessionGraphNode): string {
+// `-n`; sem ele, o `-n` de sempre. Única regra de rótulo de nó do grafo no
+// renderer: tile, faixa de atenção e Ctrl+` usam esta, nunca `cliName ?? title`.
+export function nodeTitle(n: SessionGraphNode): string {
   const own = preferredSessionTitle({
     manualTitle: n.titleSource === 'manual' ? n.title : null,
     autoTitle: n.autoTitle,

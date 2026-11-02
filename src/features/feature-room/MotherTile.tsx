@@ -12,6 +12,7 @@ import type { ChatMessage } from '../../../shared/types/chat'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { sinceText } from './room-labels'
+import { nodeTitle } from './room-model'
 
 export type TileLiveState = 'live' | 'paused'
 
@@ -93,7 +94,7 @@ export const MotherTile = memo(function MotherTile({
   )
   const { messages } = useChatTail(node.sessionId, live, node.ccSessionId ?? null)
   const [echo, setEcho] = useState<{ text: string; at: number } | null>(null)
-  const title = stripUnsafeDisplay(node.cliName ?? node.title)
+  const title = nodeTitle(node)
   const repo = node.repoLabel ? stripUnsafeDisplay(node.repoLabel) : ''
   const feature = featureTitle ? stripUnsafeDisplay(featureTitle) : 'Sem feature'
   const need = ownNeed + kidsNeed

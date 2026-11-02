@@ -2,6 +2,7 @@
 import { indicatorFor, type IndicatorTone } from './card-indicator'
 import { featureLaneId, projectLaneId } from './graph-to-flow'
 import { motherOfFocus } from './mother-dock'
+import { nodeTitle } from '../feature-room/room-model'
 import { formatCombo, type Combo } from '../../lib/keybindings'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import type { SessionGraph } from '../../../shared/types/session-graph'
@@ -90,7 +91,7 @@ export function buildSwitcherEntries(
     const mother = motherId ? byId.get(motherId) : undefined
     const base = {
       motherId: motherId ?? null,
-      motherTitle: mother ? (mother.cliName ?? mother.title) : null,
+      motherTitle: mother ? nodeTitle(mother) : null,
       motherTone: motherId ? (tones.get(motherId) ?? null) : null,
       working: count((t) => t === 'working' || t === 'starting'),
       needsYou: subjects.size,

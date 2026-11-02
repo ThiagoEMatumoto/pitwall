@@ -5,6 +5,7 @@ import { ShortcutHints } from '@/components/ui/ShortcutHints'
 import { hintText, type ShortcutHint } from '@/components/ui/shortcut-hints'
 import { ChatView } from '@/features/sessions/chat/ChatView'
 import { AttentionMenuPanel } from '@/features/session-switcher/AttentionPopover'
+import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
@@ -965,7 +966,7 @@ function LiftStrip({
                 className={`shrink-0 ${r.kind === 'mother' ? 'text-[var(--color-accent)]' : ''}`}
               />
             )}
-            <span className="truncate">{s?.title ?? s?.name ?? s?.repo?.label ?? 'Sessão'}</span>
+            <span className="truncate">{s ? liveSessionLabel(s) : 'Sessão'}</span>
           </button>
         )
       })}

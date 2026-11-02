@@ -6,6 +6,7 @@ import { Kbd } from '@/components/ui/ShortcutHints'
 import { SWITCH_DEBOUNCE_MS, useSettled } from '@/features/session-canvas/MotherDock'
 import { Terminal } from '@/features/sessions/Terminal'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
+import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { EXEC_LABEL } from './room-labels'
@@ -63,7 +64,7 @@ export function RoomMotherPane({
     )
   }
 
-  const title = tab?.title ?? stripUnsafeDisplay(live.title ?? live.name ?? 'Sessão-mãe')
+  const title = tab?.title ?? stripUnsafeDisplay(liveSessionLabel(live))
   const repo = tab?.repoLabel ?? live.repo?.label ?? ''
   return (
     <section

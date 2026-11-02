@@ -88,6 +88,20 @@ describe('buildSwitcherEntries', () => {
     edges: [handoff('m1', 'c1'), handoff('m2', 'c2')],
   }
 
+  // Duas mães no mesmo repo têm o mesmo `-n` (repo.label): o auto-título é o que
+  // as distingue, então ele vence o cliName no cartão.
+  it('mãe com auto-título: o cartão mostra o título, não o `-n`', () => {
+    const withAuto: SessionGraph = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.sessionId === 'm1' ? { ...n, cliName: 'repo', autoTitle: 'Corrige login' } : n,
+      ),
+    }
+    expect(buildSwitcherEntries(withAuto, new Map())[0]).toMatchObject({
+      motherTitle: 'Corrige login',
+    })
+  })
+
   it('um cartão por feature, com pulso, mãe e contadores; o grupo do projeto como "Sem feature"', () => {
     const entries = buildSwitcherEntries(graph, new Map())
     expect(entries.map((e) => e.key)).toEqual(['f1', 'f2', 'p:p1'])
