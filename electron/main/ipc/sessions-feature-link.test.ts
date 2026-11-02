@@ -47,6 +47,8 @@ const seam = vi.hoisted(() => ({
   // Linha anterior da conversa (propósito/grupo/resumo) e o UPDATE que a herda.
   prevCanvasRow: null as Record<string, unknown> | null,
   canvasInherits: [] as unknown[][],
+  // Args de cada UPDATE sessions SET title (rename e herança do manual).
+  titleUpdates: [] as Array<{ sql: string; args: unknown[] }>,
   ptyWrites: [] as string[],
 }))
 
@@ -93,6 +95,7 @@ vi.mock('../services/db', () => ({
         if (sql.includes('INSERT INTO sessions')) seam.inserted.push(args)
         if (sql.includes('UPDATE sessions SET feature_id')) seam.featureUpdates.push(args)
         if (sql.includes('UPDATE sessions SET purpose')) seam.canvasInherits.push(args)
+        if (sql.includes('UPDATE sessions SET title')) seam.titleUpdates.push({ sql, args })
         return { changes: 1 }
       },
       get: (..._args: unknown[]) => {
@@ -216,12 +219,12 @@ function handler(channel: string): (event: unknown, ...args: never[]) => unknown
   return fn
 }
 
-function resume(): { id: string } {
+function resume(): { id: string; title: string | null; titleSource?: string | null } {
   return (
     handler('sessions:resume')(null, {
       repoId: 'r1',
       ccSessionId: CC_SESSION_ID,
-    } as never) as { session: { id: string } }
+    } as never) as { session: { id: string; title: string | null; titleSource?: string | null } }
   ).session
 }
 
@@ -234,6 +237,7 @@ function injectedSystemPrompt(): string | null {
 beforeEach(() => {
   seam.prevCanvasRow = null
   seam.canvasInherits.length = 0
+  seam.titleUpdates.length = 0
   seam.handlers.clear()
   seam.spawns.length = 0
   seam.inserted.length = 0
@@ -313,16 +317,56 @@ describe('sessions:resume preserva propósito, grupo e "onde parei"', () => {
       group_id: 'g-pag',
       last_summary: 'parei no webhook',
       last_summary_at: 42,
+      auto_title: 'Corrige login',
+      auto_title_source: 'self',
+      auto_title_at: 7,
     }
     const { id } = resume()
     expect(seam.canvasInherits).toEqual([
-      ['Migrar billing p/ Stripe', 'g-pag', 'parei no webhook', 42, id],
+      ['Migrar billing p/ Stripe', 'g-pag', 'parei no webhook', 42, 'Corrige login', 'self', 7, id],
     ])
   })
 
   it('conversa sem linha anterior não escreve nada', () => {
     resume()
     expect(seam.canvasInherits).toEqual([])
+  })
+
+  it('rename manual da linha anterior passa para a linha nova do resume', () => {
+    seam.prevCanvasRow = {
+      purpose: null,
+      group_id: null,
+      last_summary: null,
+      last_summary_at: null,
+      auto_title: 'Teste de título',
+      auto_title_source: 'self',
+      auto_title_at: 7,
+      title: 'Meu nome',
+      title_source: 'manual',
+    }
+    const session = resume()
+    expect(seam.titleUpdates.map((u) => u.args)).toEqual([['Meu nome', session.id]])
+    expect(seam.titleUpdates[0].sql).toContain("title_source = 'manual'")
+    // A aba e o header nascem do Session devolvido, não de um refetch da linha.
+    expect(session.title).toBe('Meu nome')
+    expect(session.titleSource).toBe('manual')
+  })
+
+  it('título não-manual da linha anterior não é herdado', () => {
+    seam.prevCanvasRow = {
+      purpose: null,
+      group_id: null,
+      last_summary: null,
+      last_summary_at: null,
+      auto_title: null,
+      auto_title_source: null,
+      auto_title_at: null,
+      title: 'Nome do CLI',
+      title_source: null,
+    }
+    const session = resume()
+    expect(seam.titleUpdates).toEqual([])
+    expect(session.title).toBeNull()
   })
 })
 
@@ -477,6 +521,21 @@ describe('sessions:set-feature — vincular sessão em curso', () => {
 
 // O grafo de sessões escuta pelo onBroadcast do notify: um produtor com broadcast
 // próprio (webContents.send direto) chega no renderer e nunca no grafo.
+describe('sessions:rename avisa o renderer com o nome salvo', () => {
+  it('manual leva o nome aparado; vazio leva null (volta ao auto-título)', () => {
+    handler('sessions:rename')(null, 'sess-1' as never, '  Meu nome ' as never)
+    handler('sessions:rename')(null, 'sess-1' as never, '   ' as never)
+    expect(seam.titleUpdates.map((u) => u.args)).toEqual([
+      ['Meu nome', 'manual', 'sess-1'],
+      [null, null, 'sess-1'],
+    ])
+    expect(seam.broadcasts.filter((b) => b.channel === 'session:renamed')).toEqual([
+      { channel: 'session:renamed', payload: { sessionId: 'sess-1', title: 'Meu nome' } },
+      { channel: 'session:renamed', payload: { sessionId: 'sess-1', title: null } },
+    ])
+  })
+})
+
 describe('broadcasts de sessão chegam aos ouvintes do main (grafo)', () => {
   it('set-feature, rename e pty exit passam pelo notify', () => {
     const heard: string[] = []

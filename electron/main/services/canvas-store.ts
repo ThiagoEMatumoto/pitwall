@@ -20,6 +20,7 @@ import type {
   UpdateCanvasNoteInput,
   UpdateSessionGroupInput,
 } from '../../../shared/types/canvas'
+import type { AutoTitleSource } from '../../../shared/session-title'
 
 interface PositionRow {
   scope: string
@@ -302,14 +303,47 @@ export function setSessionSummary(sessionId: string, summary: string, at: number
   )
 }
 
+// 'llm' só preenche o vazio e nunca passa por cima de um rename manual; 'self'
+// (a própria sessão via MCP) sobrescreve — a tool recusa manual antes. true = gravou.
+export function setSessionAutoTitle(
+  sessionId: string,
+  title: string,
+  source: AutoTitleSource,
+  at: number,
+): boolean {
+  const guard =
+    source === 'llm'
+      ? " AND auto_title IS NULL AND (title_source IS NULL OR title_source <> 'manual')"
+      : ''
+  const res = getDb()
+    .prepare(
+      `UPDATE sessions SET auto_title = ?, auto_title_source = ?, auto_title_at = ?
+        WHERE id = ?${guard}`,
+    )
+    .run(title, source, at, sessionId)
+  return res.changes > 0
+}
+
+// Rename pela UI: sempre manual, vence o auto-título. Vazio volta ao automático.
+export function setSessionManualTitle(sessionId: string, title: string): string | null {
+  const trimmed = title.trim() || null
+  getDb()
+    .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+    .run(trimmed, trimmed ? 'manual' : null, sessionId)
+  return trimmed
+}
+
 // Retomar cria outra linha em sessions (novo sessions.id) para o mesmo id nativo.
-// Propósito, grupo e "onde parei" são da conversa, não da linha: a nova herda os
-// da linha anterior mais recente desta conversa.
-export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
+// Propósito, grupo, "onde parei", auto-título e rename manual são da conversa,
+// não da linha: a nova herda os da linha anterior mais recente desta conversa.
+// Sem herdar o manual, o auto-título herdado venceria o nome dado pelo usuário.
+// Devolve o rename manual herdado: o Session que o resume entrega à aba nasce dele.
+export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): string | null {
   const db = getDb()
   const prev = db
     .prepare(
-      `SELECT purpose, group_id, last_summary, last_summary_at FROM sessions
+      `SELECT purpose, group_id, last_summary, last_summary_at,
+              auto_title, auto_title_source, auto_title_at, title, title_source FROM sessions
         WHERE cc_session_id = ? AND id <> ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1`,
     )
@@ -319,13 +353,50 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
         group_id: string | null
         last_summary: string | null
         last_summary_at: number | null
+        auto_title: string | null
+        auto_title_source: AutoTitleSource | null
+        auto_title_at: number | null
+        title: string | null
+        title_source: 'manual' | 'auto' | null
       }
     | undefined
-  if (!prev) return
+  if (!prev) return null
   db.prepare(
-    `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?
+    `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?,
+            auto_title = ?, auto_title_source = ?, auto_title_at = ?
       WHERE id = ?`,
-  ).run(prev.purpose, prev.group_id, prev.last_summary, prev.last_summary_at, sessionId)
+  ).run(
+    prev.purpose,
+    prev.group_id,
+    prev.last_summary,
+    prev.last_summary_at,
+    prev.auto_title,
+    prev.auto_title_source,
+    prev.auto_title_at,
+    sessionId,
+  )
+  if (prev.title_source === 'manual' && prev.title) {
+    db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(
+      prev.title,
+      sessionId,
+    )
+    return prev.title
+  }
+  return null
+}
+
+// O que o session_title_set precisa saber da linha antes de gravar.
+export function sessionTitleRow(sessionId: string): {
+  id: string
+  cc_session_id: string | null
+  started_at: number
+  title_source: 'manual' | 'auto' | null
+} {
+  const row = getDb()
+    .prepare('SELECT id, cc_session_id, started_at, title_source FROM sessions WHERE id = ?')
+    .get(sessionId) as ReturnType<typeof sessionTitleRow> | undefined
+  if (!row) throw new Error(`Sessão não encontrada: ${sessionId}`)
+  return row
 }
 
 export function sessionCcId(sessionId: string): string | null {

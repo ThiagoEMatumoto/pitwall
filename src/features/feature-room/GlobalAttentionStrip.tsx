@@ -7,7 +7,7 @@ import type { AttentionItem } from '../../../shared/types/attention'
 import type { SessionGraph } from '../../../shared/types/session-graph'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { CollapsedItem, OpenItem, type QueueSubject } from './QueueItem'
-import { groupBySubject, type RoomQueueRow } from './room-model'
+import { groupBySubject, nodeTitle, type RoomQueueRow } from './room-model'
 import { COMPACT } from './room-ui'
 
 interface Props {
@@ -40,7 +40,7 @@ export function GlobalAttentionStrip({ needYou, graph, featureTitleOf, now, onOp
       const node = item.sessionId ? graph.nodes.find((n) => n.sessionId === item.sessionId) : null
       return {
         who: stripUnsafeDisplay(
-          node?.cliName ?? node?.title ?? handoff?.task ?? live?.title ?? live?.name ?? 'Sessão',
+          (node ? nodeTitle(node) : null) ?? handoff?.task ?? live?.title ?? live?.name ?? 'Sessão',
         ),
         repo: stripUnsafeDisplay(node?.repoLabel ?? handoff?.targetRepoLabel ?? ''),
         handoff,

@@ -54,6 +54,7 @@ import { getCurrentThemeTokens, onThemeChange } from '@/app/useTheme'
 import type { GpuStatus, PermissionMode, Session, SessionActivity } from '../../../shared/types/ipc'
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 import { stripQueryReplies } from './terminal-replies'
+import { preferredSessionTitle } from '../../../shared/session-title'
 
 // Cache módulo-level: o status de GPU é imutável durante o processo (decidido no
 // boot do main), então 1 IPC atende todos os panes/remounts.
@@ -560,17 +561,25 @@ function TerminalHost({
     return () => clearInterval(id)
   }, [activity?.lastActivityAt, exited])
 
-  // Precedência do nome em destaque: rename MANUAL do usuário > name automático
-  // do CC (live) > rename salvo no DB > label do repo. Uma vez manual, o name do
-  // CC nunca mais reescreve o displayTitle.
+  // Título de exibição da sessão não-filha (sessions.auto_title), atualizado ao
+  // vivo pelo session:auto-titled no liveSessions. O main nunca grava em filha.
+  const autoTitle = useAppStore(
+    (s) => s.liveSessions.find((x) => x.id === session.id)?.autoTitle ?? null,
+  )
+
+  // Precedência do nome em destaque: rename MANUAL do usuário > auto-título >
+  // name automático do CC (live, o `-n`) > rename salvo no DB > label do repo.
+  // Uma vez manual, nada automático reescreve o displayTitle.
   const manualTitle = titleSource === 'manual' ? title : null
-  const displayTitle = manualTitle ?? activity?.name ?? title ?? repoLabel
+  const ownTitle = preferredSessionTitle({ manualTitle, autoTitle })
+  const isAutoTitle = ownTitle != null && manualTitle == null
+  const displayTitle = ownTitle ?? activity?.name ?? title ?? repoLabel
   // A sessão tem nome próprio (não é só o fallback pro label da pasta)? Só então o
   // título é exibido no header — a aba do dockview já mostra o nome da sessão, então
   // sem nome custom o header mostra só o projeto + path (evita o nome repetido).
   // Rename manual conta como nomeada mesmo que coincida com o label do repo.
   const isNamed =
-    manualTitle != null ||
+    ownTitle != null ||
     ((activity?.name ?? title) != null && (activity?.name ?? title) !== repoLabel)
 
   // Reflete o nome legível na aba do dockview. Ref pra callback evita re-disparar
@@ -1281,8 +1290,9 @@ function TerminalHost({
           repoLabel={repoLabel}
           repoPath={repoPath}
           displayTitle={displayTitle}
-          nameValue={manualTitle ?? activity?.name ?? title ?? ''}
+          nameValue={ownTitle ?? activity?.name ?? title ?? ''}
           isNamed={isNamed}
+          titleHint={isAutoTitle ? 'Título automático — clique para renomear' : null}
           canRename={canRename}
           onCommitRename={commitRename}
           exited={exited}

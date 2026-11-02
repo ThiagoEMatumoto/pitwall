@@ -4,7 +4,7 @@ import type { LiveSessionInfo } from '../../../shared/types/ipc'
 // Campos pesquisáveis de uma sessão — SessionSwitcher e CommandPalette usam o
 // mesmo conjunto pra busca ficar consistente entre os dois.
 function searchFields(s: LiveSessionInfo): (string | null | undefined)[] {
-  return [s.title, s.name, s.projectName, s.repo?.label]
+  return [s.autoTitle, s.title, s.name, s.projectName, s.repo?.label]
 }
 
 export function matchesSession(query: string, s: LiveSessionInfo): boolean {

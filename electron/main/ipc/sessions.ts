@@ -19,7 +19,11 @@ import {
   type SpawnArgs,
 } from '../services/spawn-args'
 import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
-import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
+import {
+  forgetSessionPositions,
+  inheritSessionCanvasFields,
+  setSessionManualTitle,
+} from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
@@ -109,6 +113,7 @@ import type {
   HandoffStatus,
   AgentProviderId,
   AttentionRespondInput,
+  SessionRenamedEvent,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -480,7 +485,7 @@ function startSession(opts: {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
   const id = opts.id ?? randomUUID()
-  const row: SessionRow = {
+  let row: SessionRow = {
     id,
     repo_id: opts.repoId,
     cc_session_id: opts.ccSessionId,
@@ -515,7 +520,10 @@ function startSession(opts: {
       opts.spawnArgs ? JSON.stringify({ ...opts.spawnArgs, cwd: opts.cwd }) : null,
     )
     inserted = true
-    if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
+    const inheritedTitle = row.cc_session_id
+      ? inheritSessionCanvasFields(row.id, row.cc_session_id)
+      : null
+    if (inheritedTitle) row = { ...row, title: inheritedTitle, title_source: 'manual' }
 
     const { command, args } = loginShellSpawn(opts.innerCmd)
     ptyManager.spawn({
@@ -1545,6 +1553,8 @@ export function registerSessionIpc(): void {
              s.provider AS provider,
              s.title AS session_title,
              s.title_source AS session_title_source,
+             s.auto_title AS session_auto_title,
+             s.auto_title_source AS session_auto_title_source,
              r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
              r.path AS repo_path, r.role AS repo_role, r.link_kind AS repo_link_kind,
              r.source AS repo_source, r.position AS repo_position, r.created_at AS repo_created_at,
@@ -1629,6 +1639,8 @@ export function registerSessionIpc(): void {
         attentionReason: attentionReasonForPty(sessionId, status),
         cwd: isLive ? indexed!.cwd : null,
         provider: row.provider ?? 'claude',
+        autoTitle: row.session_auto_title ?? null,
+        autoTitleSource: row.session_auto_title_source ?? null,
       })
     }
 
@@ -1660,6 +1672,8 @@ export function registerSessionIpc(): void {
            s.cc_session_id AS cc_session_id,
            s.title AS session_title,
            s.title_source AS session_title_source,
+           s.auto_title AS session_auto_title,
+           s.auto_title_source AS session_auto_title_source,
            s.ended_at AS ended_at,
            r.id AS repo_id, r.project_id AS repo_project_id, r.label AS repo_label,
            r.path AS repo_path, r.role AS repo_role, r.link_kind AS repo_link_kind,
@@ -1696,6 +1710,8 @@ export function registerSessionIpc(): void {
         lastText: null,
         isResumable: true,
         titleSource: row.session_title_source,
+        autoTitle: row.session_auto_title ?? null,
+        autoTitleSource: row.session_auto_title_source ?? null,
       })
       if (out.length >= 50) break
     }
@@ -1745,13 +1761,12 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:rename', (_e, sessionId: string, title: string) => {
-    const trimmed = title.trim()
     // Rename via UI é sempre manual: marca a origem pra exibição nunca mais ser
     // sobrescrita pelo nome automático do Claude Code. Limpar o título volta a auto.
-    getDb()
-      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
-      .run(trimmed.length > 0 ? trimmed : null, trimmed.length > 0 ? 'manual' : null, sessionId)
-    broadcast('session:renamed', { sessionId, title: trimmed.length > 0 ? trimmed : null })
+    // O broadcast atualiza a lista viva do renderer (barra, Ctrl+K) sem refetch.
+    const saved = setSessionManualTitle(sessionId, title)
+    const event: SessionRenamedEvent = { sessionId, title: saved }
+    broadcast('session:renamed', event)
   })
 
   // Vincular/trocar a frente de uma sessão JÁ EM CURSO — o momento em que a

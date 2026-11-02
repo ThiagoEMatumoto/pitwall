@@ -38,6 +38,8 @@ interface Props {
   // (activity?.name ?? title ?? ''), diferente de displayTitle.
   nameValue: string
   isNamed: boolean
+  // De onde veio o título quando não é óbvio (ex.: auto-título); vai no tooltip.
+  titleHint?: string | null
   canRename: boolean
   onCommitRename: (next: string) => void
   exited: boolean
@@ -95,6 +97,7 @@ export function SessionHeader({
   displayTitle,
   nameValue,
   isNamed: _isNamed,
+  titleHint = null,
   canRename,
   onCommitRename,
   exited,
@@ -127,7 +130,9 @@ export function SessionHeader({
   function commitRename() {
     setEditing(false)
     const next = draft.replace(/[\r\n]+/g, ' ').trim()
-    if (next.length === 0) return
+    // Confirmar sem editar não vira rename: o campo vem preenchido com o
+    // auto-título, que deixaria de ser automático (e iria para o /rename do CLI).
+    if (next.length === 0 || next === nameValue.trim()) return
     onCommitRename(next)
   }
 
@@ -229,7 +234,7 @@ export function SessionHeader({
                 onClick={() => {
                   if (repoPath) void navigator.clipboard.writeText(repoPath)
                 }}
-                title={[displayTitle, repoPath && `${repoPath} — clique para copiar`]
+                title={[displayTitle, titleHint, repoPath && `${repoPath} — clique para copiar`]
                   .filter(Boolean)
                   .join('\n')}
                 className="min-w-0 truncate text-left font-medium hover:text-[var(--color-accent)]"
@@ -256,7 +261,11 @@ export function SessionHeader({
                   setDraft(nameValue)
                   setEditing(true)
                 }}
-                title={canRename ? 'Renomear sessão' : 'Aguarde a sessão ficar ociosa pra renomear'}
+                title={
+                  canRename
+                    ? (titleHint ?? 'Renomear sessão')
+                    : 'Aguarde a sessão ficar ociosa pra renomear'
+                }
                 aria-label="Renomear sessão"
                 className="shrink-0 text-[var(--color-text-dim)] opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 enabled:hover:text-[var(--color-accent)] disabled:cursor-not-allowed"
               >

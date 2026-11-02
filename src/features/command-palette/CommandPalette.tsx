@@ -34,6 +34,7 @@ import { navigateToFeature, navigateToTask } from '@/lib/nav'
 import { matchesQuery } from '@/lib/text-match'
 import { sessionSearchText, sortByUrgency } from '../session-switcher/session-search'
 import { statusView } from '../session-switcher/status-view'
+import { liveSessionLabel } from '../session-switcher/session-label'
 import { useEndedSessions, useVisibleLiveSessions } from '../session-switcher/useGlobalSessions'
 import { launcherCommandText, loadLauncherItems } from './launcher'
 import {
@@ -107,10 +108,6 @@ function sessionHint(s: LiveSessionInfo): ReactNode {
       </span>
     </span>
   )
-}
-
-function sessionLabel(s: LiveSessionInfo): string {
-  return s.title ?? s.name ?? s.repo?.label ?? 'Avulsa'
 }
 
 export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionId }: Props) {
@@ -338,7 +335,7 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     for (const { item: s, depth } of nestUnderMothers(sortByUrgency(liveSessions), motherOfChild)) {
       list.push({
         id: `live-session-${s.ccSessionId}`,
-        label: depth > 0 ? `↳ ${sessionLabel(s)}` : sessionLabel(s),
+        label: depth > 0 ? `↳ ${liveSessionLabel(s)}` : liveSessionLabel(s),
         searchText: sessionSearchText(s),
         icon: sessionIcon(s),
         hint: sessionHint(s),
@@ -352,7 +349,7 @@ export function CommandPalette({ open, onClose, onOpenSettings, activeCcSessionI
     for (const s of endedSessions ?? []) {
       list.push({
         id: `ended-session-${s.ccSessionId}`,
-        label: sessionLabel(s),
+        label: liveSessionLabel(s),
         searchText: sessionSearchText(s),
         icon: sessionIcon(s),
         // listEndedGlobal já entrega status 'ended' — o hint mostra "encerrada".

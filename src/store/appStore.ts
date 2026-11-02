@@ -24,6 +24,7 @@ import type {
   WakeRequest,
 } from '../../shared/types/ipc'
 import type { StartMotherInput, StartMotherResult } from '../../shared/types/feature-room'
+import { liveSessionLabel } from '@/features/session-switcher/session-label'
 
 export type Area =
   | 'projects'
@@ -354,6 +355,8 @@ let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
 let offHibernated: (() => void) | null = null
+let offAutoTitled: (() => void) | null = null
+let offRenamed: (() => void) | null = null
 let offPaneCheck: (() => void) | null = null
 // sessions.id das PTYs que saíram por hibernação: o pty:exit que chega logo
 // depois não fecha a pane nem mostra o toast de sessão encerrada (Terminal).
@@ -1293,7 +1296,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       void killAndClearDrafts(sessionId, pane, live)
       void get().refreshLiveSessions()
     }, END_UNDO_MS + END_KILL_GRACE_MS)
-    const name = live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label
+    const name = live ? liveSessionLabel(live) : pane?.session.title
     const toastId = showToast({
       title: 'Sessão encerrada',
       body: name ?? undefined,
@@ -1397,6 +1400,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
     offHibernated = sessionsApi.onHibernated(onHibernated)
+    offAutoTitled = sessionsApi.onAutoTitled((e) => {
+      set((s) => ({
+        liveSessions: s.liveSessions.map((sess) =>
+          sess.id === e.sessionId || (e.ccSessionId && sess.ccSessionId === e.ccSessionId)
+            ? { ...sess, autoTitle: e.autoTitle, autoTitleSource: e.autoTitleSource }
+            : sess,
+        ),
+      }))
+    })
+    offRenamed = sessionsApi.onRenamed((e) => {
+      set((s) => ({
+        liveSessions: s.liveSessions.map((sess) =>
+          sess.id === e.sessionId
+            ? { ...sess, title: e.title, titleSource: e.title ? 'manual' : null }
+            : sess,
+        ),
+      }))
+    })
     offPaneCheck = sessionsApi.onPaneCheckRequest(answerPaneCheck)
     offOom = sessionsApi.onOom(onSessionOom)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
@@ -1454,6 +1475,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offHibernated) {
       offHibernated()
       offHibernated = null
+    }
+    if (offRenamed) {
+      offRenamed()
+      offRenamed = null
+    }
+    if (offAutoTitled) {
+      offAutoTitled()
+      offAutoTitled = null
     }
     if (offPaneCheck) {
       offPaneCheck()
@@ -1589,8 +1618,7 @@ export function onSessionOom(event: ScopeOomEvent): void {
   const { liveSessions, panes } = useAppStore.getState()
   const live = liveSessions.find((x) => x.id === event.sessionId)
   const pane = panes.find((p) => p.session.id === event.sessionId)
-  const title =
-    live?.title ?? live?.name ?? pane?.session.title ?? live?.repo?.label ?? 'sem título'
+  const title = live ? liveSessionLabel(live) : (pane?.session.title ?? 'sem título')
   showToast({ title: oomToastText(title, event), durationMs: OOM_TOAST_MS })
   const cc = event.resumeCcSessionId
   if (!cc) return

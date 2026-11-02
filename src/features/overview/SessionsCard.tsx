@@ -14,6 +14,7 @@ import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import { groupLiveSessions } from '../../../shared/home-selectors'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { CardDot, CardEmpty, HomeCard } from './HomeGrid'
+import { liveSessionLabel } from '@/features/session-switcher/session-label'
 
 type Row = { item: LiveSessionInfo; kind: 'waiting' | 'working' | 'idle'; depth: number }
 
@@ -95,7 +96,7 @@ function SessionRow({
   nested?: boolean
   onOpen: () => void
 }) {
-  const title = (item.title ?? item.name ?? item.repo?.label) || (item.repo?.label ?? 'Avulsa')
+  const title = liveSessionLabel(item)
   const waiting = kind === 'waiting'
   const idle = kind === 'idle'
 

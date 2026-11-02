@@ -12,11 +12,21 @@ export type SessionGraphAttention = 'handoff-input' | 'waiting'
 export interface SessionGraphNode {
   sessionId: string
   ccSessionId: string | null
-  // Mesma precedência do nome da aba: rename manual > nome vivo do CLI > título
-  // salvo > label do repo.
+  // Mesma precedência do nome da aba: rename manual > auto-título (não-filha) >
+  // nome vivo do CLI > título salvo > label do repo.
   title: string
+  // Identidade no agent-bus (agent_list, fromAlias, resolução por apelido): a
+  // mesma precedência de `title` SEM o auto-título, que é só exibição e muda via
+  // session_title_set. Ausente em nós montados à mão: cai em `title`.
+  alias?: string
   // Nome vivo do CLI (o `-n`): o endereço do SendMessage, que o rename não muda.
   cliName?: string | null
+  // sessions.title_source: 'manual' = o humano renomeou (vence o auto-título).
+  titleSource?: 'manual' | 'auto' | null
+  // Título de exibição (sessions.auto_title, 068): só sessão não-filha ganha;
+  // 'self' = a própria sessão via session_title_set, 'llm' = gerado do 1º prompt.
+  autoTitle?: string | null
+  autoTitleSource?: 'llm' | 'self' | null
   projectId: string | null
   repoId: string | null
   repoLabel: string | null
