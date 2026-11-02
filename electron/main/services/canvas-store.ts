@@ -324,15 +324,25 @@ export function setSessionAutoTitle(
   return res.changes > 0
 }
 
+// Rename pela UI: sempre manual, vence o auto-título. Vazio volta ao automático.
+export function setSessionManualTitle(sessionId: string, title: string): string | null {
+  const trimmed = title.trim() || null
+  getDb()
+    .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
+    .run(trimmed, trimmed ? 'manual' : null, sessionId)
+  return trimmed
+}
+
 // Retomar cria outra linha em sessions (novo sessions.id) para o mesmo id nativo.
-// Propósito, grupo, "onde parei" e auto-título são da conversa, não da linha: a
-// nova herda os da linha anterior mais recente desta conversa.
+// Propósito, grupo, "onde parei", auto-título e rename manual são da conversa,
+// não da linha: a nova herda os da linha anterior mais recente desta conversa.
+// Sem herdar o manual, o auto-título herdado venceria o nome dado pelo usuário.
 export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
   const db = getDb()
   const prev = db
     .prepare(
       `SELECT purpose, group_id, last_summary, last_summary_at,
-              auto_title, auto_title_source, auto_title_at FROM sessions
+              auto_title, auto_title_source, auto_title_at, title, title_source FROM sessions
         WHERE cc_session_id = ? AND id <> ?
         ORDER BY started_at DESC, rowid DESC LIMIT 1`,
     )
@@ -345,6 +355,8 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
         auto_title: string | null
         auto_title_source: AutoTitleSource | null
         auto_title_at: number | null
+        title: string | null
+        title_source: 'manual' | 'auto' | null
       }
     | undefined
   if (!prev) return
@@ -362,6 +374,12 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
     prev.auto_title_at,
     sessionId,
   )
+  if (prev.title_source === 'manual' && prev.title) {
+    db.prepare("UPDATE sessions SET title = ?, title_source = 'manual' WHERE id = ?").run(
+      prev.title,
+      sessionId,
+    )
+  }
 }
 
 // O que o session_title_set precisa saber da linha antes de gravar.

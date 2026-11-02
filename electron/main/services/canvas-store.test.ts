@@ -6,6 +6,7 @@ let testDb: Database.Database
 vi.mock('./db', () => ({ getDb: () => testDb }))
 
 import * as store from './canvas-store'
+import { preferredSessionTitle } from '../../../shared/session-title'
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -328,5 +329,50 @@ describe('canvas-store — auto-título (068)', () => {
       auto_title_source: 'self',
       auto_title_at: 7,
     })
+  })
+
+  // Regressão B1: rename manual → reiniciar (o resume cria linha nova). A linha
+  // nova herdava o auto-título mas não o manual, e o auto-título voltava a vencer.
+  it('rename manual sobrevive ao resume e segue vencendo o auto-título herdado', () => {
+    seedSession('old')
+    store.setSessionAutoTitle('old', 'Teste de título', 'self', 7)
+    expect(store.setSessionManualTitle('old', '  Meu nome ')).toBe('Meu nome')
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('new', NULL, 'cc-old', 'running', 2)`,
+      )
+      .run()
+    store.inheritSessionCanvasFields('new', 'cc-old')
+
+    const row = testDb
+      .prepare('SELECT title, title_source, auto_title FROM sessions WHERE id = ?')
+      .get('new') as { title: string | null; title_source: string | null; auto_title: string }
+    expect(row).toEqual({
+      title: 'Meu nome',
+      title_source: 'manual',
+      auto_title: 'Teste de título',
+    })
+    expect(
+      preferredSessionTitle({
+        manualTitle: row.title_source === 'manual' ? row.title : null,
+        autoTitle: row.auto_title,
+      }),
+    ).toBe('Meu nome')
+  })
+
+  it('nome limpo antes do resume não ressuscita: a linha nova volta ao auto-título', () => {
+    seedSession('old')
+    store.setSessionAutoTitle('old', 'Teste de título', 'self', 7)
+    store.setSessionManualTitle('old', 'Meu nome')
+    expect(store.setSessionManualTitle('old', '   ')).toBeNull()
+    testDb
+      .prepare(
+        `INSERT INTO sessions (id, repo_id, cc_session_id, status, started_at) VALUES ('new', NULL, 'cc-old', 'running', 2)`,
+      )
+      .run()
+    store.inheritSessionCanvasFields('new', 'cc-old')
+    expect(
+      testDb.prepare('SELECT title, title_source FROM sessions WHERE id = ?').get('new'),
+    ).toEqual({ title: null, title_source: null })
   })
 })
