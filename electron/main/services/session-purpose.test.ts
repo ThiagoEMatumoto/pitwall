@@ -29,6 +29,7 @@ import {
   summarizeSessionTitle,
   summarizeWhereLeftOff,
   SESSION_TITLE_INSTRUCTION,
+  SESSION_TITLE_PROMPT_MAX_CHARS,
   SESSION_TITLE_TIMEOUT_MS,
   whereLeftOffExcerpt,
 } from './session-purpose'
@@ -391,6 +392,15 @@ describe('summarizeSessionTitle — título automático da mãe', () => {
     expect(opts.timeoutMs).toBe(SESSION_TITLE_TIMEOUT_MS)
     expect(SESSION_TITLE_TIMEOUT_MS).toBeLessThanOrEqual(30_000)
     forgetFirstPrompt('cc-title')
+  })
+
+  it('1º prompt gigante (log colado) vai cortado no argv: sem E2BIG nem token à toa', async () => {
+    const run = ok('Investiga log de erro\n')
+    const huge = 'Olha esse log: ' + 'x'.repeat(200_000)
+    expect(await summarizeSessionTitle('cc-huge', run, () => huge)).toMatchObject({ ok: true })
+    const [args] = run.mock.calls[0] as [string[]]
+    expect(args[1].length).toBe(SESSION_TITLE_INSTRUCTION.length + SESSION_TITLE_PROMPT_MAX_CHARS)
+    expect(args[1]).toContain('Olha esse log')
   })
 
   it('sem 1º prompt não gasta claude', async () => {

@@ -323,6 +323,9 @@ export async function summarizeWhereLeftOff(
 // ---- Título automático (sessões não-filhas) ----
 
 export const SESSION_TITLE_TIMEOUT_MS = 30_000
+// O 1º prompt pode ser um log colado de centenas de KiB: argv único acima de
+// 128 KiB dá E2BIG (e o título nunca sai), e o começo já basta para titular.
+export const SESSION_TITLE_PROMPT_MAX_CHARS = 2000
 
 export const SESSION_TITLE_INSTRUCTION = `Dê um título curto para a conversa abaixo entre um engenheiro brasileiro e um agente de programação, no estilo dos títulos de conversa do claude.ai.
 
@@ -354,7 +357,7 @@ export async function summarizeSessionTitle(
     const result = await run(
       [
         '-p',
-        SESSION_TITLE_INSTRUCTION + prompt,
+        SESSION_TITLE_INSTRUCTION + prompt.slice(0, SESSION_TITLE_PROMPT_MAX_CHARS),
         '--output-format',
         'text',
         '--model',
