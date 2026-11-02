@@ -337,7 +337,8 @@ export function setSessionManualTitle(sessionId: string, title: string): string 
 // Propósito, grupo, "onde parei", auto-título e rename manual são da conversa,
 // não da linha: a nova herda os da linha anterior mais recente desta conversa.
 // Sem herdar o manual, o auto-título herdado venceria o nome dado pelo usuário.
-export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
+// Devolve o rename manual herdado: o Session que o resume entrega à aba nasce dele.
+export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): string | null {
   const db = getDb()
   const prev = db
     .prepare(
@@ -359,7 +360,7 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
         title_source: 'manual' | 'auto' | null
       }
     | undefined
-  if (!prev) return
+  if (!prev) return null
   db.prepare(
     `UPDATE sessions SET purpose = ?, group_id = ?, last_summary = ?, last_summary_at = ?,
             auto_title = ?, auto_title_source = ?, auto_title_at = ?
@@ -379,7 +380,9 @@ export function inheritSessionCanvasFields(sessionId: string, ccSessionId: strin
       prev.title,
       sessionId,
     )
+    return prev.title
   }
+  return null
 }
 
 // O que o session_title_set precisa saber da linha antes de gravar.

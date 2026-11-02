@@ -219,12 +219,12 @@ function handler(channel: string): (event: unknown, ...args: never[]) => unknown
   return fn
 }
 
-function resume(): { id: string } {
+function resume(): { id: string; title: string | null; titleSource?: string | null } {
   return (
     handler('sessions:resume')(null, {
       repoId: 'r1',
       ccSessionId: CC_SESSION_ID,
-    } as never) as { session: { id: string } }
+    } as never) as { session: { id: string; title: string | null; titleSource?: string | null } }
   ).session
 }
 
@@ -344,9 +344,12 @@ describe('sessions:resume preserva propósito, grupo e "onde parei"', () => {
       title: 'Meu nome',
       title_source: 'manual',
     }
-    const { id } = resume()
-    expect(seam.titleUpdates.map((u) => u.args)).toEqual([['Meu nome', id]])
+    const session = resume()
+    expect(seam.titleUpdates.map((u) => u.args)).toEqual([['Meu nome', session.id]])
     expect(seam.titleUpdates[0].sql).toContain("title_source = 'manual'")
+    // A aba e o header nascem do Session devolvido, não de um refetch da linha.
+    expect(session.title).toBe('Meu nome')
+    expect(session.titleSource).toBe('manual')
   })
 
   it('título não-manual da linha anterior não é herdado', () => {
@@ -361,8 +364,9 @@ describe('sessions:resume preserva propósito, grupo e "onde parei"', () => {
       title: 'Nome do CLI',
       title_source: null,
     }
-    resume()
+    const session = resume()
     expect(seam.titleUpdates).toEqual([])
+    expect(session.title).toBeNull()
   })
 })
 

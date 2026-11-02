@@ -485,7 +485,7 @@ function startSession(opts: {
   const provider = opts.provider ?? getProvider(SESSION_PROVIDER)
   const db = getDb()
   const id = opts.id ?? randomUUID()
-  const row: SessionRow = {
+  let row: SessionRow = {
     id,
     repo_id: opts.repoId,
     cc_session_id: opts.ccSessionId,
@@ -520,7 +520,10 @@ function startSession(opts: {
       opts.spawnArgs ? JSON.stringify({ ...opts.spawnArgs, cwd: opts.cwd }) : null,
     )
     inserted = true
-    if (row.cc_session_id) inheritSessionCanvasFields(row.id, row.cc_session_id)
+    const inheritedTitle = row.cc_session_id
+      ? inheritSessionCanvasFields(row.id, row.cc_session_id)
+      : null
+    if (inheritedTitle) row = { ...row, title: inheritedTitle, title_source: 'manual' }
 
     const { command, args } = loginShellSpawn(opts.innerCmd)
     ptyManager.spawn({
