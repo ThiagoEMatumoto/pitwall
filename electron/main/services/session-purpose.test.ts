@@ -26,7 +26,10 @@ import {
   readLastPrompt,
   readFirstPrompt,
   resolvePurpose,
+  summarizeSessionTitle,
   summarizeWhereLeftOff,
+  SESSION_TITLE_INSTRUCTION,
+  SESSION_TITLE_TIMEOUT_MS,
   whereLeftOffExcerpt,
 } from './session-purpose'
 
@@ -156,7 +159,9 @@ describe('objetivo de feature a partir do 1º prompt', () => {
 
   it('firstCleanPrompt pula o kickoff e limpa a colagem', () => {
     expect(firstCleanPrompt([kickoff, 'Agora rode a migração'])).toBe('Agora rode a migração')
-    expect(firstCleanPrompt(['<pasted_content id="1">x</pasted_content> resume isso'])).toBe('resume isso')
+    expect(firstCleanPrompt(['<pasted_content id="1">x</pasted_content> resume isso'])).toBe(
+      'resume isso',
+    )
     expect(firstCleanPrompt([kickoff])).toBeNull()
   })
 
@@ -197,9 +202,13 @@ describe('cleanPrompt — o 1º prompt como identificação da sessão', () => {
 
   it('tira a colagem e fica com o pedido escrito em volta', () => {
     expect(
-      cleanPrompt('<pasted_content id="67b7">log enorme\nlinha 2</pasted_content> por que isso quebra?'),
+      cleanPrompt(
+        '<pasted_content id="67b7">log enorme\nlinha 2</pasted_content> por que isso quebra?',
+      ),
     ).toBe('por que isso quebra?')
-    expect(cleanPrompt('<pasted_content id="67b7"> resume o erro acima')).toBe('resume o erro acima')
+    expect(cleanPrompt('<pasted_content id="67b7"> resume o erro acima')).toBe(
+      'resume o erro acima',
+    )
   })
 
   it('URL do Linear vira chave · slug legível', () => {
@@ -214,12 +223,17 @@ describe('cleanPrompt — o 1º prompt como identificação da sessão', () => {
       userLine('Investigar o alerta de fila parada'),
     ].join('\n')
     expect(firstUserPrompt(parseChatMessages(jsonl))).toBe('Investigar o alerta de fila parada')
-    expect(cleanPrompt('veja https://x.slack.com/archives/C1/p2 e responda')).toBe('veja e responda')
+    expect(cleanPrompt('veja https://x.slack.com/archives/C1/p2 e responda')).toBe(
+      'veja e responda',
+    )
   })
 
   it('última mensagem do usuário, limpa', () => {
-    const jsonl = [userLine('primeiro pedido'), userLine('https://x.slack.com/a/b'), userLine('ajusta o teste')]
-      .join('\n')
+    const jsonl = [
+      userLine('primeiro pedido'),
+      userLine('https://x.slack.com/a/b'),
+      userLine('ajusta o teste'),
+    ].join('\n')
     expect(lastUserPrompt(parseChatMessages(jsonl))).toBe('ajusta o teste')
   })
 })
@@ -351,5 +365,61 @@ describe('onde parei', () => {
     const run = vi.fn()
     expect(await summarizeWhereLeftOff('cc-none', run)).toMatchObject({ ok: false })
     expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('summarizeSessionTitle — título automático da mãe', () => {
+  // O 1º prompt sai do leitor REAL (readFirstPrompt) sobre um JSONL no formato da CLI.
+  function realReader(id: string): (cc: string) => string | null {
+    const file = join(dir, `${id}.jsonl`)
+    writeFileSync(file, REAL_SHAPES)
+    return (cc) => readFirstPrompt(cc, true, () => file)
+  }
+  const ok = (stdout: string) => vi.fn().mockResolvedValue({ code: 0, stdout, stderr: '' })
+
+  it('gera do 1º prompt humano limpo, com haiku só-texto e timeout curto', async () => {
+    const run = ok('"Migra checkout para gateway novo."\n')
+    const out = await summarizeSessionTitle('cc-title', run, realReader('cc-title'))
+    expect(out).toEqual({ ok: true, title: 'Migra checkout para gateway novo' })
+    const [args, opts] = run.mock.calls[0] as [string[], { timeoutMs: number }]
+    expect(args[1].startsWith(SESSION_TITLE_INSTRUCTION)).toBe(true)
+    // O caveat/comando/skill injetados pela CLI ficam fora; entra o pedido de verdade.
+    expect(args[1]).toContain('Migrar o checkout')
+    expect(args[1]).not.toContain('Injected skill body')
+    expect(args).toEqual(expect.arrayContaining(['--model', 'haiku', '--output-format', 'text']))
+    expect(args).toEqual(expect.arrayContaining(['--tools', '', '--strict-mcp-config']))
+    expect(opts.timeoutMs).toBe(SESSION_TITLE_TIMEOUT_MS)
+    expect(SESSION_TITLE_TIMEOUT_MS).toBeLessThanOrEqual(30_000)
+    forgetFirstPrompt('cc-title')
+  })
+
+  it('sem 1º prompt não gasta claude', async () => {
+    const run = vi.fn()
+    expect(await summarizeSessionTitle('cc-empty', run, () => null)).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('falha, timeout ou saída vazia não viram título', async () => {
+    const prompt = () => 'Corrigir o login'
+    const failed = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'boom' })
+    expect(await summarizeSessionTitle('cc-f1', failed, prompt)).toMatchObject({ ok: false })
+    const timedOut = vi.fn().mockRejectedValue(new Error('timeout'))
+    expect(await summarizeSessionTitle('cc-f2', timedOut, prompt)).toMatchObject({ ok: false })
+    expect(await summarizeSessionTitle('cc-f3', ok('  ".\n'), prompt)).toMatchObject({
+      ok: false,
+    })
+  })
+
+  it('trava por sessão: a 2ª chamada concorrente não roda outro claude', async () => {
+    let release!: (v: { code: number; stdout: string; stderr: string }) => void
+    const run = vi.fn(
+      () => new Promise<{ code: number; stdout: string; stderr: string }>((r) => (release = r)),
+    )
+    const prompt = () => 'Corrigir o login'
+    const first = summarizeSessionTitle('cc-lock', run, prompt)
+    expect(await summarizeSessionTitle('cc-lock', run, prompt)).toMatchObject({ ok: false })
+    release({ code: 0, stdout: 'Corrige login', stderr: '' })
+    expect(await first).toEqual({ ok: true, title: 'Corrige login' })
+    expect(run).toHaveBeenCalledTimes(1)
   })
 })

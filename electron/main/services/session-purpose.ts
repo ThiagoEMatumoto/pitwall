@@ -16,6 +16,7 @@ import { findTranscriptPath } from './transcript-path'
 import { transcriptIndex } from './transcript-index'
 import { runClaude, TEXT_ONLY_CLAUDE_ARGS, type RunResult } from './claude-cli'
 import { stripCodeFence } from './feature-digest'
+import { normalizeAutoTitle } from '../../../shared/session-title'
 
 export const PURPOSE_MAX_CHARS = 120
 
@@ -316,5 +317,57 @@ export async function summarizeWhereLeftOff(
     return { ok: true, summary }
   } finally {
     inFlight.delete(ccSessionId)
+  }
+}
+
+// ---- Título automático (sessões não-filhas) ----
+
+export const SESSION_TITLE_TIMEOUT_MS = 30_000
+
+export const SESSION_TITLE_INSTRUCTION = `Dê um título curto para a conversa abaixo entre um engenheiro brasileiro e um agente de programação, no estilo dos títulos de conversa do claude.ai.
+
+Regras:
+- português do Brasil, de 2 a 5 palavras;
+- diga o assunto/objetivo do trabalho, começando por verbo ou substantivo;
+- sem aspas, sem ponto final, sem emoji;
+- responda SÓ com o título.
+
+Primeiro pedido do usuário:
+`
+
+export type SessionTitleResult = { ok: true; title: string } | { ok: false; error: string }
+
+const titleInFlight = new Set<string>()
+
+// Uma geração por chamada; quem decide se/quando chamar é o session-auto-title.
+export async function summarizeSessionTitle(
+  ccSessionId: string,
+  run: Runner = runClaude,
+  readPrompt: (ccSessionId: string) => string | null = (id) => readFirstPrompt(id, true),
+): Promise<SessionTitleResult> {
+  if (titleInFlight.has(ccSessionId))
+    return { ok: false, error: 'Um título desta sessão já está em andamento.' }
+  const prompt = readPrompt(ccSessionId)
+  if (!prompt) return { ok: false, error: 'A sessão ainda não tem 1º prompt.' }
+  titleInFlight.add(ccSessionId)
+  try {
+    const result = await run(
+      [
+        '-p',
+        SESSION_TITLE_INSTRUCTION + prompt,
+        '--output-format',
+        'text',
+        '--model',
+        SUMMARY_MODEL,
+        ...TEXT_ONLY_CLAUDE_ARGS,
+      ],
+      { timeoutMs: SESSION_TITLE_TIMEOUT_MS },
+    ).catch(() => null)
+    if (!result || result.code !== 0) return { ok: false, error: 'O titulador (claude) falhou.' }
+    const title = normalizeAutoTitle(stripCodeFence(result.stdout))
+    if (!title) return { ok: false, error: 'O titulador devolveu um título vazio.' }
+    return { ok: true, title }
+  } finally {
+    titleInFlight.delete(ccSessionId)
   }
 }

@@ -325,8 +325,8 @@ export function setSessionAutoTitle(
 }
 
 // Retomar cria outra linha em sessions (novo sessions.id) para o mesmo id nativo.
-// Propósito, grupo, "onde parei" e auto-título são da conversa, não da linha: a nova herda os
-// da linha anterior mais recente desta conversa.
+// Propósito, grupo, "onde parei" e auto-título são da conversa, não da linha: a
+// nova herda os da linha anterior mais recente desta conversa.
 export function inheritSessionCanvasFields(sessionId: string, ccSessionId: string): void {
   const db = getDb()
   const prev = db
