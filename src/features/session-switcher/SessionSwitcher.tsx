@@ -19,6 +19,7 @@ import { useFocusFilterStore } from '@/lib/focus-filter-store'
 import { relativeTime } from '@/lib/time'
 import { useAppStore } from '@/store/appStore'
 import { matchesSession } from './session-search'
+import { liveSessionLabel } from './session-label'
 import { statusView, type LiveStatus } from './status-view'
 import {
   listsCrew,
@@ -531,7 +532,7 @@ function SessionRow({
   onOpen,
 }: RowProps) {
   const view = statusView(item.status)
-  const name = item.title ?? item.name ?? item.repo?.label ?? 'Avulsa'
+  const name = liveSessionLabel(item)
   const preview = item.lastText?.replace(/\s+/g, ' ').trim()
 
   return (

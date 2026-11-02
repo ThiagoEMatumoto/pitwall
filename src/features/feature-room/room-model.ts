@@ -16,6 +16,7 @@ import type {
   SessionGraphStatus,
 } from '../../../shared/types/session-graph'
 import { stripUnsafeDisplay } from '../../../shared/tui/permission-request'
+import { isChildSessionNode, preferredSessionTitle } from '../../../shared/session-title'
 import { HIDDEN_TIMELINE_EVENTS } from './room-labels'
 import { isMotherLike } from '../sessions/conversation-hierarchy'
 
@@ -105,8 +106,15 @@ export function groupBySubject(items: AttentionItem[]): RoomQueueRow[] {
   return [...rows.values()]
 }
 
+// Nome próprio de exibição (rename manual > auto-título de não-filha) vence o
+// `-n`; sem ele, o `-n` de sempre.
 function nodeTitle(n: SessionGraphNode): string {
-  return stripUnsafeDisplay(n.cliName ?? n.title)
+  const own = preferredSessionTitle({
+    manualTitle: n.titleSource === 'manual' ? n.title : null,
+    autoTitle: n.autoTitle,
+    isChild: isChildSessionNode(n),
+  })
+  return stripUnsafeDisplay(own ?? n.cliName ?? n.title)
 }
 
 // Tela/transcript e texto de agente (task, purpose, detail) não são confiáveis: um

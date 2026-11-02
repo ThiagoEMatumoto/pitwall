@@ -354,6 +354,7 @@ let liveWatchStarted = false
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
 let offHibernated: (() => void) | null = null
+let offAutoTitled: (() => void) | null = null
 let offPaneCheck: (() => void) | null = null
 // sessions.id das PTYs que saíram por hibernação: o pty:exit que chega logo
 // depois não fecha a pane nem mostra o toast de sessão encerrada (Terminal).
@@ -1397,6 +1398,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
     offHibernated = sessionsApi.onHibernated(onHibernated)
+    offAutoTitled = sessionsApi.onAutoTitled((e) => {
+      set((s) => ({
+        liveSessions: s.liveSessions.map((sess) =>
+          sess.id === e.sessionId || (e.ccSessionId && sess.ccSessionId === e.ccSessionId)
+            ? { ...sess, autoTitle: e.autoTitle, autoTitleSource: e.autoTitleSource }
+            : sess,
+        ),
+      }))
+    })
     offPaneCheck = sessionsApi.onPaneCheckRequest(answerPaneCheck)
     offOom = sessionsApi.onOom(onSessionOom)
     // Boot sem nenhuma pane não muda `panes`: o sync inicial sai daqui.
@@ -1454,6 +1464,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (offHibernated) {
       offHibernated()
       offHibernated = null
+    }
+    if (offAutoTitled) {
+      offAutoTitled()
+      offAutoTitled = null
     }
     if (offPaneCheck) {
       offPaneCheck()
