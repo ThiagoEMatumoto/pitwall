@@ -19,7 +19,11 @@ import {
   type SpawnArgs,
 } from '../services/spawn-args'
 import { sweepAfterDraftFlush, sweepImageTempsKeepingDrafts } from '../services/image-temp-sweep'
-import { forgetSessionPositions, inheritSessionCanvasFields } from '../services/canvas-store'
+import {
+  forgetSessionPositions,
+  inheritSessionCanvasFields,
+  setSessionManualTitle,
+} from '../services/canvas-store'
 import { resolveRepoPath } from '../services/repo-path'
 import { canonicalDir, resolveFeatureWorktree } from '../services/work-dir'
 import { ptyManager } from '../services/pty-manager'
@@ -109,6 +113,7 @@ import type {
   HandoffStatus,
   AgentProviderId,
   AttentionRespondInput,
+  SessionRenamedEvent,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -1753,13 +1758,12 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.handle('sessions:rename', (_e, sessionId: string, title: string) => {
-    const trimmed = title.trim()
     // Rename via UI é sempre manual: marca a origem pra exibição nunca mais ser
     // sobrescrita pelo nome automático do Claude Code. Limpar o título volta a auto.
-    getDb()
-      .prepare('UPDATE sessions SET title = ?, title_source = ? WHERE id = ?')
-      .run(trimmed.length > 0 ? trimmed : null, trimmed.length > 0 ? 'manual' : null, sessionId)
-    broadcast('session:renamed', { sessionId, title: trimmed.length > 0 ? trimmed : null })
+    // O broadcast atualiza a lista viva do renderer (barra, Ctrl+K) sem refetch.
+    const saved = setSessionManualTitle(sessionId, title)
+    const event: SessionRenamedEvent = { sessionId, title: saved }
+    broadcast('session:renamed', event)
   })
 
   // Vincular/trocar a frente de uma sessão JÁ EM CURSO — o momento em que a

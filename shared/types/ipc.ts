@@ -1462,6 +1462,13 @@ export interface LiveSessionInfo {
   autoTitleSource?: 'llm' | 'self' | null
 }
 
+// Broadcast 'session:renamed': rename manual pela UI. title null = nome limpo,
+// a sessão volta ao auto-título.
+export interface SessionRenamedEvent {
+  sessionId: string
+  title: string | null
+}
+
 // Broadcast 'session:auto-titled': o rótulo troca sem refetch da lista viva.
 export interface SessionAutoTitledEvent {
   sessionId: string
@@ -2405,6 +2412,7 @@ export interface Api {
     /** Uma PTY saiu pelo /exit da hibernação; chega ANTES do pty:exit da mesma PTY. */
     onHibernated(handler: (event: SessionHibernatedEvent) => void): () => void
     onAutoTitled(handler: (event: SessionAutoTitledEvent) => void): () => void
+    onRenamed(handler: (event: SessionRenamedEvent) => void): () => void
     /** O main confirma a aba antes do /exit da hibernação; responda com paneCheckResult. */
     onPaneCheckRequest(handler: (request: PaneCheckRequest) => void): () => void
     paneCheckResult(result: PaneCheckResult): Promise<void>
