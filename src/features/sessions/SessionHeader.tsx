@@ -130,7 +130,9 @@ export function SessionHeader({
   function commitRename() {
     setEditing(false)
     const next = draft.replace(/[\r\n]+/g, ' ').trim()
-    if (next.length === 0) return
+    // Confirmar sem editar não vira rename: o campo vem preenchido com o
+    // auto-título, que deixaria de ser automático (e iria para o /rename do CLI).
+    if (next.length === 0 || next === nameValue.trim()) return
     onCommitRename(next)
   }
 
