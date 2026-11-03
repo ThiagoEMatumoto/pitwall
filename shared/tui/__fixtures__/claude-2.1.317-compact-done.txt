@@ -12,11 +12,11 @@
 ❯ /compact                                                                                                              
   ⎿  Compacted (ctrl+o to see full summary)
   ⎿  Read 
-     ../../../../../../../../../.claude/rules/team/brain--apresentao-slide-ou-deck-abra-a-skill-lexter-slide-6ae65a14.md
+     ../../../../../../../../../.claude/rules/team/sample-team-rule-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md
      (12 lines)
-  ⎿  Read ../../../../../../../../../.claude/rules/common/comunicacao-com-o-time.md (67 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/sample-rule-one-xxxxxx.md (67 lines)
   ⎿  Read ../../../../../../../../../.claude/rules/common/workflow.md (85 lines)
-  ⎿  Read ../../../../../../../../../.claude/rules/common/analytics-reasoning.md (30 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/sample-rule-two-xxx.md (30 lines)
   ⎿  Read ../../../../../../../../../.claude/rules/common/testing.md (43 lines)
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
