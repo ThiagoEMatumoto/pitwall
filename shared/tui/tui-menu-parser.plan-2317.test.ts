@@ -168,6 +168,37 @@ describe('menu de plano do claude 2.1.317 (capturas reais)', () => {
   })
 })
 
+describe('labels de plano fora do diálogo de plano', () => {
+  it('AskUserQuestion com labels de plano continua pergunta', () => {
+    for (const labels of [
+      ['Yes, and use auto mode', 'Tell Claude what to change'],
+      ['Yes, clear context and start over', 'No'],
+      ['Yes, manually approve edits', 'No, keep planning'],
+    ]) {
+      const menu = parseTuiMenu(` Como devo seguir?
+
+ ❯ 1. ${labels[0]}
+   2. ${labels[1]}
+   3. Type something.
+   4. Chat about this
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+`)
+      expect(menu?.kind, labels[0]).toBe('question')
+      expect(menu?.options.every((o) => o.planIntent == null), labels[0]).toBe(true)
+    }
+  })
+
+  it('permissão com "Yes, and use auto mode" continua permissão', () => {
+    const menu = parseTuiMenu(` Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and use auto mode
+   3. No
+`)
+    expect(menu?.kind).toBe('permission')
+  })
+})
+
 describe('AskUserQuestion do claude 2.1.317 (capturas reais)', () => {
   it('single-select com Type something./Chat about this', async () => {
     const menu = await parseAnsiFixture('question-chat-sentinel')

@@ -183,9 +183,10 @@ const TRUST_HEADING_RE = /trust this configuration|trust this folder/i
 const TRUST_OPTION_RE = /I trust this folder|remember this directory|No, continue without these permissions/i
 // Classificação do menu de plano (labels exatos vistos no binário da CLI).
 const PLAN_QUESTION_RE = /Would you like to proceed|Exit plan mode/i
-// Sem o bypass: "Yes, and switch to …" também é label de permissão ("… to auto mode").
-const PLAN_OPTION_RE =
-  /^Yes, and use auto mode|^Yes, clear context\b|^Yes, auto-accept edits|^Yes, manually approve|^No, keep planning|^Tell Claude what to change$/i
+// Só os labels que nenhum outro menu usa classificam sozinhos. Os do 2.1.317 ("Yes,
+// and use auto mode", "Yes, clear context", "Tell Claude what to change") cabem numa
+// opção escrita pelo modelo ou numa permissão: exigem a pergunta do diálogo.
+const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep planning/i
 const PLAN_FEEDBACK_LABEL_RE = /^Tell Claude what to change$/i
 const PLAN_FEEDBACK_HINT_RE = /approve with this feedback/i
 const PLAN_KEEP_PLANNING_RE = /^No, keep planning/i
@@ -597,6 +598,7 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   const hasSentinel = options.some((o) => o.sentinel != null)
   const isPlan =
     !isReview &&
+    !hasSentinel &&
     ((question != null && PLAN_QUESTION_RE.test(question)) ||
       options.some((o) => PLAN_OPTION_RE.test(o.label)))
   const isTrust =
