@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/ipc'
+import { parseTuiMenu } from '../../../../shared/tui/tui-menu-parser'
+import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import {
   countUserMessages,
   isAtBottom,
+  liveMenuCoversPending,
   nextResolveAt,
   pendingEchoes,
   pendingInteractive,
@@ -216,5 +221,32 @@ describe('isAtBottom', () => {
   it('respects a custom threshold', () => {
     expect(isAtBottom({ scrollTop: 700, scrollHeight: 1000, clientHeight: 200 }, 100)).toBe(true)
     expect(isAtBottom({ scrollTop: 600, scrollHeight: 1000, clientHeight: 200 }, 100)).toBe(false)
+  })
+})
+
+describe('liveMenuCoversPending — JSONL e tela reais do claude 2.1.317', () => {
+  const real = (name: string) =>
+    readFileSync(
+      join(__dirname, '../../../../shared/tui/__fixtures__', `claude-2.1.317-${name}`),
+      'utf8',
+    )
+
+  it('plano pendente no JSONL + diálogo de plano vivo = o menu vivo responde', () => {
+    const pending = pendingInteractive(parseChatMessages(real('plan-default.jsonl')))
+    expect(pending).toEqual({ kind: 'plan', id: 'toolu_013zfPNQQ4TP4VVHVMLzMZ7q' })
+    expect(liveMenuCoversPending(pending, parseTuiMenu(real('plan-default.txt'))?.kind)).toBe(true)
+  })
+
+  it('depois do Esc o plano não está mais pendente', () => {
+    expect(pendingInteractive(parseChatMessages(real('plan-default-after-esc.jsonl')))).toBeNull()
+  })
+
+  it('pergunta pendente é coberta pela pergunta ou pela revisão, nunca pelo plano', () => {
+    const q = { kind: 'question' as const, id: 'q' }
+    expect(liveMenuCoversPending(q, 'question')).toBe(true)
+    expect(liveMenuCoversPending(q, 'question_review')).toBe(true)
+    expect(liveMenuCoversPending(q, 'plan')).toBe(false)
+    expect(liveMenuCoversPending({ kind: 'plan', id: 'p' }, 'permission')).toBe(false)
+    expect(liveMenuCoversPending(null, 'plan')).toBe(false)
   })
 })

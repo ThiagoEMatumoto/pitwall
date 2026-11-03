@@ -381,6 +381,8 @@ export function parseChatMessages(
   const toolUseIdxByMsgId = new Map<string, { idx: number; id: string }[]>()
   const resolvedToolIds = new Set<string>()
   const interruptedMsgIds = new Set<string>()
+  // O 2.1.317 pode regravar o mesmo tool_use (mesmo id) em outra linha: um card só.
+  const seenToolUseIds = new Set<string>()
   const trackIdx = <T,>(map: Map<string, T[]>, key: string, value: T): void => {
     const list = map.get(key)
     if (list) list.push(value)
@@ -507,6 +509,10 @@ export function parseChatMessages(
           push({ kind: 'thinking', text: '(raciocínio oculto)' })
         } else if (item?.type === 'tool_use' && typeof item.name === 'string') {
           const id = typeof item.id === 'string' ? item.id : ''
+          if (id) {
+            if (seenToolUseIds.has(id)) continue
+            seenToolUseIds.add(id)
+          }
           const sub = id ? subagents?.get(id) : undefined
           if (sub) {
             if (id) subIds.add(id)

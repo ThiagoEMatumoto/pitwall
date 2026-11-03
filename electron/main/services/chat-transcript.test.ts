@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   lastPlanFilePath,
@@ -986,5 +988,44 @@ describe('parseChatMessages — pergunta de outro agente (pitwall-ask)', () => {
     )
     expect(lastUserPrompt(m)).toBe('migrar o checkout')
     expect(cleanPrompt(envelope)).toBeNull()
+  })
+})
+
+// JSONL real do claude 2.1.317 (sonda probe-chat-plan-2317): o tool_use do
+// ExitPlanMode aparece também numa linha api-request-blob, com o mesmo id.
+describe('parseChatMessages — ExitPlanMode do claude 2.1.317 (JSONL real)', () => {
+  const real = (name: string) =>
+    readFileSync(
+      join(__dirname, '../../../shared/tui/__fixtures__', `claude-2.1.317-${name}.jsonl`),
+      'utf8',
+    )
+  const plans = (msgs: ReturnType<typeof parseChatMessages>) =>
+    msgs.filter((m) => m.kind === 'exit_plan_mode' || m.kind === 'plan_decision')
+
+  it('aprovado: um card e a decisão aprovada, apesar do api-request-blob', () => {
+    expect(plans(parseChatMessages(real('plan-auto-after-approve')))).toEqual([
+      expect.objectContaining({ kind: 'exit_plan_mode', id: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB' }),
+      { kind: 'plan_decision', forId: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB', approved: true },
+    ])
+  })
+
+  it('pendente: o tool_use chega com o diálogo aberto, sem decisão', () => {
+    expect(plans(parseChatMessages(real('plan-default')))).toEqual([
+      expect.objectContaining({
+        kind: 'exit_plan_mode',
+        planFilePath: '~/.claude/plans/planeje-criar-um-arquivo-structured-pike.md',
+      }),
+    ])
+  })
+
+  it('feedback: decisão não aprovada', () => {
+    const decision = plans(parseChatMessages(real('plan-feedback-after-submit')))[1]
+    expect(decision).toMatchObject({ kind: 'plan_decision', approved: false })
+  })
+
+  it('a mesma linha assistant regravada não duplica o card', () => {
+    const line = real('plan-default').trim()
+    const msgs = parseChatMessages(`${line}\n${line}\n`)
+    expect(msgs.filter((m) => m.kind === 'exit_plan_mode')).toHaveLength(1)
   })
 })

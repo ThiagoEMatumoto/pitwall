@@ -73,7 +73,8 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
 
 // Conteúdo de um arquivo de plano (~/.claude/plans) via IPC read-only. null
 // enquanto carrega, sem path, ou quando a leitura falha — a UI cai no fallback.
-export function usePlanFile(path: string | null): string | null {
+// `version` muda → relê o mesmo path (o replanejamento regrava o arquivo).
+export function usePlanFile(path: string | null, version?: string | null): string | null {
   const [content, setContent] = useState<string | null>(null)
   useEffect(() => {
     if (!path) {
@@ -90,6 +91,6 @@ export function usePlanFile(path: string | null): string | null {
     return () => {
       cancelled = true
     }
-  }, [path])
+  }, [path, version])
   return content
 }

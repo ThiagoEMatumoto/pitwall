@@ -131,6 +131,45 @@ describe('ChatView — atualização das filhas', () => {
   })
 })
 
+const fixture317 = (name: string) =>
+  readFileSync(
+    join(__dirname, `../../../../shared/tui/__fixtures__/claude-2.1.317-${name}`),
+    'utf8',
+  )
+
+// A corrida do bug real: o tool_use do ExitPlanMode já está no JSONL e o diálogo
+// continua aberto na tela (claude 2.1.317, sonda probe-chat-plan-2317).
+describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () => {
+  function renderRace(onRespond = vi.fn()) {
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    const menu = parseTuiMenu(fixture317('plan-default.txt'))!
+    const utils = render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={menu}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-default.txt'))}
+        onRespond={onRespond}
+      />,
+    )
+    return { ...utils, onRespond }
+  }
+
+  it('um único card de plano, interativo, e sem o banner de ir ao terminal', () => {
+    const { container } = renderRace()
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(container.textContent).not.toContain('responda no compositor ou no terminal')
+    expect(container.textContent).not.toContain('use o terminal')
+  })
+
+  it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(container.textContent).toContain('aguardando sua aprovação do plano')
+  })
+})
+
 describe('PlanCard', () => {
   it('atalho de aprovar usa tecla com ícone, nunca o glifo ⏎', () => {
     render(<PlanCard plan="# Plano" onDecide={() => {}} />)
