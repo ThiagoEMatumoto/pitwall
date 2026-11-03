@@ -38,6 +38,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: (
 
 import { ChatView } from './ChatView'
 import { PlanCard } from './PlanCard'
+import { PLAN_FEEDBACK_KEY_DELAY_MS } from './respond-keys'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -162,6 +163,58 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(container.textContent).not.toContain('use o terminal')
   })
 
+  it('um botão por opção real, com o modo explícito e o destaque do terminal marcado', () => {
+    const { container } = renderRace()
+    expect(screen.getByTestId('plan-choice-approve-auto').textContent).toContain(
+      'Aprovar e ligar auto mode',
+    )
+    expect(screen.getByTestId('plan-choice-approve-auto').dataset.highlighted).toBe('true')
+    expect(screen.getByTestId('plan-choice-approve-manual').textContent).toBe(
+      'Aprovar com edições manuais',
+    )
+    expect(screen.getByTestId('plan-choice-approve-manual').dataset.highlighted).toBeUndefined()
+    expect(container.textContent).not.toContain('Pra aprovar, use o terminal')
+  })
+
+  it('aprovar manda o dígito da opção escolhida', () => {
+    const { onRespond } = renderRace()
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).toHaveBeenCalledWith(['2'], undefined)
+  })
+
+  it('pedir mudanças: dígito do campo + paste + Enter, com respiro entre as teclas', () => {
+    const { onRespond } = renderRace()
+    fireEvent.change(screen.getByTestId('plan-feedback'), { target: { value: 'use bye.txt' } })
+    fireEvent.click(screen.getByTestId('plan-feedback-send'))
+    expect(onRespond).toHaveBeenCalledWith(
+      ['3', '\x1b[200~use bye.txt\x1b[201~', '\r'],
+      PLAN_FEEDBACK_KEY_DELAY_MS,
+    )
+  })
+
+  it('descartar = Esc', () => {
+    const { onRespond } = renderRace()
+    fireEvent.click(screen.getByTestId('plan-choice-reject'))
+    expect(onRespond).toHaveBeenCalledWith(['\x1b'], undefined)
+  })
+
+  it('diálogo mudou desde o render: não digita e avisa', () => {
+    const onRespond = vi.fn()
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={parseTuiMenu(fixture317('plan-default.txt'))}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-no-auto.txt'))}
+        onRespond={onRespond}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).not.toHaveBeenCalled()
+    expect(screen.getByTestId('plan-notice').textContent).toContain('mudou')
+  })
+
   it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
     transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
     const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
@@ -171,10 +224,11 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
 })
 
 describe('PlanCard', () => {
-  it('atalho de aprovar usa tecla com ícone, nunca o glifo ⏎', () => {
+  it('sem atalho de Enter: o Enter do terminal escolheria a opção destacada', () => {
     render(<PlanCard plan="# Plano" onDecide={() => {}} />)
     const hints = screen.getByTestId('plan-shortcuts')
     expect(hints.textContent).not.toContain('⏎')
-    expect(hints.querySelector('kbd svg')).toBeTruthy()
+    expect(hints.querySelector('kbd svg')).toBeNull()
+    expect(hints.textContent).toContain('esc')
   })
 })

@@ -24,7 +24,8 @@ import { ModelPickerCard } from './ModelPickerCard'
 import { PermissionCard } from './PermissionCard'
 import { PendingElsewhereChip } from './PendingElsewhereChip'
 import { useMainPermissionMenu, usePermissionResponder } from './usePermissionResponder'
-import { PlanCard } from './PlanCard'
+import { PlanCard, type PlanDecision } from './PlanCard'
+import { planAcceptsFeedback, planChoices } from './plan-choices'
 import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
 import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
@@ -53,12 +54,12 @@ import {
   buildOtherKeys,
   buildPickerSelectKeys,
   buildPlanKeys,
+  PLAN_FEEDBACK_KEY_DELAY_MS,
   buildReviewKeys,
   buildSelectKeys,
   buildSpaceKey,
   buildTabKeys,
   buildToggleKeys,
-  findPlanOption,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
 import { pickerFingerprint, type TuiPicker } from '../tui-picker-parser'
@@ -91,10 +92,9 @@ interface Props {
   onToggleMode?: () => void
   // Reproduz sequências de teclas no PTY vivo (mesmo write() do onForwardKey do
   // composer). Vem do Terminal; ausente = cards ficam read-only. Consumido pelo
-  // caminho de clique baseado no menu TUI parseado (não pelo transcript: a CLI
-  // não grava o tool_use pendente no JSONL, então cards de transcript nunca
-  // estão pendentes — só pós-resposta).
-  onRespond?: (seqs: string[]) => void
+  // caminho de clique baseado no menu TUI parseado. delayMs: respiro entre as
+  // sequências quando a TUI precisa redesenhar entre elas (campo de feedback).
+  onRespond?: (seqs: string[], delayMs?: number) => void
   // Menu TUI pendente parseado do buffer do xterm (Terminal, debounced). É a
   // FONTE do momento pendente clicável. null = sem menu íntegro parseado.
   tuiMenu?: TuiMenu | null
@@ -367,8 +367,12 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     }
   }, [tuiMenu])
 
-  const manualApproveIndex =
-    tuiMenu && tuiMenu.kind === 'plan' ? (findPlanOption(tuiMenu, 'approve-manual')?.index ?? null) : null
+  const tuiPlanChoices = useMemo(
+    () => (tuiMenu?.kind === 'plan' ? planChoices(tuiMenu) : []),
+    [tuiMenu],
+  )
+  const [planNotice, setPlanNotice] = useState<string | null>(null)
+  useEffect(() => setPlanNotice(null), [menuFp])
 
   // Prompt TTY-only (permissão de tool / trust de diretório) espelhado do buffer:
   // as opções vão inteiras pro card (não há sentinelas nesses menus).
@@ -495,16 +499,26 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     onRespond?.(keys)
   }
 
-  function respondTuiPlan(d: 'approve' | 'reject') {
+  function respondTuiPlan(d: PlanDecision, feedback?: string) {
     if (!canRespondTui || menuFp == null) return
     const fresh = freshMenuMatches()
-    if (!fresh) return
-    // O dígito de aprovação vem do RE-PARSE (não do menu do estado): se a opção
-    // manual sumiu/mudou de posição, buildPlanKeys devolve [] e nada é enviado.
-    const keys = buildPlanKeys(fresh, d === 'reject' ? 'reject' : 'approve-manual')
-    if (keys.length === 0) return
+    if (!fresh) {
+      setPlanNotice('O diálogo mudou no terminal — confira as opções de novo.')
+      return
+    }
+    // O dígito vem do RE-PARSE (não do menu do estado): se a opção sumiu/mudou de
+    // posição, buildPlanKeys devolve [] e nada é enviado.
+    const keys = buildPlanKeys(fresh, d, feedback)
+    if (keys.length === 0) {
+      setPlanNotice(
+        d === 'feedback'
+          ? 'O campo de mudanças no terminal já tem texto: envie ou apague por lá.'
+          : 'Essa opção não está mais no diálogo.',
+      )
+      return
+    }
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
+    onRespond?.(keys, d === 'feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined)
   }
 
   // ── Pickers de /model, /theme, /config e busca de histórico (Ctrl+R) ──────
@@ -713,7 +727,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           plan={pendingPlanText ?? PLAN_PLACEHOLDER}
           onDecide={canRespondTui ? respondTuiPlan : undefined}
           sent={tuiSent != null && tuiSent.fp === menuFp}
-          canApprove={manualApproveIndex != null}
+          choices={tuiPlanChoices}
+          canFeedback={planAcceptsFeedback(tuiMenu)}
+          notice={planNotice}
         />
       )}
       {tuiPermission && (

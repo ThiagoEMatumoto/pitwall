@@ -1414,7 +1414,7 @@ function TerminalHost({
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
-            onRespond={(seqs) => void playKeys(seqs, write)}
+            onRespond={(seqs, delayMs) => void playKeys(seqs, write, delayMs)}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o
             // guard de clique — re-parse fresco antes de digitar.
