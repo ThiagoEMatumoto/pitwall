@@ -438,6 +438,26 @@ describe('AttentionPopover — plano do 2.1.317', () => {
     )
   })
 
+  it('não oferece aprovar com bypass: o popover não mostra o plano', async () => {
+    const menu =
+      parseTuiMenu(` Claude has written up a plan and is ready to execute. Would you like to proceed?
+ ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session
+   2. Yes, manually approve edits
+   3. Tell Claude what to change
+      shift+tab to approve with this feedback
+`)!
+    attentionMenu.mockResolvedValue({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 5,
+      menu,
+    })
+    render(<AttentionPopover item={planItem} />)
+    await screen.findByTestId('attention-plan-approve-manual')
+    expect(screen.queryByTestId('attention-plan-approve-bypass')).toBeNull()
+    expect(screen.getByTestId('attention-plan-bypass-hint')).toHaveTextContent('card do chat')
+  })
+
   it('menuActions não oferece dígito cru para o plano', () => {
     expect(menuActions(planMenu())).toEqual([])
   })

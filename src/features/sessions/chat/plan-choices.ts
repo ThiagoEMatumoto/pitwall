@@ -10,6 +10,9 @@ export interface PlanChoice {
   // A opção sob o ❯ no terminal: é a que um Enter escolheria lá.
   highlighted: boolean
   tone: 'primary' | 'secondary' | 'danger'
+  // Bypass desliga todo prompt da sessão: o card pede um 2º clique e o popover, que
+  // não mostra o plano, não oferece.
+  confirm: boolean
 }
 
 const MODE_TAIL: Record<PlanMode, string> = {
@@ -41,8 +44,10 @@ function choiceLabel(o: TuiMenuOption): string | null {
   }
 }
 
+const isBypass = (o: TuiMenuOption) => o.planIntent === 'approve-bypass' || o.planMode === 'bypass'
+
 function toneOf(o: TuiMenuOption): PlanChoice['tone'] {
-  if (o.planIntent === 'approve-bypass' || o.planMode === 'bypass') return 'danger'
+  if (isBypass(o)) return 'danger'
   return o.planIntent === 'approve-manual' ? 'primary' : 'secondary'
 }
 
@@ -60,6 +65,7 @@ export function planChoices(menu: TuiMenu): PlanChoice[] {
       optionLabel: o.label,
       highlighted: menu.cursorIndex === o.index,
       tone: toneOf(o),
+      confirm: isBypass(o),
     })
   }
   return out

@@ -55,5 +55,6 @@ describe('planChoices — capturas reais do claude 2.1.317', () => {
       shift+tab to approve with this feedback
 `)!
     expect(summary(menu)[0]).toEqual(['approve-bypass', 'Aprovar e ligar bypass', 'danger', true])
+    expect(planChoices(menu).map((c) => c.confirm)).toEqual([true, false])
   })
 })

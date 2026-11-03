@@ -280,7 +280,9 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const [sending, setSending] = useState(false)
   const menu = snapshot?.menu ?? null
   const actions = menu ? menuActions(menu) : []
-  const plan = menu?.kind === 'plan' ? planChoices(menu) : null
+  const allPlan = menu?.kind === 'plan' ? planChoices(menu) : null
+  const plan = allPlan?.filter((c) => !c.confirm) ?? null
+  const planHidesBypass = allPlan != null && allPlan.length > (plan?.length ?? 0)
   const unrecognized = snapshot === null && isActionableDetail(item.detail) && !notice
   useChatFallback(
     unrecognized && item.detail && item.detail !== 'turn-end' && item.detail !== 'handoff-input'
@@ -409,6 +411,11 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
           >
             Descartar
           </Button>
+          {planHidesBypass && (
+            <p data-testid="attention-plan-bypass-hint" className="w-full text-[var(--color-text-dim)]">
+              Aprovar com bypass só pelo card do chat, que mostra o plano.
+            </p>
+          )}
         </div>
       )}
       {menu && planAcceptsFeedback(menu) && (

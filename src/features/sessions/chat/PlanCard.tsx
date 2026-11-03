@@ -83,6 +83,7 @@ export function PlanCard({
   notice,
 }: Props) {
   const [open, setOpen] = useState(plan.length <= COLLAPSE_THRESHOLD)
+  const [armed, setArmed] = useState<PlanChoice['intent'] | null>(null)
   const pending = decision === undefined
   const live = onDecide != null || sent === true
   const disabled = sent === true || onDecide == null
@@ -143,9 +144,13 @@ export function PlanCard({
                 title={c.optionLabel}
                 data-testid={`plan-choice-${c.intent}`}
                 data-highlighted={c.highlighted || undefined}
-                onClick={() => onDecide?.(c.intent)}
+                onClick={() => {
+                  if (c.confirm && armed !== c.intent) return setArmed(c.intent)
+                  setArmed(null)
+                  onDecide?.(c.intent)
+                }}
               >
-                {c.label}
+                {armed === c.intent ? 'Confirmar bypass: sem mais prompts nesta sessão' : c.label}
                 {c.highlighted && (
                   <span className="rounded-full border border-current/40 px-1.5 text-[9px] font-normal opacity-80">
                     destaque no terminal
