@@ -190,7 +190,8 @@ const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep
 const PLAN_FEEDBACK_LABEL_RE = /^Tell Claude what to change$/i
 const PLAN_FEEDBACK_HINT_RE = /approve with this feedback/i
 const PLAN_KEEP_PLANNING_RE = /^No, keep planning/i
-const PLAN_FILE_RE = /ctrl\+g to edit in .+? · (\S+\.md)\s*$/
+// Depois de salvar no editor o rodapé ganha " · ✔ Plan saved!".
+const PLAN_FILE_RE = /ctrl\+g to edit in .+? · (.+?\.md)(?: · .*)?\s*$/
 
 // Bordas de box-drawing (moldura do box de diff/comando) aparadas do contexto.
 // ╌ é a moldura tracejada do comando no prompt de permissão do 2.1.286.

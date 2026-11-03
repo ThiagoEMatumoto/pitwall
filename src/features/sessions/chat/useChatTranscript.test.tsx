@@ -18,6 +18,7 @@ vi.mock('@/lib/ipc', () => ({
       mainWatches.delete(id)
     }),
     getTranscript: vi.fn(() => new Promise(() => {})),
+    readPlanFile: vi.fn(),
     onTranscriptUpdate: vi.fn((h: Listener) => {
       listeners.add(h)
       return () => listeners.delete(h)
@@ -25,7 +26,8 @@ vi.mock('@/lib/ipc', () => ({
   },
 }))
 
-import { useChatTranscript } from './useChatTranscript'
+import { chatApi } from '@/lib/ipc'
+import { PLAN_FILE_POLL_MS, usePlanFile, useChatTranscript } from './useChatTranscript'
 
 function emitFromMain(u: ChatTranscriptUpdate) {
   if (!mainWatches.has(u.sessionId)) return
@@ -59,5 +61,40 @@ describe('useChatTranscript com dois consumidores', () => {
     })
 
     expect(screen.getByTestId('b').textContent).toBe('1')
+  })
+})
+
+function PlanConsumer({ path }: { path: string | null }) {
+  return <div data-testid="plan">{usePlanFile(path, 'fp') ?? 'null'}</div>
+}
+
+describe('usePlanFile', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  it('relê o arquivo editado com o diálogo aberto (Ctrl+G), sem o menu mudar', async () => {
+    const read = vi.mocked(chatApi.readPlanFile)
+    read.mockResolvedValueOnce('plano antigo').mockResolvedValue('plano editado')
+    render(<PlanConsumer path="/p/plan.md" />)
+    await act(async () => {})
+    expect(screen.getByTestId('plan').textContent).toBe('plano antigo')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PLAN_FILE_POLL_MS)
+    })
+    expect(screen.getByTestId('plan').textContent).toBe('plano editado')
+  })
+
+  it('sem path não lê nem agenda releitura', async () => {
+    const read = vi.mocked(chatApi.readPlanFile)
+    read.mockClear()
+    render(<PlanConsumer path={null} />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PLAN_FILE_POLL_MS * 3)
+    })
+    expect(read).not.toHaveBeenCalled()
+    expect(screen.getByTestId('plan').textContent).toBe('null')
   })
 })

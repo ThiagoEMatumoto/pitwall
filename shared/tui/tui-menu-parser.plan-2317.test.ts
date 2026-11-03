@@ -92,6 +92,12 @@ describe('menu de plano do claude 2.1.317 (capturas reais)', () => {
     )
   })
 
+  it('o rodapé com "Plan saved!" depois do Ctrl+G ainda dá o arquivo', () => {
+    expect(parseTuiMenu(fixture('plan-ctrlg.txt'))?.planFile).toBe(
+      '~/.claude/plans/planeje-criar-um-arquivo-replicated-penguin.md',
+    )
+  })
+
   it('campo de feedback focado: cursor na opção 3, ainda feedback', () => {
     const menu = parseTuiMenu(fixture('plan-feedback-input.txt'))
     expect(menu?.kind).toBe('plan')

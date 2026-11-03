@@ -393,8 +393,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Conteúdo do plano pro card PENDENTE, sempre do arquivo: o input.plan do JSONL
   // pode trazer o plano anterior (Write e ExitPlanMode saem em paralelo). O path
   // vem do rodapé do diálogo, senão do último Write/Edit em ~/.claude/plans/. O
-  // fingerprint relê o arquivo quando o replanejamento regrava o mesmo path. Sem
-  // path ou leitura falhou → placeholder.
+  // fingerprint relê na hora quando o replanejamento regrava o mesmo path; o poll do
+  // usePlanFile pega a edição por Ctrl+G. Sem path ou leitura falhou → placeholder.
   const pendingPlanText = usePlanFile(
     tuiMenu?.kind === 'plan' ? (tuiMenu.planFile ?? lastPlanFilePath) : null,
     menuFp,

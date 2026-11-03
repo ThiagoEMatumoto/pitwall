@@ -71,9 +71,13 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
   return { messages, loading, transcriptExists, lastPlanFilePath }
 }
 
+// Ctrl+G edita o arquivo com o diálogo aberto, e nada na tela do menu muda (o
+// fingerprint não tem o texto do plano): só relendo de tempos em tempos.
+export const PLAN_FILE_POLL_MS = 1000
+
 // Conteúdo de um arquivo de plano (~/.claude/plans) via IPC read-only. null
 // enquanto carrega, sem path, ou quando a leitura falha — a UI cai no fallback.
-// `version` muda → relê o mesmo path (o replanejamento regrava o arquivo).
+// `version` muda → relê na hora (o replanejamento regrava o arquivo).
 export function usePlanFile(path: string | null, version?: string | null): string | null {
   const [content, setContent] = useState<string | null>(null)
   useEffect(() => {
@@ -82,14 +86,18 @@ export function usePlanFile(path: string | null, version?: string | null): strin
       return
     }
     let cancelled = false
-    void chatApi
-      .readPlanFile(path)
-      .then((c) => {
-        if (!cancelled) setContent(c)
-      })
-      .catch(() => {})
+    const read = () =>
+      void chatApi
+        .readPlanFile(path)
+        .then((c) => {
+          if (!cancelled) setContent(c)
+        })
+        .catch(() => {})
+    read()
+    const timer = setInterval(read, PLAN_FILE_POLL_MS)
     return () => {
       cancelled = true
+      clearInterval(timer)
     }
   }, [path, version])
   return content
