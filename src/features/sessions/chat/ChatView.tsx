@@ -926,6 +926,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             <ChatWaitBanners
               pendingPrompt={showTuiCard ? null : pendingPrompt}
               waitInTerminal={waitInTerminal}
+              menuKind={tuiMenu?.kind}
               onToggleMode={onToggleMode}
             />
             {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente

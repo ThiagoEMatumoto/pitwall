@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { planAcceptsFeedback, planChoices } from '@/features/sessions/chat/plan-choices'
+import { useChatFallback } from '@/features/sessions/chat/useChatFallback'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
@@ -280,6 +281,13 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const menu = snapshot?.menu ?? null
   const actions = menu ? menuActions(menu) : []
   const plan = menu?.kind === 'plan' ? planChoices(menu) : null
+  const unrecognized = snapshot === null && isActionableDetail(item.detail) && !notice
+  useChatFallback(
+    unrecognized && item.detail && item.detail !== 'turn-end' && item.detail !== 'handoff-input'
+      ? item.detail
+      : null,
+    'popover-unrecognized',
+  )
   const otherIndex = menu ? otherOptionIndex(menu) : null
   const alwaysAction = actions.find((a) => a.key === 'always')
   const alwaysOption = menu?.options.find((o) => o.index === alwaysAction?.optionIndex)
@@ -343,7 +351,7 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
       {snapshot === undefined && isActionableDetail(item.detail) && (
         <p className="text-[var(--color-text-dim)]">Lendo o menu…</p>
       )}
-      {snapshot === null && isActionableDetail(item.detail) && !notice && (
+      {unrecognized && (
         <p className="text-[var(--color-text-dim)]">Menu não reconhecido — responda no terminal.</p>
       )}
 

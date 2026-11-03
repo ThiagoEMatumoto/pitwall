@@ -21,6 +21,7 @@ export type {
 import type { ComposerDraft, VersionedDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
+import type { ChatFallbackCounters, ChatFallbackKind, ChatFallbackReason } from '../chat/fallback'
 import type { AttentionCounters, AttentionItem } from './attention'
 import type {
   MotherPreflight,
@@ -1538,6 +1539,8 @@ export interface AttentionReasonCounters {
   lastUnparsedAt: number | null
 }
 
+export type AttentionDebugCounters = AttentionReasonCounters & ChatFallbackCounters
+
 // main → renderer: o kernel matou um processo da sessão por MemoryMax.
 // claudeAlive false = o morto foi o próprio claude (a sessão acabou).
 export interface ScopeOomEvent {
@@ -2401,7 +2404,7 @@ export interface Api {
     attentionMenu(sessionId: string): Promise<AttentionMenuSnapshot | null>
     /** Responde o menu sem abrir o terminal; recusa se o menu mudou desde o snapshot. */
     attentionRespond(input: AttentionRespondInput): Promise<AttentionRespondResult>
-    attentionDebug(): Promise<AttentionReasonCounters>
+    attentionDebug(): Promise<AttentionDebugCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
     /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
@@ -2434,6 +2437,8 @@ export interface Api {
     getTranscript(sessionId: string): Promise<ChatTranscript>
     /** Lê um arquivo de plano (validado dentro de ~/.claude/plans/); null se inválido/ilegível. */
     readPlanFile(path: string): Promise<string | null>
+    /** Conta um caminho do chat que mandou o usuário ao terminal (ver shared/chat/fallback). */
+    noteFallback(kind: ChatFallbackKind, reason: ChatFallbackReason): Promise<void>
     /** Começa a observar o JSONL da sessão; emite chat:transcript-update em cada mudança. */
     watch(sessionId: string): void
     /** Para o watcher (também é chamado automaticamente no pty:exit). */

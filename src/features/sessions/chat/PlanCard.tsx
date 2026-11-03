@@ -6,6 +6,7 @@ import { Kbd } from '@/components/ui/ShortcutHints'
 import { ApexDot, Button, GradientBorder, Ruler } from '@/features/brand'
 import type { PlanIntent } from '../tui-menu-parser'
 import type { PlanChoice } from './plan-choices'
+import { useChatFallback } from './useChatFallback'
 
 export type PlanDecision = Exclude<PlanIntent, 'feedback'> | 'feedback' | 'reject'
 
@@ -85,6 +86,8 @@ export function PlanCard({
   const pending = decision === undefined
   const live = onDecide != null || sent === true
   const disabled = sent === true || onDecide == null
+  const noOptions = pending && live && choices.length === 0 && !canFeedback
+  useChatFallback(noOptions ? 'plan' : null, 'no-options')
 
   const status =
     decision === true
@@ -164,7 +167,7 @@ export function PlanCard({
           {canFeedback && (
             <FeedbackField disabled={disabled} onSend={(t) => onDecide?.('feedback', t)} />
           )}
-          {choices.length === 0 && !canFeedback && (
+          {noOptions && (
             <p className="text-xs text-[var(--color-text-dim)]">
               Nenhuma opção de aprovação reconhecida neste diálogo.
             </p>
