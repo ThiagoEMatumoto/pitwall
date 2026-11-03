@@ -3,6 +3,8 @@
 //   npx tsx e2e/scenarios/probe-chat-plan-2317.ts <cenario>
 // Env: PROBE_SB (sandbox; cwd da sessão e saídas brutas ficam em PROBE_SB/<cenario>/),
 //      PROBE_FIXTURES=1 copia os dumps marcados como fixture para shared/tui/__fixtures__.
+// Cenários e2e-* respondem pelo caminho de produção (parseTuiMenuFull -> buildPlanKeys ->
+// playKeys) e terminam com [verdict] PASS/FAIL; exit 1 se alguma expectativa falhar.
 // Cada cenário declara flags extras, prompt inicial e passos. Um dump grava .txt (tela do
 // xterm headless) e .ansi (bytes do PTY desde o último dump), roda parseTuiMenuFull real e
 // loga status de ~/.claude/sessions/<pid>.json e o estado do ExitPlanMode no JSONL.
@@ -13,7 +15,13 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as pty from 'node-pty'
-import { parseTuiMenuFull, type TuiMenu } from '../../shared/tui/tui-menu-parser'
+import {
+  buildPlanKeys,
+  findPlanOption,
+  PLAN_FEEDBACK_KEY_DELAY_MS,
+  playKeys,
+} from '../../shared/tui/respond-keys'
+import { parseTuiMenuFull, type PlanIntent, type TuiMenu } from '../../shared/tui/tui-menu-parser'
 import { parseTuiPicker } from '../../src/features/sessions/tui-picker-parser'
 
 const xtermHeadless = createRequire(import.meta.url)(
@@ -77,6 +85,11 @@ type Step =
   | { jsonl: string; fixture?: string; awaitUseMs?: number; tool?: string }
   // Lê o log dos hooks (Scenario.hookLog): evento, tool, campos e atraso vs. 1º parse do menu.
   | { hooklog: string; fixture?: string }
+  // Responde o diálogo de plano como o card: parse fresco + buildPlanKeys + playKeys.
+  | { respond: PlanIntent | 'reject'; feedback?: string }
+  // Expectativas (entram no [verdict]): rodapé da tela e último tool_result do ExitPlanMode.
+  | { expectFooter: RegExp; timeout?: number }
+  | { expectResult: { isError: boolean; feedback?: string }; timeout?: number }
 
 interface Scenario {
   args: string[]
@@ -148,7 +161,73 @@ const HOOK_LOG = join(HOOK_DIR, 'log.jsonl')
 const HOOK_SETTINGS = join(HOOK_DIR, 'settings.json')
 const observeHook = [{ matcher: '*', hooks: [{ type: 'command', command: HOOK_SCRIPT }] }]
 
+// Fecha a sessão depois do Write negado: o turno pode seguir, o que importa já foi medido.
+const denyWrite: Step[] = [
+  { wait: 'menu', kind: 'permission', timeout: 90_000 },
+  { dump: '50-write-permission' },
+  { keys: ['esc'] },
+  { sleep: 2000 },
+]
+const NO_AUTO = JSON.stringify({ disableAutoMode: 'disable' })
+
 const SCENARIOS: Record<string, Scenario> = {
+  'e2e-approve-auto': {
+    args: BASE_ARGS,
+    prompt: PLAN_PROMPT_EXEC,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { respond: 'approve-auto' },
+      { expectFooter: /⏵⏵ auto mode on/ },
+      { expectResult: { isError: false } },
+      { dump: '40-after-approve' },
+      { wait: 'idle', timeout: 120_000 },
+      { dump: '41-idle' },
+    ],
+  },
+  'e2e-approve-manual': {
+    args: [...BASE_ARGS, '--settings', NO_AUTO],
+    prompt: PLAN_PROMPT_EXEC,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { respond: 'approve-manual' },
+      { expectFooter: /⏸ manual mode on/ },
+      { expectResult: { isError: false } },
+      { dump: '40-after-approve' },
+      ...denyWrite,
+    ],
+  },
+  'e2e-feedback': {
+    args: BASE_ARGS,
+    prompt: PLAN_PROMPT,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { respond: 'feedback', feedback: 'adicione também um bye.txt' },
+      { expectResult: { isError: true, feedback: 'adicione também um bye.txt' } },
+      { dump: '20-after-feedback' },
+      { wait: 'text', re: /User rejected Claude's plan/, timeout: 60_000 },
+      { wait: 'menu', kind: 'plan', timeout: 120_000 },
+      { dump: '30-plan-dialog-2' },
+      { respond: 'reject' },
+      { sleep: 2000 },
+      { dump: '31-after-esc' },
+    ],
+  },
+  'e2e-clear-context-manual': {
+    args: [...BASE_ARGS, '--settings', JSON.stringify({ showClearContextOnPlanAccept: true })],
+    prompt: PLAN_PROMPT_EXEC,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { respond: 'approve-manual' },
+      { expectFooter: /⏸ manual mode on/ },
+      { expectResult: { isError: false } },
+      { dump: '40-after-approve' },
+      ...denyWrite,
+    ],
+  },
   'plan-default': {
     args: BASE_ARGS,
     prompt: PLAN_PROMPT,
@@ -818,6 +897,33 @@ async function waitFor(pred: () => boolean, timeout: number): Promise<boolean> {
 }
 const statusOf = () => String(ccSession()?.status ?? 'no-file')
 
+const verdicts: { what: string; pass: boolean; evidence: string }[] = []
+function verdict(what: string, pass: boolean, evidence: string) {
+  verdicts.push({ what, pass, evidence })
+  say(`[expect ${pass ? 'PASS' : 'FAIL'}] ${what} :: ${evidence}`)
+}
+const screenFooter = () =>
+  readTail(ROWS)
+    .split('\n')
+    .filter((l) => l.trim())
+    .slice(-4)
+    .map((l) => l.trim())
+function lastPlanResult(): any | null {
+  const entries = readJsonl()
+  const uses = new Set(
+    entries.flatMap((e) =>
+      blocks(e).filter((b) => b.type === 'tool_use' && b.name === 'ExitPlanMode').map((b) => b.id),
+    ),
+  )
+  const found = entries.flatMap((e) =>
+    blocks(e)
+      .filter((b) => b.type === 'tool_result' && uses.has(b.tool_use_id))
+      .map((b) => ({ block: b, entry: e })),
+  )
+  return found.at(-1) ?? null
+}
+let promised: string | null = null
+
 async function run(step: Step) {
   if ('wait' in step) {
     const timeout = step.timeout ?? 120_000
@@ -878,7 +984,50 @@ async function run(step: Step) {
     const lines = readTail(ROWS).split('\n').filter((l) => l.trim()).slice(-4)
     say(`[footer ${step.footer}] ${JSON.stringify(lines.map((l) => l.trimEnd()))}`)
   }
-  else if ('dump' in step) dump(step.dump, step.fixture)
+  else if ('respond' in step) {
+    const m = parseNow()
+    if (m?.kind !== 'plan') throw new Error(`respond: menu atual=${m?.kind ?? 'null'}`)
+    const keys = buildPlanKeys(m, step.respond, step.feedback)
+    const opt = step.respond === 'reject' ? null : findPlanOption(m, step.respond)
+    promised = opt?.planMode ?? (opt?.planIntent?.startsWith('approve-') ? opt.planIntent.slice(8) : null)
+    say(
+      `[respond] intent=${step.respond} opts=${JSON.stringify(m.options.map((o) => ({ i: o.index, label: o.label, planIntent: o.planIntent, planMode: o.planMode, submitOnDigit: o.submitOnDigit })))} cursor=${m.cursorIndex} chosen=${JSON.stringify(opt?.label ?? null)} planMode=${promised} keys=${JSON.stringify(keys)}`,
+    )
+    if (keys.length === 0) throw new Error(`respond ${step.respond}: buildPlanKeys devolveu []`)
+    await playKeys(
+      keys,
+      (k) => proc.write(k),
+      step.respond === 'feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined,
+    )
+  } else if ('expectFooter' in step) {
+    const ok = await waitFor(() => step.expectFooter.test(screenFooter().join('\n')), step.timeout ?? 15_000)
+    verdict(
+      `footer ${step.expectFooter} (card prometia planMode=${promised})`,
+      ok,
+      JSON.stringify(screenFooter().filter((l) => /mode on|esc to/.test(l))),
+    )
+  } else if ('expectResult' in step) {
+    const want = step.expectResult
+    const match = (r: any) =>
+      r &&
+      (r.block.is_error ?? false) === want.isError &&
+      (want.feedback == null || r.entry.userFeedback === want.feedback)
+    // Último tool_result do ExitPlanMode: para o feedback, o 2º diálogo ainda não tem resultado.
+    const ok = await waitFor(() => match(lastPlanResult()), step.timeout ?? 20_000)
+    const r = lastPlanResult()
+    verdict(
+      `tool_result is_error=${want.isError}${want.feedback ? ` userFeedback=${JSON.stringify(want.feedback)}` : ''}`,
+      ok,
+      r
+        ? JSON.stringify({
+            is_error: r.block.is_error ?? false,
+            toolDenialKind: r.entry.toolDenialKind,
+            userFeedback: r.entry.userFeedback,
+            content: JSON.stringify(r.block.content).slice(0, 90),
+          })
+        : 'sem tool_result',
+    )
+  } else if ('dump' in step) dump(step.dump, step.fixture)
   else if ('hooklog' in step) hookReport(step.hooklog, step.fixture)
   else if ('jsonl' in step) {
     const TOOL = step.tool ?? SC.tool ?? 'ExitPlanMode'
@@ -912,6 +1061,11 @@ try {
   proc.write(KEYS.enter)
   const promptAt = performance.now()
   for (const step of SC.steps) await run(step)
+  if (verdicts.length > 0) {
+    const pass = verdicts.every((v) => v.pass)
+    say(`[verdict] ${NAME} ${pass ? 'PASS' : 'FAIL'} (${verdicts.filter((v) => v.pass).length}/${verdicts.length})`)
+    if (!pass) exitCode = 1
+  }
   if (SC.latency) {
     const r = (x?: number) => (x == null ? null : Math.round(x - promptAt))
     say(
