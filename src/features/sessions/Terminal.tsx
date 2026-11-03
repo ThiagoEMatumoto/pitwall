@@ -30,7 +30,7 @@ import { useSummarizeNow } from './voice/useSummarizeNow'
 import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
-import { buildOtherKeys, buildPlanKeys, PLAN_FEEDBACK_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
+import { buildOtherKeys, buildPlanKeys, PLAN_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
 import type { ComposerMenuRoute } from './composer-menu-guard'
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
@@ -811,7 +811,7 @@ function TerminalHost({
         ? buildPlanKeys(menu, 'feedback', text)
         : buildOtherKeys(route.optionIndex, text)
     if (keys.length === 0) throw new Error(`o menu não aceita este texto (${route.kind})`)
-    await playKeys(keys, write, route.kind === 'plan-feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined)
+    await playKeys(keys, write, route.kind === 'plan-feedback' ? PLAN_KEY_DELAY_MS : undefined)
   }
 
   // Chamado pelo SessionHeader ao commitar um rename (Enter/blur no input com

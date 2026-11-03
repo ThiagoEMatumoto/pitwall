@@ -124,9 +124,10 @@ export const AMEND_KEY_DELAY_MS = 250
 const PASTE_START = '\x1b[200~'
 const PASTE_END = '\x1b[201~'
 
-// Entre as teclas do feedback: o campo só existe depois que a TUI redesenha o foco.
-// A sonda esperou 1s; 400ms ficam bem acima do redesenho observado (2-3 ms de parse).
-export const PLAN_FEEDBACK_KEY_DELAY_MS = 400
+// Entre as teclas do plano: o campo só existe (ou só sai de foco) depois que a TUI
+// redesenha. A sonda esperou 1s; 400ms ficam bem acima do redesenho observado (2-3 ms
+// de parse).
+export const PLAN_KEY_DELAY_MS = 400
 
 // Opção do menu de plano com esse intent. Duas com o mesmo intent = ambíguo → null.
 export function findPlanOption(menu: TuiMenu, intent: PlanIntent): TuiMenuOption | null {
@@ -146,12 +147,20 @@ export function buildPlanKeys(
   if (!opt) return []
   const digit = buildDigitKey(opt.index)
   if (digit.length === 0) return []
-  if (intent !== 'feedback') return opt.submitOnDigit === true ? digit : []
+  // Cursor no campo de feedback = campo com foco, e ali o dígito vira texto (o mesmo
+  // Select do /rewind: "Summarize from here: 1", visto ao vivo). ↑ tira o foco.
+  const feedbackOpt = findPlanOption(menu, 'feedback')
+  const inField = feedbackOpt != null && menu.cursorIndex === feedbackOpt.index
+  if (intent !== 'feedback') {
+    if (opt.submitOnDigit !== true) return []
+    return inField ? ['\x1b[A', ...digit] : digit
+  }
   // Mesma limpeza do amend: um ESC no texto fecharia o paste e o resto viraria tecla.
   const clean = (feedback ?? '').replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').trim()
   // Campo já com texto digitado no terminal: o paste concatenaria nele.
   if (clean === '' || !/^Tell Claude what to change$/i.test(opt.label)) return []
-  return [...digit, PASTE_START + clean + PASTE_END, '\r']
+  const paste = PASTE_START + clean + PASTE_END
+  return inField ? [paste, '\r'] : [...digit, paste, '\r']
 }
 
 // --- Pickers de /model, /theme, /config e busca de histórico (Ctrl+R) — Fase 2 ---

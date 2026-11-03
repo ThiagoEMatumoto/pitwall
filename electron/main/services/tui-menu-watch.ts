@@ -15,7 +15,7 @@ import {
   buildOtherKeys,
   buildPlanKeys,
   buildSelectKeys,
-  PLAN_FEEDBACK_KEY_DELAY_MS,
+  PLAN_KEY_DELAY_MS,
   playKeys,
 } from '../../../shared/tui/respond-keys'
 import { menuFingerprint, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
@@ -151,7 +151,7 @@ function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
 
 function keyDelay(action: AttentionAction): number | undefined {
   if (action.kind === 'amend') return AMEND_KEY_DELAY_MS
-  if (action.kind === 'plan' && action.intent === 'feedback') return PLAN_FEEDBACK_KEY_DELAY_MS
+  if (action.kind === 'plan') return PLAN_KEY_DELAY_MS
   return undefined
 }
 

@@ -54,7 +54,7 @@ import {
   buildOtherKeys,
   buildPickerSelectKeys,
   buildPlanKeys,
-  PLAN_FEEDBACK_KEY_DELAY_MS,
+  PLAN_KEY_DELAY_MS,
   buildReviewKeys,
   buildSelectKeys,
   buildSpaceKey,
@@ -518,7 +518,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       return
     }
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys, d === 'feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined)
+    onRespond?.(keys, keys.length > 1 ? PLAN_KEY_DELAY_MS : undefined)
   }
 
   // ── Pickers de /model, /theme, /config e busca de histórico (Ctrl+R) ──────

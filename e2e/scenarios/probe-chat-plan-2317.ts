@@ -18,7 +18,7 @@ import * as pty from 'node-pty'
 import {
   buildPlanKeys,
   findPlanOption,
-  PLAN_FEEDBACK_KEY_DELAY_MS,
+  PLAN_KEY_DELAY_MS,
   playKeys,
 } from '../../shared/tui/respond-keys'
 import { parseTuiMenuFull, type PlanIntent, type TuiMenu } from '../../shared/tui/tui-menu-parser'
@@ -997,7 +997,7 @@ async function run(step: Step) {
     await playKeys(
       keys,
       (k) => proc.write(k),
-      step.respond === 'feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined,
+      keys.length > 1 ? PLAN_KEY_DELAY_MS : undefined,
     )
   } else if ('expectFooter' in step) {
     const ok = await waitFor(() => step.expectFooter.test(screenFooter().join('\n')), step.timeout ?? 15_000)

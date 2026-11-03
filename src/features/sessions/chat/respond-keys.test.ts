@@ -103,12 +103,17 @@ describe('buildPlanKeys — capturas reais do 2.1.317', () => {
     expect(buildPlanKeys(planFixture('plan-feedback-typed'), 'feedback', 'outra coisa')).toEqual([])
   })
 
-  it('o campo focado (sem texto) ainda aceita o feedback', () => {
+  it('cursor já no campo (focado, sem texto): cola sem o dígito, que viraria texto', () => {
     expect(buildPlanKeys(planFixture('plan-feedback-input'), 'feedback', 'x')).toEqual([
-      '3',
       PASTE('x'),
       '\r',
     ])
+  })
+
+  it('cursor já no campo: aprovar sai dele com ↑ antes do dígito', () => {
+    const menu = planFixture('plan-feedback-input')
+    expect(buildPlanKeys(menu, 'approve-auto')).toEqual(['\x1b[A', '1'])
+    expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['\x1b[A', '2'])
   })
 
   it('rejeitar sem feedback = Esc, de qualquer posição', () => {

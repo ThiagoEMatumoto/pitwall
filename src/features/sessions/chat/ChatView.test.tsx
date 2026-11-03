@@ -38,7 +38,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: (
 
 import { ChatView } from './ChatView'
 import { PlanCard } from './PlanCard'
-import { PLAN_FEEDBACK_KEY_DELAY_MS } from './respond-keys'
+import { PLAN_KEY_DELAY_MS } from './respond-keys'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -188,7 +188,7 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     fireEvent.click(screen.getByTestId('plan-feedback-send'))
     expect(onRespond).toHaveBeenCalledWith(
       ['3', '\x1b[200~use bye.txt\x1b[201~', '\r'],
-      PLAN_FEEDBACK_KEY_DELAY_MS,
+      PLAN_KEY_DELAY_MS,
     )
   })
 
