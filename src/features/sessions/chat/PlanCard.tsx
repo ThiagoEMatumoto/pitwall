@@ -87,7 +87,7 @@ export function PlanCard({
   const pending = decision === undefined
   const live = onDecide != null || sent === true
   const disabled = sent === true || onDecide == null
-  const noOptions = pending && live && choices.length === 0 && !canFeedback
+  const noOptions = pending && onDecide != null && choices.length === 0 && !canFeedback
   useChatFallback(noOptions ? 'plan' : null, 'no-options')
 
   const status =

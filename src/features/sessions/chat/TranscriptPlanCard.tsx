@@ -12,11 +12,14 @@ export function TranscriptPlanCard({
   plan,
   planFilePath,
   decision,
+  sent,
 }: {
   plan: string
   planFilePath: string | null
   decision?: boolean
+  // Respondido pelo card do menu vivo, decisão ainda a caminho do JSONL.
+  sent?: boolean
 }) {
   const fetched = usePlanFile(plan ? null : planFilePath)
-  return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} />
+  return <PlanCard plan={plan || fetched || PLAN_PLACEHOLDER} decision={decision} sent={sent} />
 }

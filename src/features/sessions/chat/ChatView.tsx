@@ -125,6 +125,9 @@ interface Props {
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
 // Terminal); esta view só LÊ o transcript e adiciona ecos otimistas das mensagens
 // recém-enviadas até o disco alcançar.
+// A sonda viu o tool_use chegar ao JSONL até ~10s depois do diálogo (awaitUseMs).
+export const ANSWER_HOLD_MS = 10_000
+
 export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
@@ -328,15 +331,41 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Reconciliação do clique otimista: resposta real chegou (contagem avançou) →
   // menu consumido; menu mudou/sumiu sem resposta (ex.: Esc no terminal) → limpa
   // o sent pra não bloquear cliques num menu novo.
+  // O diálogo sai da tela antes do tool_result chegar no JSONL (gravação preguiçosa
+  // do 2.1.317 + debounce do watcher): nesse intervalo o pendente do transcript
+  // voltaria sem botões e com o banner de "responda". Segura o estado de enviado
+  // até a resposta chegar ou ANSWER_HOLD_MS passar.
+  const lastCoveredRef = useRef<{ id: string; plan: string | null } | null>(null)
+  const [answered, setAnswered] = useState<{
+    id: string
+    plan: string | null
+    resolvedCount: number
+  } | null>(null)
+
   useEffect(() => {
     if (!tuiSent) return
     if (resolvedCount > tuiSent.resolvedCount) {
       setConsumedFp(tuiSent.fp)
       setTuiSent(null)
     } else if (menuFp !== tuiSent.fp) {
+      const covered = lastCoveredRef.current
+      if (menuFp == null && covered && covered.id === pendingPrompt?.id) {
+        setAnswered({ ...covered, resolvedCount: tuiSent.resolvedCount })
+      }
       setTuiSent(null)
     }
-  }, [tuiSent, resolvedCount, menuFp])
+  }, [tuiSent, resolvedCount, menuFp, pendingPrompt?.id])
+
+  useEffect(() => {
+    if (!answered) return
+    if (resolvedCount > answered.resolvedCount || menuFp != null || pendingPrompt?.id !== answered.id) {
+      setAnswered(null)
+      return
+    }
+    const t = setTimeout(() => setAnswered(null), ANSWER_HOLD_MS)
+    return () => clearTimeout(t)
+  }, [answered, resolvedCount, menuFp, pendingPrompt?.id])
+  const heldPending = answered != null && answered.id === pendingPrompt?.id ? answered : null
 
   // Dados sintetizados pro QuestionCard: a sentinela 'chat' fica fora das
   // opções (não tem card pra ela); 'other' (texto livre) fica dentro — MAS só
@@ -413,6 +442,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const coveredPendingId =
     showTuiCard && liveMenuCoversPending(pendingPrompt, tuiMenu?.kind) ? pendingPrompt?.id : null
   const canRespondTui = onRespond != null && showTuiCard && tuiSent == null
+  useEffect(() => {
+    if (coveredPendingId) lastCoveredRef.current = { id: coveredPendingId, plan: pendingPlanText }
+  }, [coveredPendingId, pendingPlanText])
 
   // Guard de clique: RE-PARSE fresco do buffer imediatamente antes de digitar.
   // Menu fechou/mudou (respondido pelo terminal, resize) → fingerprint diverge →
@@ -849,9 +881,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         return (
           <TranscriptPlanCard
             key={i}
-            plan={m.plan}
+            plan={(m.id === heldPending?.id && heldPending.plan) || m.plan}
             planFilePath={m.planFilePath}
             decision={interactive.plans.get(m.id)}
+            sent={m.id === heldPending?.id}
           />
         )
 
@@ -924,14 +957,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             {tuiCardNode}
             {tuiPickerCardNode}
             <ChatWaitBanners
-              pendingPrompt={showTuiCard ? null : pendingPrompt}
+              pendingPrompt={showTuiCard || heldPending ? null : pendingPrompt}
               waitInTerminal={waitInTerminal}
               menuKind={tuiMenu?.kind}
               onToggleMode={onToggleMode}
             />
             {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente
             (status 'waiting'), pra não competir com o banner acima. */}
-            {status === 'working' && !pendingPrompt && workingSince != null && (
+            {status === 'working' && (!pendingPrompt || heldPending) && workingSince != null && (
               <WorkingIndicator since={workingSince} thinking={lastIsThinking} />
             )}
           </div>

@@ -215,6 +215,17 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(screen.getByTestId('plan-notice').textContent).toContain('mudou')
   })
 
+  it('respondido pelo card: o diálogo sai antes do tool_result e o banner não volta', () => {
+    const onRespond = vi.fn()
+    const { rerender, container } = renderRace(onRespond)
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).toHaveBeenCalledWith(['2'], undefined)
+    rerender(<ChatView sessionId="s-plan" status="working" onRespond={onRespond} />)
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(screen.getByTestId('plan-shortcuts')).toHaveTextContent('Decisão enviada…')
+    expect(container.textContent).not.toContain('aguardando sua aprovação do plano')
+  })
+
   it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
     transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
     const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
