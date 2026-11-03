@@ -6,6 +6,14 @@ import { Button, GradientBorder } from '@/features/brand'
 import { sendToApi, sessionsApi } from '@/lib/ipc'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
+import {
+  ANSWERED_NOTICE,
+  emptyEnterNotice,
+  insertBlockedNotice,
+  routeComposerSend,
+  type ComposerMenuRoute,
+} from './composer-menu-guard'
+import type { TuiMenu } from './tui-menu-parser'
 import { insertDictation } from './composer-insert'
 import { insertPathToken, pickImageFiles, pickImageItems } from './image-paste'
 import { MentionMenu, SessionPill, useMentionMenu } from './MentionMenu'
@@ -52,6 +60,16 @@ interface Props {
   // Encaminha uma sequência ANSI crua direto pro PTY (modelo Warp: o xterm é
   // display-only e o composer dirige a TUI do claude — setas, Ctrl+C, Esc, etc).
   onForwardKey?: (seq: string) => void
+  // Parse fresco do menu TUI na tela (sem o gate de status, como o deliveryVerdict).
+  // Presente = o envio passa pela guarda de menu aberto (composer-menu-guard).
+  readMenu?: () => TuiMenu | null
+  // Responde o menu lido com o texto do composer (feedback do plano, Other da
+  // pergunta). Mesmo contrato do onSend: rejeita se não deu pra digitar.
+  onMenuAnswer?: (
+    menu: TuiMenu,
+    route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
+    text: string,
+  ) => Promise<void>
   // Barra de controles acima do textarea (switcher de modelo, anexar, etc).
   // Slot agnóstico: o pai compõe o conteúdo (compartilhado entre terminal e chat).
   toolbar?: ReactNode
@@ -108,6 +126,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     onSend,
     onInsert,
     onForwardKey,
+    readMenu,
+    onMenuAnswer,
     toolbar,
     collapsible = false,
     compact = false,
@@ -522,6 +542,19 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   async function sendHere(value: string) {
     setRouteNotice(null)
     const prompt = rewriteFileMentions(value, selfTarget?.cwd ?? null, pickedFiles)
+    const menu = readMenu?.() ?? null
+    const route = routeComposerSend(menu)
+    if (route.kind === 'blocked') return setRouteNotice(route.notice)
+    if (route.kind !== 'deliver') {
+      const answered = await sendThenClear(value, async () => {
+        if (!menu || !onMenuAnswer) return false
+        await onMenuAnswer(menu, route, prompt)
+        return true
+      })
+      if (answered) clearDraft(value)
+      setRouteNotice(answered ? ANSWERED_NOTICE[route.kind] : 'Não deu pra responder — o rascunho foi mantido.')
+      return
+    }
     const ok = await sendThenClear(value, async () => {
       await onSend(prompt)
       return true
@@ -533,6 +566,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   async function insertOnly() {
     const value = text
     if (sending || value.trim().length === 0) return
+    const blocked = insertBlockedNotice(readMenu?.() ?? null)
+    if (blocked) return setRouteNotice(blocked)
     const ok = await sendThenClear(value, async () => {
       await onInsert(value)
       return true
@@ -724,6 +759,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                     )
                     if ('seq' in fwd) {
                       e.preventDefault()
+                      const blocked = fwd.seq === '\r' ? emptyEnterNotice(readMenu?.() ?? null) : null
+                      if (blocked) return setRouteNotice(blocked)
                       onForwardKey(fwd.seq)
                       return
                     }

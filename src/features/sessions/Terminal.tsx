@@ -30,7 +30,8 @@ import { useSummarizeNow } from './voice/useSummarizeNow'
 import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
-import { playKeys } from './chat/respond-keys'
+import { buildOtherKeys, buildPlanKeys, PLAN_FEEDBACK_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
+import type { ComposerMenuRoute } from './composer-menu-guard'
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
@@ -797,6 +798,22 @@ function TerminalHost({
     if (mode === 'chat') chatViewRef.current?.pushEcho(text)
   }
 
+  // Texto do composer com um menu aberto vira a resposta que o menu aceita (guarda
+  // do Composer): feedback do plano ou Other da pergunta. Sem eco: não é um turno
+  // do usuário no JSONL, e sim o tool_result do menu.
+  async function answerMenu(
+    menu: TuiMenu,
+    route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
+    text: string,
+  ): Promise<void> {
+    const keys =
+      route.kind === 'plan-feedback'
+        ? buildPlanKeys(menu, 'feedback', text)
+        : buildOtherKeys(route.optionIndex, text)
+    if (keys.length === 0) throw new Error(`o menu não aceita este texto (${route.kind})`)
+    await playKeys(keys, write, route.kind === 'plan-feedback' ? PLAN_FEEDBACK_KEY_DELAY_MS : undefined)
+  }
+
   // Chamado pelo SessionHeader ao commitar um rename (Enter/blur no input com
   // valor não-vazio). Cache no nosso DB (Fase 4/listagem) — a exibição prioriza
   // activity.name; fonte de verdade do nome é o próprio claude via /rename.
@@ -1509,6 +1526,8 @@ function TerminalHost({
           // Modelo Warp: o composer encaminha teclas de controle/navegação direto pro
           // PTY (write escreve no pty, fora do xterm display-only).
           onForwardKey={(seq) => write(seq)}
+          readMenu={readTuiMenu}
+          onMenuAnswer={answerMenu}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).
           collapsible={mode === 'terminal' && composer === 'full'}
           compact={composer === 'compact'}
