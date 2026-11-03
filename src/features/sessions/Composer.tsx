@@ -8,7 +8,7 @@ import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
 import {
   ANSWERED_NOTICE,
-  emptyEnterNotice,
+  forwardKeyNotice,
   insertBlockedNotice,
   routeComposerSend,
   type ComposerMenuRoute,
@@ -747,6 +747,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                   // dirigir a TUI do claude (menus, y/n, Shift+Tab, interrupção). O textarea
                   // vazio é "modo de controle"; com texto, as teclas editam o draft.
                   if (onForwardKey) {
+                    const draftEmpty = text.trim().length === 0
                     const fwd = resolveForwardKey(
                       {
                         key: e.key,
@@ -755,11 +756,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
                         shift: e.shiftKey,
                         alt: e.altKey,
                       },
-                      text.trim().length === 0,
+                      draftEmpty,
                     )
                     if ('seq' in fwd) {
                       e.preventDefault()
-                      const blocked = fwd.seq === '\r' ? emptyEnterNotice(readMenu?.() ?? null) : null
+                      const blocked = forwardKeyNotice(fwd.seq, readMenu?.() ?? null, draftEmpty)
                       if (blocked) return setRouteNotice(blocked)
                       onForwardKey(fwd.seq)
                       return

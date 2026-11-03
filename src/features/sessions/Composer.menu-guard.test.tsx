@@ -153,6 +153,41 @@ describe('Composer — guarda de menu aberto', () => {
     expect(box).toHaveValue('roxo')
   })
 
+  it('plano aberto: Shift+Tab não chega ao diálogo, que aprovaria pelo atalho', () => {
+    const { onForwardKey, box } = setup(screenOf('2.1.317-plan-default'))
+    fireEvent.keyDown(box, { key: 'Tab', shiftKey: true })
+    fireEvent.change(box, { target: { value: 'rascunho' } })
+    fireEvent.keyDown(box, { key: 'Tab', shiftKey: true })
+    expect(onForwardKey).not.toHaveBeenCalled()
+    expect(screen.getByTestId('composer-route')).toHaveTextContent('Shift+Tab aprovaria')
+  })
+
+  it('plano aberto: Esc com rascunho não descarta o plano; vazio descarta', () => {
+    const { onForwardKey, box } = setup(screenOf('2.1.317-plan-default'))
+    fireEvent.change(box, { target: { value: 'use bye.txt' } })
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(onForwardKey).not.toHaveBeenCalled()
+    expect(box).toHaveValue('use bye.txt')
+    expect(screen.getByTestId('composer-route')).toHaveTextContent('Esc descartaria o plano')
+    fireEvent.change(box, { target: { value: '' } })
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(onForwardKey).toHaveBeenCalledWith('\x1b')
+  })
+
+  it('sem menu, Shift+Tab segue pra TUI (troca o modo de permissão)', () => {
+    const { onForwardKey, box } = setup(null)
+    fireEvent.keyDown(box, { key: 'Tab', shiftKey: true })
+    expect(onForwardKey).toHaveBeenCalledWith('\x1b[Z')
+  })
+
+  it('menu sem card (nudge do auto mode): o aviso aponta o terminal, não um card', async () => {
+    const { onSend, box } = setup(screenOf('2.1.317-auto-mode-env-nudge'))
+    fireEvent.change(box, { target: { value: 'oi' } })
+    await act(async () => fireEvent.keyDown(box, { key: 'Enter' }))
+    expect(onSend).not.toHaveBeenCalled()
+    expect(screen.getByTestId('composer-route')).toHaveTextContent('menu aberto no terminal')
+  })
+
   it('a resposta falhou: mantém o rascunho e avisa', async () => {
     const { onMenuAnswer, box } = setup(screenOf('2.1.317-plan-default'))
     onMenuAnswer.mockRejectedValueOnce(new Error('campo já tem texto'))

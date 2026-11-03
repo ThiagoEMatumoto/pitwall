@@ -28,6 +28,11 @@ export function routeComposerSend(menu: TuiMenu | null): ComposerMenuRoute {
       notice: `Há um pedido de permissão aberto: responda no card. ${KEPT}`,
     }
   }
+  // Sem sentinela não é AskUserQuestion (nudge do auto mode, submenus do /rewind):
+  // não há card pra ele.
+  if (menu.kind === 'question' && !menu.options.some((o) => o.sentinel != null)) {
+    return { kind: 'blocked', notice: `Há um menu aberto no terminal: responda por lá. ${KEPT}` }
+  }
   return { kind: 'blocked', notice: `Há uma pergunta aberta: responda no card. ${KEPT}` }
 }
 
@@ -36,11 +41,21 @@ export function insertBlockedNotice(menu: TuiMenu | null): string | null {
   return menu ? `Há um menu aberto no terminal: responda-o antes de inserir. ${KEPT}` : null
 }
 
-// Enter com o composer vazio vira \r cru pra TUI: no plano, aprovaria às cegas.
-export function emptyEnterNotice(menu: TuiMenu | null): string | null {
-  return menu?.kind === 'plan'
-    ? 'Enter não aprova o plano: escolha uma opção no card ou escreva o que mudar.'
-    : null
+// Teclas encaminhadas cruas pra TUI com o diálogo de plano aberto: Enter aprovaria a
+// opção destacada, Shift+Tab aprova pelo atalho do próprio diálogo ("shift+tab to
+// approve"), e Esc com rascunho descartaria o plano em vez de mandar o rascunho.
+export function forwardKeyNotice(
+  seq: string,
+  menu: TuiMenu | null,
+  draftEmpty: boolean,
+): string | null {
+  if (menu?.kind !== 'plan') return null
+  if (seq === '\r') return 'Enter não aprova o plano: escolha uma opção no card ou escreva o que mudar.'
+  if (seq === '\x1b[Z' || seq === '\t')
+    return 'Tab não chega ao diálogo do plano (Shift+Tab aprovaria): escolha uma opção no card.'
+  if (seq === '\x1b' && !draftEmpty)
+    return `Esc descartaria o plano: envie o rascunho como mudanças, ou apague-o para descartar. ${KEPT}`
+  return null
 }
 
 export const ANSWERED_NOTICE: Record<'plan-feedback' | 'question-other', string> = {
