@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes/history-rewind-compact/cwd
+
+
+❯ diga a                                                                                                                
+
+● Sua mensagem chegou incompleta: só "diga a". Me diga o que você quer que eu diga ou faça, e eu continuo.
+
+✻ Sautéed for 2s · done 20:00
+
+❯ diga b                                                                                                                
+
+● Só "diga b" também não me diz o que você quer. Parece que o pedido anterior ("diga a") ficou sem contexto. Me conta a
+  pergunta ou a tarefa completa, e eu respondo.
+
+✻ Brewed for 1s · done 20:01
+
+❯ diga c                                                                                                                
+
+● Continuo sem contexto: recebi "diga a", "diga b" e agora "diga c", e não sei a que eles se referem. Se você tinha
+  opções de uma lista anterior, cole a lista ou descreva a pergunta, e eu respondo.
+
+✻ Worked for 1s · done 20:01
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Rewind
+
+  Restore the code and/or conversation to the point before…
+
+    diga a
+    No code changes
+
+    diga b
+    No code changes
+
+    diga c
+    No code changes
+
+  ❯ (current)
+
+
+
+  Enter to continue · Esc to cancel
+

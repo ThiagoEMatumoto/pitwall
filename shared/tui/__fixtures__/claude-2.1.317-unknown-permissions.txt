@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes/unknown-menus/cwd
+
+
+❯ diga oi                                                                                                               
+
+● Oi! Em que posso ajudar hoje?
+
+  Vi que estamos em /home/pitwall-fixture/.cache/ct/claude-1000/.../scratchpad/probes/unknown-menus/cwd, que não é um
+  repositório git. Se você tiver alguma tarefa, me passe os detalhes.
+
+✻ Sautéed for 1s · done 20:03
+  
+❯ /permissions                                                                                                          
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Permissions  Recently blocked   Allow   Ask   Deny   Auto mode   Workspace
+
+  Claude Code won't ask before using allowed tools.
+  ╭───────────────────────────────────────────────╮
+  │ ⌕ Search…                                     │
+  ╰───────────────────────────────────────────────╯
+
+    1. Add a new rule…
+
+  ←/→ to switch · ↓ to select · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
