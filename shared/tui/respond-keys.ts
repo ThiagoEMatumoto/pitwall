@@ -1,4 +1,4 @@
-import type { TuiMenu } from './tui-menu-parser'
+import type { PlanIntent, TuiMenu, TuiMenuOption } from './tui-menu-parser'
 
 // Tradução dos cliques nos cards interativos do chat (QuestionCard/PlanCard) em
 // teclas pro PTY vivo — o mesmo canal write() usado pelo onForwardKey do composer.
@@ -8,11 +8,9 @@ import type { TuiMenu } from './tui-menu-parser'
 //   opção N — confirmado ao vivo (<1,5s, sem Enter). Por isso a resposta é UM
 //   dígito, imune ao drift de highlight que tornava setas+Enter frágeis (se o
 //   usuário já navegou no menu pelo terminal, o highlight não está no topo).
-// - ExitPlanMode: a CONTAGEM e a ORDEM das opções variam entre versões/modos
-//   (ultraplan/bypass). Aprovar NUNCA usa Enter cego — o highlight inicial pode
-//   ser "Yes, auto-accept edits", que muda o modo de permissão. Só aprovamos via
-//   dígito da opção de aprovação MANUAL parseada do buffer; sem match, a UI nem
-//   renderiza o botão. Esc rejeita de qualquer posição.
+// - ExitPlanMode: a CONTAGEM e a ORDEM das opções variam entre versões/modos.
+//   Cada opção tem o seu planIntent (parser) e a resposta é o dígito dela — ver
+//   buildPlanKeys.
 // - A fonte do menu é o parse do buffer do xterm (tui-menu-parser): a CLI não
 //   grava o tool_use pendente no JSONL, então o transcript não expõe o momento.
 
@@ -68,14 +66,11 @@ export function buildMultiSelectSubmitKeys(tabCount: number): string[] {
 
 // Opções da tela de revisão ("Review your answers") pelo LABEL exato do
 // binário — nunca por posição fixa (a ordem/contagem pode variar em teoria,
-// mesma cautela de findManualApproveIndex).
+// mesma cautela de findPlanOption).
 const REVIEW_SUBMIT_RE = /^Submit answers$/i
 const REVIEW_CANCEL_RE = /^Cancel$/i
 
-export function findReviewOptionIndex(
-  menu: TuiMenu,
-  decision: 'submit' | 'cancel',
-): number | null {
+export function findReviewOptionIndex(menu: TuiMenu, decision: 'submit' | 'cancel'): number | null {
   if (menu.kind !== 'question_review') return null
   const re = decision === 'submit' ? REVIEW_SUBMIT_RE : REVIEW_CANCEL_RE
   const opt = menu.options.find((o) => re.test(o.label))
@@ -120,25 +115,43 @@ export function buildAmendKeys(menu: TuiMenu, optionIndex: number, text: string)
 // texto que chega antes cai no menu, onde letra pode ser atalho.
 export const AMEND_KEY_DELAY_MS = 250
 
-// Opção de aprovação MANUAL no menu de plano parseado. Prefixo estrito: não pode
-// casar "Yes, auto-accept edits" (evidência dos labels no binário da CLI).
-const MANUAL_APPROVE_RE = /^Yes, manually approve/i
+// Diálogo do ExitPlanMode no 2.1.317 (sonda probe-chat-plan-2317, capturas em
+// __fixtures__/claude-2.1.317-plan-*): o dígito de uma opção "Yes, …" aprova e já
+// troca o modo de permissão; o da última opção só foca o campo de feedback, onde
+// o texto entra por bracketed paste e o Enter envia (tool_result is_error com o
+// texto como userFeedback). Esc rejeita sem feedback, de qualquer posição. Enter
+// cego nunca: o destaque inicial é "Yes, and use auto mode".
+const PASTE_START = '\x1b[200~'
+const PASTE_END = '\x1b[201~'
 
-export function findManualApproveIndex(menu: TuiMenu): number | null {
+// Entre as teclas do feedback: o campo só existe depois que a TUI redesenha o foco.
+// A sonda esperou 1s; 400ms ficam bem acima do redesenho observado (2-3 ms de parse).
+export const PLAN_FEEDBACK_KEY_DELAY_MS = 400
+
+// Opção do menu de plano com esse intent. Duas com o mesmo intent = ambíguo → null.
+export function findPlanOption(menu: TuiMenu, intent: PlanIntent): TuiMenuOption | null {
   if (menu.kind !== 'plan') return null
-  const opt = menu.options.find((o) => MANUAL_APPROVE_RE.test(o.label))
-  return opt ? opt.index : null
+  const found = menu.options.filter((o) => o.planIntent === intent)
+  return found.length === 1 ? found[0] : null
 }
 
-// Decide um ExitPlanMode: aprovar = dígito da opção de aprovação manual (null =
-// não encontrada → [] e a UI não oferece o botão); rejeitar = Esc, que cancela
-// de qualquer posição do highlight.
 export function buildPlanKeys(
-  d: 'approve' | 'reject',
-  manualApproveIndex: number | null,
+  menu: TuiMenu,
+  intent: PlanIntent | 'reject',
+  feedback?: string,
 ): string[] {
-  if (d === 'reject') return ['\x1b']
-  return manualApproveIndex == null ? [] : buildDigitKey(manualApproveIndex)
+  if (menu.kind !== 'plan') return []
+  if (intent === 'reject') return ['\x1b']
+  const opt = findPlanOption(menu, intent)
+  if (!opt) return []
+  const digit = buildDigitKey(opt.index)
+  if (digit.length === 0) return []
+  if (intent !== 'feedback') return opt.submitOnDigit === true ? digit : []
+  // Mesma limpeza do amend: um ESC no texto fecharia o paste e o resto viraria tecla.
+  const clean = (feedback ?? '').replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').trim()
+  // Campo já com texto digitado no terminal: o paste concatenaria nele.
+  if (clean === '' || !/^Tell Claude what to change$/i.test(opt.label)) return []
+  return [...digit, PASTE_START + clean + PASTE_END, '\r']
 }
 
 // --- Pickers de /model, /theme, /config e busca de histórico (Ctrl+R) — Fase 2 ---
@@ -195,7 +208,7 @@ export function buildFilterKeys(text: string): string[] {
 
 // Clique numa opção do picker de /model ou /theme: navega do highlight ATUAL
 // (vindo do RE-PARSE fresco, nunca do estado antigo — mesma cautela de
-// findManualApproveIndex) até o índice clicado via setas, depois Enter aplica.
+// findPlanOption) até o índice clicado via setas, depois Enter aplica.
 // Composição de duas primitivas validadas — não é uma tecla nova.
 export function buildPickerSelectKeys(currentIndex: number, targetIndex: number): string[] {
   const delta = targetIndex - currentIndex

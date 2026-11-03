@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
-import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
+import { findPlanOption } from '@/features/sessions/chat/respond-keys'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
@@ -104,7 +104,7 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
     ]
   }
   if (menu.kind === 'plan') {
-    return action(menu, 'approve-plan', 'Aprovar plano', 'primary', findManualApproveIndex(menu))
+    return action(menu, 'approve-plan', 'Aprovar plano', 'primary', findPlanOption(menu, 'approve-manual')?.index ?? null)
   }
   if (menu.kind !== 'question' || menu.multiSelect || menu.tabs) return []
   return menu.options

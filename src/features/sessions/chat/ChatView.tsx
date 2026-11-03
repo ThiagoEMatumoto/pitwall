@@ -58,7 +58,7 @@ import {
   buildSpaceKey,
   buildTabKeys,
   buildToggleKeys,
-  findManualApproveIndex,
+  findPlanOption,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
 import { pickerFingerprint, type TuiPicker } from '../tui-picker-parser'
@@ -367,7 +367,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }, [tuiMenu])
 
   const manualApproveIndex =
-    tuiMenu && tuiMenu.kind === 'plan' ? findManualApproveIndex(tuiMenu) : null
+    tuiMenu && tuiMenu.kind === 'plan' ? (findPlanOption(tuiMenu, 'approve-manual')?.index ?? null) : null
 
   // Prompt TTY-only (permissão de tool / trust de diretório) espelhado do buffer:
   // as opções vão inteiras pro card (não há sentinelas nesses menus).
@@ -497,7 +497,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     if (!fresh) return
     // O dígito de aprovação vem do RE-PARSE (não do menu do estado): se a opção
     // manual sumiu/mudou de posição, buildPlanKeys devolve [] e nada é enviado.
-    const keys = buildPlanKeys(d, findManualApproveIndex(fresh))
+    const keys = buildPlanKeys(fresh, d === 'reject' ? 'reject' : 'approve-manual')
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
     onRespond?.(keys)

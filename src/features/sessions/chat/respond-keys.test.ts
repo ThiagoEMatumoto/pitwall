@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildArrowKeys,
@@ -15,11 +17,11 @@ import {
   buildSpaceKey,
   buildTabKeys,
   buildToggleKeys,
-  findManualApproveIndex,
+  findPlanOption,
   findReviewOptionIndex,
   playKeys,
 } from './respond-keys'
-import type { TuiMenu } from '../tui-menu-parser'
+import { parseTuiMenu, type TuiMenu } from '../tui-menu-parser'
 
 const DOWN = '\x1b[B'
 
@@ -43,68 +45,119 @@ describe('buildDigitKey', () => {
   })
 })
 
-function planMenu(labels: string[]): TuiMenu {
-  return {
-    kind: 'plan',
-    question: 'Would you like to proceed?',
-    options: labels.map((label, index) => ({ index, label })),
-    multiSelect: false,
-  }
+const PLAN_FIXTURES = join(__dirname, '../../../../shared/tui/__fixtures__')
+
+// Tela real do diálogo de plano (claude 2.1.317, sonda probe-chat-plan-2317).
+function planFixture(name: string): TuiMenu {
+  const menu = parseTuiMenu(readFileSync(join(PLAN_FIXTURES, `claude-2.1.317-${name}.txt`), 'utf8'))
+  if (menu?.kind !== 'plan') throw new Error(`${name}: sem menu de plano`)
+  return menu
 }
 
-describe('findManualApproveIndex', () => {
-  it('finds "Yes, manually approve edits" at any position', () => {
-    expect(
-      findManualApproveIndex(
-        planMenu(['Yes, auto-accept edits', 'Yes, manually approve edits', 'No, keep planning']),
-      ),
-    ).toBe(1)
-    expect(
-      findManualApproveIndex(
-        planMenu([
-          'Yes, and bypass permissions',
-          'Yes, auto-accept edits',
-          'Yes, manually approve edits',
-          'No, keep planning',
-        ]),
-      ),
-    ).toBe(2)
+const PASTE = (t: string) => `\x1b[200~${t}\x1b[201~`
+
+describe('buildPlanKeys — capturas reais do 2.1.317', () => {
+  it('default: auto mode = 1, manual = 2 (o dígito já submete)', () => {
+    const menu = planFixture('plan-default')
+    expect(buildPlanKeys(menu, 'approve-auto')).toEqual(['1'])
+    expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['2'])
+    expect(buildPlanKeys(menu, 'approve-accept-edits')).toEqual([])
   })
 
-  it('never matches "Yes, auto-accept edits"', () => {
-    expect(
-      findManualApproveIndex(planMenu(['Yes, auto-accept edits', 'No, keep planning'])),
-    ).toBeNull()
+  it('no-auto: auto-accept edits = 1', () => {
+    const menu = planFixture('plan-no-auto')
+    expect(buildPlanKeys(menu, 'approve-accept-edits')).toEqual(['1'])
+    expect(buildPlanKeys(menu, 'approve-auto')).toEqual([])
+    expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['2'])
   })
 
-  it('returns null for question menus', () => {
-    const menu: TuiMenu = {
+  it('clear-context: limpar = 1, auto = 2, manual = 3, feedback = 4', () => {
+    const menu = planFixture('plan-clear-context')
+    expect(buildPlanKeys(menu, 'approve-clear-context')).toEqual(['1'])
+    expect(buildPlanKeys(menu, 'approve-auto')).toEqual(['2'])
+    expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['3'])
+    expect(buildPlanKeys(menu, 'feedback', 'mude')).toEqual(['4', PASTE('mude'), '\r'])
+  })
+
+  it('feedback: dígito do campo + paste + Enter (a sequência que a sonda validou)', () => {
+    const menu = planFixture('plan-feedback')
+    expect(buildPlanKeys(menu, 'feedback', 'adicione também um bye.txt')).toEqual([
+      '3',
+      PASTE('adicione também um bye.txt'),
+      '\r',
+    ])
+  })
+
+  it('feedback vazio, ou com ESC/quebras no texto, nunca vira Enter cru nem tecla solta', () => {
+    const menu = planFixture('plan-feedback')
+    expect(buildPlanKeys(menu, 'feedback', '   ')).toEqual([])
+    expect(buildPlanKeys(menu, 'feedback')).toEqual([])
+    expect(buildPlanKeys(menu, 'feedback', 'a\x1b[201~b\nc')).toEqual([
+      '3',
+      PASTE('a [201~b c'),
+      '\r',
+    ])
+  })
+
+  it('campo já com texto digitado no terminal: não cola por cima', () => {
+    expect(buildPlanKeys(planFixture('plan-feedback-typed'), 'feedback', 'outra coisa')).toEqual([])
+  })
+
+  it('o campo focado (sem texto) ainda aceita o feedback', () => {
+    expect(buildPlanKeys(planFixture('plan-feedback-input'), 'feedback', 'x')).toEqual([
+      '3',
+      PASTE('x'),
+      '\r',
+    ])
+  })
+
+  it('rejeitar sem feedback = Esc, de qualquer posição', () => {
+    expect(buildPlanKeys(planFixture('plan-default'), 'reject')).toEqual(['\x1b'])
+    expect(buildPlanKeys(planFixture('plan-feedback-input'), 'reject')).toEqual(['\x1b'])
+  })
+
+  it('aprovar nunca manda Enter (o destaque inicial é o auto mode)', () => {
+    for (const name of ['plan-default', 'plan-no-auto', 'plan-clear-context']) {
+      const menu = planFixture(name)
+      for (const o of menu.options) {
+        if (o.planIntent && o.planIntent !== 'feedback')
+          expect(buildPlanKeys(menu, o.planIntent).join(''), `${name}:${o.label}`).not.toContain(
+            '\r',
+          )
+      }
+    }
+  })
+
+  it('fora de um menu de plano, nada', () => {
+    const q: TuiMenu = {
       kind: 'question',
       options: [{ index: 0, label: 'Yes, manually approve edits' }],
       multiSelect: false,
+      submitOnDigit: true,
     }
-    expect(findManualApproveIndex(menu)).toBeNull()
-  })
-})
-
-describe('buildPlanKeys', () => {
-  it('approves via the parsed manual-approve digit only', () => {
-    expect(buildPlanKeys('approve', 1)).toEqual(['2'])
-    expect(buildPlanKeys('approve', 2)).toEqual(['3'])
+    expect(buildPlanKeys(q, 'approve-manual')).toEqual([])
+    expect(buildPlanKeys(q, 'reject')).toEqual([])
   })
 
-  it('fails closed when the manual-approve option was not found', () => {
-    expect(buildPlanKeys('approve', null)).toEqual([])
+  it('legado "No, keep planning": dígito da opção', () => {
+    const menu =
+      parseTuiMenu(`Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+❯ 1. Yes, auto-accept edits
+  2. Yes, manually approve edits
+  3. No, keep planning
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+`)!
+    expect(buildPlanKeys(menu, 'keep-planning')).toEqual(['3'])
+    expect(buildPlanKeys(menu, 'feedback', 'x')).toEqual([])
   })
 
-  it('never approves with a blind Enter (would hit auto-accept edits)', () => {
-    expect(buildPlanKeys('approve', 0).join('')).not.toContain('\r')
-    expect(buildPlanKeys('approve', null).join('')).not.toContain('\r')
-  })
-
-  it('rejects with a single Esc (position-independent)', () => {
-    expect(buildPlanKeys('reject', null)).toEqual(['\x1b'])
-    expect(buildPlanKeys('reject', 1)).toEqual(['\x1b'])
+  it('intent repetido é ambíguo: não escolhe', () => {
+    const menu = planFixture('plan-default')
+    const dup = { ...menu, options: [...menu.options, { ...menu.options[0], index: 3 }] }
+    expect(findPlanOption(dup, 'approve-auto')).toBeNull()
+    expect(buildPlanKeys(dup, 'approve-auto')).toEqual([])
   })
 })
 
@@ -302,16 +355,26 @@ describe('playKeys', () => {
 
   it('writes a single sequence without sleeping', async () => {
     const log: string[] = []
-    await playKeys(['\r'], (s) => log.push(s), 30, (ms) => {
-      log.push(`sleep:${ms}`)
-      return Promise.resolve()
-    })
+    await playKeys(
+      ['\r'],
+      (s) => log.push(s),
+      30,
+      (ms) => {
+        log.push(`sleep:${ms}`)
+        return Promise.resolve()
+      },
+    )
     expect(log).toEqual(['\r'])
   })
 
   it('does nothing for an empty list', async () => {
     const writes: string[] = []
-    await playKeys([], (s) => writes.push(s), 30, () => Promise.resolve())
+    await playKeys(
+      [],
+      (s) => writes.push(s),
+      30,
+      () => Promise.resolve(),
+    )
     expect(writes).toEqual([])
   })
 })
