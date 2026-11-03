@@ -89,12 +89,15 @@ export function buildReviewKeys(menu: TuiMenu, decision: 'submit' | 'cancel'): s
 // submete), o texto digitado reescreve a label inline, Enter confirma —
 // validado ao vivo. Armadilha confirmada: Enter com o campo vazio é lido
 // pela TUI como "declinou responder" — por isso texto vazio nunca manda
-// Enter (retorna [], fail-closed).
+// Enter (retorna [], fail-closed). O texto pode vir do composer (multilinha): uma
+// quebra no meio submeteria a primeira linha e o resto cairia na tela seguinte como
+// tecla, por isso controle vira espaço (mesma limpeza do amend).
 export function buildOtherKeys(optionIndex: number, text: string): string[] {
-  if (text === '') return []
+  const clean = text.replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').trim()
+  if (clean === '') return []
   const digit = buildDigitKey(optionIndex)
   if (digit.length === 0) return []
-  return [...digit, text, '\r']
+  return [...digit, clean, '\r']
 }
 
 // "Tab to amend" do 2.1.316 (validado ao vivo, sonda probe-chat-permission-2316):

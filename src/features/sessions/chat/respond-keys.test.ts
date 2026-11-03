@@ -298,6 +298,15 @@ describe('buildOtherKeys — "Other" (texto livre)', () => {
   it('fail-closed fora do range de dígito', () => {
     expect(buildOtherKeys(9, 'algo')).toEqual([])
   })
+
+  it('texto multilinha do composer: quebra, tab e ESC nunca viram tecla', () => {
+    expect(buildOtherKeys(3, 'linha 1\nlinha 2\tx\x1b[201~y')).toEqual([
+      '4',
+      'linha 1 linha 2 x [201~y',
+      '\r',
+    ])
+    expect(buildOtherKeys(3, '\n\n ')).toEqual([])
+  })
 })
 
 describe('buildArrowKeys — navegação dos pickers de /model e /theme', () => {
