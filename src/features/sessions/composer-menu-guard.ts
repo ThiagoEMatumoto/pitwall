@@ -41,6 +41,19 @@ export function insertBlockedNotice(menu: TuiMenu | null): string | null {
   return menu ? `Há um menu aberto no terminal: responda-o antes de inserir. ${KEPT}` : null
 }
 
+// Escritas do Terminal fora do composer (Shift+Tab do pill de permissão, /rename do
+// header): com um menu aberto, Shift+Tab aprova o plano pelo atalho do diálogo e o
+// \r do /rename escolhe a opção destacada.
+export function terminalWriteBlockedNotice(
+  menu: TuiMenu | null,
+  action: 'permission' | 'rename',
+): string | null {
+  if (!menu) return null
+  return action === 'permission'
+    ? 'Há um menu aberto no terminal: responda-o antes de trocar o modo de permissão.'
+    : 'Renomeado aqui, mas o /rename não foi pro claude: há um menu aberto no terminal.'
+}
+
 // Teclas encaminhadas cruas pra TUI com o diálogo de plano aberto: Enter aprovaria a
 // opção destacada, Shift+Tab aprova pelo atalho do próprio diálogo ("shift+tab to
 // approve"), e Esc com rascunho descartaria o plano em vez de mandar o rascunho.

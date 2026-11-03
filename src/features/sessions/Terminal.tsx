@@ -31,7 +31,7 @@ import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
 import { buildOtherKeys, buildPlanKeys, PLAN_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
-import type { ComposerMenuRoute } from './composer-menu-guard'
+import { terminalWriteBlockedNotice, type ComposerMenuRoute } from './composer-menu-guard'
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
@@ -696,7 +696,7 @@ function TerminalHost({
       jumpTimerRef.current = null
     }
     const term = xtermRef.current
-    if (!term) return
+    if (!term || blockPermissionWrite()) return
     const start = detectFooterMode(readFooterText(term))
     if (start === target) return
     let steps = 0
@@ -704,6 +704,10 @@ function TerminalHost({
     const tick = () => {
       const t = xtermRef.current
       if (!t) return
+      if (blockPermissionWrite()) {
+        jumpTimerRef.current = null
+        return
+      }
       steps += 1
       const cur = detectFooterMode(readFooterText(t))
       setCurrentMode(cur)
@@ -715,6 +719,12 @@ function TerminalHost({
       jumpTimerRef.current = window.setTimeout(tick, 140)
     }
     jumpTimerRef.current = window.setTimeout(tick, 140)
+  }
+
+  function blockPermissionWrite(): boolean {
+    const notice = terminalWriteBlockedNotice(readTuiMenu(), 'permission')
+    if (notice) showToast({ title: 'Modo de permissão não trocado', body: notice })
+    return notice != null
   }
 
   // Cancela os timers de permissão (jump + debounce do tracking) ao desmontar.
@@ -825,7 +835,10 @@ function TerminalHost({
     setTitle(next)
     setTitleSource('manual')
     void sessionsApi.rename(session.id, next)
-    if (canRename) write('\x15/rename ' + next + '\r')
+    if (!canRename) return
+    const notice = terminalWriteBlockedNotice(readTuiMenu(), 'rename')
+    if (notice) showToast({ title: 'Sessão renomeada', body: notice })
+    else write('\x15/rename ' + next + '\r')
   }
 
   useEffect(() => {
@@ -1546,7 +1559,9 @@ function TerminalHost({
               onSelectEffort={selectEffort}
               // Shift+Tab (CSI Z) cicla o modo de permissão no TUI do claude. A CLI
               // não tem set-exato em runtime (sem /permission) — só este ciclo nativo.
-              onCyclePermission={() => write('\x1b[Z')}
+              onCyclePermission={() => {
+                if (!blockPermissionWrite()) write('\x1b[Z')
+              }}
               // Seleção direta: "pula" até o modo escolhido ciclando Shift+Tab e
               // observando o modo parseado (selectPermission + effect acima).
               onSelectPermission={selectPermission}
