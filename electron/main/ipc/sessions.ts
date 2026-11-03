@@ -147,6 +147,20 @@ const attentionActionSchema = z.discriminatedUnion('kind', [
     optionIndex: z.number().int().nonnegative(),
     text: z.string().min(1).max(4000),
   }),
+  z.object({
+    kind: z.literal('plan'),
+    intent: z.enum([
+      'approve-auto',
+      'approve-accept-edits',
+      'approve-manual',
+      'approve-bypass',
+      'approve-clear-context',
+      'feedback',
+      'keep-planning',
+      'reject',
+    ]),
+    text: z.string().min(1).max(4000).optional(),
+  }),
 ])
 const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
   sessionId: z.string().min(1),

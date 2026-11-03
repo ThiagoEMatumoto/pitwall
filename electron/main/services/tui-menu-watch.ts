@@ -13,7 +13,9 @@ import {
   AMEND_KEY_DELAY_MS,
   buildAmendKeys,
   buildOtherKeys,
+  buildPlanKeys,
   buildSelectKeys,
+  PLAN_FEEDBACK_KEY_DELAY_MS,
   playKeys,
 } from '../../../shared/tui/respond-keys'
 import { menuFingerprint, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
@@ -128,7 +130,14 @@ function scanKey(scan: ScreenScan): string {
 
 // As teclas saem do menu FRESCO: o renderer só diz qual opção. Multi-select e
 // abas ficam de fora (exigem navegação que o popover não oferece) — responde no terminal.
+// Plano só por intent: o dígito cru do campo de feedback só o foca (buildSelectKeys
+// "responderia" sem enviar nada), e aprovar precisa ser a opção que o usuário leu.
 function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
+  if (menu.kind === 'plan' || action.kind === 'plan') {
+    return menu.kind === 'plan' && action.kind === 'plan'
+      ? buildPlanKeys(menu, action.intent, action.text)
+      : []
+  }
   const opt = menu.options.find((o) => o.index === action.optionIndex)
   if (!opt || opt.sentinel === 'chat' || menu.multiSelect || menu.tabs) return []
   if (action.kind === 'amend') {
@@ -138,6 +147,12 @@ function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
     return opt.sentinel === 'other' ? buildOtherKeys(opt.index, action.text) : []
   }
   return opt.sentinel === 'other' ? [] : buildSelectKeys(menu, opt.index)
+}
+
+function keyDelay(action: AttentionAction): number | undefined {
+  if (action.kind === 'amend') return AMEND_KEY_DELAY_MS
+  if (action.kind === 'plan' && action.intent === 'feedback') return PLAN_FEEDBACK_KEY_DELAY_MS
+  return undefined
 }
 
 // Emitido a cada resposta digitada na PTY pela UI — a medição durável escuta aqui.
@@ -388,11 +403,7 @@ export class TuiMenuWatch extends EventEmitter {
     const keys = keysFor(snapshot.menu, input.action)
     if (keys.length === 0) return { ok: false, error: 'invalid-action', snapshot }
     const menuSince = this.entries.get(input.sessionId)?.menuSince ?? null
-    await playKeys(
-      keys,
-      (seq) => source.write(input.sessionId, seq),
-      input.action.kind === 'amend' ? AMEND_KEY_DELAY_MS : undefined,
-    )
+    await playKeys(keys, (seq) => source.write(input.sessionId, seq), keyDelay(input.action))
     const event: AttentionRespondedEvent = {
       sessionId: input.sessionId,
       menu: snapshot.menu,

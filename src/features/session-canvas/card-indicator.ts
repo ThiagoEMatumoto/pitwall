@@ -45,6 +45,7 @@ export interface IndicatorInput {
 const REASON: Record<string, string> = {
   permission: 'Permissão',
   question: 'Pergunta',
+  plan: 'Plano',
   'handoff-input': 'Pergunta pendente',
   trust: 'Confiar',
 }

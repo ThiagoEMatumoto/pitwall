@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
-import type { AttentionAction, TuiMenu } from '../../../../shared/types/ipc'
+import type { MenuOptionAction, TuiMenu } from '../../../../shared/types/ipc'
 import { deriveChildAllowRule } from '../../../../electron/main/services/spawn-flags'
 import { buildSelectKeys } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint } from '../tui-menu-parser'
@@ -68,7 +68,7 @@ export function usePermissionResponder({
       ? deriveChildAllowRule(menu.request?.tool, menu.request?.command)
       : null
 
-  async function send(shown: TuiMenu, action: AttentionAction): Promise<boolean> {
+  async function send(shown: TuiMenu, action: MenuOptionAction): Promise<boolean> {
     const res = await respondGuarded(sessionsApi, sessionId, shown, action)
     if (res.ok) return true
     // Main sem espelho desta sessão, mas a tela local ainda mostra o mesmo prompt:

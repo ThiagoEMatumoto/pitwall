@@ -1493,6 +1493,7 @@ export type GlobalActivityBatch = {
 // se o menu ainda é o mesmo — as teclas saem do menu fresco, nunca do renderer.
 export type { AttentionReason } from '../tui/attention-reason'
 export type { TuiMenu, TuiMenuOption } from '../tui/tui-menu-parser'
+import type { PlanIntent } from '../tui/tui-menu-parser'
 
 // menuSeq: aparição do menu na tela (sobe a cada menu que entra). O fingerprint
 // sozinho não separa dois prompts idênticos seguidos (mesmo comando retentado).
@@ -1508,6 +1509,11 @@ export type AttentionAction =
   | { kind: 'other'; optionIndex: number; text: string }
   // "Tab to amend": a opção vai junto de um texto (negar explicando o porquê).
   | { kind: 'amend'; optionIndex: number; text: string }
+  // Diálogo de plano: a opção sai do intent no menu fresco (buildPlanKeys).
+  | { kind: 'plan'; intent: PlanIntent | 'reject'; text?: string }
+
+// Ações que apontam uma opção pelo índice (permissão, trust, pergunta).
+export type MenuOptionAction = Exclude<AttentionAction, { kind: 'plan' }>
 
 export interface AttentionRespondInput {
   sessionId: string

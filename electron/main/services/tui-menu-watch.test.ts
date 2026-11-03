@@ -464,3 +464,62 @@ describe('TuiMenuWatch — PTY alto com menu ativo abaixo de input velho', () =>
     expect(deliveryVerdict('idle', scan, false)).toBe('menu-open')
   })
 })
+
+// Diálogo de plano REAL do claude 2.1.317 (sonda probe-chat-plan-2317, PTY 120x45).
+describe('TuiMenuWatch.respond — diálogo de plano do 2.1.317', () => {
+  const PLAN = readFileSync(join(FIXTURES, 'claude-2.1.317-plan-default.ansi'), 'utf8')
+
+  async function planSession() {
+    const pty = new FakePty()
+    const watch = new TuiMenuWatch()
+    watch.attach(pty)
+    pty.emit('spawn', { sessionId: 's1', cols: 120, rows: 45 })
+    pty.emit('data', { sessionId: 's1', data: PLAN })
+    const snap = await watch.snapshot('s1')
+    expect(snap?.menu.kind).toBe('plan')
+    const respond = (action: Parameters<TuiMenuWatch['respond']>[0]['action']) =>
+      watch.respond({
+        sessionId: 's1',
+        fingerprint: snap!.fingerprint,
+        menuSeq: snap!.menuSeq,
+        action,
+      })
+    return { pty, respond, menu: snap!.menu }
+  }
+
+  it('aprovar com edições manuais = dígito 2, sem Enter', async () => {
+    const { pty, respond } = await planSession()
+    expect(await respond({ kind: 'plan', intent: 'approve-manual' })).toEqual({ ok: true })
+    expect(pty.writes).toEqual(['2'])
+  })
+
+  it('pedir mudanças = dígito do campo, paste e Enter', async () => {
+    const { pty, respond } = await planSession()
+    expect(await respond({ kind: 'plan', intent: 'feedback', text: 'use bye.txt' })).toEqual({
+      ok: true,
+    })
+    expect(pty.writes).toEqual(['3', '\x1b[200~use bye.txt\x1b[201~', '\r'])
+  })
+
+  it('select cru num menu de plano é recusado (o dígito do campo de feedback não envia nada)', async () => {
+    const { pty, respond } = await planSession()
+    expect(await respond({ kind: 'select', optionIndex: 2 })).toMatchObject({
+      ok: false,
+      error: 'invalid-action',
+    })
+    expect(pty.writes).toEqual([])
+  })
+
+  it('ação de plano fora de um menu de plano é recusada', async () => {
+    const { pty, watch } = setup(PERMISSION)
+    const snap = await watch.snapshot('s1')
+    const res = await watch.respond({
+      sessionId: 's1',
+      fingerprint: snap!.fingerprint,
+      menuSeq: snap!.menuSeq,
+      action: { kind: 'plan', intent: 'reject' },
+    })
+    expect(res).toMatchObject({ ok: false, error: 'invalid-action' })
+    expect(pty.writes).toEqual([])
+  })
+})
