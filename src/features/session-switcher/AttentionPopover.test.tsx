@@ -118,7 +118,7 @@ describe('menuActions', () => {
     ])
   })
 
-  it('pergunta multi-select ou com abas não vira botão (responde no terminal)', () => {
+  it('multi-select não vira botão de select (tem controles próprios)', () => {
     const multi: TuiMenu = {
       kind: 'question',
       options: [
@@ -460,5 +460,95 @@ describe('AttentionPopover — plano do 2.1.317', () => {
 
   it('menuActions não oferece dígito cru para o plano', () => {
     expect(menuActions(planMenu())).toEqual([])
+  })
+})
+
+const fixtureMenu = (name: string): TuiMenu =>
+  parseTuiMenu(
+    readFileSync(join(__dirname, `../../../shared/tui/__fixtures__/claude-${name}.txt`), 'utf8'),
+  )!
+
+function snapOf(menu: TuiMenu, menuSeq = 1) {
+  return { sessionId: 'child', fingerprint: menuFingerprint(menu), menuSeq, menu }
+}
+
+// Telas reais do claude 2.1.317/318: a ação vai ao main, que tecla pelo menu fresco.
+describe('AttentionPopover — menus genéricos, multi-select e chat (2.1.317)', () => {
+  const qItem: AttentionItem = { ...item, detail: 'question' }
+
+  it('/hooks: card genérico com Esc, sem "responda no terminal"', async () => {
+    attentionMenu.mockResolvedValue(snapOf(fixtureMenu('2.1.317-unknown-hooks')))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={qItem} />)
+    fireEvent.click(await screen.findByTestId('generic-esc'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'child', action: { kind: 'esc' } }),
+    )
+    expect(screen.queryByText(/responda no terminal/i)).toBeNull()
+  })
+
+  it('/permissions: aba é passo — o menu é relido em vez de "Resposta enviada"', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const menu = fixtureMenu('2.1.317-unknown-permissions')
+    attentionMenu.mockResolvedValue(snapOf(menu))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={qItem} />)
+    fireEvent.click(await screen.findByTestId('generic-tab-next'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ action: { kind: 'tab', direction: 'next' } }),
+    )
+    await act(async () => vi.advanceTimersByTime(400))
+    expect(attentionMenu).toHaveBeenCalledTimes(2)
+    expect(await screen.findByTestId('generic-tab-next')).toBeTruthy()
+    vi.useRealTimers()
+  })
+
+  it('multi-select: marcar, Outra e Enviar respostas', async () => {
+    const menu = fixtureMenu('2.1.317-question-multi-other')
+    attentionMenu.mockResolvedValue(snapOf(menu))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={qItem} />)
+    fireEvent.click(await screen.findByTestId('attention-submit-multi'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: { kind: 'submit-multi' } }),
+    )
+    expect(screen.getByTestId('attention-notice').textContent).toBe('Resposta enviada.')
+  })
+
+  it('multi-select: o toggle manda a opção', async () => {
+    attentionMenu.mockResolvedValue(snapOf(fixtureMenu('2.1.317-question-multi-other')))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={qItem} />)
+    fireEvent.click(await screen.findByTestId('attention-toggle-1'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ action: { kind: 'toggle', optionIndex: 1 } }),
+    )
+  })
+
+  it('single-select: Conversar sobre isso manda a ação chat', async () => {
+    attentionMenu.mockResolvedValue(snapOf(fixtureMenu('2.1.317-question-chat-sentinel')))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={qItem} />)
+    fireEvent.click(await screen.findByTestId('attention-chat'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'chat' } }))
+  })
+
+  it('revisão: Enviar respostas e Recusar responder pelas opções reais', () => {
+    const review = fixtureMenu('2.1.318-question-multi-review-no-other')
+    expect(menuActions(review).map((a) => [a.key, a.optionIndex])).toEqual([
+      ['review-submit', 0],
+      ['review-cancel', 1],
+    ])
+  })
+
+  it('nem o tolerante leu: aviso sem mandar ao terminal', async () => {
+    attentionMenu.mockResolvedValue(null)
+    render(<AttentionPopover item={qItem} />)
+    expect(await screen.findByText(/Não deu pra ler o menu desta tela/)).toBeTruthy()
   })
 })

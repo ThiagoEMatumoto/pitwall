@@ -503,7 +503,12 @@ export function PermissionCard({
           )}
         </div>
       ) : (
-        <p className="text-xs text-[var(--color-text-dim)]">Responda no terminal desta sessão.</p>
+        // Enviado já tem a linha de estado (permission-sent); sem onDecide é só leitura.
+        !sent && (
+          <p data-testid="permission-readonly" className="text-xs text-[var(--color-text-dim)]">
+            Pedido só para leitura aqui.
+          </p>
+        )
       )}
 
       {notice && (

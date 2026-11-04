@@ -57,7 +57,8 @@ export function GenericMenuCard({ menu, onSelect, onEsc, onTab, sent, bare }: Pr
           )}
         </div>
       )}
-      {menu.context && (
+      {/* No popover o painel já mostra o texto do menu (MenuContext). */}
+      {!bare && menu.context && (
         <p className="m-0 whitespace-pre-wrap text-xs text-[var(--color-text-dim)]">
           {stripUnsafeDisplay(menu.context)}
         </p>

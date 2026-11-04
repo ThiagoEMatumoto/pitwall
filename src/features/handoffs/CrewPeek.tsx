@@ -9,6 +9,7 @@ import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
+import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
@@ -980,7 +981,8 @@ function LiftStrip({
 }
 
 // Rodapé do peek de sessão avulsa em modo chat: não há canal de handoff pra
-// responder, então escrever é no terminal da própria sessão (mesma janela).
+// responder; escrever vai pelo quick composer (mesma fila guardada do "Enviar
+// mensagem" do popover de atenção) ou pelo terminal da própria sessão.
 function SessionChatFooter({
   live,
   onTerminal,
@@ -993,7 +995,18 @@ function SessionChatFooter({
 }) {
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-dim)]">
-      <span className="flex-1">Para escrever para a sessão, use o terminal dela.</span>
+      <span className="flex-1">Escreva para a sessão pelo envio rápido ou pelo terminal dela.</span>
+      {live && (
+        <button
+          type="button"
+          data-testid="crew-peek-send-message"
+          onClick={() => useQuickComposerStore.getState().openFor(live.id)}
+          className="flex shrink-0 items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 font-medium text-[var(--color-text)] transition hover:border-[var(--color-accent)]"
+        >
+          <Icon as={MessageSquare} size={13} />
+          Enviar mensagem
+        </button>
+      )}
       {live && (
         <button
           type="button"

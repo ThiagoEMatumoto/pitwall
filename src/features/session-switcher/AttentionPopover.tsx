@@ -16,6 +16,8 @@ import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { planAcceptsFeedback, planChoices } from '@/features/sessions/chat/plan-choices'
 import { useChatFallback } from '@/features/sessions/chat/useChatFallback'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
+import { GenericMenuCard } from '@/features/sessions/chat/GenericMenuCard'
+import { isStepAction } from '../../../shared/tui/menu-actions'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
 import { alwaysHintText, contextLines } from '@/features/sessions/chat/permission-view'
@@ -108,6 +110,14 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
   }
   // Plano responde por intent, não por dígito: ver PlanActions.
   if (menu.kind === 'plan') return []
+  // Revisão do multi-select: no 2.1.318 Cancel recusa a pergunta inteira.
+  if (menu.kind === 'question_review') {
+    return [
+      ...action(menu, 'review-submit', 'Enviar respostas', 'primary', findOption(menu, /^Submit answers$/i)),
+      ...action(menu, 'review-cancel', 'Recusar responder', 'danger', findOption(menu, /^Cancel$/i)),
+    ]
+  }
+  // Multi-select tem os próprios controles (MultiSelectActions).
   if (menu.kind !== 'question' || menu.multiSelect || menu.tabs) return []
   return menu.options
     .filter((o) => o.sentinel == null)
@@ -120,9 +130,71 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
     }))
 }
 
+// Pergunta única: single-select sem abas, ou multi-select com a linha Submit (2.1.317).
+function singleQuestion(menu: TuiMenu): boolean {
+  if (menu.kind !== 'question') return false
+  if (!menu.tabs) return !menu.multiSelect
+  return menu.multiSelect && menu.submitRow != null && menu.tabs.length === 2
+}
+
 function otherOptionIndex(menu: TuiMenu): number | null {
-  if (menu.kind !== 'question' || menu.multiSelect || menu.tabs) return null
-  return menu.options.find((o) => o.sentinel === 'other')?.index ?? null
+  if (!singleQuestion(menu)) return null
+  return menu.options.find((o) => o.sentinel === 'other' && o.otherText == null)?.index ?? null
+}
+
+function hasChat(menu: TuiMenu): boolean {
+  return singleQuestion(menu) && menu.options.some((o) => o.sentinel === 'chat')
+}
+
+// Checkboxes + Enviar do multi-select: marcar é passo (o menu é relido), enviar abre a
+// revisão, que chega como outro menu.
+function MultiSelectActions({
+  menu,
+  disabled,
+  send,
+}: {
+  menu: TuiMenu
+  disabled: boolean
+  send: (act: AttentionAction) => void
+}) {
+  if (!singleQuestion(menu) || !menu.multiSelect) return null
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="attention-multi">
+      <div className="flex flex-wrap gap-1.5">
+        {menu.options
+          .filter((o) => o.sentinel == null)
+          .map((o) => (
+            <Button
+              key={o.index}
+              data-testid={`attention-toggle-${o.index}`}
+              aria-pressed={o.checked === true}
+              variant={o.checked ? 'primary' : 'ghost'}
+              disabled={disabled}
+              className="!px-3 !py-1 text-xs"
+              onClick={() => send({ kind: 'toggle', optionIndex: o.index })}
+            >
+              {o.checked ? '☑' : '☐'} {stripUnsafeDisplay(o.label)}
+            </Button>
+          ))}
+      </div>
+      {menu.options.find((o) => o.sentinel === 'other' && o.otherText != null) && (
+        <p className="text-[var(--color-text-dim)]">
+          Outra:{' '}
+          {stripUnsafeDisplay(menu.options.find((o) => o.sentinel === 'other')?.otherText ?? '')}
+        </p>
+      )}
+      <Button
+        data-testid="attention-submit-multi"
+        variant="primary"
+        disabled={disabled}
+        className="!px-3 !py-1 self-start text-xs"
+        title="Abre a revisão das respostas"
+        onClick={() => send({ kind: 'submit-multi' })}
+      >
+        Enviar respostas
+      </Button>
+    </div>
+  )
 }
 
 // Mesma leitura do card de permissão do chat: um só lugar entende a caixa da TUI.
@@ -284,6 +356,7 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const plan = allPlan?.filter((c) => !c.confirm) ?? null
   const planHidesBypass = allPlan != null && allPlan.length > (plan?.length ?? 0)
   const unrecognized = snapshot === null && isActionableDetail(item.detail) && !notice
+  const generic = menu && (menu.kind === 'menu' || menu.kind === 'nudge') ? menu : null
   useChatFallback(
     unrecognized && item.detail && item.detail !== 'turn-end' && item.detail !== 'handoff-input'
       ? item.detail
@@ -334,6 +407,15 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
     if (res.ok) {
       // Sem snapshot, sem botões: um 2º clique no menu velho iria pro PRÓXIMO prompt.
       setSnapshot(null)
+      if (menu && isStepAction(menu, act)) {
+        // O mesmo diálogo segue na tela com outro estado (checkbox, aba): relê.
+        setNotice(null)
+        const sessionId = item.sessionId
+        window.setTimeout(() => {
+          void sessionsApi.attentionMenu(sessionId).then((snap) => setSnapshot(snap))
+        }, 300)
+        return true
+      }
       setNotice('Resposta enviada.')
       return true
     }
@@ -354,8 +436,21 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
         <p className="text-[var(--color-text-dim)]">Lendo o menu…</p>
       )}
       {unrecognized && (
-        <p className="text-[var(--color-text-dim)]">Menu não reconhecido — responda no terminal.</p>
+        <p className="text-[var(--color-text-dim)]">
+          Não deu pra ler o menu desta tela. Abra a sessão para responder.
+        </p>
       )}
+      {generic && (
+        <GenericMenuCard
+          bare
+          menu={generic}
+          sent={sending}
+          onSelect={(optionIndex) => void send({ kind: 'select', optionIndex })}
+          onEsc={() => void send({ kind: 'esc' })}
+          onTab={(direction) => void send({ kind: 'tab', direction })}
+        />
+      )}
+      {menu && <MultiSelectActions menu={menu} disabled={sending} send={(a) => void send(a)} />}
 
       {actions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -434,8 +529,21 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
       {otherIndex != null && (
         <OtherAnswer
           disabled={sending}
+          label={menu?.multiSelect ? 'Outra (marca com o texto)' : 'Outra resposta'}
           onSend={(text) => void send({ kind: 'other', optionIndex: otherIndex, text })}
         />
+      )}
+      {menu && hasChat(menu) && (
+        <Button
+          variant="ghost"
+          data-testid="attention-chat"
+          disabled={sending}
+          className="!px-3 !py-1 self-start text-xs"
+          title="Recusa a pergunta dizendo que você quer esclarecer; depois escreva para a sessão."
+          onClick={() => void send({ kind: 'chat' })}
+        >
+          Conversar sobre isso
+        </Button>
       )}
       {notice && (
         <p data-testid="attention-notice" className="text-[var(--color-text-dim)]">
