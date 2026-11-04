@@ -243,3 +243,25 @@ describe('parser tolerante: menus que nenhum parser dedicado conhece (2.1.317)',
     }
   })
 })
+
+// Drift numa tela de diálogo dedicado: o parser dedicado recusa, e o tolerante não
+// pode virar um menu de um clique (Enter aprovaria a opção destacada).
+describe('parser tolerante: drift de permissão/plano continua não reconhecido', () => {
+  it('permissão com uma linha nova depois das opções', () => {
+    const raw = fixture('2.1.316-permission-bash-curl.txt')
+    expect(parseTuiMenu(raw)?.kind).toBe('permission')
+    const drifted = raw.replace('   4. No\n', '   4. No\n Press ? for details\n')
+    expect(drifted).not.toBe(raw)
+    expect(parseTuiMenu(drifted)).toBeNull()
+  })
+
+  it('plano com rodapé Esc e uma linha nova', () => {
+    const raw = fixture('2.1.317-plan-default.txt')
+    const drifted = raw.replace(
+      /( ctrl\+g to edit in [^\n]*)\n/,
+      '$1\n Press ? for details\n Esc to cancel\n',
+    )
+    expect(drifted).not.toBe(raw)
+    expect(parseTuiMenu(drifted)).toBeNull()
+  })
+})

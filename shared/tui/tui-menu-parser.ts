@@ -779,6 +779,26 @@ const REWIND_DESC_RE = /^(No code changes|\d+ files? changed\b.*)$/i
 const CURSOR_LINE_RE = /^(\s*)❯\s+(\S.*)$/
 const GENERIC_BOX_RE = /^[╭╰│]/
 
+// Marcas dos diálogos que têm parser dedicado (permissão, trust, plano, AskUserQuestion).
+// Se o dedicado recusou a tela, é drift: o tolerante não pode virar uma aprovação de um
+// clique dela, então a tela segue não reconhecida (fallback e contador).
+const DEDICATED_DIALOG_RES = [
+  PERMISSION_QUESTION_RE,
+  PERMISSION_OPTION_RE,
+  TRUST_HEADING_RE,
+  TRUST_OPTION_RE,
+  PLAN_QUESTION_RE,
+  PLAN_OPTION_RE,
+  PLAN_FEEDBACK_HINT_RE,
+  /\b(Type something|Chat about this)\b/,
+]
+const AMEND_FOOTER_RE = /Tab to amend/i
+
+function looksLikeDedicatedDialog(body: (BodyLine | null)[], footer: string): boolean {
+  if (AMEND_FOOTER_RE.test(footer)) return true
+  return body.some((b) => b != null && DEDICATED_DIALOG_RES.some((re) => re.test(b.t)))
+}
+
 interface BodyLine {
   raw: string
   t: string
@@ -804,6 +824,7 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
   })
   // Caixa de input ociosa entre a régua e o rodapé: não é diálogo.
   if (body.some((b) => b != null && /^❯\s*$/.test(b.t))) return null
+  if (looksLikeDedicatedDialog(body, hasFooter ? footerRaw : '')) return null
   const first = body.findIndex((b) => b != null)
   if (first < 0) return null
 
