@@ -15,6 +15,16 @@ interface Props {
   bare?: boolean
 }
 
+// O Esc da CLI muda de efeito conforme a tela; o rodapé diz qual. Na busca do /permissions
+// o 1º Esc limpa o texto e, com ela vazia, o Esc leva o foco para a lista (sem fechar).
+function escLabel(menu: TuiMenu): string {
+  const footer = menu.footer
+  if (footer && /Esc to clear/i.test(footer)) return menu.search ? 'Limpar busca (Esc)' : 'Sair da busca (Esc)'
+  if (footer && /Esc to go back/i.test(footer)) return 'Voltar (Esc)'
+  if (footer && /Esc to cancel/i.test(footer) && !/to switch|to select|to navigate/i.test(footer)) return 'Cancelar (Esc)'
+  return 'Fechar (Esc)'
+}
+
 // Diálogo da CLI que nenhum card dedicado conhece (/permissions, /hooks, seletor e
 // submenu do /rewind, nudge do auto mode). Mostra o que a tela mostra e oferece só o
 // que tem tecla segura: opção sem caminho de teclas fica desabilitada; Esc sempre.
@@ -63,34 +73,48 @@ export function GenericMenuCard({ menu, onSelect, onEsc, onTab, sent, bare }: Pr
           {stripUnsafeDisplay(menu.context)}
         </p>
       )}
+      {menu.search && (
+        <p data-testid="generic-search" className="m-0 text-xs text-[var(--color-text-dim)]">
+          Busca: <span className="text-[var(--color-text)]">{stripUnsafeDisplay(menu.search)}</span>
+        </p>
+      )}
+      {menu.moreAbove && <MoreHint text="mais itens acima (role pelo terminal)" />}
       {menu.options.length > 0 && (
         <div className={nudge ? 'flex flex-wrap gap-1.5' : 'flex flex-col gap-1'}>
-          {menu.options.map((o) => {
+          {menu.options.map((o, k) => {
             const reachable = keysForAction(menu, { kind: 'select', optionIndex: o.index }).length > 0
             const current = menu.cursorIndex === o.index
+            const groupStart = o.group != null && o.group !== menu.options[k - 1]?.group
             return (
-              <button
-                key={o.index}
-                type="button"
-                data-testid={`generic-option-${o.index}`}
-                disabled={!live || onSelect == null || !reachable}
-                onClick={() => onSelect?.(o.index)}
-                title={reachable ? undefined : 'Sem caminho de teclas seguro a partir do cursor atual'}
-                className={`flex items-start gap-2 rounded border px-2 py-1 text-left text-xs transition hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/10 disabled:opacity-40 ${
-                  current ? 'border-[var(--color-accent)]/50' : 'border-[var(--color-border)]'
-                }`}
-              >
-                <span className="min-w-0">
-                  <span className="font-medium text-[var(--color-text)]">{stripUnsafeDisplay(o.label)}</span>
-                  {o.description && (
-                    <span className="block text-[var(--color-text-dim)]">{stripUnsafeDisplay(o.description)}</span>
-                  )}
-                </span>
-              </button>
+              <div key={o.index} className="contents">
+                {groupStart && (
+                  <span className="mt-1 text-[11px] font-medium text-[var(--color-text-dim)]">
+                    {stripUnsafeDisplay(o.group!)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  data-testid={`generic-option-${o.index}`}
+                  disabled={!live || onSelect == null || !reachable}
+                  onClick={() => onSelect?.(o.index)}
+                  title={reachable ? undefined : 'Sem caminho de teclas seguro a partir do cursor atual'}
+                  className={`flex items-start gap-2 rounded border px-2 py-1 text-left text-xs transition hover:border-[var(--color-accent)]/60 hover:bg-[var(--color-accent)]/10 disabled:opacity-40 ${
+                    current ? 'border-[var(--color-accent)]/50' : 'border-[var(--color-border)]'
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="font-medium text-[var(--color-text)]">{stripUnsafeDisplay(o.label)}</span>
+                    {o.description && (
+                      <span className="block text-[var(--color-text-dim)]">{stripUnsafeDisplay(o.description)}</span>
+                    )}
+                  </span>
+                </button>
+              </div>
             )
           })}
         </div>
       )}
+      {menu.moreBelow && <MoreHint text="mais itens abaixo (role pelo terminal)" />}
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -99,7 +123,7 @@ export function GenericMenuCard({ menu, onSelect, onEsc, onTab, sent, bare }: Pr
           onClick={onEsc}
           className="rounded border border-[var(--color-border)] px-2 py-0.5 text-xs transition hover:border-[var(--color-accent)]/60 disabled:opacity-40"
         >
-          Fechar (Esc)
+          {escLabel(menu)}
         </button>
         <span className="min-w-0 truncate text-[11px] text-[var(--color-text-dim)]" title={menu.footer}>
           {sent ? 'Enviado…' : menu.footer ? stripUnsafeDisplay(menu.footer) : null}
@@ -125,4 +149,8 @@ export function GenericMenuCard({ menu, onSelect, onEsc, onTab, sent, bare }: Pr
       <div className="px-3 py-2">{body}</div>
     </div>
   )
+}
+
+function MoreHint({ text }: { text: string }) {
+  return <span className="text-[11px] text-[var(--color-text-dim)]">{text}</span>
 }

@@ -203,6 +203,37 @@ describe('ChatView — menus da CLI pelo card genérico (2.1.317)', () => {
     expect(onRespond).toHaveBeenLastCalledWith([DOWN, '\r'])
   })
 
+  it('/hooks populado (2.1.318): evento como cabeçalho, hook por setas, aviso de mais itens', () => {
+    const { onRespond } = renderMenu('2.1.318-populated-hooks-down3')
+    expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+    expect(screen.getByText('PostToolUse — after tool execution')).toBeTruthy()
+    expect(screen.getByText('mais itens abaixo (role pelo terminal)')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('generic-option-5'))
+    expect(onRespond).toHaveBeenCalledWith([DOWN, DOWN, '\r'])
+  })
+
+  it('/hooks: detalhe do hook só volta com Esc', () => {
+    const { onRespond } = renderMenu('2.1.318-populated-hooks-detail')
+    expect(screen.getByText('Command hook')).toBeTruthy()
+    fireEvent.click(screen.getByText('Voltar (Esc)'))
+    expect(onRespond).toHaveBeenCalledWith(['\x1b'])
+  })
+
+  it('/permissions com texto na busca: regras sem clique, Esc limpa a busca', () => {
+    const { onRespond } = renderMenu('2.1.318-populated-permissions-search')
+    expect(screen.getByTestId('generic-search').textContent).toContain('g')
+    expect((screen.getByTestId('generic-option-0') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('generic-tab-next')).toBeNull()
+    fireEvent.click(screen.getByText('Limpar busca (Esc)'))
+    expect(onRespond).toHaveBeenCalledWith(['\x1b'])
+  })
+
+  it('/permissions populado com foco nas abas: regra por ↓ + setas + Enter', () => {
+    const { onRespond } = renderMenu('2.1.318-populated-permissions')
+    fireEvent.click(screen.getByText('Bash(echo:*)'))
+    expect(onRespond).toHaveBeenCalledWith([DOWN, DOWN, DOWN, '\r'])
+  })
+
   it('nudge do auto mode em idle: card pequeno com as 3 opções', () => {
     const { onRespond } = renderMenu('2.1.317-auto-mode-env-nudge', 'idle')
     expect(screen.getByTestId('generic-menu').getAttribute('data-kind')).toBe('nudge')
