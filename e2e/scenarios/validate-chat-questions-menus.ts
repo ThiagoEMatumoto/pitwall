@@ -182,6 +182,48 @@ async function captureTerminalAndEscape(name: string): Promise<void> {
 const waitIdle = (label: string, ms = 180_000) =>
   waitFor(label, async () => (await sessionStatus()) === 'idle', ms)
 
+// Banner de "tela não reconhecida" pisca entre screenshots: o contador só o vê depois.
+// Fotografa cada aparição e despeja o que a CLI desenhava naquele instante.
+const BANNERS = '[data-testid="chat-wait-unrecognized"], [data-testid="chat-wait-open-terminal"]'
+let bannerSeen = 0
+let bannerOn = false
+let bannerBusy = false
+let bannerTimer: ReturnType<typeof setInterval> | null = null
+function watchBanners(): void {
+  bannerTimer = setInterval(async () => {
+    if (bannerBusy) return
+    bannerBusy = true
+    try {
+      const on = (await page.locator(BANNERS).count()) > 0
+      if (on && !bannerOn) {
+        bannerSeen++
+        const id = await sessionId()
+        const preview = id
+          ? await page.evaluate(
+              (sid) =>
+                (
+                  window as unknown as {
+                    api: { sendTo: { preview: (id: string) => Promise<unknown> } }
+                  }
+                ).api.sendTo.preview(sid),
+              id,
+            )
+          : null
+        log(`[banner] #${bannerSeen} @${new Date().toISOString()} status=${await sessionStatus()}`)
+        log('[banner] tela da CLI:', preview)
+        await shot(`banner-${bannerSeen}`)
+      }
+      bannerOn = on
+    } catch {
+      /* página fechando */
+    } finally {
+      bannerBusy = false
+    }
+  }, 300)
+}
+const logCounters = async (at: string) =>
+  log(`[qm] contadores ${at} @${new Date().toISOString()}:`, await attentionDebug())
+
 async function composerTextarea(): Promise<Locator> {
   const idx = await page
     .locator('textarea')
@@ -249,9 +291,15 @@ const reviewCard = () =>
     .filter({ has: page.getByText('Revise suas respostas', { exact: true }) })
     .last()
 
-// Transcript da sessão no sandbox: linhas JSONL do arquivo mais recente.
+// Transcript da sessão no sandbox. A CLI só cria o JSONL na 1ª mensagem: com o "mais
+// recente" o mark saía de um transcript antigo do mesmo sandbox e (a) nunca via answers.
+let claudeSessionId: string | undefined
 function transcriptLines(): string[] {
   const dir = join(homedir(), '.claude', 'projects', SANDBOX.replace(/[^a-zA-Z0-9]/g, '-'))
+  if (claudeSessionId) {
+    const own = join(dir, `${claudeSessionId}.jsonl`)
+    return existsSync(own) ? readFileSync(own, 'utf8').split('\n').filter(Boolean) : []
+  }
   if (!existsSync(dir)) return []
   const f = readdirSync(dir)
     .filter((x) => x.endsWith('.jsonl'))
@@ -340,11 +388,13 @@ try {
   await page.waitForTimeout(1500)
   await answerTrustIfShown()
   await shot('02-chat-ready')
+  watchBanners()
   const argv = execSync("pgrep -af 'claude .*--session-id' || true")
     .toString()
     .split('\n')
     .filter((l) => l.includes(userData))
   log('[qm] argv do claude spawnado:', argv)
+  claudeSessionId = argv[0]?.match(/--session-id (\S+)/)?.[1]
   check(
     'spawn em modo Padrão',
     argv.length === 1 && !/--permission-mode (?!default)/.test(argv[0]),
@@ -502,6 +552,7 @@ try {
 
   // ---------- (c) /hooks -> card genérico -> Esc pelo card ----------
   try {
+    await logCounters('antes de (c)')
     await sendComposer('/hooks')
     await waitFor(
       'card genérico /hooks',
@@ -514,7 +565,8 @@ try {
     await shot('c1-hooks-card')
     check('(c) card genérico do /hooks', /hook/i.test(txt), txt.replace(/\s+/g, ' ').slice(0, 200))
     check('(c) sem "Ir pro Terminal"/banner', hint === '', hint)
-    // Navega: entra no 1º evento com hooks configurados (lista "N hook(s)"), olha, volta.
+    // Navega: entra num hook (CLI 2.1.31x lista os hooks direto; antes, eventos "N hooks"),
+    // olha, volta. Índice >= 1 para o clique passar por ↓ antes do Enter.
     const hooksCard = () => page.getByTestId('generic-menu').last()
     const opts = hooksCard().locator('[data-testid^="generic-option-"]')
     const optInfo = await opts.evaluateAll((els) =>
@@ -526,6 +578,7 @@ try {
     )
     log('[qm] (c) opções do /hooks:', optInfo)
     const target =
+      optInfo.find((o) => o.enabled && o.id !== 'generic-option-0' && /· command$/.test(o.text)) ??
       optInfo.find((o) => o.enabled && /\b[1-9]\d* hooks?\b/i.test(o.text)) ??
       optInfo.find(
         (o) =>
@@ -549,6 +602,8 @@ try {
       const sub = await hooksCard().innerText()
       await shot('c2-hooks-event')
       check('(c) navegou ao evento pelo card', sub !== txt, sub.replace(/\s+/g, ' ').slice(0, 200))
+      if (/· command$/.test(target.text))
+        check('(c) Enter abriu "Command hook"', /command hook/i.test(sub), sub.slice(0, 120))
       await hooksCard().getByTestId('generic-esc').click()
       await waitFor(
         'volta ao topo do /hooks',
@@ -589,6 +644,7 @@ try {
 
   // ---------- (d) /permissions -> aba -> volta -> Esc ----------
   try {
+    await logCounters('antes de (d)')
     await sendComposer('/permissions')
     await waitFor(
       'card genérico /permissions',
@@ -652,6 +708,9 @@ try {
   check('cenário completo', false, String(e))
   await shot('error')
 } finally {
+  if (bannerTimer) clearInterval(bannerTimer)
+  log('[qm] banners de terminal vistos:', bannerSeen)
+  check('nenhum banner de terminal', bannerSeen === 0, String(bannerSeen))
   fallbackAfter = await attentionDebug().catch((e) => `erro: ${String(e)}`)
   log('[qm] attention-debug depois:', fallbackAfter)
   log('[qm] console errors:', consoleErrors.length, consoleErrors.slice(0, 20))
