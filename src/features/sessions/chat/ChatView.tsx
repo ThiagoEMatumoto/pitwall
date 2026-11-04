@@ -30,6 +30,8 @@ import type { PermissionMode } from '../../../../shared/types/ipc'
 import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
 import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
+import { GenericMenuCard } from './GenericMenuCard'
+import { keysForAction } from '../../../../shared/tui/menu-actions'
 import { QuestionReviewCard } from './QuestionReviewCard'
 import { SubagentCard } from './SubagentCard'
 import { SystemCard } from './SystemCard'
@@ -427,6 +429,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Tela final de revisão ("Review your answers") do multi-select/multi-
   // pergunta — kind próprio no parser, card dedicado (QuestionReviewCard).
   const tuiReview = tuiMenu && tuiMenu.kind === 'question_review' ? tuiMenu : null
+  // Diálogo da CLI lido pelo parser tolerante (ou o nudge do auto mode). Os pickers de
+  // /model, /theme, /config e Ctrl+R têm card próprio, que tem precedência.
+  const tuiGeneric =
+    tuiMenu && (tuiMenu.kind === 'menu' || tuiMenu.kind === 'nudge') && !tuiPicker ? tuiMenu : null
 
   // Conteúdo do plano pro card PENDENTE, sempre do arquivo: o input.plan do JSONL
   // pode trazer o plano anterior (Write e ExitPlanMode saem em paralelo). O path
@@ -447,7 +453,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     tuiMenu != null &&
     gateMenuByStatus(tuiMenu, status) != null &&
     menuFp !== consumedFp &&
-    (tuiMenu.kind === 'plan' || tuiQuestion != null || tuiPermission != null || tuiReview != null)
+    (tuiMenu.kind === 'plan' ||
+      tuiQuestion != null ||
+      tuiPermission != null ||
+      tuiReview != null ||
+      tuiGeneric != null)
   const coveredPendingId =
     showTuiCard && liveMenuCoversPending(pendingPrompt, tuiMenu?.kind) ? pendingPrompt?.id : null
   const canRespondTui = onRespond != null && showTuiCard && tuiSent == null
@@ -558,6 +568,23 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
     onRespond?.(keys)
+  }
+
+  // Menu genérico: opção (dígito ou setas+Enter, ver buildGenericSelectKeys) e Esc são
+  // finais pra este menu — um submenu que abrir é outro fingerprint. Aba é passo.
+  function respondGeneric(action: { kind: 'select'; optionIndex: number } | { kind: 'esc' }) {
+    if (!canRespondTui || menuFp == null) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? keysForAction(fresh, action) : []
+    if (keys.length === 0) return
+    setTuiSent({ fp: menuFp, resolvedCount })
+    onRespond?.(keys)
+  }
+  function respondGenericTab(direction: 'next' | 'prev') {
+    if (!canRespondTui) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? keysForAction(fresh, { kind: 'tab', direction }) : []
+    if (keys.length > 0) onRespond?.(keys)
   }
 
   function respondTuiPlan(d: PlanDecision, feedback?: string) {
@@ -798,6 +825,15 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           choices={tuiPlanChoices}
           canFeedback={planAcceptsFeedback(tuiMenu)}
           notice={planNotice}
+        />
+      )}
+      {tuiGeneric && (
+        <GenericMenuCard
+          menu={tuiGeneric}
+          onSelect={canRespondTui ? (optionIndex) => respondGeneric({ kind: 'select', optionIndex }) : undefined}
+          onEsc={canRespondTui ? () => respondGeneric({ kind: 'esc' }) : undefined}
+          onTab={canRespondTui ? respondGenericTab : undefined}
+          sent={tuiSent != null && tuiSent.fp === menuFp}
         />
       )}
       {tuiPermission && (

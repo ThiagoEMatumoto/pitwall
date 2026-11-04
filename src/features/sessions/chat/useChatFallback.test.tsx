@@ -15,7 +15,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('contador de fallback pro terminal', () => {
-  it('"Ir pro Terminal" que fica na tela conta uma vez, por kind/motivo', () => {
+  it('o link residual ao terminal que fica na tela conta uma vez, por kind/motivo', () => {
     render(
       <ChatWaitBanners
         pendingPrompt={null}

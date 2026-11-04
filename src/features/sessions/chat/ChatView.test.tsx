@@ -160,7 +160,7 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
   it('um único card de plano, interativo, e sem o banner de ir ao terminal', () => {
     const { container } = renderRace()
     expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
-    expect(container.textContent).not.toContain('responda no compositor ou no terminal')
+    expect(container.textContent).not.toContain('diálogo não foi lido da tela')
     expect(container.textContent).not.toContain('use o terminal')
   })
 

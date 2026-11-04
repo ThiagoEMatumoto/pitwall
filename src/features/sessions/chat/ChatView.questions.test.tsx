@@ -11,8 +11,14 @@ vi.mock('@/lib/ipc', () => {
   )
   return new Proxy({}, { get: () => inert })
 })
+const transcript = vi.hoisted(() => ({ messages: [] as { kind: 'user'; text: string }[] }))
 vi.mock('./useChatTranscript', () => ({
-  useChatTranscript: () => ({ messages: [], loading: false, transcriptExists: true, lastPlanFilePath: null }),
+  useChatTranscript: () => ({
+    messages: transcript.messages,
+    loading: false,
+    transcriptExists: true,
+    lastPlanFilePath: null,
+  }),
   usePlanFile: () => null,
 }))
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
@@ -110,5 +116,57 @@ describe('ChatView — sentinela "Chat about this" (2.1.317)', () => {
     const { onRespond } = renderMenu('2.1.318-question-single-digit-other')
     fireEvent.click(screen.getByTestId('question-chat'))
     expect(onRespond).toHaveBeenCalledWith([UP, '5'])
+  })
+})
+
+describe('ChatView — menus da CLI pelo card genérico (2.1.317)', () => {
+  it('/hooks: card com a opção e Esc; nada de banner de terminal', () => {
+    const { onRespond } = renderMenu('2.1.317-unknown-hooks')
+    expect(screen.getByTestId('generic-menu').getAttribute('data-kind')).toBe('menu')
+    expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+    fireEvent.click(screen.getByTestId('generic-esc'))
+    expect(onRespond).toHaveBeenCalledWith(['\x1b'])
+  })
+
+  it('/hooks: a opção sem número vai por Enter (cursor já nela)', () => {
+    const { onRespond } = renderMenu('2.1.317-unknown-hooks')
+    fireEvent.click(screen.getByTestId('generic-option-0'))
+    expect(onRespond).toHaveBeenCalledWith(['\r'])
+  })
+
+  it('/permissions: abas por →/← e a opção por ↓ + Enter (foco na busca)', () => {
+    const { onRespond } = renderMenu('2.1.317-unknown-permissions')
+    fireEvent.click(screen.getByTestId('generic-tab-next'))
+    expect(onRespond).toHaveBeenLastCalledWith(['\x1b[C'])
+    fireEvent.click(screen.getByTestId('generic-option-0'))
+    expect(onRespond).toHaveBeenLastCalledWith([DOWN, '\r'])
+  })
+
+  it('nudge do auto mode em idle: card pequeno com as 3 opções', () => {
+    const { onRespond } = renderMenu('2.1.317-auto-mode-env-nudge', 'idle')
+    expect(screen.getByTestId('generic-menu').getAttribute('data-kind')).toBe('nudge')
+    expect(screen.getByText('Not now')).toBeTruthy()
+    fireEvent.click(screen.getByText("Don't show again"))
+    expect(onRespond).toHaveBeenCalledWith(['3'])
+  })
+
+  it('submenu do /rewind: nunca vira pergunta; opção com campo vai por setas', () => {
+    const { onRespond } = renderMenu('2.1.317-rewind-restore-menu')
+    expect(screen.queryByText('Claude perguntou')).toBeNull()
+    fireEvent.click(screen.getByText('Summarize from here'))
+    expect(onRespond).toHaveBeenCalledWith([DOWN, '\r'])
+  })
+
+  it('seletor do /rewind: setas do cursor até a mensagem + Enter', () => {
+    const { onRespond } = renderMenu('2.1.317-rewind-picker')
+    fireEvent.click(screen.getByText('diga b'))
+    expect(onRespond).toHaveBeenCalledWith([UP, UP, '\r'])
+  })
+
+  it('waiting sem nada lido: só o aviso com link discreto ao terminal', () => {
+    transcript.messages = [{ kind: 'user', text: 'oi' }]
+    render(<ChatView sessionId="s-q" status="waiting" tuiMenu={null} onToggleMode={vi.fn()} />)
+    expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
+    expect(screen.getByTestId('chat-wait-open-terminal').textContent).toContain('Abrir terminal')
   })
 })
