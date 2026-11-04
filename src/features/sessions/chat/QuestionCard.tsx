@@ -61,7 +61,8 @@ function OtherField({
   onSubmit: (text: string) => void
   disabled?: boolean
   multi?: boolean
-  // Texto já digitado no terminal: o campo de lá tem dono, este só mostra.
+  // Texto que a tela já mostra no campo do Other (veio do terminal ou deste card: a
+  // tela não diz de onde). O campo de lá tem dono, este só mostra.
   typed?: string
 }) {
   const [text, setText] = useState('')
@@ -75,7 +76,7 @@ function OtherField({
         data-testid="question-other-typed"
         className="rounded border border-[var(--color-border)] px-2 py-1.5 text-xs text-[var(--color-text-dim)]"
       >
-        Outra: <span className="text-[var(--color-text)]">{typed}</span> (digitado no terminal)
+        Outra (preenchida): <span className="text-[var(--color-text)]">{typed}</span>
       </div>
     )
   }

@@ -144,9 +144,12 @@ describe('ChatView — multi-select com Other (2.1.317)', () => {
     expect(onRespond).toHaveBeenCalledWith([UP, '\x1b[C'])
   })
 
-  it('Other com texto já digitado no terminal: mostra o texto, sem campo', () => {
+  it('Other com texto já no campo: mostra o texto, sem campo', () => {
     renderMenu('2.1.317-question-multi-other-typed')
-    expect(screen.getByTestId('question-other-typed').textContent).toContain('verde agua')
+    const typed = screen.getByTestId('question-other-typed').textContent
+    expect(typed).toContain('verde agua')
+    // A tela não diz de onde o texto veio: pode ter sido o próprio card.
+    expect(typed).not.toContain('terminal')
     expect(screen.queryByTestId('question-other-input')).toBeNull()
   })
 
