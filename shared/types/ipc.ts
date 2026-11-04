@@ -21,6 +21,7 @@ export type {
 import type { ComposerDraft, VersionedDraftInput } from './composer-draft'
 import type { ChatTranscript, ChatTranscriptTail, ChatTranscriptUpdate } from './chat'
 import type { AttentionReason } from '../tui/attention-reason'
+import type { ChatFallbackCounters, ChatFallbackKind, ChatFallbackReason } from '../chat/fallback'
 import type { AttentionCounters, AttentionItem } from './attention'
 import type {
   MotherPreflight,
@@ -1493,6 +1494,7 @@ export type GlobalActivityBatch = {
 // se o menu ainda é o mesmo — as teclas saem do menu fresco, nunca do renderer.
 export type { AttentionReason } from '../tui/attention-reason'
 export type { TuiMenu, TuiMenuOption } from '../tui/tui-menu-parser'
+import type { PlanIntent } from '../tui/tui-menu-parser'
 
 // menuSeq: aparição do menu na tela (sobe a cada menu que entra). O fingerprint
 // sozinho não separa dois prompts idênticos seguidos (mesmo comando retentado).
@@ -1508,6 +1510,11 @@ export type AttentionAction =
   | { kind: 'other'; optionIndex: number; text: string }
   // "Tab to amend": a opção vai junto de um texto (negar explicando o porquê).
   | { kind: 'amend'; optionIndex: number; text: string }
+  // Diálogo de plano: a opção sai do intent no menu fresco (buildPlanKeys).
+  | { kind: 'plan'; intent: PlanIntent | 'reject'; text?: string }
+
+// Ações que apontam uma opção pelo índice (permissão, trust, pergunta).
+export type MenuOptionAction = Exclude<AttentionAction, { kind: 'plan' }>
 
 export interface AttentionRespondInput {
   sessionId: string
@@ -1531,6 +1538,8 @@ export interface AttentionReasonCounters {
   attentionReasonUnparsed: number
   lastUnparsedAt: number | null
 }
+
+export type AttentionDebugCounters = AttentionReasonCounters & ChatFallbackCounters
 
 // main → renderer: o kernel matou um processo da sessão por MemoryMax.
 // claudeAlive false = o morto foi o próprio claude (a sessão acabou).
@@ -2395,7 +2404,7 @@ export interface Api {
     attentionMenu(sessionId: string): Promise<AttentionMenuSnapshot | null>
     /** Responde o menu sem abrir o terminal; recusa se o menu mudou desde o snapshot. */
     attentionRespond(input: AttentionRespondInput): Promise<AttentionRespondResult>
-    attentionDebug(): Promise<AttentionReasonCounters>
+    attentionDebug(): Promise<AttentionDebugCounters>
     /** Informa o main qual sessão está no pane ativo/visível (supressão de notificação). */
     setRendererFocus(ccSessionId: string | null): void
     /** Lazy restore: quais destes cc_session_ids sobem eager no boot. */
@@ -2428,6 +2437,8 @@ export interface Api {
     getTranscript(sessionId: string): Promise<ChatTranscript>
     /** Lê um arquivo de plano (validado dentro de ~/.claude/plans/); null se inválido/ilegível. */
     readPlanFile(path: string): Promise<string | null>
+    /** Conta um caminho do chat que mandou o usuário ao terminal (ver shared/chat/fallback). */
+    noteFallback(kind: ChatFallbackKind, reason: ChatFallbackReason): Promise<void>
     /** Começa a observar o JSONL da sessão; emite chat:transcript-update em cada mudança. */
     watch(sessionId: string): void
     /** Para o watcher (também é chamado automaticamente no pty:exit). */

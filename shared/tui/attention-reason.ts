@@ -4,7 +4,8 @@ import { isInputRule } from './input-rule'
 // POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
 // sessão entra/sai da fila nem se notifica — isso continua no status do
 // ~/.claude/sessions/<pid>.json. Motivo ausente = exatamente o comportamento de antes.
-export type AttentionReason = 'permission' | 'trust' | 'question' | 'turn-end' | 'handoff-input'
+export type AttentionReason =
+  'permission' | 'trust' | 'question' | 'plan' | 'turn-end' | 'handoff-input'
 
 export type LiveStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'ended'
 
@@ -80,7 +81,7 @@ export function scanScreen(
 }
 
 function menuReason(menu: TuiMenu): AttentionReason {
-  if (menu.kind === 'permission' || menu.kind === 'trust') return menu.kind
+  if (menu.kind === 'permission' || menu.kind === 'trust' || menu.kind === 'plan') return menu.kind
   return 'question'
 }
 

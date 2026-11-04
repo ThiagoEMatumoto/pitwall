@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes/question-chat-sentinel/cwd
+
+
+❯ Use a ferramenta AskUserQuestion com UMA pergunta single-select (multiSelect false) com 3 opções sobre linguagem de   
+  programação favorita. Depois da resposta, só diga ok e pare.                                                          
+  
+● Vou fazer a pergunta sobre linguagem favorita com a ferramenta de perguntas.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Linguagem 
+
+Qual é a sua linguagem de programação favorita?
+
+  1. Python
+     Sintaxe limpa e ecossistema enorme em dados, automação e backend.
+  2. TypeScript
+     JavaScript com tipagem estática, forte em frontend e fullstack.
+  3. Go
+     Simples, rápida de compilar e muito usada em serviços e infraestrutura.
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 5. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

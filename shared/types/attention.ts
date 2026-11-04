@@ -69,7 +69,7 @@ export interface AttentionRequestView {
   escalated: boolean
 }
 
-export type SessionMenuReason = 'permission' | 'trust' | 'question' | 'unrecognized'
+export type SessionMenuReason = 'permission' | 'trust' | 'question' | 'plan' | 'unrecognized'
 
 export interface AttentionItem {
   kind: AttentionKind
@@ -94,7 +94,7 @@ export interface AttentionLiveSession {
   sessionId: string
   status: LiveStatus
   // Motivo da TELA, sem handoffAsking: deriveAttentionReason({ ..., handoffAsking: false }).
-  screenReason: 'permission' | 'trust' | 'question' | 'turn-end' | undefined
+  screenReason: 'permission' | 'trust' | 'question' | 'plan' | 'turn-end' | undefined
   menuSeq: number | null // tuiMenuWatch.menuSeqOf (null sem menu na tela)
   lastActivityAt: number | null // sessions/<pid>.json updatedAt (índice), não o DB
   featureId: string | null // sessions.feature_id

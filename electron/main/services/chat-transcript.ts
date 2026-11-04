@@ -123,6 +123,13 @@ export function lastPlanFilePath(messages: ChatMessage[]): string | null {
   return last
 }
 
+// Plano aprovado, gravado pela CLI no toolUseResult do ExitPlanMode.
+function approvedPlan(tur: unknown): string | null {
+  if (!tur || typeof tur !== 'object') return null
+  const plan = (tur as { plan?: unknown }).plan
+  return typeof plan === 'string' && plan.trim() ? plan : null
+}
+
 // Mapa pergunta→opção(ões) escolhida(s) do toolUseResult de um AskUserQuestion.
 function parseAnswers(tur: unknown): Record<string, string> {
   if (!tur || typeof tur !== 'object') return {}
@@ -381,6 +388,8 @@ export function parseChatMessages(
   const toolUseIdxByMsgId = new Map<string, { idx: number; id: string }[]>()
   const resolvedToolIds = new Set<string>()
   const interruptedMsgIds = new Set<string>()
+  // O 2.1.317 pode regravar o mesmo tool_use (mesmo id) em outra linha: um card só.
+  const seenToolUseIds = new Set<string>()
   const trackIdx = <T,>(map: Map<string, T[]>, key: string, value: T): void => {
     const list = map.get(key)
     if (list) list.push(value)
@@ -457,10 +466,12 @@ export function parseChatMessages(
             } else if (planIds.has(forId)) {
               // Aprovação tem texto canônico "User has approved your plan."; a
               // ausência dele (rejeição/feedback) marca não-aprovado.
+              const plan = approvedPlan(obj.toolUseResult)
               push({
                 kind: 'plan_decision',
                 forId,
                 approved: /User has approved/i.test(toText(item.content)),
+                ...(plan ? { plan } : {}),
               })
             } else {
               push({
@@ -507,6 +518,10 @@ export function parseChatMessages(
           push({ kind: 'thinking', text: '(raciocínio oculto)' })
         } else if (item?.type === 'tool_use' && typeof item.name === 'string') {
           const id = typeof item.id === 'string' ? item.id : ''
+          if (id) {
+            if (seenToolUseIds.has(id)) continue
+            seenToolUseIds.add(id)
+          }
           const sub = id ? subagents?.get(id) : undefined
           if (sub) {
             if (id) subIds.add(id)

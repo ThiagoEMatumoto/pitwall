@@ -14,9 +14,12 @@
 //     4. Chat about this        ← sentinela __chat__
 //   Enter to select · ↑/↓ to navigate · Esc to cancel
 //
-// Menu de plano: "Would you like to proceed?" / "Exit plan mode?" com opções
-// "Yes, auto-accept edits" / "Yes, manually approve edits" / "No, keep planning"
-// (contagem VARIÁVEL entre versões).
+// Menu de plano: "Would you like to proceed?" / "Exit plan mode?". No 2.1.317
+// (capturas __fixtures__/claude-2.1.317-plan-*) as opções variam com a config:
+// "Yes, and use auto mode" / "Yes, auto-accept edits" / "Yes, clear context (N%
+// used) and use auto mode" / "Yes, manually approve edits" e, por último, o campo
+// "Tell Claude what to change" (+ linha "shift+tab to approve with this feedback").
+// Versões antigas tinham "No, keep planning". Cada opção leva o seu planIntent.
 //
 // Prompts TTY-only (NUNCA vão pro JSONL, nem depois da resposta): permissão de
 // tool ("Do you want to …?" + opções Yes/No) e trust de diretório ("Only proceed
@@ -45,7 +48,25 @@ export interface TuiMenuOption {
   // (❯) — a TUI só desenha o preview pra opção com o cursor; muda ao navegar
   // (validado ao vivo). Bordas de box-drawing já removidas.
   preview?: string
+  // Só no menu de plano: o que a opção faz, lido da forma/posição (não só do label:
+  // o label do campo de feedback vira o texto que o usuário está digitando).
+  planIntent?: PlanIntent
+  // approve-clear-context: o modo de permissão que vale depois de limpar o contexto.
+  planMode?: PlanMode
+  // Só no menu de plano: o dígito submete esta opção? O campo de feedback só ganha foco.
+  submitOnDigit?: boolean
 }
+
+export type PlanMode = 'auto' | 'accept-edits' | 'manual' | 'bypass'
+
+export type PlanIntent =
+  | 'approve-auto'
+  | 'approve-accept-edits'
+  | 'approve-manual'
+  | 'approve-bypass'
+  | 'approve-clear-context'
+  | 'feedback'
+  | 'keep-planning'
 
 // Uma aba da barra de abas (multi-pergunta/multi-select): "←  ☒ Rótulo  ☐
 // Rótulo  ✔ Submit  →" — validado ao vivo contra claude 2.1.215. `done` reflete
@@ -96,6 +117,9 @@ export interface TuiMenu {
   // permission/trust: a janela lida acabou antes da régua do topo do prompt, então
   // o context é só o fim do diff. Quem lê o buffer amplia a janela (parseTuiMenuFull).
   contextClipped?: boolean
+  // plan: arquivo do plano lido do rodapé "ctrl+g to edit in … · ~/.claude/plans/x.md".
+  // É a fonte do conteúdo do card: o input.plan do JSONL pode trazer o plano anterior.
+  planFile?: string
 }
 
 // Linha de opção numerada: pointer opcional (❯), UM dígito, ponto, label.
@@ -159,7 +183,15 @@ const TRUST_HEADING_RE = /trust this configuration|trust this folder/i
 const TRUST_OPTION_RE = /I trust this folder|remember this directory|No, continue without these permissions/i
 // Classificação do menu de plano (labels exatos vistos no binário da CLI).
 const PLAN_QUESTION_RE = /Would you like to proceed|Exit plan mode/i
+// Só os labels que nenhum outro menu usa classificam sozinhos. Os do 2.1.317 ("Yes,
+// and use auto mode", "Yes, clear context", "Tell Claude what to change") cabem numa
+// opção escrita pelo modelo ou numa permissão: exigem a pergunta do diálogo.
 const PLAN_OPTION_RE = /^Yes, auto-accept edits|^Yes, manually approve|^No, keep planning/i
+const PLAN_FEEDBACK_LABEL_RE = /^Tell Claude what to change$/i
+const PLAN_FEEDBACK_HINT_RE = /approve with this feedback/i
+const PLAN_KEEP_PLANNING_RE = /^No, keep planning/i
+// Depois de salvar no editor o rodapé ganha " · ✔ Plan saved!".
+const PLAN_FILE_RE = /ctrl\+g to edit in .+? · (.+?\.md)(?: · .*)?\s*$/
 
 // Bordas de box-drawing (moldura do box de diff/comando) aparadas do contexto.
 // ╌ é a moldura tracejada do comando no prompt de permissão do 2.1.286.
@@ -420,6 +452,50 @@ function parseUnnumberedTrust(lines: string[], end: number): TuiMenu | null {
   }
 }
 
+// Ordem importa: "auto-accept edits" contém "auto", e o clear-context termina no modo.
+function planModeOf(label: string): PlanMode | undefined {
+  if (/bypass permissions/i.test(label)) return 'bypass'
+  if (/auto-accept edits/i.test(label)) return 'accept-edits'
+  if (/manually approve/i.test(label)) return 'manual'
+  if (/auto mode/i.test(label)) return 'auto'
+  return undefined
+}
+
+// A dica "shift+tab to approve with this feedback" fica abaixo da última opção (no
+// rodapé, não na descrição) e continua lá depois que o label vira o texto digitado.
+function planIntentOf(
+  option: TuiMenuOption,
+  isLast: boolean,
+  cursorIndex: number | undefined,
+  footer: string,
+): Pick<TuiMenuOption, 'planIntent' | 'planMode'> {
+  if (PLAN_FEEDBACK_LABEL_RE.test(option.label) || (isLast && PLAN_FEEDBACK_HINT_RE.test(footer)))
+    return { planIntent: 'feedback' }
+  if (PLAN_KEEP_PLANNING_RE.test(option.label)) return { planIntent: 'keep-planning' }
+  if (/^Yes\b/i.test(option.label)) {
+    const mode = planModeOf(option.label)
+    if (!mode) return {}
+    if (/^Yes, clear context\b/i.test(option.label)) return { planIntent: 'approve-clear-context', planMode: mode }
+    return { planIntent: `approve-${mode}` }
+  }
+  // Sem a linha de dica, o campo de feedback com texto digitado só se reconhece por
+  // ser o último e estar com o cursor (digitar exige o foco nele).
+  if (isLast && cursorIndex === option.index) return { planIntent: 'feedback' }
+  return {}
+}
+
+function classifyPlanOptions(
+  options: TuiMenuOption[],
+  cursorIndex: number | undefined,
+  footer: string,
+): TuiMenuOption[] {
+  return options.map((o, k) => {
+    const intent = planIntentOf(o, k === options.length - 1, cursorIndex, footer)
+    if (!intent.planIntent) return o
+    return { ...o, ...intent, submitOnDigit: intent.planIntent !== 'feedback' }
+  })
+}
+
 function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   const text = lines.join('\n')
 
@@ -523,6 +599,7 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   const hasSentinel = options.some((o) => o.sentinel != null)
   const isPlan =
     !isReview &&
+    !hasSentinel &&
     ((question != null && PLAN_QUESTION_RE.test(question)) ||
       options.some((o) => PLAN_OPTION_RE.test(o.label)))
   const isTrust =
@@ -568,19 +645,22 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   // Preview/notas presente → dígito só navega/toggla, precisa de Enter
   // separado pra submeter (regra validada na Fase 0).
   const submitOnDigit = previewParts.length === 0 && !hasNotesHint
+  const cursorIndex = cursorIdx >= 0 ? options[cursorIdx].index : undefined
+  const planFile = kind === 'plan' ? PLAN_FILE_RE.exec(footer.trimEnd())?.[1] : undefined
 
   return {
     kind,
     ...(kind === 'question_review' ? { question: 'Review your answers' } : question != null ? { question } : {}),
     ...(context != null ? { context } : {}),
     ...(request != null ? { request } : {}),
-    options,
+    options: kind === 'plan' ? classifyPlanOptions(options, cursorIndex, footer) : options,
     multiSelect,
     ...(tabs != null ? { tabs } : {}),
     submitOnDigit,
-    ...(cursorIdx >= 0 ? { cursorIndex: options[cursorIdx].index } : {}),
+    ...(cursorIndex != null ? { cursorIndex } : {}),
     ...(/Tab to amend/i.test(footer) ? { amendable: true } : {}),
     ...(boxed?.clipped ? { contextClipped: true } : {}),
+    ...(planFile && !planFile.includes('…') ? { planFile } : {}),
   }
 }
 

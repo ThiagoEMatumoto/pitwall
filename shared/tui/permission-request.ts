@@ -1,4 +1,4 @@
-import type { AttentionAction } from '../types/ipc'
+import type { AttentionAction, MenuOptionAction } from '../types/ipc'
 import type { TuiMenu } from './tui-menu-parser'
 
 export const COMMAND_SUMMARY_MAX = 80
@@ -46,7 +46,7 @@ export function isScopedAlwaysLabel(label: string): boolean {
   return ALWAYS_RE.test(label) && !AUTO_MODE_RE.test(label)
 }
 
-function optionLabel(menu: TuiMenu, action: AttentionAction): string {
+function optionLabel(menu: TuiMenu, action: MenuOptionAction): string {
   return menu.options.find((o) => o.index === action.optionIndex)?.label ?? ''
 }
 
@@ -55,6 +55,10 @@ export type AttentionChoice = 'approve' | 'always' | 'deny' | 'answer' | 'other'
 // Classe da opção escolhida, pelo label REAL (mesmas âncoras do menuActions do
 // popover). "switch to auto mode" libera os próximos prompts: conta como always.
 export function classifyChoice(menu: TuiMenu, action: AttentionAction): AttentionChoice {
+  if (action.kind === 'plan') {
+    if (action.intent === 'reject') return 'deny'
+    return action.intent === 'feedback' ? 'other' : 'approve'
+  }
   if (action.kind === 'other') return 'other'
   if (menu.kind !== 'permission' && menu.kind !== 'trust') return 'answer'
   if (action.kind === 'amend') return /^No\b/i.test(optionLabel(menu, action)) ? 'deny' : 'approve'

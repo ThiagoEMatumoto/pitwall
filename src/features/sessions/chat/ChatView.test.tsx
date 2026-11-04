@@ -7,7 +7,7 @@ import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { sessionsApiMock, transcript } = vi.hoisted(() => ({
   sessionsApiMock: { attentionMenu: vi.fn(), attentionRespond: vi.fn() },
-  transcript: { messages: [] as ChatMessage[] },
+  transcript: { messages: [] as ChatMessage[], planFileText: null as string | null },
 }))
 
 // Qualquer outra api do preload: inerte (assinaturas devolvem o "off").
@@ -31,13 +31,14 @@ vi.mock('./useChatTranscript', () => ({
     transcriptExists: true,
     lastPlanFilePath: null,
   }),
-  usePlanFile: () => null,
+  usePlanFile: () => transcript.planFileText,
 }))
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
 import { ChatView } from './ChatView'
 import { PlanCard } from './PlanCard'
+import { PLAN_KEY_DELAY_MS } from './respond-keys'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -59,6 +60,7 @@ globalThis.ResizeObserver ??= class {
 
 beforeEach(() => {
   transcript.messages = []
+  transcript.planFileText = null
   sessionsApiMock.attentionMenu.mockReset()
   sessionsApiMock.attentionRespond.mockReset()
 })
@@ -131,11 +133,167 @@ describe('ChatView — atualização das filhas', () => {
   })
 })
 
+const fixture317 = (name: string) =>
+  readFileSync(
+    join(__dirname, `../../../../shared/tui/__fixtures__/claude-2.1.317-${name}`),
+    'utf8',
+  )
+
+// A corrida do bug real: o tool_use do ExitPlanMode já está no JSONL e o diálogo
+// continua aberto na tela (claude 2.1.317, sonda probe-chat-plan-2317).
+describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () => {
+  function renderRace(onRespond = vi.fn()) {
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    const menu = parseTuiMenu(fixture317('plan-default.txt'))!
+    const utils = render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={menu}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-default.txt'))}
+        onRespond={onRespond}
+      />,
+    )
+    return { ...utils, onRespond }
+  }
+
+  it('um único card de plano, interativo, e sem o banner de ir ao terminal', () => {
+    const { container } = renderRace()
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(container.textContent).not.toContain('responda no compositor ou no terminal')
+    expect(container.textContent).not.toContain('use o terminal')
+  })
+
+  it('um botão por opção real, com o modo explícito e o destaque do terminal marcado', () => {
+    const { container } = renderRace()
+    expect(screen.getByTestId('plan-choice-approve-auto').textContent).toContain(
+      'Aprovar e ligar auto mode',
+    )
+    expect(screen.getByTestId('plan-choice-approve-auto').dataset.highlighted).toBe('true')
+    expect(screen.getByTestId('plan-choice-approve-manual').textContent).toBe(
+      'Aprovar com edições manuais',
+    )
+    expect(screen.getByTestId('plan-choice-approve-manual').dataset.highlighted).toBeUndefined()
+    expect(container.textContent).not.toContain('Pra aprovar, use o terminal')
+  })
+
+  it('aprovar manda o dígito da opção escolhida', () => {
+    const { onRespond } = renderRace()
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).toHaveBeenCalledWith(['2'], undefined)
+  })
+
+  it('pedir mudanças: dígito do campo + paste + Enter, com respiro entre as teclas', () => {
+    const { onRespond } = renderRace()
+    fireEvent.change(screen.getByTestId('plan-feedback'), { target: { value: 'use bye.txt' } })
+    fireEvent.click(screen.getByTestId('plan-feedback-send'))
+    expect(onRespond).toHaveBeenCalledWith(
+      ['3', '\x1b[200~use bye.txt\x1b[201~', '\r'],
+      PLAN_KEY_DELAY_MS,
+    )
+  })
+
+  it('descartar = Esc', () => {
+    const { onRespond } = renderRace()
+    fireEvent.click(screen.getByTestId('plan-choice-reject'))
+    expect(onRespond).toHaveBeenCalledWith(['\x1b'], undefined)
+  })
+
+  it('diálogo mudou desde o render: não digita e avisa', () => {
+    const onRespond = vi.fn()
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={parseTuiMenu(fixture317('plan-default.txt'))}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-no-auto.txt'))}
+        onRespond={onRespond}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).not.toHaveBeenCalled()
+    expect(screen.getByTestId('plan-notice').textContent).toContain('mudou')
+  })
+
+  it('respondido pelo card: o diálogo sai antes do tool_result e o banner não volta', () => {
+    const onRespond = vi.fn()
+    const { rerender, container } = renderRace(onRespond)
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onRespond).toHaveBeenCalledWith(['2'], undefined)
+    rerender(<ChatView sessionId="s-plan" status="working" onRespond={onRespond} />)
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(screen.getByTestId('plan-shortcuts')).toHaveTextContent('Decisão enviada…')
+    expect(container.textContent).not.toContain('aguardando sua aprovação do plano')
+  })
+
+  // JSONL real com a decisão do plano LzMZ7q no formato que a CLI grava.
+  function withDecision(toolUseResult: unknown, content: string) {
+    const line = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_013zfPNQQ4TP4VVHVMLzMZ7q', content }],
+      },
+      toolUseResult,
+    }
+    return parseChatMessages(`${fixture317('plan-default.jsonl')}\n${JSON.stringify(line)}`)
+  }
+
+  it('aprovado: o card mostra o plano aprovado (toolUseResult.plan), não o input.plan antigo', () => {
+    transcript.messages = withDecision(
+      { plan: 'Criar saudacao.txt com ola.', isAgent: false, filePath: '~/.claude/plans/x.md' },
+      'User has approved your plan. You can now start coding.',
+    )
+    const { container } = render(<ChatView sessionId="s-plan" status="idle" />)
+    expect(container.textContent).toContain('Criar saudacao.txt com ola.')
+    expect(container.textContent).not.toContain('hello.txt')
+  })
+
+  it('rejeitado: o card mostra o plano que estava no diálogo, não o input.plan antigo', () => {
+    transcript.planFileText = 'Criar saudacao.txt com ola.'
+    const { rerender, container } = renderRace()
+    transcript.messages = withDecision(
+      'User rejected tool use',
+      "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+    )
+    transcript.planFileText = null
+    rerender(<ChatView sessionId="s-plan" status="idle" />)
+    expect(container.textContent).toContain('Criar saudacao.txt com ola.')
+    expect(container.textContent).not.toContain('hello.txt')
+  })
+
+  it('aprovar pelo card avisa o modo que a opção liga (pill não fica em Plano)', () => {
+    const onPlanApproved = vi.fn()
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={parseTuiMenu(fixture317('plan-default.txt'))}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-default.txt'))}
+        onRespond={vi.fn()}
+        onPlanApproved={onPlanApproved}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onPlanApproved).toHaveBeenCalledWith('default')
+  })
+
+  it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
+    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+    expect(container.textContent).toContain('aguardando sua aprovação do plano')
+  })
+})
+
 describe('PlanCard', () => {
-  it('atalho de aprovar usa tecla com ícone, nunca o glifo ⏎', () => {
+  it('sem atalho de Enter: o Enter do terminal escolheria a opção destacada', () => {
     render(<PlanCard plan="# Plano" onDecide={() => {}} />)
     const hints = screen.getByTestId('plan-shortcuts')
     expect(hints.textContent).not.toContain('⏎')
-    expect(hints.querySelector('kbd svg')).toBeTruthy()
+    expect(hints.querySelector('kbd svg')).toBeNull()
+    expect(hints.textContent).toContain('esc')
   })
 })

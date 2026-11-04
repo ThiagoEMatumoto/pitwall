@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes/history-rewind-compact/cwd
+
+
+✻ Conversation compacted (ctrl+o for the summary)
+  Earlier messages are saved in ~/.claude/projects/-home-pitwall-fixture--cache-ct-claude-1000--home-pitwall-fixture-pro
+  jetos-pessoal-claude-manager-27d08eff-5b3f-41ed-9512-4090ae0944fa-scratchpad-probes-history-rewind-compact-cwd/fd348fe
+  2-209a-4069-baa4-fe3c71e37d09.jsonl
+
+
+❯ /compact                                                                                                              
+  ⎿  Compacted (ctrl+o to see full summary)
+  ⎿  Read 
+     ../../../../../../../../../.claude/rules/team/sample-team-rule-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.md
+     (12 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/sample-rule-one-xxxxxx.md (67 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/workflow.md (85 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/sample-rule-two-xxx.md (30 lines)
+  ⎿  Read ../../../../../../../../../.claude/rules/common/testing.md (43 lines)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts                                                                   ○ low · /effort
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

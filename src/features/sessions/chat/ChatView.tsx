@@ -24,7 +24,9 @@ import { ModelPickerCard } from './ModelPickerCard'
 import { PermissionCard } from './PermissionCard'
 import { PendingElsewhereChip } from './PendingElsewhereChip'
 import { useMainPermissionMenu, usePermissionResponder } from './usePermissionResponder'
-import { PlanCard } from './PlanCard'
+import { PlanCard, type PlanDecision } from './PlanCard'
+import { planAcceptsFeedback, planApprovalMode, planChoices } from './plan-choices'
+import type { PermissionMode } from '../../../../shared/types/ipc'
 import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
 import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
@@ -53,18 +55,20 @@ import {
   buildOtherKeys,
   buildPickerSelectKeys,
   buildPlanKeys,
+  PLAN_KEY_DELAY_MS,
   buildReviewKeys,
   buildSelectKeys,
   buildSpaceKey,
   buildTabKeys,
   buildToggleKeys,
-  findManualApproveIndex,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
 import { pickerFingerprint, type TuiPicker } from '../tui-picker-parser'
 import {
   countUserMessages,
+  decidedPlanText,
   isAtBottom,
+  liveMenuCoversPending,
   nextResolveAt,
   pendingEchoes,
   pendingInteractive,
@@ -90,10 +94,12 @@ interface Props {
   onToggleMode?: () => void
   // Reproduz sequências de teclas no PTY vivo (mesmo write() do onForwardKey do
   // composer). Vem do Terminal; ausente = cards ficam read-only. Consumido pelo
-  // caminho de clique baseado no menu TUI parseado (não pelo transcript: a CLI
-  // não grava o tool_use pendente no JSONL, então cards de transcript nunca
-  // estão pendentes — só pós-resposta).
-  onRespond?: (seqs: string[]) => void
+  // caminho de clique baseado no menu TUI parseado. delayMs: respiro entre as
+  // sequências quando a TUI precisa redesenhar entre elas (campo de feedback).
+  onRespond?: (seqs: string[], delayMs?: number) => void
+  // Plano aprovado pelo card: o modo de permissão que a opção liga (palpite do pill
+  // até o rodapé do xterm voltar a aparecer).
+  onPlanApproved?: (mode: PermissionMode) => void
   // Menu TUI pendente parseado do buffer do xterm (Terminal, debounced). É a
   // FONTE do momento pendente clicável. null = sem menu íntegro parseado.
   tuiMenu?: TuiMenu | null
@@ -124,7 +130,10 @@ interface Props {
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
 // Terminal); esta view só LÊ o transcript e adiciona ecos otimistas das mensagens
 // recém-enviadas até o disco alcançar.
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
+// A sonda viu o tool_use chegar ao JSONL até ~10s depois do diálogo (awaitUseMs).
+export const ANSWER_HOLD_MS = 10_000
+
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
@@ -327,15 +336,44 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Reconciliação do clique otimista: resposta real chegou (contagem avançou) →
   // menu consumido; menu mudou/sumiu sem resposta (ex.: Esc no terminal) → limpa
   // o sent pra não bloquear cliques num menu novo.
+  // O diálogo sai da tela antes do tool_result chegar no JSONL (gravação preguiçosa
+  // do 2.1.317 + debounce do watcher): nesse intervalo o pendente do transcript
+  // voltaria sem botões e com o banner de "responda". Segura o estado de enviado
+  // até a resposta chegar ou ANSWER_HOLD_MS passar.
+  const lastCoveredRef = useRef<{ id: string; plan: string | null } | null>(null)
+  // Último conteúdo do plan file mostrado no diálogo, por id: é o plano que o usuário
+  // decidiu, e o card decidido cai nele quando a decisão não traz o plano (rejeição).
+  const shownPlanRef = useRef(new Map<string, string>())
+  const [answered, setAnswered] = useState<{
+    id: string
+    plan: string | null
+    resolvedCount: number
+  } | null>(null)
+
   useEffect(() => {
     if (!tuiSent) return
     if (resolvedCount > tuiSent.resolvedCount) {
       setConsumedFp(tuiSent.fp)
       setTuiSent(null)
     } else if (menuFp !== tuiSent.fp) {
+      const covered = lastCoveredRef.current
+      if (menuFp == null && covered && covered.id === pendingPrompt?.id) {
+        setAnswered({ ...covered, resolvedCount: tuiSent.resolvedCount })
+      }
       setTuiSent(null)
     }
-  }, [tuiSent, resolvedCount, menuFp])
+  }, [tuiSent, resolvedCount, menuFp, pendingPrompt?.id])
+
+  useEffect(() => {
+    if (!answered) return
+    if (resolvedCount > answered.resolvedCount || menuFp != null || pendingPrompt?.id !== answered.id) {
+      setAnswered(null)
+      return
+    }
+    const t = setTimeout(() => setAnswered(null), ANSWER_HOLD_MS)
+    return () => clearTimeout(t)
+  }, [answered, resolvedCount, menuFp, pendingPrompt?.id])
+  const heldPending = answered != null && answered.id === pendingPrompt?.id ? answered : null
 
   // Dados sintetizados pro QuestionCard: a sentinela 'chat' fica fora das
   // opções (não tem card pra ela); 'other' (texto livre) fica dentro — MAS só
@@ -366,8 +404,12 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     }
   }, [tuiMenu])
 
-  const manualApproveIndex =
-    tuiMenu && tuiMenu.kind === 'plan' ? findManualApproveIndex(tuiMenu) : null
+  const tuiPlanChoices = useMemo(
+    () => (tuiMenu?.kind === 'plan' ? planChoices(tuiMenu) : []),
+    [tuiMenu],
+  )
+  const [planNotice, setPlanNotice] = useState<string | null>(null)
+  useEffect(() => setPlanNotice(null), [menuFp])
 
   // Prompt TTY-only (permissão de tool / trust de diretório) espelhado do buffer:
   // as opções vão inteiras pro card (não há sentinelas nesses menus).
@@ -385,26 +427,33 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // pergunta — kind próprio no parser, card dedicado (QuestionReviewCard).
   const tuiReview = tuiMenu && tuiMenu.kind === 'question_review' ? tuiMenu : null
 
-  // Conteúdo do plano pro card PENDENTE: o tool_use do ExitPlanMode ainda não
-  // está no JSONL, mas o plan file foi escrito durante o plan mode — lemos ele
-  // pelo path do último Write/Edit em ~/.claude/plans/. Sem path ou leitura
-  // falhou → placeholder (fail-safe, CLIs antigas continuam como antes).
+  // Conteúdo do plano pro card PENDENTE, sempre do arquivo: o input.plan do JSONL
+  // pode trazer o plano anterior (Write e ExitPlanMode saem em paralelo). O path
+  // vem do rodapé do diálogo, senão do último Write/Edit em ~/.claude/plans/. O
+  // fingerprint relê na hora quando o replanejamento regrava o mesmo path; o poll do
+  // usePlanFile pega a edição por Ctrl+G. Sem path ou leitura falhou → placeholder.
   const pendingPlanText = usePlanFile(
-    tuiMenu?.kind === 'plan' ? lastPlanFilePath : null,
+    tuiMenu?.kind === 'plan' ? (tuiMenu.planFile ?? lastPlanFilePath) : null,
+    menuFp,
   )
 
   // Card sintetizado só quando: menu íntegro + status elegível pro kind
   // ('waiting' pra qualquer um; 'starting'/'idle' pré-transcript só pra
-  // permission/trust — mesmo gate do Terminal, defesa em profundidade) + o
-  // transcript não tem momento pendente próprio (nunca duplicar) + o menu não
-  // foi consumido.
+  // permission/trust — mesmo gate do Terminal, defesa em profundidade) + o menu
+  // não foi consumido. O menu vivo precede o pendente do transcript (ver
+  // liveMenuCoversPending): esconder o card aqui deixava o plano sem botões.
   const showTuiCard =
     tuiMenu != null &&
     gateMenuByStatus(tuiMenu, status) != null &&
-    pendingPrompt == null &&
     menuFp !== consumedFp &&
     (tuiMenu.kind === 'plan' || tuiQuestion != null || tuiPermission != null || tuiReview != null)
+  const coveredPendingId =
+    showTuiCard && liveMenuCoversPending(pendingPrompt, tuiMenu?.kind) ? pendingPrompt?.id : null
   const canRespondTui = onRespond != null && showTuiCard && tuiSent == null
+  useEffect(() => {
+    if (coveredPendingId) lastCoveredRef.current = { id: coveredPendingId, plan: pendingPlanText }
+    if (coveredPendingId && pendingPlanText) shownPlanRef.current.set(coveredPendingId, pendingPlanText)
+  }, [coveredPendingId, pendingPlanText])
 
   // Guard de clique: RE-PARSE fresco do buffer imediatamente antes de digitar.
   // Menu fechou/mudou (respondido pelo terminal, resize) → fingerprint diverge →
@@ -491,16 +540,28 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     onRespond?.(keys)
   }
 
-  function respondTuiPlan(d: 'approve' | 'reject') {
+  function respondTuiPlan(d: PlanDecision, feedback?: string) {
     if (!canRespondTui || menuFp == null) return
     const fresh = freshMenuMatches()
-    if (!fresh) return
-    // O dígito de aprovação vem do RE-PARSE (não do menu do estado): se a opção
-    // manual sumiu/mudou de posição, buildPlanKeys devolve [] e nada é enviado.
-    const keys = buildPlanKeys(d, findManualApproveIndex(fresh))
-    if (keys.length === 0) return
+    if (!fresh) {
+      setPlanNotice('O diálogo mudou no terminal — confira as opções de novo.')
+      return
+    }
+    // O dígito vem do RE-PARSE (não do menu do estado): se a opção sumiu/mudou de
+    // posição, buildPlanKeys devolve [] e nada é enviado.
+    const keys = buildPlanKeys(fresh, d, feedback)
+    if (keys.length === 0) {
+      setPlanNotice(
+        d === 'feedback'
+          ? 'O campo de mudanças no terminal já tem texto: envie ou apague por lá.'
+          : 'Essa opção não está mais no diálogo.',
+      )
+      return
+    }
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
+    onRespond?.(keys, keys.length > 1 ? PLAN_KEY_DELAY_MS : undefined)
+    const mode = planApprovalMode(fresh, d)
+    if (mode) onPlanApproved?.(mode)
   }
 
   // ── Pickers de /model, /theme, /config e busca de histórico (Ctrl+R) ──────
@@ -709,7 +770,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           plan={pendingPlanText ?? PLAN_PLACEHOLDER}
           onDecide={canRespondTui ? respondTuiPlan : undefined}
           sent={tuiSent != null && tuiSent.fp === menuFp}
-          canApprove={manualApproveIndex != null}
+          choices={tuiPlanChoices}
+          canFeedback={planAcceptsFeedback(tuiMenu)}
+          notice={planNotice}
         />
       )}
       {tuiPermission && (
@@ -817,20 +880,26 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             interrupted={m.interrupted}
           />
         )
-      // Cards de transcript são PÓS-resposta por natureza: a CLI só grava o
-      // tool_use no JSONL junto com a resposta, então nunca estão pendentes.
-      // O momento pendente (clicável) vem do menu TUI parseado do buffer.
+      // O momento pendente (clicável) vem do menu TUI parseado do buffer. Quando o
+      // tool_use pendente já chegou ao JSONL, o card do menu vivo o substitui.
       case 'ask_user_question':
+        if (m.id === coveredPendingId) return null
         return (
           <QuestionCard key={i} questions={m.questions} answers={interactive.answers.get(m.id)} />
         )
       case 'exit_plan_mode':
+        if (m.id === coveredPendingId) return null
         return (
           <TranscriptPlanCard
             key={i}
-            plan={m.plan}
+            plan={
+              (m.id === heldPending?.id && heldPending.plan) ||
+              decidedPlanText(m.id, interactive, shownPlanRef.current) ||
+              m.plan
+            }
             planFilePath={m.planFilePath}
             decision={interactive.plans.get(m.id)}
+            sent={m.id === heldPending?.id}
           />
         )
 
@@ -903,13 +972,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             {tuiCardNode}
             {tuiPickerCardNode}
             <ChatWaitBanners
-              pendingPrompt={pendingPrompt}
+              pendingPrompt={showTuiCard || heldPending ? null : pendingPrompt}
               waitInTerminal={waitInTerminal}
+              menuKind={tuiMenu?.kind}
               onToggleMode={onToggleMode}
             />
             {/* Indicador discreto de atividade. Suprimido quando há um prompt pendente
             (status 'waiting'), pra não competir com o banner acima. */}
-            {status === 'working' && !pendingPrompt && workingSince != null && (
+            {status === 'working' && (!pendingPrompt || heldPending) && workingSince != null && (
               <WorkingIndicator since={workingSince} thinking={lastIsThinking} />
             )}
           </div>

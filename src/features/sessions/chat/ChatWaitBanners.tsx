@@ -1,16 +1,23 @@
 import { Clock, TerminalSquare } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
+import type { ChatFallbackKind } from '../../../../shared/chat/fallback'
 import type { PendingInteractive } from './chat-logic'
+import { useChatFallback } from './useChatFallback'
 
 export function ChatWaitBanners({
   pendingPrompt,
   waitInTerminal,
   onToggleMode,
+  menuKind = 'unknown',
 }: {
   pendingPrompt: PendingInteractive | null
   waitInTerminal: boolean
   onToggleMode?: () => void
+  // Menu parseado que o chat não soube mostrar (sem menu = 'unknown').
+  menuKind?: ChatFallbackKind
 }) {
+  useChatFallback(pendingPrompt?.kind ?? null, 'pending-without-menu')
+  useChatFallback(waitInTerminal ? menuKind : null, 'wait-in-terminal')
   return (
     <>
       {pendingPrompt && (

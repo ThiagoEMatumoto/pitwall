@@ -141,6 +141,7 @@ const stamp = (t: HandoffTransition | undefined): string => (t ? String(t.at) : 
 const MENU_WHY: Record<SessionMenuReason, string> = {
   permission: 'Permissão pedida na tela',
   question: 'Pergunta na tela',
+  plan: 'Plano esperando aprovação',
   trust: 'Confiar na pasta',
   unrecognized: 'Esperando você (tela não reconhecida)',
 }

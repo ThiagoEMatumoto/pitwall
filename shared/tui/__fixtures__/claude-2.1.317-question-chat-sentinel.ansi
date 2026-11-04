@@ -1,0 +1,135 @@
+(B[?2004h[?25l[2D[3B[2C[3AUse a ferramenta AskUserQuestion com[40GUMA[44Gpergunta[53Gsingle-select[67G(multiSelect[80Gfalse)[87Gcom[91G3[93Gopções[100Gsobre[106Glinguagem[116Gde[1B  programação favorita. Depois da resposta, só diga ok e pare.[K[1B[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[39m
+[62C[3A[?25h]0;◐ Claude Code[?25l[62D[3B[5A[48;5;237m[38;5;246m❯ [38;5;231mUse a ferramenta AskUserQuestion com UMA pergunta single-select (multiSelect false) com 3 opções sobre linguagem de [39m  [1B  [38;5;231mprogramação favorita. Depois da resposta, só diga ok e pare.[39m                                                          [2C[1B[49m[K[1B[38;5;174m*[39m [38;5;174mThundering… [39m[K[2C[1B[K
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[38;5;246m❯ [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[40G·[42Gesc[46Gto[49Ginterrupt[39m
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m·[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[2C[6A[38;5;174mGrooving… [39m[K
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[12C[6A[38;5;246m(0s · [38;5;247mthinking with low effort[38;5;246m)[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[18C[6A[38;5;246mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m*[39m
+
+
+
+
+
+[2C[3A[?25h]0;◑ Claude Code[?25l[2D[3B[6A[38;5;174m✶[14G[38;5;246m1[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✻[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✽[19G[38;5;247mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[18C[6A[38;5;248mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[18C[6A[38;5;246m↓[39m [38;5;246m25 tokens · [38;5;248mthinking with low effort[38;5;246m)[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;231m●[3G[39mVou fazer a pergunta sobre linguagem favorita com a ferramenta[66Gde[69Gperguntas.[2B[38;5;174m✽[39m [38;5;174mGrooving… [38;5;246m(1s · ↓[39m [38;5;246m25 tokens · [38;5;248mthinking with low effort[38;5;246m)[39m[K[1B[K[2B[38;5;246m❯ [39m[K
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[40G·[42Gesc[46Gto[49Ginterrupt[39m
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✻[21G[38;5;246m50[33G[38;5;249mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[20C[6A[38;5;246m75[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✶[21G[38;5;246m113 tokens · [38;5;249mthinking with low e[54Gfort[38;5;246m)[39m
+
+
+
+
+
+[2C[3A[?25h]0;◑ Teste AskUserQuestion com linguagem favorita]0;◐ Teste AskUserQuestion com linguagem favorita[?25l[2D[3B[6A[38;5;174m*[14G[38;5;246m2[22G38[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[11G[38;5;216m…[22G[38;5;246m63[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[21C[6A[38;5;246m88[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m·[10G[38;5;216mg[21G[38;5;246m225[34G[38;5;248mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h]0;✳ Teste AskUserQuestion com linguagem favorita[?25l[2D[3B[7A[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[48;5;153m[38;5;16m ☐ Linguagem [39m[49m[K[2B[38;5;231m[1mQual é a sua linguagem de programação favorita?[22m[39m[K[1B[K[1B[38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mPython[39m[K[2C[1B   [38;5;246mSintaxe limpa e ecossistema enorme em dad[48Gs, automação e backend.[39m
+[3G[38;5;246m2.[6G[39mTypeScript
+[6G[38;5;246mJavaScript[17Gcom[21Gtipagem[29Gestática,[39Gforte[45Gem[48Gfrontend[57Ge[59Gfullstack.[39m
+[3G[38;5;246m3.[6G[39mGo
+[6G[38;5;246mSimples,[15Grápida[22Gde[25Gcompilar[34Ge[36Gmuito[42Gusada[48Gem[51Gserviços[60Ge[62Ginfraestrutura.[39m
+[3G[38;5;246m4.[6GType[11Gsomething.[39m
+[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G5.[6GChat[11Gabout[17Gthis
+
+[38;5;246mEnter[7Gto[10Gselect[17G·[19G↑/↓[23Gto[26Gnavigate[35G·[37GEsc[41Gto[44Gcancel[39m
+[11A

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   lastPlanFilePath,
@@ -239,7 +241,12 @@ describe('parseChatMessages — interactive prompts', () => {
       planFilePath: null,
       allowedPrompts: ['edit'],
     })
-    expect(m[2]).toEqual({ kind: 'plan_decision', forId: 'plan_1', approved: true })
+    expect(m[2]).toEqual({
+      kind: 'plan_decision',
+      forId: 'plan_1',
+      approved: true,
+      plan: '# My Plan\n\nDo the thing.',
+    })
   })
 
   it('parses AskUserQuestion questions/options and the answers map', () => {
@@ -986,5 +993,71 @@ describe('parseChatMessages — pergunta de outro agente (pitwall-ask)', () => {
     )
     expect(lastUserPrompt(m)).toBe('migrar o checkout')
     expect(cleanPrompt(envelope)).toBeNull()
+  })
+})
+
+// JSONL real do claude 2.1.317 (sonda probe-chat-plan-2317): o tool_use do
+// ExitPlanMode aparece também numa linha api-request-blob, com o mesmo id.
+describe('parseChatMessages — ExitPlanMode do claude 2.1.317 (JSONL real)', () => {
+  const real = (name: string) =>
+    readFileSync(
+      join(__dirname, '../../../shared/tui/__fixtures__', `claude-2.1.317-${name}.jsonl`),
+      'utf8',
+    )
+  const plans = (msgs: ReturnType<typeof parseChatMessages>) =>
+    msgs.filter((m) => m.kind === 'exit_plan_mode' || m.kind === 'plan_decision')
+
+  it('aprovado: um card e a decisão aprovada, apesar do api-request-blob', () => {
+    expect(plans(parseChatMessages(real('plan-auto-after-approve')))).toEqual([
+      expect.objectContaining({ kind: 'exit_plan_mode', id: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB' }),
+      {
+        kind: 'plan_decision',
+        forId: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB',
+        approved: true,
+        plan: expect.stringContaining('Criar o arquivo `hello.txt`'),
+      },
+    ])
+  })
+
+  it('aprovado: a decisão traz o plano do toolUseResult, não o input.plan antigo', () => {
+    // Mesmo JSONL real, com o plano aprovado diferente do input (o Write do plan file
+    // e o ExitPlanMode saem em paralelo: o input pode trazer o plano anterior).
+    const jsonl = real('plan-auto-after-approve')
+      .split('\n')
+      .map((line) => {
+        if (!line.includes('"toolUseResult"')) return line
+        const obj = JSON.parse(line)
+        if (typeof obj.toolUseResult?.plan !== 'string') return line
+        return JSON.stringify({ ...obj, toolUseResult: { ...obj.toolUseResult, plan: 'criar saudacao.txt' } })
+      })
+      .join('\n')
+    const [card, decision] = plans(parseChatMessages(jsonl))
+    expect(card).toMatchObject({ kind: 'exit_plan_mode' })
+    expect(decision).toMatchObject({ kind: 'plan_decision', approved: true, plan: 'criar saudacao.txt' })
+  })
+
+  it('rejeitado com feedback: toolUseResult é string, a decisão vem sem plano', () => {
+    const decision = plans(parseChatMessages(real('plan-feedback-after-submit')))[1]
+    expect(decision).not.toHaveProperty('plan')
+  })
+
+  it('pendente: o tool_use chega com o diálogo aberto, sem decisão', () => {
+    expect(plans(parseChatMessages(real('plan-default')))).toEqual([
+      expect.objectContaining({
+        kind: 'exit_plan_mode',
+        planFilePath: '~/.claude/plans/planeje-criar-um-arquivo-structured-pike.md',
+      }),
+    ])
+  })
+
+  it('feedback: decisão não aprovada', () => {
+    const decision = plans(parseChatMessages(real('plan-feedback-after-submit')))[1]
+    expect(decision).toMatchObject({ kind: 'plan_decision', approved: false })
+  })
+
+  it('a mesma linha assistant regravada não duplica o card', () => {
+    const line = real('plan-default').trim()
+    const msgs = parseChatMessages(`${line}\n${line}\n`)
+    expect(msgs.filter((m) => m.kind === 'exit_plan_mode')).toHaveLength(1)
   })
 })

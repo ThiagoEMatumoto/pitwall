@@ -3,6 +3,7 @@ import {
   ChevronDown,
   CircleCheck,
   FolderLock,
+  ListChecks,
   MessageCircleQuestion,
   MessagesSquare,
   ShieldQuestion,
@@ -12,7 +13,8 @@ import {
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
-import { findManualApproveIndex } from '@/features/sessions/chat/respond-keys'
+import { planAcceptsFeedback, planChoices } from '@/features/sessions/chat/plan-choices'
+import { useChatFallback } from '@/features/sessions/chat/useChatFallback'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import type { AttentionAction, AttentionMenuSnapshot, TuiMenu } from '../../../shared/types/ipc'
 import { isScopedAlwaysLabel, stripUnsafeDisplay } from '../../../shared/tui/permission-request'
@@ -36,6 +38,7 @@ const REASON_META: Record<AttentionDetail, ReasonMeta> = {
   permission: { label: 'Pede permissão', icon: ShieldQuestion, color: 'var(--color-warning)' },
   trust: { label: 'Confiar na pasta?', icon: FolderLock, color: 'var(--color-warning)' },
   question: { label: 'Pergunta pendente', icon: MessageCircleQuestion, color: 'var(--color-info)' },
+  plan: { label: 'Plano esperando aprovação', icon: ListChecks, color: 'var(--color-info)' },
   'turn-end': { label: 'Terminou o turno', icon: CircleCheck, color: 'var(--color-text-dim)' },
   'handoff-input': {
     label: 'Pergunta pendente',
@@ -50,7 +53,7 @@ export function reasonMeta(detail: AttentionDetail): ReasonMeta {
 
 // Motivos em que dá pra responder daqui: há menu na tela da PTY.
 export function isActionableDetail(detail: AttentionDetail | undefined): boolean {
-  return detail === 'permission' || detail === 'trust' || detail === 'question'
+  return detail === 'permission' || detail === 'trust' || detail === 'question' || detail === 'plan'
 }
 
 export interface MenuAction {
@@ -103,9 +106,8 @@ export function menuActions(menu: TuiMenu): MenuAction[] {
       ...action(menu, 'exit', 'Sair', 'danger', findOption(menu, /^No\b/i)),
     ]
   }
-  if (menu.kind === 'plan') {
-    return action(menu, 'approve-plan', 'Aprovar plano', 'primary', findManualApproveIndex(menu))
-  }
+  // Plano responde por intent, não por dígito: ver PlanActions.
+  if (menu.kind === 'plan') return []
   if (menu.kind !== 'question' || menu.multiSelect || menu.tabs) return []
   return menu.options
     .filter((o) => o.sentinel == null)
@@ -141,7 +143,17 @@ function MenuContext({ menu }: { menu: TuiMenu }) {
   )
 }
 
-function OtherAnswer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => void }) {
+function OtherAnswer({
+  disabled,
+  onSend,
+  label = 'Outra resposta',
+  testId = 'attention-other-input',
+}: {
+  disabled: boolean
+  onSend: (text: string) => void
+  label?: string
+  testId?: string
+}) {
   const [text, setText] = useState('')
   const canSend = !disabled && text.trim() !== ''
   return (
@@ -150,13 +162,13 @@ function OtherAnswer({ disabled, onSend }: { disabled: boolean; onSend: (text: s
         type="text"
         value={text}
         disabled={disabled}
-        data-testid="attention-other-input"
-        aria-label="Outra resposta"
+        data-testid={testId}
+        aria-label={label}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && canSend) onSend(text)
         }}
-        placeholder="Outra resposta…"
+        placeholder={`${label}…`}
         className="min-w-0 flex-1 bg-transparent text-xs text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
       />
       <Button
@@ -242,6 +254,7 @@ interface PopoverProps {
 // equivalente (o original fica no tooltip). Pergunta desconhecida passa como veio.
 const QUESTION_PT: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   [/^Do you want to proceed\?$/i, () => 'Quer continuar?'],
+  [/Claude has written up a plan.*Would you like to proceed\?$/i, () => 'Plano pronto. Como seguir?'],
   [/^Do you want to make this edit to (.+)\?$/i, (m) => `Aplicar esta edição em ${m[1]}?`],
   [/^Do you want to create (.+)\?$/i, (m) => `Criar ${m[1]}?`],
   [/^Do you want to allow (.+)\?$/i, (m) => `Permitir ${m[1]}?`],
@@ -267,6 +280,16 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const [sending, setSending] = useState(false)
   const menu = snapshot?.menu ?? null
   const actions = menu ? menuActions(menu) : []
+  const allPlan = menu?.kind === 'plan' ? planChoices(menu) : null
+  const plan = allPlan?.filter((c) => !c.confirm) ?? null
+  const planHidesBypass = allPlan != null && allPlan.length > (plan?.length ?? 0)
+  const unrecognized = snapshot === null && isActionableDetail(item.detail) && !notice
+  useChatFallback(
+    unrecognized && item.detail && item.detail !== 'turn-end' && item.detail !== 'handoff-input'
+      ? item.detail
+      : null,
+    'popover-unrecognized',
+  )
   const otherIndex = menu ? otherOptionIndex(menu) : null
   const alwaysAction = actions.find((a) => a.key === 'always')
   const alwaysOption = menu?.options.find((o) => o.index === alwaysAction?.optionIndex)
@@ -330,7 +353,7 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
       {snapshot === undefined && isActionableDetail(item.detail) && (
         <p className="text-[var(--color-text-dim)]">Lendo o menu…</p>
       )}
-      {snapshot === null && isActionableDetail(item.detail) && !notice && (
+      {unrecognized && (
         <p className="text-[var(--color-text-dim)]">Menu não reconhecido — responda no terminal.</p>
       )}
 
@@ -362,6 +385,46 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
             </Button>
           )}
         </div>
+      )}
+      {plan && (
+        <div className="flex flex-wrap gap-1.5">
+          {plan.map((c) => (
+            <Button
+              key={c.intent}
+              data-testid={`attention-plan-${c.intent}`}
+              variant={c.tone === 'secondary' ? 'ghost' : c.tone}
+              disabled={sending}
+              className="!px-3 !py-1 text-xs"
+              title={c.optionLabel}
+              onClick={() => void send({ kind: 'plan', intent: c.intent })}
+            >
+              {c.label}
+            </Button>
+          ))}
+          <Button
+            data-testid="attention-plan-reject"
+            variant="ghost"
+            disabled={sending}
+            className="!px-3 !py-1 text-xs"
+            title="Esc: rejeita o plano sem mandar mudanças"
+            onClick={() => void send({ kind: 'plan', intent: 'reject' })}
+          >
+            Descartar
+          </Button>
+          {planHidesBypass && (
+            <p data-testid="attention-plan-bypass-hint" className="w-full text-[var(--color-text-dim)]">
+              Aprovar com bypass só pelo card do chat, que mostra o plano.
+            </p>
+          )}
+        </div>
+      )}
+      {menu && planAcceptsFeedback(menu) && (
+        <OtherAnswer
+          disabled={sending}
+          label="Pedir mudanças no plano"
+          testId="attention-plan-feedback"
+          onSend={(text) => void send({ kind: 'plan', intent: 'feedback', text })}
+        />
       )}
       {alwaysHint && (
         <p data-testid="attention-always-hint" className="text-[var(--color-text-dim)]">

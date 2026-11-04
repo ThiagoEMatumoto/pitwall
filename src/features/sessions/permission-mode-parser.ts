@@ -42,6 +42,13 @@ export function detectFooterMode(footer: string): PermissionMode {
   return parsePermissionMode(footer) ?? 'default'
 }
 
+// Leitura do rodapé pro pill com um menu TUI possivelmente aberto. O diálogo de plano e o
+// prompt de permissão tomam o lugar do rodapé: ali "sem indicador" não prova 'default', só
+// um indicador explícito conta. null = manter o modo atual (sem toast de mudança falsa).
+export function footerModeUpdate(footer: string, menuOpen: boolean): PermissionMode | null {
+  return parsePermissionMode(footer) ?? (menuOpen ? null : 'default')
+}
+
 // Decide se uma mudança de `currentMode` (Terminal.tsx) merece o banner efêmero de
 // transição. `prev` null cobre DOIS casos que nunca notificam: o estado inicial
 // (ainda não detectamos nada) e a PRIMEIRA detecção real (baseline, não é uma

@@ -1,0 +1,65 @@
+[?25l[2D[3B[103C[1A[K
+[2C[3A[?25h[?25l[2D[3B[2C[3A[38;5;153m/hooks[2C[2B❯ /[1mhooks[22m                                          View hook configurations for tool events[39m
+[3G[38;5;246m [5G/update-config[53GChange[60Gsettings:[70G[39m[1mhooks[22m[38;5;246m,[77Gpermissions,[90Genvironment[102Gvariables[39m
+[3G[38;5;246m [5G/doctor[53GHealth-check[66Gyour[71Gsetup[77Gand[81Gfix[85Gissues:[93Ginstallation,[107Gunused[39m
+[53G[38;5;246mextensions,[65Gduplicated[76Gor[79Gbloated[87Gmemory[94Gfiles,[101Gslow[106G[39m[1mhooks[22m[38;5;246m,[113Gupdat…[39m
+[3G[38;5;246m [5G/plugin-authoring[53GWrite[59Ga[61Gmod:[66Ga[68Glive[73Gpane,[79Gview[84Gor[87Gbehaviour[97Gchange[104Gin[107GClaude[114GCode[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[8C[24A[?25h[?25l[8D[24B[H[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[H[38;5;174m ▐[48;5;16m▛███▛█[12G[39m[49m[1mClaude[19GCode[24G[22m[38;5;246mv2.1.317[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[12G[38;5;246mHaiku[18G5.5[22Gwith[27Glow[31Geffort[38G·[40GClaude[47GUltra[39m
+[38;5;174m ▝▝[7G▝▝[12G[38;5;246m~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes/unknown-menus/cwd[39m
+
+
+[48;5;237m[38;5;246m❯ [38;5;231mdiga oi[39m                                                                                                               [49m
+
+[38;5;231m●[3G[39mOi![7GEm[10Gque[14Gposso[20Gajudar[27Ghoje?
+
+[3GVi[6Gque[10Gestamos[18Gem[21G[38;5;153m/home/pitwall-fixture/.cache/ct/claude-1000/.../scratchpad/probes/unknown-menus/cwd[39m,[106Gque[110Gnão[114Gé[116Gum
+[3Grepositório[15Ggit.[20GSe[23Gvocê[28Gtiver[34Galguma[41Gtarefa,[49Gme[52Gpasse[58Gos[61Gdetalhes.
+
+[38;5;246m✻[3GSautéed[11Gfor[15G1s[18G·[20Gdone[25G20:03[39m
+
+[48;5;237m[38;5;246m❯[39m [38;5;231m/permissions[39m [49m
+[38;5;246m [3G⎿[6G[39mPermissions[18Gdialog[25Gdismissed
+
+[48;5;237m[38;5;246m❯[39m [38;5;231m/mcp[39m [49m
+[38;5;246m [3G⎿[6G[39mMCP[10Gdialog[17Gdismissed
+
+[48;5;237m[38;5;246m❯[39m [38;5;231m/agents[39m                                                                                                               [49m
+[38;5;246m [3G⎿[6G[39mThe[10G/agents[18Gwizard[25Ghas[29Gbeen[34Gremoved.
+
+[6GAsk[10GClaude[17Gto[20Gcreate[27Gor[30Gupdate[37Gsubagents[47Gfor[51Gyou[55G(e.g.[61G"create[69Ga[71Gcode-reviewer[85Gsubagent[94Gthat[99G..."),
+[6Gor[9Gedit[14Gthe[18Gfiles[24Gdirectly:
+[8G•[10G.claude/agents/[32G(this[38Gproject)
+[8G•[10G~/.claude/agents/[32G(all[37Gprojects)
+
+[6GDocs:[12Ghttps://code.claude.com/docs/en/sub-agents
+
+[48;5;237m[38;5;246m❯ [38;5;231m/hooks[39m                                                                                                                [49m
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;153m[1mHooks[22m[39m
+[3G[38;5;246mno[6Ghooks[12Gyet[39m
+
+[3G[38;5;246mThis[8Gmenu[13Gis[16Gread-only.[27GTo[30Gadd[34Gor[37Gchange[44Ga[46Ghook,[52Gedit[57Gsettings.json[71Gor[74Gask[78GClaude.[86GLearn[92Gmore[39m
+
+[3G[38;5;153m❯[5GAll[9Gevents[39m
+
+[3G[38;5;246m[3mEnter[9Gto[12Gview[17G·[19GEsc[23Gto[26Gclose[23m[39m
+[2C[3A

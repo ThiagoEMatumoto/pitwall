@@ -98,7 +98,12 @@ export function searchTargets(query: string, targets: SendTarget[]): SendTarget[
   return ranked.map((x) => x.t)
 }
 
-const MENU_REASONS: ReadonlySet<AttentionReason> = new Set(['permission', 'trust', 'question'])
+const MENU_REASONS: ReadonlySet<AttentionReason> = new Set([
+  'permission',
+  'trust',
+  'question',
+  'plan',
+])
 
 export function defaultWhen(
   t: Pick<SendTarget, 'status' | 'attentionReason'>,

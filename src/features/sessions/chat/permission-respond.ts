@@ -1,5 +1,5 @@
 import type {
-  AttentionAction,
+  MenuOptionAction,
   AttentionMenuSnapshot,
   AttentionRespondInput,
   AttentionRespondResult,
@@ -42,7 +42,7 @@ export async function respondGuarded(
   api: GuardedRespondApi,
   sessionId: string,
   shown: TuiMenu,
-  action: AttentionAction,
+  action: MenuOptionAction,
 ): Promise<GuardedRespondResult> {
   const snap = await api.attentionMenu(sessionId)
   if (!snap) return { ok: false, error: 'no-watch' }

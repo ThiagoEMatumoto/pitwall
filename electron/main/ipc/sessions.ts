@@ -7,6 +7,8 @@ import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import { z } from 'zod'
 import { getDb } from '../services/db'
+import { chatFallbackCounters, noteChatFallback } from '../services/chat-fallback-counter'
+import { CHAT_FALLBACK_KINDS, CHAT_FALLBACK_REASONS } from '../../../shared/chat/fallback'
 import {
   clearConversationHibernated,
   isConversationHibernated,
@@ -147,6 +149,20 @@ const attentionActionSchema = z.discriminatedUnion('kind', [
     optionIndex: z.number().int().nonnegative(),
     text: z.string().min(1).max(4000),
   }),
+  z.object({
+    kind: z.literal('plan'),
+    intent: z.enum([
+      'approve-auto',
+      'approve-accept-edits',
+      'approve-manual',
+      'approve-bypass',
+      'approve-clear-context',
+      'feedback',
+      'keep-planning',
+      'reject',
+    ]),
+    text: z.string().min(1).max(4000).optional(),
+  }),
 ])
 const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
   sessionId: z.string().min(1),
@@ -155,6 +171,10 @@ const attentionRespondSchema: z.ZodType<AttentionRespondInput> = z.object({
   action: attentionActionSchema,
 })
 const attentionSessionSchema = z.string().min(1)
+const chatFallbackSchema = z.object({
+  kind: z.enum(CHAT_FALLBACK_KINDS),
+  reason: z.enum(CHAT_FALLBACK_REASONS),
+})
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -1726,7 +1746,10 @@ export function registerSessionIpc(): void {
   ipcMain.handle('sessions:attention-respond', (_e, input: unknown) =>
     tuiMenuWatch.respond(attentionRespondSchema.parse(input)),
   )
-  ipcMain.handle('sessions:attention-debug', () => tuiMenuWatch.counters())
+  ipcMain.handle('sessions:attention-debug', () => ({
+    ...tuiMenuWatch.counters(),
+    ...chatFallbackCounters(),
+  }))
   ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
@@ -1847,6 +1870,11 @@ export function registerSessionIpc(): void {
   // Segurança: o path vem do renderer — só aceitamos arquivos cujo realpath
   // (symlinks/.. resolvidos) esteja DENTRO de ~/.claude/plans/. Qualquer coisa
   // fora, inexistente ou ilegível → null (a UI cai no placeholder).
+  ipcMain.handle('chat:note-fallback', (_e, input: unknown) => {
+    const { kind, reason } = chatFallbackSchema.parse(input)
+    noteChatFallback(kind, reason)
+  })
+
   ipcMain.handle('chat:read-plan-file', async (_e, filePath: string): Promise<string | null> => {
     if (typeof filePath !== 'string' || !filePath) return null
     try {

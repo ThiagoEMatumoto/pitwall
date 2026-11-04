@@ -216,6 +216,7 @@ const api: Api = {
   chat: {
     getTranscript: (sessionId) => invoke('chat:get-transcript', sessionId),
     readPlanFile: (path) => invoke('chat:read-plan-file', path),
+    noteFallback: (kind, reason) => invoke('chat:note-fallback', { kind, reason }),
     watch: (sessionId) => {
       void invoke('chat:watch', sessionId)
     },

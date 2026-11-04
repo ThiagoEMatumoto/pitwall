@@ -30,12 +30,13 @@ import { useSummarizeNow } from './voice/useSummarizeNow'
 import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
-import { playKeys } from './chat/respond-keys'
+import { buildOtherKeys, buildPlanKeys, PLAN_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
+import { terminalWriteBlockedNotice, type ComposerMenuRoute } from './composer-menu-guard'
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
 import { mergePending, nextPendingApply, type PendingSelection } from './model-queue'
-import { detectFooterMode, shouldNotifyModeChange } from './permission-mode-parser'
+import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './permission-mode-parser'
 import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
@@ -695,7 +696,7 @@ function TerminalHost({
       jumpTimerRef.current = null
     }
     const term = xtermRef.current
-    if (!term) return
+    if (!term || blockPermissionWrite()) return
     const start = detectFooterMode(readFooterText(term))
     if (start === target) return
     let steps = 0
@@ -703,6 +704,10 @@ function TerminalHost({
     const tick = () => {
       const t = xtermRef.current
       if (!t) return
+      if (blockPermissionWrite()) {
+        jumpTimerRef.current = null
+        return
+      }
       steps += 1
       const cur = detectFooterMode(readFooterText(t))
       setCurrentMode(cur)
@@ -714,6 +719,12 @@ function TerminalHost({
       jumpTimerRef.current = window.setTimeout(tick, 140)
     }
     jumpTimerRef.current = window.setTimeout(tick, 140)
+  }
+
+  function blockPermissionWrite(): boolean {
+    const notice = terminalWriteBlockedNotice(readTuiMenu(), 'permission')
+    if (notice) showToast({ title: 'Modo de permissão não trocado', body: notice })
+    return notice != null
   }
 
   // Cancela os timers de permissão (jump + debounce do tracking) ao desmontar.
@@ -797,6 +808,22 @@ function TerminalHost({
     if (mode === 'chat') chatViewRef.current?.pushEcho(text)
   }
 
+  // Texto do composer com um menu aberto vira a resposta que o menu aceita (guarda
+  // do Composer): feedback do plano ou Other da pergunta. Sem eco: não é um turno
+  // do usuário no JSONL, e sim o tool_result do menu.
+  async function answerMenu(
+    menu: TuiMenu,
+    route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
+    text: string,
+  ): Promise<void> {
+    const keys =
+      route.kind === 'plan-feedback'
+        ? buildPlanKeys(menu, 'feedback', text)
+        : buildOtherKeys(route.optionIndex, text)
+    if (keys.length === 0) throw new Error(`o menu não aceita este texto (${route.kind})`)
+    await playKeys(keys, write, route.kind === 'plan-feedback' ? PLAN_KEY_DELAY_MS : undefined)
+  }
+
   // Chamado pelo SessionHeader ao commitar um rename (Enter/blur no input com
   // valor não-vazio). Cache no nosso DB (Fase 4/listagem) — a exibição prioriza
   // activity.name; fonte de verdade do nome é o próprio claude via /rename.
@@ -808,7 +835,10 @@ function TerminalHost({
     setTitle(next)
     setTitleSource('manual')
     void sessionsApi.rename(session.id, next)
-    if (canRename) write('\x15/rename ' + next + '\r')
+    if (!canRename) return
+    const notice = terminalWriteBlockedNotice(readTuiMenu(), 'rename')
+    if (notice) showToast({ title: 'Sessão renomeada', body: notice })
+    else write('\x15/rename ' + next + '\r')
   }
 
   useEffect(() => {
@@ -961,10 +991,12 @@ function TerminalHost({
         // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
         // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
         // status limpam (null).
-        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(t), statusRef.current))
+        const menuOnScreen = readTuiMenuFrom(t)
+        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(t))
         if (statusRef.current === 'working' || statusRef.current === 'starting') return
-        setCurrentMode(detectFooterMode(readFooterText(t)))
+        const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
+        if (mode) setCurrentMode(mode)
       }, 150)
       if (flushed) term.write(data)
       else liveTotal += data
@@ -998,13 +1030,15 @@ function TerminalHost({
         flushed = true
         // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
         // escrito no term). Gate de status: não lê durante 'working'/'starting'.
+        const menuOnScreen = readTuiMenuFrom(term)
         if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          setCurrentMode(detectFooterMode(readFooterText(term)))
+          const mode = footerModeUpdate(readFooterText(term), menuOnScreen != null)
+          if (mode) setCurrentMode(mode)
         }
         // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
         // prompt numa pane remontada) não gera data event novo — sem este seed o
         // card só apareceria no próximo byte do PTY.
-        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(term), statusRef.current))
+        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(term))
       })
 
@@ -1414,7 +1448,8 @@ function TerminalHost({
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
-            onRespond={(seqs) => void playKeys(seqs, write)}
+            onRespond={(seqs, delayMs) => void playKeys(seqs, write, delayMs)}
+            onPlanApproved={setCurrentMode}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o
             // guard de clique — re-parse fresco antes de digitar.
@@ -1509,6 +1544,9 @@ function TerminalHost({
           // Modelo Warp: o composer encaminha teclas de controle/navegação direto pro
           // PTY (write escreve no pty, fora do xterm display-only).
           onForwardKey={(seq) => write(seq)}
+          readMenu={readTuiMenu}
+          openMenuFp={pendingTuiMenu ? menuFingerprint(pendingTuiMenu) : null}
+          onMenuAnswer={answerMenu}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).
           collapsible={mode === 'terminal' && composer === 'full'}
           compact={composer === 'compact'}
@@ -1527,7 +1565,9 @@ function TerminalHost({
               onSelectEffort={selectEffort}
               // Shift+Tab (CSI Z) cicla o modo de permissão no TUI do claude. A CLI
               // não tem set-exato em runtime (sem /permission) — só este ciclo nativo.
-              onCyclePermission={() => write('\x1b[Z')}
+              onCyclePermission={() => {
+                if (!blockPermissionWrite()) write('\x1b[Z')
+              }}
               // Seleção direta: "pula" até o modo escolhido ciclando Shift+Tab e
               // observando o modo parseado (selectPermission + effect acima).
               onSelectPermission={selectPermission}

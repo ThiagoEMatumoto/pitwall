@@ -209,3 +209,11 @@ describe('handoffAsking', () => {
     )
   })
 })
+
+describe('deriveAttentionReason — diálogo de plano do claude 2.1.317', () => {
+  it("plano na tela em waiting vira o motivo 'plan'", async () => {
+    const scan = await scanFixture('claude-2.1.317-plan-default.ansi', 120, 45)
+    expect(scan.menu?.kind).toBe('plan')
+    expect(deriveAttentionReason({ status: 'waiting', scan, handoffAsking: false })).toBe('plan')
+  })
+})

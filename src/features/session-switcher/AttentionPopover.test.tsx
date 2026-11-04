@@ -380,3 +380,85 @@ describe('Sempre permitir para filhas', () => {
     expect(screen.getByTestId('attention-notice')).toHaveTextContent('não vira regra')
   })
 })
+
+// Diálogo de plano REAL do claude 2.1.317 (sonda probe-chat-plan-2317).
+describe('AttentionPopover — plano do 2.1.317', () => {
+  const planMenu = () =>
+    parseTuiMenu(
+      readFileSync(
+        join(__dirname, '../../../shared/tui/__fixtures__/claude-2.1.317-plan-default.txt'),
+        'utf8',
+      ),
+    )!
+  const planItem: AttentionItem = { ...item, detail: 'plan' }
+
+  async function open() {
+    const menu = planMenu()
+    attentionMenu.mockResolvedValue({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 4,
+      menu,
+    })
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={planItem} />)
+    await screen.findByTestId('attention-plan-approve-manual')
+    return menu
+  }
+
+  it('mostra o motivo e uma ação por opção, com o modo explícito', async () => {
+    await open()
+    expect(screen.getByText('Plano esperando aprovação')).toBeInTheDocument()
+    expect(screen.getByTestId('attention-plan-approve-auto')).toHaveTextContent(
+      'Aprovar e ligar auto mode',
+    )
+    expect(screen.getByTestId('attention-plan-approve-manual')).toHaveTextContent(
+      'Aprovar com edições manuais',
+    )
+    expect(screen.queryByText(/responda no terminal/i)).toBeNull()
+  })
+
+  it('aprovar manda o intent, não um dígito', async () => {
+    const menu = await open()
+    await act(async () => fireEvent.click(screen.getByTestId('attention-plan-approve-manual')))
+    expect(attentionRespond).toHaveBeenCalledWith({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 4,
+      action: { kind: 'plan', intent: 'approve-manual' },
+    })
+  })
+
+  it('pedir mudanças manda o texto pelo intent feedback', async () => {
+    await open()
+    fireEvent.change(screen.getByTestId('attention-plan-feedback'), { target: { value: 'menor' } })
+    await act(async () => fireEvent.click(screen.getByText('Enviar')))
+    expect(attentionRespond).toHaveBeenCalledWith(
+      expect.objectContaining({ action: { kind: 'plan', intent: 'feedback', text: 'menor' } }),
+    )
+  })
+
+  it('não oferece aprovar com bypass: o popover não mostra o plano', async () => {
+    const menu =
+      parseTuiMenu(` Claude has written up a plan and is ready to execute. Would you like to proceed?
+ ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session
+   2. Yes, manually approve edits
+   3. Tell Claude what to change
+      shift+tab to approve with this feedback
+`)!
+    attentionMenu.mockResolvedValue({
+      sessionId: 'child',
+      fingerprint: menuFingerprint(menu),
+      menuSeq: 5,
+      menu,
+    })
+    render(<AttentionPopover item={planItem} />)
+    await screen.findByTestId('attention-plan-approve-manual')
+    expect(screen.queryByTestId('attention-plan-approve-bypass')).toBeNull()
+    expect(screen.getByTestId('attention-plan-bypass-hint')).toHaveTextContent('card do chat')
+  })
+
+  it('menuActions não oferece dígito cru para o plano', () => {
+    expect(menuActions(planMenu())).toEqual([])
+  })
+})

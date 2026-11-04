@@ -1,4 +1,5 @@
 import type { ChatMessage, SessionActivity } from '../../../../shared/types/ipc'
+import type { TuiMenu } from '../../../../shared/tui/tui-menu-parser'
 
 // Eco otimista de uma mensagem do usuário enviada pelo composer em modo chat. O
 // transcript de disco tem atraso (o claude grava o turno do usuário no JSONL
@@ -47,19 +48,35 @@ export function countUserMessages(messages: ChatMessage[]): number {
 export interface InteractiveResolution {
   answers: Map<string, Record<string, string>> // id da pergunta → mapa pergunta→opção
   plans: Map<string, boolean> // id do plano → aprovado
+  approvedPlans: Map<string, string> // id do plano → plano aprovado (toolUseResult.plan)
   subagents: Map<string, boolean> // id do subagente → terminou com erro
 }
 
 export function resolveInteractive(messages: ChatMessage[]): InteractiveResolution {
   const answers = new Map<string, Record<string, string>>()
   const plans = new Map<string, boolean>()
+  const approvedPlans = new Map<string, string>()
   const subagents = new Map<string, boolean>()
   for (const m of messages) {
     if (m.kind === 'ask_user_question_answered') answers.set(m.forId, m.answers)
-    else if (m.kind === 'plan_decision') plans.set(m.forId, m.approved)
-    else if (m.kind === 'subagent_result') subagents.set(m.forId, m.isError)
+    else if (m.kind === 'plan_decision') {
+      plans.set(m.forId, m.approved)
+      if (m.plan) approvedPlans.set(m.forId, m.plan)
+    } else if (m.kind === 'subagent_result') subagents.set(m.forId, m.isError)
   }
-  return { answers, plans, subagents }
+  return { answers, plans, approvedPlans, subagents }
+}
+
+// Plano de um card JÁ decidido: o aprovado (toolUseResult.plan), senão o último
+// conteúdo do plan file mostrado no diálogo (rejeição não grava o plano). null =
+// resta o input.plan, que pode ser o plano anterior.
+export function decidedPlanText(
+  id: string,
+  interactive: InteractiveResolution,
+  shown: ReadonlyMap<string, string>,
+): string | null {
+  if (!interactive.plans.has(id)) return null
+  return interactive.approvedPlans.get(id) ?? shown.get(id) ?? null
 }
 
 // Momento interativo aguardando o usuário: kind + id do tool_use. O id permite à
@@ -82,6 +99,19 @@ export function pendingInteractive(messages: ChatMessage[]): PendingInteractive 
       pending = plans.has(m.id) ? null : { kind: 'plan', id: m.id }
   }
   return pending
+}
+
+// O 2.1.317 às vezes grava o tool_use do ExitPlanMode com o diálogo ainda aberto
+// (~4 em 13 na sonda probe-chat-plan-2317): o pendente do transcript e o menu vivo
+// são o mesmo momento. O menu vivo é o que responde, então ele vira o card único e
+// o card do transcript sai. A revisão final é o fim do mesmo AskUserQuestion.
+export function liveMenuCoversPending(
+  pending: PendingInteractive | null,
+  menuKind: TuiMenu['kind'] | null | undefined,
+): boolean {
+  if (!pending || !menuKind) return false
+  if (pending.kind === 'plan') return menuKind === 'plan'
+  return menuKind === 'question' || menuKind === 'question_review'
 }
 
 // Decisão pura: mostrar o banner genérico de "aguardando no terminal"? Verdadeiro

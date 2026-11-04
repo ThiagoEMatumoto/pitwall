@@ -1,9 +1,14 @@
 import { useState } from 'react'
-import { CheckCircle2, Clock, CornerDownLeft, XCircle } from 'lucide-react'
+import { CheckCircle2, Clock, XCircle } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 import { Kbd } from '@/components/ui/ShortcutHints'
 import { ApexDot, Button, GradientBorder, Ruler } from '@/features/brand'
+import type { PlanIntent } from '../tui-menu-parser'
+import type { PlanChoice } from './plan-choices'
+import { useChatFallback } from './useChatFallback'
+
+export type PlanDecision = Exclude<PlanIntent, 'feedback'> | 'feedback' | 'reject'
 
 interface Props {
   plan: string
@@ -11,25 +16,79 @@ interface Props {
   decision?: boolean
   // Clique-pra-decidir: presente = o ChatView liberou (card é o momento pendente +
   // sessão 'waiting'). O handler de lá re-checa os guards no clique.
-  onDecide?: (d: 'approve' | 'reject') => void
+  onDecide?: (d: PlanDecision, feedback?: string) => void
   // Decisão já clicada, aguardando a decision real chegar no JSONL (forId).
   sent?: boolean
-  // Falso quando a opção de aprovação MANUAL não foi achada no menu TUI parseado:
-  // sem dígito seguro pra aprovar (Enter cego acertaria "auto-accept edits"), o
-  // botão de aprovar não é oferecido — só rejeitar (Esc) + dica de ir ao terminal.
-  canApprove?: boolean
+  // Uma por opção real do diálogo (planChoices). Vazio + sem feedback = nada a clicar.
+  choices?: PlanChoice[]
+  // O diálogo tem o campo "Tell Claude what to change".
+  canFeedback?: boolean
+  notice?: string | null
 }
 
 // Planos longos começam colapsados pra não tomar a conversa inteira.
 const COLLAPSE_THRESHOLD = 1200
 
+function FeedbackField({
+  disabled,
+  onSend,
+}: {
+  disabled: boolean
+  onSend: (text: string) => void
+}) {
+  const [text, setText] = useState('')
+  const canSend = !disabled && text.trim() !== ''
+  return (
+    <div className="flex items-end gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5">
+      <textarea
+        rows={2}
+        value={text}
+        disabled={disabled}
+        maxLength={4000}
+        data-testid="plan-feedback"
+        aria-label="Pedir mudanças no plano"
+        placeholder="Pedir mudanças: o que o Claude deve mudar no plano?"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.shiftKey) return
+          e.preventDefault()
+          if (canSend) onSend(text)
+        }}
+        className="min-w-0 flex-1 resize-none bg-transparent text-[13px] text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
+      />
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={!canSend}
+        data-testid="plan-feedback-send"
+        onClick={() => onSend(text)}
+      >
+        Pedir mudanças
+      </Button>
+    </div>
+  )
+}
+
 // Render dedicado de um ExitPlanMode (substitui o tool card genérico). Mostra o
 // plano em markdown (colapsável) + o estado de aprovação derivado do tool_result.
-// Com onDecide presente e decisão pendente, expõe botões de aprovar/rejeitar que
-// enviam a decisão ao PTY; a decision real do JSONL substitui o estado otimista.
-export function PlanCard({ plan, decision, onDecide, sent, canApprove = true }: Props) {
+// Pendente e com o diálogo vivo, mostra uma ação por opção real da TUI, o campo de
+// mudanças e o descarte (Esc); a decision real do JSONL substitui o estado otimista.
+export function PlanCard({
+  plan,
+  decision,
+  onDecide,
+  sent,
+  choices = [],
+  canFeedback = false,
+  notice,
+}: Props) {
   const [open, setOpen] = useState(plan.length <= COLLAPSE_THRESHOLD)
+  const [armed, setArmed] = useState<PlanChoice['intent'] | null>(null)
   const pending = decision === undefined
+  const live = onDecide != null || sent === true
+  const disabled = sent === true || onDecide == null
+  const noOptions = pending && onDecide != null && choices.length === 0 && !canFeedback
+  useChatFallback(noOptions ? 'plan' : null, 'no-options')
 
   const status =
     decision === true
@@ -73,32 +132,51 @@ export function PlanCard({ plan, decision, onDecide, sent, canApprove = true }: 
           Plano longo — clique para expandir.
         </button>
       )}
-      {/* Botões de decisão: só enquanto a decisão real não chegou. `sent` mantém os
-          botões visíveis porém desabilitados até o JSONL confirmar. */}
-      {pending && (onDecide != null || sent) && (
-        <div className="flex flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] px-4 py-3">
-          {canApprove ? (
+      {pending && live && (
+        <div className="flex flex-col gap-2.5 border-t border-[var(--color-border)] px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {choices.map((c) => (
+              <Button
+                key={c.intent}
+                variant={c.tone}
+                size="sm"
+                disabled={disabled}
+                title={c.optionLabel}
+                data-testid={`plan-choice-${c.intent}`}
+                data-highlighted={c.highlighted || undefined}
+                onClick={() => {
+                  if (c.confirm && armed !== c.intent) return setArmed(c.intent)
+                  setArmed(null)
+                  onDecide?.(c.intent)
+                }}
+              >
+                {armed === c.intent ? 'Confirmar bypass: sem mais prompts nesta sessão' : c.label}
+                {c.highlighted && (
+                  <span className="rounded-full border border-current/40 px-1.5 text-[9px] font-normal opacity-80">
+                    destaque no terminal
+                  </span>
+                )}
+              </Button>
+            ))}
             <Button
-              variant="primary"
+              variant="ghost"
               size="sm"
-              disabled={sent || onDecide == null}
-              onClick={() => onDecide?.('approve')}
+              disabled={disabled}
+              data-testid="plan-choice-reject"
+              title="Esc: rejeita o plano sem mandar mudanças"
+              onClick={() => onDecide?.('reject')}
             >
-              Aprovar plano
+              Descartar
             </Button>
-          ) : (
-            <span className="text-xs text-[var(--color-text-dim)]">
-              Pra aprovar, use o terminal.
-            </span>
+          </div>
+          {canFeedback && (
+            <FeedbackField disabled={disabled} onSend={(t) => onDecide?.('feedback', t)} />
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={sent || onDecide == null}
-            onClick={() => onDecide?.('reject')}
-          >
-            Continuar planejando
-          </Button>
+          {noOptions && (
+            <p className="text-xs text-[var(--color-text-dim)]">
+              Nenhuma opção de aprovação reconhecida neste diálogo.
+            </p>
+          )}
           <span
             data-testid="plan-shortcuts"
             className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-dim)]"
@@ -107,14 +185,19 @@ export function PlanCard({ plan, decision, onDecide, sent, canApprove = true }: 
               'Decisão enviada…'
             ) : (
               <>
-                {/* O glifo ⏎ não existe nas fontes da UI: tecla com ícone. */}
-                <Kbd>
-                  <Icon as={CornerDownLeft} size={10} aria-label="Enter" />
-                </Kbd>
-                aprova · <Kbd>esc</Kbd> rejeita
+                <Kbd>esc</Kbd> no compositor vazio descarta
               </>
             )}
           </span>
+          {notice && (
+            <p
+              role="alert"
+              data-testid="plan-notice"
+              className="text-xs text-[var(--color-warning)]"
+            >
+              {notice}
+            </p>
+          )}
         </div>
       )}
     </GradientBorder>
