@@ -22,8 +22,12 @@ const raw = (name: string) =>
   fixture(`claude-2.1.318-fullscreen-${name}.txt`).replace(/\n$/, '').split('\n').join('\r\n')
 
 async function rendererMenu(name: string) {
+  return rendererMenuOf(raw(name))
+}
+
+async function rendererMenuOf(data: string) {
   const term = new Terminal({ ...SIZE, allowProposedApi: true, scrollback: 2000 })
-  await new Promise<void>((resolve) => term.write(raw(name), resolve))
+  await new Promise<void>((resolve) => term.write(data, resolve))
   const menu = parseTuiMenuFull((n) => readBufferTail(term, n), term.buffer.active.length)
   term.dispose()
   return gateMenuByStatus(menu, 'waiting')
@@ -75,4 +79,22 @@ describe('diálogos em tui fullscreen (régua ▔)', () => {
       )
     },
   )
+
+  // A régua ▔ entra como topo de diálogo: transcript comum sob ela (lista numerada, saída
+  // de ferramenta com ❯, diff) não pode virar menu. O topo e a caixa de input vêm das
+  // capturas reais (fullscreen-hooks e compact-done); só o miolo é montado.
+  it.each([
+    ['lista numerada', ['⏺ Opções:', '  1. Primeira', '  2. Segunda', '  3. Terceira']],
+    ['saída com ❯', ['⏺ Bash(ls)', '  ⎿  ❯ item a', '     item b', '     Esc to cancel']],
+    ['diff', ['⏺ Update(a.ts)', '  ⎿  Updated a.ts', '      1 - old', '      1 + new', '      2   ❯ x']],
+  ])('transcript com %s sob a régua ▔ segue sem menu', async (_, body) => {
+    const fs = fixture('claude-2.1.318-fullscreen-hooks.txt').split('\n')
+    const top = fs.slice(0, fs.findIndex((l) => /^▔{10,}/.test(l)) + 1)
+    const idle = fixture('claude-2.1.317-compact-done.txt').split('\n').slice(21, 25)
+    const screen = [...top, ...body, '', ...idle].join('\r\n')
+    expect(await rendererMenuOf(screen)).toBeNull()
+    const scan = await scanOf(screen, SIZE)
+    expect(scan.menu).toBeNull()
+    expect(scan.inputPrompt).toBe(true)
+  })
 })
