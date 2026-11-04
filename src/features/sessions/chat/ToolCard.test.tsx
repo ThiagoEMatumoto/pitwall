@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-// O MarkdownViewer do raciocínio importa o preload; aqui ele é inerte.
+// O MarkdownViewer importa o preload; aqui ele é inerte.
 vi.mock('@/lib/ipc', () => {
   const inert = new Proxy({}, { get: () => () => Promise.resolve(null) })
   return new Proxy({}, { get: () => inert })
