@@ -11,20 +11,12 @@ export interface ToolEntry {
   result?: ToolResultMsg
 }
 
-// Raciocínio intercalado entre chamadas: não quebra o grupo, aparece nele aberto.
-export interface ThinkingEntry {
-  kind: 'thinking'
-  index: number
-  text: string
-}
-
-export type GroupEntry = ToolEntry | ThinkingEntry
-
 export type ChatRow =
-  { type: 'message'; index: number } | { type: 'tools'; index: number; entries: GroupEntry[] }
+  { type: 'message'; index: number } | { type: 'tools'; index: number; entries: ToolEntry[] }
 
 // Linhas da conversa: cada tool_use leva o seu tool_result junto e uma sequência
-// de chamadas (com raciocínio entre elas) vira um grupo só. `skip` são índices
+// de chamadas seguidas vira um grupo só. O raciocínio quebra o grupo: o TUI o
+// mostra inline, e dentro de um grupo colapsado ele sumiria. `skip` são índices
 // que não renderizam (fundidos em cards de artefato); `own` são índices com card
 // próprio (artefato/consulta), que nunca entram num grupo.
 export function buildChatRows(
@@ -51,29 +43,16 @@ export function buildChatRows(
   })
 
   const rows: ChatRow[] = []
-  let group: GroupEntry[] = []
-  // Só o raciocínio ENTRE chamadas entra no grupo: o de antes da primeira e o
-  // de depois da última (que costuma explicar a resposta) continua à vista.
+  let group: ToolEntry[] = []
   const flush = () => {
-    const first = group.findIndex((e) => e.kind === 'tool')
-    if (first < 0) {
-      for (const e of group) rows.push({ type: 'message', index: e.index })
-    } else {
-      let last = group.length - 1
-      while (group[last].kind !== 'tool') last--
-      for (const e of group.slice(0, first)) rows.push({ type: 'message', index: e.index })
-      rows.push({ type: 'tools', index: group[first].index, entries: group.slice(first, last + 1) })
-      for (const e of group.slice(last + 1)) rows.push({ type: 'message', index: e.index })
-    }
+    if (group.length) rows.push({ type: 'tools', index: group[0].index, entries: group })
     group = []
   }
-  messages.forEach((m, i) => {
+  messages.forEach((_, i) => {
     if (skip.has(i) || attached.has(i)) return
     const tool = entries.get(i)
     if (tool) {
       group.push(tool)
-    } else if (m.kind === 'thinking' && !own.has(i)) {
-      group.push({ kind: 'thinking', index: i, text: m.text })
     } else {
       flush()
       rows.push({ type: 'message', index: i })
@@ -81,10 +60,6 @@ export function buildChatRows(
   })
   flush()
   return rows
-}
-
-export function toolEntries(entries: GroupEntry[]): ToolEntry[] {
-  return entries.filter((e): e is ToolEntry => e.kind === 'tool')
 }
 
 // Ritmo vertical: respiro grande quando o humano abre um turno novo, pequeno

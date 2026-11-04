@@ -71,6 +71,9 @@ export type ChatMessage =
       trigger?: string
       preTokens?: number
       postTokens?: number
+      // Nasce aberto: o detalhe é o que o usuário precisa ler (ex. o recap com
+      // o próximo passo), como o TUI mostra.
+      defaultOpen?: boolean
     }
   // Resumo de compact gravado pela CLI como turno de usuário (isCompactSummary:
   // true) — NUNCA o humano digitou isso. Card colapsado, não bolha de usuário.

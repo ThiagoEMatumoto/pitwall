@@ -9,6 +9,7 @@ import {
   type SubagentInfo,
 } from './chat-transcript'
 import { formatAskEnvelope } from './agent-bus'
+import { buildChatRows } from '../../../src/features/sessions/chat/chat-rows'
 import { cleanPrompt, lastUserPrompt } from './session-purpose'
 
 // Fixture representativo: prompt do usuário, resposta assistant com texto +
@@ -682,10 +683,17 @@ describe('parseChatMessages — thinking', () => {
 })
 
 // Linhas type:'system': só subtypes whitelistados viram chip; o ruído de alto
-// volume (stop_hook_summary, turn_duration) é descartado.
+// volume (stop_hook_summary, turn_duration) é descartado. away_summary (o recap
+// que o TUI mostra) vira chip, sem o sufixo de configuração.
 const SYSTEM_FIXTURE = [
   JSON.stringify({ type: 'system', subtype: 'stop_hook_summary', level: 'suggestion' }), // ruído → fora
   JSON.stringify({ type: 'system', subtype: 'turn_duration', isMeta: false }), // ruído → fora
+  JSON.stringify({
+    type: 'system',
+    subtype: 'away_summary',
+    isMeta: false,
+    content: 'O objetivo é publicar o fluxo. Próximo passo: revisar o rascunho.  (disable recaps in /config)',
+  }),
   JSON.stringify({ type: 'system', subtype: 'compact_boundary', level: 'info', content: 'Conversation compacted' }),
   JSON.stringify({ type: 'system', subtype: 'api_error', level: 'error', error: 'rate limited' }),
   JSON.stringify({
@@ -701,16 +709,23 @@ describe('parseChatMessages — system context (curated)', () => {
   const m = parseChatMessages(SYSTEM_FIXTURE)
 
   it('keeps whitelisted subtypes as system chips, drops noise, unifies local_command', () => {
-    expect(m.map((x) => x.kind)).toEqual(['system', 'system', 'command', 'user'])
+    expect(m.map((x) => x.kind)).toEqual(['system', 'system', 'system', 'command', 'user'])
   })
 
   it('maps subtype to label/detail/level', () => {
-    expect(m[0]).toEqual({ kind: 'system', label: 'Conversa compactada', detail: 'Conversation compacted', level: 'info' })
-    expect(m[1]).toEqual({ kind: 'system', label: 'Erro de API', detail: 'rate limited', level: 'error' })
+    expect(m[0]).toEqual({
+      kind: 'system',
+      label: 'Recap',
+      detail: 'O objetivo é publicar o fluxo. Próximo passo: revisar o rascunho.',
+      level: 'info',
+      defaultOpen: true,
+    })
+    expect(m[1]).toEqual({ kind: 'system', label: 'Conversa compactada', detail: 'Conversation compacted', level: 'info' })
+    expect(m[2]).toEqual({ kind: 'system', label: 'Erro de API', detail: 'rate limited', level: 'error' })
   })
 
   it('emits the SAME command kind as the current user-string format', () => {
-    expect(m[2]).toEqual({ kind: 'command', name: 'model', args: '' })
+    expect(m[3]).toEqual({ kind: 'command', name: 'model', args: '' })
   })
 
   it('extracts command_output from old-format local_command content, ANSI stripped', () => {
@@ -1059,5 +1074,233 @@ describe('parseChatMessages — ExitPlanMode do claude 2.1.317 (JSONL real)', ()
     const line = real('plan-default').trim()
     const msgs = parseChatMessages(`${line}\n${line}\n`)
     expect(msgs.filter((m) => m.kind === 'exit_plan_mode')).toHaveLength(1)
+  })
+})
+
+// Shape real (Claude Code 2.1.317): um turno que lê uma thread do Slack, raciocina
+// (bloco thinking resumido, com assinatura) e edita um arquivo, fechando com o
+// recap away_summary. Mesmas chaves e mesma ordem de linhas do transcript de
+// produção; conteúdo anonimizado e assinaturas/resultados encurtados.
+describe('turno real: raciocínio entre ferramentas e recap', () => {
+  const base = (uuid: string) => ({
+    cwd: '/repo',
+    entrypoint: 'cli',
+    gitBranch: 'main',
+    isSidechain: false,
+    parentUuid: `p-${uuid}`,
+    sessionId: 's1',
+    session_id: 's1',
+    slug: 'sessao-anonima',
+    timestamp: '2026-11-04T18:00:00.000Z',
+    userType: 'external',
+    uuid,
+    version: '2.1.317',
+  })
+  const assistantBase = (uuid: string, msgId: string, content: unknown[], extra = {}) => ({
+    ...base(uuid),
+    advisorModel: null,
+    apiBlockIndex: 0,
+    effort: 'high',
+    perTurnEffort: 'high',
+    promptCacheRequested: true,
+    requestId: `req-${msgId}`,
+    requestRef: `ref-${msgId}`,
+    requestedModel: 'claude-opus-5-5',
+    serverClassifierRequest: null,
+    ...extra,
+    type: 'assistant',
+    message: { id: msgId, role: 'assistant', content },
+  })
+  const sessionMeta = [
+    { type: 'last-prompt', lastPrompt: 'veja a resposta', leafUuid: 'u0', sessionId: 's1' },
+    { type: 'custom-title', customTitle: 'Sessão', sessionId: 's1' },
+    { type: 'agent-name', agentName: 'agente', sessionId: 's1' },
+    { type: 'mode', mode: 'default', sessionId: 's1' },
+    { type: 'permission-mode', permissionMode: 'auto', sessionId: 's1' },
+    { type: 'session-owner', accountUuid: 'a1', organizationUuid: 'o1', sessionId: 's1' },
+    { type: 'atis-latch', atis: true, sessionId: 's1' },
+  ]
+  const attachment = (uuid: string) => ({ ...base(uuid), type: 'attachment', attachment: { type: 'hook_success' } })
+  const thinkingText =
+    'A proposta foi aprovada pela revisora; ela pediu que o fluxo avise antes de enviar. Vou registrar isso na memória.'
+  const thinkingExtra = {
+    attributionMcpServer: 'plugin:slack:slack',
+    attributionMcpTool: 'slack_read_thread',
+    thinkingDisplay: 'updates',
+    thinkingDurationMs: 9274,
+  }
+  const editInput = {
+    replace_all: false,
+    file_path: '/home/user/.claude/memory/projeto.md',
+    old_string: '**Atualização:**',
+    new_string: '**Validada pela revisora.**',
+  }
+
+  const lines = [
+    assistantBase('u1', 'msg_a', [{ type: 'text', text: 'Vou ler a thread para ver a resposta.' }]),
+    {
+      ...assistantBase('u2', 'msg_a', [
+        {
+          type: 'tool_use',
+          id: 'toolu_slack',
+          name: 'mcp__plugin_slack_slack__slack_read_thread',
+          input: { channel_id: 'C000', message_ts: '1.0' },
+          caller: { type: 'direct' },
+        },
+      ]),
+      wireToolInputs: {},
+    },
+    {
+      ...base('u3'),
+      type: 'user',
+      permissionDecision: 'allow',
+      promptId: 'pr1',
+      sourceToolAssistantUUID: 'u2',
+      toolUseResult: [{ type: 'text', text: '{"messages":"=== THREAD ==="}' }],
+      message: {
+        role: 'user',
+        content: [
+          {
+            tool_use_id: 'toolu_slack',
+            type: 'tool_result',
+            content: [{ type: 'text', text: '{"messages":"=== THREAD ==="}' }],
+          },
+        ],
+      },
+    },
+    attachment('u4'),
+    ...sessionMeta,
+    assistantBase('u5', 'msg_b', [{ type: 'thinking', thinking: '', signature: 'sigA' }], thinkingExtra),
+    assistantBase(
+      'u6',
+      'msg_b',
+      [{ type: 'thinking', thinking: thinkingText, signature: 'sigB' }],
+      { ...thinkingExtra, apiBlockIndex: 1, thinkingDurationMs: 1 },
+    ),
+    {
+      ...assistantBase('u7', 'msg_b', [
+        { type: 'tool_use', id: 'toolu_edit', name: 'Edit', input: editInput, caller: { type: 'direct' } },
+      ]),
+      attributionMcpServer: 'plugin:slack:slack',
+      attributionMcpTool: 'slack_read_thread',
+      wireToolInputs: {},
+    },
+    {
+      ...base('u8'),
+      type: 'user',
+      permissionDecision: 'allow',
+      promptId: 'pr1',
+      serverClassifierContext: null,
+      sourceToolAssistantUUID: 'u7',
+      toolUseResult: { filePath: editInput.file_path, oldString: editInput.old_string },
+      message: {
+        role: 'user',
+        content: [
+          {
+            tool_use_id: 'toolu_edit',
+            type: 'tool_result',
+            content: `The file ${editInput.file_path} has been updated successfully.`,
+          },
+        ],
+      },
+    },
+    attachment('u9'),
+    attachment('u10'),
+    {
+      type: 'api-request-blob',
+      hash: 'h1',
+      sessionId: 's1',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: '', signature: 'sigA' },
+          { type: 'thinking', thinking: thinkingText, signature: 'sigB' },
+          { type: 'tool_use', id: 'toolu_edit', name: 'Edit', input: editInput, caller: { type: 'direct' } },
+        ],
+      },
+    },
+    {
+      type: 'api-request',
+      base: 'b',
+      cacheControl: null,
+      id: 'r1',
+      keep: 1,
+      params: {},
+      querySource: 'repl',
+      requestDigest: 'd',
+      sessionId: 's1',
+      shapeHash: 'sh',
+      tail: [],
+      timestamp: '2026-11-04T18:00:01.000Z',
+      version: '2.1.317',
+    },
+    ...sessionMeta,
+    attachment('u11'),
+    assistantBase('u12', 'msg_c', [{ type: 'thinking', thinking: '', signature: 'sigC' }], {
+      thinkingDisplay: 'updates',
+      thinkingDurationMs: 3000,
+    }),
+    assistantBase('u13', 'msg_c', [{ type: 'text', text: 'Registrei a validação na memória.' }]),
+    attachment('u14'),
+    {
+      ...base('u15'),
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      hasOutput: true,
+      hookAdditionalContext: [],
+      hookCount: 2,
+      hookErrors: [],
+      hookInfos: [{ command: 'hook.sh', durationMs: 15 }],
+      level: 'suggestion',
+      preventedContinuation: false,
+      stopReason: '',
+      toolUseID: 't1',
+    },
+    {
+      ...base('u16'),
+      type: 'system',
+      subtype: 'turn_duration',
+      durationMs: 60000,
+      isMeta: false,
+      messageCount: 30,
+    },
+    {
+      ...base('u17'),
+      type: 'system',
+      subtype: 'away_summary',
+      isMeta: false,
+      content:
+        'O objetivo é publicar o fluxo com a proposta aprovada. Próximo passo: confirmar o ajuste no rascunho. (disable recaps in /config)',
+    },
+  ]
+  const messages = parseChatMessages(lines.map((l) => JSON.stringify(l)).join('\n'))
+
+  it('o raciocínio entre slack_read_thread e Edit fica fora do grupo de ferramentas', () => {
+    const rows = buildChatRows(messages)
+    const thinkingIdx = messages.findIndex((x) => x.kind === 'thinking' && x.text === thinkingText)
+    expect(thinkingIdx).toBeGreaterThan(-1)
+    expect(rows).toContainEqual({ type: 'message', index: thinkingIdx })
+    const grouped = rows.flatMap((r) => (r.type === 'tools' ? r.entries.map((e) => e.index) : []))
+    expect(grouped).not.toContain(thinkingIdx)
+    expect(rows.map((r) => (r.type === 'tools' ? 'tools' : messages[r.index].kind))).toEqual([
+      'assistant',
+      'tools',
+      'thinking',
+      'tools',
+      'assistant',
+      'system',
+    ])
+  })
+
+  it('o recap vira um card system "Recap" sem o sufixo de configuração', () => {
+    expect(messages.filter((x) => x.kind === 'system')).toEqual([
+      {
+        kind: 'system',
+        label: 'Recap',
+        detail: 'O objetivo é publicar o fluxo com a proposta aprovada. Próximo passo: confirmar o ajuste no rascunho.',
+        level: 'info',
+        defaultOpen: true,
+      },
+    ])
   })
 })

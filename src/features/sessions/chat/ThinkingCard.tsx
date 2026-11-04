@@ -9,10 +9,14 @@ interface Props {
   text: string
 }
 
-// Bloco de raciocínio (extended thinking). Colapsado por padrão — é longo e
-// secundário à conversa; a primeira frase fica visível pra dizer do que se trata.
+// O TUI mostra o raciocínio resumido inline; colapsar esse texto curto faria o
+// chat perder o que o terminal mostra. Só o raciocínio longo nasce colapsado,
+// com a primeira frase visível pra dizer do que se trata.
+const OPEN_BY_DEFAULT_MAX_CHARS = 600
+
+// Bloco de raciocínio (extended thinking).
 export function ThinkingCard({ text }: Props) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => text.length <= OPEN_BY_DEFAULT_MAX_CHARS)
   const preview = oneLine(text, 120)
   return (
     <div className="min-w-0">
