@@ -230,6 +230,7 @@ function parseSystemLine(obj: RawLine): {
   trigger?: string
   preTokens?: number
   postTokens?: number
+  defaultOpen?: boolean
 } | null {
   const sub = obj.subtype
   if (!sub || !(sub in SYSTEM_LABELS)) return null
@@ -240,7 +241,7 @@ function parseSystemLine(obj: RawLine): {
     return { label, detail, level: 'error' }
   }
   if (sub === 'away_summary') {
-    return { label, detail: content.replace(RECAP_CONFIG_HINT, '') || label, level: 'info' }
+    return { label, detail: content.replace(RECAP_CONFIG_HINT, '') || label, level: 'info', defaultOpen: true }
   }
   if (sub === 'compact_boundary' && obj.compactMetadata) {
     const cm = obj.compactMetadata

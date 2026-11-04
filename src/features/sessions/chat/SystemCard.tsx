@@ -11,6 +11,7 @@ interface Props {
   trigger?: string
   preTokens?: number
   postTokens?: number
+  defaultOpen?: boolean
 }
 
 const LEVEL_COLOR: Record<Props['level'], string> = {
@@ -21,10 +22,10 @@ const LEVEL_COLOR: Record<Props['level'], string> = {
 
 const TRIGGER_LABEL: Record<string, string> = { auto: 'automática', manual: 'manual' }
 
-// Contexto de sistema CURADO: chip discreto e colapsado, centralizado entre as
-// mensagens. Só expande o detalhe sob demanda — nunca despeja conteúdo cru inline.
-export function SystemCard({ label, detail, level, trigger, preTokens, postTokens }: Props) {
-  const [open, setOpen] = useState(false)
+// Contexto de sistema CURADO: chip discreto centralizado entre as mensagens.
+// Colapsado salvo `defaultOpen` (recap) — nunca despeja conteúdo cru inline.
+export function SystemCard({ label, detail, level, trigger, preTokens, postTokens, defaultOpen = false }: Props) {
+  const [open, setOpen] = useState(defaultOpen)
   const color = LEVEL_COLOR[level]
   const showsMore = detail.trim() !== '' && detail.trim() !== label.trim()
   const suffix = [

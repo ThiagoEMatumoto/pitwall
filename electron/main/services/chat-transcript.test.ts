@@ -718,6 +718,7 @@ describe('parseChatMessages — system context (curated)', () => {
       label: 'Recap',
       detail: 'O objetivo é publicar o fluxo. Próximo passo: revisar o rascunho.',
       level: 'info',
+      defaultOpen: true,
     })
     expect(m[1]).toEqual({ kind: 'system', label: 'Conversa compactada', detail: 'Conversation compacted', level: 'info' })
     expect(m[2]).toEqual({ kind: 'system', label: 'Erro de API', detail: 'rate limited', level: 'error' })
@@ -1298,6 +1299,7 @@ describe('turno real: raciocínio entre ferramentas e recap', () => {
         label: 'Recap',
         detail: 'O objetivo é publicar o fluxo com a proposta aprovada. Próximo passo: confirmar o ajuste no rascunho.',
         level: 'info',
+        defaultOpen: true,
       },
     ])
   })

@@ -1086,6 +1086,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             trigger={m.trigger}
             preTokens={m.preTokens}
             postTokens={m.postTokens}
+            defaultOpen={m.defaultOpen}
           />
         )
       case 'compact_summary':
