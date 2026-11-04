@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { parseTuiMenu, type TuiMenu } from '../../../../shared/tui/tui-menu-parser'
 
@@ -85,6 +85,59 @@ describe('ChatView — multi-select com Other (2.1.317)', () => {
     expect(onRespond).toHaveBeenCalledWith([DOWN, DOWN, DOWN, DOWN, '\r'], QUESTION_KEY_DELAY_MS)
   })
 
+  it('Other em andamento trava o card: Enviar e marcar não intercalam teclas', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish: (ok: boolean) => void = () => {}
+      const onRespond = vi.fn(() => new Promise<boolean>((r) => (finish = r)))
+      const menu = menuOf('2.1.317-question-multi-other')
+      render(
+        <ChatView
+          sessionId="s-q"
+          status="waiting"
+          tuiMenu={menu}
+          reparseMenu={() => menu}
+          onRespond={onRespond}
+          onToggleMode={vi.fn()}
+        />,
+      )
+      fireEvent.change(screen.getByTestId('question-other-input'), { target: { value: 'roxo' } })
+      fireEvent.click(screen.getByText('Marcar'))
+      fireEvent.click(screen.getByTestId('question-submit-multi'))
+      fireEvent.click(screen.getByText('Verde'))
+      expect(onRespond).toHaveBeenCalledTimes(1)
+      // A última tecla saiu, mas a TUI ainda redesenha: segue travado pelo respiro.
+      await act(async () => finish(true))
+      fireEvent.click(screen.getByTestId('question-submit-multi'))
+      expect(onRespond).toHaveBeenCalledTimes(1)
+      await act(async () => vi.advanceTimersByTime(QUESTION_KEY_DELAY_MS))
+      fireEvent.click(screen.getByText('Verde'))
+      expect(onRespond).toHaveBeenCalledTimes(2)
+      expect(onRespond).toHaveBeenLastCalledWith(['2'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Terminal recusou (outra resposta tocando): o card volta a aceitar', async () => {
+    const onRespond = vi.fn(() => Promise.resolve(false))
+    const menu = menuOf('2.1.317-question-multi-other')
+    render(
+      <ChatView
+        sessionId="s-q"
+        status="waiting"
+        tuiMenu={menu}
+        reparseMenu={() => menu}
+        onRespond={onRespond}
+        onToggleMode={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('question-submit-multi'))
+    await act(async () => {})
+    fireEvent.click(screen.getByTestId('question-submit-multi'))
+    expect(onRespond).toHaveBeenCalledTimes(2)
+  })
+
   it('Other com texto já digitado no terminal: mostra o texto, sem campo', () => {
     renderMenu('2.1.317-question-multi-other-typed')
     expect(screen.getByTestId('question-other-typed').textContent).toContain('verde agua')
@@ -134,10 +187,12 @@ describe('ChatView — menus da CLI pelo card genérico (2.1.317)', () => {
     expect(onRespond).toHaveBeenCalledWith(['\r'])
   })
 
-  it('/permissions: abas por →/← e a opção por ↓ + Enter (foco na busca)', () => {
+  it('/permissions: abas por →/← e a opção por ↓ + Enter (foco na busca)', async () => {
     const { onRespond } = renderMenu('2.1.317-unknown-permissions')
     fireEvent.click(screen.getByTestId('generic-tab-next'))
     expect(onRespond).toHaveBeenLastCalledWith(['\x1b[C'])
+    // Uma resposta por vez: o clique seguinte vem depois que a seta saiu.
+    await act(async () => {})
     fireEvent.click(screen.getByTestId('generic-option-0'))
     expect(onRespond).toHaveBeenLastCalledWith([DOWN, '\r'])
   })

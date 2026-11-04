@@ -817,6 +817,20 @@ function TerminalHost({
   // Texto do composer com um menu aberto vira a resposta que o menu aceita (guarda
   // do Composer): feedback do plano ou Other da pergunta. Sem eco: não é um turno
   // do usuário no JSONL, e sim o tool_result do menu.
+  // Uma resposta por vez no PTY: card e composer calculam as setas do cursor lido na
+  // hora, e duas sequências tocando juntas somariam as setas uma da outra.
+  const respondingRef = useRef(false)
+  async function playResponse(keys: string[], delayMs?: number): Promise<boolean> {
+    if (respondingRef.current) return false
+    respondingRef.current = true
+    try {
+      await playKeys(keys, write, delayMs)
+      return true
+    } finally {
+      respondingRef.current = false
+    }
+  }
+
   async function answerMenu(
     menu: TuiMenu,
     route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
@@ -828,7 +842,7 @@ function TerminalHost({
         : buildQuestionOtherKeys(menu, route.optionIndex, text)
     if (keys.length === 0) throw new Error(`o menu não aceita este texto (${route.kind})`)
     const delay = route.kind === 'plan-feedback' ? PLAN_KEY_DELAY_MS : route.multi ? QUESTION_KEY_DELAY_MS : undefined
-    await playKeys(keys, write, delay)
+    if (!(await playResponse(keys, delay))) throw new Error('outra resposta ainda está sendo digitada no menu')
   }
 
   // Chamado pelo SessionHeader ao commitar um rename (Enter/blur no input com
@@ -1455,7 +1469,7 @@ function TerminalHost({
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
-            onRespond={(seqs, delayMs) => void playKeys(seqs, write, delayMs)}
+            onRespond={playResponse}
             onPlanApproved={setCurrentMode}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o
