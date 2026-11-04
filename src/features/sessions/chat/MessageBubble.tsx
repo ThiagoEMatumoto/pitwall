@@ -1,4 +1,4 @@
-import { OctagonX } from 'lucide-react'
+import { OctagonX, Undo2 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
 
@@ -9,14 +9,18 @@ interface Props {
   pending?: boolean
   // Turno cortado por Ctrl+C: o texto abaixo está pela metade. Só assistant.
   interrupted?: boolean
+  // Só user: "Voltar a este ponto" (abre o /rewind da CLI nesta mensagem). Ausente = sem
+  // ação; rewindDisabled explica por que não dá agora.
+  onRewind?: () => void
+  rewindDisabled?: string | null
 }
 
-export function MessageBubble({ role, text, pending, interrupted }: Props) {
+export function MessageBubble({ role, text, pending, interrupted, onRewind, rewindDisabled }: Props) {
   if (role === 'user') {
     // Bolha do usuário: à direita, tinta da marca sólida e discreta, cauda
     // inferior-direita (radius 16 16 4 16).
     return (
-      <div className="flex justify-end">
+      <div className="group flex flex-col items-end">
         <div
           className={`max-w-[min(80%,62ch)] rounded-[16px_16px_4px_16px] border border-[color-mix(in_srgb,var(--color-accent)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_13%,var(--color-surface))] px-3.5 py-2.5 text-[13.5px] leading-[1.55] text-[var(--color-text)] transition-opacity duration-200 ${
             pending ? 'opacity-60' : ''
@@ -30,6 +34,19 @@ export function MessageBubble({ role, text, pending, interrupted }: Props) {
             </div>
           )}
         </div>
+        {onRewind && !pending && (
+          <button
+            type="button"
+            data-testid="rewind-here"
+            disabled={rewindDisabled != null}
+            title={rewindDisabled ?? 'Abre o rewind do Claude nesta mensagem; você escolhe o que restaurar'}
+            onClick={onRewind}
+            className="mt-0.5 flex items-center gap-1 rounded px-1 text-[11px] text-[var(--color-text-dim)] opacity-0 transition hover:text-[var(--color-text)] focus:opacity-100 group-hover:opacity-100 disabled:hover:text-[var(--color-text-dim)]"
+          >
+            <Icon as={Undo2} size={11} />
+            Voltar a este ponto
+          </button>
+        )}
       </div>
     )
   }

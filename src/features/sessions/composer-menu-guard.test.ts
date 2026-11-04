@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseTuiMenu, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
+import { parseTuiPicker } from './tui-picker-parser'
 import {
+  cliDraftBlockedNotice,
   forwardKeyNotice,
+  pickerBlockedNotice,
   routeComposerSend,
   answeredNotice,
   terminalWriteBlockedNotice,
@@ -89,3 +92,19 @@ describe('routeComposerSend — campo de texto de diálogo da CLI', () => {
     expect(routeComposerSend(parseTuiMenu(raw))).toEqual({ kind: 'deliver' })
   })
 })
+
+describe('pickers e rascunho da CLI', () => {
+  it('Ctrl+R aberto bloqueia o envio (o \\r mandaria o prompt achado)', () => {
+    const open = parseTuiPicker(
+      readFileSync(join(__dirname, '../../../shared/tui/__fixtures__/claude-2.1.318-history-query.txt'), 'utf8'),
+    )
+    expect(pickerBlockedNotice(open)).toMatch(/Ctrl\+R/)
+    expect(pickerBlockedNotice(null)).toBeNull()
+  })
+
+  it('texto na caixa da CLI bloqueia: o envio grudaria nele', () => {
+    expect(cliDraftBlockedNotice('diga india')).toMatch(/caixa do terminal/)
+    expect(cliDraftBlockedNotice(null)).toBeNull()
+  })
+})
+
