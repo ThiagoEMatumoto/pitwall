@@ -4,8 +4,9 @@
 // Env: PROBE_SB (sandbox; cwd da sessão e saídas brutas ficam em PROBE_SB/<cenario>/),
 //      PROBE_FIXTURES=1 copia os dumps marcados como fixture para shared/tui/__fixtures__.
 // Cenários e2e-* respondem pelo caminho de produção (parseTuiMenuFull -> buildPlanKeys ou
-// keysForAction -> playKeys) e terminam com [verdict] PASS/FAIL; exit 1 se alguma expectativa
-// falhar. question-multi-keys*, question-single-keys e question-multi-chat-digit são
+// keysForAction -> playKeys; history-search-keys no Ctrl+R; rewind.ts no "Voltar a este
+// ponto") e terminam com [verdict] PASS/FAIL; exit 1 se alguma expectativa falhar.
+// PROBE_REAL_SETTINGS=1 roda sem --setting-sources (settings real, ex.: fullscreen). question-multi-keys*, question-single-keys e question-multi-chat-digit são
 // exploratórios: registram o que cada tecla faz (fonte das teclas de respond-keys).
 // Cada cenário declara flags extras, prompt inicial e passos. Um dump grava .txt (tela do
 // xterm headless) e .ansi (bytes do PTY desde o último dump), roda parseTuiMenuFull real e
@@ -27,7 +28,18 @@ import {
 import { parseTuiMenuFull, type PlanIntent, type TuiMenu } from '../../shared/tui/tui-menu-parser'
 import { actionKeyDelay, keysForAction } from '../../shared/tui/menu-actions'
 import type { AttentionAction } from '../../shared/types/ipc'
-import { parseTuiPicker } from '../../src/features/sessions/tui-picker-parser'
+import { parseTuiPicker, type TuiHistorySearch } from '../../src/features/sessions/tui-picker-parser'
+import * as historyKeys from '../../src/features/sessions/history-search-keys'
+import { readInputBox } from '../../shared/tui/input-draft'
+import {
+  isRewindPicker,
+  REWIND_NAV_DELAY_MS,
+  REWIND_OPEN_DELAY_MS,
+  REWIND_OPEN_KEYS,
+  rewindCursorOnTarget,
+  rewindNavKeys,
+} from '../../shared/tui/rewind'
+import { buildGenericScrollKeys } from '../../shared/tui/respond-keys'
 
 const xtermHeadless = createRequire(import.meta.url)(
   process.env.XTERM_HEADLESS ?? '@xterm/headless',
@@ -41,6 +53,10 @@ const CLAUDE_VERSION =
   execFileSync('claude', ['--version'], { encoding: 'utf8' }).match(/\d+\.\d+\.\d+/)?.[0] ?? 'unknown'
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../shared/tui/__fixtures__')
 const SB = process.env.PROBE_SB ?? join(tmpdir(), 'pitwall-probe-chat-plan-2317')
+// PROBE_REAL_SETTINGS=1: sem --setting-sources, a sessão lê o ~/.claude/settings.json do
+// usuário (ex.: "tui": "fullscreen", que troca a régua dos diálogos por ▔). As fixtures
+// ganham o prefixo "fullscreen-" e a saída vai para <cenario>-real.
+const REAL_SETTINGS = process.env.PROBE_REAL_SETTINGS === '1'
 
 const KEYS = {
   enter: '\r',
@@ -54,6 +70,7 @@ const KEYS = {
   'ctrl-c': '\x03',
   'ctrl-g': '\x07',
   'ctrl-r': '\x12',
+  'ctrl-s': '\x13',
   'ctrl-u': '\x15',
   backspace: '\x7f',
   space: ' ',
@@ -64,6 +81,7 @@ const KEYS = {
   '3': '3',
   '4': '4',
   '5': '5',
+  '6': '6',
 } as const
 type KeyName = keyof typeof KEYS
 
@@ -113,6 +131,27 @@ type Step =
   | { escUntilIdle: number }
   // Arquivo do cwdSetup segue byte a byte igual (o diálogo não gravou nada nele).
   | { expectUnchanged: string }
+  // Loga as últimas n linhas do JSONL (tipo, subtipo, uuid/parent curtos, texto do usuário)
+  // e a cadeia de mensagens do usuário vista a partir da última entrada.
+  | { jsonlTail: string; n?: number }
+  // Loga o conteúdo de arquivos do cwd (rewind de código).
+  | { files: string[] }
+  // Busca do Ctrl+R pelas teclas de produção (history-search-keys) sobre o parse fresco.
+  | { hist: 'query'; text: string }
+  | { hist: 'older' | 'newer' | 'accept' | 'fill' | 'cancel' | 'scope' }
+  | { hist: 'select'; text: RegExp }
+  | { expectHistory: { what: string; test: (p: TuiHistorySearch | null) => boolean }; timeout?: number }
+  // Caixa de input da CLI lida como o renderer lê (input-draft): texto exato ou vazia.
+  | { expectDraft: string | null; timeout?: number }
+  // Mensagem do usuário mais nova na cadeia do JSONL (a partir da última entrada).
+  | { expectChainHead: string | RegExp; timeout?: number }
+  | { expectChainLacks: string }
+  | { expectFiles: Record<string, string | null> }
+  // Fluxo do "Voltar a este ponto" (useRewind): Esc-Esc, setas, confere a tela, Enter.
+  | { rewindTo: { text: string; fromEnd: number } }
+  | { scroll: 'up' | 'down' }
+  // Tela sem o texto (transcript depois do rewind).
+  | { expectScreenLacks: string }
 
 type Act =
   | { kind: 'toggle'; label: RegExp | number }
@@ -251,6 +290,50 @@ const SEED_CWD = {
     JSON.stringify({ hooks: SEED_HOOKS, permissions: SEED_PERMISSIONS }, null, 2) + '\n',
 }
 
+
+// Histórico com conteúdo: 16 prompts distintos (alguns repetem o prefixo "diga") para ver
+// o que Ctrl+R mostra, como cicla, o que Tab/Enter/Esc fazem e o que fica no composer.
+const HISTORY_PROMPTS = [
+  'diga alfa',
+  'Responda só: ok bravo',
+  'diga charlie, e mais nada',
+  'Qual a capital da França? Responda numa palavra.',
+  'diga delta',
+  'Responda só: ok echo',
+  'diga foxtrot com letras maiúsculas',
+  'Some 2 e 3 e responda só o número.',
+  'diga golf',
+  'Responda só: ok hotel',
+  'diga india',
+  'Liste três cores separadas por vírgula, nada mais.',
+  'diga juliett',
+  'Responda só: ok kilo',
+  'diga lima',
+  'Responda só: ok mike',
+]
+const submitAll = (prompts: string[]): Step[] =>
+  prompts.flatMap((p): Step[] => [{ submit: p }, { wait: 'idle', timeout: 90_000 }])
+
+// Sessão com 9 mensagens do usuário, 5 delas editando arquivos (acceptEdits: sem diálogo
+// de permissão), para o seletor do rewind rolar e oferecer restaurar o código.
+const REWIND_ARGS = ['--model', 'claude-haiku-5-5', '--effort', 'low', '--permission-mode', 'acceptEdits']
+const REWIND_PROMPTS = [
+  "Crie o arquivo notas.txt contendo só a linha: um. Não faça mais nada.",
+  'Responda só: ok dois.',
+  "Acrescente a linha 'tres' ao final de notas.txt. Não faça mais nada.",
+  "Crie o arquivo extra.txt contendo só a linha: quatro. Não faça mais nada.",
+  'Responda só: ok cinco.',
+  "Acrescente a linha 'seis' ao final de notas.txt. Não faça mais nada.",
+  'Responda só: ok sete.',
+  "Acrescente a linha 'oito' ao final de extra.txt. Não faça mais nada.",
+  'Responda só: ok nove.',
+]
+const ups = (n: number, from: number): Step[] =>
+  Array.from({ length: n }, (_, k): Step[] => [
+    { keys: ['up'] },
+    { sleep: 600 },
+    { dump: `${from + k}-up${k + 1}` },
+  ]).flat()
 
 const SCENARIOS: Record<string, Scenario> = {
   'e2e-approve-auto': {
@@ -1043,6 +1126,427 @@ const SCENARIOS: Record<string, Scenario> = {
       { jsonl: 'after-compact' },
     ],
   },
+  // Exploratório: Ctrl+R com 17 prompts no histórico do projeto.
+  'history-populated': {
+    args: DEFAULT_ARGS,
+    tool: 'none',
+    prompt: 'diga zulu',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(HISTORY_PROMPTS),
+      { dump: '10-idle', fixture: 'history-idle-populated' },
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { dump: '20-ctrl-r-empty', fixture: 'history-open-empty' },
+      { footer: 'ctrl-r-empty' },
+      { type: 'diga' },
+      { sleep: 1200 },
+      { dump: '21-query-diga', fixture: 'history-query' },
+      { footer: 'query-diga' },
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { dump: '22-ctrl-r-2', fixture: 'history-query-older' },
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { dump: '23-ctrl-r-3' },
+      { keys: ['down'] },
+      { sleep: 900 },
+      { dump: '24-down' },
+      { keys: ['up'] },
+      { sleep: 900 },
+      { dump: '25-up' },
+      { type: ' g' },
+      { sleep: 900 },
+      { dump: '26-query-narrow', fixture: 'history-query-narrow' },
+      { keys: ['backspace', 'backspace'] },
+      { sleep: 900 },
+      { dump: '27-backspace' },
+      { type: 'zzqx' },
+      { sleep: 900 },
+      { dump: '28-no-match', fixture: 'history-no-match' },
+      { keys: ['backspace', 'backspace', 'backspace', 'backspace'] },
+      { sleep: 900 },
+      { dump: '29-back-from-no-match' },
+      // Tab: aceita sem enviar? O status e o JSONL dizem se houve turno.
+      { jsonlTail: 'before-tab', n: 2 },
+      { keys: ['tab'] },
+      { sleep: 2500 },
+      { dump: '30-after-tab', fixture: 'history-after-tab' },
+      { footer: 'after-tab' },
+      { jsonlTail: 'after-tab', n: 2 },
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { sleep: 1200 },
+      { dump: '31-cleared' },
+      // Esc: deixa o match no composer.
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { type: 'capital' },
+      { sleep: 900 },
+      { dump: '40-query-capital' },
+      { keys: ['esc'] },
+      { sleep: 1500 },
+      { dump: '41-after-esc', fixture: 'history-after-esc' },
+      { footer: 'after-esc' },
+      { jsonlTail: 'after-esc', n: 2 },
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { sleep: 1200 },
+      { dump: '42-cleared' },
+      // Ctrl+C dentro da busca.
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { type: 'cores' },
+      { sleep: 900 },
+      { keys: ['ctrl-c'] },
+      { sleep: 1500 },
+      { dump: '50-after-ctrl-c', fixture: 'history-after-ctrl-c' },
+      { footer: 'after-ctrl-c' },
+      // Enter: executa ou só preenche?
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { type: 'ok kilo' },
+      { sleep: 900 },
+      { dump: '60-query-kilo' },
+      { keys: ['enter'] },
+      { sleep: 2500 },
+      { dump: '61-after-enter', fixture: 'history-after-enter' },
+      { footer: 'after-enter' },
+      { jsonlTail: 'after-enter', n: 3 },
+      { wait: 'idle', timeout: 60_000 },
+      { dump: '62-idle-after-enter' },
+      { jsonlTail: 'idle-after-enter', n: 3 },
+      // Ctrl+R com texto no composer.
+      { type: 'rascunho' },
+      { sleep: 700 },
+      { keys: ['ctrl-r'] },
+      { sleep: 900 },
+      { dump: '70-ctrl-r-with-draft', fixture: 'history-open-with-draft' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '71-esc-with-draft' },
+    ],
+  },
+  // e2e do Ctrl+R sem fullscreen pelas teclas de produção: buscar, ciclar, preencher (Tab),
+  // limpar como o aviso do chat, e enviar (Enter vira turno).
+  'e2e-history': {
+    args: DEFAULT_ARGS,
+    tool: 'none',
+    prompt: 'diga zulu',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(HISTORY_PROMPTS),
+      { keys: ['ctrl-r'] },
+      { sleep: 1000 },
+      { expectHistory: { what: 'inline aberta', test: (p) => p?.mode === 'inline' && p.query === '' } },
+      { hist: 'query', text: 'ok kilo' },
+      { expectHistory: { what: 'match ok kilo', test: (p) => p?.match === 'Responda só: ok kilo' } },
+      { hist: 'query', text: 'diga' },
+      { expectHistory: { what: 'match diga lima', test: (p) => p?.match === 'diga lima' } },
+      { hist: 'older' },
+      { expectHistory: { what: 'anterior = diga juliett', test: (p) => p?.match === 'diga juliett' } },
+      { dump: '20-inline-older', fixture: 'history-e2e-inline-older' },
+      { hist: 'fill' },
+      { expectDraft: 'diga juliett' },
+      { expectChainHead: 'Responda só: ok mike', timeout: 3_000 },
+      // "Limpar" do aviso de rascunho.
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { expectDraft: null },
+      { keys: ['ctrl-r'] },
+      { sleep: 1000 },
+      { hist: 'query', text: 'ok kilo' },
+      { expectHistory: { what: 'match ok kilo de novo', test: (p) => p?.match === 'Responda só: ok kilo' } },
+      { hist: 'accept' },
+      { expectChainHead: 'Responda só: ok kilo', timeout: 30_000 },
+      { wait: 'idle', timeout: 60_000 },
+      // Cancelar com rascunho: o Ctrl+C também leva o rascunho?
+      { type: 'rascunho' },
+      { sleep: 700 },
+      { keys: ['ctrl-r'] },
+      { sleep: 1000 },
+      { hist: 'query', text: 'diga' },
+      { hist: 'cancel' },
+      { sleep: 1200 },
+      { dump: '40-cancel-with-draft', fixture: 'history-e2e-cancel-with-draft' },
+      { footer: 'cancel-with-draft' },
+      { expectHistory: { what: 'busca fechada', test: (p) => p == null } },
+    ],
+  },
+  // e2e do modal do fullscreen (rodar com PROBE_REAL_SETTINGS=1). As telas com fixture são
+  // as do escopo "project" (só prompts da sonda); o "everywhere" traz o histórico do usuário.
+  'e2e-history-fullscreen': {
+    args: DEFAULT_ARGS,
+    tool: 'none',
+    prompt: 'diga zulu',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(HISTORY_PROMPTS),
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { expectHistory: { what: 'modal aberto', test: (p) => p?.mode === 'modal' && p.scope === 'everywhere' } },
+      { hist: 'scope' },
+      { hist: 'scope' },
+      { expectHistory: { what: 'escopo project', test: (p) => p?.scope === 'project' } },
+      { dump: '20-scope-project' },
+      { sleep: 300 },
+      { dump: '21-modal-project', fixture: 'history-modal-project' },
+      { hist: 'query', text: 'diga' },
+      { expectHistory: { what: 'filtro diga', test: (p) => p?.query === 'diga' && (p.results ?? []).every((r) => r.text.startsWith('diga')) } },
+      { dump: '22-modal-query', fixture: 'history-modal-query' },
+      { hist: 'select', text: /^diga india$/ },
+      { expectHistory: { what: 'cursor em diga india', test: (p) => p?.results?.find((r) => r.index === p.cursorIndex)?.text === 'diga india' } },
+      { hist: 'older' },
+      { expectHistory: { what: 'mais antigo = diga golf', test: (p) => p?.results?.find((r) => r.index === p.cursorIndex)?.text === 'diga golf' } },
+      { hist: 'newer' },
+      { dump: '23-modal-selected', fixture: 'history-modal-selected' },
+      { hist: 'accept' },
+      { expectDraft: 'diga india' },
+      { expectChainHead: 'Responda só: ok mike', timeout: 3_000 },
+      { dump: '24-after-use', fixture: 'history-modal-after-use' },
+      // "Enviar ao Claude" do aviso de rascunho.
+      { keys: ['enter'] },
+      { expectChainHead: 'diga india', timeout: 30_000 },
+      { wait: 'idle', timeout: 60_000 },
+      { type: 'rascunho' },
+      { sleep: 700 },
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { hist: 'cancel' },
+      { expectDraft: 'rascunho' },
+      { expectHistory: { what: 'modal fechado', test: (p) => p == null } },
+    ],
+  },
+  // e2e do "Voltar a este ponto" + Restore conversation: a sessão volta para antes da 4ª
+  // mensagem, a CLI devolve o texto dela na caixa e os arquivos ficam como estão.
+  'e2e-rewind-restore': {
+    args: REWIND_ARGS,
+    tool: 'none',
+    prompt: 'Responda só: ok zero.',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(REWIND_PROMPTS),
+      { expectFiles: { 'notas.txt': 'um\ntres\nseis\n', 'extra.txt': 'quatro\noito\n' } },
+      { rewindTo: { text: REWIND_PROMPTS[3], fromEnd: 6 } },
+      { expectMenu: { kind: 'menu', question: /^Rewind$/ }, timeout: 3_000 },
+      { dump: '20-submenu', fixture: 'rewind-e2e-submenu' },
+      { jsonlTail: 'before-restore', n: 1 },
+      { act: { kind: 'select', label: /^Restore conversation$/ } },
+      { sleep: 2500 },
+      { dump: '30-after-restore', fixture: 'rewind-e2e-after-restore' },
+      { jsonlTail: 'after-restore', n: 3 },
+      { expectMenu: null, timeout: 5_000 },
+      { expectDraft: REWIND_PROMPTS[3] },
+      { expectScreenLacks: 'ok nove' },
+      { expectFiles: { 'notas.txt': 'um\ntres\nseis\n', 'extra.txt': 'quatro\noito\n' } },
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { expectDraft: null },
+      { submit: 'Responda só: ok depois.' },
+      { wait: 'idle', timeout: 90_000 },
+      { jsonlTail: 'after-new-prompt', n: 2 },
+      { expectChainHead: 'Responda só: ok depois.' },
+      { expectChainLacks: 'Responda só: ok nove.' },
+      { expectChainLacks: 'Crie o arquivo extra.txt' },
+    ],
+  },
+  // e2e: Never mind (fora da janela: "mostrar mais" do card) não muda nada; depois Restore
+  // code and conversation volta os arquivos para antes da mensagem.
+  'e2e-rewind-never-mind': {
+    args: REWIND_ARGS,
+    tool: 'none',
+    prompt: 'Responda só: ok zero.',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(REWIND_PROMPTS.slice(0, 4)),
+      { expectFiles: { 'notas.txt': 'um\ntres\n', 'extra.txt': 'quatro\n' } },
+      { rewindTo: { text: REWIND_PROMPTS[1], fromEnd: 3 } },
+      { expectMenu: { kind: 'menu', question: /^Rewind$/ }, timeout: 3_000 },
+      { scroll: 'down' },
+      { dump: '20-submenu-scrolled', fixture: 'rewind-e2e-submenu-scrolled' },
+      { act: { kind: 'select', label: /^Never mind$/ } },
+      { sleep: 1500 },
+      { dump: '21-after-never-mind' },
+      { expectMenu: { kind: 'menu', question: /^Rewind$/ }, timeout: 3_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 5_000 },
+      { jsonlTail: 'after-never-mind', n: 1 },
+      { expectChainHead: REWIND_PROMPTS[3] },
+      { expectFiles: { 'notas.txt': 'um\ntres\n', 'extra.txt': 'quatro\n' } },
+      { wait: 'idle', timeout: 30_000 },
+      { rewindTo: { text: REWIND_PROMPTS[1], fromEnd: 3 } },
+      { expectMenu: { kind: 'menu', question: /^Rewind$/ }, timeout: 3_000 },
+      { act: { kind: 'select', label: /^Restore code and conversation$/ } },
+      { sleep: 2500 },
+      { dump: '30-after-code-restore', fixture: 'rewind-e2e-after-code-restore' },
+      { expectMenu: null, timeout: 5_000 },
+      { expectFiles: { 'notas.txt': 'um\n', 'extra.txt': null } },
+      { expectDraft: REWIND_PROMPTS[1] },
+    ],
+  },
+  // Exploratório (rodar com PROBE_REAL_SETTINGS=1): no fullscreen o Ctrl+R é um modal com
+  // filtro e lista do histórico de TODOS os projetos ("everywhere"). Sem fixture automática:
+  // as telas "everywhere" trazem prompts reais do usuário.
+  'history-fullscreen': {
+    args: DEFAULT_ARGS,
+    tool: 'none',
+    prompt: 'diga zulu',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(HISTORY_PROMPTS),
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { dump: '20-open' },
+      { keys: ['ctrl-s'] },
+      { sleep: 900 },
+      { dump: '21-scope1' },
+      { keys: ['ctrl-s'] },
+      { sleep: 900 },
+      { dump: '22-scope2' },
+      { keys: ['ctrl-s'] },
+      { sleep: 900 },
+      { dump: '23-scope3' },
+      { type: 'diga' },
+      { sleep: 1200 },
+      { dump: '24-query' },
+      { keys: ['up'] },
+      { sleep: 700 },
+      { dump: '25-up1' },
+      { keys: ['up'] },
+      { sleep: 700 },
+      { dump: '26-up2' },
+      { keys: ['ctrl-r'] },
+      { sleep: 700 },
+      { dump: '27-ctrl-r' },
+      { keys: ['down'] },
+      { sleep: 700 },
+      { dump: '28-down' },
+      { type: 'zzqx' },
+      { sleep: 900 },
+      { dump: '29-no-match' },
+      { keys: ['backspace', 'backspace', 'backspace', 'backspace'] },
+      { sleep: 900 },
+      { jsonlTail: 'before-tab', n: 1 },
+      { keys: ['tab'] },
+      { sleep: 2500 },
+      { dump: '30-after-tab' },
+      { footer: 'after-tab' },
+      { jsonlTail: 'after-tab', n: 1 },
+      { keys: ['ctrl-c'] },
+      { sleep: 2500 },
+      { dump: '31-after-ctrl-c' },
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { dump: '40-reopen' },
+      { type: 'capital' },
+      { sleep: 900 },
+      { dump: '41-query-capital' },
+      { keys: ['esc'] },
+      { sleep: 1500 },
+      { dump: '42-after-esc' },
+      { footer: 'after-esc' },
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { type: 'ok kilo' },
+      { sleep: 900 },
+      { dump: '50-query-kilo' },
+      { jsonlTail: 'before-enter', n: 1 },
+      { keys: ['enter'] },
+      { sleep: 2500 },
+      { dump: '51-after-enter' },
+      { footer: 'after-enter' },
+      { jsonlTail: 'after-enter', n: 1 },
+      { wait: 'idle', timeout: 60_000 },
+      { jsonlTail: 'idle-after-enter', n: 1 },
+      { keys: ['ctrl-c'] },
+      { sleep: 2500 },
+      { type: 'rascunho' },
+      { sleep: 700 },
+      { keys: ['ctrl-r'] },
+      { sleep: 1200 },
+      { dump: '60-with-draft' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '61-esc-with-draft' },
+      { footer: 'esc-with-draft' },
+    ],
+  },
+  // Exploratório: Esc-Esc numa sessão com 9 mensagens e edições de arquivo.
+  'rewind-populated': {
+    args: REWIND_ARGS,
+    tool: 'none',
+    prompt: 'Responda só: ok zero.',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      ...submitAll(REWIND_PROMPTS),
+      { files: ['notas.txt', 'extra.txt'] },
+      { dump: '10-idle', fixture: 'rewind-idle-populated' },
+      { jsonlTail: 'idle', n: 3 },
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { sleep: 1500 },
+      { dump: '20-picker', fixture: 'rewind-picker-populated' },
+      ...ups(10, 21),
+      { dump: '31-picker-top', fixture: 'rewind-picker-scrolled' },
+      { keys: ['down', 'down', 'down', 'down'], gapMs: 300 },
+      { sleep: 600 },
+      // 5ª linha a partir do topo = "Crie o arquivo extra.txt" (mensagem 4 do usuário).
+      { dump: '32-picker-at-extra', fixture: 'rewind-picker-code' },
+      { keys: ['enter'] },
+      { sleep: 1500 },
+      { dump: '40-submenu-code', fixture: 'rewind-submenu-code' },
+      { jsonlTail: 'submenu', n: 2 },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '41-submenu-down1' },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '42-submenu-down2' },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '43-submenu-down3', fixture: 'rewind-submenu-code-summarize' },
+      { type: 'foco nas notas' },
+      { sleep: 800 },
+      { dump: '44-summarize-typed', fixture: 'rewind-submenu-summarize-typed' },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '45-submenu-down4' },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '46-submenu-down5' },
+      { keys: ['down'] },
+      { sleep: 600 },
+      { dump: '47-submenu-down6' },
+      // Esc no submenu: volta ao seletor?
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '50-submenu-esc', fixture: 'rewind-submenu-esc' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '51-submenu-again' },
+      // "6. Never mind" fica fora da janela (1-5 visíveis): o dígito alcança?
+      { keys: ['6'] },
+      { sleep: 1500 },
+      { dump: '52-never-mind', fixture: 'rewind-never-mind' },
+      { footer: 'never-mind' },
+      { jsonlTail: 'never-mind', n: 2 },
+      { files: ['notas.txt', 'extra.txt'] },
+      { escUntilIdle: 3 },
+      { dump: '53-closed' },
+      // Mensagem sem edição: submenu sem opções de código.
+      { keys: ['esc', 'esc'], gapMs: 200 },
+      { sleep: 1500 },
+      { dump: '60-picker-again' },
+      { keys: ['up', 'up'], gapMs: 300 },
+      { sleep: 600 },
+      { dump: '61-picker-ok-sete' },
+      { keys: ['enter'] },
+      { sleep: 1500 },
+      { dump: '62-submenu-no-code', fixture: 'rewind-submenu-no-code' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '63-back' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '64-closed', fixture: 'rewind-closed' },
+      { jsonlTail: 'closed', n: 2 },
+    ],
+  },
   // Spike: PreToolUse/PermissionRequest disparam para ExitPlanMode e AskUserQuestion na TUI?
   // --setting-sources project,local deixa os hooks do usuário de fora; --settings é flag.
   'hook-spike': {
@@ -1113,7 +1617,7 @@ if (!SC) {
   console.error(`cenario desconhecido "${NAME}". Opcoes: ${Object.keys(SCENARIOS).join(', ')}`)
   process.exit(2)
 }
-const OUT = join(SB, NAME)
+const OUT = join(SB, REAL_SETTINGS ? `${NAME}-real` : NAME)
 const CWD = join(OUT, 'cwd')
 rmSync(OUT, { recursive: true, force: true })
 mkdirSync(CWD, { recursive: true })
@@ -1139,7 +1643,12 @@ env.TERM = 'xterm-256color'
 Object.assign(env, SC.env)
 const TOOL = SC.tool ?? 'ExitPlanMode'
 const sessionId = randomUUID()
-const args = ['--session-id', sessionId, '--setting-sources', 'project,local', ...SC.args]
+const args = [
+  '--session-id',
+  sessionId,
+  ...(REAL_SETTINGS ? [] : ['--setting-sources', 'project,local']),
+  ...SC.args,
+]
 const t0 = performance.now()
 const proc = pty.spawn('claude', args, {
   name: 'xterm-256color',
@@ -1393,6 +1902,11 @@ function hookReport(label: string, fixture?: string) {
   }
 }
 
+// O nome do usuário vira um de mesmo comprimento (colunas da tela intactas).
+const USER = homedir().split('/').pop() ?? ''
+const FIXTURE_USER = 'pitwall-fixture'.padEnd(USER.length, '-').slice(0, USER.length)
+const scrubPii = (s: string) => (USER.length >= 4 ? s.split(USER).join(FIXTURE_USER) : s)
+
 function dump(step: string, fixture?: string) {
   const txt = readTail(80)
   const ansi = raw.slice(rawMark)
@@ -1404,9 +1918,11 @@ function dump(step: string, fixture?: string) {
     `[${step}] t=${Math.round(performance.now() - t0)}ms status=${ccStatus()} menu=${m ? JSON.stringify({ kind: m.kind, q: m.question, opts: m.options.map((o) => ({ i: o.index, label: o.label, ...(o.sentinel ? { sentinel: o.sentinel } : {}) })), cursorIndex: m.cursorIndex, submitOnDigit: m.submitOnDigit, multiSelect: m.multiSelect }) : 'null'} picker=${JSON.stringify(parseTuiPicker(txt))}`,
   )
   if (fixture && process.env.PROBE_FIXTURES === '1') {
-    const base = join(FIXTURES_DIR, `claude-${CLAUDE_VERSION}-${fixture}`)
-    writeFileSync(`${base}.txt`, txt)
-    writeFileSync(`${base}.ansi`, ansi)
+    const base = join(FIXTURES_DIR, `claude-${CLAUDE_VERSION}-${REAL_SETTINGS ? 'fullscreen-' : ''}${fixture}`)
+    writeFileSync(`${base}.txt`, scrubPii(txt))
+    // Com o settings real o 1º dump traz a saída dos hooks do usuário (texto da conta); o
+    // fullscreen redesenha numa tela alternativa, e o delta sozinho não reproduz a tela.
+    if (!REAL_SETTINGS) writeFileSync(`${base}.ansi`, scrubPii(ansi))
     say(`[fixture] ${base}.{txt,ansi}`)
   }
 }
@@ -1461,6 +1977,30 @@ function lastToolResult(tool: string): any | null {
   )
   return found.at(-1) ?? null
 }
+
+function userChain(): string[] {
+  const entries = readJsonl()
+  const byId = new Map(entries.filter((e) => e.uuid).map((e) => [e.uuid, e]))
+  const text = (e: any) => {
+    const c = e?.message?.content
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.find((b: any) => b.type === 'text')?.text : null
+    return typeof t === 'string' ? t : null
+  }
+  const out: string[] = []
+  let cur = [...entries].reverse().find((e) => e.uuid && (e.type === 'user' || e.type === 'assistant'))
+  let guard = 0
+  while (cur && guard++ < 5000) {
+    const t = cur.type === 'user' && !cur.isMeta ? text(cur) : null
+    if (t && !t.startsWith('<')) out.push(t)
+    cur = cur.parentUuid ? byId.get(cur.parentUuid) : undefined
+  }
+  return out
+}
+const freshHistory = (): TuiHistorySearch | null => {
+  const p = parseTuiPicker(readTail(80))
+  return p?.kind === 'history_search' ? p : null
+}
+let histQuery = ''
 
 async function run(step: Step) {
   if ('wait' in step) {
@@ -1649,6 +2189,114 @@ async function run(step: Step) {
     verdict(`${step.expectUnchanged} intocado no cwd`, want != null && got === want, got == null ? 'ausente' : `${got.length}ch`)
   } else if ('dump' in step) dump(step.dump, step.fixture)
   else if ('hooklog' in step) hookReport(step.hooklog, step.fixture)
+  else if ('hist' in step) {
+    const p = freshHistory()
+    if (!p) throw new Error(`hist ${step.hist}: busca nao esta na tela`)
+    let keys: string[]
+    if (step.hist === 'query') {
+      keys = historyKeys.historyQueryKeys(histQuery, step.text)
+      histQuery = step.text
+    } else if (step.hist === 'select') {
+      const r = p.results?.find((x) => step.text.test(x.text))
+      if (!r) throw new Error(`hist select ${step.text}: resultado nao visivel`)
+      keys = historyKeys.historySelectKeys(p, r.index)
+    } else {
+      const fn = {
+        older: historyKeys.historyOlderKeys,
+        newer: historyKeys.historyNewerKeys,
+        accept: historyKeys.historyAcceptKeys,
+        fill: historyKeys.historyFillKeys,
+        cancel: historyKeys.historyCancelKeys,
+        scope: historyKeys.historyScopeKeys,
+      }[step.hist]
+      keys = fn(p)
+      if (['accept', 'fill', 'cancel'].includes(step.hist)) histQuery = ''
+    }
+    say(`[hist ${step.hist}] mode=${p.mode} q=${JSON.stringify(p.query)} match=${JSON.stringify(p.match ?? p.results?.find((r) => r.index === p.cursorIndex)?.text ?? null)} effect=${historyKeys.historyAcceptEffect(p)} keys=${JSON.stringify(keys)}`)
+    if (keys.length === 0) throw new Error(`hist ${step.hist}: [] (acao nao cabe)`)
+    await playKeys(keys, (k) => proc.write(k))
+    await sleep(700)
+  } else if ('expectHistory' in step) {
+    const ok = await waitFor(() => step.expectHistory.test(freshHistory()), step.timeout ?? 5_000)
+    const p = freshHistory()
+    verdict(`historico: ${step.expectHistory.what}`, ok, JSON.stringify(p ? { mode: p.mode, scope: p.scope, q: p.query, match: p.match, cursor: p.cursorIndex, results: p.results?.map((r) => r.text) } : null))
+  } else if ('expectDraft' in step) {
+    const ok = await waitFor(() => readInputBox(term).draft === step.expectDraft, step.timeout ?? 5_000)
+    verdict(`caixa de input = ${JSON.stringify(step.expectDraft)}`, ok, JSON.stringify(readInputBox(term)))
+  } else if ('expectChainHead' in step) {
+    const want = step.expectChainHead
+    const match = (t?: string) => t != null && (typeof want === 'string' ? t === want : want.test(t))
+    const ok = await waitFor(() => match(userChain()[0]), step.timeout ?? 20_000)
+    verdict(`cadeia do JSONL comeca em ${want}`, ok, JSON.stringify(userChain().slice(0, 4)))
+  } else if ('expectChainLacks' in step) {
+    const chain = userChain()
+    verdict(`cadeia do JSONL sem ${JSON.stringify(step.expectChainLacks)}`, !chain.some((t) => t.startsWith(step.expectChainLacks)), JSON.stringify(chain.slice(0, 6)))
+  } else if ('expectFiles' in step) {
+    for (const [f, want] of Object.entries(step.expectFiles)) {
+      const p = join(CWD, f)
+      const got = existsSync(p) ? readFileSync(p, 'utf8') : null
+      verdict(`arquivo ${f} = ${JSON.stringify(want)}`, got === want, JSON.stringify(got))
+    }
+  } else if ('expectScreenLacks' in step) {
+    const ok = await waitFor(() => !readTail(ROWS).includes(step.expectScreenLacks), 5_000)
+    verdict(`tela sem ${JSON.stringify(step.expectScreenLacks)}`, ok, '')
+  } else if ('scroll' in step) {
+    const m = parseNow()
+    if (!m) throw new Error('scroll: sem menu')
+    const keys = buildGenericScrollKeys(m, step.scroll)
+    say(`[scroll ${step.scroll}] cursor=${m.cursorIndex} opts=${JSON.stringify(m.options.map((o) => o.index))} keys=${JSON.stringify(keys)}`)
+    if (keys.length === 0) throw new Error('scroll: []')
+    await playKeys(keys, (k) => proc.write(k))
+    await sleep(700)
+  } else if ('rewindTo' in step) {
+    const target = step.rewindTo
+    const input = readInputBox(term)
+    if (!input.prompt || input.draft != null || statusOf() !== 'idle') throw new Error(`rewindTo: pre-condicao ${JSON.stringify({ ...input, status: statusOf() })}`)
+    await playKeys(REWIND_OPEN_KEYS, (k) => proc.write(k), REWIND_OPEN_DELAY_MS)
+    let picker: TuiMenu | null = null
+    await waitFor(() => isRewindPicker((picker = parseNow())), 3_000)
+    if (!isRewindPicker(picker)) throw new Error('rewindTo: seletor nao abriu')
+    const keys = rewindNavKeys(picker, target)
+    say(`[rewindTo] fromEnd=${target.fromEnd} cursor=${picker.cursorIndex} above=${picker.moreAboveCount ?? 0} below=${picker.moreBelowCount ?? 0} visible=${picker.options.length} keys=${keys?.length ?? 'null'}`)
+    if (keys == null) throw new Error('rewindTo: rewindNavKeys null')
+    if (keys.length > 0) await playKeys(keys, (k) => proc.write(k), REWIND_NAV_DELAY_MS)
+    const on = await waitFor(() => {
+      const m = parseNow()
+      return m != null && rewindCursorOnTarget(m, target)
+    }, 2_500)
+    const m = parseNow()
+    verdict(`seletor com o cursor em ${JSON.stringify(target.text.slice(0, 40))}`, on, JSON.stringify({ cursor: m?.cursorIndex, label: m?.options.find((o) => o.index === m?.cursorIndex)?.label, above: m?.moreAboveCount }))
+    if (!on) throw new Error('rewindTo: cursor nao confirmou o alvo')
+    proc.write('\r')
+    await sleep(1200)
+  }
+  else if ('jsonlTail' in step) {
+    const entries = readJsonl()
+    const short = (u: unknown) => (typeof u === 'string' ? u.slice(0, 8) : String(u))
+    const userText = (e: any) => {
+      const c = e?.message?.content
+      const t = typeof c === 'string' ? c : Array.isArray(c) ? c.find((b: any) => b.type === 'text')?.text : null
+      return typeof t === 'string' ? t.slice(0, 60) : null
+    }
+    say(`[jsonlTail ${step.jsonlTail}] entries=${entries.length}`)
+    for (const e of entries.slice(-(step.n ?? 3)))
+      say(`  ${JSON.stringify({ type: e.type, subtype: e.subtype, uuid: short(e.uuid), parent: short(e.parentUuid), isMeta: e.isMeta, user: e.type === 'user' ? userText(e) : undefined, keys: Object.keys(e).filter((k) => !['message', 'uuid', 'parentUuid', 'type', 'subtype', 'cwd', 'sessionId', 'version', 'gitBranch', 'timestamp', 'userType', 'isSidechain', 'entrypoint', 'slug'].includes(k)) })}`)
+    // Cadeia a partir da última entrada: quais mensagens do usuário estão "vivas".
+    const byId = new Map(entries.filter((e) => e.uuid).map((e) => [e.uuid, e]))
+    const chain: string[] = []
+    let cur = [...entries].reverse().find((e) => e.uuid && (e.type === 'user' || e.type === 'assistant'))
+    let guard = 0
+    while (cur && guard++ < 2000) {
+      if (cur.type === 'user' && !cur.isMeta && userText(cur) && !String(userText(cur)).startsWith('<')) chain.push(String(userText(cur)))
+      cur = cur.parentUuid ? byId.get(cur.parentUuid) : undefined
+    }
+    say(`  chain(user, newest first)=${JSON.stringify(chain)}`)
+  } else if ('files' in step) {
+    for (const f of step.files) {
+      const p = join(CWD, f)
+      say(`[file ${f}] ${existsSync(p) ? JSON.stringify(readFileSync(p, 'utf8')) : 'ausente'}`)
+    }
+  }
   else if ('jsonl' in step) {
     const TOOL = step.tool ?? SC.tool ?? 'ExitPlanMode'
     let r = jsonlReport(step.jsonl, TOOL)
