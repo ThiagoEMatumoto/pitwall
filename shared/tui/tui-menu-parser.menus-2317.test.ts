@@ -211,6 +211,24 @@ describe('parser tolerante: menus que nenhum parser dedicado conhece (2.1.317)',
     expect(menuFingerprint(selected!)).toBe(menuFingerprint(menu!))
   })
 
+  it('/permissions depois de → (sonda e2e-generic-menus, 2.1.318): outra aba, mesmo diálogo', () => {
+    const before = txt('2.1.317-unknown-permissions')
+    const after = txt('2.1.318-unknown-permissions-tab-next')
+    expect(after?.kind).toBe('menu')
+    expect(after?.question).toBe('Permissions')
+    expect(after?.context).toMatch(/^Claude Code will always ask/)
+    // A aba ativa só aparece no texto do corpo: o fingerprint muda, então o card relê.
+    expect(menuFingerprint(after!)).not.toBe(menuFingerprint(before!))
+  })
+
+  it('"Add allow permission rule": diálogo de campo, só Esc (nenhuma opção)', () => {
+    const menu = txt('2.1.318-unknown-permissions-add-rule')
+    expect(menu?.kind).toBe('menu')
+    expect(menu?.question).toBe('Add allow permission rule')
+    expect(menu?.options).toEqual([])
+    expect(menu?.footer).toBe('Enter to submit · Esc to cancel')
+  })
+
   it('telas sem diálogo continuam sem menu', () => {
     for (const name of [
       '2.1.317-compact-done',
