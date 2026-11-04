@@ -11,6 +11,11 @@ export interface RewindTarget {
   text: string
   // 1 = a última mensagem do usuário; 2 = a anterior; …
   fromEnd: number
+  // Mensagens do usuário no chat, da mais antiga à mais nova. Com elas, o Enter também exige
+  // que as outras paradas visíveis batam com o chat: depois de um Restore conversation o
+  // chat segue mostrando o ramo desfeito, e o mesmo fromEnd cai em outra mensagem, às
+  // vezes com o mesmo texto ("sim", "continue").
+  chat?: string[]
 }
 
 export const REWIND_OPEN_KEYS = ['\x1b', '\x1b']
@@ -85,5 +90,15 @@ export function rewindCursorOnTarget(menu: TuiMenu, target: RewindTarget): boole
   const pos = position(menu)
   if (!pos || pos.cursor !== pos.total - 1 - target.fromEnd) return false
   const opt = menu.options.find((o) => o.index === menu.cursorIndex)
-  return opt != null && opt.label !== CURRENT_LABEL && rewindLabelMatches(opt.label, target.text)
+  if (opt == null || opt.label === CURRENT_LABEL || !rewindLabelMatches(opt.label, target.text))
+    return false
+  return target.chat == null || stopsMatchChat(menu, pos, target.chat)
+}
+
+function stopsMatchChat(menu: TuiMenu, pos: Position, chat: string[]): boolean {
+  return menu.options.every((o, k) => {
+    if (o.label === CURRENT_LABEL) return true
+    const text = chat[chat.length - (pos.total - 1 - (pos.offset + k))]
+    return text != null && rewindLabelMatches(o.label, text)
+  })
 }

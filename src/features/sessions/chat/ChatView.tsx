@@ -181,6 +181,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
 
   const diskLines = useMemo(() => userLines(messages), [messages])
   const diskUserCount = diskLines.length
+  // Restore conversation pelo card: o terminal desfez mensagens que o chat só tira quando o
+  // próximo prompt chegar ao disco. Até as linhas do disco mudarem, as paradas do /rewind
+  // não são as mensagens que o chat mostra.
+  const diskKey = useMemo(() => JSON.stringify(diskLines), [diskLines])
+  const [restoredAt, setRestoredAt] = useState<string | null>(null)
+  useEffect(() => {
+    if (restoredAt != null && diskKey !== restoredAt) setRestoredAt(null)
+  }, [diskKey, restoredAt])
   const shownEchoes = useMemo(() => visibleEchoes(echoes), [echoes])
 
   useImperativeHandle(
@@ -646,6 +654,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     sendKeys(keys)
     if (action.kind === 'select' && restoresConversation(fresh!, action.optionIndex)) {
       rewind.announce(RESTORED_NOTICE)
+      setRestoredAt(diskKey)
     }
   }
   function respondGenericInput(optionIndex: number, text: string) {
@@ -834,13 +843,19 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     }
     return out
   }, [messages])
+  const chatPrompts = useMemo(
+    () => messages.flatMap((m) => (m.kind === 'user' ? [m.text] : [])),
+    [messages],
+  )
   const rewindDisabled = rewind.busy
     ? 'Abrindo o rewind…'
     : status !== 'idle'
       ? 'Disponível com o Claude parado'
       : tuiMenu != null || tuiPicker != null
         ? 'Feche o diálogo aberto antes'
-        : cliDraft
+        : restoredAt != null
+          ? 'O chat ainda mostra o que o terminal desfez: mande a próxima mensagem antes'
+          : cliDraft
           ? 'A caixa do terminal tem texto'
           : null
   const rewindNoticeNode = rewind.notice ? (
@@ -1052,7 +1067,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             role="user"
             text={m.text}
             pending={echoPending}
-            onRewind={rewind.available && fromEnd != null ? () => void rewind.start({ text: m.text, fromEnd }) : undefined}
+            onRewind={rewind.available && fromEnd != null ? () => void rewind.start({ text: m.text, fromEnd, chat: chatPrompts }) : undefined}
             rewindDisabled={rewindDisabled}
           />
         )

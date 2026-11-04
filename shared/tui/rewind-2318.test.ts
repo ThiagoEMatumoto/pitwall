@@ -88,6 +88,21 @@ describe('seletor do /rewind com edições (2.1.318)', () => {
     ).toBe(false)
   })
 
+  it('o chat mostra mensagens que o terminal desfez: o texto bate, mas as vizinhas não', () => {
+    const code = menu('rewind-picker-code')
+    const labels = code.options.slice(0, -1).map((o) => o.label)
+    expect(rewindCursorOnTarget(code, { text: EXTRA, fromEnd: 6, chat: labels })).toBe(true)
+    // Mesmo texto e mesma distância do fim, mas o chat tem uma mensagem a mais antes dele
+    // (ramo que um Restore conversation desfez e o disco ainda não tirou do chat).
+    const stale = [...labels.slice(0, 4), 'faz o setup', ...labels.slice(4)]
+    expect(stale[stale.length - 6]).toBe(EXTRA)
+    expect(rewindCursorOnTarget(code, { text: EXTRA, fromEnd: 6, chat: stale })).toBe(false)
+    // Fullscreen: só as paradas visíveis entram na conferência.
+    const full = menu('fullscreen-rewind-picker-code')
+    expect(rewindCursorOnTarget(full, { text: EXTRA, fromEnd: 6, chat: labels })).toBe(true)
+    expect(rewindCursorOnTarget(full, { text: EXTRA, fromEnd: 6, chat: stale })).toBe(false)
+  })
+
   it('lista rolada sem a contagem não tem posição: nada de setas', () => {
     const m = { ...menu('fullscreen-rewind-picker-populated'), moreAboveCount: undefined }
     expect(rewindNavKeys(m, { text: EXTRA, fromEnd: 6 })).toBeNull()

@@ -234,6 +234,31 @@ describe('ChatView — Voltar a este ponto (2.1.318)', () => {
     expect(t.onRespond.mock.calls.some((c) => c[0][0] === '\r')).toBe(false)
   })
 
+  it('o chat ainda mostra uma mensagem que o terminal desfez: nada de Enter no submenu de outra', async () => {
+    // A captura tem o cursor na 5ª parada com o texto certo, mas o chat tem uma mensagem a
+    // mais antes dela: a parada é de outra mensagem com o mesmo texto.
+    const t = rewindTerminal({ open: 'rewind-picker-populated', nav: 'rewind-picker-code' })
+    transcript.messages = [...REWIND_SESSION.slice(0, 4), 'faz o setup', ...REWIND_SESSION.slice(4)].map(
+      (text) => ({ kind: 'user' as const, text }),
+    )
+    render(
+      <ChatView
+        sessionId="s-r"
+        status="idle"
+        onRespond={t.onRespond}
+        reparseMenu={t.reparseMenu}
+        readCliInput={() => EMPTY_INPUT}
+      />,
+    )
+    fireEvent.click(screen.getAllByTestId('rewind-here')[5])
+    await waitFor(
+      () =>
+        expect(screen.getByTestId('rewind-notice').textContent).toMatch(/Não achei essa mensagem/),
+      { timeout: 4000 },
+    )
+    expect(t.onRespond.mock.calls.some((c) => c[0][0] === '\r')).toBe(false)
+  })
+
   it('com o Claude trabalhando ou texto na caixa do terminal: não manda Esc', () => {
     const t = rewindTerminal({ open: 'rewind-picker-populated', nav: 'rewind-picker-code' })
     const { unmount } = renderRewind(t, 'working')
@@ -277,6 +302,32 @@ describe('ChatView — submenu do /rewind e caixa do terminal (2.1.318)', () => 
     fireEvent.click(screen.getByTestId('generic-option-1'))
     expect(onRespond).toHaveBeenLastCalledWith(['2'])
     expect(screen.getByTestId('rewind-notice').textContent).toMatch(/A conversa voltou no terminal/)
+  })
+
+  it('depois do Restore conversation pelo card, "Voltar a este ponto" espera a próxima mensagem', () => {
+    transcript.messages = REWIND_SESSION.map((text) => ({ kind: 'user' as const, text }))
+    const onRespond = vi.fn()
+    const props = { sessionId: 's-s', onRespond, readCliInput: () => EMPTY_INPUT }
+    const { rerender } = render(
+      <ChatView
+        {...props}
+        status="waiting"
+        tuiMenu={menuOf('rewind-submenu-code')}
+        reparseMenu={() => menuOf('rewind-submenu-code')}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('generic-option-1'))
+    rerender(<ChatView {...props} status="idle" tuiMenu={null} reparseMenu={() => null} />)
+    const stale = screen.getAllByTestId('rewind-here')[9] as HTMLButtonElement
+    expect(stale.disabled).toBe(true)
+    expect(stale.title).toMatch(/próxima mensagem/)
+    // O prompt novo chegou ao disco e o ramo desfeito saiu do chat.
+    transcript.messages = [...REWIND_SESSION.slice(0, 4), 'Responda só: ok depois.'].map((text) => ({
+      kind: 'user' as const,
+      text,
+    }))
+    rerender(<ChatView {...props} status="idle" tuiMenu={null} reparseMenu={() => null} />)
+    expect((screen.getAllByTestId('rewind-here')[4] as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('"mostrar mais" anda o cursor até o Never mind aparecer', () => {
