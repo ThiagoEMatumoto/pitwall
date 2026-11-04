@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, MessageCircleQuestion, Square, SquareCheck } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  MessageCircleQuestion,
+  MessagesSquare,
+  Square,
+  SquareCheck,
+} from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import type { ChatQuestion } from '../../../../shared/types/ipc'
 import { questionPositionLabel } from '../tui-menu-parser'
@@ -16,8 +24,12 @@ interface Props {
   // Clique num checkbox de multi-select: dígito faz TOGGLE, nunca submete —
   // submeter de fato é só na tela de revisão (QuestionReviewCard).
   onToggle?: (optionIndex: number, label: string) => void
-  // Envio do campo "Other" (texto livre): dígito + texto + Enter.
+  // Envio do campo "Other" (texto livre). Single-select: é a resposta. Multi-select: só
+  // marca a opção com o texto (o envio continua no "Enviar respostas").
   onOtherSubmit?: (optionIndex: number, text: string) => void
+  // Sentinela "Chat about this": recusa a pergunta pra conversar; o usuário escreve
+  // depois pelo composer.
+  onChat?: () => void
   // Label da opção clicada, enquanto a resposta real não chega no JSONL (forId).
   sentLabel?: string
   // Barra de abas (multi-pergunta/multi-select) — a pergunta atual já vem em
@@ -43,14 +55,29 @@ function isSelected(answer: string | undefined, label: string): boolean {
 function OtherField({
   onSubmit,
   disabled,
+  multi,
+  typed,
 }: {
   onSubmit: (text: string) => void
   disabled?: boolean
+  multi?: boolean
+  // Texto já digitado no terminal: o campo de lá tem dono, este só mostra.
+  typed?: string
 }) {
   const [text, setText] = useState('')
-  const canSubmit = !disabled && text.trim() !== ''
+  const canSubmit = !disabled && typed == null && text.trim() !== ''
   function submit() {
     if (canSubmit) onSubmit(text)
+  }
+  if (typed != null) {
+    return (
+      <div
+        data-testid="question-other-typed"
+        className="rounded border border-[var(--color-border)] px-2 py-1.5 text-xs text-[var(--color-text-dim)]"
+      >
+        Outra: <span className="text-[var(--color-text)]">{typed}</span> (digitado no terminal)
+      </div>
+    )
   }
   return (
     <div className="flex items-center gap-2 rounded border border-[var(--color-border)] px-2 py-1.5">
@@ -62,7 +89,8 @@ function OtherField({
         onKeyDown={(e) => {
           if (e.key === 'Enter') submit()
         }}
-        placeholder="Digite sua resposta…"
+        data-testid="question-other-input"
+        placeholder={multi ? 'Outra opção…' : 'Digite sua resposta…'}
         className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]"
       />
       <button
@@ -71,7 +99,7 @@ function OtherField({
         disabled={!canSubmit}
         className="shrink-0 rounded border border-[var(--color-border)] px-2 py-0.5 text-xs font-medium transition hover:border-[var(--color-accent)]/60 disabled:opacity-40"
       >
-        Enviar
+        {multi ? 'Marcar' : 'Enviar'}
       </button>
     </div>
   )
@@ -84,10 +112,9 @@ function OtherField({
 // - single-select: clique = onRespond (o ChatView decide dígito-só ou
 //   dígito+Enter, conforme `submitOnDigit` do menu parseado).
 // - multiSelect: clique = onToggle (checkbox, nunca submete sozinho).
-// - "Other" (texto livre): campo de texto inline via onOtherSubmit — validado
-//   ao vivo tanto pergunta única quanto DENTRO de multi-pergunta (sonda Fase 2,
-//   docs/probe-2116-findings.md); multi-SELECT+Other continua sem evidência e
-//   é filtrado antes de chegar aqui (ver `tuiQuestion` em ChatView).
+// - "Other" (texto livre): campo de texto inline via onOtherSubmit. No multi-select
+//   ele só marca a opção com o texto (sondas 2.1.317/318); o envio é o botão.
+// - "Chat about this": botão próprio (onChat), fora da lista de opções.
 export function QuestionCard({
   questions,
   answers,
@@ -98,6 +125,7 @@ export function QuestionCard({
   tabs,
   onTabNav,
   onSubmitMulti,
+  onChat,
 }: Props) {
   const answered = answers != null
   const sent = sentLabel != null && !answered
@@ -186,6 +214,8 @@ export function QuestionCard({
                     return (
                       <OtherField
                         key={oi}
+                        multi={qq.multiSelect}
+                        typed={opt.otherText}
                         disabled={onOtherSubmit == null || answered || sent}
                         onSubmit={(text) => onOtherSubmit?.(oi, text)}
                       />
@@ -292,10 +322,24 @@ export function QuestionCard({
               {qq === q && qq.multiSelect && toggleClickable && onSubmitMulti && (
                 <button
                   type="button"
+                  data-testid="question-submit-multi"
                   onClick={onSubmitMulti}
                   className="self-start rounded border border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 px-2 py-1 text-xs font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/20"
                 >
                   Enviar respostas
+                </button>
+              )}
+              {qq === q && onChat && !answered && (
+                <button
+                  type="button"
+                  data-testid="question-chat"
+                  disabled={sent}
+                  onClick={onChat}
+                  title="Recusa a pergunta dizendo que você quer esclarecer; depois escreva pelo compositor."
+                  className="flex items-center gap-1.5 self-start rounded px-1 py-0.5 text-xs text-[var(--color-text-dim)] transition hover:text-[var(--color-text)] disabled:opacity-40"
+                >
+                  <Icon as={MessagesSquare} size={12} />
+                  Conversar sobre isso
                 </button>
               )}
               {qq === q && preview && (
@@ -311,10 +355,10 @@ export function QuestionCard({
             {sent
               ? 'Resposta enviada…'
               : selectClickable
-                ? 'Clique numa opção pra responder — ou use o compositor/terminal.'
+                ? 'Clique numa opção pra responder — ou escreva no compositor.'
                 : toggleClickable
-                  ? 'Marque as opções e clique em "Enviar respostas" quando terminar.'
-                  : 'Responda no compositor abaixo (ou no terminal) — selecione com as setas e Enter.'}
+                  ? 'Marque as opções e clique em "Enviar respostas": a revisão vem em seguida.'
+                  : 'Aguardando a resposta.'}
           </div>
         )}
       </div>
