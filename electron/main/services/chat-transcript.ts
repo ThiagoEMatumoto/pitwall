@@ -22,6 +22,10 @@ interface RawContentItem {
 
 interface RawLine {
   type?: string
+  // Encadeamento das linhas: o "Restore conversation" do /rewind não reescreve o arquivo;
+  // a próxima mensagem nasce do pai da mensagem restaurada (sonda e2e-rewind-restore).
+  uuid?: string
+  parentUuid?: string | null
   // Turnos de subagente (Task) vivem inline com isSidechain:true.
   isSidechain?: boolean
   // Conteúdo injetado pela CLI no turno do usuário (SKILL.md, caveats, avisos) —
@@ -360,10 +364,54 @@ function toText(content: string | RawContentItem[] | undefined): string {
 //
 // LIMITAÇÃO: prompts de permissão de tool (y/n de Edit/Bash) são TTY-only e NÃO
 // vão pro JSONL — o chat não os mostra a partir do transcript (fallback: terminal).
+// Prompt digitado pelo usuário (não tool_result, meta nem tag de comando).
+function isUserPrompt(obj: RawLine): boolean {
+  if (obj.type !== 'user' || obj.isMeta || obj.isSidechain) return false
+  const content = (obj as { message?: { content?: unknown } }).message?.content
+  if (typeof content === 'string') return !content.startsWith('<')
+  if (!Array.isArray(content)) return false
+  const blocks = content as { type?: string; text?: unknown }[]
+  if (blocks.some((b) => b?.type === 'tool_result')) return false
+  return blocks.some((b) => b?.type === 'text' && typeof b.text === 'string' && !b.text.startsWith('<'))
+}
+
+// Ramos que o rewind abandonou: dois prompts com o mesmo pai só acontecem depois de um
+// "Restore conversation" (0 casos nas 40 maiores sessões reais sem rewind; 1 na sonda).
+// Vale o prompt mais novo; o mais antigo e tudo que descende dele saem do chat. Sem essa
+// assinatura nada é descartado: irmãos assistant/user são comuns em sessões normais.
+export function rewoundUuids(lines: RawLine[]): Set<string> {
+  const prompts = new Map<string, string[]>()
+  for (const l of lines) {
+    if (!l.uuid || !l.parentUuid || !isUserPrompt(l)) continue
+    const list = prompts.get(l.parentUuid)
+    if (list) list.push(l.uuid)
+    else prompts.set(l.parentUuid, [l.uuid])
+  }
+  const dropped = new Set<string>()
+  for (const kids of prompts.values()) for (const id of kids.slice(0, -1)) dropped.add(id)
+  if (dropped.size === 0) return dropped
+  // Filho vem depois do pai no arquivo: uma passada em ordem pega a subárvore inteira.
+  for (const l of lines) {
+    if (l.uuid && l.parentUuid && dropped.has(l.parentUuid)) dropped.add(l.uuid)
+  }
+  return dropped
+}
+
 export function parseChatMessages(
   jsonl: string,
   subagents?: Map<string, SubagentInfo>,
 ): ChatMessage[] {
+  const parsed: RawLine[] = []
+  for (const raw of jsonl.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    try {
+      parsed.push(JSON.parse(line) as RawLine)
+    } catch {
+      // malformada / escrita parcial — pula a linha, nunca o arquivo.
+    }
+  }
+  const rewound = rewoundUuids(parsed)
   const out: ChatMessage[] = []
   // Ids de tool_use interativos já vistos, pra classificar o tool_result seguinte.
   const askIds = new Set<string>()
@@ -415,16 +463,9 @@ export function parseChatMessages(
     if (msg.kind === 'command_output' && !msg.text) return
     push(msg)
   }
-  for (const raw of jsonl.split('\n')) {
-    const line = raw.trim()
-    if (!line) continue
-    let obj: RawLine
-    try {
-      obj = JSON.parse(line) as RawLine
-    } catch {
-      continue // malformada / escrita parcial — pula a linha, nunca o arquivo.
-    }
+  for (const obj of parsed) {
     if (obj.isSidechain === true) continue
+    if (obj.uuid && rewound.has(obj.uuid)) continue
     if (typeof obj.interruptedMessageId === 'string' && obj.interruptedMessageId)
       interruptedMsgIds.add(obj.interruptedMessageId)
     if (obj.type === 'system') {
