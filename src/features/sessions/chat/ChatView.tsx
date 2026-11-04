@@ -65,6 +65,7 @@ import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-par
 import { pickerFingerprint, type TuiPicker } from '../tui-picker-parser'
 import {
   countUserMessages,
+  decidedPlanText,
   isAtBottom,
   liveMenuCoversPending,
   nextResolveAt,
@@ -336,6 +337,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // voltaria sem botões e com o banner de "responda". Segura o estado de enviado
   // até a resposta chegar ou ANSWER_HOLD_MS passar.
   const lastCoveredRef = useRef<{ id: string; plan: string | null } | null>(null)
+  // Último conteúdo do plan file mostrado no diálogo, por id: é o plano que o usuário
+  // decidiu, e o card decidido cai nele quando a decisão não traz o plano (rejeição).
+  const shownPlanRef = useRef(new Map<string, string>())
   const [answered, setAnswered] = useState<{
     id: string
     plan: string | null
@@ -444,6 +448,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const canRespondTui = onRespond != null && showTuiCard && tuiSent == null
   useEffect(() => {
     if (coveredPendingId) lastCoveredRef.current = { id: coveredPendingId, plan: pendingPlanText }
+    if (coveredPendingId && pendingPlanText) shownPlanRef.current.set(coveredPendingId, pendingPlanText)
   }, [coveredPendingId, pendingPlanText])
 
   // Guard de clique: RE-PARSE fresco do buffer imediatamente antes de digitar.
@@ -881,7 +886,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         return (
           <TranscriptPlanCard
             key={i}
-            plan={(m.id === heldPending?.id && heldPending.plan) || m.plan}
+            plan={
+              (m.id === heldPending?.id && heldPending.plan) ||
+              decidedPlanText(m.id, interactive, shownPlanRef.current) ||
+              m.plan
+            }
             planFilePath={m.planFilePath}
             decision={interactive.plans.get(m.id)}
             sent={m.id === heldPending?.id}

@@ -48,19 +48,35 @@ export function countUserMessages(messages: ChatMessage[]): number {
 export interface InteractiveResolution {
   answers: Map<string, Record<string, string>> // id da pergunta → mapa pergunta→opção
   plans: Map<string, boolean> // id do plano → aprovado
+  approvedPlans: Map<string, string> // id do plano → plano aprovado (toolUseResult.plan)
   subagents: Map<string, boolean> // id do subagente → terminou com erro
 }
 
 export function resolveInteractive(messages: ChatMessage[]): InteractiveResolution {
   const answers = new Map<string, Record<string, string>>()
   const plans = new Map<string, boolean>()
+  const approvedPlans = new Map<string, string>()
   const subagents = new Map<string, boolean>()
   for (const m of messages) {
     if (m.kind === 'ask_user_question_answered') answers.set(m.forId, m.answers)
-    else if (m.kind === 'plan_decision') plans.set(m.forId, m.approved)
-    else if (m.kind === 'subagent_result') subagents.set(m.forId, m.isError)
+    else if (m.kind === 'plan_decision') {
+      plans.set(m.forId, m.approved)
+      if (m.plan) approvedPlans.set(m.forId, m.plan)
+    } else if (m.kind === 'subagent_result') subagents.set(m.forId, m.isError)
   }
-  return { answers, plans, subagents }
+  return { answers, plans, approvedPlans, subagents }
+}
+
+// Plano de um card JÁ decidido: o aprovado (toolUseResult.plan), senão o último
+// conteúdo do plan file mostrado no diálogo (rejeição não grava o plano). null =
+// resta o input.plan, que pode ser o plano anterior.
+export function decidedPlanText(
+  id: string,
+  interactive: InteractiveResolution,
+  shown: ReadonlyMap<string, string>,
+): string | null {
+  if (!interactive.plans.has(id)) return null
+  return interactive.approvedPlans.get(id) ?? shown.get(id) ?? null
 }
 
 // Momento interativo aguardando o usuário: kind + id do tool_use. O id permite à

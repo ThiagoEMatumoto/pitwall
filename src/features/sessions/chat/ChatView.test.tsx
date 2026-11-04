@@ -7,7 +7,7 @@ import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { sessionsApiMock, transcript } = vi.hoisted(() => ({
   sessionsApiMock: { attentionMenu: vi.fn(), attentionRespond: vi.fn() },
-  transcript: { messages: [] as ChatMessage[] },
+  transcript: { messages: [] as ChatMessage[], planFileText: null as string | null },
 }))
 
 // Qualquer outra api do preload: inerte (assinaturas devolvem o "off").
@@ -31,7 +31,7 @@ vi.mock('./useChatTranscript', () => ({
     transcriptExists: true,
     lastPlanFilePath: null,
   }),
-  usePlanFile: () => null,
+  usePlanFile: () => transcript.planFileText,
 }))
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
@@ -60,6 +60,7 @@ globalThis.ResizeObserver ??= class {
 
 beforeEach(() => {
   transcript.messages = []
+  transcript.planFileText = null
   sessionsApiMock.attentionMenu.mockReset()
   sessionsApiMock.attentionRespond.mockReset()
 })
@@ -224,6 +225,42 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
     expect(screen.getByTestId('plan-shortcuts')).toHaveTextContent('Decisão enviada…')
     expect(container.textContent).not.toContain('aguardando sua aprovação do plano')
+  })
+
+  // JSONL real com a decisão do plano LzMZ7q no formato que a CLI grava.
+  function withDecision(toolUseResult: unknown, content: string) {
+    const line = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_013zfPNQQ4TP4VVHVMLzMZ7q', content }],
+      },
+      toolUseResult,
+    }
+    return parseChatMessages(`${fixture317('plan-default.jsonl')}\n${JSON.stringify(line)}`)
+  }
+
+  it('aprovado: o card mostra o plano aprovado (toolUseResult.plan), não o input.plan antigo', () => {
+    transcript.messages = withDecision(
+      { plan: 'Criar saudacao.txt com ola.', isAgent: false, filePath: '~/.claude/plans/x.md' },
+      'User has approved your plan. You can now start coding.',
+    )
+    const { container } = render(<ChatView sessionId="s-plan" status="idle" />)
+    expect(container.textContent).toContain('Criar saudacao.txt com ola.')
+    expect(container.textContent).not.toContain('hello.txt')
+  })
+
+  it('rejeitado: o card mostra o plano que estava no diálogo, não o input.plan antigo', () => {
+    transcript.planFileText = 'Criar saudacao.txt com ola.'
+    const { rerender, container } = renderRace()
+    transcript.messages = withDecision(
+      'User rejected tool use',
+      "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+    )
+    transcript.planFileText = null
+    rerender(<ChatView sessionId="s-plan" status="idle" />)
+    expect(container.textContent).toContain('Criar saudacao.txt com ola.')
+    expect(container.textContent).not.toContain('hello.txt')
   })
 
   it('sem o menu vivo o card do transcript fica (e o banner também)', () => {

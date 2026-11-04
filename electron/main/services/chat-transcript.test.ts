@@ -241,7 +241,12 @@ describe('parseChatMessages — interactive prompts', () => {
       planFilePath: null,
       allowedPrompts: ['edit'],
     })
-    expect(m[2]).toEqual({ kind: 'plan_decision', forId: 'plan_1', approved: true })
+    expect(m[2]).toEqual({
+      kind: 'plan_decision',
+      forId: 'plan_1',
+      approved: true,
+      plan: '# My Plan\n\nDo the thing.',
+    })
   })
 
   it('parses AskUserQuestion questions/options and the answers map', () => {
@@ -1005,8 +1010,35 @@ describe('parseChatMessages — ExitPlanMode do claude 2.1.317 (JSONL real)', ()
   it('aprovado: um card e a decisão aprovada, apesar do api-request-blob', () => {
     expect(plans(parseChatMessages(real('plan-auto-after-approve')))).toEqual([
       expect.objectContaining({ kind: 'exit_plan_mode', id: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB' }),
-      { kind: 'plan_decision', forId: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB', approved: true },
+      {
+        kind: 'plan_decision',
+        forId: 'toolu_01CH3jJXfWbRH6SM4TBAJAzB',
+        approved: true,
+        plan: expect.stringContaining('Criar o arquivo `hello.txt`'),
+      },
     ])
+  })
+
+  it('aprovado: a decisão traz o plano do toolUseResult, não o input.plan antigo', () => {
+    // Mesmo JSONL real, com o plano aprovado diferente do input (o Write do plan file
+    // e o ExitPlanMode saem em paralelo: o input pode trazer o plano anterior).
+    const jsonl = real('plan-auto-after-approve')
+      .split('\n')
+      .map((line) => {
+        if (!line.includes('"toolUseResult"')) return line
+        const obj = JSON.parse(line)
+        if (typeof obj.toolUseResult?.plan !== 'string') return line
+        return JSON.stringify({ ...obj, toolUseResult: { ...obj.toolUseResult, plan: 'criar saudacao.txt' } })
+      })
+      .join('\n')
+    const [card, decision] = plans(parseChatMessages(jsonl))
+    expect(card).toMatchObject({ kind: 'exit_plan_mode' })
+    expect(decision).toMatchObject({ kind: 'plan_decision', approved: true, plan: 'criar saudacao.txt' })
+  })
+
+  it('rejeitado com feedback: toolUseResult é string, a decisão vem sem plano', () => {
+    const decision = plans(parseChatMessages(real('plan-feedback-after-submit')))[1]
+    expect(decision).not.toHaveProperty('plan')
   })
 
   it('pendente: o tool_use chega com o diálogo aberto, sem decisão', () => {

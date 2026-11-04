@@ -104,7 +104,10 @@ export type ChatMessage =
       planFilePath: string | null
       allowedPrompts: string[] | null
     }
-  | { kind: 'plan_decision'; forId: string; approved: boolean }
+  // plan: o plano que o usuário aprovou (toolUseResult.plan). O input.plan do
+  // tool_use pode ser o plano ANTERIOR (o Write do plan file e o ExitPlanMode saem
+  // em paralelo); ausente na rejeição, onde o toolUseResult é só uma string.
+  | { kind: 'plan_decision'; forId: string; approved: boolean; plan?: string }
 
 // Retorno do read inicial (chat:get-transcript). path/mtimeMs são null quando a
 // sessão ainda não tem transcript no disco (recém-spawnada).
