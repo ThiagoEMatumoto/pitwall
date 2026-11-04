@@ -36,7 +36,7 @@ import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
 import { mergePending, nextPendingApply, type PendingSelection } from './model-queue'
-import { detectFooterMode, shouldNotifyModeChange } from './permission-mode-parser'
+import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './permission-mode-parser'
 import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
@@ -991,10 +991,12 @@ function TerminalHost({
         // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
         // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
         // status limpam (null).
-        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(t), statusRef.current))
+        const menuOnScreen = readTuiMenuFrom(t)
+        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(t))
         if (statusRef.current === 'working' || statusRef.current === 'starting') return
-        setCurrentMode(detectFooterMode(readFooterText(t)))
+        const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
+        if (mode) setCurrentMode(mode)
       }, 150)
       if (flushed) term.write(data)
       else liveTotal += data
@@ -1028,13 +1030,15 @@ function TerminalHost({
         flushed = true
         // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
         // escrito no term). Gate de status: não lê durante 'working'/'starting'.
+        const menuOnScreen = readTuiMenuFrom(term)
         if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          setCurrentMode(detectFooterMode(readFooterText(term)))
+          const mode = footerModeUpdate(readFooterText(term), menuOnScreen != null)
+          if (mode) setCurrentMode(mode)
         }
         // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
         // prompt numa pane remontada) não gera data event novo — sem este seed o
         // card só apareceria no próximo byte do PTY.
-        applyTuiMenu(gateMenuByStatus(readTuiMenuFrom(term), statusRef.current))
+        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(term))
       })
 
@@ -1445,6 +1449,7 @@ function TerminalHost({
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
             onRespond={(seqs, delayMs) => void playKeys(seqs, write, delayMs)}
+            onPlanApproved={setCurrentMode}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o
             // guard de clique — re-parse fresco antes de digitar.

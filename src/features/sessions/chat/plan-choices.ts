@@ -1,4 +1,6 @@
+import type { PermissionMode } from '../../../../shared/types/ipc'
 import type { PlanIntent, PlanMode, TuiMenu, TuiMenuOption } from '../tui-menu-parser'
+import { findPlanOption } from './respond-keys'
 
 // Um botão por opção real do diálogo de plano, com o modo que a aprovação liga
 // dito por extenso: "Aprovar plano" sozinho escondia que a opção 1 liga o auto mode.
@@ -73,4 +75,27 @@ export function planChoices(menu: TuiMenu): PlanChoice[] {
 
 export function planAcceptsFeedback(menu: TuiMenu): boolean {
   return menu.kind === 'plan' && menu.options.some((o) => o.planIntent === 'feedback')
+}
+
+const INTENT_MODE: Partial<Record<PlanIntent, PlanMode>> = {
+  'approve-auto': 'auto',
+  'approve-accept-edits': 'accept-edits',
+  'approve-manual': 'manual',
+  'approve-bypass': 'bypass',
+}
+
+const PERMISSION_OF: Record<PlanMode, PermissionMode> = {
+  auto: 'auto',
+  'accept-edits': 'acceptEdits',
+  manual: 'default',
+  bypass: 'bypassPermissions',
+}
+
+// Modo de permissão que a aprovação do plano liga. Depois da decisão o claude segue
+// trabalhando (rodapé não é lido) ou abre o prompt de permissão da 1ª edição (rodapé
+// escondido): sem este palpite o pill ficava em "Plano" até o próximo rodapé visível.
+export function planApprovalMode(menu: TuiMenu, intent: PlanIntent | 'reject'): PermissionMode | null {
+  if (intent === 'reject') return null
+  const mode = intent === 'approve-clear-context' ? findPlanOption(menu, intent)?.planMode : INTENT_MODE[intent]
+  return mode ? PERMISSION_OF[mode] : null
 }

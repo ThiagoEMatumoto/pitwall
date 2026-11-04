@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseTuiMenu, type TuiMenu } from '../tui-menu-parser'
-import { planAcceptsFeedback, planChoices } from './plan-choices'
+import { planAcceptsFeedback, planApprovalMode, planChoices } from './plan-choices'
 
 const real = (name: string): TuiMenu =>
   parseTuiMenu(
@@ -56,5 +56,25 @@ describe('planChoices — capturas reais do claude 2.1.317', () => {
 `)!
     expect(summary(menu)[0]).toEqual(['approve-bypass', 'Aprovar e ligar bypass', 'danger', true])
     expect(planChoices(menu).map((c) => c.confirm)).toEqual([true, false])
+  })
+})
+
+describe('planApprovalMode — o modo que o pill assume após decidir pelo card', () => {
+  it('cada aprovação liga o seu modo; descartar não muda nada', () => {
+    const menu = real('plan-default')
+    expect(planApprovalMode(menu, 'approve-manual')).toBe('default')
+    expect(planApprovalMode(menu, 'approve-auto')).toBe('auto')
+    expect(planApprovalMode(menu, 'feedback')).toBeNull()
+    expect(planApprovalMode(menu, 'reject')).toBeNull()
+  })
+
+  it('accept-edits e bypass mapeiam pro PermissionMode da CLI', () => {
+    const menu = real('plan-default')
+    expect(planApprovalMode(menu, 'approve-accept-edits')).toBe('acceptEdits')
+    expect(planApprovalMode(menu, 'approve-bypass')).toBe('bypassPermissions')
+  })
+
+  it('limpar contexto liga o modo dito na própria opção', () => {
+    expect(planApprovalMode(real('plan-clear-context'), 'approve-clear-context')).toBe('auto')
   })
 })

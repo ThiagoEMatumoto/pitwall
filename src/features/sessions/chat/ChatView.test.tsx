@@ -263,6 +263,23 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(container.textContent).not.toContain('hello.txt')
   })
 
+  it('aprovar pelo card avisa o modo que a opção liga (pill não fica em Plano)', () => {
+    const onPlanApproved = vi.fn()
+    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+    render(
+      <ChatView
+        sessionId="s-plan"
+        status="waiting"
+        tuiMenu={parseTuiMenu(fixture317('plan-default.txt'))}
+        reparseMenu={() => parseTuiMenu(fixture317('plan-default.txt'))}
+        onRespond={vi.fn()}
+        onPlanApproved={onPlanApproved}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('plan-choice-approve-manual'))
+    expect(onPlanApproved).toHaveBeenCalledWith('default')
+  })
+
   it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
     transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
     const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)

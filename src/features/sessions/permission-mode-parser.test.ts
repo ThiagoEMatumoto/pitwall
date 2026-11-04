@@ -1,5 +1,13 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parsePermissionMode, shouldNotifyModeChange } from './permission-mode-parser'
+import { parseTuiMenu } from '../../../shared/tui/tui-menu-parser'
+import {
+  detectFooterMode,
+  footerModeUpdate,
+  parsePermissionMode,
+  shouldNotifyModeChange,
+} from './permission-mode-parser'
 
 describe('parsePermissionMode', () => {
   it('reads acceptEdits from "accept edits on"', () => {
@@ -58,5 +66,31 @@ describe('shouldNotifyModeChange', () => {
 
   it('does not notify if next somehow reverts to null', () => {
     expect(shouldNotifyModeChange('plan', null)).toBe(false)
+  })
+})
+
+// Telas reais (sondas 2.1.316/2.1.317). O rodapé é o das últimas 10 linhas com conteúdo:
+// a captura vem com linhas em branco abaixo do que a TUI desenhou.
+describe('footerModeUpdate — rodapé com menu TUI aberto', () => {
+  const screen = (name: string) =>
+    readFileSync(join(__dirname, '../../../shared/tui/__fixtures__', `claude-${name}.txt`), 'utf8')
+  const footerOf = (text: string) => text.trimEnd().split('\n').slice(-10).join('\n')
+  const read = (name: string) => {
+    const text = screen(name)
+    return footerModeUpdate(footerOf(text), parseTuiMenu(text) != null)
+  }
+
+  it('diálogo de plano aberto: o rodapé some, mas isso não é "modo Padrão"', () => {
+    expect(detectFooterMode(footerOf(screen('2.1.317-plan-default')))).toBe('default')
+    expect(read('2.1.317-plan-default')).toBeNull()
+  })
+
+  it('prompt de permissão do Write aberto: mantém o modo atual', () => {
+    expect(read('2.1.316-permission-write-create')).toBeNull()
+  })
+
+  it('sem menu, o rodapé decide: "manual mode on" é o Padrão, "auto mode on" é auto', () => {
+    expect(read('2.1.317-plan-no-auto-after-manual')).toBe('default')
+    expect(read('2.1.317-plan-auto-after-approve')).toBe('auto')
   })
 })
