@@ -762,9 +762,10 @@ describe('parseTuiMenu — trust sem numeração', () => {
     expect(gateMenuByStatus(parseTuiMenu(UNNUMBERED_TRUST), 'starting')?.kind).toBe('trust')
   })
 
-  it('sem o rodapé no fim (tela já mudou) ou sem a opção de trust: null', () => {
+  it('sem o rodapé no fim (tela já mudou) ou sem a opção de trust: não é trust', () => {
     expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Enter to confirm · Esc to cancel', ''))).toBeNull()
-    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Yes, I trust this folder', 'Yes'))).toBeNull()
+    // Sem a opção de trust é um diálogo qualquer: o parser tolerante lê, nunca como trust.
+    expect(parseTuiMenu(UNNUMBERED_TRUST.replace('Yes, I trust this folder', 'Yes'))?.kind).toBe('menu')
     expect(parseTuiMenu(`${UNNUMBERED_TRUST}\nconversa depois\n`)).toBeNull()
   })
 })

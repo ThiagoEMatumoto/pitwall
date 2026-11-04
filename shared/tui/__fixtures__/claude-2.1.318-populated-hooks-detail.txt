@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes3/populated-menus/cwd
+
+
+❯ diga oi                                                                                                               
+
+● Oi! Em que posso ajudar? Pode me dizer o que você quer fazer no repositório ou em outra tarefa.
+
+✻ Cogitated for 1s · done 23:12
+
+❯ /hooks                                                                                                                
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Command hook
+  PreCompact · matches everything
+
+  Source:  Project settings (.claude/settings.json)
+
+  Command
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   true pitwall-hook-24
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   
+  To change or remove this hook, edit .claude/settings.json or ask Claude.
+
+  Esc to go back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

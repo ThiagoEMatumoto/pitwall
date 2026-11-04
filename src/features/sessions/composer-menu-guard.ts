@@ -7,7 +7,8 @@ import type { TuiMenu } from './tui-menu-parser'
 export type ComposerMenuRoute =
   | { kind: 'deliver' }
   | { kind: 'plan-feedback' }
-  | { kind: 'question-other'; optionIndex: number }
+  // multi: no multi-select o texto só marca o Other; enviar continua sendo pelo card.
+  | { kind: 'question-other'; optionIndex: number; multi?: true }
   | { kind: 'blocked'; notice: string }
 
 const KEPT = 'O rascunho foi mantido.'
@@ -18,9 +19,21 @@ export function routeComposerSend(menu: TuiMenu | null): ComposerMenuRoute {
     if (menu.options.some((o) => o.planIntent === 'feedback')) return { kind: 'plan-feedback' }
     return { kind: 'blocked', notice: `O plano espera sua decisão: escolha no card. ${KEPT}` }
   }
-  if (menu.kind === 'question' && !menu.multiSelect && !menu.tabs) {
-    const other = menu.options.find((o) => o.sentinel === 'other')
-    if (other) return { kind: 'question-other', optionIndex: other.index }
+  // Pergunta única: single-select sem abas, ou multi-select com a linha Submit do 2.1.317
+  // (abas = [pergunta, Submit]). Other que já tem texto no terminal não recebe mais.
+  const single = !menu.tabs || (menu.multiSelect && menu.submitRow != null && menu.tabs.length === 2)
+  if (menu.kind === 'question' && single) {
+    const other = menu.options.find((o) => o.sentinel === 'other' && o.otherText == null)
+    if (other) {
+      return {
+        kind: 'question-other',
+        optionIndex: other.index,
+        ...(menu.multiSelect ? { multi: true as const } : {}),
+      }
+    }
+  }
+  if (menu.kind === 'menu' || menu.kind === 'nudge') {
+    return { kind: 'blocked', notice: `Há um menu aberto: responda no card acima. ${KEPT}` }
   }
   if (menu.kind === 'permission' || menu.kind === 'trust') {
     return {
@@ -74,4 +87,12 @@ export function forwardKeyNotice(
 export const ANSWERED_NOTICE: Record<'plan-feedback' | 'question-other', string> = {
   'plan-feedback': 'Mudanças enviadas ao plano.',
   'question-other': 'Enviado como resposta à pergunta.',
+}
+
+export function answeredNotice(
+  route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
+): string {
+  if (route.kind === 'question-other' && route.multi)
+    return 'Marcado como resposta "Outra". Envie as respostas pelo card.'
+  return ANSWERED_NOTICE[route.kind]
 }

@@ -60,7 +60,9 @@ export function classifyChoice(menu: TuiMenu, action: AttentionAction): Attentio
     return action.intent === 'feedback' ? 'other' : 'approve'
   }
   if (action.kind === 'other') return 'other'
+  if (action.kind === 'esc' && (menu.kind === 'permission' || menu.kind === 'trust')) return 'deny'
   if (menu.kind !== 'permission' && menu.kind !== 'trust') return 'answer'
+  if (!('optionIndex' in action)) return 'other'
   if (action.kind === 'amend') return /^No\b/i.test(optionLabel(menu, action)) ? 'deny' : 'approve'
   const label = optionLabel(menu, action)
   if (/^No\b/i.test(label)) return 'deny'

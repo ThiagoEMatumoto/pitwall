@@ -55,6 +55,17 @@ export interface TuiMenuOption {
   planMode?: PlanMode
   // Só no menu de plano: o dígito submete esta opção? O campo de feedback só ganha foco.
   submitOnDigit?: boolean
+  // Other (sentinel 'other') com texto já digitado no terminal: o label vira esse texto
+  // (2.1.317, capturas question-multi-other-typed / single-other-typed). Mandar mais
+  // texto concatenaria nele.
+  otherText?: string
+  // Menus fora do AskUserQuestion (kind 'menu'/'nudge'): a opção abre um campo de texto
+  // ao receber o cursor ("Summarize from here: add context (optional)" no /rewind). Com o
+  // cursor nela, dígito e letra viram texto (captura rewind-digit-into-input).
+  opensInput?: boolean
+  // kind 'menu': cabeçalho não selecionável acima da opção (evento do /hooks: "PreToolUse
+  // before tool execution"). O cursor da CLI pula essas linhas.
+  group?: string
 }
 
 export type PlanMode = 'auto' | 'accept-edits' | 'manual' | 'bypass'
@@ -84,8 +95,11 @@ export interface PermissionRequest {
   command?: string
 }
 
+// 'menu': diálogo que nenhum parser dedicado reconhece (/permissions, /hooks, seletor e
+// submenu do /rewind), lido pelo parser tolerante. 'nudge': o "Teach auto mode about your
+// environment?" do 2.1.317, que aparece com a sessão idle depois do turno.
 export interface TuiMenu {
-  kind: 'question' | 'plan' | 'permission' | 'trust' | 'question_review'
+  kind: 'question' | 'plan' | 'permission' | 'trust' | 'question_review' | 'menu' | 'nudge'
   question?: string
   // permission/trust: linhas do box ACIMA da pergunta (diff/comando/config).
   // question_review: resumo "pergunta → resposta" da tela de revisão.
@@ -120,6 +134,23 @@ export interface TuiMenu {
   // plan: arquivo do plano lido do rodapé "ctrl+g to edit in … · ~/.claude/plans/x.md".
   // É a fonte do conteúdo do card: o input.plan do JSONL pode trazer o plano anterior.
   planFile?: string
+  // Multi-select do 2.1.317: linha "Submit" sem número logo abaixo da última opção antes
+  // da régua (capturas question-multi-*). afterIndex = opção logo acima dela; focused =
+  // o ❯ está nela (aí cursorIndex fica ausente). Enter nela abre a revisão.
+  submitRow?: { afterIndex: number; focused: boolean }
+  // kind 'menu'/'nudge': rodapé de teclas como a TUI escreveu ("Enter to view · Esc to close").
+  footer?: string
+  // Rodapé com "←/→ to switch": as abas (tabs) trocam por seta lateral.
+  tabSwitch?: boolean
+  // Rodapé com "↓ to select" (sem "Enter/"): o foco está nas abas, não na lista; o 1º ↓
+  // pousa na opção 1 (capturas unknown-permissions-down e populated-permissions-list).
+  listFocusKey?: boolean
+  // kind 'menu': a lista rolou ("↑ 10 more"/"↓ 11 more" do /hooks, "↑ N."/"↓ N." do
+  // /permissions). As opções lidas são só a janela visível.
+  moreAbove?: boolean
+  moreBelow?: boolean
+  // kind 'menu': texto do campo de busca do /permissions (ausente = vazio, "Search…").
+  search?: string
 }
 
 // Linha de opção numerada: pointer opcional (❯), UM dígito, ponto, label.
@@ -168,6 +199,8 @@ const SEPARATOR_RE = /^─{3,}(?:\s+[^\s─│┼┬┴├┤╭╮╰╯](?:[^�
 // numeração) — tolerado sem dígito na zona pós-última-opção; não é clicável
 // de qualquer forma (sentinela 'chat' já é filtrado no wiring).
 const UNNUMBERED_SENTINEL_RE = /^(Type something\.?|Chat about this\.?)$/
+// Linha "Submit" do multi-select do 2.1.317 (sem número, recuada sob a última opção).
+const SUBMIT_ROW_RE = /^(❯\s*)?Submit$/
 // Chip/header truncado acima da pergunta (campo `header` da tool AskUserQuestion,
 // prefixado por um glyph de checkbox — observado ao vivo no 2.1.216, sonda
 // Fase 0). Nunca faz parte do texto da pergunta — é um rótulo curto à parte.
@@ -300,16 +333,25 @@ interface ScanResult {
   descParts: string[]
   previewParts: string[]
   hasNotesHint: boolean
+  submit?: 'focused' | 'idle'
 }
 
 function scanBetween(lines: string[], from: number, to: number): ScanResult {
   const descParts: string[] = []
   const previewParts: string[] = []
   let hasNotesHint = false
+  let submit: ScanResult['submit']
   for (let i = from; i < to; i++) {
     const raw = lines[i]
     const t = raw.trim()
     if (t === '') continue
+    // Régua do 2.1.317 entre o Other e "Chat about this": não é descrição de ninguém.
+    if (SEPARATOR_RE.test(t)) continue
+    const sm = SUBMIT_ROW_RE.exec(t)
+    if (sm) {
+      submit = sm[1] ? 'focused' : 'idle'
+      continue
+    }
     if (NOTES_HINT_RE.test(raw)) {
       hasNotesHint = true
       continue
@@ -322,7 +364,7 @@ function scanBetween(lines: string[], from: number, to: number): ScanResult {
     }
     descParts.push(t)
   }
-  return { descParts, previewParts, hasNotesHint }
+  return { descParts, previewParts, hasNotesHint, ...(submit ? { submit } : {}) }
 }
 
 // Barra de abas: sobe a partir da pergunta tolerando linhas em branco; para no
@@ -399,7 +441,7 @@ export function parseTuiMenu(text: string): TuiMenu | null {
   let end = lines.length
   while (end > 0 && lines[end - 1].trim() === '') end--
   if (end === 0) return null
-  return parseNumberedMenu(lines, end) ?? parseUnnumberedTrust(lines, end)
+  return parseNumberedMenu(lines, end) ?? parseUnnumberedTrust(lines, end) ?? parseGenericMenu(lines, end)
 }
 
 // Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
@@ -531,6 +573,7 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
     if (SEPARATOR_RE.test(t)) continue
     if (BOX_CHAR_RE.test(l) || NOTES_HINT_RE.test(l)) continue
     if (UNNUMBERED_SENTINEL_RE.test(t)) continue
+    if (SUBMIT_ROW_RE.test(t)) continue
     return null
   }
 
@@ -538,11 +581,13 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   // conteúdo de preview/notas — nunca os dois misturados.
   let previewParts: string[] = []
   let hasNotesHint = false
+  let submitRow: TuiMenu['submitRow']
   const options: TuiMenuOption[] = run.map((entry, k) => {
     const next = k + 1 < run.length ? run[k + 1].line : last.line + 1
     const scanned = scanBetween(lines, entry.line + 1, next)
     previewParts = previewParts.concat(scanned.previewParts)
     hasNotesHint = hasNotesHint || scanned.hasNotesHint
+    if (scanned.submit) submitRow = { afterIndex: entry.digit - 1, focused: scanned.submit === 'focused' }
 
     // Checkbox de multi-select: "[ ] Label" / "[✔] Label".
     const cb = CHECKBOX_RE.exec(entry.rest)
@@ -576,6 +621,8 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
   const tailScan = scanBetween(lines, last.line + 1, end)
   previewParts = previewParts.concat(tailScan.previewParts)
   hasNotesHint = hasNotesHint || tailScan.hasNotesHint
+  if (tailScan.submit) submitRow = { afterIndex: last.digit - 1, focused: tailScan.submit === 'focused' }
+  markTypedOther(options)
   // Preview coletado (entre opções + depois da última) pertence à opção com o
   // pointer ❯ (a TUI só desenha o preview pra opção destacada) — sem pointer
   // identificável, cai fail-soft na última opção.
@@ -615,6 +662,19 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
     !hasSentinel &&
     (options.some((o) => PERMISSION_OPTION_RE.test(o.label)) ||
       (question != null && PERMISSION_QUESTION_RE.test(question)))
+
+  // Diálogo numerado que não é AskUserQuestion (sem sentinela): o nudge do auto mode e o
+  // submenu de restaurar do /rewind (capturas 2.1.317) liam como 'question' e o card
+  // oferecia "responder" um menu da própria CLI. Vão para o parser tolerante.
+  if (
+    !isReview &&
+    !isPlan &&
+    !isTrust &&
+    !isPermission &&
+    !hasSentinel &&
+    isCliDialog(question, lines, run[0].line, footerOf(lines, last.line, end))
+  )
+    return parseGenericMenu(lines, end, true)
 
   const kind: TuiMenu['kind'] = isReview
     ? 'question_review'
@@ -661,7 +721,375 @@ function parseNumberedMenu(lines: string[], end: number): TuiMenu | null {
     ...(/Tab to amend/i.test(footer) ? { amendable: true } : {}),
     ...(boxed?.clipped ? { contextClipped: true } : {}),
     ...(planFile && !planFile.includes('…') ? { planFile } : {}),
+    ...(kind === 'question' && multiSelect && submitRow ? { submitRow } : {}),
   }
+}
+
+function footerOf(lines: string[], lastOptionLine: number, end: number): string {
+  return lines.slice(lastOptionLine + 1, end).join('\n')
+}
+
+// O Other com texto digitado perde o label "Type something" (vira o texto). No
+// AskUserQuestion ele é sempre a opção logo acima de "Chat about this".
+// Um Other digitado com o texto "Chat about this" casa a sentinela pelo label: só a
+// última opção com ele é a sentinela de verdade (no AskUserQuestion ela vem por último).
+function markTypedOther(options: TuiMenuOption[]): void {
+  let lastChat = -1
+  options.forEach((o, i) => {
+    if (o.sentinel === 'chat') lastChat = i
+  })
+  options.forEach((o, i) => {
+    if (o.sentinel !== 'chat' || i === lastChat) return
+    const copy = { ...o }
+    delete copy.sentinel
+    options[i] = copy
+  })
+  if (options.some((o) => o.sentinel === 'other')) return
+  const chat = options.findIndex((o) => o.sentinel === 'chat')
+  if (chat < 1) return
+  const prev = options[chat - 1]
+  if (prev.sentinel != null) return
+  options[chat - 1] = { ...prev, sentinel: 'other', otherText: prev.label }
+}
+
+const NUDGE_TITLE_RE = /^Teach auto mode about your environment\?$/
+const REWIND_CONFIRM_RE = /^Confirm you want to restore\b/
+// O AskUserQuestion escreve "Enter to select"; os Select da própria CLI, "Enter to confirm".
+const CLI_DIALOG_FOOTER_RE = /Enter to confirm/i
+// Abas e busca do /permissions (capturas populated-permissions-*): a aba Ask/Deny com 2+
+// regras é uma run numerada a partir de 1 e lia como 'question'. O AskUserQuestion navega
+// abas com "Tab/Arrow keys", nunca escreve estas dicas.
+const CLI_TABS_FOOTER_RE = /←\/→ to switch|↑ to tabs|Type to filter|(?:^|·\s*)↓ to select/i
+
+function isCliDialog(
+  question: string | undefined,
+  lines: string[],
+  firstOptionLine: number,
+  footer: string,
+): boolean {
+  // O multi-select antigo (2.1.212) também dizia "Enter to confirm", junto do "Space to toggle".
+  if (CLI_DIALOG_FOOTER_RE.test(footer) && !MULTI_SELECT_RE.test(footer)) return true
+  if (CLI_TABS_FOOTER_RE.test(footer)) return true
+  if (question != null && NUDGE_TITLE_RE.test(question)) return true
+  for (let i = firstOptionLine - 1; i >= Math.max(0, firstOptionLine - 15); i--) {
+    const t = lines[i].trim()
+    if (NUDGE_TITLE_RE.test(t) || REWIND_CONFIRM_RE.test(t)) return true
+    if (isInputRule(t)) break
+  }
+  return false
+}
+
+// --- Parser tolerante (kind 'menu'/'nudge') ---------------------------------------
+// Diálogos da CLI que nenhum parser dedicado conhece (capturas 2.1.317 unknown-*,
+// rewind-*, auto-mode-env-nudge): régua cheia no topo, título, texto, opções com ou
+// sem número, rodapé de teclas com Esc. Só lê o que a tela mostra; quem decide se dá
+// pra clicar é buildGenericSelectKeys (cursor conhecido, campo de texto, número).
+const GENERIC_FOOTER_RE = /Esc to (cancel|close|go back|exit|clear)/i
+const GENERIC_MAX_LINES = 45
+const TAB_SWITCH_RE = /←\/→ to switch/i
+// "Enter/↓ to select" é o rodapé da busca com texto: o ↓ dali pousa numa opção que a sonda
+// não conseguiu prever (populated-menus, 1ª rodada), então não conta.
+const LIST_FOCUS_RE = /(?:^|·\s*)↓ to select/i
+// A barra de abas também existe com o foco na busca, que não troca de aba ("↑ to tabs").
+const TABS_HINT_RE = /←\/→ to switch|↑ to tabs/i
+// Tela só de leitura (detalhe de hook, regra de fonte read-only): o rodapé é só o Esc e o
+// título é um dos capturados (populated-hooks-detail, populated-permissions-rule-readonly).
+// Fora deles, tela sem opção nem aba segue sem menu.
+const READONLY_FOOTER_RE = /^Esc to (cancel|go back|close)$/i
+const READONLY_TITLE_RE = /^(Command hook|Rule details)$/
+const SEARCH_BOX_RE = /⌕\s*(.*?)\s*│?$/
+const SEARCH_PLACEHOLDER_RE = /^Search…?$/
+const INPUT_OPTION_RE = /^(Type something|Summarize from here|Tell Claude what to change)\b|\(optional\)$/i
+// Descrição sob a mensagem no seletor do /rewind: mesma indentação do label, não é parada.
+const REWIND_DESC_RE = /^(No code changes|\d+ files? changed\b.*)$/i
+const CURSOR_LINE_RE = /^(\s*)❯\s+(\S.*)$/
+const GENERIC_BOX_RE = /^[╭╰│]/
+// Com `"tui": "fullscreen"` no settings do usuário a CLI abre o diálogo com uma régua de ▔
+// (U+2594) em vez de ─ (drive-app, claude 2.1.318); a caixa de input segue com ─.
+// Logo depois de abrir, a régua embute o aviso de esforço ("▔▔▔ ○ low · /effort ▔"),
+// que some em segundos: mesmo shape da régua ─ com nome de sessão (input-rule.ts).
+const FULLSCREEN_TOP_RULE_RE = /^▔{3,}(?:\s+[^\s▔│┼┬┴├┤╭╮╰╯](?:[^▔│┼┬┴├┤╭╮╰╯]*[^\s▔│┼┬┴├┤╭╮╰╯])?\s+▔+)?$/
+const MIN_FULLSCREEN_RULE_CHARS = 10
+
+function isFullscreenTopRule(line: string): boolean {
+  if (!FULLSCREEN_TOP_RULE_RE.test(line)) return false
+  let rule = 0
+  for (const ch of line) if (ch === '▔') rule++
+  return rule >= MIN_FULLSCREEN_RULE_CHARS
+}
+
+function isDialogTopRule(line: string): boolean {
+  return isInputRule(line) || isFullscreenTopRule(line)
+}
+
+// Marcas dos diálogos que têm parser dedicado (permissão, trust, plano, AskUserQuestion).
+// Se o dedicado recusou a tela, é drift: o tolerante não pode virar uma aprovação de um
+// clique dela, então a tela segue não reconhecida (fallback e contador).
+const DEDICATED_DIALOG_RES = [
+  PERMISSION_QUESTION_RE,
+  PERMISSION_OPTION_RE,
+  TRUST_HEADING_RE,
+  TRUST_OPTION_RE,
+  PLAN_QUESTION_RE,
+  PLAN_OPTION_RE,
+  PLAN_FEEDBACK_HINT_RE,
+  /\b(Type something|Chat about this)\b/,
+]
+const AMEND_FOOTER_RE = /Tab to amend/i
+
+function looksLikeDedicatedDialog(body: (BodyLine | null)[], footer: string): boolean {
+  if (AMEND_FOOTER_RE.test(footer)) return true
+  return body.some((b) => b != null && DEDICATED_DIALOG_RES.some((re) => re.test(b.t)))
+}
+
+interface BodyLine {
+  raw: string
+  t: string
+  indent: number
+}
+
+function parseGenericMenu(lines: string[], end: number, footerOptional = false): TuiMenu | null {
+  const footerRaw = lines[end - 1].trim()
+  const hasFooter = GENERIC_FOOTER_RE.test(footerRaw)
+  if (!hasFooter && !footerOptional) return null
+  const bodyEnd = hasFooter ? end - 1 : end
+  let top = -1
+  for (let i = bodyEnd - 1; i >= Math.max(0, end - GENERIC_MAX_LINES); i--) {
+    if (isDialogTopRule(lines[i].trim())) {
+      top = i
+      break
+    }
+  }
+  if (top < 0) return null
+  const body: (BodyLine | null)[] = lines.slice(top + 1, bodyEnd).map((raw) => {
+    const t = raw.trim()
+    return t === '' ? null : { raw, t, indent: raw.length - raw.trimStart().length }
+  })
+  // Caixa de input ociosa entre a régua e o rodapé: não é diálogo.
+  if (body.some((b) => b != null && /^❯\s*$/.test(b.t))) return null
+  if (looksLikeDedicatedDialog(body, hasFooter ? footerRaw : '')) return null
+  const first = body.findIndex((b) => b != null)
+  if (first < 0) return null
+
+  const parsed = genericNumbered(body) ?? genericUnnumbered(body)
+  if (!parsed) return null
+  const { options, firstLine, cursorIndex, numbered, moreAbove, moreBelow } = parsed
+
+  const titleLine = body[first]!
+  const tabSwitch = hasFooter && TAB_SWITCH_RE.test(footerRaw)
+  const listFocusKey = hasFooter && LIST_FOCUS_RE.test(footerRaw)
+  let title: string | undefined = first < firstLine ? titleLine.t : undefined
+  let tabs: TuiMenuTab[] | undefined
+  if (title && hasFooter && TABS_HINT_RE.test(footerRaw)) {
+    const tokens = title.split(/\s{2,}/).filter(Boolean)
+    if (tokens.length > 1) {
+      title = tokens[0]
+      tabs = tokens.slice(1).map((label) => ({ label, done: false }))
+    }
+  }
+  // Sem opção nem aba só passa a tela de leitura. O resto é campo de texto ("Add allow
+  // permission rule"): como menu ele bloquearia o composer, que é por onde o texto entra.
+  const readOnly =
+    hasFooter &&
+    READONLY_FOOTER_RE.test(footerRaw) &&
+    title != null &&
+    READONLY_TITLE_RE.test(title) &&
+    !body.some((b) => b != null && /^[╭│]/.test(b.t))
+  if (options.length === 0 && !tabs && !listFocusKey && !readOnly) return null
+  const searchRaw = body
+    .map((b) => (b ? SEARCH_BOX_RE.exec(b.t)?.[1] : undefined))
+    .find((v) => v != null)
+  const search = searchRaw && !SEARCH_PLACEHOLDER_RE.test(searchRaw) ? searchRaw : undefined
+  const context = body
+    .slice(first + 1, firstLine)
+    .filter((b): b is BodyLine => b != null && !/^[╭╰]/.test(b.t) && !/⌕/.test(b.t) && !/^╌+$/.test(b.t))
+    .map((b) => b.t.replace(BOX_EDGE_RE, ''))
+    .filter((t) => t !== '')
+    .join('\n')
+  const kind: TuiMenu['kind'] = title && NUDGE_TITLE_RE.test(title) ? 'nudge' : 'menu'
+  return {
+    kind,
+    ...(title ? { question: title } : {}),
+    ...(context ? { context } : {}),
+    options,
+    multiSelect: false,
+    submitOnDigit: numbered && !moreAbove,
+    ...(cursorIndex != null ? { cursorIndex } : {}),
+    // Lista numerada rolada: o dígito de uma janela que não começa em 1 não foi sondado.
+    ...(numbered && !moreAbove ? {} : { navigation: 'arrows' as const }),
+    ...(tabs ? { tabs } : {}),
+    ...(hasFooter ? { footer: footerRaw } : {}),
+    ...(tabSwitch ? { tabSwitch: true } : {}),
+    ...(listFocusKey ? { listFocusKey: true } : {}),
+    ...(moreAbove ? { moreAbove: true } : {}),
+    ...(moreBelow ? { moreBelow: true } : {}),
+    ...(search ? { search } : {}),
+  }
+}
+
+// Diálogos da CLI que o tolerante já leu em captura (2.1.317/318). Um 'menu' fora deles é
+// tela que nenhum parser conhece: o card ainda serve, mas conta como drift no contador.
+const KNOWN_GENERIC_TITLE_RE =
+  /^(Rewind|Hooks|Hook events|Command hook|Permissions|Rule details|Delete (allow|ask|deny) tool\?)$/
+
+export function isKnownMenu(menu: TuiMenu): boolean {
+  return menu.kind !== 'menu' || KNOWN_GENERIC_TITLE_RE.test(menu.question ?? '')
+}
+
+interface GenericOptions {
+  options: TuiMenuOption[]
+  // Linha (no body) da primeira opção: o que vem acima é título/texto.
+  firstLine: number
+  cursorIndex?: number
+  numbered: boolean
+  moreAbove?: boolean
+  moreBelow?: boolean
+}
+
+function genericOption(index: number, label: string, desc: string[]): TuiMenuOption {
+  return {
+    index,
+    label,
+    ...(desc.length > 0 ? { description: desc.join(' ') } : {}),
+    ...(INPUT_OPTION_RE.test(label) ? { opensInput: true } : {}),
+  }
+}
+
+// Opções "N. label" (submenu do /rewind, nudge, regras do /permissions): a run termina
+// no fim do body; depois dela só cabe descrição recuada. A lista do /permissions rola e
+// marca a borda com a seta no lugar do recuo ("↓ 10. Glob"), já com dois dígitos.
+const GENERIC_OPTION_RE = /^\s*(❯)?\s*([↑↓])?\s*(\d{1,2})\.\s+(.+)$/
+
+function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
+  const rows = body.map((b) => (b ? GENERIC_OPTION_RE.exec(b.raw) : null))
+  let lastRow = -1
+  for (let i = body.length - 1; i >= 0; i--) {
+    if (rows[i]) {
+      lastRow = i
+      break
+    }
+  }
+  if (lastRow < 0) return null
+  const lastIndent = body[lastRow]!.indent
+  for (let i = lastRow + 1; i < body.length; i++) {
+    const b = body[i]
+    if (b && b.indent <= lastIndent + 2) return null
+  }
+  const num = (i: number) => Number(rows[i]![3])
+  const run: number[] = [lastRow]
+  for (let i = lastRow - 1; i >= 0; i--) {
+    if (!rows[i]) {
+      const b = body[i]
+      if (b == null || b.indent > lastIndent + 2) continue
+      break
+    }
+    if (num(i) !== num(run[0]) - 1) break
+    run.unshift(i)
+  }
+  const moreAbove = rows[run[0]]![2] === '↑'
+  // Janela que não começa em 1 só vale com a seta de rolagem em cima.
+  if (num(run[0]) !== 1 && !moreAbove) return null
+  if (run.some((line, k) => k > 0 && k < run.length - 1 && rows[line]![2] != null)) return null
+  let cursorIndex: number | undefined
+  const options = run.map((line, k) => {
+    const m = rows[line]!
+    const stop = k + 1 < run.length ? run[k + 1] : body.length
+    const desc = body.slice(line + 1, stop).filter((b): b is BodyLine => b != null).map((b) => b.t)
+    const index = num(line) - 1
+    if (m[1]) cursorIndex = index
+    return genericOption(index, m[4].trim(), desc)
+  })
+  return {
+    options,
+    firstLine: run[0],
+    ...(cursorIndex != null ? { cursorIndex } : {}),
+    numbered: true,
+    ...(moreAbove ? { moreAbove } : {}),
+    ...(rows[lastRow]![2] === '↓' ? { moreBelow: true } : {}),
+  }
+}
+
+// Lista sem número (/hooks, seletor do /rewind): as paradas ficam na coluna do texto
+// da linha com ❯. Blocos separados por linha em branco = uma opção por bloco (label +
+// descrição, como no /rewind); sem blocos, cada linha é uma opção.
+function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
+  const cursorRow = body.findIndex((b) => b != null && CURSOR_LINE_RE.test(b.raw))
+  if (cursorRow < 0) {
+    // Sem cursor e sem número: nada a clicar; parseGenericMenu só aceita se houver abas.
+    return { options: [], firstLine: body.length, numbered: false }
+  }
+  const cm = CURSOR_LINE_RE.exec(body[cursorRow]!.raw)!
+  const col = cm[1].length + 2
+  const atCol = (b: BodyLine | null) =>
+    b != null && (b.indent === col || CURSOR_LINE_RE.exec(b.raw)?.[1].length === col - 2) && !GENERIC_BOX_RE.test(b.t)
+  let from = cursorRow
+  while (from > 0 && (body[from - 1] == null || atCol(body[from - 1]))) from--
+  while (body[from] == null) from++
+  let to = cursorRow + 1
+  while (to < body.length && (body[to] == null || atCol(body[to]))) to++
+  // "↑ 10 more" / "↓ 11 more" (/hooks rolado) marcam a borda da janela, não são opções.
+  const more = { above: false, below: false }
+  const region = body.slice(from, to).filter((b) => {
+    const m = b ? MORE_RE.exec(b.t) : null
+    if (m) more[m[1] === '↑' ? 'above' : 'below'] = true
+    return m == null
+  })
+  const scroll = { ...(more.above ? { moreAbove: true } : {}), ...(more.below ? { moreBelow: true } : {}) }
+  if (TAGGED_RE.test(cm[2])) return { ...taggedOptions(region, from), ...scroll }
+  const blocks: string[][] = [[]]
+  for (const b of region) {
+    if (b == null) {
+      if (blocks[blocks.length - 1].length > 0) blocks.push([])
+      continue
+    }
+    blocks[blocks.length - 1].push(b.raw)
+  }
+  if (blocks[blocks.length - 1].length === 0) blocks.pop()
+  const grouped = blocks.length > 1
+  const entries: string[][] = []
+  for (const block of blocks) {
+    if (grouped) entries.push(block)
+    else for (const raw of block) entries.push([raw])
+  }
+  // Descrição do /rewind numa lista sem blocos: cola na entrada anterior.
+  const merged: string[][] = []
+  for (const e of entries) {
+    if (merged.length > 0 && REWIND_DESC_RE.test(e[0].trim())) merged[merged.length - 1].push(...e)
+    else merged.push([...e])
+  }
+  let cursorIndex: number | undefined
+  const options = merged.map((e, k) => {
+    const head = CURSOR_LINE_RE.exec(e[0])
+    if (head) cursorIndex = k
+    const label = (head ? head[2] : e[0]).trim()
+    return genericOption(k, label, e.slice(1).map((l) => l.trim()))
+  })
+  return { options, firstLine: from, ...(cursorIndex != null ? { cursorIndex } : {}), numbered: false, ...scroll }
+}
+
+const MORE_RE = /^([↑↓])\s+\d+\s+more$/
+// Linha de hook do /hooks: "[User] comando   matcher · command" (capturas populated-hooks
+// e a tela real do usuário, com [User]/[Plugin]). Com o cursor numa delas, as linhas sem
+// etiqueta na mesma coluna são o cabeçalho do evento, que o cursor pula.
+const TAGGED_RE = /^\[[^\]]+\]\s/
+const spaced = (t: string, sep: string) => t.trim().replace(/\s{2,}/g, sep)
+
+function taggedOptions(region: (BodyLine | null)[], from: number): GenericOptions {
+  let group: string | undefined
+  let cursorIndex: number | undefined
+  const options: TuiMenuOption[] = []
+  for (const b of region) {
+    if (b == null) continue
+    const head = CURSOR_LINE_RE.exec(b.raw)
+    const text = head ? head[2] : b.t
+    if (!TAGGED_RE.test(text)) {
+      group = spaced(text, ' — ')
+      continue
+    }
+    if (head) cursorIndex = options.length
+    options.push({ index: options.length, label: spaced(text, ' · '), ...(group ? { group } : {}) })
+  }
+  return { options, firstLine: from, ...(cursorIndex != null ? { cursorIndex } : {}), numbered: false }
 }
 
 // Parse de um buffer real: amplia a janela também quando o menu parseou mas o
@@ -705,6 +1133,9 @@ export function gateMenuByStatus(
     (menu.kind === 'permission' || menu.kind === 'trust')
   )
     return menu
+  // O nudge do auto mode aparece com a sessão idle, logo depois do turno (captura
+  // auto-mode-env-nudge): um Enter do composer ali escolheria "Yes".
+  if (status === 'idle' && menu.kind === 'nudge') return menu
   return null
 }
 

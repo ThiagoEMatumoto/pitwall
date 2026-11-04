@@ -1,0 +1,23 @@
+[?25l[2D[3B[2C[3A[38;5;153m/permissions[2C[2B❯ /[1mpermissions[22m                                    Manage allow and deny tool permission rules[104G[39m[K
+[3G[38;5;246m [5G/fewer-[39m[1mpermission[22m[38;5;246m-prompt[39m[1ms[22m[38;5;246m [53GPre-approve[65Gsafe[70Gread-only[80Gcommands[89Gbased[95Gon[98Gyour[103Gusage[39m
+[3G[38;5;246m [5G/claude-in-chrome[53GLet[57GClaude[64Gbrowse[71Gand[75Ginteract[84Gwith[89Gpages[95Gin[98Gyour[103GChrome[39m
+[3G[38;5;246m [5G/update-config[53GChange[60Gsettings:[70Ghooks,[77G[39m[1mpermissions[22m[38;5;246m,[90Genvironment[102Gvariables[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[14C[24A[?25h[?25l[14D[24B[2K[1A[2K[1A[2K[G[1A[22A[48;5;237m[38;5;246m❯ [38;5;231m/permissions[39m                                                                                                          [1B[49m[K[1B[38;5;153m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[2C[1B[1mPermiss[11Gons[22m[39m  Recently blocked  [48;5;153m[38;5;16m[1m Allow [22m[39m[49m  Ask   Deny   Auto mode   Workspace[K[2C[1B[K[2C[1BClaude Code won't ask before using allowed tools.[K[2C[1B[2m╭───────────────────────────────────────────────╮[22m[K[2C[1B[2m│[5G[22m[38;5;246m⌕ Search…[51G[39m[2m│[2C[1B╰───────────────────────────────────────────────╯[4C[2B[22m[38;5;246m1.  [39mAdd[13Ga[15Gnew[19Grule…[4C[1B[38;5;246m2.  [39mBash(cat:*)[4C[1B[38;5;246m3.  [39mBash(echo:*)[4C[1B[38;5;246m4.  [39mBash(git[18Gdiff:*)[4C[1B[38;5;246m5.  [39mBash(git[18Glog:*)[4C[1B[38;5;246m6.  [39mBash(git[18Gstatus:*)[4C[1B[38;5;246m7.  [39mBash(ls:*)[4C[1B[38;5;246m8.  [39mBash(npm[18Grun[22Gtypecheck)[4C[1B[38;5;246m9.  [39mBash(npm[18Gtest:*)[2C[1B[38;5;246m↓[5G10. [39mGlob[2C[2B[38;5;246m←/→ to switch · ↓ to select · Esc to cancel[1B[39m[K[1B[K[1B[K[2A[34C[19A[34D[19B[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G[1A[33C[9A[1m[7m Allow [2C[3B[27m[22m[38;5;153m╭───────────────────────────────────────────────╮[2C[1B│[5G[39m⌕ 3      [51G[38;5;153m│[2C[1B╰───────────────────────────────────────────────╯[4C[2B[39m[K[2C[1B[38;5;246mType[8Gto filter · Enter/↓ to select · ↑ to tabs · Esc to clear[1B[39m[K[1B[K[1B[K[1B[K[1B[K[1B[K[1B[K[1B[K[1B[K[1B[K[9A[7C[5A[?25h

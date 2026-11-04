@@ -13,7 +13,8 @@ interface Props {
 // Tela final do multi-select/multi-pergunta ("Review your answers") — kind
 // próprio no parser (`question_review`), depois de navegar pela barra de
 // abas até "Submit". Confirmar aqui é o que de fato envia as respostas
-// marcadas nas perguntas anteriores; cancelar volta pra edição.
+// marcadas nas perguntas anteriores. Cancelar NÃO volta pra edição: no 2.1.318 recusa
+// a pergunta inteira (tool_result user-rejected, sonda question-multi-keys2).
 export function QuestionReviewCard({ summary, onDecide, sent }: Props) {
   const clickable = onDecide != null && !sent
 
@@ -44,11 +45,13 @@ export function QuestionReviewCard({ summary, onDecide, sent }: Props) {
             onClick={() => onDecide?.('cancel')}
             className="rounded border border-[var(--color-border)] px-2.5 py-1 text-xs font-medium transition hover:border-[var(--color-danger)]/40 disabled:opacity-40"
           >
-            Cancelar
+            Recusar responder
           </button>
         </div>
         <div className="text-xs text-[var(--color-text-dim)]">
-          {sent ? 'Resposta enviada…' : 'Enviar de fato envia as respostas marcadas nas perguntas anteriores.'}
+          {sent
+            ? 'Resposta enviada…'
+            : 'Enviar manda as respostas marcadas. Recusar encerra a pergunta sem resposta.'}
         </div>
       </div>
     </div>

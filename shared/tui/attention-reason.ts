@@ -1,11 +1,11 @@
-import { gateMenuByStatus, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
+import { gateMenuByStatus, isKnownMenu, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
 import { isInputRule } from './input-rule'
 
 // POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
 // sessão entra/sai da fila nem se notifica — isso continua no status do
 // ~/.claude/sessions/<pid>.json. Motivo ausente = exatamente o comportamento de antes.
 export type AttentionReason =
-  'permission' | 'trust' | 'question' | 'plan' | 'turn-end' | 'handoff-input'
+  'permission' | 'trust' | 'question' | 'plan' | 'dialog' | 'turn-end' | 'handoff-input'
 
 export type LiveStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'ended'
 
@@ -80,8 +80,12 @@ export function scanScreen(
   }
 }
 
-function menuReason(menu: TuiMenu): AttentionReason {
+function menuReason(menu: TuiMenu): AttentionReason | undefined {
   if (menu.kind === 'permission' || menu.kind === 'trust' || menu.kind === 'plan') return menu.kind
+  // O nudge do auto mode aparece idle, depois do turno: não é pergunta do Claude.
+  if (menu.kind === 'nudge') return undefined
+  // /hooks, /permissions, /rewind: diálogo que o usuário abriu, não pergunta do Claude.
+  if (menu.kind === 'menu') return 'dialog'
   return 'question'
 }
 
@@ -106,11 +110,12 @@ export function deriveAttentionReason({
 }
 
 // A sessão espera você e a tela tem conteúdo, mas nada foi reconhecido: é o
-// sinal de drift do parser (nova versão da CLI) que o contador expõe.
+// sinal de drift do parser (nova versão da CLI) que o contador expõe. Um diálogo que só
+// o parser tolerante leu, e que não é um dos já capturados, também é drift.
 export function isUnparsedWaiting(status: LiveStatus, scan: ScreenScan): boolean {
   return (
     status === 'waiting' &&
-    !scan.menu &&
+    (!scan.menu || !isKnownMenu(scan.menu)) &&
     !scan.inputPrompt &&
     scan.nonBlankLines > UNPARSED_MIN_LINES
   )

@@ -257,7 +257,9 @@ export const MotherTile = memo(function MotherTile({
           {menuItem ? (
             <AttentionMenuPanel item={menuItem} />
           ) : (
-            <p className="m-0 text-[var(--color-text-dim)]">Responda no terminal.</p>
+            <p className="m-0 text-[var(--color-text-dim)]">
+              Sem a tela ao vivo desta sessão aqui: abra-a para responder.
+            </p>
           )}
           <button
             type="button"

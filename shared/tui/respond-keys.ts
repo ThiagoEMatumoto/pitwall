@@ -28,9 +28,27 @@ export function buildDigitKey(index: number): string[] {
 // destacada mas nada é enviado.
 export function buildSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
   if (menu.navigation === 'arrows') return buildArrowSelectKeys(menu, optionIndex)
-  const digit = buildDigitKey(optionIndex)
+  const digit = digitOutOfInput(menu, optionIndex)
   if (digit.length === 0) return []
   return menu.submitOnDigit ? digit : [...digit, '\r']
+}
+
+const UP = '\x1b[A'
+const DOWN = '\x1b[B'
+
+// Cursor numa opção com campo de texto (o Other da pergunta, "Summarize from here" do
+// /rewind): ali dígito e letra viram texto (capturas rewind-digit-into-input do 2.1.317 e
+// question-single-other-typed do 2.1.318). Quem vai teclar um dígito sai do campo antes.
+export function cursorInInput(menu: TuiMenu): boolean {
+  if (menu.cursorIndex == null) return false
+  const o = menu.options.find((x) => x.index === menu.cursorIndex)
+  return o != null && (o.sentinel === 'other' || o.opensInput === true)
+}
+
+function digitOutOfInput(menu: TuiMenu, optionIndex: number): string[] {
+  const digit = buildDigitKey(optionIndex)
+  if (digit.length === 0 || !cursorInInput(menu) || menu.cursorIndex === optionIndex) return digit
+  return [menu.cursorIndex === 0 ? DOWN : UP, ...digit]
 }
 
 // Clique num checkbox de multi-select: dígito faz TOGGLE (marca/desmarca),
@@ -38,8 +56,79 @@ export function buildSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
 // desmarca, sem sair da tela). Submeter de fato só na aba "Submit" → tela de
 // revisão (ver buildReviewKeys). Alias de buildDigitKey só pra deixar a
 // intenção explícita nos call sites (toggle ≠ select).
-export function buildToggleKeys(optionIndex: number): string[] {
-  return buildDigitKey(optionIndex)
+// 2.1.318 (sonda question-multi-keys): o dígito alterna o checkbox sem mover o cursor;
+// espaço e Enter alternam a opção sob o cursor. Com o cursor no campo do Other o dígito
+// viraria texto, então sai dele antes.
+export function buildToggleKeys(optionIndex: number, menu?: TuiMenu): string[] {
+  return menu ? digitOutOfInput(menu, optionIndex) : buildDigitKey(optionIndex)
+}
+
+// Entre as teclas do Other/Submit do multi-select: o campo só existe depois que a TUI
+// redesenha o cursor nele. A sonda esperou 300-800 ms entre os passos.
+export const QUESTION_KEY_DELAY_MS = 300
+
+// Posição de navegação no multi-select do 2.1.317: a linha "Submit" fica entre a última
+// opção e "Chat about this" e também é uma parada do cursor.
+function navPos(menu: TuiMenu, optionIndex: number): number {
+  const after = menu.submitRow?.afterIndex
+  return after != null && optionIndex > after ? optionIndex + 1 : optionIndex
+}
+
+function cursorPos(menu: TuiMenu): number | null {
+  if (menu.submitRow?.focused) return menu.submitRow.afterIndex + 1
+  return menu.cursorIndex == null ? null : navPos(menu, menu.cursorIndex)
+}
+
+function arrowsBy(delta: number): string[] {
+  return Array<string>(Math.abs(delta)).fill(delta > 0 ? DOWN : UP)
+}
+
+const cleanText = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]+/g, ' ').trim()
+
+// Texto do Other de uma pergunta (card ou composer).
+// - single-select (2.1.318, question-single-digit-other): o dígito foca o campo, o texto
+//   entra e Enter envia — a resposta é o texto.
+// - multi-select (2.1.317/318, question-multi-other*): o dígito só marca "Type something"
+//   vazio e as letras se perdem. O campo abre com o cursor nele: setas até a opção, texto,
+//   e ↓, que marca "[✔] <texto>" e leva o cursor ao Submit. Enter dentro do campo não marca
+//   nem avança. Não envia: o Submit continua sendo do usuário.
+// Campo que já tem texto digitado no terminal: o novo concatenaria, então nada sai.
+export function buildQuestionOtherKeys(menu: TuiMenu, optionIndex: number, text: string): string[] {
+  if (menu.kind !== 'question') return []
+  const opt = menu.options.find((o) => o.index === optionIndex)
+  if (!opt || opt.sentinel !== 'other' || opt.otherText != null) return []
+  const clean = cleanText(text)
+  if (clean === '') return []
+  if (!menu.multiSelect) {
+    // Vale também com abas (várias perguntas): com o cursor no campo, o dígito viraria
+    // texto ("4Rust"). Sem captura de abas no single-select, a mesma regra do sem abas.
+    if (menu.cursorIndex === optionIndex) return [clean, '\r']
+    const digit = digitOutOfInput(menu, optionIndex)
+    return digit.length === 0 ? [] : [...digit, clean, '\r']
+  }
+  const from = cursorPos(menu)
+  if (from == null || !menu.submitRow) return []
+  return [...arrowsBy(navPos(menu, optionIndex) - from), clean, DOWN]
+}
+
+// "Enviar" do multi-select do 2.1.317/318: ↓ até a linha Submit e Enter, que abre a revisão
+// (sondas question-multi-keys2: ↓×4 passando pelo Other vazio, Enter → "Review your
+// answers"). → também chega lá, mas não sai de dentro do campo do Other.
+export function buildMultiSubmitKeys(menu: TuiMenu): string[] {
+  if (menu.kind !== 'question' || !menu.multiSelect || !menu.submitRow) return []
+  const from = cursorPos(menu)
+  if (from == null) return []
+  return [...arrowsBy(menu.submitRow.afterIndex + 1 - from), '\r']
+}
+
+// Sentinela "Chat about this": o dígito dela recusa a pergunta com o userFeedback "The
+// user wants to clarify these questions" — visto ao vivo no 2.1.318 tanto no single quanto
+// no multi-select (sondas question-single-keys / question-multi-chat-digit). Depois disso
+// o usuário escreve pelo composer.
+export function buildChatKeys(menu: TuiMenu): string[] {
+  if (menu.kind !== 'question') return []
+  const chat = menu.options.filter((o) => o.sentinel === 'chat').at(-1)
+  return chat ? digitOutOfInput(menu, chat.index) : []
 }
 
 // Navegação entre abas da barra de multi-pergunta/multi-select — setas
@@ -47,6 +136,14 @@ export function buildToggleKeys(optionIndex: number): string[] {
 // Enter: trocar de aba não marca nem submete nada.
 export function buildTabKeys(direction: 'next' | 'prev'): string[] {
   return [direction === 'next' ? '\x1b[C' : '\x1b[D']
+}
+
+// Aba de uma pergunta: dentro do campo do Other ←/→ só movem o caret do texto, então sai
+// dele antes (mesma saída do dígito, digitOutOfInput).
+export function buildQuestionTabKeys(menu: TuiMenu, direction: 'next' | 'prev'): string[] {
+  if (!menu.tabs) return []
+  const arrow = buildTabKeys(direction)
+  return cursorInInput(menu) ? [menu.cursorIndex === 0 ? DOWN : UP, ...arrow] : arrow
 }
 
 // Submete um multi-select PURO (checkboxes marcados, uma pergunta só): o
@@ -98,6 +195,34 @@ export function buildOtherKeys(optionIndex: number, text: string): string[] {
   const digit = buildDigitKey(optionIndex)
   if (digit.length === 0) return []
   return [...digit, clean, '\r']
+}
+
+// Diálogo genérico (kind 'menu'/'nudge', parser tolerante). Número só quando a opção é
+// numerada, o cursor é conhecido e nem ele nem o alvo estão num campo de texto (o dígito
+// do submenu do /rewind escolhe e confirma, sonda history-rewind-compact); fora isso,
+// setas do cursor até a opção e Enter. Com o foco na busca ("↓ to select" do
+// /permissions), o 1º ↓ pousa na opção 1 (capturas unknown-permissions-down e
+// populated-permissions-list). Com texto na busca não há caminho sondado: nada sai.
+export function buildGenericSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
+  if (menu.kind !== 'menu' && menu.kind !== 'nudge') return []
+  const target = menu.options.find((o) => o.index === optionIndex)
+  if (!target) return []
+  const cursor = menu.cursorIndex
+  if (cursor != null) {
+    if (menu.navigation !== 'arrows' && !cursorInInput(menu) && !target.opensInput) {
+      const digit = buildDigitKey(optionIndex)
+      if (digit.length > 0) return digit
+    }
+    return [...arrowsBy(optionIndex - cursor), '\r']
+  }
+  // Foco nas abas: o 1º ↓ pousa na opção 1, que só é a do topo da janela sem rolagem.
+  if (menu.listFocusKey && !menu.moreAbove) return [DOWN, ...arrowsBy(optionIndex), '\r']
+  return []
+}
+
+// Abas do diálogo genérico ("←/→ to switch" do /permissions). Sem a dica no rodapé, nada.
+export function buildGenericTabKeys(menu: TuiMenu, direction: 'next' | 'prev'): string[] {
+  return menu.tabSwitch ? buildTabKeys(direction) : []
 }
 
 // "Tab to amend" do 2.1.316 (validado ao vivo, sonda probe-chat-permission-2316):

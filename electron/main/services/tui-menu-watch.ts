@@ -9,15 +9,9 @@ import {
   type LiveStatus,
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
-import {
-  AMEND_KEY_DELAY_MS,
-  buildAmendKeys,
-  buildOtherKeys,
-  buildPlanKeys,
-  buildSelectKeys,
-  PLAN_KEY_DELAY_MS,
-  playKeys,
-} from '../../../shared/tui/respond-keys'
+import { playKeys } from '../../../shared/tui/respond-keys'
+import { readBufferTail } from '../../../shared/tui/read-tail'
+import { actionKeyDelay, keysForAction } from '../../../shared/tui/menu-actions'
 import { menuFingerprint, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
 import type {
   AttentionAction,
@@ -92,15 +86,6 @@ interface Entry {
   inflight: { key: string | null; timer: NodeJS.Timeout | null } | null
 }
 
-function readTail(term: HeadlessTerminal, n: number): string {
-  const buf = term.buffer.active
-  let text = ''
-  for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
-    text += (buf.getLine(y)?.translateToString(true) ?? '') + '\n'
-  }
-  return text
-}
-
 // Atributos de célula da caixa de input (só o fim da tela: é onde ela mora).
 function readInputDirty(term: HeadlessTerminal): boolean {
   const buf = term.buffer.active
@@ -126,33 +111,6 @@ function readInputDirty(term: HeadlessTerminal): boolean {
 function scanKey(scan: ScreenScan): string {
   if (scan.menu) return menuFingerprint(scan.menu)
   return scan.inputPrompt ? 'prompt' : 'none'
-}
-
-// As teclas saem do menu FRESCO: o renderer só diz qual opção. Multi-select e
-// abas ficam de fora (exigem navegação que o popover não oferece) — responde no terminal.
-// Plano só por intent: o dígito cru do campo de feedback só o foca (buildSelectKeys
-// "responderia" sem enviar nada), e aprovar precisa ser a opção que o usuário leu.
-function keysFor(menu: TuiMenu, action: AttentionAction): string[] {
-  if (menu.kind === 'plan' || action.kind === 'plan') {
-    return menu.kind === 'plan' && action.kind === 'plan'
-      ? buildPlanKeys(menu, action.intent, action.text)
-      : []
-  }
-  const opt = menu.options.find((o) => o.index === action.optionIndex)
-  if (!opt || opt.sentinel === 'chat' || menu.multiSelect || menu.tabs) return []
-  if (action.kind === 'amend') {
-    return opt.sentinel == null ? buildAmendKeys(menu, opt.index, action.text) : []
-  }
-  if (action.kind === 'other') {
-    return opt.sentinel === 'other' ? buildOtherKeys(opt.index, action.text) : []
-  }
-  return opt.sentinel === 'other' ? [] : buildSelectKeys(menu, opt.index)
-}
-
-function keyDelay(action: AttentionAction): number | undefined {
-  if (action.kind === 'amend') return AMEND_KEY_DELAY_MS
-  if (action.kind === 'plan') return PLAN_KEY_DELAY_MS
-  return undefined
 }
 
 // Emitido a cada resposta digitada na PTY pela UI — a medição durável escuta aqui.
@@ -269,7 +227,7 @@ export class TuiMenuWatch extends EventEmitter {
     await new Promise<void>((resolve) => entry.term.write('', resolve))
     if (this.entries.get(sessionId) !== entry) return null
     const base = scanScreen(
-      (n) => readTail(entry.term, n),
+      (n) => readBufferTail(entry.term, n),
       entry.term.buffer.active.length,
       entry.term.rows,
     )
@@ -294,7 +252,7 @@ export class TuiMenuWatch extends EventEmitter {
     const scan = await this.rescan(sessionId)
     const entry = this.entries.get(sessionId)
     if (!scan || !entry) return null
-    const text = readTail(entry.term, entry.term.rows + 1).split('\n')
+    const text = readBufferTail(entry.term, entry.term.rows + 1).split('\n')
     const kept = text.map((l) => l.trimEnd())
     while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
     return kept.slice(-lines)
@@ -400,10 +358,11 @@ export class TuiMenuWatch extends EventEmitter {
     if (snapshot.fingerprint !== input.fingerprint || snapshot.menuSeq !== input.menuSeq) {
       return { ok: false, error: 'menu-changed', snapshot }
     }
-    const keys = keysFor(snapshot.menu, input.action)
+    // As teclas saem do menu FRESCO: o renderer só diz qual ação.
+    const keys = keysForAction(snapshot.menu, input.action)
     if (keys.length === 0) return { ok: false, error: 'invalid-action', snapshot }
     const menuSince = this.entries.get(input.sessionId)?.menuSince ?? null
-    await playKeys(keys, (seq) => source.write(input.sessionId, seq), keyDelay(input.action))
+    await playKeys(keys, (seq) => source.write(input.sessionId, seq), actionKeyDelay(snapshot.menu, input.action))
     const event: AttentionRespondedEvent = {
       sessionId: input.sessionId,
       menu: snapshot.menu,

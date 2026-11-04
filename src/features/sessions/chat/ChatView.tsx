@@ -30,6 +30,8 @@ import type { PermissionMode } from '../../../../shared/types/ipc'
 import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
 import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
+import { GenericMenuCard } from './GenericMenuCard'
+import { keysForAction } from '../../../../shared/tui/menu-actions'
 import { QuestionReviewCard } from './QuestionReviewCard'
 import { SubagentCard } from './SubagentCard'
 import { SystemCard } from './SystemCard'
@@ -47,19 +49,22 @@ import { useArtifactPanelStore } from './artifacts/artifactPanelStore'
 import { useSidePanelFits } from './artifacts/useSidePanelFits'
 import {
   buildArrowKeys,
+  buildChatKeys,
   buildCtrlTKey,
   buildEnterKey,
   buildEscKey,
   buildFilterKeys,
   buildMultiSelectSubmitKeys,
-  buildOtherKeys,
+  buildMultiSubmitKeys,
   buildPickerSelectKeys,
   buildPlanKeys,
   PLAN_KEY_DELAY_MS,
+  QUESTION_KEY_DELAY_MS,
+  buildQuestionOtherKeys,
   buildReviewKeys,
   buildSelectKeys,
   buildSpaceKey,
-  buildTabKeys,
+  buildQuestionTabKeys,
   buildToggleKeys,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
@@ -70,10 +75,13 @@ import {
   isAtBottom,
   liveMenuCoversPending,
   nextResolveAt,
+  absorbDialogLines,
   pendingEchoes,
   pendingInteractive,
   resolveChatViewState,
   resolveInteractive,
+  settleDialogEchoes,
+  visibleEchoes,
   showTerminalWaitBanner,
   type ChatViewState,
   type Echo,
@@ -96,7 +104,9 @@ interface Props {
   // composer). Vem do Terminal; ausente = cards ficam read-only. Consumido pelo
   // caminho de clique baseado no menu TUI parseado. delayMs: respiro entre as
   // sequências quando a TUI precisa redesenhar entre elas (campo de feedback).
-  onRespond?: (seqs: string[], delayMs?: number) => void
+  // Resolve quando a última tecla saiu; false = o Terminal recusou (outra resposta
+  // ainda tocando, ex. pelo composer) e nada foi escrito.
+  onRespond?: (seqs: string[], delayMs?: number) => void | Promise<boolean | void>
   // Plano aprovado pelo card: o modo de permissão que a opção liga (palpite do pill
   // até o rodapé do xterm voltar a aparecer).
   onPlanApproved?: (mode: PermissionMode) => void
@@ -144,24 +154,38 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const stickRef = useRef(true)
 
   const diskUserCount = useMemo(() => countUserMessages(messages), [messages])
+  const shownEchoes = useMemo(() => visibleEchoes(echoes), [echoes])
 
   useImperativeHandle(
     ref,
     () => ({
       pushEcho: (text: string) => {
         stickRef.current = true
-        setEchoes((prev) => [...prev, { text, resolveAt: nextResolveAt(diskUserCount, prev.length) }])
+        setEchoes((prev) => [
+          ...prev,
+          { text, resolveAt: nextResolveAt(diskUserCount, visibleEchoes(prev).length) },
+        ])
       },
     }),
     [diskUserCount],
   )
 
   // Poda ecos resolvidos quando a contagem de usuário no disco avança.
+  const seenDiskCount = useRef(diskUserCount)
   useEffect(() => {
+    const from = seenDiskCount.current
+    seenDiskCount.current = diskUserCount
+    const fresh =
+      diskUserCount > from
+        ? messages.filter((m) => m.kind === 'user' || m.kind === 'command').slice(from)
+        : []
     setEchoes((prev) => {
-      const next = pendingEchoes(prev, diskUserCount)
-      return next.length === prev.length ? prev : next
+      const absorbed = absorbDialogLines(prev, fresh)
+      const next = pendingEchoes(absorbed, diskUserCount)
+      return absorbed === prev && next.length === prev.length ? prev : next
     })
+    // messages entra pelo diskUserCount: só as linhas novas importam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diskUserCount])
 
   // Espelho em estado do stickRef, só pra mostrar o atalho "Ir para o fim".
@@ -200,8 +224,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   const rendered = useMemo<ChatMessage[]>(
-    () => [...messages, ...echoes.map((e) => ({ kind: 'user', text: e.text }) as ChatMessage)],
-    [messages, echoes],
+    () => [...messages, ...shownEchoes.map((e) => ({ kind: 'user', text: e.text }) as ChatMessage)],
+    [messages, shownEchoes],
   )
 
   // Conteúdo novo com o usuário lendo lá em cima: não puxamos a rolagem, avisamos.
@@ -375,15 +399,12 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }, [answered, resolvedCount, menuFp, pendingPrompt?.id])
   const heldPending = answered != null && answered.id === pendingPrompt?.id ? answered : null
 
-  // Dados sintetizados pro QuestionCard: a sentinela 'chat' fica fora das
-  // opções (não tem card pra ela); 'other' (texto livre) fica dentro — MAS só
-  // quando single-select (sem evidência validada pro caso multi+Other, ainda
-  // filtrada nesse caso).
+  // Dados sintetizados pro QuestionCard: a sentinela 'chat' fica fora das opções
+  // (vira o botão "Conversar sobre isso"); 'other' (texto livre) fica dentro, no
+  // single e no multi-select (teclas das sondas 2.1.317/318, ver respond-keys).
   const tuiQuestion = useMemo(() => {
     if (!tuiMenu || tuiMenu.kind !== 'question') return null
-    const clickable = tuiMenu.options.filter(
-      (o) => o.sentinel !== 'chat' && (o.sentinel !== 'other' || !tuiMenu.multiSelect),
-    )
+    const clickable = tuiMenu.options.filter((o) => o.sentinel !== 'chat')
     if (clickable.length === 0) return null
     return {
       clickable,
@@ -398,6 +419,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             sentinel: o.sentinel,
             checked: o.checked,
             preview: o.preview,
+            otherText: o.otherText,
           })),
         },
       ],
@@ -426,6 +448,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Tela final de revisão ("Review your answers") do multi-select/multi-
   // pergunta — kind próprio no parser, card dedicado (QuestionReviewCard).
   const tuiReview = tuiMenu && tuiMenu.kind === 'question_review' ? tuiMenu : null
+  // Diálogo da CLI lido pelo parser tolerante (ou o nudge do auto mode). Os pickers de
+  // /model, /theme, /config e Ctrl+R têm card próprio, que tem precedência.
+  const tuiGeneric =
+    tuiMenu && (tuiMenu.kind === 'menu' || tuiMenu.kind === 'nudge') && !tuiPicker ? tuiMenu : null
 
   // Conteúdo do plano pro card PENDENTE, sempre do arquivo: o input.plan do JSONL
   // pode trazer o plano anterior (Write e ExitPlanMode saem em paralelo). O path
@@ -446,9 +472,23 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     tuiMenu != null &&
     gateMenuByStatus(tuiMenu, status) != null &&
     menuFp !== consumedFp &&
-    (tuiMenu.kind === 'plan' || tuiQuestion != null || tuiPermission != null || tuiReview != null)
+    (tuiMenu.kind === 'plan' ||
+      tuiQuestion != null ||
+      tuiPermission != null ||
+      tuiReview != null ||
+      tuiGeneric != null)
   const coveredPendingId =
     showTuiCard && liveMenuCoversPending(pendingPrompt, tuiMenu?.kind) ? pendingPrompt?.id : null
+  // Diálogo da CLI na tela (menu genérico, picker): o slash command que o abriu chegou,
+  // e o disco pode nunca gravá-lo. Sem isto a bolha do /hooks ficava em "enviando…".
+  const cliDialogOpen = (showTuiCard && tuiMenu?.kind === 'menu') || tuiPicker != null
+  useEffect(() => {
+    if (cliDialogOpen) setEchoes(settleDialogEchoes)
+  }, [cliDialogOpen])
+  // Teclas de uma resposta ainda tocando (o Other do multi-select leva ~1,2 s). O
+  // cursor não entra no fingerprint, então um 2º clique nesse meio passaria no guard
+  // e calcularia as setas de um cursor a caminho: as duas sequências se intercalam.
+  const keysInFlightRef = useRef(false)
   const canRespondTui = onRespond != null && showTuiCard && tuiSent == null
   useEffect(() => {
     if (coveredPendingId) lastCoveredRef.current = { id: coveredPendingId, plan: pendingPlanText }
@@ -459,9 +499,26 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // Menu fechou/mudou (respondido pelo terminal, resize) → fingerprint diverge →
   // NÃO digita nada no PTY.
   function freshMenuMatches(): TuiMenu | null {
+    if (keysInFlightRef.current) return null
     const fresh = reparseMenu?.() ?? null
     if (!fresh || menuFp == null || menuFingerprint(fresh) !== menuFp) return null
     return fresh
+  }
+
+  // Toda resposta do card passa por aqui: trava o card até a última tecla sair e a TUI
+  // ter um respiro pra redesenhar (o próximo clique relê o cursor já parado).
+  function sendKeys(...args: [keys: string[], delayMs?: number]) {
+    if (!onRespond || keysInFlightRef.current) return
+    const delayMs = args[1]
+    keysInFlightRef.current = true
+    void Promise.resolve(onRespond(...args))
+      .then(async (ok) => {
+        if (ok === false) setTuiSent(null)
+        else if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
+      })
+      .finally(() => {
+        keysInFlightRef.current = false
+      })
   }
 
   // Single-select: buildSelectKeys decide dígito-só ou dígito+Enter conforme
@@ -476,7 +533,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     const keys = buildSelectKeys(fresh, target.index)
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, label, resolvedCount })
-    onRespond?.(keys)
+    sendKeys(keys)
   }
 
   // Checkbox de multi-select: dígito faz TOGGLE, NUNCA é resposta final — não
@@ -486,30 +543,48 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   function respondTuiToggle(clickIndex: number) {
     if (!canRespondTui || !tuiQuestion || menuFp == null || !tuiMenu?.multiSelect) return
     const target = tuiQuestion.clickable[clickIndex]
-    if (!target || !freshMenuMatches()) return
-    const keys = buildToggleKeys(target.index)
+    const fresh = target ? freshMenuMatches() : null
+    if (!target || !fresh) return
+    const keys = buildToggleKeys(target.index, fresh)
     if (keys.length === 0) return
-    onRespond?.(keys)
+    sendKeys(keys)
   }
 
-  // "Other" (texto livre, single-select apenas): dígito + texto + Enter — é
-  // resposta FINAL, marca tuiSent.
+  // "Other" (texto livre). Single-select: é a resposta FINAL, marca tuiSent.
+  // Multi-select: só marca a opção com o texto e leva o cursor ao Submit — o card
+  // segue interativo e o re-parse traz "[✔] <texto>".
   function respondTuiOther(clickIndex: number, text: string) {
     if (!canRespondTui || !tuiQuestion || menuFp == null) return
     const target = tuiQuestion.clickable[clickIndex]
-    if (!target || !freshMenuMatches()) return
-    const keys = buildOtherKeys(target.index, text)
+    const fresh = target ? freshMenuMatches() : null
+    if (!target || !fresh) return
+    const keys = buildQuestionOtherKeys(fresh, target.index, text)
     if (keys.length === 0) return
+    if (fresh.multiSelect) {
+      sendKeys(keys, QUESTION_KEY_DELAY_MS)
+      return
+    }
     setTuiSent({ fp: menuFp, label: text, resolvedCount })
-    onRespond?.(keys)
+    sendKeys(keys)
+  }
+
+  // "Chat about this": recusa a pergunta pra conversar (FINAL).
+  function respondTuiChat() {
+    if (!canRespondTui || menuFp == null) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? buildChatKeys(fresh) : []
+    if (keys.length === 0) return
+    setTuiSent({ fp: menuFp, label: 'Chat about this', resolvedCount })
+    sendKeys(keys)
   }
 
   // Navegação de aba: nunca é resposta final (não marca tuiSent) — só move o
   // cursor entre perguntas/Submit da barra de abas.
   function respondTuiTabNav(direction: 'next' | 'prev') {
     if (!canRespondTui || !tuiMenu?.tabs) return
-    if (!freshMenuMatches()) return
-    onRespond?.(buildTabKeys(direction))
+    const fresh = freshMenuMatches()
+    const keys = fresh ? buildQuestionTabKeys(fresh, direction) : []
+    if (keys.length > 0) sendKeys(keys)
   }
 
   // Multi-select PURO (Bug 3): botão dedicado "Enviar respostas" — over-navega
@@ -517,14 +592,16 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // aba atual) + Enter, que É o passo que faltava pra sair da tela de
   // checkboxes. Resposta FINAL, marca tuiSent. Não oferecido em multi-pergunta
   // (tabs de perguntas — esse fluxo já resolve via digit-por-pergunta).
+  // 2.1.317+: ↓ até a linha "Submit" e Enter, que abre a revisão (QuestionReviewCard).
+  // Sem a linha (versões antigas), o caminho por abas de antes.
   function respondTuiSubmitMulti() {
     if (!canRespondTui || !tuiMenu?.multiSelect || !tuiMenu.tabs || menuFp == null) return
     const fresh = freshMenuMatches()
     if (!fresh?.tabs) return
-    const keys = buildMultiSelectSubmitKeys(fresh.tabs.length)
+    const keys = fresh.submitRow ? buildMultiSubmitKeys(fresh) : buildMultiSelectSubmitKeys(fresh.tabs.length)
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
+    sendKeys(keys, fresh.submitRow ? QUESTION_KEY_DELAY_MS : undefined)
   }
 
   // Tela de revisão final: dígito 1 (Submit answers) ou 2 (Cancel) — resposta
@@ -537,7 +614,24 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     const keys = buildReviewKeys(fresh, decision)
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys)
+    sendKeys(keys)
+  }
+
+  // Menu genérico: opção (dígito ou setas+Enter, ver buildGenericSelectKeys) e Esc são
+  // finais pra este menu — um submenu que abrir é outro fingerprint. Aba é passo.
+  function respondGeneric(action: { kind: 'select'; optionIndex: number } | { kind: 'esc' }) {
+    if (!canRespondTui || menuFp == null) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? keysForAction(fresh, action) : []
+    if (keys.length === 0) return
+    setTuiSent({ fp: menuFp, resolvedCount })
+    sendKeys(keys)
+  }
+  function respondGenericTab(direction: 'next' | 'prev') {
+    if (!canRespondTui) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? keysForAction(fresh, { kind: 'tab', direction }) : []
+    if (keys.length > 0) sendKeys(keys)
   }
 
   function respondTuiPlan(d: PlanDecision, feedback?: string) {
@@ -559,7 +653,7 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       return
     }
     setTuiSent({ fp: menuFp, resolvedCount })
-    onRespond?.(keys, keys.length > 1 ? PLAN_KEY_DELAY_MS : undefined)
+    sendKeys(keys, keys.length > 1 ? PLAN_KEY_DELAY_MS : undefined)
     const mode = planApprovalMode(fresh, d)
     if (mode) onPlanApproved?.(mode)
   }
@@ -756,6 +850,11 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           onSubmitMulti={
             canRespondTui && tuiMenu.multiSelect && tuiMenu.tabs ? respondTuiSubmitMulti : undefined
           }
+          onChat={
+            canRespondTui && tuiMenu.options.some((o) => o.sentinel === 'chat')
+              ? respondTuiChat
+              : undefined
+          }
         />
       )}
       {tuiReview && (
@@ -773,6 +872,15 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
           choices={tuiPlanChoices}
           canFeedback={planAcceptsFeedback(tuiMenu)}
           notice={planNotice}
+        />
+      )}
+      {tuiGeneric && (
+        <GenericMenuCard
+          menu={tuiGeneric}
+          onSelect={canRespondTui ? (optionIndex) => respondGeneric({ kind: 'select', optionIndex }) : undefined}
+          onEsc={canRespondTui ? () => respondGeneric({ kind: 'esc' }) : undefined}
+          onTab={canRespondTui ? respondGenericTab : undefined}
+          sent={tuiSent != null && tuiSent.fp === menuFp}
         />
       )}
       {tuiPermission && (

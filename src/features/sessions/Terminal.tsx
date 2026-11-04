@@ -30,7 +30,13 @@ import { useSummarizeNow } from './voice/useSummarizeNow'
 import { useVoiceRecorder } from './voice/useVoiceRecorder'
 import { stopSpeaking } from './voice/useVoiceSpeaker'
 import { ChatView, type ChatViewHandle } from './chat/ChatView'
-import { buildOtherKeys, buildPlanKeys, PLAN_KEY_DELAY_MS, playKeys } from './chat/respond-keys'
+import {
+  buildPlanKeys,
+  buildQuestionOtherKeys,
+  PLAN_KEY_DELAY_MS,
+  playKeys,
+  QUESTION_KEY_DELAY_MS,
+} from './chat/respond-keys'
 import { terminalWriteBlockedNotice, type ComposerMenuRoute } from './composer-menu-guard'
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
@@ -40,6 +46,7 @@ import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './pe
 import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
+import { readBufferTail } from '../../../shared/tui/read-tail'
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
 import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
@@ -140,19 +147,10 @@ function resolvePath(raw: string, cwd: string | null): string | null {
   return '/' + out.join('/')
 }
 
-// Lê as últimas `n` linhas do buffer do xterm como texto plano (uma linha por \n,
-// trim à direita). IBuffer.length = total de linhas (scrollback + viewport), com
-// getLine 0-based — o tail são as linhas [length - n, length). É a fonte de texto
-// pra detectar o modo de permissão E pra parsear o menu TUI pendente (a TUI
-// desenha pergunta + opções no fundo do buffer).
+// Últimas `n` linhas do buffer: fonte de texto pra detectar o modo de permissão E
+// pra parsear o menu TUI pendente (a TUI desenha pergunta + opções no fundo).
 function readTailText(term: Xterm, n = 40): string {
-  const buf = term.buffer.active
-  let text = ''
-  for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
-    const line = buf.getLine(y)
-    if (line) text += line.translateToString(true) + '\n'
-  }
-  return text
+  return readBufferTail(term, n)
 }
 
 // Rodapé da TUI (input box / status lines): as últimas linhas do VIEWPORT, pra
@@ -811,6 +809,20 @@ function TerminalHost({
   // Texto do composer com um menu aberto vira a resposta que o menu aceita (guarda
   // do Composer): feedback do plano ou Other da pergunta. Sem eco: não é um turno
   // do usuário no JSONL, e sim o tool_result do menu.
+  // Uma resposta por vez no PTY: card e composer calculam as setas do cursor lido na
+  // hora, e duas sequências tocando juntas somariam as setas uma da outra.
+  const respondingRef = useRef(false)
+  async function playResponse(keys: string[], delayMs?: number): Promise<boolean> {
+    if (respondingRef.current) return false
+    respondingRef.current = true
+    try {
+      await playKeys(keys, write, delayMs)
+      return true
+    } finally {
+      respondingRef.current = false
+    }
+  }
+
   async function answerMenu(
     menu: TuiMenu,
     route: Extract<ComposerMenuRoute, { kind: 'plan-feedback' | 'question-other' }>,
@@ -819,9 +831,10 @@ function TerminalHost({
     const keys =
       route.kind === 'plan-feedback'
         ? buildPlanKeys(menu, 'feedback', text)
-        : buildOtherKeys(route.optionIndex, text)
+        : buildQuestionOtherKeys(menu, route.optionIndex, text)
     if (keys.length === 0) throw new Error(`o menu não aceita este texto (${route.kind})`)
-    await playKeys(keys, write, route.kind === 'plan-feedback' ? PLAN_KEY_DELAY_MS : undefined)
+    const delay = route.kind === 'plan-feedback' ? PLAN_KEY_DELAY_MS : route.multi ? QUESTION_KEY_DELAY_MS : undefined
+    if (!(await playResponse(keys, delay))) throw new Error('outra resposta ainda está sendo digitada no menu')
   }
 
   // Chamado pelo SessionHeader ao commitar um rename (Enter/blur no input com
@@ -1448,7 +1461,7 @@ function TerminalHost({
             onToggleMode={onToggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
-            onRespond={(seqs, delayMs) => void playKeys(seqs, write, delayMs)}
+            onRespond={playResponse}
             onPlanApproved={setCurrentMode}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o

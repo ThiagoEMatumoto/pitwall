@@ -17,9 +17,13 @@ const IDLE_PROMPT = fixture('claude-2.1.286-idle-prompt.ansi')
 // como menu aberto.
 const TRUST = fixture('claude-2.1.286-trust-unnumbered.ansi')
 // Menu que o parser NÃO reconhece: a mesma captura com o texto da opção mudado
-// ("folder" → "directory"), simulando drift da CLI. Sem menu e sem a caixa de
-// input — o caso em que o \r responderia às cegas.
-const UNPARSED = TRUST.replace('\x1b[22Gfolder', '\x1b[22Gdirectory')
+// ("folder" → "directory") e um rodapé sem Esc, simulando drift da CLI que nem o
+// parser tolerante lê. Sem menu e sem a caixa de input — o caso em que o \r
+// responderia às cegas.
+const UNPARSED = TRUST.replace('\x1b[22Gfolder', '\x1b[22Gdirectory').replace(
+  '\x1b[28Gcancel',
+  '\x1b[28Gquit',
+)
 // Caixa de input vazia (placeholder esmaecido) × com rascunho digitado sem Enter:
 // o texto puro das duas é "❯ <algo>"; só o atributo dim das células separa.
 const PLACEHOLDER = fixture('claude-2.1.286-input-placeholder.ansi')

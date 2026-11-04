@@ -16,6 +16,8 @@ export interface ChatQuestion {
     sentinel?: 'other' | 'chat'
     checked?: boolean
     preview?: string
+    // Other com texto já digitado no terminal (o label vira esse texto).
+    otherText?: string
   }[]
 }
 

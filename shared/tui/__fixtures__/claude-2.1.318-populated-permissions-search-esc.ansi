@@ -1,0 +1,7 @@
+[?25l[7D[10B[6C[10A[38;5;246mSearch…[7C[3B [39mAdd a new rule…[7C[1B[38;5;246m [39mBash(cat:*)[K[7C[1B[38;5;246m [39mBash(echo:*)[K[7C[1B[38;5;246m [39mBash(git[18Gdiff:*)[7C[1B[38;5;246m [39mBash(git[18Glog:*)[4C[1B[38;5;246m6.  [39mBash(git[18Gstatus:*)[2C[1B  [38;5;246m7.[8G [39mBash(ls:*)[K
+[5G[38;5;246m8.[9G[39mBash(npm[18Grun[22Gtypecheck)
+[5G[38;5;246m9.[9G[39mBash(npm[18Gtest:*)
+[3G[38;5;246m↓[5G10.[9G[39mGlob
+
+[3G[38;5;246mType[8Gto[11Gfilter[18G·[20GEnter/↓[28Gto[31Gselect[38G·[40G↑[42Gto[45Gtabs[50G·[52GEsc[56Gto[59Gclear[39m
+[6C[15A[?25h

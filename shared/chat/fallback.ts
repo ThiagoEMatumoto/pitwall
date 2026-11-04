@@ -9,6 +9,8 @@ export const CHAT_FALLBACK_KINDS = [
   'permission',
   'trust',
   'question_review',
+  'menu',
+  'nudge',
   'unknown',
 ] as const satisfies readonly (TuiMenu['kind'] | 'unknown')[]
 export type ChatFallbackKind = (typeof CHAT_FALLBACK_KINDS)[number]

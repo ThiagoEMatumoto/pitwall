@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createRef } from 'react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseTuiMenu } from '../../../../shared/tui/tui-menu-parser'
+import { parseModelMenu } from '../tui-picker-parser'
 import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { sessionsApiMock, transcript } = vi.hoisted(() => ({
@@ -20,7 +22,7 @@ vi.mock('@/lib/ipc', () => {
     },
   )
   return new Proxy(
-    { sessionsApi: sessionsApiMock },
+    { sessionsApi: sessionsApiMock, chatApi: inert },
     { get: (t, key: string) => (t as Record<string, unknown>)[key] ?? inert },
   )
 })
@@ -36,9 +38,10 @@ vi.mock('./useChatTranscript', () => ({
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
-import { ChatView } from './ChatView'
+import { ChatView, type ChatViewHandle } from './ChatView'
 import { PlanCard } from './PlanCard'
 import { PLAN_KEY_DELAY_MS } from './respond-keys'
+import { FALLBACK_STABLE_MS } from './useChatFallback'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -160,7 +163,7 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
   it('um único card de plano, interativo, e sem o banner de ir ao terminal', () => {
     const { container } = renderRace()
     expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
-    expect(container.textContent).not.toContain('responda no compositor ou no terminal')
+    expect(container.textContent).not.toContain('diálogo não foi lido da tela')
     expect(container.textContent).not.toContain('use o terminal')
   })
 
@@ -280,11 +283,18 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(onPlanApproved).toHaveBeenCalledWith('default')
   })
 
-  it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
-    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
-    const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
-    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
-    expect(container.textContent).toContain('aguardando sua aprovação do plano')
+  it('sem o menu vivo o card do transcript fica na hora; o banner, só quando estável', () => {
+    vi.useFakeTimers()
+    try {
+      transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+      const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
+      expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+      expect(container.textContent).not.toContain('aguardando sua aprovação do plano')
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+      expect(container.textContent).toContain('aguardando sua aprovação do plano')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -295,5 +305,82 @@ describe('PlanCard', () => {
     expect(hints.textContent).not.toContain('⏎')
     expect(hints.querySelector('kbd svg')).toBeNull()
     expect(hints.textContent).toContain('esc')
+  })
+})
+
+// /hooks e /permissions não gravam linha nenhuma no JSONL (claude 2.1.318): a bolha
+// esperava o disco e ficava em "enviando…" para sempre. O diálogo na tela é a confirmação.
+describe('eco de slash command que abre diálogo da CLI', () => {
+  const hooksMenu = () =>
+    parseTuiMenu(
+      readFileSync(
+        join(
+          __dirname,
+          '../../../../shared/tui/__fixtures__/claude-2.1.318-fullscreen-hooks-effort-label.txt',
+        ),
+        'utf8',
+      ),
+    )!
+
+  it('a bolha do /hooks sai de "enviando…" quando o diálogo aparece', async () => {
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('/hooks'))
+    expect(screen.getByText('enviando…')).toBeTruthy()
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiMenu={hooksMenu()} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+  })
+
+  it('mensagem comum segue esperando o disco com o diálogo aberto', async () => {
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('oi'))
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiMenu={hooksMenu()} />)
+    await screen.findByText('Hooks')
+    expect(screen.getByText('enviando…')).toBeTruthy()
+  })
+
+  // O /model grava o local_command ao fechar (2.1.318): essa linha é do /model, não da
+  // mensagem enviada com o picker aberto. As teclas dela foram para o picker, então ela
+  // não chegou e precisa seguir em "enviando…".
+  it('a linha do /model ao fechar não resolve a mensagem enviada com o picker aberto', async () => {
+    const picker = parseModelMenu(
+      [
+        '❯ /model',
+        '',
+        '─'.repeat(68),
+        '  Select model',
+        '  ❯ 1. Default (recommended) ✔  Opus 4.8 with 1M context · Best for everyday, complex tasks',
+        '    2. Sonnet                   Sonnet 5 · Efficient for routine tasks',
+        '',
+        '  Enter to set as default · s to use this session only · Esc to cancel',
+      ].join('\n'),
+    )!
+    expect(picker).not.toBeNull()
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('/model'))
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiPicker={picker} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+    act(() => ref.current!.pushEcho('oi'))
+    expect(screen.getByText('enviando…')).toBeTruthy()
+
+    transcript.messages = parseChatMessages(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'local_command',
+        content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>',
+      }),
+    )
+    expect(transcript.messages).toEqual([{ kind: 'command', name: 'model', args: '' }])
+    rerender(<ChatView ref={ref} sessionId="s1" status="idle" tuiPicker={null} />)
+    await screen.findByText('oi')
+    expect(screen.getByText('enviando…')).toBeTruthy()
+
+    // Quando o 'oi' chega ao disco a bolha sai de "enviando…".
+    transcript.messages = [...transcript.messages, { kind: 'user', text: 'oi' }]
+    rerender(<ChatView ref={ref} sessionId="s1" status="idle" tuiPicker={null} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+    expect(screen.getAllByText('oi')).toHaveLength(1)
   })
 })

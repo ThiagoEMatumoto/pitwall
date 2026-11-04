@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes2/question-single-keys/cwd
+
+
+❯ Use a ferramenta AskUserQuestion com UMA pergunta single-select (multiSelect false) com 3 opções sobre linguagem de   
+  programação favorita. Depois da resposta, só diga ok e pare.                                                          
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Linguagem 
+
+Qual é a sua linguagem de programação favorita?
+
+  1. Python
+     Linguagem de alto nível, muito usada em dados, scripts e backends.
+  2. TypeScript
+     JavaScript tipado, comum em frontend e backends Node.
+  3. Go
+     Linguagem compilada da Google, focada em simplicidade e concorrência.
+❯ 4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

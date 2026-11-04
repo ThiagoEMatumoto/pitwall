@@ -1,0 +1,70 @@
+[2D[12B[2C[12A [9GAdd a new rule…[2C[1B[38;5;153m❯[9GBash(cat:*)[39m
+
+
+
+
+
+
+
+
+
+
+[2C[11A[2D[11B[2C[11A [9GBash(cat:*)[2C[1B[38;5;153m❯[9GBash(echo:*)[39m
+
+
+
+
+
+
+
+
+
+[2C[10A[2D[10B[2C[10A [9GBash(echo:*)[2C[1B[38;5;153m❯[9GBash(git diff:*)[39m
+
+
+
+
+
+
+
+
+[2C[9A[2D[9B[2C[9A [9GBash(git diff:*)[2C[1B[38;5;153m❯[9GBash(git log:*)[39m
+
+
+
+
+
+
+
+[2C[8A[2D[8B[2C[8A [9GBash(git log:*)[2C[1B[38;5;153m❯[9GBash(git status:*)[39m
+
+
+
+
+
+
+[2C[7A[2D[7B[2C[7A [9GBash(git status:*)[2C[1B[38;5;153m❯[9GBash(ls:*)[39m
+
+
+
+
+
+[2C[6A[2D[6B[2C[6A [9GBash(ls:*)[2C[1B[38;5;153m❯[9GBash(npm run typecheck)[39m
+
+
+
+
+[2C[5A[2D[5B[2C[5A [9GBash(npm run typecheck)[2C[1B[38;5;153m❯[9GBash(npm test:*)[39m
+
+
+
+[2C[4A[2D[4B[2C[4A [9GBash(npm test:*)[2C[1B[38;5;153m❯[9GGlob[39m
+
+
+[2C[3A[2D[3B[2C[12A[38;5;246m↑[5G2[9G[39mBash(cat:*)[K[4C[1B[38;5;246m3[14G[39mecho:*)[4C[1B[38;5;246m4[14G[39mgit diff:*)[4C[1B[38;5;246m5[18G[39mlog:*)[K[4C[1B[38;5;246m6[18G[39mstatus:*)[4C[1B[38;5;246m7[14G[39mls:*)[K[4C[1B[38;5;246m8[14G[39mnpm run[22Gtypecheck)[4C[1B[38;5;246m9[18G[39mtest:*)[K[4C[1B[38;5;246m10.[9G[39mGlob[K[5C[1B[38;5;246m1[10G[38;5;153mrep[39m
+
+
+[2C[3A[2D[3B[4C[12A[38;5;246m3[14G[39mecho:*)[4C[1B[38;5;246m4[14G[39mgit diff:*)[4C[1B[38;5;246m5[18G[39mlog:*)[K[4C[1B[38;5;246m6[18G[39mstatus:*)[4C[1B[38;5;246m7[14G[39mls:*)[K[4C[1B[38;5;246m8[14G[39mnpm run[22Gtypecheck)[4C[1B[38;5;246m9[18G[39mtest:*)[K[4C[1B[38;5;246m10.[9G[39mGlob[K[5C[1B[38;5;246m1[10G[39mrep[5C[1B[38;5;246m2[9G[38;5;153mRead(./src/**)[39m
+
+
+[2C[3A

@@ -3,11 +3,14 @@
 //   npx tsx e2e/scenarios/probe-chat-plan-2317.ts <cenario>
 // Env: PROBE_SB (sandbox; cwd da sessão e saídas brutas ficam em PROBE_SB/<cenario>/),
 //      PROBE_FIXTURES=1 copia os dumps marcados como fixture para shared/tui/__fixtures__.
-// Cenários e2e-* respondem pelo caminho de produção (parseTuiMenuFull -> buildPlanKeys ->
-// playKeys) e terminam com [verdict] PASS/FAIL; exit 1 se alguma expectativa falhar.
+// Cenários e2e-* respondem pelo caminho de produção (parseTuiMenuFull -> buildPlanKeys ou
+// keysForAction -> playKeys) e terminam com [verdict] PASS/FAIL; exit 1 se alguma expectativa
+// falhar. question-multi-keys*, question-single-keys e question-multi-chat-digit são
+// exploratórios: registram o que cada tecla faz (fonte das teclas de respond-keys).
 // Cada cenário declara flags extras, prompt inicial e passos. Um dump grava .txt (tela do
 // xterm headless) e .ansi (bytes do PTY desde o último dump), roda parseTuiMenuFull real e
 // loga status de ~/.claude/sessions/<pid>.json e o estado do ExitPlanMode no JSONL.
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -22,6 +25,8 @@ import {
   playKeys,
 } from '../../shared/tui/respond-keys'
 import { parseTuiMenuFull, type PlanIntent, type TuiMenu } from '../../shared/tui/tui-menu-parser'
+import { actionKeyDelay, keysForAction } from '../../shared/tui/menu-actions'
+import type { AttentionAction } from '../../shared/types/ipc'
 import { parseTuiPicker } from '../../src/features/sessions/tui-picker-parser'
 
 const xtermHeadless = createRequire(import.meta.url)(
@@ -31,7 +36,9 @@ const { Terminal } = xtermHeadless as unknown as {
   Terminal: new (o: Record<string, unknown>) => any
 }
 
-const CLAUDE_VERSION = '2.1.317'
+// Nome das fixtures: a versão instalada (o 2.1.318 já desenha as mesmas telas do 2.1.317).
+const CLAUDE_VERSION =
+  execFileSync('claude', ['--version'], { encoding: 'utf8' }).match(/\d+\.\d+\.\d+/)?.[0] ?? 'unknown'
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../shared/tui/__fixtures__')
 const SB = process.env.PROBE_SB ?? join(tmpdir(), 'pitwall-probe-chat-plan-2317')
 
@@ -49,6 +56,7 @@ const KEYS = {
   'ctrl-r': '\x12',
   'ctrl-u': '\x15',
   backspace: '\x7f',
+  space: ' ',
   'paste-start': '\x1b[200~',
   'paste-end': '\x1b[201~',
   '1': '1',
@@ -90,12 +98,38 @@ type Step =
   // Expectativas (entram no [verdict]): rodapé da tela e último tool_result do ExitPlanMode.
   | { expectFooter: RegExp; timeout?: number }
   | { expectResult: { isError: boolean; feedback?: string }; timeout?: number }
+  // Responde pelo caminho de produção dos cards (keysForAction + playKeys) a partir do
+  // parse fresco. Opção por índice ou pelo label; other/chat acham a sentinela.
+  | { act: Act }
+  // Último tool_result do AskUserQuestion: respostas contêm cada texto / recusa com feedback.
+  | { expectAnswers: string[] | 'checked'; timeout?: number }
+  | { expectRejected: RegExp; timeout?: number }
+  // Menu atual (parse fresco) com esse kind e, se dado, título; null = nenhum menu.
+  | { expectMenu: { kind: TuiMenu['kind']; question?: RegExp } | null; timeout?: number }
+  // Só verificação (sem tecla): status da sessão em ~/.claude/sessions/<pid>.json.
+  | { expectStatus: string }
+  | { expectNoFile: string }
+  // Esc até a sessão voltar a idle sem menu (no máx. n vezes): fecha o diálogo seja qual for o nível.
+  | { escUntilIdle: number }
+  // Arquivo do cwdSetup segue byte a byte igual (o diálogo não gravou nada nele).
+  | { expectUnchanged: string }
+
+type Act =
+  | { kind: 'toggle'; label: RegExp | number }
+  | { kind: 'other'; text: string }
+  | { kind: 'submit-multi' }
+  | { kind: 'chat' }
+  | { kind: 'esc' }
+  | { kind: 'tab'; direction: 'next' | 'prev' }
+  | { kind: 'select'; label: RegExp | number }
 
 interface Scenario {
   args: string[]
   env?: Record<string, string>
   // Arquivos criados no SB antes do spawn (path relativo ao SB -> conteúdo, modo 0755).
   setup?: Record<string, string>
+  // Arquivos criados no cwd da sessão antes do spawn (path relativo ao cwd -> conteúdo).
+  cwdSetup?: Record<string, string>
   prompt: string
   // Diálogo cuja latência é medida: texto no PTY vs. 1º parse com o kind esperado.
   latency?: { kind: TuiMenu['kind']; textRe: RegExp }
@@ -169,6 +203,54 @@ const denyWrite: Step[] = [
   { sleep: 2000 },
 ]
 const NO_AUTO = JSON.stringify({ disableAutoMode: 'disable' })
+
+// /hooks e /permissions populados (as fixtures unknown-* só têm as telas vazias): 24 hooks
+// inócuos em 7 eventos + 3 ask + 3 deny no .claude/settings.json do cwd, e 12 allow via
+// --settings. O /hooks não lista hooks de --settings, e o allow do projeto não aparece
+// numa pasta sem trust; regra de --settings abre "Rule details" read-only.
+let noopN = 0
+// `true` ignora argumentos; o sufixo só evita que hooks iguais sejam deduplicados.
+const noop = (matcher?: string) => ({
+  ...(matcher ? { matcher } : {}),
+  hooks: [{ type: 'command', command: `true pitwall-hook-${++noopN}` }],
+})
+const SEED_HOOKS = {
+  PreToolUse: [noop('Bash'), noop('Edit|Write'), noop('Read'), noop('Agent'), noop('Grep')],
+  PostToolUse: [noop('Bash'), noop('Edit|Write'), noop('Read'), noop('Glob')],
+  UserPromptSubmit: [noop(), noop(), noop()],
+  SessionStart: [noop('startup'), noop('resume'), noop('clear'), noop('compact')],
+  Stop: [noop(), noop(), noop()],
+  Notification: [noop(), noop()],
+  PreCompact: [noop('manual'), noop('auto'), noop()],
+}
+const SEED_ALLOW = {
+  allow: [
+    'Bash(git status:*)',
+    'Bash(git diff:*)',
+    'Bash(git log:*)',
+    'Bash(ls:*)',
+    'Bash(cat:*)',
+    'Bash(npm test:*)',
+    'Bash(npm run typecheck)',
+    'Read(./src/**)',
+    'Grep',
+    'Glob',
+    'WebSearch',
+    'Bash(echo:*)',
+  ],
+}
+const SEED_PERMISSIONS = {
+  ask: ['Bash(git push:*)', 'Bash(npm publish:*)', 'Edit(./docs/**)'],
+  deny: ['Bash(rm -rf:*)', 'Read(./.env)', 'Bash(curl:*)'],
+}
+const SEED_FLAG = join(SB, 'seed', 'allow.json')
+const SEED_ARGS = [...DEFAULT_ARGS, '--settings', SEED_FLAG]
+const SEED_SETUP = { 'seed/allow.json': JSON.stringify({ permissions: SEED_ALLOW }, null, 2) }
+const SEED_CWD = {
+  '.claude/settings.json':
+    JSON.stringify({ hooks: SEED_HOOKS, permissions: SEED_PERMISSIONS }, null, 2) + '\n',
+}
+
 
 const SCENARIOS: Record<string, Scenario> = {
   'e2e-approve-auto': {
@@ -457,6 +539,409 @@ const SCENARIOS: Record<string, Scenario> = {
       { dump: '33-after-nudge-esc' },
     ],
   },
+  // Exploratório (Fase 2): o que cada tecla faz no multi-select do 2.1.317. Cada dump
+  // registra a tela depois de uma tecla; o que o card usa sai daqui.
+  'question-multi-keys': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      "Use a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre frutas favoritas. Depois da resposta, só diga ok e pare.",
+    latency: QUESTION_LATENCY,
+    steps: [
+      ...questionCapture('question-multi-keys'),
+      { keys: ['1'] },
+      { sleep: 900 },
+      { dump: '20-digit1', fixture: 'question-multi-keys-digit1' },
+      { keys: ['1'] },
+      { sleep: 900 },
+      { dump: '21-digit1-again', fixture: 'question-multi-keys-digit1-again' },
+      { keys: ['2'] },
+      { sleep: 900 },
+      { dump: '22-digit2', fixture: 'question-multi-keys-digit2' },
+      { keys: ['space'] },
+      { sleep: 900 },
+      { dump: '23-space', fixture: 'question-multi-keys-space' },
+      { keys: ['down'] },
+      { sleep: 900 },
+      { dump: '24-down' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '25-enter-on-option', fixture: 'question-multi-keys-enter-option' },
+      { keys: ['4'] },
+      { sleep: 900 },
+      { dump: '26-digit-other', fixture: 'question-multi-keys-digit-other' },
+      { type: 'roxo' },
+      { sleep: 900 },
+      { dump: '27-other-typed' },
+      { keys: ['up'] },
+      { sleep: 900 },
+      { dump: '28-up-from-other', fixture: 'question-multi-keys-up-from-other' },
+      { keys: ['right'] },
+      { sleep: 1200 },
+      { dump: '29-right', fixture: 'question-multi-keys-right' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '30-enter-after-right', fixture: 'question-multi-keys-enter-after-right' },
+      { keys: ['2'] },
+      { sleep: 1200 },
+      { dump: '31-review-cancel', fixture: 'question-multi-keys-review-cancel' },
+      { keys: ['esc'] },
+      { sleep: 2500 },
+      { dump: '32-esc' },
+      { jsonl: 'end' },
+    ],
+  },
+  // Exploratório (Fase 2): ↓ até a linha Submit passando pelo Other vazio, Enter nela,
+  // Cancel e Esc na revisão, e o Other com texto seguido de ↓.
+  'question-multi-keys2': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      "Use a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre frutas favoritas. Depois da resposta, só diga ok e pare.",
+    latency: QUESTION_LATENCY,
+    steps: [
+      ...questionCapture('question-multi-keys2'),
+      { keys: ['2'] },
+      { sleep: 900 },
+      { keys: ['down', 'down', 'down', 'down'], gapMs: 400 },
+      { sleep: 900 },
+      { dump: '20-down4-submit-line', fixture: 'question-multi-submit-line' },
+      { keys: ['enter'] },
+      { sleep: 1500 },
+      { dump: '21-enter-on-submit', fixture: 'question-multi-review-no-other' },
+      { keys: ['2'] },
+      { sleep: 1500 },
+      { dump: '22-review-cancel', fixture: 'question-multi-after-review-cancel' },
+      { jsonl: 'after-cancel' },
+      { sleep: 6000 },
+      { dump: '23-later' },
+    ],
+  },
+  // Exploratório (Fase 2): o dígito da sentinela chat no multi-select.
+  'question-multi-chat-digit': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      "Use a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre frutas favoritas. Depois da resposta, só diga ok e pare.",
+    latency: QUESTION_LATENCY,
+    steps: [
+      ...questionCapture('question-multi-chat-digit'),
+      { keys: ['5'] },
+      { sleep: 3000 },
+      { dump: '20-digit-chat' },
+      { jsonl: 'after-digit-chat' },
+    ],
+  },
+  // Exploratório (Fase 2): no single-select, o dígito do Other foca o campo? E o da
+  // sentinela chat responde? Duas perguntas na mesma sessão.
+  'question-single-keys': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      'Use a ferramenta AskUserQuestion com UMA pergunta single-select (multiSelect false) com 3 opções sobre linguagem de programação favorita. Depois da resposta, só diga ok e pare.',
+    latency: QUESTION_LATENCY,
+    steps: [
+      ...questionCapture('question-single-keys'),
+      { keys: ['4'] },
+      { sleep: 900 },
+      { dump: '20-digit-other', fixture: 'question-single-digit-other' },
+      { type: 'Rust 2' },
+      { sleep: 900 },
+      { dump: '21-other-typed', fixture: 'question-single-other-typed' },
+      { keys: ['enter'] },
+      { sleep: 3000 },
+      { dump: '22-after-enter' },
+      { jsonl: 'after-other' },
+      { sleep: 6000 },
+      { dump: '23-idle' },
+      { keys: ['esc'] },
+      { sleep: 800 },
+      {
+        submit:
+          'Agora use AskUserQuestion de novo com UMA pergunta single-select com 3 opções sobre editor favorito. Depois da resposta, só diga ok e pare.',
+      },
+      { wait: 'menu', kind: 'question', timeout: 180_000 },
+      { dump: '30-question2' },
+      { keys: ['5'] },
+      { sleep: 3000 },
+      { dump: '31-digit-chat', fixture: 'question-single-digit-chat' },
+      { jsonl: 'after-digit-chat' },
+    ],
+  },
+  // e2e (Fase 2): multi-select respondido pelos cards — marca 2 opções, Other com texto,
+  // Enviar respostas, revisão. O tool_result tem que trazer as 3.
+  'e2e-multi-other': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      "Use a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre cores favoritas. Depois da resposta, só diga ok e pare.",
+    latency: QUESTION_LATENCY,
+    steps: [
+      { wait: 'menu', kind: 'question', timeout: 180_000 },
+      { dump: '10-question' },
+      { act: { kind: 'toggle', label: 0 } },
+      { sleep: 900 },
+      { act: { kind: 'toggle', label: 1 } },
+      { sleep: 900 },
+      { dump: '20-two-checked' },
+      { act: { kind: 'other', text: 'roxo' } },
+      { sleep: 1200 },
+      { dump: '21-other-marked' },
+      { act: { kind: 'submit-multi' } },
+      { wait: 'menu', kind: 'question_review', timeout: 10_000 },
+      { dump: '30-review' },
+      { act: { kind: 'select', label: /^Submit answers$/ } },
+      { expectAnswers: 'checked', timeout: 20_000 },
+      { jsonl: 'after-submit' },
+    ],
+  },
+  // e2e (Fase 2): "Conversar sobre isso" pelo card no single-select.
+  'e2e-chat-sentinel': {
+    args: QUESTION_ARGS,
+    tool: 'AskUserQuestion',
+    prompt:
+      'Use a ferramenta AskUserQuestion com UMA pergunta single-select (multiSelect false) com 3 opções sobre linguagem de programação favorita. Depois da resposta, só diga ok e pare.',
+    latency: QUESTION_LATENCY,
+    steps: [
+      { wait: 'menu', kind: 'question', timeout: 180_000 },
+      { dump: '10-question' },
+      { act: { kind: 'chat' } },
+      { expectRejected: /The user wants to clarify these questions/, timeout: 20_000 },
+      { jsonl: 'after-chat' },
+    ],
+  },
+  // Exploratório: /hooks e /permissions com conteúdo (24 hooks, 18 regras). Registra o
+  // layout e o que cada tecla faz em cada estado (abas, busca, lista, detalhe).
+  'populated-menus': {
+    args: SEED_ARGS,
+    setup: SEED_SETUP,
+    cwdSetup: SEED_CWD,
+    tool: 'none',
+    prompt: 'diga oi',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      { type: '/hooks' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { dump: '10-hooks', fixture: 'populated-hooks' },
+      { keys: ['down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '11-hooks-down3', fixture: 'populated-hooks-down3' },
+      { keys: ['down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '12-hooks-scrolled', fixture: 'populated-hooks-scrolled' },
+      { type: '2' },
+      { sleep: 800 },
+      { dump: '13-hooks-digit' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '14-hooks-detail', fixture: 'populated-hooks-detail' },
+      { keys: ['down', 'enter'] },
+      { sleep: 800 },
+      { dump: '15-hooks-detail-keys' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '16-hooks-back' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { dump: '20-perm', fixture: 'populated-permissions' },
+      { keys: ['down'] },
+      { sleep: 800 },
+      { dump: '21-perm-list', fixture: 'populated-permissions-list' },
+      { keys: ['down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '22-perm-list-scrolled', fixture: 'populated-permissions-list-scrolled' },
+      { keys: ['up', 'up'] },
+      { sleep: 800 },
+      { dump: '23-perm-list-scrolled-up2' },
+      { type: '4' },
+      { sleep: 1000 },
+      { dump: '24-perm-scrolled-digit', fixture: 'populated-permissions-rule-readonly' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '25-perm-after-esc' },
+      { keys: ['up', 'up', 'up'] },
+      { sleep: 800 },
+      { type: '3' },
+      { sleep: 1000 },
+      { dump: '26-perm-list-up3-digit' },
+      { keys: ['down', 'right'] },
+      { sleep: 800 },
+      { dump: '27-perm-readonly-keys' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '28-perm-readonly-esc' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { type: '3' },
+      { sleep: 1000 },
+      { dump: '30-perm-digit', fixture: 'populated-permissions-digit' },
+      { keys: ['backspace'] },
+      { sleep: 800 },
+      { dump: '31-perm-search-cleared' },
+      { type: 'g' },
+      { sleep: 800 },
+      { dump: '32-perm-search', fixture: 'populated-permissions-search' },
+      { keys: ['left', 'right'] },
+      { sleep: 800 },
+      { dump: '33-perm-search-arrows' },
+      { keys: ['esc'] },
+      { sleep: 1000 },
+      { dump: '34-perm-search-esc', fixture: 'populated-permissions-search-esc' },
+      { keys: ['esc'] },
+      { sleep: 1000 },
+      { dump: '35-perm-search-esc2' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { keys: ['right'] },
+      { sleep: 800 },
+      { dump: '40-perm-ask', fixture: 'populated-permissions-ask' },
+      { keys: ['right'] },
+      { sleep: 800 },
+      { dump: '41-perm-deny', fixture: 'populated-permissions-deny' },
+      { keys: ['left'] },
+      { sleep: 800 },
+      { keys: ['down', 'down'] },
+      { sleep: 800 },
+      { dump: '42-perm-ask-list', fixture: 'populated-permissions-ask-list' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '43-perm-delete', fixture: 'populated-permissions-delete' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '44-perm-delete-esc' },
+      { keys: ['up', 'up'] },
+      { sleep: 800 },
+      { dump: '45-perm-up-to-tabs' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { expectNoFile: '.claude/settings.local.json' },
+      { expectUnchanged: '.claude/settings.json' },
+    ],
+  },
+  // e2e: /hooks e /permissions populados pelo card genérico. Abre o detalhe de um hook e de
+  // uma regra read-only, recusa o "Delete ask tool?" com No, limpa a busca e fecha tudo por
+  // Esc, sem gravar nada no cwd.
+  'e2e-populated-menus': {
+    args: SEED_ARGS,
+    setup: SEED_SETUP,
+    cwdSetup: SEED_CWD,
+    tool: 'none',
+    prompt: 'diga oi',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      { type: '/hooks' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Hooks$/ }, timeout: 10_000 },
+      { expectStatus: 'waiting' },
+      { act: { kind: 'select', label: /pitwall-hook-6 / } },
+      { expectMenu: { kind: 'menu', question: /^Command hook$/ }, timeout: 5_000 },
+      { dump: '10-hook-detail' },
+      { act: { kind: 'esc' } },
+      { expectMenu: { kind: 'menu', question: /^Hooks$/ }, timeout: 5_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { wait: 'idle', timeout: 30_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 10_000 },
+      { act: { kind: 'select', label: /^Bash\(echo:/ } },
+      { expectMenu: { kind: 'menu', question: /^Rule details$/ }, timeout: 5_000 },
+      { dump: '20-rule-details' },
+      { act: { kind: 'esc' } },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { act: { kind: 'tab', direction: 'next' } },
+      { sleep: 900 },
+      { act: { kind: 'select', label: /^Bash\(git push:/ } },
+      { expectMenu: { kind: 'menu', question: /^Delete ask tool\?$/ }, timeout: 5_000 },
+      { dump: '21-delete-confirm' },
+      { act: { kind: 'select', label: /^No$/ } },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { dump: '22-after-no' },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { wait: 'idle', timeout: 30_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 10_000 },
+      { type: 'g' },
+      { sleep: 900 },
+      { dump: '30-search' },
+      { act: { kind: 'esc' } },
+      { sleep: 900 },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { dump: '31-search-cleared' },
+      { act: { kind: 'esc' } },
+      { sleep: 900 },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { expectNoFile: '.claude/settings.local.json' },
+      { expectUnchanged: '.claude/settings.json' },
+    ],
+  },
+  // e2e (Fase 2): menus da CLI pelo card genérico. /hooks fecha com Esc; em /permissions
+  // troca de aba, entra na opção e volta com Esc sem gravar regra nenhuma.
+  'e2e-generic-menus': {
+    args: DEFAULT_ARGS,
+    tool: 'none',
+    prompt: 'diga oi',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      { type: '/hooks' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Hooks$/ }, timeout: 10_000 },
+      { expectStatus: 'waiting' },
+      { dump: '10-hooks' },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { dump: '11-hooks-closed' },
+      { wait: 'idle', timeout: 30_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 10_000 },
+      { dump: '20-permissions' },
+      { act: { kind: 'tab', direction: 'next' } },
+      { sleep: 900 },
+      { dump: '21-permissions-tab-next' },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ } },
+      { act: { kind: 'tab', direction: 'prev' } },
+      { sleep: 900 },
+      { dump: '22-permissions-tab-prev' },
+      { act: { kind: 'select', label: /^Add a new rule/ } },
+      { sleep: 1200 },
+      { dump: '23-permissions-add-rule' },
+      // O campo da regra não é menu (o composer escreve nele): Esc pelo teclado.
+      { expectMenu: null, timeout: 5_000 },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '24-permissions-esc1' },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { dump: '25-permissions-closed' },
+      { expectNoFile: '.claude/settings.local.json' },
+      { expectNoFile: '.claude/settings.json' },
+    ],
+  },
   // Single-select: registra a sentinela "Chat about this" e o que ela devolve ao modelo.
   'question-chat-sentinel': {
     args: QUESTION_ARGS,
@@ -632,9 +1117,15 @@ const OUT = join(SB, NAME)
 const CWD = join(OUT, 'cwd')
 rmSync(OUT, { recursive: true, force: true })
 mkdirSync(CWD, { recursive: true })
-for (const [rel, body] of Object.entries(SC.setup ?? {}))
+for (const [rel, body] of Object.entries(SC.setup ?? {})) {
+  mkdirSync(dirname(join(SB, rel)), { recursive: true })
   writeFileSync(join(SB, rel), body, { mode: 0o755 })
+}
 writeFileSync(join(CWD, 'README.md'), '# sandbox\n')
+for (const [rel, body] of Object.entries(SC.cwdSetup ?? {})) {
+  mkdirSync(dirname(join(CWD, rel)), { recursive: true })
+  writeFileSync(join(CWD, rel), body)
+}
 
 const COLS = 120
 const ROWS = 45
@@ -956,6 +1447,20 @@ function lastPlanResult(): any | null {
   return found.at(-1) ?? null
 }
 let promised: string | null = null
+// Labels marcados na tela e o texto do Other, lidos no último parse antes do submit-multi.
+let checkedBeforeSubmit: string[] = []
+function lastToolResult(tool: string): any | null {
+  const entries = readJsonl()
+  const uses = new Set(
+    entries.flatMap((e) => blocks(e).filter((b) => b.type === 'tool_use' && b.name === tool).map((b) => b.id)),
+  )
+  const found = entries.flatMap((e) =>
+    blocks(e)
+      .filter((b) => b.type === 'tool_result' && uses.has(b.tool_use_id))
+      .map((b) => ({ block: b, entry: e })),
+  )
+  return found.at(-1) ?? null
+}
 
 async function run(step: Step) {
   if ('wait' in step) {
@@ -1060,6 +1565,88 @@ async function run(step: Step) {
           })
         : 'sem tool_result',
     )
+  } else if ('act' in step) {
+    const m = parseNow()
+    if (!m) throw new Error(`act ${step.act.kind}: sem menu na tela`)
+    const pick = (l: RegExp | number) =>
+      typeof l === 'number' ? m.options.find((o) => o.index === l) : m.options.find((o) => l.test(o.label))
+    let action: AttentionAction
+    const a = step.act
+    if (a.kind === 'toggle' || a.kind === 'select') {
+      const o = pick(a.label)
+      if (!o) throw new Error(`act ${a.kind} ${a.label}: opcao nao encontrada (menu=${m.kind})`)
+      action = { kind: a.kind, optionIndex: o.index }
+    } else if (a.kind === 'other') {
+      const o = m.options.find((x) => x.sentinel === 'other')
+      if (!o) throw new Error('act other: sem sentinela other')
+      action = { kind: 'other', optionIndex: o.index, text: a.text }
+    } else action = a
+    if (action.kind === 'submit-multi')
+      checkedBeforeSubmit = m.options.filter((o) => o.checked).map((o) => o.otherText ?? o.label)
+    const keys = keysForAction(m, action)
+    const delay = actionKeyDelay(m, action)
+    say(`[act] ${JSON.stringify(action)} menu=${m.kind} cursor=${m.cursorIndex} submitRow=${JSON.stringify(m.submitRow ?? null)} keys=${JSON.stringify(keys)} delay=${delay ?? 30}`)
+    if (keys.length === 0) throw new Error(`act ${a.kind}: keysForAction devolveu []`)
+    await playKeys(keys, (k) => proc.write(k), delay)
+  } else if ('expectAnswers' in step) {
+    const want = step.expectAnswers
+    // 'checked': os labels marcados na tela antes do envio + o texto do Other.
+    const lastAnswers = () => {
+      const r = lastToolResult('AskUserQuestion')
+      const answers = r?.entry.toolUseResult?.answers
+      return answers ? (Object.values(answers) as string[]).join(' | ') : null
+    }
+    const expected = want === 'checked' ? checkedBeforeSubmit : want
+    const ok = await waitFor(() => {
+      const got = lastAnswers()
+      return got != null && expected.every((w) => got.includes(w))
+    }, step.timeout ?? 20_000)
+    verdict(`answers contem ${JSON.stringify(expected)}`, ok, JSON.stringify(lastAnswers()))
+  } else if ('expectRejected' in step) {
+    const re = step.expectRejected
+    const ok = await waitFor(() => {
+      const r = lastToolResult('AskUserQuestion')
+      return r != null && r.block.is_error === true && re.test(String(r.entry.userFeedback ?? ''))
+    }, step.timeout ?? 20_000)
+    const r = lastToolResult('AskUserQuestion')
+    verdict(
+      `tool_result rejeitado com userFeedback ${re}`,
+      ok,
+      r ? JSON.stringify({ is_error: r.block.is_error, toolDenialKind: r.entry.toolDenialKind, userFeedback: String(r.entry.userFeedback ?? '').slice(0, 80) }) : 'sem tool_result',
+    )
+  } else if ('expectMenu' in step) {
+    const want = step.expectMenu
+    const match = () => {
+      const m = parseNow()
+      if (want == null) return m == null
+      return m?.kind === want.kind && (want.question == null || want.question.test(m.question ?? ''))
+    }
+    const ok = await waitFor(match, step.timeout ?? 3_000)
+    const m = parseNow()
+    verdict(
+      `menu ${want ? `${want.kind} ${want.question ?? ''}` : 'fechado'}`,
+      ok,
+      JSON.stringify(m ? { kind: m.kind, q: m.question, opts: m.options.map((o) => o.label), cursor: m.cursorIndex, ctx: m.context?.slice(0, 60) } : null),
+    )
+  } else if ('expectStatus' in step) {
+    const st = statusOf()
+    verdict(`status ${step.expectStatus}`, st === step.expectStatus, ccStatus())
+  } else if ('expectNoFile' in step) {
+    const f = join(CWD, step.expectNoFile)
+    verdict(`sem ${step.expectNoFile} no cwd`, !existsSync(f), existsSync(f) ? readFileSync(f, 'utf8').slice(0, 200) : 'ausente')
+  } else if ('escUntilIdle' in step) {
+    let n = 0
+    while (n < step.escUntilIdle && !(statusOf() === 'idle' && parseNow() == null)) {
+      proc.write(KEYS.esc)
+      n++
+      await sleep(1200)
+    }
+    say(`[escUntilIdle] ${n} Esc -> status=${statusOf()} menu=${parseNow()?.kind ?? 'null'}`)
+  } else if ('expectUnchanged' in step) {
+    const f = join(CWD, step.expectUnchanged)
+    const want = SC.cwdSetup?.[step.expectUnchanged]
+    const got = existsSync(f) ? readFileSync(f, 'utf8') : null
+    verdict(`${step.expectUnchanged} intocado no cwd`, want != null && got === want, got == null ? 'ausente' : `${got.length}ch`)
   } else if ('dump' in step) dump(step.dump, step.fixture)
   else if ('hooklog' in step) hookReport(step.hooklog, step.fixture)
   else if ('jsonl' in step) {

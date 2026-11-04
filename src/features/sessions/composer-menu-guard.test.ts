@@ -5,6 +5,7 @@ import { parseTuiMenu, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
 import {
   forwardKeyNotice,
   routeComposerSend,
+  answeredNotice,
   terminalWriteBlockedNotice,
 } from './composer-menu-guard'
 
@@ -51,17 +52,40 @@ describe('forwardKeyNotice', () => {
   })
 })
 
-describe('routeComposerSend — menus sem card', () => {
-  it('nudge do auto mode e submenu do /rewind apontam o terminal', () => {
+describe('routeComposerSend — menus da CLI e multi-select (2.1.317)', () => {
+  it('nudge do auto mode e submenu do /rewind: bloqueado, aponta o card', () => {
     for (const name of ['2.1.317-auto-mode-env-nudge', '2.1.317-rewind-restore-menu']) {
       const route = routeComposerSend(screenOf(name))
       expect(route.kind, name).toBe('blocked')
-      expect(route.kind === 'blocked' && route.notice, name).toMatch(/menu aberto no terminal/)
+      expect(route.kind === 'blocked' && route.notice, name).toMatch(/responda no card acima/)
     }
   })
 
-  it('AskUserQuestion multi-select continua apontando o card', () => {
+  it('menus desconhecidos (/hooks, /permissions): bloqueado, aponta o card', () => {
+    for (const name of ['2.1.317-unknown-hooks', '2.1.317-unknown-permissions']) {
+      const route = routeComposerSend(screenOf(name))
+      expect(route.kind === 'blocked' && route.notice, name).toMatch(/responda no card acima/)
+    }
+  })
+
+  it('AskUserQuestion multi-select: o texto vira o Other (sem enviar)', () => {
     const route = routeComposerSend(screenOf('2.1.317-question-multi-other'))
+    expect(route).toEqual({ kind: 'question-other', optionIndex: 3, multi: true })
+    expect(answeredNotice({ kind: 'question-other', optionIndex: 3, multi: true })).toMatch(/Envie as respostas pelo card/)
+  })
+
+  it('Other que já tem texto no terminal: não recebe mais (vai pro card)', () => {
+    const route = routeComposerSend(screenOf('2.1.317-question-multi-other-typed'))
     expect(route.kind === 'blocked' && route.notice).toMatch(/responda no card/)
+  })
+})
+
+describe('routeComposerSend — campo de texto de diálogo da CLI', () => {
+  it('"Add allow permission rule": o texto do composer vai pro campo', () => {
+    const raw = readFileSync(
+      join(__dirname, '../../../shared/tui/__fixtures__', 'claude-2.1.318-unknown-permissions-add-rule.txt'),
+      'utf8',
+    )
+    expect(routeComposerSend(parseTuiMenu(raw))).toEqual({ kind: 'deliver' })
   })
 })

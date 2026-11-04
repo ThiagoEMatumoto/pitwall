@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { noteFallback } = vi.hoisted(() => ({ noteFallback: vi.fn(() => Promise.resolve()) }))
@@ -15,7 +15,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('contador de fallback pro terminal', () => {
-  it('"Ir pro Terminal" que fica na tela conta uma vez, por kind/motivo', () => {
+  it('o link residual ao terminal que fica na tela conta uma vez, por kind/motivo', () => {
     render(
       <ChatWaitBanners
         pendingPrompt={null}
@@ -70,5 +70,53 @@ describe('contador de fallback pro terminal', () => {
     )
     act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS * 2))
     expect(noteFallback).not.toHaveBeenCalled()
+  })
+})
+
+describe('banner de tela não reconhecida: mesma estabilidade do contador', () => {
+  const banners = () => [
+    screen.queryByTestId('chat-wait-unrecognized'),
+    screen.queryByTestId('chat-wait-open-terminal'),
+  ]
+
+  it('waiting transitório (<1500 ms, diálogo da CLI fechando) não mostra banner nem conta', () => {
+    const { rerender } = render(
+      <ChatWaitBanners pendingPrompt={null} waitInTerminal onToggleMode={() => {}} />,
+    )
+    expect(banners()).toEqual([null, null])
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS - 1))
+    expect(banners()).toEqual([null, null])
+    rerender(<ChatWaitBanners pendingPrompt={null} waitInTerminal={false} onToggleMode={() => {}} />)
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS * 2))
+    expect(banners()).toEqual([null, null])
+    expect(noteFallback).not.toHaveBeenCalled()
+  })
+
+  it('tela não reconhecida estável (≥1500 ms): banner e link aparecem junto com a contagem', () => {
+    render(<ChatWaitBanners pendingPrompt={null} waitInTerminal onToggleMode={() => {}} />)
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+    expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
+    expect(screen.getByTestId('chat-wait-open-terminal').textContent).toContain('Abrir terminal')
+    expect(noteFallback).toHaveBeenCalledTimes(1)
+    expect(noteFallback).toHaveBeenCalledWith('unknown', 'wait-in-terminal')
+  })
+
+  it('a volta ao waiting depois de sair recomeça a espera do zero', () => {
+    const { rerender } = render(<ChatWaitBanners pendingPrompt={null} waitInTerminal />)
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+    expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
+    rerender(<ChatWaitBanners pendingPrompt={null} waitInTerminal={false} />)
+    rerender(<ChatWaitBanners pendingPrompt={null} waitInTerminal />)
+    expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+    expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
+  })
+
+  it('pendente sem menu segue a mesma regra: só aparece quando conta', () => {
+    render(<ChatWaitBanners pendingPrompt={{ kind: 'plan', id: 'p' }} waitInTerminal={false} />)
+    expect(screen.queryByText(/diálogo não foi lido da tela/)).toBeNull()
+    act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+    expect(screen.getByText(/diálogo não foi lido da tela/)).toBeTruthy()
+    expect(noteFallback).toHaveBeenCalledWith('plan', 'pending-without-menu')
   })
 })

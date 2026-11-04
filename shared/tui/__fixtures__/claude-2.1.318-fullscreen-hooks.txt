@@ -1,0 +1,37 @@
+
+✻ Brewed for 4s · done 23:49
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Hooks
+   24 hooks on 7 events
+
+   This menu is read-only. To add or change a hook, edit settings.json or ask Claude. Learn more
+
+     PreToolUse  before tool execution
+   ❯ [User]   ~/.claude/hooks/prompt-linter.sh                     Agent · command
+     [User]   ~/.claude/hooks/gate-lock.sh                         Bash · command
+     [User]   ~/.claude/hooks/protect-files.sh                     Edit|Write|MultiEdit · command
+     [User]   ~/.claude/scripts/worktree-guard.sh                  Edit|Write|MultiEdit · command
+     [Plugin] "${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/hooks/gate-e…   fixture@claude-plugins-official · __exec$ · command
+
+     PostToolUse  after tool execution
+     [User]   ~/.claude/hooks/delegation-reminder.sh               Bash|Agent|Task · command
+     [User]   ~/.claude/hooks/auto-format.sh                       Edit|Write|MultiEdit · command
+     [User]   ~/.claude/hooks/contract-fixture-guard.sh            Edit|Write|MultiEdit · command
+     [User]   ~/.claude/hooks/silent-suppression-guard.sh          Edit|Write|MultiEdit · command
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/scripts/debug-detecto…   pitwall-hook@pitwal-marketplace · command
+
+     UserPromptSubmit  when the user submits a prompt
+     [User]   ~/.claude/hooks/team-brain-reminder.sh               command
+     [User]   ~/.claude/hooks/orchestration-kickoff.sh             command
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/scripts/jit-inject.js"   pitwall-hook@pitwal-marketplace · command
+
+     SessionStart  when a new session is started
+     [User]   ~/.claude/hooks/branch-behind-check.sh               command
+     [User]   ~/.claude/hooks/gc-cruft.sh                          command
+     [Plugin] bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/check-se…   watch@claude-video · command
+     [Plugin] "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" sessio…   superpowers@claude-plugins-official · startup|clear|compact · command
+     [Plugin] _R="${CLAUDE_PLUGIN_ROOT}"; node "$_R/scripts/syn…   pitwall-hook@pitwal-marketplace · startup|clear|compact · command
+     [Plugin] node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-and-inje…   fixture-p@pitwall-fixture-marketplace · startup|clear|compact · command
+     ↓ 6 more
+   
+   Enter to view · Esc to close
