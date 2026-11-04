@@ -221,3 +221,23 @@ describe('aba de pergunta com o cursor no campo do Other', () => {
     ])
   })
 })
+
+describe('Other digitado com o texto de uma sentinela', () => {
+  // A tela real do Other digitado, com o texto trocado por "Chat about this".
+  const raw = readFileSync(join(__dirname, '__fixtures__', 'claude-2.1.317-question-multi-other-typed.txt'), 'utf8')
+  const menu = parseTuiMenu(raw.replace('[✔] verde agua', '[✔] Chat about this'))!
+
+  it('continua sendo o Other; a sentinela chat é só a última opção', () => {
+    expect(menu.options.map((o) => [o.label, o.sentinel ?? null, o.otherText ?? null])).toEqual([
+      ['Azul', null, null],
+      ['Verde', null, null],
+      ['Vermelho', null, null],
+      ['Chat about this', 'other', 'Chat about this'],
+      ['Chat about this', 'chat', null],
+    ])
+  })
+
+  it('Conversar vai para a última opção, saindo do campo antes', () => {
+    expect(buildChatKeys(menu)).toEqual([UP, '5'])
+  })
+})

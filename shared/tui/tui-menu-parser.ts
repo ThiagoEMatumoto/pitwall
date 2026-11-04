@@ -721,7 +721,19 @@ function footerOf(lines: string[], lastOptionLine: number, end: number): string 
 
 // O Other com texto digitado perde o label "Type something" (vira o texto). No
 // AskUserQuestion ele é sempre a opção logo acima de "Chat about this".
+// Um Other digitado com o texto "Chat about this" casa a sentinela pelo label: só a
+// última opção com ele é a sentinela de verdade (no AskUserQuestion ela vem por último).
 function markTypedOther(options: TuiMenuOption[]): void {
+  let lastChat = -1
+  options.forEach((o, i) => {
+    if (o.sentinel === 'chat') lastChat = i
+  })
+  options.forEach((o, i) => {
+    if (o.sentinel !== 'chat' || i === lastChat) return
+    const copy = { ...o }
+    delete copy.sentinel
+    options[i] = copy
+  })
   if (options.some((o) => o.sentinel === 'other')) return
   const chat = options.findIndex((o) => o.sentinel === 'chat')
   if (chat < 1) return

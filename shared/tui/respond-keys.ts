@@ -127,7 +127,7 @@ export function buildMultiSubmitKeys(menu: TuiMenu): string[] {
 // o usuário escreve pelo composer.
 export function buildChatKeys(menu: TuiMenu): string[] {
   if (menu.kind !== 'question') return []
-  const chat = menu.options.find((o) => o.sentinel === 'chat')
+  const chat = menu.options.filter((o) => o.sentinel === 'chat').at(-1)
   return chat ? digitOutOfInput(menu, chat.index) : []
 }
 
