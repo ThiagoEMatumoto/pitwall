@@ -7,10 +7,18 @@
 // só na cópia do userData. Uso:
 //   PLAN_SB=<dir> npx tsx e2e/scenarios/validate-chat-plan-approval.ts
 // Saídas: PLAN_SB/shots/*.png e PLAN_SB/scenario.log; termina com [verdict] PASS/FAIL.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js'
 import type { Locator } from 'playwright'
@@ -183,6 +191,59 @@ async function answerTrustIfShown(): Promise<boolean> {
   return true
 }
 
+// Toasts com timestamp, para provar que nenhum "Modo alterado" saiu com o plano pendente.
+// Como string: o tsx (esbuild keepNames) injetaria __name() nas funções aninhadas, e ele
+// não existe no renderer.
+const TOAST_PROBE = `(() => {
+  if (window.__toasts) return
+  const seen = new WeakSet()
+  window.__toasts = []
+  const scan = () => {
+    for (const el of document.querySelectorAll('[data-testid="toast-card"]')) {
+      if (seen.has(el)) continue
+      seen.add(el)
+      window.__toasts.push({ t: Date.now(), text: el.innerText.trim() })
+    }
+  }
+  new MutationObserver(scan).observe(document.body, { childList: true, subtree: true })
+  scan()
+})()`
+async function installToastProbe(): Promise<void> {
+  await page.evaluate(TOAST_PROBE)
+}
+const toastsSeen = () =>
+  page.evaluate(
+    () => (window as unknown as { __toasts?: Array<{ t: number; text: string }> }).__toasts ?? [],
+  )
+const MODE_TOAST_RE = /Modo alterado/i
+
+// O plano aprovado de fato é o toolUseResult.plan do ExitPlanMode no transcript da sessão.
+function approvedPlanFromTranscript(): string | null {
+  const dir = join(homedir(), '.claude', 'projects', SANDBOX.replace(/[^a-zA-Z0-9]/g, '-'))
+  if (!existsSync(dir)) return null
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .map((f) => join(dir, f))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  for (const f of files) {
+    let plan: string | null = null
+    for (const line of readFileSync(f, 'utf8').split('\n')) {
+      if (!line.includes('toolUseResult')) continue
+      try {
+        const p = (JSON.parse(line) as { toolUseResult?: { plan?: unknown } }).toolUseResult?.plan
+        if (typeof p === 'string' && p.trim()) plan = p
+      } catch {
+        /* linha parcial */
+      }
+    }
+    if (plan) return plan
+  }
+  return null
+}
+const normHeading = (s: string) => s.replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim()
+const markdownHeading = (md: string) => /^#{1,2}\s+(.+)$/m.exec(md)?.[1] ?? ''
+
+let promptAt = 0
 let fallbackBefore: unknown = null
 let fallbackAfter: unknown = null
 try {
@@ -196,6 +257,7 @@ try {
       .split('\n')
       .filter((l) => l.includes('drive-safe') || l.includes('[launch]')),
   )
+  await installToastProbe()
   fallbackBefore = await attentionDebug()
   log('[plan] attention-debug antes:', fallbackBefore)
 
@@ -245,6 +307,7 @@ try {
   await composer.click()
   await composer.fill(PROMPT)
   await composer.press('Enter')
+  promptAt = Date.now()
   log('[plan] prompt enviado; pill:', await pillText())
   log(
     '[plan] argv do claude spawnado:',
@@ -256,6 +319,7 @@ try {
 
   // ---------- (a) 1º card ----------
   await waitFor('1º PlanCard pendente', pendingCardLive, 180_000)
+  const pendingSince = Date.now()
   await page.waitForTimeout(1200)
   const c1 = await describeChoices()
   log('[plan] escolhas do 1º card:', c1)
@@ -344,8 +408,29 @@ try {
 
   // ---------- (d) aprovar com edições manuais ----------
   const headingPending = await lastPlanHeading()
+  const approvedAt = Date.now()
   await page.locator('[data-testid="plan-choice-approve-manual"]').click()
-  await page.waitForTimeout(150)
+  const modeToastsPending = (await toastsSeen()).filter(
+    (x) => x.t >= pendingSince && x.t < approvedAt && MODE_TOAST_RE.test(x.text),
+  )
+  check(
+    '(d) nenhum toast de modo com o plano pendente',
+    modeToastsPending.length === 0,
+    modeToastsPending.map((x) => x.text.replace(/\s+/g, ' ')).join(' | '),
+  )
+  // Pill em manual/Padrão em até 3s depois do clique (a aprovação pelo card).
+  let pillMs = -1
+  let pillLast = ''
+  for (;;) {
+    pillLast = await pillText()
+    if (/padr|default/i.test(pillLast) && !/plan/i.test(pillLast)) {
+      pillMs = Date.now() - approvedAt
+      break
+    }
+    if (Date.now() - approvedAt > 3000) break
+    await page.waitForTimeout(100)
+  }
+  check('(d) pill em Padrão em até 3s', pillMs >= 0, pillMs >= 0 ? `${pillMs}ms` : pillLast)
   const sentShown = (await page.getByText('Decisão enviada…').count()) > 0
   const btnsDisabled = await choiceButtons()
     .evaluateAll((els) => els.length > 0 && els.every((e) => (e as HTMLButtonElement).disabled))
@@ -372,9 +457,33 @@ try {
     headingApproved === headingPending,
     `pendente="${headingPending}" aprovado="${headingApproved}"`,
   )
+  const approvedPlan = approvedPlanFromTranscript()
+  const approvedHeading = approvedPlan ? markdownHeading(approvedPlan) : ''
+  check(
+    '(d) card aprovado mostra o toolUseResult.plan',
+    !!approvedHeading && normHeading(headingApproved) === normHeading(approvedHeading),
+    `card="${headingApproved}" toolUseResult.plan="${approvedHeading}"`,
+  )
   check('(d) modo manual no pill', /padr|default/i.test(pillD) && !/plan/i.test(pillD), pillD)
   await page.waitForTimeout(4000)
   await shot('d3-after-approval')
+  const noticeAfter = await page
+    .getByText('Mudanças enviadas ao plano.')
+    .filter({ visible: true })
+    .count()
+  check(
+    '(d) aviso "Mudanças enviadas ao plano." sumiu',
+    noticeAfter === 0,
+    `visíveis=${noticeAfter}`,
+  )
+  const pillD3 = await pillText()
+  check('(d) pill segue em Padrão', /padr|default/i.test(pillD3) && !/plan/i.test(pillD3), pillD3)
+  const modeToastsAll = (await toastsSeen()).filter((x) => MODE_TOAST_RE.test(x.text))
+  log('[plan] toasts de modo na sessão (ms desde o prompt):', {
+    primeiroCard: pendingSince - promptAt,
+    aprovacao: approvedAt - promptAt,
+    toasts: modeToastsAll.map((x) => ({ t: x.t - promptAt, text: x.text })),
+  })
 } catch (e) {
   log('[plan] ERRO:', String((e as Error).stack ?? e))
   check('cenário completo', false, String(e))
