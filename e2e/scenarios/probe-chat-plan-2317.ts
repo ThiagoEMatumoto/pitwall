@@ -109,6 +109,10 @@ type Step =
   // Só verificação (sem tecla): status da sessão em ~/.claude/sessions/<pid>.json.
   | { expectStatus: string }
   | { expectNoFile: string }
+  // Esc até a sessão voltar a idle sem menu (no máx. n vezes): fecha o diálogo seja qual for o nível.
+  | { escUntilIdle: number }
+  // Arquivo do cwdSetup segue byte a byte igual (o diálogo não gravou nada nele).
+  | { expectUnchanged: string }
 
 type Act =
   | { kind: 'toggle'; label: RegExp | number }
@@ -124,6 +128,8 @@ interface Scenario {
   env?: Record<string, string>
   // Arquivos criados no SB antes do spawn (path relativo ao SB -> conteúdo, modo 0755).
   setup?: Record<string, string>
+  // Arquivos criados no cwd da sessão antes do spawn (path relativo ao cwd -> conteúdo).
+  cwdSetup?: Record<string, string>
   prompt: string
   // Diálogo cuja latência é medida: texto no PTY vs. 1º parse com o kind esperado.
   latency?: { kind: TuiMenu['kind']; textRe: RegExp }
@@ -197,6 +203,54 @@ const denyWrite: Step[] = [
   { sleep: 2000 },
 ]
 const NO_AUTO = JSON.stringify({ disableAutoMode: 'disable' })
+
+// /hooks e /permissions populados (as fixtures unknown-* só têm as telas vazias): 24 hooks
+// inócuos em 7 eventos + 3 ask + 3 deny no .claude/settings.json do cwd, e 12 allow via
+// --settings. O /hooks não lista hooks de --settings, e o allow do projeto não aparece
+// numa pasta sem trust; regra de --settings abre "Rule details" read-only.
+let noopN = 0
+// `true` ignora argumentos; o sufixo só evita que hooks iguais sejam deduplicados.
+const noop = (matcher?: string) => ({
+  ...(matcher ? { matcher } : {}),
+  hooks: [{ type: 'command', command: `true pitwall-hook-${++noopN}` }],
+})
+const SEED_HOOKS = {
+  PreToolUse: [noop('Bash'), noop('Edit|Write'), noop('Read'), noop('Agent'), noop('Grep')],
+  PostToolUse: [noop('Bash'), noop('Edit|Write'), noop('Read'), noop('Glob')],
+  UserPromptSubmit: [noop(), noop(), noop()],
+  SessionStart: [noop('startup'), noop('resume'), noop('clear'), noop('compact')],
+  Stop: [noop(), noop(), noop()],
+  Notification: [noop(), noop()],
+  PreCompact: [noop('manual'), noop('auto'), noop()],
+}
+const SEED_ALLOW = {
+  allow: [
+    'Bash(git status:*)',
+    'Bash(git diff:*)',
+    'Bash(git log:*)',
+    'Bash(ls:*)',
+    'Bash(cat:*)',
+    'Bash(npm test:*)',
+    'Bash(npm run typecheck)',
+    'Read(./src/**)',
+    'Grep',
+    'Glob',
+    'WebSearch',
+    'Bash(echo:*)',
+  ],
+}
+const SEED_PERMISSIONS = {
+  ask: ['Bash(git push:*)', 'Bash(npm publish:*)', 'Edit(./docs/**)'],
+  deny: ['Bash(rm -rf:*)', 'Read(./.env)', 'Bash(curl:*)'],
+}
+const SEED_FLAG = join(SB, 'seed', 'allow.json')
+const SEED_ARGS = [...DEFAULT_ARGS, '--settings', SEED_FLAG]
+const SEED_SETUP = { 'seed/allow.json': JSON.stringify({ permissions: SEED_ALLOW }, null, 2) }
+const SEED_CWD = {
+  '.claude/settings.json':
+    JSON.stringify({ hooks: SEED_HOOKS, permissions: SEED_PERMISSIONS }, null, 2) + '\n',
+}
+
 
 const SCENARIOS: Record<string, Scenario> = {
   'e2e-approve-auto': {
@@ -656,6 +710,192 @@ const SCENARIOS: Record<string, Scenario> = {
       { jsonl: 'after-chat' },
     ],
   },
+  // Exploratório: /hooks e /permissions com conteúdo (24 hooks, 18 regras). Registra o
+  // layout e o que cada tecla faz em cada estado (abas, busca, lista, detalhe).
+  'populated-menus': {
+    args: SEED_ARGS,
+    setup: SEED_SETUP,
+    cwdSetup: SEED_CWD,
+    tool: 'none',
+    prompt: 'diga oi',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      { type: '/hooks' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { dump: '10-hooks', fixture: 'populated-hooks' },
+      { keys: ['down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '11-hooks-down3', fixture: 'populated-hooks-down3' },
+      { keys: ['down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '12-hooks-scrolled', fixture: 'populated-hooks-scrolled' },
+      { type: '2' },
+      { sleep: 800 },
+      { dump: '13-hooks-digit' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '14-hooks-detail', fixture: 'populated-hooks-detail' },
+      { keys: ['down', 'enter'] },
+      { sleep: 800 },
+      { dump: '15-hooks-detail-keys' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '16-hooks-back' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { dump: '20-perm', fixture: 'populated-permissions' },
+      { keys: ['down'] },
+      { sleep: 800 },
+      { dump: '21-perm-list', fixture: 'populated-permissions-list' },
+      { keys: ['down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down', 'down'] },
+      { sleep: 800 },
+      { dump: '22-perm-list-scrolled', fixture: 'populated-permissions-list-scrolled' },
+      { keys: ['up', 'up'] },
+      { sleep: 800 },
+      { dump: '23-perm-list-scrolled-up2' },
+      { type: '4' },
+      { sleep: 1000 },
+      { dump: '24-perm-scrolled-digit', fixture: 'populated-permissions-rule-readonly' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '25-perm-after-esc' },
+      { keys: ['up', 'up', 'up'] },
+      { sleep: 800 },
+      { type: '3' },
+      { sleep: 1000 },
+      { dump: '26-perm-list-up3-digit' },
+      { keys: ['down', 'right'] },
+      { sleep: 800 },
+      { dump: '27-perm-readonly-keys' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '28-perm-readonly-esc' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { type: '3' },
+      { sleep: 1000 },
+      { dump: '30-perm-digit', fixture: 'populated-permissions-digit' },
+      { keys: ['backspace'] },
+      { sleep: 800 },
+      { dump: '31-perm-search-cleared' },
+      { type: 'g' },
+      { sleep: 800 },
+      { dump: '32-perm-search', fixture: 'populated-permissions-search' },
+      { keys: ['left', 'right'] },
+      { sleep: 800 },
+      { dump: '33-perm-search-arrows' },
+      { keys: ['esc'] },
+      { sleep: 1000 },
+      { dump: '34-perm-search-esc', fixture: 'populated-permissions-search-esc' },
+      { keys: ['esc'] },
+      { sleep: 1000 },
+      { dump: '35-perm-search-esc2' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { sleep: 2000 },
+      { keys: ['right'] },
+      { sleep: 800 },
+      { dump: '40-perm-ask', fixture: 'populated-permissions-ask' },
+      { keys: ['right'] },
+      { sleep: 800 },
+      { dump: '41-perm-deny', fixture: 'populated-permissions-deny' },
+      { keys: ['left'] },
+      { sleep: 800 },
+      { keys: ['down', 'down'] },
+      { sleep: 800 },
+      { dump: '42-perm-ask-list', fixture: 'populated-permissions-ask-list' },
+      { keys: ['enter'] },
+      { sleep: 1200 },
+      { dump: '43-perm-delete', fixture: 'populated-permissions-delete' },
+      { keys: ['esc'] },
+      { sleep: 1200 },
+      { dump: '44-perm-delete-esc' },
+      { keys: ['up', 'up'] },
+      { sleep: 800 },
+      { dump: '45-perm-up-to-tabs' },
+      { escUntilIdle: 4 },
+      { wait: 'idle', timeout: 15_000 },
+      { expectNoFile: '.claude/settings.local.json' },
+      { expectUnchanged: '.claude/settings.json' },
+    ],
+  },
+  // e2e: /hooks e /permissions populados pelo card genérico. Abre o detalhe de um hook e de
+  // uma regra read-only, recusa o "Delete ask tool?" com No, limpa a busca e fecha tudo por
+  // Esc, sem gravar nada no cwd.
+  'e2e-populated-menus': {
+    args: SEED_ARGS,
+    setup: SEED_SETUP,
+    cwdSetup: SEED_CWD,
+    tool: 'none',
+    prompt: 'diga oi',
+    steps: [
+      { wait: 'idle', timeout: 90_000 },
+      { type: '/hooks' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Hooks$/ }, timeout: 10_000 },
+      { expectStatus: 'waiting' },
+      { act: { kind: 'select', label: /pitwall-hook-6 / } },
+      { expectMenu: { kind: 'menu', question: /^Command hook$/ }, timeout: 5_000 },
+      { dump: '10-hook-detail' },
+      { act: { kind: 'esc' } },
+      { expectMenu: { kind: 'menu', question: /^Hooks$/ }, timeout: 5_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { wait: 'idle', timeout: 30_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 10_000 },
+      { act: { kind: 'select', label: /^Bash\(echo:/ } },
+      { expectMenu: { kind: 'menu', question: /^Rule details$/ }, timeout: 5_000 },
+      { dump: '20-rule-details' },
+      { act: { kind: 'esc' } },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { act: { kind: 'tab', direction: 'next' } },
+      { sleep: 900 },
+      { act: { kind: 'select', label: /^Bash\(git push:/ } },
+      { expectMenu: { kind: 'menu', question: /^Delete ask tool\?$/ }, timeout: 5_000 },
+      { dump: '21-delete-confirm' },
+      { act: { kind: 'select', label: /^No$/ } },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { dump: '22-after-no' },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { wait: 'idle', timeout: 30_000 },
+      { type: '/permissions' },
+      { sleep: 700 },
+      { keys: ['enter'] },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 10_000 },
+      { type: 'g' },
+      { sleep: 900 },
+      { dump: '30-search' },
+      { act: { kind: 'esc' } },
+      { sleep: 900 },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { dump: '31-search-cleared' },
+      { act: { kind: 'esc' } },
+      { sleep: 900 },
+      { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },
+      { act: { kind: 'esc' } },
+      { expectMenu: null, timeout: 10_000 },
+      { expectNoFile: '.claude/settings.local.json' },
+      { expectUnchanged: '.claude/settings.json' },
+    ],
+  },
   // e2e (Fase 2): menus da CLI pelo card genérico. /hooks fecha com Esc; em /permissions
   // troca de aba, entra na opção e volta com Esc sem gravar regra nenhuma.
   'e2e-generic-menus': {
@@ -877,9 +1117,15 @@ const OUT = join(SB, NAME)
 const CWD = join(OUT, 'cwd')
 rmSync(OUT, { recursive: true, force: true })
 mkdirSync(CWD, { recursive: true })
-for (const [rel, body] of Object.entries(SC.setup ?? {}))
+for (const [rel, body] of Object.entries(SC.setup ?? {})) {
+  mkdirSync(dirname(join(SB, rel)), { recursive: true })
   writeFileSync(join(SB, rel), body, { mode: 0o755 })
+}
 writeFileSync(join(CWD, 'README.md'), '# sandbox\n')
+for (const [rel, body] of Object.entries(SC.cwdSetup ?? {})) {
+  mkdirSync(dirname(join(CWD, rel)), { recursive: true })
+  writeFileSync(join(CWD, rel), body)
+}
 
 const COLS = 120
 const ROWS = 45
@@ -1388,6 +1634,19 @@ async function run(step: Step) {
   } else if ('expectNoFile' in step) {
     const f = join(CWD, step.expectNoFile)
     verdict(`sem ${step.expectNoFile} no cwd`, !existsSync(f), existsSync(f) ? readFileSync(f, 'utf8').slice(0, 200) : 'ausente')
+  } else if ('escUntilIdle' in step) {
+    let n = 0
+    while (n < step.escUntilIdle && !(statusOf() === 'idle' && parseNow() == null)) {
+      proc.write(KEYS.esc)
+      n++
+      await sleep(1200)
+    }
+    say(`[escUntilIdle] ${n} Esc -> status=${statusOf()} menu=${parseNow()?.kind ?? 'null'}`)
+  } else if ('expectUnchanged' in step) {
+    const f = join(CWD, step.expectUnchanged)
+    const want = SC.cwdSetup?.[step.expectUnchanged]
+    const got = existsSync(f) ? readFileSync(f, 'utf8') : null
+    verdict(`${step.expectUnchanged} intocado no cwd`, want != null && got === want, got == null ? 'ausente' : `${got.length}ch`)
   } else if ('dump' in step) dump(step.dump, step.fixture)
   else if ('hooklog' in step) hookReport(step.hooklog, step.fixture)
   else if ('jsonl' in step) {
