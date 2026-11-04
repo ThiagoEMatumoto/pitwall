@@ -804,6 +804,13 @@ const INPUT_OPTION_RE = /^(Type something|Summarize from here|Tell Claude what t
 const REWIND_DESC_RE = /^(No code changes|\d+ files? changed\b.*)$/i
 const CURSOR_LINE_RE = /^(\s*)❯\s+(\S.*)$/
 const GENERIC_BOX_RE = /^[╭╰│]/
+// Com `"tui": "fullscreen"` no settings do usuário a CLI abre o diálogo com uma régua de ▔
+// (U+2594) em vez de ─ (drive-app, claude 2.1.318); a caixa de input segue com ─.
+const FULLSCREEN_TOP_RULE_RE = /^▔{10,}$/
+
+function isDialogTopRule(line: string): boolean {
+  return isInputRule(line) || FULLSCREEN_TOP_RULE_RE.test(line)
+}
 
 // Marcas dos diálogos que têm parser dedicado (permissão, trust, plano, AskUserQuestion).
 // Se o dedicado recusou a tela, é drift: o tolerante não pode virar uma aprovação de um
@@ -838,7 +845,7 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
   const bodyEnd = hasFooter ? end - 1 : end
   let top = -1
   for (let i = bodyEnd - 1; i >= Math.max(0, end - GENERIC_MAX_LINES); i--) {
-    if (isInputRule(lines[i].trim())) {
+    if (isDialogTopRule(lines[i].trim())) {
       top = i
       break
     }

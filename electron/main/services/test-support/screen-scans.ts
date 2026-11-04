@@ -18,11 +18,14 @@ class FakePty extends EventEmitter {
 
 // O scan sai do TuiMenuWatch real com timers reais (o write do xterm headless é
 // assíncrono); os testes rodam com timers falsos em cima desse shape.
-export async function scanOf(raw: string): Promise<ScreenScan> {
+export async function scanOf(
+  raw: string,
+  size: { cols: number; rows: number } = { cols: 80, rows: 24 },
+): Promise<ScreenScan> {
   const pty = new FakePty()
   const watch = new TuiMenuWatch()
   watch.attach(pty)
-  pty.emit('spawn', { sessionId: 'probe', cols: 80, rows: 24 })
+  pty.emit('spawn', { sessionId: 'probe', ...size })
   pty.emit('data', { sessionId: 'probe', data: raw })
   const scan = await watch.rescan('probe')
   pty.emit('exit', { sessionId: 'probe', exitCode: 0 })
