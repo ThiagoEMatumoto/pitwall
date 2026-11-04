@@ -113,6 +113,53 @@ describe('ChatView — Ctrl+R (2.1.318)', () => {
     expect(onRespond).toHaveBeenLastCalledWith([ESC])
   })
 
+  it('digitar com a edição anterior ainda tocando: espera e manda a diferença do que o terminal tem', async () => {
+    transcript.messages = []
+    const plays: ((ok: boolean) => void)[] = []
+    const onRespond = vi.fn(() => new Promise<boolean>((resolve) => plays.push(resolve)))
+    render(
+      <ChatView
+        sessionId="s-h"
+        status="idle"
+        tuiPicker={pickerOf('history-query')}
+        reparsePicker={() => pickerOf('history-query')}
+        onRespond={onRespond}
+      />,
+    )
+    const input = screen.getByTestId('history-query') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'diga x' } })
+    fireEvent.change(input, { target: { value: 'diga xy' } })
+    expect(input.value).toBe('diga xy')
+    expect(onRespond).toHaveBeenCalledTimes(1)
+    expect(onRespond).toHaveBeenLastCalledWith([' x'])
+    plays[0](true)
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(2))
+    expect(onRespond).toHaveBeenLastCalledWith(['y'])
+    plays[1](true)
+  })
+
+  it('o terminal recusou as teclas (outra resposta tocando): o campo volta ao que o terminal tem', async () => {
+    transcript.messages = []
+    const onRespond = vi.fn(async () => false)
+    render(
+      <ChatView
+        sessionId="s-h"
+        status="idle"
+        tuiPicker={pickerOf('history-query')}
+        reparsePicker={() => pickerOf('history-query')}
+        onRespond={onRespond}
+      />,
+    )
+    const input = screen.getByTestId('history-query') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'diga x' } })
+    await waitFor(() => expect(input.value).toBe('diga'))
+    onRespond.mockImplementation(async () => true)
+    fireEvent.change(input, { target: { value: 'diga y' } })
+    expect(onRespond).toHaveBeenLastCalledWith([' y'])
+  })
+
   it('sem match: aceitar desabilitado', () => {
     renderPicker('history-no-match')
     expect((screen.getByTestId('history-accept') as HTMLButtonElement).disabled).toBe(true)

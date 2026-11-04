@@ -804,11 +804,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     if (fresh?.kind !== 'history_search' || tuiPicker?.kind !== 'history_search') return null
     return fresh.mode === tuiPicker.mode ? fresh : null
   }
-  function historyStep(keysOf: (p: TuiHistorySearch) => string[]) {
-    if (!canRespondPicker) return
+  // false = nada foi escrito (busca fechou, ou o PTY recusou porque outra resposta tocava).
+  async function historyStep(keysOf: (p: TuiHistorySearch) => string[]): Promise<boolean> {
+    if (!canRespondPicker || !onRespond) return false
     const fresh = freshHistory()
-    const keys = fresh ? keysOf(fresh) : []
-    if (keys.length > 0) onRespond?.(keys)
+    if (!fresh) return false
+    const keys = keysOf(fresh)
+    if (keys.length === 0) return true
+    return (await onRespond(keys)) !== false
   }
   function historyFinal(keysOf: (p: TuiHistorySearch) => string[]) {
     if (!canRespondPicker || pickerFp == null) return
@@ -916,10 +919,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         <HistorySearchCard
           picker={tuiPicker}
           onQuery={canRespondPicker ? (prev, next) => historyStep(() => historyQueryKeys(prev, next)) : undefined}
-          onOlder={canRespondPicker ? () => historyStep(historyOlderKeys) : undefined}
-          onNewer={canRespondPicker ? () => historyStep(historyNewerKeys) : undefined}
-          onSelect={canRespondPicker ? (i) => historyStep((p) => historySelectKeys(p, i)) : undefined}
-          onScope={canRespondPicker ? () => historyStep(historyScopeKeys) : undefined}
+          onOlder={canRespondPicker ? () => void historyStep(historyOlderKeys) : undefined}
+          onNewer={canRespondPicker ? () => void historyStep(historyNewerKeys) : undefined}
+          onSelect={canRespondPicker ? (i) => void historyStep((p) => historySelectKeys(p, i)) : undefined}
+          onScope={canRespondPicker ? () => void historyStep(historyScopeKeys) : undefined}
           onAccept={canRespondPicker ? () => historyFinal(historyAcceptKeys) : undefined}
           onFill={canRespondPicker ? () => historyFinal(historyFillKeys) : undefined}
           onCancel={canRespondPicker ? () => historyFinal(historyCancelKeys) : undefined}

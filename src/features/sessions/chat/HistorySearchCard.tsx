@@ -7,8 +7,9 @@ import { historyAcceptEffect } from '../history-search-keys'
 
 interface Props {
   picker: TuiHistorySearch
-  // Ausentes = card só leitura (sem PTY ou resposta em voo).
-  onQuery?: (prev: string, next: string) => void
+  // Ausentes = card só leitura (sem PTY ou resposta em voo). onQuery resolve false
+  // quando as teclas não foram escritas no terminal.
+  onQuery?: (prev: string, next: string) => Promise<boolean>
   onOlder?: () => void
   onNewer?: () => void
   onSelect?: (index: number) => void
@@ -40,9 +41,41 @@ export function HistorySearchCard({
   const live = !sent
   const [query, setQuery] = useState(picker.query)
   const focused = useRef(false)
+  // O que o terminal já recebeu e o que o campo quer. Uma edição no meio da query vira
+  // várias teclas tocando por ~30 ms cada, e o PTY recusa outra resposta nesse meio-tempo:
+  // as edições de depois esperam e saem como a diferença do que o terminal TEM, nunca do
+  // que o campo mostrava. Tecla recusada (outra resposta tocando) devolve o campo ao
+  // terminal, senão campo e terminal divergem para sempre.
+  const inTerminal = useRef(picker.query)
+  const wanted = useRef(picker.query)
+  const playing = useRef(false)
+  // A fila atravessa renders: cada passo usa o onQuery atual, não o do primeiro.
+  const onQueryRef = useRef(onQuery)
+  onQueryRef.current = onQuery
   useEffect(() => {
-    if (!focused.current) setQuery(picker.query)
+    if (focused.current) return
+    setQuery(picker.query)
+    if (!playing.current) inTerminal.current = wanted.current = picker.query
   }, [picker.query])
+
+  async function flushQuery() {
+    if (playing.current) return
+    playing.current = true
+    try {
+      while (wanted.current !== inTerminal.current) {
+        const target = wanted.current
+        const play = onQueryRef.current
+        if (!play || !(await play(inTerminal.current, target))) {
+          wanted.current = inTerminal.current
+          setQuery(inTerminal.current)
+          return
+        }
+        inTerminal.current = target
+      }
+    } finally {
+      playing.current = false
+    }
+  }
   const effect = historyAcceptEffect(picker)
   const modal = picker.mode === 'modal'
   const result = modal
@@ -81,9 +114,9 @@ export function HistorySearchCard({
           onFocus={() => (focused.current = true)}
           onBlur={() => (focused.current = false)}
           onChange={(e) => {
-            const next = e.target.value
-            onQuery?.(query, next)
-            setQuery(next)
+            wanted.current = e.target.value
+            setQuery(e.target.value)
+            void flushQuery()
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && hasResult) {
