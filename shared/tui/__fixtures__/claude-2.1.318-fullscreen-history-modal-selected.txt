@@ -1,0 +1,45 @@
+
+❯ Liste três cores separadas por vírgula, nada mais.                                                                    
+     
+● vermelho, azul, verde
+
+✻ Sautéed for 3s · done 1:56
+
+❯ diga juliett                                                                                                          
+
+● Juliett
+
+✻ Cooked for 2s · done 1:56
+
+❯ Responda só: ok kilo                                                                                                  
+
+● ok kilo
+
+✻ Worked for 2s · done 1:56
+
+❯ diga lima                                                                                                             
+
+● Lima
+
+✻ Crunched for 3s · done 1:56
+
+❯ Responda só: ok mike                                                                                                  
+
+● ok mike
+
+✻ Baked for 2s · done 1:56
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Search prompts · project
+  ↑ 1m ago   diga alfa                           ╭───────────────────────────────────────────────────────────────────╮
+    1m ago   diga charlie, e mais nada           │ diga india                                                        │
+    55s ago  diga delta                          │                                                                   │
+    47s ago  diga foxtrot com letras maiúsculas  │                                                                   │
+    37s ago  diga golf                           │                                                                   │
+  ❯ 29s ago  diga india                          │                                                                   │
+    20s ago  diga juliett                        │                                                                   │
+    11s ago  diga lima                           ╰───────────────────────────────────────────────────────────────────╯
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ diga                                                                                                           │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ to navigate · Enter to use · Esc to cancel · ctrl+s to scope
