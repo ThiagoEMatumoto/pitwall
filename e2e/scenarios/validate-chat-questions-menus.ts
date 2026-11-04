@@ -292,11 +292,7 @@ function askAnswersFrom(mark: number): Record<string, string> | null {
   }
   return null
 }
-const norm = (s: string) =>
-  s
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
+const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 let fallbackBefore: unknown = null
 let fallbackAfter: unknown = null
@@ -398,6 +394,12 @@ try {
       20_000,
     )
     await page.waitForTimeout(800)
+    const otherLabel = await questionCard().getByTestId('question-other-typed').innerText()
+    check(
+      '(a) rótulo do Other não diz "no terminal"',
+      !/terminal/i.test(otherLabel),
+      otherLabel.replace(/\s+/g, ' '),
+    )
     const st1 = await toggleStates()
     await shot('a2-marked')
     check(
@@ -512,15 +514,71 @@ try {
     await shot('c1-hooks-card')
     check('(c) card genérico do /hooks', /hook/i.test(txt), txt.replace(/\s+/g, ' ').slice(0, 200))
     check('(c) sem "Ir pro Terminal"/banner', hint === '', hint)
-    await page.getByTestId('generic-esc').last().click()
+    // Navega: entra no 1º evento com hooks configurados (lista "N hook(s)"), olha, volta.
+    const hooksCard = () => page.getByTestId('generic-menu').last()
+    const opts = hooksCard().locator('[data-testid^="generic-option-"]')
+    const optInfo = await opts.evaluateAll((els) =>
+      els.map((e) => ({
+        id: e.getAttribute('data-testid') ?? '',
+        text: (e as HTMLElement).innerText.replace(/\s+/g, ' ').trim(),
+        enabled: !(e as HTMLButtonElement).disabled,
+      })),
+    )
+    log('[qm] (c) opções do /hooks:', optInfo)
+    const target =
+      optInfo.find((o) => o.enabled && /\b[1-9]\d* hooks?\b/i.test(o.text)) ??
+      optInfo.find(
+        (o) =>
+          o.enabled && /^(PreToolUse|PostToolUse|Stop|SessionStart|UserPromptSubmit)/.test(o.text),
+      )
+    check(
+      '(c) /hooks lista eventos com hooks reais',
+      target != null,
+      target?.text ?? JSON.stringify(optInfo).slice(0, 200),
+    )
+    if (target) {
+      await hooksCard().getByTestId(target.id).click()
+      await waitFor(
+        'submenu do evento',
+        async () =>
+          (await page.getByTestId('generic-menu').count()) > 0 &&
+          (await hooksCard().innerText()) !== txt,
+        15_000,
+      )
+      await page.waitForTimeout(1200)
+      const sub = await hooksCard().innerText()
+      await shot('c2-hooks-event')
+      check('(c) navegou ao evento pelo card', sub !== txt, sub.replace(/\s+/g, ' ').slice(0, 200))
+      await hooksCard().getByTestId('generic-esc').click()
+      await waitFor(
+        'volta ao topo do /hooks',
+        async () =>
+          (await page.getByTestId('generic-menu').count()) === 0 ||
+          (await hooksCard().innerText()) === txt,
+        15_000,
+      )
+      await page.waitForTimeout(1000)
+      await shot('c3-hooks-back')
+      check(
+        '(c) Esc pelo card voltou ao topo',
+        (await page.getByTestId('generic-menu').count()) > 0 &&
+          (await hooksCard().innerText()) === txt,
+      )
+    }
+    if (await page.getByTestId('generic-menu').count())
+      await page.getByTestId('generic-esc').last().click()
     await waitFor(
       'card /hooks fecha',
       async () => (await page.getByTestId('generic-menu').count()) === 0,
       15_000,
     )
     await page.waitForTimeout(1000)
-    await shot('c2-hooks-closed')
+    await shot('c4-hooks-closed')
     check('(c) Esc pelo card fechou', true)
+    check(
+      '(c) continuou na view Chat',
+      (await page.getByRole('button', { name: 'Mudar para Terminal' }).count()) > 0,
+    )
     await waitIdle('idle após /hooks', 30_000)
   } catch (e) {
     log('[qm] (c) ERRO:', String((e as Error).stack ?? e))
@@ -571,10 +629,18 @@ try {
     )
     await page.waitForTimeout(1000)
     await shot('d4-permissions-closed')
+    check(
+      '(d) continuou na view Chat',
+      (await page.getByRole('button', { name: 'Mudar para Terminal' }).count()) > 0,
+    )
     await waitIdle('idle após /permissions', 30_000)
     const hashesAfter = settingsHashes()
     const changed = SETTINGS_FILES.filter((f) => hashesBefore[f] !== hashesAfter[f])
-    check('(d) Esc fechou e nada alterado', changed.length === 0, changed.join(',') || 'settings iguais')
+    check(
+      '(d) Esc fechou e nada alterado',
+      changed.length === 0,
+      changed.join(',') || 'settings iguais',
+    )
   } catch (e) {
     log('[qm] (d) ERRO:', String((e as Error).stack ?? e))
     check('(d) completo', false, String(e))
