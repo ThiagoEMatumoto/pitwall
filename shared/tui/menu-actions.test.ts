@@ -177,3 +177,30 @@ describe('menu genérico e nudge', () => {
     expect(buildGenericSelectKeys(menu, 0)).toEqual([])
   })
 })
+
+describe('single-select com abas (várias perguntas): Other', () => {
+  // Sem captura de abas no single-select: a tela real de uma pergunta com as abas que
+  // várias perguntas teriam.
+  const withTabs = (m: TuiMenu): TuiMenu => ({
+    ...m,
+    tabs: [
+      { label: 'Q1', done: false },
+      { label: 'Q2', done: false },
+      { label: 'Submit', done: false },
+    ],
+  })
+
+  it('cursor já no campo do Other: só o texto e Enter, sem o dígito', () => {
+    const menu = withTabs(menuOf('2.1.318-question-single-digit-other'))
+    const other = menu.options.find((o) => o.sentinel === 'other')!
+    expect(menu.cursorIndex).toBe(other.index)
+    expect(buildQuestionOtherKeys(menu, other.index, 'Rust')).toEqual(['Rust', '\r'])
+  })
+
+  it('cursor fora do campo: dígito do Other, texto e Enter', () => {
+    const base = menuOf('2.1.318-question-single-digit-other')
+    const other = base.options.find((o) => o.sentinel === 'other')!
+    const menu = withTabs({ ...base, cursorIndex: 0 })
+    expect(buildQuestionOtherKeys(menu, other.index, 'Rust')).toEqual([String(other.index + 1), 'Rust', '\r'])
+  })
+})

@@ -100,7 +100,8 @@ export function buildQuestionOtherKeys(menu: TuiMenu, optionIndex: number, text:
   const clean = cleanText(text)
   if (clean === '') return []
   if (!menu.multiSelect) {
-    if (menu.tabs && menu.tabs.length > 2) return buildOtherKeys(optionIndex, clean)
+    // Vale também com abas (várias perguntas): com o cursor no campo, o dígito viraria
+    // texto ("4Rust"). Sem captura de abas no single-select, a mesma regra do sem abas.
     if (menu.cursorIndex === optionIndex) return [clean, '\r']
     const digit = digitOutOfInput(menu, optionIndex)
     return digit.length === 0 ? [] : [...digit, clean, '\r']
