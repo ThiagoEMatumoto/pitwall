@@ -221,12 +221,23 @@ describe('parser tolerante: menus que nenhum parser dedicado conhece (2.1.317)',
     expect(menuFingerprint(after!)).not.toBe(menuFingerprint(before!))
   })
 
-  it('"Add allow permission rule": diálogo de campo, só Esc (nenhuma opção)', () => {
-    const menu = txt('2.1.318-unknown-permissions-add-rule')
-    expect(menu?.kind).toBe('menu')
-    expect(menu?.question).toBe('Add allow permission rule')
-    expect(menu?.options).toEqual([])
-    expect(menu?.footer).toBe('Enter to submit · Esc to cancel')
+  it('"Add allow permission rule": campo de texto não é menu (o composer escreve nele)', () => {
+    const raw = fixture('2.1.318-unknown-permissions-add-rule.txt')
+    expect(raw).toMatch(/Enter to submit · Esc to cancel/)
+    expect(parseTuiMenu(raw)).toBeNull()
+  })
+
+  it('tela sem diálogo terminada em "Esc to cancel" não vira menu vazio', () => {
+    const idle = [
+      '─'.repeat(80),
+      '❯ ',
+      '─'.repeat(80),
+      '  ? for shortcuts',
+      '',
+      '  Some status line',
+      '  Esc to cancel',
+    ].join('\n')
+    expect(parseTuiMenu(idle)).toBeNull()
   })
 
   it('telas sem diálogo continuam sem menu', () => {

@@ -689,7 +689,9 @@ const SCENARIOS: Record<string, Scenario> = {
       { act: { kind: 'select', label: /^Add a new rule/ } },
       { sleep: 1200 },
       { dump: '23-permissions-add-rule' },
-      { act: { kind: 'esc' } },
+      // O campo da regra não é menu (o composer escreve nele): Esc pelo teclado.
+      { expectMenu: null, timeout: 5_000 },
+      { keys: ['esc'] },
       { sleep: 1200 },
       { dump: '24-permissions-esc1' },
       { expectMenu: { kind: 'menu', question: /^Permissions$/ }, timeout: 5_000 },

@@ -79,3 +79,13 @@ describe('routeComposerSend — menus da CLI e multi-select (2.1.317)', () => {
     expect(route.kind === 'blocked' && route.notice).toMatch(/responda no card/)
   })
 })
+
+describe('routeComposerSend — campo de texto de diálogo da CLI', () => {
+  it('"Add allow permission rule": o texto do composer vai pro campo', () => {
+    const raw = readFileSync(
+      join(__dirname, '../../../shared/tui/__fixtures__', 'claude-2.1.318-unknown-permissions-add-rule.txt'),
+      'utf8',
+    )
+    expect(routeComposerSend(parseTuiMenu(raw))).toEqual({ kind: 'deliver' })
+  })
+})

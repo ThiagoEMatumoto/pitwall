@@ -834,6 +834,10 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
 
   const titleLine = body[first]!
   const tabSwitch = hasFooter && TAB_SWITCH_RE.test(footerRaw)
+  const listFocusKey = hasFooter && LIST_FOCUS_RE.test(footerRaw)
+  // Sem opção nem aba é um campo de texto ("Add allow permission rule"): como menu ele
+  // bloquearia o composer, que é justamente por onde o texto entra.
+  if (options.length === 0 && !tabSwitch && !listFocusKey) return null
   let title: string | undefined = first < firstLine ? titleLine.t : undefined
   let tabs: TuiMenuTab[] | undefined
   if (title && tabSwitch) {
@@ -862,7 +866,7 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
     ...(tabs ? { tabs } : {}),
     ...(hasFooter ? { footer: footerRaw } : {}),
     ...(tabSwitch ? { tabSwitch: true } : {}),
-    ...(hasFooter && LIST_FOCUS_RE.test(footerRaw) ? { listFocusKey: true } : {}),
+    ...(listFocusKey ? { listFocusKey: true } : {}),
   }
 }
 
@@ -928,7 +932,7 @@ function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
 function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
   const cursorRow = body.findIndex((b) => b != null && CURSOR_LINE_RE.test(b.raw))
   if (cursorRow < 0) {
-    // Sem cursor e sem número: nada a clicar, mas o Esc e as abas ainda servem.
+    // Sem cursor e sem número: nada a clicar; parseGenericMenu só aceita se houver abas.
     return { options: [], firstLine: body.length, numbered: false }
   }
   const cm = CURSOR_LINE_RE.exec(body[cursorRow]!.raw)!
