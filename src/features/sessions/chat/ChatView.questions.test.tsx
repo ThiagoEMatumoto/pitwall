@@ -9,7 +9,8 @@ vi.mock('@/lib/ipc', () => {
     {},
     { get: (_t, key: string) => (key.startsWith('on') ? () => () => {} : () => Promise.resolve(null)) },
   )
-  return new Proxy({}, { get: () => inert })
+  // chatApi explícito: o vitest exige a chave no alvo quando o contador de fallback dispara.
+  return new Proxy({ chatApi: inert }, { get: () => inert })
 })
 const transcript = vi.hoisted(() => ({ messages: [] as { kind: 'user'; text: string }[] }))
 vi.mock('./useChatTranscript', () => ({
@@ -25,6 +26,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: (
 
 import { ChatView } from './ChatView'
 import { QUESTION_KEY_DELAY_MS } from './respond-keys'
+import { FALLBACK_STABLE_MS } from './useChatFallback'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -258,10 +260,57 @@ describe('ChatView — menus da CLI pelo card genérico (2.1.317)', () => {
     expect(onRespond).toHaveBeenCalledWith([UP, UP, '\r'])
   })
 
-  it('waiting sem nada lido: só o aviso com link discreto ao terminal', () => {
-    transcript.messages = [{ kind: 'user', text: 'oi' }]
-    render(<ChatView sessionId="s-q" status="waiting" tuiMenu={null} onToggleMode={vi.fn()} />)
-    expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
-    expect(screen.getByTestId('chat-wait-open-terminal').textContent).toContain('Abrir terminal')
+  it('waiting sem nada lido e estável: só o aviso com link discreto ao terminal', () => {
+    vi.useFakeTimers()
+    try {
+      transcript.messages = [{ kind: 'user', text: 'oi' }]
+      render(<ChatView sessionId="s-q" status="waiting" tuiMenu={null} onToggleMode={vi.fn()} />)
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+      expect(screen.getByTestId('chat-wait-unrecognized')).toBeTruthy()
+      expect(screen.getByTestId('chat-wait-open-terminal').textContent).toContain('Abrir terminal')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waiting transitório ao fechar diálogo da CLI: o banner não pisca', () => {
+    vi.useFakeTimers()
+    try {
+      transcript.messages = [{ kind: 'user', text: 'oi' }]
+      const { rerender } = render(
+        <ChatView sessionId="s-q" status="waiting" tuiMenu={null} onToggleMode={vi.fn()} />,
+      )
+      expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS - 100))
+      expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+      rerender(<ChatView sessionId="s-q" status="idle" tuiMenu={null} onToggleMode={vi.fn()} />)
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS * 2))
+      expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+      expect(screen.queryByTestId('chat-wait-open-terminal')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cards reconhecidos aparecem sem espera (plano, permissão, pergunta, menu genérico)', () => {
+    vi.useFakeTimers()
+    try {
+      const cases: [string, () => HTMLElement][] = [
+        ['2.1.317-plan-default', () => screen.getByTestId('plan-choice-reject')],
+        ['2.1.316-permission-bash-curl', () => screen.getByTestId('permission-card')],
+        ['2.1.317-question-multi-other', () => screen.getByTestId('question-chat')],
+      ]
+      for (const [name, card] of cases) {
+        const { unmount } = renderMenu(name)
+        expect(card()).toBeTruthy()
+        unmount()
+      }
+      renderMenu('2.1.317-unknown-hooks')
+      expect(screen.getByTestId('generic-menu')).toBeTruthy()
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS * 2))
+      expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

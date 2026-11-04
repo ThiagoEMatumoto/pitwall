@@ -16,8 +16,10 @@ export function ChatWaitBanners({
   // Menu parseado que o chat não soube mostrar (sem menu = 'unknown').
   menuKind?: ChatFallbackKind
 }) {
-  useChatFallback(pendingPrompt?.kind ?? null, 'pending-without-menu')
-  useChatFallback(waitInTerminal ? menuKind : null, 'wait-in-terminal')
+  // Os banners só aparecem quando o fallback é estável, a mesma condição que o conta: um
+  // 'waiting' transitório (diálogo da CLI que acabou de fechar) não pisca na tela.
+  const showPending = useChatFallback(pendingPrompt?.kind ?? null, 'pending-without-menu')
+  const showUnrecognized = useChatFallback(waitInTerminal ? menuKind : null, 'wait-in-terminal')
   // Só sobra o que nem o parser tolerante leu: o chat diz isso e deixa um link discreto
   // pro terminal (contado em useChatFallback — se virar regra, o contador mostra).
   const terminalLink = onToggleMode && (
@@ -33,7 +35,7 @@ export function ChatWaitBanners({
   )
   return (
     <>
-      {pendingPrompt && (
+      {pendingPrompt && showPending && (
         <div className="sticky bottom-0 flex items-center gap-2 rounded-md border border-[var(--color-accent)]/50 bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] shadow-lg">
           <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
           <Icon as={Clock} size={14} className="shrink-0 text-[var(--color-accent)]" />
@@ -45,7 +47,7 @@ export function ChatWaitBanners({
           {terminalLink}
         </div>
       )}
-      {waitInTerminal && (
+      {showUnrecognized && (
         <div
           data-testid="chat-wait-unrecognized"
           className="sticky bottom-0 flex items-center gap-2 rounded-md border border-[var(--color-warning)]/60 bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] shadow-lg"

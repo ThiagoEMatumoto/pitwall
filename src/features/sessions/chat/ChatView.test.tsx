@@ -22,7 +22,7 @@ vi.mock('@/lib/ipc', () => {
     },
   )
   return new Proxy(
-    { sessionsApi: sessionsApiMock },
+    { sessionsApi: sessionsApiMock, chatApi: inert },
     { get: (t, key: string) => (t as Record<string, unknown>)[key] ?? inert },
   )
 })
@@ -41,6 +41,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: (
 import { ChatView, type ChatViewHandle } from './ChatView'
 import { PlanCard } from './PlanCard'
 import { PLAN_KEY_DELAY_MS } from './respond-keys'
+import { FALLBACK_STABLE_MS } from './useChatFallback'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
@@ -282,11 +283,18 @@ describe('ChatView — plano pendente no JSONL com o diálogo ainda aberto', () 
     expect(onPlanApproved).toHaveBeenCalledWith('default')
   })
 
-  it('sem o menu vivo o card do transcript fica (e o banner também)', () => {
-    transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
-    const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
-    expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
-    expect(container.textContent).toContain('aguardando sua aprovação do plano')
+  it('sem o menu vivo o card do transcript fica na hora; o banner, só quando estável', () => {
+    vi.useFakeTimers()
+    try {
+      transcript.messages = parseChatMessages(fixture317('plan-default.jsonl'))
+      const { container } = render(<ChatView sessionId="s-plan" status="waiting" />)
+      expect(screen.getAllByText('Plano pronto — sua decisão')).toHaveLength(1)
+      expect(container.textContent).not.toContain('aguardando sua aprovação do plano')
+      act(() => vi.advanceTimersByTime(FALLBACK_STABLE_MS))
+      expect(container.textContent).toContain('aguardando sua aprovação do plano')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
