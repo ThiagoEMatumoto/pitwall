@@ -488,6 +488,22 @@ describe('AttentionPopover — menus genéricos, multi-select e chat (2.1.317)',
     expect(screen.queryByText(/responda no terminal/i)).toBeNull()
   })
 
+  it('diálogo da CLI fora do chat: só Esc, nenhuma opção a um clique (Restore do /rewind)', async () => {
+    const menu = fixtureMenu('2.1.317-rewind-restore-menu')
+    expect(menu.options[0].label).toMatch(/^Restore conversation/)
+    attentionMenu.mockResolvedValue(snapOf(menu))
+    attentionRespond.mockResolvedValue({ ok: true })
+    render(<AttentionPopover item={{ ...item, detail: 'dialog' }} />)
+    const restore = await screen.findByTestId('generic-option-0')
+    expect(restore).toBeDisabled()
+    fireEvent.click(restore)
+    await act(async () => {})
+    expect(attentionRespond).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('generic-esc'))
+    await act(async () => {})
+    expect(attentionRespond).toHaveBeenCalledWith(expect.objectContaining({ action: { kind: 'esc' } }))
+  })
+
   it('/permissions: aba é passo — o menu é relido em vez de "Resposta enviada"', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const menu = fixtureMenu('2.1.317-unknown-permissions')

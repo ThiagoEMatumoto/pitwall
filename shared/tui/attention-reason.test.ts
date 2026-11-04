@@ -248,3 +248,33 @@ describe('isUnparsedWaiting — diálogo lido só pelo parser tolerante', () => 
     }
   })
 })
+
+describe('deriveAttentionReason — diálogo aberto pelo usuário', () => {
+  const scanOf = (name: string): ScreenScan => {
+    const text = fixture(`claude-${name}.txt`)
+    return { menu: parseTuiMenu(text), inputPrompt: false, nonBlankLines: 20 }
+  }
+
+  it('/hooks, /permissions e /rewind são "dialog", não pergunta do Claude', () => {
+    for (const name of [
+      '2.1.317-unknown-hooks',
+      '2.1.317-unknown-permissions',
+      '2.1.317-rewind-picker',
+      '2.1.317-rewind-restore-menu',
+    ]) {
+      expect(deriveAttentionReason({ status: 'waiting', scan: scanOf(name), handoffAsking: false }), name).toBe(
+        'dialog',
+      )
+    }
+  })
+
+  it('AskUserQuestion continua "question"', () => {
+    expect(
+      deriveAttentionReason({
+        status: 'waiting',
+        scan: scanOf('2.1.317-question-multi-other'),
+        handoffAsking: false,
+      }),
+    ).toBe('question')
+  })
+})

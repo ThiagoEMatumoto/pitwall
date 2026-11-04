@@ -143,6 +143,7 @@ const MENU_WHY: Record<SessionMenuReason, string> = {
   question: 'Pergunta na tela',
   plan: 'Plano esperando aprovação',
   trust: 'Confiar na pasta',
+  dialog: 'Diálogo da CLI aberto na tela',
   unrecognized: 'Esperando você (tela não reconhecida)',
 }
 

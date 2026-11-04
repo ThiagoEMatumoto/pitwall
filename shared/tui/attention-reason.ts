@@ -5,7 +5,7 @@ import { isInputRule } from './input-rule'
 // sessão entra/sai da fila nem se notifica — isso continua no status do
 // ~/.claude/sessions/<pid>.json. Motivo ausente = exatamente o comportamento de antes.
 export type AttentionReason =
-  'permission' | 'trust' | 'question' | 'plan' | 'turn-end' | 'handoff-input'
+  'permission' | 'trust' | 'question' | 'plan' | 'dialog' | 'turn-end' | 'handoff-input'
 
 export type LiveStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'ended'
 
@@ -84,6 +84,8 @@ function menuReason(menu: TuiMenu): AttentionReason | undefined {
   if (menu.kind === 'permission' || menu.kind === 'trust' || menu.kind === 'plan') return menu.kind
   // O nudge do auto mode aparece idle, depois do turno: não é pergunta do Claude.
   if (menu.kind === 'nudge') return undefined
+  // /hooks, /permissions, /rewind: diálogo que o usuário abriu, não pergunta do Claude.
+  if (menu.kind === 'menu') return 'dialog'
   return 'question'
 }
 

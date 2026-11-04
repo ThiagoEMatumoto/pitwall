@@ -4,6 +4,7 @@ import {
   CircleCheck,
   FolderLock,
   ListChecks,
+  ListTree,
   MessageCircleQuestion,
   MessagesSquare,
   ShieldQuestion,
@@ -41,6 +42,7 @@ const REASON_META: Record<AttentionDetail, ReasonMeta> = {
   trust: { label: 'Confiar na pasta?', icon: FolderLock, color: 'var(--color-warning)' },
   question: { label: 'Pergunta pendente', icon: MessageCircleQuestion, color: 'var(--color-info)' },
   plan: { label: 'Plano esperando aprovação', icon: ListChecks, color: 'var(--color-info)' },
+  dialog: { label: 'Diálogo aberto', icon: ListTree, color: 'var(--color-text-dim)' },
   'turn-end': { label: 'Terminou o turno', icon: CircleCheck, color: 'var(--color-text-dim)' },
   'handoff-input': {
     label: 'Pergunta pendente',
@@ -55,7 +57,13 @@ export function reasonMeta(detail: AttentionDetail): ReasonMeta {
 
 // Motivos em que dá pra responder daqui: há menu na tela da PTY.
 export function isActionableDetail(detail: AttentionDetail | undefined): boolean {
-  return detail === 'permission' || detail === 'trust' || detail === 'question' || detail === 'plan'
+  return (
+    detail === 'permission' ||
+    detail === 'trust' ||
+    detail === 'question' ||
+    detail === 'plan' ||
+    detail === 'dialog'
+  )
 }
 
 export interface MenuAction {
@@ -359,7 +367,9 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
   const generic = menu && (menu.kind === 'menu' || menu.kind === 'nudge') ? menu : null
   useChatFallback(
     unrecognized && item.detail && item.detail !== 'turn-end' && item.detail !== 'handoff-input'
-      ? item.detail
+      ? item.detail === 'dialog'
+        ? 'menu'
+        : item.detail
       : null,
     'popover-unrecognized',
   )
@@ -445,7 +455,11 @@ export function AttentionMenuPanel({ item }: { item: AttentionItem }) {
           bare
           menu={generic}
           sent={sending}
-          onSelect={(optionIndex) => void send({ kind: 'select', optionIndex })}
+          // Fora do chat, um diálogo da CLI (ex. "Restore conversation" do /rewind) só
+          // fecha ou troca de aba: escolher fica pra sessão, junto do transcript.
+          onSelect={
+            generic.kind === 'menu' ? undefined : (optionIndex) => void send({ kind: 'select', optionIndex })
+          }
           onEsc={() => void send({ kind: 'esc' })}
           onTab={(direction) => void send({ kind: 'tab', direction })}
         />
