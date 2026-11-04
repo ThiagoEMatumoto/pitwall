@@ -202,13 +202,18 @@ export function parseSubagentTurns(jsonl: string): { turnCount: number; turns: s
 }
 
 // Subtypes de linha type:'system' que VALEM mostrar no chat (curadoria). O resto
-// (stop_hook_summary, turn_duration, scheduled_task_fire, away_summary, …) é
-// telemetria/ruído de alto volume e fica de fora — nada de despejar cru.
+// (stop_hook_summary, turn_duration, scheduled_task_fire, …) é telemetria/ruído
+// de alto volume e fica de fora — nada de despejar cru. away_summary é o recap
+// que o TUI mostra (com o próximo passo pedido ao usuário), então entra.
 const SYSTEM_LABELS: Record<string, string> = {
   compact_boundary: 'Conversa compactada',
   api_error: 'Erro de API',
   informational: 'Sistema',
+  away_summary: 'Recap',
 }
+
+// Dica de configuração que o CLI anexa ao recap; no chat é ruído.
+const RECAP_CONFIG_HINT = /\s*\(\s*disable recaps in \/config\s*\)\s*$/
 
 function asLevel(v: unknown): 'info' | 'warning' | 'error' {
   return v === 'warning' || v === 'error' ? v : 'info'
@@ -233,6 +238,9 @@ function parseSystemLine(obj: RawLine): {
   if (sub === 'api_error') {
     const detail = typeof obj.error === 'string' ? obj.error : content || JSON.stringify(obj.error ?? '')
     return { label, detail, level: 'error' }
+  }
+  if (sub === 'away_summary') {
+    return { label, detail: content.replace(RECAP_CONFIG_HINT, '') || label, level: 'info' }
   }
   if (sub === 'compact_boundary' && obj.compactMetadata) {
     const cm = obj.compactMetadata
