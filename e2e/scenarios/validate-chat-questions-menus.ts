@@ -635,6 +635,9 @@ try {
       (await page.getByRole('button', { name: 'Mudar para Terminal' }).count()) > 0,
     )
     await waitIdle('idle após /hooks', 30_000)
+    // A CLI não grava /hooks no JSONL: a bolha não pode esperar o disco.
+    const sendingC = await page.getByText('enviando…').count()
+    check('(c) bolha do /hooks sem "enviando…"', sendingC === 0, String(sendingC))
   } catch (e) {
     log('[qm] (c) ERRO:', String((e as Error).stack ?? e))
     check('(c) completo', false, String(e))
@@ -690,6 +693,9 @@ try {
       (await page.getByRole('button', { name: 'Mudar para Terminal' }).count()) > 0,
     )
     await waitIdle('idle após /permissions', 30_000)
+    // A CLI não grava /permissions no JSONL: a bolha não pode esperar o disco.
+    const sendingD = await page.getByText('enviando…').count()
+    check('(d) bolha do /permissions sem "enviando…"', sendingD === 0, String(sendingD))
     const hashesAfter = settingsHashes()
     const changed = SETTINGS_FILES.filter((f) => hashesBefore[f] !== hashesAfter[f])
     check(
