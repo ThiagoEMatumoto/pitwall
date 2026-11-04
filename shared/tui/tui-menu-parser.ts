@@ -806,10 +806,20 @@ const CURSOR_LINE_RE = /^(\s*)❯\s+(\S.*)$/
 const GENERIC_BOX_RE = /^[╭╰│]/
 // Com `"tui": "fullscreen"` no settings do usuário a CLI abre o diálogo com uma régua de ▔
 // (U+2594) em vez de ─ (drive-app, claude 2.1.318); a caixa de input segue com ─.
-const FULLSCREEN_TOP_RULE_RE = /^▔{10,}$/
+// Logo depois de abrir, a régua embute o aviso de esforço ("▔▔▔ ○ low · /effort ▔"),
+// que some em segundos: mesmo shape da régua ─ com nome de sessão (input-rule.ts).
+const FULLSCREEN_TOP_RULE_RE = /^▔{3,}(?:\s+[^\s▔│┼┬┴├┤╭╮╰╯](?:[^▔│┼┬┴├┤╭╮╰╯]*[^\s▔│┼┬┴├┤╭╮╰╯])?\s+▔+)?$/
+const MIN_FULLSCREEN_RULE_CHARS = 10
+
+function isFullscreenTopRule(line: string): boolean {
+  if (!FULLSCREEN_TOP_RULE_RE.test(line)) return false
+  let rule = 0
+  for (const ch of line) if (ch === '▔') rule++
+  return rule >= MIN_FULLSCREEN_RULE_CHARS
+}
 
 function isDialogTopRule(line: string): boolean {
-  return isInputRule(line) || FULLSCREEN_TOP_RULE_RE.test(line)
+  return isInputRule(line) || isFullscreenTopRule(line)
 }
 
 // Marcas dos diálogos que têm parser dedicado (permissão, trust, plano, AskUserQuestion).

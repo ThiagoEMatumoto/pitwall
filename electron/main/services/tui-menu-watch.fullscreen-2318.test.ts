@@ -80,6 +80,21 @@ describe('diálogos em tui fullscreen (régua ▔)', () => {
     },
   )
 
+  // Logo depois de abrir o diálogo a régua ▔ carrega o aviso de esforço ("○ low · /effort"),
+  // que some sozinho em 1 a 8 s. Com a régua só de ▔ aceita, o banner ficava na tela e o
+  // espelho contava drift até o aviso sumir (drive-app: /permissions 8,1 s, 1 contagem).
+  it.each([
+    ['hooks', 'Hooks'],
+    ['permissions', 'Permissions'],
+  ])('%s com o aviso de esforço na régua: lido de primeira', async (name, title) => {
+    const screen = raw(`${name}-effort-label`)
+    expect(screen).toMatch(/▔ ○ low · \/effort ▔/)
+    expect((await rendererMenuOf(screen))?.question).toBe(title)
+    const scan = await scanOf(screen, SIZE)
+    expect(scan.menu?.question).toBe(title)
+    expect(isUnparsedWaiting('waiting', scan)).toBe(false)
+  })
+
   // A régua ▔ entra como topo de diálogo: transcript comum sob ela (lista numerada, saída
   // de ferramenta com ❯, diff) não pode virar menu. O topo e a caixa de input vêm das
   // capturas reais (fullscreen-hooks e compact-done); só o miolo é montado.
