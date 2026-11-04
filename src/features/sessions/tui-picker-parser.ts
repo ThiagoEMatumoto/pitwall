@@ -38,12 +38,19 @@
 //            (renderizados como não-clicáveis). Esc tem 3 estágios (limpa
 //            filtro → sai da busca → fecha o dialog), tratado no wiring do
 //            ChatView (um Esc por clique + re-parse), não aqui.
-//   Ctrl+R:  não é uma caixa — é uma linha inline no rodapé/status bar:
-//            "search prompts: <query>" (sem match ainda) ou "no matching
-//            prompt: <query>" (sem match algum). GAP conhecido, documentado no
-//            plano: ciclar/aceitar um match (Enter vs Tab) NÃO tem evidência
-//            (sem histórico persistido na sessão de teste) — não
-//            implementado; só abrir (reconhecer o estado) e cancelar (Esc).
+//   Ctrl+R:  duas telas, conforme o "tui" do settings (sondas history-populated e
+//            history-fullscreen, claude 2.1.318, 17 prompts no histórico):
+//            - sem fullscreen: linha inline no rodapé, "search prompts: <query>" ou
+//              "no matching prompt: <query>"; o match aparece na caixa de input.
+//              Ctrl+R cicla para o match anterior; setas não fazem nada. Enter ENVIA
+//              o match (vira turno no JSONL); Tab e Esc só preenchem a caixa; Ctrl+C
+//              fecha e esvazia a caixa. Sem match, a caixa mantém o match anterior.
+//            - fullscreen: modal "Search prompts · everywhere|session|project" com
+//              lista (idade + prompt), preview à direita, caixa "⌕" e rodapé
+//              "↑/↓ to navigate · Enter to use · Esc to cancel · ctrl+s to scope".
+//              Setas navegam (↑ = mais antigo); Ctrl+R não faz nada; Enter e Tab só
+//              PREENCHEM a caixa de input; Esc fecha e devolve o rascunho; ctrl+s
+//              cicla o escopo e cada abertura volta para "everywhere".
 //
 // FAIL-CLOSED em tudo: anchors específicos (título exato, footer exato, caixa
 // de busca) evitam falso positivo contra texto de conversa comum — mesma
@@ -106,12 +113,28 @@ export interface TuiConfigMenu {
   hasMoreBelow: boolean
 }
 
+export interface TuiHistoryResult {
+  index: number
+  // "28s ago", "3w ago" — como a TUI escreveu.
+  age: string
+  text: string
+}
+
 export interface TuiHistorySearch {
   kind: 'history_search'
+  // 'inline' = rodapé "search prompts:"; 'modal' = fullscreen "Search prompts · …".
+  mode: 'inline' | 'modal'
   query: string
-  // true = "no matching prompt: …"; false = "search prompts: …" (ainda sem
-  // confirmar se há match — não dá pra saber sem ciclar, que é o GAP).
+  // inline: "no matching prompt: …"; modal: lista vazia.
   noMatch: boolean
+  // inline: o prompt que a caixa de input mostra para a query (só com query e match).
+  match?: string
+  // modal: escopo atual, a janela visível da lista e a linha do cursor.
+  scope?: string
+  results?: TuiHistoryResult[]
+  cursorIndex?: number
+  moreAbove?: boolean
+  moreBelow?: boolean
 }
 
 export type TuiPicker = TuiModelMenu | TuiThemeMenu | TuiConfigMenu | TuiHistorySearch
@@ -335,18 +358,93 @@ export function parseConfigMenu(text: string): TuiConfigMenu | null {
 // próximo run de 2+ espaços (padding antes do indicador de modo de permissão)
 // ou o fim da linha.
 const HISTORY_RE = /(no matching prompt|search prompts): (.*?)(?: {2,}|$)/
+const RULE_LINE_RE = /^─{10,}$/
+const INPUT_HEAD_RE = /^❯[\s\u00a0]?/
 
-export function parseHistorySearch(text: string): TuiHistorySearch | null {
-  for (const line of text.split('\n')) {
-    const m = HISTORY_RE.exec(line)
-    if (!m) continue
-    return {
-      kind: 'history_search',
-      query: m[2].trim(),
-      noMatch: m[1] === 'no matching prompt',
+// Caixa de input logo acima da linha da busca: régua, "❯ texto" (com NBSP), régua.
+function inputBoxAbove(lines: string[], footer: number): string | null {
+  if (footer < 1 || !RULE_LINE_RE.test(lines[footer - 1].trim())) return null
+  const rows: string[] = []
+  for (let i = footer - 2; i >= 0 && i >= footer - 12; i--) {
+    const t = lines[i].trim()
+    if (RULE_LINE_RE.test(t)) {
+      rows.reverse()
+      if (rows.length === 0 || !INPUT_HEAD_RE.test(rows[0])) return null
+      rows[0] = rows[0].replace(INPUT_HEAD_RE, '')
+      return rows.join('\n').replace(/\u00a0/g, ' ').trim()
     }
+    rows.push(t)
   }
   return null
+}
+
+export function parseHistorySearch(text: string): TuiHistorySearch | null {
+  return parseHistoryModal(text) ?? parseHistoryInline(text)
+}
+
+function parseHistoryInline(text: string): TuiHistorySearch | null {
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const m = HISTORY_RE.exec(lines[i])
+    if (!m) continue
+    const query = m[2].trim()
+    const noMatch = m[1] === 'no matching prompt'
+    // Sem query a caixa mostra o rascunho; sem match, o match anterior (velho).
+    const match = query !== '' && !noMatch ? inputBoxAbove(lines, i) : null
+    return { kind: 'history_search', mode: 'inline', query, noMatch, ...(match ? { match } : {}) }
+  }
+  return null
+}
+
+const MODAL_TITLE_RE = /^Search prompts · (\S+)$/
+const MODAL_FOOTER_RE = /↑\/↓ to navigate · Enter to use · Esc to cancel/
+const MODAL_FILTER_RE = /^│\s*⌕\s*(.*?)\s*│$/
+const MODAL_PLACEHOLDER = 'Filter history…'
+const MODAL_ROW_RE = /^(❯)?\s*([↑↓])?\s*(\d+(?:s|m|h|d|w|mo|y) ago)\s+(\S.*)$/
+// Coluna do preview à direita da lista: começa no 1º caractere de moldura depois de 2+ espaços.
+const PREVIEW_SPLIT_RE = /\s{2,}[╭│╰]/
+
+function parseHistoryModal(text: string): TuiHistorySearch | null {
+  const lines = text.split('\n')
+  const footer = lines.findIndex((l) => MODAL_FOOTER_RE.test(l))
+  if (footer < 0) return null
+  let title = -1
+  for (let i = footer - 1; i >= 0 && i >= footer - 40; i--) {
+    if (MODAL_TITLE_RE.test(lines[i].trim())) {
+      title = i
+      break
+    }
+  }
+  if (title < 0) return null
+  const filterLine = lines.slice(title + 1, footer).findIndex((l) => MODAL_FILTER_RE.test(l.trim()))
+  if (filterLine < 0) return null
+  const rawQuery = MODAL_FILTER_RE.exec(lines[title + 1 + filterLine].trim())![1]
+  const results: TuiHistoryResult[] = []
+  let cursorIndex: number | undefined
+  let moreAbove = false
+  let moreBelow = false
+  for (let i = title + 1; i < title + 1 + filterLine; i++) {
+    const t = lines[i].trim()
+    const split = t.search(PREVIEW_SPLIT_RE)
+    const listPart = split >= 0 ? t.slice(0, split) : t
+    const m = MODAL_ROW_RE.exec(listPart)
+    if (!m) continue
+    if (m[1]) cursorIndex = results.length
+    if (m[2] === '↑') moreAbove = true
+    if (m[2] === '↓') moreBelow = true
+    results.push({ index: results.length, age: m[3], text: m[4].trim() })
+  }
+  return {
+    kind: 'history_search',
+    mode: 'modal',
+    scope: MODAL_TITLE_RE.exec(lines[title].trim())![1],
+    query: rawQuery === MODAL_PLACEHOLDER ? '' : rawQuery,
+    noMatch: results.length === 0,
+    results,
+    ...(cursorIndex != null ? { cursorIndex } : {}),
+    ...(moreAbove ? { moreAbove } : {}),
+    ...(moreBelow ? { moreBelow } : {}),
+  }
 }
 
 // Combinador fail-closed: tenta cada parser específico (anchors mutuamente
@@ -385,6 +483,15 @@ export function pickerFingerprint(picker: TuiPicker): string {
         ...picker.items.map((i) => `${i.label}:${i.value}:${i.highlighted}`),
       ].join('\n')
     case 'history_search':
-      return ['history_search', picker.query, picker.noMatch].join('\n')
+      return [
+        'history_search',
+        picker.mode,
+        picker.query,
+        picker.noMatch,
+        picker.match ?? '',
+        picker.scope ?? '',
+        picker.cursorIndex ?? '',
+        ...(picker.results ?? []).map((r) => r.text),
+      ].join('\n')
   }
 }

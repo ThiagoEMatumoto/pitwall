@@ -1,0 +1,80 @@
+
+✻ Brewed for 0s · done 1:17
+
+❯ diga delta                                                                                                            
+
+● Delta
+
+✻ Churned for 0s · done 1:17
+
+❯ Responda só: ok echo                                                                                                  
+
+● ok echo
+
+✻ Baked for 0s · done 1:17
+
+❯ diga foxtrot com letras maiúsculas                                                                                    
+
+● FOXTROT
+
+✻ Cogitated for 0s · done 1:17
+
+❯ Some 2 e 3 e responda só o número.                                                                                    
+
+● 5
+
+✻ Crunched for 0s · done 1:17
+
+❯ diga golf                                                                                                             
+
+● Golf
+
+✻ Churned for 0s · done 1:17
+
+❯ Responda só: ok hotel                                                                                                 
+
+● ok hotel
+
+✻ Crunched for 0s · done 1:17
+
+❯ diga india                                                                                                            
+
+● India
+
+✻ Cooked for 0s · done 1:17
+
+❯ Liste três cores separadas por vírgula, nada mais.                                                                    
+
+● vermelho, azul, verde
+
+✻ Worked for 0s · done 1:17
+
+❯ diga juliett                                                                                                          
+
+● Juliett
+
+✻ Worked for 1s · done 1:17
+
+❯ Responda só: ok kilo                                                                                                  
+
+● ok kilo
+
+✻ Cogitated for 0s · done 1:17
+
+❯ diga lima                                                                                                             
+
+● Lima
+
+✻ Cogitated for 0s · done 1:17
+
+❯ Responda só: ok mike                                                                                                  
+
+● ok mike
+
+✻ Cooked for 0s · done 1:18
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ diga lima
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on
+

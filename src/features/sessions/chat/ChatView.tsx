@@ -15,6 +15,19 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { CompactSummaryCard } from './CompactSummaryCard'
 import { ConfigCard } from './ConfigCard'
 import { HistorySearchCard } from './HistorySearchCard'
+import { CliDraftBanner } from './CliDraftBanner'
+import { useRewind } from './useRewind'
+import type { InputBoxState } from '../../../../shared/tui/input-draft'
+import {
+  historyAcceptKeys,
+  historyCancelKeys,
+  historyFillKeys,
+  historyNewerKeys,
+  historyOlderKeys,
+  historyQueryKeys,
+  historyScopeKeys,
+  historySelectKeys,
+} from '../history-search-keys'
 import { MessageBubble } from './MessageBubble'
 import { HandoffUpdateCard } from './HandoffUpdateCard'
 import { parseHandoffWakeEnvelope } from '../../../../shared/handoff-wake-envelope'
@@ -31,7 +44,7 @@ import { PLAN_PLACEHOLDER, TranscriptPlanCard } from './TranscriptPlanCard'
 import { ChatWaitBanners } from './ChatWaitBanners'
 import { QuestionCard } from './QuestionCard'
 import { GenericMenuCard } from './GenericMenuCard'
-import { keysForAction } from '../../../../shared/tui/menu-actions'
+import { actionKeyDelay, keysForAction } from '../../../../shared/tui/menu-actions'
 import { QuestionReviewCard } from './QuestionReviewCard'
 import { SubagentCard } from './SubagentCard'
 import { SystemCard } from './SystemCard'
@@ -53,6 +66,7 @@ import {
   buildCtrlTKey,
   buildEnterKey,
   buildEscKey,
+  buildGenericScrollKeys,
   buildFilterKeys,
   buildMultiSelectSubmitKeys,
   buildMultiSubmitKeys,
@@ -68,19 +82,18 @@ import {
   buildToggleKeys,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
-import { pickerFingerprint, type TuiPicker } from '../tui-picker-parser'
+import { pickerFingerprint, type TuiHistorySearch, type TuiPicker } from '../tui-picker-parser'
 import {
-  countUserMessages,
   decidedPlanText,
   isAtBottom,
   liveMenuCoversPending,
   nextResolveAt,
-  absorbDialogLines,
-  pendingEchoes,
   pendingInteractive,
+  reconcileEchoes,
   resolveChatViewState,
   resolveInteractive,
   settleDialogEchoes,
+  userLines,
   visibleEchoes,
   showTerminalWaitBanner,
   type ChatViewState,
@@ -122,6 +135,9 @@ interface Props {
   tuiPicker?: TuiPicker | null
   // Re-parse fresco do picker, mesmo papel de reparseMenu.
   reparsePicker?: () => TuiPicker | null
+  // Texto que ficou na caixa de input da CLI (null = vazia) e o leitor fresco dela.
+  cliDraft?: string | null
+  readCliInput?: () => InputBoxState
   // Estado vazio de quem só LÊ (peek): "digite abaixo" mentiria, não há campo.
   emptyHint?: string
   // O menu pendente é respondido por um painel fora do chat (quick look da filha).
@@ -137,13 +153,23 @@ interface Props {
   artifactSide?: boolean
 }
 
+// O "Restore conversation" do /rewind não grava nada no JSONL: o ramo novo só aparece no
+// disco com a próxima mensagem (sonda e2e-rewind-restore). Até lá o chat mostra o antigo.
+const RESTORED_NOTICE =
+  'A conversa voltou no terminal. O chat esconde as mensagens desfeitas quando a próxima mensagem chegar; a mensagem restaurada ficou na caixa do terminal (aviso abaixo).'
+
+function restoresConversation(menu: TuiMenu, optionIndex: number): boolean {
+  const label = menu.options.find((o) => o.index === optionIndex)?.label ?? ''
+  return menu.question === 'Rewind' && /^Restore (code and )?conversation$/.test(label)
+}
+
 // Render híbrido do transcript JSONL. O PTY segue vivo por baixo (xterm oculto no
 // Terminal); esta view só LÊ o transcript e adiciona ecos otimistas das mensagens
 // recém-enviadas até o disco alcançar.
 // A sonda viu o tool_use chegar ao JSONL até ~10s depois do diálogo (awaitUseMs).
 export const ANSWER_HOLD_MS = 10_000
 
-export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
+export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, cliDraft = null, readCliInput, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
@@ -153,7 +179,16 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // rolagem de quem subiu pra reler).
   const stickRef = useRef(true)
 
-  const diskUserCount = useMemo(() => countUserMessages(messages), [messages])
+  const diskLines = useMemo(() => userLines(messages), [messages])
+  const diskUserCount = diskLines.length
+  // Restore conversation pelo card: o terminal desfez mensagens que o chat só tira quando o
+  // próximo prompt chegar ao disco. Até as linhas do disco mudarem, as paradas do /rewind
+  // não são as mensagens que o chat mostra.
+  const diskKey = useMemo(() => JSON.stringify(diskLines), [diskLines])
+  const [restoredAt, setRestoredAt] = useState<string | null>(null)
+  useEffect(() => {
+    if (restoredAt != null && diskKey !== restoredAt) setRestoredAt(null)
+  }, [diskKey, restoredAt])
   const shownEchoes = useMemo(() => visibleEchoes(echoes), [echoes])
 
   useImperativeHandle(
@@ -170,23 +205,14 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     [diskUserCount],
   )
 
-  // Poda ecos resolvidos quando a contagem de usuário no disco avança.
-  const seenDiskCount = useRef(diskUserCount)
+  // Poda ecos resolvidos a cada leitura do disco. Comparar as linhas (e não só a contagem)
+  // cobre o rewind, que tira mensagens do chat na mesma leitura em que o prompt novo chega.
+  const seenDiskLines = useRef(diskLines)
   useEffect(() => {
-    const from = seenDiskCount.current
-    seenDiskCount.current = diskUserCount
-    const fresh =
-      diskUserCount > from
-        ? messages.filter((m) => m.kind === 'user' || m.kind === 'command').slice(from)
-        : []
-    setEchoes((prev) => {
-      const absorbed = absorbDialogLines(prev, fresh)
-      const next = pendingEchoes(absorbed, diskUserCount)
-      return absorbed === prev && next.length === prev.length ? prev : next
-    })
-    // messages entra pelo diskUserCount: só as linhas novas importam.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diskUserCount])
+    const prev = seenDiskLines.current
+    seenDiskLines.current = diskLines
+    setEchoes((cur) => reconcileEchoes(cur, prev, diskLines))
+  }, [diskLines])
 
   // Espelho em estado do stickRef, só pra mostrar o atalho "Ir para o fim".
   const [stuck, setStuck] = useState(true)
@@ -626,6 +652,26 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     if (keys.length === 0) return
     setTuiSent({ fp: menuFp, resolvedCount })
     sendKeys(keys)
+    if (action.kind === 'select' && restoresConversation(fresh!, action.optionIndex)) {
+      rewind.announce(RESTORED_NOTICE)
+      setRestoredAt(diskKey)
+    }
+  }
+  function respondGenericInput(optionIndex: number, text: string) {
+    if (!canRespondTui || menuFp == null) return
+    const fresh = freshMenuMatches()
+    const action = { kind: 'other' as const, optionIndex, text }
+    const keys = fresh ? keysForAction(fresh, action) : []
+    if (keys.length === 0) return
+    setTuiSent({ fp: menuFp, resolvedCount })
+    sendKeys(keys, actionKeyDelay(fresh!, action))
+  }
+  // Passo: o cursor anda até a janela rolar; o menu segue aberto (sem tuiSent).
+  function respondGenericScroll(direction: 'up' | 'down') {
+    if (!canRespondTui) return
+    const fresh = freshMenuMatches()
+    const keys = fresh ? buildGenericScrollKeys(fresh, direction) : []
+    if (keys.length > 0) sendKeys(keys)
   }
   function respondGenericTab(direction: 'next' | 'prev') {
     if (!canRespondTui) return
@@ -759,11 +805,87 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
     onRespond?.(buildEscKey())
   }
 
-  // Ctrl+R: só cancelar tem evidência (ver gap no parser/card).
-  function respondHistoryCancel() {
-    if (!canRespondPicker || pickerFp == null || !freshPickerMatches()) return
+  // Ctrl+R: digitar, andar e trocar o escopo são passos (a busca segue aberta, o
+  // fingerprint muda a cada tecla), então só exigem que a mesma busca siga na tela.
+  // Aceitar, preencher e cancelar fecham a busca: guard estrito, como os outros pickers.
+  function freshHistory(): TuiHistorySearch | null {
+    const fresh = reparsePicker?.() ?? null
+    if (fresh?.kind !== 'history_search' || tuiPicker?.kind !== 'history_search') return null
+    return fresh.mode === tuiPicker.mode ? fresh : null
+  }
+  // false = nada foi escrito (busca fechou, ou o PTY recusou porque outra resposta tocava).
+  async function historyStep(keysOf: (p: TuiHistorySearch) => string[]): Promise<boolean> {
+    if (!canRespondPicker || !onRespond) return false
+    const fresh = freshHistory()
+    if (!fresh) return false
+    const keys = keysOf(fresh)
+    if (keys.length === 0) return true
+    return (await onRespond(keys)) !== false
+  }
+  function historyFinal(keysOf: (p: TuiHistorySearch) => string[]) {
+    if (!canRespondPicker || pickerFp == null) return
+    const fresh = freshPickerMatches()
+    const keys = fresh?.kind === 'history_search' ? keysOf(fresh) : []
+    if (keys.length === 0) return
     setPickerSent({ fp: pickerFp })
-    onRespond?.(buildEscKey())
+    onRespond?.(keys)
+  }
+
+  // "Voltar a este ponto": a posição da mensagem a partir do fim é a parada do seletor do
+  // /rewind (uma por mensagem do usuário, a última antes de "(current)"). O seletor ainda
+  // confere o texto na tela antes do Enter (useRewind).
+  const rewind = useRewind({ status, onRespond, reparseMenu, pickerOpen: tuiPicker != null, readCliInput })
+  const userFromEnd = useMemo(() => {
+    const out = new Map<number, number>()
+    let n = 0
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].kind === 'user') out.set(i, ++n)
+    }
+    return out
+  }, [messages])
+  const chatPrompts = useMemo(
+    () => messages.flatMap((m) => (m.kind === 'user' ? [m.text] : [])),
+    [messages],
+  )
+  const rewindDisabled = rewind.busy
+    ? 'Abrindo o rewind…'
+    : status !== 'idle'
+      ? 'Disponível com o Claude parado'
+      : tuiMenu != null || tuiPicker != null
+        ? 'Feche o diálogo aberto antes'
+        : restoredAt != null
+          ? 'O chat ainda mostra o que o terminal desfez: mande a próxima mensagem antes'
+          : cliDraft
+          ? 'A caixa do terminal tem texto'
+          : null
+  const rewindNoticeNode = rewind.notice ? (
+    <div
+      data-testid="rewind-notice"
+      className="flex items-start gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-dim)]"
+    >
+      <span className="flex-1">{rewind.notice}</span>
+      <button type="button" onClick={rewind.dismiss} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]">
+        Ok
+      </button>
+    </div>
+  ) : null
+  const cliDraftNode =
+    cliDraft && tuiMenu == null && tuiPicker == null ? (
+      <CliDraftBanner
+        draft={cliDraft}
+        onSend={onRespond && status === 'idle' ? () => sendCliDraft(cliDraft) : undefined}
+        onClear={onRespond && status === 'idle' ? () => clearCliDraft(cliDraft) : undefined}
+      />
+    ) : null
+  // Só com o mesmo texto ainda na caixa: Enter vazio não faz nada, mas Esc-Esc com a caixa
+  // vazia abriria o rewind.
+  function sendCliDraft(draft: string) {
+    if (readCliInput?.().draft !== draft) return
+    onRespond?.(['\r'])
+  }
+  function clearCliDraft(draft: string) {
+    if (readCliInput?.().draft !== draft) return
+    onRespond?.(['\x1b', '\x1b'], 200)
   }
 
   const tuiPickerCardNode = tuiPicker ? (
@@ -810,9 +932,15 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       )}
       {tuiPicker.kind === 'history_search' && (
         <HistorySearchCard
-          query={tuiPicker.query}
-          noMatch={tuiPicker.noMatch}
-          onCancel={canRespondPicker ? respondHistoryCancel : undefined}
+          picker={tuiPicker}
+          onQuery={canRespondPicker ? (prev, next) => historyStep(() => historyQueryKeys(prev, next)) : undefined}
+          onOlder={canRespondPicker ? () => void historyStep(historyOlderKeys) : undefined}
+          onNewer={canRespondPicker ? () => void historyStep(historyNewerKeys) : undefined}
+          onSelect={canRespondPicker ? (i) => void historyStep((p) => historySelectKeys(p, i)) : undefined}
+          onScope={canRespondPicker ? () => void historyStep(historyScopeKeys) : undefined}
+          onAccept={canRespondPicker ? () => historyFinal(historyAcceptKeys) : undefined}
+          onFill={canRespondPicker ? () => historyFinal(historyFillKeys) : undefined}
+          onCancel={canRespondPicker ? () => historyFinal(historyCancelKeys) : undefined}
           sent={pickerSent != null && pickerSent.fp === pickerFp}
         />
       )}
@@ -878,6 +1006,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
         <GenericMenuCard
           menu={tuiGeneric}
           onSelect={canRespondTui ? (optionIndex) => respondGeneric({ kind: 'select', optionIndex }) : undefined}
+          onInput={canRespondTui ? respondGenericInput : undefined}
+          onScroll={canRespondTui ? respondGenericScroll : undefined}
           onEsc={canRespondTui ? () => respondGeneric({ kind: 'esc' }) : undefined}
           onTab={canRespondTui ? respondGenericTab : undefined}
           sent={tuiSent != null && tuiSent.fp === menuFp}
@@ -930,7 +1060,17 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       case 'user': {
         const wake = parseHandoffWakeEnvelope(m.text)
         if (wake) return <HandoffUpdateCard key={i} envelope={wake} />
-        return <MessageBubble key={i} role="user" text={m.text} pending={echoPending} />
+        const fromEnd = userFromEnd.get(i)
+        return (
+          <MessageBubble
+            key={i}
+            role="user"
+            text={m.text}
+            pending={echoPending}
+            onRewind={rewind.available && fromEnd != null ? () => void rewind.start({ text: m.text, fromEnd, chat: chatPrompts }) : undefined}
+            rewindDisabled={rewindDisabled}
+          />
+        )
       }
       case 'assistant':
         return <MessageBubble key={i} role="assistant" text={m.text} interrupted={m.interrupted} />
@@ -1030,6 +1170,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
             sessão pra própria conversa nascer. */}
         {tuiCardNode && <div className="w-full max-w-3xl text-left">{tuiCardNode}</div>}
         {tuiPickerCardNode && <div className="w-full max-w-3xl text-left">{tuiPickerCardNode}</div>}
+        {rewindNoticeNode && <div className="w-full max-w-3xl text-left">{rewindNoticeNode}</div>}
+        {cliDraftNode && <div className="w-full max-w-3xl text-left">{cliDraftNode}</div>}
       </ChatEmptyState>
     )
   }
@@ -1077,8 +1219,10 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
                 )
               })}
             </div>
+            {rewindNoticeNode}
             {tuiCardNode}
             {tuiPickerCardNode}
+            {cliDraftNode}
             <ChatWaitBanners
               pendingPrompt={showTuiCard || heldPending ? null : pendingPrompt}
               waitInTerminal={waitInTerminal}

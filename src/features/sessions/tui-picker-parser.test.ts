@@ -226,12 +226,12 @@ describe('parseConfigMenu', () => {
 describe('parseHistorySearch', () => {
   it('reconhece a busca aberta sem query', () => {
     const menu = parseHistorySearch('  search prompts:   ⏵⏵ bypass permissions on (shift+tab to cycle)\n')
-    expect(menu).toEqual({ kind: 'history_search', query: '', noMatch: false })
+    expect(menu).toEqual({ kind: 'history_search', mode: 'inline', query: '', noMatch: false })
   })
 
   it('reconhece sem match, com query', () => {
     const menu = parseHistorySearch('  no matching prompt: model  ⏵⏵ bypass permissions on (shift+tab to cycle)\n')
-    expect(menu).toEqual({ kind: 'history_search', query: 'model', noMatch: true })
+    expect(menu).toEqual({ kind: 'history_search', mode: 'inline', query: 'model', noMatch: true })
   })
 
   it('fail-closed fora do estado de busca de histórico', () => {

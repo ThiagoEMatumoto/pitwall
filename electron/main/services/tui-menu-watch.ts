@@ -1,14 +1,12 @@
 import xtermHeadless from '@xterm/headless'
 import { EventEmitter } from 'node:events'
 import {
-  inputBoxHasUserText,
-  inputBoxRows,
   isUnparsedWaiting,
   scanScreen,
-  type InputCell,
   type LiveStatus,
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
+import { readInputBox } from '../../../shared/tui/input-draft'
 import { playKeys } from '../../../shared/tui/respond-keys'
 import { readBufferTail } from '../../../shared/tui/read-tail'
 import { actionKeyDelay, keysForAction } from '../../../shared/tui/menu-actions'
@@ -88,24 +86,7 @@ interface Entry {
 
 // Atributos de célula da caixa de input (só o fim da tela: é onde ela mora).
 function readInputDirty(term: HeadlessTerminal): boolean {
-  const buf = term.buffer.active
-  const first = Math.max(0, buf.length - term.rows - 1)
-  const lines: string[] = []
-  for (let y = first; y < buf.length; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-  const box = inputBoxRows(lines)
-  if (!box) return false
-  const rows: InputCell[][] = []
-  for (let r = box.start; r < box.end; r++) {
-    const line = buf.getLine(first + r)
-    if (!line) continue
-    const cells: InputCell[] = []
-    for (let x = 0; x < line.length; x++) {
-      const cell = line.getCell(x)
-      if (cell) cells.push({ chars: cell.getChars(), dim: cell.isDim() !== 0 })
-    }
-    rows.push(cells)
-  }
-  return inputBoxHasUserText(rows)
+  return readInputBox(term).draft != null
 }
 
 function scanKey(scan: ScreenScan): string {

@@ -1,4 +1,5 @@
 import type { TuiMenu } from './tui-menu-parser'
+import type { TuiPicker } from './tui-picker-parser'
 
 // Com um menu aberto na TUI, o envio do composer (paste + \r) cairia no menu e o
 // \r escolheria a opção destacada — no diálogo de plano, "Yes, and use auto mode".
@@ -47,6 +48,21 @@ export function routeComposerSend(menu: TuiMenu | null): ComposerMenuRoute {
     return { kind: 'blocked', notice: `Há um menu aberto no terminal: responda por lá. ${KEPT}` }
   }
   return { kind: 'blocked', notice: `Há uma pergunta aberta: responda no card. ${KEPT}` }
+}
+
+// Pickers da CLI (/model, /theme, /config, Ctrl+R): o paste vira busca/filtro e o \r
+// aplica a opção destacada — na busca do Ctrl+R sem fullscreen, ENVIA o prompt achado.
+export function pickerBlockedNotice(picker: TuiPicker | null): string | null {
+  if (!picker) return null
+  return picker.kind === 'history_search'
+    ? `A busca do histórico (Ctrl+R) está aberta: use o card. ${KEPT}`
+    : `Há um seletor aberto no terminal: use o card. ${KEPT}`
+}
+
+// Texto que ficou na caixa de input da CLI (busca do Ctrl+R preenchida, mensagem devolvida
+// pelo rewind): o paste entraria depois dele e o \r mandaria os dois juntos.
+export function cliDraftBlockedNotice(draft: string | null): string | null {
+  return draft ? `A caixa do terminal já tem texto: envie ou limpe no aviso do chat. ${KEPT}` : null
 }
 
 // "Inserir sem enviar" cola sem \r, mas com um menu aberto as letras viram atalhos dele.

@@ -212,7 +212,8 @@ describe('ChatView — menus da CLI pelo card genérico (2.1.317)', () => {
     const { onRespond } = renderMenu('2.1.318-populated-hooks-down3')
     expect(screen.queryByTestId('chat-wait-unrecognized')).toBeNull()
     expect(screen.getByText('PostToolUse — after tool execution')).toBeTruthy()
-    expect(screen.getByText('mais itens abaixo (role pelo terminal)')).toBeTruthy()
+    // "↓ 11 more": o card rola pelo cursor (passa da última linha visível).
+    expect(screen.getByTestId('generic-scroll-down').textContent).toBe('Mostrar mais 11 abaixo')
     fireEvent.click(screen.getByTestId('generic-option-5'))
     expect(onRespond).toHaveBeenCalledWith([DOWN, DOWN, '\r'])
   })

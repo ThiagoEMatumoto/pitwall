@@ -1,0 +1,45 @@
+
+  
+  Ran 1 shell command 
+
+● Acrescentei seis ao final de notas.txt.
+
+✻ Churned for 5s · done 1:33
+
+❯ Responda só: ok sete.                                                                                                 
+
+● ok sete
+
+✻ Worked for 4s · done 1:33
+  
+❯ Acrescente a linha 'oito' ao final de extra.txt. Não faça mais nada.                                                  
+
+  Ran 1 shell command 
+
+● Acrescentei oito ao final de extra.txt. O arquivo agora tem quatro e oito.
+
+✻ Cooked for 5s · done 1:34
+
+❯ Responda só: ok nove.                                                                                                 
+
+● ok nove
+
+✻ Crunched for 2s · done 1:34
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Rewind
+
+   Restore the code and/or conversation to the point before…
+
+     ↑ 8 more
+     Acrescente a linha 'oito' ao final de extra.txt. Não faça mais nada.
+     extra.txt +1
+
+     Responda só: ok nove.
+     No code changes
+
+   ❯ (current)
+
+
+   
+
+   Enter to continue · Esc to cancel

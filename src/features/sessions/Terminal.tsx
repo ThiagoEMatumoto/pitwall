@@ -48,6 +48,7 @@ import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
 import { readBufferTail } from '../../../shared/tui/read-tail'
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
+import { readInputBox, type InputBoxState } from '../../../shared/tui/input-draft'
 import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
 import { clearSharedAtlas, registerTerminal } from './terminal-atlas'
@@ -324,6 +325,9 @@ function TerminalHost({
   // parseado em paralelo ao menu TUI (família de tela diferente, sem gate de
   // status: é UI local do CLI, sempre segura de mostrar quando o parse bate).
   const [pendingTuiPicker, setPendingTuiPicker] = useState<TuiPicker | null>(null)
+  // Texto que ficou na caixa de input da CLI (Ctrl+R preenchido, rewind restaurado): o
+  // chat mostra e o Composer não concatena nele.
+  const [cliDraft, setCliDraft] = useState<string | null>(null)
   // Esforço ativo e ultracode são rastreados localmente — não há campo no transcript
   // pra eles. Refletem o último valor que ESTE app injetou (null = ainda não definido).
   const [activeEffort, setActiveEffort] = useState<EffortLevel | null>(null)
@@ -464,6 +468,16 @@ function TerminalHost({
     const t = xtermRef.current
     return t ? readTuiPickerFrom(t) : null
   }
+
+  function readCliInputFrom(t: Xterm): InputBoxState {
+    if (!caps.tuiMenus) return { prompt: false, draft: null }
+    return readInputBox(t)
+  }
+  function readCliInput(): InputBoxState {
+    const t = xtermRef.current
+    return t ? readCliInputFrom(t) : { prompt: false, draft: null }
+  }
+  const readCliDraft = () => readCliInput().draft
 
   function applyTuiPicker(picker: TuiPicker | null) {
     setPendingTuiPicker((prev) =>
@@ -1007,6 +1021,7 @@ function TerminalHost({
         const menuOnScreen = readTuiMenuFrom(t)
         applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(t))
+        setCliDraft(readCliInputFrom(t).draft)
         if (statusRef.current === 'working' || statusRef.current === 'starting') return
         const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
         if (mode) setCurrentMode(mode)
@@ -1053,6 +1068,7 @@ function TerminalHost({
         // card só apareceria no próximo byte do PTY.
         applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(term))
+        setCliDraft(readCliInputFrom(term).draft)
       })
 
     // Copy-on-select: copiar automaticamente o que for selecionado.
@@ -1470,6 +1486,8 @@ function TerminalHost({
             reparseMenu={readTuiMenu}
             tuiPicker={pendingTuiPicker}
             reparsePicker={readTuiPicker}
+            cliDraft={cliDraft}
+            readCliInput={readCliInput}
             isChild={linkState === 'active'}
           />
         )}
@@ -1558,6 +1576,8 @@ function TerminalHost({
           // PTY (write escreve no pty, fora do xterm display-only).
           onForwardKey={(seq) => write(seq)}
           readMenu={readTuiMenu}
+          readPicker={readTuiPicker}
+          readCliDraft={readCliDraft}
           openMenuFp={pendingTuiMenu ? menuFingerprint(pendingTuiMenu) : null}
           onMenuAnswer={answerMenu}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).

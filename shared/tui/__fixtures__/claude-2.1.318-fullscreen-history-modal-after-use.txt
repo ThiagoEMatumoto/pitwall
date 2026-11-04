@@ -1,0 +1,45 @@
+
+✻ Worked for 2s · done 1:56
+     
+❯ diga india                                                                                                            
+
+● India
+
+✻ Worked for 3s · done 1:56
+
+❯ Liste três cores separadas por vírgula, nada mais.                                                                    
+
+● vermelho, azul, verde
+
+✻ Sautéed for 3s · done 1:56
+
+❯ diga juliett                                                                                                          
+
+● Juliett
+
+✻ Cooked for 2s · done 1:56
+
+❯ Responda só: ok kilo                                                                                                  
+
+● ok kilo
+
+✻ Worked for 2s · done 1:56
+
+❯ diga lima                                                                                                             
+
+● Lima
+
+✻ Crunched for 3s · done 1:56
+
+❯ Responda só: ok mike                                                                                                  
+
+● ok mike
+
+✻ Baked for 2s · done 1:56
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ diga india 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   [Haiku 5.5] 📁 cwd | ⚡low  
+   █░░░░░░░░░ 10% in:100k out:6 /1.0M | 💰 $0.043 | ⏱ 1m234 | +0/-0
+  ⏸ manual mode on

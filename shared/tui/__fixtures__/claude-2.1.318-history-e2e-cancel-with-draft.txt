@@ -1,0 +1,80 @@
+
+✻ Worked for 0s · done 1:54
+
+❯ Responda só: ok echo                                                                                                  
+
+● Echo
+
+✻ Crunched for 0s · done 1:54
+
+❯ diga foxtrot com letras maiúsculas                                                                                    
+
+● FOXTROT
+  
+✻ Cooked for 0s · done 1:54
+
+❯ Some 2 e 3 e responda só o número.                                                                                    
+
+● 5
+
+✻ Brewed for 0s · done 1:54
+
+❯ diga golf                                                                                                             
+
+● Golf
+
+✻ Crunched for 0s · done 1:54
+
+❯ Responda só: ok hotel                                                                                                 
+
+● Hotel
+
+✻ Cogitated for 0s · done 1:54
+
+❯ diga india                                                                                                            
+
+● India
+
+✻ Cooked for 0s · done 1:54
+
+❯ Liste três cores separadas por vírgula, nada mais.                                                                    
+
+● vermelho, azul, verde
+
+✻ Crunched for 0s · done 1:54
+
+❯ diga juliett                                                                                                          
+
+● Juliett
+
+✻ Churned for 0s · done 1:54
+
+❯ Responda só: ok kilo                                                                                                  
+
+● Kilo
+
+✻ Cooked for 0s · done 1:54
+
+❯ diga lima                                                                                                             
+
+● Lima
+
+✻ Brewed for 0s · done 1:54
+
+❯ Responda só: ok mike                                                                                                  
+
+● Mike
+
+✻ Crunched for 0s · done 1:54
+
+❯ Responda só: ok kilo                                                                                                  
+
+● Kilo
+
+✻ Sautéed for 0s · done 1:54
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ rascunho
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on
+

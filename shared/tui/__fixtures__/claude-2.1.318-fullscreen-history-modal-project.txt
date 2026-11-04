@@ -1,0 +1,45 @@
+
+❯ Liste três cores separadas por vírgula, nada mais.                                                                    
+     
+● vermelho, azul, verde
+
+✻ Sautéed for 3s · done 1:56
+
+❯ diga juliett                                                                                                          
+
+● Juliett
+
+✻ Cooked for 2s · done 1:56
+
+❯ Responda só: ok kilo                                                                                                  
+
+● ok kilo
+
+✻ Worked for 2s · done 1:56
+
+❯ diga lima                                                                                                             
+
+● Lima
+
+✻ Crunched for 3s · done 1:56
+
+❯ Responda só: ok mike                                                                                                  
+
+● ok mike
+
+✻ Baked for 2s · done 1:56
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Search prompts · project
+  ↑ 34s ago  diga golf                                         ╭─────────────────────────────────────────────────────╮
+    30s ago  Responda só: ok hotel                             │ Responda só: ok mike                                │
+    26s ago  diga india                                        │                                                     │
+    21s ago  Liste três cores separadas por vírgula, nada ma…  │                                                     │
+    17s ago  diga juliett                                      │                                                     │
+    13s ago  Responda só: ok kilo                              │                                                     │
+    8s ago   diga lima                                         │                                                     │
+  ❯ 4s ago   Responda só: ok mike                              ╰─────────────────────────────────────────────────────╯
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ ⌕ Filter history…                                                                                                │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ to navigate · Enter to use · Esc to cancel · ctrl+s to scope

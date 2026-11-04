@@ -9,11 +9,14 @@ import { navigateHistory, resolveComposerKey, resolveForwardKey } from './compos
 import {
   answeredNotice,
   forwardKeyNotice,
+  cliDraftBlockedNotice,
   insertBlockedNotice,
+  pickerBlockedNotice,
   routeComposerSend,
   type ComposerMenuRoute,
 } from './composer-menu-guard'
 import type { TuiMenu } from './tui-menu-parser'
+import type { TuiPicker } from './tui-picker-parser'
 import { insertDictation } from './composer-insert'
 import { insertPathToken, pickImageFiles, pickImageItems } from './image-paste'
 import { MentionMenu, SessionPill, useMentionMenu } from './MentionMenu'
@@ -63,6 +66,10 @@ interface Props {
   // Parse fresco do menu TUI na tela (sem o gate de status, como o deliveryVerdict).
   // Presente = o envio passa pela guarda de menu aberto (composer-menu-guard).
   readMenu?: () => TuiMenu | null
+  // Parse fresco dos pickers (/model, /theme, /config, Ctrl+R) e do texto na caixa de input
+  // da CLI: com qualquer um dos dois, enviar daqui misturaria o texto com a tela.
+  readPicker?: () => TuiPicker | null
+  readCliDraft?: () => string | null
   // Fingerprint do menu TUI aberto agora (null = nenhum). Só pra aposentar o aviso
   // de "respondido" quando o diálogo que ele respondeu dá lugar a outro.
   openMenuFp?: string | null
@@ -130,6 +137,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     onInsert,
     onForwardKey,
     readMenu,
+    readPicker,
+    readCliDraft,
     openMenuFp = null,
     onMenuAnswer,
     toolbar,
@@ -567,6 +576,11 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     const menu = readMenu?.() ?? null
     const route = routeComposerSend(menu)
     if (route.kind === 'blocked') return setRouteNotice(route.notice)
+    if (route.kind === 'deliver') {
+      const held =
+        pickerBlockedNotice(readPicker?.() ?? null) ?? cliDraftBlockedNotice(readCliDraft?.() ?? null)
+      if (held) return setRouteNotice(held)
+    }
     if (route.kind !== 'deliver') {
       const answered = await sendThenClear(value, async () => {
         if (!menu || !onMenuAnswer) return false
@@ -590,7 +604,8 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   async function insertOnly() {
     const value = text
     if (sending || value.trim().length === 0) return
-    const blocked = insertBlockedNotice(readMenu?.() ?? null)
+    const blocked =
+      insertBlockedNotice(readMenu?.() ?? null) ?? pickerBlockedNotice(readPicker?.() ?? null)
     if (blocked) return setRouteNotice(blocked)
     const ok = await sendThenClear(value, async () => {
       await onInsert(value)
