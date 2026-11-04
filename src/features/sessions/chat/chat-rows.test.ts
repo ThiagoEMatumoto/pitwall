@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/ipc'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
-import { buildChatRows, rowRhythm, rowSpacing, toolEntries } from './chat-rows'
+import { buildChatRows, rowRhythm, rowSpacing } from './chat-rows'
 
 // Linhas no formato que a CLI grava no JSONL: o shape vem do parser real.
 function line(obj: unknown): string {
@@ -57,7 +57,7 @@ describe('buildChatRows (transcript real do parser)', () => {
     expect(rows.map((r) => r.type)).toEqual(['message', 'tools', 'message'])
     const group = rows[1]
     if (group.type !== 'tools') throw new Error('esperava grupo')
-    const tools = toolEntries(group.entries)
+    const tools = group.entries
     expect(tools.map((t) => t.use.name)).toEqual(['Read', 'Read', 'Bash'])
     expect(tools.map((t) => t.result?.content)).toEqual(['conteúdo a', 'conteúdo b', 'falhou'])
     expect(tools[2].result?.isError).toBe(true)
@@ -91,7 +91,7 @@ describe('buildChatRows (casos de borda)', () => {
     expect(rows).toEqual([{ type: 'message', index: 0 }])
   })
 
-  it('raciocínio entre chamadas fica dentro do grupo; sozinho, não vira grupo', () => {
+  it('raciocínio entre chamadas quebra o grupo e fica à vista; sozinho, não vira grupo', () => {
     const msgs: ChatMessage[] = [
       use('a'),
       { kind: 'thinking', text: 'hmm' },
@@ -100,11 +100,10 @@ describe('buildChatRows (casos de borda)', () => {
       res('b'),
     ]
     const rows = buildChatRows(msgs)
-    expect(rows).toHaveLength(1)
-    expect(rows[0].type === 'tools' && rows[0].entries.map((e) => e.kind)).toEqual([
-      'tool',
-      'thinking',
-      'tool',
+    expect(rows.map((r) => [r.type, r.index])).toEqual([
+      ['tools', 0],
+      ['message', 1],
+      ['tools', 2],
     ])
     expect(buildChatRows([{ kind: 'thinking', text: 'só pensei' }])).toEqual([
       { type: 'message', index: 0 },

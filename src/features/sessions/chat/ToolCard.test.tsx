@@ -7,7 +7,7 @@ vi.mock('@/lib/ipc', () => {
   return new Proxy({}, { get: () => inert })
 })
 import type { ChatMessage } from '../../../../shared/types/ipc'
-import type { GroupEntry, ToolEntry } from './chat-rows'
+import type { ToolEntry } from './chat-rows'
 import { ToolGroup, ToolRow } from './ToolCard'
 
 function entry(
@@ -82,10 +82,9 @@ describe('ToolRow', () => {
 })
 
 describe('ToolGroup', () => {
-  const entries: GroupEntry[] = [
+  const entries: ToolEntry[] = [
     entry(0, 'Read', { file_path: '/r/a.ts' }, { content: 'a' }),
     entry(1, 'Read', { file_path: '/r/b.ts' }, { content: 'b' }),
-    { kind: 'thinking', index: 2, text: 'agora testar' },
     entry(3, 'Bash', { command: 'npm test' }, { content: 'falhou', isError: true }),
   ]
 
@@ -96,7 +95,6 @@ describe('ToolGroup', () => {
     expect(screen.queryByText('/r/b.ts')).not.toBeInTheDocument()
     fireEvent.click(summary)
     expect(screen.getByText('/r/b.ts')).toBeInTheDocument()
-    expect(screen.getByText('Raciocínio')).toBeInTheDocument()
   })
 
   it('com uma chamada só, mostra a linha direto, sem resumo', () => {

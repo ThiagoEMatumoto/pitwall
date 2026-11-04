@@ -19,8 +19,7 @@ import { Icon } from '@/components/ui/Icon'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { DiffBlock } from './PermissionCard'
 import { Chevron, ROW_BUTTON } from './chat-row-ui'
-import { ThinkingCard } from './ThinkingCard'
-import { toolEntries, type GroupEntry, type ToolEntry } from './chat-rows'
+import type { ToolEntry } from './chat-rows'
 import { oneLine, previewLines, summarizeTools, toolDiff, toolView, type ToolCategory } from './tool-view'
 
 const CATEGORY_ICON: Record<ToolCategory, ComponentType<LucideProps>> = {
@@ -233,8 +232,7 @@ export function ToolRow({
 // A árvore é a mesma nos dois casos (o resumo só entra acima da lista), então
 // quando a 2ª chamada chega a linha aberta não desmonta; e o grupo nasce
 // expandido se havia uma linha aberta, pra não esconder o que se estava lendo.
-export function ToolGroup({ entries, running }: { entries: GroupEntry[]; running?: boolean }) {
-  const tools = toolEntries(entries)
+export function ToolGroup({ entries: tools, running }: { entries: ToolEntry[]; running?: boolean }) {
   const multi = tools.length >= 2
   const [expanded, setExpanded] = useState(false)
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set())
@@ -296,8 +294,7 @@ export function ToolGroup({ entries, running }: { entries: GroupEntry[]; running
       {showList && (
         <div className={`flex min-w-0 flex-col ${multi ? 'chat-reveal ml-4 mt-0.5' : ''}`}>
           {/* Chamadas paralelas: todas as que ainda não têm resultado estão rodando. */}
-          {entries.map((e) => {
-            if (e.kind !== 'tool') return <ThinkingCard key={e.index} text={e.text} />
+          {tools.map((e) => {
             const key = toolKey(e.use)
             return (
               <ToolRow
