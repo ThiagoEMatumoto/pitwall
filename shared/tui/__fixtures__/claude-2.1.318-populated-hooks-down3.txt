@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes3/populated-menus/cwd
+
+
+❯ diga oi                                                                                                               
+
+● Oi! Em que posso ajudar? Pode me dizer o que você quer fazer no repositório ou em outra tarefa.
+
+✻ Cogitated for 1s · done 23:12
+
+❯ /hooks                                                                                                                
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Hooks
+  24 hooks on 7 events
+
+  This menu is read-only. To add or change a hook, edit settings.json or ask Claude. Learn more
+
+    PreToolUse  before tool execution
+    [Project] true pitwall-hook-4    Agent · command
+    [Project] true pitwall-hook-1    Bash · command
+    [Project] true pitwall-hook-2    Edit|Write · command
+  ❯ [Project] true pitwall-hook-5    Grep · command
+    [Project] true pitwall-hook-3    Read · command
+
+    PostToolUse  after tool execution
+    [Project] true pitwall-hook-6    Bash · command
+    [Project] true pitwall-hook-7    Edit|Write · command
+    [Project] true pitwall-hook-9    Glob · command
+    [Project] true pitwall-hook-8    Read · command
+
+    Notification  when notifications are sent
+    [Project] true pitwall-hook-20   command
+    [Project] true pitwall-hook-21   command
+
+    UserPromptSubmit  when the user submits a prompt
+    [Project] true pitwall-hook-10   command
+    [Project] true pitwall-hook-11   command
+    [Project] true pitwall-hook-12   command
+    ↓ 11 more
+
+  Enter to view · Esc to close
+
+

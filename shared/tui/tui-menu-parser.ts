@@ -63,6 +63,9 @@ export interface TuiMenuOption {
   // ao receber o cursor ("Summarize from here: add context (optional)" no /rewind). Com o
   // cursor nela, dígito e letra viram texto (captura rewind-digit-into-input).
   opensInput?: boolean
+  // kind 'menu': cabeçalho não selecionável acima da opção (evento do /hooks: "PreToolUse
+  // before tool execution"). O cursor da CLI pula essas linhas.
+  group?: string
 }
 
 export type PlanMode = 'auto' | 'accept-edits' | 'manual' | 'bypass'
@@ -139,8 +142,15 @@ export interface TuiMenu {
   footer?: string
   // Rodapé com "←/→ to switch": as abas (tabs) trocam por seta lateral.
   tabSwitch?: boolean
-  // Rodapé com "↓ to select": o foco está na busca, não na lista; o 1º ↓ pousa na opção 1.
+  // Rodapé com "↓ to select" (sem "Enter/"): o foco está nas abas, não na lista; o 1º ↓
+  // pousa na opção 1 (capturas unknown-permissions-down e populated-permissions-list).
   listFocusKey?: boolean
+  // kind 'menu': a lista rolou ("↑ 10 more"/"↓ 11 more" do /hooks, "↑ N."/"↓ N." do
+  // /permissions). As opções lidas são só a janela visível.
+  moreAbove?: boolean
+  moreBelow?: boolean
+  // kind 'menu': texto do campo de busca do /permissions (ausente = vazio, "Search…").
+  search?: string
 }
 
 // Linha de opção numerada: pointer opcional (❯), UM dígito, ponto, label.
@@ -746,6 +756,10 @@ const NUDGE_TITLE_RE = /^Teach auto mode about your environment\?$/
 const REWIND_CONFIRM_RE = /^Confirm you want to restore\b/
 // O AskUserQuestion escreve "Enter to select"; os Select da própria CLI, "Enter to confirm".
 const CLI_DIALOG_FOOTER_RE = /Enter to confirm/i
+// Abas e busca do /permissions (capturas populated-permissions-*): a aba Ask/Deny com 2+
+// regras é uma run numerada a partir de 1 e lia como 'question'. O AskUserQuestion navega
+// abas com "Tab/Arrow keys", nunca escreve estas dicas.
+const CLI_TABS_FOOTER_RE = /←\/→ to switch|↑ to tabs|Type to filter|(?:^|·\s*)↓ to select/i
 
 function isCliDialog(
   question: string | undefined,
@@ -755,6 +769,7 @@ function isCliDialog(
 ): boolean {
   // O multi-select antigo (2.1.212) também dizia "Enter to confirm", junto do "Space to toggle".
   if (CLI_DIALOG_FOOTER_RE.test(footer) && !MULTI_SELECT_RE.test(footer)) return true
+  if (CLI_TABS_FOOTER_RE.test(footer)) return true
   if (question != null && NUDGE_TITLE_RE.test(question)) return true
   for (let i = firstOptionLine - 1; i >= Math.max(0, firstOptionLine - 15); i--) {
     const t = lines[i].trim()
@@ -769,10 +784,21 @@ function isCliDialog(
 // rewind-*, auto-mode-env-nudge): régua cheia no topo, título, texto, opções com ou
 // sem número, rodapé de teclas com Esc. Só lê o que a tela mostra; quem decide se dá
 // pra clicar é buildGenericSelectKeys (cursor conhecido, campo de texto, número).
-const GENERIC_FOOTER_RE = /Esc to (cancel|close|go back|exit)/i
+const GENERIC_FOOTER_RE = /Esc to (cancel|close|go back|exit|clear)/i
 const GENERIC_MAX_LINES = 45
 const TAB_SWITCH_RE = /←\/→ to switch/i
-const LIST_FOCUS_RE = /↓ to select/i
+// "Enter/↓ to select" é o rodapé da busca com texto: o ↓ dali pousa numa opção que a sonda
+// não conseguiu prever (populated-menus, 1ª rodada), então não conta.
+const LIST_FOCUS_RE = /(?:^|·\s*)↓ to select/i
+// A barra de abas também existe com o foco na busca, que não troca de aba ("↑ to tabs").
+const TABS_HINT_RE = /←\/→ to switch|↑ to tabs/i
+// Tela só de leitura (detalhe de hook, regra de fonte read-only): o rodapé é só o Esc e o
+// título é um dos capturados (populated-hooks-detail, populated-permissions-rule-readonly).
+// Fora deles, tela sem opção nem aba segue sem menu.
+const READONLY_FOOTER_RE = /^Esc to (cancel|go back|close)$/i
+const READONLY_TITLE_RE = /^(Command hook|Rule details)$/
+const SEARCH_BOX_RE = /⌕\s*(.*?)\s*│?$/
+const SEARCH_PLACEHOLDER_RE = /^Search…?$/
 const INPUT_OPTION_RE = /^(Type something|Summarize from here|Tell Claude what to change)\b|\(optional\)$/i
 // Descrição sob a mensagem no seletor do /rewind: mesma indentação do label, não é parada.
 const REWIND_DESC_RE = /^(No code changes|\d+ files? changed\b.*)$/i
@@ -830,26 +856,36 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
 
   const parsed = genericNumbered(body) ?? genericUnnumbered(body)
   if (!parsed) return null
-  const { options, firstLine, cursorIndex, numbered } = parsed
+  const { options, firstLine, cursorIndex, numbered, moreAbove, moreBelow } = parsed
 
   const titleLine = body[first]!
   const tabSwitch = hasFooter && TAB_SWITCH_RE.test(footerRaw)
   const listFocusKey = hasFooter && LIST_FOCUS_RE.test(footerRaw)
-  // Sem opção nem aba é um campo de texto ("Add allow permission rule"): como menu ele
-  // bloquearia o composer, que é justamente por onde o texto entra.
-  if (options.length === 0 && !tabSwitch && !listFocusKey) return null
   let title: string | undefined = first < firstLine ? titleLine.t : undefined
   let tabs: TuiMenuTab[] | undefined
-  if (title && tabSwitch) {
+  if (title && hasFooter && TABS_HINT_RE.test(footerRaw)) {
     const tokens = title.split(/\s{2,}/).filter(Boolean)
     if (tokens.length > 1) {
       title = tokens[0]
       tabs = tokens.slice(1).map((label) => ({ label, done: false }))
     }
   }
+  // Sem opção nem aba só passa a tela de leitura. O resto é campo de texto ("Add allow
+  // permission rule"): como menu ele bloquearia o composer, que é por onde o texto entra.
+  const readOnly =
+    hasFooter &&
+    READONLY_FOOTER_RE.test(footerRaw) &&
+    title != null &&
+    READONLY_TITLE_RE.test(title) &&
+    !body.some((b) => b != null && /^[╭│]/.test(b.t))
+  if (options.length === 0 && !tabs && !listFocusKey && !readOnly) return null
+  const searchRaw = body
+    .map((b) => (b ? SEARCH_BOX_RE.exec(b.t)?.[1] : undefined))
+    .find((v) => v != null)
+  const search = searchRaw && !SEARCH_PLACEHOLDER_RE.test(searchRaw) ? searchRaw : undefined
   const context = body
     .slice(first + 1, firstLine)
-    .filter((b): b is BodyLine => b != null && !/^[╭╰]/.test(b.t) && !/⌕/.test(b.t))
+    .filter((b): b is BodyLine => b != null && !/^[╭╰]/.test(b.t) && !/⌕/.test(b.t) && !/^╌+$/.test(b.t))
     .map((b) => b.t.replace(BOX_EDGE_RE, ''))
     .filter((t) => t !== '')
     .join('\n')
@@ -860,19 +896,24 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
     ...(context ? { context } : {}),
     options,
     multiSelect: false,
-    submitOnDigit: numbered,
+    submitOnDigit: numbered && !moreAbove,
     ...(cursorIndex != null ? { cursorIndex } : {}),
-    ...(numbered ? {} : { navigation: 'arrows' as const }),
+    // Lista numerada rolada: o dígito de uma janela que não começa em 1 não foi sondado.
+    ...(numbered && !moreAbove ? {} : { navigation: 'arrows' as const }),
     ...(tabs ? { tabs } : {}),
     ...(hasFooter ? { footer: footerRaw } : {}),
     ...(tabSwitch ? { tabSwitch: true } : {}),
     ...(listFocusKey ? { listFocusKey: true } : {}),
+    ...(moreAbove ? { moreAbove: true } : {}),
+    ...(moreBelow ? { moreBelow: true } : {}),
+    ...(search ? { search } : {}),
   }
 }
 
 // Diálogos da CLI que o tolerante já leu em captura (2.1.317/318). Um 'menu' fora deles é
 // tela que nenhum parser conhece: o card ainda serve, mas conta como drift no contador.
-const KNOWN_GENERIC_TITLE_RE = /^(Rewind|Hooks|Permissions)$/
+const KNOWN_GENERIC_TITLE_RE =
+  /^(Rewind|Hooks|Hook events|Command hook|Permissions|Rule details|Delete (allow|ask|deny) tool\?)$/
 
 export function isKnownMenu(menu: TuiMenu): boolean {
   return menu.kind !== 'menu' || KNOWN_GENERIC_TITLE_RE.test(menu.question ?? '')
@@ -884,6 +925,8 @@ interface GenericOptions {
   firstLine: number
   cursorIndex?: number
   numbered: boolean
+  moreAbove?: boolean
+  moreBelow?: boolean
 }
 
 function genericOption(index: number, label: string, desc: string[]): TuiMenuOption {
@@ -895,10 +938,13 @@ function genericOption(index: number, label: string, desc: string[]): TuiMenuOpt
   }
 }
 
-// Opções "N. label" (submenu do /rewind, nudge, "1. Add a new rule…" do /permissions):
-// a run termina no fim do body; depois dela só cabe descrição recuada.
+// Opções "N. label" (submenu do /rewind, nudge, regras do /permissions): a run termina
+// no fim do body; depois dela só cabe descrição recuada. A lista do /permissions rola e
+// marca a borda com a seta no lugar do recuo ("↓ 10. Glob"), já com dois dígitos.
+const GENERIC_OPTION_RE = /^\s*(❯)?\s*([↑↓])?\s*(\d{1,2})\.\s+(.+)$/
+
 function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
-  const rows = body.map((b) => (b ? OPTION_RE.exec(b.raw) : null))
+  const rows = body.map((b) => (b ? GENERIC_OPTION_RE.exec(b.raw) : null))
   let lastRow = -1
   for (let i = body.length - 1; i >= 0; i--) {
     if (rows[i]) {
@@ -912,6 +958,7 @@ function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
     const b = body[i]
     if (b && b.indent <= lastIndent + 2) return null
   }
+  const num = (i: number) => Number(rows[i]![3])
   const run: number[] = [lastRow]
   for (let i = lastRow - 1; i >= 0; i--) {
     if (!rows[i]) {
@@ -919,19 +966,30 @@ function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
       if (b == null || b.indent > lastIndent + 2) continue
       break
     }
-    if (Number(rows[i]![2]) !== Number(rows[run[0]]![2]) - 1) break
+    if (num(i) !== num(run[0]) - 1) break
     run.unshift(i)
   }
-  if (Number(rows[run[0]]![2]) !== 1) return null
+  const moreAbove = rows[run[0]]![2] === '↑'
+  // Janela que não começa em 1 só vale com a seta de rolagem em cima.
+  if (num(run[0]) !== 1 && !moreAbove) return null
+  if (run.some((line, k) => k > 0 && k < run.length - 1 && rows[line]![2] != null)) return null
   let cursorIndex: number | undefined
   const options = run.map((line, k) => {
     const m = rows[line]!
     const stop = k + 1 < run.length ? run[k + 1] : body.length
     const desc = body.slice(line + 1, stop).filter((b): b is BodyLine => b != null).map((b) => b.t)
-    if (m[1]) cursorIndex = k
-    return genericOption(k, m[3].trim(), desc)
+    const index = num(line) - 1
+    if (m[1]) cursorIndex = index
+    return genericOption(index, m[4].trim(), desc)
   })
-  return { options, firstLine: run[0], ...(cursorIndex != null ? { cursorIndex } : {}), numbered: true }
+  return {
+    options,
+    firstLine: run[0],
+    ...(cursorIndex != null ? { cursorIndex } : {}),
+    numbered: true,
+    ...(moreAbove ? { moreAbove } : {}),
+    ...(rows[lastRow]![2] === '↓' ? { moreBelow: true } : {}),
+  }
 }
 
 // Lista sem número (/hooks, seletor do /rewind): as paradas ficam na coluna do texto
@@ -952,7 +1010,15 @@ function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
   while (body[from] == null) from++
   let to = cursorRow + 1
   while (to < body.length && (body[to] == null || atCol(body[to]))) to++
-  const region = body.slice(from, to)
+  // "↑ 10 more" / "↓ 11 more" (/hooks rolado) marcam a borda da janela, não são opções.
+  const more = { above: false, below: false }
+  const region = body.slice(from, to).filter((b) => {
+    const m = b ? MORE_RE.exec(b.t) : null
+    if (m) more[m[1] === '↑' ? 'above' : 'below'] = true
+    return m == null
+  })
+  const scroll = { ...(more.above ? { moreAbove: true } : {}), ...(more.below ? { moreBelow: true } : {}) }
+  if (TAGGED_RE.test(cm[2])) return { ...taggedOptions(region, from), ...scroll }
   const blocks: string[][] = [[]]
   for (const b of region) {
     if (b == null) {
@@ -981,6 +1047,31 @@ function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
     const label = (head ? head[2] : e[0]).trim()
     return genericOption(k, label, e.slice(1).map((l) => l.trim()))
   })
+  return { options, firstLine: from, ...(cursorIndex != null ? { cursorIndex } : {}), numbered: false, ...scroll }
+}
+
+const MORE_RE = /^([↑↓])\s+\d+\s+more$/
+// Linha de hook do /hooks: "[User] comando   matcher · command" (capturas populated-hooks
+// e a tela real do usuário, com [User]/[Plugin]). Com o cursor numa delas, as linhas sem
+// etiqueta na mesma coluna são o cabeçalho do evento, que o cursor pula.
+const TAGGED_RE = /^\[[^\]]+\]\s/
+const spaced = (t: string, sep: string) => t.trim().replace(/\s{2,}/g, sep)
+
+function taggedOptions(region: (BodyLine | null)[], from: number): GenericOptions {
+  let group: string | undefined
+  let cursorIndex: number | undefined
+  const options: TuiMenuOption[] = []
+  for (const b of region) {
+    if (b == null) continue
+    const head = CURSOR_LINE_RE.exec(b.raw)
+    const text = head ? head[2] : b.t
+    if (!TAGGED_RE.test(text)) {
+      group = spaced(text, ' — ')
+      continue
+    }
+    if (head) cursorIndex = options.length
+    options.push({ index: options.length, label: spaced(text, ' · '), ...(group ? { group } : {}) })
+  }
   return { options, firstLine: from, ...(cursorIndex != null ? { cursorIndex } : {}), numbered: false }
 }
 

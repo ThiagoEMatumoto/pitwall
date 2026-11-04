@@ -1,0 +1,136 @@
+[2D[20B[2C[20A [15Gtrue pitwall-hook-5[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-3[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[2C[19A[2D[19B[2C[19A [15Gtrue pitwall-hook-3[2C[3B[38;5;153m❯[15Gtrue pitwall-hook-6[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[2C[16A[2D[16B[2C[16A [15Gtrue pitwall-hook-6[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-7[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[2C[15A[2D[15B[2C[15A [15Gtrue pitwall-hook-7[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-9[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+[2C[14A[2D[14B[2C[14A [15Gtrue pitwall-hook-9[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-8[39m
+
+
+
+
+
+
+
+
+
+
+
+
+[2C[13A[2D[13B[2C[13A [15Gtrue pitwall-hook-8[2C[3B[38;5;153m❯[15Gtrue pitwall-hook-20[39m
+
+
+
+
+
+
+
+
+
+[2C[10A[2D[10B[2C[10A [15Gtrue pitwall-hook-20[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-21[39m
+
+
+
+
+
+
+
+
+[2C[9A[2D[9B[2C[9A [15Gtrue pitwall-hook-21[2C[3B[38;5;153m❯[15Gtrue pitwall-hook-10[39m
+
+
+
+
+
+[2C[6A[2D[6B[2C[6A [15Gtrue pitwall-hook-10[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-11[39m
+
+
+
+
+[2C[5A[2D[5B[2C[5A [15Gtrue pitwall-hook-11[2C[1B[38;5;153m❯[15Gtrue pitwall-hook-12[39m
+
+
+
+[2C[4A[2D[4B[4C[24A[38;5;246m↑ 3 more[39m[K[32C[1B5[38G[38;5;246mGr[41Gp · com[49Gand[39m[K[32C[1B3[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mPostToolUse[22m[38;5;246m  after tool execution[39m[K[32C[1B6[38G[38;5;246mBash[4C[1B[Project][15G[39mtrue[20Gpitwall-hook-7[38G[38;5;246mEdit|Write · command[4C[1B[Project][39m true pitwall-hook-9    [38;5;246mGlob · command[32C[1B[39m8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[39m[K[32C[1B20[38G[38;5;246mcommand[39m[K[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-21[38G[38;5;246mcommand[4C[1B[39m[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user sub[41Gits a prompt[32C[1B[39m10[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-11[38G[38;5;246mcommand[4C[1B[Project][39m true pitwall-hook-12   [38;5;246mco[41Gmand[39m[K[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[33C[1B[38;5;153m5[39G[38;5;246mlear · command[7C[1B0[39m
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m4[32C[1B[39m3[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mPostToolUse[22m[38;5;246m  after tool execution[4C[1B[Project][39m true pitwall-hook-6    [38;5;246mBash · command[32C[1B[39m7[38G[38;5;246mEdit|Write · command[32C[1B[39m9[38G[38;5;246mGlob · command[39m[K[32C[1B8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[4C[1B[Project][39m true pitwall-hook-20   [38;5;246mcommand[39m[K[33C[1B1[4C[1B[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user submits a prompt[4C[1B[Project][39m true pitwall-hook-10   [38;5;246mco[41Gmand[39m[K[33C[1B1[33C[1B2[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[4C[1B[Project][39m true pitwall-hook-15   [38;5;246mclear · command[33C[1B[38;5;153m6[39G[38;5;246mompact[46G· command[6C[1B9 more[39m[K
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m5[4C[1B[39m[K[4C[1B[1mPostToolUse[22m[38;5;246m  after tool execution[4C[1B[Project][39m true pitwall-hook-6    [38;5;246mBash · command[32C[1B[39m7[38G[38;5;246mEdit|Write · command[32C[1B[39m9[38G[38;5;246mGlob · command[39m[K[32C[1B8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[4C[1B[Project][39m true pitwall-hook-20   [38;5;246mcommand[39m[K[33C[1B1[4C[1B[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user submits a prompt[4C[1B[Project][39m true pitwall-hook-10   [38;5;246mco[41Gmand[39m[K[33C[1B1[33C[1B2[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[4C[1B[Project][39m true pitwall-hook-15   [38;5;246mclear · command[33C[1B[39m6[39G[38;5;246mompact[46G· command[33C[1B[38;5;153m4[38G[38;5;246mresume · com[51Gand[39m[K[6C[1B[38;5;246m8[39m
+
+
+[2C[4A[2D[4B[4C[23A[1mPostToolUse[22m[38;5;246m  after tool execution[4C[1B[Project][39m true pitwall-hook-6    [38;5;246mBash · command[32C[1B[39m7[38G[38;5;246mEdit|Write · command[32C[1B[39m9[38G[38;5;246mGlob · command[39m[K[32C[1B8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[4C[1B[Project][39m true pitwall-hook-20   [38;5;246mcommand[39m[K[33C[1B1[4C[1B[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user submits a prompt[4C[1B[Project][39m true pitwall-hook-10   [38;5;246mco[41Gmand[39m[K[33C[1B1[33C[1B2[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[4C[1B[Project][39m true pitwall-hook-15   [38;5;246mclear · command[33C[1B[39m6[39G[38;5;246mompact[46G· command[33C[1B[39m4[38G[38;5;246mresume · com[51Gand[39m[K[33C[1B[38;5;153m3[38G[38;5;246mstartup · co[51Gmand[6C[1B7[39m
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m7[4C[1B[Project][39m true pitwall-hook-9    [38;5;246mGlob · command[32C[1B[39m8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[39m[K[32C[1B20[38G[38;5;246mcommand[39m[K[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-21[38G[38;5;246mcommand[4C[1B[39m[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user sub[41Gits a prompt[32C[1B[39m10[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-11[38G[38;5;246mcommand[4C[1B[Project][39m true pitwall-hook-12   [38;5;246mco[41Gmand[39m[K[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[33C[1B[39m5[39G[38;5;246mlear · command[4C[1B[Project][15G[39mtrue[20Gpitwall-hook-16[38G[38;5;246mcompact · command[4C[1B[Project][39m true pitwall-hook-14   [38;5;246mresume · command[33C[1B[39m3[38G[38;5;246mstartup[46G· command[4C[1B[39m[K[4C[1B[1mStop[22m[38;5;246m  right before Claude concludes its[45Gresponse[39m[K[33C[1B[38;5;153m7[38G[38;5;246mcommand[39m[K[6C[1B[38;5;246m6[39m
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m8[32C[1B[39m8[38G[38;5;246mRead[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[4C[1B[Project][39m true pitwall-hook-20   [38;5;246mcommand[39m[K[33C[1B1[4C[1B[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user submits a prompt[4C[1B[Project][39m true pitwall-hook-10   [38;5;246mco[41Gmand[39m[K[33C[1B1[33C[1B2[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[4C[1B[Project][39m true pitwall-hook-15   [38;5;246mclear · command[33C[1B[39m6[39G[38;5;246mompact[46G· command[33C[1B[39m4[38G[38;5;246mresume · com[51Gand[39m[K[33C[1B3[38G[38;5;246mstartup · co[51Gmand[4C[1B[39m[K[4C[1B[1mStop[22m[38;5;246m  right before Claude concludes its response[4C[1B[Project][39m true pitwall-hook-17   [38;5;246mcommand[39m[K[33C[1B[38;5;153m8[6C[1B[38;5;246m5[39m
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m9[4C[1B[39m[K[4C[1B[1mNotification[22m[38;5;246m  when notifications are sent[4C[1B[Project][39m true pitwall-hook-20   [38;5;246mcommand[39m[K[33C[1B1[4C[1B[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user submits a prompt[4C[1B[Project][39m true pitwall-hook-10   [38;5;246mco[41Gmand[39m[K[33C[1B1[33C[1B2[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[4C[1B[Project][39m true pitwall-hook-15   [38;5;246mclear · command[33C[1B[39m6[39G[38;5;246mompact[46G· command[33C[1B[39m4[38G[38;5;246mresume · com[51Gand[39m[K[33C[1B3[38G[38;5;246mstartup · co[51Gmand[4C[1B[39m[K[4C[1B[1mStop[22m[38;5;246m  right before Claude concludes its response[4C[1B[Project][39m true pitwall-hook-17   [38;5;246mcommand[39m[K[33C[1B8[33C[1B[38;5;153m9[6C[1B[38;5;246m4[39m
+
+
+[2C[4A[2D[4B[6C[24A[38;5;246m10 more[4C[1B[Project][15G[39mtrue[20Gpitwall-hook-21[38G[38;5;246mcommand[4C[1B[39m[K[4C[1B[1mUserPromptSubmit[22m[38;5;246m  when the user sub[41Gits a prompt[32C[1B[39m10[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-11[38G[38;5;246mcommand[4C[1B[Project][39m true pitwall-hook-12   [38;5;246mco[41Gmand[39m[K[4C[1B[K[4C[1B[1mSessionStart[22m[38;5;246m  when a new session is started[33C[1B[39m5[39G[38;5;246mlear · command[4C[1B[Project][15G[39mtrue[20Gpitwall-hook-16[38G[38;5;246mcompact · command[4C[1B[Project][39m true pitwall-hook-14   [38;5;246mresume · command[33C[1B[39m3[38G[38;5;246mstartup[46G· command[4C[1B[39m[K[4C[1B[1mStop[22m[38;5;246m  right before Claude concludes its[45Gresponse[39m[K[33C[1B7[38G[38;5;246mcommand[39m[K[4C[1B[38;5;246m[Project][15G[39mtrue[20Gpitwall-hook-18[38G[38;5;246mcommand[4C[1B[Project][39m true pitwall-hook-19   [38;5;246mcommand[39m[K[4C[1B[K[4C[1B[1mPreCompact[22m[38;5;246m  before conversation compaction[32C[1B[38;5;153m24[6C[1B[38;5;246m3[39m
+
+
+[2C[4A

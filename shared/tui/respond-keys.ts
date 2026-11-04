@@ -201,7 +201,8 @@ export function buildOtherKeys(optionIndex: number, text: string): string[] {
 // numerada, o cursor é conhecido e nem ele nem o alvo estão num campo de texto (o dígito
 // do submenu do /rewind escolhe e confirma, sonda history-rewind-compact); fora isso,
 // setas do cursor até a opção e Enter. Com o foco na busca ("↓ to select" do
-// /permissions), o 1º ↓ pousa na opção 1 (captura unknown-permissions-down).
+// /permissions), o 1º ↓ pousa na opção 1 (capturas unknown-permissions-down e
+// populated-permissions-list). Com texto na busca não há caminho sondado: nada sai.
 export function buildGenericSelectKeys(menu: TuiMenu, optionIndex: number): string[] {
   if (menu.kind !== 'menu' && menu.kind !== 'nudge') return []
   const target = menu.options.find((o) => o.index === optionIndex)
@@ -214,7 +215,8 @@ export function buildGenericSelectKeys(menu: TuiMenu, optionIndex: number): stri
     }
     return [...arrowsBy(optionIndex - cursor), '\r']
   }
-  if (menu.listFocusKey) return [DOWN, ...arrowsBy(optionIndex), '\r']
+  // Foco nas abas: o 1º ↓ pousa na opção 1, que só é a do topo da janela sem rolagem.
+  if (menu.listFocusKey && !menu.moreAbove) return [DOWN, ...arrowsBy(optionIndex), '\r']
   return []
 }
 
