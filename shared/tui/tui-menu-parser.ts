@@ -149,8 +149,14 @@ export interface TuiMenu {
   // /permissions). As opções lidas são só a janela visível.
   moreAbove?: boolean
   moreBelow?: boolean
+  // "↑ 8 more"/"↓ 4 more" (seletor do /rewind rolado no fullscreen): quantas opções há fora
+  // da janela. Com as duas, a posição absoluta de cada opção visível é conhecida.
+  moreAboveCount?: number
+  moreBelowCount?: number
   // kind 'menu': texto do campo de busca do /permissions (ausente = vazio, "Search…").
   search?: string
+  // kind 'menu': aviso abaixo das opções ("⚠ Restored files go back whole…" do /rewind).
+  warning?: string
 }
 
 // Linha de opção numerada: pointer opcional (❯), UM dígito, ponto, label.
@@ -441,7 +447,22 @@ export function parseTuiMenu(text: string): TuiMenu | null {
   let end = lines.length
   while (end > 0 && lines[end - 1].trim() === '') end--
   if (end === 0) return null
-  return parseNumberedMenu(lines, end) ?? parseUnnumberedTrust(lines, end) ?? parseGenericMenu(lines, end)
+  return (
+    parseNumberedMenu(lines, end) ??
+    parseUnnumberedTrust(lines, end) ??
+    parseGenericMenu(lines, end) ??
+    parseRewindConfirm(lines, end)
+  )
+}
+
+// Submenu do /rewind com código a restaurar (2.1.318, captura rewind-submenu-code): seis
+// opções numa janela de cinco ("↓ 5."), aviso "⚠" embaixo e nenhum rodapé. O numerado
+// recusa a seta e o aviso; o tolerante só aceita sem rodapé com a frase de confirmação.
+function parseRewindConfirm(lines: string[], end: number): TuiMenu | null {
+  for (let i = end - 1; i >= Math.max(0, end - GENERIC_MAX_LINES); i--) {
+    if (REWIND_CONFIRM_RE.test(lines[i].trim())) return parseGenericMenu(lines, end, true)
+  }
+  return null
 }
 
 // Trust de diretório do 2.1.286+ (captura real __fixtures__/claude-2.1.286-trust-
@@ -799,7 +820,11 @@ const READONLY_FOOTER_RE = /^Esc to (cancel|go back|close)$/i
 const READONLY_TITLE_RE = /^(Command hook|Rule details)$/
 const SEARCH_BOX_RE = /⌕\s*(.*?)\s*│?$/
 const SEARCH_PLACEHOLDER_RE = /^Search…?$/
-const INPUT_OPTION_RE = /^(Type something|Summarize from here|Tell Claude what to change)\b|\(optional\)$/i
+// "Summarize up to here" também abre o campo com o cursor (captura rewind-submenu-code, 2.1.318).
+const INPUT_OPTION_RE = /^(Type something|Summarize from here|Summarize up to here|Tell Claude what to change)\b|\(optional\)$/i
+// Aviso depois das opções, sem rodapé: "⚠ Restored files go back whole…" no submenu do
+// /rewind com código a restaurar.
+const WARNING_LINE_RE = /^⚠\s*\S/
 // Descrição sob a mensagem no seletor do /rewind: mesma indentação do label, não é parada.
 const REWIND_DESC_RE = /^(No code changes|\d+ files? changed\b.*)$/i
 const CURSOR_LINE_RE = /^(\s*)❯\s+(\S.*)$/
@@ -873,7 +898,8 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
 
   const parsed = genericNumbered(body) ?? genericUnnumbered(body)
   if (!parsed) return null
-  const { options, firstLine, cursorIndex, numbered, moreAbove, moreBelow } = parsed
+  const { options, firstLine, cursorIndex, numbered, moreAbove, moreBelow, moreAboveCount, moreBelowCount, warning } =
+    parsed
 
   const titleLine = body[first]!
   const tabSwitch = hasFooter && TAB_SWITCH_RE.test(footerRaw)
@@ -923,14 +949,17 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
     ...(listFocusKey ? { listFocusKey: true } : {}),
     ...(moreAbove ? { moreAbove: true } : {}),
     ...(moreBelow ? { moreBelow: true } : {}),
+    ...(moreAboveCount != null ? { moreAboveCount } : {}),
+    ...(moreBelowCount != null ? { moreBelowCount } : {}),
     ...(search ? { search } : {}),
+    ...(warning ? { warning } : {}),
   }
 }
 
 // Diálogos da CLI que o tolerante já leu em captura (2.1.317/318). Um 'menu' fora deles é
 // tela que nenhum parser conhece: o card ainda serve, mas conta como drift no contador.
 const KNOWN_GENERIC_TITLE_RE =
-  /^(Rewind|Hooks|Hook events|Command hook|Permissions|Rule details|Delete (allow|ask|deny) tool\?)$/
+  /^(Rewind|Hooks|Hook events|Command hook|Permissions|Rule details|Delete (allow|ask|deny) tool\?|Search prompts · (everywhere|session|project))$/
 
 export function isKnownMenu(menu: TuiMenu): boolean {
   return menu.kind !== 'menu' || KNOWN_GENERIC_TITLE_RE.test(menu.question ?? '')
@@ -944,6 +973,9 @@ interface GenericOptions {
   numbered: boolean
   moreAbove?: boolean
   moreBelow?: boolean
+  moreAboveCount?: number
+  moreBelowCount?: number
+  warning?: string
 }
 
 function genericOption(index: number, label: string, desc: string[]): TuiMenuOption {
@@ -960,7 +992,23 @@ function genericOption(index: number, label: string, desc: string[]): TuiMenuOpt
 // marca a borda com a seta no lugar do recuo ("↓ 10. Glob"), já com dois dígitos.
 const GENERIC_OPTION_RE = /^\s*(❯)?\s*([↑↓])?\s*(\d{1,2})\.\s+(.+)$/
 
-function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
+function genericNumbered(fullBody: (BodyLine | null)[]): GenericOptions | null {
+  // O aviso fecha o body: o que vem dele para baixo não é descrição da última opção.
+  let noteAt = -1
+  for (let i = fullBody.length - 1; i >= 0; i--) {
+    const b = fullBody[i]
+    if (b && WARNING_LINE_RE.test(b.t)) noteAt = i
+    else if (b && GENERIC_OPTION_RE.test(b.raw)) break
+  }
+  const body = noteAt >= 0 ? fullBody.slice(0, noteAt) : fullBody
+  const warning =
+    noteAt >= 0
+      ? fullBody
+          .slice(noteAt)
+          .filter((b): b is BodyLine => b != null)
+          .map((b) => b.t)
+          .join(' ')
+      : undefined
   const rows = body.map((b) => (b ? GENERIC_OPTION_RE.exec(b.raw) : null))
   let lastRow = -1
   for (let i = body.length - 1; i >= 0; i--) {
@@ -1006,6 +1054,7 @@ function genericNumbered(body: (BodyLine | null)[]): GenericOptions | null {
     numbered: true,
     ...(moreAbove ? { moreAbove } : {}),
     ...(rows[lastRow]![2] === '↓' ? { moreBelow: true } : {}),
+    ...(warning ? { warning } : {}),
   }
 }
 
@@ -1028,13 +1077,16 @@ function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
   let to = cursorRow + 1
   while (to < body.length && (body[to] == null || atCol(body[to]))) to++
   // "↑ 10 more" / "↓ 11 more" (/hooks rolado) marcam a borda da janela, não são opções.
-  const more = { above: false, below: false }
+  const more: { above?: number; below?: number } = {}
   const region = body.slice(from, to).filter((b) => {
     const m = b ? MORE_RE.exec(b.t) : null
-    if (m) more[m[1] === '↑' ? 'above' : 'below'] = true
+    if (m) more[m[1] === '↑' ? 'above' : 'below'] = Number(m[2])
     return m == null
   })
-  const scroll = { ...(more.above ? { moreAbove: true } : {}), ...(more.below ? { moreBelow: true } : {}) }
+  const scroll = {
+    ...(more.above != null ? { moreAbove: true, moreAboveCount: more.above } : {}),
+    ...(more.below != null ? { moreBelow: true, moreBelowCount: more.below } : {}),
+  }
   if (TAGGED_RE.test(cm[2])) return { ...taggedOptions(region, from), ...scroll }
   const blocks: string[][] = [[]]
   for (const b of region) {
@@ -1067,7 +1119,7 @@ function genericUnnumbered(body: (BodyLine | null)[]): GenericOptions | null {
   return { options, firstLine: from, ...(cursorIndex != null ? { cursorIndex } : {}), numbered: false, ...scroll }
 }
 
-const MORE_RE = /^([↑↓])\s+\d+\s+more$/
+const MORE_RE = /^([↑↓])\s+(\d+)\s+more$/
 // Linha de hook do /hooks: "[User] comando   matcher · command" (capturas populated-hooks
 // e a tela real do usuário, com [User]/[Plugin]). Com o cursor numa delas, as linhas sem
 // etiqueta na mesma coluna são o cabeçalho do evento, que o cursor pula.

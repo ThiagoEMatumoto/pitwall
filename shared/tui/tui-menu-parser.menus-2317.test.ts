@@ -136,7 +136,8 @@ describe('diálogos da CLI nunca são pergunta (2.1.317)', () => {
     expect(menu?.options.map((o) => [o.label, o.opensInput ?? false])).toEqual([
       ['Restore conversation', false],
       ['Summarize from here', true],
-      ['Summarize up to here', false],
+      // Com o cursor, também abre campo (captura 2.1.318 rewind-submenu-code).
+      ['Summarize up to here', true],
       ['Never mind', false],
     ])
     for (const name of ['2.1.317-rewind-restore-menu-down', '2.1.317-rewind-digit-into-input']) {

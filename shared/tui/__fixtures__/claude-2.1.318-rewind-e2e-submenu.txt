@@ -1,0 +1,80 @@
+● ok cinco
+
+✻ Baked for 1s · done 1:47
+
+❯ Acrescente a linha 'seis' ao final de notas.txt. Não faça mais nada.                                                  
+
+● Write(notas.txt)
+  ⎿  Added 1 line
+      1  um
+      2  tres
+      3 +seis                                                                                                    
+
+● Acrescentei seis ao final de notas.txt. Agora o arquivo tem um, tres e seis, uma por linha.
+
+✻ Brewed for 3s · done 1:47
+
+❯ Responda só: ok sete.                                                                                                 
+
+● ok sete
+
+✻ Worked for 1s · done 1:47
+
+❯ Acrescente a linha 'oito' ao final de extra.txt. Não faça mais nada.                                                  
+
+● Write(extra.txt)
+  ⎿  Added 1 line
+      1  quatro
+      2 +oito                                                                                                    
+
+● Acrescentei oito ao final de extra.txt. Agora o arquivo tem quatro e oito, uma por linha.
+
+✻ Brewed for 3s · done 1:47
+
+❯ Responda só: ok nove.                                                                                                 
+
+● ok nove
+
+✻ Brewed for 1s · done 1:47
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Rewind
+
+  Confirm you want to restore to the point before you sent this message:
+
+  │ Crie o arquivo extra.txt contendo só a linha: quatro. Não faça mais nada.
+  │ (24s ago)
+
+  This message and everything after it will be removed.
+  The code will be restored -3 in notas.txt and extra.txt.
+
+  ❯ 1. Restore code and conversation
+    2. Restore conversation
+    3. Restore code
+    4. Summarize from here
+  ↓ 5. Summarize up to here
+
+  ⚠ Restored files go back whole, losing later changes by anyone. Bash changes to other files are not undone.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
