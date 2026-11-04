@@ -138,6 +138,14 @@ export function buildTabKeys(direction: 'next' | 'prev'): string[] {
   return [direction === 'next' ? '\x1b[C' : '\x1b[D']
 }
 
+// Aba de uma pergunta: dentro do campo do Other ←/→ só movem o caret do texto, então sai
+// dele antes (mesma saída do dígito, digitOutOfInput).
+export function buildQuestionTabKeys(menu: TuiMenu, direction: 'next' | 'prev'): string[] {
+  if (!menu.tabs) return []
+  const arrow = buildTabKeys(direction)
+  return cursorInInput(menu) ? [menu.cursorIndex === 0 ? DOWN : UP, ...arrow] : arrow
+}
+
 // Submete um multi-select PURO (checkboxes marcados, uma pergunta só): o
 // parser não expõe qual aba está com o cursor agora (TuiMenuTab só tem
 // label/done, sem "aba ativa" — ver tui-menu-parser), então navegamos

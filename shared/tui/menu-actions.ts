@@ -9,8 +9,8 @@ import {
   buildMultiSubmitKeys,
   buildPlanKeys,
   buildQuestionOtherKeys,
+  buildQuestionTabKeys,
   buildSelectKeys,
-  buildTabKeys,
   buildToggleKeys,
   PLAN_KEY_DELAY_MS,
   QUESTION_KEY_DELAY_MS,
@@ -34,7 +34,7 @@ export function keysForAction(menu: TuiMenu, action: AttentionAction): string[] 
     if (action.kind === 'tab') return buildGenericTabKeys(menu, action.direction)
     return []
   }
-  if (action.kind === 'tab') return menu.tabs ? buildTabKeys(action.direction) : []
+  if (action.kind === 'tab') return buildQuestionTabKeys(menu, action.direction)
   // Várias perguntas numa chamada (abas sem multi-select): sem captura no 2.1.317.
   if (!menu.multiSelect && menu.tabs) return []
   if (action.kind === 'chat') return buildChatKeys(menu)

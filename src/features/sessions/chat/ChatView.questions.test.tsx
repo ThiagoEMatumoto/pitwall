@@ -138,6 +138,12 @@ describe('ChatView — multi-select com Other (2.1.317)', () => {
     expect(onRespond).toHaveBeenCalledTimes(2)
   })
 
+  it('aba com o cursor no campo do Other: sai dele antes da seta', () => {
+    const { onRespond } = renderMenu('2.1.317-question-multi-other-typing')
+    fireEvent.click(screen.getByLabelText('Próxima aba'))
+    expect(onRespond).toHaveBeenCalledWith([UP, '\x1b[C'])
+  })
+
   it('Other com texto já digitado no terminal: mostra o texto, sem campo', () => {
     renderMenu('2.1.317-question-multi-other-typed')
     expect(screen.getByTestId('question-other-typed').textContent).toContain('verde agua')

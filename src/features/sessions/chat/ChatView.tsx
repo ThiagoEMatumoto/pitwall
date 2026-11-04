@@ -64,7 +64,7 @@ import {
   buildReviewKeys,
   buildSelectKeys,
   buildSpaceKey,
-  buildTabKeys,
+  buildQuestionTabKeys,
   buildToggleKeys,
 } from './respond-keys'
 import { gateMenuByStatus, menuFingerprint, type TuiMenu } from '../tui-menu-parser'
@@ -559,8 +559,9 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   // cursor entre perguntas/Submit da barra de abas.
   function respondTuiTabNav(direction: 'next' | 'prev') {
     if (!canRespondTui || !tuiMenu?.tabs) return
-    if (!freshMenuMatches()) return
-    sendKeys(buildTabKeys(direction))
+    const fresh = freshMenuMatches()
+    const keys = fresh ? buildQuestionTabKeys(fresh, direction) : []
+    if (keys.length > 0) sendKeys(keys)
   }
 
   // Multi-select PURO (Bug 3): botão dedicado "Enviar respostas" — over-navega

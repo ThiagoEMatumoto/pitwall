@@ -204,3 +204,20 @@ describe('single-select com abas (várias perguntas): Other', () => {
     expect(buildQuestionOtherKeys(menu, other.index, 'Rust')).toEqual([String(other.index + 1), 'Rust', '\r'])
   })
 })
+
+describe('aba de pergunta com o cursor no campo do Other', () => {
+  it('sai do campo com ↑ antes de →/← (dentro dele a seta só move o caret)', () => {
+    for (const name of ['2.1.317-question-multi-other-typing', '2.1.317-question-multi-other-typed']) {
+      const menu = menuOf(name)
+      expect(cursorInInput(menu)).toBe(true)
+      expect(keysForAction(menu, { kind: 'tab', direction: 'next' })).toEqual([UP, '\x1b[C'])
+      expect(keysForAction(menu, { kind: 'tab', direction: 'prev' })).toEqual([UP, '\x1b[D'])
+    }
+  })
+
+  it('cursor numa opção comum: só a seta', () => {
+    expect(keysForAction(menuOf('2.1.317-question-multi-other'), { kind: 'tab', direction: 'next' })).toEqual([
+      '\x1b[C',
+    ])
+  })
+})
