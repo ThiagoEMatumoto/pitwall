@@ -40,6 +40,7 @@ import {
   rewindNavKeys,
 } from '../../shared/tui/rewind'
 import { buildGenericScrollKeys } from '../../shared/tui/respond-keys'
+import { parseChatMessages } from '../../electron/main/services/chat-transcript'
 
 const xtermHeadless = createRequire(import.meta.url)(
   process.env.XTERM_HEADLESS ?? '@xterm/headless',
@@ -2249,7 +2250,17 @@ async function run(step: Step) {
     await playKeys(keys, (k) => proc.write(k))
     await sleep(700)
   } else if ('rewindTo' in step) {
-    const target = step.rewindTo
+    // As mensagens do chat saem do JSONL real pelo parser do produto, como no ChatView.
+    const p = jsonlPath()
+    const chat = parseChatMessages(p ? readFileSync(p, 'utf8') : '').flatMap((m) =>
+      m.kind === 'user' ? [m.text] : [],
+    )
+    const target = { ...step.rewindTo, chat }
+    verdict(
+      `chat tem o alvo a ${target.fromEnd} do fim`,
+      chat[chat.length - target.fromEnd] === target.text,
+      `${chat.length} mensagens`,
+    )
     const input = readInputBox(term)
     if (!input.prompt || input.draft != null || statusOf() !== 'idle') throw new Error(`rewindTo: pre-condicao ${JSON.stringify({ ...input, status: statusOf() })}`)
     await playKeys(REWIND_OPEN_KEYS, (k) => proc.write(k), REWIND_OPEN_DELAY_MS)
