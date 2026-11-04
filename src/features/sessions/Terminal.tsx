@@ -46,6 +46,7 @@ import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './pe
 import { permissionModeLabel } from './permission-modes'
 import { jumpDecision } from './permission-jump'
 import { gateMenuByStatus, menuFingerprint, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
+import { readBufferTail } from '../../../shared/tui/read-tail'
 import { parseTuiPicker, pickerFingerprint, type TuiPicker } from './tui-picker-parser'
 import { parseWithGrowingWindow } from './tui-read-window'
 import { modelSupportsXhigh } from './model-context-limits'
@@ -146,19 +147,10 @@ function resolvePath(raw: string, cwd: string | null): string | null {
   return '/' + out.join('/')
 }
 
-// Lê as últimas `n` linhas do buffer do xterm como texto plano (uma linha por \n,
-// trim à direita). IBuffer.length = total de linhas (scrollback + viewport), com
-// getLine 0-based — o tail são as linhas [length - n, length). É a fonte de texto
-// pra detectar o modo de permissão E pra parsear o menu TUI pendente (a TUI
-// desenha pergunta + opções no fundo do buffer).
+// Últimas `n` linhas do buffer: fonte de texto pra detectar o modo de permissão E
+// pra parsear o menu TUI pendente (a TUI desenha pergunta + opções no fundo).
 function readTailText(term: Xterm, n = 40): string {
-  const buf = term.buffer.active
-  let text = ''
-  for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
-    const line = buf.getLine(y)
-    if (line) text += line.translateToString(true) + '\n'
-  }
-  return text
+  return readBufferTail(term, n)
 }
 
 // Rodapé da TUI (input box / status lines): as últimas linhas do VIEWPORT, pra

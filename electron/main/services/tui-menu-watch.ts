@@ -10,6 +10,7 @@ import {
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
 import { playKeys } from '../../../shared/tui/respond-keys'
+import { readBufferTail } from '../../../shared/tui/read-tail'
 import { actionKeyDelay, keysForAction } from '../../../shared/tui/menu-actions'
 import { menuFingerprint, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
 import type {
@@ -83,15 +84,6 @@ interface Entry {
   menuSince: number | null
   // Resposta em voo: key do menu respondido (null enquanto confere a tela).
   inflight: { key: string | null; timer: NodeJS.Timeout | null } | null
-}
-
-function readTail(term: HeadlessTerminal, n: number): string {
-  const buf = term.buffer.active
-  let text = ''
-  for (let y = Math.max(0, buf.length - n); y < buf.length; y++) {
-    text += (buf.getLine(y)?.translateToString(true) ?? '') + '\n'
-  }
-  return text
 }
 
 // Atributos de célula da caixa de input (só o fim da tela: é onde ela mora).
@@ -235,7 +227,7 @@ export class TuiMenuWatch extends EventEmitter {
     await new Promise<void>((resolve) => entry.term.write('', resolve))
     if (this.entries.get(sessionId) !== entry) return null
     const base = scanScreen(
-      (n) => readTail(entry.term, n),
+      (n) => readBufferTail(entry.term, n),
       entry.term.buffer.active.length,
       entry.term.rows,
     )
@@ -260,7 +252,7 @@ export class TuiMenuWatch extends EventEmitter {
     const scan = await this.rescan(sessionId)
     const entry = this.entries.get(sessionId)
     if (!scan || !entry) return null
-    const text = readTail(entry.term, entry.term.rows + 1).split('\n')
+    const text = readBufferTail(entry.term, entry.term.rows + 1).split('\n')
     const kept = text.map((l) => l.trimEnd())
     while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
     return kept.slice(-lines)
