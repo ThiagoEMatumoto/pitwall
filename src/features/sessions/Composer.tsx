@@ -63,6 +63,9 @@ interface Props {
   // Parse fresco do menu TUI na tela (sem o gate de status, como o deliveryVerdict).
   // Presente = o envio passa pela guarda de menu aberto (composer-menu-guard).
   readMenu?: () => TuiMenu | null
+  // Fingerprint do menu TUI aberto agora (null = nenhum). Só pra aposentar o aviso
+  // de "respondido" quando o diálogo que ele respondeu dá lugar a outro.
+  openMenuFp?: string | null
   // Responde o menu lido com o texto do composer (feedback do plano, Other da
   // pergunta). Mesmo contrato do onSend: rejeita se não deu pra digitar.
   onMenuAnswer?: (
@@ -127,6 +130,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     onInsert,
     onForwardKey,
     readMenu,
+    openMenuFp = null,
     onMenuAnswer,
     toolbar,
     collapsible = false,
@@ -156,6 +160,24 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   // @alias no início manda pra outra sessão; #arquivo vira @arquivo do destino.
   const [caret, setCaret] = useState(0)
   const [routeNotice, setRouteNotice] = useState<string | null>(null)
+  // Aviso de "respondido" (ANSWERED_NOTICE) em tela: vale até o diálogo respondido
+  // fechar e OUTRO menu abrir (o plano replanejado, a permissão da 1ª edição). Sem
+  // isso ele sobrevivia à decisão seguinte. Não compara fingerprints: o do plano muda
+  // enquanto o feedback é digitado no campo.
+  const answeredNoticeRef = useRef<{ notice: string; closed: boolean } | null>(null)
+  const openMenuFpRef = useRef(openMenuFp)
+  useEffect(() => {
+    openMenuFpRef.current = openMenuFp
+    const answered = answeredNoticeRef.current
+    if (!answered) return
+    if (openMenuFp == null) {
+      answeredNoticeRef.current = { ...answered, closed: true }
+      return
+    }
+    if (!answered.closed) return
+    answeredNoticeRef.current = null
+    setRouteNotice((n) => (n === answered.notice ? null : n))
+  }, [openMenuFp])
   // Envio em voo: o botão mostra "Enviando" e um segundo Enter não duplica o prompt.
   const [sending, setSending] = useState(false)
   // Só os #arquivos escolhidos no menu viram @arquivo; o resto do texto vai como está.
@@ -552,7 +574,9 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         return true
       })
       if (answered) clearDraft(value)
-      setRouteNotice(answered ? ANSWERED_NOTICE[route.kind] : 'Não deu pra responder — o rascunho foi mantido.')
+      const notice = answered ? ANSWERED_NOTICE[route.kind] : 'Não deu pra responder — o rascunho foi mantido.'
+      answeredNoticeRef.current = answered ? { notice, closed: openMenuFpRef.current == null } : null
+      setRouteNotice(notice)
       return
     }
     const ok = await sendThenClear(value, async () => {

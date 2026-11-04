@@ -1545,6 +1545,7 @@ function TerminalHost({
           // PTY (write escreve no pty, fora do xterm display-only).
           onForwardKey={(seq) => write(seq)}
           readMenu={readTuiMenu}
+          openMenuFp={pendingTuiMenu ? menuFingerprint(pendingTuiMenu) : null}
           onMenuAnswer={answerMenu}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).
           collapsible={mode === 'terminal' && composer === 'full'}

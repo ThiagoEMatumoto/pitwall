@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { parseTuiMenu, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
+import { menuFingerprint, parseTuiMenu, type TuiMenu } from '../../../shared/tui/tui-menu-parser'
 
 vi.mock('@/lib/ipc', () => {
   const inert = new Proxy(
@@ -98,6 +98,29 @@ describe('Composer — guarda de menu aberto', () => {
     expect(onMenuAnswer).toHaveBeenCalledWith(menu, { kind: 'plan-feedback' }, 'use bye.txt')
     expect(box).toHaveValue('')
     expect(screen.getByTestId('composer-route')).toHaveTextContent('Mudanças enviadas ao plano.')
+  })
+
+  it('o aviso de mudanças enviadas some quando o plano replanejado aparece', async () => {
+    const menu = screenOf('2.1.317-plan-default')
+    const fp = (name: string) => menuFingerprint(screenOf(name))
+    const props = {
+      sessionId: 's1',
+      onSend: vi.fn(async () => {}),
+      onInsert: vi.fn(async () => {}),
+      readMenu: () => menu,
+      onMenuAnswer: vi.fn(async () => {}),
+    }
+    const { rerender } = render(<Composer {...props} openMenuFp={fp('2.1.317-plan-default')} />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'use bye.txt' } })
+    await act(async () => fireEvent.keyDown(box, { key: 'Enter' }))
+    const notice = () => screen.queryByTestId('composer-route')?.textContent ?? ''
+    // O campo com o texto digitado e o diálogo fechando são o próprio diálogo respondido.
+    rerender(<Composer {...props} openMenuFp={fp('2.1.317-plan-feedback-typed')} />)
+    rerender(<Composer {...props} openMenuFp={null} />)
+    expect(notice()).toContain('Mudanças enviadas ao plano.')
+    rerender(<Composer {...props} openMenuFp={fp('2.1.317-plan-replanned')} />)
+    expect(notice()).not.toContain('Mudanças enviadas ao plano.')
   })
 
   it('plano aberto: Enter com o composer vazio não aprova às cegas', () => {
