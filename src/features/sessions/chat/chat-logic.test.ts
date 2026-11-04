@@ -15,6 +15,8 @@ import {
   resolveInteractive,
   settleDialogEchoes,
   absorbDialogLines,
+  reconcileEchoes,
+  userLines,
   visibleEchoes,
   showTerminalWaitBanner,
   type Echo,
@@ -116,6 +118,58 @@ describe('echo of a slash command that opens a CLI dialog', () => {
       { text: 'a /path in the middle', resolveAt: 5 },
     ]
     expect(settleDialogEchoes(echoes)).toBe(echoes)
+  })
+})
+
+describe('echo after a rewind (the disk count goes down)', () => {
+  // JSONL real (sonda e2e-rewind-restore, claude 2.1.318): Restore conversation na 5ª
+  // mensagem e depois "Responda só: ok depois." enviada pelo composer. O ramo desfeito
+  // sai do chat junto com a chegada do prompt novo: 10 mensagens do usuário viram 5.
+  const jsonl = readFileSync(
+    join(__dirname, '../../../../shared/tui/__fixtures__/claude-2.1.318-rewind-e2e-restored.jsonl'),
+    'utf8',
+  )
+  const lines = jsonl.trimEnd().split('\n')
+  const cut = lines.findIndex((l) => l.includes('Responda só: ok depois.'))
+  const before = userLines(parseChatMessages(lines.slice(0, cut).join('\n')))
+  const after = userLines(parseChatMessages(jsonl))
+
+  it('resolves the echo of the prompt that made the rewound branch go away', () => {
+    expect(before).toHaveLength(10)
+    expect(after).toHaveLength(5)
+    const echoes: Echo[] = [{ text: 'Responda só: ok depois.', resolveAt: nextResolveAt(before.length, 0) }]
+    expect(reconcileEchoes(echoes, before, after)).toEqual([])
+  })
+
+  it('keeps the next echo one line away from resolving', () => {
+    const echoes: Echo[] = [
+      { text: 'Responda só: ok depois.', resolveAt: nextResolveAt(before.length, 0) },
+      { text: 'e mais uma', resolveAt: nextResolveAt(before.length, 1) },
+    ]
+    const left = reconcileEchoes(echoes, before, after)
+    expect(left).toEqual([{ text: 'e mais uma', resolveAt: after.length + 1 }])
+    const next = [...after, user('e mais uma')]
+    expect(reconcileEchoes(left, after, next)).toEqual([])
+  })
+
+  it('resolves when the rewind undid exactly one message (the count stays the same)', () => {
+    const prev = [user('a'), user('b'), user('c')]
+    const next = [user('a'), user('b'), user('c, reescrita')]
+    const echoes: Echo[] = [{ text: 'c, reescrita', resolveAt: nextResolveAt(3, 0) }]
+    expect(reconcileEchoes(echoes, prev, next)).toEqual([])
+  })
+
+  it('resolves when the new prompt repeats the text of the one it replaced', () => {
+    const prev = [user('a'), user('sim'), user('d')]
+    const next = [user('a'), user('sim')]
+    const echoes: Echo[] = [{ text: 'sim', resolveAt: nextResolveAt(3, 0) }]
+    expect(reconcileEchoes(echoes, prev, next)).toEqual([])
+  })
+
+  it('behaves as before when the disk only grows', () => {
+    const echoes: Echo[] = [{ text: 'b', resolveAt: 2 }]
+    expect(reconcileEchoes(echoes, [user('a')], [user('a')])).toBe(echoes)
+    expect(reconcileEchoes(echoes, [user('a')], [user('a'), user('b')])).toEqual([])
   })
 })
 

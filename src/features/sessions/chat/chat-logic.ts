@@ -185,6 +185,36 @@ export function absorbDialogLines(echoes: Echo[], fresh: ChatMessage[]): Echo[] 
   return out
 }
 
+// Linhas do disco que contam para os ecos (as mesmas de countUserMessages), em ordem.
+export function userLines(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((m) => m.kind === 'user' || m.kind === 'command')
+}
+
+function sameLine(a: ChatMessage, b: ChatMessage): boolean {
+  if (a.kind === 'user' && b.kind === 'user') return a.text === b.text
+  if (a.kind === 'command' && b.kind === 'command') return a.name === b.name && a.args === b.args
+  return false
+}
+
+// Reconcilia os ecos com uma nova leitura do disco. Depois de um "Restore conversation" o
+// parser tira do chat o ramo desfeito na mesma leitura em que o prompt novo chega
+// (rewoundUuids), e a contagem pode cair ou ficar igual: as linhas que saíram deixam de
+// contar, então os alvos dos ecos descem junto. O que mudou desde o fim do prefixo comum é
+// linha nova. Contagem menor só acontece com um prompt novo chegando, então ao menos a
+// última linha é nova mesmo que repita o texto do prompt que ela substituiu.
+export function reconcileEchoes(echoes: Echo[], prev: ChatMessage[], next: ChatMessage[]): Echo[] {
+  if (echoes.length === 0) return echoes
+  const max = Math.min(prev.length, next.length)
+  let kept = 0
+  while (kept < max && sameLine(prev[kept], next[kept])) kept++
+  if (next.length < prev.length) kept = Math.min(kept, Math.max(0, next.length - 1))
+  const removed = prev.length - kept
+  const shifted = removed ? echoes.map((e) => ({ ...e, resolveAt: e.resolveAt - removed })) : echoes
+  const absorbed = absorbDialogLines(shifted, next.slice(kept))
+  const out = pendingEchoes(absorbed, next.length)
+  return absorbed === echoes && out.length === echoes.length ? echoes : out
+}
+
 function slashName(text: string): string {
   return text.trimStart().slice(1).split(/\s/, 1)[0]
 }
