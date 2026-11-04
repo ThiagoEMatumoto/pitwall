@@ -142,6 +142,25 @@ export function pendingEchoes(echoes: Echo[], diskUserCount: number): Echo[] {
   return echoes.filter((e) => diskUserCount < e.resolveAt)
 }
 
+// Eco de slash command com o diálogo da CLI na tela: o diálogo é a confirmação de que a
+// CLI recebeu o comando, e o disco pode nunca ter uma linha dele (no 2.1.318 /hooks e
+// /permissions não gravam nada; o /model só grava ao fechar). Sai da fila e os ecos de
+// depois descem uma posição, para não esperarem por uma linha que não vem.
+export function settleDialogEchoes(echoes: Echo[]): Echo[] {
+  if (!echoes.some((e) => isSlashCommand(e.text))) return echoes
+  const kept: Echo[] = []
+  let dropped = 0
+  for (const e of echoes) {
+    if (isSlashCommand(e.text)) dropped++
+    else kept.push(dropped ? { ...e, resolveAt: e.resolveAt - dropped } : e)
+  }
+  return kept
+}
+
+function isSlashCommand(text: string): boolean {
+  return /^\/[^\s/]/.test(text.trimStart())
+}
+
 // Stick-to-bottom: só consideramos "no fim" (e portanto auto-scrollamos no
 // próximo conteúdo) se a distância até o fundo está dentro de uma folga pequena.
 // Folga absorve subpixels e o crescimento de uma linha em digitação.

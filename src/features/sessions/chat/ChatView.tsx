@@ -79,6 +79,7 @@ import {
   pendingInteractive,
   resolveChatViewState,
   resolveInteractive,
+  settleDialogEchoes,
   showTerminalWaitBanner,
   type ChatViewState,
   type Echo,
@@ -462,6 +463,12 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
       tuiGeneric != null)
   const coveredPendingId =
     showTuiCard && liveMenuCoversPending(pendingPrompt, tuiMenu?.kind) ? pendingPrompt?.id : null
+  // Diálogo da CLI na tela (menu genérico, picker): o slash command que o abriu chegou,
+  // e o disco pode nunca gravá-lo. Sem isto a bolha do /hooks ficava em "enviando…".
+  const cliDialogOpen = (showTuiCard && tuiMenu?.kind === 'menu') || tuiPicker != null
+  useEffect(() => {
+    if (cliDialogOpen) setEchoes(settleDialogEchoes)
+  }, [cliDialogOpen])
   // Teclas de uma resposta ainda tocando (o Other do multi-select leva ~1,2 s). O
   // cursor não entra no fingerprint, então um 2º clique nesse meio passaria no guard
   // e calcularia as setas de um cursor a caminho: as duas sequências se intercalam.

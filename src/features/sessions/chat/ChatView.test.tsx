@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createRef } from 'react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseTuiMenu } from '../../../../shared/tui/tui-menu-parser'
 import type { ChatMessage } from '../../../../shared/types/chat'
@@ -36,7 +37,7 @@ vi.mock('./useChatTranscript', () => ({
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
-import { ChatView } from './ChatView'
+import { ChatView, type ChatViewHandle } from './ChatView'
 import { PlanCard } from './PlanCard'
 import { PLAN_KEY_DELAY_MS } from './respond-keys'
 import { formatWakeEnvelope } from '../../../../electron/main/services/handoff/handoff-wake'
@@ -295,5 +296,38 @@ describe('PlanCard', () => {
     expect(hints.textContent).not.toContain('⏎')
     expect(hints.querySelector('kbd svg')).toBeNull()
     expect(hints.textContent).toContain('esc')
+  })
+})
+
+// /hooks e /permissions não gravam linha nenhuma no JSONL (claude 2.1.318): a bolha
+// esperava o disco e ficava em "enviando…" para sempre. O diálogo na tela é a confirmação.
+describe('eco de slash command que abre diálogo da CLI', () => {
+  const hooksMenu = () =>
+    parseTuiMenu(
+      readFileSync(
+        join(
+          __dirname,
+          '../../../../shared/tui/__fixtures__/claude-2.1.318-fullscreen-hooks-effort-label.txt',
+        ),
+        'utf8',
+      ),
+    )!
+
+  it('a bolha do /hooks sai de "enviando…" quando o diálogo aparece', async () => {
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('/hooks'))
+    expect(screen.getByText('enviando…')).toBeTruthy()
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiMenu={hooksMenu()} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+  })
+
+  it('mensagem comum segue esperando o disco com o diálogo aberto', async () => {
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('oi'))
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiMenu={hooksMenu()} />)
+    await screen.findByText('Hooks')
+    expect(screen.getByText('enviando…')).toBeTruthy()
   })
 })
