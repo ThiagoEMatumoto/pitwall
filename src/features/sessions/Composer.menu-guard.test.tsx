@@ -167,13 +167,18 @@ describe('Composer — guarda de menu aberto', () => {
     expect(onInsert).not.toHaveBeenCalled()
   })
 
-  it('multi-select aberto (Other ainda sem caminho): bloqueia', async () => {
-    const { onSend, onMenuAnswer, box } = setup(screenOf('2.1.317-question-multi-other'))
+  it('multi-select aberto: o texto vira o Other, sem enviar como prompt', async () => {
+    const menu = screenOf('2.1.317-question-multi-other')
+    const { onSend, onMenuAnswer, box } = setup(menu)
     fireEvent.change(box, { target: { value: 'roxo' } })
     await act(async () => fireEvent.keyDown(box, { key: 'Enter' }))
     expect(onSend).not.toHaveBeenCalled()
-    expect(onMenuAnswer).not.toHaveBeenCalled()
-    expect(box).toHaveValue('roxo')
+    expect(onMenuAnswer).toHaveBeenCalledWith(
+      menu,
+      { kind: 'question-other', optionIndex: 3, multi: true },
+      'roxo',
+    )
+    expect(screen.getByTestId('composer-route')).toHaveTextContent('Envie as respostas pelo card')
   })
 
   it('plano aberto: Shift+Tab não chega ao diálogo, que aprovaria pelo atalho', () => {
@@ -203,12 +208,12 @@ describe('Composer — guarda de menu aberto', () => {
     expect(onForwardKey).toHaveBeenCalledWith('\x1b[Z')
   })
 
-  it('menu sem card (nudge do auto mode): o aviso aponta o terminal, não um card', async () => {
+  it('nudge do auto mode: bloqueia e aponta o card do menu', async () => {
     const { onSend, box } = setup(screenOf('2.1.317-auto-mode-env-nudge'))
     fireEvent.change(box, { target: { value: 'oi' } })
     await act(async () => fireEvent.keyDown(box, { key: 'Enter' }))
     expect(onSend).not.toHaveBeenCalled()
-    expect(screen.getByTestId('composer-route')).toHaveTextContent('menu aberto no terminal')
+    expect(screen.getByTestId('composer-route')).toHaveTextContent('responda no card acima')
   })
 
   it('a resposta falhou: mantém o rascunho e avisa', async () => {

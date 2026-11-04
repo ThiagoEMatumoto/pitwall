@@ -80,8 +80,10 @@ export function scanScreen(
   }
 }
 
-function menuReason(menu: TuiMenu): AttentionReason {
+function menuReason(menu: TuiMenu): AttentionReason | undefined {
   if (menu.kind === 'permission' || menu.kind === 'trust' || menu.kind === 'plan') return menu.kind
+  // O nudge do auto mode aparece idle, depois do turno: não é pergunta do Claude.
+  if (menu.kind === 'nudge') return undefined
   return 'question'
 }
 

@@ -7,7 +7,7 @@ import { sendToApi, sessionsApi } from '@/lib/ipc'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
 import {
-  ANSWERED_NOTICE,
+  answeredNotice,
   forwardKeyNotice,
   insertBlockedNotice,
   routeComposerSend,
@@ -574,7 +574,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
         return true
       })
       if (answered) clearDraft(value)
-      const notice = answered ? ANSWERED_NOTICE[route.kind] : 'Não deu pra responder — o rascunho foi mantido.'
+      const notice = answered ? answeredNotice(route) : 'Não deu pra responder — o rascunho foi mantido.'
       answeredNoticeRef.current = answered ? { notice, closed: openMenuFpRef.current == null } : null
       setRouteNotice(notice)
       return

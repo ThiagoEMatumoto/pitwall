@@ -1,0 +1,132 @@
+(B[?2004h[?25l[2D[3B[2C[3AUse a ferramenta AskUserQuestion com[40GUMA[44Gpergunta[53GmultiSelect[65Gcom[69G3[71Gopções[78Gsobre[84Gfrutas[91Gfavoritas.[102GDepois[109Gda[1B  resposta, só diga ok e pare.[K[1B[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[39m
+[30C[3A[?25h]0;◐ Claude Code[?25l[30D[3B[5A[48;5;237m[38;5;246m❯ [38;5;231mUse a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre frutas favoritas. Depois da [39m         [1B  [38;5;231mresposta, só diga ok e pare.[39m                                                                                          [2C[1B[49m[K[1B[38;5;174m*[39m [38;5;174mFluttering… [39m[K[2C[1B[K
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[38;5;246m❯ [39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[40G·[42Gesc[46Gto[49Ginterrupt[39m
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m·[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[39m
+
+
+
+
+
+[2C[3A[?25h]0;◐ Pergunta sobre frutas favoritas[?25l[2D[3B[2C[6A[38;5;174mSchlepp[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[14C[6A[38;5;246m(0s · thinking with low effort)[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m*[39m
+
+
+
+
+
+[2C[3A[?25h]0;◑ Pergunta sobre frutas favoritas[?25l[2D[3B[6A[38;5;174m✶[16G[38;5;246m1[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✻[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✽[21G[38;5;247mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[20C[6A[38;5;248mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[20C[6A[38;5;246m↓[39m [38;5;246m25 tokens · [38;5;248mthinking with low effort[38;5;246m)[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;231m●[3G[39m[K[2B[38;5;174m✽[39m [38;5;174mSchlepping… [38;5;246m(1s · ↓[39m [38;5;246m25 tokens · [38;5;248mthinking with low effort[38;5;246m)[39m[K[1B[K[2B[38;5;246m❯ [39m[K
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G[38;5;220m⏵⏵[6Gauto[11Gmode[16Gon[38;5;246m (shift+tab[30Gto[33Gcycle)[40G·[42Gesc[46Gto[49Ginterrupt[39m
+[2C[3A[?25h[?25l[2D[3B[2C[8AVou[7Gperguntar[17Gsobre[23Gfrutas[30Gfavoritas[40Gcom[44Ga[46Gferramenta[57GAskUserQuestion.
+
+
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✻[23G[38;5;246m50[35G[38;5;249mthinking with low effort[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[22C[6A[38;5;246m75[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✶[23G[38;5;246m113 tokens · [38;5;249mthinking with low e[56Gfort[38;5;246m)[39m
+
+
+
+
+
+[2C[3A[?25h]0;◐ Pergunta sobre frutas favoritas[?25l[2D[3B[6A[38;5;174m*[16G[38;5;246m2[24G38[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[6A[38;5;174m✢[24G[38;5;246m63[39m
+
+
+
+
+
+[2C[3A[?25h[?25l[2D[3B[23C[6A[38;5;246m88[39m
+
+
+
+
+
+[2C[3A[?25h]0;✳ Pergunta sobre frutas favoritas[?25l[2D[3B[7A[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B← [48;5;153m[38;5;16m ☐ Frutas [39m[49m ✔ Submit[23G →[K[2B[38;5;231m[1mQuais são as suas frutas favoritas?[22m[39m[K[1B[K[1B[38;5;153m❯[39m [38;5;246m1.[39m [ ] [38;5;153mManga[39m[K[2C[1B       [38;5;246mFruta tropical doce[30Ge sucu[38Gnta[39m[K
+[3G[38;5;246m2.[6G[39m[[8G][10GMorango
+[10G[38;5;246mFruta[16Gvermelha[25Gpequena[33Ge[35Garomática[39m
+[3G[38;5;246m3.[6G[39m[[8G][10GBanana
+[10G[38;5;246mFruta[16Gamarela[24Gmacia[30Ge[32Gfácil[38Gde[41Glevar[39m
+[3G[38;5;246m4.[6G[39m[[8G][10G[38;5;246mType[15Gsomething[39m
+[6G[1mSubmit[22m
+[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+[3G5.[6GChat[11Gabout[17Gthis
+
+[38;5;246mEnter[7Gto[10Gselect[17G·[19G↑/↓[23Gto[26Gnavigate[35G·[37GEsc[41Gto[44Gcancel[39m
+[12A

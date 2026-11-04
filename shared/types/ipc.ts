@@ -1512,9 +1512,19 @@ export type AttentionAction =
   | { kind: 'amend'; optionIndex: number; text: string }
   // Diálogo de plano: a opção sai do intent no menu fresco (buildPlanKeys).
   | { kind: 'plan'; intent: PlanIntent | 'reject'; text?: string }
+  // Multi-select: alterna um checkbox (não envia nada).
+  | { kind: 'toggle'; optionIndex: number }
+  // Multi-select: vai à linha "Submit" e abre a revisão.
+  | { kind: 'submit-multi' }
+  // Sentinela "Chat about this": recusa a pergunta pedindo para esclarecer.
+  | { kind: 'chat' }
+  // Esc no diálogo (fecha o menu genérico, cancela a pergunta).
+  | { kind: 'esc' }
+  // Abas do diálogo genérico ("←/→ to switch") ou da pergunta.
+  | { kind: 'tab'; direction: 'next' | 'prev' }
 
-// Ações que apontam uma opção pelo índice (permissão, trust, pergunta).
-export type MenuOptionAction = Exclude<AttentionAction, { kind: 'plan' }>
+// Ações que apontam uma opção pelo índice (permissão, trust, pergunta, menu genérico).
+export type MenuOptionAction = Extract<AttentionAction, { optionIndex: number }>
 
 export interface AttentionRespondInput {
   sessionId: string

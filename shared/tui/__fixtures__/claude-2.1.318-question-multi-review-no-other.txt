@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.318
+▝▜██████▀  Haiku 5.5 with low effort · Claude Ultra
+ ▝▝   ▝▝   ~/…/27d08eff-5b3f-41ed-9512-4090ae0944fa/scratchpad/probes2/question-multi-keys2/cwd
+
+
+❯ Use a ferramenta AskUserQuestion com UMA pergunta multiSelect com 3 opções sobre frutas favoritas. Depois da          
+  resposta, só diga ok e pare.                                                                                          
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Frutas  ✔ Submit  →
+
+Review your answers
+  
+ ● Quais são as suas frutas favoritas?
+   → Morango
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
