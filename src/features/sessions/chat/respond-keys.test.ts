@@ -116,6 +116,20 @@ describe('buildPlanKeys — capturas reais do 2.1.317', () => {
     expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['\x1b[A', '2'])
   })
 
+  // Cursor levado ao campo por ↓↓ (sonda e2e-cursor-on-feedback-*): mesmo foco do dígito.
+  it('cursor no campo por setas: aprovar sai com ↑, feedback cola sem dígito', () => {
+    const menu = planFixture('plan-feedback-cursor-arrows')
+    expect(menu.cursorIndex).toBe(2)
+    expect(buildPlanKeys(menu, 'approve-manual')).toEqual(['\x1b[A', '2'])
+    expect(buildPlanKeys(menu, 'feedback', 'teste cursor')).toEqual([PASTE('teste cursor'), '\r'])
+  })
+
+  it('feedback com fim de paste + Enter + dígito embutidos não vira tecla', () => {
+    const keys = buildPlanKeys(planFixture('plan-default'), 'feedback', 'abc\x1b[201~\r1')
+    expect(keys).toEqual(['3', PASTE('abc [201~ 1'), '\r'])
+    expect(keys[1].match(/\x1b/g)).toHaveLength(2)
+  })
+
   it('rejeitar sem feedback = Esc, de qualquer posição', () => {
     expect(buildPlanKeys(planFixture('plan-default'), 'reject')).toEqual(['\x1b'])
     expect(buildPlanKeys(planFixture('plan-feedback-input'), 'reject')).toEqual(['\x1b'])

@@ -215,6 +215,39 @@ const SCENARIOS: Record<string, Scenario> = {
       { dump: '31-after-esc' },
     ],
   },
+  // Cursor levado ao campo por setas (não pelo dígito): o campo fica focado e vazio, e um
+  // dígito ali vira texto. Aprovar precisa sair do campo antes.
+  'e2e-cursor-on-feedback-approve': {
+    args: BASE_ARGS,
+    prompt: PLAN_PROMPT,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { keys: ['down', 'down'], gapMs: 600 },
+      { sleep: 800 },
+      { dump: '20-cursor-on-feedback', fixture: 'plan-feedback-cursor-arrows' },
+      { respond: 'approve-manual' },
+      { expectFooter: /manual mode on/ },
+      { expectResult: { isError: false } },
+      { dump: '40-after-approve' },
+      { sleep: 2000 },
+    ],
+  },
+  'e2e-cursor-on-feedback-feedback': {
+    args: BASE_ARGS,
+    prompt: PLAN_PROMPT,
+    steps: [
+      { wait: 'menu', kind: 'plan', timeout: 180_000 },
+      { dump: '10-plan-dialog' },
+      { keys: ['down', 'down'], gapMs: 600 },
+      { sleep: 800 },
+      { dump: '20-cursor-on-feedback' },
+      { respond: 'feedback', feedback: 'teste cursor' },
+      { expectResult: { isError: true, feedback: 'teste cursor' } },
+      { dump: '30-after-feedback' },
+      { sleep: 2000 },
+    ],
+  },
   'e2e-clear-context-manual': {
     args: [...BASE_ARGS, '--settings', JSON.stringify({ showClearContextOnPlanAccept: true })],
     prompt: PLAN_PROMPT_EXEC,
