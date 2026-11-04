@@ -12,6 +12,10 @@ export interface Echo {
   // histórico com texto idêntico não resolve o eco por engano, e envios rápidos
   // em sequência não resolvem uns aos outros.
   resolveAt: number
+  // Slash command confirmado pelo diálogo da CLI (settleDialogEchoes): não aparece e não
+  // segura posição na contagem. Fica guardado porque alguns ainda gravam uma linha ao
+  // fechar (o /model no Esc), e essa linha é dele, não do eco seguinte.
+  settled?: boolean
 }
 
 // Estado de tela do Chat View. Distingue "aguardando o JSONL nascer" (sessão
@@ -137,24 +141,52 @@ export function nextResolveAt(diskUserCount: number, pendingCount: number): numb
   return diskUserCount + pendingCount + 1
 }
 
-// Ecos ainda não resolvidos dada a contagem de usuário atual no disco.
+// Ecos ainda não resolvidos dada a contagem de usuário atual no disco. O liquidado não
+// depende da contagem: só sai quando a linha dele chega (absorbDialogLines).
 export function pendingEchoes(echoes: Echo[], diskUserCount: number): Echo[] {
-  return echoes.filter((e) => diskUserCount < e.resolveAt)
+  return echoes.filter((e) => e.settled || diskUserCount < e.resolveAt)
+}
+
+// Ecos que viram bolha "enviando…" e ocupam posição na contagem.
+export function visibleEchoes(echoes: Echo[]): Echo[] {
+  return echoes.filter((e) => !e.settled)
 }
 
 // Eco de slash command com o diálogo da CLI na tela: o diálogo é a confirmação de que a
 // CLI recebeu o comando, e o disco pode nunca ter uma linha dele (no 2.1.318 /hooks e
-// /permissions não gravam nada; o /model só grava ao fechar). Sai da fila e os ecos de
+// /permissions não gravam nada; o /model só grava ao fechar). Vira liquidado e os ecos de
 // depois descem uma posição, para não esperarem por uma linha que não vem.
 export function settleDialogEchoes(echoes: Echo[]): Echo[] {
-  if (!echoes.some((e) => isSlashCommand(e.text))) return echoes
-  const kept: Echo[] = []
+  if (!echoes.some((e) => !e.settled && isSlashCommand(e.text))) return echoes
   let dropped = 0
-  for (const e of echoes) {
-    if (isSlashCommand(e.text)) dropped++
-    else kept.push(dropped ? { ...e, resolveAt: e.resolveAt - dropped } : e)
+  return echoes.map((e) => {
+    if (e.settled) return e
+    if (isSlashCommand(e.text)) {
+      dropped++
+      return { ...e, settled: true }
+    }
+    return dropped ? { ...e, resolveAt: e.resolveAt - dropped } : e
+  })
+}
+
+// Linhas novas do disco (user/command, em ordem): a de um comando liquidado é dele. Ele
+// sai e os ecos de depois sobem a posição de volta, senão essa linha resolveria um eco
+// que não chegou (teclas digitadas com o picker aberto vão para o picker).
+export function absorbDialogLines(echoes: Echo[], fresh: ChatMessage[]): Echo[] {
+  let out = echoes
+  for (const line of fresh) {
+    if (line.kind !== 'command') continue
+    const at = out.findIndex((e) => e.settled && slashName(e.text) === line.name)
+    if (at < 0) continue
+    out = out.flatMap((e, i) =>
+      i === at ? [] : i > at && !e.settled ? [{ ...e, resolveAt: e.resolveAt + 1 }] : [e],
+    )
   }
-  return kept
+  return out
+}
+
+function slashName(text: string): string {
+  return text.trimStart().slice(1).split(/\s/, 1)[0]
 }
 
 function isSlashCommand(text: string): boolean {

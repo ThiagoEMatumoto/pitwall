@@ -75,11 +75,13 @@ import {
   isAtBottom,
   liveMenuCoversPending,
   nextResolveAt,
+  absorbDialogLines,
   pendingEchoes,
   pendingInteractive,
   resolveChatViewState,
   resolveInteractive,
   settleDialogEchoes,
+  visibleEchoes,
   showTerminalWaitBanner,
   type ChatViewState,
   type Echo,
@@ -152,24 +154,38 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   const stickRef = useRef(true)
 
   const diskUserCount = useMemo(() => countUserMessages(messages), [messages])
+  const shownEchoes = useMemo(() => visibleEchoes(echoes), [echoes])
 
   useImperativeHandle(
     ref,
     () => ({
       pushEcho: (text: string) => {
         stickRef.current = true
-        setEchoes((prev) => [...prev, { text, resolveAt: nextResolveAt(diskUserCount, prev.length) }])
+        setEchoes((prev) => [
+          ...prev,
+          { text, resolveAt: nextResolveAt(diskUserCount, visibleEchoes(prev).length) },
+        ])
       },
     }),
     [diskUserCount],
   )
 
   // Poda ecos resolvidos quando a contagem de usuário no disco avança.
+  const seenDiskCount = useRef(diskUserCount)
   useEffect(() => {
+    const from = seenDiskCount.current
+    seenDiskCount.current = diskUserCount
+    const fresh =
+      diskUserCount > from
+        ? messages.filter((m) => m.kind === 'user' || m.kind === 'command').slice(from)
+        : []
     setEchoes((prev) => {
-      const next = pendingEchoes(prev, diskUserCount)
-      return next.length === prev.length ? prev : next
+      const absorbed = absorbDialogLines(prev, fresh)
+      const next = pendingEchoes(absorbed, diskUserCount)
+      return absorbed === prev && next.length === prev.length ? prev : next
     })
+    // messages entra pelo diskUserCount: só as linhas novas importam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diskUserCount])
 
   // Espelho em estado do stickRef, só pra mostrar o atalho "Ir para o fim".
@@ -208,8 +224,8 @@ export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ se
   }
 
   const rendered = useMemo<ChatMessage[]>(
-    () => [...messages, ...echoes.map((e) => ({ kind: 'user', text: e.text }) as ChatMessage)],
-    [messages, echoes],
+    () => [...messages, ...shownEchoes.map((e) => ({ kind: 'user', text: e.text }) as ChatMessage)],
+    [messages, shownEchoes],
   )
 
   // Conteúdo novo com o usuário lendo lá em cima: não puxamos a rolagem, avisamos.

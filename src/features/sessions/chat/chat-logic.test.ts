@@ -14,6 +14,8 @@ import {
   resolveChatViewState,
   resolveInteractive,
   settleDialogEchoes,
+  absorbDialogLines,
+  visibleEchoes,
   showTerminalWaitBanner,
   type Echo,
 } from './chat-logic'
@@ -82,7 +84,8 @@ describe('echo of a slash command that opens a CLI dialog', () => {
   it('is settled by the dialog, since the disk never gets it', () => {
     const echoes: Echo[] = [{ text: '/hooks', resolveAt: nextResolveAt(3, 0) }]
     expect(pendingEchoes(echoes, 3)).toHaveLength(1)
-    expect(settleDialogEchoes(echoes)).toEqual([])
+    expect(visibleEchoes(settleDialogEchoes(echoes))).toEqual([])
+    expect(pendingEchoes(settleDialogEchoes(echoes), 3)).toHaveLength(1)
   })
 
   it('does not hold a later message on the settled slot', () => {
@@ -90,9 +93,21 @@ describe('echo of a slash command that opens a CLI dialog', () => {
     echoes = [...echoes, { text: '/permissions', resolveAt: nextResolveAt(3, echoes.length) }]
     echoes = [...echoes, { text: 'hello', resolveAt: nextResolveAt(3, echoes.length) }]
     const settled = settleDialogEchoes(echoes)
-    expect(settled).toEqual([{ text: 'hello', resolveAt: 4 }])
+    expect(visibleEchoes(settled)).toEqual([{ text: 'hello', resolveAt: 4 }])
     // O disco grava só o 'hello' (count 3 → 4): nada fica pendente.
-    expect(pendingEchoes(settled, 4)).toHaveLength(0)
+    expect(visibleEchoes(pendingEchoes(settled, 4))).toHaveLength(0)
+  })
+
+  it('gives the slot back when the settled command writes its line later (/model on Esc)', () => {
+    let echoes: Echo[] = [{ text: '/model', resolveAt: nextResolveAt(3, 0) }]
+    echoes = settleDialogEchoes(echoes)
+    echoes = [...echoes, { text: 'hello', resolveAt: nextResolveAt(3, visibleEchoes(echoes).length) }]
+    // O disco grava só o /model (3 → 4): o 'hello' não chegou e segue pendente.
+    echoes = absorbDialogLines(echoes, [{ kind: 'command', name: 'model', args: '' }])
+    expect(pendingEchoes(echoes, 4)).toEqual([{ text: 'hello', resolveAt: 5 }])
+    // Linha de outro comando não é do liquidado.
+    const other = settleDialogEchoes([{ text: '/hooks', resolveAt: 4 }, { text: 'x', resolveAt: 5 }])
+    expect(absorbDialogLines(other, [{ kind: 'command', name: 'model', args: '' }])).toBe(other)
   })
 
   it('leaves messages that are not slash commands waiting for the disk', () => {

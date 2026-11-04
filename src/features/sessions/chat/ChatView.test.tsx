@@ -4,6 +4,7 @@ import { createRef } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseTuiMenu } from '../../../../shared/tui/tui-menu-parser'
+import { parseModelMenu } from '../tui-picker-parser'
 import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { sessionsApiMock, transcript } = vi.hoisted(() => ({
@@ -329,5 +330,49 @@ describe('eco de slash command que abre diálogo da CLI', () => {
     rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiMenu={hooksMenu()} />)
     await screen.findByText('Hooks')
     expect(screen.getByText('enviando…')).toBeTruthy()
+  })
+
+  // O /model grava o local_command ao fechar (2.1.318): essa linha é do /model, não da
+  // mensagem enviada com o picker aberto. As teclas dela foram para o picker, então ela
+  // não chegou e precisa seguir em "enviando…".
+  it('a linha do /model ao fechar não resolve a mensagem enviada com o picker aberto', async () => {
+    const picker = parseModelMenu(
+      [
+        '❯ /model',
+        '',
+        '─'.repeat(68),
+        '  Select model',
+        '  ❯ 1. Default (recommended) ✔  Opus 4.8 with 1M context · Best for everyday, complex tasks',
+        '    2. Sonnet                   Sonnet 5 · Efficient for routine tasks',
+        '',
+        '  Enter to set as default · s to use this session only · Esc to cancel',
+      ].join('\n'),
+    )!
+    expect(picker).not.toBeNull()
+    const ref = createRef<ChatViewHandle>()
+    const { rerender } = render(<ChatView ref={ref} sessionId="s1" status="idle" />)
+    act(() => ref.current!.pushEcho('/model'))
+    rerender(<ChatView ref={ref} sessionId="s1" status="waiting" tuiPicker={picker} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+    act(() => ref.current!.pushEcho('oi'))
+    expect(screen.getByText('enviando…')).toBeTruthy()
+
+    transcript.messages = parseChatMessages(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'local_command',
+        content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>',
+      }),
+    )
+    expect(transcript.messages).toEqual([{ kind: 'command', name: 'model', args: '' }])
+    rerender(<ChatView ref={ref} sessionId="s1" status="idle" tuiPicker={null} />)
+    await screen.findByText('oi')
+    expect(screen.getByText('enviando…')).toBeTruthy()
+
+    // Quando o 'oi' chega ao disco a bolha sai de "enviando…".
+    transcript.messages = [...transcript.messages, { kind: 'user', text: 'oi' }]
+    rerender(<ChatView ref={ref} sessionId="s1" status="idle" tuiPicker={null} />)
+    await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
+    expect(screen.getAllByText('oi')).toHaveLength(1)
   })
 })
