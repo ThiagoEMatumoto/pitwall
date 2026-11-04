@@ -220,6 +220,38 @@ export function buildGenericSelectKeys(menu: TuiMenu, optionIndex: number): stri
   return []
 }
 
+// Opção que abre campo no diálogo genérico ("Summarize from here" do /rewind): setas até
+// ela, o texto e Enter (sonda rewind-populated: com o cursor na opção, letras viram texto
+// do campo). Campo que já tem texto não recebe mais: concatenaria.
+export function buildGenericInputKeys(menu: TuiMenu, optionIndex: number, text: string): string[] {
+  if (menu.kind !== 'menu' || menu.cursorIndex == null) return []
+  const target = menu.options.find((o) => o.index === optionIndex)
+  if (!target?.opensInput || inputHasText(target.label)) return []
+  const clean = cleanText(text)
+  if (clean === '') return []
+  return [...arrowsBy(optionIndex - menu.cursorIndex), clean, '\r']
+}
+
+// "Summarize from here: foco nas notas" (captura rewind-submenu-summarize-typed); o campo
+// vazio com o cursor é "…: add context (optional)".
+function inputHasText(label: string): boolean {
+  return /:\s+\S/.test(label) && !/\(optional\)$/i.test(label)
+}
+
+// Lista rolada do diálogo genérico ("↓ 5. Summarize up to here" no submenu do /rewind com
+// código, "↓ 4 more" no seletor): o cursor passa da borda da janela e ela rola uma linha.
+// É passo, não resposta — o menu continua aberto com outra janela.
+export function buildGenericScrollKeys(menu: TuiMenu, direction: 'up' | 'down'): string[] {
+  if (menu.kind !== 'menu' || menu.cursorIndex == null || menu.options.length === 0) return []
+  const first = menu.options[0].index
+  const last = menu.options[menu.options.length - 1].index
+  if (direction === 'down') return menu.moreBelow ? arrowsBy(last - menu.cursorIndex + 1) : []
+  return menu.moreAbove ? arrowsBy(first - menu.cursorIndex - 1) : []
+}
+
+// A seta precisa ser desenhada antes do texto: letra que chega antes cai no menu.
+export const GENERIC_INPUT_KEY_DELAY_MS = 150
+
 // Abas do diálogo genérico ("←/→ to switch" do /permissions). Sem a dica no rodapé, nada.
 export function buildGenericTabKeys(menu: TuiMenu, direction: 'next' | 'prev'): string[] {
   return menu.tabSwitch ? buildTabKeys(direction) : []

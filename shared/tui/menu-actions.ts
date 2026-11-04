@@ -4,6 +4,7 @@ import {
   buildAmendKeys,
   buildChatKeys,
   buildEscKey,
+  buildGenericInputKeys,
   buildGenericSelectKeys,
   buildGenericTabKeys,
   buildMultiSubmitKeys,
@@ -12,6 +13,7 @@ import {
   buildQuestionTabKeys,
   buildSelectKeys,
   buildToggleKeys,
+  GENERIC_INPUT_KEY_DELAY_MS,
   PLAN_KEY_DELAY_MS,
   QUESTION_KEY_DELAY_MS,
 } from './respond-keys'
@@ -32,6 +34,7 @@ export function keysForAction(menu: TuiMenu, action: AttentionAction): string[] 
   if (menu.kind === 'menu' || menu.kind === 'nudge') {
     if (action.kind === 'select') return buildGenericSelectKeys(menu, action.optionIndex)
     if (action.kind === 'tab') return buildGenericTabKeys(menu, action.direction)
+    if (action.kind === 'other') return buildGenericInputKeys(menu, action.optionIndex, action.text)
     return []
   }
   if (action.kind === 'tab') return buildQuestionTabKeys(menu, action.direction)
@@ -57,6 +60,7 @@ export function keysForAction(menu: TuiMenu, action: AttentionAction): string[] 
 export function actionKeyDelay(menu: TuiMenu, action: AttentionAction): number | undefined {
   if (action.kind === 'amend') return AMEND_KEY_DELAY_MS
   if (action.kind === 'plan') return PLAN_KEY_DELAY_MS
+  if (menu.kind === 'menu' && action.kind === 'other') return GENERIC_INPUT_KEY_DELAY_MS
   if (menu.kind === 'question' && (action.kind === 'other' || action.kind === 'submit-multi'))
     return QUESTION_KEY_DELAY_MS
   return undefined
