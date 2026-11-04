@@ -1,4 +1,4 @@
-import { gateMenuByStatus, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
+import { gateMenuByStatus, isKnownMenu, parseTuiMenuFull, type TuiMenu } from './tui-menu-parser'
 import { isInputRule } from './input-rule'
 
 // POR QUE uma sessão está na fila de atenção. É só enfeite: nunca decide se a
@@ -108,11 +108,12 @@ export function deriveAttentionReason({
 }
 
 // A sessão espera você e a tela tem conteúdo, mas nada foi reconhecido: é o
-// sinal de drift do parser (nova versão da CLI) que o contador expõe.
+// sinal de drift do parser (nova versão da CLI) que o contador expõe. Um diálogo que só
+// o parser tolerante leu, e que não é um dos já capturados, também é drift.
 export function isUnparsedWaiting(status: LiveStatus, scan: ScreenScan): boolean {
   return (
     status === 'waiting' &&
-    !scan.menu &&
+    (!scan.menu || !isKnownMenu(scan.menu)) &&
     !scan.inputPrompt &&
     scan.nonBlankLines > UNPARSED_MIN_LINES
   )

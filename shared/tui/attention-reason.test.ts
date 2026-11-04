@@ -12,6 +12,7 @@ import {
   type ScreenScan,
 } from './attention-reason'
 import { isInputRule } from './input-rule'
+import { parseTuiMenu } from './tui-menu-parser'
 
 const { Terminal } = xtermHeadless as unknown as {
   Terminal: typeof import('@xterm/headless').Terminal
@@ -215,5 +216,35 @@ describe('deriveAttentionReason — diálogo de plano do claude 2.1.317', () => 
     const scan = await scanFixture('claude-2.1.317-plan-default.ansi', 120, 45)
     expect(scan.menu?.kind).toBe('plan')
     expect(deriveAttentionReason({ status: 'waiting', scan, handoffAsking: false })).toBe('plan')
+  })
+})
+
+describe('isUnparsedWaiting — diálogo lido só pelo parser tolerante', () => {
+  const scanOf = (text: string): ScreenScan => ({
+    menu: parseTuiMenu(text),
+    inputPrompt: false,
+    nonBlankLines: text.split('\n').filter((l) => l.trim() !== '').length,
+  })
+
+  it('diálogo novo da CLI (rodapé Esc) vira card, mas conta como drift', () => {
+    const scan = scanOf(
+      ['─'.repeat(80), ' Some new dialog', '', ' ❯ Do the thing', '   Other thing', '', ' Esc to cancel'].join('\n'),
+    )
+    expect(scan.menu?.kind).toBe('menu')
+    expect(isUnparsedWaiting('waiting', scan)).toBe(true)
+  })
+
+  it('diálogos já capturados (/hooks, /permissions, /rewind, nudge) não contam', () => {
+    for (const name of [
+      '2.1.317-unknown-hooks',
+      '2.1.317-unknown-permissions',
+      '2.1.317-rewind-picker',
+      '2.1.317-rewind-restore-menu',
+      '2.1.317-auto-mode-env-nudge',
+    ]) {
+      const scan = scanOf(fixture(`claude-${name}.txt`))
+      expect(scan.menu, name).not.toBeNull()
+      expect(isUnparsedWaiting('waiting', scan), name).toBe(false)
+    }
   })
 })

@@ -870,6 +870,14 @@ function parseGenericMenu(lines: string[], end: number, footerOptional = false):
   }
 }
 
+// Diálogos da CLI que o tolerante já leu em captura (2.1.317/318). Um 'menu' fora deles é
+// tela que nenhum parser conhece: o card ainda serve, mas conta como drift no contador.
+const KNOWN_GENERIC_TITLE_RE = /^(Rewind|Hooks|Permissions)$/
+
+export function isKnownMenu(menu: TuiMenu): boolean {
+  return menu.kind !== 'menu' || KNOWN_GENERIC_TITLE_RE.test(menu.question ?? '')
+}
+
 interface GenericOptions {
   options: TuiMenuOption[]
   // Linha (no body) da primeira opção: o que vem acima é título/texto.
