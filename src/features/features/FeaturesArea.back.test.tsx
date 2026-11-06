@@ -73,6 +73,9 @@ function makeFeature(over: Partial<Feature> = {}): Feature {
 
 vi.mock('@/lib/ipc', () => ({
   shellApi: { openPath: vi.fn() },
+  // Seção Artefatos do dossiê: sem diagramas/designs ligados.
+  diagramsApi: { list: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDeleted: () => () => {} },
+  designApi: { documentsList: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDocumentDeleted: () => () => {} },
   projectsApi: {
     list: vi.fn().mockResolvedValue([]),
     listRepos: vi.fn().mockResolvedValue([]),

@@ -19,6 +19,9 @@ vi.mock('@/features/sessions/SpawnSessionDialog', () => ({
 
 vi.mock('@/lib/ipc', () => ({
   shellApi: { openPath: vi.fn() },
+  // Seção Artefatos do dossiê: sem diagramas/designs ligados.
+  diagramsApi: { list: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDeleted: () => () => {} },
+  designApi: { documentsList: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDocumentDeleted: () => () => {} },
   sessionsApi: {},
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn() },
   loopApi: {
