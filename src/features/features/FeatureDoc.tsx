@@ -17,6 +17,7 @@ import { StatusBadge } from './FeatureList'
 import { FeatureObjectiveField } from './FeatureObjectiveField'
 import { FeatureObjectiveLinksSection } from './FeatureObjectiveLinksSection'
 import { FeaturePulse } from './FeaturePulse'
+import { FeatureArtifactsSection } from './FeatureArtifactsSection'
 import { FeatureSessions } from './FeatureSessions'
 import { FeatureTasksSection } from './FeatureTasksSection'
 import { LivenessChip } from './LivenessChip'
@@ -343,6 +344,8 @@ export function FeatureDoc({ feature, loading, reposById, projectsById, onBack }
         )}
 
         <FeatureTasksSection featureId={feature.id} objectives={objectives} krTitles={krTitles} />
+
+        <FeatureArtifactsSection featureId={feature.id} />
 
         <FeatureSessions
           featureId={feature.id}

@@ -13,6 +13,9 @@ vi.mock('./useObjectiveLookups', () => ({
 const snapshotMock = vi.fn()
 vi.mock('@/lib/ipc', () => ({
   shellApi: { openPath: vi.fn() },
+  // Seção Artefatos do dossiê: sem diagramas/designs ligados.
+  diagramsApi: { list: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDeleted: () => () => {} },
+  designApi: { documentsList: vi.fn().mockResolvedValue([]), onLinksUpdated: () => () => {}, onDocumentDeleted: () => () => {} },
   // O dossiê agora lista as sessões da feature e sabe abrir uma nova.
   sessionsApi: { listByFeature: vi.fn().mockResolvedValue([]) },
   featuresApi: { list: vi.fn().mockResolvedValue([]), get: vi.fn() },
