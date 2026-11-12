@@ -43,6 +43,8 @@ const handoff: Handoff = {
   outcome: null,
   dismissedAt: null,
   resumable: false,
+  predecessorSessionId: null,
+  endedByUserAt: null,
 }
 
 beforeAll(() => {
