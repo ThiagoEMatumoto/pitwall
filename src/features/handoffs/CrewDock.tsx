@@ -13,6 +13,7 @@ import { useProjectsViewStore } from '@/features/session-canvas/projects-view-st
 import { useHandoffsStore } from '@/store/handoffsStore'
 import {
   HandoffCard,
+  canArchiveCard,
   childProcessAlive,
   crewDotColor,
   crewDotInitial,
@@ -205,10 +206,14 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
       e.preventDefault()
       openPeek(id)
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
-      // Dispensa rápida sem tirar a mão do teclado — o par do "×" no card. O
-      // destino do cursor sai ANTES da dispensa: depois dela o card sob o dedo
-      // já não existe, e o resolveCrewFocus jogaria o foco de volta no topo.
+      // Arquivar sem tirar a mão do teclado — o par do "×" no card, com a mesma
+      // regra (só com o processo morto). O destino do cursor sai ANTES: depois
+      // o card sob o dedo já não existe, e o resolveCrewFocus jogaria o foco de
+      // volta no topo.
       e.preventDefault()
+      const handoff = crew.find((h) => h.id === id)
+      const live = handoff?.childSessionId ? liveById.get(handoff.childSessionId) : undefined
+      if (!handoff || !canArchiveCard(handoff, live)) return
       const next = crewFocusAfterDismiss(idsRef.current, id)
       void dismissHandoff(id).then(() => {
         // rAF: a lista precisa re-renderizar sem o card dispensado antes de

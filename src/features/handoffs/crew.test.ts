@@ -525,6 +525,33 @@ describe('backgroundChildrenByMother — filhas vivas sem aba, por mãe', () => 
   })
 })
 
+// Antes de "Arquivar card" dava pra dispensar com a filha viva. O que mudou foi o
+// botão: dismissed_at significa o mesmo, e quem já estava dispensado segue igual.
+describe('card dispensado com a filha viva (antes de "Arquivar card")', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => testDb.close())
+
+  it('segue fora do dock, com a sessão nas superfícies comuns e o vínculo intacto', () => {
+    const dismissed = child('r1', 'a')
+    const kept = child('r2', 'b')
+    store.dismiss(dismissed.id)
+
+    const handoffs = store.list()
+    const sessions = ['a', 'b'].map((id) => harness.toLiveInfo(testDb, liveOf(id, 'working', null)))
+
+    expect(dockCrew(handoffs).map((h) => h.id)).toEqual([kept.id])
+    expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set(['b']))
+    expect(handoffs.find((h) => h.id === dismissed.id)?.childSessionId).toBe('a')
+  })
+})
+
 describe('crewTerminalTarget', () => {
   const pane = (ccSessionId: string | null, id = 'pane-session') => ({
     session: { id, ccSessionId },

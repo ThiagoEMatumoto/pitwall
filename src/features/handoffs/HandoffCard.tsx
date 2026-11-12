@@ -126,6 +126,18 @@ export function childProcessAlive(
   return !!live && live.status !== 'ended'
 }
 
+// Arquivar o card (carimba dismissed_at) só com o processo morto. Com a filha
+// viva ele tirava o card e deixava a sessão rodando como sessão comum, que no
+// próximo resume subia sem apelido nem permissões de filha (o relink exige
+// dismissed_at IS NULL): prometia arquivar e, na prática, soltava. Quem tira a
+// filha viva da frente é Minimizar ou Encerrar.
+export function canArchiveCard(
+  handoff: Pick<Handoff, 'dismissedAt'>,
+  child: Pick<LiveSessionInfo, 'status'> | null | undefined,
+): boolean {
+  return handoff.dismissedAt == null && !childProcessAlive(child)
+}
+
 export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
   label: 'assumindo o bastão',
   color: 'var(--color-info)',
@@ -324,14 +336,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // matar uma filha viva em trabalho longo por engano.
   const canForceFail = handoff.status === 'running' || handoff.status === 'approved'
 
-  // Dispensar: tira o card de vista sem tocar no status. Só some o que ainda não
-  // foi dispensado — repetir não faria nada visível.
-  const canDismiss = handoff.dismissedAt == null
-
   // Soltar: a operação INVERSA da adoção — corta o vínculo mãe→filha e devolve a
   // sessão à condição de sessão normal. Só faz sentido com filha atrelada; sem
-  // childSessionId não há vínculo pra cortar. Ao contrário de "Dispensar", NÃO é
-  // bloqueado com a filha viva: soltar não cria órfão invisível, é justamente o
+  // childSessionId não há vínculo pra cortar. Ao contrário de "Arquivar card", NÃO
+  // é bloqueado com a filha viva: soltar não cria órfão invisível, é justamente o
   // contrário — a sessão volta a aparecer na barra e no switcher.
   const canRelease = handoff.childSessionId != null
 
@@ -437,6 +445,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // traz para a tela (focusOrOpenSession RE-ATTACHA uma pane à PTY viva, nunca
   // re-spawn/--resume).
   const childProcess = childProcessAlive(childSession) ? childSession : undefined
+  const canArchive = canArchiveCard(handoff, childSession)
   // Aba aberta da filha: sem ela não há o que minimizar.
   const childPaneId = useAppStore((s) =>
     childProcess
@@ -513,7 +522,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   const hasActions = !!(
     childProcess ||
     canForceFail ||
-    canDismiss ||
+    canArchive ||
     canRelease ||
     canPeek ||
     paused
@@ -561,7 +570,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
           no mesmo peso de "Abrir na aba" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
-      {(childProcess || canForceFail || canDismiss || canRelease) && (
+      {(childProcess || canForceFail || canArchive || canRelease) && (
         <Menu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
@@ -599,34 +608,13 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
                   },
                 ]
               : []),
-            ...(canDismiss
+            ...(canArchive
               ? [
                   {
-                    // Rótulo com o efeito no próprio nome: "Dispensar" sozinho
-                    // e "Soltar" sozinho leem como sinônimos no mesmo menu. O que
-                    // os separa é o efeito — e é isso que cada rótulo diz.
-                    //
-                    // Dizia "mantém o vínculo", e era MENTIRA na parte que o
-                    // usuário sente: o vínculo sobrevive só como REGISTRO (o
-                    // child_session_id fica gravado, e com ele a trilha do
-                    // handoff), mas a sessão dispensada volta a ser tratada como
-                    // sessão comum em todas as superfícies vivas — e, ao ser
-                    // retomada, sobe sem apelido de peer e sem as settings de
-                    // filha (o relink do sessions:resume exige dismissed_at
-                    // IS NULL). Prometer vínculo e entregar sessão comum é a
-                    // pior das duas opções: o rótulo agora diz o que acontece.
-                    label: dismissing ? 'Dispensando…' : 'Dispensar (arquiva o card)',
-                    // Já foi DESABILITADO com a filha viva, pra proteger o
-                    // acompanhamento — e o efeito foi o oposto: em needs_input
-                    // com filha viva "Forçar falha" nem é renderizado, então o
-                    // menu abria com um item só ("Soltar do painel"), e não havia
-                    // como tirar o card da frente. O bloqueio também não se
-                    // justificava: dispensar só carimba dismissed_at, não encosta
-                    // na PTY. Agora dispensa sempre, o rótulo diz o que acontece
-                    // e o toast oferece "Desfazer".
+                    label: dismissing ? 'Arquivando…' : 'Arquivar card',
                     disabled: dismissing,
                     title:
-                      'Arquiva este handoff: o card sai do dock e o registro fica no histórico. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher, notificações próprias) e, se for retomada, sobe sem o apelido nem as permissões de filha. Dá pra desfazer pelo toast.',
+                      'Tira este card do painel; o registro fica no histórico. Dá pra desfazer pelo toast.',
                     onClick: () => void dismiss(),
                   },
                 ]
@@ -655,10 +643,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
           </button>
         </Menu>
       )}
-      {/* Dispensa rápida. O "×" é o caminho de UM clique pro que antes só existia
-          enterrado no menu — e que, em needs_input com filha viva, o menu nem
-          chegava a oferecer. Fica por último, à direita, onde se procura fechar. */}
-      {canDismiss && (
+      {/* Arquivar em UM clique. Fica por último, à direita, onde se procura
+          fechar — e só existe com o processo morto (canArchiveCard): com a filha
+          viva um "×" aqui leria como o X da aba, que encerra. */}
+      {canArchive && (
         <button
           type="button"
           onClick={(e) => {
@@ -668,8 +656,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
             void dismiss()
           }}
           disabled={dismissing}
-          aria-label="Dispensar"
-          title="Tira este card do painel. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher). Dá pra desfazer pelo toast."
+          aria-label="Arquivar card"
+          title="Arquivar card: sai do painel e o registro fica no histórico. Dá pra desfazer pelo toast."
           className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
         >
           <Icon as={X} size={14} />

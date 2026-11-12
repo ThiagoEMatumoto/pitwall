@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -14,12 +14,16 @@ vi.mock('@/lib/ipc', () => ({
     fail: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue(undefined),
     setOutcome: vi.fn().mockResolvedValue(undefined),
+    dismiss: vi.fn().mockResolvedValue(undefined),
+    list: vi.fn().mockResolvedValue([]),
   },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
 }))
 
 import { HandoffCard } from './HandoffCard'
 import { useAppStore, type ActivePane } from '@/store/appStore'
+import { handoffsApi } from '@/lib/ipc'
+import { useToastStore } from '@/features/notifications/toast-store'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
@@ -154,31 +158,52 @@ describe('HandoffCard no dock (tier mid)', () => {
   })
 })
 
-// O caso reportado: filha viva com pergunta aberta. Aqui "Forçar falha" nem é
-// renderizado (o gate é running/approved), então o menu abria com UM item —
-// "Soltar do painel", que é outra coisa — e o card não tinha como sair da frente.
-describe('HandoffCard: dispensar com a filha viva', () => {
+// "Dispensar" com a filha viva tirava o card e deixava a sessão rodando como
+// sessão comum: prometia arquivar e soltava. Agora o card só é arquivado com o
+// processo morto; com ele vivo o que tira da frente é Minimizar ou Encerrar.
+describe('HandoffCard: "Arquivar card" só com o processo morto', () => {
   beforeEach(() => {
     useAppStore.setState({ liveSessions: [] })
+    useToastStore.setState({ toasts: [] })
+    vi.mocked(handoffsApi.dismiss).mockClear()
   })
 
-  it('needs_input + filha viva: o "×" fecha o card sem passar pelo menu', () => {
+  it('filha viva: nem o "×" nem o item do menu, e nada se chama Dispensar', () => {
     mountDock({ status: 'needs_input', pendingQuestion: 'posso apagar?' }, 'waiting')
-    const close = screen.getByLabelText('Dispensar')
-    // O aviso é a metade que faltava: fechar o card não encosta na sessão.
-    expect(close.getAttribute('title')).toContain('CONTINUA RODANDO')
-  })
-
-  it('o item do menu deixa de vir desabilitado só por a filha estar viva', () => {
-    mountDock({ status: 'needs_input', pendingQuestion: 'posso apagar?' }, 'waiting')
+    expect(screen.queryByLabelText('Arquivar card')).toBeNull()
     fireEvent.click(screen.getByLabelText('Mais ações'))
-    const item = screen.getByText('Dispensar (arquiva o card)').closest('button')!
-    expect(item.disabled).toBe(false)
+    expect(screen.queryByText('Arquivar card')).toBeNull()
+    expect(screen.queryByText(/Dispensar/)).toBeNull()
+    // O menu não fica num beco: Encerrar é o que tira a filha viva da frente.
+    expect(screen.getByText('Encerrar filha')).toBeTruthy()
   })
 
-  it('já dispensado: nada de fechar de novo (o "×" some com as demais ações)', () => {
-    mountDock({ dismissedAt: Date.now() })
-    expect(screen.queryByLabelText('Dispensar')).toBeNull()
+  it('processo morto: "×" e menu arquivam pelo mesmo handoffs:dismiss de antes', async () => {
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.getByText('Arquivar card')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Arquivar card'))
+    await waitFor(() => expect(handoffsApi.dismiss).toHaveBeenCalledWith('h1'))
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Card arquivado']),
+    )
+  })
+
+  it("'ended' ainda na lista viva conta como processo morto", () => {
+    mountDock({}, 'ended')
+    expect(screen.getByLabelText('Arquivar card')).toBeTruthy()
+  })
+
+  it('já arquivado: nada de arquivar de novo', () => {
+    render(
+      <HandoffCard
+        handoff={{ ...handoff, dismissedAt: Date.now() }}
+        ttlHours={2}
+        tier="mid"
+        onPeek={() => {}}
+      />,
+    )
+    expect(screen.queryByLabelText('Arquivar card')).toBeNull()
   })
 })
 

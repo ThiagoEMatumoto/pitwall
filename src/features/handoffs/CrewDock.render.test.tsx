@@ -153,3 +153,39 @@ describe('CrewDock: o dot da trilha foca aquela filha', () => {
     expect(useCrewDockStore.getState().collapsed).toBe(false)
   })
 })
+
+// O Delete do dock é o "×" do card pelo teclado: vale a mesma regra.
+describe('CrewDock: Delete arquiva o card só com o processo morto', () => {
+  const realDismiss = useHandoffsStore.getState().dismiss
+  const dismiss = vi.fn().mockResolvedValue(undefined)
+
+  beforeEach(() => {
+    dismiss.mockClear()
+    useAppStore.setState({ liveSessions: [] })
+    useHandoffsStore.setState({ handoffs: [handoff], dismiss })
+    useCrewDockStore.setState({ collapsed: false, focusedId: null })
+  })
+  afterEach(() => {
+    useAppStore.setState({ liveSessions: [] })
+    useHandoffsStore.setState({ handoffs: [], dismiss: realDismiss })
+  })
+
+  function pressDeleteOnCard() {
+    const { container } = render(<CrewDock />)
+    const card = container.querySelector<HTMLElement>('[data-crew-card="h1"]')!
+    fireEvent.keyDown(card, { key: 'Delete' })
+  }
+
+  it('filha viva: Delete não arquiva', () => {
+    useAppStore.setState({
+      liveSessions: [{ id: 's-child', ccSessionId: 'cc-child', status: 'working' } as LiveSessionInfo],
+    })
+    pressDeleteOnCard()
+    expect(dismiss).not.toHaveBeenCalled()
+  })
+
+  it('processo morto: Delete arquiva', () => {
+    pressDeleteOnCard()
+    expect(dismiss).toHaveBeenCalledWith('h1')
+  })
+})

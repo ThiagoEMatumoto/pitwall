@@ -9,7 +9,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial, childProcessAlive } = await import(
+const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial, childProcessAlive, canArchiveCard } = await import(
   './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -250,5 +250,23 @@ describe('childProcessAlive — o processo da filha existe?', () => {
     for (const status of ['starting', 'working', 'waiting', 'idle'] as const) {
       expect(childProcessAlive({ status })).toBe(true)
     }
+  })
+})
+
+// Arquivar com o processo vivo tirava o card e deixava a sessão rodando como
+// "comum", sem apelido nem permissões de filha no próximo resume.
+describe('canArchiveCard — só com o processo morto', () => {
+  it('filha viva: não arquiva (os verbos são Minimizar / Encerrar / Desvincular)', () => {
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'working' })).toBe(false)
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'waiting' })).toBe(false)
+  })
+
+  it('sem processo (nunca subiu, encerrou, caiu): arquiva', () => {
+    expect(canArchiveCard(mk({ dismissedAt: null }), undefined)).toBe(true)
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'ended' })).toBe(true)
+  })
+
+  it('já arquivado: repetir não faria nada', () => {
+    expect(canArchiveCard(mk({ dismissedAt: 123 }), undefined)).toBe(false)
   })
 })
