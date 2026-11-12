@@ -316,6 +316,10 @@ export interface Handoff {
   // nem é desfecho: a filha segue ligada à mãe e retomável; retomar limpa a marca.
   // NULL = nunca encerrada pelo usuário (ou já retomada).
   endedByUserAt: number | null
+  // DERIVADO (não é coluna): a filha concluiu (done) e a sessão dela saiu pela
+  // hibernação (sessions.hibernated_at). Dormindo: segue vinculada, sem processo,
+  // e volta por "Acordar" ou quando a mãe chama (handoff_message).
+  childAsleep: boolean
   // DERIVADO (não é coluna): este handoff interrompido pode ser retomado via
   // `claude --resume`? Só é true com status 'interrupted', filha atrelada e o
   // transcript dela ainda no disco — o mesmo gate do handoffs:is-resumable, agora

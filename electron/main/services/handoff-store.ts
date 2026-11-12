@@ -51,12 +51,18 @@ interface HandoffRow {
   ended_by_user_at: number | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
+  // sessions.hibernated_at da linha da filha (null sem filha ou acordada).
+  child_hibernated_at: number | null
 }
 
 // SELECT base com o label do repo-alvo resolvido. LEFT JOIN: handoff sobrevive à
 // remoção do repo (label vira null), mas continua listável.
-const SELECT_HANDOFF =
-  'SELECT h.*, r.label AS target_repo_label FROM handoffs h LEFT JOIN repos r ON r.id = h.target_repo_id'
+// child_hibernated_at lê a linha apontada pelo vínculo, por chave primária: é a
+// que o hibernador marca (a PTY viva), e o resume re-aponta o vínculo para a
+// linha nova (adoptResumedConversation) depois de limpar a marca da conversa.
+const SELECT_HANDOFF = `SELECT h.*, r.label AS target_repo_label,
+    (SELECT hs.hibernated_at FROM sessions hs WHERE hs.id = h.child_session_id) AS child_hibernated_at
+  FROM handoffs h LEFT JOIN repos r ON r.id = h.target_repo_id`
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -143,6 +149,7 @@ function toEntity(row: HandoffRow): Handoff {
     dismissedAt: row.dismissed_at,
     predecessorSessionId: row.predecessor_session_id,
     endedByUserAt: row.ended_by_user_at,
+    childAsleep: row.status === 'done' && row.child_hibernated_at != null,
     resumable: isResumable(row),
   }
 }
