@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import type { ComponentType } from 'react'
 import type { LucideProps } from 'lucide-react'
 import {
@@ -17,9 +17,10 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { CopyButton } from '@/components/ui/CopyButton'
+import { perfCount } from '@/lib/perf-probe'
 import { DiffBlock } from './PermissionCard'
 import { Chevron, ROW_BUTTON } from './chat-row-ui'
-import type { ToolEntry } from './chat-rows'
+import { sameToolEntries, type ToolEntry } from './chat-rows'
 import { oneLine, previewLines, summarizeTools, toolDiff, toolView, type ToolCategory } from './tool-view'
 
 const CATEGORY_ICON: Record<ToolCategory, ComponentType<LucideProps>> = {
@@ -227,12 +228,24 @@ export function ToolRow({
   )
 }
 
+interface ToolGroupProps {
+  entries: ToolEntry[]
+  running?: boolean
+}
+
+function sameToolGroup(prev: ToolGroupProps, next: ToolGroupProps): boolean {
+  return prev.running === next.running && sameToolEntries(prev.entries, next.entries)
+}
+
 // Sequência de chamadas seguidas. Com uma só, a linha basta; com várias, um
 // resumo ("Leu 6 arquivos · rodou 3 comandos") que abre a lista sob demanda.
 // A árvore é a mesma nos dois casos (o resumo só entra acima da lista), então
 // quando a 2ª chamada chega a linha aberta não desmonta; e o grupo nasce
 // expandido se havia uma linha aberta, pra não esconder o que se estava lendo.
-export function ToolGroup({ entries: tools, running }: { entries: ToolEntry[]; running?: boolean }) {
+// As linhas são refeitas a cada mudança do transcript: o grupo só renderiza de
+// novo quando alguma chamada ou resultado dele mudou de fato.
+export const ToolGroup = memo(function ToolGroup({ entries: tools, running }: ToolGroupProps) {
+  perfCount('ToolGroup')
   const multi = tools.length >= 2
   const [expanded, setExpanded] = useState(false)
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set())
@@ -310,7 +323,7 @@ export function ToolGroup({ entries: tools, running }: { entries: ToolEntry[]; r
       )}
     </div>
   )
-}
+}, sameToolGroup)
 
 // Resultado sem chamada correspondente no transcript (raro: chamada fundida em
 // outro card ou cortada). Continua visível, no mesmo vocabulário das linhas.

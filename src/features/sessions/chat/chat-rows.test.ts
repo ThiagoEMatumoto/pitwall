@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/ipc'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
-import { buildChatRows, rowRhythm, rowSpacing } from './chat-rows'
+import { buildChatRows, rowRhythm, rowSpacing, sameToolEntries, type ToolEntry } from './chat-rows'
 
 // Linhas no formato que a CLI grava no JSONL: o shape vem do parser real.
 function line(obj: unknown): string {
@@ -69,6 +69,51 @@ describe('buildChatRows (transcript real do parser)', () => {
       (r) => r.type === 'message' && messages[r.index].kind === 'tool_result',
     )
     expect(loose).toHaveLength(0)
+  })
+})
+
+describe('sameToolEntries (transcript real do parser)', () => {
+  const calls = assistantTools('m1', [
+    { id: 't1', name: 'Read', input: { file_path: '/r/a.ts' } },
+    { id: 't2', name: 'Read', input: { file_path: '/r/b.ts' } },
+  ])
+  const firstResult = results([{ id: 't1', text: 'conteúdo a' }])
+  const group = (messages: ChatMessage[]): ToolEntry[] => {
+    const row = buildChatRows(messages)[0]
+    if (row.type !== 'tools') throw new Error('esperava grupo')
+    return row.entries
+  }
+
+  it('linhas refeitas sobre as mesmas mensagens são o mesmo grupo', () => {
+    const messages = parseChatMessages([calls, firstResult].join('\n'))
+    const a = group(messages)
+    const b = group(messages)
+    expect(a).not.toBe(b)
+    expect(sameToolEntries(a, b)).toBe(true)
+  })
+
+  it('resultado que chega para uma chamada já vista muda o grupo', () => {
+    const pending = parseChatMessages(calls)
+    const answered = [...pending, ...parseChatMessages(firstResult)]
+    expect(sameToolEntries(group(pending), group(answered))).toBe(false)
+  })
+
+  it('chamada nova no fim muda o grupo', () => {
+    const one = parseChatMessages(calls)
+    const more = [
+      ...one,
+      ...parseChatMessages(
+        assistantTools('m2', [{ id: 't3', name: 'Bash', input: { command: 'ls' } }]),
+      ),
+    ]
+    expect(sameToolEntries(group(one), group(more))).toBe(false)
+  })
+
+  it('transcript relido por inteiro troca a identidade e não casa', () => {
+    const jsonl = [calls, firstResult].join('\n')
+    expect(sameToolEntries(group(parseChatMessages(jsonl)), group(parseChatMessages(jsonl)))).toBe(
+      false,
+    )
   })
 })
 
