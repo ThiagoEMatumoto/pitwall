@@ -13,8 +13,11 @@ import type {
 //    o rascunho que ainda está sendo lido;
 //  - se o usuário digitou antes da leitura terminar, salvo e digitado são
 //    JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
-//  - flushSync grava na hora por IPC síncrono (blur, troca de pane, unload,
-//    pedido do main no quit/exit): quando retorna, o commit já aconteceu;
+//  - blur e troca de pane gravam na hora pelo flush assíncrono: não seguram o
+//    renderer à espera do main;
+//  - flushSync grava na hora por IPC síncrono (unload, pedido do main no
+//    quit/exit, desmonte com mudança ainda não enviada): quando retorna, o
+//    commit já aconteceu, inclusive o de um flush assíncrono ainda em voo;
 //  - a remoção só acontece depois do envio confirmado (sendThenClear) ou porque
 //    o usuário esvaziou o texto à mão.
 
@@ -88,6 +91,13 @@ export interface DraftPersister {
 // Persisters vivos, para o flush global (beforeunload, troca de pane, pedido do main).
 const live = new Set<DraftPersister>()
 
+// Blur e troca de pane: o invoke de cada persister sai nesta chamada, sem
+// bloquear o renderer à espera do main.
+export async function flushAllDrafts(): Promise<void> {
+  await Promise.all([...live].map((p) => p.flush()))
+}
+
+// Só no unload e no pedido do main (quit/exit): bloqueia até o commit.
 export function flushAllDraftsSync(): void {
   for (const p of live) {
     try {
@@ -113,6 +123,8 @@ export function createDraftPersister(opts: {
   let disposed = false
   let apply: ApplyDraft | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  // Saves assíncronos em voo: o commit deles ainda não foi confirmado.
+  let saving = 0
   // Versão monotônica deste persister: o main descarta versão antiga do mesmo writer.
   const writer = newWriterId()
   let seq = 0
@@ -144,11 +156,14 @@ export function createDraftPersister(opts: {
     cancelTimer()
     if (!key || !hydrated || !dirty) return
     dirty = false
+    saving++
     try {
       await api.save(draftInput(key))
     } catch (err) {
       dirty = true
       console.error('[composer] falha ao gravar o rascunho:', err)
+    } finally {
+      saving--
     }
   }
 
@@ -189,7 +204,7 @@ export function createDraftPersister(opts: {
       }
     }
     cancelTimer()
-    if (!dirty) return
+    if (!dirty && saving === 0) return
     dirty = false
     try {
       api.saveSync(draftInput(key))
@@ -257,7 +272,9 @@ export function createDraftPersister(opts: {
     dispose() {
       disposed = true
       live.delete(persister)
-      flushSync()
+      // Save em voo já está na fila do IPC e o renderer segue vivo: só o que
+      // ainda não saiu vai pelo síncrono.
+      if (dirty) flushSync()
       // O síncrono falhou: última tentativa pelo caminho assíncrono.
       if (dirty) void write()
     },
