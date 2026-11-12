@@ -11,10 +11,13 @@ import {
 import { buildLongMotherLines } from '../../../../electron/main/services/__fixtures__/long-mother-jsonl'
 import {
   applyTranscriptUpdate,
+  CHAT_WINDOW_ROWS,
   countUserMessages,
+  earlierWindowStart,
   isAtBottom,
   liveMenuCoversPending,
   nextResolveAt,
+  nextWindowStart,
   pendingEchoes,
   pendingInteractive,
   resolveChatViewState,
@@ -433,5 +436,44 @@ describe('applyTranscriptUpdate', () => {
       messages: [a],
     })
     expect(applyTranscriptUpdate([], -1, { base: 3, rev: 4, messages: [a] })).toEqual({ kind: 'gap' })
+  })
+})
+
+describe('janela de linhas do chat', () => {
+  const W = CHAT_WINDOW_ROWS
+
+  it('ao abrir, monta só as últimas linhas', () => {
+    expect(nextWindowStart(null, 30_980, true)).toBe(30_980 - W)
+    expect(nextWindowStart(null, 30_980, false)).toBe(30_980 - W)
+  })
+
+  it('conversa menor que a janela começa do zero', () => {
+    expect(nextWindowStart(null, 40, true)).toBe(0)
+    expect(nextWindowStart(null, 0, true)).toBe(0)
+  })
+
+  it('colado no fim, só apara quando passa de duas janelas montadas', () => {
+    expect(nextWindowStart(100, 100 + 2 * W, true)).toBe(100)
+    expect(nextWindowStart(100, 100 + 2 * W + 1, true)).toBe(101 + W)
+  })
+
+  it('lendo lá em cima, o que chega no fim não tira linha nenhuma', () => {
+    expect(nextWindowStart(100, 100 + 10 * W, false)).toBe(100)
+  })
+
+  it('aparar é estável: a janela aparada não muda de novo', () => {
+    const trimmed = nextWindowStart(0, 5 * W, true)
+    expect(nextWindowStart(trimmed, 5 * W, true)).toBe(trimmed)
+  })
+
+  it('a conversa encolheu (rewind, compact): a janela recua pra seguir cheia', () => {
+    expect(nextWindowStart(900, 500, false)).toBe(500 - W)
+    expect(nextWindowStart(900, 20, false)).toBe(0)
+  })
+
+  it('recuar traz uma janela a mais e nunca passa do início', () => {
+    expect(earlierWindowStart(1000)).toBe(1000 - W)
+    expect(earlierWindowStart(W - 1)).toBe(0)
+    expect(earlierWindowStart(0)).toBe(0)
   })
 })

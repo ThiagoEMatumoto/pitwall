@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { transcript } = vi.hoisted(() => {
@@ -46,7 +46,13 @@ import { MessageBubble } from './MessageBubble'
 import { ToolGroup } from './ToolCard'
 import { buildChatRows, type ToolEntry } from './chat-rows'
 import { startPerfProbe } from '@/lib/perf-probe'
-import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
+import {
+  createChatParser,
+  parseChatMessages,
+  parseTranscriptLines,
+} from '../../../../electron/main/services/chat-transcript'
+import { buildLongMotherLines } from '../../../../electron/main/services/__fixtures__/long-mother-jsonl'
+import { applyTranscriptUpdate, CHAT_WINDOW_ROWS } from './chat-logic'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -247,5 +253,257 @@ describe('folhas do chat memoizadas (contadores da sonda)', () => {
 
     rerender(<ToolGroup entries={toolGroup(answered)} />)
     expect(renders('ToolGroup')).toBe(before + 2)
+  })
+})
+
+describe('janela de linhas (contadores da sonda)', () => {
+  const renders = (name: string) => window.__cmPerf?.counters[name] ?? 0
+  const rowsEl = () => screen.getByTestId('chat-rows')
+  const earlier = () => screen.queryByRole('button', { name: 'Mostrar mensagens anteriores' })
+  // Cada turno do gerador são 5 linhas de JSONL e 4 linhas do chat: pedido, texto,
+  // grupo de ferramentas e texto final.
+  const turns = (n: number) => buildLongMotherLines(n, 64)
+
+  // O transcript como o renderer o recebe: parser incremental do main, cada delta
+  // emendado pelo merge do hook (os objetos antigos seguem os mesmos).
+  function liveTranscript() {
+    const parser = createChatParser()
+    let current: ChatMessage[] = []
+    let rev = 0
+    return (lines: string[]): ChatMessage[] => {
+      parser.feed(parseTranscriptLines(lines.join('\n')))
+      const base = parser.takeDirty()
+      const update = { base, rev: rev + 1, messages: parser.messages.slice(base) }
+      const merged = applyTranscriptUpdate(current, rev, update)
+      if (merged.kind !== 'applied') throw new Error(merged.kind)
+      rev = update.rev
+      current = merged.messages
+      return current
+    }
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  // Rolagem medida: o jsdom não faz layout, então a altura e a posição de cada linha
+  // seguem as linhas montadas. Acima delas fica o botão de mensagens anteriores.
+  function measured(rowPx = 40) {
+    const el = scroller()
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const rows = this.parentElement
+      return rows ? 30 + Array.prototype.indexOf.call(rows.children, this) * rowPx : 0
+    })
+    Object.defineProperty(el, 'scrollHeight', {
+      configurable: true,
+      get: () => rowsEl().children.length * rowPx,
+    })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 })
+    return el
+  }
+
+  it('abrir 30.980 mensagens monta só a janela do fim', () => {
+    transcript.messages = parseChatMessages(turns(6196).join('\n'))
+    expect(transcript.messages).toHaveLength(30_980)
+    const markdown = renders('MarkdownViewer')
+    const groups = renders('ToolGroup')
+
+    render(<ChatView sessionId="w1" />)
+
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(screen.getByText(/^pronto 6195\./)).toBeInTheDocument()
+    expect(screen.queryByText(/^pedido 0:/)).not.toBeInTheDocument()
+    expect(renders('MarkdownViewer') - markdown).toBeLessThanOrEqual(CHAT_WINDOW_ROWS)
+    expect(renders('ToolGroup') - groups).toBeLessThanOrEqual(CHAT_WINDOW_ROWS)
+  }, 120_000)
+
+  it('conversa que cabe na janela monta tudo e não oferece mensagens anteriores', () => {
+    transcript.messages = parseChatMessages(turns(10).join('\n'))
+    render(<ChatView sessionId="w2" />)
+    expect(rowsEl().children).toHaveLength(40)
+    expect(earlier()).not.toBeInTheDocument()
+  })
+
+  it('mensagem nova no fim não renderiza de novo as linhas antigas', () => {
+    const all = turns(301)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w3" />)
+    const markdown = renders('MarkdownViewer')
+    const groups = renders('ToolGroup')
+    const bubbles = renders('MessageBubble')
+
+    diskNow(disk(all.slice(-5)))
+
+    expect(screen.getByText(/^pronto 300\./)).toBeInTheDocument()
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS + 4)
+    expect(renders('MarkdownViewer') - markdown).toBe(3)
+    expect(renders('MessageBubble') - bubbles).toBe(3)
+    expect(renders('ToolGroup') - groups).toBe(1)
+  })
+
+  it('colado no fim, o streaming apara a janela em vez de crescer sem limite', () => {
+    const all = turns(78)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, 40 * 5))
+    render(<ChatView sessionId="w4" />)
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+
+    diskNow(disk(all.slice(40 * 5, 77 * 5)))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS + 37 * 4)
+
+    diskNow(disk(all.slice(77 * 5)))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(screen.getByText(/^pronto 77\./)).toBeInTheDocument()
+  })
+
+  it('perto do topo, a janela anterior entra sem mover o que está na tela e sem animar', () => {
+    const all = turns(100)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, 5))
+    render(<ChatView sessionId="w5" />)
+    // Tudo que chega depois da 1ª pintura entra animado; colado no fim, a janela apara.
+    diskNow(disk(all.slice(5)))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    const el = measured()
+    const groups = renders('ToolGroup')
+
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+
+    expect(rowsEl().children).toHaveLength(2 * CHAT_WINDOW_ROWS)
+    expect(el.scrollTop).toBe(100 + CHAT_WINDOW_ROWS * 40)
+    expect(screen.getByText(/^pronto 99\./)).toBeInTheDocument()
+    expect(rowsEl().querySelectorAll(':scope > .chat-row-in')).toHaveLength(0)
+    // Só os grupos da janela que entrou renderizam; os que já estavam, não.
+    expect(renders('ToolGroup') - groups).toBeLessThanOrEqual(CHAT_WINDOW_ROWS / 4 + 1)
+  })
+
+  it('janela anterior e mensagem nova no mesmo commit: só o que entrou por cima desloca a rolagem', () => {
+    const all = turns(101)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w10" />)
+    const el = measured()
+
+    // Streaming: o disco muda entre o scroll e o commit da janela anterior.
+    act(() => {
+      el.scrollTop = 100
+      fireEvent.scroll(el)
+      transcript.messages = disk(all.slice(-5))
+      transcript.listeners.forEach((refresh) => refresh())
+    })
+
+    expect(rowsEl().children).toHaveLength(2 * CHAT_WINDOW_ROWS + 4)
+    expect(el.scrollTop).toBe(100 + CHAT_WINDOW_ROWS * 40)
+  })
+
+  it('"Ir para o fim" com mais de duas janelas montadas apara e volta a colar', () => {
+    const all = turns(101)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w11" />)
+    const el = measured()
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(400)
+
+    act(() => fireEvent.click(screen.getByRole('button', { name: /Ir para o fim/ })))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(screen.getByText(/^pronto 99\./)).toBeInTheDocument()
+
+    // A conversa encolheu: a rolagem cai perto do topo no meio do salto e nada volta a entrar.
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+
+    diskNow(disk(all.slice(-5)))
+    expect(el.scrollTop).toBe(el.scrollHeight)
+    expect(
+      screen.queryByRole('button', { name: /Ir para o fim|Novas mensagens/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('rewind desmonta a linha de referência no mesmo commit: a rolagem fica como está', () => {
+    transcript.messages = parseChatMessages(turns(100).join('\n'))
+    render(<ChatView sessionId="w12" />)
+    const el = measured()
+
+    act(() => {
+      el.scrollTop = 100
+      fireEvent.scroll(el)
+      transcript.messages = parseChatMessages(turns(50).join('\n'))
+      transcript.listeners.forEach((refresh) => refresh())
+    })
+
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(el.scrollTop).toBe(100)
+  })
+
+  it('lendo lá em cima, o que chega no fim não desmonta nada', () => {
+    const all = turns(101)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w6" />)
+    const el = measured()
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(400)
+    expect(earlier()).not.toBeInTheDocument()
+
+    diskNow(disk(all.slice(-5)))
+    expect(rowsEl().children).toHaveLength(404)
+    expect(screen.getByText(/^pedido 0:/)).toBeInTheDocument()
+  })
+
+  it('"Mostrar mensagens anteriores" traz uma janela por clique e some no início', () => {
+    transcript.messages = parseChatMessages(turns(100).join('\n'))
+    render(<ChatView sessionId="w7" />)
+    const el = measured()
+    // Lendo no meio: nem colado no fim, nem perto do topo.
+    el.scrollTop = 2000
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+
+    act(() => fireEvent.click(earlier()!))
+    expect(rowsEl().children).toHaveLength(2 * CHAT_WINDOW_ROWS)
+    expect(el.scrollTop).toBe(2000 + CHAT_WINDOW_ROWS * 40)
+
+    act(() => fireEvent.click(earlier()!))
+    expect(rowsEl().children).toHaveLength(400)
+    expect(screen.getByText(/^pedido 0:/)).toBeInTheDocument()
+    expect(earlier()).not.toBeInTheDocument()
+  })
+
+  it('o grupo em andamento segue marcado com a janela deslocada', () => {
+    const all = turns(100)
+    // O último turno ainda sem o resultado da ferramenta nem o texto final.
+    transcript.messages = parseChatMessages(all.slice(0, -2).join('\n'))
+    render(<ChatView sessionId="w8" status="working" />)
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    const last = rowsEl().lastElementChild as HTMLElement
+    expect(last.querySelectorAll('[aria-label="rodando"]').length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText('rodando')).toHaveLength(
+      last.querySelectorAll('[aria-label="rodando"]').length,
+    )
+  })
+
+  it('troca de sessão: a janela volta pro fim da conversa nova', () => {
+    transcript.messages = parseChatMessages(turns(100).join('\n'))
+    const { rerender } = render(<ChatView sessionId="w9a" />)
+    const el = measured()
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(2 * CHAT_WINDOW_ROWS)
+
+    rerender(<ChatView sessionId="w9b" />)
+    expect(screen.getByTestId('chat-loading')).toBeInTheDocument()
+    diskNow(parseChatMessages(turns(90).join('\n')))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(screen.getByText(/^pronto 89\./)).toBeInTheDocument()
   })
 })
