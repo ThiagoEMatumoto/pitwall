@@ -12,12 +12,21 @@ export interface PerfSpanStats {
   maxMs: number
 }
 
-/** Distribuição de uma latência em ms numa janela. */
+/**
+ * Distribuição de uma latência em ms numa janela. Nem todo evento é medido: o
+ * Event Timing só entrega os que passam do limiar (16 ms). `null` num percentil
+ * quer dizer "caiu num evento não medido" (abaixo do limiar, ou não houve
+ * evento), nunca "0 ms": com `measured` 0 e `n` > 0 nada foi medido na janela.
+ */
 export interface PerfLatencyStats {
+  /** Eventos da janela, medidos ou não. */
   n: number
-  p50Ms: number
-  p95Ms: number
-  maxMs: number
+  /** Quantos tiveram a duração medida (passaram do limiar do observer). */
+  measured: number
+  p50Ms: number | null
+  p95Ms: number | null
+  /** Maior duração medida; `null` sem nenhuma amostra medida. */
+  maxMs: number | null
 }
 
 /**
@@ -34,8 +43,8 @@ export interface PerfRendererSummary {
   longTasks: PerfSpanStats
   /**
    * Tecla até o próximo paint (Event Timing de `keydown`). O observer só entrega
-   * eventos >= 16 ms: `n` é o total de teclas da janela e as que ficaram abaixo
-   * do limiar entram nos percentis como 0.
+   * eventos >= 16 ms: `n` é o total de teclas da janela, `measured` as que
+   * passaram do limiar, e percentil que cai abaixo dele sai `null`.
    */
   keyToPaint: PerfLatencyStats
   /** Tecla no terminal até a chamada de `sessions.write` (atraso antes do IPC). */
@@ -64,9 +73,10 @@ const spanStatsSchema = z.strictObject({
 
 const latencyStatsSchema = z.strictObject({
   n: z.number(),
-  p50Ms: z.number(),
-  p95Ms: z.number(),
-  maxMs: z.number(),
+  measured: z.number(),
+  p50Ms: z.number().nullable(),
+  p95Ms: z.number().nullable(),
+  maxMs: z.number().nullable(),
 })
 
 export const perfRendererSummarySchema: z.ZodType<PerfRendererSummary> = z.strictObject({

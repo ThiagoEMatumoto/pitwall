@@ -125,8 +125,8 @@ describe('flag ligada', () => {
     expect(summary).toEqual({
       windowMs: 10_000,
       longTasks: { n: 2, totalMs: 180, maxMs: 120 },
-      keyToPaint: { n: 4, p50Ms: 0, p95Ms: 40, maxMs: 40 },
-      keyToWrite: { n: 1, p50Ms: 12, p95Ms: 12, maxMs: 12 },
+      keyToPaint: { n: 4, measured: 2, p50Ms: null, p95Ms: 40, maxMs: 40 },
+      keyToWrite: { n: 1, measured: 1, p50Ms: 12, p95Ms: 12, maxMs: 12 },
       counters: { ChatView: 2, MarkdownViewer: 3 },
       spans: {
         'tui-parse:s1': { n: 1, totalMs: 7.5, maxMs: 7.5 },
@@ -142,8 +142,8 @@ describe('flag ligada', () => {
     expect(report.mock.calls[1][0]).toEqual({
       windowMs: 10_000,
       longTasks: { n: 0, totalMs: 0, maxMs: 0 },
-      keyToPaint: { n: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 },
-      keyToWrite: { n: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 },
+      keyToPaint: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
+      keyToWrite: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
       counters: { Composer: 1 },
       spans: {},
     })

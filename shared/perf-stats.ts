@@ -16,16 +16,24 @@ export function spanStats(durations: number[]): PerfSpanStats {
 }
 
 // `total` é quantos eventos aconteceram; `samples`, os que foram medidos. O Event
-// Timing só entrega os lentos (>= 16 ms), então os que faltam entram como 0 nos
-// percentis (posto mais próximo) em vez de sumirem e inflarem a mediana.
+// Timing só entrega os lentos (>= 16 ms): os que faltam ocupam os postos mais
+// baixos (posto mais próximo) e o percentil que cai num deles sai `null`, não 0.
+// Assim "abaixo do limiar" e "nada foi medido" não se confundem com "0 ms".
 export function latencyStats(samples: number[], total: number): PerfLatencyStats {
   const sorted = [...samples].sort((a, b) => a - b)
-  const n = Math.max(total, sorted.length)
-  const zeros = n - sorted.length
-  const at = (p: number): number => {
+  const measured = sorted.length
+  const n = Math.max(total, measured)
+  const unmeasured = n - measured
+  const at = (p: number): number | null => {
     const index = Math.ceil(p * n) - 1
-    return index < zeros ? 0 : roundMs(sorted[index - zeros])
+    return index < unmeasured ? null : roundMs(sorted[index - unmeasured])
   }
-  if (n === 0) return { n: 0, p50Ms: 0, p95Ms: 0, maxMs: 0 }
-  return { n, p50Ms: at(0.5), p95Ms: at(0.95), maxMs: roundMs(sorted.at(-1) ?? 0) }
+  if (n === 0) return { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null }
+  return {
+    n,
+    measured,
+    p50Ms: at(0.5),
+    p95Ms: at(0.95),
+    maxMs: measured > 0 ? roundMs(sorted[measured - 1]) : null,
+  }
 }

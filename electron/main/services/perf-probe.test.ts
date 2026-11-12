@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { latencyStats } from '../../../shared/perf-stats'
 import type { PerfLine, PerfRendererSummary } from '../../../shared/types/perf'
 
 // A flag é lida uma vez na carga do módulo: cada teste recarrega com o env que quer.
@@ -239,8 +240,9 @@ describe('perf-probe', () => {
     const summary: PerfRendererSummary = {
       windowMs: 10_000,
       longTasks: { n: 3, totalMs: 420, maxMs: 210 },
-      keyToPaint: { n: 200, p50Ms: 0, p95Ms: 64, maxMs: 180 },
-      keyToWrite: { n: 200, p50Ms: 2, p95Ms: 31, maxMs: 90 },
+      // Do produtor real: 200 teclas, só 3 acima do limiar (percentil não medido = null).
+      keyToPaint: latencyStats([24, 64, 180], 200),
+      keyToWrite: latencyStats([2, 31, 90], 3),
       counters: { ChatView: 12 },
       spans: { 'tui-parse:s1': { n: 4, totalMs: 80, maxMs: 35 } },
     }
