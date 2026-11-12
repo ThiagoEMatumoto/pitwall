@@ -112,7 +112,8 @@ describe('decideGpuBoot', () => {
     const decision = decideGpuBoot(boot({ autoDisabled: record, now: T0 + 2 * DAY }))
     expect(decision.hwAccelDisabled).toBe(true)
     expect(decision.probation).toBe(false)
-    expect(decision.autoDisabled).toEqual(record)
+    // Mesma referência = nada a gravar: o boot só escreve a pref que mudou.
+    expect(decision.autoDisabled).toBe(record)
   })
 
   it('versão nova religa uma vez, e o registro regravado não religa no boot seguinte', () => {
@@ -213,7 +214,8 @@ describe('decideGpuBoot', () => {
     )
     expect(decision.hwAccelDisabled).toBe(true)
     expect(decision.probation).toBe(false)
-    expect(decision.autoDisabled).toEqual(record)
+    // Mesma referência = nada a gravar: o boot só escreve a pref que mudou.
+    expect(decision.autoDisabled).toBe(record)
   })
 
   describe('legado: gpu.disabled=true gravado pelo automático antigo', () => {
