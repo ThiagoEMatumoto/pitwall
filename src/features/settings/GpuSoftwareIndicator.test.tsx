@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // O status vem do handler real gpu:status sobre prefs gravadas pelos produtores
@@ -8,7 +8,7 @@ const { handlers, relaunch, prefs, failing, statusDelivery } = vi.hoisted(() => 
   handlers: new Map<string, (e: unknown, payload: unknown) => unknown>(),
   relaunch: vi.fn(),
   prefs: new Map<string, unknown>(),
-  failing: { key: null as string | null },
+  failing: { key: null as string | null, read: false },
   // O main já respondeu; a resposta só chega ao renderer quando isto resolve.
   statusDelivery: { gate: null as Promise<void> | null },
 }))
@@ -22,7 +22,10 @@ vi.mock('electron', () => ({
   },
 }))
 vi.mock('../../../electron/main/services/prefs-store', () => ({
-  getPref: (key: string, fallback: unknown) => (prefs.has(key) ? prefs.get(key) : fallback),
+  getPref: (key: string, fallback: unknown) => {
+    if (failing.read) throw new Error('disk I/O error')
+    return prefs.has(key) ? prefs.get(key) : fallback
+  },
   setPref: (key: string, value: unknown) => {
     if (key === failing.key) throw new Error('disk I/O error')
     prefs.set(key, JSON.parse(JSON.stringify(value)))
@@ -61,7 +64,7 @@ const {
 const { GpuSoftwareIndicator } = await import('./GpuSoftwareIndicator')
 const { TerminalSection } = await import('./TerminalSection')
 const { IconRail } = await import('@/app/IconRail')
-const { useGpuStatusStore } = await import('./gpu-status-store')
+const { useGpuStatusStore, GPU_STATUS_RETRY_MS } = await import('./gpu-status-store')
 
 const HOUR_MS = 60 * 60 * 1000
 const NOW = new Date(2026, 10, 12, 9, 0).getTime()
@@ -117,7 +120,11 @@ describe('GpuSoftwareIndicator', () => {
     useGpuStatusStore.setState({ status: null })
     registerGpuIpc()
   })
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    failing.read = false
+    vi.useRealTimers()
+  })
 
   it('não aparece com a GPU ligada', async () => {
     boot()
@@ -222,6 +229,67 @@ describe('GpuSoftwareIndicator', () => {
     expect(relaunch).not.toHaveBeenCalled()
   })
 
+  it('se a escrita e a releitura falham, o aviso volta sozinho quando o gpu:status responde', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    crashTwice()
+    boot()
+    await renderIndicator()
+    failing.key = GPU_AUTO_PREF_KEY
+    failing.read = true
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(useGpuStatusStore.getState().status).toBeNull())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GPU_STATUS_RETRY_MS)
+    })
+    expect(useGpuStatusStore.getState().status).toBeNull()
+    expect(indicator()).toBeNull()
+
+    // Nada mudou no main: o registro segue no banco e a GPU segue desligada.
+    failing.read = false
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GPU_STATUS_RETRY_MS)
+    })
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('religar'))
+    expect(indicator()?.getAttribute('aria-label')).not.toContain('reiniciar')
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
+  })
+
+  it('um religar que falhou no rail não vira "reiniciar" quando as Configurações religam depois', async () => {
+    crashTwice()
+    boot()
+    render(
+      <>
+        <GpuSoftwareIndicator />
+        <TerminalSection open />
+      </>,
+    )
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+    failing.key = GPU_AUTO_PREF_KEY
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+    fireEvent.click(indicator()!)
+    // Palpite em vigor até a releitura chegar.
+    await waitFor(() => expect(indicator()).toBeNull())
+    deliver()
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('religar'))
+    await act(async () => {})
+
+    // Mesmo desfecho de religar pelas Configurações sem o clique que falhou.
+    failing.key = null
+    statusDelivery.gate = null
+    fireEvent.click(toggle)
+    await waitFor(() => expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull())
+    await waitFor(() => expect(indicator()).toBeNull())
+    expect(screen.getByRole('button', { name: 'Reiniciar agora' })).toBeInTheDocument()
+  })
+
   it('fica no rail, logo acima do botão de Configurações', async () => {
     crashTwice()
     boot()
@@ -309,6 +377,135 @@ describe('GpuSoftwareIndicator', () => {
     expect(useGpuStatusStore.getState().status?.prefOzone).toBe(false)
     expect(toggle).toBeChecked()
     expect(wayland).not.toBeChecked()
+  })
+})
+
+describe('gpu-status-store × escrita que falha', () => {
+  beforeEach(() => {
+    handlers.clear()
+    prefs.clear()
+    failing.key = null
+    statusDelivery.gate = null
+    useGpuStatusStore.setState({ status: null })
+    registerGpuIpc()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    cleanup()
+    failing.key = null
+    failing.read = false
+    statusDelivery.gate = null
+    vi.restoreAllMocks()
+  })
+
+  const store = () => useGpuStatusStore.getState()
+
+  it('um gpu:set-ozone que falha volta ao que ficou no banco, sem rejeição solta', async () => {
+    boot()
+    await store().load()
+    expect(store().status?.prefOzone).toBe(true)
+    failing.key = OZONE_PREF_KEY
+
+    await expect(store().setOzone(false)).resolves.toBeUndefined()
+
+    expect(prefs.has(OZONE_PREF_KEY)).toBe(false)
+    expect(store().status?.prefOzone).toBe(true)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('o toggle de Wayland volta a ficar marcado quando a escrita falha', async () => {
+    boot()
+    render(<TerminalSection open />)
+    const wayland = await screen.findByRole('checkbox', { name: /Wayland nativo/ })
+    await waitFor(() => expect(wayland).not.toBeDisabled())
+    failing.key = OZONE_PREF_KEY
+
+    fireEvent.click(wayland)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+
+    await waitFor(() => expect(wayland).toBeChecked())
+    expect(screen.queryByRole('button', { name: 'Reiniciar agora' })).toBeNull()
+  })
+
+  it('outra escrita durante a reconciliação do Wayland que falhou não deixa o palpite valendo', async () => {
+    boot()
+    await store().load()
+    failing.key = OZONE_PREF_KEY
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+
+    const ozone = store().setOzone(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+    const disabled = store().setDisabled(true)
+    await waitFor(() => expect(prefs.get(GPU_DISABLED_PREF_KEY)).toBe(true))
+    deliver()
+    await Promise.all([ozone, disabled])
+
+    await waitFor(() => expect(store().status?.prefOzone).toBe(true))
+    expect(store().status?.prefDisabled).toBe(true)
+  })
+
+  it('duas escritas que falham em sequência terminam no que ficou no banco', async () => {
+    crashTwice()
+    boot()
+    await store().load()
+    // O automático avisa no console ao desligar: só contam os avisos das escritas.
+    vi.mocked(console.warn).mockClear()
+    failing.key = GPU_AUTO_PREF_KEY
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+
+    const reenable = store().setDisabled(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+    failing.key = OZONE_PREF_KEY
+    const ozone = store().setOzone(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
+    deliver()
+    await Promise.all([reenable, ozone])
+
+    await waitFor(() => expect(store().status?.autoDisabled).not.toBeNull())
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
+    expect(store().status?.prefOzone).toBe(true)
+  })
+
+  it('se nem o gpu:status responde depois de religar falhar, o palpite sai e os toggles travam', async () => {
+    crashTwice()
+    boot()
+    render(<TerminalSection open />)
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+    await waitFor(() => expect(toggle).toBeChecked())
+    failing.key = GPU_AUTO_PREF_KEY
+    failing.read = true
+
+    await expect(store().setDisabled(false)).resolves.toBeUndefined()
+
+    // O palpite seria "religada, falta reiniciar"; o registro segue no banco.
+    expect(store().status).toBeNull()
+    await waitFor(() => expect(toggle).toBeDisabled())
+    expect(screen.queryByRole('button', { name: 'Reiniciar agora' })).toBeNull()
+
+    failing.read = false
+    await store().load()
+    expect(store().status?.autoDisabled).not.toBeNull()
+    await waitFor(() => expect(toggle).toBeChecked())
+  })
+
+  it('se nem o gpu:status responde depois do Wayland falhar, o palpite sai', async () => {
+    boot()
+    await store().load()
+    failing.key = OZONE_PREF_KEY
+    failing.read = true
+
+    await expect(store().setOzone(false)).resolves.toBeUndefined()
+
+    expect(store().status).toBeNull()
+    failing.read = false
+    await store().load()
+    expect(store().status?.prefOzone).toBe(true)
   })
 })
 
