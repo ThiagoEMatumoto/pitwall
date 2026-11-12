@@ -170,6 +170,36 @@ describe('startLiveWatch', () => {
     useAppStore.getState().stopLiveWatch()
   })
 
+  // Na janela de undo a sessão sai de liveSessions: o batch que muda o status
+  // dela é descartado, e o main não o repete. O Desfazer reinsere a cópia antiga,
+  // que o refresh preserva por já estar na lista: só reassinar traz o status certo.
+  it('Desfazer o encerramento recebe o batch que saiu durante a janela de undo', async () => {
+    live.mockResolvedValueOnce([{ ...session('a'), status: 'working', lastActivityAt: 1_000 }])
+    await useAppStore.getState().startLiveWatch()
+    const batch: GlobalActivityBatch = [
+      { ccSessionId: 'cc-a', status: 'idle', lastActivityAt: 2_000 },
+    ]
+    watchGlobal.mockImplementation(() => activityHandler?.(structuredClone(batch)))
+
+    useAppStore.getState().endSession('a')
+    expect(useAppStore.getState().liveSessions).toEqual([])
+    activityHandler?.(structuredClone(batch))
+
+    live.mockResolvedValueOnce([{ ...session('a'), status: 'idle', lastActivityAt: 2_000 }])
+    useAppStore.getState().undoEndSession('a')
+    // O undo dispara o refresh sem devolvê-lo: espera o snapshot ser aplicado.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useAppStore.getState().liveSessions).toHaveLength(1)
+    expect(useAppStore.getState().liveSessions[0]).toMatchObject({
+      id: 'a',
+      status: 'idle',
+      lastActivityAt: 2_000,
+    })
+
+    useAppStore.getState().stopLiveWatch()
+  })
+
   // Reassinar faz o main reler o índice e retransmitir: só vale quando o
   // snapshot trouxe sessão que o stream ainda não podia ter atualizado.
   it('snapshot sem sessão nova não reassina o stream', async () => {

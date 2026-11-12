@@ -1330,6 +1330,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           : s.liveSessions,
     }))
     schedulePersist(get().panes)
+    // A sessão ficou fora da lista durante a janela: o batch que mudou o status
+    // dela foi descartado e o main não repete batch igual. O refresh abaixo a
+    // encontra já reinserida e preserva a cópia antiga: só assinar de novo reenvia.
+    if (pending.live && liveWatchStarted) sessionsApi.watchGlobalActivity()
     void get().refreshLiveSessions()
   },
 
