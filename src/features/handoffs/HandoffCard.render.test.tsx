@@ -19,7 +19,9 @@ vi.mock('@/lib/ipc', () => ({
 }))
 
 import { HandoffCard } from './HandoffCard'
-import { useAppStore } from '@/store/appStore'
+import { useAppStore, type ActivePane } from '@/store/appStore'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
+import type { SessionGraphNode } from '../../../shared/types/session-graph'
 
 const LONG_TASK =
   'Melhorar o modo Chat em duas frentes que hoje forçam o usuário a sair para o Terminal. ' +
@@ -218,6 +220,93 @@ describe('HandoffCard: "Abrir na aba" é a ação primária', () => {
     useAppStore.setState({ liveSessions: [] })
     render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
     expect(screen.queryByRole('button', { name: 'Abrir na aba' })).toBeNull()
+  })
+})
+
+// Os verbos da filha são os mesmos da barra e do X da aba, com o mesmo efeito:
+// Minimizar tira da tela, Encerrar mata o processo (e não desvincula).
+describe('HandoffCard: Minimizar e Encerrar no menu da filha viva', () => {
+  const real = {
+    endSession: useAppStore.getState().endSession,
+    closePane: useAppStore.getState().closePane,
+  }
+  const endSession = vi.fn()
+  const closePane = vi.fn()
+  const childPane = {
+    paneId: 'pane-child',
+    session: { id: 's-child', ccSessionId: 'cc-child', title: null },
+  } as unknown as ActivePane
+
+  function openMenu(liveStatus: LiveSessionInfo['status'] = 'working') {
+    mountDock({}, liveStatus)
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+  }
+
+  beforeEach(() => {
+    endSession.mockClear()
+    closePane.mockClear()
+    useAppStore.setState({ liveSessions: [], panes: [], endSession, closePane })
+    // "É filha" sai do grafo: hierarchyMotherId, escrito no main por
+    // session-graph.ts a partir de readHierarchyLinks.
+    useSessionGraphStore.setState({
+      graph: {
+        nodes: [
+          { sessionId: 's-child', hierarchyMotherId: 'm1' },
+          { sessionId: 'm1', hierarchyMotherId: null },
+        ] as unknown as SessionGraphNode[],
+        lanes: [],
+        edges: [],
+      },
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    useAppStore.setState({ liveSessions: [], panes: [], ...real })
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+  })
+
+  it('Encerrar com a filha trabalhando pede confirmação; negada, nada é encerrado', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    openMenu('working')
+    fireEvent.click(screen.getByText('Encerrar filha'))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(endSession).not.toHaveBeenCalled()
+  })
+
+  it('confirmada, encerra pelo caminho da barra: mata o processo e mantém o vínculo', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    openMenu('working')
+    fireEvent.click(screen.getByText('Encerrar filha'))
+    expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true })
+  })
+
+  it('filha parada encerra direto (o Desfazer do toast cobre o clique errado)', () => {
+    const confirm = vi.spyOn(window, 'confirm')
+    openMenu('idle')
+    fireEvent.click(screen.getByText('Encerrar filha'))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true })
+  })
+
+  it('Minimizar fecha só a aba dela', () => {
+    useAppStore.setState({ panes: [childPane] })
+    openMenu()
+    fireEvent.click(screen.getByText('Minimizar'))
+    expect(closePane).toHaveBeenCalledWith('pane-child')
+    expect(endSession).not.toHaveBeenCalled()
+  })
+
+  it('sem aba aberta não há o que minimizar', () => {
+    openMenu()
+    expect(screen.queryByText('Minimizar')).toBeNull()
+  })
+
+  it('sem processo o menu não oferece Encerrar nem Minimizar', () => {
+    useAppStore.setState({ panes: [childPane] })
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.queryByText('Encerrar filha')).toBeNull()
+    expect(screen.queryByText('Minimizar')).toBeNull()
   })
 })
 

@@ -20,7 +20,8 @@ import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
 import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
-import { crewResumedAfterQuestion, splitAlias } from './crew'
+import { crewResumedAfterQuestion, paneShowsLive, splitAlias } from './crew'
+import { endSessionAsked } from './end-child'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -436,6 +437,12 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // traz para a tela (focusOrOpenSession RE-ATTACHA uma pane à PTY viva, nunca
   // re-spawn/--resume).
   const childProcess = childProcessAlive(childSession) ? childSession : undefined
+  // Aba aberta da filha: sem ela não há o que minimizar.
+  const childPaneId = useAppStore((s) =>
+    childProcess
+      ? (s.panes.find((p) => paneShowsLive(p, childProcess))?.paneId ?? null)
+      : null,
+  )
 
   // Identidade endereçável da filha: `sessions.title` carrega o alias fixado no
   // spawn (`<nome>-<escopo>`). Nome em destaque, escopo apagado embaixo.
@@ -554,12 +561,35 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
           no mesmo peso de "Abrir na aba" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
-      {(canForceFail || canDismiss || canRelease) && (
+      {(childProcess || canForceFail || canDismiss || canRelease) && (
         <Menu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
           portal
           items={[
+            // Os verbos da filha viva são os da barra e do X da aba, com o mesmo
+            // efeito: Minimizar é o closePane, Encerrar é o endSessionAsked.
+            ...(childPaneId
+              ? [
+                  {
+                    label: 'Minimizar',
+                    title:
+                      'Fecha só a aba. A filha segue rodando em 2º plano, no chip da mãe na barra.',
+                    onClick: () => useAppStore.getState().closePane(childPaneId),
+                  },
+                ]
+              : []),
+            ...(childProcess
+              ? [
+                  {
+                    label: 'Encerrar filha',
+                    danger: true,
+                    title:
+                      'Mata o processo. A filha segue vinculada à mãe e pode ser retomada depois.',
+                    onClick: () => endSessionAsked(childProcess.id),
+                  },
+                ]
+              : []),
             ...(canForceFail
               ? [
                   {
