@@ -8,6 +8,7 @@ import {
   RAW_LOAD_EVERY,
   RAW_LOAD_OUTPUT,
   RAW_PROMPT,
+  argvFlag,
   buildSessionFile,
   createFakeHome,
   parseRawStdin,
@@ -52,14 +53,28 @@ describe('buildSessionFile / withStatus', () => {
       name: null,
       startedAt: 1000,
       updatedAt: 1000,
+      statusUpdatedAt: 1000,
     })
   })
 
   it('troca status e updatedAt sem mutar o original', () => {
     const file = buildSessionFile(42, { sessionId: 's1', cwd: '/r', status: 'busy' }, 1000)
     const next = withStatus(file, 'waiting', 2000)
-    expect(next).toMatchObject({ status: 'waiting', updatedAt: 2000, startedAt: 1000 })
+    expect(next).toMatchObject({
+      status: 'waiting',
+      updatedAt: 2000,
+      startedAt: 1000,
+      statusUpdatedAt: 2000,
+    })
     expect(file.status).toBe('busy')
+  })
+
+  it('statusUpdatedAt só anda quando o status muda', () => {
+    const file = buildSessionFile(42, { sessionId: 's1', cwd: '/r', status: 'busy' }, 1000)
+    expect(withStatus(file, 'busy', 2000)).toMatchObject({
+      updatedAt: 2000,
+      statusUpdatedAt: 1000,
+    })
   })
 })
 
@@ -134,6 +149,16 @@ describe('fake-claude.sh', () => {
     expect(fake.readSessionFiles()[0].data.sessionId).toBe('cc-old')
   })
 
+  // O /exit é como a hibernação tira o claude do ar: o stub tem de sair nele.
+  it('/exit encerra o stub sem ler o que vem depois', () => {
+    fake = createFakeHome()
+    const out = runStub(fake.fakeCliPath('claude'), ['--session-id', 'cc-4'], '/exit\ndepois\n')
+    const log = fake.readCliLog('claude')
+    expect(log).toContain('stdin: /exit\n')
+    expect(log).not.toContain('stdin: depois')
+    expect(out).not.toContain('recebido: depois')
+  })
+
   // Contrato com o produtor real: o arquivo escrito pelo stub (e o flip do
   // setStatus) tem que ser lido pelo MESMO leitor que o app usa em produção.
   it('o leitor do app (buildSessionsFileIndex) indexa o que o stub escreveu', async () => {
@@ -148,10 +173,30 @@ describe('fake-claude.sh', () => {
     const before = activity.buildSessionsFileIndex().get('cc-2')
     expect(before).toMatchObject({ pid, name: 'renata', cwd: fake.root, status: 'busy' })
     expect(activity.mapStatus(before!.status)).toBe('working')
+    // O gate da hibernação recusa o arquivo sem statusUpdatedAt.
+    expect(before!.statusUpdatedAt).toEqual(expect.any(Number))
 
+    const flippedAt = Date.now()
     fake.setStatus(pid, 'waiting')
     const after = activity.buildSessionsFileIndex().get('cc-2')
     expect(activity.mapStatus(after!.status)).toBe('waiting')
+    expect(after!.statusUpdatedAt).toBeGreaterThanOrEqual(flippedAt)
+  })
+})
+
+describe('argvFlag', () => {
+  it('lê o valor de uma flag do argv que o stub logou, sem o escape do %q', () => {
+    fake = createFakeHome()
+    runStub(
+      fake.fakeCliPath('claude'),
+      ['--resume', 'cc-9', '-n', 'ana-fix', '--settings', '/tmp/a b/s.json', 'kick -n off'],
+      '',
+    )
+    const log = fake.readCliLog('claude')
+    expect(argvFlag(log, '--resume')).toBe('cc-9')
+    expect(argvFlag(log, '-n')).toBe('ana-fix')
+    expect(argvFlag(log, '--settings')).toBe('/tmp/a b/s.json')
+    expect(argvFlag(log, '--session-id')).toBeNull()
   })
 })
 
