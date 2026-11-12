@@ -154,7 +154,7 @@ function overlayInsets(container: HTMLElement): Insets & { dock: number; minimap
   const bar = rect('[data-testid="map-top-bar"]')
   const controls = rect('.react-flow__controls')
   const minimap = rect('.react-flow__minimap')
-  // Equipe/Conversas aberta flutua sobre a borda direita do mapa (CrewDock).
+  // Equipe aberta flutua sobre a borda direita do mapa (CrewDock).
   const dock = document
     .querySelector<HTMLElement>('[data-testid="crew-dock"][data-overlay]')
     ?.getBoundingClientRect()
@@ -385,7 +385,7 @@ function SessionMapInner() {
   const scope = scopeMode === 'project' && activeProjectId ? activeProjectId : GLOBAL_CANVAS_SCOPE
   const graph = useSessionGraph()
   const inUse = useMapSessionIds()
-  // Painel Equipe/Conversas aberto sobre o mapa: a barra do topo não põe a pílula
+  // Painel Equipe aberto sobre o mapa: a barra do topo não põe a pílula
   // de contadores embaixo dele (o rail segue no layout, fora do mapa).
   const dockOverlay = Math.max(0, useCrewDockWidth() - RAIL_WIDTH)
   const canvas = useCanvasState(scope)
@@ -945,7 +945,7 @@ function SessionMapInner() {
     }
   }, [panelFeatureId, fitReadable])
 
-  // Abrir a Equipe/Conversas sobre o mapa: se o dock passa a cobrir um cartão
+  // Abrir a Equipe sobre o mapa: se o dock passa a cobrir um cartão
   // (mais de 30% dele), reenquadra sem fechá-lo. Antes o cartão ficava meio
   // escondido e só o "Enquadrar" manual o trazia de volta.
   const prevDock = useRef(dockOverlay)

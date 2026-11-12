@@ -327,7 +327,7 @@ export function MapTopBar({
   narrow = false,
   children,
 }: {
-  // Largura do painel Equipe/Conversas sobre o mapa: nada da barra fica embaixo.
+  // Largura do painel Equipe sobre o mapa: nada da barra fica embaixo.
   rightInset?: number
   // Mapa estreito (painel da mãe ou da feature aberto): o "+N" dos avisos pode
   // morar no canto da barra, que reserva a vaga dele sempre.
