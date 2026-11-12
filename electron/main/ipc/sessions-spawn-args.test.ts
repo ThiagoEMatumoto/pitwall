@@ -96,6 +96,9 @@ import { registerSessionIpc, spawnSession } from './sessions'
 import { IdleHibernator, setIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { markHibernated, unmarkHibernated } from '../services/hibernate/hibernated-store'
 import { parseSpawnArgs } from '../services/spawn-args'
+import * as handoffStore from '../services/handoff-store'
+import { spawnHandoffChild } from '../services/handoff/spawn-child'
+import { permissionModeForHandoffMode } from '../services/spawn-flags'
 
 const REPO_DIR = join(HOME, 'repo')
 const MODEL = SPAWNABLE_MODEL_ALIASES[0]
@@ -633,5 +636,157 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
     expect(await h.hibernate({ sessionId: spawned.id, ccSessionId: cc }, 'pane-1')).toBe(false)
     expect(h.isHibernating(spawned.id)).toBe(false)
     expect(h.getStats().refused['guard-held']).toBe(1)
+  })
+})
+
+// Filha que entregou (handoff done) e saiu. Retomar devolve a IDENTIDADE dela
+// (apelido, modo de permissão, --settings de filha) sem reabrir nem desvincular o
+// handoff. Pelos produtores reais: create/markRunning/report do store, o spawn pelo
+// seam do session_handoff e o exit da PTY.
+describe('filha de handoff done retomada', () => {
+  const ALIAS = 'filha-api'
+
+  function dispatchChild(mode: 'plan' | 'auto-edits'): { handoffId: string; spawnedId: string } {
+    const handoff = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 't',
+      composedPrompt: 'briefing',
+      motherSessionId: null,
+      status: 'approved',
+      mode,
+    })
+    const child = spawnHandoffChild({
+      repoId: 'r1',
+      name: ALIAS,
+      initialPrompt: 'comece',
+      systemPromptText: 'briefing',
+      permissionMode: permissionModeForHandoffMode(mode),
+      handoffId: handoff.id,
+    })
+    handoffStore.markRunning(handoff.id, child.id)
+    return { handoffId: handoff.id, spawnedId: child.id }
+  }
+
+  function doneChild(mode: 'plan' | 'auto-edits' = 'auto-edits'): {
+    handoffId: string
+    spawnedId: string
+    cc: string
+  } {
+    const child = dispatchChild(mode)
+    handoffStore.report(child.handoffId, 'entregue')
+    const cc = ccOf(child.spawnedId)
+    writeTranscript(cc)
+    exitPty(child.spawnedId, { hibernated: false })
+    return { ...child, cc }
+  }
+
+  function rowOf(sessionId: string): {
+    title: string | null
+    title_source: string | null
+    spawn_args: string
+  } {
+    return seam.db
+      .prepare('SELECT title, title_source, spawn_args FROM sessions WHERE id = ?')
+      .get(sessionId) as { title: string | null; title_source: string | null; spawn_args: string }
+  }
+
+  it('sessions:resume: mesmo -n, mesmo modo e o --settings de filha', () => {
+    const { cc, spawnedId } = doneChild()
+    const before = launchOf(spawnedId)
+    expect(before.flags).toContain("'acceptEdits'")
+
+    const resumed = resume(cc)
+
+    expect(argvOf(resumed)).toContain(`--resume ${cc}`)
+    expect(argvOf(resumed)).toContain(`-n '${ALIAS}'`)
+    expect(launchOf(resumed)).toEqual(before)
+    expect(settingsOf(resumed)?.crossSessionInbound).toBe('accept')
+    expect(settingsOf(resumed)?.permissions?.deny).toContain('Bash(rm:*)')
+    const row = rowOf(resumed)
+    expect(row).toMatchObject({ title: ALIAS, title_source: 'manual' })
+    expect(parseSpawnArgs(row.spawn_args)).toMatchObject({
+      handoffChild: true,
+      permissionMode: 'acceptEdits',
+    })
+  })
+
+  it('modo plan volta em plan (não vira editável)', () => {
+    const { cc, spawnedId } = doneChild('plan')
+    const before = launchOf(spawnedId)
+
+    const resumed = resume(cc)
+
+    expect(launchOf(resumed)).toEqual(before)
+    expect(launchOf(resumed).flags).toContain("'plan'")
+    expect(settingsOf(resumed)?.crossSessionInbound).toBe('accept')
+  })
+
+  it('o handoff segue done e vinculado: aponta para a linha nova, sem reabrir', () => {
+    const { handoffId, cc } = doneChild()
+    handoffStore.dismiss(handoffId)
+    const dismissedAt = handoffStore.get(handoffId)?.dismissedAt
+    expect(dismissedAt).not.toBeNull()
+
+    const resumed = resume(cc)
+
+    expect(handoffStore.get(handoffId)).toMatchObject({
+      status: 'done',
+      summary: 'entregue',
+      childSessionId: resumed,
+      dismissedAt,
+    })
+  })
+
+  it('segundo resume mantém o mesmo -n e o handoff segue done', () => {
+    const { handoffId, cc } = doneChild()
+    const first = resume(cc)
+    exitPty(first, { hibernated: false })
+
+    const second = resume(cc)
+
+    expect(argvOf(second)).toContain(`-n '${ALIAS}'`)
+    expect(launchOf(second)).toEqual(launchOf(first))
+    expect(handoffStore.get(handoffId)).toMatchObject({ status: 'done', childSessionId: second })
+  })
+
+  it('handoffs:resume (painel): relança como filha e devolve o handoff ainda done', () => {
+    const { handoffId, cc } = doneChild()
+
+    const updated = seam.handlers.get('handoffs:resume')!(null, handoffId as never) as {
+      status: string
+      childSessionId: string
+    }
+
+    const resumed = seam.spawns[seam.spawns.length - 1]
+    expect(resumed.argv).toContain(`--resume ${cc}`)
+    expect(resumed.argv).toContain(`-n '${ALIAS}'`)
+    expect(updated).toMatchObject({ status: 'done', childSessionId: resumed.sessionId })
+  })
+
+  it('hibernada: o wake limpa o hibernated_at da conversa', () => {
+    const { cc, spawnedId } = doneChild()
+    markHibernated(seam.db, spawnedId)
+
+    wake(cc)
+
+    const stillHibernated = seam.db
+      .prepare(
+        'SELECT COUNT(*) AS n FROM sessions WHERE cc_session_id = ? AND hibernated_at IS NOT NULL',
+      )
+      .get(cc) as { n: number }
+    expect(stillHibernated.n).toBe(0)
+  })
+
+  it('handoff failed segue fora: resume comum, sem o --settings de filha', () => {
+    const { handoffId, spawnedId } = dispatchChild('auto-edits')
+    handoffStore.fail(handoffId, 'quebrou')
+    const cc = ccOf(spawnedId)
+    writeTranscript(cc)
+    exitPty(spawnedId, { hibernated: false })
+
+    const resumed = resume(cc)
+
+    expect(relevantFlags(argvOf(resumed))).toEqual([])
+    expect(handoffStore.get(handoffId)?.status).toBe('failed')
   })
 })
