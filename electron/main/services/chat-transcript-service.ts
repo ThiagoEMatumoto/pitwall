@@ -26,6 +26,10 @@ import type {
 
 const POLL_MS = 1000 // espera o JSONL nascer (sessão recém-spawnada)
 const DEBOUNCE_MS = 150 // coalesce de bursts de append durante o streaming
+// Num streaming os appends chegam a menos de DEBOUNCE_MS um do outro e a cauda nunca
+// vence: sem teto o chat só leria quando a rajada parasse. O 1º change de uma rajada
+// garante uma leitura em no máximo isto.
+const MAX_WAIT_MS = 300
 // A 1ª leitura de uma mãe passa de 60MB: em blocos, o pico de memória é um bloco e as
 // linhas dele, não o arquivo inteiro.
 const BLOCK_BYTES = 4 * 1024 * 1024
@@ -134,6 +138,8 @@ interface FullWatch {
   watcher: FSWatcher | null
   poll: NodeJS.Timeout | null
   debounce: NodeJS.Timeout | null
+  // Teto do debounce: armado pelo 1º change de uma rajada, os seguintes não o zeram.
+  maxWait: NodeJS.Timeout | null
   // webContents.id de quem chamou chat:watch → o próprio webContents.
   subscribers: Map<number, WebContents>
   tracked: Tracked | null
@@ -141,6 +147,8 @@ interface FullWatch {
   rev: number
   // Leituras em série: duas ao mesmo tempo consumiriam o mesmo trecho duas vezes.
   queue: Promise<void>
+  // Há uma leitura na fila que ainda não começou.
+  queued: boolean
 }
 
 function newTracked(index: Map<string, SubagentRef>, dropped?: ReadonlySet<string>): Tracked {
@@ -266,7 +274,7 @@ export interface ChatTranscriptSnapshot extends ChatTranscriptRead {
 //
 // Watcher: chokidar num ÚNICO arquivo. NÃO usamos awaitWriteFinish — ele aguarda o
 // arquivo PARAR de mudar, o que atrasaria updates durante o streaming (append
-// contínuo). Em vez disso: debounce curto + leitura só do que foi acrescentado desde a
+// contínuo). Em vez disso: debounce curto com teto + leitura só do que foi acrescentado desde a
 // última, alimentando o parser incremental. Cada mudança emite o delta (`base` + as
 // mensagens dali em diante) só para os webContents que chamaram chat:watch. O arquivo é
 // relido do zero (base 0) quando encolheu, foi reescrito, sofreu rewind, ou quando o meta
@@ -329,10 +337,12 @@ class ChatTranscriptService {
       watcher: null,
       poll: null,
       debounce: null,
+      maxWait: null,
       subscribers: new Map(),
       tracked: null,
       rev: 0,
       queue: Promise.resolve(),
+      queued: false,
     }
     this.subscribe(entry, sender)
     this.watches.set(sessionId, entry)
@@ -352,6 +362,7 @@ class ChatTranscriptService {
     }
     if (entry.poll) clearInterval(entry.poll)
     if (entry.debounce) clearTimeout(entry.debounce)
+    if (entry.maxWait) clearTimeout(entry.maxWait)
     if (entry.watcher) void entry.watcher.close()
     this.watches.delete(sessionId)
   }
@@ -440,9 +451,18 @@ class ChatTranscriptService {
   }
 
   private enqueue(sessionId: string, entry: FullWatch): Promise<void> {
+    // A leitura que ainda não começou já vai ver o que for escrito até ela começar:
+    // outra na fila só abriria o arquivo de novo para o mesmo trecho.
+    if (entry.queued) return entry.queue
+    entry.queued = true
     // Erro de leitura (arquivo sumiu, corrida com uma reescrita): o estado fica como
     // estava e a próxima mudança do arquivo tenta de novo.
-    entry.queue = entry.queue.then(() => this.advance(sessionId, entry)).catch(() => {})
+    entry.queue = entry.queue
+      .then(() => {
+        entry.queued = false
+        return this.advance(sessionId, entry)
+      })
+      .catch(() => {})
     return entry.queue
   }
 
@@ -580,9 +600,18 @@ class ChatTranscriptService {
     entry.path = path
     void this.enqueue(sessionId, entry) // estado inicial imediato.
     entry.watcher = chokidar.watch(path, { ignoreInitial: true })
+    // Cauda e teto disparam a mesma leitura; a que vencer desarma a outra.
+    const read = () => {
+      if (entry.debounce) clearTimeout(entry.debounce)
+      if (entry.maxWait) clearTimeout(entry.maxWait)
+      entry.debounce = null
+      entry.maxWait = null
+      void this.enqueue(sessionId, entry)
+    }
     const schedule = () => {
       if (entry.debounce) clearTimeout(entry.debounce)
-      entry.debounce = setTimeout(() => void this.enqueue(sessionId, entry), DEBOUNCE_MS)
+      entry.debounce = setTimeout(read, DEBOUNCE_MS)
+      entry.maxWait ??= setTimeout(read, MAX_WAIT_MS)
     }
     entry.watcher.on('change', schedule)
     entry.watcher.on('add', schedule)
