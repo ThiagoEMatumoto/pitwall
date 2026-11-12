@@ -224,7 +224,7 @@ describe('sessions:hibernated', () => {
     })
     expect(c.session).toMatchObject({ id: 'dormant:cc-c', title: 'migrar banco' })
     expect(useToastStore.getState().toasts).toEqual([])
-    // O main acha a pane para acordar (agent-bus, wake da mãe).
+    // O main acha a pane para acordar (wake da mãe, send-prompt).
     expect(calls.dormantSync.at(-1)).toEqual([
       expect.objectContaining({ ccSessionId: 'cc-c', paneId: 'pane-c' }),
     ])

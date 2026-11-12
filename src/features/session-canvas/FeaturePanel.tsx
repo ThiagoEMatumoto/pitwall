@@ -619,7 +619,7 @@ const PANEL_ESC_OWNERS = [
 export const FEATURE_PANEL_W = 380
 
 /** Painel lateral da feature sobre o mapa (dashboard da frente). Não navega. */
-// `rightInset`: largura da Equipe/Conversas aberta sobre o mapa (a mesma que a
+// `rightInset`: largura da Equipe aberta sobre o mapa (a mesma que a
 // MapTopBar desvia) — sem isto o dock, portado depois no DOM, cobre o painel.
 export function FeaturePanel({
   rightInset = 0,

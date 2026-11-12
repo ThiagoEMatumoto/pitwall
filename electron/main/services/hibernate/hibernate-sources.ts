@@ -1,8 +1,7 @@
 // Leitores que alimentam o gate da hibernação, cada um da fonte que já responde
 // a pergunta no app (escritor real entre parênteses):
 // - status do claude: buildSessionsFileIndex (o próprio claude, sessions/<pid>.json);
-// - pane aberta: workspace_state.open_panes (renderer, via workspace:save-panes);
-// - agent_ask: agent_messages (agent-bus).
+// - pane aberta: workspace_state.open_panes (renderer, via workspace:save-panes).
 import { getDb } from '../db'
 import { buildSessionsFileIndex } from '../session-activity'
 import type { PaneSnapshot } from '../../../../shared/types/ipc'
@@ -32,22 +31,6 @@ export function hasAwakePane(ccSessionId: string, isDormant: (cc: string) => boo
   }
   if (!Array.isArray(panes)) return false
   return panes.some((p) => p?.ccSessionId === ccSessionId) && !isDormant(ccSessionId)
-}
-
-// Qualquer sessions.id da mesma conversa conta (o --resume troca o sessions.id e
-// mantém o cc). Pendente = alguém ainda espera resposta, independe da janela.
-export function agentMessageSince(ccSessionId: string, since: number): boolean {
-  const row = getDb()
-    .prepare(
-      `SELECT 1 FROM agent_messages
-        WHERE (from_session_id IN (SELECT id FROM sessions WHERE cc_session_id = ?)
-               OR to_session_id IN (SELECT id FROM sessions WHERE cc_session_id = ?))
-          AND (status = 'pending'
-               OR MAX(created_at, COALESCE(delivered_at, 0), COALESCE(answered_at, 0)) >= ?)
-        LIMIT 1`,
-    )
-    .get(ccSessionId, ccSessionId, since)
-  return row !== undefined
 }
 
 // PTYs vivas do provider claude com conversa nativa.

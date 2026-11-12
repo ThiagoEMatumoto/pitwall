@@ -4,7 +4,7 @@
 // recusa conta por motivo — os contadores são a única forma de alguém notar um
 // gate que recusa tudo.
 //
-// O /exit sai pela PromptQueue com when 'on-idle', a mesma guarda do agent-bus
+// O /exit sai pela PromptQueue com when 'on-idle', a mesma guarda de toda entrega
 // (sem menu, sem rascunho, tela reconhecida). Nunca Ctrl-U, nunca limpar input,
 // nunca kill: se não sair, a sessão fica viva.
 //
@@ -78,8 +78,6 @@ export interface IdleHibernatorDeps {
   // permissão e --settings, no checkout que a posse reservou para ela.
   isHandoffChild(ccSessionId: string): boolean
   queueHas(sessionId: string): boolean
-  // agent_ask envolvendo a conversa desde `since` (ou ainda pendente).
-  agentMessageSince(ccSessionId: string, since: number): boolean
   transcriptPath(ccSessionId: string): string | null
   // null = transcript ilegível.
   scanTranscript(path: string): Promise<TranscriptVerdict | null>
@@ -252,7 +250,7 @@ export class IdleHibernator {
     }
   }
 
-  // Gates H2 a-g, dos baratos para os caros. O primeiro que falha decide o motivo.
+  // Gates H2 a-f, dos baratos para os caros. O primeiro que falha decide o motivo.
   async evaluate(
     c: HibernateCandidate,
     windowMs: number,
@@ -278,22 +276,20 @@ export class IdleHibernator {
     if (handoffCc.has(c.ccSessionId)) return refuse('handoff')
     if (this.deps.isHandoffChild(c.ccSessionId)) return refuse('handoff-child')
     if (this.deps.queueHas(c.sessionId)) return refuse('queue')
-    // e) agent_ask recente.
-    if (this.deps.agentMessageSince(c.ccSessionId, now - windowMs)) return refuse('agent-msg')
-    // f) agendamento em qualquer ponto do transcript, ou trabalho em background
+    // e) agendamento em qualquer ponto do transcript, ou trabalho em background
     // que o status 'idle' não conta (Monitor, teammate, task MCP) ainda aberto.
     const path = this.deps.transcriptPath(c.ccSessionId)
     if (!path) return refuse('no-transcript')
     const transcript = await this.deps.scanTranscript(path)
     if (transcript === null) return refuse('no-transcript')
     if (transcript !== 'clear') return refuse(transcript)
-    // g) nada rodando embaixo do claude.
+    // f) nada rodando embaixo do claude.
     const tree = this.deps.procTree(file.pid)
     if (!tree.ok) return refuse('proc-tree')
     return { ok: true, pid: file.pid }
   }
 
-  // H3: /exit pela fila on-idle com a guarda do agent-bus. Só conta como em curso
+  // H3: /exit pela fila on-idle, com a guarda dela. Só conta como em curso
   // se a fila escreveu agora; segurado/enfileirado/recusado = cancela e não hiberna.
   async hibernate(c: HibernateCandidate, paneId: string | null = null): Promise<boolean> {
     const pending: Pending = {

@@ -1,6 +1,6 @@
 // Panes dormindo do lazy restore, vistas do main. Uma pane dormindo não tem
-// processo: quem entrega de fora do renderer (agent-bus, wake da mãe,
-// send-prompt) só a alcança acordando-a primeiro. O renderer é o dono da pane
+// processo: quem entrega de fora do renderer (wake da mãe, send-prompt) só a
+// alcança acordando-a primeiro. O renderer é o dono da pane
 // (layout, paneId); o main pede o resume a ele e espera a PTY ficar pronta.
 //
 // O SendMessage NATIVO do Claude Code não passa por aqui (socket por pid): para
@@ -26,7 +26,7 @@ export function openElsewhereError(pid: number, inPitwall = false): string {
     : `conversa aberta em outro processo (pid ${pid})`
 }
 
-export type DormantWakeReason = 'agent-bus' | 'handoff-wake' | 'send-prompt' | 'answer-delivery'
+export type DormantWakeReason = 'handoff-wake' | 'send-prompt' | 'answer-delivery'
 
 export type DormantWakeOutcome =
   | { ok: true; sessionId: string }
@@ -104,17 +104,6 @@ export class DormantPanes {
   // contar como dormindo já, antes do próximo sync do renderer.
   forget(ccSessionId: string): void {
     this.byCc.delete(ccSessionId)
-  }
-
-  // Mesmo critério do resolveAlias do agent-bus: título, case-insensitive.
-  findDormantByAlias(name: string): DormantPaneInfo[] {
-    const key = name.trim().toLowerCase()
-    if (!key) return []
-    return [...this.byCc.values()].filter((p) => p.title?.toLowerCase() === key)
-  }
-
-  findDormantByRepo(repoId: string): DormantPaneInfo[] {
-    return [...this.byCc.values()].filter((p) => p.repoId === repoId)
   }
 
   onWakeResult(result: WakeResult): void {
@@ -209,24 +198,8 @@ export function setDormantPanes(panes: DormantPanes | null, isEnabled?: () => bo
   enabled = isEnabled ?? (() => true)
 }
 
-// null com a pref desligada: agent-bus, wake da mãe, send-prompt e a resposta a
+// null com a pref desligada: wake da mãe, send-prompt e a resposta a
 // pedido escalado seguem o caminho de antes da feature (not-running/not_running).
 export function getDormantPanes(): DormantPanes | null {
   return current && enabled() ? current : null
-}
-
-// O que o agent-bus enxerga das panes dormindo. Relido a cada chamada: com a pref
-// desligada não há pane dormindo e o ask cai no "nenhuma sessão viva" de antes.
-export function agentBusDormantDeps(): {
-  byAlias(name: string): DormantPaneInfo[]
-  byRepo(repoId: string): DormantPaneInfo[]
-  wake(ccSessionId: string): Promise<DormantWakeOutcome>
-} {
-  return {
-    byAlias: (name) => getDormantPanes()?.findDormantByAlias(name) ?? [],
-    byRepo: (repoId) => getDormantPanes()?.findDormantByRepo(repoId) ?? [],
-    wake: (cc) =>
-      getDormantPanes()?.wakeDormant(cc, 'agent-bus') ??
-      Promise.resolve({ ok: false, error: 'no-registry', sessionId: null }),
-  }
 }

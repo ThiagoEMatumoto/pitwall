@@ -11,7 +11,6 @@ import { serviceTools } from './service-tools'
 import { designTools } from './design-tools'
 import { loopTools } from './loop-tools'
 import { canvasTools } from './canvas-tools'
-import { agentTools } from './agent-tools'
 import type { McpServer } from '@modelcontextprotocol/server'
 import * as objectiveStore from '../objective-store'
 import * as overviewStore from '../overview-store'
@@ -26,7 +25,7 @@ import * as requestStore from '../handoff-requests'
 import { HumanOnlyError } from '../handoff-requests'
 import { deliverAnswer } from '../handoff/answer-delivery'
 import type { HandoffRequest } from '../../../../shared/types/handoff-request'
-import { MAX_WAIT_SECONDS } from '../agent-bus'
+import { MAX_WAIT_SECONDS } from '../handoff/envelope-text'
 import * as repoPullStore from '../repo-pull-store'
 import * as diagramStore from '../diagram-store'
 import * as diagramLibraryStore from '../diagram-library-store'
@@ -2102,7 +2101,6 @@ export function buildTools(
     ...diagramLibraryTools(notify),
     ...designTools(notify, ctx),
     ...canvasTools(notify, ctx),
-    ...agentTools(ctx),
     ...serviceTools(ctx),
   ]
 }
@@ -2110,7 +2108,7 @@ export function buildTools(
 // readOnlyHint: em --permission-mode plan o claude (2.1.316) pede permissão para MCP
 // tool sem a anotação, e o allow do --settings não vale ali (sonda com `claude -p
 // --permission-mode plan`: allow → negado; readOnlyHint → passa). Sem ela a filha em
-// plan trava num menu ao ler o próprio estado (handoff_result, agent_check…).
+// plan trava num menu ao ler o próprio estado (handoff_result, handoff_list…).
 //
 // Reporte da filha ao handoff: só escrevem no registro do próprio handoff.
 // handoff_wait entra porque a filha em needs_input só recebe a resposta por ele
@@ -2118,12 +2116,11 @@ export function buildTools(
 const CHILD_REPORT_TOOLS = ['handoff_report', 'handoff_progress', 'handoff_ask', 'handoff_wait']
 
 // Tools que só leem. handoff_result marca o done como consumido (recibo de leitura
-// no próprio handoff) e agent_check expira asks vencidos: bookkeeping, não escrita
-// do agente. Ficam de fora design_screenshot (persiste a altura medida) e os
-// exports (escrevem em disco). Todo *_list/*_get entra pelo sufixo; o teste guarda.
+// no próprio handoff): bookkeeping, não escrita do agente. Ficam de fora
+// design_screenshot (persiste a altura medida) e os exports (escrevem em disco).
+// Todo *_list/*_get entra pelo sufixo; o teste guarda.
 const READ_ONLY_TOOLS = [
   'handoff_result',
-  'agent_check',
   'service_list',
   'design_guide',
   'design_tree_summary',

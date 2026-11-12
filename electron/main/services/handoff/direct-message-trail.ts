@@ -9,7 +9,7 @@
 //     do transcript é tratada como histórico e não é registrada;
 // (d) é a tentativa, não a entrega — não acorda a mãe nem suprime o wake.
 import * as handoffStore from '../handoff-store'
-import { sanitizeBody } from '../agent-bus'
+import { sanitizeBody } from './envelope-text'
 import type { ObservedSendMessage } from '../session-link-pulse'
 
 const PREVIEW_CHARS = 200

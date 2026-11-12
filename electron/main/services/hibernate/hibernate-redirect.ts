@@ -1,7 +1,7 @@
 // Mensagem que entrou na fila entre a entrega do /exit da hibernação e a saída do
-// claude (agent_ask, wake da mãe): sem isto o exit a finalizava como
+// claude (wake da mãe, send-prompt): sem isto o exit a finalizava como
 // session-gone. A conversa não acabou, só dormiu: acorda a pane dormant pelo
-// mesmo wake do agent-bus/send-prompt e os itens seguem na sessão nova.
+// mesmo wake do send-prompt e os itens seguem na sessão nova.
 import type { DormantPanes } from '../dormant-panes'
 
 export interface HibernateRedirectDeps {

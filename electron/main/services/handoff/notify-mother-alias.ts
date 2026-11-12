@@ -6,7 +6,7 @@
 // entregue à ANTECESSORA. Não é uma falha visível: a mensagem chega, na sessão
 // errada, e a mãe segue supervisionando um endereço morto.
 //
-// A nota vai pro REPL da mãe pela fila on-idle (a mesma do agent-bus), não por
+// A nota vai pro REPL da mãe pela fila on-idle (a mesma do wake), não por
 // write cru no PTY: a nota termina em Enter, e escrita direta sobre um menu de
 // permissão aberto o aprovaria — ou enviaria junto o rascunho que a mãe digitava.
 // A fila segura a nota (menu, rascunho, tela não reconhecida) e entrega no fim do
@@ -17,7 +17,7 @@
 
 import { ptyManager } from '../pty-manager'
 import * as store from '../handoff-store'
-import { sanitizeBody } from '../agent-bus'
+import { sanitizeBody } from './envelope-text'
 import { injectIntoChildGuarded } from './guarded-inject'
 import { emitSessionLinkPulse } from '../session-link-pulse'
 import type { Handoff } from '../../../../shared/types/ipc'

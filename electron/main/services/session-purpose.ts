@@ -8,7 +8,6 @@
 // pedido do usuário + o que o agente respondeu depois. Nunca em massa — custo.
 import { openSync, readSync, closeSync, readFileSync, fstatSync } from 'node:fs'
 import type { ChatMessage } from '../../../shared/types/chat'
-import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { isHandoffWakeEnvelope } from '../../../shared/handoff-wake-envelope'
 import { isHandoffAnswerEnvelope } from '../../../shared/handoff-answer-envelope'
 import { parseChatMessages } from './chat-transcript'
@@ -67,7 +66,6 @@ export function cleanPrompt(raw: string): string | null {
   let text = raw.trim()
   if (
     KICKOFF_RE.test(text) ||
-    isAgentAskEnvelope(text) ||
     isHandoffWakeEnvelope(text) ||
     isHandoffAnswerEnvelope(text)
   )

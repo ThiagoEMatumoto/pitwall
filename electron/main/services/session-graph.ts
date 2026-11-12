@@ -173,8 +173,8 @@ export function sessionNodeTitle(args: {
 }
 
 // O nome próprio da sessão, sem os fallbacks de exibição (repo/'Avulsa'): é o que
-// a pane dormindo herda (dormant-enrich) para o agent-bus achá-la pelo alias. O
-// auto-título fica de fora de propósito: ele é exibição, não identidade.
+// a pane dormindo herda (dormant-enrich). O auto-título fica de fora de
+// propósito: ele é exibição, não identidade.
 export function sessionOwnTitle(args: {
   title: string | null
   titleSource: 'manual' | 'auto' | null
@@ -281,12 +281,6 @@ function buildNodes(input: SessionGraphInput, childHandoff: Map<string, GraphHan
         repoLabel: repo?.label ?? null,
         autoTitle: s.auto_title ?? null,
         isChild,
-      }),
-      alias: sessionNodeTitle({
-        title: s.title,
-        titleSource: s.title_source,
-        liveName: live?.name ?? null,
-        repoLabel: repo?.label ?? null,
       }),
       titleSource: s.title_source,
       autoTitle: s.auto_title ?? null,

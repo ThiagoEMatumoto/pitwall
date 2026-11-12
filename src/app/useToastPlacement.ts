@@ -28,7 +28,7 @@ function readFeaturePanelBox(): PeekBox | null {
 }
 
 // Painel da feature sobre o mapa: mede quando abre/troca, no resize e quando o
-// dock da Equipe/Conversas muda de largura (o painel encosta nele: right =
+// dock da Equipe muda de largura (o painel encosta nele: right =
 // dockOverlay, sem evento de resize). Fora do mapa o painel não está na tela,
 // mesmo com o store ainda "aberto".
 const PANEL_SETTLE_MS = 300

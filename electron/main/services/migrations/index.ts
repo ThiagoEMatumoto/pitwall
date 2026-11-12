@@ -67,6 +67,7 @@ import * as designFolders from './065_design_folders'
 import * as diagramFolders from './066_diagram_folders'
 import * as motherPins from './067_mother_pins'
 import * as sessionsAutoTitle from './068_sessions_auto_title'
+import * as dropAgentMessages from './069_drop_agent_messages'
 
 interface Migration {
   version: number
@@ -149,6 +150,7 @@ export const migrations: Migration[] = [
   diagramFolders,
   motherPins,
   sessionsAutoTitle,
+  dropAgentMessages,
 ]
 
 export function runMigrations(db: Database.Database): void {
