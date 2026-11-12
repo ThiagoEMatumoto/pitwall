@@ -425,6 +425,11 @@ function stripMask(clipped: { left: number; right: number }): CSSProperties | un
   return { maskImage: mask, WebkitMaskImage: mask }
 }
 
+// Começo do chip que as ações do hover nunca cobrem: os glifos antes do nome
+// (↳, coroa, status, ponto do projeto — ~19px cada, com o vão) e ~2 letras dele.
+const LEAD_GLYPH_PX = 19
+const LEAD_NAME_PX = 14
+
 interface ChipProps {
   item: LiveSessionInfo
   // 0 = topo; 1+ = filha logo depois da mãe (recuada).
@@ -463,6 +468,8 @@ function Chip({
   }`
   const { icon, spin } = statusIcon(item.status)
   const waiting = item.status === 'waiting'
+  const leadGlyphs =
+    1 + (depth > 0 ? 1 : 0) + (isPinnedMother ? 1 : 0) + (spin && item.projectColor ? 1 : 0)
 
   return (
     <div
@@ -472,7 +479,11 @@ function Chip({
       data-waiting={waiting || undefined}
       data-clipped-hidden={hidden || undefined}
       aria-hidden={hidden || undefined}
-      className={`group relative flex shrink-0 items-center gap-1.5 rounded-lg border text-[11px] transition ${
+      // O clique em qualquer ponto do chip abre a sessão — a folga em volta do
+      // nome e o vão entre as ações do hover inclusive. Só os botões de ação
+      // seguram o clique (stopPropagation).
+      onClick={onOpen}
+      className={`group relative grid shrink-0 items-center rounded-lg border text-[11px] transition ${
         depth > 0 ? 'h-6 pl-1.5 pr-2' : 'h-7 px-2.5'
       } ${
         isFocused
@@ -492,68 +503,81 @@ function Chip({
       }}
       title={tooltip}
     >
-      <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2">
-        {depth > 0 && (
-          <span
-            data-testid="tab-child-nested"
-            aria-hidden
-            className="shrink-0 text-[10px] leading-none text-[var(--color-text-dim)]"
-            title="Filha da sessão anterior"
-          >
-            ↳
-          </span>
-        )}
-        {isPinnedMother && (
-          <Icon
-            as={Crown}
-            size={11}
-            aria-label="Mãe"
-            className="shrink-0 fill-current text-[var(--color-accent)]"
-          />
-        )}
-        {/* Aguardando ("no box · sua vez") ganha O Ápice pulsante; demais estados
-            mantêm o glifo cuja FORMA carrega o status e a COR o projeto. */}
-        {waiting ? (
-          <ApexDot size={7} active color="var(--color-accent)" className="shrink-0" />
-        ) : (
-          <Icon
-            as={icon}
-            size={12}
-            className={spin ? 'shrink-0 animate-spin' : 'shrink-0'}
-            // Girando, a cor é a do status (a mesma do ponto do cartão): na cor do
-            // projeto, as abas do Pessoal giravam em vermelho e liam como erro.
-            style={{
-              color: spin ? 'var(--color-info)' : (item.projectColor ?? 'var(--color-border)'),
-            }}
-          />
-        )}
-        {spin && item.projectColor && (
-          <span
-            data-testid="tab-project-dot"
-            aria-hidden
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ background: item.projectColor }}
-          />
-        )}
-        <span className="max-w-40 truncate">{title}</span>
-        {motherTitle && (
-          <span
-            data-testid="tab-mother-chip"
-            title={`Filha de ${motherTitle}`}
-            className="max-w-24 shrink-0 truncate rounded bg-[var(--color-surface-2)] px-1 text-[10px] text-[var(--color-text-dim)]"
-          >
-            ↳ {motherTitle}
-          </span>
-        )}
-        <ProviderBadge provider={item.provider} />
-      </button>
-      <SessionFeatureChip sessionId={item.id} density="dot" />
-      {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
-      {isPinned && <PinButton isPinned onTogglePin={onTogglePin} />}
-      {/* Ações do hover sobrepostas à ponta da aba: invisíveis com largura, eram
-          ~40px de vão morto à direita do nome em cada aba; inline no hover, a
-          aba crescia e empurrava as vizinhas. */}
-      <span className="absolute inset-y-0 right-0 hidden items-center gap-1.5 rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 group-focus-within:flex group-hover:flex">
+      <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
+        <button type="button" className="flex min-w-0 items-center gap-2">
+          {depth > 0 && (
+            <span
+              data-testid="tab-child-nested"
+              aria-hidden
+              className="shrink-0 text-[10px] leading-none text-[var(--color-text-dim)]"
+              title="Filha da sessão anterior"
+            >
+              ↳
+            </span>
+          )}
+          {isPinnedMother && (
+            <Icon
+              as={Crown}
+              size={11}
+              aria-label="Mãe"
+              className="shrink-0 fill-current text-[var(--color-accent)]"
+            />
+          )}
+          {/* Aguardando ("no box · sua vez") ganha O Ápice pulsante; demais estados
+              mantêm o glifo cuja FORMA carrega o status e a COR o projeto. */}
+          {waiting ? (
+            <ApexDot size={7} active color="var(--color-accent)" className="shrink-0" />
+          ) : (
+            <Icon
+              as={icon}
+              size={12}
+              className={spin ? 'shrink-0 animate-spin' : 'shrink-0'}
+              // Girando, a cor é a do status (a mesma do ponto do cartão): na cor do
+              // projeto, as abas do Pessoal giravam em vermelho e liam como erro.
+              style={{
+                color: spin ? 'var(--color-info)' : (item.projectColor ?? 'var(--color-border)'),
+              }}
+            />
+          )}
+          {spin && item.projectColor && (
+            <span
+              data-testid="tab-project-dot"
+              aria-hidden
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: item.projectColor }}
+            />
+          )}
+          <span className="max-w-40 truncate">{title}</span>
+          {motherTitle && (
+            <span
+              data-testid="tab-mother-chip"
+              title={`Filha de ${motherTitle}`}
+              className="max-w-24 shrink-0 truncate rounded bg-[var(--color-surface-2)] px-1 text-[10px] text-[var(--color-text-dim)]"
+            >
+              ↳ {motherTitle}
+            </span>
+          )}
+          <ProviderBadge provider={item.provider} />
+        </button>
+        <SessionFeatureChip sessionId={item.id} density="dot" />
+        {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
+        {isPinned && <PinButton isPinned onTogglePin={onTogglePin} />}
+      </div>
+      {/* Ações do hover sobrepostas à ponta da aba: ao lado do nome, eram ~40px
+          de vão morto em cada aba; inline no hover, a aba crescia e empurrava as
+          vizinhas. Dividem a célula do grid com o conteúdo, invisíveis mas com
+          largura, afastadas do começo dela: a aba de nome curto alarga só o que
+          falta para os glifos e o início do nome ficarem fora delas — sobrepostas
+          com `absolute`, cobriam o botão inteiro e o clique caía nelas. `relative`
+          as mantém por cima do conteúdo; a margem negativa leva até a borda.
+          Chip cortado não as revela: `visible` aqui venceria o `hidden` herdado. */}
+      <span
+        data-testid="strip-chip-actions"
+        style={{ marginLeft: leadGlyphs * LEAD_GLYPH_PX + LEAD_NAME_PX }}
+        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
+          hidden ? '' : 'group-focus-within:visible group-hover:visible'
+        } ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}
+      >
         {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
         {onToggleMother && (
           <MotherPinToggle pinned={isPinnedMother} onToggle={onToggleMother} size={11} className="!p-0" />
