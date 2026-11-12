@@ -468,7 +468,9 @@ try {
     A.pane.getAttribute('data-pane-mode', { timeout: remaining() })
 
   async function toggleA(to: 'Chat' | 'Terminal', remaining: () => number): Promise<void> {
-    await A.pane.getByLabel(`Mudar para ${to}`, { exact: true }).click({ timeout: remaining() })
+    // Seletor CSS, não getByLabel: com o DOM do chat de 60 MB (187 mil nós) o
+    // motor de acessibilidade do Playwright leva minutos para resolver o rótulo.
+    await A.pane.locator(`[aria-label="Mudar para ${to}"]`).click({ timeout: remaining() })
     const mode = to.toLowerCase()
     await waitFor(
       `pane de A em modo ${mode}`,
