@@ -559,6 +559,31 @@ describe('tick: as três condições', () => {
     }
   })
 
+  // O tick agora roda por padrão: um dep que lança (banco fechando no quit) não
+  // pode virar rejeição sem dono no timer.
+  it('dep que lança no tick agendado vira aviso, e o tick seguinte roda', async () => {
+    vi.useFakeTimers()
+    try {
+      let broken = true
+      const warnings: Array<Record<string, unknown>> = []
+      const candidates = vi.fn(() => {
+        if (broken) throw new Error('banco fechado')
+        return []
+      })
+      const h = gate({ candidates, tickMs: 1_000, warn: (e) => warnings.push(e) })
+      h.reschedule()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(warnings).toEqual([{ event: 'hibernate_tick_failed', error: 'Error: banco fechado' }])
+      broken = false
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(candidates).toHaveBeenCalledTimes(2)
+      expect(warnings).toHaveLength(1)
+      h.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('round-trip: o renderer responde a aba → /exit sai com o paneId confirmado', async () => {
     const asked: Array<{ sessionId: string; ccSessionId: string }> = []
     const confirmer = new PaneConfirmer({

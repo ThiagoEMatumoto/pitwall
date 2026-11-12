@@ -217,11 +217,24 @@ export class IdleHibernator {
   reschedule(): void {
     const { on } = this.windows()
     if (on && !this.timer) {
-      this.timer = setInterval(() => void this.tick(), this.deps.tickMs ?? HIBERNATE_TICK_MS)
+      this.timer = setInterval(
+        () => void this.scheduledTick(),
+        this.deps.tickMs ?? HIBERNATE_TICK_MS,
+      )
       this.timer.unref?.()
     } else if (!on && this.timer) {
       clearInterval(this.timer)
       this.timer = null
+    }
+  }
+
+  // No timer ninguém trata a rejeição: um dep que lança (banco fechando no quit)
+  // vira aviso, e o próximo tick tenta de novo.
+  private async scheduledTick(): Promise<void> {
+    try {
+      await this.tick()
+    } catch (err) {
+      this.deps.warn({ event: 'hibernate_tick_failed', error: String(err) })
     }
   }
 
