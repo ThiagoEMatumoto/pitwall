@@ -214,4 +214,41 @@ describe('startLiveWatch', () => {
 
     useAppStore.getState().stopLiveWatch()
   })
+
+  // stopLiveWatch esvazia a lista; a resposta de um refresh que já estava em voo
+  // a repovoava fora do ciclo de vida do watch.
+  it('refresh em voo não repovoa a lista depois que o watch parou', async () => {
+    live.mockResolvedValueOnce([session('a')])
+    await useAppStore.getState().startLiveWatch()
+
+    let respond: (list: unknown[]) => void = () => {}
+    live.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)))
+    const refreshing = useAppStore.getState().refreshLiveSessions()
+    useAppStore.getState().stopLiveWatch()
+    respond([session('a'), session('b')])
+    await refreshing
+
+    expect(useAppStore.getState().liveSessions).toEqual([])
+    expect(watchGlobal).toHaveBeenCalledTimes(1)
+  })
+
+  // Stop + start durante o await (remontagem do StrictMode, HMR) religa o watch:
+  // a resposta do ciclo anterior é mais velha que o snapshot do start novo.
+  it('refresh em voo de um ciclo anterior não troca o snapshot do watch reiniciado', async () => {
+    live.mockResolvedValueOnce([session('a')])
+    await useAppStore.getState().startLiveWatch()
+
+    let respond: (list: unknown[]) => void = () => {}
+    live.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)))
+    const refreshing = useAppStore.getState().refreshLiveSessions()
+    useAppStore.getState().stopLiveWatch()
+    live.mockResolvedValueOnce([session('a'), session('b')])
+    await useAppStore.getState().startLiveWatch()
+    respond([session('a')])
+    await refreshing
+
+    expect(useAppStore.getState().liveSessions.map((s) => s.id)).toEqual(['a', 'b'])
+
+    useAppStore.getState().stopLiveWatch()
+  })
 })
