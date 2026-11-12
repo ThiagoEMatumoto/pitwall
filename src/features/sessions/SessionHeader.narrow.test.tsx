@@ -68,7 +68,6 @@ function mount(width: number) {
           tokens: { output: 0, context: 40_000 },
         } as SessionActivity
       }
-      now={Date.now()}
       claudeNotFound={false}
       exitCode={null}
       error={null}

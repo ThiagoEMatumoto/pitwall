@@ -1,6 +1,12 @@
 import { Loader2 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
-import { formatRelative, shortenAgentName, statusDotView } from './status-view'
+import { useNow } from '@/features/feature-room/room-ui'
+import {
+  formatRelative,
+  RELATIVE_TIME_TICK_MS,
+  shortenAgentName,
+  statusDotView,
+} from './status-view'
 import type { SessionActivity, SubagentActivity } from '../../../shared/types/ipc'
 
 // HUD fino estilo statusline (Warp) entre o terminal e o composer: status da
@@ -14,7 +20,6 @@ const MAX_CHIPS = 4
 
 interface Props {
   activity: SessionActivity | null
-  now: number
   // Status vindo de quem monta (a modal do mapa passa o MESMO selo do header):
   // sem isto o HUD lia o watch por sessão e mostrava "Iniciando" enquanto o
   // chip do header já dizia "trabalhando".
@@ -38,7 +43,8 @@ function SubagentChip({ agent }: { agent: SubagentActivity }) {
   )
 }
 
-export function AgentHud({ activity, now, status }: Props) {
+export function AgentHud({ activity, status }: Props) {
+  const now = useNow(activity?.lastActivityAt ? RELATIVE_TIME_TICK_MS : null)
   // Primeiro broadcast ainda em voo (activity null) → mostra como iniciando.
   const fromActivity = statusDotView(activity?.status ?? 'starting')
   const dot = status ? { label: status.label, className: '', pulse: false } : fromActivity

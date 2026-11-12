@@ -5,7 +5,7 @@ import type { ChatMessage } from '../../../../shared/types/chat'
 const { transcript } = vi.hoisted(() => {
   // A sonda lê a flag uma vez, na carga do módulo: liga antes dos imports.
   ;(window as unknown as { api: unknown }).api = { perf: { enabled: true, report: () => {} } }
-  return { transcript: { messages: [] as ChatMessage[] } }
+  return { transcript: { messages: [] as ChatMessage[], listeners: new Set<() => void>() } }
 })
 
 vi.mock('@/lib/ipc', () => {
@@ -18,15 +18,27 @@ vi.mock('@/lib/ipc', () => {
   )
   return new Proxy({}, { get: () => inert })
 })
-vi.mock('./useChatTranscript', () => ({
-  useChatTranscript: () => ({
-    messages: transcript.messages,
-    loading: false,
-    transcriptExists: true,
-    lastPlanFilePath: null,
-  }),
-  usePlanFile: () => null,
-}))
+// Como o hook real: transcript novo chega por estado do hook, não por re-render do
+// pai (o ChatView é memo e ignoraria um re-render com as mesmas props).
+vi.mock('./useChatTranscript', async () => {
+  const { useEffect, useReducer } = await import('react')
+  return {
+    useChatTranscript: () => {
+      const [, refresh] = useReducer((n: number) => n + 1, 0)
+      useEffect(() => {
+        transcript.listeners.add(refresh)
+        return () => void transcript.listeners.delete(refresh)
+      }, [])
+      return {
+        messages: transcript.messages,
+        loading: false,
+        transcriptExists: true,
+        lastPlanFilePath: null,
+      }
+    },
+    usePlanFile: () => null,
+  }
+})
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
 import { ChatView } from './ChatView'
@@ -45,6 +57,14 @@ globalThis.ResizeObserver ??= class {
 globalThis.PerformanceObserver ??= class {
   observe() {}
 } as unknown as typeof PerformanceObserver
+
+// O disco mudou: o hook avisa o ChatView montado, por estado, como o hook real.
+function diskNow(messages: ChatMessage[]) {
+  act(() => {
+    transcript.messages = messages
+    transcript.listeners.forEach((refresh) => refresh())
+  })
+}
 
 // Transcript no formato que a CLI grava, passado pelo parser real.
 const L = (o: unknown) => JSON.stringify(o)
@@ -99,7 +119,7 @@ describe('ChatView — linhas agrupadas', () => {
 
   it('ao subir pra reler, oferece voltar ao fim e avisa de conteúdo novo', () => {
     transcript.messages = parseChatMessages([USER, TOOLS, RESULTS].join('\n'))
-    const { rerender } = render(<ChatView sessionId="s2" />)
+    render(<ChatView sessionId="s2" />)
     const el = scroller()
     Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 2000 })
     Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 })
@@ -107,8 +127,7 @@ describe('ChatView — linhas agrupadas', () => {
     fireEvent.scroll(el)
     expect(screen.getByRole('button', { name: /Ir para o fim/ })).toBeInTheDocument()
 
-    transcript.messages = parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n'))
-    rerender(<ChatView sessionId="s2" />)
+    diskNow(parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n')))
     const jump = screen.getByRole('button', { name: /Novas mensagens/ })
     act(() => fireEvent.click(jump))
     expect(el.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 2000 }))
@@ -123,7 +142,7 @@ describe('ChatView — linhas agrupadas', () => {
 
   it('salto suave: scroll intermediário não desengata e o conteúdo novo continua colado', () => {
     transcript.messages = parseChatMessages([USER, TOOLS, RESULTS].join('\n'))
-    const { rerender } = render(<ChatView sessionId="s4" />)
+    render(<ChatView sessionId="s4" />)
     const el = scroller()
     Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 2000 })
     Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 })
@@ -136,8 +155,7 @@ describe('ChatView — linhas agrupadas', () => {
     fireEvent.scroll(el)
     expect(screen.queryByRole('button', { name: /Ir para o fim|Novas mensagens/ })).not.toBeInTheDocument()
 
-    transcript.messages = parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n'))
-    rerender(<ChatView sessionId="s4" />)
+    diskNow(parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n')))
     expect(el.scrollTop).toBe(2000)
   })
 })
@@ -160,17 +178,15 @@ describe('ChatView — troca de sessão na mesma instância', () => {
     rerender(<ChatView sessionId="b" />)
     expect(screen.getByTestId('chat-loading')).toBeInTheDocument()
 
-    transcript.messages = many()
-    rerender(<ChatView sessionId="b" />)
+    diskNow(many())
     expect(screen.getByText('pergunta 7')).toBeInTheDocument()
     expect(document.querySelectorAll('.chat-row-in')).toHaveLength(0)
   })
 
   it('na mesma sessão, o que chega depois da 1ª pintura entra animado', () => {
     transcript.messages = parseChatMessages(USER)
-    const { rerender } = render(<ChatView sessionId="c" />)
-    transcript.messages = parseChatMessages([USER, ANSWER].join('\n'))
-    rerender(<ChatView sessionId="c" />)
+    render(<ChatView sessionId="c" />)
+    diskNow(parseChatMessages([USER, ANSWER].join('\n')))
     expect(document.querySelectorAll('.chat-row-in').length).toBeGreaterThan(0)
   })
 })

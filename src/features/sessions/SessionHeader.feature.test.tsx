@@ -89,7 +89,6 @@ function renderHeader(over: Partial<Parameters<typeof SessionHeader>[0]> = {}) {
       onCommitRename={() => {}}
       exited={false}
       activity={null}
-      now={Date.now()}
       claudeNotFound={false}
       exitCode={null}
       error={null}
