@@ -5,6 +5,7 @@ import { handoffsApi, sendToApi } from '@/lib/ipc'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { dockCrew } from '@/features/handoffs/crew'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import {
   AttentionMenuPanel,
   isActionableDetail,
@@ -214,6 +215,8 @@ export function CardPromptBar({
     setSending(true)
     setNotice(null)
     try {
+      // Pelo mapa a aba da filha nasce em segundo plano: quem escreve fica no cartão.
+      await revealChildOnUserMessage(node.sessionId, { focus: false })
       if (crewHandoffId) {
         await handoffsApi.sendMessage({ id: crewHandoffId, text: body })
         setText('')

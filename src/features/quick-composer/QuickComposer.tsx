@@ -4,6 +4,8 @@ import { CornerDownLeft, ShieldAlert, X } from 'lucide-react'
 import { Button } from '@/features/brand'
 import { Icon } from '@/components/ui/Icon'
 import { sendToApi } from '@/lib/ipc'
+import { useAppStore } from '@/store/appStore'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import {
   MentionMenu,
   NO_SESSION_MATCH,
@@ -306,11 +308,19 @@ function QuickComposerPanel({
     if (parsed.kind !== 'ok') return
     setSending(true)
     try {
+      // A aba da filha abre antes do envio, em segundo plano: este painel é modal e
+      // a recusa tem de continuar aqui. Envio aceito, ele dá lugar à aba.
+      const opened = await revealChildOnUserMessage(parsed.target.sessionId, { focus: false })
       const res = await sendToApi.send({
         sessionId: parsed.target.sessionId,
         text: parsed.body,
         when,
       })
+      if (res.ok && opened) {
+        onClose()
+        void useAppStore.getState().focusOrOpenSession(opened)
+        return
+      }
       if (res.ok) {
         setSelectedId(parsed.target.sessionId)
         setPickedFiles(new Set())

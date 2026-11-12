@@ -12,6 +12,7 @@ import { ChevronRight, CornerDownLeft, Image as ImageIcon, Loader, TextCursorInp
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
 import { sendToApi, sessionsApi } from '@/lib/ipc'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import { perfCount } from '@/lib/perf-probe'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
@@ -551,6 +552,9 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     const body = parsed.body
     let notice = `Não deu pra enviar para @${target.alias} — tente de novo.`
     const ok = await sendThenClear(value, async () => {
+      // @alias de uma filha fora da tela: a aba dela nasce em segundo plano e quem
+      // escreve segue nesta pane.
+      await revealChildOnUserMessage(target.sessionId, { focus: false })
       const res = await sendToApi.send({
         sessionId: target.sessionId,
         text: body,
