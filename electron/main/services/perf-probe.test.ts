@@ -260,7 +260,7 @@ describe('perf-probe', () => {
       keyToPaint: latencyStats([24, 64, 180], 200),
       keyToWrite: latencyStats([2, 31, 90], 3),
       counters: { ChatView: 12 },
-      spans: { 'tui-parse:s1': { n: 4, totalMs: 80, maxMs: 35 } },
+      spans: { 'tui-parse': { n: 4, totalMs: 80, maxMs: 35 } },
     }
     send('perf:renderer', 7, summary)
 

@@ -88,7 +88,7 @@ describe('flag ligada', () => {
     now.mockReturnValueOnce(100)
     const parseStart = probe.perfStart()
     now.mockReturnValueOnce(107.5)
-    probe.perfEnd('tui-parse:s1', parseStart)
+    probe.perfEnd('tui-parse', parseStart)
     now.mockReturnValueOnce(200)
     const replayStart = probe.perfStart()
     now.mockReturnValueOnce(260)
@@ -129,7 +129,7 @@ describe('flag ligada', () => {
       keyToWrite: { n: 1, measured: 1, p50Ms: 12, p95Ms: 12, maxMs: 12 },
       counters: { ChatView: 2, MarkdownViewer: 3 },
       spans: {
-        'tui-parse:s1': { n: 1, totalMs: 7.5, maxMs: 7.5 },
+        'tui-parse': { n: 1, totalMs: 7.5, maxMs: 7.5 },
         replay: { n: 1, totalMs: 60, maxMs: 60 },
       },
     } satisfies PerfRendererSummary)
@@ -155,14 +155,14 @@ describe('flag ligada', () => {
     probe.startPerfProbe()
 
     probe.perfCount('ChatView')
-    probe.perfEnd('tui-parse:s1', probe.perfStart())
+    probe.perfEnd('tui-parse', probe.perfStart())
     vi.advanceTimersByTime(10_000)
     probe.perfCount('ChatView')
-    probe.perfEnd('tui-parse:s1', probe.perfStart())
+    probe.perfEnd('tui-parse', probe.perfStart())
 
     expect(window.__cmPerf).toEqual({
       counters: { ChatView: 2 },
-      spans: { 'tui-parse:s1': { n: 2, totalMs: 0, maxMs: 0 } },
+      spans: { 'tui-parse': { n: 2, totalMs: 0, maxMs: 0 } },
     })
   })
 

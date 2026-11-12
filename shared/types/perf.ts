@@ -51,7 +51,7 @@ export interface PerfRendererSummary {
   keyToWrite: PerfLatencyStats
   /** Contadores livres, ex.: renders por componente (`ChatView`, `Composer`). */
   counters: Record<string, number>
-  /** Trechos cronometrados, ex.: `tui-parse:<sessionId>`, `replay`. */
+  /** Trechos cronometrados, ex.: `tui-parse`, `replay`. Nomes fixos, sem id de sessão. */
   spans: Record<string, PerfSpanStats>
 }
 

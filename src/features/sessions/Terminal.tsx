@@ -1007,7 +1007,6 @@ function TerminalHost({
     // porque o term é novo e zerado a cada mount.
     let flushed = false
     let liveTotal = ''
-    const parseSpan = `tui-parse:${session.id}`
     setDataHandler((data) => {
       gotDataRef.current = true
       // Modo de permissão: relê o rodapé REAL do xterm (debounced) depois que a saída assenta.
@@ -1030,7 +1029,7 @@ function TerminalHost({
           const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
           if (mode) setCurrentMode(mode)
         }
-        perfEnd(parseSpan, parseStart)
+        perfEnd('tui-parse', parseStart)
       }, 150)
       if (flushed) term.write(data)
       else liveTotal += data
