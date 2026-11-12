@@ -75,11 +75,12 @@ async function markInPage(phase: string): Promise<void> {
   w.__cmPerfDrive!.data.marks.push({ phase, t: performance.now(), totals })
 }
 
-async function collectInPage(endPhase: string): Promise<PerfRaw> {
+async function collectInPage(endPhase: string | null): Promise<PerfRaw> {
   const w = window as unknown as DriveWindow
   const drive = w.__cmPerfDrive!
-  // Fecha no main a janela da última fase, que não tem marca seguinte.
-  await w.api?.perf?.drain?.(endPhase)
+  // Fecha no main a janela da última fase, que não tem marca seguinte. Sem
+  // `endPhase` é só uma leitura no meio do cenário: a janela do main segue aberta.
+  if (endPhase !== null) await w.api?.perf?.drain?.(endPhase)
   drive.flush()
   return { ...drive.data, end: { t: performance.now(), totals: w.__cmPerf ?? null } }
 }
@@ -110,6 +111,84 @@ export async function markPerf(page: Page, phase: string): Promise<void> {
 
 export async function collectPerf(page: Page): Promise<PerfRaw> {
   return page.evaluate(collectInPage, END_PHASE)
+}
+
+/**
+ * O que o coletor juntou até agora, sem encerrar nada: a última fase vai até o
+ * momento da leitura. É o que sobra de uma rodada cujo renderer não responde mais.
+ */
+export async function peekPerf(page: Page): Promise<PerfRaw> {
+  return page.evaluate(collectInPage, null)
+}
+
+export interface PhaseOutcome<T> {
+  phase: string
+  /** A interação da fase falhou ou não fechou no prazo. */
+  blocked: boolean
+  /** Só em fase bloqueada: a mensagem do erro, em uma linha. */
+  reason?: string
+  elapsedMs: number
+  /** O que `collect` devolveu ao fim da fase, bloqueada ou não. */
+  collected: T
+}
+
+// As ações do Playwright recebem o que falta do prazo como timeout e falham
+// sozinhas, com um erro que diz o que estava sendo esperado. Esta folga dá tempo
+// de esse erro chegar antes do corte seco, que só diz "não fechou".
+const PHASE_BACKSTOP_MS = 2000
+const REASON_MAX_CHARS = 300
+
+function oneLine(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  return message
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, REASON_MAX_CHARS)
+}
+
+/**
+ * Roda a interação de uma fase sob um prazo próprio. Erro ou prazo estourado não
+ * sobem: a fase sai `blocked`, com o motivo, e o cenário segue. `collect` é lido
+ * nos dois casos, depois da espera, então os números da fase bloqueada não se
+ * perdem. `run` recebe o que falta do prazo, para o timeout de cada ação: uma
+ * ação que sobrevivesse ao prazo agiria no meio da fase seguinte.
+ */
+export async function runPhase<T>(
+  phase: string,
+  timeoutMs: number,
+  run: (remaining: () => number) => Promise<void>,
+  collect: () => Promise<T>,
+): Promise<PhaseOutcome<T>> {
+  const started = Date.now()
+  // Nunca 0: no Playwright, timeout 0 é "sem timeout".
+  const remaining = (): number => Math.max(1, started + timeoutMs - Date.now())
+  let backstop: ReturnType<typeof setTimeout> | undefined
+  const cut = new Promise<never>((_, reject) => {
+    backstop = setTimeout(
+      () => reject(new Error(`a interação não fechou no prazo de ${timeoutMs} ms da fase`)),
+      timeoutMs + PHASE_BACKSTOP_MS,
+    )
+  })
+  let reason: string | undefined
+  try {
+    const interaction = run(remaining)
+    // Abandonada no corte, ela ainda pode rejeitar depois, sem ninguém esperando.
+    interaction.catch(() => {})
+    await Promise.race([interaction, cut])
+  } catch (err) {
+    reason = oneLine(err)
+  } finally {
+    clearTimeout(backstop)
+  }
+  const elapsedMs = Date.now() - started
+  return {
+    phase,
+    blocked: reason !== undefined,
+    ...(reason !== undefined ? { reason } : {}),
+    elapsedMs,
+    collected: await collect(),
+  }
 }
 
 export interface PerfPhaseSummary {

@@ -8,6 +8,8 @@ import {
   installPerfProbe,
   markPerf,
   parsePerfLines,
+  peekPerf,
+  runPhase,
   summarizePerf,
   typeOpenLoop,
   withMainLines,
@@ -198,6 +200,27 @@ describe('collectPerf + summarizePerf', () => {
   })
 })
 
+describe('peekPerf', () => {
+  it('lê o coletor no meio do cenário sem fechar a janela do main', async () => {
+    const drain = vi.fn(async () => undefined)
+    ;(window as unknown as { api: unknown }).api = { perf: { drain } }
+    await installPerfProbe(page)
+    now.mockReturnValue(100)
+    await markPerf(page, 'open')
+    pending.longtask = [{ name: 'self', startTime: 200, duration: 13_000 }]
+
+    now.mockReturnValue(14_000)
+    const raw = await peekPerf(page)
+
+    expect(drain.mock.calls).toEqual([['open']])
+    expect(summarizePerf(raw)).toMatchObject([
+      { phase: 'open', durationMs: 13_900, longTasks: { n: 1, maxMs: 13_000 } },
+    ])
+    await collectPerf(page)
+    expect(drain.mock.calls).toEqual([['open'], ['end']])
+  })
+})
+
 describe('parsePerfLines', () => {
   it('lê do log as linhas [perf] que a sonda real do main emite', async () => {
     const userData = mkdtempSync(join(tmpdir(), 'perf-driver-'))
@@ -336,5 +359,110 @@ describe('typeOpenLoop', () => {
     )
     await vi.advanceTimersByTimeAsync(60)
     expect(await typing).toMatchObject({ keys: 3, failed: 1 })
+  })
+})
+
+describe('runPhase', () => {
+  it('fase que fecha no prazo sai livre, com o que o coletor juntou', async () => {
+    vi.useFakeTimers()
+    const outcome = await runPhase(
+      'open',
+      1000,
+      async () => void (await vi.advanceTimersByTimeAsync(400)),
+      async () => ({ longTasks: 1 }),
+    )
+    expect(outcome).toEqual({
+      phase: 'open',
+      blocked: false,
+      elapsedMs: 400,
+      collected: { longTasks: 1 },
+    })
+  })
+
+  it('interação que falha vira fase bloqueada, com o motivo em uma linha e os números do coletor', async () => {
+    const outcome = await runPhase(
+      'chat-focus',
+      1000,
+      async () => {
+        throw new Error(
+          'locator.click: Timeout 30000ms exceeded.\nCall log:\n  \u001b[2m- waiting for element to be stable\u001b[22m\n',
+        )
+      },
+      async () => ({ longTasks: 3, renders: { MarkdownViewer: 18_588 } }),
+    )
+    expect(outcome).toMatchObject({
+      phase: 'chat-focus',
+      blocked: true,
+      reason:
+        'locator.click: Timeout 30000ms exceeded. Call log: - waiting for element to be stable',
+      collected: { longTasks: 3, renders: { MarkdownViewer: 18_588 } },
+    })
+  })
+
+  it('interação que não fecha no prazo vira fase bloqueada, e o coletor é lido depois da espera', async () => {
+    vi.useFakeTimers()
+    const start = Date.now()
+    const longTasks: number[] = []
+    const running = runPhase(
+      'chat-typing',
+      1000,
+      () => {
+        // O renderer travado: long tasks se acumulam e a interação nunca responde.
+        setTimeout(() => longTasks.push(13_000), 900)
+        return new Promise<void>(() => {})
+      },
+      async () => ({ longTasks: [...longTasks], readAt: Date.now() - start }),
+    )
+    await vi.advanceTimersByTimeAsync(999)
+    let settled = false
+    void running.then(() => (settled = true))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    const outcome = await running
+    expect(outcome.blocked).toBe(true)
+    expect(outcome.reason).toBe('a interação não fechou no prazo de 1000 ms da fase')
+    expect(outcome.collected.longTasks).toEqual([13_000])
+    expect(outcome.collected.readAt).toBeGreaterThanOrEqual(1000)
+    expect(outcome.elapsedMs).toBe(outcome.collected.readAt)
+  })
+
+  it('dá à interação o que falta do prazo, para o timeout de cada ação', async () => {
+    vi.useFakeTimers()
+    const left: number[] = []
+    await runPhase(
+      'to-terminal',
+      1000,
+      async (remaining) => {
+        left.push(remaining())
+        await vi.advanceTimersByTimeAsync(300)
+        left.push(remaining())
+        await vi.advanceTimersByTimeAsync(800)
+        // Prazo vencido: nunca 0, que no Playwright quer dizer "sem timeout".
+        left.push(remaining())
+      },
+      async () => null,
+    )
+    expect(left).toEqual([1000, 700, 1])
+  })
+
+  it('a interação abandonada pode falhar depois do prazo sem derrubar o processo', async () => {
+    vi.useFakeTimers()
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    const running = runPhase(
+      'tab-switch',
+      1000,
+      () => new Promise<void>((_, reject) => setTimeout(() => reject(new Error('tarde')), 60_000)),
+      async () => null,
+    )
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect((await running).blocked).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    vi.useRealTimers()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    process.off('unhandledRejection', unhandled)
+    expect(unhandled).not.toHaveBeenCalled()
   })
 })
