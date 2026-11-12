@@ -2917,6 +2917,12 @@ export interface Api {
      * resposta). Ele sai na próxima linha `[perf]`, em `renderer`.
      */
     report(summary: PerfRendererSummary): void
+    /**
+     * Marca de fase de um cenário e2e: o main fecha a janela corrente da sonda e
+     * etiqueta as linhas `[perf]` seguintes com `phase`. Resolve quando a linha
+     * da janela fechada já foi emitida. Sem CM_PERF não faz nada.
+     */
+    drain(phase: string): Promise<void>
   }
   window: {
     minimize(): Promise<void>

@@ -227,6 +227,76 @@ describe('perf-probe', () => {
     expect(await writtenLines(dir, 2)).toEqual(lines.map((l) => l.slice('[perf] '.length)))
   })
 
+  it('perf:drain fecha a janela corrente e etiqueta as linhas com a fase', async () => {
+    vi.useFakeTimers()
+    const probe = await loadProbe('1')
+    const lines: string[] = []
+    const { ipc, invoke } = fakeIpcMain()
+    const stop = probe.startPerfProbe({
+      app: fakeApp(dir),
+      ipcMain: ipc,
+      log: (line) => lines.push(line),
+    })
+
+    probe.perfCount('boot')
+    await vi.advanceTimersByTimeAsync(3_000)
+    invoke('perf:drain', 'open')
+    // A linha sai na hora do pedido, não na próxima janela de 10 s.
+    expect(lines).toHaveLength(1)
+
+    probe.perfCount('abrindo', 2)
+    await vi.advanceTimersByTimeAsync(1_500)
+    invoke('perf:drain', 'chat-typing')
+
+    // Fase mais longa que a janela: a linha periódica herda a etiqueta.
+    probe.perfCount('digitando', 3)
+    await vi.advanceTimersByTimeAsync(5_500)
+    probe.perfCount('digitando', 4)
+    await vi.advanceTimersByTimeAsync(2_000)
+    // Payload fora do contrato fecha a janela e tira a etiqueta.
+    invoke('perf:drain', 42)
+    probe.perfCount('depois')
+    await vi.advanceTimersByTimeAsync(8_000)
+    stop()
+
+    expect(
+      lines.map(parseLine).map((line) => [line.phase, line.windowMs, line.counters]),
+    ).toEqual([
+      [undefined, 3_000, { boot: 1 }],
+      ['open', 1_500, { abrindo: 2 }],
+      ['chat-typing', 5_500, { digitando: 3 }],
+      ['chat-typing', 2_000, { digitando: 4 }],
+      [undefined, 8_000, { depois: 1 }],
+    ])
+    expect(await writtenLines(dir, 5)).toEqual(lines.map((l) => l.slice('[perf] '.length)))
+  })
+
+  it('dois drains no mesmo instante não produzem taxa infinita', async () => {
+    vi.useFakeTimers()
+    const probe = await loadProbe('1')
+    const lines: string[] = []
+    const { ipc, invoke } = fakeIpcMain()
+    const stop = probe.startPerfProbe({
+      app: fakeApp(dir),
+      ipcMain: ipc,
+      log: (line) => lines.push(line),
+    })
+    probe.instrumentIpcMain(ipc)
+    ;(ipc as unknown as { handle: (c: string, fn: Listener) => void }).handle(
+      'sessions:write',
+      () => undefined,
+    )
+    invoke('perf:drain', 'a')
+    invoke('sessions:write', 's1', 'x')
+    invoke('perf:drain', 'b')
+    stop()
+
+    const line = parseLine(lines[1])
+    expect(line).toMatchObject({ phase: 'a', windowMs: 0 })
+    expect(line.ipcIn['sessions:write']).toMatchObject({ n: 1, perSec: 1000 })
+    await writtenLines(dir, 2)
+  })
+
   it('perf.jsonl começa do zero a cada boot', async () => {
     writeFileSync(join(dir, 'perf.jsonl'), '{"t":"boot anterior"}\n{"t":"boot anterior"}\n')
     vi.useFakeTimers()

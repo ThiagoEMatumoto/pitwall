@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 // Contrato da sonda de desempenho (CM_PERF=1). O main emite uma PerfLine a cada
-// janela, no log (`[perf] {json}`) e em <userData>/perf.jsonl; o renderer manda o
+// janela (10 s, ou antes quando um cenário pede o drain), no log (`[perf] {json}`) e em <userData>/perf.jsonl; o renderer manda o
 // próprio resumo pelo canal `perf:renderer` (window.api.perf.report) e ele entra
 // na linha seguinte. Importe só os TIPOS no renderer: o schema puxa o zod.
 
@@ -110,6 +110,11 @@ export interface PerfLine {
   /** Fim da janela, ISO 8601. */
   t: string
   windowMs: number
+  /**
+   * Fase do cenário e2e que a janela cobre (`window.api.perf.drain`). Ausente
+   * fora de cenário e antes da primeira marca.
+   */
+  phase?: string
   /** Atraso do event loop do main, já descontada a resolução do amostrador. */
   lagMs: { p50: number; p99: number; max: number }
   /** ipcMain.handle / ipcMain.on. */

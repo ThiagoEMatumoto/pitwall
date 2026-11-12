@@ -643,6 +643,9 @@ const api: Api = {
   perf: {
     enabled: process.env.CM_PERF === '1',
     report: (summary) => ipcRenderer.send('perf:renderer', summary),
+    // Sem CM_PERF o main não registra o handler e o invoke rejeitaria.
+    drain: (phase) =>
+      process.env.CM_PERF === '1' ? invoke('perf:drain', phase) : Promise.resolve(),
   },
   window: {
     minimize: () => invoke('window:minimize'),

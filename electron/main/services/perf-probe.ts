@@ -137,7 +137,8 @@ export function instrumentIpcMain(ipc: Pick<IpcMain, 'handle' | 'on'>): void {
 export function drainPerfWindow(
   windowMs: number,
 ): Pick<PerfLine, 'ipcIn' | 'ipcOut' | 'counters' | 'spans'> {
-  const seconds = windowMs / 1000
+  // Um drain pedido logo após o outro fecha uma janela de 0 ms.
+  const seconds = Math.max(windowMs, 1) / 1000
   const window = {
     ipcIn: Object.fromEntries(
       [...ipcIn].map(([channel, s]): [string, PerfIpcInStats] => [
@@ -184,7 +185,7 @@ const WINDOW_MS = 10_000
 
 interface PerfProbeDeps {
   app: Pick<App, 'getPath' | 'getAppMetrics'>
-  ipcMain: Pick<IpcMain, 'on'>
+  ipcMain: Pick<IpcMain, 'on' | 'handle'>
   log?: (line: string) => void
 }
 
@@ -214,13 +215,15 @@ export function startPerfProbe({ app, ipcMain, log = console.log }: PerfProbeDep
   // acumula dezenas de MB por dia e mistura medições de execuções diferentes.
   let writes = writeFile(file, '').catch(warnWrite)
   let windowStart = Date.now()
-  const timer = setInterval(() => {
+  let phase: string | undefined
+  const closeWindow = (): void => {
     const now = Date.now()
     const windowMs = now - windowStart
     windowStart = now
     const line: PerfLine = {
       t: new Date(now).toISOString(),
       windowMs,
+      ...(phase === undefined ? {} : { phase }),
       lagMs: {
         p50: lagMs(lag.percentile(50)),
         p99: lagMs(lag.percentile(99)),
@@ -236,8 +239,17 @@ export function startPerfProbe({ app, ipcMain, log = console.log }: PerfProbeDep
     log(`[perf] ${json}`)
     // Encadeado: dois appendFile soltos não garantem a ordem das linhas.
     writes = writes.then(() => appendFile(file, `${json}\n`)).catch(warnWrite)
-  }, WINDOW_MS)
+  }
+  const timer = setInterval(closeWindow, WINDOW_MS)
   timer.unref()
+
+  // Marca de fase de um cenário e2e (window.api.perf.drain): a janela corrente
+  // fecha agora, ainda com a etiqueta da fase que terminou, e as seguintes saem
+  // com a da fase que começa. Sem isto uma linha de 10 s mistura várias fases.
+  ipcMain.handle('perf:drain', (_event, next: unknown) => {
+    closeWindow()
+    phase = typeof next === 'string' ? next : undefined
+  })
 
   return () => {
     clearInterval(timer)
