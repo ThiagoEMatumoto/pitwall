@@ -30,8 +30,14 @@ import {
   type PerfRaw,
   type PhaseOutcome,
 } from '../driver/perf'
-import { transcriptLoad } from '../driver/transcript-load'
-import { loadChecks } from '../driver/typing-fidelity'
+import {
+  loadTurnsShown,
+  ptyCharsSent,
+  readChatLoad,
+  typingLoadArrived,
+  type ChatLoadRead,
+} from '../driver/chat-load'
+import { transcriptLoad, turnsToLast } from '../driver/transcript-load'
 
 // Medição de desempenho antes/depois (plano A1), sobre a CÓPIA do perfil real com
 // HOME fake e stubs do `claude`. Uma sessão A recebe um transcript grande e passa
@@ -41,9 +47,7 @@ import { loadChecks } from '../driver/typing-fidelity'
 //   open             alterna A para o chat com o transcript já no disco
 //   chat-focus       clique no composer de A (sem carga)
 //   chat-typing      transcript ganhando um turno a cada 300 ms + PTYs emitindo
-//                    saída, enquanto 200 caracteres entram no composer a 30 ms;
-//                    sai `blocked` se o chat não desenhou mensagem nova antes da
-//                    última tecla (a latência seria a de um chat parado)
+//                    saída, enquanto 200 caracteres entram no composer a 30 ms
 //   to-terminal      alterna A para o terminal (sem carga)
 //   terminal-typing  a mesma carga, digitando no xterm de A
 //   to-chat          volta A para o chat e deixa assentar (sem carga)
@@ -53,6 +57,14 @@ import { loadChecks } from '../driver/typing-fidelity'
 // "primeiro visível da página" é de quem vier antes no DOM. A digitação é em laço
 // aberto (ver typeOpenLoop). Cada marca de fase fecha a janela da sonda do main,
 // então as linhas [perf] dele saem dentro da fase.
+// Prova de carga, em toda fase: `chatNewMessages` são os turnos da carga que o chat
+// de A mostrou pela primeira vez na fase e `domNodes` os nós do documento ao fim
+// dela, os dois lidos do DOM. As fases de digitação levam ainda `loadArrived` e os
+// números que o sustentam (`load`): no chat, mensagem nova desenhada antes da
+// última tecla; no terminal, onde o chat está desmontado, saída de PTY além do eco.
+// Fase de digitação sem carga comprovada não aborta nem bloqueia: sai com
+// `loadArrived: false` e entra em `phasesWithoutLoad` (a latência dela é a de uma
+// tela parada).
 // Cada fase roda sob um prazo próprio (runPhase). Se a interação dela falha ou
 // não fecha no prazo (com transcript grande o composer pode nem ficar clicável), a
 // fase sai no JSON com `blocked: true`, o motivo e tudo o que o coletor juntou
@@ -96,14 +108,19 @@ mkdirSync(OUT_DIR, { recursive: true })
 
 const TYPED = 'the quick brown fox jumps over the lazy dog '.repeat(5).slice(0, 200)
 const KEY_DELAY_MS = 30
-// Turnos a mais do gerador, gravados aos poucos enquanto as fases de digitação rodam.
-const STREAM_TURNS = 120
 const IDLE_MS = 20_000
 const TAB_SWITCHES = 8
 // Prazo de cada fase; estourado, ela sai `blocked` e o cenário segue.
 const CHAT_READY_TIMEOUT_MS = 180_000
 const INTERACTION_TIMEOUT_MS = 60_000
 const TYPING_TIMEOUT_MS = 90_000
+// Turnos a mais do gerador, gravados aos poucos enquanto as fases de digitação
+// rodam: o bastante para a carga não acabar antes do prazo das duas.
+const STREAM_TURNS = turnsToLast(2 * TYPING_TIMEOUT_MS)
+const TYPING_PHASES: Record<string, 'chat' | 'terminal'> = {
+  'chat-typing': 'chat',
+  'terminal-typing': 'terminal',
+}
 // A marca da fase e a leitura do coletor rodam na página: com long tasks de
 // vários segundos elas demoram. A leitura pode falhar (a seguinte traz o mesmo
 // acumulado); sem a marca não há fase, então ela espera bem mais antes de o
@@ -340,8 +357,18 @@ async function replied<T>(
 
 const startedAt = new Date().toISOString()
 const clock: Array<{ phase: string; at: string }> = []
-const outcomes: Array<PhaseOutcome<void>> = []
+const outcomes: Array<Omit<PhaseOutcome<unknown>, 'collected'>> = []
 const typing: Record<string, OpenLoopTyping> = {}
+// Prova de carga (ver o cabeçalho). `loadTurnsSeen` é o máximo de turnos da carga
+// que o chat de A já mostrou: o que passar disso numa leitura é mensagem nova.
+const chatAtEnd: Array<{ chatNewMessages: number | null; domNodes: number | null }> = []
+const typingLoad: Record<string, { transcriptLines: number; chatNewMessages: number }> = {}
+let loadTurnsSeen = 0
+let firstLoadTurn = 0
+let streamLines = 0
+// O chat de A ao fim de uma fase. Nulo antes de A abrir e quando o renderer não
+// responde: a fase fica sem a leitura e o cenário segue.
+let chatOfA = async (_phase: string): Promise<ChatLoadRead | null> => null
 // A última leitura do coletor que voltou. Ela é acumulada: cobre todas as fases
 // marcadas até ali, inclusive as que ficaram sem leitura própria.
 const latest: { raw: PerfRaw | null } = { raw: null }
@@ -364,12 +391,22 @@ async function phase(
   log(`fase ${name}`)
   await replied(`marca da fase ${name}`, markPerf(page, name), MARK_REPLY_MS)
   clock.push({ phase: name, at: new Date().toISOString() })
-  const outcome = await runPhase(name, timeoutMs, run, () =>
-    readCollector(`leitura do coletor na fase ${name}`, peekPerf(page)),
-  )
+  const { collected: chat, ...outcome } = await runPhase(name, timeoutMs, run, async () => {
+    const [, read] = await Promise.all([
+      readCollector(`leitura do coletor na fase ${name}`, peekPerf(page)),
+      chatOfA(name),
+    ])
+    return read
+  })
   // A interação cortada no prazo não chega a desligar a própria carga.
   stopLoad()
   outcomes.push(outcome)
+  const shown = chat ? loadTurnsShown(chat.lastReply, firstLoadTurn) : 0
+  chatAtEnd.push({
+    chatNewMessages: chat ? Math.max(0, shown - loadTurnsSeen) : null,
+    domNodes: chat?.domNodes ?? null,
+  })
+  loadTurnsSeen = Math.max(loadTurnsSeen, shown)
   if (outcome.blocked) {
     log(`fase ${name} BLOQUEADA em ${outcome.elapsedMs} ms: ${outcome.reason}`)
   }
@@ -425,6 +462,15 @@ try {
   await waitFor(`${SESSIONS} session files`, async () => files().length >= SESSIONS)
 
   // ---------- A: seletores presos ao pane dela ----------
+  chatOfA = async (phaseName) => {
+    const label = `leitura do chat de A na fase ${phaseName}`
+    try {
+      return await replied(label, readChatLoad(A.pane, RENDERER_REPLY_MS))
+    } catch (err) {
+      log(`${label} falhou: ${String(err).split('\n')[0]}`)
+      return null
+    }
+  }
   const composerA = A.pane.locator('textarea:not(.xterm-helper-textarea):not([disabled])')
   const FOCUS = {
     composer: 'textarea:not(.xterm-helper-textarea)',
@@ -491,10 +537,6 @@ try {
     await A.pane.getByTestId('chat-loading').waitFor({ state: 'hidden', timeout: remaining() })
   }
 
-  // textContent, não innerText: este forçaria layout dentro da janela medida.
-  const lastChatTextOfA = (remaining: () => number): Promise<string | null> =>
-    A.pane.locator('.markdown-body').last().textContent({ timeout: remaining() })
-
   const cdp = await page.context().newCDPSession(page)
   // Digita em A sob carga. O ponto de partida (modo e foco) é conferido ANTES de
   // a carga ligar: se a fase anterior bloqueou, esta bloqueia sem mexer em nada.
@@ -505,7 +547,6 @@ try {
     remaining: () => number,
   ): Promise<void> {
     await expectA(mode, focus, remaining)
-    const chatAtStart = mode === 'chat' ? await lastChatTextOfA(remaining) : null
     const appendedAtStart = load.appendedLines()
     startLoad()
     const result = await typeOpenLoop(
@@ -517,25 +558,20 @@ try {
       throw new Error(`${phaseName}: o CDP recusou ${result.failed} de ${result.keys} teclas`)
     }
     // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
-    // depois disso não concorreu com a digitação.
-    const seen = {
+    // depois disso não concorreu com a digitação. No terminal o chat está
+    // desmontado e não há o que ler dele.
+    const atLastKey = mode === 'chat' ? await readChatLoad(A.pane, remaining()) : null
+    typingLoad[phaseName] = {
       transcriptLines: load.appendedLines() - appendedAtStart,
-      chatChanged: mode === 'chat' && (await lastChatTextOfA(remaining)) !== chatAtStart,
-      screenOutputs: 0,
+      chatNewMessages: atLastKey
+        ? Math.max(0, loadTurnsShown(atLastKey.lastReply, firstLoadTurn) - loadTurnsSeen)
+        : 0,
     }
     // O foco não pode ter saído de A no meio da digitação.
     await expectA(mode, focus, remaining)
     typing[phaseName] = result
     await page.waitForTimeout(500)
     stopLoad()
-    // No terminal o chat está desmontado: a carga de lá é a saída dos PTYs.
-    if (mode !== 'chat') return
-    const missing = loadChecks('composer', seen).filter((proof) => !proof.ok)
-    if (missing.length > 0) {
-      throw new Error(
-        `${phaseName}: a fase mediu sem carga de chat (${missing.map((proof) => proof.label).join('; ')})`,
-      )
-    }
   }
 
   // ---------- transcript de A, no disco antes de o chat abrir ----------
@@ -549,6 +585,7 @@ try {
   if (REAL_TRANSCRIPT) {
     copyFileSync(REAL_TRANSCRIPT, transcript)
     stream = buildLongMotherLines(STREAM_TURNS)
+    // firstLoadTurn fica em 0: a numeração do gerador recomeça na carga.
     out.transcript = {
       source: 'real',
       bytes: statSync(transcript).size,
@@ -561,6 +598,7 @@ try {
     const baseCount = (all.length / (turns + STREAM_TURNS)) * turns
     writeFileSync(transcript, all.slice(0, baseCount).join('\n') + '\n')
     stream = all.slice(baseCount)
+    firstLoadTurn = turns
     // Texto final do último turno do gerador (buildLongMotherLines).
     lastMessage = `pronto ${turns - 1}.`
     out.transcript = {
@@ -574,6 +612,7 @@ try {
   log(`transcript de A: ${JSON.stringify(out.transcript)}`)
 
   const pidA = A.file.data.pid
+  streamLines = stream.length
   const load = transcriptLoad(transcript, stream, stream.length / STREAM_TURNS)
   function startLoad(): void {
     writeFileSync(noiseFlag, '')
@@ -684,6 +723,8 @@ try {
 fake.cleanup()
 
 out.appendedLines = appendedLines
+// Verdadeiro, a carga acabou no meio de uma fase de digitação.
+out.loadStreamExhausted = streamLines > 0 && appendedLines >= streamLines
 const blocked = outcomes.filter((outcome) => outcome.blocked).map((outcome) => outcome.phase)
 out.blockedPhases = blocked
 // Uma fase por marca, na ordem: o i-ésimo resumo é o do i-ésimo desfecho. Fase
@@ -693,10 +734,33 @@ const phases = outcomes.map((outcome, i) => ({
   ...outcome,
   startedAt: clock[i].at,
   ...(summaries[i] ?? { collectorRead: false }),
+  ...chatAtEnd[i],
   ...(typing[outcome.phase] ? { typing: typing[outcome.phase] } : {}),
 }))
 // Cada linha do main vai para a fase que a etiquetou (drain do markPerf).
-out.phases = withMainLines(phases, main)
+const loaded = withMainLines(phases, main).map((entry) => {
+  const surface = TYPING_PHASES[entry.phase]
+  if (!surface) return entry
+  // Fase que bloqueou antes de digitar não gravou nada: fica sem carga comprovada.
+  const seen = typingLoad[entry.phase] ?? { transcriptLines: 0, chatNewMessages: 0 }
+  const load = {
+    transcriptLines: seen.transcriptLines,
+    chatNewMessagesAtLastKey: seen.chatNewMessages,
+    ptyChars: ptyCharsSent(entry.main),
+  }
+  const loadArrived = typingLoadArrived({
+    surface,
+    typedChars: TYPED.length,
+    chatNewMessages: load.chatNewMessagesAtLastKey,
+    ptyChars: load.ptyChars,
+  })
+  return { ...entry, loadArrived, load }
+})
+out.phases = loaded
+const withoutLoad = loaded
+  .filter((entry) => 'loadArrived' in entry && !entry.loadArrived)
+  .map((entry) => entry.phase)
+out.phasesWithoutLoad = withoutLoad
 const phaseNames = new Set(phases.map((p) => p.phase))
 // Boot e abertura das sessões (sem etiqueta) e o que saiu depois do fim.
 out.mainOutsidePhases = main.filter((line) => !line.phase || !phaseNames.has(line.phase))
@@ -705,4 +769,5 @@ if (fatal) out.error = String(fatal)
 writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
 log(`${main.length} linha(s) [perf] do main · JSON em ${OUT_FILE}`)
 if (blocked.length) log(`fases bloqueadas: ${blocked.join(', ')}`)
+if (withoutLoad.length) log(`fases de digitação SEM carga comprovada: ${withoutLoad.join(', ')}`)
 if (fatal) process.exit(1)
