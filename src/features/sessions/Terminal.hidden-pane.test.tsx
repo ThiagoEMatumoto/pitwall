@@ -23,6 +23,7 @@ const h = vi.hoisted(() => {
     backlog: Promise.resolve('') as Promise<string>,
     intersect: null as ((entries: { isIntersecting: boolean }[]) => void) | null,
     chatProps: null as { tuiMenu: { kind: string } | null; paused?: boolean } | null,
+    term: null as import('@xterm/headless').Terminal | null,
     session: {
       exited: false,
       exitCode: null,
@@ -91,6 +92,7 @@ vi.mock('@xterm/xterm', async () => {
   class Terminal extends headless.Terminal {
     constructor() {
       super({ cols: 80, rows: 24, allowProposedApi: true, scrollback: 1000 })
+      h.term = this
     }
     open() {}
     refresh() {}
@@ -353,5 +355,38 @@ describe('Terminal com a pane oculta', () => {
     const windows = vi.mocked(readBufferTail).mock.calls.map(([, n]) => n)
     expect(windows.length).toBeGreaterThan(0)
     expect(windows).toEqual([...new Set(windows)])
+  })
+})
+
+describe('Terminal: replay do backlog', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    h.term = null
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  const screenLines = () => {
+    const buffer = h.term!.buffer.active
+    return Array.from({ length: buffer.length }, (_, i) =>
+      buffer.getLine(i)!.translateToString(true),
+    ).filter((line) => line !== '')
+  }
+
+  it('backlog cortado, com live visto antes da resposta: a tela não repete e segue na ordem', async () => {
+    let deliver: (backlog: string) => void = () => {}
+    h.backlog = new Promise((resolve) => (deliver = resolve))
+    await mount()
+    const seen = ['linha 1\r\n', 'linha 2\r\n', 'linha 3\r\n']
+    act(() => seen.forEach((chunk) => h.dataHandler!(chunk)))
+
+    deliver(seen.join('').slice(-16))
+    await settle(0)
+    act(() => h.dataHandler!('linha 4\r\n'))
+    await settle(20)
+
+    expect(screenLines()).toEqual(['nha 2', 'linha 3', 'linha 4'])
   })
 })

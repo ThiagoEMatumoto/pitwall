@@ -42,6 +42,7 @@ import { terminalWriteBlockedNotice, type ComposerMenuRoute } from './composer-m
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
+import { REPLAY_PENDING, replayStep, type ReplayEvent } from './backlog-replay'
 import { mergePending, nextPendingApply, type PendingSelection } from './model-queue'
 import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './permission-mode-parser'
 import { permissionModeLabel } from './permission-modes'
@@ -1030,14 +1031,11 @@ function TerminalHost({
     })
 
     // O processo já foi spawnado no clique, então pode já ter emitido bytes.
-    // Para o replay: acumulamos a saída live num buffer (`liveTotal`) e buscamos
-    // o backlog (snapshot do histórico no main). O backlog é prefixo do que vimos
-    // até agora; escrevemos o backlog inteiro, depois só a cauda do live que ele
-    // ainda não cobria. Assim não duplicamos os bytes que entraram em `liveTotal`
-    // enquanto o IPC do backlog estava em voo. Idempotente em remounts (StrictMode)
+    // O replay (backlog-replay.ts) decide o que vai pro xterm: o backlog (snapshot
+    // do histórico no main) já cobre o live que chegou antes da resposta dele; o
+    // que chega depois é escrito na ordem. Idempotente em remounts (StrictMode)
     // porque o term é novo e zerado a cada mount.
-    let flushed = false
-    let liveTotal = ''
+    let replay = REPLAY_PENDING
     setDataHandler((data) => {
       gotDataRef.current = true
       // Modo de permissão: relê o rodapé REAL do xterm (debounced) depois que a saída assenta.
@@ -1052,8 +1050,9 @@ function TerminalHost({
         if (!t || !visibleRef.current) return
         scanTui(t)
       }, 150)
-      if (flushed) term.write(data)
-      else liveTotal += data
+      const step = replayStep(replay, { kind: 'data', data })
+      replay = step.state
+      if (step.write) term.write(step.write)
     })
     // Replay do backlog: o xterm RESPONDE às queries que estão nos bytes antigos
     // (DA, DSR, DECRQM, OSC 10/11) e essas respostas sairiam pelo onData direto
@@ -1071,21 +1070,25 @@ function TerminalHost({
 
     void sessionsApi
       .getBacklog(session.id)
-      .catch(() => '')
-      .then((backlog) => {
+      .then(
+        (backlog): ReplayEvent => ({ kind: 'backlog', backlog }),
+        (): ReplayEvent => ({ kind: 'backlog-failed' }),
+      )
+      .then((event) => {
         if (xtermRef.current !== term) return
-        if (backlog) {
+        const step = replayStep(replay, event)
+        // Antes de escrever: se o write lançar, o live seguinte não fica preso.
+        replay = step.state
+        if (event.kind === 'backlog' && step.write) {
           const replayStart = perfStart()
-          term.write(backlog, () => {
+          term.write(step.write, () => {
             replaying = false
             perfEnd('replay', replayStart)
           })
         } else {
           replaying = false
+          if (step.write) term.write(step.write)
         }
-        if (liveTotal.length > backlog.length) term.write(liveTotal.slice(backlog.length))
-        liveTotal = ''
-        flushed = true
         // Seed do modo de permissão e do menu TUI a partir do que o backlog desenhou: um
         // prompt já na tela ANTES do mount (ex.: trust prompt numa pane remontada) não
         // gera data event novo — sem este seed o card só apareceria no próximo byte do
@@ -1200,7 +1203,7 @@ function TerminalHost({
         // modo de permissão é comparado com o visto antes de ocultar (o baseline do
         // aviso não zera), então a troca feita pela CLI nesse meio ainda avisa. Antes
         // do replay do backlog a tela está vazia: quem lê é o seed.
-        if (!cameBack || !flushed) return
+        if (!cameBack || !replay.replied) return
         term.write('', () => {
           if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
           scanTui(term)
