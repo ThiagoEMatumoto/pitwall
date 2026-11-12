@@ -14,19 +14,25 @@ import { useProjectsViewStore } from './projects-view-store'
 // vista explicitamente.
 export function useLeaveMapOnSessionFocus(): void {
   const focusPaneId = useAppStore((s) => s.focusPaneId)
+  const paneCount = useAppStore((s) => s.panes.length)
   // Aba nascida em segundo plano não conta: o xterm dela não toma o teclado atrás
-  // do mapa (entra inativa ou, sendo a única, monta sem focar).
-  const paneCount = useAppStore((s) => s.panes.filter((p) => !p.background).length)
+  // do mapa (entra inativa ou, sendo a única, monta sem focar). A marca sai quando
+  // o terminal monta: a aba passa a contar sem ter chegado, por isso o total
+  // também tem de crescer.
+  const foregroundCount = useAppStore((s) => s.panes.filter((p) => !p.background).length)
   const restoreComplete = useAppStore((s) => s.restoreComplete)
   const prevCount = useRef(paneCount)
+  const prevForeground = useRef(foregroundCount)
 
   useEffect(() => {
     // As panes do restore do boot não são um pedido do usuário.
-    const grew = restoreComplete && paneCount > prevCount.current
+    const grew =
+      restoreComplete && paneCount > prevCount.current && foregroundCount > prevForeground.current
     prevCount.current = paneCount
+    prevForeground.current = foregroundCount
     if (!focusPaneId && !grew) return
     if (hasActiveLease()) return
     const view = useProjectsViewStore.getState()
     if (view.view === 'map') view.setView('terminals')
-  }, [focusPaneId, paneCount, restoreComplete])
+  }, [focusPaneId, paneCount, foregroundCount, restoreComplete])
 }

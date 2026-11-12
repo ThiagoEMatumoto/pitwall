@@ -86,6 +86,32 @@ describe('useLeaveMapOnSessionFocus', () => {
       expect(useProjectsViewStore.getState().view).toBe('map')
     })
 
+    // O Terminal apaga a marca ao montar: a aba passa a contar, mas não chegou agora.
+    it('em segundo plano, depois de o terminal montar: o mapa fica na frente', async () => {
+      renderHook(() => useLeaveMapOnSessionFocus())
+      await open('s-child', { background: true })
+
+      act(() => {
+        const { panes, clearPaneBackground } = useAppStore.getState()
+        clearPaneBackground(panes[0].paneId)
+      })
+
+      expect(useProjectsViewStore.getState().view).toBe('map')
+    })
+
+    it('aba nova depois de uma em segundo plano já montada: o mapa cede', async () => {
+      renderHook(() => useLeaveMapOnSessionFocus())
+      await open('s-child', { background: true })
+      act(() => {
+        const { panes, clearPaneBackground } = useAppStore.getState()
+        clearPaneBackground(panes[0].paneId)
+      })
+
+      act(() => useAppStore.setState((s) => ({ panes: [...s.panes, pane('pane-nova')] })))
+
+      expect(useProjectsViewStore.getState().view).toBe('terminals')
+    })
+
     it('com foco: o mapa cede', async () => {
       await open('s-mae')
       useAppStore.setState({ focusPaneId: null })

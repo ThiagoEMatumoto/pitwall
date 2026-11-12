@@ -88,4 +88,17 @@ describe('focusOrOpenSession — abrir em segundo plano', () => {
     expect(useAppStore.getState().area).toBe('features')
     expect(useAppStore.getState().focusPaneId).toBeNull()
   })
+
+  // A marca vale para uma montagem: o Terminal a apaga ao montar.
+  it('a marca sai da aba quando o terminal dela monta, sem mexer nas outras', async () => {
+    await useAppStore.getState().focusOrOpenSession(child, { background: true })
+    const motherPane = paneOf('s-mae')
+
+    useAppStore.getState().clearPaneBackground(paneOf('s-child')!.paneId)
+
+    expect(paneOf('s-child')).not.toHaveProperty('background')
+    expect(paneOf('s-mae')).toBe(motherPane)
+    expect(useAppStore.getState().area).toBe('features')
+    expect(useAppStore.getState().focusPaneId).toBeNull()
+  })
 })

@@ -1278,6 +1278,11 @@ function TerminalHost({
     if (focusOnEnter.current && mode !== 'chat' && !exited) xtermRef.current?.focus()
     focusOnEnter.current = true
   }, [mode, exited])
+  // A marca vale só para esta montagem: sai da pane para a próxima (acordar da
+  // hibernação, painel recriado) focar como qualquer aba.
+  useEffect(() => {
+    if (background && paneId) useAppStore.getState().clearPaneBackground(paneId)
+  }, [background, paneId])
 
   // WebGL só no modo terminal: em chat o xterm fica invisible sob o ChatView —
   // manter um contexto WebGL ali gasta VRAM e ocupa slot do cap global à toa.

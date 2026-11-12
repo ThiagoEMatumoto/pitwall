@@ -88,8 +88,9 @@ export interface ActivePane {
   // Nasceu em segundo plano (focusOrOpenSession com background): o mapa não cede
   // a vista e o terminal novo não toma o teclado de quem digita em outra tela. O
   // layout a cria como aba inativa; sem outra aba ao lado ela entra ativa (inativa,
-  // ficaria vazia) e é o Terminal que deixa de focar ao montar. Só o nascimento
-  // lê; não vai ao open_panes.
+  // ficaria vazia) e é o Terminal que deixa de focar ao montar. Vale para essa
+  // montagem só: o Terminal a apaga (clearPaneBackground), senão a aba acordaria
+  // da hibernação sem teclado. Não vai ao open_panes.
   background?: true
 }
 
@@ -870,6 +871,8 @@ interface AppState {
   wakeDormantPane: (paneId: string) => Promise<string | null>
   // Alterna/define o display da pane (terminal ⇄ chat) e lembra por sessão.
   setPaneMode: (paneId: string, mode: PaneMode) => void
+  // O terminal da aba nascida em segundo plano montou: a marca já cumpriu o papel.
+  clearPaneBackground: (paneId: string) => void
   // Encerramento com undo: some da UI na hora, toast "Desfazer" por ~5s; o kill
   // efetivo da PTY só dispara quando a janela expira. `immediate: true` pula a
   // janela de undo e mata na hora (ex.: Reabrir uma sessão já exited — não há
@@ -1200,6 +1203,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }))
     const pane = get().panes.find((p) => p.paneId === paneId)
     writePaneMode(pane?.session.ccSessionId ?? null, mode)
+  },
+
+  clearPaneBackground: (paneId) => {
+    set((s) => ({
+      panes: s.panes.map((p) => {
+        if (p.paneId !== paneId || !p.background) return p
+        const { background: _background, ...rest } = p
+        return rest
+      }),
+    }))
   },
 
   wakeDormantPane: (paneId) => {
