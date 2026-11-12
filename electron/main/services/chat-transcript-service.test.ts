@@ -35,6 +35,7 @@ vi.mock('./session-activity', () => ({
 
 import { lastPlanFilePath, parseChatMessages } from './chat-transcript'
 import { clearSubagentCachesForTest, readSubagentInfos } from './subagent-turns'
+import { applyTranscriptUpdate } from '../../../src/features/sessions/chat/chat-logic'
 import {
   chatTranscriptService,
   readTail,
@@ -177,19 +178,19 @@ function fakeSender() {
   return { sender, updates, events }
 }
 
-// O lado do renderer, reduzido ao contrato: revs em sequência, base 0 substitui, o resto
-// emenda em `base`. Devolve a lista que um consumidor teria depois de todos os updates.
+// O lado do renderer: a lista que o useChatTranscript teria depois de todos os updates,
+// pelo mesmo merge que ele usa. Update que não emenda (rev pulado) ou repetido falha aqui.
 function follower(updates: ChatTranscriptUpdate[]) {
   let seen = 0
-  let rev = 0
+  let rev = -1
   let messages: ChatMessage[] = []
   return (): ChatMessage[] => {
     for (; seen < updates.length; seen++) {
       const u = updates[seen]
-      expect(u.rev, `rev do update ${seen}`).toBe(rev + 1)
-      expect(u.base, `base do update ${seen}`).toBeLessThanOrEqual(messages.length)
+      const merged = applyTranscriptUpdate(messages, rev, u)
+      if (merged.kind !== 'applied') throw new Error(`update ${seen} (rev ${u.rev}): ${merged.kind}`)
       rev = u.rev
-      messages = messages.slice(0, u.base).concat(u.messages)
+      messages = merged.messages
     }
     return messages
   }
