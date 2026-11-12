@@ -199,6 +199,43 @@ async function waitFor(label: string, fn: () => Promise<boolean>, timeoutMs = 30
   }
 }
 
+// O que a janela está de fato apresentando. As ações do Playwright esperam o
+// elemento ficar estável entre dois frames: sem frames, nenhum clique fecha, com
+// ou sem carga no renderer.
+async function windowState() {
+  const win = await app.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0]
+    return { visible: w.isVisible(), focused: w.isFocused(), minimized: w.isMinimized() }
+  })
+  const doc = await replied(
+    'frames da janela',
+    page.evaluate(
+      () =>
+        new Promise<{ visibilityState: string; hasFocus: boolean; framesPerSec: number }>(
+          (resolve) => {
+            let frames = 0
+            let counting = true
+            const tick = (): void => {
+              if (!counting) return
+              frames += 1
+              requestAnimationFrame(tick)
+            }
+            requestAnimationFrame(tick)
+            setTimeout(() => {
+              counting = false
+              resolve({
+                visibilityState: document.visibilityState,
+                hasFocus: document.hasFocus(),
+                framesPerSec: frames,
+              })
+            }, 1000)
+          },
+        ),
+    ),
+  )
+  return { ...win, ...doc }
+}
+
 const files = (): FakeSessionEntry[] => fake.readSessionFiles()
 const gpuStatus = () => page.evaluate(() => window.api.gpu.status())
 const live = () =>
@@ -510,11 +547,17 @@ try {
     }
   }
 
+  const windowAtStart = await windowState()
+  out.window = { atStart: windowAtStart }
+  log(`janela: ${JSON.stringify(windowAtStart)}`)
+
   // ---------- open ----------
   await page.waitForTimeout(2000)
   await phase('open', CHAT_READY_TIMEOUT_MS, async (remaining) => {
     const openStart = Date.now()
     await toggleA('Chat', remaining)
+    // Do clique até o pane virar chat: separa a espera pelo clique da carga do transcript.
+    out.openToggleMs = Date.now() - openStart
     await waitChatReady(lastMessage, remaining)
     // Inclui a ida e volta do Playwright (poucos ms): serve para comparar rodadas.
     out.openMs = Date.now() - openStart
@@ -573,6 +616,7 @@ try {
   })
 
   latest.raw = await replied('coleta final', collectPerf(page))
+  out.window = { atStart: windowAtStart, atEnd: await windowState() }
   out.gpu = {
     ...gpu,
     atEnd: await replied('status final da GPU', gpuStatus()),
