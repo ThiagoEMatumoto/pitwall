@@ -71,6 +71,8 @@ export interface FakeHome {
   fakeCliPath(provider: FakeCliProvider): string
   // Stub do claude com a TTY em modo raw (ver fakeRawClaudeScript). Loga como 'claude'.
   rawClaudePath: string
+  // Liga/desliga a saída de carga do stub raw (RAW_LOAD_OUTPUT), para os que já rodam.
+  setRawLoad(on: boolean): void
   // Concatena os logs de todas as execuções daquele provider.
   readCliLog(provider: FakeCliProvider): string
   cleanup(): void
@@ -179,6 +181,14 @@ echo_loop
 // como caixa de input com rascunho, o que seguraria o envio do composer.
 export const RAW_PROMPT = 'raw> '
 
+// Saída do stub raw sob carga: enquanto o arquivo-gatilho existir (setRawLoad),
+// uma linha a cada RAW_LOAD_EVERY caracteres ecoados, no meio do eco. Vem entre
+// colchetes duplos para quem lê a tela separá-la do que foi digitado (o texto
+// digitado não pode ter "[[").
+export const RAW_LOAD_EVERY = 10
+export const RAW_LOAD_OUTPUT = /\[\[carga \d+ [^\]]*\]\]/g
+const RAW_LOAD_FILLER = 'lorem ipsum dolor sit amet consectetur '.repeat(2).trimEnd()
+
 // Stub do `claude` com a TTY em modo raw, como a TUI real: cada byte do stdin é
 // lido assim que chega, logado com horário ("byte: <epoch> <hex>") e ecoado na
 // hora. Sequências de escape (os marcadores do bracketed-paste) são logadas e não
@@ -187,10 +197,11 @@ export const RAW_PROMPT = 'raw> '
 // religa a cada byte a tradução de CR em NL e os sinais (Ctrl+C), e o modo deixaria
 // de ser raw; o od do uutils segura a saída mesmo sob stdbuf.
 // LC_ALL=C só depois do banner: é o que dá ponto decimal ao horário.
-export function fakeRawClaudeScript(sessionsDir: string, logDir: string): string {
+export function fakeRawClaudeScript(sessionsDir: string, logDir: string, loadFlag: string): string {
   return `#!/usr/bin/env bash
 # Stub do claude em modo raw para cenários e2e — gerado por e2e/driver/fake-home.ts.
 SESSIONS_DIR=${shSingleQuote(sessionsDir)}
+LOAD=${shSingleQuote(loadFlag)}
 ${logArgv(logDir, 'claude')}
 
 ${CLAUDE_SESSION_START}
@@ -202,6 +213,7 @@ LC_ALL=C
 printf '\\e[?2004h%s' ${shSingleQuote(RAW_PROMPT)}
 perl -e '$|=1; while (sysread(STDIN, $b, 4096)) { printf("%02x\\n", ord) for split(//, $b) }' | {
   escape=0
+  chars=0
   while read -r hex; do
     printf 'byte: %s %s\\n' "$EPOCHREALTIME" "$hex" >&3
     if [ $escape -eq 1 ]; then
@@ -213,6 +225,13 @@ perl -e '$|=1; while (sysread(STDIN, $b, 4096)) { printf("%02x\\n", ord) for spl
     elif [ "$hex" = 0d ]; then
       printf '\\r\\n%s' ${shSingleQuote(RAW_PROMPT)}
     else
+      # Só no começo de um caractere: no meio de um UTF-8 a carga o partiria.
+      if [ -e "$LOAD" ] && (( 0x$hex < 0x80 || 0x$hex >= 0xc0 )); then
+        chars=$((chars + 1))
+        if (( chars % ${RAW_LOAD_EVERY} == 0 )); then
+          printf '\\r\\n[[carga %s %s]]\\r\\n' "$chars" ${shSingleQuote(RAW_LOAD_FILLER)}
+        fi
+      fi
       printf "\\\\x$hex"
     fi
   done
@@ -316,9 +335,10 @@ export function createFakeHome(opts: FakeHomeOptions = {}): FakeHome {
     codex: join(binDir, 'fake-codex.sh'),
   }
   const rawClaudePath = join(binDir, 'fake-claude-raw.sh')
+  const rawLoadFlag = join(root, 'raw-load')
   writeFileSync(cliPaths.claude, fakeClaudeScript(sessionsDir, logDir))
   writeFileSync(cliPaths.codex, fakeCodexScript(logDir))
-  writeFileSync(rawClaudePath, fakeRawClaudeScript(sessionsDir, logDir))
+  writeFileSync(rawClaudePath, fakeRawClaudeScript(sessionsDir, logDir, rawLoadFlag))
   for (const path of [cliPaths.claude, cliPaths.codex, rawClaudePath]) chmodSync(path, 0o755)
 
   const sessionPath = (pid: number) => join(sessionsDir, `${pid}.json`)
@@ -352,6 +372,10 @@ export function createFakeHome(opts: FakeHomeOptions = {}): FakeHome {
       return cliPaths[provider]
     },
     rawClaudePath,
+    setRawLoad(on) {
+      if (on) writeFileSync(rawLoadFlag, '')
+      else rmSync(rawLoadFlag, { force: true })
+    },
     readCliLog(provider) {
       return readdirSync(logDir)
         .filter((f) => f.startsWith(`${provider}-`))

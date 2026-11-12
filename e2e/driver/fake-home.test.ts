@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FAKE_CODEX_DONE,
+  RAW_LOAD_EVERY,
+  RAW_LOAD_OUTPUT,
   RAW_PROMPT,
   buildSessionFile,
   createFakeHome,
@@ -166,6 +168,31 @@ describe('fake-claude-raw.sh', () => {
     expect([...stdin.atMs].sort((a, b) => a - b)).toEqual(stdin.atMs)
     // O eco não repete os marcadores do bracketed-paste, e o Enter abre outro prompt.
     expect(out.split(RAW_PROMPT).slice(1)).toEqual(['olá, ação\r\n', 'ab  c\r\n', ''])
+  })
+
+  it('com setRawLoad, escreve uma linha de carga a cada RAW_LOAD_EVERY caracteres, nunca no meio de um UTF-8', () => {
+    fake = createFakeHome()
+    const typed = `${'ã'.repeat(25)}\r`
+    expect(runStub(fake.rawClaudePath, ['--session-id', 'cc-idle'], typed)).not.toMatch(
+      RAW_LOAD_OUTPUT,
+    )
+
+    fake.setRawLoad(true)
+    const out = runStub(fake.rawClaudePath, ['--session-id', 'cc-load'], typed)
+    expect(RAW_LOAD_EVERY).toBe(10)
+    // Cada linha de carga sai antes do 10º, 20º... caractere, com o eco inteiro em volta.
+    expect(out.split(RAW_PROMPT)[1].split(RAW_LOAD_OUTPUT)).toEqual([
+      `${'ã'.repeat(9)}\r\n`,
+      `\r\n${'ã'.repeat(10)}\r\n`,
+      `\r\n${'ã'.repeat(6)}\r\n`,
+    ])
+    // Os bytes logados são só os do stdin: a carga não entra na camada pty.
+    expect(parseRawStdin(fake.readCliLog('claude')).bytes.toString()).toBe(typed + typed)
+
+    fake.setRawLoad(false)
+    expect(runStub(fake.rawClaudePath, ['--session-id', 'cc-off'], typed)).not.toMatch(
+      RAW_LOAD_OUTPUT,
+    )
   })
 
   // Sem TTY o teste acima não distingue raw de canônico: aqui o stub roda numa PTY
