@@ -129,15 +129,22 @@ export interface ChatTranscript {
   // conteúdo do plano no card pendente (o tool_use do ExitPlanMode ainda não
   // está no JSONL nesse momento). null quando a sessão nunca escreveu plano.
   lastPlanFilePath: string | null
+  // Rev do watch a que `messages` corresponde: o renderer só troca a lista que tem por
+  // esta se ela for mais nova. 0 quando o main não está observando a sessão.
+  rev: number
 }
 
-// Payload do broadcast chat:transcript-update. Emite a LISTA completa reparseada
-// a cada mudança do JSONL — simples e robusto a reescritas do arquivo (o renderer
-// só substitui o estado). transcriptExists distingue "JSONL ainda não nasceu"
-// (sessão recém-spawnada, pré-flush) de "existe mas sem mensagens renderizáveis".
+// Payload de chat:transcript-update, enviado só aos webContents que chamaram chat:watch.
+// É um delta: `messages` substitui a lista do renderer a partir do índice `base` (0 =
+// lista inteira: 1º update, rewind, arquivo reescrito). `rev` sobe de um em um por update;
+// um rev pulado significa delta perdido, e o renderer pede o transcript de novo.
+// transcriptExists distingue "JSONL ainda não nasceu" (sessão recém-spawnada, pré-flush)
+// de "existe mas sem mensagens renderizáveis".
 export interface ChatTranscriptUpdate {
   sessionId: string
   transcriptExists: boolean
+  base: number
+  rev: number
   messages: ChatMessage[]
   lastPlanFilePath: string | null
 }

@@ -1,9 +1,10 @@
 import { chatApi } from '@/lib/ipc'
 
-// O main mantém um watcher por sessionId (watch idempotente, unwatch apaga).
-// Com 2+ ChatViews da mesma sessão (Room + Peek, MotherDock + Peek) o primeiro
-// unmount derrubaria o watcher dos outros. O contador fica no renderer porque um
-// reload zera ele junto com os consumidores; no main sobraria contagem órfã.
+// O main guarda uma inscrição por janela em cada sessão observada (watch repetido é
+// no-op, unwatch tira a janela). Com 2+ ChatViews da mesma sessão nesta janela (Room +
+// Peek, MotherDock + Peek) o primeiro unmount cortaria os updates dos outros. O contador
+// fica no renderer porque um reload zera ele junto com os consumidores; o main solta a
+// inscrição sozinho quando a janela recarrega ou fecha.
 //
 // O main ignora o watch enquanto a sessão não tem ccSessionId (não há transcript
 // a observar) e não guarda nada. Por isso lembramos se o watch já saiu com um cc

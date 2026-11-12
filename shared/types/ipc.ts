@@ -2444,15 +2444,15 @@ export interface Api {
     scopeStats(): Promise<ScopeStats>
   }
   chat: {
-    /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */
+    /** Lista ordenada de mensagens: o estado do watch (com o rev dele) ou, sem watch, o arquivo lido inteiro. */
     getTranscript(sessionId: string): Promise<ChatTranscript>
     /** Lê um arquivo de plano (validado dentro de ~/.claude/plans/); null se inválido/ilegível. */
     readPlanFile(path: string): Promise<string | null>
     /** Conta um caminho do chat que mandou o usuário ao terminal (ver shared/chat/fallback). */
     noteFallback(kind: ChatFallbackKind, reason: ChatFallbackReason): Promise<void>
-    /** Começa a observar o JSONL da sessão; emite chat:transcript-update em cada mudança. */
+    /** Inscreve esta janela no JSONL da sessão; cada mudança chega como delta em chat:transcript-update. */
     watch(sessionId: string): void
-    /** Para o watcher (também é chamado automaticamente no pty:exit). */
+    /** Tira esta janela; o watcher para quando a última sai (e no pty:exit, para todas). */
     unwatch(sessionId: string): void
     onTranscriptUpdate(handler: (event: ChatTranscriptUpdate) => void): () => void
     /** Cauda do tile: observa só os últimos bytes do JSONL; emite chat:transcript-tail. */

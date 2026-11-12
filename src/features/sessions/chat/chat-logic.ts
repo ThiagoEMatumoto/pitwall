@@ -1,5 +1,30 @@
-import type { ChatMessage, SessionActivity } from '../../../../shared/types/ipc'
+import type {
+  ChatMessage,
+  ChatTranscriptUpdate,
+  SessionActivity,
+} from '../../../../shared/types/ipc'
 import type { TuiMenu } from '../../../../shared/tui/tui-menu-parser'
+
+export type TranscriptMerge =
+  | { kind: 'applied'; messages: ChatMessage[] }
+  // rev já aplicado: chegou atrasado ou repetido.
+  | { kind: 'stale' }
+  // Um delta se perdeu no caminho: só o transcript inteiro (chat:get-transcript) repõe.
+  | { kind: 'gap' }
+
+// PURA: aplica um chat:transcript-update à lista que o renderer tem no rev `rev` (-1 =
+// nada aplicado ainda). Abaixo de `base` ficam os MESMOS objetos de antes: é o que mantém
+// válidos os memos das linhas do chat enquanto o streaming só acrescenta no fim.
+export function applyTranscriptUpdate(
+  prev: readonly ChatMessage[],
+  rev: number,
+  update: Pick<ChatTranscriptUpdate, 'base' | 'rev' | 'messages'>,
+): TranscriptMerge {
+  if (update.rev <= rev) return { kind: 'stale' }
+  if (update.base === 0) return { kind: 'applied', messages: update.messages }
+  if (update.rev !== rev + 1 || update.base > prev.length) return { kind: 'gap' }
+  return { kind: 'applied', messages: prev.slice(0, update.base).concat(update.messages) }
+}
 
 // Eco otimista de uma mensagem do usuário enviada pelo composer em modo chat. O
 // transcript de disco tem atraso (o claude grava o turno do usuário no JSONL

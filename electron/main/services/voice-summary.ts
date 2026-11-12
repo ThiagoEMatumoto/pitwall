@@ -135,6 +135,8 @@ async function runSummary(
     // claude ou entrega à UI) — um rótulo único mandava o usuário caçar no lugar errado.
     let read: Awaited<ReturnType<typeof chatTranscriptService.read>>
     try {
+      // Arquivo inteiro, de propósito: o resumo roda uma vez por turno e só tem o cc id,
+      // enquanto o estado incremental do chat é guardado por sessions.id de quem observa.
       read = await chatTranscriptService.read(ccSessionId)
     } catch {
       return { ok: false, error: 'Falha ao ler o transcript da sessão.' }

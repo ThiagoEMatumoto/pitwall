@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import Database from 'better-sqlite3'
@@ -8,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // room:get real via roomSnapshot). Só window.api é dublê: ele devolve o que o main
 // devolveria a partir do mesmo banco.
 // Produtores reais do main que a Room consome ao iniciar a mãe: o list-live-global
-// (via ipcMain) e o chat:transcript-update (via broadcast da janela).
+// (via ipcMain) e o chat:transcript-update, que o main manda só ao webContents que
+// chamou chat:watch (roomWindow, abaixo).
 const rt = vi.hoisted(() => ({
   running: [] as string[],
   index: new Map<string, unknown>(),
@@ -17,17 +19,7 @@ const rt = vi.hoisted(() => ({
 }))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '0.0.0-test' },
-  BrowserWindow: {
-    getAllWindows: () => [
-      {
-        webContents: {
-          send: (channel: string, payload: unknown) => {
-            if (channel === 'chat:transcript-update') rt.chat.forEach((cb) => cb(payload))
-          },
-        },
-      },
-    ],
-  },
+  BrowserWindow: { getAllWindows: () => [{ webContents: { send: () => {} } }] },
   ipcMain: {
     handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) =>
       rt.handlers.set(channel, fn),
@@ -509,6 +501,19 @@ describe('FeatureRoom', () => {
         cc_session_id: string
       }
     ).cc_session_id
+  // O webContents da janela da Room, como o handler do chat:watch o recebe em e.sender.
+  const roomWindow = Object.assign(new EventEmitter(), {
+    id: 1,
+    isDestroyed: () => false,
+    send: (channel: string, payload: unknown) => {
+      if (channel === 'chat:transcript-update') rt.chat.forEach((cb) => cb(payload))
+    },
+  })
+  // O chat:watch de verdade, como o ChatView da mãe o dispara nesta janela.
+  const watchFromRoomWindow = (id: string) => {
+    if (!rt.handlers.has('chat:watch')) registerSessionIpc()
+    return rt.handlers.get('chat:watch')!({ sender: roomWindow }, id)
+  }
 
   it('recém-nascida (starting no list-live-global): os passos esperam e o foco chega ao composer quando ele monta', async () => {
     await mount([])
@@ -533,7 +538,7 @@ describe('FeatureRoom', () => {
     expect(useFeatureRoomStore.getState().pendingMother).toMatchObject({ step: 'chat' })
 
     // O watch do chat emite a lista vazia de cara (transcript ainda inexistente).
-    act(() => chatTranscriptService.watch('M', ccOf('M')))
+    act(() => void watchFromRoomWindow('M'))
     expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
 
     // O RoomMotherPane monta depois (o grafo ainda não via a mãe): o foco espera por ele.
@@ -581,7 +586,7 @@ describe('FeatureRoom', () => {
     expect(screen.getByTestId('start-mother-failure')).toHaveTextContent(CHAT_TIMEOUT_TEXT)
     expect(document.querySelector('[data-step="chat"]')).toHaveAttribute('data-state', 'failed')
     // Chegou tarde, mas chegou: o card sai sozinho.
-    act(() => chatTranscriptService.watch('M', ccOf('M')))
+    act(() => void watchFromRoomWindow('M'))
     expect(useFeatureRoomStore.getState().pendingMother).toBeNull()
   })
 
