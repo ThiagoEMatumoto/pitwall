@@ -26,7 +26,9 @@
 // 1 min (o mínimo da pref) e o cenário espera os ticks reais de 60 s.
 // (10): retomar e acordar abrem uma linha nova em sessions e o handoff passa a
 // apontar para ela. O que não pode acontecer é o vínculo ficar nulo, trocar de
-// conversa ou de mãe, ou o id mudar fora de um relance.
+// conversa ou de mãe, ou o id mudar fora de um relance. O vínculo é lido a cada
+// 250 ms durante o cenário todo: um valor que só durasse o meio de um passo
+// também reprova.
 //
 // HOME fake + stub do claude, cópia do perfil (CM_DRIVE_SAFE=1), GPU LIGADA (com
 // ela desligada a janela deste harness nunca fica visível e nenhum clique estabiliza).
@@ -52,6 +54,7 @@ import { argvFlag, createFakeHome } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
 import { countWhenPresent, tapNextInvoke, tappedInvoke } from '../driver/ipc-tap'
 import { copyRealUserData, launchApp, writeCopyPrefs } from '../driver/launch'
+import { createLinkWatch, type Link, type LinkRead } from '../driver/link-watch'
 import { goToArea, waitReady } from '../driver/nav'
 import { CHILD_HIBERNATE_AFTER_MIN_PREF, HIBERNATE_AFTER_MIN_PREF } from '../../shared/hibernate'
 
@@ -79,6 +82,7 @@ const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
 // Painel dos menus abertos por portal (chip de 2º plano, "Mais ações" do card).
 const MENU_PANEL = 'div.fixed.min-w-40'
 const ENDED_BY_USER = /encerrada pelo usuário/i
+const LINK_POLL_MS = 250
 const SEND_PROMPT = 'sessions:send-prompt'
 // Abas da filha na janela quando o envio chega ao main. Enquanto o handler não
 // responde, o submit do QuickComposer está parado no await do envio: uma aba que
@@ -260,12 +264,6 @@ const shot = (n: string) => page.screenshot({ path: join(SHOTS, `${n}.png`) }).c
 const waitFor = (label: string, fn: () => Promise<boolean>, timeoutMs?: number) =>
   seedWaitFor(page, label, fn, timeoutMs, notes)
 
-interface Link {
-  passo: string
-  filha: string | null
-  conversa: string | null
-  mae: string | null
-}
 const links: Link[] = []
 
 // O watchdog e o fim normal podem chegar juntos: o desfecho sai uma vez só.
@@ -448,14 +446,18 @@ try {
   writeFileSync(join(transcriptDir, `${cc0}.jsonl`), '')
   await closeOverlays(page)
 
+  const linkWatch = createLinkWatch(
+    () =>
+      db<LinkRead>(
+        `SELECT h.child_session_id AS filha, s.cc_session_id AS conversa, h.mother_session_id AS mae
+           FROM handoffs h LEFT JOIN sessions s ON s.id = h.child_session_id
+          WHERE h.id = ?`,
+        H,
+      )[0],
+  )
+  const linkPoll = setInterval(linkWatch.sample, LINK_POLL_MS)
   const link = (passo: string): void => {
-    const row = handoffRow(H)
-    links.push({
-      passo,
-      filha: row.child_session_id,
-      conversa: row.child_session_id ? ccOf(row.child_session_id) : null,
-      mae: row.mother_session_id,
-    })
+    links.push(...linkWatch.mark(passo))
   }
   link('nascer')
 
@@ -1118,15 +1120,25 @@ try {
   record(11, eleven.ok, eleven.detail)
   link('11 mãe acorda')
 
-  // ---- (10) o vínculo em todos os passos ----
+  // ---- (10) o vínculo durante o cenário todo ----
+  clearInterval(linkPoll)
   const soltou = links.filter((l) => l.filha === null || l.conversa !== cc0 || l.mae !== M)
   const trocas = links.filter((l, i) => i > 0 && l.filha !== links[i - 1].filha).map((l) => l.passo)
-  record(10, soltou.length === 0 && trocas.every((passo) => RELAUNCHES.has(passo)), {
-    passos: links.map((l) => `${l.passo}=${l.filha?.slice(0, 8) ?? 'NULO'}`),
-    soltouEm: soltou.map((l) => l.passo),
-    idMudouEm: trocas,
-    idSoPodeMudarEm: [...RELAUNCHES],
-  })
+  const vigia = linkWatch.polled()
+  record(
+    10,
+    soltou.length === 0 &&
+      vigia.read > 0 &&
+      vigia.failed === 0 &&
+      trocas.every((passo) => RELAUNCHES.has(passo)),
+    {
+      passos: links.map((l) => `${l.passo}=${l.filha?.slice(0, 8) ?? 'NULO'}`),
+      soltouEm: soltou.map((l) => l.passo),
+      idMudouEm: trocas,
+      idSoPodeMudarEm: [...RELAUNCHES],
+      leiturasDoVigia: vigia,
+    },
+  )
 } catch (e) {
   notes.push(`EXC: ${(e as Error).stack}`)
   await shot('exception')
