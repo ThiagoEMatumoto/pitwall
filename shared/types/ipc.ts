@@ -1957,6 +1957,7 @@ export interface GpuStatus {
   ozoneWayland: boolean
   prefDisabled: boolean
   prefOzone: boolean
+  autoDisabled: GpuAutoDisabled | null
 }
 
 // Desligamento que o app fez sozinho depois de crashes do processo de GPU. Fica
