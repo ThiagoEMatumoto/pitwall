@@ -46,6 +46,16 @@ export interface PerfRendererSummary {
   spans: Record<string, PerfSpanStats>
 }
 
+/**
+ * Acumulado do renderer desde o início da sonda, exposto em `window.__cmPerf`.
+ * Não zera a cada janela: o driver e2e lê no começo e no fim de cada fase do
+ * cenário e trabalha com a diferença.
+ */
+export interface PerfRendererTotals {
+  counters: Record<string, number>
+  spans: Record<string, PerfSpanStats>
+}
+
 const spanStatsSchema = z.strictObject({
   n: z.number(),
   totalMs: z.number(),

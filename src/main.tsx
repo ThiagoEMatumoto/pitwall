@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './app/App'
 import { loadKeyboardLayoutLabels } from './lib/keybindings'
+import { startPerfProbe } from './lib/perf-probe'
 import './index.css'
 
 // Warm-up das fontes bundladas já no boot do renderer. JetBrains Mono destrava
@@ -13,6 +14,7 @@ void document.fonts.load('600 16px "Schibsted Grotesk"')
 void document.fonts.load('700 16px "Schibsted Grotesk"')
 // Rótulos dos atalhos no layout do teclado (ABNT2: Ctrl+' em vez de Ctrl+`).
 void loadKeyboardLayoutLabels()
+startPerfProbe()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
