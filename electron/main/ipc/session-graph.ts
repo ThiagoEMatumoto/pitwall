@@ -13,6 +13,7 @@ import { createAutoTitler } from '../services/session-auto-title'
 import { setSessionAutoTitle } from '../services/canvas-store'
 import { transcriptIndex } from '../services/transcript-index'
 import { onSessionLinkPulse } from '../services/session-link-pulse'
+import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { resolveLiveSessionFeatures } from '../services/feature-session-live'
 import type { HandoffEvent, SessionGraph } from '../../../shared/types/session-graph'
 
@@ -77,8 +78,12 @@ export function watchSessionGraph(push: () => void, delayMs = GRAPH_PUSH_DELAY_M
   const offs = GRAPH_CHANNEL_PREFIXES.map((prefix) => onBroadcast(prefix, schedule))
   // Transcript novo no índice = 1º prompt que agora dá pra ler.
   offs.push(transcriptIndex.onGrow(schedule))
+  // O batch global só sai quando muda, e o status de uma PTY sem session file
+  // (trust, subindo) não entra nele: o menu da TUI chega direto, como na atenção.
+  tuiMenuWatch.on('change', schedule)
   return () => {
     for (const off of offs) off()
+    tuiMenuWatch.removeListener('change', schedule)
     if (timer) clearTimeout(timer)
     timer = null
   }
