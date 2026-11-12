@@ -2,18 +2,18 @@
 import { describe, expect, it } from 'vitest'
 import { createBacklogRequests } from './backlog-request'
 
-type Reply = { requestId: number; backlog?: string; error?: string }
+type Reply = { requestId: string; backlog?: string; error?: string }
 
 function fakeIpc() {
   const listeners: Array<{ channel: string; fn: (event: unknown, reply: Reply) => void }> = []
-  const requests: Array<{ channel: string; requestId: number; sessionId: string }> = []
+  const requests: Array<{ channel: string; requestId: string; sessionId: string }> = []
   return {
     listeners,
     requests,
     on: (channel: string, fn: (event: unknown, reply: Reply) => void) => {
       listeners.push({ channel, fn })
     },
-    send: (channel: string, requestId: number, sessionId: string) => {
+    send: (channel: string, requestId: string, sessionId: string) => {
       requests.push({ channel, requestId, sessionId })
     },
     reply: (reply: Reply) => {
@@ -95,7 +95,25 @@ describe('pedido de backlog por evento', () => {
 
     // Repetida ou de um pedido que este renderer não fez.
     expect(() => ipc.reply({ requestId: a.requestId, backlog: 'de novo' })).not.toThrow()
-    expect(() => ipc.reply({ requestId: 9999, backlog: 'alheia' })).not.toThrow()
+    expect(() => ipc.reply({ requestId: 'de-ninguem', backlog: 'alheia' })).not.toThrow()
     expect(backlogs.pendingCount()).toBe(0)
+  })
+
+  it('resposta a um pedido de antes do reload não resolve o pedido da página nova', async () => {
+    // Duas cargas do preload no mesmo webContents: o main responde por
+    // sender.send, então a resposta atrasada chega no listener da página nova.
+    const ipc = fakeIpc()
+    const beforeReload = createBacklogRequests(ipc)
+    void beforeReload.get('s1')
+    const afterReload = createBacklogRequests(ipc)
+    const pending = afterReload.get('s2')
+    const [stale, fresh] = ipc.requests
+    expect(stale.requestId).not.toBe(fresh.requestId)
+
+    ipc.reply({ requestId: stale.requestId, backlog: 'de s1' })
+    expect(afterReload.pendingCount()).toBe(1)
+
+    ipc.reply({ requestId: fresh.requestId, backlog: 'de s2' })
+    await expect(pending).resolves.toBe('de s2')
   })
 })

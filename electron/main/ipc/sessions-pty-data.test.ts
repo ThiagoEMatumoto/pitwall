@@ -107,10 +107,10 @@ function emitExit(sessionId: string): void {
   for (const fn of seam.listeners.get('exit') ?? []) fn({ sessionId, exitCode: 0, signal: null })
 }
 
-type BacklogReply = { requestId: number; backlog?: string; error?: string }
+type BacklogReply = { requestId: string; backlog?: string; error?: string }
 
 // O pedido como o preload o faz: evento com id, resposta por sender.send.
-function requestBacklog(requestId: number, sessionId: string, sender = seam.main): void {
+function requestBacklog(requestId: string, sessionId: string, sender = seam.main): void {
   seam.events.get('sessions:get-backlog')!({ sender }, requestId, sessionId)
 }
 
@@ -118,7 +118,7 @@ const backlogReplies = () =>
   seam.sent.filter((s) => s.channel === 'sessions:backlog').map((s) => s.payload as BacklogReply)
 
 function getBacklog(sessionId: string): string {
-  requestBacklog(1, sessionId)
+  requestBacklog('r1', sessionId)
   return backlogReplies().at(-1)!.backlog!
 }
 
@@ -178,10 +178,10 @@ describe('pty:data coalescido no ipc/sessions', () => {
     emitData(ID, 'b')
     emitData(ID, 'c')
 
-    requestBacklog(7, ID)
+    requestBacklog('r7', ID)
 
     expect(channelsTo(1)).toEqual(['pty:data', 'pty:data', 'sessions:backlog'])
-    expect(backlogReplies()).toEqual([{ requestId: 7, backlog: 'abc' }])
+    expect(backlogReplies()).toEqual([{ requestId: 'r7', backlog: 'abc' }])
     // Tudo que o backlog cobre já está na frente da resposta.
     expect(live(ID, 0)).toBe('abc')
 
@@ -197,7 +197,7 @@ describe('pty:data coalescido no ipc/sessions', () => {
     emitData(ID, 'a')
     emitData(ID, 'b')
 
-    requestBacklog(1, ID, other)
+    requestBacklog('r1', ID, other)
 
     expect(channelsTo(2)).toEqual(['pty:data', 'pty:data', 'sessions:backlog'])
     expect(channelsTo(1)).toEqual(['pty:data', 'pty:data'])
@@ -206,9 +206,19 @@ describe('pty:data coalescido no ipc/sessions', () => {
   it('erro ao ler o backlog vira resposta de erro para o pedido', () => {
     seam.backlogError = new Error('pty sumiu')
 
-    expect(() => requestBacklog(3, ID)).not.toThrow()
+    expect(() => requestBacklog('r3', ID)).not.toThrow()
 
-    expect(backlogReplies()).toEqual([{ requestId: 3, error: 'pty sumiu' }])
+    expect(backlogReplies()).toEqual([{ requestId: 'r3', error: 'pty sumiu' }])
+  })
+
+  it('pedido com id ou sessão de tipo errado é ignorado, sem lançar', () => {
+    emitData(ID, 'a')
+    const handler = seam.events.get('sessions:get-backlog')!
+
+    expect(() => handler({ sender: seam.main }, 7, ID)).not.toThrow()
+    expect(() => handler({ sender: seam.main }, 'r7', undefined)).not.toThrow()
+
+    expect(backlogReplies()).toEqual([])
   })
 
   it('remetente destruído: não lança e não envia', () => {
@@ -216,7 +226,7 @@ describe('pty:data coalescido no ipc/sessions', () => {
     seam.main.destroyed = true
     seam.windows = []
 
-    expect(() => requestBacklog(4, ID)).not.toThrow()
+    expect(() => requestBacklog('r4', ID)).not.toThrow()
 
     expect(backlogReplies()).toEqual([])
   })
@@ -227,18 +237,18 @@ describe('pty:data coalescido no ipc/sessions', () => {
     emitData(OTHER, 'x')
     emitData(OTHER, 'y')
 
-    requestBacklog(1, ID)
-    requestBacklog(2, OTHER)
+    requestBacklog('r1', ID)
+    requestBacklog('r2', OTHER)
 
     expect(backlogReplies()).toEqual([
-      { requestId: 1, backlog: 'ab' },
-      { requestId: 2, backlog: 'xy' },
+      { requestId: 'r1', backlog: 'ab' },
+      { requestId: 'r2', backlog: 'xy' },
     ])
     const sent = seam.sent.map((s) => {
-      const p = s.payload as { sessionId?: string; data?: string; requestId?: number }
+      const p = s.payload as { sessionId?: string; data?: string; requestId?: string }
       return p.sessionId ? `${p.sessionId}:${p.data}` : `reply ${p.requestId}`
     })
-    expect(sent).toEqual(['pty-1:a', 'pty-2:x', 'pty-1:b', 'reply 1', 'pty-2:y', 'reply 2'])
+    expect(sent).toEqual(['pty-1:a', 'pty-2:x', 'pty-1:b', 'reply r1', 'pty-2:y', 'reply r2'])
   })
 
   it('sessions:get-backlog entrega o pendente antes de responder', () => {
