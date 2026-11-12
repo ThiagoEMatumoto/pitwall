@@ -246,6 +246,10 @@ describe('closePane avisa o main', () => {
   it('aba acordada → sessions:pane-closed com o id da PTY', () => {
     useAppStore.getState().closePane('pane-a')
     expect(calls.paneClosed).toEqual(['sess-a'])
+    // Fechar a aba não encerra nada: o aviso diz que o processo continua.
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
+      'Aba fechada · a sessão segue rodando',
+    ])
   })
 
   it('aba dormindo não tem PTY → não avisa', async () => {
@@ -253,6 +257,7 @@ describe('closePane avisa o main', () => {
     await flush()
     useAppStore.getState().closePane('pane-a')
     expect(calls.paneClosed).toEqual([])
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Aba fechada'])
   })
 })
 

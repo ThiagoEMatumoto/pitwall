@@ -1234,7 +1234,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!closed.dormant) void sessionsApi.paneClosed(closed.session.id)
     const cancelExpiry = closed.dormant ? scheduleDraftExpiry(paneId) : () => {}
     showToast({
-      title: 'Aba fechada',
+      // Aba dormindo não tem processo: ali "segue rodando" seria mentira.
+      title: closed.dormant ? 'Aba fechada' : 'Aba fechada · a sessão segue rodando',
       body: closed.session.title ?? closed.repo?.label ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => {
