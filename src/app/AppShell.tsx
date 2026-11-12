@@ -49,6 +49,7 @@ import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
+import { listenChildActivity } from '@/features/handoffs/child-activity-store'
 import { closeChildTab, useIsLinkedChild } from '@/features/handoffs/end-child'
 import { layoutRestoreStep } from '../../shared/dock-layout-restore'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
@@ -424,6 +425,9 @@ export function AppShell() {
   )
 
   useEffect(() => listenSessionFeatureChanges(), [])
+
+  // Mensagem da mãe para filha sem aba: marca não lida e avisa, sem roubar o foco.
+  useEffect(() => listenChildActivity(), [])
 
   // Restore do layout exato. Quando há pendingLayout, aplicamos api.fromJSON UMA
   // vez — em vez de deixar o effect de reconciliação criar os painéis no arranjo

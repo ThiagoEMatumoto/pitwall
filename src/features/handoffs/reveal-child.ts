@@ -7,6 +7,15 @@ import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { paneShowsLive } from './crew'
 import { isLinkedChild } from './end-child'
 
+// A filha vinculada em segundo plano (processo vivo, sem aba), ou null.
+export function backgroundChild(sessionId: string | null | undefined): LiveSessionInfo | null {
+  if (!sessionId || !isLinkedChild(sessionId)) return null
+  const { liveSessions, panes } = useAppStore.getState()
+  const live = liveSessions.find((s) => s.id === sessionId && s.status !== 'ended')
+  if (!live || panes.some((p) => paneShowsLive(p, live))) return null
+  return live
+}
+
 // focus: leva o usuário até a aba (card da filha). Sem focus a aba nasce em
 // segundo plano e ele fica onde está (mapa, Room, @alias de outra pane); as modais
 // (quick look, QuickComposer) também abrem assim e só navegam depois do envio
@@ -17,10 +26,8 @@ export async function revealChildOnUserMessage(
   sessionId: string | null | undefined,
   opts: { focus: boolean },
 ): Promise<LiveSessionInfo | null> {
-  if (!sessionId || !isLinkedChild(sessionId)) return null
-  const { liveSessions, panes, focusOrOpenSession } = useAppStore.getState()
-  const live = liveSessions.find((s) => s.id === sessionId && s.status !== 'ended')
-  if (!live || panes.some((p) => paneShowsLive(p, live))) return null
-  await focusOrOpenSession(live, { background: !opts.focus })
+  const live = backgroundChild(sessionId)
+  if (!live) return null
+  await useAppStore.getState().focusOrOpenSession(live, { background: !opts.focus })
   return live
 }
