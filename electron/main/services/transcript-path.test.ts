@@ -19,7 +19,11 @@ vi.mock('node:fs', async () => {
   return { ...actual, readdirSync: vi.fn(actual.readdirSync) }
 })
 
-import { PROJECTS_ROOT, findTranscriptPath } from './transcript-path'
+import {
+  PROJECTS_ROOT,
+  _resetTranscriptPathMemoForTests,
+  findTranscriptPath,
+} from './transcript-path'
 
 const scans = (): number => vi.mocked(readdirSync).mock.calls.length
 
@@ -35,6 +39,7 @@ describe('findTranscriptPath', () => {
     rmSync(HOME, { recursive: true, force: true })
     mkdirSync(join(PROJECTS_ROOT, '-home-user-other'), { recursive: true })
     vi.mocked(readdirSync).mockClear()
+    _resetTranscriptPathMemoForTests()
   })
 
   afterAll(() => {
