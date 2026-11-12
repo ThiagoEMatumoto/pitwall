@@ -31,11 +31,20 @@ export function registerGpuIpc(): void {
   // A marca separa esta escolha do gpu.disabled=true que o automático antigo
   // gravava: só o que não tem marca entra na re-tentativa do boot. Religar pela
   // UI também encerra o desligamento automático pendente.
+  //
+  // A ordem das escritas nunca deixa gpu.disabled=true sem a marca, nem se uma
+  // delas falhar: ao desligar a marca entra antes, ao religar ela sai depois.
+  // Esse estado é o que o boot lê como legado, e ele religaria a GPU em teste.
   ipcMain.handle('gpu:set-disabled', (_e, payload: unknown) => {
     const disabled = boolSchema.parse(payload)
-    setPref(GPU_DISABLED_PREF_KEY, disabled)
-    setPref(GPU_DISABLED_BY_USER_PREF_KEY, disabled)
-    if (!disabled) setPref(GPU_AUTO_PREF_KEY, null)
+    if (disabled) {
+      setPref(GPU_DISABLED_BY_USER_PREF_KEY, true)
+      setPref(GPU_DISABLED_PREF_KEY, true)
+      return
+    }
+    setPref(GPU_DISABLED_PREF_KEY, false)
+    setPref(GPU_DISABLED_BY_USER_PREF_KEY, false)
+    setPref(GPU_AUTO_PREF_KEY, null)
   })
 
   ipcMain.handle('gpu:set-ozone', (_e, payload: unknown) => {

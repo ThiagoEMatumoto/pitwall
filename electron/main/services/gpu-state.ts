@@ -113,10 +113,18 @@ export interface GpuBootDecision {
 }
 
 export function decideGpuBoot(input: GpuBootInput): GpuBootDecision {
-  const legacy = input.prefDisabled && !input.disabledByUser && input.autoDisabled === null
+  // Sem a marca do usuário, gpu.disabled=true é do automático antigo. Se o
+  // registro já existe, a migração anterior parou entre as duas escritas: ele
+  // vale como está e só falta zerar a pref.
+  const legacy = input.prefDisabled && !input.disabledByUser
   const prefDisabled = legacy ? false : input.prefDisabled
   const record = legacy
-    ? { at: input.now, reason: 'legacy', version: LEGACY_VERSION, strikes: 1 }
+    ? (input.autoDisabled ?? {
+        at: input.now,
+        reason: 'legacy',
+        version: LEGACY_VERSION,
+        strikes: 1,
+      })
     : input.autoDisabled
 
   if (input.envDisabled || prefDisabled || record === null) {
@@ -137,5 +145,134 @@ export function decideGpuBoot(input: GpuBootInput): GpuBootDecision {
     probation: true,
     prefDisabled,
     autoDisabled: { ...record, at: input.now, version: input.version },
+  }
+}
+
+// Fiação do boot e do processo: as dependências entram por parâmetro para a
+// regra rodar em teste sem Electron nem banco.
+export interface GpuPrefs {
+  getPref<T>(key: string, fallback: T): T
+  setPref(key: string, value: unknown): void
+}
+
+// O boot lê as prefs antes do ready: falha de I/O cai no default (GPU ligada).
+function readPref<T>(prefs: GpuPrefs, key: string, fallback: T): T {
+  try {
+    return prefs.getPref(key, fallback)
+  } catch {
+    return fallback
+  }
+}
+
+// gpu.disabled é só a escolha manual; o desligamento por crash vive em
+// gpu.autoDisabled e é re-tentado (regra em decideGpuBoot). A tentativa é gravada
+// ANTES de ligar a GPU: é o que impede um driver quebrado de virar loop de crash.
+export function resolveGpuBoot(args: {
+  prefs: GpuPrefs
+  envDisabled: boolean
+  version: string
+  now: number
+}): { hwAccelDisabled: boolean; probation: boolean } {
+  const { prefs } = args
+  const input = {
+    envDisabled: args.envDisabled,
+    prefDisabled: readPref(prefs, GPU_DISABLED_PREF_KEY, false),
+    disabledByUser: readPref(prefs, GPU_DISABLED_BY_USER_PREF_KEY, false),
+    autoDisabled: parseGpuAutoDisabled(readPref<unknown>(prefs, GPU_AUTO_PREF_KEY, null)),
+    version: args.version,
+    now: args.now,
+  }
+  const decision = decideGpuBoot(input)
+  // O registro vai primeiro. Se a migração do legado parar entre as duas
+  // escritas, sobra gpu.disabled=true sem marca e com registro, que decideGpuBoot
+  // retoma no boot seguinte. Na ordem inversa sobraria gpu.disabled=false sem
+  // registro: GPU ligada, fora de teste e sem rastro do desligamento.
+  try {
+    if (decision.autoDisabled !== input.autoDisabled) {
+      prefs.setPref(GPU_AUTO_PREF_KEY, decision.autoDisabled)
+    }
+    if (decision.prefDisabled !== input.prefDisabled) {
+      prefs.setPref(GPU_DISABLED_PREF_KEY, decision.prefDisabled)
+    }
+  } catch (err) {
+    console.warn('[gpu] não gravou a decisão de boot:', String(err))
+    if (decision.probation) return { hwAccelDisabled: true, probation: false }
+  }
+  return { hwAccelDisabled: decision.hwAccelDisabled, probation: decision.probation }
+}
+
+export interface GpuCrashWatchDeps {
+  prefs: GpuPrefs
+  // O que resolveGpuBoot decidiu para este processo.
+  hwAccelDisabled: boolean
+  probation: boolean
+  version: string
+  now: () => number
+  onAutoDisabled: () => void
+  notifyCrashed: (payload: { reason: string; count: number }) => void
+}
+
+export interface GpuCrashWatch {
+  processGone(reason: string): void
+  endProbation(): void
+}
+
+// Auto-fallback em crash do processo de GPU (driver instável, ex: NVIDIA/
+// Wayland): avisa os renderers pra largarem o WebGL (seguem em DOM na mesma
+// sessão). No 2º crash do driver (1º num boot de teste), registra o
+// desligamento pro PRÓXIMO boot (a flag só vale antes do ready) e avisa o
+// usuário. O registro vai antes do aviso: quem reagir ao gpu:crashed já lê o
+// gpu:status atualizado.
+export function createGpuCrashWatch(deps: GpuCrashWatchDeps): GpuCrashWatch {
+  // Crashes de driver nesta execução. Morte externa ('killed') não entra na conta.
+  let crashCount = 0
+  // Boot de teste: a GPU foi religada depois de um desligamento automático.
+  let onProbation = deps.probation
+
+  function recordCrash(reason: string): void {
+    crashCount += 1
+    // Com a aceleração já desligada o processo que morre é o de software: não diz
+    // nada sobre o driver.
+    if (deps.hwAccelDisabled || crashCount !== gpuCrashThreshold(onProbation)) return
+    // Falha de escrita não pode subir: quem chama ainda precisa avisar os
+    // terminais, que só largam o WebGL ao receber o gpu:crashed.
+    try {
+      deps.prefs.setPref(
+        GPU_AUTO_PREF_KEY,
+        autoDisableRecord({
+          previous: parseGpuAutoDisabled(deps.prefs.getPref<unknown>(GPU_AUTO_PREF_KEY, null)),
+          reason,
+          version: deps.version,
+          now: deps.now(),
+        }),
+      )
+    } catch (err) {
+      console.warn('[gpu] não gravou o desligamento automático:', String(err))
+      return
+    }
+    deps.onAutoDisabled()
+  }
+
+  return {
+    processGone(reason) {
+      if (!notifiesGpuLoss(reason)) return
+      if (countsAsGpuCrash(reason)) recordCrash(reason)
+      console.warn(`[gpu] processo de GPU morreu (${reason}) — crash #${crashCount}`)
+      deps.notifyCrashed({ reason, count: crashCount })
+    },
+    // Com crash no teste o boot segue em teste até o fim: o strike já foi somado e
+    // um crash seguinte não pode somar outro na mesma execução.
+    endProbation() {
+      if (!onProbation || crashCount > 0) return
+      // Roda num timer e no shutdown final, antes de matar as PTYs e fechar o
+      // banco: falha de escrita não pode interromper nenhum dos dois. O teste só
+      // passa quando o registro sai do banco, então a próxima chamada tenta de novo.
+      try {
+        deps.prefs.setPref(GPU_AUTO_PREF_KEY, null)
+        onProbation = false
+      } catch (err) {
+        console.warn('[gpu] não apagou o registro do boot de teste:', String(err))
+      }
+    },
   }
 }

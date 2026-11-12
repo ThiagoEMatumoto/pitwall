@@ -1,12 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   autoDisableRecord,
   countsAsGpuCrash,
+  createGpuCrashWatch,
   decideGpuBoot,
   gpuCrashThreshold,
   notifiesGpuLoss,
   parseGpuAutoDisabled,
+  resolveGpuBoot,
+  GPU_AUTO_PREF_KEY,
+  GPU_DISABLED_BY_USER_PREF_KEY,
+  GPU_DISABLED_PREF_KEY,
   type GpuBootInput,
+  type GpuPrefs,
 } from './gpu-state'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -261,5 +267,323 @@ describe('decideGpuBoot', () => {
       expect(withoutEnv.hwAccelDisabled).toBe(false)
       expect(withoutEnv.probation).toBe(true)
     })
+  })
+})
+
+// Mesmo contrato do prefs-store: JSON por chave, fallback quando não há linha.
+function memoryPrefs() {
+  const rows = new Map<string, string>()
+  const failing = new Set<string>()
+  const prefs: GpuPrefs = {
+    getPref<T>(key: string, fallback: T): T {
+      const raw = rows.get(key)
+      return raw === undefined ? fallback : (JSON.parse(raw) as T)
+    },
+    setPref(key, value) {
+      if (failing.has(key)) throw new Error(`disk I/O error (${key})`)
+      rows.set(key, JSON.stringify(value))
+    },
+  }
+  return {
+    prefs,
+    read: (key: string) => prefs.getPref<unknown>(key, undefined),
+    failWritesTo: (key: string) => failing.add(key),
+    writesWorkAgain: () => failing.clear(),
+  }
+}
+
+type MemoryPrefs = ReturnType<typeof memoryPrefs>
+
+// Um processo do app: o boot decide, e a mesma decisão alimenta a escuta de
+// crashes, como em electron/main/index.ts.
+function startApp(store: MemoryPrefs, at = T0, version = '1.0.0') {
+  const boot = resolveGpuBoot({ prefs: store.prefs, envDisabled: false, version, now: at })
+  const crashed: Array<{ reason: string; count: number }> = []
+  const toasts: number[] = []
+  const watch = createGpuCrashWatch({
+    prefs: store.prefs,
+    hwAccelDisabled: boot.hwAccelDisabled,
+    probation: boot.probation,
+    version,
+    now: () => at + 60_000,
+    onAutoDisabled: () => toasts.push(at),
+    notifyCrashed: (payload) => crashed.push(payload),
+  })
+  return { boot, watch, crashed, toasts }
+}
+
+// Chega ao boot de teste pelo caminho real: dois crashes desligam, e o prazo de
+// 3 dias religa.
+function startProbationBoot(store: MemoryPrefs) {
+  const first = startApp(store)
+  first.watch.processGone('crashed')
+  first.watch.processGone('crashed')
+  const app = startApp(store, T0 + 3 * DAY + 60_000)
+  expect(app.boot).toEqual({ hwAccelDisabled: false, probation: true })
+  return app
+}
+
+describe('fiação do crash e do boot de teste', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('boot normal: o segundo crash de driver grava o registro e avisa uma vez', () => {
+    const store = memoryPrefs()
+    const app = startApp(store)
+    expect(app.boot).toEqual({ hwAccelDisabled: false, probation: false })
+
+    app.watch.processGone('crashed')
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+
+    app.watch.processGone('oom')
+    app.watch.processGone('crashed')
+    expect(store.read(GPU_AUTO_PREF_KEY)).toEqual({
+      at: T0 + 60_000,
+      reason: 'oom',
+      version: '1.0.0',
+      strikes: 1,
+    })
+    expect(app.toasts).toHaveLength(1)
+    expect(app.crashed).toEqual([
+      { reason: 'crashed', count: 1 },
+      { reason: 'oom', count: 2 },
+      { reason: 'crashed', count: 3 },
+    ])
+    expect(startApp(store, T0 + 120_000).boot).toEqual({ hwAccelDisabled: true, probation: false })
+  })
+
+  it('quit limpo no boot de teste apaga o registro e o boot seguinte sobe fora de teste', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+
+    app.watch.endProbation()
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeNull()
+    expect(startApp(store, T0 + 4 * DAY).boot).toEqual({ hwAccelDisabled: false, probation: false })
+  })
+
+  it('crash durante a tentativa soma um strike e impede o quit de apagar o registro', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+
+    app.watch.processGone('crashed')
+    app.watch.endProbation()
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ reason: 'crashed', strikes: 2 })
+    expect(app.toasts).toHaveLength(1)
+    expect(startApp(store, T0 + 4 * DAY).boot).toEqual({ hwAccelDisabled: true, probation: false })
+  })
+
+  it('um crash a mais na mesma tentativa não soma outro strike', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+
+    app.watch.processGone('crashed')
+    app.watch.processGone('crashed')
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 2 })
+  })
+
+  it("'killed' avisa os terminais mas não conta: o teste ainda passa no quit", () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+
+    app.watch.processGone('killed')
+
+    expect(app.crashed).toEqual([{ reason: 'killed', count: 0 }])
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+    expect(app.toasts).toHaveLength(0)
+
+    app.watch.endProbation()
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeNull()
+  })
+
+  it("'killed' num boot normal nunca desliga, por mais que se repita", () => {
+    const store = memoryPrefs()
+    const app = startApp(store)
+
+    for (let i = 0; i < 5; i++) app.watch.processGone('killed')
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+    expect(app.crashed).toHaveLength(5)
+  })
+
+  it('saída limpa do processo de GPU não avisa ninguém', () => {
+    const app = startApp(memoryPrefs())
+    app.watch.processGone('clean-exit')
+    expect(app.crashed).toEqual([])
+  })
+
+  it('depois que o teste passa o limite volta a ser dois crashes', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    app.watch.endProbation()
+
+    app.watch.processGone('crashed')
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeNull()
+
+    app.watch.processGone('crashed')
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+  })
+
+  it('falha ao gravar o registro não impede o aviso de crash aos terminais', () => {
+    const store = memoryPrefs()
+    const app = startApp(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    app.watch.processGone('crashed')
+    expect(() => app.watch.processGone('crashed')).not.toThrow()
+
+    expect(app.crashed).toEqual([
+      { reason: 'crashed', count: 1 },
+      { reason: 'crashed', count: 2 },
+    ])
+    // Nada foi desligado: o toast diria o contrário.
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+    expect(app.toasts).toHaveLength(0)
+  })
+
+  it('falha ao gravar o strike do boot de teste também não impede o aviso', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    expect(() => app.watch.processGone('crashed')).not.toThrow()
+
+    expect(app.crashed).toEqual([{ reason: 'crashed', count: 1 }])
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+  })
+
+  it('falha ao apagar o registro não sobe para o shutdown, e o quit tenta de novo', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    // O timer de 10 min.
+    expect(() => app.watch.endProbation()).not.toThrow()
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+
+    // O shutdown final, com o banco gravando de novo.
+    store.writesWorkAgain()
+    app.watch.endProbation()
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeNull()
+  })
+
+  it('enquanto o registro não sai do banco, um crash ainda soma strike sobre ele', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+    app.watch.endProbation()
+    store.writesWorkAgain()
+
+    app.watch.processGone('crashed')
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 2 })
+  })
+
+  it('com a aceleração já desligada um crash não diz nada sobre o driver', () => {
+    const store = memoryPrefs()
+    const first = startApp(store)
+    first.watch.processGone('crashed')
+    first.watch.processGone('crashed')
+    const app = startApp(store, T0 + 60_000)
+    expect(app.boot.hwAccelDisabled).toBe(true)
+
+    app.watch.processGone('crashed')
+    app.watch.processGone('crashed')
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+    expect(app.toasts).toHaveLength(0)
+    expect(app.crashed).toHaveLength(2)
+  })
+})
+
+describe('migração do legado no boot', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // O automático antigo gravava só gpu.disabled=true, sem marca nem registro.
+  function legacyStore(): MemoryPrefs {
+    const store = memoryPrefs()
+    store.prefs.setPref(GPU_DISABLED_PREF_KEY, true)
+    return store
+  }
+
+  it('migra para o registro, religa em teste e o quit limpo encerra o desligamento', () => {
+    const store = legacyStore()
+    const app = startApp(store)
+
+    expect(app.boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toEqual({
+      at: T0,
+      reason: 'legacy',
+      version: '1.0.0',
+      strikes: 1,
+    })
+
+    app.watch.endProbation()
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: false, probation: false })
+  })
+
+  it('se o registro não grava, nada muda no banco e o boot seguinte migra de novo', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    // Sem a tentativa gravada a GPU não liga: um driver quebrado viraria loop.
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+
+    store.writesWorkAgain()
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+  })
+
+  it('se só o gpu.disabled=false não grava, o registro que sobra segue a regra de re-tentativa', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_DISABLED_PREF_KEY)
+
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ reason: 'legacy', strikes: 1 })
+
+    store.writesWorkAgain()
+    // A tentativa do boot que falhou foi gasta sem ligar a GPU: mesma versão e
+    // dentro do prazo fica desligado, mas a migração termina.
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ reason: 'legacy', strikes: 1 })
+
+    expect(startApp(store, T0 + 3 * DAY).boot).toEqual({ hwAccelDisabled: false, probation: true })
+  })
+
+  it('a migração interrompida também religa na troca de versão, sem esperar o prazo', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_DISABLED_PREF_KEY)
+    startApp(store)
+    store.writesWorkAgain()
+
+    const next = startApp(store, T0 + 60_000, '1.1.0')
+
+    expect(next.boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+  })
+
+  it('a escolha manual do usuário não entra na migração', () => {
+    const store = legacyStore()
+    store.prefs.setPref(GPU_DISABLED_BY_USER_PREF_KEY, true)
+
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
   })
 })
