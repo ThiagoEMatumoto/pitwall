@@ -201,6 +201,8 @@ async function stampOf(path: string): Promise<Stamp | null> {
 export class ScheduleScanner {
   private cache = new Map<string, CacheEntry>()
   private reading = new Set<string>()
+  // Fila das leituras em segundo plano: uma de cada vez.
+  private background: Promise<unknown> = Promise.resolve()
 
   // null = transcript ilegível (sumiu, sem permissão): quem chama recusa.
   async scan(path: string): Promise<TranscriptVerdict | null> {
@@ -216,7 +218,8 @@ export class ScheduleScanner {
 
   // O que o tick usa: não espera a leitura. Ler um transcript de dezenas de MB
   // leva centenas de ms, então o novo (ou alterado desde a última leitura)
-  // devolve 'reading' e é lido em segundo plano, uma leitura por vez por arquivo.
+  // devolve 'reading' e entra na fila de leitura em segundo plano: N transcripts
+  // frios no mesmo tick não viram N streams disputando o event loop.
   // Leitura que falha não fica no cache: a consulta seguinte tenta de novo.
   async peek(path: string): Promise<TranscriptPeek | null> {
     const stamp = await stampOf(path)
@@ -225,7 +228,9 @@ export class ScheduleScanner {
     if (hit) return hit
     if (!this.reading.has(path)) {
       this.reading.add(path)
-      void this.scan(path).finally(() => this.reading.delete(path))
+      this.background = this.background
+        .then(() => this.scan(path))
+        .finally(() => this.reading.delete(path))
     }
     return 'reading'
   }

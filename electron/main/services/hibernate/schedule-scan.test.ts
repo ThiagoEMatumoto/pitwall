@@ -324,6 +324,35 @@ describe('ScheduleScanner', () => {
       expect(reads).toHaveBeenCalledTimes(1)
     })
 
+    // N filhas com o transcript frio no mesmo tick não viram N streams de uma vez.
+    it('lê um transcript por vez', async () => {
+      const paths = ['a.jsonl', 'b.jsonl', 'c.jsonl'].map((name) => join(dir, name))
+      for (const path of paths) writeFileSync(path, `${userText('oi')}\n`)
+      const scanner = new ScheduleScanner()
+      const target = scanner as unknown as { read(path: string): Promise<unknown> }
+      const original = target.read.bind(scanner)
+      let active = 0
+      let peak = 0
+      const reads = vi.spyOn(target, 'read').mockImplementation(async (path) => {
+        peak = Math.max(peak, ++active)
+        try {
+          return await original(path)
+        } finally {
+          active--
+        }
+      })
+      expect(await Promise.all(paths.map((path) => scanner.peek(path)))).toEqual([
+        'reading',
+        'reading',
+        'reading',
+      ])
+      await vi.waitFor(async () => {
+        for (const path of paths) expect(await scanner.peek(path)).toBe('clear')
+      })
+      expect(reads).toHaveBeenCalledTimes(3)
+      expect(peak).toBe(1)
+    })
+
     it('transcript ausente devolve null, sem leitura', async () => {
       const scanner = new ScheduleScanner()
       const reads = readsOf(scanner)
