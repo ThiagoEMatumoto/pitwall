@@ -9,7 +9,13 @@ import type { ChatMessage, ChatTranscriptUpdate } from '../../../../shared/types
 // `base`, e os objetos abaixo dele seguem os mesmos. Libera o watch no unmount (toggle
 // pro terminal desmonta o ChatView); o refcount em chat-watch-refs só faz unwatch
 // quando o último consumidor sai.
-export function useChatTranscript(sessionId: string, ccSessionId: string | null = null) {
+// `paused` (pane oculta): os deltas seguem emendando na lista, fora do estado do React, e
+// nada renderiza; ao retomar, a lista acumulada entra de uma vez.
+export function useChatTranscript(
+  sessionId: string,
+  ccSessionId: string | null = null,
+  paused = false,
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
   // O read inicial sinaliza inexistência via path null; o update via flag. Isso
@@ -22,6 +28,9 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
   // reassinar o transcript, só reativar o watch (efeito abaixo).
   const ccSessionIdRef = useRef(ccSessionId)
   ccSessionIdRef.current = ccSessionId
+  const pausedRef = useRef(paused)
+  pausedRef.current = paused
+  const publishRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     let cancelled = false
@@ -33,7 +42,20 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
     // voltou) espera o read em voo e é reaplicado em cima dele.
     let reading = false
     let held: ChatTranscriptUpdate[] = []
+    // Aplicado em pausa e ainda fora do estado do React.
+    let unpublished: { exists: boolean; planFilePath: string | null } | null = null
     setLoading(true)
+
+    const publish = () => {
+      if (!unpublished) return
+      const { exists, planFilePath } = unpublished
+      unpublished = null
+      setMessages(current)
+      setTranscriptExists(exists)
+      setLastPlanFilePath(planFilePath)
+      setLoading(false)
+    }
+    publishRef.current = publish
 
     const show = (
       next: ChatMessage[],
@@ -43,10 +65,8 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
     ) => {
       current = next
       rev = nextRev
-      setMessages(next)
-      setTranscriptExists(exists)
-      setLastPlanFilePath(planFilePath)
-      setLoading(false)
+      unpublished = { exists, planFilePath }
+      if (!pausedRef.current) publish()
     }
 
     const onUpdate = (u: ChatTranscriptUpdate) => {
@@ -96,6 +116,10 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
       releaseChatWatch(sessionId)
     }
   }, [sessionId])
+
+  useEffect(() => {
+    if (!paused) publishRef.current()
+  }, [paused])
 
   useEffect(() => {
     noteChatWatchCcSessionId(sessionId, ccSessionId)
