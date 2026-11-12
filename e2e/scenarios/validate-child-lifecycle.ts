@@ -17,6 +17,9 @@
 //        mesma identidade
 //   (10) em todo passo o handoff segue apontando para a conversa da filha
 //   (11) a mãe chama a filha que dorme   → acorda em 2º plano, handoff segue done
+//        e o recado chega ao stdin dela assim que ela fica ociosa
+//   (12) X logo depois de o status mudar → vale o status do main, não o que o
+//        renderer ainda guarda: trabalhando pergunta, ociosa encerra sem perguntar
 //
 // (6): a ordem é lida no main, no handler do envio. O window.api chega congelado
 // à janela e não dá para envolver de lá a função que o QuickComposer chama.
@@ -29,12 +32,21 @@
 // conversa ou de mãe, ou o id mudar fora de um relance. O vínculo é lido a cada
 // 250 ms durante o cenário todo: um valor que só durasse o meio de um passo
 // também reprova.
+// (11): o recado à filha acordada sai pela fila on-idle. O stub nasce trabalhando
+// e não grava transcript: o cenário o deixa ocioso e a prova da entrega é o stdin
+// do processo que acordou.
+// (12): roda entre (3) e (2). Precisa da aba da filha, que o cenário só sabe abrir
+// com o handoff running, e se um Desfazer dela falhasse só (2) acharia a filha
+// morta. O main relê os arquivos de sessão a cada listLiveGlobal; o renderer só
+// anda com o stream global, que sai 250 ms (debounce) depois da mudança. O clique
+// é agendado pela tarefa da janela que leu o main, e o status do renderer é lido
+// na tarefa do próprio clique: nenhum batch entra entre os dois.
 //
 // HOME fake + stub do claude, cópia do perfil (CM_DRIVE_SAFE=1), GPU LIGADA (com
 // ela desligada a janela deste harness nunca fica visível e nenhum clique estabiliza).
 // Rodar (depois de npm run rebuild:native && npm run build), sem pipe na saída:
 //   VCL_SHOTS=<dir> npx tsx e2e/scenarios/validate-child-lifecycle.ts > <log> 2>&1
-// Leva até ~12 min: as duas hibernações esperam até 4,5 min cada.
+// Leva até ~13 min: as duas hibernações esperam até 4,5 min cada.
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -86,6 +98,9 @@ const KILL_AFTER_MS = 5000 + 750 + 2500
 // Janela de 1 min + até dois ticks de 60 s (o primeiro só manda ler o
 // transcript) + folga para o /exit sair.
 const HIBERNATE_WAIT_MS = 270_000
+// A fila on-idle escreve 400 ms depois da borda trabalhando→ociosa, ou no poll de
+// 3 s dela se a borda se perder: cabem seis polls.
+const ON_IDLE_DELIVERY_MS = 20_000
 const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
 // A aba como o dockview a cria, com ou sem o rótulo já pintado.
 const TAB = '.dv-tab'
@@ -111,7 +126,8 @@ const LABELS: Record<number, string> = {
   8: 'card: Minimizar/Encerrar/Desvincular; "Arquivar card" só com o processo morto',
   9: 'filha done ociosa hiberna: card "Dormindo" e "Acordar" devolve a mesma identidade',
   10: 'o handoff nunca solta a conversa da filha',
-  11: 'a mãe chama a filha que dorme: acorda em 2º plano e o handoff segue done',
+  11: 'a mãe chama a filha que dorme: acorda em 2º plano, segue done e o recado chega ao stdin',
+  12: 'X logo após a mudança de status: trabalhando no main pergunta, ociosa no main não',
 }
 // Passos em que o handoff pode passar a apontar para outra linha de sessions.
 const RELAUNCHES = new Set(['5 retomar encerrada', '5 retomar done', '9 acordar', '11 mãe acorda'])
@@ -609,7 +625,13 @@ try {
   // e, 60 s depois, a entrega volta como "talvez não entregue". O relance reaponta
   // o item para a sessão nova e o gate da fila segura a hibernação até o usuário
   // decidir. O cenário decide por ele: Descartar.
-  type Queued = { id: string; sessionId: string; recovery?: string; text: string }
+  type Queued = {
+    id: string
+    sessionId: string
+    recovery?: string
+    heldReason?: string | null
+    text: string
+  }
   const childQueue = async (): Promise<Queued[]> => {
     const mine = new Set(
       db<{ id: string }>('SELECT id FROM sessions WHERE cc_session_id = ?', cc0).map((s) => s.id),
@@ -620,7 +642,7 @@ try {
     return queue.items.filter((i) => mine.has(i.sessionId))
   }
   const brief = (i: Queued): string =>
-    `${i.recovery ?? 'na fila'}: ${i.text.replace(/\s+/g, ' ').slice(0, 40)}`
+    `${i.recovery ?? i.heldReason ?? 'na fila'}: ${i.text.replace(/\s+/g, ' ').slice(0, 40)}`
   const dropUnproven = async (): Promise<string[]> => {
     const unproven = (await childQueue()).filter((i) => i.recovery === 'maybe-undelivered')
     for (const item of unproven) {
@@ -911,6 +933,160 @@ try {
   record(3, three.ok, three.detail)
   link('3 desfazer')
 
+  // ---- (12) X logo depois de o status mudar no main ----
+  const twelve = await attempt('12 x logo apos a mudanca de status', async () => {
+    await openChildTab()
+    const id = childId()
+    const pid = childPid()
+    const handoffAntes = handoffRow(H).status
+    const motherLog = logOf(motherPid).length
+    // Muda o status da filha e clica no X da aba assim que o main o lê, sem esperar
+    // o stream: o renderer ainda guarda o status anterior.
+    const xRightAfter = (status: 'busy' | 'idle') => {
+      fake.setStatus(pid, status)
+      return page.evaluate(
+        async ({ sessionId, shown, selector }) => {
+          const w = window as any
+          w.__vclAtClick = null
+          const deadline = Date.now() + 5000
+          let main: string | null = null
+          while (main !== shown && Date.now() < deadline) {
+            const list = (await w.api.sessions.listLiveGlobal()) as Array<{
+              id: string
+              status?: string
+            }>
+            main = list.find((s) => s.id === sessionId)?.status ?? null
+            if (main !== shown) await new Promise((r) => setTimeout(r, 20))
+          }
+          const x = main === shown ? document.querySelector<HTMLElement>(selector) : null
+          // Na tarefa seguinte: a pergunta que o clique abrir trava a janela, e não
+          // pode travar junto o retorno deste evaluate.
+          if (x) {
+            setTimeout(() => {
+              w.__vclAtClick = w.__vclChildStatus ?? null
+              x.click()
+            }, 0)
+          }
+          return { main, clicou: x !== null }
+        },
+        {
+          sessionId: id,
+          shown: status === 'busy' ? 'working' : 'idle',
+          selector: `${CHILD_TAB} .dv-default-tab-action`,
+        },
+      )
+    }
+    // O último status que o stream entregou à janela, lido na tarefa do clique.
+    const rendererAtClick = () =>
+      page.evaluate(() => ((window as any).__vclAtClick ?? null) as string | null)
+    // O que vier primeiro: a pergunta (com a consulta ao main, um IPC depois do
+    // clique) ou a marca, que o encerramento sem pergunta grava no clique.
+    const askedOrEnded = (asked: number) =>
+      waitFor(
+        'pergunta ou encerramento depois do X',
+        async () => confirms.length > asked || handoffRow(H).ended_by_user_at !== null,
+        5000,
+      )
+    // O Desfazer do aviso, como em (3). null = o X não encerrou, nada a desfazer.
+    const undoIfEnded = async (): Promise<boolean | null> => {
+      if (handoffRow(H).ended_by_user_at === null) return null
+      const clicked = await toasts
+        .filter({ hasText: 'Filha encerrada' })
+        .getByRole('button', { name: 'Desfazer', exact: true })
+        .click({ timeout: 4000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      return (
+        clicked &&
+        (await waitFor('marca desfeita', async () => handoffRow(H).ended_by_user_at === null, 5000))
+      )
+    }
+    try {
+      // (12a) ociosa nos dois lados, passa a trabalhar: o X tem de perguntar. A
+      // recusa deixa a filha como está.
+      await setChildStatus('idle')
+      confirmAnswer = false
+      const askedA = confirms.length
+      const clickA = await xRightAfter('busy')
+      await askedOrEnded(askedA)
+      // Folga para uma segunda pergunta, ou um encerramento depois dela, aparecer.
+      await page.waitForTimeout(1000)
+      const marcaA = handoffRow(H).ended_by_user_at
+      const desfeitoA = await undoIfEnded()
+      const rendererA = await rendererAtClick()
+      const working = {
+        statusNoMainNoClique: clickA.main,
+        statusNoRendererNoClique: rendererA,
+        clicouNoX: clickA.clicou,
+        dialogos: confirms.length - askedA,
+        confirmacao: confirms[askedA]?.slice(0, 60) ?? null,
+        ended_by_user_at: marcaA,
+        encerramentoDesfeito: desfeitoA,
+        abas: await childTab.count(),
+        processoVivo: await isLive(id),
+        pidVivo: pidAlive(pid),
+      }
+      const workingOk =
+        clickA.clicou &&
+        clickA.main === 'working' &&
+        rendererA === 'idle' &&
+        working.dialogos === 1 &&
+        marcaA === null &&
+        working.abas === 1 &&
+        working.processoVivo &&
+        working.pidVivo
+      // Já no log: se (12b) lançar, o detalhe da conferência vira só o erro.
+      say(`(12a) ${JSON.stringify(working)}`)
+
+      // (12b) trabalhando nos dois lados, volta a ociosa: o X encerra sem perguntar
+      // e o Desfazer devolve a filha às conferências seguintes. Se perguntar por
+      // engano, a recusa não encerra nada.
+      await setChildStatus('busy')
+      const askedB = confirms.length
+      const clickB = await xRightAfter('idle')
+      await askedOrEnded(askedB)
+      const marcaB = handoffRow(H).ended_by_user_at
+      const desfeitoB = await undoIfEnded()
+      const rendererB = await rendererAtClick()
+      await page.waitForTimeout(KILL_AFTER_MS)
+      const row = handoffRow(H)
+      const idle = {
+        statusNoMainNoClique: clickB.main,
+        statusNoRendererNoClique: rendererB,
+        clicouNoX: clickB.clicou,
+        dialogos: confirms.length - askedB,
+        marcaNoClique: marcaB,
+        encerramentoDesfeito: desfeitoB,
+        ended_by_user_at: row.ended_by_user_at,
+        handoff: row.status,
+        abaDeVolta: await childTab.count(),
+        processoVivo: await isLive(id),
+        pidVivo: pidAlive(pid),
+        avisoAMae: endedNoticeSince(logOf(motherPid), motherLog)?.slice(0, 140) ?? null,
+      }
+      const idleOk =
+        clickB.clicou &&
+        clickB.main === 'idle' &&
+        rendererB === 'working' &&
+        idle.dialogos === 0 &&
+        marcaB !== null &&
+        desfeitoB === true &&
+        row.ended_by_user_at === null &&
+        row.status === handoffAntes &&
+        idle.abaDeVolta === 1 &&
+        idle.processoVivo &&
+        idle.pidVivo &&
+        idle.avisoAMae === null
+      return { ok: workingOk && idleOk, detail: { trabalhando: working, ociosa: idle } }
+    } finally {
+      confirmAnswer = true
+    }
+  })
+  record(12, twelve.ok, twelve.detail)
+  link('12 x logo após a mudança')
+
   // ---- (2) X na filha trabalhando: recusa segura, confirmação encerra ----
   const two = await attempt('2 encerrar', async () => {
     await openChildTab()
@@ -1138,8 +1314,11 @@ try {
     if (!slept.asleep) return { ok: false, detail: slept.detail }
     dropDeadSessionFiles()
     const pids = knownPids()
+    // O recado chega depois de um preâmbulo (como responder à mãe): o que se
+    // procura no stdin da filha é este carimbo, só dele.
+    const stamp = `vcl mae acorda ${RUN_ID}`
     const called = (await asM
-      .call('handoff_message', { handoffId: H, text: 'vcl: e o caso X?' })
+      .call('handoff_message', { handoffId: H, text: `${stamp}: e o caso X?` })
       .catch((e: Error) => ({ error: e.message }))) as {
       woke?: boolean
       delivered?: boolean
@@ -1148,6 +1327,38 @@ try {
       error?: string
     }
     const back = called.woke === true ? await relaunched(pids) : { ok: false, detail: {} }
+    // O stub nasce trabalhando: o recado fica na fila on-idle até a filha parar.
+    // Sem transcript, a prova da entrega é o stdin do processo que acordou.
+    const wokenPid = called.woke === true ? stubOf(cc0) : null
+    let chegou = false
+    let entrega: Detail = { motivo: 'nenhum processo acordado com a conversa da filha' }
+    if (wokenPid !== null) {
+      fake.setStatus(wokenPid, 'idle')
+      const ociosa = await waitFor(
+        'filha acordada ociosa no main',
+        async () => (await liveOf(childId()))?.status === 'idle',
+        10_000,
+      )
+      const idleAt = Date.now()
+      chegou =
+        ociosa &&
+        (await waitFor(
+          'recado da mãe no stdin da filha acordada',
+          async () => logOf(wokenPid).includes(stamp),
+          ON_IDLE_DELIVERY_MS,
+        ))
+      entrega = {
+        processoNovo: !pids.has(wokenPid),
+        ociosaNoMain: ociosa,
+        recadoNoStdin: chegou,
+        esperaEmMs: Date.now() - idleAt,
+        stdinDaAcordada: logOf(wokenPid)
+          .split('\n')
+          .filter((line) => line.startsWith('stdin: '))
+          .map((line) => line.slice('stdin: '.length, 120)),
+        filaDaFilha: (await childQueue()).map(brief),
+      }
+    }
     // Folga para uma aba que abrisse sozinha aparecer.
     await page.waitForTimeout(1000)
     const abas = await childTab.count()
@@ -1158,6 +1369,7 @@ try {
         (called.delivered === true || called.queued === true) &&
         /session_handoff/.test(called.note ?? '') &&
         back.ok &&
+        chegou &&
         row.status === 'done' &&
         hibernatedRows() === 0 &&
         abas === 0,
@@ -1171,6 +1383,7 @@ try {
         },
         pedeNovoHandoffParaTrabalhoNovo: /session_handoff/.test(called.note ?? ''),
         ...back.detail,
+        entrega,
         abasDaFilha: abas,
         handoff: row.status,
         linhasAindaHibernadas: hibernatedRows(),
