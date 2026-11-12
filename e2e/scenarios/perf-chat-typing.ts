@@ -22,11 +22,14 @@ import {
   installPerfProbe,
   markPerf,
   parsePerfLines,
+  peekPerf,
+  runPhase,
   summarizePerf,
   typeOpenLoop,
   withMainLines,
   type OpenLoopTyping,
-  type PerfPhaseSummary,
+  type PerfRaw,
+  type PhaseOutcome,
 } from '../driver/perf'
 
 // Medição de desempenho antes/depois (plano A1), sobre a CÓPIA do perfil real com
@@ -35,6 +38,7 @@ import {
 // demais só existem para dar carga (saída de PTY e batch de atividade), como no
 // uso real com várias sessões vivas.
 //   open             alterna A para o chat com o transcript já no disco
+//   chat-focus       clique no composer de A (sem carga)
 //   chat-typing      transcript crescendo a cada 100 ms + PTYs emitindo saída,
 //                    enquanto 200 caracteres entram no composer a 30 ms
 //   to-terminal      alterna A para o terminal (sem carga)
@@ -46,17 +50,22 @@ import {
 // "primeiro visível da página" é de quem vier antes no DOM. A digitação é em laço
 // aberto (ver typeOpenLoop). Cada marca de fase fecha a janela da sonda do main,
 // então as linhas [perf] dele saem dentro da fase.
-// Saída: .cm-drive/perf/<CM_PERF_LABEL>.json. Não há PASS/FAIL de desempenho: é
-// baseline. O cenário só falha quando a medida não valeria (pane ou foco errado,
-// GPU diferente da pedida, aba que não trocou).
+// Cada fase roda sob um prazo próprio (runPhase). Se a interação dela falha ou
+// não fecha no prazo (com transcript grande o composer pode nem ficar clicável), a
+// fase sai no JSON com `blocked: true`, o motivo e tudo o que o coletor juntou
+// durante a espera, e o cenário segue: a fase seguinte confere o próprio ponto de
+// partida (modo e foco do pane de A) e bloqueia logo se ele não foi alcançado.
+// Saída: .cm-drive/perf/<CM_PERF_LABEL>-<tamanho>mb.json. Não há PASS/FAIL de
+// desempenho: é baseline. O cenário só falha por infraestrutura (o app não sobe,
+// as sessões não abrem, GPU diferente da pedida, renderer que não responde mais).
 //
 // Env:
 //   CM_PERF_GPU=on|off         fixa gpu.disabled na cópia (default on; a cópia do
 //                              perfil real herdaria o que o app gravou sozinho)
 //   CM_PERF_SESSIONS=N         sessões stub vivas (default 5, mínimo 2)
-//   CM_PERF_LABEL=nome         nome do arquivo de saída (default gpu-<on|off>)
-//   CM_PERF_TRANSCRIPT_MB=N    tamanho do transcript sintético de A (default 60,
-//                              a ordem de grandeza do sintoma)
+//   CM_PERF_LABEL=nome         prefixo do arquivo de saída (default gpu-<on|off>)
+//   CM_PERF_TRANSCRIPT_MB=N    tamanho do transcript sintético de A (default 8;
+//                              60 é a ordem de grandeza do sintoma)
 //   CM_PERF_TRANSCRIPT=p       JSONL real a usar no lugar do sintético
 //   CM_PERF_DUMP_RAW=1         inclui a amostra bruta do coletor no JSON
 // Rodar (depois de npm run rebuild:native && npm run build):
@@ -71,9 +80,13 @@ const { buildLongMotherLines } = tsxRequire(
 
 const GPU = process.env.CM_PERF_GPU === 'off' ? 'off' : 'on'
 const SESSIONS = Math.max(2, Number(process.env.CM_PERF_SESSIONS) || 5)
-const LABEL = process.env.CM_PERF_LABEL ?? `gpu-${GPU}`
 const REAL_TRANSCRIPT = process.env.CM_PERF_TRANSCRIPT
-const TRANSCRIPT_MB = Number(process.env.CM_PERF_TRANSCRIPT_MB) || 60
+const TRANSCRIPT_MB = Number(process.env.CM_PERF_TRANSCRIPT_MB) || 8
+// O tamanho entra no nome: rodadas de tamanhos diferentes não se sobrescrevem.
+const SIZE_MB = REAL_TRANSCRIPT
+  ? Math.round(statSync(REAL_TRANSCRIPT).size / 2 ** 20)
+  : TRANSCRIPT_MB
+const LABEL = `${process.env.CM_PERF_LABEL ?? `gpu-${GPU}`}-${SIZE_MB}mb`
 const OUT_DIR = join(REPO_ROOT, '.cm-drive', 'perf')
 const OUT_FILE = join(OUT_DIR, `${LABEL}.json`)
 mkdirSync(OUT_DIR, { recursive: true })
@@ -85,7 +98,13 @@ const APPEND_EVERY_MS = 100
 const STREAM_TURNS = 120
 const IDLE_MS = 20_000
 const TAB_SWITCHES = 8
+// Prazo de cada fase; estourado, ela sai `blocked` e o cenário segue.
 const CHAT_READY_TIMEOUT_MS = 180_000
+const INTERACTION_TIMEOUT_MS = 60_000
+const TYPING_TIMEOUT_MS = 90_000
+// A marca da fase e a leitura do coletor rodam na página: com long tasks de
+// vários segundos elas demoram. Sem resposta neste prazo, é infraestrutura.
+const RENDERER_REPLY_MS = 120_000
 
 const log = (msg: string) => console.log(`[perf-typing] ${msg}`)
 const fake = createFakeHome({ parentDir: tmpdir() })
@@ -252,18 +271,54 @@ async function expectShown(shown: Opened, hidden: Opened): Promise<void> {
   if (!active) throw new Error(`a aba de ${shown.label} não ficou ativa no dockview`)
 }
 
+async function replied<T>(label: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const cut = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`renderer sem resposta em ${RENDERER_REPLY_MS} ms: ${label}`)),
+      RENDERER_REPLY_MS,
+    )
+  })
+  work.catch(() => {})
+  try {
+    return await Promise.race([work, cut])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const startedAt = new Date().toISOString()
 const clock: Array<{ phase: string; at: string }> = []
-async function phase(name: string): Promise<void> {
+const outcomes: Array<Omit<PhaseOutcome<PerfRaw>, 'collected'>> = []
+const typing: Record<string, OpenLoopTyping> = {}
+// A última leitura do coletor. É dela que sai o resumo, mesmo se o cenário morrer
+// no meio: as fases já fechadas não se perdem.
+const latest: { raw: PerfRaw | null } = { raw: null }
+// Desliga a carga da fase de digitação em curso; no-op fora delas.
+let stopLoad = (): void => {}
+
+async function phase(
+  name: string,
+  timeoutMs: number,
+  run: (remaining: () => number) => Promise<void>,
+): Promise<void> {
   log(`fase ${name}`)
+  await replied(`marca da fase ${name}`, markPerf(page, name))
   clock.push({ phase: name, at: new Date().toISOString() })
-  await markPerf(page, name)
+  const { collected, ...outcome } = await runPhase(name, timeoutMs, run, () =>
+    replied(`leitura do coletor na fase ${name}`, peekPerf(page)),
+  )
+  // A interação cortada no prazo não chega a desligar a própria carga.
+  stopLoad()
+  latest.raw = collected
+  outcomes.push(outcome)
+  if (outcome.blocked) {
+    log(`fase ${name} BLOQUEADA em ${outcome.elapsedMs} ms: ${outcome.reason}`)
+  }
 }
 
 let fatal: unknown = null
 let appendedLines = 0
-let summaries: Array<PerfPhaseSummary & { startedAt: string; typing?: OpenLoopTyping }> | null =
-  null
 const out: Record<string, unknown> = { label: LABEL, startedAt, sessions: SESSIONS }
 try {
   await waitReady(page)
@@ -320,16 +375,26 @@ try {
 
   // A no modo esperado E o foco no composer/xterm DELA. Uma tecla que caísse em
   // outro pane ainda produziria um JSON sem erro nenhum.
-  async function expectA(mode: 'chat' | 'terminal', focus: keyof typeof FOCUS): Promise<void> {
+  async function expectA(
+    mode: 'chat' | 'terminal',
+    focus: keyof typeof FOCUS,
+    remaining: () => number,
+  ): Promise<void> {
     const read = () =>
-      A.pane.evaluate((root, selector) => {
-        const active = document.activeElement
-        return {
-          mode: root.getAttribute('data-pane-mode'),
-          focused: !!active && root.contains(active) && active.matches(selector),
-          active: active ? `${active.tagName.toLowerCase()}.${active.getAttribute('class')}` : '-',
-        }
-      }, FOCUS[focus])
+      A.pane.evaluate(
+        (root, selector) => {
+          const active = document.activeElement
+          return {
+            mode: root.getAttribute('data-pane-mode'),
+            focused: !!active && root.contains(active) && active.matches(selector),
+            active: active
+              ? `${active.tagName.toLowerCase()}.${active.getAttribute('class')}`
+              : '-',
+          }
+        },
+        FOCUS[focus],
+        { timeout: remaining() },
+      )
     const started = Date.now()
     let state = await read()
     while (state.mode !== mode || !state.focused) {
@@ -343,36 +408,40 @@ try {
     }
   }
 
-  async function toggleA(to: 'Chat' | 'Terminal'): Promise<void> {
-    await A.pane.getByLabel(`Mudar para ${to}`, { exact: true }).click()
+  const modeOfA = (remaining: () => number) =>
+    A.pane.getAttribute('data-pane-mode', { timeout: remaining() })
+
+  async function toggleA(to: 'Chat' | 'Terminal', remaining: () => number): Promise<void> {
+    await A.pane.getByLabel(`Mudar para ${to}`, { exact: true }).click({ timeout: remaining() })
     const mode = to.toLowerCase()
     await waitFor(
       `pane de A em modo ${mode}`,
-      async () => (await A.pane.getAttribute('data-pane-mode')) === mode,
-      10_000,
+      async () => (await modeOfA(remaining)) === mode,
+      Math.min(10_000, remaining()),
     )
   }
 
   // Pronto = a última mensagem do transcript pintada e o esqueleto de carregamento
   // fora da tela. Sem saber qual é a última (transcript real, ou depois de a carga
   // ter acrescentado linhas), vale o último bloco de markdown.
-  async function waitChatReady(lastMessage: string | null): Promise<void> {
+  async function waitChatReady(lastMessage: string | null, remaining: () => number): Promise<void> {
     const body = A.pane.locator('.markdown-body')
     const painted = lastMessage ? body.filter({ hasText: lastMessage }) : body
-    await painted.last().waitFor({ state: 'visible', timeout: CHAT_READY_TIMEOUT_MS })
-    await A.pane
-      .getByTestId('chat-loading')
-      .waitFor({ state: 'hidden', timeout: CHAT_READY_TIMEOUT_MS })
+    await painted.last().waitFor({ state: 'visible', timeout: remaining() })
+    await A.pane.getByTestId('chat-loading').waitFor({ state: 'hidden', timeout: remaining() })
   }
 
   const cdp = await page.context().newCDPSession(page)
-  const typing: Record<string, OpenLoopTyping> = {}
+  // Digita em A sob carga. O ponto de partida (modo e foco) é conferido ANTES de
+  // a carga ligar: se a fase anterior bloqueou, esta bloqueia sem mexer em nada.
   async function typeIntoA(
     phaseName: string,
     mode: 'chat' | 'terminal',
     focus: keyof typeof FOCUS,
+    remaining: () => number,
   ): Promise<void> {
-    await expectA(mode, focus)
+    await expectA(mode, focus, remaining)
+    startLoad()
     const result = await typeOpenLoop(
       (method, params) => cdp.send(method, params as never),
       TYPED,
@@ -382,8 +451,10 @@ try {
       throw new Error(`${phaseName}: o CDP recusou ${result.failed} de ${result.keys} teclas`)
     }
     // O foco não pode ter saído de A no meio da digitação.
-    await expectA(mode, focus)
+    await expectA(mode, focus, remaining)
     typing[phaseName] = result
+    await page.waitForTimeout(500)
+    stopLoad()
   }
 
   // ---------- transcript de A, no disco antes de o chat abrir ----------
@@ -422,7 +493,7 @@ try {
   log(`transcript de A: ${JSON.stringify(out.transcript)}`)
 
   const pidA = A.file.data.pid
-  function startLoad(): () => void {
+  function startLoad(): void {
     writeFileSync(noiseFlag, '')
     fake.setStatus(pidA, 'busy')
     const timer = setInterval(() => {
@@ -431,85 +502,87 @@ try {
       appendFileSync(transcript, line + '\n')
       appendedLines += 1
     }, APPEND_EVERY_MS)
-    return () => {
+    stopLoad = () => {
       clearInterval(timer)
       rmSync(noiseFlag, { force: true })
       fake.setStatus(pidA, 'idle')
+      stopLoad = () => {}
     }
   }
 
   // ---------- open ----------
   await page.waitForTimeout(2000)
-  await phase('open')
-  const openStart = Date.now()
-  await toggleA('Chat')
-  await waitChatReady(lastMessage)
-  // Inclui a ida e volta do Playwright (poucos ms): serve para comparar rodadas.
-  out.openMs = Date.now() - openStart
-  await page.waitForTimeout(2000)
+  await phase('open', CHAT_READY_TIMEOUT_MS, async (remaining) => {
+    const openStart = Date.now()
+    await toggleA('Chat', remaining)
+    await waitChatReady(lastMessage, remaining)
+    // Inclui a ida e volta do Playwright (poucos ms): serve para comparar rodadas.
+    out.openMs = Date.now() - openStart
+    await page.waitForTimeout(2000)
+  })
 
   // ---------- chat-typing ----------
-  await composerA.click()
-  let stopLoad = startLoad()
-  await phase('chat-typing')
-  await typeIntoA('chat-typing', 'chat', 'composer')
-  await page.waitForTimeout(500)
-  stopLoad()
-  const typedInComposer = await composerA.inputValue()
-  if (typedInComposer !== TYPED) {
-    throw new Error(
-      `o composer de A ficou com ${typedInComposer.length} de ${TYPED.length} caracteres digitados`,
-    )
-  }
+  // O clique que leva o foco ao composer é uma fase à parte: a espera por ele fica
+  // com etiqueta própria e a janela de chat-typing só tem carga e digitação.
+  await phase('chat-focus', INTERACTION_TIMEOUT_MS, async (remaining) => {
+    await composerA.click({ timeout: remaining() })
+    await expectA('chat', 'composer', remaining)
+  })
+  await phase('chat-typing', TYPING_TIMEOUT_MS, async (remaining) => {
+    await typeIntoA('chat-typing', 'chat', 'composer', remaining)
+    const typedInComposer = await composerA.inputValue({ timeout: remaining() })
+    if (typedInComposer !== TYPED) {
+      throw new Error(
+        `o composer de A ficou com ${typedInComposer.length} de ${TYPED.length} caracteres digitados`,
+      )
+    }
+  })
 
   // ---------- terminal-typing ----------
-  await phase('to-terminal')
-  await toggleA('Terminal')
-  await A.pane.locator('.xterm-screen').click()
-  await page.waitForTimeout(1500)
-  stopLoad = startLoad()
-  await phase('terminal-typing')
-  await typeIntoA('terminal-typing', 'terminal', 'xterm')
-  await page.waitForTimeout(500)
-  stopLoad()
+  await phase('to-terminal', INTERACTION_TIMEOUT_MS, async (remaining) => {
+    await toggleA('Terminal', remaining)
+    await A.pane.locator('.xterm-screen').click({ timeout: remaining() })
+    await page.waitForTimeout(1500)
+  })
+  await phase('terminal-typing', TYPING_TIMEOUT_MS, (remaining) =>
+    typeIntoA('terminal-typing', 'terminal', 'xterm', remaining),
+  )
 
   // ---------- idle ----------
-  await phase('to-chat')
-  await toggleA('Chat')
-  await waitChatReady(null)
-  // O que ainda está assentando (última rajada do transcript, batch de atividade)
-  // não é "ocioso".
-  await page.waitForTimeout(5000)
-  await phase('idle')
-  await page.waitForTimeout(IDLE_MS)
+  await phase('to-chat', CHAT_READY_TIMEOUT_MS, async (remaining) => {
+    // Se to-terminal bloqueou antes de alternar, A ainda está no chat.
+    if ((await modeOfA(remaining)) !== 'chat') await toggleA('Chat', remaining)
+    await waitChatReady(null, remaining)
+    // O que ainda está assentando (última rajada do transcript, batch de atividade)
+    // não é "ocioso".
+    await page.waitForTimeout(5000)
+  })
+  // Roda sempre, no estado em que as fases anteriores deixaram A.
+  await phase('idle', IDLE_MS + INTERACTION_TIMEOUT_MS, () => page.waitForTimeout(IDLE_MS))
 
   // ---------- tab-switch ----------
   // Clique na aba, como o usuário: A sai da tela e volta a cada par de trocas.
-  await expectShown(A, B)
-  await phase('tab-switch')
-  for (let i = 0; i < TAB_SWITCHES; i++) {
-    const [to, from] = i % 2 === 0 ? [B, A] : [A, B]
-    await to.tab.locator('.dv-default-tab-content').click()
-    await expectShown(to, from)
-    await page.waitForTimeout(700)
-  }
+  await phase('tab-switch', INTERACTION_TIMEOUT_MS, async (remaining) => {
+    await expectShown(A, B)
+    for (let i = 0; i < TAB_SWITCHES; i++) {
+      const [to, from] = i % 2 === 0 ? [B, A] : [A, B]
+      await to.tab.locator('.dv-default-tab-content').click({ timeout: remaining() })
+      await expectShown(to, from)
+      await page.waitForTimeout(700)
+    }
+  })
 
-  const raw = await collectPerf(page)
+  latest.raw = await replied('coleta final', collectPerf(page))
   out.gpu = {
     ...gpu,
-    atEnd: await gpuStatus(),
+    atEnd: await replied('status final da GPU', gpuStatus()),
     features: await app.evaluate(({ app }) => app.getGPUFeatureStatus()),
   }
-  summaries = summarizePerf(raw).map((summary, i) => ({
-    startedAt: clock[i].at,
-    ...summary,
-    ...(typing[summary.phase] ? { typing: typing[summary.phase] } : {}),
-  }))
-  if (process.env.CM_PERF_DUMP_RAW === '1') out.raw = raw
   // O drain de cada marca já foi confirmado pelo main; falta o stdout dele chegar.
   await page.waitForTimeout(1000)
 } catch (err) {
   fatal = err
+  stopLoad()
   console.error('[perf-typing] erro fatal:', err)
   await page.screenshot({ path: join(OUT_DIR, `${LABEL}-fatal.png`) }).catch(() => {})
 }
@@ -525,17 +598,28 @@ try {
 fake.cleanup()
 
 out.appendedLines = appendedLines
-if (summaries) {
+const blocked = outcomes.filter((outcome) => outcome.blocked).map((outcome) => outcome.phase)
+out.blockedPhases = blocked
+if (latest.raw) {
+  // Uma fase por marca, na ordem: a i-ésima é a do i-ésimo desfecho.
+  const summaries = summarizePerf(latest.raw).map((summary, i) => ({
+    ...outcomes[i],
+    startedAt: clock[i].at,
+    ...summary,
+    ...(typing[summary.phase] ? { typing: typing[summary.phase] } : {}),
+  }))
   // Cada linha do main vai para a fase que a etiquetou (drain do markPerf).
   out.phases = withMainLines(summaries, main)
   const phaseNames = new Set(summaries.map((s) => s.phase))
   // Boot e abertura das sessões (sem etiqueta) e o que saiu depois do fim.
   out.mainOutsidePhases = main.filter((line) => !line.phase || !phaseNames.has(line.phase))
+  if (process.env.CM_PERF_DUMP_RAW === '1') out.raw = latest.raw
 } else {
-  // Morreu antes do resumo: as linhas ficam soltas, cada uma com a fase dela.
+  // Morreu antes da primeira fase: as linhas ficam soltas.
   out.main = main
 }
 if (fatal) out.error = String(fatal)
 writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
 log(`${main.length} linha(s) [perf] do main · JSON em ${OUT_FILE}`)
+if (blocked.length) log(`fases bloqueadas: ${blocked.join(', ')}`)
 if (fatal) process.exit(1)
