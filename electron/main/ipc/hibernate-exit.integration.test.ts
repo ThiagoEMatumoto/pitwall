@@ -317,7 +317,9 @@ describe('exit da hibernação pelos handlers reais', () => {
     })
     expect(getDormantPanes()?.findDormantByCc(CC)).toBeNull()
     expect(
-      db.prepare('SELECT status, hibernated_at IS NOT NULL AS asleep FROM sessions WHERE id = ?').get(PTY),
+      db
+        .prepare('SELECT status, hibernated_at IS NOT NULL AS asleep FROM sessions WHERE id = ?')
+        .get(PTY),
     ).toEqual({ status: 'exited', asleep: 1 })
     // O exit não mexe no handoff: nem status, nem vínculo, nem aviso à mãe.
     expect(handoffStore.get(handoff.id)).toMatchObject({ status: 'done', childSessionId: PTY })

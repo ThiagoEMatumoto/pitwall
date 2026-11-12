@@ -222,7 +222,7 @@ describe('janela da filha concluída (ligada por padrão, sem depender do lazyRe
   })
 })
 
-describe('janela da filha desligada: qualquer uma das 3 condições da geral desligada → nenhum tick', () => {
+describe('sem a janela da filha: qualquer condição da geral desligada → nenhum tick', () => {
   it('nenhuma das prefs da geral gravada: desligado no boot', async () => {
     boot({ childAfterMin: 0 })
     expect(hibernator().isScheduled()).toBe(false)
