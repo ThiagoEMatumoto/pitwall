@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { handoffsApi, motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
@@ -85,6 +86,13 @@ export interface ActivePane {
   // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
   // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
   dormantReason?: 'hibernated'
+  // Nasceu em segundo plano (focusOrOpenSession com background): o mapa não cede
+  // a vista e o terminal novo não toma o teclado de quem digita em outra tela. O
+  // layout a cria como aba inativa; sem outra aba ao lado ela entra ativa (inativa,
+  // ficaria vazia) e é o Terminal que deixa de focar ao montar. Vale para essa
+  // montagem só: o Terminal a apaga (clearPaneBackground), senão a aba acordaria
+  // da hibernação sem teclado. Não vai ao open_panes.
+  background?: true
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -145,12 +153,6 @@ function dormantPaneFromSnapshot(
     dormant: true,
     ...(restoreError ? { restoreError } : {}),
   }
-}
-
-// "Error invoking remote method 'sessions:resume': Error: <msg>" → "<msg>".
-function ipcErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
 }
 
 // Pane ativa do layout salvo do dockview: activeGroup → o grupo na árvore do
@@ -864,6 +866,8 @@ interface AppState {
   wakeDormantPane: (paneId: string) => Promise<string | null>
   // Alterna/define o display da pane (terminal ⇄ chat) e lembra por sessão.
   setPaneMode: (paneId: string, mode: PaneMode) => void
+  // O terminal da aba nascida em segundo plano montou: a marca já cumpriu o papel.
+  clearPaneBackground: (paneId: string) => void
   // Encerramento com undo: some da UI na hora, toast "Desfazer" por ~5s; o kill
   // efetivo da PTY só dispara quando a janela expira. `immediate: true` pula a
   // janela de undo e mata na hora (ex.: Reabrir uma sessão já exited — não há
@@ -874,7 +878,8 @@ interface AppState {
   undoEndSession: (sessionId: string) => void
   // Clique simples na lista: foca a pane se já exibida; senão resume/abre (sem
   // destruir as panes existentes) e vai pra área de projetos.
-  focusOrOpenSession: (item: LiveSessionInfo) => Promise<void>
+  // background: cria a aba sem levar o usuário até ela (area e foco ficam como estão).
+  focusOrOpenSession: (item: LiveSessionInfo, opts?: { background?: boolean }) => Promise<void>
   // Multi-seleção: garante as N selecionadas em panes, substitui a view por
   // exatamente essas N e monta a grade (via gridRequest), indo pra projetos.
   openSessionsInGrid: (items: LiveSessionInfo[]) => Promise<void>
@@ -1195,6 +1200,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     writePaneMode(pane?.session.ccSessionId ?? null, mode)
   },
 
+  clearPaneBackground: (paneId) => {
+    set((s) => ({
+      panes: s.panes.map((p) => {
+        if (p.paneId !== paneId || !p.background) return p
+        const { background: _background, ...rest } = p
+        return rest
+      }),
+    }))
+  },
+
   wakeDormantPane: (paneId) => {
     const inflight = wakes.get(paneId)
     if (inflight) return inflight
@@ -1367,9 +1382,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     void get().refreshLiveSessions()
   },
 
-  focusOrOpenSession: async (item) => {
+  focusOrOpenSession: async (item, opts) => {
+    const background = opts?.background === true
     const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
+      if (background) return
       set({ focusPaneId: existing.paneId, area: 'projects' })
       if (existing.dormant) await get().wakeDormantPane(existing.paneId)
       return
@@ -1380,11 +1397,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Algo abriu a mesma conversa durante a adoção: foca a que entrou.
     const opened = get().panes.find((p) => paneShowsLive(p, item))
     if (opened) {
-      set({ focusPaneId: opened.paneId, area: 'projects' })
+      if (!background) set({ focusPaneId: opened.paneId, area: 'projects' })
       return
     }
-    const pane = paneFromLiveSession(item, paneId)
-    set((s) => ({ panes: [...s.panes, pane], area: 'projects', focusPaneId: paneId }))
+    const live = paneFromLiveSession(item, paneId)
+    const pane = background ? { ...live, background: true as const } : live
+    set((s) => ({
+      panes: [...s.panes, pane],
+      ...(background ? {} : { area: 'projects' as const, focusPaneId: paneId }),
+    }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
   },

@@ -3,6 +3,8 @@
 // ela desligada a janela deste harness nunca fica visível e nenhum clique estabiliza).
 //   1. filha nasce sem aba            → chip "↳ 1 em 2º plano" sob a mãe
 //   2. abre a aba e Minimiza          → processo vivo, handoff running, sem marca
+//   2b. recado da mãe (handoff_message) → nenhuma aba abre; ponto de não lida no
+//      chip e aviso com "Abrir", que leva à aba e limpa a marca
 //   3. X da aba + Desfazer            → nada morre, a marca some
 //   4. filha trabalhando + X recusado → a confirmação segura o encerramento
 //   5. X confirmado                   → processo morto, handoff interrupted,
@@ -198,6 +200,59 @@ try {
   check(handoffRow(H).status === 'running', `Minimizar: handoff running (${handoffRow(H).status})`)
   check(handoffRow(H).ended_by_user_at === null, 'Minimizar: sem marca de encerrada')
   check((await backgroundCount()) === '1', 'Minimizar: a filha volta ao chip de 2º plano')
+
+  // ---- 2b. recado da mãe: marca não lida e avisa, sem abrir a aba ----
+  const told = (await asM
+    .call('handoff_message', { handoffId: H, text: 'vcl recado da mae' })
+    .catch((e: Error) => ({ error: e.message }))) as { delivered?: boolean; error?: string }
+  out.notes.push(`handoff_message: ${JSON.stringify(told).slice(0, 300)}`)
+  if (check(told.delivered === true, 'handoff_message da mãe entregue à filha em 2º plano')) {
+    const unreadDot = page.getByTestId('strip-background-unread')
+    const notice = page.getByTestId('toast-card').filter({ hasText: 'recebeu mensagem da mãe' })
+    await waitFor(page, 'aviso do recado', async () => (await notice.count()) === 1, 5000)
+    check((await notice.count()) === 1, 'recado da mãe: aviso com "Abrir"')
+    check((await unreadDot.count()) === 1, 'recado da mãe: ponto de não lida no chip de 2º plano')
+    check((await page.locator(CHILD_TAB).count()) === 0, 'recado da mãe: nenhuma aba abre sozinha')
+    await shot('recado-da-mae')
+    const clicked = await notice
+      .getByRole('button', { name: 'Abrir', exact: true })
+      .click({ timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      )
+    const opened =
+      clicked &&
+      (await waitFor(
+        page,
+        'aba aberta pelo aviso',
+        async () => (await page.locator(CHILD_TAB).count()) === 1,
+        10_000,
+      ))
+    check(opened, '"Abrir" do aviso leva à aba da filha')
+    // Os passos seguintes partem da filha minimizada, com ou sem o aviso.
+    if (!opened) await openChildTab()
+    check((await unreadDot.count()) === 0, 'aba aberta: a marca de não lida some')
+    await page.getByRole('button', { name: 'Minimizar', exact: true }).last().click()
+    await waitFor(
+      page,
+      'aba minimizada de novo',
+      async () => (await page.locator(CHILD_TAB).count()) === 0,
+    )
+    // O eco do recado é atividade: o X do passo 3 só dispensa a confirmação com
+    // a filha parada.
+    await waitFor(
+      page,
+      'filha parada depois do recado',
+      async () => {
+        const status = ((await liveGlobal(page)) as Array<{ id: string; status?: string }>).find(
+          (s) => s.id === K,
+        )?.status
+        return status !== 'working' && status !== 'starting'
+      },
+      20_000,
+    )
+  }
 
   // ---- 3. X + Desfazer ----
   check(await openChildTab(), 'aba da filha reaberta')

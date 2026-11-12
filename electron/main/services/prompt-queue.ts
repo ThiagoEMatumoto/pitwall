@@ -64,7 +64,7 @@ export interface PromptQueueDeps {
   // raw = o texto já são os bytes do PTY (input segurado na hibernação).
   write(sessionId: string, text: string, raw: boolean): void
   // Escrita de fato no PTY (agora ou ao sair da fila) — nunca no enfileiramento.
-  delivered?(sessionId: string, fromSessionId: string | undefined): void
+  delivered?(sessionId: string, fromSessionId: string | undefined, by: 'human' | undefined): void
   emit(snapshot: PromptQueueSnapshot): void
   warn(event: Record<string, unknown>): void
   now?(): number
@@ -148,6 +148,9 @@ const REFUSAL: Partial<Record<Verdict, SendPromptError>> = {
 const isHold = (v: Verdict): v is HoldVerdict =>
   v === 'menu-open' || v === 'unparsed' || v === 'input-dirty'
 
+// De onde a mensagem saiu e quem a escreveu: só o aviso da entrega lê.
+type Origin = Pick<SendPromptInput, 'fromSessionId' | 'by'>
+
 interface Item extends QueuedPrompt {
   holding: boolean
   // Alvo de verdade de um item persistido: a conversa, que troca de sessions.id ao retomar.
@@ -157,6 +160,9 @@ interface Item extends QueuedPrompt {
   // da linha sessions, não persistido.
   paneCc: string | null
   fromSessionId?: string
+  // Fora do app.db: só serve ao pulso da entrega, que exige a PTY de origem viva,
+  // e nenhuma PTY atravessa um kill/reboot. Item restaurado nunca pulsa.
+  by?: 'human'
   bypassAttention?: boolean
   raw?: boolean
   // Fora do app.db: não sobrevive a um kill (o /exit da hibernação).
@@ -244,15 +250,21 @@ export class PromptQueue {
   }
 
   async send(input: SendPromptInput): Promise<SendPromptResult> {
-    const { sessionId, text, when, fromSessionId, bypassAttention, raw, ephemeral } = input
+    const { sessionId, text, when, fromSessionId, by, bypassAttention, raw, ephemeral } = input
     if (!this.deps.isRunning(sessionId)) return { ok: false, error: 'not-running' }
     const scan = await this.deps.screen(sessionId)
     if (when === 'now' && !this.deps.isHibernating?.(sessionId)) {
-      return this.sendNow(sessionId, text, scan, fromSessionId, bypassAttention)
+      return this.sendNow(sessionId, text, scan, { fromSessionId, by }, bypassAttention)
     }
     // Hibernando não há tela que importe: o destino é a sessão acordada.
     if (!scan && !this.deps.isHibernating?.(sessionId)) return { ok: false, error: 'no-screen' }
-    const item = this.enqueue(sessionId, text, { fromSessionId, bypassAttention, raw, ephemeral })
+    const item = this.enqueue(sessionId, text, {
+      fromSessionId,
+      by,
+      bypassAttention,
+      raw,
+      ephemeral,
+    })
     const isHead = this.items.find((i) => i.sessionId === sessionId) === item
     if (isHead && (await this.tryDeliver(sessionId))) {
       return { ok: true, delivered: true }
@@ -271,7 +283,7 @@ export class PromptQueue {
     sessionId: string,
     text: string,
     scan: ScreenScan | null,
-    fromSessionId: string | undefined,
+    origin: Origin,
     bypassAttention: boolean | undefined,
   ): SendPromptResult {
     const status = this.deps.status(sessionId)
@@ -284,7 +296,7 @@ export class PromptQueue {
       this.countRefusal(sessionId, verdict)
       return { ok: false, error }
     }
-    this.write(sessionId, text, false, fromSessionId)
+    this.write(sessionId, text, false, origin)
     return { ok: true, delivered: true }
   }
 
@@ -672,9 +684,9 @@ export class PromptQueue {
   private enqueue(
     sessionId: string,
     text: string,
-    opts: Pick<SendPromptInput, 'fromSessionId' | 'bypassAttention' | 'raw' | 'ephemeral'>,
+    opts: Pick<SendPromptInput, 'fromSessionId' | 'by' | 'bypassAttention' | 'raw' | 'ephemeral'>,
   ): Item {
-    const { fromSessionId, bypassAttention, raw, ephemeral } = opts
+    const { fromSessionId, by, bypassAttention, raw, ephemeral } = opts
     const createdAt = this.now()
     const store = ephemeral ? undefined : this.deps.store
     const item: Item = {
@@ -689,6 +701,7 @@ export class PromptQueue {
       heldReason: null,
       holding: false,
       fromSessionId,
+      ...(by ? { by } : {}),
       bypassAttention,
       ...(raw ? { raw } : {}),
       ...(ephemeral ? { ephemeral } : {}),
@@ -764,10 +777,10 @@ export class PromptQueue {
     for (const id of [...this.pendingRemoval]) this.removeRow(id)
   }
 
-  private write(sessionId: string, text: string, raw: boolean, fromSessionId?: string): void {
+  private write(sessionId: string, text: string, raw: boolean, origin: Origin): void {
     this.deps.write(sessionId, text, raw)
     this.awaitingWork.set(sessionId, this.now())
-    this.deps.delivered?.(sessionId, fromSessionId)
+    this.deps.delivered?.(sessionId, origin.fromSessionId, origin.by)
   }
 
   // Entrega a PRIMEIRA mensagem da sessão se a tela provar que pode. Uma por turno:
@@ -821,7 +834,7 @@ export class PromptQueue {
       // boot conferem no transcript em que a mensagem entra agora.
       head.ccSessionId = this.ccSessionOf(sessionId) ?? head.ccSessionId
       if (!this.markDelivering(head, deliveringAt)) return false
-      this.write(sessionId, head.text, head.raw === true, head.fromSessionId)
+      this.write(sessionId, head.text, head.raw === true, head)
       const keepRow = this.deps.store != null && !head.ephemeral
       if (keepRow) {
         this.confirming = [...this.confirming, { item: head, deliveringAt, foundAt: null }]
@@ -1004,6 +1017,7 @@ function publicItem({
   holding: _h,
   outcome: _o,
   fromSessionId: _f,
+  by: _by,
   bypassAttention: _b,
   ccSessionId: _c,
   raw: _r,

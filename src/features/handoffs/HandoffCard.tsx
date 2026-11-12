@@ -16,12 +16,14 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { handoffsApi, prefsApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
 import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
 import { crewResumedAfterQuestion, paneShowsLive, splitAlias } from './crew'
 import { endSessionAsked } from './end-child'
+import { revealChildOnUserMessage } from './reveal-child'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -313,6 +315,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   const [releasing, setReleasing] = useState(false)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [rating, setRating] = useState(false)
   const [resuming, setResuming] = useState(false)
   const liveSessions = useAppStore((s) => s.liveSessions)
@@ -517,12 +520,21 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     const text = message.trim()
     if (!text || sending || !childLive) return
     setSending(true)
+    setSendError(null)
     try {
+      // A aba da filha abre antes do envio, em segundo plano: ir até ela trocaria
+      // de área e desmontaria o card do inbox, com o texto e o erro. Envio aceito,
+      // o usuário é levado até ela.
+      const opened = await revealChildOnUserMessage(handoff.childSessionId, { focus: false })
       await handoffsApi.sendMessage({ id: handoff.id, text })
       setMessage('')
-    } catch {
-      // Falha (filha morreu entre o render e o envio): o load() seguinte atualiza
-      // o liveness e o input some. Mantém o texto pro usuário não perder o que digitou.
+      if (opened) void focusOrOpenSession(opened)
+    } catch (err) {
+      // Mantém o texto pro usuário não perder o que digitou e mostra o motivo aqui.
+      // Filha que morreu entre o render e o envio: o load() abaixo tira o input.
+      setSendError(
+        err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível entregar a mensagem.',
+      )
     } finally {
       setSending(false)
       await load()
@@ -924,6 +936,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
             {sending ? 'Enviando…' : sendLabel}
           </button>
         </form>
+      )}
+      {canSend && sendError && (
+        <div className="mt-1 text-xs text-[var(--color-danger)]">{sendError}</div>
       )}
 
       {/* Pausada já mostrou o gatilho junto do estado; aqui ficam os terminais

@@ -14,6 +14,10 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuItem } from '@/components/ui/Menu'
+import {
+  CHILD_UNREAD_HINT,
+  useChildActivityStore,
+} from '@/features/handoffs/child-activity-store'
 import { backgroundChildrenByMother } from '@/features/handoffs/crew'
 import { endSessionAsked } from '@/features/handoffs/end-child'
 import {
@@ -650,10 +654,16 @@ function BackgroundChildrenChip({
   // Some junto com o chip da mãe: sem ela ao lado o "↳" fica solto. Com filha
   // aguardando ele fica — escondido, nada na barra apontaria para ela.
   const hidden = motherHidden && !waiting
-  const items: MenuItem[] = sessions.map((s) => ({
-    label: `${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
-    onClick: () => onOpen(s),
-  }))
+  const unread = useChildActivityStore((s) => s.unread)
+  const unreadCount = sessions.filter((s) => unread[s.id]).length
+  const items: MenuItem[] = sessions.map((s) => {
+    const reason = unread[s.id]
+    return {
+      label: `${reason ? '● ' : ''}${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
+      onClick: () => onOpen(s),
+      ...(reason ? { title: CHILD_UNREAD_HINT[reason] } : {}),
+    }
+  })
   return (
     <div className="flex shrink-0">
       <Menu open={menuOpen} onClose={() => setMenuOpen(false)} items={items} portal align="left">
@@ -668,12 +678,23 @@ function BackgroundChildrenChip({
           style={hidden ? { visibility: 'hidden' } : undefined}
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
-          title={`${hint}${waiting ? ' (há filha aguardando você)' : ''} — clique para abrir a aba de uma delas`}
-          className={`flex h-6 items-center whitespace-nowrap rounded-lg px-1.5 text-[10px] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)] ${
+          title={`${hint}${waiting ? ' (há filha aguardando você)' : ''}${
+            unreadCount > 0 ? ` (${unreadCount} com novidade que você não viu)` : ''
+          } — clique para abrir a aba de uma delas`}
+          className={`relative flex h-6 items-center whitespace-nowrap rounded-lg px-1.5 text-[10px] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)] ${
             waiting ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-dim)]'
           }`}
         >
           ↳ {sessions.length} em 2º plano
+          {/* Sobreposto ao respiro do chip: com largura própria, a medição do
+              "+N" de overflow mudaria a cada mensagem. */}
+          {unreadCount > 0 && (
+            <span
+              data-testid="strip-background-unread"
+              aria-hidden
+              className="absolute right-0 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]"
+            />
+          )}
         </button>
       </Menu>
     </div>

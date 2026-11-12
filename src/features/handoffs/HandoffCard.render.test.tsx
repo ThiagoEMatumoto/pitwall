@@ -25,6 +25,7 @@ vi.mock('@/lib/ipc', () => ({
   sessionsApi: {
     kill: vi.fn().mockResolvedValue(undefined),
     clearSessionDrafts: vi.fn().mockResolvedValue(undefined),
+    adoptDraft: vi.fn().mockResolvedValue(null),
   },
   workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
@@ -87,7 +88,10 @@ const live: LiveSessionInfo = {
 
 // tier='mid' é o que o dock resolve na largura padrão de 340px (narrow só abaixo
 // de 220, e o dock não desce de 240).
-function mountDock(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status'] = 'working') {
+function mountDock(
+  patch: Partial<Handoff> = {},
+  liveStatus: LiveSessionInfo['status'] = 'working',
+) {
   useAppStore.setState({ liveSessions: [{ ...live, status: liveStatus }] })
   return render(
     <HandoffCard handoff={{ ...handoff, ...patch }} ttlHours={2} tier="mid" onPeek={() => {}} />,
@@ -520,5 +524,99 @@ describe('HandoffCard no inbox (tier wide)', () => {
     expect(row.contains(terminal)).toBe(true)
     // E o campo de envio continua sempre disponível na largura do inbox.
     expect(screen.getByPlaceholderText('Enviar mensagem para a filha…')).toBeTruthy()
+  })
+})
+
+// Decisão do usuário: a mensagem que ele manda a uma filha fora da tela abre a aba
+// dela antes do envio. O card do inbox desmonta ao trocar de área: a aba nasce em
+// segundo plano e ele só é levado até ela com o envio aceito.
+describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
+  const realFocusOrOpenSession = useAppStore.getState().focusOrOpenSession
+  const focusOrOpenSession = vi.fn().mockResolvedValue(undefined)
+  const sendMessage = vi.mocked(handoffsApi.sendMessage)
+
+  function send(text: string) {
+    render(<HandoffCard handoff={handoff} ttlHours={2} />)
+    fireEvent.change(screen.getByPlaceholderText('Enviar mensagem para a filha…'), {
+      target: { value: text },
+    })
+    fireEvent.click(screen.getByTitle('Enviar (Enter)'))
+  }
+
+  beforeEach(() => {
+    focusOrOpenSession.mockClear()
+    sendMessage.mockClear()
+    useAppStore.setState({ liveSessions: [live], panes: [], focusOrOpenSession })
+    // "É filha" sai do grafo: hierarchyMotherId, escrito no main por
+    // session-graph.ts a partir de readHierarchyLinks.
+    useSessionGraphStore.setState({
+      graph: {
+        nodes: [
+          { sessionId: 's-child', hierarchyMotherId: 'm1' },
+          { sessionId: 'm1', hierarchyMotherId: null },
+        ] as unknown as SessionGraphNode[],
+        lanes: [],
+        edges: [],
+      },
+    })
+  })
+  afterEach(() => {
+    useAppStore.setState({
+      liveSessions: [],
+      panes: [],
+      area: 'overview',
+      focusPaneId: null,
+      focusOrOpenSession: realFocusOrOpenSession,
+    })
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+  })
+
+  it('filha sem aba: a aba nasce em segundo plano, o envio sai e só então leva até ela', async () => {
+    send('segue por aqui')
+
+    await waitFor(() => expect(focusOrOpenSession).toHaveBeenCalledTimes(2))
+    expect(sendMessage).toHaveBeenCalledWith({ id: 'h1', text: 'segue por aqui' })
+    expect(focusOrOpenSession.mock.calls).toEqual([[live, { background: true }], [live]])
+    const [opened, taken] = focusOrOpenSession.mock.invocationCallOrder
+    const sent = sendMessage.mock.invocationCallOrder[0]
+    expect(opened).toBeLessThan(sent)
+    expect(sent).toBeLessThan(taken)
+  })
+
+  // O inbox só existe na área handoffs: sair dela antes da resposta do envio
+  // desmontaria o card com o texto digitado e o motivo da recusa.
+  it('envio recusado: o usuário fica onde está, com o texto e o motivo no card', async () => {
+    useAppStore.setState({ area: 'handoffs', focusOrOpenSession: realFocusOrOpenSession })
+    // Como a recusa chega do ipcRenderer.invoke: o prefixo do canal e a classe do
+    // erro do main (ChildWriteRefusedError de menu aberto, do guarded-inject).
+    const reason =
+      'Não deu para entregar: há um menu aberto na tela da filha (permissão/pergunta): o Enter da mensagem o responderia. Responda o menu no terminal dela primeiro.'
+    sendMessage.mockRejectedValueOnce(
+      new Error(
+        `Error invoking remote method 'handoffs:send-message': ChildWriteRefusedError: ${reason}`,
+      ),
+    )
+
+    send('segue por aqui')
+
+    expect(await screen.findByText(reason)).toBeTruthy()
+    expect(useAppStore.getState().area).toBe('handoffs')
+    expect(useAppStore.getState().focusPaneId).toBeNull()
+    expect(useAppStore.getState().panes.map((p) => p.session.id)).toEqual(['s-child'])
+    expect(
+      (screen.getByPlaceholderText('Enviar mensagem para a filha…') as HTMLTextAreaElement).value,
+    ).toBe('segue por aqui')
+  })
+
+  it('filha que já tem aba: só envia', async () => {
+    useAppStore.setState({
+      panes: [
+        { paneId: 'pane-child', session: { id: 's-child', ccSessionId: 'cc-child', title: null } },
+      ] as unknown as ActivePane[],
+    })
+    send('segue por aqui')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalled())
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
   })
 })

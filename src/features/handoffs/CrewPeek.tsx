@@ -9,6 +9,8 @@ import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
+import { revealChildOnUserMessage } from './reveal-child'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -409,12 +411,16 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
     setSending(true)
     setError(null)
     try {
+      // A aba da filha abre antes do envio, em segundo plano: este painel é modal
+      // e o erro tem de continuar aqui. Envio aceito, ele dá lugar à aba.
+      const opened = await revealChildOnUserMessage(handoff.childSessionId, { focus: false })
       await handoffsApi.sendMessage({ id: handoff.id, text })
       setMessage('')
+      if (opened) promoteToTab()
     } catch (err) {
       // Filha morreu entre o render e o envio é o caso comum: mostra o motivo e
       // preserva o texto pro usuário não perder o que digitou.
-      setError(err instanceof Error ? err.message : 'Não foi possível entregar a mensagem.')
+      setError(err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível entregar a mensagem.')
     } finally {
       setSending(false)
       await load()

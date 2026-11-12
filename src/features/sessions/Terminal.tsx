@@ -111,6 +111,8 @@ interface Props {
   // Display da pane (híbrido): 'terminal' mostra o xterm; 'chat' mostra o ChatView
   // renderizado do transcript com o xterm/PTY vivo por baixo. Default 'terminal'.
   mode?: PaneMode
+  // Aba nascida em segundo plano (ActivePane.background): monta sem tomar o teclado.
+  background?: boolean
   onToggleMode?: () => void
   // Moldura em volta do terminal. 'full' (default) traz o SessionHeader completo
   // — identidade, rename, minimizar, ENCERRAR. 'bare' omite o header inteiro: é
@@ -287,6 +289,7 @@ function TerminalHost({
   projectIcon,
   projectColor,
   mode: requestedMode = 'terminal',
+  background = false,
   onToggleMode,
   chrome = 'full',
   renderer = 'auto',
@@ -1268,9 +1271,18 @@ function TerminalHost({
 
   // Foco no xterm ao (re)entrar no modo terminal, pra digitar direto na TUI sem clicar
   // primeiro. Em chat o host é invisible (não-focável), então não rouba foco lá.
+  // Nascido em segundo plano, o foco da montagem não é dele: quem digita está em
+  // outra tela (cartão do mapa, Room, card da equipe).
+  const focusOnEnter = useRef(!background)
   useEffect(() => {
-    if (mode !== 'chat' && !exited) xtermRef.current?.focus()
+    if (focusOnEnter.current && mode !== 'chat' && !exited) xtermRef.current?.focus()
+    focusOnEnter.current = true
   }, [mode, exited])
+  // A marca vale só para esta montagem: sai da pane para a próxima (acordar da
+  // hibernação, painel recriado) focar como qualquer aba.
+  useEffect(() => {
+    if (background && paneId) useAppStore.getState().clearPaneBackground(paneId)
+  }, [background, paneId])
 
   // WebGL só no modo terminal: em chat o xterm fica invisible sob o ChatView —
   // manter um contexto WebGL ali gasta VRAM e ocupa slot do cap global à toa.

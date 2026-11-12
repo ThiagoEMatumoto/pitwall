@@ -4,6 +4,7 @@ import { AttentionMenuPanel } from '@/features/session-switcher/AttentionPopover
 import { peekAttentionItem } from '@/features/handoffs/peek-attention'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { endSessionAsked } from '@/features/handoffs/end-child'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import { openSessionByCc } from '@/features/sessions/open-session'
 import { handoffsApi } from '@/lib/ipc'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -264,9 +265,12 @@ function QuestionBody({ item, handoff }: { item: AttentionItem; handoff: Handoff
             disabled={!canSend}
             loading={busy === 'reply'}
             onClick={() =>
-              void run('reply', () =>
-                handoffsApi.sendMessage({ id: item.handoffId!, text: text.trim() }),
-              )
+              void run('reply', async () => {
+                // Pela Room a aba da filha nasce em segundo plano: quem responde
+                // continua na fila.
+                await revealChildOnUserMessage(item.sessionId, { focus: false })
+                await handoffsApi.sendMessage({ id: item.handoffId!, text: text.trim() })
+              })
             }
           >
             {busy === 'reply' ? 'Enviando…' : 'Responder e retomar'}

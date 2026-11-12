@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Ações inline da fila: cada botão chama o caminho que já existe (handoffs:send-
@@ -31,7 +31,9 @@ vi.mock('../../../electron/main/services/live-session-states', () => ({
 const special: Record<string, Record<string, unknown>> = {
   room: { get: (id: string) => Promise.resolve(roomSnapshot(id)) },
   handoffs: { list: () => Promise.resolve(store.list()), sendMessage, resume },
-  sessions: { attentionMenu, attentionRespond },
+  // adoptDraft: o que o appStore chama ao abrir a aba da filha antes do envio.
+  sessions: { attentionMenu, attentionRespond, adoptDraft: () => Promise.resolve(null) },
+  workspace: { savePanes: () => Promise.resolve() },
 }
 vi.stubGlobal(
   'window',
@@ -132,6 +134,33 @@ describe('QueueItem — ações inline', () => {
     expect(reply).toBeEnabled()
     await act(async () => void fireEvent.click(reply))
     expect(sendMessage).toHaveBeenCalledWith({ id: h.id, text: 'main' })
+  })
+
+  // Decisão do usuário: a resposta dele abre a aba da filha fora da tela ANTES do
+  // envio. Pela Room a aba nasce em segundo plano: ele continua na fila.
+  it('child_question: responder abre a aba da filha em segundo plano antes de enviar', async () => {
+    const h = child('r1', 'A')
+    harness.legacyAsk(testDb, h.id, 'qual branch?')
+    useAppStore.setState({ panes: [], focusPaneId: null })
+    let tabsAtSend: string[] = []
+    sendMessage.mockImplementation(async () => {
+      tabsAtSend = useAppStore.getState().panes.map((p) => p.session.id)
+    })
+    await mount([
+      { id: 'M', status: 'idle' },
+      { id: 'A', status: 'working' },
+    ])
+    fireEvent.change(within(open()).getByRole('textbox', { name: 'Resposta' }), {
+      target: { value: 'main' },
+    })
+    await act(
+      async () =>
+        void fireEvent.click(within(open()).getByRole('button', { name: 'Responder e retomar' })),
+    )
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ id: h.id, text: 'main' }))
+    expect(tabsAtSend).toEqual(['A'])
+    expect(useAppStore.getState().area).toBe('room')
+    expect(useAppStore.getState().focusPaneId).toBeNull()
   })
 
   it('child_question: erro do envio aparece em role=status', async () => {

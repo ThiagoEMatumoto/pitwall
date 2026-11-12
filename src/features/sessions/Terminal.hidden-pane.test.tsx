@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDockview, type DockviewApi } from 'dockview'
-import type { Session, SessionActivity } from '../../../shared/types/ipc'
+import type { LiveSessionInfo, Session, SessionActivity } from '../../../shared/types/ipc'
 
 // O TerminalHost de verdade, com a tela vinda do parser real do xterm (headless, o mesmo
 // do espelho do main) e capturas brutas do claude. Só o que precisa de canvas ou de IPC
@@ -26,6 +26,7 @@ const h = vi.hoisted(() => {
     chatProps: null as { tuiMenu: { kind: string } | null; paused?: boolean } | null,
     chatRenders: [] as { kind: string | null; paused: boolean }[],
     term: null as import('@xterm/headless').Terminal | null,
+    focusCalls: 0,
     session: {
       exited: false,
       exitCode: null,
@@ -97,6 +98,9 @@ vi.mock('@xterm/xterm', async () => {
       h.term = this
     }
     open() {}
+    focus() {
+      h.focusCalls++
+    }
     refresh() {}
     registerLinkProvider() {
       return { dispose() {} }
@@ -169,6 +173,7 @@ import { parseTuiMenuFull } from './tui-menu-parser'
 import { parseTuiPicker } from './tui-picker-parser'
 import { readBufferTail } from '../../../shared/tui/read-tail'
 import { useToastStore } from '@/features/notifications/toast-store'
+import { adoptRelaunchedSession, holdPaneForRelaunch, useAppStore } from '@/store/appStore'
 
 // Capturas brutas do claude real (node-pty), o mesmo shape que chega pelo pty:data.
 const fixture = (name: string) =>
@@ -521,5 +526,92 @@ describe('Terminal: replay do backlog', () => {
     await settle(20)
 
     expect(screenLines()).toEqual(['nha 2', 'linha 3', 'linha 4'])
+  })
+})
+
+// O xterm toma o teclado ao montar, pra digitar na TUI sem clicar. Aba nascida em
+// segundo plano (o usuário escreveu a uma filha sem aba) é a exceção: quem digita
+// está em outra tela (cartão do mapa, Room, card da equipe).
+describe('Terminal: foco ao montar', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    h.focusCalls = 0
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  const terminal = (props: Partial<React.ComponentProps<typeof Terminal>>) => (
+    <Terminal
+      session={session}
+      repoLabel="web"
+      repoPath="/tmp"
+      projectName="p"
+      mode="terminal"
+      onClose={() => {}}
+      {...props}
+    />
+  )
+
+  it('aba comum: o xterm toma o teclado', async () => {
+    render(terminal({}))
+    await settle(0)
+
+    expect(h.focusCalls).toBe(1)
+  })
+
+  it('nascida em segundo plano: o teclado fica com quem digita', async () => {
+    render(terminal({ background: true }))
+    await settle(0)
+
+    expect(h.focusCalls).toBe(0)
+  })
+
+  it('nascida em segundo plano: voltar ao modo terminal foca como em qualquer aba', async () => {
+    const view = render(terminal({ background: true }))
+    await settle(0)
+
+    view.rerender(terminal({ background: true, mode: 'chat' }))
+    view.rerender(terminal({ background: true, mode: 'terminal' }))
+
+    expect(h.focusCalls).toBe(1)
+  })
+
+  // A pane sai do próprio store e dorme/acorda pelas transições dele (o relance do
+  // "Tornar mãe" faz o mesmo spread da hibernação e acorda pelo mesmo adoptLiveSession).
+  // O painel repete o TerminalPanel do AppShell: dormant não monta o Terminal.
+  it('nascida em segundo plano: depois de dormir e acordar, o xterm toma o teclado', async () => {
+    const live: LiveSessionInfo = {
+      id: 's-bg',
+      ccSessionId: 'cc-bg',
+      name: null,
+      title: null,
+      status: 'working',
+      repo: null,
+      projectName: null,
+      projectIcon: null,
+      projectColor: null,
+      lastActivityAt: null,
+      lastText: null,
+    }
+    useAppStore.setState({ panes: [], liveSessions: [live] })
+    await act(() => useAppStore.getState().focusOrOpenSession(live, { background: true }))
+    function Panel() {
+      const pane = useAppStore((s) => s.panes[0])
+      if (pane.dormant) return null
+      return terminal({ session: pane.session, paneId: pane.paneId, background: pane.background })
+    }
+
+    render(<Panel />)
+    await settle(0)
+    expect(h.focusCalls).toBe(0)
+    expect(useAppStore.getState().panes[0]).not.toHaveProperty('background')
+
+    act(() => holdPaneForRelaunch('s-bg', 'cc-bg'))
+    act(() => adoptRelaunchedSession({ ...useAppStore.getState().panes[0].session, id: 's-bg-2' }))
+    await settle(0)
+
+    expect(h.focusCalls).toBe(1)
   })
 })

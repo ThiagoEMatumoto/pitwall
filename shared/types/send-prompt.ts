@@ -12,6 +12,9 @@ export interface SendPromptInput {
   // Sessão de onde a mensagem saiu (o @alias digitado no composer de outra aba).
   // Só serve para a bolinha no fio do mapa, que sai quando a entrega acontece.
   fromSessionId?: string
+  // Só o main liga, no canal que a UI chama (sessions:send-prompt): foi o usuário
+  // quem escreveu. Sai no pulso da entrega; o schema zod do IPC descarta o campo.
+  by?: 'human'
   // Só o main process liga (answer-delivery): a resposta a um pedido é o que a
   // filha em needs_input espera, então passa pelo gate 'attention'. O IPC do
   // renderer não aceita o campo (o schema zod o descarta).
