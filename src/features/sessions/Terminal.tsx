@@ -1353,7 +1353,15 @@ function TerminalHost({
   }
 
   return (
-    <div className="flex h-full flex-col" onKeyDown={onSessionKeyDown}>
+    // data-*: o dockview monta o conteúdo fora da árvore do grupo, sem id no DOM;
+    // é por aqui que um cenário e2e acha o pane de UMA sessão e o modo dele.
+    <div
+      data-testid="session-pane"
+      data-session-id={session.id}
+      data-pane-mode={mode}
+      className="flex h-full flex-col"
+      onKeyDown={onSessionKeyDown}
+    >
       {chrome === 'full' && (
         <SessionHeader
           projectName={projectName}
