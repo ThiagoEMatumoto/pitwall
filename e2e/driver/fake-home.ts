@@ -69,6 +69,10 @@ export interface FakeHome {
   setStatus(pid: number, status: FakeSessionStatus): void
   readSessionFiles(): FakeSessionEntry[]
   fakeCliPath(provider: FakeCliProvider): string
+  // Stub do claude com a TTY em modo raw (ver fakeRawClaudeScript). Loga como 'claude'.
+  rawClaudePath: string
+  // Liga/desliga a saída de carga do stub raw (RAW_LOAD_OUTPUT), para os que já rodam.
+  setRawLoad(on: boolean): void
   // Concatena os logs de todas as execuções daquele provider.
   readCliLog(provider: FakeCliProvider): string
   cleanup(): void
@@ -94,14 +98,18 @@ function shSingleQuote(s: string): string {
   return `'${s.replaceAll("'", `'\\''`)}'`
 }
 
-// Trecho comum aos dois stubs: log por PID + loop que ecoa cada linha do stdin.
-// O app injeta prompts via bracketed-paste (ESC[200~ … ESC[201~); os marcadores
-// são removidos antes de logar pra o cenário poder comparar o texto puro.
-function echoLoop(logDir: string, provider: FakeCliProvider, prompt: string): string {
+function logArgv(logDir: string, provider: FakeCliProvider): string {
   return `LOG=${shSingleQuote(logDir)}/${provider}-$$.log
 printf 'argv:' >> "$LOG"
 for a in "$@"; do printf ' %q' "$a" >> "$LOG"; done
-printf '\\n' >> "$LOG"
+printf '\\n' >> "$LOG"`
+}
+
+// Log por PID + loop que ecoa cada linha do stdin.
+// O app injeta prompts via bracketed-paste (ESC[200~ … ESC[201~); os marcadores
+// são removidos antes de logar pra o cenário poder comparar o texto puro.
+function echoLoop(logDir: string, provider: FakeCliProvider, prompt: string): string {
+  return `${logArgv(logDir, provider)}
 
 echo_loop() {
   printf '%s' ${shSingleQuote(prompt)}
@@ -122,17 +130,9 @@ echo_loop() {
 const INPUT_RULE = '─'.repeat(50)
 const CLAUDE_INPUT_BOX = `\n${INPUT_RULE}\n❯ \n${INPUT_RULE}\n`
 
-// Stub do `claude`: lê --session-id/--resume e -n do comando montado por
-// buildSpawnInnerCmd, grava sessions/<pid>.json com status 'busy' (a sessão
-// "trabalhando") e fica viva ecoando o stdin. O caminho do sessionsDir é
-// embutido (não $HOME) pra não depender do env que a PTY recebe.
-export function fakeClaudeScript(sessionsDir: string, logDir: string): string {
-  return `#!/usr/bin/env bash
-# Stub do claude para cenários e2e — gerado por e2e/driver/fake-home.ts.
-SESSIONS_DIR=${shSingleQuote(sessionsDir)}
-${echoLoop(logDir, 'claude', CLAUDE_INPUT_BOX)}
-
-session_id=''
+// Comum aos stubs do claude: lê o argv do spawn, grava sessions/<pid>.json e
+// imprime o banner.
+const CLAUDE_SESSION_START = `session_id=''
 name=''
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -160,9 +160,98 @@ printf '\\u2502  cwd:    %s\\n' "$PWD"
 # Nome por último e sem linha em branco antes da caixa de input: a prévia do
 # "enviar para" mostra só as 6 últimas linhas, e é o nome que prova de quem é a tela.
 printf '\\u2502  nome:   %s\\n' "$name"
-printf '\\u2570\\u2500\\n'
+printf '\\u2570\\u2500\\n'`
+
+// Stub do `claude`: lê --session-id/--resume e -n do comando montado por
+// buildSpawnInnerCmd, grava sessions/<pid>.json com status 'busy' (a sessão
+// "trabalhando") e fica viva ecoando o stdin. O caminho do sessionsDir é
+// embutido (não $HOME) pra não depender do env que a PTY recebe.
+export function fakeClaudeScript(sessionsDir: string, logDir: string): string {
+  return `#!/usr/bin/env bash
+# Stub do claude para cenários e2e — gerado por e2e/driver/fake-home.ts.
+SESSIONS_DIR=${shSingleQuote(sessionsDir)}
+${echoLoop(logDir, 'claude', CLAUDE_INPUT_BOX)}
+
+${CLAUDE_SESSION_START}
 echo_loop
 `
+}
+
+// Prompt do stub raw. Não é o ❯ do claude: a tela dele não pode ser lida pelo app
+// como caixa de input com rascunho, o que seguraria o envio do composer.
+export const RAW_PROMPT = 'raw> '
+
+// Saída do stub raw sob carga: enquanto o arquivo-gatilho existir (setRawLoad),
+// uma linha a cada RAW_LOAD_EVERY caracteres ecoados, no meio do eco. Vem entre
+// colchetes duplos para quem lê a tela separá-la do que foi digitado (o texto
+// digitado não pode ter "[[").
+export const RAW_LOAD_EVERY = 10
+export const RAW_LOAD_OUTPUT = /\[\[carga \d+ [^\]]*\]\]/g
+const RAW_LOAD_FILLER = 'lorem ipsum dolor sit amet consectetur '.repeat(2).trimEnd()
+
+// Stub do `claude` com a TTY em modo raw, como a TUI real: cada byte do stdin é
+// lido assim que chega, logado com horário ("byte: <epoch> <hex>") e ecoado na
+// hora. Sequências de escape (os marcadores do bracketed-paste) são logadas e não
+// ecoadas; o Enter fecha a linha e abre outro prompt.
+// Quem lê a TTY é o perl (sysread, um hex por linha): o `read` do bash, numa TTY,
+// religa a cada byte a tradução de CR em NL e os sinais (Ctrl+C), e o modo deixaria
+// de ser raw; o od do uutils segura a saída mesmo sob stdbuf.
+// LC_ALL=C só depois do banner: é o que dá ponto decimal ao horário.
+export function fakeRawClaudeScript(sessionsDir: string, logDir: string, loadFlag: string): string {
+  return `#!/usr/bin/env bash
+# Stub do claude em modo raw para cenários e2e — gerado por e2e/driver/fake-home.ts.
+SESSIONS_DIR=${shSingleQuote(sessionsDir)}
+LOAD=${shSingleQuote(loadFlag)}
+${logArgv(logDir, 'claude')}
+
+${CLAUDE_SESSION_START}
+saved=$(stty -g 2>/dev/null)
+trap '[ -n "$saved" ] && stty "$saved" 2>/dev/null' EXIT
+stty raw -echo 2>/dev/null
+exec 3>> "$LOG"
+LC_ALL=C
+printf '\\e[?2004h%s' ${shSingleQuote(RAW_PROMPT)}
+perl -e '$|=1; while (sysread(STDIN, $b, 4096)) { printf("%02x\\n", ord) for split(//, $b) }' | {
+  escape=0
+  chars=0
+  while read -r hex; do
+    printf 'byte: %s %s\\n' "$EPOCHREALTIME" "$hex" >&3
+    if [ $escape -eq 1 ]; then
+      if [ "$hex" = 5b ]; then escape=2; else escape=0; fi
+    elif [ $escape -eq 2 ]; then
+      if (( 0x$hex >= 0x40 )); then escape=0; fi
+    elif [ "$hex" = 1b ]; then
+      escape=1
+    elif [ "$hex" = 0d ]; then
+      printf '\\r\\n%s' ${shSingleQuote(RAW_PROMPT)}
+    else
+      # Só no começo de um caractere: no meio de um UTF-8 a carga o partiria.
+      if [ -e "$LOAD" ] && (( 0x$hex < 0x80 || 0x$hex >= 0xc0 )); then
+        chars=$((chars + 1))
+        if (( chars % ${RAW_LOAD_EVERY} == 0 )); then
+          printf '\\r\\n[[carga %s %s]]\\r\\n' "$chars" ${shSingleQuote(RAW_LOAD_FILLER)}
+        fi
+      fi
+      printf "\\\\x$hex"
+    fi
+  done
+}
+`
+}
+
+export interface RawStdin {
+  bytes: Buffer
+  // Horário em que o stub leu cada byte, na mesma ordem.
+  atMs: number[]
+}
+
+// Os bytes que o stub raw recebeu, a partir das linhas "byte:" do log dele.
+export function parseRawStdin(log: string): RawStdin {
+  const entries = [...log.matchAll(/^byte: ([\d.]+) ([0-9a-f]{2})$/gm)]
+  return {
+    bytes: Buffer.from(entries.map((m) => m[2]).join(''), 'hex'),
+    atMs: entries.map((m) => Number(m[1]) * 1000),
+  }
 }
 
 // Stub do `codex`: banner no formato da TUI do Codex, um "turno" que imprime
@@ -245,10 +334,12 @@ export function createFakeHome(opts: FakeHomeOptions = {}): FakeHome {
     claude: join(binDir, 'fake-claude.sh'),
     codex: join(binDir, 'fake-codex.sh'),
   }
+  const rawClaudePath = join(binDir, 'fake-claude-raw.sh')
+  const rawLoadFlag = join(root, 'raw-load')
   writeFileSync(cliPaths.claude, fakeClaudeScript(sessionsDir, logDir))
   writeFileSync(cliPaths.codex, fakeCodexScript(logDir))
-  chmodSync(cliPaths.claude, 0o755)
-  chmodSync(cliPaths.codex, 0o755)
+  writeFileSync(rawClaudePath, fakeRawClaudeScript(sessionsDir, logDir, rawLoadFlag))
+  for (const path of [cliPaths.claude, cliPaths.codex, rawClaudePath]) chmodSync(path, 0o755)
 
   const sessionPath = (pid: number) => join(sessionsDir, `${pid}.json`)
 
@@ -279,6 +370,11 @@ export function createFakeHome(opts: FakeHomeOptions = {}): FakeHome {
     },
     fakeCliPath(provider) {
       return cliPaths[provider]
+    },
+    rawClaudePath,
+    setRawLoad(on) {
+      if (on) writeFileSync(rawLoadFlag, '')
+      else rmSync(rawLoadFlag, { force: true })
     },
     readCliLog(provider) {
       return readdirSync(logDir)

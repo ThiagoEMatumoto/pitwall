@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   chmodSync,
   copyFileSync,
   existsSync,
@@ -31,6 +30,8 @@ import {
   type PerfRaw,
   type PhaseOutcome,
 } from '../driver/perf'
+import { transcriptLoad } from '../driver/transcript-load'
+import { loadChecks } from '../driver/typing-fidelity'
 
 // Medição de desempenho antes/depois (plano A1), sobre a CÓPIA do perfil real com
 // HOME fake e stubs do `claude`. Uma sessão A recebe um transcript grande e passa
@@ -39,8 +40,10 @@ import {
 // uso real com várias sessões vivas.
 //   open             alterna A para o chat com o transcript já no disco
 //   chat-focus       clique no composer de A (sem carga)
-//   chat-typing      transcript crescendo a cada 100 ms + PTYs emitindo saída,
-//                    enquanto 200 caracteres entram no composer a 30 ms
+//   chat-typing      transcript ganhando um turno a cada 300 ms + PTYs emitindo
+//                    saída, enquanto 200 caracteres entram no composer a 30 ms;
+//                    sai `blocked` se o chat não desenhou mensagem nova antes da
+//                    última tecla (a latência seria a de um chat parado)
 //   to-terminal      alterna A para o terminal (sem carga)
 //   terminal-typing  a mesma carga, digitando no xterm de A
 //   to-chat          volta A para o chat e deixa assentar (sem carga)
@@ -93,7 +96,6 @@ mkdirSync(OUT_DIR, { recursive: true })
 
 const TYPED = 'the quick brown fox jumps over the lazy dog '.repeat(5).slice(0, 200)
 const KEY_DELAY_MS = 30
-const APPEND_EVERY_MS = 100
 // Turnos a mais do gerador, gravados aos poucos enquanto as fases de digitação rodam.
 const STREAM_TURNS = 120
 const IDLE_MS = 20_000
@@ -489,6 +491,10 @@ try {
     await A.pane.getByTestId('chat-loading').waitFor({ state: 'hidden', timeout: remaining() })
   }
 
+  // textContent, não innerText: este forçaria layout dentro da janela medida.
+  const lastChatTextOfA = (remaining: () => number): Promise<string | null> =>
+    A.pane.locator('.markdown-body').last().textContent({ timeout: remaining() })
+
   const cdp = await page.context().newCDPSession(page)
   // Digita em A sob carga. O ponto de partida (modo e foco) é conferido ANTES de
   // a carga ligar: se a fase anterior bloqueou, esta bloqueia sem mexer em nada.
@@ -499,6 +505,8 @@ try {
     remaining: () => number,
   ): Promise<void> {
     await expectA(mode, focus, remaining)
+    const chatAtStart = mode === 'chat' ? await lastChatTextOfA(remaining) : null
+    const appendedAtStart = load.appendedLines()
     startLoad()
     const result = await typeOpenLoop(
       (method, params) => cdp.send(method, params as never),
@@ -508,11 +516,26 @@ try {
     if (result.failed > 0) {
       throw new Error(`${phaseName}: o CDP recusou ${result.failed} de ${result.keys} teclas`)
     }
+    // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
+    // depois disso não concorreu com a digitação.
+    const seen = {
+      transcriptLines: load.appendedLines() - appendedAtStart,
+      chatChanged: mode === 'chat' && (await lastChatTextOfA(remaining)) !== chatAtStart,
+      screenOutputs: 0,
+    }
     // O foco não pode ter saído de A no meio da digitação.
     await expectA(mode, focus, remaining)
     typing[phaseName] = result
     await page.waitForTimeout(500)
     stopLoad()
+    // No terminal o chat está desmontado: a carga de lá é a saída dos PTYs.
+    if (mode !== 'chat') return
+    const missing = loadChecks('composer', seen).filter((proof) => !proof.ok)
+    if (missing.length > 0) {
+      throw new Error(
+        `${phaseName}: a fase mediu sem carga de chat (${missing.map((proof) => proof.label).join('; ')})`,
+      )
+    }
   }
 
   // ---------- transcript de A, no disco antes de o chat abrir ----------
@@ -551,17 +574,14 @@ try {
   log(`transcript de A: ${JSON.stringify(out.transcript)}`)
 
   const pidA = A.file.data.pid
+  const load = transcriptLoad(transcript, stream, stream.length / STREAM_TURNS)
   function startLoad(): void {
     writeFileSync(noiseFlag, '')
     fake.setStatus(pidA, 'busy')
-    const timer = setInterval(() => {
-      const line = stream[appendedLines]
-      if (!line) return
-      appendFileSync(transcript, line + '\n')
-      appendedLines += 1
-    }, APPEND_EVERY_MS)
+    const stopAppends = load.start()
     stopLoad = () => {
-      clearInterval(timer)
+      stopAppends()
+      appendedLines = load.appendedLines()
       rmSync(noiseFlag, { force: true })
       fake.setStatus(pidA, 'idle')
       stopLoad = () => {}
