@@ -802,6 +802,12 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
                 onKeyDown={(e) => {
                   // Não deixa atalhos globais/terminal interceptarem enquanto compõe.
                   e.stopPropagation()
+                  // Rascunho ainda sendo lido: o campo parece vazio sem estar. Um Enter
+                  // aqui iria cru ao PTY e confirmaria a opção padrão do claude.
+                  if (hydrating) {
+                    e.preventDefault()
+                    return
+                  }
                   // Menu de @/# aberto: setas, Enter, Tab e Esc são dele (não da TUI).
                   const m = mention.onKey(e)
                   if (m) {
