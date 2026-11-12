@@ -40,4 +40,15 @@ describe('clippedBackgroundCount', () => {
     ]
     expect(clippedBackgroundCount({ left: 0, right: 500 }, groups)).toEqual({ left: 2, right: 4 })
   })
+  it('escondido junto com a mãe e inteiro na barra: as filhas entram no "+N" da esquerda', () => {
+    const groups = [{ left: 54, right: 150, count: 2, hiddenWithMother: true }]
+    expect(clippedBackgroundCount({ left: 0, right: 500 }, groups)).toEqual({ left: 2, right: 0 })
+  })
+  it('escondido junto com a mãe e também cortado: conta uma vez só, do lado cortado', () => {
+    const groups = [
+      { left: -40, right: 50, count: 2, hiddenWithMother: true },
+      { left: 450, right: 540, count: 3, hiddenWithMother: true },
+    ]
+    expect(clippedBackgroundCount({ left: 0, right: 500 }, groups)).toEqual({ left: 2, right: 3 })
+  })
 })

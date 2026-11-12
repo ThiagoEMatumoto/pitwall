@@ -265,6 +265,8 @@ describe('SessionStrip — filhas em segundo plano', () => {
       const chip = screen.getByTestId('strip-background-children')
       expect(chip.dataset.clippedHidden).toBe('true')
       expect(chip).not.toBeVisible()
+      // A mãe e a filha que sumiu com o chip agregado.
+      expect(screen.getByTestId('session-strip-more')).toHaveTextContent('+2')
     })
 
     it('mãe cortada some, mas o chip agregado com filha aguardando fica', () => {
@@ -283,6 +285,8 @@ describe('SessionStrip — filhas em segundo plano', () => {
       const chip = screen.getByTestId('strip-background-children')
       expect(chip.dataset.clippedHidden).toBeUndefined()
       expect(chip).toBeVisible()
+      // Só a mãe: a filha continua à vista no chip agregado.
+      expect(screen.getByTestId('session-strip-more')).toHaveTextContent('+1')
     })
 
     it('chip agregado cortado com a mãe inteira na barra: as filhas entram no "+N"', () => {

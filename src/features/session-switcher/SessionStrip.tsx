@@ -220,11 +220,21 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     const chips = [...el.querySelectorAll<HTMLElement>('[data-strip-chip]')].map((c) =>
       c.getBoundingClientRect(),
     )
+    const cut = clippedCount(bounds, chips)
     const groups = [...el.querySelectorAll<HTMLElement>('[data-strip-background]')].map((g) => {
       const { left, right } = g.getBoundingClientRect()
-      return { left, right, count: Number(g.dataset.stripBackground) }
+      return {
+        left,
+        right,
+        count: Number(g.dataset.stripBackground),
+        // A mesma regra de `hidden` do BackgroundChildrenChip, sobre a medição
+        // de agora: o atributo no DOM ainda é o da medição anterior.
+        hiddenWithMother:
+          g.dataset.stripMotherIndex !== undefined &&
+          cut.hidden.includes(Number(g.dataset.stripMotherIndex)) &&
+          g.dataset.waiting !== 'true',
+      }
     })
-    const cut = clippedCount(bounds, chips)
     const cutBackground = clippedBackgroundCount(bounds, groups)
     const next = {
       left: cut.left + cutBackground.left,
@@ -323,6 +333,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                   <BackgroundChildrenChip
                     sessions={backgroundChildren}
                     hint="Filhas desta sessão rodando sem aba"
+                    motherIndex={index}
                     motherHidden={clipped.hidden.includes(index)}
                     onOpen={(child) => void focusOrOpenSession(child)}
                   />
@@ -592,11 +603,14 @@ function PinButton({ isPinned, onTogglePin }: { isPinned: boolean; onTogglePin: 
 function BackgroundChildrenChip({
   sessions,
   hint,
+  motherIndex,
   motherHidden = false,
   onOpen,
 }: {
   sessions: LiveSessionInfo[]
   hint: string
+  // Posição do chip da mãe entre os [data-strip-chip]; ausente no grupo sem mãe.
+  motherIndex?: number
   motherHidden?: boolean
   onOpen: (child: LiveSessionInfo) => void
 }) {
@@ -616,6 +630,7 @@ function BackgroundChildrenChip({
           type="button"
           data-testid="strip-background-children"
           data-strip-background={sessions.length}
+          data-strip-mother-index={motherIndex}
           data-waiting={waiting || undefined}
           data-clipped-hidden={hidden || undefined}
           aria-hidden={hidden || undefined}
