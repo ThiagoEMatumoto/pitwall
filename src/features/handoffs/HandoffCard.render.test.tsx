@@ -289,6 +289,32 @@ describe('HandoffCard: Encerrar com o Desfazer em aberto não libera o Arquivar'
     act(() => useAppStore.setState({ liveSessions: [] }))
     expect(screen.getByLabelText('Arquivar card')).toBeTruthy()
   })
+
+  // O "Dispensar" do Room não passa pelo gate do card, e ali a filha já saiu da
+  // lista viva: sem aviso, o Desfazer do Encerrar a devolvia viva a um card
+  // arquivado sem que nada tivesse dito que ela ainda rodava.
+  function archivedToastBody() {
+    return useToastStore.getState().toasts.find((t) => t.title === 'Card arquivado')?.body
+  }
+
+  it('arquivado pelo Room na janela do Desfazer: o toast avisa que o encerramento está pendente', async () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    endChildFromMenu()
+    await act(() => useHandoffsStore.getState().dismiss('h1'))
+    expect(archivedToastBody()).toBe(
+      'claude-manager: encerramento pendente — se desfizer, ela segue rodando sem o card.',
+    )
+  })
+
+  it('arquivado depois da janela: o processo morreu e o toast traz só o nome', async () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    endChildFromMenu()
+    act(() => {
+      vi.advanceTimersByTime(END_WINDOW_MS)
+    })
+    await act(() => useHandoffsStore.getState().dismiss('h1'))
+    expect(archivedToastBody()).toBe('claude-manager')
+  })
 })
 
 // Reabrir a filha levava três cliques e passava pela modal do quick look. A aba é

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { handoffsApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { dispatchHandoffChild, permissionModeFor } from '@/features/handoffs/spawn-child'
-import { useAppStore } from './appStore'
+import { pendingEndSessionIds, useAppStore } from './appStore'
 import type { Handoff, LiveSessionInfo } from '../../shared/types/ipc'
 
 // permissionModeFor mudou de casa (spawn-child.ts, junto do resto do nascimento
@@ -60,6 +60,14 @@ export function dispatchedToast(h: Handoff, alias: string | null, child: LiveSes
 
 // Janela em que o "Desfazer" da dispensa fica à vista (mesmo tempo do Encerrar).
 const DISMISS_UNDO_MS = 5000
+
+function archivedToastBody(who: string, running: boolean, endPending: boolean): string {
+  if (running) return `${who} continua rodando — só o card saiu do painel.`
+  if (endPending) {
+    return `${who}: encerramento pendente — se desfizer, ela segue rodando sem o card.`
+  }
+  return who
+}
 
 // Dono único da assinatura de onUpdated — assinada uma vez (StrictMode-safe),
 // mesmo padrão do objectivesStore.
@@ -128,9 +136,13 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
       const who = child?.title?.trim() || handoff?.targetRepoLabel || 'A sessão-filha'
       // 'ended' ainda na lista é processo morto (a lista recarrega um tick depois).
       const running = !!child && child.status !== 'ended'
+      // Encerrar com o Desfazer em aberto: a filha já saiu da lista viva, mas a
+      // PTY só morre quando a janela expira, e o Desfazer a devolve rodando.
+      const endPending =
+        !!handoff?.childSessionId && pendingEndSessionIds().has(handoff.childSessionId)
       showToast({
         title: 'Card arquivado',
-        body: running ? `${who} continua rodando — só o card saiu do painel.` : who,
+        body: archivedToastBody(who, running, endPending),
         actionLabel: 'Desfazer',
         onAction: () => void get().undismiss(id),
         durationMs: DISMISS_UNDO_MS,
