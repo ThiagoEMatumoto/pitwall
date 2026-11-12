@@ -247,6 +247,10 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // que chegar nesse estado fica na fila e é aplicado no compositionend.
   const composingRef = useRef(false)
   const pendingDictationRef = useRef<string[]>([])
+  // Ditado e imagem que chegam durante a leitura do rascunho esperam por ela:
+  // aplicados antes, seriam juntados ao salvo e trocariam o valor sob o cursor.
+  const hydratingRef = useRef(hydrating)
+  const pendingImagesRef = useRef<File[]>([])
 
   // Ditado por voz → draft. Cursor: posição atual se o textarea tem foco,
   // fim caso contrário (ditar sem foco não pode sobrescrever o meio do texto).
@@ -284,7 +288,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
       appendText: (dictated: string) => {
         // Dock recolhido esconderia o draft ditado — expande antes de inserir.
         setComposerCollapsed(false)
-        if (composingRef.current) {
+        if (composingRef.current || hydratingRef.current) {
           pendingDictationRef.current.push(dictated)
           return
         }
@@ -367,6 +371,18 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     // ccSessionId/paneId só rotulam a linha; a identidade é a chave.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, memKey])
+
+  useEffect(() => {
+    hydratingRef.current = hydrating
+    if (hydrating) return
+    const dictated = pendingDictationRef.current
+    pendingDictationRef.current = []
+    for (const d of dictated) applyDictation(d)
+    const images = pendingImagesRef.current
+    pendingImagesRef.current = []
+    if (images.length > 0) void ingestImages(images)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrating])
 
   function flushDraftNow() {
     const persister = persisterRef.current
@@ -467,6 +483,10 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // na posição do cursor — a CLI claude anexa a imagem a partir do caminho colado.
   // Nunca submete: o usuário revisa e aperta Enter.
   async function ingestImages(files: File[]) {
+    if (hydratingRef.current) {
+      pendingImagesRef.current = [...pendingImagesRef.current, ...files]
+      return
+    }
     const saved: Attachment[] = []
     for (const file of files) {
       try {
