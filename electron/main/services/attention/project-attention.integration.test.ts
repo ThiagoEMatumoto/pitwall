@@ -257,6 +257,51 @@ describe('projectAttention — desfechos com handoff_events reais', () => {
     expect(project([liveOf('c1', 'idle', null)]).map((i) => i.kind)).toEqual(['child_interrupted'])
   })
 
+  // O caminho real do X da aba: handoffs:set-child-ended marca (setEndedByUser) e
+  // o exit da PTY transiciona (failIfRunning). O card já diz "Encerrada por você"
+  // com Retomar e a mãe foi avisada: não é pendência de ninguém.
+  function endedByUser(repo: string, childSid: string) {
+    const h = runningChild(repo, childSid)
+    store.setEndedByUser(h.id, true)
+    return store.failIfRunning(h.id, store.ENDED_BY_USER_ERROR)!
+  }
+
+  it('7f) interrupted porque o usuário encerrou → sem child_interrupted; a que caiu sozinha segue na fila', () => {
+    const ended = endedByUser('r1', 'c1')
+    const crashed = runningChild('r2', 'c2')
+    store.failIfRunning(crashed.id, 'PTY morreu')
+    transcriptPath = '/tmp/t.jsonl'
+    expect(store.get(ended.id)).toMatchObject({ status: 'interrupted', resumable: true })
+    expect(store.get(ended.id)!.endedByUserAt).not.toBeNull()
+    const items = project([])
+    expect(items.map((i) => [i.kind, i.handoffId])).toEqual([['child_interrupted', crashed.id]])
+    expect(countAttentionSubjects(humanQueue(items))).toBe(1)
+  })
+
+  it('7g) encerrada pelo usuário, retomada e caída depois → volta a ser child_interrupted', () => {
+    const h = endedByUser('r1', 'c1')
+    transcriptPath = '/tmp/t.jsonl'
+    expect(project([])).toEqual([])
+    // Retomar relança a filha numa linha nova e passa por markRunning, que limpa a marca.
+    seedSession(testDb, 'c1b')
+    expect(store.markRunning(h.id, 'c1b').endedByUserAt).toBeNull()
+    store.failIfRunning(h.id, 'PTY morreu')
+    expect(project([]).map((i) => [i.kind, i.handoffId])).toEqual([['child_interrupted', h.id]])
+  })
+
+  it('7h) encerrada pelo usuário: menu na tela e PTY ainda viva seguem com o item deles', async () => {
+    const h = endedByUser('r1', 'c1')
+    transcriptPath = '/tmp/t.jsonl'
+    const scan = await scanFixture('permission-bash')
+    expect(
+      project([liveOf('c1', 'waiting', scan)]).map((i) => [i.kind, i.handoffId]),
+    ).toEqual([['session_menu', h.id]])
+    // Processo vivo num handoff encerrado nunca fica invisível.
+    const orphan = project([liveOf('c1', 'idle', null)])
+    expect(orphan.map((i) => [i.kind, i.severity])).toEqual([['pty_orphan', 'action']])
+    expect(orphan[0].actions.map((a) => a.kind)).toEqual(['kill_session', 'open_session'])
+  })
+
   it('7e) failed com a PTY da filha num menu → 2 itens, mas a lane conta 1 sessão', async () => {
     const h = runningChild('r1', 'c1')
     store.fail(h.id, 'x')

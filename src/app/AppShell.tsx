@@ -199,7 +199,7 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
         {...props}
         title={
           isChild
-            ? 'Fechar (X) encerra a filha: mata o processo; ela segue vinculada à mãe e retomável. Ctrl+W só minimiza'
+            ? 'Fechar (X) encerra a filha: mata o processo; ela segue vinculada à mãe e retomável. Para só tirar da tela, use Minimizar'
             : 'Fechar (X) só tira a aba da tela; não encerra a sessão'
         }
         closeActionOverride={isChild ? () => closeChildTab(paneId) : undefined}

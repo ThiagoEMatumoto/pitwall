@@ -101,7 +101,10 @@ function handoffItem(
     return withOpenRequest.has(h.id) ? null : childQuestionItem(h)
   if (h.status === 'failed' && h.dismissedAt == null && inScope(h, live))
     return childFailedItem(h, t, live)
-  if (h.status === 'interrupted' && isLedByMother(h)) return childInterruptedItem(h, t, live)
+  // Encerrada pelo usuário não é pendência: foi de propósito, o card diz isso com
+  // o Retomar e a mãe já foi avisada. Retomada, a marca some (markRunning).
+  if (h.status === 'interrupted' && h.endedByUserAt == null && isLedByMother(h))
+    return childInterruptedItem(h, t, live)
   if (h.status === 'done' && h.consumedAt == null && h.dismissedAt == null && inScope(h, live))
     return resultUnconsumedItem(h, t, live)
   return null
@@ -280,7 +283,7 @@ function childInterruptedItem(
     dedupKey: `child_interrupted:${h.id}:${stamp(t)}`,
     whyNow: 'Interrompida; dá pra retomar',
     entryRule:
-      "handoffs.status='interrupted' (interrupt/reconcileStuck), resumable (transcript no disco), não dispensado",
+      "handoffs.status='interrupted' (interrupt/reconcileStuck), resumable (transcript no disco), não dispensado, não encerrada pelo usuário (ended_by_user_at IS NULL)",
     exitRule: 'retomada, dismiss ou transcript sumiu (resumable=false)',
     severity: 'action',
     audience: 'human',

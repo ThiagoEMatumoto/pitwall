@@ -5,9 +5,12 @@ const killSpy = vi.fn(() => Promise.resolve())
 const setChildEndedSpy = vi.fn((_input: { sessionId: string; ended: boolean }) =>
   Promise.resolve(null),
 )
+// O status que o main devolve no clique. Vazio = a sessão não veio na resposta.
+const listLiveGlobalSpy = vi.fn((): Promise<unknown[]> => Promise.resolve([]))
 const spies: Record<string, (...args: never[]) => unknown> = {
   kill: killSpy,
   setChildEnded: setChildEndedSpy,
+  listLiveGlobal: listLiveGlobalSpy,
 }
 Object.assign(window, {
   api: new Proxy(
@@ -68,12 +71,17 @@ function seed(sessionId: string, status: LiveSessionInfo['status']): void {
   })
 }
 
+// O Encerrar da filha espera o main responder antes de decidir a pergunta.
+const mainAnswered = () => vi.advanceTimersByTimeAsync(0)
+
 let confirmSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.useFakeTimers()
   killSpy.mockClear()
   setChildEndedSpy.mockClear()
+  listLiveGlobalSpy.mockReset()
+  listLiveGlobalSpy.mockImplementation(() => Promise.resolve([]))
   confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
   useAppStore.setState({ panes: [], liveSessions: [] })
   useToastStore.setState({ toasts: [] })
@@ -121,13 +129,15 @@ describe('isLinkedChild', () => {
 })
 
 describe('endSessionAsked', () => {
-  it('filha trabalhando e o usuário recusa: nada acontece', () => {
+  it('filha trabalhando e o usuário recusa: nada acontece', async () => {
     linkAsChild('filha', 'mae')
     seed('filha', 'working')
     confirmSpy.mockReturnValue(false)
 
     endSessionAsked('filha')
+    await mainAnswered()
 
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().panes).toHaveLength(1)
     expect(useToastStore.getState().toasts).toHaveLength(0)
     expect(setChildEndedSpy).not.toHaveBeenCalled()
@@ -135,11 +145,12 @@ describe('endSessionAsked', () => {
     expect(killSpy).not.toHaveBeenCalled()
   })
 
-  it('filha trabalhando e o usuário confirma: encerra com Desfazer e marca', () => {
+  it('filha trabalhando e o usuário confirma: encerra com Desfazer e marca', async () => {
     linkAsChild('filha', 'mae')
     seed('filha', 'working')
 
     endSessionAsked('filha')
+    await mainAnswered()
 
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().panes).toHaveLength(0)
@@ -156,16 +167,118 @@ describe('endSessionAsked', () => {
     endSessionAsked('comum')
 
     expect(confirmSpy).not.toHaveBeenCalled()
+    expect(listLiveGlobalSpy).not.toHaveBeenCalled()
     expect(useToastStore.getState().toasts[0]?.title).toBe('Sessão encerrada')
   })
+
+  it('renderer diz idle e o main diz working: pergunta', async () => {
+    linkAsChild('filha', 'mae')
+    seed('filha', 'idle')
+    listLiveGlobalSpy.mockImplementation(() => Promise.resolve([makeLive('filha', 'working')]))
+    confirmSpy.mockReturnValue(false)
+
+    endSessionAsked('filha')
+    await mainAnswered()
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().panes).toHaveLength(1)
+    expect(setChildEndedSpy).not.toHaveBeenCalled()
+  })
+
+  it('renderer diz working e o main diz idle: encerra sem perguntar', async () => {
+    linkAsChild('filha', 'mae')
+    seed('filha', 'working')
+    listLiveGlobalSpy.mockImplementation(() => Promise.resolve([makeLive('filha', 'idle')]))
+
+    endSessionAsked('filha')
+    await mainAnswered()
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(useAppStore.getState().panes).toHaveLength(0)
+    expect(setChildEndedSpy).toHaveBeenCalledWith({ sessionId: 'filha', ended: true })
+  })
+
+  it.each(['working', 'idle'] as const)(
+    'o main não responde (IPC rejeita): decide pelo renderer (%s)',
+    async (status) => {
+      linkAsChild('filha', 'mae')
+      seed('filha', status)
+      listLiveGlobalSpy.mockImplementation(() => Promise.reject(new Error('ipc')))
+
+      endSessionAsked('filha')
+      await mainAnswered()
+
+      expect(confirmSpy).toHaveBeenCalledTimes(status === 'working' ? 1 : 0)
+      expect(setChildEndedSpy).toHaveBeenCalledWith({ sessionId: 'filha', ended: true })
+    },
+  )
+
+  it.each(['working', 'idle'] as const)(
+    'a sessão não vem na resposta do main: decide pelo renderer (%s)',
+    async (status) => {
+      linkAsChild('filha', 'mae')
+      seed('filha', status)
+      listLiveGlobalSpy.mockImplementation(() =>
+        Promise.resolve([makeLive('outra', status === 'working' ? 'idle' : 'working')]),
+      )
+
+      endSessionAsked('filha')
+      await mainAnswered()
+
+      expect(confirmSpy).toHaveBeenCalledTimes(status === 'working' ? 1 : 0)
+      expect(setChildEndedSpy).toHaveBeenCalledWith({ sessionId: 'filha', ended: true })
+    },
+  )
+
+  it('dois cliques com a consulta em voo: uma pergunta e um encerramento', async () => {
+    linkAsChild('filha', 'mae')
+    seed('filha', 'idle')
+    const answers: Array<(list: unknown[]) => void> = []
+    listLiveGlobalSpy.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => answers.push(resolve)),
+    )
+
+    endSessionAsked('filha')
+    endSessionAsked('filha')
+    for (const answer of answers) answer([makeLive('filha', 'working')])
+    await mainAnswered()
+
+    expect(listLiveGlobalSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(setChildEndedSpy).toHaveBeenCalledTimes(1)
+    expect(useToastStore.getState().toasts).toHaveLength(1)
+  })
+
+  it.each(['responde', 'rejeita'] as const)(
+    'clique depois que o main %s e o usuário recusa: pergunta de novo',
+    async (outcome) => {
+      linkAsChild('filha', 'mae')
+      seed('filha', 'working')
+      listLiveGlobalSpy.mockImplementation(() =>
+        outcome === 'responde'
+          ? Promise.resolve([makeLive('filha', 'working')])
+          : Promise.reject(new Error('ipc')),
+      )
+      confirmSpy.mockReturnValue(false)
+
+      endSessionAsked('filha')
+      await mainAnswered()
+      endSessionAsked('filha')
+      await mainAnswered()
+
+      expect(confirmSpy).toHaveBeenCalledTimes(2)
+      expect(setChildEndedSpy).not.toHaveBeenCalled()
+    },
+  )
 })
 
 describe('closeChildTab (X da aba de uma filha)', () => {
-  it('filha viva: encerra de verdade (kill depois da janela), não só fecha a aba', () => {
+  it('filha viva: encerra de verdade (kill depois da janela), não só fecha a aba', async () => {
     linkAsChild('filha', 'mae')
     seed('filha', 'idle')
 
     closeChildTab('pane-filha')
+    await mainAnswered()
 
     expect(useAppStore.getState().panes).toHaveLength(0)
     expect(useToastStore.getState().toasts[0]?.title).toBe(
