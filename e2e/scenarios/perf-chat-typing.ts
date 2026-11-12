@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Locator } from 'playwright'
-import { buildLongMotherLines } from '../../electron/main/services/__fixtures__/long-mother-jsonl'
+import { require as tsxRequire } from 'tsx/cjs/api'
 import { createFakeHome, type FakeSessionEntry } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
 import { copyRealUserData, launchApp, REPO_ROOT, writeCopyPrefs } from '../driver/launch'
@@ -61,6 +61,13 @@ import {
 //   CM_PERF_DUMP_RAW=1         inclui a amostra bruta do coletor no JSON
 // Rodar (depois de npm run rebuild:native && npm run build):
 //   CM_PERF_GPU=on npx tsx e2e/scenarios/perf-chat-typing.ts
+
+// O fixture usa __dirname (injetado pelo vitest). O pacote é "type": "module", então
+// um import estático o carregaria como ESM, onde __dirname não existe.
+const { buildLongMotherLines } = tsxRequire(
+  '../../electron/main/services/__fixtures__/long-mother-jsonl.ts',
+  import.meta.url,
+) as typeof import('../../electron/main/services/__fixtures__/long-mother-jsonl')
 
 const GPU = process.env.CM_PERF_GPU === 'off' ? 'off' : 'on'
 const SESSIONS = Math.max(2, Number(process.env.CM_PERF_SESSIONS) || 5)
