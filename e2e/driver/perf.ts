@@ -136,7 +136,9 @@ export interface PhaseOutcome<T> {
 // sozinhas, com um erro que diz o que estava sendo esperado. Esta folga dá tempo
 // de esse erro chegar antes do corte seco, que só diz "não fechou".
 const PHASE_BACKSTOP_MS = 2000
-const REASON_MAX_CHARS = 300
+// O erro de uma ação do Playwright abre com o seletor e o elemento; o que ela
+// estava esperando vem depois.
+const REASON_MAX_CHARS = 700
 
 function oneLine(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
