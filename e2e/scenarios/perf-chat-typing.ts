@@ -38,7 +38,9 @@ import {
   typingLoadArrived,
   type ChatLoadRead,
 } from '../driver/chat-load'
+import { lastNoiseOutput, noisyStub } from '../driver/noisy-stub'
 import { transcriptLoad, turnsToLast } from '../driver/transcript-load'
+import { readXtermBuffer } from '../driver/xterm-buffer'
 
 // Medição de desempenho antes/depois (plano A1), sobre a CÓPIA do perfil real com
 // HOME fake e stubs do `claude`. Uma sessão A recebe um transcript grande e passa
@@ -64,7 +66,10 @@ import { transcriptLoad, turnsToLast } from '../driver/transcript-load'
 // diz quanto ela ocupou a página, e `load.lastKeyReadMs` o mesmo para a leitura da
 // última tecla, que não conta os nós. As fases de digitação levam ainda `loadArrived` e os
 // números que o sustentam (`load`): no chat, mensagem nova desenhada antes da
-// última tecla; no terminal, onde o chat está desmontado, saída de PTY além do eco.
+// última tecla; no terminal, onde o chat está desmontado, saída de carga do stub
+// no xterm de A antes da última tecla (`screenOutputsAtLastKey`, nulo se o buffer
+// não pôde ser lido). `ptyCharsAllSessions` é o que o main mandou de todas as
+// sessões: acompanha, não prova nada sobre A.
 // Fase de digitação sem carga comprovada não aborta nem bloqueia: sai com
 // `loadArrived: false` e entra em `phasesWithoutLoad` (a latência dela é a de uma
 // tela parada).
@@ -113,6 +118,8 @@ const TYPED = 'the quick brown fox jumps over the lazy dog '.repeat(5).slice(0, 
 const KEY_DELAY_MS = 30
 const IDLE_MS = 20_000
 const TAB_SWITCHES = 8
+// Linhas do fim do buffer do xterm de A em que a última saída de carga é procurada.
+const XTERM_TAIL_LINES = 100
 // Prazo de cada fase; estourado, ela sai `blocked` e o cenário segue.
 const CHAT_READY_TIMEOUT_MS = 180_000
 const INTERACTION_TIMEOUT_MS = 60_000
@@ -135,51 +142,8 @@ const log = (msg: string) => console.log(`[perf-typing] ${msg}`)
 const fake = createFakeHome({ parentDir: tmpdir() })
 const noiseFlag = join(fake.root, 'noise')
 
-function shq(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`
-}
-
-// Stub vivo: grava o session file como 'idle', ecoa o stdin e, enquanto o arquivo
-// `noise` existir, emite ~5 linhas de saída por segundo (carga de pty:data sem
-// passar por nenhum IPC do renderer, que sujaria a contagem de sessions:write).
-function noisyStub(sessionsDir: string, logDir: string): string {
-  const rule = '─'.repeat(50)
-  const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(2)
-  return `#!/usr/bin/env bash
-SESSIONS_DIR=${shq(sessionsDir)}
-LOG=${shq(logDir)}/claude-$$.log
-NOISE=${shq(noiseFlag)}
-printf 'argv:' >> "$LOG"; for a in "$@"; do printf ' %q' "$a" >> "$LOG"; done; printf '\\n' >> "$LOG"
-session_id=''; name=''
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --session-id|--resume) session_id="$2"; shift 2 ;;
-    -n|--name) name="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-now=$(date +%s%3N)
-printf '{"pid":%s,"sessionId":"%s","cwd":"%s","status":"idle","name":"%s","startedAt":%s,"updatedAt":%s}' \\
-  "$$" "$session_id" "$PWD" "$name" "$now" "$now" > "$SESSIONS_DIR/$$.json"
-box() { printf '\\n%s\\n\\u276f \\n%s\\n' ${shq(rule)} ${shq(rule)}; }
-printf '\\u23fa Fake Claude Code (stub perf) %s\\n' "$name"
-box
-n=0
-while true; do
-  if IFS= read -t 0.2 -r line; then
-    printf '\\u23fa recebido: %s\\n' "$line"
-    box
-  elif [ $? -le 128 ]; then
-    exit 0
-  elif [ -e "$NOISE" ]; then
-    n=$((n+1))
-    printf '\\u23fa saida %s %s\\n' "$n" ${shq(filler)}
-  fi
-done
-`
-}
 const stub = join(fake.root, 'bin', 'perf-claude.sh')
-writeFileSync(stub, noisyStub(fake.sessionsDir, fake.logDir))
+writeFileSync(stub, noisyStub(fake.sessionsDir, fake.logDir, noiseFlag))
 chmodSync(stub, 0o755)
 
 // ---------- cópia do perfil, com a GPU fixada antes do boot ----------
@@ -276,6 +240,7 @@ const live = () =>
 // Uma sessão com aba: o session file do stub, o pane dela e a aba no dockview.
 interface Opened {
   label: 'A' | 'B'
+  id: string
   file: FakeSessionEntry
   pane: Locator
   tab: Locator
@@ -297,7 +262,13 @@ async function opened(label: Opened['label'], before: Set<number>, tabIndex: num
   })
   const pane = paneOf(sessionId)
   await pane.locator('.xterm-screen').waitFor({ state: 'visible', timeout: 20_000 })
-  const session: Opened = { label, file: file!, pane, tab: page.locator('.dv-tab').nth(tabIndex) }
+  const session: Opened = {
+    label,
+    id: sessionId,
+    file: file!,
+    pane,
+    tab: page.locator('.dv-tab').nth(tabIndex),
+  }
   return session
 }
 
@@ -371,7 +342,12 @@ const chatAtEnd: Array<{
 }> = []
 const typingLoad: Record<
   string,
-  { transcriptLines: number; chatNewMessages: number; lastKeyReadMs: number | null }
+  {
+    transcriptLines: number
+    chatNewMessages: number
+    screenOutputs: number | null
+    lastKeyReadMs: number | null
+  }
 > = {}
 let loadTurnsSeen = 0
 let firstLoadTurn = 0
@@ -548,6 +524,25 @@ try {
     await A.pane.getByTestId('chat-loading').waitFor({ state: 'hidden', timeout: remaining() })
   }
 
+  // A última saída de carga no xterm de A. Nulo se o buffer não pôde ser lido: a
+  // fase fica sem a prova e segue.
+  async function noiseOnScreenOfA(
+    phaseName: string,
+  ): Promise<{ last: number; readMs: number } | null> {
+    const label = `leitura do xterm de A na fase ${phaseName}`
+    try {
+      const read = await replied(label, readXtermBuffer(page, A.id, 'aba', XTERM_TAIL_LINES))
+      if (read.text == null) {
+        log(`${label}: sem buffer para ler (${read.terms} xterm da sessão)`)
+        return null
+      }
+      return { last: lastNoiseOutput(read.text), readMs: read.readMs }
+    } catch (err) {
+      log(`${label} falhou: ${String(err).split('\n')[0]}`)
+      return null
+    }
+  }
+
   const cdp = await page.context().newCDPSession(page)
   // Digita em A sob carga. O ponto de partida (modo e foco) é conferido ANTES de
   // a carga ligar: se a fase anterior bloqueou, esta bloqueia sem mexer em nada.
@@ -559,6 +554,7 @@ try {
   ): Promise<void> {
     await expectA(mode, focus, remaining)
     const appendedAtStart = load.appendedLines()
+    const screenAtStart = mode === 'terminal' ? await noiseOnScreenOfA(phaseName) : null
     startLoad()
     const result = await typeOpenLoop(
       (method, params) => cdp.send(method, params as never),
@@ -570,14 +566,17 @@ try {
     }
     // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
     // depois disso não concorreu com a digitação. No terminal o chat está
-    // desmontado e não há o que ler dele.
+    // desmontado: a prova é a saída de carga no xterm de A.
     const atLastKey = mode === 'chat' ? await readLastReply(A.pane, remaining()) : null
+    const screenAtLastKey = mode === 'terminal' ? await noiseOnScreenOfA(phaseName) : null
     typingLoad[phaseName] = {
       transcriptLines: load.appendedLines() - appendedAtStart,
       chatNewMessages: atLastKey
         ? Math.max(0, loadTurnsShown(atLastKey.lastReply, firstLoadTurn) - loadTurnsSeen)
         : 0,
-      lastKeyReadMs: atLastKey?.readMs ?? null,
+      screenOutputs:
+        screenAtStart && screenAtLastKey ? screenAtLastKey.last - screenAtStart.last : null,
+      lastKeyReadMs: atLastKey?.readMs ?? screenAtLastKey?.readMs ?? null,
     }
     // O foco não pode ter saído de A no meio da digitação.
     await expectA(mode, focus, remaining)
@@ -757,19 +756,20 @@ const loaded = withMainLines(phases, main).map((entry) => {
   const seen = typingLoad[entry.phase] ?? {
     transcriptLines: 0,
     chatNewMessages: 0,
+    screenOutputs: null,
     lastKeyReadMs: null,
   }
   const load = {
     transcriptLines: seen.transcriptLines,
     chatNewMessagesAtLastKey: seen.chatNewMessages,
+    screenOutputsAtLastKey: seen.screenOutputs,
     lastKeyReadMs: seen.lastKeyReadMs,
-    ptyChars: ptyCharsSent(entry.main),
+    ptyCharsAllSessions: ptyCharsSent(entry.main),
   }
   const loadArrived = typingLoadArrived({
     surface,
-    typedChars: TYPED.length,
     chatNewMessages: load.chatNewMessagesAtLastKey,
-    ptyChars: load.ptyChars,
+    screenOutputs: load.screenOutputsAtLastKey ?? 0,
   })
   return { ...entry, loadArrived, load }
 })

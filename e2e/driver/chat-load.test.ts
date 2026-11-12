@@ -145,18 +145,18 @@ describe('typingLoadArrived', () => {
     '[perf] {"t":"2026-11-12T06:42:54.643Z","windowMs":6288,"phase":"terminal-typing","lagMs":{"p50":0.14,"p99":1.1,"max":48.92},"ipcIn":{"sessions:write":{"n":192,"perSec":30.53,"peakPerSec":34,"totalMs":12.82,"maxMs":0.15}},"ipcOut":{"pty:data":350,"session:activity":4,"session:activity:global":3,"session-graph:updated":3},"counters":{"pty:data.chars":14570,"broadcastGlobal.sessions":15},"spans":{"broadcastGlobal":{"n":3,"totalMs":30,"maxMs":10.9},"graph.rebuild":{"n":4,"totalMs":129.14,"maxMs":49.79}}}',
   ].join('\n')
 
-  it('no terminal a carga é a saída dos PTYs além do eco do que foi digitado', () => {
-    const ptyChars = ptyCharsSent(parsePerfLines(MAIN_LOG))
-    expect(ptyChars).toBe(15033)
-    const seen = { surface: 'terminal' as const, typedChars: 200, chatNewMessages: 0 }
-
-    expect(typingLoadArrived({ ...seen, ptyChars })).toBe(true)
-    expect(typingLoadArrived({ ...seen, ptyChars: 200 })).toBe(false)
+  it('no terminal a carga é saída de carga na tela de A, não o que o main mandou de todas as sessões', () => {
+    // O contador do main soma as sessões todas: outra sessão emitindo já passa do eco.
+    expect(ptyCharsSent(parsePerfLines(MAIN_LOG))).toBe(15033)
     expect(ptyCharsSent([])).toBe(0)
+    const seen = { surface: 'terminal' as const, chatNewMessages: 0 }
+
+    expect(typingLoadArrived({ ...seen, screenOutputs: 0 })).toBe(false)
+    expect(typingLoadArrived({ ...seen, screenOutputs: 3 })).toBe(true)
   })
 
   it('no chat a carga é mensagem nova na tela antes da última tecla', () => {
-    const seen = { surface: 'chat' as const, typedChars: 200, ptyChars: 15033 }
+    const seen = { surface: 'chat' as const, screenOutputs: 3 }
 
     expect(typingLoadArrived({ ...seen, chatNewMessages: 0 })).toBe(false)
     expect(typingLoadArrived({ ...seen, chatNewMessages: 1 })).toBe(true)

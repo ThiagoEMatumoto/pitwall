@@ -58,22 +58,25 @@ export function loadTurnsShown(lastReply: string | null, firstLoadTurn: number):
   return turn ? Math.max(0, Number(turn[1]) - firstLoadTurn + 1) : 0
 }
 
-/** Caracteres de pty:data que o main enviou ao renderer nas linhas de uma fase. */
+/**
+ * Caracteres de pty:data que o main enviou ao renderer nas linhas de uma fase, de
+ * TODAS as sessões: o contador do main não separa por sessão.
+ */
 export function ptyCharsSent(lines: PerfLine[]): number {
   return lines.reduce((sum, line) => sum + (line.counters['pty:data.chars'] ?? 0), 0)
 }
 
 export interface TypingLoadSeen {
   surface: 'chat' | 'terminal'
-  typedChars: number
   /** Turnos da carga que o chat mostrou entre o começo da fase e a última tecla. */
   chatNewMessages: number
-  ptyChars: number
+  /** Saídas de carga que o xterm da sessão ganhou no mesmo intervalo. */
+  screenOutputs: number
 }
 
 // No chat, a carga é mensagem nova desenhada antes da última tecla. No terminal o
-// chat está desmontado: a carga é a saída dos PTYs, e o eco do que foi digitado
-// (um caractere por tecla) não conta.
+// chat está desmontado: a carga é saída do stub no xterm da sessão em que se
+// digita. O que o main mandou não serve: soma as outras sessões.
 export function typingLoadArrived(seen: TypingLoadSeen): boolean {
-  return seen.surface === 'chat' ? seen.chatNewMessages > 0 : seen.ptyChars > seen.typedChars
+  return seen.surface === 'chat' ? seen.chatNewMessages > 0 : seen.screenOutputs > 0
 }
