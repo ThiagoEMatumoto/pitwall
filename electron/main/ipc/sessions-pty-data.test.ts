@@ -1,35 +1,44 @@
 /** @vitest-environment node */
 // O pty:data coalescido pelos produtores reais do ipc/sessions.ts: o listener de
-// data, o handler sessions:get-backlog e o listener de exit. Fake só na borda: a
+// data, o pedido sessions:get-backlog e o listener de exit. Fake só na borda: a
 // PTY (com o backlog crescendo ANTES do evento, como o deliver do pty-manager) e
-// a janela, que guarda o que o renderer receberia, na ordem.
+// as janelas, que guardam o que cada renderer receberia, na ordem.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PTY_DATA_WINDOW_MS } from '../services/pty-data-coalescer'
 
-const seam = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
-  listeners: new Map<string, Array<(e: unknown) => void>>(),
-  backlog: new Map<string, string>(),
-  sent: [] as Array<{ channel: string; payload: unknown }>,
-}))
+const seam = vi.hoisted(() => {
+  const sent: Array<{ to: number; channel: string; payload: unknown }> = []
+  const webContentsOf = (id: number) => ({
+    destroyed: false,
+    isDestroyed(): boolean {
+      return this.destroyed
+    },
+    send: (channel: string, payload: unknown) => sent.push({ to: id, channel, payload }),
+  })
+  const main = webContentsOf(1)
+  return {
+    events: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
+    listeners: new Map<string, Array<(e: unknown) => void>>(),
+    backlog: new Map<string, string>(),
+    backlogError: null as Error | null,
+    sent,
+    webContentsOf,
+    main,
+    windows: [main],
+  }
+})
 
 vi.mock('../services/handoff/claude-trust', () => ({ preTrustClaudeDirs: vi.fn(() => true) }))
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cm-test-userdata' },
   BrowserWindow: {
-    getAllWindows: () => [
-      {
-        isDestroyed: () => false,
-        webContents: {
-          isDestroyed: () => false,
-          send: (channel: string, payload: unknown) => seam.sent.push({ channel, payload }),
-        },
-      },
-    ],
+    getAllWindows: () =>
+      seam.windows.map((webContents) => ({ isDestroyed: () => false, webContents })),
   },
   ipcMain: {
-    handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
-      seam.handlers.set(channel, fn)
+    handle: () => {},
+    on: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
+      seam.events.set(channel, fn)
     },
   },
 }))
@@ -49,7 +58,10 @@ vi.mock('../services/pty-manager', () => ({
     runningIds: () => [],
     getPid: () => null,
     sessionIdByPid: () => null,
-    getBacklog: (sessionId: string) => seam.backlog.get(sessionId) ?? '',
+    getBacklog: (sessionId: string) => {
+      if (seam.backlogError) throw seam.backlogError
+      return seam.backlog.get(sessionId) ?? ''
+    },
   },
 }))
 vi.mock('../services/custom-env', () => ({ sessionSpawnEnv: () => ({}) }))
@@ -95,11 +107,23 @@ function emitExit(sessionId: string): void {
   for (const fn of seam.listeners.get('exit') ?? []) fn({ sessionId, exitCode: 0, signal: null })
 }
 
-function getBacklog(sessionId: string): string {
-  return seam.handlers.get('sessions:get-backlog')!(null, sessionId) as string
+type BacklogReply = { requestId: number; backlog?: string; error?: string }
+
+// O pedido como o preload o faz: evento com id, resposta por sender.send.
+function requestBacklog(requestId: number, sessionId: string, sender = seam.main): void {
+  seam.events.get('sessions:get-backlog')!({ sender }, requestId, sessionId)
 }
 
-const ptyChannels = () => seam.sent.map((s) => s.channel).filter((c) => c.startsWith('pty:'))
+const backlogReplies = () =>
+  seam.sent.filter((s) => s.channel === 'sessions:backlog').map((s) => s.payload as BacklogReply)
+
+function getBacklog(sessionId: string): string {
+  requestBacklog(1, sessionId)
+  return backlogReplies().at(-1)!.backlog!
+}
+
+const channelsTo = (to: number) => seam.sent.filter((s) => s.to === to).map((s) => s.channel)
+const ptyChannels = () => channelsTo(1).filter((c) => c.startsWith('pty:'))
 
 // O que um terminal montado no envio de índice `from` recebeu ao vivo até `to`.
 function live(sessionId: string, from: number, to = seam.sent.length): string {
@@ -126,7 +150,10 @@ describe('pty:data coalescido no ipc/sessions', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     seam.backlog.clear()
+    seam.backlogError = null
     seam.sent.length = 0
+    seam.main.destroyed = false
+    seam.windows = [seam.main]
   })
   afterEach(() => {
     // Fecha as janelas abertas antes de devolver os timers reais.
@@ -144,6 +171,74 @@ describe('pty:data coalescido no ipc/sessions', () => {
     vi.advanceTimersByTime(PTY_DATA_WINDOW_MS)
     expect(ptyChannels()).toHaveLength(2)
     expect(live(ID, 0)).toBe(seam.backlog.get(ID))
+  })
+
+  it('a resposta do backlog sai na fila dos pty:data, atrás de tudo que saiu antes do snapshot', () => {
+    emitData(ID, 'a')
+    emitData(ID, 'b')
+    emitData(ID, 'c')
+
+    requestBacklog(7, ID)
+
+    expect(channelsTo(1)).toEqual(['pty:data', 'pty:data', 'sessions:backlog'])
+    expect(backlogReplies()).toEqual([{ requestId: 7, backlog: 'abc' }])
+    // Tudo que o backlog cobre já está na frente da resposta.
+    expect(live(ID, 0)).toBe('abc')
+
+    emitData(ID, 'd')
+    vi.advanceTimersByTime(PTY_DATA_WINDOW_MS * 2)
+    expect(channelsTo(1).at(-1)).toBe('pty:data')
+    expect(live(ID, 3)).toBe('d')
+  })
+
+  it('a resposta do backlog vai só para o remetente do pedido', () => {
+    const other = seam.webContentsOf(2)
+    seam.windows = [seam.main, other]
+    emitData(ID, 'a')
+    emitData(ID, 'b')
+
+    requestBacklog(1, ID, other)
+
+    expect(channelsTo(2)).toEqual(['pty:data', 'pty:data', 'sessions:backlog'])
+    expect(channelsTo(1)).toEqual(['pty:data', 'pty:data'])
+  })
+
+  it('erro ao ler o backlog vira resposta de erro para o pedido', () => {
+    seam.backlogError = new Error('pty sumiu')
+
+    expect(() => requestBacklog(3, ID)).not.toThrow()
+
+    expect(backlogReplies()).toEqual([{ requestId: 3, error: 'pty sumiu' }])
+  })
+
+  it('remetente destruído: não lança e não envia', () => {
+    emitData(ID, 'a')
+    seam.main.destroyed = true
+    seam.windows = []
+
+    expect(() => requestBacklog(4, ID)).not.toThrow()
+
+    expect(backlogReplies()).toEqual([])
+  })
+
+  it('dois pedidos concorrentes: cada resposta leva o id e o backlog do seu pedido', () => {
+    emitData(ID, 'a')
+    emitData(ID, 'b')
+    emitData(OTHER, 'x')
+    emitData(OTHER, 'y')
+
+    requestBacklog(1, ID)
+    requestBacklog(2, OTHER)
+
+    expect(backlogReplies()).toEqual([
+      { requestId: 1, backlog: 'ab' },
+      { requestId: 2, backlog: 'xy' },
+    ])
+    const sent = seam.sent.map((s) => {
+      const p = s.payload as { sessionId?: string; data?: string; requestId?: number }
+      return p.sessionId ? `${p.sessionId}:${p.data}` : `reply ${p.requestId}`
+    })
+    expect(sent).toEqual(['pty-1:a', 'pty-2:x', 'pty-1:b', 'reply 1', 'pty-2:y', 'reply 2'])
   })
 
   it('sessions:get-backlog entrega o pendente antes de responder', () => {

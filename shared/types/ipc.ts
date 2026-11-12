@@ -1389,6 +1389,11 @@ export interface PtyDataEvent {
   data: string
 }
 
+/** Resposta de sessions:get-backlog, entregue por evento na fila dos pty:data. */
+export type BacklogReply =
+  | { requestId: number; backlog: string }
+  | { requestId: number; error: string }
+
 export interface PtyExitEvent {
   sessionId: string
   exitCode: number
