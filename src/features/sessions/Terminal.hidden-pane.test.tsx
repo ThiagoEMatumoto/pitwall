@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDockview, type DockviewApi } from 'dockview'
 import type { Session, SessionActivity } from '../../../shared/types/ipc'
 
 // O TerminalHost de verdade, com a tela vinda do parser real do xterm (headless, o mesmo
@@ -185,7 +186,7 @@ const settle = (ms: number) =>
 // Passa do debounce de 150 ms do parse da TUI.
 const SETTLED_MS = 400
 
-async function mount() {
+async function mount(panelVisibility?: React.ComponentProps<typeof Terminal>['panelVisibility']) {
   render(
     <Terminal
       session={session}
@@ -193,6 +194,7 @@ async function mount() {
       repoPath="/tmp"
       projectName="p"
       mode="chat"
+      panelVisibility={panelVisibility}
       onClose={() => {}}
     />,
   )
@@ -374,6 +376,118 @@ describe('Terminal com a pane oculta', () => {
     const windows = vi.mocked(readBufferTail).mock.calls.map(([, n]) => n)
     expect(windows.length).toBeGreaterThan(0)
     expect(windows).toEqual([...new Set(windows)])
+  })
+})
+
+// A aba inativa de um grupo fica visibility:hidden, com caixa de layout: o
+// IntersectionObserver segue dizendo "visível". Quem sabe é o painel do dockview; aqui o
+// dockview é o de verdade, com duas abas no mesmo grupo, e o observer nunca avisa nada.
+describe('Terminal em aba do dockview', () => {
+  let dock: DockviewApi
+  let host: HTMLElement
+
+  function twoTabs() {
+    const a = dock.addPanel({ id: 'a', component: 'pane' })
+    const b = dock.addPanel({ id: 'b', component: 'pane' })
+    return { a, b }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    h.backlog = Promise.resolve('')
+    h.chatProps = null
+    h.activityListeners.clear()
+    useToastStore.setState({ toasts: [] })
+    host = document.body.appendChild(document.createElement('div'))
+    dock = createDockview(host, {
+      defaultRenderer: 'always',
+      createComponent: () => ({ element: document.createElement('div'), init: () => {} }),
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    dock.dispose()
+    host.remove()
+    vi.useRealTimers()
+  })
+
+  it('duas abas no mesmo grupo: só a ativa é visível para o dockview', () => {
+    const { a, b } = twoTabs()
+
+    expect(a.group).toBe(b.group)
+    expect([a.api.isVisible, b.api.isVisible]).toEqual([false, true])
+  })
+
+  it('outra aba do grupo passa à frente: a saída da TUI não é parseada e o chat pausa', async () => {
+    const { a, b } = twoTabs()
+    a.api.setActive()
+    await mount(a.api)
+    setStatus('waiting')
+    expect(h.chatProps?.paused).toBe(false)
+
+    act(() => b.api.setActive())
+    vi.mocked(parseTuiMenuFull).mockClear()
+    vi.mocked(parseTuiPicker).mockClear()
+    await ptyPrints(PERMISSION_PROMPT)
+
+    expect(parses()).toBe(0)
+    expect(h.chatProps?.tuiMenu).toBeNull()
+    expect(h.chatProps?.paused).toBe(true)
+  })
+
+  it('a aba volta à frente: o chat sai da pausa já com o menu de agora', async () => {
+    const { a, b } = twoTabs()
+    a.api.setActive()
+    await mount(a.api)
+    setStatus('waiting')
+    await ptyPrints(PERMISSION_PROMPT)
+    act(() => b.api.setActive())
+    await ptyPrints(TRUST_PROMPT)
+    expect(h.chatProps).toMatchObject({ paused: true, tuiMenu: { kind: 'permission' } })
+    h.chatRenders.length = 0
+
+    act(() => a.api.setActive())
+
+    expect(h.chatRenders.filter((r) => !r.paused).map((r) => r.kind)).not.toContain('permission')
+    expect(h.chatProps).toMatchObject({ paused: false, tuiMenu: { kind: 'trust' } })
+  })
+
+  it('montada como aba inativa: nasce em pausa e lê a tela quando vira a ativa', async () => {
+    h.backlog = Promise.resolve(PERMISSION_PROMPT)
+    const { a } = twoTabs()
+    vi.mocked(parseTuiMenuFull).mockClear()
+    vi.mocked(parseTuiPicker).mockClear()
+
+    await mount(a.api)
+    setStatus('waiting')
+    await settle(SETTLED_MS)
+
+    expect(parses()).toBe(0)
+    expect(h.chatProps?.paused).toBe(true)
+
+    act(() => a.api.setActive())
+    await settle(20)
+
+    expect(h.chatProps).toMatchObject({ paused: false, tuiMenu: { kind: 'permission' } })
+  })
+
+  it('aba ativa numa área oculta segue em pausa, e a área voltar não acorda a aba inativa', async () => {
+    const { a, b } = twoTabs()
+    a.api.setActive()
+    await mount(a.api)
+    setStatus('waiting')
+
+    await setVisible(false)
+    expect(h.chatProps?.paused).toBe(true)
+
+    act(() => b.api.setActive())
+    await setVisible(true)
+    await ptyPrints(PERMISSION_PROMPT)
+    expect(h.chatProps).toMatchObject({ paused: true, tuiMenu: null })
+
+    act(() => a.api.setActive())
+    await settle(20)
+    expect(h.chatProps).toMatchObject({ paused: false, tuiMenu: { kind: 'permission' } })
   })
 })
 
