@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { require as tsxRequire } from 'tsx/cjs/api'
@@ -7,6 +7,7 @@ import { queryDb } from '../driver/inspect'
 import { copyRealUserData, launchApp, REPO_ROOT, writeCopyPrefs } from '../driver/launch'
 import { goToArea, waitReady } from '../driver/nav'
 import { typeOpenLoop } from '../driver/perf'
+import { transcriptLoad } from '../driver/transcript-load'
 import {
   compareTyped,
   loadChecks,
@@ -57,10 +58,6 @@ const { buildLongMotherLines } = tsxRequire(
 
 const CHARS = 300
 const KEY_DELAY_MS = 5
-// Acima do debounce de 150 ms do watcher do transcript (chat-transcript-service):
-// com appends mais juntos que isso ele só lê quando a rajada para, e o chat não
-// desenha nada enquanto se digita.
-const APPEND_EVERY_MS = 300
 const BASE_TURNS = 40
 // Turnos a mais do gerador, gravados aos poucos nas rodadas sob carga.
 const STREAM_TURNS = 200
@@ -279,20 +276,13 @@ try {
   const baseCount = turnLines * BASE_TURNS
   writeFileSync(transcript, all.slice(0, baseCount).join('\n') + '\n')
   const stream = all.slice(baseCount)
-  let appendedLines = 0
-  // Um turno inteiro por vez: cada leitura do watcher traz uma resposta nova do
-  // assistant para o chat desenhar.
+  const chatLoad = transcriptLoad(transcript, stream, turnLines)
   function startLoad(surface: Surface): void {
     fake.setStatus(pid, 'busy')
     if (surface === 'xterm') fake.setRawLoad(true)
-    const timer = setInterval(() => {
-      const turn = stream.slice(appendedLines, appendedLines + turnLines)
-      if (turn.length === 0) return
-      appendFileSync(transcript, turn.join('\n') + '\n')
-      appendedLines += turn.length
-    }, APPEND_EVERY_MS)
+    const stopAppends = chatLoad.start()
     stopLoad = () => {
-      clearInterval(timer)
+      stopAppends()
       fake.setRawLoad(false)
       fake.setStatus(pid, 'idle')
       stopLoad = () => {}
@@ -381,7 +371,7 @@ try {
     }
 
     const typed: Partial<Record<Layer, string>> = {}
-    const appendedAtStart = appendedLines
+    const appendedAtStart = chatLoad.appendedLines()
     const chatAtStart = load && surface === 'composer' ? await lastChatText() : ''
     const outputsAtStart = loadOutputs(await screenText())
     let appended = 0
@@ -398,7 +388,7 @@ try {
       }
       // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
       // depois disso não concorreu com a digitação.
-      appended = appendedLines - appendedAtStart
+      appended = chatLoad.appendedLines() - appendedAtStart
       chatChanged = load && surface === 'composer' && (await lastChatText()) !== chatAtStart
       // O foco não pode ter saído no meio da digitação.
       await expectFocus(mode, surface)
