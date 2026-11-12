@@ -77,8 +77,10 @@ try {
       console.log("[menu] itens (role=menuitem):", JSON.stringify(items));
       // Fallback: alguns Menu não usam role=menuitem.
       for (const label of [
-        "Dispensar (arquiva o card)",
-        "Soltar do painel (desfaz o vínculo)",
+        "Minimizar",
+        "Encerrar filha",
+        "Arquivar card",
+        "Desvincular",
         "Forçar falha",
       ]) {
         const n = await page.getByText(label, { exact: false }).count();

@@ -262,10 +262,8 @@ try {
     .locator('[data-testid="handoff-card"]')
     .filter({ hasText: 'listagem lenta' })
     .first()
-  // "Abrir terminal" abre o terminal no quick look (2b1b349); a aba de verdade sai
-  // do "abrir como aba" do rodapé.
-  await otavioCard.locator('button[title="Anexar o terminal desta sessão-filha"]').click()
-  await page.getByRole('button', { name: 'abrir como aba' }).click()
+  // "Abrir na aba" leva direto à aba de verdade, sem passar pelo quick look.
+  await otavioCard.locator('button[aria-label="Abrir na aba"]').click()
   await waitFor('aba do Otávio no dockview', async () => (await dockviewTabs()).tabs >= 1, 60_000)
   await page.waitForTimeout(2000)
   const tabsBaseline = await dockviewTabs()
