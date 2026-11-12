@@ -67,6 +67,7 @@ const { useSessionFeatureStore } = await import('@/store/sessionFeatureStore')
 const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
 const { useMotherPinsStore } = await import('@/features/sessions/mother-pins-store')
 const { useFocusFilterStore } = await import('@/lib/focus-filter-store')
+const { useChildActivityStore } = await import('@/features/handoffs/child-activity-store')
 
 function makeSession(over: Partial<LiveSessionInfo> = {}): LiveSessionInfo {
   return {
@@ -99,6 +100,7 @@ beforeEach(() => {
   sessions.length = 0
   background.length = 0
   pinnedIds.length = 0
+  useChildActivityStore.setState({ unread: {} })
   useSessionFeatureStore.setState({
     bySessionId: { 's-1': 'f-42' },
     featureTitles: { 'f-42': 'Extração TRF4' },
@@ -228,6 +230,57 @@ describe('SessionStrip — filhas em segundo plano', () => {
     sessions.push(named('mae'))
     setup([node('mae')], false)
     expect(screen.queryByTestId('strip-background-children')).not.toBeInTheDocument()
+  })
+
+  describe('não lida', () => {
+    const family = () => {
+      sessions.push(named('mae'))
+      background.push(named('helena-auth'), named('caio-db'))
+      return [
+        node('mae'),
+        node('helena-auth', { hierarchyMotherId: 'mae' }),
+        node('caio-db', { hierarchyMotherId: 'mae' }),
+      ]
+    }
+
+    it('mensagem da mãe: ponto no chip agregado e no item daquela filha', () => {
+      useChildActivityStore.setState({ unread: { 'caio-db': 'message' } })
+      setup(family(), false)
+
+      const chip = screen.getByTestId('strip-background-children')
+      expect(within(chip).getByTestId('strip-background-unread')).toBeInTheDocument()
+      expect(chip.title).toContain('1 com novidade que você não viu')
+
+      fireEvent.click(chip)
+      const item = screen.getByText('● caio-db · ocioso')
+      expect(item.closest('button')).toHaveAttribute(
+        'title',
+        'a mãe mandou mensagem e você ainda não abriu a aba',
+      )
+      expect(screen.getByText('helena-auth · ocioso')).toBeInTheDocument()
+      fireEvent.click(item)
+      expect(openSession).toHaveBeenCalledWith(background[1])
+    })
+
+    it('voltou a trabalhar sem aba: o item diz o motivo', () => {
+      useChildActivityStore.setState({ unread: { 'helena-auth': 'activity' } })
+      setup(family(), false)
+
+      fireEvent.click(screen.getByTestId('strip-background-children'))
+      expect(screen.getByText('● helena-auth · ocioso').closest('button')).toHaveAttribute(
+        'title',
+        'voltou a trabalhar sem aba aberta',
+      )
+    })
+
+    it('sem marca nas filhas deste chip não há ponto', () => {
+      useChildActivityStore.setState({ unread: { 'filha-de-outra-mae': 'message' } })
+      setup(family(), false)
+
+      const chip = screen.getByTestId('strip-background-children')
+      expect(within(chip).queryByTestId('strip-background-unread')).not.toBeInTheDocument()
+      expect(chip.title).not.toContain('novidade')
+    })
   })
 
   // jsdom não tem layout: a barra mede pelos retângulos [left, right] dados aqui,

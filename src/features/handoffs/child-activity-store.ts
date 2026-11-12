@@ -28,7 +28,7 @@ export const CHILD_UNREAD_HINT: Record<ChildUnread, string> = {
 }
 
 interface ChildActivityState {
-  unread: Readonly<Record<string, ChildUnread>>
+  unread: Readonly<Record<string, ChildUnread | undefined>>
 }
 
 export const useChildActivityStore = create<ChildActivityState>(() => ({ unread: {} }))
