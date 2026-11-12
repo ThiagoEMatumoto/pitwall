@@ -41,16 +41,9 @@ import { backfillRepoRemotes } from './services/git-remote'
 import { listMissingRepos } from './services/repo-clone'
 import { getPref, setPref } from './services/prefs-store'
 import {
-  autoDisableRecord,
-  countsAsGpuCrash,
-  decideGpuBoot,
-  gpuCrashThreshold,
-  notifiesGpuLoss,
-  parseGpuAutoDisabled,
+  createGpuCrashWatch,
+  resolveGpuBoot,
   setGpuState,
-  GPU_AUTO_PREF_KEY,
-  GPU_DISABLED_BY_USER_PREF_KEY,
-  GPU_DISABLED_PREF_KEY,
   OZONE_PREF_KEY,
   OZONE_PREF_DEFAULT,
 } from './services/gpu-state'
@@ -147,33 +140,13 @@ function safeGetPref<T>(key: string, fallback: T): T {
     return fallback
   }
 }
-// gpu.disabled é só a escolha manual; o desligamento por crash vive em
-// gpu.autoDisabled e é re-tentado (regra em decideGpuBoot). A tentativa é gravada
-// ANTES de ligar a GPU: é o que impede um driver quebrado de virar loop de crash.
-function resolveGpuBoot(): { hwAccelDisabled: boolean; probation: boolean } {
-  const input = {
-    envDisabled: process.env.CM_DISABLE_GPU === '1',
-    prefDisabled: safeGetPref(GPU_DISABLED_PREF_KEY, false),
-    disabledByUser: safeGetPref(GPU_DISABLED_BY_USER_PREF_KEY, false),
-    autoDisabled: parseGpuAutoDisabled(safeGetPref<unknown>(GPU_AUTO_PREF_KEY, null)),
-    version: app.getVersion(),
-    now: Date.now(),
-  }
-  const decision = decideGpuBoot(input)
-  try {
-    if (decision.prefDisabled !== input.prefDisabled) {
-      setPref(GPU_DISABLED_PREF_KEY, decision.prefDisabled)
-    }
-    if (decision.autoDisabled !== input.autoDisabled) {
-      setPref(GPU_AUTO_PREF_KEY, decision.autoDisabled)
-    }
-  } catch (err) {
-    console.warn('[gpu] não gravou a decisão de boot:', String(err))
-    if (decision.probation) return { hwAccelDisabled: true, probation: false }
-  }
-  return { hwAccelDisabled: decision.hwAccelDisabled, probation: decision.probation }
-}
-const gpuBoot = resolveGpuBoot()
+// A regra do boot e da re-tentativa vive em services/gpu-state.ts.
+const gpuBoot = resolveGpuBoot({
+  prefs: { getPref, setPref },
+  envDisabled: process.env.CM_DISABLE_GPU === '1',
+  version: app.getVersion(),
+  now: Date.now(),
+})
 const gpuOff = gpuBoot.hwAccelDisabled
 if (gpuOff) app.disableHardwareAcceleration()
 // Wayland nativo por padrão no Linux. Sob XWayland o servidor X gera autorepeat
@@ -489,63 +462,38 @@ app.whenReady().then(async () => {
     broadcast('gpu:resumed', { at: Date.now() })
   })
 
-  // Auto-fallback em crash do processo de GPU (driver instável, ex: NVIDIA/
-  // Wayland): avisa os renderers pra largarem o WebGL (seguem em DOM na mesma
-  // sessão). No 2º crash do driver (1º num boot de teste), registra o
-  // desligamento pro PRÓXIMO boot (a flag só vale antes do ready) e avisa o
-  // usuário via toast. O registro vai antes do broadcast: quem reagir ao
-  // gpu:crashed já lê o gpu:status atualizado.
+  // Auto-fallback em crash do processo de GPU: a regra (o que conta, quando
+  // desliga, quando o teste passa) vive em createGpuCrashWatch.
   app.on('child-process-gone', (_e, details) => {
-    if (details.type !== 'GPU') return
-    if (!notifiesGpuLoss(details.reason)) return
-    if (countsAsGpuCrash(details.reason)) recordGpuCrash(details.reason)
-    console.warn(`[gpu] processo de GPU morreu (${details.reason}) — crash #${gpuCrashCount}`)
-    broadcast('gpu:crashed', { reason: details.reason, count: gpuCrashCount })
+    if (details.type === 'GPU') gpuCrashWatch.processGone(details.reason)
   })
-  if (gpuOnProbation) gpuProbationTimer = setTimeout(endGpuProbation, GPU_PROBATION_MS)
+  if (gpuBoot.probation) {
+    gpuProbationTimer = setTimeout(() => gpuCrashWatch.endProbation(), GPU_PROBATION_MS)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
 })
 
-// Crashes de driver nesta execução (ver child-process-gone no whenReady). Morte
-// externa ('killed') não entra na conta.
-let gpuCrashCount = 0
-
 // Boot de teste: a GPU foi religada depois de um desligamento automático. Passa
 // no teste quem roda 10 min, ou fecha o app, sem crash de driver.
 const GPU_PROBATION_MS = 10 * 60 * 1000
-let gpuOnProbation = gpuBoot.probation
 let gpuProbationTimer: ReturnType<typeof setTimeout> | null = null
 
-function recordGpuCrash(reason: string): void {
-  gpuCrashCount += 1
-  // Com a aceleração já desligada o processo que morre é o de software: não diz
-  // nada sobre o driver.
-  if (gpuOff || gpuCrashCount !== gpuCrashThreshold(gpuOnProbation)) return
-  setPref(
-    GPU_AUTO_PREF_KEY,
-    autoDisableRecord({
-      previous: parseGpuAutoDisabled(getPref<unknown>(GPU_AUTO_PREF_KEY, null)),
-      reason,
-      version: app.getVersion(),
-      now: Date.now(),
-    }),
-  )
-  emitToast(
-    'Aceleração de GPU desativada',
-    'Aceleração de GPU instável neste driver — desativada. Reinicie o app pra aplicar totalmente.',
-  )
-}
-
-// Com crash no teste o boot segue em teste até o fim: o strike já foi somado e
-// um crash seguinte não pode somar outro na mesma execução.
-function endGpuProbation(): void {
-  if (!gpuOnProbation || gpuCrashCount > 0) return
-  gpuOnProbation = false
-  setPref(GPU_AUTO_PREF_KEY, null)
-}
+const gpuCrashWatch = createGpuCrashWatch({
+  prefs: { getPref, setPref },
+  hwAccelDisabled: gpuOff,
+  probation: gpuBoot.probation,
+  version: app.getVersion(),
+  now: Date.now,
+  onAutoDisabled: () =>
+    emitToast(
+      'Aceleração de GPU desativada',
+      'Aceleração de GPU instável neste driver — desativada. Reinicie o app pra aplicar totalmente.',
+    ),
+  notifyCrashed: (payload) => broadcast('gpu:crashed', payload),
+})
 
 // Self-heal de handoffs órfãos a cada 5min (ver app.whenReady).
 const HANDOFF_RECONCILE_INTERVAL_MS = 5 * 60 * 1000
@@ -580,7 +528,7 @@ function runFinalShutdown(): void {
     clearTimeout(gpuProbationTimer)
     gpuProbationTimer = null
   }
-  endGpuProbation()
+  gpuCrashWatch.endProbation()
   syncCoordinator.stop()
   featureMemory.close()
   // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.
