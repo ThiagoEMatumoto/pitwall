@@ -347,12 +347,17 @@ const ChatTranscriptView = forwardRef<ChatViewHandle, Props>(function ChatView({
   const windowStart =
     stale || rows.length === 0 ? null : nextWindowStart(windowFrom, rows.length, stuck)
   if (windowStart !== windowFrom) setWindowFrom(windowStart)
-  // Rolagem medida antes de a janela anterior entrar, pra repor depois do commit.
-  const beforeEarlierRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null)
+  // Rolagem e posição da primeira linha montada, medidas antes de a janela anterior
+  // entrar, pra repor depois do commit. A referência é a linha e não o scrollHeight: o
+  // que chega no fim no mesmo commit (streaming) também cresce o scrollHeight.
+  const rowsRef = useRef<HTMLDivElement>(null)
+  const beforeEarlierRef = useRef<{ scrollTop: number; anchor: HTMLElement; anchorTop: number } | null>(null)
   function showEarlierRows() {
     const el = scrollRef.current
     if (!el || !windowStart) return
-    beforeEarlierRef.current = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight }
+    const anchor = rowsRef.current?.firstElementChild
+    beforeEarlierRef.current =
+      anchor instanceof HTMLElement ? { scrollTop: el.scrollTop, anchor, anchorTop: anchor.offsetTop } : null
     // O que entra por cima já estava na conversa: não é conteúdo novo pra animar.
     firstCountRef.current = rendered.length
     setWindowFrom(earlierWindowStart(windowStart))
@@ -364,7 +369,9 @@ const ChatTranscriptView = forwardRef<ChatViewHandle, Props>(function ChatView({
     const el = scrollRef.current
     const before = beforeEarlierRef.current
     beforeEarlierRef.current = null
-    if (el && before) el.scrollTop = before.scrollTop + el.scrollHeight - before.scrollHeight
+    // Linha desmontada no mesmo commit (rewind, troca de sessão): não há o que repor.
+    if (el && before?.anchor.isConnected)
+      el.scrollTop = before.scrollTop + before.anchor.offsetTop - before.anchorTop
   })
   // Grupo do turno em andamento: o último, desde que nenhuma resposta ou mensagem
   // do disco tenha vindo depois (linhas que não renderizam e ecos não contam).
@@ -1241,7 +1248,7 @@ const ChatTranscriptView = forwardRef<ChatViewHandle, Props>(function ChatView({
                 Mostrar mensagens anteriores
               </button>
             )}
-            <div data-testid="chat-rows" className="flex min-w-0 flex-col">
+            <div ref={rowsRef} data-testid="chat-rows" className="flex min-w-0 flex-col">
               {rows.slice(windowStart ?? 0).map((row, w) => {
                 const r = (windowStart ?? 0) + w
                 const node =

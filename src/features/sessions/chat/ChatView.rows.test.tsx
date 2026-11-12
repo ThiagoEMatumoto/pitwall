@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { transcript } = vi.hoisted(() => {
@@ -282,9 +282,18 @@ describe('janela de linhas (contadores da sonda)', () => {
     }
   }
 
-  // Rolagem medida: o jsdom não faz layout, então a altura segue as linhas montadas.
+  afterEach(() => vi.restoreAllMocks())
+
+  // Rolagem medida: o jsdom não faz layout, então a altura e a posição de cada linha
+  // seguem as linhas montadas. Acima delas fica o botão de mensagens anteriores.
   function measured(rowPx = 40) {
     const el = scroller()
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const rows = this.parentElement
+      return rows ? 30 + Array.prototype.indexOf.call(rows.children, this) * rowPx : 0
+    })
     Object.defineProperty(el, 'scrollHeight', {
       configurable: true,
       get: () => rowsEl().children.length * rowPx,
@@ -368,6 +377,69 @@ describe('janela de linhas (contadores da sonda)', () => {
     expect(rowsEl().querySelectorAll(':scope > .chat-row-in')).toHaveLength(0)
     // Só os grupos da janela que entrou renderizam; os que já estavam, não.
     expect(renders('ToolGroup') - groups).toBeLessThanOrEqual(CHAT_WINDOW_ROWS / 4 + 1)
+  })
+
+  it('janela anterior e mensagem nova no mesmo commit: só o que entrou por cima desloca a rolagem', () => {
+    const all = turns(101)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w10" />)
+    const el = measured()
+
+    // Streaming: o disco muda entre o scroll e o commit da janela anterior.
+    act(() => {
+      el.scrollTop = 100
+      fireEvent.scroll(el)
+      transcript.messages = disk(all.slice(-5))
+      transcript.listeners.forEach((refresh) => refresh())
+    })
+
+    expect(rowsEl().children).toHaveLength(2 * CHAT_WINDOW_ROWS + 4)
+    expect(el.scrollTop).toBe(100 + CHAT_WINDOW_ROWS * 40)
+  })
+
+  it('"Ir para o fim" com mais de duas janelas montadas apara e volta a colar', () => {
+    const all = turns(101)
+    const disk = liveTranscript()
+    transcript.messages = disk(all.slice(0, -5))
+    render(<ChatView sessionId="w11" />)
+    const el = measured()
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(400)
+
+    act(() => fireEvent.click(screen.getByRole('button', { name: /Ir para o fim/ })))
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(screen.getByText(/^pronto 99\./)).toBeInTheDocument()
+
+    // A conversa encolheu: a rolagem cai perto do topo no meio do salto e nada volta a entrar.
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+
+    diskNow(disk(all.slice(-5)))
+    expect(el.scrollTop).toBe(el.scrollHeight)
+    expect(
+      screen.queryByRole('button', { name: /Ir para o fim|Novas mensagens/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('rewind desmonta a linha de referência no mesmo commit: a rolagem fica como está', () => {
+    transcript.messages = parseChatMessages(turns(100).join('\n'))
+    render(<ChatView sessionId="w12" />)
+    const el = measured()
+
+    act(() => {
+      el.scrollTop = 100
+      fireEvent.scroll(el)
+      transcript.messages = parseChatMessages(turns(50).join('\n'))
+      transcript.listeners.forEach((refresh) => refresh())
+    })
+
+    expect(rowsEl().children).toHaveLength(CHAT_WINDOW_ROWS)
+    expect(el.scrollTop).toBe(100)
   })
 
   it('lendo lá em cima, o que chega no fim não desmonta nada', () => {
