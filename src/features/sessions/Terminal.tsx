@@ -165,6 +165,19 @@ function readFooterText(term: Xterm): string {
   return readTailText(term, Math.min(term.rows, 10))
 }
 
+// Leitor do tail para UMA passada de parse: menu e picker pedem as mesmas janelas, e
+// cada leitura percorre as linhas do buffer.
+function tailReader(term: Xterm): (n: number) => string {
+  const read = new Map<number, string>()
+  return (n) => {
+    const hit = read.get(n)
+    if (hit !== undefined) return hit
+    const text = readTailText(term, n)
+    read.set(n, text)
+    return text
+  }
+}
+
 export function Terminal(props: Props) {
   const owner = useTerminalLease((s) => s.leases[props.session.id])
   const blocked = leaseBlocks(owner, props.leaseHost)
@@ -381,6 +394,11 @@ function TerminalHost({
   const rendererRef = useRef(renderer)
   rendererRef.current = renderer
   const visibleRef = useRef(true)
+  // O mesmo dado em estado, só pro que precisa re-renderizar com ele (pausa do chat).
+  const [paneVisible, setPaneVisible] = useState(true)
+  // Lido pelo scan da volta, que roda de dentro do mount effect.
+  const exitedRef = useRef(exited)
+  exitedRef.current = exited
 
   // Dispose do WebGL vivo (se houver): devolve ao DOM renderer, repinta a tela
   // toda (remove restos do atlas) e libera o slot do cap global.
@@ -442,9 +460,9 @@ function TerminalHost({
   // guard de clique — re-parse imediatamente antes de digitar). A janela cresce
   // só quando 40 linhas não bastam: menus altos (preview/wrap) ficavam cortados
   // e o parser fail-closava, empurrando o usuário pro terminal.
-  function readTuiMenuFrom(t: Xterm): TuiMenu | null {
+  function readTuiMenuFrom(t: Xterm, tail = tailReader(t)): TuiMenu | null {
     if (!caps.tuiMenus) return null
-    return parseTuiMenuFull((n) => readTailText(t, n), t.buffer.active.length)
+    return parseTuiMenuFull(tail, t.buffer.active.length)
   }
   function readTuiMenu(): TuiMenu | null {
     const t = xtermRef.current
@@ -463,9 +481,9 @@ function TerminalHost({
   // buffer — mesmo papel de readTuiMenu, exposto ao ChatView como guard. Mesma
   // janela adaptativa: a lista do /config e o preview do /theme passam de 40
   // linhas com facilidade.
-  function readTuiPickerFrom(t: Xterm): TuiPicker | null {
+  function readTuiPickerFrom(t: Xterm, tail = tailReader(t)): TuiPicker | null {
     if (!caps.tuiMenus) return null
-    return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiPicker, t.buffer.active.length)
+    return parseWithGrowingWindow(tail, parseTuiPicker, t.buffer.active.length)
   }
   function readTuiPicker(): TuiPicker | null {
     const t = xtermRef.current
@@ -488,6 +506,24 @@ function TerminalHost({
     )
   }
 
+  // Uma passada de leitura da tela: menu, picker, rascunho da CLI e modo de permissão.
+  // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer menu;
+  // 'starting'/'idle' (pré-transcript) só permission/trust; outros status limpam (null).
+  // O rodapé não é lido durante 'working'/'starting' (input box fora da tela).
+  function scanTui(t: Xterm) {
+    const parseStart = perfStart()
+    const tail = tailReader(t)
+    const menuOnScreen = readTuiMenuFrom(t, tail)
+    applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
+    applyTuiPicker(readTuiPickerFrom(t, tail))
+    setCliDraft(readCliInputFrom(t).draft)
+    if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
+      const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
+      if (mode) setCurrentMode(mode)
+    }
+    perfEnd('tui-parse', parseStart)
+  }
+
   // Menu TUI: parse na TRANSIÇÃO de status. Entrou num status elegível → tenta
   // parsear o que já está desenhado (o debounce do PTY cobre desenhos
   // posteriores); status inelegível → gate devolve null e limpa. 'waiting'
@@ -499,6 +535,8 @@ function TerminalHost({
       setPendingTuiPicker(null)
       return
     }
+    // Pane oculta não parseia: o scan da volta (IntersectionObserver) cobre.
+    if (!visibleRef.current) return
     applyTuiMenu(gateMenuByStatus(readTuiMenu(), activity?.status))
     applyTuiPicker(readTuiPicker())
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1008,21 +1046,11 @@ function TerminalHost({
       if (permTimerRef.current != null) clearTimeout(permTimerRef.current)
       permTimerRef.current = window.setTimeout(() => {
         const t = xtermRef.current
-        if (!t) return
-        const parseStart = perfStart()
-        // Menu TUI pendente: o parse roda no MESMO debounce (a saída assentou).
-        // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
-        // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
-        // status limpam (null).
-        const menuOnScreen = readTuiMenuFrom(t)
-        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
-        applyTuiPicker(readTuiPickerFrom(t))
-        setCliDraft(readCliInputFrom(t).draft)
-        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
-          if (mode) setCurrentMode(mode)
-        }
-        perfEnd('tui-parse', parseStart)
+        // Pane oculta não parseia a TUI: o card e o pill só servem a esta pane, e a
+        // atenção/notificação vêm do espelho headless do main (tui-menu-watch). O
+        // timer segue armado pra cobrir a pane que volta com a saída ainda assentando.
+        if (!t || !visibleRef.current) return
+        scanTui(t)
       }, 150)
       if (flushed) term.write(data)
       else liveTotal += data
@@ -1058,19 +1086,11 @@ function TerminalHost({
         if (liveTotal.length > backlog.length) term.write(liveTotal.slice(backlog.length))
         liveTotal = ''
         flushed = true
-        // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
-        // escrito no term). Gate de status: não lê durante 'working'/'starting'.
-        const menuOnScreen = readTuiMenuFrom(term)
-        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          const mode = footerModeUpdate(readFooterText(term), menuOnScreen != null)
-          if (mode) setCurrentMode(mode)
-        }
-        // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
-        // prompt numa pane remontada) não gera data event novo — sem este seed o
-        // card só apareceria no próximo byte do PTY.
-        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
-        applyTuiPicker(readTuiPickerFrom(term))
-        setCliDraft(readCliInputFrom(term).draft)
+        // Seed do modo de permissão e do menu TUI a partir do que o backlog desenhou: um
+        // prompt já na tela ANTES do mount (ex.: trust prompt numa pane remontada) não
+        // gera data event novo — sem este seed o card só apareceria no próximo byte do
+        // PTY. Pane montada oculta espera o scan da volta.
+        if (visibleRef.current) scanTui(term)
       })
 
     // Copy-on-select: copiar automaticamente o que for selecionado.
@@ -1170,9 +1190,21 @@ function TerminalHost({
     const io = new IntersectionObserver(
       (entries) => {
         const visible = entries[entries.length - 1]?.isIntersecting ?? true
+        const cameBack = visible && !visibleRef.current
         visibleRef.current = visible
+        setPaneVisible(visible)
         if (visible) attachWebgl()
         else detachWebgl()
+        // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. O
+        // write vazio drena a fila do xterm (write é assíncrono) antes da leitura. O
+        // modo de permissão é comparado com o visto antes de ocultar (o baseline do
+        // aviso não zera), então a troca feita pela CLI nesse meio ainda avisa. Antes
+        // do replay do backlog a tela está vazia: quem lê é o seed.
+        if (!cameBack || !flushed) return
+        term.write('', () => {
+          if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
+          scanTui(term)
+        })
       },
       { threshold: 0 },
     )
@@ -1584,6 +1616,7 @@ function TerminalHost({
             cliDraft={cliDraft}
             readCliInput={readInput}
             isChild={linkState === 'active'}
+            paused={!paneVisible}
           />
         )}
 
