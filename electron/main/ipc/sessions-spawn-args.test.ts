@@ -98,7 +98,7 @@ import { markHibernated, unmarkHibernated } from '../services/hibernate/hibernat
 import { parseSpawnArgs } from '../services/spawn-args'
 import * as handoffStore from '../services/handoff-store'
 import { spawnHandoffChild } from '../services/handoff/spawn-child'
-import { permissionModeForHandoffMode } from '../services/spawn-flags'
+import { HANDOFF_CHILD_DENY, permissionModeForHandoffMode } from '../services/spawn-flags'
 
 const REPO_DIR = join(HOME, 'repo')
 const MODEL = SPAWNABLE_MODEL_ALIASES[0]
@@ -701,7 +701,9 @@ describe('filha de handoff done retomada', () => {
     expect(argvOf(resumed)).toContain(`-n '${ALIAS}'`)
     expect(launchOf(resumed)).toEqual(before)
     expect(settingsOf(resumed)?.crossSessionInbound).toBe('accept')
-    expect(settingsOf(resumed)?.permissions?.deny).toContain('Bash(rm:*)')
+    expect(settingsOf(resumed)?.permissions?.deny).toEqual(
+      expect.arrayContaining([...HANDOFF_CHILD_DENY]),
+    )
     const row = rowOf(resumed)
     expect(row).toMatchObject({ title: ALIAS, title_source: 'manual' })
     expect(parseSpawnArgs(row.spawn_args)).toMatchObject({
