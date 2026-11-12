@@ -111,7 +111,7 @@ export class EdgePulseStore {
 
   // Um fio montado "assume" o par: o pulso anda nele. Par sem fio (sessões de
   // projetos diferentes, mãe com o leque recolhido) ganha um arco temporário na camada solta.
-  // Dois fios no mesmo par (handoff + ask) não desenham dois trens: só o dono.
+  // Se mais de um fio assumir o mesmo par, só o primeiro (o dono) desenha o trem.
   claim(key: string, edgeId: string): () => void {
     this.claims.set(key, [...(this.claims.get(key) ?? []), edgeId])
     this.touchClaims(key)
