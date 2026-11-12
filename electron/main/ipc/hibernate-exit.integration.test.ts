@@ -68,6 +68,7 @@ vi.mock('electron', async () => {
       handle: (channel: string, fn: (event: unknown, ...args: unknown[]) => unknown) => {
         seam.handlers.set(channel, fn)
       },
+      on: () => {},
     },
     __win: win,
   }

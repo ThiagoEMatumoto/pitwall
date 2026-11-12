@@ -113,6 +113,7 @@ import type {
   ScreenTailUpdate,
   SendPromptInput,
 } from '../../shared/types/send-prompt'
+import { createBacklogRequests } from './backlog-request'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -131,6 +132,8 @@ function subscribe<T>(channel: string, handler: (event: T) => void): () => void 
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
 }
+
+const backlogRequests = createBacklogRequests(ipcRenderer)
 
 const api: Api = {
   projects: {
@@ -153,7 +156,7 @@ const api: Api = {
     currentIds: (sessionIds) => invoke('sessions:current-ids', sessionIds),
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
     listByFeature: (featureId) => invoke('sessions:list-by-feature', featureId),
-    getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
+    getBacklog: (sessionId) => backlogRequests.get(sessionId),
     write: (sessionId, data) => invoke('sessions:write', sessionId, data),
     saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
     getDraft: (key) => invoke('sessions:get-draft', key),

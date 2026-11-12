@@ -62,7 +62,7 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
-import { perfCount } from '../services/perf-probe'
+import { perfCount, perfOut } from '../services/perf-probe'
 import { createPtyDataCoalescer } from '../services/pty-data-coalescer'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
@@ -118,6 +118,7 @@ import type {
   AgentProviderId,
   AttentionRespondInput,
   SessionRenamedEvent,
+  BacklogReply,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -1767,11 +1768,22 @@ export function registerSessionIpc(): void {
   }))
   ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
-  ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
-    // O replay do Terminal assume que todo byte do backlog já foi entregue antes
-    // desta resposta; o que ficasse na janela chegaria depois e duplicaria na tela.
-    ptyData.flush(sessionId)
-    return ptyManager.getBacklog(sessionId)
+  // O replay do Terminal assume que todo byte do backlog já foi entregue antes
+  // da resposta. Por isso ela não é o retorno de um invoke (que ultrapassava os
+  // pty:data já enfileirados quando o renderer estava atrasado, e o replay os
+  // escrevia de novo): sai por sender.send, na mesma fila ordenada deles.
+  ipcMain.on('sessions:get-backlog', (e, requestId: number, sessionId: string) => {
+    if (e.sender.isDestroyed()) return
+    let reply: BacklogReply
+    try {
+      // O que ficasse na janela do coalescer chegaria depois e duplicaria na tela.
+      ptyData.flush(sessionId)
+      reply = { requestId, backlog: ptyManager.getBacklog(sessionId) }
+    } catch (err) {
+      reply = { requestId, error: err instanceof Error ? err.message : String(err) }
+    }
+    perfOut('sessions:backlog')
+    e.sender.send('sessions:backlog', reply)
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
