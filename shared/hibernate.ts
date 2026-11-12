@@ -33,6 +33,7 @@ export const HIBERNATE_REFUSALS = [
   'handoff-child',
   'queue',
   'no-transcript',
+  'transcript-reading',
   'scheduled',
   'background-task',
   'proc-tree',

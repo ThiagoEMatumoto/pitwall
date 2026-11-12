@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendFileSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -285,5 +285,50 @@ describe('ScheduleScanner', () => {
 
   it('transcript ausente devolve null (quem chama recusa)', async () => {
     expect(await new ScheduleScanner().scan(join(dir, 'nope.jsonl'))).toBeNull()
+  })
+
+  // O tick não espera a leitura: um transcript de dezenas de MB leva centenas de ms.
+  describe('peek', () => {
+    const readsOf = (scanner: ScheduleScanner) =>
+      vi.spyOn(scanner as unknown as { read(path: string): Promise<unknown> }, 'read')
+
+    it('transcript novo devolve reading na hora e o veredito numa consulta seguinte', async () => {
+      const path = join(dir, 'm.jsonl')
+      writeFileSync(path, `${MONITOR_USE}\n${MONITOR_STARTED}\n${MONITOR_EVENT}\n`)
+      const scanner = new ScheduleScanner()
+      expect(await scanner.peek(path)).toBe('reading')
+      await vi.waitFor(async () => expect(await scanner.peek(path)).toBe('background-task'))
+    })
+
+    it('transcript alterado volta a reading até a releitura terminar', async () => {
+      const path = join(dir, 's.jsonl')
+      writeFileSync(path, `${userText('oi')}\n`)
+      const scanner = new ScheduleScanner()
+      expect(await scanner.scan(path)).toBe('clear')
+      expect(await scanner.peek(path)).toBe('clear')
+      appendFileSync(path, `${toolUse('CronCreate')}\n`)
+      expect(await scanner.peek(path)).toBe('reading')
+      await vi.waitFor(async () => expect(await scanner.peek(path)).toBe('scheduled'))
+    })
+
+    it('consultas durante a leitura não abrem outra leitura do mesmo transcript', async () => {
+      const path = join(dir, 's.jsonl')
+      writeFileSync(path, `${userText('oi')}\n`)
+      const scanner = new ScheduleScanner()
+      const reads = readsOf(scanner)
+      expect(await Promise.all([scanner.peek(path), scanner.peek(path)])).toEqual([
+        'reading',
+        'reading',
+      ])
+      await vi.waitFor(async () => expect(await scanner.peek(path)).toBe('clear'))
+      expect(reads).toHaveBeenCalledTimes(1)
+    })
+
+    it('transcript ausente devolve null, sem leitura', async () => {
+      const scanner = new ScheduleScanner()
+      const reads = readsOf(scanner)
+      expect(await scanner.peek(join(dir, 'nope.jsonl'))).toBeNull()
+      expect(reads).not.toHaveBeenCalled()
+    })
   })
 })

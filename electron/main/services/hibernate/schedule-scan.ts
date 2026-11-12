@@ -19,6 +19,8 @@ import { createInterface } from 'node:readline'
 // <tool-use-id>; só a terminal tem <status>. Eventos do Monitor não têm status.
 
 export type TranscriptVerdict = 'clear' | 'scheduled' | 'background-task'
+// 'reading' = o transcript ainda está sendo lido; o veredito sai numa consulta seguinte.
+export type TranscriptPeek = TranscriptVerdict | 'reading'
 
 const SCHEDULING_TOOLS = new Set(['CronCreate', 'ScheduleWakeup', 'RemoteTrigger'])
 const LOOP_COMMAND = '<command-name>/loop</command-name>'
@@ -178,32 +180,60 @@ export class BackgroundTracker {
   }
 }
 
-interface CacheEntry {
+interface Stamp {
   size: number
   mtimeMs: number
+}
+
+interface CacheEntry extends Stamp {
   verdict: TranscriptVerdict
+}
+
+async function stampOf(path: string): Promise<Stamp | null> {
+  try {
+    const st = await stat(path)
+    return { size: st.size, mtimeMs: st.mtimeMs }
+  } catch {
+    return null
+  }
 }
 
 export class ScheduleScanner {
   private cache = new Map<string, CacheEntry>()
+  private reading = new Set<string>()
 
   // null = transcript ilegível (sumiu, sem permissão): quem chama recusa.
   async scan(path: string): Promise<TranscriptVerdict | null> {
-    let size: number
-    let mtimeMs: number
-    try {
-      const st = await stat(path)
-      size = st.size
-      mtimeMs = st.mtimeMs
-    } catch {
-      return null
-    }
-    const hit = this.cache.get(path)
-    if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.verdict
+    const stamp = await stampOf(path)
+    if (!stamp) return null
+    const hit = this.hit(path, stamp)
+    if (hit) return hit
     const verdict = await this.read(path)
     if (verdict === null) return null
-    this.cache.set(path, { size, mtimeMs, verdict })
+    this.cache.set(path, { ...stamp, verdict })
     return verdict
+  }
+
+  // O que o tick usa: não espera a leitura. Ler um transcript de dezenas de MB
+  // leva centenas de ms, então o novo (ou alterado desde a última leitura)
+  // devolve 'reading' e é lido em segundo plano, uma leitura por vez por arquivo.
+  // Leitura que falha não fica no cache: a consulta seguinte tenta de novo.
+  async peek(path: string): Promise<TranscriptPeek | null> {
+    const stamp = await stampOf(path)
+    if (!stamp) return null
+    const hit = this.hit(path, stamp)
+    if (hit) return hit
+    if (!this.reading.has(path)) {
+      this.reading.add(path)
+      void this.scan(path).finally(() => this.reading.delete(path))
+    }
+    return 'reading'
+  }
+
+  private hit(path: string, stamp: Stamp): TranscriptVerdict | null {
+    const entry = this.cache.get(path)
+    const same = entry && entry.size === stamp.size && entry.mtimeMs === stamp.mtimeMs
+    return same ? entry.verdict : null
   }
 
   private async read(path: string): Promise<TranscriptVerdict | null> {

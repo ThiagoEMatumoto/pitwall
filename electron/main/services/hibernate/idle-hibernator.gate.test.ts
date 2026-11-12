@@ -333,6 +333,10 @@ describe('gate da hibernação (fontes reais)', () => {
       ok: false,
       reason: 'no-transcript',
     })
+    expect(await evaluate(gate({ scanTranscript: async () => 'reading' }))).toEqual({
+      ok: false,
+      reason: 'transcript-reading',
+    })
     expect(await evaluate(gate({ scanTranscript: async () => 'scheduled' }))).toEqual({
       ok: false,
       reason: 'scheduled',

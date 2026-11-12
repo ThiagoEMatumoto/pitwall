@@ -23,7 +23,7 @@ import {
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
 import type { ProcTreeVerdict } from './proc-tree'
-import type { TranscriptVerdict } from './schedule-scan'
+import type { TranscriptPeek } from './schedule-scan'
 
 export const HIBERNATE_TICK_MS = 60_000
 // O marcador cai aqui: um exit depois disso é um exit comum (o claude que não saiu
@@ -85,8 +85,8 @@ export interface IdleHibernatorDeps {
   handoffChildKind(ccSessionId: string): HandoffChildKind
   queueHas(sessionId: string): boolean
   transcriptPath(ccSessionId: string): string | null
-  // null = transcript ilegível.
-  scanTranscript(path: string): Promise<TranscriptVerdict | null>
+  // null = transcript ilegível. 'reading' = ainda sendo lido, fora do tick.
+  scanTranscript(path: string): Promise<TranscriptPeek | null>
   procTree(pid: number): ProcTreeVerdict
   send(input: SendPromptInput): Promise<SendPromptResult>
   cancel(queueId: string): void
@@ -329,6 +329,7 @@ export class IdleHibernator {
     if (!path) return refuse('no-transcript')
     const transcript = await this.deps.scanTranscript(path)
     if (transcript === null) return refuse('no-transcript')
+    if (transcript === 'reading') return refuse('transcript-reading')
     if (transcript !== 'clear') return refuse(transcript)
     // f) nada rodando embaixo do claude.
     const tree = this.deps.procTree(file.pid)

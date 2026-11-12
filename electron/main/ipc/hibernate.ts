@@ -116,7 +116,7 @@ export function createIdleHibernator(): IdleHibernator {
     handoffChildKind: childHandoffKindCc,
     queueHas: (id) => promptQueue.snapshot().items.some((item) => item.sessionId === id),
     transcriptPath: findTranscriptPath,
-    scanTranscript: (path) => scanner.scan(path),
+    scanTranscript: (path) => scanner.peek(path),
     procTree: (pid) => inspectProcTree(pid),
     send: (input) => promptQueue.send(input),
     cancel: (id) => {
