@@ -11,7 +11,7 @@ vi.mock('../transcript-path', () => ({
 import * as store from '../handoff-store'
 import { applyAllMigrations, seedRepos, seedSession } from '../attention/attention-test-harness'
 import { resumeSweptChildren } from './boot-resume'
-import { sweepInFlightHandoffs } from './boot-sweep'
+import { ORPHANED_AT_BOOT_ERROR, sweepInFlightHandoffs } from './boot-sweep'
 
 function ccOf(id: string): string {
   return (testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as {
@@ -80,6 +80,31 @@ describe('boot: filhas em voo sem aba voltam vivas', () => {
     expect(resume).toHaveBeenCalledTimes(1)
     expect(store.get(ended)?.childSessionId).toBe('f2')
     expect(store.get(ended)?.resumable).toBe(true)
+  })
+
+  // O app fechou na janela do Desfazer: a PTY morre sem passar pelo exit handler,
+  // então é o sweep que grava o motivo que a mãe lê.
+  it('o sweep grava "encerrada pelo usuário" na filha marcada e "órfã" nas outras', () => {
+    const background = dispatch('f1')
+    const ended = dispatch('f2')
+    store.setEndedByUser(ended, true)
+    const asking = dispatch('f3')
+    store.ask(asking, 'pergunta')
+    store.setEndedByUser(asking, true)
+    const undone = dispatch('f4')
+    store.setEndedByUser(undone, true)
+    store.setEndedByUser(undone, false)
+
+    sweep()
+
+    expect(store.get(ended)?.error).toBe(store.ENDED_BY_USER_ERROR)
+    expect(store.get(asking)?.error).toBe(store.ENDED_BY_USER_ERROR)
+    expect(store.get(background)?.error).toBe(ORPHANED_AT_BOOT_ERROR)
+    expect(store.get(undone)?.error).toBe(ORPHANED_AT_BOOT_ERROR)
+    for (const id of [background, ended, asking, undone]) {
+      expect(store.get(id)?.status).toBe('interrupted')
+    }
+    expect(store.get(ended)?.childSessionId).toBe('f2')
   })
 
   it('falha ao retomar uma não impede as outras', () => {

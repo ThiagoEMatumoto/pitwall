@@ -789,10 +789,7 @@ export function undismiss(id: string): Handoff {
   return fresh(id)
 }
 
-// Motivo gravado quando a PTY de uma filha encerrada pelo usuário sai. É o texto
-// que a mãe lê no aviso: sem ele ela veria uma filha que "caiu" e re-despacharia.
-export const ENDED_BY_USER_ERROR =
-  'Sessão-filha encerrada pelo usuário no Pitwall (não caiu nem falhou). Não re-despache este trabalho por conta própria: ela segue vinculada e o usuário a retoma quando quiser.'
+export { ENDED_BY_USER_ERROR } from './handoff/ended-by-user'
 
 // O usuário encerrou a filha de propósito (ou desfez isso na janela do Desfazer).
 // Só a marca muda: status e child_session_id ficam como estão — encerrar não

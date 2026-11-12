@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { ENDED_BY_USER_ERROR } from './ended-by-user'
 
 export const ORPHANED_AT_BOOT_ERROR = 'Sessão-filha órfã: app reiniciou sem reconciliar o handoff'
 
@@ -12,6 +13,9 @@ export const ORPHANED_AT_BOOT_ERROR = 'Sessão-filha órfã: app reiniciou sem r
 // pelo humano. Mantém em sync com failIfRunning / reconcileStuck (mesma transição
 // em → interrupted).
 //
+// A filha que o usuário encerrou e cuja PTY morreu com o app (sem passar pelo exit
+// handler) leva o mesmo motivo que o exit gravaria: é o que a mãe lê depois.
+//
 // Devolve quem estava em voo, lido ANTES do UPDATE: o lazy restore sobe eager a mãe
 // e a filha desses handoffs, e depois do sweep eles são indistinguíveis de um
 // 'interrupted' antigo (que não deve acordar nada no boot).
@@ -20,7 +24,11 @@ export function sweepInFlightHandoffs(db: Database.Database): string[] {
     .prepare("SELECT id FROM handoffs WHERE status IN ('running','needs_input')")
     .all() as Array<{ id: string }>
   db.prepare(
-    "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",
-  ).run(ORPHANED_AT_BOOT_ERROR, Date.now())
+    `UPDATE handoffs
+        SET status = 'interrupted',
+            error = CASE WHEN ended_by_user_at IS NOT NULL THEN ? ELSE ? END,
+            updated_at = ?
+      WHERE status IN ('running','needs_input')`,
+  ).run(ENDED_BY_USER_ERROR, ORPHANED_AT_BOOT_ERROR, Date.now())
   return inFlight.map((r) => r.id)
 }
