@@ -91,7 +91,7 @@ import { liveKeyOf } from '@/features/sessions/live-key'
 import { SessionLinkHud } from '@/features/sessions/SessionLinkHud'
 import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { sessionLinkKeyAction, stepSessionLink } from '@/features/sessions/session-link-nav'
-import { flushAllDraftsSync } from '@/features/sessions/composer-draft-persister'
+import { flushAllDrafts } from '@/features/sessions/composer-draft-persister'
 
 interface PaneParams {
   pane: ActivePane
@@ -365,8 +365,9 @@ export function AppShell() {
       // Default contextual: ao trocar o pane ativo, o seletor de arquivos segue
       // o repo daquele terminal (quando está entre os roots).
       event.api.onDidActivePanelChange(() => {
-        // Troca de pane: o rascunho da que perdeu o foco vai para o disco já.
-        flushAllDraftsSync()
+        // Troca de pane: o rascunho da que perdeu o foco vai para o disco já,
+        // sem IPC síncrono (o renderer não espera o main para trocar).
+        void flushAllDrafts()
         syncFilesRepoToActivePane()
         const id = event.api.activePanel?.id ?? null
         setActivePanelId(id)

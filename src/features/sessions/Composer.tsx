@@ -342,7 +342,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     const persister = persisterRef.current
     if (!persister) return
     persister.update({ text, attachments: attached.map(({ name, path }) => ({ name, path })) })
-    persister.flushSync()
+    void persister.flush()
   }
 
   useEffect(() => {
