@@ -16,7 +16,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { handoffsApi, prefsApi } from '@/lib/ipc'
-import { useAppStore } from '@/store/appStore'
+import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
 import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
@@ -132,10 +132,14 @@ export function childProcessAlive(
 // dismissed_at IS NULL): prometia arquivar e, na prática, soltava. Quem tira a
 // filha viva da frente é Minimizar ou Encerrar.
 export function canArchiveCard(
-  handoff: Pick<Handoff, 'dismissedAt'>,
+  handoff: Pick<Handoff, 'dismissedAt' | 'childSessionId'>,
   child: Pick<LiveSessionInfo, 'status'> | null | undefined,
 ): boolean {
-  return handoff.dismissedAt == null && !childProcessAlive(child)
+  if (handoff.dismissedAt != null || childProcessAlive(child)) return false
+  // Encerrar com o Desfazer em aberto: a filha já saiu da lista viva, mas a PTY
+  // só morre quando a janela expira. Arquivar ali e desfazer devolvia a filha
+  // viva a um card arquivado.
+  return !handoff.childSessionId || !pendingEndSessionIds().has(handoff.childSessionId)
 }
 
 // "Forçar falha" só para o aprovado cuja filha nunca subiu: ali não há processo

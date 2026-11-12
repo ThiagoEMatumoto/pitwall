@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -18,13 +18,20 @@ vi.mock('@/lib/ipc', () => ({
     detachChild: vi.fn().mockResolvedValue(undefined),
     release: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue([]),
+    setChildEnded: vi.fn().mockResolvedValue(null),
   },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
+  // O que o endSession real do appStore toca.
+  sessionsApi: {
+    kill: vi.fn().mockResolvedValue(undefined),
+    clearSessionDrafts: vi.fn().mockResolvedValue(undefined),
+  },
+  workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
 
 import { HandoffCard } from './HandoffCard'
 import { useAppStore, type ActivePane } from '@/store/appStore'
-import { handoffsApi } from '@/lib/ipc'
+import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { useToastStore } from '@/features/notifications/toast-store'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
@@ -208,6 +215,60 @@ describe('HandoffCard: "Arquivar card" só com o processo morto', () => {
       />,
     )
     expect(screen.queryByLabelText('Arquivar card')).toBeNull()
+  })
+})
+
+// O endSession tira a filha da lista viva na hora, mas a PTY só morre quando a
+// janela do Desfazer expira. Arquivar ali e desfazer deixava a filha viva sem
+// card. Aqui o Encerrar é o do appStore, não um mock.
+describe('HandoffCard: Encerrar com o Desfazer em aberto não libera o Arquivar', () => {
+  // END_UNDO_MS + END_KILL_GRACE_MS do appStore.
+  const END_WINDOW_MS = 5750
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    useAppStore.setState({ liveSessions: [], panes: [] })
+    useToastStore.setState({ toasts: [] })
+    vi.mocked(sessionsApi.kill).mockClear()
+  })
+  afterEach(() => {
+    vi.runAllTimers()
+    vi.useRealTimers()
+    useAppStore.setState({ liveSessions: [], panes: [] })
+    useToastStore.setState({ toasts: [] })
+  })
+
+  function endChildFromMenu() {
+    mountDock({}, 'idle')
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    fireEvent.click(screen.getByText('Encerrar filha'))
+    expect(useAppStore.getState().liveSessions).toEqual([])
+  }
+
+  it('na janela do Desfazer a PTY segue viva: nem o "×" nem o item do menu', () => {
+    endChildFromMenu()
+    expect(screen.queryByLabelText('Arquivar card')).toBeNull()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.getByText('Desvincular')).toBeTruthy()
+    expect(screen.queryByText('Arquivar card')).toBeNull()
+  })
+
+  it('Desfazer devolve a filha viva, e o card segue sem Arquivar', () => {
+    endChildFromMenu()
+    act(() => useToastStore.getState().toasts[0].onAction?.())
+    expect(useAppStore.getState().liveSessions.map((s) => s.id)).toEqual(['s-child'])
+    expect(screen.queryByLabelText('Arquivar card')).toBeNull()
+  })
+
+  it('janela expirada: o processo foi morto e o "×" aparece', () => {
+    endChildFromMenu()
+    act(() => {
+      vi.advanceTimersByTime(END_WINDOW_MS)
+    })
+    expect(sessionsApi.kill).toHaveBeenCalledWith('s-child')
+    // O que o refreshLiveSessions do timer faz com o watch ligado: lista nova.
+    act(() => useAppStore.setState({ liveSessions: [] }))
+    expect(screen.getByLabelText('Arquivar card')).toBeTruthy()
   })
 })
 

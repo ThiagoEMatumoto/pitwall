@@ -9,8 +9,15 @@ vi.mock('@/lib/ipc', () => ({
   handoffsApi: {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     isResumable: vi.fn().mockResolvedValue(false),
+    setChildEnded: vi.fn().mockResolvedValue(null),
   },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
+  // O que o endSession real do appStore toca.
+  sessionsApi: {
+    kill: vi.fn().mockResolvedValue(undefined),
+    clearSessionDrafts: vi.fn().mockResolvedValue(undefined),
+  },
+  workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
 
 import { CrewDock } from './CrewDock'
@@ -189,5 +196,27 @@ describe('CrewDock: Delete arquiva o card só com o processo morto', () => {
   it('processo morto: Delete arquiva', () => {
     pressDeleteOnCard()
     expect(dismiss).toHaveBeenCalledWith('h1')
+  })
+
+  // O endSession (o do appStore, não um mock) tira a filha da lista viva na hora,
+  // mas a PTY só morre quando a janela do Desfazer expira.
+  describe('Encerrar com o Desfazer em aberto', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.runAllTimers()
+      vi.useRealTimers()
+    })
+
+    it('Delete não arquiva: a PTY segue viva', () => {
+      useAppStore.setState({
+        liveSessions: [{ id: 's-child', ccSessionId: 'cc-child', status: 'idle' } as LiveSessionInfo],
+      })
+      useAppStore.getState().endSession('s-child', { linkedChild: true })
+      expect(useAppStore.getState().liveSessions).toEqual([])
+      pressDeleteOnCard()
+      expect(dismiss).not.toHaveBeenCalled()
+    })
   })
 })
