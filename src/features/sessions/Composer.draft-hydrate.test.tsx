@@ -11,7 +11,7 @@ vi.mock('electron', () => ({ app: {} }))
 
 const draftApi = vi.hoisted(() => ({
   getDraft: vi.fn(),
-  getDraftSync: vi.fn(() => null),
+  getDraftSync: vi.fn((_key: string): ComposerDraft | null => null),
   saveDraft: vi.fn(async () => {}),
   saveDraftSync: vi.fn(),
   writeDraft: vi.fn(),
@@ -83,6 +83,7 @@ import {
   getComposerDraft,
   saveComposerDraft,
 } from '../../../electron/main/services/composer-drafts'
+import { createDraftWriteThrough } from '../../../electron/main/services/draft-write-through'
 import { Composer, type ComposerHandle } from './Composer'
 import { DRAFT_HYDRATE_LOCK_MS } from './composer-draft-persister'
 
@@ -113,6 +114,20 @@ function pendingRead() {
   return async (draft: ComposerDraft | null) => {
     await act(async () => release(draft))
   }
+}
+
+// O main de verdade sobre o app.db do teste, na fiação do IPC
+// (electron/main/ipc/composer-drafts.ts): o que o Composer grava chega ao banco.
+function wireRealMain() {
+  const main = createDraftWriteThrough(() => db)
+  const read = (key: string) => {
+    main.drain()
+    return getComposerDraft(db, key)
+  }
+  draftApi.writeDraft.mockImplementation((draft) => main.write(draft))
+  draftApi.saveDraftSync.mockImplementation((draft) => main.saveDurable(draft))
+  draftApi.getDraftSync.mockImplementation(read)
+  return read
 }
 
 function mount(
@@ -174,6 +189,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   cleanup()
+  draftApi.writeDraft.mockReset()
+  draftApi.saveDraftSync.mockReset()
+  draftApi.getDraftSync.mockReset().mockImplementation(() => null)
   db.close()
   rmSync(dir, { recursive: true, force: true })
 })
@@ -457,6 +475,59 @@ describe('Composer — remount de pane já lida', () => {
     await act(async () => {})
 
     expect(box.value).toBe(SAVED)
+  })
+
+  it('o teto destravou, digitou e desmontou antes da leitura: o remount mantém o salvo junto com o digitado', async () => {
+    vi.useFakeTimers()
+    const paneId = `hydrate-${paneSeq}`
+    const key = `pane:${paneId}`
+    savedDraft(paneId, SAVED)
+    const read = wireRealMain()
+    pendingRead()
+    const first = mount(paneId)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DRAFT_HYDRATE_LOCK_MS)
+    })
+    type(first, 'novo')
+    cleanup()
+    expect(read(key)?.text).toBe(`${SAVED}\n\nnovo`)
+
+    const box = mount(paneId)
+    await act(async () => {})
+
+    expect(box.readOnly).toBe(false)
+    expect(box.value).toBe(`${SAVED}\n\nnovo`)
+    expect(read(key)?.text).toBe(`${SAVED}\n\nnovo`)
+    expect(draftApi.getDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('a leitura síncrona do desmonte falhou: o remount relê e junta o salvo ao digitado', async () => {
+    vi.useFakeTimers()
+    const paneId = `hydrate-${paneSeq}`
+    const key = `pane:${paneId}`
+    savedDraft(paneId, SAVED)
+    const read = wireRealMain()
+    draftApi.getDraftSync.mockImplementationOnce(() => {
+      throw new Error('main fora do ar')
+    })
+    pendingRead()
+    const first = mount(paneId)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DRAFT_HYDRATE_LOCK_MS)
+    })
+    type(first, 'novo')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    cleanup()
+    errors.mockRestore()
+    expect(read(key)?.text).toBe(SAVED)
+
+    draftApi.getDraft.mockImplementationOnce(async (k: string) => read(k))
+    const box = mount(paneId)
+    expect(box.readOnly).toBe(true)
+    await act(async () => {})
+
+    expect(box.value).toBe(`${SAVED}\n\nnovo`)
+    expect(read(key)?.text).toBe(`${SAVED}\n\nnovo`)
   })
 })
 

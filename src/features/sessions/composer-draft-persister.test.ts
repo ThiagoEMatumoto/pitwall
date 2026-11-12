@@ -208,6 +208,50 @@ describe('flush assíncrono em voo', () => {
     expect(h.calls.saveSync.map((d) => d.text)).toEqual(['antes e depois'])
   })
 
+  it('desmonte com a leitura pendente e texto digitado: lê o salvo síncrono, grava a junção e a devolve', () => {
+    const h = countingApi({
+      key: KEY,
+      ccSessionId: 'cc-1',
+      paneId: 'pane-1',
+      text: 'salvo',
+      attachments: [],
+      updatedAt: 1,
+    })
+    const p = newPersister(h.api)
+    void p.hydrate(() => {})
+    p.update({ text: 'digitado', attachments: [] })
+
+    expect(p.dispose()).toEqual({ text: 'salvo\n\ndigitado', attachments: [] })
+    expect(h.calls.saveSync.map((d) => d.text)).toEqual(['salvo\n\ndigitado'])
+  })
+
+  it('desmonte de persister já hidratado não devolve nada: a memória do Composer já é a atual', async () => {
+    const h = countingApi()
+    const p = await hydrated(h)
+    p.update({ text: 'digitado', attachments: [] })
+
+    expect(p.dispose()).toBeNull()
+  })
+
+  it('desmonte com a leitura síncrona falhando não devolve nada nem grava: o salvo segue desconhecido', () => {
+    const h = countingApi()
+    const api: DraftApi = {
+      ...h.api,
+      getSync: () => {
+        throw new Error('main fora do ar')
+      },
+    }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const p = newPersister(api)
+    void p.hydrate(() => {})
+    p.update({ text: 'digitado', attachments: [] })
+
+    expect(p.dispose()).toBeNull()
+    expect(h.calls.saveSync).toEqual([])
+    expect(h.calls.writeThrough).toEqual([])
+    error.mockRestore()
+  })
+
   it('duas gravações fora de ordem: a versão mais nova é a de maior seq e a falha da antiga regrava a atual', async () => {
     const h = countingApi()
     const p = await hydrated(h)
