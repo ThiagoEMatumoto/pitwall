@@ -92,6 +92,32 @@ export function hiddenCrewSessionIds(
   return hidden
 }
 
+export interface BackgroundChildren {
+  // sessions.id da mãe que está na barra → filhas dela vivas e sem aba.
+  byMother: Map<string, LiveSessionInfo[]>
+  // Mãe fora da barra (encerrada, sem aba, ou vínculo ainda não carregado).
+  orphans: LiveSessionInfo[]
+}
+
+// Agrupa as filhas em segundo plano (vivas, sem aba) pela mãe, para o chip
+// "N em 2º plano" da barra. `background` é a lista do "N na equipe"
+// (crewOnlySessions): o chip não conta de novo, só reparte. Quem não tem a mãe
+// na barra vira órfã em vez de sumir.
+export function backgroundChildrenByMother(
+  background: LiveSessionInfo[],
+  motherOfChild: ReadonlyMap<string, string>,
+  barIds: ReadonlySet<string>,
+): BackgroundChildren {
+  const byMother = new Map<string, LiveSessionInfo[]>()
+  const orphans: LiveSessionInfo[] = []
+  for (const s of background) {
+    const mother = motherOfChild.get(s.id)
+    if (mother && barIds.has(mother)) byMother.set(mother, [...(byMother.get(mother) ?? []), s])
+    else orphans.push(s)
+  }
+  return { byMother, orphans }
+}
+
 // Endereço das filhas do dock no vocabulário das notificações: o evento do main
 // vem com ccSessionId, e o dock raciocina em Session.id. Serve pra calar o aviso
 // que o dock já dá (ver NotificationToast). Puro → testável.

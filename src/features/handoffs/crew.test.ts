@@ -34,7 +34,12 @@ const {
   openPaneKeys,
   paneShowsLive,
   childrenMissedToast,
+  backgroundChildrenByMother,
 } = await import('./crew')
+const { crewOnlyCount, crewOnlySessions, visibleLiveSessions } =
+  await import('@/features/session-switcher/useGlobalSessions')
+const { motherOfChildMap } = await import('@/features/sessions/conversation-hierarchy')
+const { readHierarchyLinks } = await import('../../../electron/main/services/session-graph')
 const store = await import('../../../electron/main/services/handoff-store')
 const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
@@ -445,6 +450,78 @@ describe('crewAttentionCount / orderCrew — fila única', () => {
     child('r2', 'b')
     const { handoffs } = projected([])
     expect(orderCrew(handoffs, new Set()).map((h) => h.childSessionId)).toEqual(['b'])
+  })
+})
+
+describe('backgroundChildrenByMother — filhas vivas sem aba, por mãe', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => testDb.close())
+
+  // A cadeia que a barra roda, com cada elo do produtor real: handoffs do store,
+  // vínculo mãe→filha do readHierarchyLinks, vivas no shape de toLiveInfo.
+  function scene(opts: { openTabs?: string[]; barIds?: string[] } = {}) {
+    const handoffs = store.list()
+    const rows = testDb
+      .prepare('SELECT id, cc_session_id, started_at FROM sessions ORDER BY rowid')
+      .all() as Array<{ id: string; cc_session_id: string; started_at: number }>
+    const sessions = rows.map((r) => harness.toLiveInfo(testDb, liveOf(r.id, 'working', null)))
+    const panes = sessions
+      .filter((s) => opts.openTabs?.includes(s.id))
+      .map((s) => ({ session: { id: s.id, ccSessionId: s.ccSessionId } }))
+    const visible = visibleLiveSessions(sessions, panes as never, handoffs)
+    const motherOfChild = motherOfChildMap(
+      [...readHierarchyLinks(testDb, rows, new Map())].map(([sessionId, link]) => ({
+        sessionId,
+        hierarchyMotherId: link.motherSessionId,
+      })),
+    )
+    const groups = backgroundChildrenByMother(
+      crewOnlySessions(sessions, visible),
+      motherOfChild,
+      new Set(opts.barIds ?? visible.map((s) => s.id)),
+    )
+    return { groups, crewOnly: crewOnlyCount(sessions, visible) }
+  }
+  const ids = (list: LiveSessionInfo[] | undefined) => (list ?? []).map((s) => s.id)
+
+  it('filha ativa sem aba cai no grupo da mãe; o N é o mesmo do "N na equipe"', () => {
+    child('r1', 'a')
+    child('r2', 'b')
+    const { groups, crewOnly } = scene()
+    expect(ids(groups.byMother.get('m'))).toEqual(['a', 'b'])
+    expect(groups.orphans).toEqual([])
+    expect(crewOnly).toBe(2)
+  })
+
+  it('com a aba aberta ela sai do grupo', () => {
+    child('r1', 'a')
+    child('r2', 'b')
+    const { groups, crewOnly } = scene({ openTabs: ['a'] })
+    expect(ids(groups.byMother.get('m'))).toEqual(['b'])
+    expect(crewOnly).toBe(1)
+  })
+
+  it('dispensada e concluída não entram', () => {
+    store.dismiss(child('r1', 'a').id)
+    store.report(child('r2', 'b').id, 'ok')
+    const { groups, crewOnly } = scene()
+    expect(groups.byMother.size).toBe(0)
+    expect(groups.orphans).toEqual([])
+    expect(crewOnly).toBe(0)
+  })
+
+  it('mãe fora da barra: as filhas viram órfãs, sem sumir', () => {
+    child('r1', 'a')
+    const { groups } = scene({ barIds: [] })
+    expect(groups.byMother.size).toBe(0)
+    expect(ids(groups.orphans)).toEqual(['a'])
   })
 })
 
