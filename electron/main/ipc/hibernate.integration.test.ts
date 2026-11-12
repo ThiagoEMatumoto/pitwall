@@ -68,7 +68,12 @@ import { closeDb, getDb } from '../services/db'
 import { setPref } from '../services/prefs-store'
 import { fixture, scanOf } from '../services/test-support/screen-scans'
 import { getIdleHibernator, HIBERNATE_TICK_MS } from '../services/hibernate/idle-hibernator'
-import { HIBERNATE_AFTER_MIN_PREF, type HibernateStatsView } from '../../../shared/hibernate'
+import * as handoffStore from '../services/handoff-store'
+import {
+  CHILD_HIBERNATE_AFTER_MIN_PREF,
+  HIBERNATE_AFTER_MIN_PREF,
+  type HibernateStatsView,
+} from '../../../shared/hibernate'
 import { LAZY_RESTORE_PREF } from '../../../shared/lazy-restore'
 import { __resetForTests as resetDormant, registerDormantPanesIpc } from './dormant-panes'
 import { __resetHibernateForTests, registerHibernateIpc } from './hibernate'
@@ -78,9 +83,12 @@ const PTY = 'pty-1'
 const CC = '74f13261-5b8e-4f43-9d0e-2c5a2b1f7c11'
 
 // Um boot do main com as prefs como estão no DB agora (a ordem do index.ts).
-function boot(prefs: { lazy?: boolean; afterMin?: number }): void {
+function boot(prefs: { lazy?: boolean; afterMin?: number; childAfterMin?: number }): void {
   if (prefs.lazy !== undefined) setPref(LAZY_RESTORE_PREF, prefs.lazy)
   if (prefs.afterMin !== undefined) setPref(HIBERNATE_AFTER_MIN_PREF, prefs.afterMin)
+  if (prefs.childAfterMin !== undefined) {
+    setPref(CHILD_HIBERNATE_AFTER_MIN_PREF, prefs.childAfterMin)
+  }
   resetDormant()
   __resetHibernateForTests()
   registerDormantPanesIpc()
@@ -112,11 +120,12 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.useFakeTimers()
   const db = getDb()
-  db.prepare('DELETE FROM app_prefs WHERE key IN (?, ?)').run(
+  db.prepare('DELETE FROM app_prefs WHERE key IN (?, ?, ?)').run(
     LAZY_RESTORE_PREF,
     HIBERNATE_AFTER_MIN_PREF,
+    CHILD_HIBERNATE_AFTER_MIN_PREF,
   )
-  db.exec('DELETE FROM sessions; DELETE FROM workspace_state;')
+  db.exec('DELETE FROM handoffs; DELETE FROM sessions; DELETE FROM workspace_state;')
   seam.handlers.clear()
   seam.running = []
   seam.writes.length = 0
@@ -132,16 +141,97 @@ afterAll(() => {
   rmSync(app.getPath('userData'), { recursive: true, force: true })
 })
 
-describe('qualquer uma das 3 condições desligada → nenhum tick', () => {
-  it('defaults (nenhuma pref gravada): desligado no boot', async () => {
+function seedSession(id: string, cc: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, title, status, started_at, provider)
+       VALUES (?, NULL, ?, NULL, 'running', ?, 'claude')`,
+    )
+    .run(id, cc, Date.now())
+}
+
+// Handoff concluído com a sessão como filha, pelo handoff-store real.
+function seedDoneChild(sessionId: string): void {
+  const db = getDb()
+  db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'P1', 1, 1)`,
+  ).run()
+  db.prepare(
+    `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at)
+     VALUES ('r1', 'p1', 'Repo 1', '/tmp/r1', 0, 1)`,
+  ).run()
+  const h = handoffStore.create({
+    targetRepoId: 'r1',
+    task: 't',
+    composedPrompt: 'p',
+    motherSessionId: null,
+    mode: 'plan',
+    status: 'approved',
+  })
+  handoffStore.markRunning(h.id, sessionId)
+  handoffStore.report(h.id, 'pronto')
+  expect(handoffStore.get(h.id)?.status).toBe('done')
+}
+
+const refusalTotal = (): number => Object.values(stats().refusals).reduce((a, n) => a + n, 0)
+
+describe('janela da filha concluída (ligada por padrão, sem depender do lazyRestore)', () => {
+  it('defaults (nenhuma pref gravada): a geral fica desligada e o tick roda', async () => {
     boot({})
+    expect(hibernator().isScheduled()).toBe(true)
+    expect(await tickRan()).toBe(true)
+    expect(hibernator().getStats()).toMatchObject({ afterMin: 0, childAfterMin: 15 })
+    expect(stats()).toMatchObject({ enabled: false, reasonDisabled: 'lazy-restore-off-at-boot' })
+  })
+
+  it('defaults: só a filha concluída é avaliada, e sem exigir aba', async () => {
+    boot({})
+    seedSession(PTY, CC)
+    seedSession('pty-child', 'cc-child')
+    seedDoneChild('pty-child')
+    seam.running = [PTY, 'pty-child']
+    expect(await tickRan()).toBe(true)
+    // Nenhuma aba no layout salvo. A sessão comum nem entra no gate; a filha
+    // passa da pane e para no gate seguinte (o PTY fake não tem lastIoAt).
+    expect(stats().refusals).toMatchObject({ 'no-pane': 0, 'io-recent': 1 })
+    expect(refusalTotal()).toBe(1)
+  })
+
+  it('prefs:set da janela da filha: 0 desliga o tick, 15 religa', async () => {
+    boot({})
+    prefsSet(CHILD_HIBERNATE_AFTER_MIN_PREF, 0)
+    expect(hibernator().isScheduled()).toBe(false)
+    expect(await tickRan()).toBe(false)
+    prefsSet(CHILD_HIBERNATE_AFTER_MIN_PREF, 15)
+    expect(hibernator().isScheduled()).toBe(true)
+    expect(await tickRan()).toBe(true)
+  })
+
+  it('janela da filha desligada e geral ligada: a filha concluída segue recusada', async () => {
+    boot({ lazy: true, afterMin: 30, childAfterMin: 0 })
+    seedSession('pty-child', 'cc-child')
+    seedDoneChild('pty-child')
+    getDb()
+      .prepare('INSERT INTO workspace_state (id, last_opened_at, open_panes) VALUES (1, ?, ?)')
+      .run(Date.now(), JSON.stringify([{ ccSessionId: 'cc-child', paneId: 'pane-1' }]))
+    seam.running = ['pty-child']
+    expect(await tickRan()).toBe(true)
+    // Com a geral, a pane é exigida e o gate b vem antes do de filha.
+    expect(stats().refusals).toMatchObject({ 'io-recent': 1 })
+    expect(refusalTotal()).toBe(1)
+  })
+})
+
+describe('janela da filha desligada: qualquer uma das 3 condições da geral desligada → nenhum tick', () => {
+  it('nenhuma das prefs da geral gravada: desligado no boot', async () => {
+    boot({ childAfterMin: 0 })
     expect(hibernator().isScheduled()).toBe(false)
     expect(await tickRan()).toBe(false)
     expect(stats()).toMatchObject({ enabled: false, reasonDisabled: 'lazy-restore-off-at-boot' })
   })
 
   it('lazyRestore desligado no boot: ligar a pref ao vivo não cria tick', async () => {
-    boot({ lazy: false, afterMin: 30 })
+    boot({ lazy: false, afterMin: 30, childAfterMin: 0 })
     expect(hibernator().isScheduled()).toBe(false)
     prefsSet(LAZY_RESTORE_PREF, true)
     expect(hibernator().isScheduled()).toBe(false)
@@ -150,14 +240,14 @@ describe('qualquer uma das 3 condições desligada → nenhum tick', () => {
   })
 
   it('hibernateAfterMin = 0 com lazyRestore ligado', async () => {
-    boot({ lazy: true, afterMin: 0 })
+    boot({ lazy: true, afterMin: 0, childAfterMin: 0 })
     expect(hibernator().isScheduled()).toBe(false)
     expect(await tickRan()).toBe(false)
     expect(stats()).toMatchObject({ enabled: false, reasonDisabled: 'after-min-off' })
   })
 
   it('lazyRestore ao vivo desligado depois do boot para o tick', async () => {
-    boot({ lazy: true, afterMin: 30 })
+    boot({ lazy: true, afterMin: 30, childAfterMin: 0 })
     expect(hibernator().isScheduled()).toBe(true)
     prefsSet(LAZY_RESTORE_PREF, false)
     expect(hibernator().isScheduled()).toBe(false)
@@ -168,7 +258,7 @@ describe('qualquer uma das 3 condições desligada → nenhum tick', () => {
 
 describe('prefs:set religa e desliga o tick', () => {
   it('hibernateAfterMin 0 → 30 liga; 30 → 0 para', async () => {
-    boot({ lazy: true, afterMin: 0 })
+    boot({ lazy: true, afterMin: 0, childAfterMin: 0 })
     prefsSet(HIBERNATE_AFTER_MIN_PREF, 30)
     expect(hibernator().isScheduled()).toBe(true)
     expect(await tickRan()).toBe(true)
@@ -182,7 +272,7 @@ describe('prefs:set religa e desliga o tick', () => {
   })
 
   it('lazyRestore ao vivo false → true religa (o boot já era true)', async () => {
-    boot({ lazy: true, afterMin: 30 })
+    boot({ lazy: true, afterMin: 30, childAfterMin: 0 })
     prefsSet(LAZY_RESTORE_PREF, false)
     prefsSet(LAZY_RESTORE_PREF, true)
     expect(hibernator().isScheduled()).toBe(true)

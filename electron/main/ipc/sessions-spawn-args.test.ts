@@ -519,6 +519,7 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
     const h: IdleHibernator = new IdleHibernator({
       lazyRestore: () => true,
       afterMin: () => 30,
+      childAfterMin: () => 0,
       candidates: unused,
       hasPane: unused,
       confirmPane: unused,
@@ -529,7 +530,7 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
       isPidAlive: unused,
       aliveSessionId: unused,
       activeHandoffCcSessionIds: unused,
-      isHandoffChild: unused,
+      handoffChildKind: unused,
       queueHas: unused,
       transcriptPath: unused,
       scanTranscript: unused,

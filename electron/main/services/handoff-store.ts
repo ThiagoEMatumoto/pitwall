@@ -1097,22 +1097,10 @@ export function activeHandoffCcSessionIds(): string[] {
   return rows.map((r) => r.cc)
 }
 
-// A conversa é (ou foi) filha de algum handoff, em qualquer status. Casa pelo cc:
-// o relink re-aponta child_session_id para a linha nova da mesma conversa.
-export function isHandoffChildCc(ccSessionId: string): boolean {
-  const row = getDb()
-    .prepare(
-      `SELECT 1 FROM handoffs h
-         JOIN sessions s ON s.id = h.child_session_id
-        WHERE s.cc_session_id = ?
-        LIMIT 1`,
-    )
-    .get(ccSessionId)
-  return row !== undefined
-}
-
-// 'done' exige TODOS os handoffs da conversa concluídos: um em voo, falhado ou
-// interrompido ainda depende do processo vivo. Casa pelo cc, como isHandoffChildCc.
+// O que a conversa é (ou foi) como filha de handoff. Casa pelo cc: o relink
+// re-aponta child_session_id para a linha nova da mesma conversa. 'done' exige
+// TODOS os handoffs dela concluídos: um em voo, falhado ou interrompido ainda
+// depende do processo vivo.
 export function childHandoffKindCc(ccSessionId: string): HandoffChildKind {
   const rows = getDb()
     .prepare(

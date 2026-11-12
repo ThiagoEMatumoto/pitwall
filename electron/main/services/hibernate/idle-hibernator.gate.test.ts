@@ -145,6 +145,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
   return new IdleHibernator({
     lazyRestore: () => true,
     afterMin: () => 30,
+    childAfterMin: () => 0,
     candidates: () => claudeCandidates([PTY]),
     hasPane: (cc) => hasAwakePane(cc, () => false),
     confirmPane: async () => idlePane('pane-1'),
@@ -155,7 +156,7 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     isPidAlive: (file) => isSessionPidAlive(file),
     aliveSessionId: () => PTY,
     activeHandoffCcSessionIds: () => [],
-    isHandoffChild: handoffStore.isHandoffChildCc,
+    handoffChildKind: handoffStore.childHandoffKindCc,
     queueHas: () => false,
     transcriptPath: () => '/fake/transcript.jsonl',
     scanTranscript: async () => 'clear',
@@ -352,6 +353,169 @@ describe('gate da hibernação (fontes reais)', () => {
     })
     expect(await evaluate(h)).toEqual({ ok: false, reason: 'proc-tree' })
     expect(seen).toEqual([process.pid])
+  })
+})
+
+// O padrão de quem nunca abriu Configurações: hibernação geral desligada, a da
+// filha concluída em 15 min. O renderer responde que nenhuma aba mostra a PTY.
+describe('filha de handoff concluído: janela própria, sem exigir aba', () => {
+  const CHILD_WINDOW = 15 * MIN
+  const noPane = { paneId: null, focused: false, composerHasText: false, composerFocused: false }
+  const delivered = () => vi.fn(async () => ({ ok: true, delivered: true }) as const)
+
+  function childGate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
+    return gate({
+      lazyRestore: () => false,
+      afterMin: () => 0,
+      childAfterMin: () => 15,
+      lastIoAt: () => NOW - CHILD_WINDOW,
+      activeHandoffCcSessionIds: handoffStore.activeHandoffCcSessionIds,
+      confirmPane: async () => noPane,
+      exitTimeoutMs: 60_000,
+      ...over,
+    })
+  }
+
+  it('sem aba e com a geral desligada → /exit sai; o exit não deixa dormant', async () => {
+    seedChildHandoff('done')
+    savePanes([])
+    const send = delivered()
+    const registered: string[] = []
+    const h = childGate({ send, registerDormant: (cc) => registered.push(cc) })
+    await h.tick()
+    expect(send).toHaveBeenCalledWith({
+      sessionId: PTY,
+      text: '/exit',
+      when: 'on-idle',
+      ephemeral: true,
+    })
+    expect(h.getStats()).toMatchObject({ afterMin: 0, childAfterMin: 15 })
+    expect(h.onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: null, child: true })
+    expect(registered).toEqual([])
+    expect(h.getStats().hibernated).toBe(1)
+    h.dispose()
+  })
+
+  it('com aba fora de foco → hiberna do mesmo jeito, sem dormant', async () => {
+    seedChildHandoff('done')
+    const send = delivered()
+    const registered: string[] = []
+    const h = childGate({
+      send,
+      confirmPane: async () => idlePane('pane-1'),
+      registerDormant: (cc) => registered.push(cc),
+    })
+    await h.tick()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(h.onExit(PTY)).toEqual({ sessionId: PTY, ccSessionId: CC, paneId: null, child: true })
+    expect(registered).toEqual([])
+    h.dispose()
+  })
+
+  it.each([
+    ['a aba é a focada', 'pane-focused', { ...idlePane('pane-1'), focused: true }],
+    ['aberta fora de aba e à vista', 'pane-focused', { ...noPane, focused: true }],
+    ['o Composer tem rascunho', 'composer-busy', { ...idlePane('pane-1'), composerHasText: true }],
+    ['sem resposta do renderer', 'no-pane', null],
+  ] as const)('%s → recusa %s, sem /exit', async (_name, reason, check) => {
+    seedChildHandoff('done')
+    const send = delivered()
+    const h = childGate({ send, confirmPane: async () => check })
+    await h.tick()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats().refused[reason]).toBe(1)
+    expect(h.isHibernating(PTY)).toBe(false)
+  })
+
+  it('vale a janela da filha, não a geral: 15 min bastam com a geral em 30', async () => {
+    seedChildHandoff('done')
+    const send = delivered()
+    const h = childGate({ lazyRestore: () => true, afterMin: () => 30, send })
+    await h.tick()
+    expect(send).toHaveBeenCalledTimes(1)
+    h.dispose()
+  })
+
+  it('I/O há menos de 15 min → io-recent', async () => {
+    seedChildHandoff('done')
+    const send = delivered()
+    const h = childGate({ send, lastIoAt: () => NOW - CHILD_WINDOW + 1 })
+    await h.tick()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats().refused['io-recent']).toBe(1)
+  })
+
+  it('pref da filha desligada e geral ligada → segue handoff-child', async () => {
+    seedChildHandoff('done')
+    const send = delivered()
+    const h = childGate({
+      lazyRestore: () => true,
+      afterMin: () => 30,
+      childAfterMin: () => 0,
+      lastIoAt: () => NOW - 2 * WINDOW,
+      send,
+    })
+    await h.tick()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats().refused['handoff-child']).toBe(1)
+  })
+
+  it.each([
+    ['failed', 'handoff-child'],
+    ['running', 'handoff'],
+  ] as const)('filha de handoff %s com a geral ligada → %s', async (status, reason) => {
+    seedChildHandoff(status)
+    const send = delivered()
+    const h = childGate({
+      lazyRestore: () => true,
+      afterMin: () => 30,
+      lastIoAt: () => NOW - 2 * WINDOW,
+      send,
+    })
+    await h.tick()
+    expect(send).not.toHaveBeenCalled()
+    expect(h.getStats().refused[reason]).toBe(1)
+  })
+
+  // O gate lê o transcript inteiro: com a geral desligada ele só pode rodar para
+  // a filha concluída.
+  it.each([
+    ['sessão comum', null],
+    ['filha de handoff falhado', 'failed'],
+    ['filha de handoff em voo', 'running'],
+  ] as const)('geral desligada: %s fica fora da avaliação', async (_name, status) => {
+    if (status) seedChildHandoff(status)
+    const sessionFile = vi.fn(sessionFileFor)
+    const scanTranscript = vi.fn(async () => 'clear' as const)
+    const send = delivered()
+    const h = childGate({ sessionFile, scanTranscript, send })
+    await h.tick()
+    expect(h.getStats().lastTickAt).toBe(NOW)
+    expect(sessionFile).not.toHaveBeenCalled()
+    expect(scanTranscript).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(Object.values(h.getStats().refused).every((n) => n === 0)).toBe(true)
+  })
+
+  it('reschedule liga o timer só com a janela da filha e desliga sem ela', () => {
+    vi.useFakeTimers()
+    try {
+      const candidates = vi.fn(() => [])
+      let childMin = 15
+      const h = childGate({ childAfterMin: () => childMin, candidates, tickMs: 1_000 })
+      h.reschedule()
+      expect(h.isScheduled()).toBe(true)
+      vi.advanceTimersByTime(1_000)
+      expect(candidates).toHaveBeenCalledTimes(1)
+      childMin = 0
+      h.reschedule()
+      expect(h.isScheduled()).toBe(false)
+      vi.advanceTimersByTime(5_000)
+      expect(candidates).toHaveBeenCalledTimes(1)
+      h.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
