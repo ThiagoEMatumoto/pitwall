@@ -424,15 +424,21 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // filha até ser relançada. O caminho de limpar é o normal: encerrar a sessão e
   // retomá-la pela barra; o sessions:resume NÃO re-vincula depois do release
   // (o relink exige dismissed_at IS NULL), então ela volta como sessão comum.
+  //
+  // detachChild, e não release(handoff.id): é o MESMO Desvincular do diálogo de
+  // vínculo da sessão (ChildLinkDialog), que solta todos os handoffs da conversa.
+  // Soltando só este, outro handoff apontando pra mesma conversa a manteria filha
+  // depois de "desvinculada".
   async function release() {
-    if (releasing) return
+    const childSessionId = handoff.childSessionId
+    if (releasing || !childSessionId) return
     const ok = window.confirm(
       `Desvincular esta sessão de "${repoLabel}"? Ela deixa de ser filha: volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, encerre-a e retome pela barra.`,
     )
     if (!ok) return
     setReleasing(true)
     try {
-      await handoffsApi.release(handoff.id)
+      await handoffsApi.detachChild(childSessionId)
       await load()
     } catch {
       setReleasing(false)

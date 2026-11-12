@@ -15,6 +15,7 @@ vi.mock('@/lib/ipc', () => ({
     resume: vi.fn().mockResolvedValue(undefined),
     setOutcome: vi.fn().mockResolvedValue(undefined),
     dismiss: vi.fn().mockResolvedValue(undefined),
+    detachChild: vi.fn().mockResolvedValue(undefined),
     release: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue([]),
   },
@@ -339,6 +340,7 @@ describe('HandoffCard: Minimizar e Encerrar no menu da filha viva', () => {
 describe('HandoffCard: Desvincular e Forçar falha', () => {
   beforeEach(() => {
     useAppStore.setState({ liveSessions: [] })
+    vi.mocked(handoffsApi.detachChild).mockClear()
     vi.mocked(handoffsApi.release).mockClear()
   })
   afterEach(() => {
@@ -352,12 +354,17 @@ describe('HandoffCard: Desvincular e Forçar falha', () => {
     expect(screen.queryByText(/Soltar/)).toBeNull()
   })
 
-  it('pede confirmação e solta pelo release de sempre', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+  // O Desvincular do diálogo de vínculo (ChildLinkDialog) solta TODOS os handoffs
+  // da conversa (detachChild). O do card soltava só o próprio: com outro handoff
+  // apontando pra mesma conversa ela seguia filha depois de "desvinculada".
+  it('é o mesmo Desvincular do diálogo de vínculo: solta a conversa, não só este handoff', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     mountDock()
     fireEvent.click(screen.getByLabelText('Mais ações'))
     fireEvent.click(screen.getByText('Desvincular'))
-    await waitFor(() => expect(handoffsApi.release).toHaveBeenCalledWith('h1'))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(handoffsApi.detachChild).toHaveBeenCalledWith('s-child'))
+    expect(handoffsApi.release).not.toHaveBeenCalled()
   })
 
   it('sem confirmação nada é desvinculado', () => {
@@ -365,7 +372,7 @@ describe('HandoffCard: Desvincular e Forçar falha', () => {
     mountDock()
     fireEvent.click(screen.getByLabelText('Mais ações'))
     fireEvent.click(screen.getByText('Desvincular'))
-    expect(handoffsApi.release).not.toHaveBeenCalled()
+    expect(handoffsApi.detachChild).not.toHaveBeenCalled()
   })
 
   it('filha viva: sem "Forçar falha" (o verbo é Encerrar)', () => {
