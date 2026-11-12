@@ -62,6 +62,18 @@ export function buildChatRows(
   return rows
 }
 
+// buildChatRows cria ToolEntry novos a cada chamada: o grupo só é o mesmo se as
+// mensagens por baixo forem as mesmas, por identidade.
+export function sameToolEntries(a: readonly ToolEntry[], b: readonly ToolEntry[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((entry, i) => {
+      const other = b[i]
+      return entry.index === other.index && entry.use === other.use && entry.result === other.result
+    })
+  )
+}
+
 // Ritmo vertical: respiro grande quando o humano abre um turno novo, pequeno
 // entre as partes de uma mesma resposta.
 export type RowRhythm = 'turn' | 'assistant' | 'tools' | 'aside'
