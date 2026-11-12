@@ -4,7 +4,8 @@ import type { AttentionReason, LiveSessionInfo } from '../../../shared/types/ipc
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import type { SendPromptError, SendPromptWhen } from '../../../shared/types/send-prompt'
 
-// Para quem dá pra mandar um prompt: toda sessão viva visível, de qualquer projeto.
+// Para quem dá pra mandar um prompt: toda sessão viva, de qualquer projeto, com
+// ou sem aba (a filha em segundo plano entra).
 
 export interface SendTarget {
   sessionId: string
