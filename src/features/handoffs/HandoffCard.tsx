@@ -4,11 +4,13 @@ import {
   CircleSlash,
   CornerDownLeft,
   Eye,
+  Moon,
   MoreHorizontal,
   PanelTop,
   Pause,
   Play,
   Send,
+  Sun,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -24,6 +26,7 @@ import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-can
 import { crewResumedAfterQuestion, paneShowsLive, splitAlias } from './crew'
 import { endSessionAsked } from './end-child'
 import { revealChildOnUserMessage } from './reveal-child'
+import { wakeChildIntoTab } from './wake-child'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -157,6 +160,13 @@ export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
   attention: false,
 }
 
+// A concluída que hibernou não tem processo, mas não caiu: apagado, sem alarme.
+export const ASLEEP_BADGE: LiveBadge = {
+  label: 'dormindo',
+  color: 'var(--color-text-dim)',
+  attention: false,
+}
+
 export function liveBadgeFor(
   live: Pick<LiveSessionInfo, 'status' | 'attentionReason'> | undefined,
   needsInput = false,
@@ -195,6 +205,7 @@ export function crewDotColor(
   if (live) return liveBadgeFor(live).color
   if (childIdentity(handoff, liveSessions, now).successorPending) return SUCCESSOR_PENDING_BADGE.color
   if (handoff.status === 'interrupted' && handoff.resumable) return 'var(--color-text-dim)'
+  if (handoff.childAsleep) return ASLEEP_BADGE.color
   return STATUS_COLOR[handoff.status]
 }
 
@@ -215,7 +226,9 @@ export function crewDotTitle(
       ? SUCCESSOR_PENDING_BADGE.label
       : handoff.status === 'interrupted' && handoff.resumable
         ? 'pausada, dá pra retomar'
-        : 'despachando'
+        : handoff.childAsleep
+          ? 'dormindo, dá pra acordar'
+          : 'despachando'
   return `${who}${scope} — ${state}`
 }
 
@@ -261,14 +274,18 @@ export const STATUS_COLOR: Record<HandoffStatus, string> = {
 // como falha e convidava a dispensar o card — que é exatamente a filha que a gente
 // quer manter à mão. Em tom apagado ele diz o que é: parada, esperando você
 // mandar continuar (o botão "Retomar", em accent, é quem carrega a ação).
+// `rest` é o mesmo tom apagado com outro nome: a filha que dorme ("Dormindo") e a
+// que o usuário encerrou ("Encerrada por você") também só esperam um clique.
 export function StatusBadge({
   status,
   paused = false,
+  rest,
 }: {
   status: HandoffStatus
   paused?: boolean
+  rest?: string
 }) {
-  const color = paused ? 'var(--color-text-dim)' : STATUS_COLOR[status]
+  const color = paused || rest ? 'var(--color-text-dim)' : STATUS_COLOR[status]
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium"
@@ -279,7 +296,7 @@ export function StatusBadge({
       }}
     >
       <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-      {paused ? 'Pausada' : STATUS_LABEL[status]}
+      {rest ?? (paused ? 'Pausada' : STATUS_LABEL[status])}
     </span>
   )
 }
@@ -318,6 +335,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   const [sendError, setSendError] = useState<string | null>(null)
   const [rating, setRating] = useState(false)
   const [resuming, setResuming] = useState(false)
+  const [waking, setWaking] = useState(false)
+  const [wakeError, setWakeError] = useState<string | null>(null)
   const liveSessions = useAppStore((s) => s.liveSessions)
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
   const load = useHandoffsStore((s) => s.load)
@@ -382,6 +401,24 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
       // O load() seguinte ressincroniza o status. Mantém o botão habilitável pra
       // nova tentativa (a filha pode ter ficado não-resumível nesse meio-tempo).
       setResuming(false)
+    }
+  }
+
+  // Diferente do Retomar, a falha fica à vista: sem o motivo, "Acordar" que não
+  // acorda (transcript apagado, conversa aberta em outro lugar) é um botão morto.
+  async function wake() {
+    if (waking) return
+    setWaking(true)
+    setWakeError(null)
+    try {
+      await wakeChildIntoTab(handoff.id)
+    } catch (err) {
+      setWakeError(
+        err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível acordar a filha.',
+      )
+    } finally {
+      setWaking(false)
+      await load()
     }
   }
 
@@ -464,6 +501,13 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // traz para a tela (focusOrOpenSession RE-ATTACHA uma pane à PTY viva, nunca
   // re-spawn/--resume).
   const childProcess = childProcessAlive(childSession) ? childSession : undefined
+  // Dormindo de fato: entre a marca e o /exit sair o processo ainda existe.
+  const asleep = handoff.childAsleep && !childProcess
+  const restLabel = asleep
+    ? 'Dormindo'
+    : paused && handoff.endedByUserAt != null
+      ? 'Encerrada por você'
+      : undefined
   const canArchive = canArchiveCard(handoff, childSession)
   // Aba aberta da filha: sem ela não há o que minimizar.
   const childPaneId = useAppStore((s) =>
@@ -553,7 +597,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     canArchive ||
     canRelease ||
     canPeek ||
-    paused
+    paused ||
+    asleep
   )
   const actions = hasActions ? (
     <div className="flex items-center gap-1">
@@ -569,6 +614,19 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
         >
           <Icon as={PanelTop} size={12} />
           {!tight && 'Abrir na aba'}
+        </button>
+      )}
+      {asleep && (
+        <button
+          type="button"
+          onClick={() => void wake()}
+          disabled={waking}
+          title="Acordar esta filha numa aba: a sessão volta com o histórico e a identidade dela. O trabalho entregue não é refeito."
+          aria-label="Acordar"
+          className="flex items-center gap-1 rounded border border-[var(--color-accent)]/50 px-2 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/10 disabled:opacity-50"
+        >
+          <Icon as={Sun} size={12} />
+          {!tight && (waking ? 'Acordando…' : 'Acordar')}
         </button>
       )}
       {canPeek && (
@@ -759,7 +817,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
               {live.label}
             </span>
         ) : (
-          <StatusBadge status={handoff.status} paused={paused} />
+          <StatusBadge status={handoff.status} paused={paused} rest={restLabel} />
         )}
       </div>
       {alias && (
@@ -797,6 +855,28 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
             )}
           </div>
           {detailBody}
+        </div>
+      )}
+
+      {asleep && (
+        <div className="mt-1">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--color-text-dim)]">
+            <span
+              className="flex items-center gap-1"
+              title="A filha entregou o trabalho e, ociosa, hibernou: o processo saiu e o histórico está salvo. Ela segue vinculada à mãe e volta quando você acordar ou quando a mãe chamar."
+            >
+              <Icon as={Moon} size={12} />
+              entregou e hibernou
+            </span>
+            {detailToggle && (
+              <>
+                <span aria-hidden>·</span>
+                {detailToggle}
+              </>
+            )}
+          </div>
+          {detailBody}
+          {wakeError && <div className="mt-1 text-xs text-[var(--color-danger)]">{wakeError}</div>}
         </div>
       )}
 
@@ -943,7 +1023,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
 
       {/* Pausada já mostrou o gatilho junto do estado; aqui ficam os terminais
           (done / failed), onde o detalhe é sobre o handoff inteiro. */}
-      {hasDetail && !paused && (
+      {hasDetail && !paused && !asleep && (
         <div className="mt-2">
           {detailToggle}
           {detailBody}

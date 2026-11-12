@@ -26,11 +26,13 @@ import { peekRole, peekRoleLabel, stripOrder, type PeekRole } from './peek-ident
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import {
+  ASLEEP_BADGE,
   STATUS_COLOR,
   STATUS_LABEL,
   SUCCESSOR_PENDING_BADGE,
   StatusBadge,
   childIdentity,
+  childProcessAlive,
   contextLabel,
   liveActivityLabel,
   liveBadgeFor,
@@ -357,7 +359,11 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   const repoLabel = handoff
     ? (handoff.targetRepoLabel ?? handoff.targetRepoId)
     : (live?.repo?.label ?? 'Avulsa')
-  const badge = identity?.successorPending ? SUCCESSOR_PENDING_BADGE : liveBadgeFor(live ?? undefined)
+  const badge = identity?.successorPending
+    ? SUCCESSOR_PENDING_BADGE
+    : handoff?.childAsleep && !childProcessAlive(live)
+      ? ASLEEP_BADGE
+      : liveBadgeFor(live ?? undefined)
   const activityLabel = liveActivityLabel(live?.lastActivityAt ?? null, Date.now())
   const ctxLabel = contextLabel(live?.tokens)
 

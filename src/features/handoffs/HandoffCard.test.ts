@@ -227,6 +227,29 @@ describe('trilha do dock no bastão de filha (crewDotTitle/crewDotColor)', () =>
   })
 })
 
+// A concluída que dorme fica no trilho: apagada como a pausada (não pede nada),
+// e o título diz o que ela é, não "despachando".
+describe('trilha do dock com a filha dormindo (crewDotTitle/crewDotColor)', () => {
+  const asleep = mk({
+    status: 'done',
+    childAsleep: true,
+    childSessionId: 'child',
+    targetRepoLabel: 'api',
+    updatedAt: 0,
+  })
+
+  it('anel apagado e título "dormindo"', () => {
+    expect(crewDotColor(asleep, undefined, [], now)).toBe('var(--color-text-dim)')
+    expect(crewDotTitle(asleep, undefined, [], now)).toBe('api — dormindo, dá pra acordar')
+  })
+
+  it('com o processo vivo vale o estado ao vivo', () => {
+    const live = { id: 'child', title: 'otavio-api', status: 'working' } as import('../../../shared/types/ipc').LiveSessionInfo
+    expect(crewDotColor(asleep, live, [live], now)).toBe('var(--color-info)')
+    expect(crewDotTitle(asleep, live, [live], now)).toBe('otavio-api (Otávio) — trabalhando')
+  })
+})
+
 describe('crewDotInitial — a inicial da filha no trilho recolhido', () => {
   const h = (over: Partial<Handoff>) => ({ id: 'h', targetRepoLabel: 'lexter-api', ...over }) as Handoff
   it('do apelido vivo, senão do repo', () => {
