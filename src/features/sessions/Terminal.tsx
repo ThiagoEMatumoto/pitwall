@@ -24,6 +24,7 @@ import { ChildLinkDialog } from '@/features/handoffs/ChildLinkDialog'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { ChildLinkInfo } from '../../../shared/types/ipc'
 import { AgentHud } from './AgentHud'
+import { sameActivity } from './status-view'
 import { SummaryChip } from './voice/SummaryChip'
 import { useAutoSummary } from './voice/useAutoSummary'
 import { useSummarizeNow } from './voice/useSummarizeNow'
@@ -540,7 +541,7 @@ function TerminalHost({
     void sessionsApi.watchActivity(ccSessionId)
     const off = sessionsApi.onActivity((a) => {
       if (a.ccSessionId === ccSessionId) {
-        setActivity(a)
+        setActivity((prev) => (prev && sameActivity(prev, a) ? prev : a))
         statusRef.current = a.status
       }
     })
@@ -557,7 +558,7 @@ function TerminalHost({
   )
   useEffect(() => {
     if (!liveFromPty || exited) return
-    setActivity({
+    const next: SessionActivity = {
       ccSessionId: liveFromPty.ccSessionId,
       status: liveFromPty.status,
       name: null,
@@ -565,7 +566,8 @@ function TerminalHost({
       lastText: null,
       lastActivityAt: liveFromPty.lastActivityAt,
       model: null,
-    })
+    }
+    setActivity((prev) => (prev && sameActivity(prev, next) ? prev : next))
     statusRef.current = liveFromPty.status
   }, [liveFromPty, exited])
 
