@@ -72,6 +72,21 @@ describe('boot: filhas em voo sem aba voltam vivas', () => {
     void noTranscript
   })
 
+  // Encerrada na janela do Desfazer e o app fechou: o sweep a deixa 'interrupted'
+  // como qualquer filha em voo, e é a marca que impede o boot de ressuscitá-la.
+  it('encerrada pelo usuário não volta viva; a em segundo plano volta; as duas seguem vinculadas', () => {
+    const background = dispatch('f1')
+    const ended = dispatch('f2')
+    store.setEndedByUser(ended, true)
+    const swept = sweep()
+    const resume = vi.fn()
+
+    expect(resumeSweptChildren(swept, resume)).toEqual([background])
+    expect(resume).toHaveBeenCalledTimes(1)
+    expect(store.get(ended)?.childSessionId).toBe('f2')
+    expect(store.get(ended)?.resumable).toBe(true)
+  })
+
   it('falha ao retomar uma não impede as outras', () => {
     const a = dispatch('f1')
     const b = dispatch('f2')
