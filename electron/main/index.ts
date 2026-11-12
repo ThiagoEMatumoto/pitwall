@@ -32,7 +32,6 @@ import { promptQueue, registerSendPromptIpc } from './ipc/send-prompt'
 import { registerDormantPanesIpc } from './ipc/dormant-panes'
 import { registerHibernateIpc } from './ipc/hibernate'
 import { getIdleHibernator } from './services/hibernate/idle-hibernator'
-import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
 import { registerDialogIpc } from './ipc/dialog'
@@ -346,7 +345,6 @@ app.whenReady().then(async () => {
   registerComposerDraftIpc()
   registerDormantPanesIpc()
   registerHibernateIpc()
-  registerAgentBusIpc()
   registerRepoFilesIpc()
   // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
   // bem-sucedido (sessions:gc-drafts). As imagens dos rascunhos coletados saem no

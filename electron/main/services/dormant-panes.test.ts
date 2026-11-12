@@ -51,12 +51,9 @@ function harness(over: Partial<DormantPanesDeps> & { answer?: 'ok' | 'error' | '
 }
 
 describe('DormantPanes registry', () => {
-  it('acha por cc, por alias (case-insensitive, como o resolveAlias) e por repo', () => {
+  it('acha por cc até o renderer tirar a pane da lista', () => {
     const { panes } = harness()
     expect(panes.findDormantByCc('cc-1')).toEqual(PANE)
-    expect(panes.findDormantByAlias('  api-contrato ')).toEqual([PANE])
-    expect(panes.findDormantByAlias('outra')).toEqual([])
-    expect(panes.findDormantByRepo('r-api')).toEqual([PANE])
     panes.setDormant([])
     expect(panes.findDormantByCc('cc-1')).toBeNull()
   })
@@ -65,7 +62,7 @@ describe('DormantPanes registry', () => {
 describe('wakeDormant', () => {
   it('sucesso: pede o resume, espera a tela e devolve o sessions.id novo', async () => {
     const h = harness()
-    const p = h.panes.wakeDormant('cc-1', 'agent-bus')
+    const p = h.panes.wakeDormant('cc-1', 'send-prompt')
     // Sobe sem tela espelhada ainda: não está pronta.
     await vi.waitFor(() => expect(h.running.has('s-1')).toBe(true))
     setTimeout(() => h.screens.set('s-1', SCAN), 20)
@@ -82,7 +79,7 @@ describe('wakeDormant', () => {
 
   it('coalesce: dois wakes do mesmo cc ao mesmo tempo = um resume só', async () => {
     const h = harness()
-    const a = h.panes.wakeDormant('cc-1', 'agent-bus')
+    const a = h.panes.wakeDormant('cc-1', 'send-prompt')
     const b = h.panes.wakeDormant('cc-1', 'handoff-wake')
     await vi.waitFor(() => expect(h.running.has('s-1')).toBe(true))
     h.ready('s-1')
@@ -107,7 +104,7 @@ describe('wakeDormant', () => {
 
   it('pronta = TUI reconhecida, mesmo com o turno do --resume ainda trabalhando', async () => {
     const h = harness()
-    const p = h.panes.wakeDormant('cc-1', 'agent-bus')
+    const p = h.panes.wakeDormant('cc-1', 'send-prompt')
     await vi.waitFor(() => expect(h.running.has('s-1')).toBe(true))
     h.screens.set('s-1', SCAN)
 
@@ -117,14 +114,14 @@ describe('wakeDormant', () => {
 
   it('PTY viva sem tela no teto: sucesso degradado com o id e warn', async () => {
     const h = harness()
-    const out = await h.panes.wakeDormant('cc-1', 'agent-bus')
+    const out = await h.panes.wakeDormant('cc-1', 'send-prompt')
     expect(out).toEqual({ ok: true, sessionId: 's-1' })
     expect(h.warns).toContainEqual({ event: 'dormant_ready_timeout', sessionId: 's-1' })
   })
 
   it('PTY morreu antes de ficar pronta: falha com o id', async () => {
     const h = harness()
-    const p = h.panes.wakeDormant('cc-1', 'agent-bus')
+    const p = h.panes.wakeDormant('cc-1', 'send-prompt')
     await vi.waitFor(() => expect(h.running.has('s-1')).toBe(true))
     h.running.delete('s-1')
     expect(await p).toEqual({ ok: false, error: 'exited-before-ready', sessionId: 's-1' })
@@ -138,8 +135,8 @@ describe('wakeDormant', () => {
         throw new Error('janela destruída')
       },
     })
-    await expect(h.panes.wakeDormant('cc-1', 'agent-bus')).rejects.toThrow('janela destruída')
-    await expect(h.panes.wakeDormant('cc-1', 'agent-bus')).rejects.toThrow('janela destruída')
+    await expect(h.panes.wakeDormant('cc-1', 'send-prompt')).rejects.toThrow('janela destruída')
+    await expect(h.panes.wakeDormant('cc-1', 'send-prompt')).rejects.toThrow('janela destruída')
     expect(calls).toBe(2)
   })
 
@@ -147,12 +144,12 @@ describe('wakeDormant', () => {
     let clock = 1_000
     const h = harness({ answer: 'error', now: () => clock })
 
-    expect(await h.panes.wakeDormant('cc-1', 'agent-bus')).toMatchObject({
+    expect(await h.panes.wakeDormant('cc-1', 'send-prompt')).toMatchObject({
       ok: false,
       error: 'resume-threw',
     })
     clock += 59_999
-    expect(await h.panes.wakeDormant('cc-1', 'agent-bus')).toEqual({
+    expect(await h.panes.wakeDormant('cc-1', 'send-prompt')).toEqual({
       ok: false,
       error: 'wake-cooldown',
       sessionId: null,
@@ -160,7 +157,7 @@ describe('wakeDormant', () => {
     expect(h.requests).toHaveLength(1)
 
     clock += 1
-    expect(await h.panes.wakeDormant('cc-1', 'agent-bus')).toMatchObject({
+    expect(await h.panes.wakeDormant('cc-1', 'send-prompt')).toMatchObject({
       error: 'resume-threw',
     })
     expect(h.requests).toHaveLength(2)
@@ -168,7 +165,7 @@ describe('wakeDormant', () => {
 
   it('resume falhou no renderer', async () => {
     const h = harness({ answer: 'error' })
-    expect(await h.panes.wakeDormant('cc-1', 'agent-bus')).toEqual({
+    expect(await h.panes.wakeDormant('cc-1', 'send-prompt')).toEqual({
       ok: false,
       error: 'resume-threw',
       sessionId: null,
@@ -177,7 +174,7 @@ describe('wakeDormant', () => {
 
   it('sem janela: falha na hora, sem esperar o timeout', async () => {
     const h = harness({ requestWake: () => false, resultTimeoutMs: 60_000 })
-    expect(await h.panes.wakeDormant('cc-1', 'agent-bus')).toEqual({
+    expect(await h.panes.wakeDormant('cc-1', 'send-prompt')).toEqual({
       ok: false,
       error: 'no-window',
       sessionId: null,
@@ -186,7 +183,7 @@ describe('wakeDormant', () => {
 
   it('cc que não está dormindo não pede resume', async () => {
     const h = harness()
-    expect(await h.panes.wakeDormant('cc-x', 'agent-bus')).toMatchObject({
+    expect(await h.panes.wakeDormant('cc-x', 'send-prompt')).toMatchObject({
       ok: false,
       error: 'not-dormant',
     })

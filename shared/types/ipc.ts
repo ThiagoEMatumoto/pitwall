@@ -1280,7 +1280,7 @@ export interface RestorePlan {
 }
 
 // Pane dormindo no renderer, espelhada no main para a entrega cross-process
-// (agent-bus, wake da mãe, send-prompt) conseguir acordá-la.
+// (wake da mãe, send-prompt) conseguir acordá-la.
 export interface DormantPaneInfo {
   ccSessionId: string
   paneId: string

@@ -1,5 +1,5 @@
 // Barramento único dos "pulsos" entre sessões: cada produtor real de mensagem
-// sessão→sessão (handoff tools, agent-bus, bastão, SendMessage nativo) avisa aqui,
+// sessão→sessão (handoff tools, bastão, SendMessage nativo) avisa aqui,
 // e o mapa anima a bolinha no fio. É efêmero de propósito — nada persiste, e falhar
 // aqui nunca pode derrubar a entrega que já aconteceu (por isso o try no emit).
 import { randomUUID } from 'node:crypto'

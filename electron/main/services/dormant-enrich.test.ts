@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 // Título/repo da pane dormindo pelo mesmo produtor da sessão viva: transcript em
 // ~/.claude/projects (HOME em tmp) + tabela sessions de verdade (migrations do app).
-// É o que a aba mostra e o que a resolução por alias do agent-bus lê.
+// É o que a aba mostra.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const homeDir = vi.hoisted(() => ({ path: '' }))
@@ -29,7 +29,6 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import { closeDb, getDb } from './db'
 import { enrichDormantPanes } from './dormant-enrich'
-import { DormantPanes } from './dormant-panes'
 
 // Envelope real (redigido) do claude 2.1.286; as linhas de título têm o shape
 // exato que o claude grava: {"type":"ai-title","aiTitle":…,"sessionId":…}.
@@ -166,22 +165,5 @@ describe('enrichDormantPanes', () => {
 
     expect(m.title).toBe('meu-nome')
     expect(a.title).toBe('do-transcript')
-  })
-
-  it('findDormantByAlias acha a pane pelo título vindo do transcript', () => {
-    sessionRow('s', 'cc-t', null, 1)
-    transcript('cc-t', [{ custom: 'lazy-A' }])
-    const panes = new DormantPanes({
-      requestWake: () => false,
-      isRunning: () => false,
-      screen: async () => null,
-      warn: () => {},
-    })
-
-    panes.setDormant(
-      enrichDormantPanes([{ ccSessionId: 'cc-t', paneId: 'p', title: null, repoId: 'r1' }]),
-    )
-
-    expect(panes.findDormantByAlias('Lazy-A').map((p) => p.ccSessionId)).toEqual(['cc-t'])
   })
 })

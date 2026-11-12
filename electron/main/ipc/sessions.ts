@@ -1019,7 +1019,7 @@ function recordResponded(e: AttentionRespondedEvent): void {
 
 // Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
 // PTY) lideravam passam a responder a esta, venha o resume de clique,
-// agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
+// send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
 // filha chegaria a um id morto.
 export function transferLeadershipToResumed(
   priorSessionIds: string[],
