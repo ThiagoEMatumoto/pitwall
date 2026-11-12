@@ -43,9 +43,18 @@ export function useVisibleLiveSessions(): LiveSessionInfo[] {
 // Vivas que só aparecem na equipe (filhas no dock): a Home e o seletor contam as
 // DELE, o mapa e o hero contam todas. Sem dizer a diferença, "11 trabalhando" no
 // mapa e "9" no seletor pareciam dois números para o mesmo estado.
-export function crewOnlyCount(all: LiveSessionInfo[], visible: LiveSessionInfo[]): number {
+// Lista única por trás do "N na equipe", do toggle do seletor e do chip
+// "N em 2º plano" da barra: um contador só, senão os três divergem.
+export function crewOnlySessions(
+  all: LiveSessionInfo[],
+  visible: LiveSessionInfo[],
+): LiveSessionInfo[] {
   const shown = new Set(visible.map((s) => s.id))
-  return all.filter((s) => s.status !== 'ended' && !shown.has(s.id)).length
+  return all.filter((s) => s.status !== 'ended' && !shown.has(s.id))
+}
+
+export function crewOnlyCount(all: LiveSessionInfo[], visible: LiveSessionInfo[]): number {
+  return crewOnlySessions(all, visible).length
 }
 
 // Regra única de contagem: o número é SEMPRE o total (com as filhas da Equipe),
@@ -87,7 +96,7 @@ export function withCrewSessions(
   includeCrew: boolean,
 ): { items: LiveSessionInfo[]; crewIds: ReadonlySet<string> } {
   const shown = new Set(visible.map((s) => s.id))
-  const crew = all.filter((s) => s.status !== 'ended' && !shown.has(s.id))
+  const crew = crewOnlySessions(all, visible)
   const crewIds = new Set(crew.map((s) => s.id))
   if (!includeCrew || crew.length === 0) return { items: visible, crewIds: new Set() }
   return { items: all.filter((s) => shown.has(s.id) || crewIds.has(s.id)), crewIds }

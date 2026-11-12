@@ -411,11 +411,11 @@ export function SessionHeader({
           </Menu>
         )}
         {/* Ícones consistentes com as tabs (lucide): Minus = minimizar, Power =
-            encerrar (hover danger). Tooltip/aria-label preservam o texto antigo. */}
+            encerrar (hover danger). */}
         <button
           type="button"
           onClick={onMinimize}
-          title="Minimizar — mantém a sessão rodando em background, acessível no strip de sessões"
+          title="Minimizar — fecha só a aba; a sessão segue rodando. Sessão comum continua na barra; filha vai para o chip “em 2º plano” da mãe"
           aria-label="Minimizar"
           className="rounded p-1 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)]"
         >

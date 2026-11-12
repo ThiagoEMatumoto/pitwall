@@ -1,5 +1,5 @@
 import type { ComponentType, CSSProperties } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuItem } from '@/components/ui/Menu'
+import { backgroundChildrenByMother } from '@/features/handoffs/crew'
 import {
   motherOfChildMap,
   nestUnderMothers,
@@ -28,6 +29,7 @@ import { ProviderBadge } from '@/features/sessions/ProviderBadge'
 import { relativeTime } from '@/lib/time'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import {
+  crewOnlySessions,
   focusFilteredSessions,
   motherTitleBySession,
   useVisibleLiveSessions,
@@ -39,7 +41,7 @@ import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { liveSessionLabel } from './session-label'
-import { clippedCount } from './strip-overflow'
+import { clippedBackgroundCount, clippedCount } from './strip-overflow'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -168,6 +170,19 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   }, [orderedSessions, motherOfChild, motherPinKeys])
   const pinnedMotherKeys = useMemo(() => new Set(motherPinKeys), [motherPinKeys])
 
+  // Filha viva sem aba não tem chip próprio: a mãe carrega um agregado que a
+  // lista e abre. Conta só as sem aba; as com aba que o filtro de foco tira da
+  // barra são as do "+N" do botão da coroa.
+  const background = useMemo(
+    () =>
+      backgroundChildrenByMother(
+        crewOnlySessions(liveSessions, visibleSessions),
+        motherOfChild,
+        new Set(orderedSessions.map((s) => s.id)),
+      ),
+    [liveSessions, visibleSessions, motherOfChild, orderedSessions],
+  )
+
   // ccSessionId → paneId das sessões exibidas no split (destaque "aberta").
   // Sessão sem id nativo (Codex) vem na lista viva chaveada pelo sessions.id.
   const openByCc = useMemo(() => {
@@ -201,10 +216,31 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     setWaitingOffscreen(findOffscreenWaiting() !== null)
     const el = scrollRef.current
     if (!el) return
+    const bounds = el.getBoundingClientRect()
     const chips = [...el.querySelectorAll<HTMLElement>('[data-strip-chip]')].map((c) =>
       c.getBoundingClientRect(),
     )
-    const next = clippedCount(el.getBoundingClientRect(), chips)
+    const cut = clippedCount(bounds, chips)
+    const groups = [...el.querySelectorAll<HTMLElement>('[data-strip-background]')].map((g) => {
+      const { left, right } = g.getBoundingClientRect()
+      return {
+        left,
+        right,
+        count: Number(g.dataset.stripBackground),
+        // A mesma regra de `hidden` do BackgroundChildrenChip, sobre a medição
+        // de agora: o atributo no DOM ainda é o da medição anterior.
+        hiddenWithMother:
+          g.dataset.stripMotherIndex !== undefined &&
+          cut.hidden.includes(Number(g.dataset.stripMotherIndex)) &&
+          g.dataset.waiting !== 'true',
+      }
+    })
+    const cutBackground = clippedBackgroundCount(bounds, groups)
+    const next = {
+      left: cut.left + cutBackground.left,
+      right: cut.right + cutBackground.right,
+      hidden: cut.hidden,
+    }
     setClipped((prev) =>
       prev.left === next.left &&
       prev.right === next.right &&
@@ -226,7 +262,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
       window.removeEventListener('resize', checkOverflow)
       observer?.disconnect()
     }
-  }, [checkOverflow, layout])
+  }, [checkOverflow, layout, background])
 
   const scrollToWaiting = useCallback(() => {
     findOffscreenWaiting()?.scrollIntoView({ inline: 'nearest', behavior: 'smooth' })
@@ -234,7 +270,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
 
   return (
     <div className="flex h-[38px] shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface)_40%,transparent)] px-2">
-      {visibleSessions.length === 0 ? (
+      {visibleSessions.length === 0 && background.orphans.length === 0 ? (
         <span className="px-1 text-[11px] text-[var(--color-text-dim)]">
           Nenhuma sessão viva — clique num repo.
         </span>
@@ -263,37 +299,55 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
             const isOpen = paneId !== undefined
             const isFocused = isOpen && paneId === focusPaneId
             const isPinnedMother = pinnedMotherKeys.has(item.ccSessionId ?? item.id)
+            const backgroundChildren = background.byMother.get(item.id)
             return (
-              <StripEntry
-                key={item.ccSessionId}
-                entry={entry}
-                dividerBefore={index === layout.pinned.length && layout.pinned.length > 0}
-                isChild={motherOfChild.has(item.id)}
-                isPinnedMother={isPinnedMother}
-                restartPending={restartPending.has(item.id)}
-                onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
-                onPromote={() => void promoteToMother(item.id, 'when-idle')}
-              >
-                <Chip
-                  item={item}
-                  depth={entry.depth}
-                  isOpen={isOpen}
-                  isFocused={isFocused}
-                  isPinned={pinnedIds.includes(item.id)}
+              <Fragment key={item.ccSessionId}>
+                <StripEntry
+                  entry={entry}
+                  dividerBefore={index === layout.pinned.length && layout.pinned.length > 0}
+                  isChild={motherOfChild.has(item.id)}
                   isPinnedMother={isPinnedMother}
-                  // Logo depois da mãe o "↳ mãe" é redundante: o recuo já diz.
-                  motherTitle={entry.depth > 0 ? null : (motherTitles.get(item.id) ?? null)}
-                  // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
-                  // lugar (a medição seguinte não oscila).
-                  hidden={clipped.hidden.includes(index)}
-                  onOpen={() => void focusOrOpenSession(item)}
-                  onEnd={() => endSession(item.id)}
-                  onTogglePin={() => void togglePin(item.id)}
+                  restartPending={restartPending.has(item.id)}
                   onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
-                />
-              </StripEntry>
+                  onPromote={() => void promoteToMother(item.id, 'when-idle')}
+                >
+                  <Chip
+                    item={item}
+                    depth={entry.depth}
+                    isOpen={isOpen}
+                    isFocused={isFocused}
+                    isPinned={pinnedIds.includes(item.id)}
+                    isPinnedMother={isPinnedMother}
+                    // Logo depois da mãe o "↳ mãe" é redundante: o recuo já diz.
+                    motherTitle={entry.depth > 0 ? null : (motherTitles.get(item.id) ?? null)}
+                    // Fora do "+N" sem caber nem ícone + nome: invisível, mas mantém o
+                    // lugar (a medição seguinte não oscila).
+                    hidden={clipped.hidden.includes(index)}
+                    onOpen={() => void focusOrOpenSession(item)}
+                    onEnd={() => endSession(item.id)}
+                    onTogglePin={() => void togglePin(item.id)}
+                    onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
+                  />
+                </StripEntry>
+                {backgroundChildren && (
+                  <BackgroundChildrenChip
+                    sessions={backgroundChildren}
+                    hint="Filhas desta sessão rodando sem aba"
+                    motherIndex={index}
+                    motherHidden={clipped.hidden.includes(index)}
+                    onOpen={(child) => void focusOrOpenSession(child)}
+                  />
+                )}
+              </Fragment>
             )
           })}
+          {background.orphans.length > 0 && (
+            <BackgroundChildrenChip
+              sessions={background.orphans}
+              hint="Filhas rodando sem aba, com a mãe fora da barra"
+              onOpen={(child) => void focusOrOpenSession(child)}
+            />
+          )}
         </div>
       )}
 
@@ -540,6 +594,58 @@ function PinButton({ isPinned, onTogglePin }: { isPinned: boolean; onTogglePin: 
     >
       <Icon as={Pin} size={11} className={isPinned ? 'fill-current' : undefined} />
     </button>
+  )
+}
+
+// Fora do [data-strip-chip] de propósito: a medição do "+N" de overflow indexa
+// os chips pela posição na lista de sessões da barra. A medição dele é a do
+// [data-strip-background], que leva o nº de filhas.
+function BackgroundChildrenChip({
+  sessions,
+  hint,
+  motherIndex,
+  motherHidden = false,
+  onOpen,
+}: {
+  sessions: LiveSessionInfo[]
+  hint: string
+  // Posição do chip da mãe entre os [data-strip-chip]; ausente no grupo sem mãe.
+  motherIndex?: number
+  motherHidden?: boolean
+  onOpen: (child: LiveSessionInfo) => void
+}) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const waiting = sessions.some((s) => s.status === 'waiting')
+  // Some junto com o chip da mãe: sem ela ao lado o "↳" fica solto. Com filha
+  // aguardando ele fica — escondido, nada na barra apontaria para ela.
+  const hidden = motherHidden && !waiting
+  const items: MenuItem[] = sessions.map((s) => ({
+    label: `${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
+    onClick: () => onOpen(s),
+  }))
+  return (
+    <div className="flex shrink-0">
+      <Menu open={menuOpen} onClose={() => setMenuOpen(false)} items={items} portal align="left">
+        <button
+          type="button"
+          data-testid="strip-background-children"
+          data-strip-background={sessions.length}
+          data-strip-mother-index={motherIndex}
+          data-waiting={waiting || undefined}
+          data-clipped-hidden={hidden || undefined}
+          aria-hidden={hidden || undefined}
+          style={hidden ? { visibility: 'hidden' } : undefined}
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((v) => !v)}
+          title={`${hint}${waiting ? ' (há filha aguardando você)' : ''} — clique para abrir a aba de uma delas`}
+          className={`flex h-6 items-center whitespace-nowrap rounded-lg px-1.5 text-[10px] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)] ${
+            waiting ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-dim)]'
+          }`}
+        >
+          ↳ {sessions.length} em 2º plano
+        </button>
+      </Menu>
+    </div>
   )
 }
 

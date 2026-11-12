@@ -244,8 +244,13 @@ describe('sessions:hibernated', () => {
 // vez de recriar a aba que o usuário acabou de fechar.
 describe('closePane avisa o main', () => {
   it('aba acordada → sessions:pane-closed com o id da PTY', () => {
-    useAppStore.getState().closePane('pane-a')
-    expect(calls.paneClosed).toEqual(['sess-a'])
+    // pane-b: a PTY da sess-a já saiu nos testes de hibernação acima.
+    useAppStore.getState().closePane('pane-b')
+    expect(calls.paneClosed).toEqual(['sess-b'])
+    // Fechar a aba não encerra nada: o aviso diz que o processo continua.
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
+      'Aba fechada · a sessão segue rodando',
+    ])
   })
 
   it('aba dormindo não tem PTY → não avisa', async () => {
@@ -253,6 +258,16 @@ describe('closePane avisa o main', () => {
     await flush()
     useAppStore.getState().closePane('pane-a')
     expect(calls.paneClosed).toEqual([])
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Aba fechada'])
+  })
+
+  // O auto-close do Terminal: pty:exit → "Sessão encerrada" → onClose → closePane.
+  it('aba cuja PTY já saiu → o aviso não promete que a sessão segue rodando', () => {
+    useAppStore.setState({ panes: [livePane('pane-gone', 'sess-gone', 'cc-gone')] })
+    emitExit('sess-gone')
+    expect(exitAction('sess-gone', undefined)).toBe('toast-and-close')
+    useAppStore.getState().closePane('pane-gone')
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual(['Aba fechada'])
   })
 })
 

@@ -365,6 +365,9 @@ const hibernatedSessionIds = new Set<string>()
 export function isHibernatedSession(sessionId: string): boolean {
   return hibernatedSessionIds.has(sessionId)
 }
+// sessions.id das PTYs que já saíram. O Terminal fecha a própria aba no pty:exit
+// (closePane): ali o aviso não pode dizer que a sessão segue rodando.
+const exitedSessionIds = new Set<string>()
 let offOom: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
@@ -1233,8 +1236,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!closed) return
     if (!closed.dormant) void sessionsApi.paneClosed(closed.session.id)
     const cancelExpiry = closed.dormant ? scheduleDraftExpiry(paneId) : () => {}
+    const running = !closed.dormant && !exitedSessionIds.has(closed.session.id)
     showToast({
-      title: 'Aba fechada',
+      // Aba dormindo ou de PTY que já saiu não tem processo: ali "segue rodando"
+      // seria mentira.
+      title: running ? 'Aba fechada · a sessão segue rodando' : 'Aba fechada',
       body: closed.session.title ?? closed.repo?.label ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => {
@@ -1441,7 +1447,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // PTY que sai sozinha (filha do dock sem aba, antecessora do bastão, /exit)
     // não passa por mutação nenhuma do store: sem este refetch ela ficava na
     // lista — e no mapa, como "encerrada" — até outra coisa refazer o snapshot.
-    offPtyExit = sessionsApi.onExit(() => {
+    offPtyExit = sessionsApi.onExit((e) => {
+      exitedSessionIds.add(e.sessionId)
       void get().refreshLiveSessions()
     })
     // Sessão criada pela Room (mãe via room:start-mother, ou outro caminho) não
