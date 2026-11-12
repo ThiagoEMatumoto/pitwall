@@ -63,6 +63,7 @@ import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
 import { perfCount } from '../services/perf-probe'
+import { createPtyDataCoalescer } from '../services/pty-data-coalescer'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
@@ -1220,6 +1221,10 @@ export function resumeConversation(
   return { session, reattached: false }
 }
 
+// Um webContents.send por chunk de cada PTY disputava o renderer com o input;
+// agora é no máximo um por sessão a cada janela.
+const ptyData = createPtyDataCoalescer((e) => broadcast('pty:data', e))
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
@@ -1235,7 +1240,13 @@ export function registerSessionIpc(): void {
     })
     ptyManager.on('data', (e) => {
       perfCount('pty:data.chars', e.data.length)
-      broadcast('pty:data', e)
+      ptyData.push(e.sessionId, e.data)
+    })
+    // Registrado antes do listener que anuncia o pty:exit (e o sessions:hibernated):
+    // a cauda ainda na janela não pode chegar depois da saída.
+    ptyManager.on('exit', (e) => {
+      ptyData.flush(e.sessionId)
+      ptyData.drop(e.sessionId)
     })
     scopeOomWatch.attach(ptyManager)
     const oomAutoResume = new OomAutoResume({
@@ -1757,6 +1768,9 @@ export function registerSessionIpc(): void {
   ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
   ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
+    // O replay do Terminal assume que todo byte do backlog já foi entregue antes
+    // desta resposta; o que ficasse na janela chegaria depois e duplicaria na tela.
+    ptyData.flush(sessionId)
     return ptyManager.getBacklog(sessionId)
   })
 
