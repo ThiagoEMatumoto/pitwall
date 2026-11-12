@@ -29,6 +29,7 @@ vi.mock('./useChatTranscript', () => ({
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
 import { ChatView } from './ChatView'
+import { CHAT_WINDOW_ROWS } from './chat-logic'
 
 globalThis.ResizeObserver ??= class {
   observe() {}
@@ -204,6 +205,27 @@ describe('ChatView — Voltar a este ponto (2.1.318)', () => {
     fireEvent.click(buttons[4])
     await waitFor(() => expect(t.onRespond).toHaveBeenCalledTimes(3))
     expect(t.onRespond.mock.calls[0]).toEqual([[ESC, ESC], 200])
+    expect(t.onRespond.mock.calls[1]).toEqual([Array(6).fill(UP), 60])
+    expect(t.onRespond.mock.calls[2][0]).toEqual(['\r'])
+  })
+
+  it('conversa maior que a janela: a distância até o fim segue contando a conversa inteira', async () => {
+    const t = rewindTerminal({ open: 'rewind-picker-populated', nav: 'rewind-picker-code' })
+    const older = Array.from({ length: 300 }, (_, i) => `mensagem antiga ${i}`)
+    transcript.messages = [...older, ...REWIND_SESSION].map((text) => ({ kind: 'user' as const, text }))
+    render(
+      <ChatView
+        sessionId="s-r"
+        status="idle"
+        onRespond={t.onRespond}
+        reparseMenu={t.reparseMenu}
+        readCliInput={() => EMPTY_INPUT}
+      />,
+    )
+    const buttons = screen.getAllByTestId('rewind-here')
+    expect(buttons).toHaveLength(CHAT_WINDOW_ROWS)
+    fireEvent.click(buttons[CHAT_WINDOW_ROWS - 10 + 4])
+    await waitFor(() => expect(t.onRespond).toHaveBeenCalledTimes(3))
     expect(t.onRespond.mock.calls[1]).toEqual([Array(6).fill(UP), 60])
     expect(t.onRespond.mock.calls[2][0]).toEqual(['\r'])
   })
