@@ -10,7 +10,10 @@
 // O número sai de dois jeitos:
 // - aqui, na linha "[hibernate-tick-cost] {json}" que o teste imprime;
 // - no app com CM_PERF=1, em spans["hibernate.tick"] do perf.jsonl. O tick roda
-//   a cada 60 s: aparece em uma de cada seis janelas de 10 s da sonda.
+//   a cada 60 s: aparece em uma de cada seis janelas de 10 s da sonda. É só o
+//   gate: o que o tick espera sai em hibernate.confirm (renderer) e
+//   hibernate.exit (fila), e a leitura em segundo plano em hibernate.scan, que é
+//   tempo de parede. O que ela trava do event loop é o lagMs da mesma linha.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const { HOME, perfBefore } = vi.hoisted(() => {
@@ -305,13 +308,16 @@ describe('custo do tick com a janela da filha ligada e a geral desligada', () =>
         loopBlockMaxMsWhileReading: round(lag.max / 1e6),
         probe: {
           'hibernate.tick': span,
+          'hibernate.scan': probe.spans['hibernate.scan'],
           'hibernate.evaluated': probe.counters['hibernate.evaluated'],
         },
       })}`,
     )
 
-    // A sonda viu todos os ticks, e só as filhas concluídas chegaram ao gate.
+    // A sonda viu todos os ticks, e só as filhas concluídas chegaram ao gate. A
+    // leitura que o tick frio deixou para trás aparece, uma por transcript.
     expect(span?.n).toBe(1 + WARM_TICKS)
+    expect(probe.spans['hibernate.scan']?.n).toBe(CHILDREN)
     expect(probe.counters['hibernate.evaluated']).toBe(CHILDREN * (1 + WARM_TICKS))
     expect(coldMs).toBeLessThan(TARGET_MS)
     expect(median(warm)).toBeLessThan(TARGET_MS)

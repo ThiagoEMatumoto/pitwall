@@ -22,7 +22,7 @@ import {
   type HibernateStats,
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
-import { perfCount, perfTime } from '../perf-probe'
+import { perfCount, perfSelfTime, type PerfWait } from '../perf-probe'
 import type { ProcTreeVerdict } from './proc-tree'
 import type { TranscriptPeek } from './schedule-scan'
 
@@ -262,15 +262,16 @@ export class IdleHibernator {
     if (!on || this.ticking) return
     this.ticking = true
     try {
-      // Com CM_PERF=1 o custo do tick sai em spans['hibernate.tick'] da sonda. Um
-      // tick que hiberna alguém inclui a espera do renderer e da fila.
-      await perfTime('hibernate.tick', () => this.sweep(afterMin, childAfterMin))
+      // Com CM_PERF=1 spans['hibernate.tick'] da sonda é só o gate. O que o tick
+      // passa esperando tem span próprio: a resposta do renderer em
+      // 'hibernate.confirm' e o /exit pela fila em 'hibernate.exit'.
+      await perfSelfTime('hibernate.tick', (wait) => this.sweep(afterMin, childAfterMin, wait))
     } finally {
       this.ticking = false
     }
   }
 
-  private async sweep(afterMin: number, childAfterMin: number): Promise<void> {
+  private async sweep(afterMin: number, childAfterMin: number, wait: PerfWait): Promise<void> {
     this.stats.lastTickAt = this.now()
     const handoffCc = new Set(this.deps.activeHandoffCcSessionIds())
     for (const candidate of this.deps.candidates()) {
@@ -289,13 +290,17 @@ export class IdleHibernator {
       }
       // O open_panes tem debounce: a aba pode ter fechado depois do último save.
       // E a aba focada, ou com o Composer em uso, nunca hiberna.
-      const check = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
+      const check = await wait('hibernate.confirm', () =>
+        this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId),
+      )
       const refusal = paneCheckRefusal(check, doneChild)
       if (refusal) {
         this.refuse(refusal)
         continue
       }
-      await this.hibernate(candidate, doneChild ? null : (check?.paneId ?? null), doneChild)
+      await wait('hibernate.exit', () =>
+        this.hibernate(candidate, doneChild ? null : (check?.paneId ?? null), doneChild),
+      )
     }
   }
 

@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import { perfTime } from '../perf-probe'
 
 // Itens f da hibernação, lidos do transcript da sessão.
 //
@@ -229,7 +230,9 @@ export class ScheduleScanner {
     if (!this.reading.has(path)) {
       this.reading.add(path)
       this.background = this.background
-        .then(() => this.scan(path))
+        // Com CM_PERF=1 a leitura sai em spans['hibernate.scan'] da sonda: tempo de
+        // parede, fora de 'hibernate.tick'. O que ela trava do event loop é o lagMs.
+        .then(() => perfTime('hibernate.scan', () => this.scan(path)))
         .finally(() => this.reading.delete(path))
     }
     return 'reading'
