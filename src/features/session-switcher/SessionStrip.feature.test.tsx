@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 
 const navigateToFeature = vi.fn()
@@ -219,5 +219,86 @@ describe('SessionStrip — filhas em segundo plano', () => {
     sessions.push(named('mae'))
     setup([node('mae')], false)
     expect(screen.queryByTestId('strip-background-children')).not.toBeInTheDocument()
+  })
+
+  // jsdom não tem layout: a barra mede pelos retângulos [left, right] dados aqui,
+  // na ordem do DOM (chips de sessão e chips agregados).
+  function stubRects(rects: {
+    bar: [number, number]
+    chips: [number, number][]
+    background: [number, number][]
+  }) {
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const at = (list: [number, number][], selector: string) =>
+          list[[...document.querySelectorAll(selector)].indexOf(this)]
+        const [left, right] =
+          this.dataset.testid === 'session-strip-scroll'
+            ? rects.bar
+            : (at(rects.chips, '[data-strip-chip]') ??
+              at(rects.background, '[data-testid="strip-background-children"]') ?? [0, 0])
+        return { left, right, width: right - left } as DOMRect
+      })
+    return () => spy.mockRestore()
+  }
+
+  describe('barra transbordando', () => {
+    let restore = () => {}
+    afterEach(() => restore())
+
+    it('mãe cortada some inteira: o chip agregado some junto', () => {
+      restore = stubRects({
+        bar: [100, 600],
+        chips: [
+          [60, 150],
+          [260, 380],
+        ],
+        background: [[154, 250]],
+      })
+      sessions.push(named('mae'), named('outra'))
+      background.push(named('helena-auth'))
+      setup([node('mae'), node('outra'), node('helena-auth', { hierarchyMotherId: 'mae' })], false)
+
+      const [mae] = document.querySelectorAll<HTMLElement>('[data-strip-chip]')
+      expect(mae.dataset.clippedHidden).toBe('true')
+      const chip = screen.getByTestId('strip-background-children')
+      expect(chip.dataset.clippedHidden).toBe('true')
+      expect(chip).not.toBeVisible()
+    })
+
+    it('mãe cortada some, mas o chip agregado com filha aguardando fica', () => {
+      restore = stubRects({
+        bar: [100, 600],
+        chips: [
+          [60, 150],
+          [260, 380],
+        ],
+        background: [[154, 250]],
+      })
+      sessions.push(named('mae'), named('outra'))
+      background.push(named('helena-auth', { status: 'waiting' }))
+      setup([node('mae'), node('outra'), node('helena-auth', { hierarchyMotherId: 'mae' })], false)
+
+      const chip = screen.getByTestId('strip-background-children')
+      expect(chip.dataset.clippedHidden).toBeUndefined()
+      expect(chip).toBeVisible()
+    })
+
+    it('chip agregado cortado com a mãe inteira na barra: as filhas entram no "+N"', () => {
+      restore = stubRects({ bar: [0, 500], chips: [[300, 420]], background: [[424, 520]] })
+      sessions.push(named('mae'))
+      background.push(named('helena-auth'), named('caio-db'))
+      setup(
+        [
+          node('mae'),
+          node('helena-auth', { hierarchyMotherId: 'mae' }),
+          node('caio-db', { hierarchyMotherId: 'mae' }),
+        ],
+        false,
+      )
+
+      expect(screen.getByTestId('session-strip-more')).toHaveTextContent('+2')
+    })
   })
 })

@@ -41,7 +41,7 @@ import { orderSessions } from './strip-pins'
 import { useStripPinsStore } from './strip-pins-store'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 import { liveSessionLabel } from './session-label'
-import { clippedCount } from './strip-overflow'
+import { clippedBackgroundCount, clippedCount } from './strip-overflow'
 
 type LiveStatus = LiveSessionInfo['status']
 
@@ -216,10 +216,21 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
     setWaitingOffscreen(findOffscreenWaiting() !== null)
     const el = scrollRef.current
     if (!el) return
+    const bounds = el.getBoundingClientRect()
     const chips = [...el.querySelectorAll<HTMLElement>('[data-strip-chip]')].map((c) =>
       c.getBoundingClientRect(),
     )
-    const next = clippedCount(el.getBoundingClientRect(), chips)
+    const groups = [...el.querySelectorAll<HTMLElement>('[data-strip-background]')].map((g) => {
+      const { left, right } = g.getBoundingClientRect()
+      return { left, right, count: Number(g.dataset.stripBackground) }
+    })
+    const cut = clippedCount(bounds, chips)
+    const cutBackground = clippedBackgroundCount(bounds, groups)
+    const next = {
+      left: cut.left + cutBackground.left,
+      right: cut.right + cutBackground.right,
+      hidden: cut.hidden,
+    }
     setClipped((prev) =>
       prev.left === next.left &&
       prev.right === next.right &&
@@ -312,6 +323,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                   <BackgroundChildrenChip
                     sessions={backgroundChildren}
                     hint="Filhas desta sessão rodando sem aba"
+                    motherHidden={clipped.hidden.includes(index)}
                     onOpen={(child) => void focusOrOpenSession(child)}
                   />
                 )}
@@ -575,18 +587,24 @@ function PinButton({ isPinned, onTogglePin }: { isPinned: boolean; onTogglePin: 
 }
 
 // Fora do [data-strip-chip] de propósito: a medição do "+N" de overflow indexa
-// os chips pela posição na lista de sessões da barra.
+// os chips pela posição na lista de sessões da barra. A medição dele é a do
+// [data-strip-background], que leva o nº de filhas.
 function BackgroundChildrenChip({
   sessions,
   hint,
+  motherHidden = false,
   onOpen,
 }: {
   sessions: LiveSessionInfo[]
   hint: string
+  motherHidden?: boolean
   onOpen: (child: LiveSessionInfo) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const waiting = sessions.some((s) => s.status === 'waiting')
+  // Some junto com o chip da mãe: sem ela ao lado o "↳" fica solto. Com filha
+  // aguardando ele fica — escondido, nada na barra apontaria para ela.
+  const hidden = motherHidden && !waiting
   const items: MenuItem[] = sessions.map((s) => ({
     label: `${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
     onClick: () => onOpen(s),
@@ -597,7 +615,11 @@ function BackgroundChildrenChip({
         <button
           type="button"
           data-testid="strip-background-children"
+          data-strip-background={sessions.length}
           data-waiting={waiting || undefined}
+          data-clipped-hidden={hidden || undefined}
+          aria-hidden={hidden || undefined}
+          style={hidden ? { visibility: 'hidden' } : undefined}
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
           title={`${hint}${waiting ? ' (há filha aguardando você)' : ''} — clique para abrir a aba de uma delas`}

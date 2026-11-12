@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clippedCount } from './strip-overflow'
+import { clippedBackgroundCount, clippedCount } from './strip-overflow'
 
 describe('clippedCount', () => {
   const bounds = { left: 0, right: 500 }
@@ -27,5 +27,17 @@ describe('clippedCount', () => {
       { left: 600, right: 700 },
     ]
     expect(clippedCount(bounds, chips)).toEqual({ left: 0, right: 3, hidden: [2, 3] })
+  })
+})
+
+describe('clippedBackgroundCount', () => {
+  it('chip agregado cortado soma as filhas dele do lado cortado; inteiro na barra não soma', () => {
+    const groups = [
+      { left: -40, right: 50, count: 2 },
+      { left: 100, right: 190, count: 5 },
+      { left: 450, right: 540, count: 1 },
+      { left: 560, right: 650, count: 3 },
+    ]
+    expect(clippedBackgroundCount({ left: 0, right: 500 }, groups)).toEqual({ left: 2, right: 4 })
   })
 })

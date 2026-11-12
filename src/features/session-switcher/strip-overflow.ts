@@ -22,3 +22,18 @@ export function clippedCount(
   })
   return { left, right, hidden }
 }
+
+// O chip agregado "↳ N em 2º plano" cortado: as N filhas dele estão tão fora da
+// barra quanto um chip de sessão cortado, e entram no "+N" do mesmo lado.
+export function clippedBackgroundCount(
+  bounds: { left: number; right: number },
+  groups: { left: number; right: number; count: number }[],
+): { left: number; right: number } {
+  let left = 0
+  let right = 0
+  for (const g of groups) {
+    if (g.right > bounds.right + 1) right += g.count
+    else if (g.left < bounds.left - 1) left += g.count
+  }
+  return { left, right }
+}
