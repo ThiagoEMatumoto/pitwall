@@ -110,7 +110,6 @@ import { sameIdList, tailSubscription, tailText, type TailCandidate } from './ca
 import { advanceWorkingClocks, indicatorFor } from './card-indicator'
 import { MapLiveContext, useMinuteClock, type MapLive } from './map-live'
 import { MapStatusCounters } from './MapStatusCounters'
-import { usePendingAsks } from '@/features/handoffs/ConversationsTab'
 import { useCrewDockWidth } from '@/features/handoffs/CrewDock'
 import { RAIL_WIDTH, useCrewDockStore } from '@/features/handoffs/crew-dock-store'
 import { useFeaturePanelStore } from './feature-panel-store'
@@ -393,7 +392,6 @@ function SessionMapInner() {
   const savePositions = useCanvasStateStore((s) => s.savePositions)
   const flowApi = useReactFlow<MapNode, MapEdge>()
   const views = useCardViewStore((s) => s.views)
-  const asks = usePendingAsks()
   const cardHeights = useCardHeightStore((s) => s.heights)
   const attention = useAttentionListStore((s) => s.items)
   const inPanel = useMotherDockStore((s) => s.shownId)
@@ -430,7 +428,6 @@ function SessionMapInner() {
       expandedMothers,
       views,
       cardHeights,
-      asks,
       rowWidth,
       compact,
       attention,
@@ -445,7 +442,6 @@ function SessionMapInner() {
       expandedMothers,
       views,
       cardHeights,
-      asks,
       rowWidth,
       compact,
     ],

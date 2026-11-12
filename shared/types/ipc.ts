@@ -49,7 +49,6 @@ import type {
 } from '../hibernate'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
-import type { AgentBusSnapshot } from './agent-bus'
 import type { SessionLinkPulse } from './session-link-pulse'
 import type {
   CanvasNote,
@@ -2763,11 +2762,6 @@ export interface Api {
     motherPreflight(featureId: string, repoId?: string | null): Promise<MotherPreflight>
     // Rejeita com "MCP_NOT_READY: …" quando o MCP não subiu, sem criar sessão.
     startMother(input: StartMotherInput): Promise<StartMotherResult>
-  }
-  // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
-  agentBus: {
-    list(): Promise<AgentBusSnapshot>
-    onUpdated(handler: (snapshot: AgentBusSnapshot) => void): () => void
   }
   // Mapa de sessões (P8): posições, notas, grupos, propósito e "onde parei".
   canvas: {

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, MessageCircle, Users } from 'lucide-react'
+import { ChevronRight, Users } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { ApexDot } from '@/features/brand'
 import { usePanelTier } from '@/features/sessions/use-panel-tier'
@@ -22,8 +22,6 @@ import {
   stepCrewFocus,
 } from './crew'
 import { RAIL_WIDTH, clampWidth, useCrewDockStore } from './crew-dock-store'
-import { ConversationsTab, useAgentBusSnapshot } from './ConversationsTab'
-import { hasDockConversations } from './dock-visibility'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Crew Dock: as sessões-filhas de handoff, na periferia da janela. Fica colapsado
@@ -42,9 +40,8 @@ export function useCrewDockWidth(): number {
   const collapsed = useCrewDockStore((s) => s.collapsed)
   const width = useCrewDockStore((s) => s.width)
   const hasCrew = useHasCrew()
-  const hasConversations = useHasDockConversations()
   const overMap = useDockOverMap()
-  if (!hasCrew && !hasConversations) return 0
+  if (!hasCrew) return 0
   if (collapsed) return RAIL_WIDTH
   // Sobre o mapa o painel flutua à esquerda da trilha, que segue no layout.
   return overMap ? RAIL_WIDTH + width : width
@@ -68,90 +65,31 @@ export function useHasCrew(): boolean {
   return useMemo(() => dockCrew(handoffs).length > 0, [handoffs])
 }
 
-function useHasDockConversations(): boolean {
-  const snapshot = useAgentBusSnapshot()
-  return hasDockConversations(snapshot, Date.now())
-}
-
 // Gate: o painel abaixo só monta quando há equipe — o que também garante que o
 // ResizeObserver do usePanelTier pegue o elemento já existente.
 export function CrewDock() {
   const handoffs = useHandoffsStore((s) => s.handoffs)
   const liveSessions = useAppStore((s) => s.liveSessions)
   const attention = useCrewWaitingCount()
-  const conversations = useAgentBusSnapshot().messages
-  const hasConversations = useHasDockConversations()
-  const pendingAsks = conversations.filter((m) => m.status === 'pending').length
 
   const attentionIds = useCrewAttentionIds()
   const crew = useMemo(() => orderCrew(handoffs, attentionIds), [handoffs, attentionIds])
   const liveById = useMemo(() => new Map(liveSessions.map((s) => [s.id, s])), [liveSessions])
 
-  // Nada delegado nem conversado entre agentes, nenhum pixel gasto.
-  if (crew.length === 0 && !hasConversations) return null
+  // Nada delegado, nenhum pixel gasto.
+  if (crew.length === 0) return null
 
-  return (
-    <CrewDockPanel
-      crew={crew}
-      liveById={liveById}
-      attention={attention}
-      pendingAsks={pendingAsks}
-    />
-  )
+  return <CrewDockPanel crew={crew} liveById={liveById} attention={attention} />
 }
 
 interface PanelProps {
   crew: Handoff[]
   liveById: Map<string, LiveSessionInfo>
   attention: number
-  pendingAsks: number
 }
 
-type DockTab = 'crew' | 'conversations'
-
-const DOCK_PANEL_ID = 'crew-dock-panel'
-
-function DockTabButton(props: {
-  active: boolean
-  onClick: () => void
-  icon: typeof Users
-  label: string
-  count: number
-  testId: string
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={props.active}
-      aria-controls={DOCK_PANEL_ID}
-      data-testid={props.testId}
-      onClick={props.onClick}
-      className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition ${
-        props.active
-          ? 'bg-[var(--color-surface-2)] font-medium text-[var(--color-text)]'
-          : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
-      }`}
-    >
-      <Icon as={props.icon} size={13} className="shrink-0" />
-      {props.label}
-      <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
-        {props.count}
-      </span>
-    </button>
-  )
-}
-
-function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
+function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const liveList = useMemo(() => [...liveById.values()], [liveById])
-  const [tab, setTab] = useState<DockTab>(crew.length > 0 ? 'crew' : 'conversations')
-  const shownTab: DockTab = crew.length === 0 ? 'conversations' : tab
-  // Filha nova (0 → n) com Conversas aberta: a equipe aparece, não fica escondida.
-  const hadCrew = useRef(crew.length > 0)
-  useEffect(() => {
-    if (crew.length > 0 && !hadCrew.current) setTab('crew')
-    hadCrew.current = crew.length > 0
-  }, [crew.length])
   const collapsed = useCrewDockStore((s) => s.collapsed)
   const width = useCrewDockStore((s) => s.width)
   const setWidth = useCrewDockStore((s) => s.setWidth)
@@ -179,11 +117,6 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   useLayoutEffect(() => {
     setOverMapHost(overMap ? document.getElementById(MAP_DOCK_HOST_ID) : null)
   }, [overMap])
-
-  function openCrew() {
-    setTab('crew')
-    expand()
-  }
 
   // ── Teclado: Ctrl+J entra, ↑/↓ andam, Espaço/Enter espiam, Esc sai ─────────
   const listRef = useRef<HTMLDivElement>(null)
@@ -228,8 +161,6 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
   // seguidas tem que disparar duas vezes.
   useEffect(() => {
     if (focusNonce === 0) return
-    // Os cards só existem na aba Equipe.
-    setTab('crew')
     const active = document.activeElement
     // Ctrl+J com o foco já no dock não pode sobrescrever a origem real.
     if (!(active instanceof HTMLElement) || !listRef.current?.contains(active)) {
@@ -315,25 +246,15 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
       />
 
       <header className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
-        <div role="tablist" className="flex min-w-0 items-center gap-0.5">
-          {crew.length > 0 && (
-            <DockTabButton
-              active={shownTab === 'crew'}
-              onClick={() => setTab('crew')}
-              icon={Users}
-              label="Equipe"
-              count={crew.length}
-              testId="crew-tab"
-            />
-          )}
-          <DockTabButton
-            active={shownTab === 'conversations'}
-            onClick={() => setTab('conversations')}
-            icon={MessageCircle}
-            label="Conversas"
-            count={pendingAsks}
-            testId="conversations-tab-button"
-          />
+        <div
+          data-testid="crew-dock-title"
+          className="flex min-w-0 items-center gap-1 text-xs font-medium text-[var(--color-text)]"
+        >
+          <Icon as={Users} size={13} className="shrink-0" />
+          Equipe
+          <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-dim)]">
+            {crew.length}
+          </span>
         </div>
         {attention > 0 && (
           <span
@@ -358,58 +279,50 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
         </button>
       </header>
 
-      {shownTab === 'conversations' ? (
-        <div id={DOCK_PANEL_ID} role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-          <ConversationsTab />
-        </div>
-      ) : (
-        <div
-          id={DOCK_PANEL_ID}
-          role="tabpanel"
-          ref={listRef}
-          onFocus={() => setDockFocused(true)}
-          onBlur={() => setDockFocused(false)}
-          className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
-        >
-          {crew.map((h) => (
-            // Wrapper focável de verdade: sem um elemento que receba foco, o
-            // Espaço vazaria pro xterm em vez de abrir o peek. tabIndex -1
-            // porque a entrada é pelo Ctrl+J — os botões/textarea de dentro do
-            // card já ocupam a ordem natural do Tab.
-            <div
-              key={h.id}
-              data-crew-card={h.id}
-              tabIndex={-1}
-              // Foco (do teclado ou do mouse) é a verdade: o cursor do store
-              // segue o DOM, não o contrário.
-              onFocus={() => setFocusedId(h.id)}
-              onKeyDown={(e) => onCardKeyDown(e, h.id)}
-              className={`shrink-0 rounded-[14px] outline-none ${
-                dockFocused && h.id === focusedId
-                  ? 'ring-1 ring-[var(--color-accent)] ring-offset-0'
-                  : ''
-              }`}
-            >
-              <HandoffCard
-                handoff={h}
-                ttlHours={ttlHours}
-                tier={tier}
-                onPeek={() => {
-                  // Foca o card ANTES de abrir: o peek guarda o activeElement
-                  // como origem, e devolver o foco ao card (não ao botão) deixa
-                  // as setas prontas assim que o overlay fecha.
-                  focusCard(h.id)
-                  openPeek(h.id)
-                }}
-                onOpenTerminal={() => {
-                  focusCard(h.id)
-                  openTerminal(h)
-                }}
-              />
-            </div>
-          ))}
-        </div>
-      )}
+      <div
+        ref={listRef}
+        onFocus={() => setDockFocused(true)}
+        onBlur={() => setDockFocused(false)}
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2"
+      >
+        {crew.map((h) => (
+          // Wrapper focável de verdade: sem um elemento que receba foco, o
+          // Espaço vazaria pro xterm em vez de abrir o peek. tabIndex -1
+          // porque a entrada é pelo Ctrl+J — os botões/textarea de dentro do
+          // card já ocupam a ordem natural do Tab.
+          <div
+            key={h.id}
+            data-crew-card={h.id}
+            tabIndex={-1}
+            // Foco (do teclado ou do mouse) é a verdade: o cursor do store
+            // segue o DOM, não o contrário.
+            onFocus={() => setFocusedId(h.id)}
+            onKeyDown={(e) => onCardKeyDown(e, h.id)}
+            className={`shrink-0 rounded-[14px] outline-none ${
+              dockFocused && h.id === focusedId
+                ? 'ring-1 ring-[var(--color-accent)] ring-offset-0'
+                : ''
+            }`}
+          >
+            <HandoffCard
+              handoff={h}
+              ttlHours={ttlHours}
+              tier={tier}
+              onPeek={() => {
+                // Foca o card ANTES de abrir: o peek guarda o activeElement
+                // como origem, e devolver o foco ao card (não ao botão) deixa
+                // as setas prontas assim que o overlay fecha.
+                focusCard(h.id)
+                openPeek(h.id)
+              }}
+              onOpenTerminal={() => {
+                focusCard(h.id)
+                openTerminal(h)
+              }}
+            />
+          </div>
+        ))}
+      </div>
     </>
   )
 
@@ -425,7 +338,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
               clique ou Ctrl+J. */}
       <button
         type="button"
-        onClick={openCrew}
+        onClick={expand}
         title={
           attention > 0
             ? `${attention} filha(s) esperando você — clique ou Ctrl+J para abrir`
@@ -440,7 +353,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
       </button>
       <button
         type="button"
-        onClick={openCrew}
+        onClick={expand}
         title={railLabel}
         aria-label={railLabel}
         className="rounded px-1 font-mono text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
@@ -448,22 +361,6 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
       >
         {attention > 0 ? `${attention}!` : crew.length}
       </button>
-      {pendingAsks > 0 && (
-        <button
-          type="button"
-          data-testid="crew-rail-conversations"
-          onClick={() => {
-            setTab('conversations')
-            expand()
-          }}
-          title={`${pendingAsks} pergunta(s) entre agentes esperando resposta`}
-          className="flex items-center gap-0.5 rounded px-1 text-[10px] tabular-nums transition hover:bg-[var(--color-surface-2)]"
-          style={{ color: 'var(--color-info)' }}
-        >
-          <Icon as={MessageCircle} size={12} />
-          {pendingAsks}
-        </button>
-      )}
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2.5 overflow-y-auto pt-1">
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
@@ -473,7 +370,7 @@ function CrewDockPanel({ crew, liveById, attention, pendingAsks }: PanelProps) {
               key={h.id}
               type="button"
               data-testid="crew-rail-child"
-              onClick={openCrew}
+              onClick={expand}
               title={crewDotTitle(h, live, liveList)}
               aria-label={crewDotTitle(h, live, liveList)}
               className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 bg-[var(--color-bg)] text-[10px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"

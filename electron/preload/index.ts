@@ -105,7 +105,6 @@ import type {
 } from '../../shared/types/mother-pins'
 import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
 import type { AttentionItem } from '../../shared/types/attention'
-import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
 import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
@@ -471,10 +470,6 @@ const api: Api = {
     onChanged: (handler) => subscribe<{ featureId: string | null }>('room:changed', handler),
     motherPreflight: (featureId, repoId) => invoke('room:mother-preflight', featureId, repoId),
     startMother: (input) => invoke('room:start-mother', input),
-  },
-  agentBus: {
-    list: () => invoke('agent-bus:list'),
-    onUpdated: (handler) => subscribe<AgentBusSnapshot>('agent-bus:updated', handler),
   },
   canvas: {
     get: (input) => invoke('canvas:get', input),

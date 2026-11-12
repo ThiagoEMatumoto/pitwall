@@ -220,8 +220,6 @@ export const KIND_LABEL: Record<SessionLinkPulseKind, string> = {
   report: 'entrega',
   question: 'pergunta',
   answer: 'resposta',
-  ask: 'pergunta',
-  reply: 'resposta',
   note: 'nota',
 }
 

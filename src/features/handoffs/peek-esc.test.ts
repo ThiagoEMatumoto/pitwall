@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/lib/ipc', () => ({ sessionsApi: {}, handoffsApi: {}, agentBusApi: {} }))
+vi.mock('@/lib/ipc', () => ({ sessionsApi: {}, handoffsApi: {} }))
 const { escBelongsToUpperLayer } = await import('./CrewPeek')
 
 afterEach(() => {

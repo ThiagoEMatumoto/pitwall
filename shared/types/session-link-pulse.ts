@@ -10,8 +10,6 @@ export type SessionLinkPulseKind =
   | 'report'
   | 'question'
   | 'answer'
-  | 'ask'
-  | 'reply'
   | 'note'
 
 export interface SessionLinkPulse {

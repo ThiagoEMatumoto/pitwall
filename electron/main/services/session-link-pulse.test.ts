@@ -70,14 +70,14 @@ describe('SessionLinkPulseBus', () => {
       bus.emit({
         fromSessionId: fwd ? 'a' : 'b',
         toSessionId: fwd ? 'b' : 'a',
-        kind: i === 9 ? 'reply' : 'message',
+        kind: i === 9 ? 'answer' : 'message',
       })
     }
     expect(published).toHaveLength(PULSES_PER_WINDOW)
     advance(PULSE_WINDOW_MS)
     expect(published).toHaveLength(PULSES_PER_WINDOW + 1)
     // O coalescido carrega o ÚLTIMO pedido (direção e tipo).
-    expect(published.at(-1)).toMatchObject({ fromSessionId: 'b', toSessionId: 'a', kind: 'reply' })
+    expect(published.at(-1)).toMatchObject({ fromSessionId: 'b', toSessionId: 'a', kind: 'answer' })
   })
 
   it('pares diferentes não dividem a cota', () => {

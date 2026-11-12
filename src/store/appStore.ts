@@ -1659,7 +1659,7 @@ function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): 
 
 // A PTY saiu por hibernação (o evento vem ANTES do pty:exit): a pane vira dormant
 // no lugar (mesmo paneId), como uma restaurada dormindo, e entra no dormantSync
-// para o agent-bus achá-la. O rascunho do Composer não migra: é 'pane:<paneId>'
+// para o main conseguir acordá-la. O rascunho do Composer não migra: é 'pane:<paneId>'
 // no app.db, e o paneId é o mesmo dormindo e acordada.
 function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent): void {
   hibernatedSessionIds.add(sessionId)
@@ -1740,7 +1740,7 @@ function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
   })
 }
 
-// Wake pedido pelo main (agent-bus, wake da mãe, send-prompt): mesmo caminho do
+// Wake pedido pelo main (wake da mãe, send-prompt): mesmo caminho do
 // clique. Se a pane já acordou por outro caminho, devolve o id atual.
 async function answerWakeRequest({ requestId, ccSessionId }: WakeRequest): Promise<void> {
   const find = () => useAppStore.getState().panes.find((p) => p.session.ccSessionId === ccSessionId)

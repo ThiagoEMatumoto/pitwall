@@ -11,7 +11,7 @@ vi.mock('@/lib/ipc', () => {
   )
   // vi.mock confere as chaves exportadas: lista explícita das apis do preload.
   return Object.fromEntries(
-    ["projectsApi", "sessionsApi", "chatApi", "shellApi", "appApi", "gpuApi", "dialogApi", "prefsApi", "secretsApi", "vaultApi", "fsApi", "repoApi", "workspaceApi", "ccConfigsApi", "ccPluginsApi", "ccSettingsApi", "updatesApi", "usageApi", "metricsApi", "featuresApi", "loopApi", "objectivesApi", "handoffsApi", "batonApi", "sessionGraphApi", "motherPinsApi", "attentionApi", "roomApi", "agentBusApi", "canvasApi", "sendToApi", "architectureApi", "tasksApi", "diagramsApi", "windowApi", "notificationsApi", "mcpApi", "syncApi", "voiceApi", "designApi"].map((k) => [k, inert]),
+    ["projectsApi", "sessionsApi", "chatApi", "shellApi", "appApi", "gpuApi", "dialogApi", "prefsApi", "secretsApi", "vaultApi", "fsApi", "repoApi", "workspaceApi", "ccConfigsApi", "ccPluginsApi", "ccSettingsApi", "updatesApi", "usageApi", "metricsApi", "featuresApi", "loopApi", "objectivesApi", "handoffsApi", "batonApi", "sessionGraphApi", "motherPinsApi", "attentionApi", "roomApi", "canvasApi", "sendToApi", "architectureApi", "tasksApi", "diagramsApi", "windowApi", "notificationsApi", "mcpApi", "syncApi", "voiceApi", "designApi"].map((k) => [k, inert]),
   )
 })
 // Destinos de @menção vêm do grafo de sessões vivo; aqui não há outras sessões.
