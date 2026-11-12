@@ -1195,15 +1195,19 @@ function TerminalHost({
         const visible = entries[entries.length - 1]?.isIntersecting ?? true
         const cameBack = visible && !visibleRef.current
         visibleRef.current = visible
+        // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. A
+        // leitura síncrona entra no mesmo render que tira o chat da pausa, senão o card
+        // de antes de ocultar reapareceria até a segunda leitura; esta espera o write
+        // vazio drenar a fila do xterm (write é assíncrono). O modo de permissão é
+        // comparado com o visto antes de ocultar (o baseline do aviso não zera), então
+        // a troca feita pela CLI nesse meio ainda avisa. Antes do replay do backlog a
+        // tela está vazia: quem lê é o seed.
+        const rescan = cameBack && replay.replied && !exitedRef.current
+        if (rescan) scanTui(term)
         setPaneVisible(visible)
         if (visible) attachWebgl()
         else detachWebgl()
-        // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. O
-        // write vazio drena a fila do xterm (write é assíncrono) antes da leitura. O
-        // modo de permissão é comparado com o visto antes de ocultar (o baseline do
-        // aviso não zera), então a troca feita pela CLI nesse meio ainda avisa. Antes
-        // do replay do backlog a tela está vazia: quem lê é o seed.
-        if (!cameBack || !replay.replied) return
+        if (!rescan) return
         term.write('', () => {
           if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
           scanTui(term)

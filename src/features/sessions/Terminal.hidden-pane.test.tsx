@@ -23,6 +23,7 @@ const h = vi.hoisted(() => {
     backlog: Promise.resolve('') as Promise<string>,
     intersect: null as ((entries: { isIntersecting: boolean }[]) => void) | null,
     chatProps: null as { tuiMenu: { kind: string } | null; paused?: boolean } | null,
+    chatRenders: [] as { kind: string | null; paused: boolean }[],
     term: null as import('@xterm/headless').Terminal | null,
     session: {
       exited: false,
@@ -144,6 +145,7 @@ vi.mock('./chat/ChatView', async () => {
   return {
     ChatView: forwardRef(function ChatView(p: NonNullable<typeof h.chatProps>) {
       h.chatProps = p
+      h.chatRenders.push({ kind: p.tuiMenu?.kind ?? null, paused: p.paused === true })
       return null
     }),
   }
@@ -172,6 +174,7 @@ const fixture = (name: string) =>
   readFileSync(join(__dirname, '../../../shared/tui/__fixtures__', name), 'utf8')
 const PERMISSION_PROMPT = fixture('claude-2.1.286-permission-bash.ansi')
 const IDLE_ACCEPT_EDITS = fixture('claude-2.1.318-rewind-e2e-after-restore.ansi')
+const TRUST_PROMPT = fixture('claude-2.1.286-trust-unnumbered.ansi')
 
 const session = { id: 's1', repoId: 'r1', ccSessionId: 'cc1', provider: 'claude' } as Session
 
@@ -294,6 +297,22 @@ describe('Terminal com a pane oculta', () => {
     await settle(20)
 
     expect(h.chatProps?.tuiMenu?.kind).toBe('permission')
+  })
+
+  it('ao voltar, o chat sai da pausa já com o menu de agora, sem repintar o de antes de ocultar', async () => {
+    await mount()
+    setStatus('waiting')
+    await ptyPrints(PERMISSION_PROMPT)
+    expect(h.chatProps?.tuiMenu?.kind).toBe('permission')
+    await setVisible(false)
+    await ptyPrints(TRUST_PROMPT)
+    h.chatRenders.length = 0
+
+    await setVisible(true)
+
+    expect(h.chatRenders.length).toBeGreaterThan(0)
+    expect(h.chatRenders.filter((r) => !r.paused).map((r) => r.kind)).not.toContain('permission')
+    expect(h.chatProps).toMatchObject({ paused: false, tuiMenu: { kind: 'trust' } })
   })
 
   it('modo trocado pela CLI com a pane oculta: o aviso sai ao voltar, contra o modo visto antes de ocultar', async () => {
