@@ -11,7 +11,14 @@ import {
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
+import {
+  HandoffCard,
+  childProcessAlive,
+  crewDotColor,
+  crewDotInitial,
+  crewDotTitle,
+  useHeartbeatTtl,
+} from './HandoffCard'
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
@@ -142,6 +149,19 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
 
   function focusCard(id: string) {
     listRef.current?.querySelector<HTMLElement>(`[data-crew-card="${CSS.escape(id)}"]`)?.focus()
+  }
+
+  // Dot da trilha: leva até AQUELA filha. Com processo, a aba dela; sem, o card
+  // (é dele que saem Retomar e Arquivar).
+  function focusChild(handoff: Handoff, live: LiveSessionInfo | undefined) {
+    if (live && childProcessAlive(live)) {
+      void useAppStore.getState().focusOrOpenSession(live)
+      return
+    }
+    expand()
+    setFocusedId(handoff.id)
+    // rAF: o expand() pode ter acabado de montar os cards.
+    requestAnimationFrame(() => focusCard(handoff.id))
   }
 
   // Pedido de foco do AppShell (Ctrl+J). Nonce, não booleano: pedir duas vezes
@@ -348,14 +368,15 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
           const color = crewDotColor(h, live, liveList)
+          const dotTitle = crewDotTitle(h, live, liveList)
           return (
             <button
               key={h.id}
               type="button"
               data-testid="crew-rail-child"
-              onClick={expand}
-              title={crewDotTitle(h, live, liveList)}
-              aria-label={crewDotTitle(h, live, liveList)}
+              onClick={() => focusChild(h, live)}
+              title={`${dotTitle} · clique para ${childProcessAlive(live) ? 'abrir a aba' : 'ver o card'}`}
+              aria-label={dotTitle}
               className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 bg-[var(--color-bg)] text-[10px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
               // Inicial da filha com o status no anel: o ponto sozinho não dizia quem era.
               style={{ borderColor: color }}
