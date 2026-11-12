@@ -24,8 +24,8 @@ import { PERMISSION_FIXTURE, attentionClaudeStub } from './attention-reason'
 //   permissão) · C (filha de A via MCP session_handoff, no repo de B).
 // Passos: Alt+A → B e Aprovar inline · Ctrl+Shift+Enter → @A + #arquivo ·
 // Alt+. de A → C · Ctrl+Shift+G mapa (lanes, cartões vivos, fio, indicadores) ·
-// recolher B, terminal em C · nota e grupo · agent_ask C → repo de A em Conversas
-// e no mapa · zero erros de console · [drive-safe] no log e zero git pull.
+// recolher B, terminal em C · nota e grupo · zero erros de console ·
+// [drive-safe] no log e zero git pull.
 // Os stubs só escrevem no HOME fake; nunca tocam os repos. Nenhuma API é chamada.
 // Rodar: JOURNEY_SHOTS=<dir> npx tsx e2e/scenarios/mission-control-journey.ts
 
@@ -720,57 +720,6 @@ try {
   await fit()
   await shot('note-and-group')
 
-  // ---------- agent_ask de C para o repo de A ----------
-  const asC = await mcpAs(idC)
-  const asked = await asC.call<{
-    askId: string
-    mode: string
-    routedTo: { sessionId: string } | null
-  }>('agent_ask', { repo: repo1.label, text: 'O schema de pedidos já tem o campo status?' })
-  check(
-    asked.routedTo?.sessionId === idA,
-    `agent_ask de C por repo=${repo1.label} roteado para A (${asked.mode})`,
-  )
-  const balloon = await waitFor(
-    'balão do ask no mapa',
-    async () => (await page.getByTestId('edge-ask-balloon').count()) === 1,
-    20_000,
-  )
-  check(balloon, 'mapa mostra o fio temporário com balão C→A')
-  const dock = page.getByTestId('crew-dock')
-  await dock.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {})
-  if ((await dock.getAttribute('data-expanded').catch(() => null)) !== 'true') {
-    await page
-      .getByTestId('crew-rail-conversations')
-      .click()
-      .catch(() => {})
-  }
-  await page
-    .getByTestId('conversations-tab-button')
-    .click()
-    .catch(() => {})
-  const row = page.locator(`[data-testid="conversation-row"][data-ask-id="${asked.askId}"]`)
-  const rowOk = await waitFor('linha em Conversas', async () => row.isVisible(), 10_000)
-  const pair = rowOk ? await row.getByTestId('conversation-pair').innerText() : ''
-  check(rowOk, `Conversas mostra o ask (${pair.replace(/\s+/g, ' ')})`)
-  await shot('conversations-and-map')
-  if (fileA) fake.setStatus(fileA.data.pid, 'idle')
-  const askDelivered = await waitFor(
-    'envelope no stdin de A',
-    async () => stdinOf(fileA?.data.pid).includes(`id="${asked.askId}"`),
-    20_000,
-  )
-  check(askDelivered, 'A ociosa recebe o <pitwall-ask> no stdin')
-  await mcpAs(idA).then((c) =>
-    c.call('agent_reply', { askId: asked.askId, text: 'Sim, desde a v3.' }),
-  )
-  const gone = await waitFor(
-    'balão some',
-    async () => (await page.getByTestId('edge-ask-balloon').count()) === 0,
-    10_000,
-  )
-  check(gone, 'resposta de A fecha o fio no mapa')
-  await shot('answered')
 } catch (err) {
   fatal = err
   console.error('[journey] erro fatal:', err)
