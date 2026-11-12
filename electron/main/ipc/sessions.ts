@@ -872,7 +872,7 @@ export function resumeHandoffChild(
   // herdava): o alias vem então de outra linha da mesma conversa.
   const name =
     childRow?.title ||
-    latestManualTitleOfCc(ccSessionId) ||
+    handoffStore.latestManualTitleOfCc(ccSessionId) ||
     readTranscriptTitle(transcript) ||
     `handoff: ${repo.label}`
   const command = resolveAgentCommand()
@@ -989,18 +989,6 @@ function sessionIdsOfCc(ccSessionId: string): string[] {
     .prepare('SELECT id FROM sessions WHERE cc_session_id = ?')
     .all(ccSessionId) as Array<{ id: string }>
   return rows.map((row) => row.id)
-}
-
-// Título manual mais recente entre as linhas da conversa (o apelido da filha).
-function latestManualTitleOfCc(ccSessionId: string): string | null {
-  const row = getDb()
-    .prepare(
-      `SELECT title FROM sessions
-        WHERE cc_session_id = ? AND title_source = 'manual' AND title <> ''
-        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get(ccSessionId) as { title: string } | undefined
-  return row?.title ?? null
 }
 
 // Kickoff do resume pelo PAINEL (Crew Dock): retomar a tarefa e reportar via MCP.

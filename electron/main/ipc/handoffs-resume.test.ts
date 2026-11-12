@@ -159,6 +159,7 @@ vi.mock('../services/handoff-store', () => ({
   })),
   getByChildSession: () => null,
   failIfRunning: () => null,
+  latestManualTitleOfCc: () => null,
 }))
 
 import { registerSessionIpc, resumeHandoffChild } from './sessions'
