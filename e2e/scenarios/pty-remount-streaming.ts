@@ -20,8 +20,11 @@ import { goToArea, waitReady } from '../driver/nav'
 // Em cada uma o stream para logo depois da montagem, para o ponto do replay
 // ainda estar na tela. Montagem em que o stream já rolou esse ponto para fora não
 // conta (inconclusiva), e o cenário falha se sobrarem poucas conclusivas.
-// A tela é lida de .xterm-rows, que só existe no renderer DOM: o app sobe com a
-// GPU desligada.
+// O que se confere é o buffer do xterm (scrollback + tela), lido da instância que
+// o TerminalHost guarda num ref: com a GPU ligada o renderer é WebGL e não existe
+// .xterm-rows. A GPU fica ligada porque, desligada, a janela deste harness nunca
+// aparece (isVisible() fica false, zero requestAnimationFrame) e nenhum clique
+// estabiliza.
 // Rodar (depois de npm run rebuild:native && npm run build):
 //   npx tsx e2e/scenarios/pty-remount-streaming.ts
 
@@ -95,13 +98,14 @@ writeCopyPrefs(userData, {
   keybindings: null,
   'app.showIntroOnBoot': JSON.stringify(false),
   'session.defaultPaneMode': JSON.stringify('terminal'),
-  'gpu.disabled': JSON.stringify(true),
+  'gpu.disabled': JSON.stringify(false),
+  'gpu.disabledByUser': JSON.stringify(false),
+  'gpu.autoDisabled': null,
 })
+// Herdado do shell, desligaria a GPU por baixo das prefs.
+delete process.env.CM_DISABLE_GPU
 
-const { app, page } = await launchApp({
-  userDataDir: userData,
-  env: { ...fake.env, CM_DISABLE_GPU: '1' },
-})
+const { app, page } = await launchApp({ userDataDir: userData, env: fake.env })
 
 async function waitFor(label: string, fn: () => Promise<boolean>, timeoutMs = 20_000) {
   const started = Date.now()
@@ -134,14 +138,33 @@ interface CounterWindow {
   __ptyRemount?: { events: number; chars: number }
 }
 
+// O recorte do React e do xterm que a leitura do buffer usa.
+interface FiberLike {
+  memoizedState: unknown
+  return: FiberLike | null
+}
+interface HookLike {
+  memoizedState: unknown
+  next: HookLike | null
+}
+interface XtermLike {
+  loadAddon: unknown
+  buffer: {
+    active: {
+      length: number
+      getLine(y: number): { translateToString(trimRight: boolean): string } | undefined
+    }
+  }
+}
+
 let fatal: unknown = null
 try {
   await waitReady(page)
   const skip = page.locator('.spl-skip')
   if (await skip.count()) await skip.click({ timeout: 5000 }).catch(() => {})
   const gpu = await page.evaluate(() => window.api.gpu.status())
-  if (!gpu.hwAccelDisabled) {
-    throw new Error('o app subiu com a GPU ligada: sem renderer DOM não há .xterm-rows para ler')
+  if (gpu.hwAccelDisabled) {
+    throw new Error('o app subiu com a GPU desligada: neste harness a janela não aparece')
   }
 
   // ---------- a sessão, pela UI (Ctrl+N): com aba ----------
@@ -167,6 +190,9 @@ try {
 
   // O xterm DESTA sessão, na modal do mapa ou fora dela (a aba). `terms` diferente
   // de 1 ou `text` nulo é falha de infraestrutura do cenário, não do replay.
+  // O .xterm é filho do host do TerminalHost: sobe pelos fibers a partir do host
+  // até o ref que guarda a instância e junta as linhas do buffer, sem separador
+  // (um token partido na quebra de linha continua inteiro).
   const screenOf = (where: 'modal' | 'aba') =>
     page.evaluate(
       ({ sid, inModal }) => {
@@ -175,13 +201,27 @@ try {
             (el.closest('[data-peek-lift]') != null) === inModal &&
             el.closest('[data-session-id]')?.getAttribute('data-session-id') === sid,
         )
-        return {
-          terms: terms.length,
-          text:
-            terms.length === 1
-              ? (terms[0].querySelector('.xterm-rows')?.textContent ?? null)
-              : null,
+        if (terms.length !== 1) return { terms: terms.length, text: null }
+        const host = terms[0].parentElement as unknown as Record<string, unknown> | null
+        const key = host ? Object.keys(host).find((k) => k.startsWith('__reactFiber$')) : undefined
+        let term: XtermLike | null = null
+        let fiber = (host && key ? host[key] : null) as FiberLike | null
+        for (; fiber && !term; fiber = fiber.return) {
+          let hook = fiber.memoizedState as HookLike | null
+          for (; hook && typeof hook === 'object' && 'next' in hook && !term; hook = hook.next) {
+            const current = (hook.memoizedState as { current?: XtermLike } | null)?.current
+            if (current && typeof current.loadAddon === 'function' && current.buffer?.active) {
+              term = current
+            }
+          }
         }
+        if (!term) return { terms: 1, text: null }
+        const buffer = term.buffer.active
+        let text = ''
+        for (let y = 0; y < buffer.length; y++) {
+          text += buffer.getLine(y)?.translateToString(true) ?? ''
+        }
+        return { terms: 1, text }
       },
       { sid: id, inModal: where === 'modal' },
     )
@@ -208,7 +248,7 @@ try {
   }
 
   // Uma montagem sob streaming: liga o stream, dispara o remount, espera o xterm
-  // novo, para o stream e compara a tela com a cauda do backlog.
+  // novo, para o stream e compara o buffer dele com a cauda do backlog.
   async function remountUnderStream(
     label: string,
     where: 'modal' | 'aba',
@@ -231,16 +271,16 @@ try {
       )
       if (!mounted) {
         const seen = await screenOf(where)
-        throw new Error(`${label}: sem .xterm-rows para ler (${seen.terms} xterm da sessão)`)
+        throw new Error(`${label}: sem buffer do xterm para ler (${seen.terms} xterm da sessão)`)
       }
       await page.waitForTimeout(200)
       stopStream()
 
       const backlogTokens = tokensOf(await settledBacklog())
       const last = backlogTokens.at(-1)
-      // O render do xterm é por frame: espera o último token do backlog aparecer.
+      // O write do xterm é assíncrono: espera o último token do backlog aparecer.
       await waitFor(
-        `${label}: último token na tela`,
+        `${label}: último token no buffer`,
         async () => tokensOf((await screenOf(where)).text ?? '').at(-1) === last,
         5000,
       )
@@ -253,14 +293,14 @@ try {
       check(
         same,
         same
-          ? `${label}: a tela é a cauda do backlog (${screenTokens.length} tokens, s${screenTokens[0]} a s${last})`
-          : `${label}: tela diferente do backlog a partir do token ${diverges} (tela s${screenTokens[diverges]}, backlog s${expected[diverges]}; ${repeated} repetidos; último da tela s${screenTokens.at(-1)}, do backlog s${last})`,
+          ? `${label}: o buffer é a cauda do backlog (${screenTokens.length} tokens, s${screenTokens[0]} a s${last})`
+          : `${label}: buffer diferente do backlog a partir do token ${diverges} (buffer s${screenTokens[diverges]}, backlog s${expected[diverges]}; ${repeated} repetidos; último do buffer s${screenTokens.at(-1)}, do backlog s${last})`,
       )
       // O ponto do replay fica dentro do que saiu depois do disparo; só conta se
-      // isso tudo ainda cabe na tela.
+      // isso tudo ainda está no buffer.
       const conclusive = sinceTrigger > 0 && sinceTrigger < screenTokens.length
       console.log(
-        `[remount] ${label}: ${sinceTrigger} tokens desde o disparo, ${screenTokens.length} na tela → ${conclusive ? 'conclusiva' : 'INCONCLUSIVA'}`,
+        `[remount] ${label}: ${sinceTrigger} tokens desde o disparo, ${screenTokens.length} no buffer → ${conclusive ? 'conclusiva' : 'INCONCLUSIVA'}`,
       )
       return same && conclusive
     } finally {
