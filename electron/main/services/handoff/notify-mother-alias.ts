@@ -17,7 +17,7 @@
 
 import { ptyManager } from '../pty-manager'
 import * as store from '../handoff-store'
-import { sanitizeBody } from '../agent-bus'
+import { sanitizeBody } from './envelope-text'
 import { injectIntoChildGuarded } from './guarded-inject'
 import { emitSessionLinkPulse } from '../session-link-pulse'
 import type { Handoff } from '../../../../shared/types/ipc'

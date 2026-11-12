@@ -23,6 +23,7 @@ import type {
 import type { SessionGraph } from '../../../shared/types/session-graph'
 import type { DormantPaneInfo } from '../../../shared/types/ipc'
 import type { DormantWakeOutcome } from './dormant-panes'
+import { MAX_WAIT_SECONDS, attr, sanitizeBody } from './handoff/envelope-text'
 import type {
   PromptQueueEvent,
   SendPromptError,
@@ -30,13 +31,14 @@ import type {
   SendPromptResult,
 } from '../../../shared/types/send-prompt'
 
+export { MAX_WAIT_SECONDS, sanitizeBody }
+
 export const MAX_ASK_DEPTH = 3
 export const ASK_RATE_PER_MINUTE = 6
 export const ASK_RATE_PER_HOUR = 30
 export const ASK_TTL_MS = 15 * 60_000
 export const MAX_ASK_TEXT = 8_000
 export const MAX_REPLY_TEXT = 16_000
-export const MAX_WAIT_SECONDS = 60
 const SNAPSHOT_LIMIT = 50
 
 export type AgentListScope = 'project' | 'linked' | 'all'
@@ -119,21 +121,6 @@ const UNDELIVERABLE: Record<SendPromptError, string> = {
   'input-dirty': 'há texto não enviado na caixa de input do destino',
   cancelled: 'a mensagem foi cancelada antes de sair',
   'wake-failed': 'a sessão de destino dormia e não acordou',
-}
-
-// Atributo do envelope: sem aspas, sinais de tag nem quebra — um alias forjado não
-// injeta atributo nem fecha a tag.
-export function attr(value: string): string {
-  return value.replace(/["<>\r\n]/g, '').trim()
-}
-
-// Controles fora \n e \t saem: ESC[201~ fecharia o bracketed-paste e o resto
-// viraria digitação crua (com \r = Enter).
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\x00-\x08\x0b-\x1f\x7f]/g
-
-export function sanitizeBody(text: string): string {
-  return text.replace(CONTROL_CHARS, '').replace(/<\/pitwall-/gi, '<\\/pitwall-')
 }
 
 export function formatAskEnvelope(args: {
