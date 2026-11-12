@@ -21,7 +21,8 @@ import { headerLayout } from './header-layout'
 import { usePanelTier } from './use-panel-tier'
 import { MeasureBlocks } from '@/features/brand/MeasureBlocks'
 import { contextUsage, formatContextUsage } from './model-context-limits'
-import { formatRelative, statusDotView } from './status-view'
+import { useNow } from '@/features/feature-room/room-ui'
+import { formatRelative, RELATIVE_TIME_TICK_MS, statusDotView } from './status-view'
 import type { PaneMode } from '@/store/appStore'
 import type { SessionFeature } from './useSessionFeature'
 import type { SessionActivity } from '../../../shared/types/ipc'
@@ -44,7 +45,6 @@ interface Props {
   onCommitRename: (next: string) => void
   exited: boolean
   activity: SessionActivity | null
-  now: number
   claudeNotFound: boolean
   exitCode: number | null
   error: string | null
@@ -102,7 +102,6 @@ export function SessionHeader({
   onCommitRename,
   exited,
   activity,
-  now,
   claudeNotFound,
   exitCode,
   error,
@@ -136,6 +135,7 @@ export function SessionHeader({
     onCommitRename(next)
   }
 
+  const now = useNow(activity?.lastActivityAt && !exited ? RELATIVE_TIME_TICK_MS : null)
   const dot = statusDotView(activity?.status)
   const relTime = activity?.lastActivityAt ? formatRelative(now - activity.lastActivityAt) : null
   // Tooltip carrega tudo que era texto visível: label de status, tempo relativo

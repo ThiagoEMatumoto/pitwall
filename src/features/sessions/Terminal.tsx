@@ -335,7 +335,6 @@ function TerminalHost({
   // pra eles. Refletem o último valor que ESTE app injetou (null = ainda não definido).
   const [activeEffort, setActiveEffort] = useState<EffortLevel | null>(null)
   const [ultracodeActive, setUltracodeActive] = useState(false)
-  const [now, setNow] = useState(() => Date.now())
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [batonOpen, setBatonOpen] = useState(false)
@@ -570,13 +569,6 @@ function TerminalHost({
     setActivity((prev) => (prev && sameActivity(prev, next) ? prev : next))
     statusRef.current = liveFromPty.status
   }, [liveFromPty, exited])
-
-  // Tick para manter o "há Xs" relativo atualizado sem novos broadcasts.
-  useEffect(() => {
-    if (!activity?.lastActivityAt || exited) return
-    const id = setInterval(() => setNow(Date.now()), 5000)
-    return () => clearInterval(id)
-  }, [activity?.lastActivityAt, exited])
 
   // Título de exibição da sessão não-filha (sessions.auto_title), atualizado ao
   // vivo pelo session:auto-titled no liveSessions. O main nunca grava em filha.
@@ -1379,7 +1371,6 @@ function TerminalHost({
           onCommitRename={commitRename}
           exited={exited}
           activity={activity}
-          now={now}
           claudeNotFound={claudeNotFound}
           exitCode={exitCode}
           error={error}
@@ -1576,7 +1567,7 @@ function TerminalHost({
           o HUD só aparece se houver subagentes — sem eles, era o mesmo
           "trabalhando há Xs" repetido numa faixa a mais. */}
       {!exited && composer === 'full' && (!hudStatus || (activity?.subagents?.length ?? 0) > 0) && (
-        <AgentHud activity={activity} now={now} status={hudStatus} />
+        <AgentHud activity={activity} status={hudStatus} />
       )}
 
       {/* Resumo falado do último turno (modo voz) — faixa acima do composer,

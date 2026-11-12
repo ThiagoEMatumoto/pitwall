@@ -109,11 +109,13 @@ export const ROOM_FOCUS =
 const CLOCK_MS = 30_000
 
 // Um relógio por superfície (não um timer por tile): "parada há X min", "há 2 min".
-export function useNow(): number {
+// intervalMs null = relógio parado (nada na tela depende da hora).
+export function useNow(intervalMs: number | null = CLOCK_MS): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), CLOCK_MS)
+    if (intervalMs == null) return
+    const t = window.setInterval(() => setNow(Date.now()), intervalMs)
     return () => window.clearInterval(t)
-  }, [])
+  }, [intervalMs])
   return now
 }

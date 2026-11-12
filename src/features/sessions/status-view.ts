@@ -28,6 +28,10 @@ export function statusDotView(status: SessionActivity['status'] | undefined): St
   }
 }
 
+// Passo do "há Xs" do header e do HUD. O relógio mora em cada um deles: no
+// dono da pane, cada passo re-renderizava o chat e o composer junto.
+export const RELATIVE_TIME_TICK_MS = 5000
+
 export function formatRelative(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
   if (s < 60) return `há ${s}s`
