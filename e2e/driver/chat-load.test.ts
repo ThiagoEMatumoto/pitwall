@@ -43,7 +43,13 @@ vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: (
 import { buildLongMotherLines } from '../../electron/main/services/__fixtures__/long-mother-jsonl'
 import { parseChatMessages } from '../../electron/main/services/chat-transcript'
 import { ChatView } from '../../src/features/sessions/chat/ChatView'
-import { loadTurnsShown, ptyCharsSent, readChatLoad, typingLoadArrived } from './chat-load'
+import {
+  loadTurnsShown,
+  ptyCharsSent,
+  readChatLoad,
+  readLastReply,
+  typingLoadArrived,
+} from './chat-load'
 import { parsePerfLines } from './perf'
 
 globalThis.ResizeObserver ??= class {
@@ -68,7 +74,8 @@ function diskNow(messages: ChatMessage[]) {
 // elemento do pane, e devolve o resultado serializado, como o Playwright faz.
 const paneOf = (el: Element) =>
   ({
-    evaluate: async (fn: (el: Element) => unknown) => JSON.parse(JSON.stringify(fn(el))),
+    evaluate: async (fn: (el: Element, arg: unknown) => unknown, arg: unknown) =>
+      JSON.parse(JSON.stringify(fn(el, arg))),
   }) as unknown as Locator
 
 describe('readChatLoad', () => {
@@ -86,7 +93,26 @@ describe('readChatLoad', () => {
     expect(loadTurnsShown(after.lastReply, BASE_TURNS)).toBe(4)
 
     expect(after.domNodes).toBe(document.getElementsByTagName('*').length)
-    expect(after.domNodes).toBeGreaterThan(before.domNodes)
+    expect(after.domNodes).toBeGreaterThan(before.domNodes ?? 0)
+    expect(after.readMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('na última tecla lê só a última resposta, sem varrer o chat nem o documento', async () => {
+    transcript.messages = turnsOnDisk(BASE_TURNS + 4)
+    const { container } = render(createElement(ChatView, { sessionId: 'tecla' }))
+    const full = await readChatLoad(paneOf(container), 1000)
+    const wholeDocument = vi.spyOn(document, 'getElementsByTagName')
+    const wholePane = vi.spyOn(container, 'querySelectorAll')
+
+    const atLastKey = await readLastReply(paneOf(container), 1000)
+
+    expect(wholeDocument).not.toHaveBeenCalled()
+    expect(wholePane).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+    expect(atLastKey.lastReply).toMatch(/^pronto 6\./)
+    expect(atLastKey.lastReply).toBe(full.lastReply)
+    expect(atLastKey.domNodes).toBeNull()
+    expect(atLastKey.readMs).toBeGreaterThanOrEqual(0)
   })
 
   it('sem chat montado no pane (modo terminal) não há resposta nem turno da carga', async () => {

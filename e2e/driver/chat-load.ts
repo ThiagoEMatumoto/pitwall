@@ -7,23 +7,44 @@ import type { PerfLine } from '../../shared/types/perf'
 export interface ChatLoadRead {
   /** Texto do último bloco de markdown do pane; nulo sem chat montado (modo terminal). */
   lastReply: string | null
-  /** Nós de elemento do documento inteiro. */
-  domNodes: number
+  /** Nós de elemento do documento inteiro; nulo na leitura que não os conta. */
+  domNodes: number | null
+  /** Quanto a leitura ocupou a página: ela roda dentro da janela medida da fase. */
+  readMs: number
 }
 
 // Roda DENTRO da página, sobre o elemento do pane. Só usa o que existe desde antes
 // da janela de linhas do chat: `.markdown-body` é a raiz do MarkdownViewer.
+// A última resposta fica a poucos nós do fim do pane: o caminho é de trás para a
+// frente, porque um querySelectorAll varreria o chat inteiro (187 mil nós com 60 MB
+// sem janela de linhas) dentro da janela medida.
 // textContent, não innerText: este forçaria layout dentro da janela medida.
-function readInPage(pane: Element): ChatLoadRead {
-  const bodies = pane.querySelectorAll('.markdown-body')
-  return {
-    lastReply: bodies.length > 0 ? bodies[bodies.length - 1].textContent : null,
-    domNodes: document.getElementsByTagName('*').length,
+function readInPage(pane: Element, countNodes: boolean): ChatLoadRead {
+  const started = performance.now()
+  const walker = document.createTreeWalker(pane, NodeFilter.SHOW_ELEMENT)
+  let last: Node | null = pane
+  while (walker.lastChild()) last = walker.currentNode
+  let lastReply: string | null = null
+  for (; last && last !== pane; last = walker.previousNode()) {
+    if ((last as Element).classList.contains('markdown-body')) {
+      lastReply = last.textContent
+      break
+    }
   }
+  const domNodes = countNodes ? document.getElementsByTagName('*').length : null
+  return { lastReply, domNodes, readMs: performance.now() - started }
 }
 
 export function readChatLoad(pane: Locator, timeoutMs: number): Promise<ChatLoadRead> {
-  return pane.evaluate(readInPage, undefined, { timeout: timeoutMs })
+  return pane.evaluate(readInPage, true, { timeout: timeoutMs })
+}
+
+/**
+ * A leitura de quando a última tecla entrou: o laço aberto ainda pinta as últimas
+ * teclas, então ela não conta os nós do documento.
+ */
+export function readLastReply(pane: Locator, timeoutMs: number): Promise<ChatLoadRead> {
+  return pane.evaluate(readInPage, false, { timeout: timeoutMs })
 }
 
 /**

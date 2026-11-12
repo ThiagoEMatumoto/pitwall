@@ -34,6 +34,7 @@ import {
   loadTurnsShown,
   ptyCharsSent,
   readChatLoad,
+  readLastReply,
   typingLoadArrived,
   type ChatLoadRead,
 } from '../driver/chat-load'
@@ -59,7 +60,9 @@ import { transcriptLoad, turnsToLast } from '../driver/transcript-load'
 // então as linhas [perf] dele saem dentro da fase.
 // Prova de carga, em toda fase: `chatNewMessages` são os turnos da carga que o chat
 // de A mostrou pela primeira vez na fase e `domNodes` os nós do documento ao fim
-// dela, os dois lidos do DOM. As fases de digitação levam ainda `loadArrived` e os
+// dela, os dois lidos do DOM. A leitura cai dentro da janela da fase: `chatReadMs`
+// diz quanto ela ocupou a página, e `load.lastKeyReadMs` o mesmo para a leitura da
+// última tecla, que não conta os nós. As fases de digitação levam ainda `loadArrived` e os
 // números que o sustentam (`load`): no chat, mensagem nova desenhada antes da
 // última tecla; no terminal, onde o chat está desmontado, saída de PTY além do eco.
 // Fase de digitação sem carga comprovada não aborta nem bloqueia: sai com
@@ -361,8 +364,15 @@ const outcomes: Array<Omit<PhaseOutcome<unknown>, 'collected'>> = []
 const typing: Record<string, OpenLoopTyping> = {}
 // Prova de carga (ver o cabeçalho). `loadTurnsSeen` é o máximo de turnos da carga
 // que o chat de A já mostrou: o que passar disso numa leitura é mensagem nova.
-const chatAtEnd: Array<{ chatNewMessages: number | null; domNodes: number | null }> = []
-const typingLoad: Record<string, { transcriptLines: number; chatNewMessages: number }> = {}
+const chatAtEnd: Array<{
+  chatNewMessages: number | null
+  domNodes: number | null
+  chatReadMs: number | null
+}> = []
+const typingLoad: Record<
+  string,
+  { transcriptLines: number; chatNewMessages: number; lastKeyReadMs: number | null }
+> = {}
 let loadTurnsSeen = 0
 let firstLoadTurn = 0
 let streamLines = 0
@@ -405,6 +415,7 @@ async function phase(
   chatAtEnd.push({
     chatNewMessages: chat ? Math.max(0, shown - loadTurnsSeen) : null,
     domNodes: chat?.domNodes ?? null,
+    chatReadMs: chat?.readMs ?? null,
   })
   loadTurnsSeen = Math.max(loadTurnsSeen, shown)
   if (outcome.blocked) {
@@ -560,12 +571,13 @@ try {
     // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
     // depois disso não concorreu com a digitação. No terminal o chat está
     // desmontado e não há o que ler dele.
-    const atLastKey = mode === 'chat' ? await readChatLoad(A.pane, remaining()) : null
+    const atLastKey = mode === 'chat' ? await readLastReply(A.pane, remaining()) : null
     typingLoad[phaseName] = {
       transcriptLines: load.appendedLines() - appendedAtStart,
       chatNewMessages: atLastKey
         ? Math.max(0, loadTurnsShown(atLastKey.lastReply, firstLoadTurn) - loadTurnsSeen)
         : 0,
+      lastKeyReadMs: atLastKey?.readMs ?? null,
     }
     // O foco não pode ter saído de A no meio da digitação.
     await expectA(mode, focus, remaining)
@@ -742,10 +754,15 @@ const loaded = withMainLines(phases, main).map((entry) => {
   const surface = TYPING_PHASES[entry.phase]
   if (!surface) return entry
   // Fase que bloqueou antes de digitar não gravou nada: fica sem carga comprovada.
-  const seen = typingLoad[entry.phase] ?? { transcriptLines: 0, chatNewMessages: 0 }
+  const seen = typingLoad[entry.phase] ?? {
+    transcriptLines: 0,
+    chatNewMessages: 0,
+    lastKeyReadMs: null,
+  }
   const load = {
     transcriptLines: seen.transcriptLines,
     chatNewMessagesAtLastKey: seen.chatNewMessages,
+    lastKeyReadMs: seen.lastKeyReadMs,
     ptyChars: ptyCharsSent(entry.main),
   }
   const loadArrived = typingLoadArrived({
