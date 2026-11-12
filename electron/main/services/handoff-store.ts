@@ -3,6 +3,7 @@ import { getDb, handoffsInterruptedAtOpen } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
 import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
+import { ENDED_BY_USER_ERROR } from './handoff/ended-by-user'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import * as requests from './handoff-requests'
 import type { CreateRequestInput, HandoffRequest } from '../../../shared/types/handoff-request'
@@ -660,23 +661,34 @@ export function reconcileStuck(
   // quem mudou). O predicado é idêntico ao do UPDATE.
   const stuck = db
     .prepare(
-      `SELECT id, status FROM handoffs
+      `SELECT id, status, ended_by_user_at FROM handoffs
        WHERE status IN ('running','needs_input')
          AND (child_session_id IS NULL
               OR child_session_id NOT IN (SELECT id FROM sessions WHERE status = 'running'))`,
     )
-    .all() as Array<{ id: string; status: string }>
+    .all() as Array<{ id: string; status: string; ended_by_user_at: number | null }>
+  // A encerrada pelo usuário que o exit handler não reconciliou leva o mesmo
+  // motivo que ele gravaria (e que o sweep do boot grava): é o que a mãe lê.
   const res = db
     .prepare(
-      `UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ?
+      `UPDATE handoffs
+          SET status = 'interrupted',
+              error = CASE WHEN ended_by_user_at IS NOT NULL THEN ? ELSE ? END,
+              updated_at = ?
        WHERE status IN ('running','needs_input')
          AND (child_session_id IS NULL
               OR child_session_id NOT IN (SELECT id FROM sessions WHERE status = 'running'))`,
     )
-    .run(error, Date.now())
+    .run(ENDED_BY_USER_ERROR, error, Date.now())
   for (const h of stuck) {
     requests.cancelOpen(h.id, 'reconcileStuck')
-    logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
+    logEvent(
+      h.id,
+      'reconcileStuck',
+      'interrupted',
+      h.status,
+      h.ended_by_user_at != null ? ENDED_BY_USER_ERROR : error,
+    )
     onInterrupted?.(h.id)
   }
   return res.changes + (killChildPty ? killFailedChildren(killChildPty) : 0)
@@ -789,7 +801,7 @@ export function undismiss(id: string): Handoff {
   return fresh(id)
 }
 
-export { ENDED_BY_USER_ERROR } from './handoff/ended-by-user'
+export { ENDED_BY_USER_ERROR }
 
 // O usuário encerrou a filha de propósito (ou desfez isso na janela do Desfazer).
 // Só a marca muda: status e child_session_id ficam como estão — encerrar não

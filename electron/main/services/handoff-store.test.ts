@@ -662,6 +662,38 @@ describe('handoff-store', () => {
       expect(store.reconcileStuck()).toBe(0)
       expect(store.get(h.id)?.status).toBe('interrupted')
     })
+
+    // O exit handler pode não ter reconciliado (algo lançou antes): quem chega
+    // primeiro é esta passada, e a mãe lê o error que ela grava.
+    it('filha encerrada pelo usuário leva o motivo do encerramento; a que caiu, o genérico', () => {
+      const ended = newHandoff('r1')
+      store.approve(ended.id, {})
+      spawnChild(ended.id, 's-ended', 'running')
+      store.setEndedByUser(ended.id, true)
+      testDb.prepare("UPDATE sessions SET status = 'exited' WHERE id = 's-ended'").run()
+      const crashed = newHandoff('r2')
+      store.approve(crashed.id, {})
+      spawnChild(crashed.id, 's-crashed', 'crashed')
+
+      const woken: string[] = []
+      expect(store.reconcileStuck(undefined, (id) => woken.push(id))).toBe(2)
+
+      const after = store.get(ended.id)
+      expect(after?.status).toBe('interrupted')
+      expect(after?.error).toBe(store.ENDED_BY_USER_ERROR)
+      expect(after?.endedByUserAt).not.toBeNull()
+      expect(after?.childSessionId).toBe('s-ended')
+      expect(events(ended.id).at(-1)).toMatchObject({
+        event: 'reconcileStuck',
+        detail: store.ENDED_BY_USER_ERROR,
+      })
+      expect(store.get(crashed.id)?.error).toBe('Sessão-filha encerrada sem reportar conclusão')
+      expect(events(crashed.id).at(-1)).toMatchObject({
+        event: 'reconcileStuck',
+        detail: 'Sessão-filha encerrada sem reportar conclusão',
+      })
+      expect(woken.sort()).toEqual([ended.id, crashed.id].sort())
+    })
   })
 
   describe('reconcileStuck com killer (failed com PTY viva)', () => {
