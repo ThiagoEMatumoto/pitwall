@@ -1,7 +1,7 @@
 // Sonda de desempenho do main, atrás de CM_PERF=1. Existe para dar número
 // antes/depois a cada otimização: lag do event loop, IPC por canal, trechos
 // cronometrados e CPU por tipo de processo, uma linha por janela.
-import { appendFile } from 'node:fs/promises'
+import { appendFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import type { App, IpcMain, ProcessMetric } from 'electron'
@@ -207,7 +207,11 @@ export function startPerfProbe({ app, ipcMain, log = console.log }: PerfProbeDep
     reports.push({ webContentsId: event.sender.id, ...parsed.data })
   })
 
-  let writes = Promise.resolve()
+  const warnWrite = (err: unknown): void =>
+    console.warn('[perf] falha ao gravar perf.jsonl:', String(err))
+  // Um arquivo por boot: sem truncar, um CM_PERF=1 esquecido no ambiente
+  // acumula dezenas de MB por dia e mistura medições de execuções diferentes.
+  let writes = writeFile(file, '').catch(warnWrite)
   let windowStart = Date.now()
   const timer = setInterval(() => {
     const now = Date.now()
@@ -230,9 +234,7 @@ export function startPerfProbe({ app, ipcMain, log = console.log }: PerfProbeDep
     const json = JSON.stringify(line)
     log(`[perf] ${json}`)
     // Encadeado: dois appendFile soltos não garantem a ordem das linhas.
-    writes = writes
-      .then(() => appendFile(file, `${json}\n`))
-      .catch((err) => console.warn('[perf] falha ao gravar perf.jsonl:', String(err)))
+    writes = writes.then(() => appendFile(file, `${json}\n`)).catch(warnWrite)
   }, WINDOW_MS)
   timer.unref()
 

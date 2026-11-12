@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -225,6 +225,22 @@ describe('perf-probe', () => {
     expect(lines).toHaveLength(2)
 
     expect(await writtenLines(dir, 2)).toEqual(lines.map((l) => l.slice('[perf] '.length)))
+  })
+
+  it('perf.jsonl começa do zero a cada boot', async () => {
+    writeFileSync(join(dir, 'perf.jsonl'), '{"t":"boot anterior"}\n{"t":"boot anterior"}\n')
+    vi.useFakeTimers()
+    const probe = await loadProbe('1')
+    const lines: string[] = []
+    const stop = probe.startPerfProbe({
+      app: fakeApp(dir),
+      ipcMain: fakeIpcMain().ipc,
+      log: (line) => lines.push(line),
+    })
+    await vi.advanceTimersByTimeAsync(10_000)
+    stop()
+
+    expect(await writtenLines(dir, 1)).toEqual([lines[0].slice('[perf] '.length)])
   })
 
   it('o resumo do renderer entra na linha seguinte, por janela de origem', async () => {
