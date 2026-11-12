@@ -78,7 +78,8 @@ export interface PaneCheckRequest {
 export interface PaneCheckResult {
   requestId: string
   paneId: string | null
-  // Aba ativa numa janela com foco.
+  // Aba ativa numa janela com foco, ou a PTY aberta fora de aba (janela do mapa,
+  // coluna da mãe, Room).
   focused: boolean
   // Rascunho com texto ou anexo no Composer da aba.
   composerHasText: boolean

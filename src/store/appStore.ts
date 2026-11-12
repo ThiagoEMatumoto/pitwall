@@ -5,6 +5,7 @@ import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
 import { oomToastText } from '@/features/sessions/oom-toast'
+import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { layoutToRestore } from '../../shared/dock-layout-restore'
@@ -1717,8 +1718,12 @@ function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): 
 // no lugar (mesmo paneId), como uma restaurada dormindo, e entra no dormantSync
 // para o main conseguir acordá-la. O rascunho do Composer não migra: é 'pane:<paneId>'
 // no app.db, e o paneId é o mesmo dormindo e acordada.
-function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent): void {
+function onHibernated({ sessionId, ccSessionId, paneId, child }: SessionHibernatedEvent): void {
   hibernatedSessionIds.add(sessionId)
+  if (child) {
+    dropSleepingChildPane(sessionId)
+    return
+  }
   const { panes } = useAppStore.getState()
   if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) {
     addHibernatedPane(sessionId, ccSessionId, paneId)
@@ -1742,6 +1747,23 @@ function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent
     }),
   })
   schedulePersist(useAppStore.getState().panes)
+}
+
+// Filha de handoff concluído: dorme sem aba e segue vinculada (quem a acorda é o
+// card dela ou a mãe). A pane, se houver, sai sem passar pelo closePane: aquele é
+// o "fechar aba" do usuário, que avisa o main e cancelaria a hibernação.
+function dropSleepingChildPane(sessionId: string): void {
+  const { panes, liveSessions } = useAppStore.getState()
+  const pane = panes.find((p) => !p.dormant && p.session.id === sessionId)
+  const live = liveSessions.find((s) => s.id === sessionId)
+  if (pane) {
+    useAppStore.setState({ panes: panes.filter((p) => p.paneId !== pane.paneId) })
+    schedulePersist(useAppStore.getState().panes)
+  }
+  showToast({
+    title: 'Filha dormindo · segue vinculada',
+    body: pane?.session.title ?? (live ? liveSessionLabel(live) : undefined),
+  })
 }
 
 // A aba confirmada antes do /exit sumiu até o exit (fechada nessa janela): sem
@@ -1776,11 +1798,14 @@ function addHibernatedPane(sessionId: string, ccSessionId: string, paneId: strin
 function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
   const { panes, area } = useAppStore.getState()
   const pane = panes.find((p) => !p.dormant && p.session.id === sessionId)
+  // Janela do mapa, coluna da mãe e Room mostram a PTY fora da aba: o usuário
+  // está nela mesmo sem pane (filha em segundo plano) ou com a pane fora de foco.
+  const hosted = useTerminalLease.getState().leases[sessionId] !== undefined
   if (!pane) {
     void sessionsApi.paneCheckResult({
       requestId,
       paneId: null,
-      focused: false,
+      focused: hosted,
       composerHasText: false,
       composerFocused: false,
     })
@@ -1792,7 +1817,7 @@ function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
     paneId: pane.paneId,
     ...activity,
     // Fora da área de projetos a aba ativa do dockview não está à vista.
-    focused: activity.focused && area === 'projects',
+    focused: hosted || (activity.focused && area === 'projects'),
   })
 }
 
