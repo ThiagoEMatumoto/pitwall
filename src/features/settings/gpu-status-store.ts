@@ -39,7 +39,7 @@ export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
       // O main grava três prefs em sequência e pode ter parado no meio: vale o
       // que ficou no banco, não o palpite local.
       console.warn('[gpu] não gravou a preferência de aceleração:', String(err))
-      await get().load()
+      await reconcile()
     }
   },
 
@@ -52,7 +52,19 @@ export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
       await gpuApi.setOzone(ozone)
     } catch (err) {
       console.warn('[gpu] não gravou a preferência de Wayland:', String(err))
-      await get().load()
+      await reconcile()
     }
   },
 }))
+
+// Depois de uma escrita que falhou vale o que o main responder, nunca o palpite.
+// Se nem o gpu:status responde, o estado é desconhecido: null trava os toggles
+// até o próximo load.
+async function reconcile(): Promise<void> {
+  try {
+    await useGpuStatusStore.getState().load()
+  } catch (err) {
+    console.warn('[gpu] não leu o status depois da escrita que falhou:', String(err))
+    useGpuStatusStore.setState({ status: null })
+  }
+}
