@@ -12,6 +12,7 @@ vi.mock('../../electron/main/services/transcript-path', () => ({
   findTranscriptPath: () => null,
 }))
 vi.mock('@/lib/ipc', () => ({
+  gpuApi: { status: () => new Promise(() => {}) },
   sessionGraphApi: { onUpdated: () => () => {}, get: () => new Promise(() => {}) },
   sessionsApi: {},
   windowApi: {

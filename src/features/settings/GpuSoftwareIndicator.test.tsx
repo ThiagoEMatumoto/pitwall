@@ -1,0 +1,261 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// O status vem do handler real gpu:status sobre prefs gravadas pelos produtores
+// reais (createGpuCrashWatch, resolveGpuBoot, gpu:set-disabled): nenhum GpuStatus
+// é montado à mão.
+const { handlers, relaunch, prefs, failing } = vi.hoisted(() => ({
+  handlers: new Map<string, (e: unknown, payload: unknown) => unknown>(),
+  relaunch: vi.fn(),
+  prefs: new Map<string, unknown>(),
+  failing: { key: null as string | null },
+}))
+
+vi.mock('electron', () => ({
+  app: { relaunch, quit: vi.fn() },
+  ipcMain: {
+    handle: (channel: string, fn: (e: unknown, payload: unknown) => unknown) => {
+      handlers.set(channel, fn)
+    },
+  },
+}))
+vi.mock('../../../electron/main/services/prefs-store', () => ({
+  getPref: (key: string, fallback: unknown) => (prefs.has(key) ? prefs.get(key) : fallback),
+  setPref: (key: string, value: unknown) => {
+    if (key === failing.key) throw new Error('disk I/O error')
+    prefs.set(key, JSON.parse(JSON.stringify(value)))
+  },
+}))
+
+const invoke = (channel: string, payload?: unknown) =>
+  Promise.resolve().then(() => handlers.get(channel)!(null, payload))
+vi.mock('@/lib/ipc', () => ({
+  gpuApi: {
+    status: () => invoke('gpu:status'),
+    setDisabled: (disabled: boolean) => invoke('gpu:set-disabled', disabled),
+    setOzone: (ozone: boolean) => invoke('gpu:set-ozone', ozone),
+    relaunch: () => invoke('app:relaunch'),
+  },
+  appApi: { getInfo: () => Promise.resolve({ platform: 'linux' }) },
+  sessionGraphApi: { onUpdated: () => () => {}, get: () => new Promise(() => {}) },
+  sessionsApi: {},
+  prefsApi: { get: () => Promise.resolve(null), set: () => Promise.resolve() },
+}))
+
+const { registerGpuIpc } = await import('../../../electron/main/ipc/gpu')
+const { getPref, setPref } = await import('../../../electron/main/services/prefs-store')
+const {
+  createGpuCrashWatch,
+  resolveGpuBoot,
+  setGpuState,
+  GPU_AUTO_PREF_KEY,
+  GPU_DISABLED_PREF_KEY,
+} = await import('../../../electron/main/services/gpu-state')
+const { GpuSoftwareIndicator } = await import('./GpuSoftwareIndicator')
+const { TerminalSection } = await import('./TerminalSection')
+const { IconRail } = await import('@/app/IconRail')
+const { useGpuStatusStore } = await import('./gpu-status-store')
+
+const HOUR_MS = 60 * 60 * 1000
+const NOW = new Date(2026, 10, 12, 9, 0).getTime()
+const VERSION = '1.0.0'
+
+// Mesma composição do boot em electron/main/index.ts.
+function boot(args: { envDisabled?: boolean; now?: number } = {}): void {
+  const envDisabled = args.envDisabled ?? false
+  const decided = resolveGpuBoot({
+    prefs: { getPref, setPref },
+    envDisabled,
+    version: VERSION,
+    now: args.now ?? NOW,
+  })
+  setGpuState({
+    hwAccelDisabled: decided.hwAccelDisabled,
+    envDisabled,
+    ozoneWayland: true,
+    probation: decided.probation,
+  })
+}
+
+// Dois crashes de driver num boot normal: o automático grava o registro.
+function crashTwice(): void {
+  boot({ now: NOW - HOUR_MS })
+  const watch = createGpuCrashWatch({
+    prefs: { getPref, setPref },
+    hwAccelDisabled: false,
+    probation: false,
+    version: VERSION,
+    now: () => NOW - HOUR_MS,
+    onAutoDisabled: () => {},
+    notifyCrashed: () => {},
+  })
+  watch.processGone('crashed')
+  watch.processGone('crashed')
+}
+
+async function renderIndicator(): Promise<void> {
+  render(<GpuSoftwareIndicator />)
+  await waitFor(() => expect(useGpuStatusStore.getState().status).not.toBeNull())
+}
+
+const indicator = () => screen.queryByTestId('gpu-software-indicator')
+
+describe('GpuSoftwareIndicator', () => {
+  beforeEach(() => {
+    handlers.clear()
+    prefs.clear()
+    relaunch.mockReset()
+    failing.key = null
+    useGpuStatusStore.setState({ status: null })
+    registerGpuIpc()
+  })
+  afterEach(cleanup)
+
+  it('não aparece com a GPU ligada', async () => {
+    boot()
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.hwAccelDisabled).toBe(false)
+    expect(indicator()).toBeNull()
+  })
+
+  it('aparece com o desligamento automático em vigor, dizendo motivo, data e efeito', async () => {
+    crashTwice()
+    boot()
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.hwAccelDisabled).toBe(true)
+    const label = indicator()?.getAttribute('aria-label') ?? ''
+    expect(label).toContain('o driver de vídeo falhou')
+    expect(label).toContain(new Date(NOW - HOUR_MS).toLocaleDateString('pt-BR'))
+    expect(label).toContain('terminais')
+  })
+
+  it('o primeiro clique apaga o registro e o segundo reinicia', async () => {
+    crashTwice()
+    boot()
+    await renderIndicator()
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('reiniciar'))
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull()
+    expect(relaunch).not.toHaveBeenCalled()
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1))
+    // O boot seguinte sobe com a GPU ligada, fora de teste.
+    expect(
+      resolveGpuBoot({
+        prefs: { getPref, setPref },
+        envDisabled: false,
+        version: VERSION,
+        now: NOW,
+      }),
+    ).toEqual({ hwAccelDisabled: false, probation: false })
+  })
+
+  it('não aparece para quem desligou a GPU pelas Configurações', async () => {
+    boot()
+    handlers.get('gpu:set-disabled')!(null, true)
+    boot()
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.hwAccelDisabled).toBe(true)
+    expect(indicator()).toBeNull()
+  })
+
+  it('não aparece para a escolha manual nem quando sobrou um registro automático antigo', async () => {
+    crashTwice()
+    handlers.get('gpu:set-disabled')!(null, true)
+    boot()
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.autoDisabled).not.toBeNull()
+    expect(indicator()).toBeNull()
+  })
+
+  it('não aparece com CM_DISABLE_GPU=1, com ou sem registro automático', async () => {
+    boot({ envDisabled: true })
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.hwAccelDisabled).toBe(true)
+    expect(indicator()).toBeNull()
+    cleanup()
+
+    crashTwice()
+    boot({ envDisabled: true })
+    useGpuStatusStore.setState({ status: null })
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.autoDisabled).not.toBeNull()
+    expect(indicator()).toBeNull()
+  })
+
+  // gpu.disabled=true sem marca é o que o automático antigo gravava. O boot migra
+  // e religa em teste; se esse boot morre sem crash nem quit limpo, o seguinte
+  // fica desligado com o registro 'legacy'.
+  it('aparece para o legado em vigor, sem inventar motivo', async () => {
+    prefs.set(GPU_DISABLED_PREF_KEY, true)
+    boot({ now: NOW - HOUR_MS })
+    boot()
+    await renderIndicator()
+    expect(useGpuStatusStore.getState().status?.hwAccelDisabled).toBe(true)
+    expect(indicator()?.getAttribute('aria-label')).toContain('motivo desconhecido')
+  })
+
+  it('se o registro não sai do banco, continua oferecendo religar e não oferece reiniciar', async () => {
+    crashTwice()
+    boot()
+    await renderIndicator()
+    failing.key = GPU_AUTO_PREF_KEY
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(console.warn).toHaveBeenCalled())
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('religar'))
+    expect(indicator()?.getAttribute('aria-label')).not.toContain('reiniciar')
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
+    expect(relaunch).not.toHaveBeenCalled()
+  })
+
+  it('fica no rail, logo acima do botão de Configurações', async () => {
+    crashTwice()
+    boot()
+    render(<IconRail onOpenSettings={() => {}} />)
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const settings = screen.getByTitle('Configurações')
+    expect(indicator()!.nextElementSibling).toBe(settings)
+  })
+
+  it('religar pelo toggle das Configurações também tira o aviso', async () => {
+    crashTwice()
+    boot()
+    render(
+      <>
+        <GpuSoftwareIndicator />
+        <TerminalSection open />
+      </>,
+    )
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(indicator()).toBeNull())
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Reiniciar agora' })).toBeInTheDocument()
+  })
+})
+
+describe('TerminalSection × CM_DISABLE_GPU=1', () => {
+  beforeEach(() => {
+    handlers.clear()
+    prefs.clear()
+    useGpuStatusStore.setState({ status: null })
+    registerGpuIpc()
+  })
+  afterEach(cleanup)
+
+  it('diz que a variável desliga a GPU e não pede um reinício que não resolve', async () => {
+    boot({ envDisabled: true })
+    render(<TerminalSection open />)
+    await waitFor(() => expect(screen.getByText(/CM_DISABLE_GPU=1/)).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Reiniciar agora' })).toBeNull()
+  })
+})

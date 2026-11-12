@@ -23,6 +23,7 @@ import { useWaitingCount } from '@/features/session-switcher/useWaitingCount'
 import { attentionCount } from '@/features/session-switcher/attention-queue'
 import { useAttentionQueue } from '@/features/session-switcher/useAttentionQueue'
 import { openRoomFromNav } from '@/features/feature-room/open-room-entry'
+import { GpuSoftwareIndicator } from '@/features/settings/GpuSoftwareIndicator'
 
 // Fundo do item ativo: gradiente da marca translúcido + anel inset accent.
 const ACTIVE_TILE: React.CSSProperties = {
@@ -116,14 +117,17 @@ export function IconRail({ onOpenSettings }: Props) {
         })}
       </ul>
 
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        title="Configurações"
-        className="flex h-[38px] w-[38px] items-center justify-center rounded-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)]"
-      >
-        <Icon as={Settings} size={ICON_SIZE_HEADER} />
-      </button>
+      <div className="flex flex-col items-center gap-1">
+        <GpuSoftwareIndicator />
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="Configurações"
+          className="flex h-[38px] w-[38px] items-center justify-center rounded-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)]"
+        >
+          <Icon as={Settings} size={ICON_SIZE_HEADER} />
+        </button>
+      </div>
     </nav>
   )
 }
