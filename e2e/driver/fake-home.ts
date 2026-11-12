@@ -33,8 +33,8 @@ export interface SessionFileInput {
 }
 
 // Shape gravado em sessions/<pid>.json: os campos que buildSessionsFileIndex lê
-// (pid, sessionId, cwd, status, name, updatedAt) mais startedAt. O arquivo real
-// do Claude Code tem outros campos que o app ignora.
+// (pid, sessionId, cwd, status, name, updatedAt, statusUpdatedAt) mais startedAt.
+// O arquivo real do Claude Code tem outros campos que o app ignora.
 export interface SessionFile {
   pid: number
   sessionId: string
@@ -43,6 +43,8 @@ export interface SessionFile {
   name: string | null
   startedAt: number
   updatedAt: number
+  // Quando o status atual começou. Sem ele o gate da hibernação recusa a sessão.
+  statusUpdatedAt: number
 }
 
 export interface FakeSessionEntry {
@@ -87,11 +89,17 @@ export function buildSessionFile(pid: number, input: SessionFileInput, now: numb
     name: input.name ?? null,
     startedAt: now,
     updatedAt: now,
+    statusUpdatedAt: now,
   }
 }
 
 export function withStatus(file: SessionFile, status: FakeSessionStatus, now: number): SessionFile {
-  return { ...file, status, updatedAt: now }
+  return {
+    ...file,
+    status,
+    updatedAt: now,
+    statusUpdatedAt: file.status === status ? file.statusUpdatedAt : now,
+  }
 }
 
 function shSingleQuote(s: string): string {
@@ -108,6 +116,7 @@ printf '\\n' >> "$LOG"`
 // Log por PID + loop que ecoa cada linha do stdin.
 // O app injeta prompts via bracketed-paste (ESC[200~ … ESC[201~); os marcadores
 // são removidos antes de logar pra o cenário poder comparar o texto puro.
+// O /exit encerra o processo, como no claude: é por ele que a hibernação sai.
 function echoLoop(logDir: string, provider: FakeCliProvider, prompt: string): string {
   return `${logArgv(logDir, provider)}
 
@@ -118,10 +127,20 @@ echo_loop() {
     line=\${line//$'\\e[201~'/}
     line=\${line%$'\\r'}
     printf 'stdin: %s\\n' "$line" >> "$LOG"
+    [ "$line" = /exit ] && exit 0
     printf 'recebido: %s\\n' "$line"
     printf '%s' ${shSingleQuote(prompt)}
   done
 }`
+}
+
+// Valor de uma flag na linha "argv:" do log do stub, sem o escape do printf %q.
+// Serve para token e caminho; valor com caractere de controle sai em $'…' e não
+// é tratado.
+export function argvFlag(log: string, flag: string): string | null {
+  const argv = log.split('\n').find((line) => line.startsWith('argv:')) ?? ''
+  const hit = new RegExp(`(?:^| )${flag} ((?:\\\\.|\\S)+)`).exec(argv.slice('argv:'.length))
+  return hit ? hit[1].replace(/\\(.)/g, '$1') : null
 }
 
 // Caixa de input ociosa do claude 2.1.286 (régua, "❯ ", régua): é a prova
@@ -150,8 +169,8 @@ json_str() {
 
 now=$(date +%s%3N)
 if [ -n "$name" ]; then name_json=$(json_str "$name"); else name_json=null; fi
-printf '{"pid":%s,"sessionId":%s,"cwd":%s,"status":"busy","name":%s,"startedAt":%s,"updatedAt":%s}' \\
-  "$$" "$(json_str "$session_id")" "$(json_str "$PWD")" "$name_json" "$now" "$now" \\
+printf '{"pid":%s,"sessionId":%s,"cwd":%s,"status":"busy","name":%s,"startedAt":%s,"updatedAt":%s,"statusUpdatedAt":%s}' \\
+  "$$" "$(json_str "$session_id")" "$(json_str "$PWD")" "$name_json" "$now" "$now" "$now" \\
   > "$SESSIONS_DIR/$$.json"
 
 printf '\\u256d\\u2500 Fake Claude Code (stub e2e)\\n'
