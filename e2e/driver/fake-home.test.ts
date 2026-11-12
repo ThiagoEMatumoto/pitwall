@@ -1,12 +1,14 @@
 // @vitest-environment node
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FAKE_CODEX_DONE,
+  RAW_PROMPT,
   buildSessionFile,
   createFakeHome,
+  parseRawStdin,
   withStatus,
   type FakeHome,
 } from './fake-home'
@@ -149,6 +151,56 @@ describe('fake-claude.sh', () => {
     const after = activity.buildSessionsFileIndex().get('cc-2')
     expect(activity.mapStatus(after!.status)).toBe('waiting')
   })
+})
+
+describe('fake-claude-raw.sh', () => {
+  it('grava o session file pelo argv e loga cada byte do stdin, na ordem e com horário', () => {
+    fake = createFakeHome()
+    const typed = '\x1b[200~olá, ação\x1b[201~\rab  c\r'
+    const out = runStub(fake.rawClaudePath, ['--session-id', 'cc-raw', '-n', 'crua'], typed)
+
+    expect(fake.readSessionFiles()[0].data).toMatchObject({ sessionId: 'cc-raw', name: 'crua' })
+    const stdin = parseRawStdin(fake.readCliLog('claude'))
+    expect(stdin.bytes.toString('hex')).toBe(Buffer.from(typed).toString('hex'))
+    expect(stdin.atMs).toHaveLength(stdin.bytes.length)
+    expect([...stdin.atMs].sort((a, b) => a - b)).toEqual(stdin.atMs)
+    // O eco não repete os marcadores do bracketed-paste, e o Enter abre outro prompt.
+    expect(out.split(RAW_PROMPT).slice(1)).toEqual(['olá, ação\r\n', 'ab  c\r\n', ''])
+  })
+
+  // Sem TTY o teste acima não distingue raw de canônico: aqui o stub roda numa PTY
+  // de verdade (script), e os bytes chegam sem Enter e sem o eco do kernel.
+  it.skipIf(spawnSync('script', ['--version']).status !== 0)(
+    'numa TTY, recebe e ecoa cada byte sem esperar o Enter e sem o eco do kernel',
+    async () => {
+      fake = createFakeHome()
+      const child = spawn(
+        'script',
+        ['-qfec', `'${fake.rawClaudePath}' --session-id cc-tty`, '/dev/null'],
+        { cwd: fake.root, env: { ...process.env, SHELL: '/bin/sh' } },
+      )
+      let out = ''
+      child.stdout.on('data', (d) => (out += String(d)))
+      const until = async (label: string, done: () => boolean): Promise<void> => {
+        const started = Date.now()
+        while (!done()) {
+          if (Date.now() - started > 5000) throw new Error(`timeout esperando: ${label}\n${out}`)
+          await new Promise((r) => setTimeout(r, 20))
+        }
+      }
+      const received = () => parseRawStdin(fake!.readCliLog('claude')).bytes.toString()
+      try {
+        await until('prompt do stub', () => out.includes(RAW_PROMPT))
+        child.stdin.write('ab')
+        await until('bytes no log sem Enter', () => received() === 'ab')
+        // Tempo para um eco do kernel, se houvesse, aparecer duplicado.
+        await new Promise((r) => setTimeout(r, 150))
+        expect(out.split(RAW_PROMPT)[1]).toBe('ab')
+      } finally {
+        child.kill()
+      }
+    },
+  )
 })
 
 describe('fake-codex.sh', () => {
