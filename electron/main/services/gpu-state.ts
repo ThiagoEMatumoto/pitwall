@@ -222,15 +222,22 @@ export function createGpuCrashWatch(deps: GpuCrashWatchDeps): GpuCrashWatch {
     // Com a aceleração já desligada o processo que morre é o de software: não diz
     // nada sobre o driver.
     if (deps.hwAccelDisabled || crashCount !== gpuCrashThreshold(onProbation)) return
-    deps.prefs.setPref(
-      GPU_AUTO_PREF_KEY,
-      autoDisableRecord({
-        previous: parseGpuAutoDisabled(deps.prefs.getPref<unknown>(GPU_AUTO_PREF_KEY, null)),
-        reason,
-        version: deps.version,
-        now: deps.now(),
-      }),
-    )
+    // Falha de escrita não pode subir: quem chama ainda precisa avisar os
+    // terminais, que só largam o WebGL ao receber o gpu:crashed.
+    try {
+      deps.prefs.setPref(
+        GPU_AUTO_PREF_KEY,
+        autoDisableRecord({
+          previous: parseGpuAutoDisabled(deps.prefs.getPref<unknown>(GPU_AUTO_PREF_KEY, null)),
+          reason,
+          version: deps.version,
+          now: deps.now(),
+        }),
+      )
+    } catch (err) {
+      console.warn('[gpu] não gravou o desligamento automático:', String(err))
+      return
+    }
     deps.onAutoDisabled()
   }
 

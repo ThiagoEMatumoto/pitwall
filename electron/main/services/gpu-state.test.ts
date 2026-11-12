@@ -429,6 +429,34 @@ describe('fiação do crash e do boot de teste', () => {
     expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
   })
 
+  it('falha ao gravar o registro não impede o aviso de crash aos terminais', () => {
+    const store = memoryPrefs()
+    const app = startApp(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    app.watch.processGone('crashed')
+    expect(() => app.watch.processGone('crashed')).not.toThrow()
+
+    expect(app.crashed).toEqual([
+      { reason: 'crashed', count: 1 },
+      { reason: 'crashed', count: 2 },
+    ])
+    // Nada foi desligado: o toast diria o contrário.
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+    expect(app.toasts).toHaveLength(0)
+  })
+
+  it('falha ao gravar o strike do boot de teste também não impede o aviso', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    expect(() => app.watch.processGone('crashed')).not.toThrow()
+
+    expect(app.crashed).toEqual([{ reason: 'crashed', count: 1 }])
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+  })
+
   it('com a aceleração já desligada um crash não diz nada sobre o driver', () => {
     const store = memoryPrefs()
     const first = startApp(store)
