@@ -22,6 +22,7 @@ import type { PanelTier } from '@/features/sessions/use-panel-tier'
 import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
 import { crewResumedAfterQuestion, paneShowsLive, splitAlias } from './crew'
 import { endSessionAsked } from './end-child'
+import { revealChildOnUserMessage } from './reveal-child'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -518,6 +519,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     if (!text || sending || !childLive) return
     setSending(true)
     try {
+      await revealChildOnUserMessage(handoff.childSessionId, { focus: true })
       await handoffsApi.sendMessage({ id: handoff.id, text })
       setMessage('')
     } catch {

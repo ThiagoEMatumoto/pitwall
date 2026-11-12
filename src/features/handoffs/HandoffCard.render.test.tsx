@@ -522,3 +522,69 @@ describe('HandoffCard no inbox (tier wide)', () => {
     expect(screen.getByPlaceholderText('Enviar mensagem para a filha…')).toBeTruthy()
   })
 })
+
+// Decisão do usuário: a mensagem que ele manda a uma filha fora da tela abre a aba
+// dela antes do envio. O card não é modal: leva até a aba.
+describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
+  const realFocusOrOpenSession = useAppStore.getState().focusOrOpenSession
+  const focusOrOpenSession = vi.fn().mockResolvedValue(undefined)
+  const sendMessage = vi.mocked(handoffsApi.sendMessage)
+
+  function send(text: string) {
+    render(<HandoffCard handoff={handoff} ttlHours={2} />)
+    fireEvent.change(screen.getByPlaceholderText('Enviar mensagem para a filha…'), {
+      target: { value: text },
+    })
+    fireEvent.click(screen.getByTitle('Enviar (Enter)'))
+  }
+
+  beforeEach(() => {
+    focusOrOpenSession.mockClear()
+    sendMessage.mockClear()
+    useAppStore.setState({ liveSessions: [live], panes: [], focusOrOpenSession })
+    // "É filha" sai do grafo: hierarchyMotherId, escrito no main por
+    // session-graph.ts a partir de readHierarchyLinks.
+    useSessionGraphStore.setState({
+      graph: {
+        nodes: [
+          { sessionId: 's-child', hierarchyMotherId: 'm1' },
+          { sessionId: 'm1', hierarchyMotherId: null },
+        ] as unknown as SessionGraphNode[],
+        lanes: [],
+        edges: [],
+      },
+    })
+  })
+  afterEach(() => {
+    useAppStore.setState({
+      liveSessions: [],
+      panes: [],
+      focusOrOpenSession: realFocusOrOpenSession,
+    })
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+  })
+
+  it('filha sem aba: abre a aba, leva até ela e só então envia', async () => {
+    send('segue por aqui')
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith({ id: 'h1', text: 'segue por aqui' }),
+    )
+    expect(focusOrOpenSession).toHaveBeenCalledWith(live, { background: false })
+    expect(focusOrOpenSession.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('filha que já tem aba: só envia', async () => {
+    useAppStore.setState({
+      panes: [
+        { paneId: 'pane-child', session: { id: 's-child', ccSessionId: 'cc-child', title: null } },
+      ] as unknown as ActivePane[],
+    })
+    send('segue por aqui')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalled())
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+  })
+})
