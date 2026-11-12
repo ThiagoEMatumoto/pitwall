@@ -138,6 +138,13 @@ export function canArchiveCard(
   return handoff.dismissedAt == null && !childProcessAlive(child)
 }
 
+// "Forçar falha" só para o aprovado cuja filha nunca subiu: ali não há processo
+// para Encerrar. Em running ele era um segundo jeito de matar a filha, que a
+// deixava failed (sem retomada) em vez de interrupted.
+export function canForceFail(handoff: Pick<Handoff, 'status'>): boolean {
+  return handoff.status === 'approved'
+}
+
 export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
   label: 'assumindo o bastão',
   color: 'var(--color-info)',
@@ -331,16 +338,15 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // filha que acabou de cair é justamente quando mais se quer.
   const canPeek = !!onPeek && !!handoff.childSessionId
 
-  // Recovery manual: força failed via IPC handoffs:fail. Disponível pra running e
-  // pra approved travado (aprovado mas a filha nunca subiu). Confirmação evita
-  // matar uma filha viva em trabalho longo por engano.
-  const canForceFail = handoff.status === 'running' || handoff.status === 'approved'
+  // Recovery manual: força failed via IPC handoffs:fail (ver canForceFail).
+  const forceFailable = canForceFail(handoff)
 
-  // Soltar: a operação INVERSA da adoção — corta o vínculo mãe→filha e devolve a
-  // sessão à condição de sessão normal. Só faz sentido com filha atrelada; sem
-  // childSessionId não há vínculo pra cortar. Ao contrário de "Arquivar card", NÃO
-  // é bloqueado com a filha viva: soltar não cria órfão invisível, é justamente o
-  // contrário — a sessão volta a aparecer na barra e no switcher.
+  // Desvincular: a operação INVERSA da adoção — corta o vínculo mãe→filha e
+  // devolve a sessão à condição de sessão normal. Só faz sentido com filha
+  // atrelada; sem childSessionId não há vínculo pra cortar. Ao contrário de
+  // "Arquivar card", NÃO é bloqueado com a filha viva: desvincular não cria órfão
+  // invisível, é justamente o contrário — a sessão volta a aparecer na barra e no
+  // switcher.
   const canRelease = handoff.childSessionId != null
 
   // Feedback de utilidade: só faz sentido pra handoffs concluídos. Persiste via
@@ -388,7 +394,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   async function forceFail() {
     if (failing) return
     const ok = window.confirm(
-      `Forçar falha deste handoff para "${repoLabel}"? A sessão-filha, se ainda estiver rodando, será encerrada.`,
+      `Forçar falha deste handoff para "${repoLabel}"? Ele foi aprovado mas a filha não subiu; o handoff vira "Falhou".`,
     )
     if (!ok) return
     setFailing(true)
@@ -415,13 +421,13 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // adoção foi RELANÇADA com HANDOFF_CHILD_SETTINGS_JSON (denylist restritiva, ver
   // electron/main/services/spawn-flags.ts). Isso é flag de exec — soltar mexe no
   // banco, não no processo, então a sessão solta continua com as permissões de
-  // filha até ser relançada. O caminho de limpar é o normal: fechar a sessão e
+  // filha até ser relançada. O caminho de limpar é o normal: encerrar a sessão e
   // retomá-la pela barra; o sessions:resume NÃO re-vincula depois do release
   // (o relink exige dismissed_at IS NULL), então ela volta como sessão comum.
   async function release() {
     if (releasing) return
     const ok = window.confirm(
-      `Soltar esta sessão do painel? O vínculo com "${repoLabel}" é desfeito: ela volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, feche-a e retome pela barra.`,
+      `Desvincular esta sessão de "${repoLabel}"? Ela deixa de ser filha: volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, encerre-a e retome pela barra.`,
     )
     if (!ok) return
     setReleasing(true)
@@ -521,7 +527,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
   // dock — mesmo JSX, dois lugares, pra não espremer o texto onde é estreito.
   const hasActions = !!(
     childProcess ||
-    canForceFail ||
+    forceFailable ||
     canArchive ||
     canRelease ||
     canPeek ||
@@ -570,7 +576,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
           no mesmo peso de "Abrir na aba" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
-      {(childProcess || canForceFail || canArchive || canRelease) && (
+      {(childProcess || forceFailable || canArchive || canRelease) && (
         <Menu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
@@ -599,7 +605,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
                   },
                 ]
               : []),
-            ...(canForceFail
+            ...(forceFailable
               ? [
                   {
                     label: failing ? 'Falhando…' : 'Forçar falha',
@@ -622,10 +628,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
             ...(canRelease
               ? [
                   {
-                    label: releasing ? 'Soltando…' : 'Soltar do painel (desfaz o vínculo)',
+                    label: releasing ? 'Desvinculando…' : 'Desvincular',
                     disabled: releasing,
                     title:
-                      'Desfaz o vínculo mãe→filha: a sessão sai do painel e VOLTA a ser uma sessão normal (barra, switcher, notificações próprias). Não encerra a sessão — mas ela segue com as permissões restritas de filha até ser fechada e retomada.',
+                      'Desfaz o vínculo mãe→filha: a sessão deixa de ser filha e VOLTA a ser uma sessão normal (barra, switcher, notificações próprias). Não encerra a sessão — mas ela segue com as permissões restritas de filha até ser encerrada e retomada.',
                     onClick: () => void release(),
                   },
                 ]

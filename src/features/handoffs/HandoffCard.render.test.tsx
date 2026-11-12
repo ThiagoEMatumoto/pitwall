@@ -15,6 +15,7 @@ vi.mock('@/lib/ipc', () => ({
     resume: vi.fn().mockResolvedValue(undefined),
     setOutcome: vi.fn().mockResolvedValue(undefined),
     dismiss: vi.fn().mockResolvedValue(undefined),
+    release: vi.fn().mockResolvedValue(undefined),
     list: vi.fn().mockResolvedValue([]),
   },
   prefsApi: { get: vi.fn().mockResolvedValue(null) },
@@ -332,6 +333,64 @@ describe('HandoffCard: Minimizar e Encerrar no menu da filha viva', () => {
     fireEvent.click(screen.getByLabelText('Mais ações'))
     expect(screen.queryByText('Encerrar filha')).toBeNull()
     expect(screen.queryByText('Minimizar')).toBeNull()
+  })
+})
+
+describe('HandoffCard: Desvincular e Forçar falha', () => {
+  beforeEach(() => {
+    useAppStore.setState({ liveSessions: [] })
+    vi.mocked(handoffsApi.release).mockClear()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('o menu chama de Desvincular, não mais de Soltar', () => {
+    mountDock()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.getByText('Desvincular')).toBeTruthy()
+    expect(screen.queryByText(/Soltar/)).toBeNull()
+  })
+
+  it('pede confirmação e solta pelo release de sempre', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    mountDock()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    fireEvent.click(screen.getByText('Desvincular'))
+    await waitFor(() => expect(handoffsApi.release).toHaveBeenCalledWith('h1'))
+  })
+
+  it('sem confirmação nada é desvinculado', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mountDock()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    fireEvent.click(screen.getByText('Desvincular'))
+    expect(handoffsApi.release).not.toHaveBeenCalled()
+  })
+
+  it('filha viva: sem "Forçar falha" (o verbo é Encerrar)', () => {
+    mountDock()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.queryByText('Forçar falha')).toBeNull()
+  })
+
+  it('running sem processo: também sem "Forçar falha" (Arquivar cobre a limpeza)', () => {
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.queryByText('Forçar falha')).toBeNull()
+    expect(screen.getByText('Arquivar card')).toBeTruthy()
+  })
+
+  it('aprovado que nunca subiu: "Forçar falha" continua lá', () => {
+    render(
+      <HandoffCard
+        handoff={{ ...handoff, status: 'approved', childSessionId: null }}
+        ttlHours={2}
+        tier="mid"
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(screen.getByText('Forçar falha')).toBeTruthy()
   })
 })
 
