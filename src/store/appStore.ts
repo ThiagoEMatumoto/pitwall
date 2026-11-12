@@ -1529,6 +1529,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }),
     })
+    // O batch que saiu durante o fetch foi descartado para a sessão que só este
+    // snapshot trouxe, e o main não repete batch igual: assinar de novo reenvia.
+    // O watch pode ter parado durante o await: reassinar aí o religaria no main.
+    const broughtNew = list.some((sess) => !prev.has(sess.ccSessionId))
+    if (broughtNew && liveWatchStarted) sessionsApi.watchGlobalActivity()
   },
 
   startMother: async (input) => {

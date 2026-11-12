@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GlobalActivityBatch } from '../../shared/types/ipc'
 
 // appStore lê window.api no module-eval: o mock precisa existir antes do import.
@@ -9,6 +9,7 @@ let renamedHandler: RenamedHandler | null = null
 type ActivityHandler = (batch: GlobalActivityBatch) => void
 let activityHandler: ActivityHandler | null = null
 const live = vi.fn()
+const watchGlobal = vi.fn()
 Object.assign(window, {
   api: new Proxy(
     {},
@@ -19,6 +20,7 @@ Object.assign(window, {
           {
             get: (_t2, prop) => {
               if (ns === 'sessions' && prop === 'listLiveGlobal') return live
+              if (ns === 'sessions' && prop === 'watchGlobalActivity') return watchGlobal
               if (ns === 'sessions' && prop === 'onExit')
                 return (h: ExitHandler) => {
                   exitHandler = h
@@ -55,6 +57,10 @@ const { liveSessionLabel } = await import('../features/session-switcher/session-
 const session = (id: string) => ({ id, ccSessionId: `cc-${id}` })
 
 describe('startLiveWatch', () => {
+  beforeEach(() => {
+    watchGlobal.mockReset()
+  })
+
   // Regressão: filha do dock (sem aba) que saía sozinha ficava em liveSessions —
   // e no mapa como "encerrada" — porque só mutações do store refaziam o snapshot.
   it('refaz o snapshot quando qualquer PTY sai', async () => {
@@ -134,5 +140,48 @@ describe('startLiveWatch', () => {
     off()
     useAppStore.getState().stopLiveWatch()
     expect(activityHandler).toBeNull()
+  })
+
+  // O list-live-global lê o índice antes de esperar os transcripts
+  // (ipc/sessions.ts): o batch que sai nesse intervalo chega antes da resposta e
+  // é descartado para o id que só ela traz. O main não repete batch igual ao
+  // último (emitGlobalBatch em session-activity.ts); só assinar de novo reenvia
+  // (watchGlobal, coberto em session-activity-broadcast.test.ts).
+  it('sessão que só o snapshot trouxe recebe o batch que saiu durante o fetch', async () => {
+    live.mockResolvedValueOnce([session('a')])
+    await useAppStore.getState().startLiveWatch()
+    const batch: GlobalActivityBatch = [
+      { ccSessionId: 'cc-a', status: 'idle', lastActivityAt: 1_000 },
+      { ccSessionId: 'cc-n', status: 'idle', lastActivityAt: 2_000 },
+    ]
+    watchGlobal.mockImplementation(() => activityHandler?.(structuredClone(batch)))
+
+    let respond: (list: unknown[]) => void = () => {}
+    live.mockReturnValueOnce(new Promise((resolve) => (respond = resolve)))
+    const refreshing = useAppStore.getState().refreshLiveSessions()
+    activityHandler?.(structuredClone(batch))
+    // PTY viva sem session file na hora da leitura do índice: unregisteredPtyStatus.
+    respond([session('a'), { ...session('n'), status: 'starting', lastActivityAt: null }])
+    await refreshing
+
+    const fresh = useAppStore.getState().liveSessions.find((s) => s.id === 'n')
+    expect(fresh).toMatchObject({ status: 'idle', lastActivityAt: 2_000 })
+
+    useAppStore.getState().stopLiveWatch()
+  })
+
+  // Reassinar faz o main reler o índice e retransmitir: só vale quando o
+  // snapshot trouxe sessão que o stream ainda não podia ter atualizado.
+  it('snapshot sem sessão nova não reassina o stream', async () => {
+    live.mockResolvedValueOnce([session('a'), session('b')])
+    await useAppStore.getState().startLiveWatch()
+    expect(watchGlobal).toHaveBeenCalledTimes(1)
+
+    live.mockResolvedValueOnce([session('a')])
+    await useAppStore.getState().refreshLiveSessions()
+    expect(useAppStore.getState().liveSessions.map((s) => s.id)).toEqual(['a'])
+    expect(watchGlobal).toHaveBeenCalledTimes(1)
+
+    useAppStore.getState().stopLiveWatch()
   })
 })
