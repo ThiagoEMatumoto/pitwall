@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // O status vem do handler real gpu:status sobre prefs gravadas pelos produtores
@@ -64,7 +64,7 @@ const {
 const { GpuSoftwareIndicator } = await import('./GpuSoftwareIndicator')
 const { TerminalSection } = await import('./TerminalSection')
 const { IconRail } = await import('@/app/IconRail')
-const { useGpuStatusStore } = await import('./gpu-status-store')
+const { useGpuStatusStore, GPU_STATUS_RETRY_MS } = await import('./gpu-status-store')
 
 const HOUR_MS = 60 * 60 * 1000
 const NOW = new Date(2026, 10, 12, 9, 0).getTime()
@@ -120,7 +120,11 @@ describe('GpuSoftwareIndicator', () => {
     useGpuStatusStore.setState({ status: null })
     registerGpuIpc()
   })
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    failing.read = false
+    vi.useRealTimers()
+  })
 
   it('não aparece com a GPU ligada', async () => {
     boot()
@@ -223,6 +227,33 @@ describe('GpuSoftwareIndicator', () => {
     fireEvent.click(indicator()!)
     await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
     expect(relaunch).not.toHaveBeenCalled()
+  })
+
+  it('se a escrita e a releitura falham, o aviso volta sozinho quando o gpu:status responde', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    crashTwice()
+    boot()
+    await renderIndicator()
+    failing.key = GPU_AUTO_PREF_KEY
+    failing.read = true
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    fireEvent.click(indicator()!)
+    await waitFor(() => expect(useGpuStatusStore.getState().status).toBeNull())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GPU_STATUS_RETRY_MS)
+    })
+    expect(useGpuStatusStore.getState().status).toBeNull()
+    expect(indicator()).toBeNull()
+
+    // Nada mudou no main: o registro segue no banco e a GPU segue desligada.
+    failing.read = false
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GPU_STATUS_RETRY_MS)
+    })
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('religar'))
+    expect(indicator()?.getAttribute('aria-label')).not.toContain('reiniciar')
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
   })
 
   it('fica no rail, logo acima do botão de Configurações', async () => {

@@ -4,7 +4,7 @@ import { gpuApi } from '@/lib/ipc'
 import { Icon, ICON_SIZE_HEADER } from '@/components/ui/Icon'
 import { gpuAutoOff, gpuDisableChecked } from '../../../shared/gpu-status'
 import { describeGpuAutoOff } from './gpu-auto-off-text'
-import { useGpuStatusStore } from './gpu-status-store'
+import { GPU_STATUS_RETRY_MS, useGpuStatusStore } from './gpu-status-store'
 
 // Aviso fixo no rail enquanto a GPU está desligada pelo automático: o toast do
 // desligamento some e o app segue em modo software sem dizer nada. Quem desligou
@@ -14,9 +14,21 @@ export function GpuSoftwareIndicator() {
   // Religou por aqui nesta execução: a GPU só volta depois de reiniciar.
   const [reenabled, setReenabled] = useState(false)
 
+  // Uma escrita e a releitura que falham deixam o store em null com a GPU ainda
+  // desligada no main: sem insistir, o aviso sumiria sem nada ter mudado.
+  const unknown = status === null
   useEffect(() => {
-    void useGpuStatusStore.getState().load()
-  }, [])
+    if (!unknown) return
+    const load = (): void => {
+      useGpuStatusStore
+        .getState()
+        .load()
+        .catch((err) => console.warn('[gpu] o aviso do rail não leu o status:', String(err)))
+    }
+    load()
+    const timer = setInterval(load, GPU_STATUS_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [unknown])
 
   if (status === null) return null
   const record = gpuAutoOff(status) ? status.autoDisabled : null

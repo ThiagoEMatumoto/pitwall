@@ -10,6 +10,9 @@ interface GpuStatusState {
   setOzone: (ozone: boolean) => Promise<void>
 }
 
+// Com o status desconhecido o aviso do rail pede de novo neste intervalo.
+export const GPU_STATUS_RETRY_MS = 5_000
+
 // Um gpu:status pedido antes de uma escrita responde com as prefs antigas e pode
 // chegar depois do estado otimista: a contagem de escritas deixa descartá-lo. O
 // descarte pede de novo, porque a resposta jogada fora pode ser a reconciliação
