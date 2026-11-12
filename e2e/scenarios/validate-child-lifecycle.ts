@@ -3,7 +3,7 @@
 //   (1)  minimizar a aba                 → chip "↳ 1 em 2º plano", processo vivo
 //   (2)  X na aba da filha trabalhando   → pede confirmação; confirmado: processo
 //        morto, handoff interrupted, ended_by_user_at e o aviso à mãe
-//   (3)  Desfazer dentro da janela       → filha viva, sem marca
+//   (3)  Desfazer dentro da janela       → filha viva, sem marca, mãe sem aviso
 //   (4)  X numa sessão comum             → só desanexa, processo vivo
 //   (5)  Retomar a encerrada e uma done  → mesmo apelido e --settings de filha no
 //        argv do spawn, marca limpa
@@ -41,6 +41,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Locator } from 'playwright'
+import { ENDED_BY_USER, endedNoticeSince, undoOk, type UndoRead } from '../driver/child-lifecycle'
 import {
   cleanCopy,
   closeOverlays,
@@ -81,7 +82,6 @@ const HIBERNATE_WAIT_MS = 270_000
 const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
 // Painel dos menus abertos por portal (chip de 2º plano, "Mais ações" do card).
 const MENU_PANEL = 'div.fixed.min-w-40'
-const ENDED_BY_USER = /encerrada pelo usuário/i
 const LINK_POLL_MS = 250
 const SEND_PROMPT = 'sessions:send-prompt'
 // Abas da filha na janela quando o envio chega ao main. Enquanto o handler não
@@ -93,7 +93,7 @@ const CHILD_TABS_AT_SEND = countWhenPresent(CHILD_TAB, 2000)
 const LABELS: Record<number, string> = {
   1: 'minimizar a aba da filha: o chip mostra 1 e o processo segue vivo',
   2: 'X na aba da filha trabalhando: confirma, mata, interrupted, marca e aviso à mãe',
-  3: 'Desfazer dentro da janela: filha viva e sem marca',
+  3: 'Desfazer dentro da janela: perguntou uma vez, filha viva, sem marca e mãe sem aviso',
   4: 'X numa sessão comum: só desanexa, processo vivo',
   5: 'Retomar a encerrada e a done: mesmo apelido e --settings de filha, marca limpa',
   6: 'recado do usuário à filha fora da tela: a aba abre antes do envio',
@@ -812,6 +812,7 @@ try {
     const pid = childPid()
     confirmAnswer = true
     const asked = confirms.length
+    const motherLog = logOf(motherPid).length
     await childTab.locator('.dv-default-tab-action').click()
     const ended = toasts.filter({ hasText: 'Filha encerrada' })
     await waitFor('aviso de filha encerrada', async () => (await ended.count()) === 1, 8000)
@@ -825,26 +826,17 @@ try {
     await waitFor('marca desfeita', async () => handoffRow(H).ended_by_user_at === null, 5000)
     await page.waitForTimeout(KILL_AFTER_MS)
     const row = handoffRow(H)
-    const vivo = await isLive(id)
-    const abas = await childTab.count()
-    return {
-      ok:
-        marcaNoClique !== null &&
-        vivo &&
-        pidAlive(pid) &&
-        row.ended_by_user_at === null &&
-        row.status === 'running' &&
-        abas === 1,
-      detail: {
-        pediuConfirmacao: confirms.length - asked,
-        marcaNoClique,
-        processoVivo: vivo,
-        pidVivo: pidAlive(pid),
-        ended_by_user_at: row.ended_by_user_at,
-        handoff: row.status,
-        abaDeVolta: abas,
-      },
+    const read: UndoRead = {
+      pediuConfirmacao: confirms.length - asked,
+      marcaNoClique,
+      processoVivo: await isLive(id),
+      pidVivo: pidAlive(pid),
+      ended_by_user_at: row.ended_by_user_at,
+      handoff: row.status,
+      abaDeVolta: await childTab.count(),
+      avisoAMae: endedNoticeSince(logOf(motherPid), motherLog)?.slice(0, 140) ?? null,
     }
+    return { ok: undoOk(read), detail: { ...read } }
   })
   record(3, three.ok, three.detail)
   link('3 desfazer')
@@ -856,6 +848,8 @@ try {
     const id = childId()
     const pid = childPid()
     const asked = confirms.length
+    // O aviso deste encerramento é o que entra no log da mãe daqui em diante.
+    const motherLog = logOf(motherPid).length
     try {
       confirmAnswer = false
       await childTab.locator('.dv-default-tab-action').click()
@@ -881,7 +875,7 @@ try {
       const row = handoffRow(H)
       const avisada = await waitFor(
         'aviso no stdin da mãe',
-        async () => ENDED_BY_USER.test(logOf(motherPid)),
+        async () => endedNoticeSince(logOf(motherPid), motherLog) !== null,
         30_000,
       )
       const wakes = db<{ reason: string; outcome: string }>(
@@ -908,11 +902,7 @@ try {
           handoff: row.status,
           ended_by_user_at: row.ended_by_user_at,
           motivoGravado: row.error?.slice(0, 60) ?? null,
-          avisoNoStdinDaMae:
-            logOf(motherPid)
-              .split('\n')
-              .find((l) => ENDED_BY_USER.test(l))
-              ?.slice(0, 140) ?? null,
+          avisoNoStdinDaMae: endedNoticeSince(logOf(motherPid), motherLog)?.slice(0, 140) ?? null,
           ledgerDeWakes: wakes,
         },
       }
