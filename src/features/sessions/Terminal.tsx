@@ -87,11 +87,21 @@ const FONT_LOAD_TIMEOUT_MS = 800
 const MAX_WEBGL_INSTANCES = 8
 let liveWebglCount = 0
 
+// O que o painel do dockview (props.api) sabe sobre estar à frente no próprio grupo.
+export interface PanelVisibility {
+  readonly isVisible: boolean
+  onDidVisibilityChange(listener: (event: { isVisible: boolean }) => void): { dispose(): void }
+}
+
 interface Props {
   session: Session
   // Pane do dockview que hospeda este terminal: identidade durável do rascunho
   // do Composer. Ausente fora das abas (quick look).
   paneId?: string
+  // Painel do dockview desta aba. A aba inativa de um grupo fica visibility:hidden,
+  // ainda com caixa de layout, e o IntersectionObserver a dá por visível: só o painel
+  // sabe. Ausente fora das abas (quick look, peek, mapa), onde vale só o observer.
+  panelVisibility?: PanelVisibility
   repoLabel: string
   repoPath: string
   projectName: string
@@ -269,6 +279,7 @@ export function LeasedPlaceholder({
 function TerminalHost({
   session,
   paneId,
+  panelVisibility,
   repoLabel,
   repoPath,
   projectName,
@@ -389,7 +400,7 @@ function TerminalHost({
   // driver que perdeu contexto tende a perder de novo — DOM renderer até remount.
   const webglFailedRef = useRef(false)
   // Guards de attach lidos dentro de callbacks/async: modo atual da pane e
-  // visibilidade do host no viewport (IntersectionObserver do mount effect).
+  // visibilidade da pane (IntersectionObserver + painel do dockview, no mount effect).
   const modeRef = useRef(mode)
   modeRef.current = mode
   const rendererRef = useRef(renderer)
@@ -536,7 +547,7 @@ function TerminalHost({
       setPendingTuiPicker(null)
       return
     }
-    // Pane oculta não parseia: o scan da volta (IntersectionObserver) cobre.
+    // Pane oculta não parseia: o scan da volta (syncVisibility) cobre.
     if (!visibleRef.current) return
     applyTuiMenu(gateMenuByStatus(readTuiMenu(), activity?.status))
     applyTuiPicker(readTuiPicker())
@@ -1187,35 +1198,50 @@ function TerminalHost({
       term.options.theme = xtermTheme(tokens)
     })
 
-    // WebGL só em pane visível: host fora do viewport (aba oculta do dockview,
-    // grid rolado) → dispose libera o slot do cap; voltou a aparecer → re-attach.
+    // Pane visível = host com caixa no viewport E painel à frente no grupo. O observer
+    // cobre a troca de área (display:none) e o grid rolado; o painel do dockview cobre a
+    // aba inativa do grupo (visibility:hidden, que o observer não enxerga). Nenhum dos
+    // dois olha oclusão: pane sob modal, peek, quick look ou overlay segue visível.
+    // WebGL só em pane visível: oculta → dispose libera o slot do cap; voltou → re-attach.
+    let intersecting = true
+    let panelVisible = panelVisibility?.isVisible ?? true
+    const syncVisibility = () => {
+      const visible = intersecting && panelVisible
+      const cameBack = visible && !visibleRef.current
+      visibleRef.current = visible
+      // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. A
+      // leitura síncrona entra no mesmo render que tira o chat da pausa, senão o card
+      // de antes de ocultar reapareceria até a segunda leitura; esta espera o write
+      // vazio drenar a fila do xterm (write é assíncrono). O modo de permissão é
+      // comparado com o visto antes de ocultar (o baseline do aviso não zera), então
+      // a troca feita pela CLI nesse meio ainda avisa. Antes do replay do backlog a
+      // tela está vazia: quem lê é o seed.
+      const rescan = cameBack && replay.replied && !exitedRef.current
+      if (rescan) scanTui(term)
+      setPaneVisible(visible)
+      if (visible) attachWebgl()
+      else detachWebgl()
+      if (!rescan) return
+      term.write('', () => {
+        if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
+        scanTui(term)
+      })
+    }
     // threshold 0: qualquer pixel visível conta como visível.
     const io = new IntersectionObserver(
       (entries) => {
-        const visible = entries[entries.length - 1]?.isIntersecting ?? true
-        const cameBack = visible && !visibleRef.current
-        visibleRef.current = visible
-        // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. A
-        // leitura síncrona entra no mesmo render que tira o chat da pausa, senão o card
-        // de antes de ocultar reapareceria até a segunda leitura; esta espera o write
-        // vazio drenar a fila do xterm (write é assíncrono). O modo de permissão é
-        // comparado com o visto antes de ocultar (o baseline do aviso não zera), então
-        // a troca feita pela CLI nesse meio ainda avisa. Antes do replay do backlog a
-        // tela está vazia: quem lê é o seed.
-        const rescan = cameBack && replay.replied && !exitedRef.current
-        if (rescan) scanTui(term)
-        setPaneVisible(visible)
-        if (visible) attachWebgl()
-        else detachWebgl()
-        if (!rescan) return
-        term.write('', () => {
-          if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
-          scanTui(term)
-        })
+        intersecting = entries[entries.length - 1]?.isIntersecting ?? true
+        syncVisibility()
       },
       { threshold: 0 },
     )
     io.observe(host)
+    const panelSub = panelVisibility?.onDidVisibilityChange((event) => {
+      panelVisible = event.isVisible
+      syncVisibility()
+    })
+    // Montada já como aba inativa (restore): nasce oculta, sem esperar o observer.
+    if (!panelVisible) syncVisibility()
 
     // O cleanup NÃO mata a sessão — só desfaz o xterm e os listeners. A sessão
     // morre quando a pane é fechada (App.closePane → sessions:kill) ou via botão kill.
@@ -1225,6 +1251,7 @@ function TerminalHost({
       if (resizeRaf != null) cancelAnimationFrame(resizeRaf)
       observer.disconnect()
       io.disconnect()
+      panelSub?.dispose()
       offTheme()
       linkProvider.dispose()
       setDataHandler(null)

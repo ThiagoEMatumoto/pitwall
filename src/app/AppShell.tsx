@@ -147,6 +147,7 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
     <Terminal
       session={pane.session}
       paneId={pane.paneId}
+      panelVisibility={props.api}
       repoLabel={pane.repo?.label ?? 'Avulsa'}
       repoPath={pane.repo?.path ?? ''}
       projectName={pane.projectName ?? ''}
