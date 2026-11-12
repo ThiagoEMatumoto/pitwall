@@ -23,6 +23,8 @@ vi.mock('@/lib/ipc', () => ({
 }))
 
 const sessions: LiveSessionInfo[] = []
+// Vivas sem aba (filhas no dock): estão no snapshot do store, fora das visíveis.
+const background: LiveSessionInfo[] = []
 const openSession = vi.fn()
 vi.mock('./useGlobalSessions', async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -45,7 +47,7 @@ vi.mock('@/store/appStore', () => ({
   pendingEndSessionIds: () => new Set<string>(),
   useAppStore: (sel: (s: unknown) => unknown) =>
     sel({
-      liveSessions: sessions,
+      liveSessions: background.length > 0 ? [...sessions, ...background] : sessions,
       panes: [],
       focusPaneId: vi.fn(),
       focusOrOpenSession: openSession,
@@ -87,6 +89,7 @@ beforeEach(() => {
   navigateToFeature.mockClear()
   openSession.mockClear()
   sessions.length = 0
+  background.length = 0
   useSessionFeatureStore.setState({
     bySessionId: { 's-1': 'f-42' },
     featureTitles: { 'f-42': 'Extração TRF4' },
@@ -115,11 +118,11 @@ describe('SessionStrip — marca da feature', () => {
   })
 })
 
-describe('SessionStrip — mães e filhas', () => {
-  function node(sessionId: string, over: Record<string, unknown> = {}) {
-    return { sessionId, ccSessionId: `cc-${sessionId}`, hierarchyMotherId: null, ...over }
-  }
+function node(sessionId: string, over: Record<string, unknown> = {}) {
+  return { sessionId, ccSessionId: `cc-${sessionId}`, hierarchyMotherId: null, ...over }
+}
 
+describe('SessionStrip — mães e filhas', () => {
   it('filha logo depois da mãe, recuada; mãe marcada abre a seção "Mães"', () => {
     sessions.push(
       makeSession({ id: 'filha', ccSessionId: 'cc-filha', name: 'filha' }),
@@ -149,3 +152,72 @@ describe('SessionStrip — mães e filhas', () => {
   })
 })
 
+describe('SessionStrip — filhas em segundo plano', () => {
+  const named = (id: string, over: Partial<LiveSessionInfo> = {}) =>
+    makeSession({ id, ccSessionId: `cc-${id}`, name: id, ...over })
+
+  function setup(nodes: ReturnType<typeof node>[], focusOnly: boolean) {
+    useSessionGraphStore.setState({ graph: { nodes: nodes as never, lanes: [], edges: [] } })
+    useMotherPinsStore.setState({ keys: [], loaded: true })
+    useFocusFilterStore.setState({
+      enabled: focusOnly,
+      loaded: true,
+      load: async () => {},
+    } as never)
+    render(<SessionStrip onOpenSwitcher={() => {}} />)
+  }
+  const barOrder = () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[data-strip-chip], [data-testid="strip-background-children"]',
+      ),
+    ].map((c) => c.textContent?.match(/mae|outra|com-aba|2º plano/)?.[0])
+
+  it('chip agregado logo depois da mãe; o item do menu abre a aba da filha', () => {
+    sessions.push(named('mae'), named('outra'))
+    background.push(named('helena-auth', { status: 'waiting' }))
+    setup([node('mae'), node('outra'), node('helena-auth', { hierarchyMotherId: 'mae' })], false)
+
+    const chip = screen.getByTestId('strip-background-children')
+    expect(chip).toHaveTextContent('↳ 1 em 2º plano')
+    expect(chip.dataset.waiting).toBe('true')
+    expect(barOrder()).toEqual(['mae', '2º plano', 'outra'])
+
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByText('helena-auth · aguardando você'))
+    expect(openSession).toHaveBeenCalledWith(background[0])
+  })
+
+  it('filtro de foco ligado: o chip conta só as sem aba, o "+N" só as com aba', () => {
+    sessions.push(named('mae'), named('com-aba'))
+    background.push(named('helena-auth'))
+    setup(
+      [
+        node('mae'),
+        node('com-aba', { hierarchyMotherId: 'mae' }),
+        node('helena-auth', { hierarchyMotherId: 'mae' }),
+      ],
+      true,
+    )
+
+    expect(barOrder()).toEqual(['mae', '2º plano'])
+    const chip = screen.getByTestId('strip-background-children')
+    expect(chip).toHaveTextContent('↳ 1 em 2º plano')
+    expect(chip.dataset.waiting).toBeUndefined()
+    expect(screen.getByTestId('session-strip-focus-toggle')).toHaveTextContent('+1')
+  })
+
+  it('mãe fora da barra: o grupo fica no fim, mesmo sem nenhuma aba', () => {
+    background.push(named('helena-auth'))
+    setup([node('helena-auth', { hierarchyMotherId: 'mae' })], false)
+
+    expect(screen.getByTestId('strip-background-children')).toHaveTextContent('↳ 1 em 2º plano')
+    expect(screen.queryByText(/Nenhuma sessão viva/)).not.toBeInTheDocument()
+  })
+
+  it('sem filha em segundo plano não há chip', () => {
+    sessions.push(named('mae'))
+    setup([node('mae')], false)
+    expect(screen.queryByTestId('strip-background-children')).not.toBeInTheDocument()
+  })
+})
