@@ -338,14 +338,30 @@ export function activeSessionNames(): string[] {
   return rows.map((r) => r.title)
 }
 
+// Título manual mais recente entre as linhas da conversa (o apelido da filha).
+export function latestManualTitleOfCc(ccSessionId: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT title FROM sessions
+        WHERE cc_session_id = ? AND title_source = 'manual' AND title <> ''
+        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(ccSessionId) as { title: string } | undefined
+  return row?.title ?? null
+}
+
 // Alias da filha de um handoff (null se ainda não spawnou ou se a sessão sumiu).
-// Fonte da verdade = sessions.title, fixado como 'manual' no spawn.
+// Fonte da verdade = sessions.title, fixado como 'manual' no spawn. A linha
+// apontada pode não ter title (o resume comum de antes da v0.86 não o herdava):
+// o alias vem então de outra linha da mesma conversa, como no resume da filha.
 export function childAlias(childSessionId: string | null): string | null {
   if (!childSessionId) return null
   const row = getDb()
-    .prepare('SELECT title FROM sessions WHERE id = ?')
-    .get(childSessionId) as { title: string | null } | undefined
-  return row?.title ?? null
+    .prepare('SELECT title, cc_session_id FROM sessions WHERE id = ?')
+    .get(childSessionId) as { title: string | null; cc_session_id: string | null } | undefined
+  if (!row) return null
+  if (row.title) return row.title
+  return row.cc_session_id ? latestManualTitleOfCc(row.cc_session_id) : null
 }
 
 interface ListFilter {
