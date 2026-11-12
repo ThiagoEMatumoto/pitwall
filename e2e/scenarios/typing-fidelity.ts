@@ -9,6 +9,8 @@ import { goToArea, waitReady } from '../driver/nav'
 import { typeOpenLoop } from '../driver/perf'
 import {
   compareTyped,
+  loadChecks,
+  loadOutputs,
   promptLines,
   submittedLines,
   type TypedComparison,
@@ -24,8 +26,12 @@ import { readXtermBuffer } from '../driver/xterm-buffer'
 // laço aberto (typeOpenLoop), em duas superfícies:
 //   composer  digita no composer do chat e envia pelo botão;
 //   xterm     digita direto no terminal e fecha a linha com Enter.
-// Cada uma roda sem carga e sob carga (o transcript da própria sessão crescendo a
-// cada 100 ms, com a sessão em 'busy': o chat escrevendo enquanto se digita).
+// Cada uma roda sem carga e sob carga: a sessão em 'busy', o transcript dela
+// ganhando um turno a cada 300 ms e, no xterm, o stub escrevendo uma linha no PTY
+// a cada 10 caracteres ecoados (no modo terminal o chat está desmontado: o que
+// concorre com o eco é a saída do próprio PTY). A rodada sob carga só passa com a
+// prova de que quem estava na tela desenhou a carga: o chat mostrou mensagem nova
+// antes de a digitação acabar, ou a saída do stub está na tela no meio do eco.
 // Camadas, na ordem em que o texto anda:
 //   textarea  o valor do composer antes do envio (só no composer);
 //   ipc       os chunks de sessions:write que o main recebeu (spy no handler);
@@ -51,7 +57,10 @@ const { buildLongMotherLines } = tsxRequire(
 
 const CHARS = 300
 const KEY_DELAY_MS = 5
-const APPEND_EVERY_MS = 100
+// Acima do debounce de 150 ms do watcher do transcript (chat-transcript-service):
+// com appends mais juntos que isso ele só lê quando a rajada para, e o chat não
+// desenha nada enquanto se digita.
+const APPEND_EVERY_MS = 300
 const BASE_TURNS = 40
 // Turnos a mais do gerador, gravados aos poucos nas rodadas sob carga.
 const STREAM_TURNS = 200
@@ -62,6 +71,7 @@ const OUT_FILE = join(OUT_DIR, 'fidelity.json')
 
 // 300 caracteres exatos, sem espaço nas pontas (o composer não envia prompt só de
 // espaços, e a ponta não é o que se quer medir). Sem @, # e /: abrem menus do composer.
+// Sem "[[": é como a saída de carga do stub se separa do eco na tela.
 function batchOf(phrase: string): string {
   return phrase
     .repeat(Math.ceil(CHARS / phrase.length))
@@ -94,6 +104,8 @@ interface Run {
   load: boolean
   // Linhas de transcript gravadas enquanto a rodada digitava.
   appendedLines: number
+  // Saídas de carga do stub que a rodada pôs na tela (só no xterm sob carga).
+  screenOutputs: number
   layers: Partial<Record<Layer, TypedComparison>>
 }
 
@@ -245,13 +257,14 @@ try {
     )
   const ptyLines = (): string[] =>
     submittedLines(parseRawStdin(fake.readCliLog('claude')).bytes.toString('utf8'))
-  const screenLines = async (): Promise<string[]> => {
+  const screenText = async (): Promise<string> => {
     const read = await readXtermBuffer(page, id, 'aba')
     if (read.text == null) {
       throw new Error(`sem buffer do xterm para ler (${read.terms} xterm da sessão)`)
     }
-    return promptLines(read.text)
+    return read.text
   }
+  const screenLines = async (): Promise<string[]> => promptLines(await screenText())
 
   // O prompt só sai depois do `stty raw`: antes dele a TTY ainda ecoaria por conta.
   await waitFor('prompt do stub raw na tela', async () => (await screenLines()).length === 1)
@@ -262,20 +275,25 @@ try {
   mkdirSync(projectDir, { recursive: true })
   const transcript = join(projectDir, `${ccSessionId}.jsonl`)
   const all = buildLongMotherLines(BASE_TURNS + STREAM_TURNS)
-  const baseCount = (all.length / (BASE_TURNS + STREAM_TURNS)) * BASE_TURNS
+  const turnLines = all.length / (BASE_TURNS + STREAM_TURNS)
+  const baseCount = turnLines * BASE_TURNS
   writeFileSync(transcript, all.slice(0, baseCount).join('\n') + '\n')
   const stream = all.slice(baseCount)
   let appendedLines = 0
-  function startLoad(): void {
+  // Um turno inteiro por vez: cada leitura do watcher traz uma resposta nova do
+  // assistant para o chat desenhar.
+  function startLoad(surface: Surface): void {
     fake.setStatus(pid, 'busy')
+    if (surface === 'xterm') fake.setRawLoad(true)
     const timer = setInterval(() => {
-      const line = stream[appendedLines]
-      if (!line) return
-      appendFileSync(transcript, line + '\n')
-      appendedLines += 1
+      const turn = stream.slice(appendedLines, appendedLines + turnLines)
+      if (turn.length === 0) return
+      appendFileSync(transcript, turn.join('\n') + '\n')
+      appendedLines += turn.length
     }, APPEND_EVERY_MS)
     stopLoad = () => {
       clearInterval(timer)
+      fake.setRawLoad(false)
       fake.setStatus(pid, 'idle')
       stopLoad = () => {}
     }
@@ -365,7 +383,10 @@ try {
     const typed: Partial<Record<Layer, string>> = {}
     const appendedAtStart = appendedLines
     const chatAtStart = load && surface === 'composer' ? await lastChatText() : ''
-    if (load) startLoad()
+    const outputsAtStart = loadOutputs(await screenText())
+    let appended = 0
+    let chatChanged = false
+    if (load) startLoad(surface)
     try {
       const typing = await typeOpenLoop(
         (method, params) => cdp.send(method, params as never),
@@ -375,6 +396,10 @@ try {
       if (typing.failed > 0) {
         throw new Error(`${label}: o CDP recusou ${typing.failed} de ${typing.keys} teclas`)
       }
+      // A prova da carga é de quando a última tecla entrou: o que o chat desenhar
+      // depois disso não concorreu com a digitação.
+      appended = appendedLines - appendedAtStart
+      chatChanged = load && surface === 'composer' && (await lastChatText()) !== chatAtStart
       // O foco não pode ter saído no meio da digitação.
       await expectFocus(mode, surface)
       if (surface === 'composer') {
@@ -390,11 +415,6 @@ try {
         async () => (await screenLines()).length > at.tela + 1,
       )
       await waitFor(`${label}: Enter no ipc`, async () => (await ipcLines()).length > at.ipc + 1)
-      if (load && surface === 'composer') {
-        console.log(
-          `[fidelity] ${label}: o chat ${(await lastChatText()) !== chatAtStart ? 'recebeu' : 'NÃO recebeu'} mensagem nova durante a rodada`,
-        )
-      }
     } finally {
       stopLoad()
     }
@@ -402,8 +422,11 @@ try {
     typed.pty = ptyLines()[at.pty]
     typed.tela = (await screenLines())[at.tela]
 
-    const appended = appendedLines - appendedAtStart
-    if (load) check(appended > 0, `${label}: ${appended} linhas de transcript durante a rodada`)
+    const screenOutputs = loadOutputs(await screenText()) - outputsAtStart
+    if (load) {
+      const seen = { transcriptLines: appended, chatChanged, screenOutputs }
+      for (const proof of loadChecks(surface, seen)) check(proof.ok, `${label}: ${proof.label}`)
+    }
     const layers: Run['layers'] = {}
     for (const layer of LAYERS) {
       const value = typed[layer]
@@ -412,7 +435,7 @@ try {
       layers[layer] = result
       check(result.ok, `${label} · ${layer}: ${scoreOf(result)}`)
     }
-    runs.push({ surface, batch: batch.name, load, appendedLines: appended, layers })
+    runs.push({ surface, batch: batch.name, load, appendedLines: appended, screenOutputs, layers })
   }
 
   // ---------- composer do chat ----------
