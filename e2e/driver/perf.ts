@@ -84,6 +84,14 @@ async function collectInPage(endPhase: string): Promise<PerfRaw> {
   return { ...drive.data, end: { t: performance.now(), totals: w.__cmPerf ?? null } }
 }
 
+// O tsx compila com keepNames do esbuild: cada função nomeada dentro das funções
+// acima vira __name(fn, 'nome'), um helper do módulo que a página não tem. O
+// vitest não liga keepNames, então só o cenário real esbarra nisso.
+function shimNameHelperInPage(): void {
+  const g = globalThis as { __name?: (fn: unknown) => unknown }
+  g.__name ??= (fn) => fn
+}
+
 const EVENT_THRESHOLD_MS = 16
 // Etiqueta das linhas do main emitidas depois do collectPerf: fora de qualquer fase.
 const END_PHASE = 'end'
@@ -91,6 +99,7 @@ const END_PHASE = 'end'
 const BLOCKING_MS = 50
 
 export async function installPerfProbe(page: Page): Promise<void> {
+  await page.evaluate(shimNameHelperInPage)
   await page.evaluate(installInPage, EVENT_THRESHOLD_MS)
 }
 
