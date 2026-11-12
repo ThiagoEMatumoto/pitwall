@@ -9,6 +9,7 @@ import {
   parseGpuAutoDisabled,
   resolveGpuBoot,
   GPU_AUTO_PREF_KEY,
+  GPU_DISABLED_BY_USER_PREF_KEY,
   GPU_DISABLED_PREF_KEY,
   type GpuBootInput,
   type GpuPrefs,
@@ -498,5 +499,91 @@ describe('fiação do crash e do boot de teste', () => {
     expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
     expect(app.toasts).toHaveLength(0)
     expect(app.crashed).toHaveLength(2)
+  })
+})
+
+describe('migração do legado no boot', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // O automático antigo gravava só gpu.disabled=true, sem marca nem registro.
+  function legacyStore(): MemoryPrefs {
+    const store = memoryPrefs()
+    store.prefs.setPref(GPU_DISABLED_PREF_KEY, true)
+    return store
+  }
+
+  it('migra para o registro, religa em teste e o quit limpo encerra o desligamento', () => {
+    const store = legacyStore()
+    const app = startApp(store)
+
+    expect(app.boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toEqual({
+      at: T0,
+      reason: 'legacy',
+      version: '1.0.0',
+      strikes: 1,
+    })
+
+    app.watch.endProbation()
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: false, probation: false })
+  })
+
+  it('se o registro não grava, nada muda no banco e o boot seguinte migra de novo', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    // Sem a tentativa gravada a GPU não liga: um driver quebrado viraria loop.
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
+
+    store.writesWorkAgain()
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+  })
+
+  it('se só o gpu.disabled=false não grava, o registro que sobra segue a regra de re-tentativa', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_DISABLED_PREF_KEY)
+
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ reason: 'legacy', strikes: 1 })
+
+    store.writesWorkAgain()
+    // A tentativa do boot que falhou foi gasta sem ligar a GPU: mesma versão e
+    // dentro do prazo fica desligado, mas a migração termina.
+    expect(startApp(store, T0 + 60_000).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ reason: 'legacy', strikes: 1 })
+
+    expect(startApp(store, T0 + 3 * DAY).boot).toEqual({ hwAccelDisabled: false, probation: true })
+  })
+
+  it('a migração interrompida também religa na troca de versão, sem esperar o prazo', () => {
+    const store = legacyStore()
+    store.failWritesTo(GPU_DISABLED_PREF_KEY)
+    startApp(store)
+    store.writesWorkAgain()
+
+    const next = startApp(store, T0 + 60_000, '1.1.0')
+
+    expect(next.boot).toEqual({ hwAccelDisabled: false, probation: true })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(false)
+  })
+
+  it('a escolha manual do usuário não entra na migração', () => {
+    const store = legacyStore()
+    store.prefs.setPref(GPU_DISABLED_BY_USER_PREF_KEY, true)
+
+    expect(startApp(store).boot).toEqual({ hwAccelDisabled: true, probation: false })
+    expect(store.read(GPU_DISABLED_PREF_KEY)).toBe(true)
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeUndefined()
   })
 })

@@ -113,10 +113,18 @@ export interface GpuBootDecision {
 }
 
 export function decideGpuBoot(input: GpuBootInput): GpuBootDecision {
-  const legacy = input.prefDisabled && !input.disabledByUser && input.autoDisabled === null
+  // Sem a marca do usuário, gpu.disabled=true é do automático antigo. Se o
+  // registro já existe, a migração anterior parou entre as duas escritas: ele
+  // vale como está e só falta zerar a pref.
+  const legacy = input.prefDisabled && !input.disabledByUser
   const prefDisabled = legacy ? false : input.prefDisabled
   const record = legacy
-    ? { at: input.now, reason: 'legacy', version: LEGACY_VERSION, strikes: 1 }
+    ? (input.autoDisabled ?? {
+        at: input.now,
+        reason: 'legacy',
+        version: LEGACY_VERSION,
+        strikes: 1,
+      })
     : input.autoDisabled
 
   if (input.envDisabled || prefDisabled || record === null) {
@@ -175,12 +183,16 @@ export function resolveGpuBoot(args: {
     now: args.now,
   }
   const decision = decideGpuBoot(input)
+  // O registro vai primeiro. Se a migração do legado parar entre as duas
+  // escritas, sobra gpu.disabled=true sem marca e com registro, que decideGpuBoot
+  // retoma no boot seguinte. Na ordem inversa sobraria gpu.disabled=false sem
+  // registro: GPU ligada, fora de teste e sem rastro do desligamento.
   try {
-    if (decision.prefDisabled !== input.prefDisabled) {
-      prefs.setPref(GPU_DISABLED_PREF_KEY, decision.prefDisabled)
-    }
     if (decision.autoDisabled !== input.autoDisabled) {
       prefs.setPref(GPU_AUTO_PREF_KEY, decision.autoDisabled)
+    }
+    if (decision.prefDisabled !== input.prefDisabled) {
+      prefs.setPref(GPU_DISABLED_PREF_KEY, decision.prefDisabled)
     }
   } catch (err) {
     console.warn('[gpu] não gravou a decisão de boot:', String(err))
