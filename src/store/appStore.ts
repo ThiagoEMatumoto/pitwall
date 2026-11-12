@@ -85,6 +85,11 @@ export interface ActivePane {
   // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
   // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
   dormantReason?: 'hibernated'
+  // Nasceu em segundo plano (focusOrOpenSession com background): o layout a cria
+  // como aba inativa e o mapa não cede a vista. Ativo, o terminal novo tomaria o
+  // teclado de quem digita em outra tela. Só o nascimento do painel lê; não vai
+  // ao open_panes.
+  background?: true
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -874,7 +879,8 @@ interface AppState {
   undoEndSession: (sessionId: string) => void
   // Clique simples na lista: foca a pane se já exibida; senão resume/abre (sem
   // destruir as panes existentes) e vai pra área de projetos.
-  focusOrOpenSession: (item: LiveSessionInfo) => Promise<void>
+  // background: cria a aba sem levar o usuário até ela (area e foco ficam como estão).
+  focusOrOpenSession: (item: LiveSessionInfo, opts?: { background?: boolean }) => Promise<void>
   // Multi-seleção: garante as N selecionadas em panes, substitui a view por
   // exatamente essas N e monta a grade (via gridRequest), indo pra projetos.
   openSessionsInGrid: (items: LiveSessionInfo[]) => Promise<void>
@@ -1367,9 +1373,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     void get().refreshLiveSessions()
   },
 
-  focusOrOpenSession: async (item) => {
+  focusOrOpenSession: async (item, opts) => {
+    const background = opts?.background === true
     const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
+      if (background) return
       set({ focusPaneId: existing.paneId, area: 'projects' })
       if (existing.dormant) await get().wakeDormantPane(existing.paneId)
       return
@@ -1380,11 +1388,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Algo abriu a mesma conversa durante a adoção: foca a que entrou.
     const opened = get().panes.find((p) => paneShowsLive(p, item))
     if (opened) {
-      set({ focusPaneId: opened.paneId, area: 'projects' })
+      if (!background) set({ focusPaneId: opened.paneId, area: 'projects' })
       return
     }
     const pane = paneFromLiveSession(item, paneId)
-    set((s) => ({ panes: [...s.panes, pane], area: 'projects', focusPaneId: paneId }))
+    set((s) => {
+      // Aba inativa precisa de outra ao lado; a primeira entra como qualquer aba.
+      const inactive = background && s.panes.length > 0
+      return {
+        panes: [...s.panes, inactive ? { ...pane, background: true as const } : pane],
+        ...(background ? {} : { area: 'projects' as const, focusPaneId: paneId }),
+      }
+    })
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
   },

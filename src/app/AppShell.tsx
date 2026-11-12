@@ -537,6 +537,20 @@ export function AppShell() {
           continue
         }
         const active = api.activePanel
+        // Nascida em segundo plano: aba INATIVA no grupo do ativo, sem gastar a
+        // intent do atalho. Ativa, o xterm dela tomaria o teclado.
+        if (pane.background && active) {
+          api.addPanel<PaneParams>({
+            id: pane.paneId,
+            component: 'terminal',
+            tabComponent: 'terminal',
+            title: paneTabTitle(pane),
+            params: { pane },
+            position: { referencePanel: active.id, direction: 'within' },
+            inactive: true,
+          })
+          continue
+        }
         const intent = nextPosition.current
         // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
         // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.

@@ -3,14 +3,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/ipc', () => ({
   prefsApi: { get: vi.fn().mockResolvedValue(null), set: vi.fn().mockResolvedValue(undefined) },
+  sessionsApi: { adoptDraft: vi.fn().mockResolvedValue(null) },
+  workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
 
 import { useLeaveMapOnSessionFocus } from './useLeaveMapOnSessionFocus'
 import { useProjectsViewStore } from './projects-view-store'
 import { useAppStore, type ActivePane } from '@/store/appStore'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
+import type { LiveSessionInfo } from '../../../shared/types/ipc'
 
 const pane = (id: string) => ({ paneId: id }) as unknown as ActivePane
+
+const liveOf = (id: string): LiveSessionInfo => ({
+  id,
+  ccSessionId: `cc-${id}`,
+  name: null,
+  title: null,
+  status: 'working',
+  repo: null,
+  projectName: null,
+  projectIcon: null,
+  projectColor: null,
+  lastActivityAt: null,
+  lastText: null,
+})
 
 describe('useLeaveMapOnSessionFocus', () => {
   beforeEach(() => {
@@ -37,6 +54,42 @@ describe('useLeaveMapOnSessionFocus', () => {
     renderHook(() => useLeaveMapOnSessionFocus())
     act(() => useAppStore.setState({ panes: [pane('pane-1')] }))
     expect(useProjectsViewStore.getState().view).toBe('terminals')
+  })
+
+  // As panes abaixo saem do próprio store (focusOrOpenSession), não de um molde:
+  // é ele quem decide se a aba nasce em segundo plano.
+  describe('aba aberta pelo store', () => {
+    const open = (id: string, opts?: { background: boolean }) =>
+      act(() => useAppStore.getState().focusOrOpenSession(liveOf(id), opts))
+
+    // Nasce inativa: não há xterm recebendo teclas atrás do mapa.
+    it('em segundo plano, ao lado de outra aba: o mapa fica na frente', async () => {
+      await open('s-mae')
+      // O AppShell limpa o pedido de foco depois de ativar o painel.
+      useAppStore.setState({ focusPaneId: null })
+      renderHook(() => useLeaveMapOnSessionFocus())
+
+      await open('s-child', { background: true })
+
+      expect(useAppStore.getState().panes).toHaveLength(2)
+      expect(useProjectsViewStore.getState().view).toBe('map')
+    })
+
+    it('em segundo plano sem nenhuma aba: entra como aba comum e o mapa cede', async () => {
+      renderHook(() => useLeaveMapOnSessionFocus())
+      await open('s-child', { background: true })
+      expect(useProjectsViewStore.getState().view).toBe('terminals')
+    })
+
+    it('com foco: o mapa cede', async () => {
+      await open('s-mae')
+      useAppStore.setState({ focusPaneId: null })
+      renderHook(() => useLeaveMapOnSessionFocus())
+
+      await open('s-child')
+
+      expect(useProjectsViewStore.getState().view).toBe('terminals')
+    })
   })
 
   it('as panes do restore do boot não tiram o mapa da frente', () => {
