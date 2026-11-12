@@ -38,6 +38,7 @@ export type { Liveness, LoopIssue, MetricTone, PulseSource } from '../feature-lo
 // pelo mesmo motivo; `design: DesignApi` liga a chave lá embaixo.
 export type * from './design'
 import type { DesignApi } from './design'
+import type { PerfRendererSummary } from './perf'
 import type { ChildLinkState } from '../handoff-lead'
 import type { DiagramLibraryCatalogEntry } from '../diagram-library-catalog'
 import type {
@@ -2907,6 +2908,21 @@ export interface Api {
     // Backup manual em .zip (independente do git; abre dialog no main).
     backupExport(): Promise<SyncBackupResult>
     backupImport(): Promise<SyncBackupResult>
+  }
+  perf: {
+    /** CM_PERF=1 no ambiente do app. Falso: o renderer não mede nem envia nada. */
+    enabled: boolean
+    /**
+     * Envia o resumo da janela de medição ao main (canal `perf:renderer`, sem
+     * resposta). Ele sai na próxima linha `[perf]`, em `renderer`.
+     */
+    report(summary: PerfRendererSummary): void
+    /**
+     * Marca de fase de um cenário e2e: o main fecha a janela corrente da sonda e
+     * etiqueta as linhas `[perf]` seguintes com `phase`. Resolve quando a linha
+     * da janela fechada já foi emitida. Sem CM_PERF não faz nada.
+     */
+    drain(phase: string): Promise<void>
   }
   window: {
     minimize(): Promise<void>

@@ -3,6 +3,7 @@
 // centralizar aqui garante que writes externos (MCP) atualizem a UI ao vivo
 // pelos MESMOS canais que o IPC usa.
 import { BrowserWindow } from 'electron'
+import { perfOut } from './perf-probe'
 import * as taskStore from './task-store'
 import type { FeatureObjectiveLink, TaskLink } from '../../../shared/types/ipc'
 
@@ -50,6 +51,7 @@ export function onBroadcast(channelPrefix: string, fn: BroadcastListener): () =>
 }
 
 export function broadcast(channel: string, payload: unknown): void {
+  perfOut(channel)
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }

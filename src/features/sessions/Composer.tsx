@@ -4,6 +4,7 @@ import { ChevronRight, CornerDownLeft, Image as ImageIcon, Loader, TextCursorInp
 import { Icon } from '@/components/ui/Icon'
 import { Button, GradientBorder } from '@/features/brand'
 import { sendToApi, sessionsApi } from '@/lib/ipc'
+import { perfCount } from '@/lib/perf-probe'
 import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { navigateHistory, resolveComposerKey, resolveForwardKey } from './composer-keys'
 import {
@@ -147,6 +148,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
   },
   ref,
 ) {
+  perfCount('Composer')
   const draftKey = composerDraftKey(paneId, ccSessionId)
   const memKey = draftKey ?? sessionId
   const [text, setText] = useState(() => drafts.get(memKey) ?? '')

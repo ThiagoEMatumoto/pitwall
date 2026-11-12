@@ -3,7 +3,7 @@
 // vier depois de qualquer módulo que puxe ./services/db, o banco já foi aberto
 // (vazio) no perfil novo e a migração viraria no-op.
 import './services/userdata-migrate'
-import { app, BrowserWindow, Menu, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, powerMonitor, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -43,6 +43,7 @@ import { getPref, setPref } from './services/prefs-store'
 import { setGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from './services/gpu-state'
 import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/repo-pull-scheduler'
 import { driveSafeBlocks } from './services/drive-safe'
+import { instrumentIpcMain, isPerfEnabled, startPerfProbe } from './services/perf-probe'
 import { registerFsIpc } from './ipc/fs'
 import { registerPrefsIpc } from './ipc/prefs'
 import { registerSecretsIpc } from './ipc/secrets'
@@ -319,6 +320,12 @@ app.whenReady().then(async () => {
   // Captura o clean_shutdown do boot anterior e o zera; deve rodar antes da
   // janela para que o renderer leia o valor correto via workspace:get-boot-state.
   markWorkspaceRunning()
+  if (isPerfEnabled()) {
+    // Antes de qualquer register*Ipc: só o que é registrado depois do embrulho é
+    // medido. A sonda vem primeiro para o perf:renderer dela não entrar na conta.
+    startPerfProbe({ app, ipcMain })
+    instrumentIpcMain(ipcMain)
+  }
   registerProjectIpc()
   registerRepoDependenciesIpc()
   registerHandoffsIpc()

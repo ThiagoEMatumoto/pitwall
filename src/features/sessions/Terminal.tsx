@@ -63,6 +63,7 @@ import { getCurrentThemeTokens, onThemeChange } from '@/app/useTheme'
 import type { GpuStatus, PermissionMode, Session, SessionActivity } from '../../../shared/types/ipc'
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 import { stripQueryReplies } from './terminal-replies'
+import { perfCount, perfEnd, perfKeyWrite, perfStart } from '@/lib/perf-probe'
 import { preferredSessionTitle } from '../../../shared/session-title'
 
 // Cache módulo-level: o status de GPU é imutável durante o processo (decidido no
@@ -270,6 +271,7 @@ function TerminalHost({
   onOpenSettings,
   leaseHost,
 }: Props) {
+  perfCount('TerminalHost')
   // Provider sem Chat View (Codex) fica no terminal cru, seja qual for o modo
   // lembrado; sem parser de menu, nada de card/pill que digita na TUI do claude.
   const caps = providerSupports(session.provider)
@@ -1014,6 +1016,7 @@ function TerminalHost({
       permTimerRef.current = window.setTimeout(() => {
         const t = xtermRef.current
         if (!t) return
+        const parseStart = perfStart()
         // Menu TUI pendente: o parse roda no MESMO debounce (a saída assentou).
         // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
         // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
@@ -1022,9 +1025,11 @@ function TerminalHost({
         applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
         applyTuiPicker(readTuiPickerFrom(t))
         setCliDraft(readCliInputFrom(t).draft)
-        if (statusRef.current === 'working' || statusRef.current === 'starting') return
-        const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
-        if (mode) setCurrentMode(mode)
+        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
+          const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
+          if (mode) setCurrentMode(mode)
+        }
+        perfEnd('tui-parse', parseStart)
       }, 150)
       if (flushed) term.write(data)
       else liveTotal += data
@@ -1038,7 +1043,9 @@ function TerminalHost({
     let replaying = true
     term.onData((d) => {
       const out = replaying ? stripQueryReplies(d) : d
-      if (out) write(out)
+      if (!out) return
+      perfKeyWrite()
+      write(out)
     })
 
     void sessionsApi
@@ -1047,8 +1054,10 @@ function TerminalHost({
       .then((backlog) => {
         if (xtermRef.current !== term) return
         if (backlog) {
+          const replayStart = perfStart()
           term.write(backlog, () => {
             replaying = false
+            perfEnd('replay', replayStart)
           })
         } else {
           replaying = false
@@ -1344,7 +1353,15 @@ function TerminalHost({
   }
 
   return (
-    <div className="flex h-full flex-col" onKeyDown={onSessionKeyDown}>
+    // data-*: o dockview monta o conteúdo fora da árvore do grupo, sem id no DOM;
+    // é por aqui que um cenário e2e acha o pane de UMA sessão e o modo dele.
+    <div
+      data-testid="session-pane"
+      data-session-id={session.id}
+      data-pane-mode={mode}
+      className="flex h-full flex-col"
+      onKeyDown={onSessionKeyDown}
+    >
       {chrome === 'full' && (
         <SessionHeader
           projectName={projectName}

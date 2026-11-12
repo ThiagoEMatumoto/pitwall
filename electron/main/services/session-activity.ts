@@ -22,6 +22,7 @@ import { notifyUsageConsumption } from './usage-monitor'
 import { getNotifPrefs, getMainWindow, getRendererFocusedSession, notify } from './notifications'
 import { getByChildSession, isActiveCrewChild } from './handoff-store'
 import { broadcast } from './notify'
+import { perfCount, perfTime } from './perf-probe'
 import { unregisteredPtyStatus } from './unregistered-pty-status'
 import { tuiMenuWatch } from './tui-menu-watch'
 import {
@@ -821,7 +822,11 @@ class SessionActivityService extends EventEmitter {
 
   // Emite o batch global com TODAS as sessões indexadas. lastText/tokens vêm do
   // tail do JSONL (mesma derivação do emitFor), sob demanda por sessão.
-  private async broadcastGlobal(): Promise<void> {
+  private broadcastGlobal(): Promise<void> {
+    return perfTime('broadcastGlobal', () => this.emitGlobalBatch())
+  }
+
+  private async emitGlobalBatch(): Promise<void> {
     const gen = ++this.globalGen
     const batch: GlobalActivityBatch = []
     for (const [ccSessionId, entry] of this.index) {
@@ -856,6 +861,7 @@ class SessionActivityService extends EventEmitter {
         lastActivityAt: ptyManager.getActivitySample(sessionId)?.lastByteAt ?? null,
       })
     }
+    perfCount('broadcastGlobal.sessions', batch.length)
     if (gen !== this.globalGen) return
     broadcast('session:activity:global', batch)
   }
