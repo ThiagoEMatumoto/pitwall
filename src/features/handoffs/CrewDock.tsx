@@ -20,6 +20,7 @@ import {
   crewDotTitle,
   useHeartbeatTtl,
 } from './HandoffCard'
+import { CHILD_UNREAD_HINT, useChildActivityStore } from './child-activity-store'
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
@@ -107,6 +108,7 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
   const setFocusedId = useCrewDockStore((s) => s.setFocusedId)
   const focusNonce = useCrewDockStore((s) => s.focusNonce)
   const dismissHandoff = useHandoffsStore((s) => s.dismiss)
+  const unread = useChildActivityStore((s) => s.unread)
   const ttlHours = useHeartbeatTtl()
   const { ref, tier } = usePanelTier<HTMLDivElement>()
 
@@ -373,7 +375,10 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
           const color = crewDotColor(h, live, liveList)
-          const dotTitle = crewDotTitle(h, live, liveList)
+          const unreadReason = live ? unread[live.id] : undefined
+          const dotTitle = unreadReason
+            ? `${crewDotTitle(h, live, liveList)} · ${CHILD_UNREAD_HINT[unreadReason]}`
+            : crewDotTitle(h, live, liveList)
           return (
             <button
               key={h.id}
@@ -391,6 +396,15 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
                 <span className="absolute -right-1 -top-1">
                   <ApexDot size={8} color="var(--color-warning)" />
                 </span>
+              )}
+              {/* Dentro da caixa do botão: a lista rola (overflow), e o que sai
+                  pela esquerda dela é cortado. */}
+              {unreadReason && (
+                <span
+                  data-testid="crew-rail-unread"
+                  aria-hidden
+                  className="absolute left-0 top-0 h-2 w-2 rounded-full bg-[var(--color-accent)] ring-1 ring-[var(--color-bg)]"
+                />
               )}
             </button>
           )

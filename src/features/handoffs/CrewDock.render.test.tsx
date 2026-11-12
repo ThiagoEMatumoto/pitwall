@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -21,6 +21,7 @@ vi.mock('@/lib/ipc', () => ({
 }))
 
 import { CrewDock } from './CrewDock'
+import { useChildActivityStore } from './child-activity-store'
 import { useCrewDockStore } from './crew-dock-store'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
@@ -122,6 +123,7 @@ describe('CrewDock: o dot da trilha foca aquela filha', () => {
     useAppStore.setState({ liveSessions: [], focusOrOpenSession })
     useHandoffsStore.setState({ handoffs: [handoff] })
     useCrewDockStore.setState({ collapsed: true, focusedId: null })
+    useChildActivityStore.setState({ unread: {} })
   })
   afterEach(() => {
     useAppStore.setState({ liveSessions: [], focusOrOpenSession: realFocusOrOpenSession })
@@ -160,6 +162,21 @@ describe('CrewDock: o dot da trilha foca aquela filha', () => {
 
     expect(focusOrOpenSession).not.toHaveBeenCalled()
     expect(useCrewDockStore.getState().collapsed).toBe(false)
+  })
+
+  it('mensagem da mãe não lida: ponto no dot dela e o motivo no rótulo', () => {
+    const other: Handoff = { ...handoff, id: 'h0', childSessionId: 's-other', task: 'outra frente' }
+    useHandoffsStore.setState({ handoffs: [other, handoff] })
+    useAppStore.setState({ liveSessions: [{ ...live, id: 's-other', ccSessionId: 'cc-o' }, live] })
+    useChildActivityStore.setState({ unread: { 's-child': 'message' } })
+    render(<CrewDock />)
+
+    const [quiet, marked] = screen.getAllByTestId('crew-rail-child')
+    expect(within(marked).getByTestId('crew-rail-unread')).toBeInTheDocument()
+    expect(marked.title).toContain('a mãe mandou mensagem e você ainda não abriu a aba')
+    expect(marked.getAttribute('aria-label')).toContain('a mãe mandou mensagem')
+    expect(within(quiet).queryByTestId('crew-rail-unread')).toBeNull()
+    expect(quiet.title).not.toContain('mensagem')
   })
 })
 
