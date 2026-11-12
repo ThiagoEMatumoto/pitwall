@@ -60,7 +60,7 @@ import {
 // as sessões não abrem, GPU diferente da pedida, renderer que não responde mais).
 //
 // Env:
-//   CM_PERF_GPU=on|off         fixa gpu.disabled na cópia (default on; a cópia do
+//   CM_PERF_GPU=on|off         fixa as prefs de GPU na cópia (default on; a cópia do
 //                              perfil real herdaria o que o app gravou sozinho)
 //   CM_PERF_SESSIONS=N         sessões stub vivas (default 5, mínimo 2)
 //   CM_PERF_LABEL=nome         prefixo do arquivo de saída (default gpu-<on|off>)
@@ -177,7 +177,12 @@ writeCopyPrefs(userData, {
   keybindings: null,
   'app.showIntroOnBoot': JSON.stringify(false),
   'session.defaultPaneMode': JSON.stringify('terminal'),
+  // Desligado só fica desligado com a marca de escolha do usuário (sem ela o
+  // boot trata como legado e religa), e ligado só fica ligado sem o registro
+  // automático que a cópia do perfil real pode trazer.
   'gpu.disabled': JSON.stringify(GPU === 'off'),
+  'gpu.disabledByUser': JSON.stringify(GPU === 'off'),
+  'gpu.autoDisabled': null,
 })
 log(`repo ${repo.label} · ${SESSIONS} sessões · GPU ${GPU} · saída ${OUT_FILE}`)
 
@@ -463,7 +468,9 @@ try {
     A.pane.getAttribute('data-pane-mode', { timeout: remaining() })
 
   async function toggleA(to: 'Chat' | 'Terminal', remaining: () => number): Promise<void> {
-    await A.pane.getByLabel(`Mudar para ${to}`, { exact: true }).click({ timeout: remaining() })
+    // Seletor CSS, não getByLabel: com o DOM do chat de 60 MB (187 mil nós) o
+    // motor de acessibilidade do Playwright leva minutos para resolver o rótulo.
+    await A.pane.locator(`[aria-label="Mudar para ${to}"]`).click({ timeout: remaining() })
     const mode = to.toLowerCase()
     await waitFor(
       `pane de A em modo ${mode}`,

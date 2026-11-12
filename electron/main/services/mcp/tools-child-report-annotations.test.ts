@@ -38,13 +38,11 @@ describe('anotações das tools de reporte da filha', () => {
     expect(registered().get(name)?.annotations?.readOnlyHint).toBe(true)
   })
 
-  // Filha em plan lê o estado (handoff_result, agent_check…) e travava num menu de
+  // Filha em plan lê o estado (handoff_result, handoff_list…) e travava num menu de
   // permissão: toda tool que só lê precisa da anotação.
   it.each([
     'handoff_result',
     'handoff_list',
-    'agent_list',
-    'agent_check',
     'overview_get',
     'repo_connections_get',
     'service_list',
@@ -55,6 +53,11 @@ describe('anotações das tools de reporte da filha', () => {
     'feature_pulse_history',
   ])('%s (só lê) tem readOnlyHint', (name) => {
     expect(registered().get(name)?.annotations?.readOnlyHint).toBe(true)
+  })
+
+  it('o canal agente↔agente saiu: nenhuma tool agent_*', () => {
+    const names = [...registered().keys()].filter((name) => name.startsWith('agent_'))
+    expect(names).toEqual([])
   })
 
   it('toda tool *_list / *_get tem readOnlyHint', () => {
@@ -77,7 +80,6 @@ describe('anotações das tools de reporte da filha', () => {
       'design_export',
       'feature_loop_export',
       'service_call',
-      'agent_ask',
     ]) {
       expect(configs.get(name)?.annotations?.readOnlyHint).not.toBe(true)
     }

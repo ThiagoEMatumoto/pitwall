@@ -88,8 +88,6 @@ export interface MapInput {
   views?: ViewMap
   // Altura desenhada de cada cartão aberto (card-height-store). Sem ela, a estimativa.
   cardHeights?: Readonly<Record<string, number>>
-  // Asks agente↔agente pendentes (P7): fio temporário até a resposta/expiração.
-  asks?: readonly PendingAsk[]
   // Largura (px do fluxo) a partir da qual os cards nascem numa linha nova: a
   // área do mapa dividida pelo zoom em que o conjunto ainda se lê. Ausente =
   // uma linha só (todos lado a lado).
@@ -108,13 +106,6 @@ export interface MapInput {
   // A fila única (attention:list): o badge da raia é o recorte dela, o mesmo número
   // da linha do Ctrl+`. Ausente = o attentionReason dos nós (também da fila).
   attention?: AttentionItem[]
-}
-
-export interface PendingAsk {
-  id: string
-  from: string
-  to: string
-  text: string
 }
 
 // Aberto antes da 1ª medição: o cartão típico (saída de 4 linhas + prompt). A
@@ -305,7 +296,7 @@ export interface NoteData {
   [key: string]: unknown
 }
 
-export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'note' | 'ask'
+export type MapEdgeKind = 'handoff' | 'baton' | 'repoDep' | 'note'
 
 export interface MapEdgeData {
   kind: MapEdgeKind
@@ -1167,20 +1158,6 @@ function graphEdges(
   return out.filter((e) => has(e.source) && has(e.target))
 }
 
-const ASK_LABEL_MAX = 80
-
-function askEdges(asks: readonly PendingAsk[], has: (id: string) => boolean): MapEdge[] {
-  return asks
-    .map((a) =>
-      edge(`e:a:${a.id}`, sessionNodeId(a.from), sessionNodeId(a.to), {
-        kind: 'ask',
-        live: true,
-        label: a.text.length > ASK_LABEL_MAX ? `${a.text.slice(0, ASK_LABEL_MAX - 1)}…` : a.text,
-      }),
-    )
-    .filter((e) => has(e.source) && has(e.target))
-}
-
 export interface FlowResult {
   nodes: MapNode[]
   edges: MapEdge[]
@@ -1299,11 +1276,9 @@ export function graphToFlow(input: MapInput): FlowResult {
           kind: 'note',
         }),
       ),
-    ...askEdges(input.asks ?? [], (id) => ids.has(id)),
   ]
   // repoDep só aparece no foco com o mapa cheio.
-  // O fio de ask é temporário e não conta: senão cada pergunta piscaria o mapa.
-  const busy = raw.filter((e) => e.data!.kind !== 'ask').length > EDGE_BUSY_THRESHOLD
+  const busy = raw.length > EDGE_BUSY_THRESHOLD
   const edges = raw.map((e) => {
     const kind = e.data!.kind
     const aggregate = busy && kind === 'repoDep'

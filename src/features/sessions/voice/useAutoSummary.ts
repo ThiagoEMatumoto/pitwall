@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { voiceApi } from '@/lib/ipc'
+import { useStableCallback } from '@/lib/use-stable-callback'
 
 // Toggle do resumo automático DESTA sessão (fim de turno → resumo no chip).
 // A fonte da verdade é o Set no main (voice-summary.ts) — ele sobrevive a
@@ -26,13 +27,14 @@ export function useAutoSummary(ccSessionId: string | null) {
     }
   }, [ccSessionId])
 
-  function toggle() {
+  const toggle = useStableCallback(() => {
     if (!ccSessionId) return
     if (enabled === null) return
     const next = !enabled
     setEnabled(next)
     void voiceApi.autoSummarySet(ccSessionId, next)
-  }
+  })
 
-  return { enabled, toggle }
+  // Mesmo objeto enquanto o estado não muda (ver useVoiceRecorder).
+  return useMemo(() => ({ enabled, toggle }), [enabled, toggle])
 }

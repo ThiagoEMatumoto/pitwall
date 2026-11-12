@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { GlobalActivityBatch } from '../../shared/types/ipc'
 
 // appStore lê window.api no module-eval: o mock precisa existir antes do import.
 type ExitHandler = (e: { sessionId: string; exitCode: number }) => void
 let exitHandler: ExitHandler | null = null
 type RenamedHandler = (e: { sessionId: string; title: string | null }) => void
 let renamedHandler: RenamedHandler | null = null
+type ActivityHandler = (batch: GlobalActivityBatch) => void
+let activityHandler: ActivityHandler | null = null
 const live = vi.fn()
 Object.assign(window, {
   api: new Proxy(
@@ -28,6 +31,13 @@ Object.assign(window, {
                   renamedHandler = h
                   return () => {
                     renamedHandler = null
+                  }
+                }
+              if (ns === 'sessions' && prop === 'onGlobalActivity')
+                return (h: ActivityHandler) => {
+                  activityHandler = h
+                  return () => {
+                    activityHandler = null
                   }
                 }
               if (typeof prop === 'string' && prop.startsWith('on')) return () => () => {}
@@ -87,5 +97,42 @@ describe('startLiveWatch', () => {
 
     useAppStore.getState().stopLiveWatch()
     expect(renamedHandler).toBeNull()
+  })
+
+  // O batch global chega a cada tick do watch, quase sempre sem novidade: trocar
+  // a referência de liveSessions aí re-renderizava todos os assinantes da lista.
+  it('batch global idêntico não notifica nenhum assinante do store', async () => {
+    live.mockResolvedValueOnce([session('a'), session('b')])
+    await useAppStore.getState().startLiveWatch()
+    // Mesmas chaves que o emitGlobalBatch do main empurra (session-activity.ts).
+    const batch: GlobalActivityBatch = [
+      {
+        ccSessionId: 'cc-a',
+        status: 'working',
+        lastActivityAt: 1_000,
+        lastText: 'respondendo',
+        tokens: { output: 12, context: 100 },
+        attentionReason: undefined,
+      },
+      { ccSessionId: 'cc-b', status: 'idle', lastActivityAt: 2_000 },
+    ]
+    const notified = vi.fn()
+    const off = useAppStore.subscribe(notified)
+
+    activityHandler?.(structuredClone(batch))
+    expect(notified).toHaveBeenCalledTimes(1)
+    const settled = useAppStore.getState().liveSessions
+    expect(settled.map((s) => s.status)).toEqual(['working', 'idle'])
+
+    activityHandler?.(structuredClone(batch))
+    expect(notified).toHaveBeenCalledTimes(1)
+    expect(useAppStore.getState().liveSessions).toBe(settled)
+
+    activityHandler?.(structuredClone(batch.map((b) => ({ ...b, status: 'waiting' as const }))))
+    expect(notified).toHaveBeenCalledTimes(2)
+
+    off()
+    useAppStore.getState().stopLiveWatch()
+    expect(activityHandler).toBeNull()
   })
 })

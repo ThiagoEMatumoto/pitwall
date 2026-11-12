@@ -1,5 +1,4 @@
 import type { ChatMessage, ChatQuestion } from '../../../shared/types/chat'
-import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 
 // Subconjunto relevante de uma linha do transcript JSONL do Claude Code. Mantemos
 // um shape LOCAL (sem importar os internos do metrics-service/session-activity)
@@ -20,7 +19,7 @@ interface RawContentItem {
   is_error?: boolean
 }
 
-interface RawLine {
+export interface RawLine {
   type?: string
   // Encadeamento das linhas: o "Restore conversation" do /rewind não reescreve o arquivo;
   // a próxima mensagem nasce do pai da mensagem restaurada (sonda e2e-rewind-restore).
@@ -330,18 +329,7 @@ export function classifyUserString(obj: RawLine, text: string): ChatMessage {
   if (text.trimStart().startsWith('<system-reminder>')) {
     return { kind: 'meta', text, label: metaLabel(text) }
   }
-  if (isAgentAskEnvelope(text)) return agentAskMessage(text)
   return { kind: 'user', text }
-}
-
-function agentAskMessage(text: string): ChatMessage {
-  const from = /^\s*<pitwall-ask from="([^"]*)"/.exec(text)?.[1] ?? 'outro agente'
-  const body = text
-    .split('\n\n')
-    .slice(1)
-    .join('\n\n')
-    .replace(/<\/pitwall-ask>\s*$/, '')
-  return { kind: 'system', label: `Pergunta de ${from}`, detail: body.trim(), level: 'info' }
 }
 
 // Normaliza o content de um tool_result para string: a CLI grava ou uma string
@@ -406,10 +394,7 @@ export function rewoundUuids(lines: RawLine[]): Set<string> {
   return dropped
 }
 
-export function parseChatMessages(
-  jsonl: string,
-  subagents?: Map<string, SubagentInfo>,
-): ChatMessage[] {
+export function parseTranscriptLines(jsonl: string): RawLine[] {
   const parsed: RawLine[] = []
   for (const raw of jsonl.split('\n')) {
     const line = raw.trim()
@@ -420,8 +405,41 @@ export function parseChatMessages(
       // malformada / escrita parcial — pula a linha, nunca o arquivo.
     }
   }
-  const rewound = rewoundUuids(parsed)
+  return parsed
+}
+
+export interface ChatParser {
+  // rewind:true = o lote traz um segundo prompt com o mesmo pai (Restore conversation), o
+  // que tira do chat mensagens já emitidas. Nada do lote é consumido: quem chama relê o
+  // arquivo inteiro num parser novo, com `dropped` semeado por rewoundUuids.
+  feed(lines: RawLine[]): { rewind: boolean }
+  readonly messages: readonly ChatMessage[]
+  // Menor índice de `messages` criado ou trocado desde a última chamada; messages.length
+  // quando nada mudou. Abaixo dele os objetos são os mesmos de antes.
+  takeDirty(): number
+  // O meta do subagente nasce depois do tool_use que o dispara. Com `id` já acrescentado ao
+  // mapa `subagents`, troca no lugar o tool_use ainda sem resultado pelo card de subagente.
+  // false = o resultado já saiu como tool_result genérico: só relendo o arquivo inteiro.
+  promoteSubagent(id: string): boolean
+}
+
+// Núcleo do parse, alimentado em pedaços: o estado que ligava uma linha às anteriores
+// (ids de tool_use, merge de texto adjacente, modelo, interrupção) sobrevive entre feeds,
+// então um append custa só as linhas novas. parseChatMessages roda neste mesmo núcleo.
+export function createChatParser(
+  opts: { subagents?: Map<string, SubagentInfo>; dropped?: ReadonlySet<string> } = {},
+): ChatParser {
+  const { subagents } = opts
+  const dropped = new Set(opts.dropped)
+  // Pais que já têm um prompt vivo: um segundo prompt no mesmo pai é a assinatura do rewind.
+  const promptParents = new Set<string>()
   const out: ChatMessage[] = []
+  let dirty = 0
+  // Troca no lugar. push não passa por aqui: o índice novo nunca fica abaixo de `dirty`.
+  const put = (idx: number, msg: ChatMessage): void => {
+    out[idx] = msg
+    if (idx < dirty) dirty = idx
+  }
   // Ids de tool_use interativos já vistos, pra classificar o tool_result seguinte.
   const askIds = new Set<string>()
   const planIds = new Set<string>()
@@ -438,7 +456,7 @@ export function parseChatMessages(
   let lastModel: string | null = null
   // Rastreio da INTERRUPÇÃO (Ctrl+C). A linha que traz "[Request interrupted…]"
   // carrega `interruptedMessageId` = o message.id do turno de assistant cortado;
-  // guardamos os ÍNDICES em `out` por message.id pra marcar, no fim do parse, o
+  // guardamos os ÍNDICES em `out` por message.id pra marcar, no fim de cada feed, o
   // que ficou pela metade. Índices (não referências) porque o merge de texto
   // adjacente substitui o objeto na mesma posição.
   const assistantIdxByMsgId = new Map<string, number[]>()
@@ -447,6 +465,16 @@ export function parseChatMessages(
   const interruptedMsgIds = new Set<string>()
   // O 2.1.317 pode regravar o mesmo tool_use (mesmo id) em outra linha: um card só.
   const seenToolUseIds = new Set<string>()
+  // Índice em `out` dos tool_use genéricos ainda sem tool_result, para promoteSubagent.
+  const pendingToolUseIdx = new Map<string, number>()
+  const subagentCard = (id: string, sub: SubagentInfo): ChatMessage => ({
+    kind: 'subagent',
+    id,
+    name: sub.name,
+    description: sub.description,
+    turnCount: sub.turnCount,
+    turns: sub.turns,
+  })
   const trackIdx = <T,>(map: Map<string, T[]>, key: string, value: T): void => {
     const list = map.get(key)
     if (list) list.push(value)
@@ -459,7 +487,7 @@ export function parseChatMessages(
   const pushAssistantText = (text: string, msgId: string | null): void => {
     const last = out[out.length - 1]
     if (msgId !== null && msgId === lastAssistantMergeId && last?.kind === 'assistant') {
-      out[out.length - 1] = { kind: 'assistant', text: last.text + '\n\n' + text }
+      put(out.length - 1, { kind: 'assistant', text: last.text + '\n\n' + text })
     } else {
       out.push({ kind: 'assistant', text })
       if (msgId !== null) trackIdx(assistantIdxByMsgId, msgId, out.length - 1)
@@ -472,9 +500,8 @@ export function parseChatMessages(
     if (msg.kind === 'command_output' && !msg.text) return
     push(msg)
   }
-  for (const obj of parsed) {
-    if (obj.isSidechain === true) continue
-    if (obj.uuid && rewound.has(obj.uuid)) continue
+  const consume = (obj: RawLine): void => {
+    if (obj.isSidechain === true) return
     if (typeof obj.interruptedMessageId === 'string' && obj.interruptedMessageId)
       interruptedMsgIds.add(obj.interruptedMessageId)
     if (obj.type === 'system') {
@@ -486,20 +513,20 @@ export function parseChatMessages(
         if (cmd) push({ kind: 'command', ...cmd })
         const stdout = parseStdoutTag(content)
         if (stdout) push({ kind: 'command_output', text: stdout })
-        continue
+        return
       }
       const sys = parseSystemLine(obj)
       if (sys) push({ kind: 'system', ...sys })
-      continue
+      return
     }
-    if (obj.type !== 'user' && obj.type !== 'assistant') continue
+    if (obj.type !== 'user' && obj.type !== 'assistant') return
 
     const content = obj.message?.content
 
     if (obj.type === 'user') {
       if (typeof content === 'string') {
         if (content.trim()) pushUserText(obj, content)
-        continue
+        return
       }
       if (Array.isArray(content)) {
         for (const item of content) {
@@ -532,7 +559,10 @@ export function parseChatMessages(
                 ...(isInterruptedResult(obj.toolUseResult) ? { interrupted: true } : {}),
               })
             }
-            if (forId) resolvedToolIds.add(forId)
+            if (forId) {
+              resolvedToolIds.add(forId)
+              pendingToolUseIdx.delete(forId)
+            }
           } else if (item?.type === 'text' && typeof item.text === 'string') {
             // Mesma classificação fail-safe: text blocks junto de tool_results
             // costumam ser system-reminders/contexto de hook, não o humano.
@@ -540,7 +570,7 @@ export function parseChatMessages(
           }
         }
       }
-      continue
+      return
     }
 
     // assistant
@@ -575,14 +605,7 @@ export function parseChatMessages(
           const sub = id ? subagents?.get(id) : undefined
           if (sub) {
             if (id) subIds.add(id)
-            push({
-              kind: 'subagent',
-              id,
-              name: sub.name,
-              description: sub.description,
-              turnCount: sub.turnCount,
-              turns: sub.turns,
-            })
+            push(subagentCard(id, sub))
           } else if (item.name === 'AskUserQuestion') {
             if (id) askIds.add(id)
             push({ kind: 'ask_user_question', id, questions: parseQuestions(item.input) })
@@ -591,6 +614,7 @@ export function parseChatMessages(
             push({ kind: 'exit_plan_mode', id, ...parsePlan(item.input) })
           } else {
             push({ kind: 'tool_use', id, name: item.name, input: item.input })
+            if (id) pendingToolUseIdx.set(id, out.length - 1)
             if (msgId !== null && id) trackIdx(toolUseIdxByMsgId, msgId, { idx: out.length - 1, id })
           }
         }
@@ -599,20 +623,87 @@ export function parseChatMessages(
       pushAssistantText(content, msgId)
     }
   }
-  // Passo final da interrupção: só aqui sabemos quais tool_use ficaram órfãos (o
+  // Interrupção: só depois das linhas seguintes sabemos quais tool_use ficaram órfãos (o
   // tool_result vem depois no arquivo) e quais turnos foram cortados. Marcar o
   // texto do assistant importa tanto quanto o tool_use — no dado real a maioria
   // dos Ctrl+C corta o assistant no meio da resposta, não uma ferramenta.
-  for (const msgId of interruptedMsgIds) {
-    for (const idx of assistantIdxByMsgId.get(msgId) ?? []) {
-      const msg = out[idx]
-      if (msg?.kind === 'assistant') out[idx] = { ...msg, interrupted: true }
-    }
-    for (const { idx, id } of toolUseIdxByMsgId.get(msgId) ?? []) {
-      if (resolvedToolIds.has(id)) continue
-      const msg = out[idx]
-      if (msg?.kind === 'tool_use') out[idx] = { ...msg, interrupted: true }
+  // Recalculada a cada feed e idempotente: o tool_result de um tool_use já marcado pode
+  // chegar num feed seguinte (a marca sai), e o merge de texto adjacente recria o objeto
+  // sem a marca. Só troca o que mudou, para não sujar índices antigos à toa.
+  const markInterrupted = (): void => {
+    for (const msgId of interruptedMsgIds) {
+      for (const idx of assistantIdxByMsgId.get(msgId) ?? []) {
+        const msg = out[idx]
+        if (msg?.kind === 'assistant' && !msg.interrupted) put(idx, { ...msg, interrupted: true })
+      }
+      for (const { idx, id } of toolUseIdxByMsgId.get(msgId) ?? []) {
+        const msg = out[idx]
+        if (msg?.kind !== 'tool_use') continue
+        const orphan = !resolvedToolIds.has(id)
+        if (orphan && !msg.interrupted) {
+          put(idx, { ...msg, interrupted: true })
+        } else if (!orphan && msg.interrupted) {
+          const { interrupted: _interrupted, ...resolved } = msg
+          put(idx, resolved)
+        }
+      }
     }
   }
-  return out
+  const feed = (lines: RawLine[]): { rewind: boolean } => {
+    // Primeiro só olha o lote: um rewind no meio dele não pode deixar metade aplicada.
+    const newPromptParents = new Set<string>()
+    const live: RawLine[] = []
+    for (const l of lines) {
+      // Filho vem depois do pai no arquivo: quem descende de um ramo abandonado sai junto.
+      // Anotar já não aplica nada: a linha sai do chat com ou sem rewind no resto do lote.
+      if (l.uuid && (dropped.has(l.uuid) || (l.parentUuid && dropped.has(l.parentUuid)))) {
+        dropped.add(l.uuid)
+        continue
+      }
+      if (l.uuid && l.parentUuid && isUserPrompt(l)) {
+        if (promptParents.has(l.parentUuid) || newPromptParents.has(l.parentUuid)) {
+          return { rewind: true }
+        }
+        newPromptParents.add(l.parentUuid)
+      }
+      live.push(l)
+    }
+    for (const id of newPromptParents) promptParents.add(id)
+    for (const l of live) consume(l)
+    markInterrupted()
+    return { rewind: false }
+  }
+  return {
+    feed,
+    get messages() {
+      return out
+    },
+    takeDirty() {
+      const lowest = dirty
+      dirty = out.length
+      return lowest
+    },
+    promoteSubagent(id) {
+      const sub = subagents?.get(id)
+      // Nada emitido para trocar: o tool_use ainda não chegou, ou já nasceu como subagente.
+      if (!sub || !seenToolUseIds.has(id) || subIds.has(id)) return true
+      const idx = pendingToolUseIdx.get(id)
+      if (idx === undefined) return false
+      put(idx, subagentCard(id, sub))
+      subIds.add(id)
+      pendingToolUseIdx.delete(id)
+      return true
+    },
+  }
+}
+
+export function parseChatMessages(
+  jsonl: string,
+  subagents?: Map<string, SubagentInfo>,
+): ChatMessage[] {
+  const lines = parseTranscriptLines(jsonl)
+  // Com os descartados já semeados o feed nunca sinaliza rewind: sobra um prompt por pai.
+  const parser = createChatParser({ subagents, dropped: rewoundUuids(lines) })
+  parser.feed(lines)
+  return [...parser.messages]
 }

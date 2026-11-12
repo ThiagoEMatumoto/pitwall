@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { appApi, gpuApi } from '@/lib/ipc'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
+import {
+  gpuAutoOff,
+  gpuDisableChecked,
+  gpuRestartPending,
+  withGpuDisabled,
+} from '../../../shared/gpu-status'
 import type { GpuStatus } from '../../../shared/types/ipc'
 
 // Seção "Terminal" das Configurações (extraída do GeneralTab, que passou de 400
@@ -24,7 +30,7 @@ export function TerminalSection({ open }: { open: boolean }) {
 
   function updateGpuDisabled(v: boolean) {
     if (!gpu) return
-    setGpu({ ...gpu, prefDisabled: v })
+    setGpu(withGpuDisabled(gpu, v))
     void gpuApi.setDisabled(v)
   }
 
@@ -34,8 +40,7 @@ export function TerminalSection({ open }: { open: boolean }) {
     void gpuApi.setOzone(v)
   }
 
-  const restartPending =
-    gpu !== null && (gpu.prefDisabled !== gpu.hwAccelDisabled || gpu.prefOzone !== gpu.ozoneWayland)
+  const restartPending = gpu !== null && gpuRestartPending(gpu)
 
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]/40 p-3">
@@ -84,12 +89,14 @@ export function TerminalSection({ open }: { open: boolean }) {
         <div className="min-w-0">
           <div className="text-sm text-[var(--color-text)]">Desativar aceleração de GPU</div>
           <div className="text-xs text-[var(--color-text-dim)]">
-            Use se a janela ficar preta ao abrir o app. Requer reiniciar.
+            {gpu !== null && gpuAutoOff(gpu)
+              ? 'Desligada automaticamente depois de falhas do driver de vídeo. Desmarque para religar. Requer reiniciar.'
+              : 'Use se a janela ficar preta ao abrir o app. Requer reiniciar.'}
           </div>
         </div>
         <input
           type="checkbox"
-          checked={gpu?.prefDisabled ?? false}
+          checked={gpu !== null && gpuDisableChecked(gpu)}
           disabled={gpu === null}
           onChange={(e) => updateGpuDisabled(e.target.checked)}
           className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"

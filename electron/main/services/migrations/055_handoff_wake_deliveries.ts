@@ -7,7 +7,7 @@ export const name = '055_handoff_wake_deliveries'
 // mãe. Eventos coalescidos no mesmo envelope dividem o wake_id (= id do item da
 // PromptQueue; uuid próprio quando nem chegou a enfileirar). outcome é o contador
 // consumível — feature_health/overview leem daqui o que não chegou. Machine-local
-// e FORA do sync: fala de sessions.id desta máquina, como agent_messages (052).
+// e FORA do sync: fala de sessions.id desta máquina.
 // Sem FK para handoffs: o ledger sobrevive à limpeza de handoffs.
 export function up(db: Database.Database): void {
   db.exec(`

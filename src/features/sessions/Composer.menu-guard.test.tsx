@@ -43,7 +43,6 @@ vi.mock('@/lib/ipc', () => {
       'motherPinsApi',
       'attentionApi',
       'roomApi',
-      'agentBusApi',
       'canvasApi',
       'sendToApi',
       'architectureApi',

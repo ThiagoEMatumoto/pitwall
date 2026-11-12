@@ -12,9 +12,28 @@ import { join } from 'node:path'
 
 export const PROJECTS_ROOT = join(homedir(), '.claude', 'projects')
 
+// Só acertos entram aqui. Um miss não é lembrado: os gates de resume/adopt
+// precisam enxergar o transcript que acabou de nascer na chamada seguinte.
+const knownPaths = new Map<string, string>()
+
+export function findTranscriptPath(ccSessionId: string): string | null {
+  const known = knownPaths.get(ccSessionId)
+  if (known !== undefined) {
+    if (existsSync(known)) return known
+    knownPaths.delete(ccSessionId)
+  }
+  const found = scanForTranscript(ccSessionId)
+  if (found !== null) knownPaths.set(ccSessionId, found)
+  return found
+}
+
+export function _resetTranscriptPathMemoForTests(): void {
+  knownPaths.clear()
+}
+
 // O JSONL nasce em ~/.claude/projects/<cwd-encoded>/<ccSessionId>.jsonl. Em vez de
 // reproduzir o encoding do cwd, varremos os subdirs procurando o arquivo pelo id.
-export function findTranscriptPath(ccSessionId: string): string | null {
+function scanForTranscript(ccSessionId: string): string | null {
   if (!existsSync(PROJECTS_ROOT)) return null
   const target = `${ccSessionId}.jsonl`
   let dirs: string[]

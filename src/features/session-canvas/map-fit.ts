@@ -65,7 +65,7 @@ export interface Insets {
 }
 
 // Insets: o que flutua por cima do mapa — a barra do topo (escopo/ações), os
-// controles de zoom (esquerda), o minimapa (base) e o painel Equipe/Conversas
+// controles de zoom (esquerda), o minimapa (base) e o painel Equipe
 // aberto sobre o mapa (direita). Sem descontá-los, o
 // cabeçalho da lane nascia embaixo da barra e os cartões da base embaixo do
 // minimapa.
@@ -147,7 +147,7 @@ export function wrapRowWidth(containerW: number): number | undefined {
 
 export interface FitPlan {
   viewport: Viewport
-  // O dock (Equipe/Conversas sobre o mapa) tem de recolher: a prioridade não
+  // O dock (Equipe sobre o mapa) tem de recolher: a prioridade não
   // cabe no piso com ele aberto e cabe melhor sem ele.
   collapseDock: boolean
   // A prioridade cabe inteira no zoom escolhido.

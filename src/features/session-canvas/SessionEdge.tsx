@@ -8,7 +8,6 @@ import {
   type EdgeProps,
   type InternalNode,
 } from '@xyflow/react'
-import { MessageCircle } from 'lucide-react'
 import { sessionGraphApi } from '@/lib/ipc'
 import type { HandoffEvent } from '../../../shared/types/session-graph'
 import type { MapEdge, MapEdgeData, MapEdgeKind, MapNode } from './graph-to-flow'
@@ -39,13 +38,6 @@ const BASE: Record<MapEdgeKind, CSSProperties> = {
     opacity: 0.9,
   },
   note: { stroke: 'var(--color-text-dim)', strokeWidth: 1, strokeDasharray: '2 4', opacity: 0.8 },
-  // Pergunta agente↔agente esperando resposta: pontilhado que corre, some na resposta.
-  ask: {
-    stroke: 'var(--color-info)',
-    strokeWidth: 1.75,
-    strokeDasharray: '1 5',
-    strokeLinecap: 'round',
-  },
 }
 
 function edgeStyle(data: MapEdgeData): CSSProperties {
@@ -61,7 +53,6 @@ function edgeStyle(data: MapEdgeData): CSSProperties {
 }
 
 function edgeClass(data: MapEdgeData): string {
-  if (data.kind === 'ask') return 'session-edge-live'
   if (data.kind !== 'handoff') return ''
   if (data.alert) return 'session-edge-alert'
   return data.live ? 'session-edge-live' : ''
@@ -199,8 +190,7 @@ function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
   // Rótulos ficam acima dos cartões (z do EdgeLabelRenderer em session-map.css).
   // Mapa cheio (busy, > EDGE_BUSY_THRESHOLD fios): só no fio em foco
   // (hover/seleção), senão viram sopa; a pergunta da filha aparece sempre.
-  const isAsk = data.kind === 'ask'
-  const showLabel = !!data.label && !dimmed && !isAsk && (!data.busy || lit || data.alert)
+  const showLabel = !!data.label && !dimmed && (!data.busy || lit || data.alert)
   const base = edgeStyle(data)
   const style: CSSProperties = lit
     ? { ...base, opacity: 1, strokeWidth: Number(base.strokeWidth ?? 1) + 0.75 }
@@ -226,29 +216,10 @@ function SessionEdgeImpl(props: EdgeProps<MapEdge>) {
         path={path}
         style={style}
         className={edgeClass(data)}
-        markerEnd={
-          data.kind === 'baton' || data.kind === 'handoff' || isAsk ? props.markerEnd : undefined
-        }
+        markerEnd={data.kind === 'baton' || data.kind === 'handoff' ? props.markerEnd : undefined}
         interactionWidth={16}
       />
       {train}
-      {isAsk && !dimmed && (
-        <EdgeLabelRenderer>
-          <div
-            title={`Pergunta entre agentes, esperando resposta: ${data.label ?? ''}`}
-            data-testid="edge-ask-balloon"
-            className="nodrag nopan pointer-events-auto absolute flex h-5 w-5 items-center justify-center rounded-full border"
-            style={{
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              borderColor: 'var(--color-info)',
-              background: 'var(--color-surface)',
-              color: 'var(--color-info)',
-            }}
-          >
-            <MessageCircle size={11} aria-hidden />
-          </div>
-        </EdgeLabelRenderer>
-      )}
       {showLabel && (
         <EdgeLabelRenderer>
           <div

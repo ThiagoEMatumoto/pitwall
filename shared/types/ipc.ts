@@ -49,7 +49,6 @@ import type {
 } from '../hibernate'
 import type { HandoffEvent, SessionGraph } from './session-graph'
 import type { AnswerHandoffRequestInput, HandoffRequest } from './handoff-request'
-import type { AgentBusSnapshot } from './agent-bus'
 import type { SessionLinkPulse } from './session-link-pulse'
 import type {
   CanvasNote,
@@ -1280,7 +1279,7 @@ export interface RestorePlan {
 }
 
 // Pane dormindo no renderer, espelhada no main para a entrega cross-process
-// (agent-bus, wake da mãe, send-prompt) conseguir acordá-la.
+// (wake da mãe, send-prompt) conseguir acordá-la.
 export interface DormantPaneInfo {
   ccSessionId: string
   paneId: string
@@ -1389,6 +1388,11 @@ export interface PtyDataEvent {
   sessionId: string
   data: string
 }
+
+/** Resposta de sessions:get-backlog, entregue por evento na fila dos pty:data. */
+export type BacklogReply =
+  | { requestId: string; backlog: string }
+  | { requestId: string; error: string }
 
 export interface PtyExitEvent {
   sessionId: string
@@ -1957,6 +1961,18 @@ export interface GpuStatus {
   ozoneWayland: boolean
   prefDisabled: boolean
   prefOzone: boolean
+  autoDisabled: GpuAutoDisabled | null
+}
+
+// Desligamento que o app fez sozinho depois de crashes do processo de GPU. Fica
+// separado de gpu.disabled (escolha manual) porque só este é re-tentado.
+export interface GpuAutoDisabled {
+  at: number
+  // details.reason do child-process-gone, ou 'legacy' para o gpu.disabled=true
+  // que o automático antigo gravou sem deixar rastro.
+  reason: string
+  version: string
+  strikes: number
 }
 
 // Status read-only do MCP server embutido (Settings → Geral). addCommand é o
@@ -2444,15 +2460,15 @@ export interface Api {
     scopeStats(): Promise<ScopeStats>
   }
   chat: {
-    /** Read inicial: resolve cc_session_id → transcript → lista ordenada de mensagens. */
+    /** Lista ordenada de mensagens: o estado do watch (com o rev dele) ou, sem watch, o arquivo lido inteiro. */
     getTranscript(sessionId: string): Promise<ChatTranscript>
     /** Lê um arquivo de plano (validado dentro de ~/.claude/plans/); null se inválido/ilegível. */
     readPlanFile(path: string): Promise<string | null>
     /** Conta um caminho do chat que mandou o usuário ao terminal (ver shared/chat/fallback). */
     noteFallback(kind: ChatFallbackKind, reason: ChatFallbackReason): Promise<void>
-    /** Começa a observar o JSONL da sessão; emite chat:transcript-update em cada mudança. */
+    /** Inscreve esta janela no JSONL da sessão; cada mudança chega como delta em chat:transcript-update. */
     watch(sessionId: string): void
-    /** Para o watcher (também é chamado automaticamente no pty:exit). */
+    /** Tira esta janela; o watcher para quando a última sai (e no pty:exit, para todas). */
     unwatch(sessionId: string): void
     onTranscriptUpdate(handler: (event: ChatTranscriptUpdate) => void): () => void
     /** Cauda do tile: observa só os últimos bytes do JSONL; emite chat:transcript-tail. */
@@ -2763,11 +2779,6 @@ export interface Api {
     motherPreflight(featureId: string, repoId?: string | null): Promise<MotherPreflight>
     // Rejeita com "MCP_NOT_READY: …" quando o MCP não subiu, sem criar sessão.
     startMother(input: StartMotherInput): Promise<StartMotherResult>
-  }
-  // Agente perguntando a agente (P7): asks recentes + contadores das guardas.
-  agentBus: {
-    list(): Promise<AgentBusSnapshot>
-    onUpdated(handler: (snapshot: AgentBusSnapshot) => void): () => void
   }
   // Mapa de sessões (P8): posições, notas, grupos, propósito e "onde parei".
   canvas: {

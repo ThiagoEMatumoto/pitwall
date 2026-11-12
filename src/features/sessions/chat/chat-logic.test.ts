@@ -1,10 +1,16 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/ipc'
 import { parseTuiMenu } from '../../../../shared/tui/tui-menu-parser'
-import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 import {
+  createChatParser,
+  parseChatMessages,
+  parseTranscriptLines,
+} from '../../../../electron/main/services/chat-transcript'
+import { buildLongMotherLines } from '../../../../electron/main/services/__fixtures__/long-mother-jsonl'
+import {
+  applyTranscriptUpdate,
   countUserMessages,
   isAtBottom,
   liveMenuCoversPending,
@@ -348,5 +354,84 @@ describe('liveMenuCoversPending — JSONL e tela reais do claude 2.1.317', () =>
     expect(liveMenuCoversPending(q, 'plan')).toBe(false)
     expect(liveMenuCoversPending({ kind: 'plan', id: 'p' }, 'permission')).toBe(false)
     expect(liveMenuCoversPending(null, 'plan')).toBe(false)
+  })
+})
+
+// Os deltas saem do parser real, montados como o chat-transcript-service os monta:
+// base = takeDirty(), messages = o que o parser tem dali em diante, rev de um em um.
+describe('applyTranscriptUpdate', () => {
+  const FIXTURES = join(__dirname, '../../../../shared/tui/__fixtures__')
+  // Sem o de rewind: ali o serviço troca de parser e manda base 0 (coberto no teste dele).
+  const REAL = readdirSync(FIXTURES)
+    .filter((f) => f.endsWith('.jsonl') && !f.includes('hook-spike') && !f.includes('rewind'))
+    .map((f): [string, string[]] => [
+      f,
+      readFileSync(join(FIXTURES, f), 'utf8')
+        .split('\n')
+        .filter((l) => l.trim()),
+    ])
+  const CASES: [string, string[]][] = [...REAL, ['mãe longa (20 turnos)', buildLongMotherLines(20)]]
+
+  it.each(CASES)('%s: delta a delta chega ao parse completo, mantendo os objetos antigos', (_n, raw) => {
+    const parser = createChatParser()
+    let prev: ChatMessage[] = []
+    let rev = 0
+    let kept = 0
+    raw.forEach((line, k) => {
+      expect(parser.feed(parseTranscriptLines(line)).rewind).toBe(false)
+      const base = parser.takeDirty()
+      const update = { base, rev: rev + 1, messages: parser.messages.slice(base) }
+      Object.freeze(prev)
+
+      const merged = applyTranscriptUpdate(prev, rev, update)
+
+      if (merged.kind !== 'applied') throw new Error(`linha ${k}: ${merged.kind}`)
+      expect(merged.messages, `linha ${k}`).toEqual(parseChatMessages(raw.slice(0, k + 1).join('\n')))
+      if (base > 0) {
+        for (let i = 0; i < base; i++) expect(merged.messages[i], `linha ${k}`).toBe(prev[i])
+        kept += base
+      }
+      prev = merged.messages
+      rev = update.rev
+    })
+    expect(prev.length).toBeGreaterThan(0)
+    if (raw.length > 10) expect(kept).toBeGreaterThan(0)
+  })
+
+  const a = user('a')
+  const b = user('b')
+  const c = user('c')
+
+  it('rev já aplicado ou mais velho é ignorado', () => {
+    expect(applyTranscriptUpdate([a, b], 5, { base: 2, rev: 5, messages: [c] })).toEqual({ kind: 'stale' })
+    expect(applyTranscriptUpdate([a, b], 5, { base: 0, rev: 4, messages: [c] })).toEqual({ kind: 'stale' })
+  })
+
+  it('base 0 substitui a lista, mesmo com rev pulado', () => {
+    expect(applyTranscriptUpdate([a, b], 5, { base: 0, rev: 9, messages: [c] })).toEqual({
+      kind: 'applied',
+      messages: [c],
+    })
+  })
+
+  it('rev seguinte emenda em base; o que estava depois dele sai', () => {
+    const merged = applyTranscriptUpdate([a, b], 5, { base: 1, rev: 6, messages: [c] })
+    expect(merged).toEqual({ kind: 'applied', messages: [a, c] })
+  })
+
+  it('rev pulado num delta parcial é lacuna', () => {
+    expect(applyTranscriptUpdate([a, b], 5, { base: 2, rev: 7, messages: [c] })).toEqual({ kind: 'gap' })
+  })
+
+  it('delta que começa depois do fim da lista é lacuna', () => {
+    expect(applyTranscriptUpdate([a], 5, { base: 2, rev: 6, messages: [c] })).toEqual({ kind: 'gap' })
+  })
+
+  it('sem nada aplicado (rev -1), só um update inteiro entra', () => {
+    expect(applyTranscriptUpdate([], -1, { base: 0, rev: 1, messages: [a] })).toEqual({
+      kind: 'applied',
+      messages: [a],
+    })
+    expect(applyTranscriptUpdate([], -1, { base: 3, rev: 4, messages: [a] })).toEqual({ kind: 'gap' })
   })
 })

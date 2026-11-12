@@ -21,7 +21,6 @@ import { mentionPlacement, type MentionPlacement } from './mention-placement'
 import { counterLines } from './queue-counters'
 import { defaultWhen, sendRefusalReason, type SendTarget } from './target-search'
 import { usePromptQueue, useQuickComposerStore, useSendTargets } from './quick-composer-store'
-import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import type {
   PromptQueueSnapshot,
   QueuedPrompt,
@@ -139,11 +138,7 @@ function QueueChips({ queue, targets }: { queue: PromptQueueSnapshot; targets: S
             title={q.text}
           >
             <span className="text-[var(--color-text-dim)]">@{t?.alias ?? 'sessão'}</span>
-            {isAgentAskEnvelope(q.text) ? (
-              <span className="text-[var(--color-info)]">pergunta de outro agente</span>
-            ) : (
-              <span className="max-w-48 truncate text-[var(--color-text)]">{q.text}</span>
-            )}
+            <span className="max-w-48 truncate text-[var(--color-text)]">{q.text}</span>
             {q.heldReason && (
               <span className="text-[var(--color-warning)]">{HELD_LABEL[q.heldReason]}</span>
             )}

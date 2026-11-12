@@ -81,7 +81,7 @@ export function watchMaybeUndelivered(deps: MaybeUndeliveredDeps): () => void {
     for (const item of snapshot.items) {
       if (pending.has(item.id) && !seen.has(item.id)) void open(item)
     }
-    // Resolvido por outro caminho (agent bus, outra janela): o toast perdeu o sentido.
+    // Resolvido por outro caminho (outra janela): o toast perdeu o sentido.
     for (const [id, toastId] of toastOf) {
       if (pending.has(id)) continue
       deps.dismiss(toastId)

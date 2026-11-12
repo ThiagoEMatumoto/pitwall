@@ -20,7 +20,6 @@ import {
   setIdleHibernator,
 } from '../services/hibernate/idle-hibernator'
 import {
-  agentMessageSince,
   claudeCandidates,
   hasAwakePane,
   sessionFileFor,
@@ -105,7 +104,6 @@ export function createIdleHibernator(): IdleHibernator {
     activeHandoffCcSessionIds,
     isHandoffChild: isHandoffChildCc,
     queueHas: (id) => promptQueue.snapshot().items.some((item) => item.sessionId === id),
-    agentMessageSince,
     transcriptPath: findTranscriptPath,
     scanTranscript: (path) => scanner.scan(path),
     procTree: (pid) => inspectProcTree(pid),

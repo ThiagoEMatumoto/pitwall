@@ -1,6 +1,8 @@
+import { memo } from 'react'
 import { OctagonX, Undo2 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { MarkdownViewer } from '@/components/ui/MarkdownViewer'
+import { perfCount } from '@/lib/perf-probe'
 
 interface Props {
   role: 'user' | 'assistant'
@@ -15,7 +17,18 @@ interface Props {
   rewindDisabled?: string | null
 }
 
-export function MessageBubble({ role, text, pending, interrupted, onRewind, rewindDisabled }: Props) {
+// Memo raso, sem comparador: a bolha do agente só tem props primitivas. A do
+// usuário ainda renderiza pelo onRewind novo a cada render do chat, e precisa:
+// ele fecha sobre a distância até o fim, que muda a cada mensagem.
+export const MessageBubble = memo(function MessageBubble({
+  role,
+  text,
+  pending,
+  interrupted,
+  onRewind,
+  rewindDisabled,
+}: Props) {
+  perfCount('MessageBubble')
   if (role === 'user') {
     // Bolha do usuário: à direita, tinta da marca sólida e discreta, cauda
     // inferior-direita (radius 16 16 4 16).
@@ -66,4 +79,4 @@ export function MessageBubble({ role, text, pending, interrupted, onRewind, rewi
       )}
     </div>
   )
-}
+})

@@ -49,7 +49,6 @@ export function featuresDir(bundleDir: string): string {
 //   _migrations, metrics_session_cache, sessions, feature_session_records,
 //   workspace_state, layouts, app_prefs,
 //   canvas_positions, canvas_notes, session_groups  (mapa de sessões, migration 051).
-//   agent_messages  (asks agente↔agente entre sessões DESTA máquina, migration 052).
 //   handoff_wake_deliveries  (ledger do wake da mãe, sessions.id DESTA máquina, migration 055).
 //   attention_responses  (respostas a menus da TUI desta máquina, migration 056).
 //   handoff_requests, attention_dismissals  (pedidos de handoff e triagem da fila, migration 058).
@@ -58,8 +57,6 @@ export function featuresDir(bundleDir: string): string {
 // recusa bundle exportado por um app >= 050 — como em toda migration.
 // Idem a 051: o mapa descreve as sessões DESTA máquina (sessions.purpose,
 // group_id e last_summary* moram em `sessions`, também excluída).
-// Idem a 052: agent_messages referencia sessions.id locais e o Q&A cru não sai
-// da máquina (no feature ledger entram só decisões).
 // Idem a 053: sessions.feature_source (origem do vínculo) mora em `sessions`.
 // Idem a 055: handoff_wake_deliveries fala de sessions.id locais (machine-local).
 // Idem a 058: handoff_requests/attention_dismissals seguem handoffs, que não sincroniza.

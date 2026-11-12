@@ -1,8 +1,7 @@
 /** @vitest-environment node */
 // Gate H2 contra os produtores reais: ~/.claude/sessions/<pid>.json no shape que o
 // claude grava (lido pelo buildSessionsFileIndex de verdade), DB better-sqlite3 com
-// as migrations do app (open_panes como o workspace:save-panes grava, agent_messages
-// como o agent-bus grava).
+// as migrations do app (open_panes como o workspace:save-panes grava).
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const HOME = vi.hoisted(() => {
@@ -33,7 +32,6 @@ import * as handoffStore from '../handoff-store'
 import { IdleHibernator, type IdleHibernatorDeps } from './idle-hibernator'
 import { PANE_CHECK_TIMEOUT_MS, PaneConfirmer } from './pane-confirm'
 import {
-  agentMessageSince,
   claudeCandidates,
   hasAwakePane,
   sessionFileFor,
@@ -108,16 +106,6 @@ function savePanes(ccs: string[]): void {
     .run(NOW, JSON.stringify(panes))
 }
 
-function ask(from: string, to: string, createdAt: number, status = 'answered'): void {
-  getDb()
-    .prepare(
-      `INSERT INTO agent_messages
-         (id, from_session_id, to_session_id, to_repo_id, feature_id, depth, text, status, created_at, expires_at)
-       VALUES (?, ?, ?, NULL, NULL, 0, 'q', ?, ?, ?)`,
-    )
-    .run(`ask-${Math.random()}`, from, to, status, createdAt, createdAt + 60 * MIN)
-}
-
 // Repo alvo do handoff (target_repo_id tem FK em repos).
 function seedRepo(): void {
   const db = getDb()
@@ -151,7 +139,6 @@ function gate(over: Partial<IdleHibernatorDeps> = {}): IdleHibernator {
     activeHandoffCcSessionIds: () => [],
     isHandoffChild: handoffStore.isHandoffChildCc,
     queueHas: () => false,
-    agentMessageSince,
     transcriptPath: () => '/fake/transcript.jsonl',
     scanTranscript: async () => 'clear',
     procTree: () => ({ ok: true }),
@@ -171,7 +158,7 @@ beforeEach(() => {
   rmSync(SESSIONS_DIR, { recursive: true, force: true })
   const db = getDb()
   db.exec(
-    'DELETE FROM agent_messages; DELETE FROM handoffs; DELETE FROM sessions; DELETE FROM workspace_state;',
+    'DELETE FROM handoffs; DELETE FROM sessions; DELETE FROM workspace_state;',
   )
   seedSession(PTY, CC)
   savePanes([CC])
@@ -295,22 +282,7 @@ describe('gate da hibernação (fontes reais)', () => {
     expect(await evaluate(gate())).toEqual({ ok: false, reason: 'handoff-child' })
   })
 
-  it('e) agent_ask recente (de/para qualquer sessions.id da conversa) → agent-msg', async () => {
-    seedSession('pty-antiga', CC)
-    seedSession('pty-outra', 'outra')
-    ask('pty-outra', 'pty-antiga', NOW - 5 * MIN)
-    expect(await evaluate(gate())).toEqual({ ok: false, reason: 'agent-msg' })
-  })
-
-  it('e) agent_ask antigo e respondido não recusa; pendente antigo recusa', async () => {
-    seedSession('pty-outra', 'outra')
-    ask(PTY, 'pty-outra', NOW - 3 * WINDOW)
-    expect(await evaluate(gate())).toEqual({ ok: true, pid: process.pid })
-    ask('pty-outra', PTY, NOW - 3 * WINDOW, 'pending')
-    expect(await evaluate(gate())).toEqual({ ok: false, reason: 'agent-msg' })
-  })
-
-  it('f) transcript ausente/ilegível → no-transcript; agendou → scheduled; background aberto → background-task', async () => {
+  it('e) transcript ausente/ilegível → no-transcript; agendou → scheduled; background aberto → background-task', async () => {
     expect(await evaluate(gate({ transcriptPath: () => null }))).toEqual({
       ok: false,
       reason: 'no-transcript',
@@ -329,7 +301,7 @@ describe('gate da hibernação (fontes reais)', () => {
     })
   })
 
-  it('g) árvore com bloqueador → proc-tree (com o pid do arquivo do claude)', async () => {
+  it('f) árvore com bloqueador → proc-tree (com o pid do arquivo do claude)', async () => {
     const seen: number[] = []
     const h = gate({
       procTree: (pid) => {

@@ -32,7 +32,6 @@ import { promptQueue, registerSendPromptIpc } from './ipc/send-prompt'
 import { registerDormantPanesIpc } from './ipc/dormant-panes'
 import { registerHibernateIpc } from './ipc/hibernate'
 import { getIdleHibernator } from './services/hibernate/idle-hibernator'
-import { registerAgentBusIpc } from './ipc/agent-bus'
 import { registerRepoFilesIpc } from './ipc/repo-files'
 import { registerShellIpc } from './ipc/shell'
 import { registerDialogIpc } from './ipc/dialog'
@@ -40,7 +39,13 @@ import { registerGitIpc, cloneMissingWithToasts } from './ipc/git'
 import { backfillRepoRemotes } from './services/git-remote'
 import { listMissingRepos } from './services/repo-clone'
 import { getPref, setPref } from './services/prefs-store'
-import { setGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from './services/gpu-state'
+import {
+  createGpuCrashWatch,
+  resolveGpuBoot,
+  setGpuState,
+  OZONE_PREF_KEY,
+  OZONE_PREF_DEFAULT,
+} from './services/gpu-state'
 import { rescheduleAutoPull, runAutoPullNow, stopAutoPull } from './services/repo-pull-scheduler'
 import { driveSafeBlocks } from './services/drive-safe'
 import { instrumentIpcMain, isPerfEnabled, startPerfProbe } from './services/perf-probe'
@@ -127,14 +132,21 @@ app.on('second-instance', () => {
 // Precisa rodar antes do ready; o getPref abre o DB cedo — as migrações são puro
 // SQLite (sem dependência pós-ready), mas o try/catch cobre qualquer falha de
 // I/O caindo no default (GPU ligada).
-function safeGetBoolPref(key: string, fallback = false): boolean {
+function safeGetPref<T>(key: string, fallback: T): T {
   try {
     return getPref(key, fallback)
   } catch {
     return fallback
   }
 }
-const gpuOff = process.env.CM_DISABLE_GPU === '1' || safeGetBoolPref('gpu.disabled')
+// A regra do boot e da re-tentativa vive em services/gpu-state.ts.
+const gpuBoot = resolveGpuBoot({
+  prefs: { getPref, setPref },
+  envDisabled: process.env.CM_DISABLE_GPU === '1',
+  version: app.getVersion(),
+  now: Date.now(),
+})
+const gpuOff = gpuBoot.hwAccelDisabled
 if (gpuOff) app.disableHardwareAcceleration()
 // Wayland nativo por padrão no Linux. Sob XWayland o servidor X gera autorepeat
 // a partir do ESTADO da tecla: um teclado que perde o scancode de break (bug de
@@ -146,9 +158,9 @@ if (gpuOff) app.disableHardwareAcceleration()
 const ozoneWayland =
   process.platform === 'linux' &&
   process.env.CM_DISABLE_WAYLAND !== '1' &&
-  safeGetBoolPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT)
+  safeGetPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT)
 if (ozoneWayland) app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
-setGpuState({ hwAccelDisabled: gpuOff, ozoneWayland })
+setGpuState({ hwAccelDisabled: gpuOff, ozoneWayland, probation: gpuBoot.probation })
 // Scheme privilegiado precisa ser registrado antes do ready.
 registerDesignScheme()
 
@@ -236,7 +248,7 @@ function logGpuInfo(): void {
         )
         .join(', ')
       console.log(
-        `[gpu] devices=[${devices}] driver=${driverVendor ?? '?'} ${driverVersion ?? '?'} hwAccelDisabled=${gpuOff}`,
+        `[gpu] devices=[${devices}] driver=${driverVendor ?? '?'} ${driverVersion ?? '?'} hwAccelDisabled=${gpuOff} probation=${gpuBoot.probation}`,
       )
     })
     .catch((err) => console.warn('[gpu] getGPUInfo falhou:', String(err)))
@@ -346,7 +358,6 @@ app.whenReady().then(async () => {
   registerComposerDraftIpc()
   registerDormantPanesIpc()
   registerHibernateIpc()
-  registerAgentBusIpc()
   registerRepoFilesIpc()
   // O GC dos rascunhos NÃO roda aqui: o renderer o aciona depois de um restore
   // bem-sucedido (sessions:gc-drafts). As imagens dos rascunhos coletados saem no
@@ -449,32 +460,38 @@ app.whenReady().then(async () => {
     broadcast('gpu:resumed', { at: Date.now() })
   })
 
-  // Auto-fallback em crash do processo de GPU (driver instável, ex: NVIDIA/
-  // Wayland): avisa os renderers pra largarem o WebGL (seguem em DOM na mesma
-  // sessão). No 2º crash do processo, desliga a aceleração pro PRÓXIMO boot
-  // (a flag só vale antes do ready) e avisa o usuário via toast.
+  // Auto-fallback em crash do processo de GPU: a regra (o que conta, quando
+  // desliga, quando o teste passa) vive em createGpuCrashWatch.
   app.on('child-process-gone', (_e, details) => {
-    if (details.type !== 'GPU') return
-    if (!['crashed', 'oom', 'launch-failed', 'killed'].includes(details.reason)) return
-    gpuCrashCount += 1
-    console.warn(`[gpu] processo de GPU morreu (${details.reason}) — crash #${gpuCrashCount}`)
-    broadcast('gpu:crashed', { reason: details.reason, count: gpuCrashCount })
-    if (gpuCrashCount === 2) {
-      setPref('gpu.disabled', true)
-      emitToast(
-        'Aceleração de GPU desativada',
-        'Aceleração de GPU instável neste driver — desativada. Reinicie o app pra aplicar totalmente.',
-      )
-    }
+    if (details.type === 'GPU') gpuCrashWatch.processGone(details.reason)
   })
+  if (gpuBoot.probation) {
+    gpuProbationTimer = setTimeout(() => gpuCrashWatch.endProbation(), GPU_PROBATION_MS)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
 })
 
-// Crashes do processo de GPU nesta execução (ver child-process-gone no whenReady).
-let gpuCrashCount = 0
+// Boot de teste: a GPU foi religada depois de um desligamento automático. Passa
+// no teste quem roda 10 min, ou fecha o app, sem crash de driver.
+const GPU_PROBATION_MS = 10 * 60 * 1000
+let gpuProbationTimer: ReturnType<typeof setTimeout> | null = null
+
+const gpuCrashWatch = createGpuCrashWatch({
+  prefs: { getPref, setPref },
+  hwAccelDisabled: gpuOff,
+  probation: gpuBoot.probation,
+  version: app.getVersion(),
+  now: Date.now,
+  onAutoDisabled: () =>
+    emitToast(
+      'Aceleração de GPU desativada',
+      'Aceleração de GPU instável neste driver — desativada. Reinicie o app pra aplicar totalmente.',
+    ),
+  notifyCrashed: (payload) => broadcast('gpu:crashed', payload),
+})
 
 // Self-heal de handoffs órfãos a cada 5min (ver app.whenReady).
 const HANDOFF_RECONCILE_INTERVAL_MS = 5 * 60 * 1000
@@ -505,6 +522,11 @@ function runFinalShutdown(): void {
     clearTimeout(autoPullBootTimer)
     autoPullBootTimer = null
   }
+  if (gpuProbationTimer) {
+    clearTimeout(gpuProbationTimer)
+    gpuProbationTimer = null
+  }
+  gpuCrashWatch.endProbation()
   syncCoordinator.stop()
   featureMemory.close()
   // As PTYs morrem agora: o que estava na fila fica no banco para o próximo boot.

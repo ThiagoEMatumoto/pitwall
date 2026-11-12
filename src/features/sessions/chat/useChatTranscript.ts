@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { chatApi } from '@/lib/ipc'
+import { applyTranscriptUpdate } from './chat-logic'
 import { acquireChatWatch, noteChatWatchCcSessionId, releaseChatWatch } from './chat-watch-refs'
-import type { ChatMessage } from '../../../../shared/types/ipc'
+import type { ChatMessage, ChatTranscriptUpdate } from '../../../../shared/types/ipc'
 
 // Assina o transcript de uma sessão enquanto montado: read inicial + watch do
-// JSONL. O broadcast manda a LISTA completa reparseada, então só substituímos o
-// estado. Libera o watch no unmount (toggle pro terminal desmonta o ChatView);
-// o refcount em chat-watch-refs só faz unwatch quando o último consumidor sai.
+// JSONL. O main manda deltas numerados (rev): cada um emenda na lista a partir de
+// `base`, e os objetos abaixo dele seguem os mesmos. Libera o watch no unmount (toggle
+// pro terminal desmonta o ChatView); o refcount em chat-watch-refs só faz unwatch
+// quando o último consumidor sai.
 export function useChatTranscript(sessionId: string, ccSessionId: string | null = null) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
-  // O read inicial sinaliza inexistência via path null; o broadcast via flag. Isso
+  // O read inicial sinaliza inexistência via path null; o update via flag. Isso
   // distingue "aguardando transcript" (arquivo não nasceu) de "vazio real".
   const [transcriptExists, setTranscriptExists] = useState(false)
   // Último arquivo de plano escrito pela sessão (~/.claude/plans/*.md) — usado
@@ -23,39 +25,70 @@ export function useChatTranscript(sessionId: string, ccSessionId: string | null 
 
   useEffect(() => {
     let cancelled = false
-    // Race fix: se um update do watch chegar antes (ou durante) o read inicial, ele
-    // é a verdade mais nova — não deixamos o resultado do getTranscript (mais velho)
-    // sobrescrevê-lo. Também garante que a 1ª atualização (ex: pergunta recém-escrita)
-    // não se perca na janela entre disparar o read e assinar o watch.
-    let gotUpdate = false
+    // Lista e rev já aplicados. O rev decide quem é mais novo entre o read (invoke) e os
+    // updates (send), seja qual for a ordem em que chegam. -1 = nada aplicado ainda.
+    let current: ChatMessage[] = []
+    let rev = -1
+    // Update que não emenda na lista (um delta se perdeu, ou o read inicial ainda não
+    // voltou) espera o read em voo e é reaplicado em cima dele.
+    let reading = false
+    let held: ChatTranscriptUpdate[] = []
     setLoading(true)
+
+    const show = (
+      next: ChatMessage[],
+      nextRev: number,
+      exists: boolean,
+      planFilePath: string | null,
+    ) => {
+      current = next
+      rev = nextRev
+      setMessages(next)
+      setTranscriptExists(exists)
+      setLastPlanFilePath(planFilePath)
+      setLoading(false)
+    }
+
+    const onUpdate = (u: ChatTranscriptUpdate) => {
+      const merged = applyTranscriptUpdate(current, rev, u)
+      if (merged.kind === 'stale') return
+      if (merged.kind === 'applied') {
+        show(merged.messages, u.rev, u.transcriptExists, u.lastPlanFilePath)
+        return
+      }
+      held = [...held, u]
+      if (!reading) readTranscript()
+    }
+
+    const readTranscript = () => {
+      reading = true
+      void chatApi
+        .getTranscript(sessionId)
+        .then((t) => {
+          if (cancelled) return
+          // Mesmo rev = mesma lista: trocar recriaria todos os objetos à toa.
+          if (t.rev > rev) show(t.messages, t.rev, t.path !== null, t.lastPlanFilePath)
+          const waiting = held
+          held = []
+          reading = false
+          waiting.forEach(onUpdate)
+        })
+        .catch(() => {
+          // Sessão sem transcript no disco ainda (recém-spawnada) ou leitura falhou:
+          // segue como está; o próximo update que não emendar pede o transcript de novo.
+          if (cancelled) return
+          held = []
+          reading = false
+          setLoading(false)
+        })
+    }
 
     // Assina ANTES do read pra não perder updates emitidos nessa janela.
     acquireChatWatch(sessionId, ccSessionIdRef.current)
     const off = chatApi.onTranscriptUpdate((u) => {
-      if (u.sessionId !== sessionId) return
-      gotUpdate = true
-      setMessages(u.messages)
-      setTranscriptExists(u.transcriptExists)
-      setLastPlanFilePath(u.lastPlanFilePath)
-      setLoading(false)
+      if (u.sessionId === sessionId) onUpdate(u)
     })
-
-    void chatApi
-      .getTranscript(sessionId)
-      .then((t) => {
-        if (cancelled || gotUpdate) return
-        setMessages(t.messages)
-        setTranscriptExists(t.path !== null)
-        setLastPlanFilePath(t.lastPlanFilePath)
-        setLoading(false)
-      })
-      .catch(() => {
-        // Sessão sem transcript no disco ainda (recém-spawnada) ou leitura falhou:
-        // segue como vazio; o watch traz as mensagens quando o arquivo aparecer.
-        if (cancelled) return
-        setLoading(false)
-      })
+    readTranscript()
 
     return () => {
       cancelled = true

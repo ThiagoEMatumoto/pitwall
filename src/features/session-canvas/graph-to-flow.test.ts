@@ -416,17 +416,10 @@ describe('graphToFlow — escopo: só as sessões em uso', () => {
     expect(few.edges.some((e) => e.data?.busy)).toBe(false)
   })
 
-  // Fio de ask é temporário: um pendente não pode virar o mapa inteiro pra "busy"
-  // (rótulos somem, repoDep esconde) e desvirar quando respondem.
-  it('8 fios + 1 ask pendente: o ask não conta pro mapa cheio', () => {
+  it('exatamente 8 fios: ainda não é mapa cheio', () => {
     const nine = Array.from({ length: 9 }, (_, i) => node(`s${i}`))
-    const r = graphToFlow(
-      input({
-        graph: graph(nine, chain(nine.map((n) => n.sessionId))),
-        asks: [{ id: 'q', from: 's0', to: 's1', text: 'oi' }],
-      }),
-    )
-    expect(r.edges).toHaveLength(9)
+    const r = graphToFlow(input({ graph: graph(nine, chain(nine.map((n) => n.sessionId))) }))
+    expect(r.edges).toHaveLength(8)
     expect(r.edges.some((e) => e.data?.busy)).toBe(false)
   })
 })
@@ -558,27 +551,6 @@ describe('graphToFlow — camadas', () => {
     expect(z).toBeLessThan(card.zIndex!)
     // Acima do fundo da lane de repo (z 1, filho da lane de projeto).
     expect(z).toBeGreaterThan(1)
-  })
-})
-
-describe('graphToFlow — ask agente↔agente pendente', () => {
-  const g = graph([node('a', { projectId: 'p1' }), node('b', { projectId: 'p2', repoId: 'r-b' })])
-
-  it('vira fio temporário de quem perguntou pra quem responde, com a pergunta no rótulo', () => {
-    const flow = graphToFlow(
-      input({ graph: g, asks: [{ id: 'q1', from: 'a', to: 'b', text: 'como está o contrato?' }] }),
-    )
-    const ask = flow.edges.find((e) => e.id === 'e:a:q1')
-    expect(ask).toMatchObject({ source: 's:a', target: 's:b' })
-    expect(ask?.data).toMatchObject({ kind: 'ask', label: 'como está o contrato?' })
-  })
-
-  it('some sem asks pendentes e não desenha ponta fora do mapa', () => {
-    expect(graphToFlow(input({ graph: g })).edges.some((e) => e.data?.kind === 'ask')).toBe(false)
-    const flow = graphToFlow(
-      input({ graph: g, asks: [{ id: 'q2', from: 'a', to: 'fora', text: 'oi' }] }),
-    )
-    expect(flow.edges.some((e) => e.data?.kind === 'ask')).toBe(false)
   })
 })
 

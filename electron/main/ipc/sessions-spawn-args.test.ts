@@ -528,7 +528,6 @@ describe('estado "hibernada" no app.db sobrevive a restart', () => {
       activeHandoffCcSessionIds: unused,
       isHandoffChild: unused,
       queueHas: unused,
-      agentMessageSince: unused,
       transcriptPath: unused,
       scanTranscript: unused,
       procTree: unused,

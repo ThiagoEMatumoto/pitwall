@@ -29,7 +29,6 @@ import {
   type LiveStatus,
   type ScreenScan,
 } from '../../../shared/tui/attention-reason'
-import { isAgentAskEnvelope } from '../../../shared/agent-ask'
 import { setMotherNoteSender } from '../services/handoff/notify-mother-alias'
 import { recordChildDirectMessage } from '../services/handoff/direct-message-trail'
 import { answerCitedRequests } from '../services/handoff/cited-answer'
@@ -121,8 +120,6 @@ function noticeLostMessage(snapshot: PromptQueueSnapshot): void {
   const ev = snapshot.lastEvent
   if (!ev || ev.id === lastNotifiedEventId) return
   if (ev.kind !== 'expired' && ev.kind !== 'session-gone') return
-  // Pergunta de agente: quem perguntou fica sabendo pelo agent_check, não o usuário.
-  if (isAgentAskEnvelope(ev.text)) return
   lastNotifiedEventId = ev.id
   // Aviso de handoff à mãe: o texto é o envelope inteiro, que não diz nada em 80
   // chars. Continua notificando — é o alarme fora do app quando o wake se perde.

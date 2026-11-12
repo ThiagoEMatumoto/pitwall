@@ -62,7 +62,8 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
-import { perfCount } from '../services/perf-probe'
+import { perfCount, perfOut } from '../services/perf-probe'
+import { createPtyDataCoalescer } from '../services/pty-data-coalescer'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
@@ -117,6 +118,7 @@ import type {
   AgentProviderId,
   AttentionRespondInput,
   SessionRenamedEvent,
+  BacklogReply,
 } from '../../../shared/types/ipc'
 
 interface SessionRow {
@@ -1019,7 +1021,7 @@ function recordResponded(e: AttentionRespondedEvent): void {
 
 // Mesma conversa, sessions.id novo: os handoffs que as linhas antigas (sem
 // PTY) lideravam passam a responder a esta, venha o resume de clique,
-// agent-bus, send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
+// send-prompt, wake da mãe ou boot. Sem isso o handoff_report da
 // filha chegaria a um id morto.
 export function transferLeadershipToResumed(
   priorSessionIds: string[],
@@ -1220,6 +1222,10 @@ export function resumeConversation(
   return { session, reattached: false }
 }
 
+// Um webContents.send por chunk de cada PTY disputava o renderer com o input;
+// agora é no máximo um por sessão a cada janela.
+const ptyData = createPtyDataCoalescer((e) => broadcast('pty:data', e))
+
 export function registerSessionIpc(): void {
   if (!listenersAttached) {
     tuiMenuWatch.attach(ptyManager, screenWatchTarget)
@@ -1235,7 +1241,13 @@ export function registerSessionIpc(): void {
     })
     ptyManager.on('data', (e) => {
       perfCount('pty:data.chars', e.data.length)
-      broadcast('pty:data', e)
+      ptyData.push(e.sessionId, e.data)
+    })
+    // Registrado antes do listener que anuncia o pty:exit (e o sessions:hibernated):
+    // a cauda ainda na janela não pode chegar depois da saída.
+    ptyManager.on('exit', (e) => {
+      ptyData.flush(e.sessionId)
+      ptyData.drop(e.sessionId)
     })
     scopeOomWatch.attach(ptyManager)
     const oomAutoResume = new OomAutoResume({
@@ -1756,8 +1768,23 @@ export function registerSessionIpc(): void {
   }))
   ipcMain.handle('sessions:scope-stats', () => scopeOomWatch.stats())
 
-  ipcMain.handle('sessions:get-backlog', (_e, sessionId: string) => {
-    return ptyManager.getBacklog(sessionId)
+  // O replay do Terminal assume que todo byte do backlog já foi entregue antes
+  // da resposta. Por isso ela não é o retorno de um invoke (que ultrapassava os
+  // pty:data já enfileirados quando o renderer estava atrasado, e o replay os
+  // escrevia de novo): sai por sender.send, na mesma fila ordenada deles.
+  ipcMain.on('sessions:get-backlog', (e, requestId: unknown, sessionId: unknown) => {
+    if (e.sender.isDestroyed()) return
+    if (typeof requestId !== 'string' || typeof sessionId !== 'string') return
+    let reply: BacklogReply
+    try {
+      // O que ficasse na janela do coalescer chegaria depois e duplicaria na tela.
+      ptyData.flush(sessionId)
+      reply = { requestId, backlog: ptyManager.getBacklog(sessionId) }
+    } catch (err) {
+      reply = { requestId, error: err instanceof Error ? err.message : String(err) }
+    }
+    perfOut('sessions:backlog')
+    e.sender.send('sessions:backlog', reply)
   })
 
   ipcMain.handle('sessions:write', (_e, sessionId: string, data: string) => {
@@ -1859,14 +1886,15 @@ export function registerSessionIpc(): void {
   }
 
   ipcMain.handle('chat:get-transcript', async (_e, sessionId: string): Promise<ChatTranscript> => {
-    const read = await chatTranscriptService.read(resolveCcSessionId(sessionId))
+    const snap = await chatTranscriptService.snapshot(sessionId, resolveCcSessionId(sessionId))
     return {
       sessionId,
-      ccSessionId: read.ccSessionId,
-      path: read.path,
-      mtimeMs: read.mtimeMs,
-      messages: read.messages,
-      lastPlanFilePath: read.lastPlanFilePath,
+      ccSessionId: snap.ccSessionId,
+      path: snap.path,
+      mtimeMs: snap.mtimeMs,
+      messages: snap.messages,
+      lastPlanFilePath: snap.lastPlanFilePath,
+      rev: snap.rev,
     }
   })
 
@@ -1892,12 +1920,12 @@ export function registerSessionIpc(): void {
     }
   })
 
-  ipcMain.handle('chat:watch', (_e, sessionId: string) => {
-    chatTranscriptService.watch(sessionId, resolveCcSessionId(sessionId))
+  ipcMain.handle('chat:watch', (e, sessionId: string) => {
+    chatTranscriptService.watch(sessionId, resolveCcSessionId(sessionId), e.sender)
   })
 
-  ipcMain.handle('chat:unwatch', (_e, sessionId: string) => {
-    chatTranscriptService.unwatch(sessionId)
+  ipcMain.handle('chat:unwatch', (e, sessionId: string) => {
+    chatTranscriptService.unwatch(sessionId, e.sender.id)
   })
 
   ipcMain.handle('chat:watch-tail', (_e, sessionId: string) => {

@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
     handle: (channel: string, fn: (event: unknown, ...args: never[]) => unknown) => {
       seam.handlers.set(channel, fn)
     },
+    on: () => {},
   },
 }))
 vi.mock('../services/db', () => ({

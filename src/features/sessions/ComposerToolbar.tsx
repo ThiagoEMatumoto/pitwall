@@ -18,8 +18,12 @@ import { SummarizeButton } from './voice/SummarizeButton'
 import type { SummarizeState } from './voice/useSummarizeNow'
 import type { RecorderState } from './voice/voice-recorder-state'
 
+// O que a barra lê da atividade. Quem monta a barra recorta só isto, e ela não
+// é refeita a cada token ou texto novo do transcript.
+export type ToolbarActivity = Pick<SessionActivity, 'status' | 'model'>
+
 interface Props {
-  activity: SessionActivity | null
+  activity: ToolbarActivity | null
   /** Sessão ociosa — único estado em que é seguro injetar /model | /effort. */
   canSwitch: boolean
   /** Troca enfileirada enquanto a sessão está ocupada. */

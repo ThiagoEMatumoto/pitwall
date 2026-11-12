@@ -32,7 +32,6 @@ export const sessionGraphApi = api.sessionGraph
 export const motherPinsApi = api.motherPins
 export const attentionApi = api.attention
 export const roomApi = api.room
-export const agentBusApi = api.agentBus
 export const canvasApi = api.canvas
 export const sendToApi = api.sendTo
 export const architectureApi = api.repoDeps

@@ -105,7 +105,6 @@ import type {
 } from '../../shared/types/mother-pins'
 import type { AnswerHandoffRequestInput } from '../../shared/types/handoff-request'
 import type { AttentionItem } from '../../shared/types/attention'
-import type { AgentBusSnapshot } from '../../shared/types/agent-bus'
 import type { SessionLinkPulse } from '../../shared/types/session-link-pulse'
 import type { CanvasUpdatedEvent } from '../../shared/types/canvas'
 import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
@@ -114,6 +113,7 @@ import type {
   ScreenTailUpdate,
   SendPromptInput,
 } from '../../shared/types/send-prompt'
+import { createBacklogRequests } from './backlog-request'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -132,6 +132,8 @@ function subscribe<T>(channel: string, handler: (event: T) => void): () => void 
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
 }
+
+const backlogRequests = createBacklogRequests(ipcRenderer)
 
 const api: Api = {
   projects: {
@@ -154,7 +156,7 @@ const api: Api = {
     currentIds: (sessionIds) => invoke('sessions:current-ids', sessionIds),
     listByRepo: (repoId) => invoke('sessions:list-by-repo', repoId),
     listByFeature: (featureId) => invoke('sessions:list-by-feature', featureId),
-    getBacklog: (sessionId) => invoke('sessions:get-backlog', sessionId),
+    getBacklog: (sessionId) => backlogRequests.get(sessionId),
     write: (sessionId, data) => invoke('sessions:write', sessionId, data),
     saveImage: (sessionId, bytes, mime) => invoke('sessions:save-image', sessionId, bytes, mime),
     getDraft: (key) => invoke('sessions:get-draft', key),
@@ -471,10 +473,6 @@ const api: Api = {
     onChanged: (handler) => subscribe<{ featureId: string | null }>('room:changed', handler),
     motherPreflight: (featureId, repoId) => invoke('room:mother-preflight', featureId, repoId),
     startMother: (input) => invoke('room:start-mother', input),
-  },
-  agentBus: {
-    list: () => invoke('agent-bus:list'),
-    onUpdated: (handler) => subscribe<AgentBusSnapshot>('agent-bus:updated', handler),
   },
   canvas: {
     get: (input) => invoke('canvas:get', input),
