@@ -312,6 +312,10 @@ export interface Handoff {
   // Passagem de bastão: sessions.id da filha que a atual substituiu (a antecessora
   // segue viva até o humano encerrar). NULL = nunca houve bastão neste handoff.
   predecessorSessionId: string | null
+  // O usuário encerrou a filha de propósito (X da aba / Encerrar). NÃO desvincula
+  // nem é desfecho: a filha segue ligada à mãe e retomável; retomar limpa a marca.
+  // NULL = nunca encerrada pelo usuário (ou já retomada).
+  endedByUserAt: number | null
   // DERIVADO (não é coluna): este handoff interrompido pode ser retomado via
   // `claude --resume`? Só é true com status 'interrupted', filha atrelada e o
   // transcript dela ainda no disco — o mesmo gate do handoffs:is-resumable, agora

@@ -45,6 +45,8 @@ interface HandoffRow {
   predecessor_session_id: string | null
   // Diretório de trabalho da filha (migration 057): chave da posse.
   work_dir: string | null
+  // Encerrada pelo usuário (migration 070).
+  ended_by_user_at: number | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
 }
@@ -138,6 +140,7 @@ function toEntity(row: HandoffRow): Handoff {
     outcome: (row.outcome as HandoffOutcome | null) ?? null,
     dismissedAt: row.dismissed_at,
     predecessorSessionId: row.predecessor_session_id,
+    endedByUserAt: row.ended_by_user_at,
     resumable: isResumable(row),
   }
 }
@@ -447,7 +450,7 @@ export function markRunning(id: string, childSessionId: string): Handoff {
   try {
     getDb()
       .prepare(
-        'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, updated_at = ? WHERE id = ?',
+        'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, ended_by_user_at = NULL, updated_at = ? WHERE id = ?',
       )
       .run('running', childSessionId, Date.now(), id)
   } catch (err) {
@@ -786,6 +789,34 @@ export function undismiss(id: string): Handoff {
   return fresh(id)
 }
 
+// O usuário encerrou a filha de propósito (ou desfez isso na janela do Desfazer).
+// Só a marca muda: status e child_session_id ficam como estão — encerrar não
+// desvincula, e quem transiciona o handoff é o exit da PTY. Quem lê: o exit
+// handler (motivo gravado e aviso à mãe) e o boot (não ressuscita a encerrada).
+// Quem limpa além do Desfazer: markRunning e relink com a filha viva — uma filha
+// viva não está encerrada. Idempotente: o instante original e a trilha não se
+// repetem a cada clique.
+export function setEndedByUser(id: string, ended: boolean): Handoff {
+  const status = currentStatus(id)
+  if (status === null) throw new Error(`handoff not found: ${id}`)
+  const now = Date.now()
+  const res = ended
+    ? getDb()
+        .prepare(
+          'UPDATE handoffs SET ended_by_user_at = ?, updated_at = ? WHERE id = ? AND ended_by_user_at IS NULL',
+        )
+        .run(now, now, id)
+    : getDb()
+        .prepare(
+          'UPDATE handoffs SET ended_by_user_at = NULL, updated_at = ? WHERE id = ? AND ended_by_user_at IS NOT NULL',
+        )
+        .run(now, id)
+  if (res.changes > 0) {
+    logEvent(id, ended ? 'ended_by_user' : 'ended_by_user_undone', status, status)
+  }
+  return fresh(id)
+}
+
 // Soltar do painel: o humano CORTA o vínculo mãe→filha, de propósito, devolvendo
 // a sessão à condição de sessão normal. É onde difere de `dismiss`, que só tira o
 // card de vista MANTENDO handoffs.child_session_id apontando pra sessão: aqui o
@@ -878,8 +909,10 @@ export function relink(
     db.transaction(() => {
       db.prepare(
         `UPDATE handoffs SET status = ?, child_session_id = ?, mother_session_id = ?,
-                dismissed_at = NULL, updated_at = ? WHERE id = ?`,
-      ).run(to, opts.childSessionId, mother, now, id)
+                dismissed_at = NULL,
+                ended_by_user_at = CASE WHEN ? THEN NULL ELSE ended_by_user_at END,
+                updated_at = ? WHERE id = ?`,
+      ).run(to, opts.childSessionId, mother, opts.childAlive ? 1 : 0, now, id)
       if (mother !== row.mother_session_id) {
         const detail = JSON.stringify({ from: row.mother_session_id, to: mother })
         logEvent(id, 'mother_changed', to, row.status, detail)

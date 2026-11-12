@@ -1352,6 +1352,66 @@ describe('handoff-store', () => {
       expect(store.listRelinkableByMother('m-old').map((h) => h.id)).toEqual([c1.id])
     })
   })
+
+  describe('encerrada pelo usuário (ended_by_user_at)', () => {
+    function runningChild(): string {
+      const h = newHandoff()
+      store.markRunning(h.id, 's-kid')
+      return h.id
+    }
+
+    it('nasce sem a marca; marcar e desmarcar não mexem no status nem no vínculo', () => {
+      const id = runningChild()
+      expect(store.get(id)?.endedByUserAt).toBeNull()
+
+      const marked = store.setEndedByUser(id, true)
+      expect(marked.endedByUserAt).toEqual(expect.any(Number))
+      expect(marked.status).toBe('running')
+      expect(marked.childSessionId).toBe('s-kid')
+
+      const cleared = store.setEndedByUser(id, false)
+      expect(cleared.endedByUserAt).toBeNull()
+      expect(cleared.status).toBe('running')
+      expect(cleared.childSessionId).toBe('s-kid')
+    })
+
+    it('marcar duas vezes preserva o instante e grava um evento só', () => {
+      const id = runningChild()
+      const first = store.setEndedByUser(id, true).endedByUserAt
+      expect(store.setEndedByUser(id, true).endedByUserAt).toBe(first)
+      expect(store.listEvents(id).filter((e) => e.event === 'ended_by_user')).toHaveLength(1)
+    })
+
+    it('a marca sobrevive à PTY morrer: interrupted, ainda vinculada', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      const out = store.failIfRunning(id, 'encerrada')
+      expect(out?.status).toBe('interrupted')
+      expect(out?.endedByUserAt).not.toBeNull()
+      expect(out?.childSessionId).toBe('s-kid')
+    })
+
+    it('markRunning (filha viva de novo) limpa a marca', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      store.failIfRunning(id, 'encerrada')
+      expect(store.markRunning(id, 's-kid-2').endedByUserAt).toBeNull()
+    })
+
+    it('relink com a filha viva limpa a marca; com a filha morta, mantém', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      store.failIfRunning(id, 'encerrada')
+      const dead = store.relink(id, { childSessionId: 's-kid', childAlive: false })
+      expect(dead.endedByUserAt).not.toBeNull()
+      const alive = store.relink(id, { childSessionId: 's-kid', childAlive: true })
+      expect(alive.endedByUserAt).toBeNull()
+    })
+
+    it('handoff inexistente lança', () => {
+      expect(() => store.setEndedByUser('nope', true)).toThrow(/handoff not found/)
+    })
+  })
 })
 
 // Posse dentro do create (transação + índice UNIQUE parcial da 057). newHandoff é

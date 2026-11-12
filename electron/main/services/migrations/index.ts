@@ -68,6 +68,7 @@ import * as diagramFolders from './066_diagram_folders'
 import * as motherPins from './067_mother_pins'
 import * as sessionsAutoTitle from './068_sessions_auto_title'
 import * as dropAgentMessages from './069_drop_agent_messages'
+import * as handoffEndedByUser from './070_handoff_ended_by_user'
 
 interface Migration {
   version: number
@@ -151,6 +152,7 @@ export const migrations: Migration[] = [
   motherPins,
   sessionsAutoTitle,
   dropAgentMessages,
+  handoffEndedByUser,
 ]
 
 export function runMigrations(db: Database.Database): void {
