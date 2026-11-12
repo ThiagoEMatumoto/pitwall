@@ -153,6 +153,8 @@ interface Props {
   // false = sem painel lateral de artefato (a gaveta "Sessão" dos editores já
   // está ao lado do artefato); os cards abrem direto no editor.
   artifactSide?: boolean
+  // Pane oculta: o transcript segue acumulando sem renderizar (useChatTranscript).
+  paused?: boolean
 }
 
 // O "Restore conversation" do /rewind não grava nada no JSONL: o ramo novo só aparece no
@@ -171,11 +173,11 @@ function restoresConversation(menu: TuiMenu, optionIndex: number): boolean {
 // A sonda viu o tool_use chegar ao JSONL até ~10s depois do diálogo (awaitUseMs).
 export const ANSWER_HOLD_MS = 10_000
 
-const ChatTranscriptView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, cliDraft = null, readCliInput, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
+const ChatTranscriptView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, cliDraft = null, readCliInput, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true, paused = false }, ref) {
   perfCount('ChatView')
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
-  const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
+  const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null, paused)
   const [echoes, setEchoes] = useState<Echo[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   // Só auto-scrollamos se o usuário já estava colado no fim (não roubamos a
