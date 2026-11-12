@@ -868,7 +868,13 @@ export function resumeHandoffChild(
 
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
-  const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
+  // A linha apontada pode não ter title (o resume comum de antes da v0.86 não o
+  // herdava): o alias vem então de outra linha da mesma conversa.
+  const name =
+    childRow?.title ||
+    latestManualTitleOfCc(ccSessionId) ||
+    readTranscriptTitle(transcript) ||
+    `handoff: ${repo.label}`
   const command = resolveAgentCommand()
   // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
   const internalSessionId = randomUUID()
@@ -983,6 +989,18 @@ function sessionIdsOfCc(ccSessionId: string): string[] {
     .prepare('SELECT id FROM sessions WHERE cc_session_id = ?')
     .all(ccSessionId) as Array<{ id: string }>
   return rows.map((row) => row.id)
+}
+
+// Título manual mais recente entre as linhas da conversa (o apelido da filha).
+function latestManualTitleOfCc(ccSessionId: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT title FROM sessions
+        WHERE cc_session_id = ? AND title_source = 'manual' AND title <> ''
+        ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(ccSessionId) as { title: string } | undefined
+  return row?.title ?? null
 }
 
 // Kickoff do resume pelo PAINEL (Crew Dock): retomar a tarefa e reportar via MCP.
