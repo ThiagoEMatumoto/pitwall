@@ -64,6 +64,18 @@ const LATE_RESULT = [
   },
 ].map((l) => JSON.stringify(l))
 
+// Linha gravada depois do rewind, mas pendurada no ramo que ele abandonou: cópia da última
+// resposta desse ramo, com uuid novo e a própria original como pai.
+const REWIND_RAW = fixtureLines(REWIND)
+const FORK_AT = REWIND_RAW.findIndex((l) => l.includes('Responda só: ok depois.'))
+const abandoned = parseTranscriptLines(REWIND_RAW.slice(0, FORK_AT).join('\n'))
+  .reverse()
+  .find((l) => l.type === 'assistant')
+const LATE_ON_ABANDONED_BRANCH = [
+  ...REWIND_RAW,
+  JSON.stringify({ ...abandoned, uuid: 'late-on-abandoned-branch', parentUuid: abandoned?.uuid }),
+]
+
 const MOTHER = buildLongMotherLines(50)
 // O turno 3 da mãe vira subagente: o tool_result dele dobra em subagent_result.
 const SUBAGENTS = new Map<string, SubagentInfo>([
@@ -82,6 +94,7 @@ const CASES: [string, string[], Map<string, SubagentInfo> | undefined][] = [
   ['mãe longa (50 turnos)', MOTHER, undefined],
   ['mãe longa com subagente', MOTHER, SUBAGENTS],
   ['interrupção com tool_result atrasado', LATE_RESULT, undefined],
+  ['rewind com linha tardia no ramo abandonado', LATE_ON_ABANDONED_BRANCH, undefined],
 ]
 
 // O que o serviço faz com o resultado do feed: rewind → parser novo, com os ramos
@@ -113,6 +126,12 @@ function firstDifference(before: readonly ChatMessage[], after: readonly ChatMes
 }
 
 describe('createChatParser — diferencial contra parseChatMessages', () => {
+  it('o caso com subagente exercita o card e o resultado dobrado', () => {
+    const kinds = parseChatMessages(MOTHER.join('\n'), SUBAGENTS).map((m) => m.kind)
+    expect(kinds).toContain('subagent')
+    expect(kinds).toContain('subagent_result')
+  })
+
   it('cobre os transcripts reais do repo', () => {
     expect(REAL.map(([name]) => name)).toEqual(
       expect.arrayContaining([
@@ -162,11 +181,14 @@ describe('createChatParser — diferencial contra parseChatMessages', () => {
 })
 
 describe('createChatParser — rewind', () => {
-  const raw = fixtureLines(REWIND)
+  const raw = REWIND_RAW
   const lines = parseTranscriptLines(raw.join('\n'))
-  const forkAt = raw.findIndex((l) => l.includes('Responda só: ok depois.'))
+  const forkAt = FORK_AT
+  // Último prompt do ramo que o rewind abandona: o lote que sinaliza começa nele.
+  const lastPrompt = raw.findIndex((l) => l.includes('Responda só: ok nove.'))
 
   it('sinaliza no segundo prompt com o mesmo pai, e só nele', () => {
+    expect(lines).toHaveLength(raw.length)
     expect(forkAt).toBeGreaterThan(0)
     const parser = createChatParser()
     lines.slice(0, forkAt).forEach((l, i) => {
@@ -176,18 +198,27 @@ describe('createChatParser — rewind', () => {
   })
 
   it('não consome nada do lote que sinalizou', () => {
+    expect(lines[lastPrompt]).toMatchObject({ type: 'user', message: { content: 'Responda só: ok nove.' } })
+    expect(lastPrompt).toBeLessThan(forkAt)
     const parser = createChatParser()
-    parser.feed(lines.slice(0, forkAt - 2))
+    parser.feed(lines.slice(0, lastPrompt))
     parser.takeDirty()
     const before = [...parser.messages]
 
-    expect(parser.feed(lines.slice(forkAt - 2)).rewind).toBe(true)
+    expect(parser.feed(lines.slice(lastPrompt)).rewind).toBe(true)
 
     expect(parser.messages).toStrictEqual(before)
     expect(parser.takeDirty()).toBe(before.length)
-    // O estado segue íntegro: o mesmo lote sem a bifurcação entra normalmente.
-    expect(parser.feed(lines.slice(forkAt - 2, forkAt)).rewind).toBe(false)
+    // O estado segue íntegro: o mesmo lote sem a bifurcação entra normalmente, prompt incluso.
+    expect(parser.feed(lines.slice(lastPrompt, forkAt)).rewind).toBe(false)
     expect(parser.messages).toStrictEqual(parseChatMessages(raw.slice(0, forkAt).join('\n')))
+  })
+
+  it('linha tardia pendurada no ramo abandonado não entra no chat', () => {
+    expect(abandoned?.uuid).toBeTruthy()
+    expect(parseChatMessages(LATE_ON_ABANDONED_BRANCH.join('\n'))).toStrictEqual(
+      parseChatMessages(raw.join('\n')),
+    )
   })
 
   it('semeado com os descartados, não sinaliza e descarta o ramo abandonado', () => {
