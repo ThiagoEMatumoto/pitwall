@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-// H3 com a PromptQueue REAL: o /exit passa pela mesma guarda do agent-bus (tela
+// H3 com a PromptQueue REAL: o /exit passa pela guarda da fila on-idle (tela
 // relida pelo espelho headless real, telas capturadas do claude 2.1.286). Fakes só
 // na borda: status, escrita no PTY e o relógio. A fila liga isHibernating e
 // beforeWrite ao hibernador como o ipc/send-prompt.ts.
@@ -102,7 +102,6 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     activeHandoffCcSessionIds: unused,
     isHandoffChild: unused,
     queueHas: unused,
-    agentMessageSince: unused,
     transcriptPath: unused,
     scanTranscript: unused,
     procTree: unused,
@@ -338,12 +337,12 @@ describe('mensagem que chega com o /exit em voo', () => {
     // O arquivo de status ainda diz idle: sem isHibernating a fila entregaria.
     ['status ainda idle', 'idle' as const, 'on-idle' as const],
     ['"enviar agora"', 'idle' as const, 'now' as const],
-  ])('agent_ask entre a entrega e a saída (%s) → reentregue na acordada', async (_n, st, when) => {
+  ])('mensagem entre a entrega e a saída (%s) → reentregue na acordada', async (_n, st, when) => {
     const { queue, hibernator, writes, snapshots, state, exit, wakeRequests, wakeFailures } =
       setup()
     expect(await hibernator.hibernate(CANDIDATE, PANE)).toBe(true)
     state.status = st
-    const sent = await queue.send({ sessionId: PTY, text: 'pergunta do agente', when })
+    const sent = await queue.send({ sessionId: PTY, text: 'pergunta da mãe', when })
     expect(sent).toMatchObject({ ok: true, delivered: false })
     expect(writes).toEqual([`${PTY}:/exit`])
     const queuedId = sent.ok && !sent.delivered ? sent.queued.id : ''
@@ -353,7 +352,7 @@ describe('mensagem que chega com o /exit em voo', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(wakeRequests).toEqual([CC])
     expect(wakeFailures).toEqual([])
-    expect(writes).toEqual([`${PTY}:/exit`, `${WOKEN}:pergunta do agente`])
+    expect(writes).toEqual([`${PTY}:/exit`, `${WOKEN}:pergunta da mãe`])
     const kinds = snapshots.map((s) => s.lastEvent?.kind)
     expect(kinds).not.toContain('session-gone')
     expect(snapshots.at(-1)?.lastEvent).toMatchObject({

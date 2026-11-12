@@ -23,7 +23,6 @@ export const HIBERNATE_REFUSALS = [
   'handoff',
   'handoff-child',
   'queue',
-  'agent-msg',
   'no-transcript',
   'scheduled',
   'background-task',
