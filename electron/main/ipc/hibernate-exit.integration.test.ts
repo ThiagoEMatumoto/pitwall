@@ -323,9 +323,13 @@ describe('exit da hibernação pelos handlers reais', () => {
     ).toEqual({ status: 'exited', asleep: 1 })
     // O exit não mexe no handoff: nem status, nem vínculo, nem aviso à mãe.
     expect(handoffStore.get(handoff.id)).toMatchObject({ status: 'done', childSessionId: PTY })
-    expect(channels()).not.toContain('handoff:updated')
+    // O que muda é o que o card mostra: o painel recarrega e a vê dormindo.
+    expect(seam.sent.filter((m) => m.channel === 'handoff:updated').map((m) => m.payload)).toEqual(
+      [expect.objectContaining({ id: handoff.id, status: 'done', childAsleep: true })],
+    )
     await new Promise((r) => setTimeout(r, 20))
     expect(channels()).not.toContain('sessions:wake-request')
+    expect(seam.ptyWrites).toEqual([`${PTY}:${formatPtyInjection('/exit')}`])
   })
 
   it('exit comum com item na fila: sem dormant e sem wake', async () => {

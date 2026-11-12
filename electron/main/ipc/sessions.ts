@@ -1270,6 +1270,17 @@ export function resumeConversation(
   return { session, reattached: false }
 }
 
+// A filha concluída dormiu: o handoff não muda, mas o card dela passa a
+// "Dormindo" (childAsleep é derivado da sessão) e o painel precisa recarregar.
+function announceAsleepChild(sessionId: string): void {
+  try {
+    const handoff = handoffStore.getByChildSession(sessionId)
+    if (handoff?.childAsleep) broadcast('handoff:updated', handoff)
+  } catch (err) {
+    console.error('[hibernate] failed to announce the asleep child', err)
+  }
+}
+
 // Um webContents.send por chunk de cada PTY disputava o renderer com o input;
 // agora é no máximo um por sessão a cada janela.
 const ptyData = createPtyDataCoalescer((e) => broadcast('pty:data', e))
@@ -1324,6 +1335,7 @@ export function registerSessionIpc(): void {
           console.error('[hibernate] failed to persist hibernated state', err)
         }
         broadcast('sessions:hibernated', hibernated)
+        if (hibernated.child) announceAsleepChild(e.sessionId)
       }
       broadcast('pty:exit', e)
 
