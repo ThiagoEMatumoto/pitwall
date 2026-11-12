@@ -2721,6 +2721,10 @@ export interface Api {
       command?: string
     }): Promise<{ ok: true; rule: string; added: boolean } | { ok: false; reason: string }>
     release(id: string): Promise<Handoff>
+    // Encerrar pelo usuário (ended: true) e o Desfazer dele (false). Recebe a
+    // SESSÃO: quem resolve se ela é filha vinculada é o main (null = não é, nada
+    // muda). Só carimba o handoff — não mata a PTY nem desvincula.
+    setChildEnded(input: { sessionId: string; ended: boolean }): Promise<Handoff | null>
     // Vínculo mãe/filha da sessão na régua única (childLinkState): decide entre
     // "Tornar filha", "Re-vincular", "Trocar mãe" e "Desvincular".
     childLink(sessionId: string): Promise<ChildLinkInfo>
