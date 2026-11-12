@@ -8,6 +8,7 @@ import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { layoutToRestore } from '../../shared/dock-layout-restore'
 import { LAZY_RESTORE_PREF } from '../../shared/lazy-restore'
+import { mergeGlobalActivity } from '../../shared/live-activity-merge'
 import type { PaneCheckRequest, SessionHibernatedEvent } from '../../shared/hibernate'
 import type {
   AdvisorModel,
@@ -1426,24 +1427,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ liveSessions: list })
     sessionsApi.watchGlobalActivity()
     offGlobalActivity = sessionsApi.onGlobalActivity((batch) => {
-      // Merge incremental por ccSessionId: atualiza só entradas existentes,
-      // ignora ids desconhecidos (o snapshot/refetch é quem adiciona/remove).
-      const byId = new Map(batch.map((b) => [b.ccSessionId, b]))
-      set((s) => ({
-        liveSessions: s.liveSessions.map((sess) => {
-          const u = byId.get(sess.ccSessionId)
-          if (!u) return sess
-          return {
-            ...sess,
-            status: u.status,
-            lastActivityAt: u.lastActivityAt,
-            lastText: u.lastText !== undefined ? u.lastText : sess.lastText,
-            tokens: u.tokens ?? sess.tokens,
-            // Substitui (não herda): ausente no batch = motivo limpo.
-            attentionReason: u.attentionReason,
-          }
-        }),
-      }))
+      // Devolver o próprio estado não notifica ninguém: batch sem novidade (a
+      // maioria) deixa os assinantes de liveSessions quietos.
+      set((s) => {
+        const next = mergeGlobalActivity(s.liveSessions, batch)
+        return next === s.liveSessions ? s : { liveSessions: next }
+      })
     })
     // PTY que sai sozinha (filha do dock sem aba, antecessora do bastão, /exit)
     // não passa por mutação nenhuma do store: sem este refetch ela ficava na
