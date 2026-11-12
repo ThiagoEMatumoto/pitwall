@@ -1956,6 +1956,18 @@ export interface GpuStatus {
   ozoneWayland: boolean
   prefDisabled: boolean
   prefOzone: boolean
+  autoDisabled: GpuAutoDisabled | null
+}
+
+// Desligamento que o app fez sozinho depois de crashes do processo de GPU. Fica
+// separado de gpu.disabled (escolha manual) porque só este é re-tentado.
+export interface GpuAutoDisabled {
+  at: number
+  // details.reason do child-process-gone, ou 'legacy' para o gpu.disabled=true
+  // que o automático antigo gravou sem deixar rastro.
+  reason: string
+  version: string
+  strikes: number
 }
 
 // Status read-only do MCP server embutido (Settings → Geral). addCommand é o

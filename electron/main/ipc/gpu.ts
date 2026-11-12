@@ -1,7 +1,15 @@
 import { app, ipcMain } from 'electron'
 import { z } from 'zod'
 import { getPref, setPref } from '../services/prefs-store'
-import { getGpuState, OZONE_PREF_KEY, OZONE_PREF_DEFAULT } from '../services/gpu-state'
+import {
+  getGpuState,
+  parseGpuAutoDisabled,
+  GPU_AUTO_PREF_KEY,
+  GPU_DISABLED_BY_USER_PREF_KEY,
+  GPU_DISABLED_PREF_KEY,
+  OZONE_PREF_KEY,
+  OZONE_PREF_DEFAULT,
+} from '../services/gpu-state'
 import type { GpuStatus } from '../../../shared/types/ipc'
 
 const boolSchema = z.boolean()
@@ -14,13 +22,20 @@ export function registerGpuIpc(): void {
     return {
       hwAccelDisabled: state.hwAccelDisabled,
       ozoneWayland: state.ozoneWayland,
-      prefDisabled: getPref('gpu.disabled', false),
+      prefDisabled: getPref(GPU_DISABLED_PREF_KEY, false),
       prefOzone: getPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT),
+      autoDisabled: parseGpuAutoDisabled(getPref<unknown>(GPU_AUTO_PREF_KEY, null)),
     }
   })
 
+  // A marca separa esta escolha do gpu.disabled=true que o automático antigo
+  // gravava: só o que não tem marca entra na re-tentativa do boot. Religar pela
+  // UI também encerra o desligamento automático pendente.
   ipcMain.handle('gpu:set-disabled', (_e, payload: unknown) => {
-    setPref('gpu.disabled', boolSchema.parse(payload))
+    const disabled = boolSchema.parse(payload)
+    setPref(GPU_DISABLED_PREF_KEY, disabled)
+    setPref(GPU_DISABLED_BY_USER_PREF_KEY, disabled)
+    if (!disabled) setPref(GPU_AUTO_PREF_KEY, null)
   })
 
   ipcMain.handle('gpu:set-ozone', (_e, payload: unknown) => {
