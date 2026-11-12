@@ -3,7 +3,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Page } from 'playwright'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { collectPerf, installPerfProbe, markPerf, parsePerfLines, summarizePerf } from './perf'
+import {
+  collectPerf,
+  installPerfProbe,
+  markPerf,
+  parsePerfLines,
+  summarizePerf,
+  typeOpenLoop,
+  withMainLines,
+} from './perf'
 
 interface Entry {
   name: string
@@ -41,7 +49,7 @@ const emit = (type: string, entries: Entry[]) =>
 // resultado serializado, como o Playwright faz.
 const page = {
   evaluate: async (fn: (arg: unknown) => unknown, arg?: unknown) => {
-    const result = fn(arg)
+    const result = await fn(arg)
     return result === undefined ? undefined : JSON.parse(JSON.stringify(result))
   },
 } as unknown as Page
@@ -67,6 +75,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
   delete (window as unknown as { __cmPerfDrive?: unknown }).__cmPerfDrive
+  delete (window as unknown as { api?: unknown }).api
   delete window.__cmPerf
 })
 
@@ -129,6 +138,8 @@ describe('collectPerf + summarizePerf', () => {
         longTasks: { n: 2, totalMs: 330, maxMs: 250, tbtMs: 230 },
         keyToPaint: { n: 20, measured: 2, p50Ms: null, p95Ms: 24, maxMs: 48 },
         inputToPaint: { n: 20, measured: 1, p50Ms: null, p95Ms: null, maxMs: 64 },
+        // 20 teclas a cada 30 ms: 19 intervalos.
+        keyIntervalMs: { n: 19, measured: 19, p50Ms: 30, p95Ms: 30, maxMs: 30 },
         counters: { ChatView: 3, MarkdownViewer: 40 },
         spans: { replay: { n: 1, totalMs: 10 } },
       },
@@ -138,6 +149,7 @@ describe('collectPerf + summarizePerf', () => {
         longTasks: { n: 1, totalMs: 60, maxMs: 60, tbtMs: 10 },
         keyToPaint: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
         inputToPaint: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
+        keyIntervalMs: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
         counters: {},
         spans: {},
       },
@@ -159,6 +171,7 @@ describe('collectPerf + summarizePerf', () => {
         longTasks: { n: 0, totalMs: 0, maxMs: 0, tbtMs: 0 },
         keyToPaint: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
         inputToPaint: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
+        keyIntervalMs: { n: 0, measured: 0, p50Ms: null, p95Ms: null, maxMs: null },
         counters: {},
         spans: {},
       },
@@ -195,7 +208,7 @@ describe('parsePerfLines', () => {
     const lines: string[] = []
     const stop = main.startPerfProbe({
       app: { getPath: () => userData, getAppMetrics: () => [] } as never,
-      ipcMain: { on: () => undefined } as never,
+      ipcMain: { on: () => undefined, handle: () => undefined } as never,
       log: (line) => lines.push(line),
     })
     main.perfCount('pty:data.chars', 12)
@@ -215,5 +228,113 @@ describe('parsePerfLines', () => {
     expect(parsed[0].windowMs).toBe(10_000)
     expect(parsed[0].counters).toEqual({ 'pty:data.chars': 12 })
     expect(parsed[1].counters).toEqual({})
+  })
+})
+
+describe('linhas do main por fase', () => {
+  it('cada marca fecha a janela da sonda real do main e a linha sai com a fase', async () => {
+    const userData = mkdtempSync(join(tmpdir(), 'perf-driver-'))
+    vi.useFakeTimers()
+    vi.resetModules()
+    vi.stubEnv('CM_PERF', '1')
+    const main = await import('../../electron/main/services/perf-probe')
+    const lines: string[] = []
+    let drain: (phase: string) => unknown = () => undefined
+    const stop = main.startPerfProbe({
+      app: { getPath: () => userData, getAppMetrics: () => [] } as never,
+      ipcMain: {
+        on: () => undefined,
+        handle: (channel: string, handler: (event: unknown, phase: string) => unknown) => {
+          if (channel === 'perf:drain') drain = (phase) => handler({}, phase)
+        },
+      } as never,
+      log: (line) => lines.push(line),
+    })
+    // A ponte do preload, ligada ao handler que o main registrou de verdade.
+    ;(window as unknown as { api: unknown }).api = {
+      perf: { drain: async (phase: string) => void drain(phase) },
+    }
+    await installPerfProbe(page)
+
+    main.perfCount('boot')
+    await markPerf(page, 'open')
+    main.perfCount('pty:data.chars', 12)
+    // Fase mais longa que a janela de 10 s do main: duas linhas na mesma fase.
+    vi.advanceTimersByTime(10_000)
+    main.perfCount('pty:data.chars', 5)
+    await markPerf(page, 'idle')
+    main.perfCount('graph.rebuild')
+    const raw = await collectPerf(page)
+    main.perfCount('depois do fim')
+    vi.advanceTimersByTime(10_000)
+    stop()
+    vi.useRealTimers()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    rmSync(userData, { recursive: true, force: true })
+
+    const parsed = parsePerfLines(lines.join('\n'))
+    expect(parsed.map((line) => line.phase)).toEqual([undefined, 'open', 'open', 'idle', 'end'])
+    const phases = withMainLines(summarizePerf(raw), parsed)
+    expect(phases.map((p) => [p.phase, p.main.map((line) => line.counters)])).toEqual([
+      ['open', [{ 'pty:data.chars': 12 }, { 'pty:data.chars': 5 }]],
+      ['idle', [{ 'graph.rebuild': 1 }]],
+    ])
+  })
+})
+
+describe('typeOpenLoop', () => {
+  it('manda cada tecla no horário sem esperar a confirmação da anterior', async () => {
+    vi.useFakeTimers()
+    const start = Date.now()
+    const sent: Array<{ at: number; params: Record<string, unknown> }> = []
+    const confirm: Array<() => void> = []
+    const typing = typeOpenLoop(
+      (_method, params) => {
+        sent.push({ at: Date.now() - start, params })
+        return new Promise<void>((resolve) => confirm.push(resolve))
+      },
+      'ab c',
+      30,
+    )
+    let finished = false
+    void typing.then(() => (finished = true))
+
+    await vi.advanceTimersByTimeAsync(90)
+    // Nenhuma tecla foi confirmada e as quatro já saíram, no ritmo.
+    expect(
+      sent.filter((s) => s.params.type === 'keyDown').map((s) => [s.at, s.params.text]),
+    ).toEqual([
+      [0, 'a'],
+      [30, 'b'],
+      [60, ' '],
+      [90, 'c'],
+    ])
+    expect(sent.filter((s) => s.params.type === 'keyUp')).toHaveLength(4)
+    expect(sent[0].params).toMatchObject({ key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 })
+    expect(sent[4].params).toMatchObject({ key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+
+    // Só termina quando o renderer confirmou tudo: a fase não fecha com tecla na fila.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(finished).toBe(false)
+    confirm.forEach((resolve) => resolve())
+    expect(await typing).toEqual({
+      keys: 4,
+      failed: 0,
+      sendIntervalMs: { n: 3, measured: 3, p50Ms: 30, p95Ms: 30, maxMs: 30 },
+    })
+  })
+
+  it('conta as teclas que o CDP recusou em vez de falhar no meio', async () => {
+    vi.useFakeTimers()
+    const typing = typeOpenLoop(
+      (_method, params) =>
+        params.type === 'keyDown' && params.text === 'b'
+          ? Promise.reject(new Error('Target closed'))
+          : Promise.resolve(),
+      'abc',
+      30,
+    )
+    await vi.advanceTimersByTimeAsync(60)
+    expect(await typing).toMatchObject({ keys: 3, failed: 1 })
   })
 })
