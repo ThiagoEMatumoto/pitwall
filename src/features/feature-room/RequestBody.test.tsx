@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // O pedido tipado na Room, montado pelos produtores reais: handoffStore.ask
@@ -39,6 +39,9 @@ const special: Record<string, Record<string, unknown>> = {
     snoozeAttention,
     dismiss,
   },
+  // O que o appStore chama ao abrir a aba da filha antes do envio.
+  sessions: { adoptDraft: () => Promise.resolve(null) },
+  workspace: { savePanes: () => Promise.resolve() },
 }
 vi.stubGlobal(
   'window',
@@ -191,6 +194,30 @@ describe('RequestBody — pedido tipado na Room', () => {
     )
     expect(snoozeAttention.mock.calls[0][0].until).toBeGreaterThan(Date.now() + 59 * 60_000)
     expect(dismiss).not.toHaveBeenCalled()
+  })
+
+  // Decisão do usuário: a resposta dele abre a aba da filha fora da tela ANTES do
+  // envio. Pela Room a aba nasce em segundo plano: ele continua na fila.
+  it('responder abre a aba da filha em segundo plano antes de enviar', async () => {
+    const { request } = store.ask(child('r1', 'A').id, 'Pode renomear o módulo?')
+    useAppStore.setState({ panes: [], focusPaneId: null })
+    let tabsAtSend: string[] = []
+    answerRequest.mockImplementation(async () => {
+      tabsAtSend = useAppStore.getState().panes.map((p) => p.session.id)
+    })
+    await mount()
+    fireEvent.change(within(open()).getByRole('textbox', { name: 'Resposta' }), {
+      target: { value: 'pode' },
+    })
+    await act(
+      async () => void fireEvent.click(within(open()).getByRole('button', { name: 'Responder' })),
+    )
+    await waitFor(() =>
+      expect(answerRequest).toHaveBeenCalledWith({ requestId: request!.id, text: 'pode' }),
+    )
+    expect(tabsAtSend).toEqual(['A'])
+    expect(useAppStore.getState().area).toBe('room')
+    expect(useAppStore.getState().focusPaneId).toBeNull()
   })
 
   it('pergunta sem opções: a resposta é o texto; Rejeitar manda reject com o comentário', async () => {

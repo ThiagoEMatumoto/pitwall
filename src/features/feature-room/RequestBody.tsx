@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { useCrewDockStore } from '@/features/handoffs/crew-dock-store'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import { handoffsApi } from '@/lib/ipc'
 import type { AttentionItem, AttentionItemAction } from '../../../shared/types/attention'
 import type { AnswerHandoffRequestInput } from '../../../shared/types/handoff-request'
@@ -47,7 +48,11 @@ export function RequestBody({ item }: { item: AttentionItem }) {
   }
   const send = (name: string, input: Omit<AnswerHandoffRequestInput, 'requestId'>) =>
     answer &&
-    void run(name, () => handoffsApi.answerRequest({ requestId: req.requestId, ...input }))
+    void run(name, async () => {
+      // Pela Room a aba da filha nasce em segundo plano: quem responde continua na fila.
+      await revealChildOnUserMessage(item.sessionId, { focus: false })
+      await handoffsApi.answerRequest({ requestId: req.requestId, ...input })
+    })
 
   const primary = hasOptions
     ? {
