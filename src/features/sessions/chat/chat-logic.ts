@@ -257,3 +257,22 @@ export function isAtBottom(
 ): boolean {
   return m.scrollHeight - m.scrollTop - m.clientHeight <= threshold
 }
+
+// Linhas do chat montadas de cada vez: o custo de abrir e de re-renderizar segue a
+// janela, não o histórico. As anteriores entram de janela em janela ao rolar pra cima.
+export const CHAT_WINDOW_ROWS = 150
+
+// Primeira linha montada. `current` null = janela ainda sem posição (abertura, troca de
+// sessão). Colado no fim, só apara depois de duas janelas montadas: aparar a cada
+// mensagem desmontaria uma linha do topo por linha que chega. Quem subiu pra reler não
+// perde linha nenhuma.
+export function nextWindowStart(current: number | null, total: number, atBottom: boolean): number {
+  const tail = Math.max(0, total - CHAT_WINDOW_ROWS)
+  if (current == null) return tail
+  if (atBottom && total - current > 2 * CHAT_WINDOW_ROWS) return tail
+  return Math.min(current, tail)
+}
+
+export function earlierWindowStart(current: number): number {
+  return Math.max(0, current - CHAT_WINDOW_ROWS)
+}
