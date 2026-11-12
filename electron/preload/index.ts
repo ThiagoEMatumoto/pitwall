@@ -640,6 +640,10 @@ const api: Api = {
     onFoldersUpdated: (handler) => subscribe<unknown>('design:folders-updated', handler),
     onThumbnailUpdated: (handler) => subscribe<unknown>('design:thumbnail-updated', handler),
   },
+  perf: {
+    enabled: process.env.CM_PERF === '1',
+    report: (summary) => ipcRenderer.send('perf:renderer', summary),
+  },
   window: {
     minimize: () => invoke('window:minimize'),
     toggleMaximize: () => invoke('window:toggle-maximize'),
