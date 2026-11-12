@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRef, type ComponentProps, type RefObject } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComposerDraft } from '../../../shared/types/composer-draft'
 
@@ -15,6 +16,7 @@ const draftApi = vi.hoisted(() => ({
   saveDraftSync: vi.fn(),
   writeDraft: vi.fn(),
   clearDraft: vi.fn(async () => {}),
+  saveImage: vi.fn(async () => '/tmp/print.png'),
 }))
 
 vi.mock('@/lib/ipc', () => {
@@ -81,8 +83,11 @@ import {
   getComposerDraft,
   saveComposerDraft,
 } from '../../../electron/main/services/composer-drafts'
-import { Composer } from './Composer'
+import { Composer, type ComposerHandle } from './Composer'
 import { DRAFT_HYDRATE_LOCK_MS } from './composer-draft-persister'
+
+// jsdom não tem object URL; o Composer só o usa para o thumbnail.
+Object.assign(URL, { createObjectURL: () => 'blob:preview', revokeObjectURL: () => {} })
 
 const SAVED = 'rascunho salvo antes do reboot'
 
@@ -110,17 +115,35 @@ function pendingRead() {
   }
 }
 
-function mount(paneId: string) {
+function mount(
+  paneId: string,
+  props: Partial<ComponentProps<typeof Composer>> = {},
+  handle?: RefObject<ComposerHandle>,
+) {
   render(
     <Composer
+      ref={handle}
       sessionId={`s-${paneId}`}
       paneId={paneId}
       ccSessionId="cc-1"
       onSend={vi.fn(async () => {})}
       onInsert={vi.fn(async () => {})}
+      {...props}
     />,
   )
   return screen.getByRole('textbox') as HTMLTextAreaElement
+}
+
+function pasteImage(box: HTMLTextAreaElement) {
+  const image = new File([new Uint8Array([137, 80, 78, 71])], 'print.png', { type: 'image/png' })
+  // jsdom não implementa Blob.arrayBuffer; o Composer lê os bytes para o saveImage.
+  Object.assign(image, { arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer })
+  fireEvent.paste(box, {
+    clipboardData: {
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+      files: [],
+    },
+  })
 }
 
 // Uma tecla como o navegador a aplica: entra na posição do cursor, que avança.
@@ -143,6 +166,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'cm-composer-hydrate-'))
   db = openAppDb(join(dir, 'app.db'))
   draftApi.getDraft.mockReset()
+  draftApi.writeDraft.mockClear()
+  draftApi.saveImage.mockClear()
   paneSeq++
 })
 
@@ -280,5 +305,191 @@ describe('Composer — digitar antes da hidratação do rascunho', () => {
     expect(box.value).toBe(SAVED)
     console.info(`[medida] campo só-leitura à espera do rascunho: ${lockedMs.toFixed(1)} ms`)
     expect(lockedMs).toBeLessThan(DRAFT_HYDRATE_LOCK_MS)
+  })
+})
+
+describe('Composer — teclas de controle durante a hidratação', () => {
+  it('Enter, Esc, Tab, setas e Ctrl+C durante a leitura não chegam ao PTY nem enviam', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const saved = savedDraft(paneId, SAVED)
+    const release = pendingRead()
+    const onForwardKey = vi.fn()
+    const onSend = vi.fn(async () => {})
+    const box = mount(paneId, { onForwardKey, onSend })
+
+    for (const key of ['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown']) {
+      fireEvent.keyDown(box, { key })
+    }
+    fireEvent.keyDown(box, { key: 'c', ctrlKey: true })
+    expect(onForwardKey).not.toHaveBeenCalled()
+
+    await release(saved)
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await act(async () => {})
+
+    expect(onSend).toHaveBeenCalledWith(SAVED)
+    expect(onForwardKey).not.toHaveBeenCalled()
+  })
+
+  it('sem rascunho salvo, o Enter volta a dirigir a TUI depois da leitura', async () => {
+    const release = pendingRead()
+    const onForwardKey = vi.fn()
+    const box = mount(`hydrate-${paneSeq}`, { onForwardKey })
+
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onForwardKey).not.toHaveBeenCalled()
+
+    await release(null)
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    expect(onForwardKey).toHaveBeenCalledWith('\r')
+  })
+
+  it('Ctrl+↑ durante a leitura não troca o campo pelo histórico', async () => {
+    // O histórico é da sessão: o envio numa pane aparece na outra pane dela.
+    const sessionId = `s-hist-${paneSeq}`
+    const releaseFirst = pendingRead()
+    const first = mount(`hist-a-${paneSeq}`, { sessionId })
+    await releaseFirst(null)
+    type(first, 'prompt antigo')
+    fireEvent.keyDown(first, { key: 'Enter' })
+    await act(async () => {})
+    expect(first.value).toBe('')
+    cleanup()
+
+    const paneId = `hist-b-${paneSeq}`
+    const saved = savedDraft(paneId, SAVED)
+    const release = pendingRead()
+    const box = mount(paneId, { sessionId })
+    fireEvent.keyDown(box, { key: 'ArrowUp', ctrlKey: true })
+    expect(box.value).toBe('')
+
+    await release(saved)
+
+    expect(box.value).toBe(SAVED)
+    expect(screen.queryByText(/juntado/)).toBeNull()
+  })
+})
+
+describe('Composer — remount de pane já lida', () => {
+  it('pane lida e vazia: o remount não trava, não relê e não grava', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const release = pendingRead()
+    mount(paneId)
+    await release(null)
+    cleanup()
+    draftApi.writeDraft.mockClear()
+
+    const box = mount(paneId)
+
+    expect(box.readOnly).toBe(false)
+    expect(screen.getByText('Escreva um prompt…')).toBeTruthy()
+    expect(draftApi.getDraft).toHaveBeenCalledTimes(1)
+    expect(draftApi.writeDraft).not.toHaveBeenCalled()
+    type(box, 'na hora')
+    expect(box.value).toBe('na hora')
+    expect(draftApi.writeDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: `pane:${paneId}`, text: 'na hora' }),
+    )
+  })
+
+  it('enviou e a pane remontou: o campo vazio aceita a tecla na hora', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const release = pendingRead()
+    const first = mount(paneId)
+    await release(null)
+    type(first, 'prompt enviado')
+    fireEvent.keyDown(first, { key: 'Enter' })
+    await act(async () => {})
+    expect(first.value).toBe('')
+    cleanup()
+
+    const box = mount(paneId)
+
+    expect(box.readOnly).toBe(false)
+    expect(draftApi.getDraft).toHaveBeenCalledTimes(1)
+  })
+
+  it('leitura que falhou não vale como lida: o remount relê e recupera o salvo', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    savedDraft(paneId, SAVED)
+    draftApi.getDraft.mockRejectedValueOnce(new Error('main fora do ar'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mount(paneId)
+    await act(async () => {})
+    errors.mockRestore()
+    cleanup()
+
+    draftApi.getDraft.mockImplementationOnce(async (key: string) => getComposerDraft(db, key))
+    const box = mount(paneId)
+    expect(box.readOnly).toBe(true)
+    await act(async () => {})
+
+    expect(box.value).toBe(SAVED)
+    expect(getComposerDraft(db, `pane:${paneId}`)?.text).toBe(SAVED)
+  })
+
+  it('desmontou antes da leitura voltar: o remount relê e recupera o salvo', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const saved = savedDraft(paneId, SAVED)
+    const release = pendingRead()
+    mount(paneId)
+    cleanup()
+    await release(saved)
+
+    draftApi.getDraft.mockImplementationOnce(async (key: string) => getComposerDraft(db, key))
+    const box = mount(paneId)
+    expect(box.readOnly).toBe(true)
+    await act(async () => {})
+
+    expect(box.value).toBe(SAVED)
+  })
+})
+
+describe('Composer — ditado e imagem durante a hidratação', () => {
+  it('ditado que chega durante a leitura espera por ela e entra depois do salvo, sem junção', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const saved = savedDraft(paneId, SAVED)
+    const release = pendingRead()
+    const handle = createRef<ComposerHandle>()
+    const box = mount(paneId, {}, handle)
+
+    act(() => handle.current?.appendText('ditado'))
+    expect(box.value).toBe('')
+
+    await release(saved)
+
+    expect(box.value).toBe(`${SAVED} ditado`)
+    expect(screen.queryByText(/juntado/)).toBeNull()
+  })
+
+  it('imagem colada durante a leitura espera por ela e entra depois do salvo, sem junção', async () => {
+    const paneId = `hydrate-${paneSeq}`
+    const saved = savedDraft(paneId, SAVED)
+    const release = pendingRead()
+    const box = mount(paneId)
+
+    pasteImage(box)
+    await act(async () => {})
+    expect(draftApi.saveImage).not.toHaveBeenCalled()
+    expect(box.value).toBe('')
+
+    await release(saved)
+    await act(async () => {})
+
+    expect(box.value).toBe(`${SAVED} /tmp/print.png `)
+    expect(screen.getByText('print.png')).toBeTruthy()
+    expect(screen.queryByText(/juntado/)).toBeNull()
+  })
+
+  it('ditado com a pane sem rascunho salvo entra assim que a leitura termina', async () => {
+    const release = pendingRead()
+    const handle = createRef<ComposerHandle>()
+    const box = mount(`hydrate-${paneSeq}`, {}, handle)
+
+    act(() => handle.current?.appendText('ditado'))
+    await release(null)
+
+    expect(box.value).toBe('ditado')
   })
 })
