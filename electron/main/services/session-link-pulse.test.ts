@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SessionLinkPulse } from '../../../shared/types/session-link-pulse'
 import {
   KIND_LABEL,
@@ -10,7 +10,9 @@ import {
   SendMessageWatcher,
   SEND_MESSAGE_RETRY_MS,
   SessionLinkPulseBus,
+  emitSessionLinkPulse,
   extractSendMessages,
+  onSessionLinkPulse,
   resolveSendMessageTarget,
   type PulseInput,
   type SendMessageResolveDeps,
@@ -62,22 +64,75 @@ describe('SessionLinkPulseBus', () => {
     expect(published).toHaveLength(0)
   })
 
-  it(`no máximo ${PULSES_PER_WINDOW}/s por par; o excedente coalesce em UM pulso no fim da janela`, () => {
-    const { bus, published, advance } = makeBus()
+  it(`no máximo ${PULSES_PER_WINDOW}/s por par, somando os dois sentidos`, () => {
+    const { bus, published } = makeBus()
     for (let i = 0; i < 10; i++) {
       // Mesma dupla nos dois sentidos conta como o mesmo par (é o mesmo fio).
       const fwd = i % 2 === 0
-      bus.emit({
-        fromSessionId: fwd ? 'a' : 'b',
-        toSessionId: fwd ? 'b' : 'a',
-        kind: i === 9 ? 'answer' : 'message',
-      })
+      bus.emit({ fromSessionId: fwd ? 'a' : 'b', toSessionId: fwd ? 'b' : 'a', kind: 'message' })
     }
+    expect(published).toHaveLength(PULSES_PER_WINDOW)
+  })
+
+  it('excedente repetido (mesmo sentido, tipo e autor) coalesce em UM pulso no fim da janela', () => {
+    const { bus, published, advance } = makeBus()
+    for (let i = 0; i < 10; i++) bus.emit({ fromSessionId: 'a', toSessionId: 'b', kind: 'message' })
     expect(published).toHaveLength(PULSES_PER_WINDOW)
     advance(PULSE_WINDOW_MS)
     expect(published).toHaveLength(PULSES_PER_WINDOW + 1)
-    // O coalescido carrega o ÚLTIMO pedido (direção e tipo).
-    expect(published.at(-1)).toMatchObject({ fromSessionId: 'b', toSessionId: 'a', kind: 'answer' })
+    expect(published.at(-1)).toMatchObject({ fromSessionId: 'a', toSessionId: 'b', kind: 'message' })
+  })
+
+  // O pulso carrega sentido (quem escreveu, para quem): o recado da mãe marca a
+  // filha em segundo plano, e o progresso da filha no mesmo fio não pode apagá-lo.
+  it('excedente de um sentido não apaga o do outro', () => {
+    const { bus, published, advance } = makeBus()
+    for (let i = 0; i < PULSES_PER_WINDOW; i++)
+      bus.emit({ fromSessionId: 'filha', toSessionId: 'mae', kind: 'progress' })
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message' })
+    bus.emit({ fromSessionId: 'filha', toSessionId: 'mae', kind: 'progress' })
+
+    advance(PULSE_WINDOW_MS)
+
+    expect(published.slice(PULSES_PER_WINDOW)).toMatchObject([
+      { fromSessionId: 'mae', toSessionId: 'filha', kind: 'message' },
+      { fromSessionId: 'filha', toSessionId: 'mae', kind: 'progress' },
+    ])
+  })
+
+  it('excedente do usuário não apaga o do agente no mesmo sentido', () => {
+    const { bus, published, advance } = makeBus()
+    for (let i = 0; i < PULSES_PER_WINDOW; i++)
+      bus.emit({ fromSessionId: 'filha', toSessionId: 'mae', kind: 'progress' })
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message' })
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message', by: 'human' })
+
+    advance(PULSE_WINDOW_MS)
+
+    const late = published.slice(PULSES_PER_WINDOW)
+    expect(late).toHaveLength(2)
+    expect(late[0]).not.toHaveProperty('by')
+    expect(late[1].by).toBe('human')
+  })
+
+  it('o excedente que não cabe na vaga aberta espera a seguinte, sem furar a cota', () => {
+    const { bus, published, advance } = makeBus()
+    for (let i = 0; i < PULSES_PER_WINDOW; i++) {
+      bus.emit({ fromSessionId: 'filha', toSessionId: 'mae', kind: 'progress' })
+      advance(100)
+    }
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message' })
+    bus.emit({ fromSessionId: 'filha', toSessionId: 'mae', kind: 'report' })
+
+    // O 1º pulso da janela expira: abre UMA vaga.
+    advance(PULSE_WINDOW_MS - PULSES_PER_WINDOW * 100)
+    expect(published.slice(PULSES_PER_WINDOW)).toMatchObject([{ kind: 'message' }])
+
+    advance(100)
+    expect(published.slice(PULSES_PER_WINDOW)).toMatchObject([
+      { kind: 'message' },
+      { kind: 'report' },
+    ])
   })
 
   it('diz quem escreveu só quando o produtor sabe que foi o usuário', () => {
@@ -94,6 +149,27 @@ describe('SessionLinkPulseBus', () => {
       bus.emit({ fromSessionId: 'a', toSessionId: 'b', kind: 'message' })
     bus.emit({ fromSessionId: 'a', toSessionId: 'c', kind: 'message' })
     expect(published).toHaveLength(PULSES_PER_WINDOW + 1)
+  })
+})
+
+describe('emitSessionLinkPulse (barramento do app)', () => {
+  // O excedente sai num timer: ali não há quem chamou para segurar a exceção.
+  it('ouvinte que falha no excedente da janela não deixa a exceção escapar do timer', () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const off = onSessionLinkPulse(() => {
+      throw new Error('janela destruída')
+    })
+    try {
+      for (let i = 0; i <= PULSES_PER_WINDOW; i++)
+        emitSessionLinkPulse({ fromSessionId: 'timer-a', toSessionId: 'timer-b', kind: 'note' })
+
+      expect(() => vi.advanceTimersByTime(PULSE_WINDOW_MS)).not.toThrow()
+    } finally {
+      off()
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
   })
 })
 

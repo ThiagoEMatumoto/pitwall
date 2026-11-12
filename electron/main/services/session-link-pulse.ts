@@ -10,7 +10,7 @@ import type {
 } from '../../../shared/types/session-link-pulse'
 
 export const PULSE_WINDOW_MS = 1000
-// Acima disso o fio vira um borrão; o excedente da janela vira UM pulso no fim dela.
+// Acima disso o fio vira um borrão; o excedente espera a janela abrir vaga.
 export const PULSES_PER_WINDOW = 4
 
 export interface PulseInput {
@@ -30,10 +30,15 @@ export interface PulseBusDeps {
 }
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
+// O que um ouvinte distingue num pulso: sentido, tipo e quem escreveu.
+const meaningKey = (input: PulseInput) => `${input.fromSessionId}|${input.kind}|${input.by ?? ''}`
 
 export class SessionLinkPulseBus {
   private recent = new Map<string, number[]>()
-  private pending = new Map<string, PulseInput>()
+  // Excedente por par. Repetido (mesmo sentido, tipo e autor) coalesce em um; os
+  // diferentes esperam lado a lado: o recado da mãe marca a filha em segundo
+  // plano, e o progresso da filha no mesmo fio não pode apagá-lo.
+  private pending = new Map<string, Map<string, PulseInput>>()
 
   constructor(private readonly deps: PulseBusDeps) {}
 
@@ -45,9 +50,13 @@ export class SessionLinkPulseBus {
     const now = this.deps.now()
     const times = (this.recent.get(key) ?? []).filter((t) => now - t < PULSE_WINDOW_MS)
     if (times.length >= PULSES_PER_WINDOW) {
-      const scheduled = this.pending.has(key)
-      this.pending.set(key, input)
-      if (!scheduled) this.deps.schedule(() => this.flush(key), times[0] + PULSE_WINDOW_MS - now)
+      const waiting = this.pending.get(key)
+      if (waiting) {
+        waiting.set(meaningKey(input), input)
+      } else {
+        this.pending.set(key, new Map([[meaningKey(input), input]]))
+        this.deps.schedule(() => this.flush(key), times[0] + PULSE_WINDOW_MS - now)
+      }
       this.recent.set(key, times)
       return
     }
@@ -64,10 +73,11 @@ export class SessionLinkPulseBus {
     })
   }
 
+  // Volta pela cota: o que não couber na vaga aberta espera a seguinte.
   private flush(key: string): void {
-    const input = this.pending.get(key)
+    const waiting = this.pending.get(key)
     this.pending.delete(key)
-    if (input) this.emit(input)
+    for (const input of waiting?.values() ?? []) this.emit(input)
   }
 }
 
@@ -253,7 +263,16 @@ const bus = new SessionLinkPulseBus({
   publish: (pulse) => {
     for (const fn of listeners) fn(pulse)
   },
-  schedule: (fn, ms) => void setTimeout(fn, ms),
+  // O excedente sai num timer: ali não há quem chamou para segurar a exceção de
+  // um ouvinte (janela destruída no desligamento).
+  schedule: (fn, ms) =>
+    void setTimeout(() => {
+      try {
+        fn()
+      } catch (err) {
+        console.warn('[session-link-pulse] pulso descartado:', err)
+      }
+    }, ms),
   labelFor: (from, to, kind) =>
     `${titleOf(from) ?? 'sessão'} → ${titleOf(to) ?? 'sessão'}: ${KIND_LABEL[kind]}`,
 })
