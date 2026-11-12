@@ -393,8 +393,10 @@ try {
     const cc = (await liveOf(C))?.ccSessionId ?? ''
     await waitFor('stub da sessão comum', async () => stubOf(cc) !== null, 15_000)
     const pid = stubOf(cc)
-    // A aba dela é a ativa: a sessão acabou de abrir.
-    const tab = page.locator('.dv-tab.dv-active-tab').first()
+    // Pelo rótulo: cada grupo de abas tem a sua ativa, e a primeira ativa da janela
+    // era a da mãe (o X fechava a aba dela, não a da sessão comum).
+    const tab = page.locator('.dv-tab', { hasText: 'vcl-solo' }).first()
+    const abaDoX = (await tab.locator('.dv-default-tab-content').innerText()).trim()
     const rotulo = await tab.locator('.dv-default-tab').getAttribute('title')
     const asked = confirms.length
     await tab.locator('.dv-default-tab-action').click()
@@ -410,6 +412,7 @@ try {
     return {
       ok: fechou && confirms.length === asked && vivo && pidVivo,
       detail: {
+        abaDoX,
         rotuloDoX: rotulo,
         abaFechou: fechou,
         pediuConfirmacao: confirms.length - asked,
@@ -456,6 +459,16 @@ try {
   writeFileSync(join(transcriptDir, `${cc0}.jsonl`), '')
   await closeOverlays(page)
 
+  // O último status da filha que o stream global entregou ao renderer.
+  await page.evaluate((cc) => {
+    const w = window as any
+    w.__vclChildStatus = null
+    w.api.sessions.onGlobalActivity((batch: Array<{ ccSessionId: string; status: string }>) => {
+      const mine = batch.find((b) => b.ccSessionId === cc)
+      if (mine) w.__vclChildStatus = mine.status
+    })
+  }, cc0)
+
   const linkWatch = createLinkWatch(
     () =>
       db<LinkRead>(
@@ -495,6 +508,19 @@ try {
       20_000,
     )
     if (!reached) throw new Error(`a filha não ficou ${shown}`)
+    // O X decide pela lista de sessões do renderer, que só anda com o stream global
+    // de atividade: liveOf lê o main e chega antes. Assinar de novo faz o main
+    // reenviar o batch inteiro, e o que a escuta do cenário viu o store também recebeu.
+    const seen = await waitFor(
+      `renderer com a filha ${shown}`,
+      async () => {
+        await page.evaluate(() => (window as any).api.sessions.watchGlobalActivity())
+        await page.waitForTimeout(300)
+        return (await page.evaluate(() => (window as any).__vclChildStatus)) === shown
+      },
+      20_000,
+    )
+    if (!seen) throw new Error(`o renderer não recebeu a filha ${shown}`)
   }
   const openChildTab = async (): Promise<void> => {
     if ((await childTab.count()) === 0) {
@@ -579,6 +605,29 @@ try {
       },
     }
   }
+  // O stub não grava transcript: a fila nunca acha a prova do que entregou à filha
+  // e, 60 s depois, a entrega volta como "talvez não entregue". O relance reaponta
+  // o item para a sessão nova e o gate da fila segura a hibernação até o usuário
+  // decidir. O cenário decide por ele: Descartar.
+  type Queued = { id: string; sessionId: string; recovery?: string; text: string }
+  const childQueue = async (): Promise<Queued[]> => {
+    const mine = new Set(
+      db<{ id: string }>('SELECT id FROM sessions WHERE cc_session_id = ?', cc0).map((s) => s.id),
+    )
+    const queue = (await page.evaluate(() => (window as any).api.sendTo.queue())) as {
+      items: Queued[]
+    }
+    return queue.items.filter((i) => mine.has(i.sessionId))
+  }
+  const brief = (i: Queued): string =>
+    `${i.recovery ?? 'na fila'}: ${i.text.replace(/\s+/g, ' ').slice(0, 40)}`
+  const dropUnproven = async (): Promise<string[]> => {
+    const unproven = (await childQueue()).filter((i) => i.recovery === 'maybe-undelivered')
+    for (const item of unproven) {
+      await page.evaluate((itemId) => (window as any).api.sendTo.cancel(itemId), item.id)
+    }
+    return unproven.map(brief)
+  }
   // Espera o hibernador do app tirar do ar a filha concluída, ociosa e sem aba.
   const sleepByApp = async (): Promise<{ asleep: boolean; detail: Detail }> => {
     await minimizeChildTab()
@@ -593,8 +642,10 @@ try {
       return Object.fromEntries(Object.entries(stats.refusals as Detail).filter(([, n]) => n !== 0))
     }
     let asleep = false
+    const dropped = await dropUnproven()
     for (let i = 1; !asleep && Date.now() - started < HIBERNATE_WAIT_MS; i++) {
       await page.waitForTimeout(3000)
+      dropped.push(...(await dropUnproven()))
       asleep = hibernatedRows() > 0 && !pidAlive(pid) && !(await isLive(id))
       if (!asleep && i % 10 === 0) {
         say(
@@ -608,6 +659,8 @@ try {
         hibernouPeloApp: asleep,
         esperaEmS: elapsed(),
         recusasDoGate: await refusals(),
+        entregasSemProvaDescartadas: dropped,
+        filaDaFilha: (await childQueue()).map(brief),
         logDoMain: mainOutput()
           .split('\n')
           .filter((l) => l.includes('hibernate') || l.includes('session_hibernated'))
