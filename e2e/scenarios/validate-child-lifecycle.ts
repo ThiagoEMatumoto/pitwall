@@ -7,8 +7,8 @@
 //   (4)  X numa sessão comum             → só desanexa, processo vivo
 //   (5)  Retomar a encerrada e uma done  → mesmo apelido e --settings de filha no
 //        argv do spawn, marca limpa
-//   (6)  recado do usuário (QuickComposer) à filha fora da tela → a aba abre
-//        antes de o recado chegar a ela
+//   (6)  recado do usuário (QuickComposer) à filha fora da tela → a aba já está
+//        aberta quando o envio chega ao main
 //   (7)  recado da mãe                   → nenhuma aba abre, o foco fica, ponto de
 //        não lida e aviso com "Abrir"
 //   (8)  card: Minimizar / Encerrar filha / Desvincular; "Arquivar card" só com o
@@ -18,6 +18,8 @@
 //   (10) em todo passo o handoff segue apontando para a conversa da filha
 //   (11) a mãe chama a filha que dorme   → acorda em 2º plano, handoff segue done
 //
+// (6): a ordem é lida no main, no handler do envio. O window.api chega congelado
+// à janela e não dá para envolver de lá a função que o QuickComposer chama.
 // (7) e (11): o stub do claude não chama tools, então o recado da mãe sai pelo
 // MCP do próprio app (handoff_message com ?s=<mãe>), o handler que a mãe real chama.
 // (9) e (11): o hibernador não tem gancho de teste. A janela da filha vai para
@@ -48,6 +50,7 @@ import {
 } from '../driver/crew-seed'
 import { argvFlag, createFakeHome } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
+import { countWhenPresent, tapNextInvoke, tappedInvoke } from '../driver/ipc-tap'
 import { copyRealUserData, launchApp, writeCopyPrefs } from '../driver/launch'
 import { goToArea, waitReady } from '../driver/nav'
 import { CHILD_HIBERNATE_AFTER_MIN_PREF, HIBERNATE_AFTER_MIN_PREF } from '../../shared/hibernate'
@@ -76,6 +79,12 @@ const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
 // Painel dos menus abertos por portal (chip de 2º plano, "Mais ações" do card).
 const MENU_PANEL = 'div.fixed.min-w-40'
 const ENDED_BY_USER = /encerrada pelo usuário/i
+const SEND_PROMPT = 'sessions:send-prompt'
+// Abas da filha na janela quando o envio chega ao main. Enquanto o handler não
+// responde, o submit do QuickComposer está parado no await do envio: uma aba que
+// só abrisse depois dele não aparece aqui. A espera é para o React pintar a aba
+// que o store já tem.
+const CHILD_TABS_AT_SEND = countWhenPresent(CHILD_TAB, 2000)
 
 const LABELS: Record<number, string> = {
   1: 'minimizar a aba da filha: o chip mostra 1 e o processo segue vivo',
@@ -83,7 +92,7 @@ const LABELS: Record<number, string> = {
   3: 'Desfazer dentro da janela: filha viva e sem marca',
   4: 'X numa sessão comum: só desanexa, processo vivo',
   5: 'Retomar a encerrada e a done: mesmo apelido e --settings de filha, marca limpa',
-  6: 'recado do usuário à filha fora da tela: a aba abre antes de ele chegar',
+  6: 'recado do usuário à filha fora da tela: a aba abre antes do envio',
   7: 'recado da mãe: nenhuma aba abre, o foco fica, não lida e aviso com "Abrir"',
   8: 'card: Minimizar/Encerrar/Desvincular; "Arquivar card" só com o processo morto',
   9: 'filha done ociosa hiberna: card "Dormindo" e "Acordar" devolve a mesma identidade',
@@ -692,9 +701,9 @@ try {
   const six = await attempt('6 recado do usuario', async () => {
     await minimizeChildTab()
     await toastsGone()
-    // Trabalhando, o recado "quando terminar" fica na fila: dá para ver a aba
-    // aberta com ele ainda sem ter chegado à filha.
+    // Trabalhando, o recado "quando terminar" fica na fila até ela parar.
     await setChildStatus('busy')
+    const id = childId()
     const pid = childPid()
     const text = `vcl recado do usuario ${RUN_ID}`
     const quick = page.getByTestId('quick-composer')
@@ -720,18 +729,20 @@ try {
       await quick.getByTestId('when-on-idle').click()
       await input.fill(text)
       const abasAntes = await childTab.count()
+      const espiado = await tapNextInvoke(app, SEND_PROMPT, CHILD_TABS_AT_SEND)
       await input.press('Enter')
       const abriu = await waitFor(
         'aba aberta pelo envio',
         async () => (await childTab.count()) === 1,
         10_000,
       )
-      const chegouAoAbrir = logOf(pid).includes(text)
       const fechou = await waitFor(
         'QuickComposer fechado',
         async () => (await quick.count()) === 0,
         8000,
       )
+      const envio = await tappedInvoke(app, SEND_PROMPT)
+      const alvo = (envio?.args[0] as { sessionId?: string } | undefined)?.sessionId ?? null
       const recusa = fechou
         ? null
         : await quick
@@ -746,12 +757,21 @@ try {
         20_000,
       )
       return {
-        ok: listada && abasAntes === 0 && abriu && !chegouAoAbrir && fechou && chegou,
+        ok:
+          listada &&
+          abasAntes === 0 &&
+          alvo === id &&
+          envio?.probed === 1 &&
+          abriu &&
+          fechou &&
+          chegou,
         detail: {
           filhaEntreOsAlvos: listada,
           abasDaFilhaAntes: abasAntes,
+          envioEspiado: espiado,
+          envioParaAFilha: alvo === id,
+          abasDaFilhaNoEnvio: envio?.probed ?? null,
           abaAbriu: abriu,
-          recadoNoStdinQuandoAAbaAbriu: chegouAoAbrir,
           quickComposerFechou: fechou,
           recusa,
           recadoNoStdinDepoisDeOciosa: chegou,
