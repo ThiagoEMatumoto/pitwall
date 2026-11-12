@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Clock, CornerDownLeft, ShieldAlert } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sendToApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { dockCrew } from '@/features/handoffs/crew'
@@ -228,7 +229,7 @@ export function CardPromptBar({
       if (res.ok) setText('')
       setNotice(resultNotice(res, target))
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Não deu pra enviar — tente de novo.')
+      setNotice(err instanceof Error ? ipcErrorMessage(err) : 'Não deu pra enviar — tente de novo.')
     } finally {
       setSending(false)
     }

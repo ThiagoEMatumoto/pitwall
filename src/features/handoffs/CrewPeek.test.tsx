@@ -754,11 +754,15 @@ describe('CrewPeek — mensagem do usuário abre a aba da filha', () => {
   })
 
   it('envio recusado: a aba já abriu, e o peek fica com o erro e o texto', async () => {
-    sendMessage.mockRejectedValue(new Error('A sessão-filha não está mais viva'))
+    // Como a recusa chega do ipcRenderer.invoke: prefixo do canal + erro do main.
+    const reason = 'A sessão-filha não está mais viva — não há para onde enviar.'
+    sendMessage.mockRejectedValue(
+      new Error(`Error invoking remote method 'handoffs:send-message': Error: ${reason}`),
+    )
     mount()
     const field = typeAndSend('segue por aqui')
 
-    expect(await screen.findByText('A sessão-filha não está mais viva')).toBeInTheDocument()
+    expect(await screen.findByText(reason)).toBeInTheDocument()
     expect(field).toHaveValue('segue por aqui')
     expect(useCrewDockStore.getState().peekId).toBe('h1')
     expect(focusOrOpenSession).toHaveBeenCalledTimes(1)

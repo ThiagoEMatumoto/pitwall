@@ -16,6 +16,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { handoffsApi, prefsApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
@@ -531,7 +532,9 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props)
     } catch (err) {
       // Mantém o texto pro usuário não perder o que digitou e mostra o motivo aqui.
       // Filha que morreu entre o render e o envio: o load() abaixo tira o input.
-      setSendError(err instanceof Error ? err.message : 'Não foi possível entregar a mensagem.')
+      setSendError(
+        err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível entregar a mensagem.',
+      )
     } finally {
       setSending(false)
       await load()

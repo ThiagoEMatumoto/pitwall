@@ -9,6 +9,7 @@ import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { revealChildOnUserMessage } from './reveal-child'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
@@ -419,7 +420,7 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
     } catch (err) {
       // Filha morreu entre o render e o envio é o caso comum: mostra o motivo e
       // preserva o texto pro usuário não perder o que digitou.
-      setError(err instanceof Error ? err.message : 'Não foi possível entregar a mensagem.')
+      setError(err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível entregar a mensagem.')
     } finally {
       setSending(false)
       await load()

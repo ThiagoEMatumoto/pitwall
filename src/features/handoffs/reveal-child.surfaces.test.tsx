@@ -134,6 +134,20 @@ describe('mensagem do usuário a uma filha fora da tela', () => {
       expect(useAppStore.getState().focusPaneId).toBeNull()
     })
 
+    // Como a recusa chega do ipcRenderer.invoke: prefixo do canal + erro do main.
+    it('envio recusado: o cartão mostra só o motivo', async () => {
+      const reason = 'A sessão-filha não está mais viva — não há para onde enviar.'
+      sendMessage
+        .mockReset()
+        .mockRejectedValue(
+          new Error(`Error invoking remote method 'handoffs:send-message': Error: ${reason}`),
+        )
+
+      await sendFromCard('segue por aqui')
+
+      expect((await screen.findByTestId('card-prompt-notice')).textContent).toBe(reason)
+    })
+
     it('filha com o handoff done (fora do dock) segue filha: abre do mesmo jeito', async () => {
       store.report(handoff.id, 'pronto')
       world = roomWorld(testDb, [

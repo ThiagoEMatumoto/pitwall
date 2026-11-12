@@ -88,7 +88,10 @@ const live: LiveSessionInfo = {
 
 // tier='mid' é o que o dock resolve na largura padrão de 340px (narrow só abaixo
 // de 220, e o dock não desce de 240).
-function mountDock(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status'] = 'working') {
+function mountDock(
+  patch: Partial<Handoff> = {},
+  liveStatus: LiveSessionInfo['status'] = 'working',
+) {
   useAppStore.setState({ liveSessions: [{ ...live, status: liveStatus }] })
   return render(
     <HandoffCard handoff={{ ...handoff, ...patch }} ttlHours={2} tier="mid" onPeek={() => {}} />,
@@ -584,11 +587,19 @@ describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
   // desmontaria o card com o texto digitado e o motivo da recusa.
   it('envio recusado: o usuário fica onde está, com o texto e o motivo no card', async () => {
     useAppStore.setState({ area: 'handoffs', focusOrOpenSession: realFocusOrOpenSession })
-    sendMessage.mockRejectedValueOnce(new Error('A filha está com um menu aberto.'))
+    // Como a recusa chega do ipcRenderer.invoke: o prefixo do canal e a classe do
+    // erro do main (ChildWriteRefusedError de menu aberto, do guarded-inject).
+    const reason =
+      'Não deu para entregar: há um menu aberto na tela da filha (permissão/pergunta): o Enter da mensagem o responderia. Responda o menu no terminal dela primeiro.'
+    sendMessage.mockRejectedValueOnce(
+      new Error(
+        `Error invoking remote method 'handoffs:send-message': ChildWriteRefusedError: ${reason}`,
+      ),
+    )
 
     send('segue por aqui')
 
-    expect(await screen.findByText('A filha está com um menu aberto.')).toBeTruthy()
+    expect(await screen.findByText(reason)).toBeTruthy()
     expect(useAppStore.getState().area).toBe('handoffs')
     expect(useAppStore.getState().focusPaneId).toBeNull()
     expect(useAppStore.getState().panes.map((p) => p.session.id)).toEqual(['s-child'])

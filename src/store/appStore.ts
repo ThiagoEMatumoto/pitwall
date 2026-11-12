@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { handoffsApi, motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
@@ -152,12 +153,6 @@ function dormantPaneFromSnapshot(
     dormant: true,
     ...(restoreError ? { restoreError } : {}),
   }
-}
-
-// "Error invoking remote method 'sessions:resume': Error: <msg>" → "<msg>".
-function ipcErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
 }
 
 // Pane ativa do layout salvo do dockview: activeGroup → o grupo na árvore do
