@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // O status vem do handler real gpu:status sobre prefs gravadas pelos produtores
 // reais (createGpuCrashWatch, resolveGpuBoot, gpu:set-disabled): nenhum GpuStatus
 // é montado à mão.
-const { handlers, relaunch, prefs, failing } = vi.hoisted(() => ({
+const { handlers, relaunch, prefs, failing, statusDelivery } = vi.hoisted(() => ({
   handlers: new Map<string, (e: unknown, payload: unknown) => unknown>(),
   relaunch: vi.fn(),
   prefs: new Map<string, unknown>(),
   failing: { key: null as string | null },
+  // O main já respondeu; a resposta só chega ao renderer quando isto resolve.
+  statusDelivery: { gate: null as Promise<void> | null },
 }))
 
 vi.mock('electron', () => ({
@@ -31,7 +33,11 @@ const invoke = (channel: string, payload?: unknown) =>
   Promise.resolve().then(() => handlers.get(channel)!(null, payload))
 vi.mock('@/lib/ipc', () => ({
   gpuApi: {
-    status: () => invoke('gpu:status'),
+    status: () => {
+      const answered = invoke('gpu:status')
+      const { gate } = statusDelivery
+      return gate ? gate.then(() => answered) : answered
+    },
     setDisabled: (disabled: boolean) => invoke('gpu:set-disabled', disabled),
     setOzone: (ozone: boolean) => invoke('gpu:set-ozone', ozone),
     relaunch: () => invoke('app:relaunch'),
@@ -106,6 +112,7 @@ describe('GpuSoftwareIndicator', () => {
     prefs.clear()
     relaunch.mockReset()
     failing.key = null
+    statusDelivery.gate = null
     useGpuStatusStore.setState({ status: null })
     registerGpuIpc()
   })
@@ -240,6 +247,33 @@ describe('GpuSoftwareIndicator', () => {
     await waitFor(() => expect(indicator()).toBeNull())
     expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull()
     expect(screen.getByRole('button', { name: 'Reiniciar agora' })).toBeInTheDocument()
+  })
+
+  it('um gpu:status pedido antes de religar e entregue depois não desfaz o religar', async () => {
+    crashTwice()
+    boot()
+    render(
+      <>
+        <GpuSoftwareIndicator />
+        <TerminalSection open />
+      </>,
+    )
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+    const staleLoad = useGpuStatusStore.getState().load()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull())
+    deliver()
+    await staleLoad
+
+    expect(useGpuStatusStore.getState().status?.autoDisabled).toBeNull()
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(indicator()).toBeNull()
   })
 })
 

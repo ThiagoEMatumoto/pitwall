@@ -10,18 +10,25 @@ interface GpuStatusState {
   setOzone: (ozone: boolean) => Promise<void>
 }
 
+// Um gpu:status pedido antes de uma escrita responde com as prefs antigas e pode
+// chegar depois do estado otimista: a contagem de escritas deixa descartá-lo.
+let writes = 0
+
 // O gpu:status visto pelo renderer. As Configurações e o aviso do rail leem
 // daqui: religar por um dos dois tem de aparecer no outro.
 export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
   status: null,
 
   load: async () => {
-    set({ status: await gpuApi.status() })
+    const writesAtRequest = writes
+    const status = await gpuApi.status()
+    if (writes === writesAtRequest) set({ status })
   },
 
   setDisabled: async (disabled) => {
     const { status } = get()
     if (!status) return
+    writes += 1
     set({ status: withGpuDisabled(status, disabled) })
     try {
       await gpuApi.setDisabled(disabled)
@@ -36,6 +43,7 @@ export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
   setOzone: async (ozone) => {
     const { status } = get()
     if (!status) return
+    writes += 1
     set({ status: { ...status, prefOzone: ozone } })
     await gpuApi.setOzone(ozone)
   },
