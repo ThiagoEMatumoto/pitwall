@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { endedNoticeSince, undoOk, type UndoRead } from './child-lifecycle'
+import {
+  endedNoticeSince,
+  tabOpenAtSend,
+  undoOk,
+  type SendTabsRead,
+  type UndoRead,
+} from './child-lifecycle'
 
 const NOTICE = 'stdin: a filha "kid" foi encerrada pelo usuário e segue vinculada'
 
@@ -59,5 +65,31 @@ describe('undoOk', () => {
     { abaDeVolta: 0 },
   ])('o que já reprovava segue reprovando: %j', (broken) => {
     expect(undoOk({ ...UNDONE, ...broken })).toBe(false)
+  })
+})
+
+// O que o passo (6) conta quando a aba abre antes do envio. Montado à mão pelo
+// mesmo motivo do UNDONE.
+const OPEN_AT_SEND: SendTabsRead = { antes: 2, noEnvio: 3, depois: 3, daFilha: 1 }
+
+describe('tabOpenAtSend', () => {
+  it('uma aba a mais na chegada do envio, a mesma conta depois e ela é a da filha: passa', () => {
+    expect(tabOpenAtSend(OPEN_AT_SEND)).toBe(true)
+  })
+
+  it('aba que só abriu com o envio já no main: reprova', () => {
+    expect(tabOpenAtSend({ ...OPEN_AT_SEND, noEnvio: 2 })).toBe(false)
+  })
+
+  it('envio que o espião não viu: reprova', () => {
+    expect(tabOpenAtSend({ ...OPEN_AT_SEND, noEnvio: null })).toBe(false)
+  })
+
+  it('outra aba abriu depois do envio: a da chegada pode não ser a da filha, reprova', () => {
+    expect(tabOpenAtSend({ ...OPEN_AT_SEND, depois: 4 })).toBe(false)
+  })
+
+  it('a aba que entrou não leva o rótulo da filha: reprova', () => {
+    expect(tabOpenAtSend({ ...OPEN_AT_SEND, daFilha: 0 })).toBe(false)
   })
 })

@@ -39,15 +39,11 @@ export function tapNextInvoke(app: MainApp, channel: string, probe: string): Pro
   )
 }
 
-// Expressão para o `probe`: quantos elementos casam com `selector`, com até
-// `waitMs` de espera pelo primeiro.
-export const countWhenPresent = (selector: string, waitMs: number): string =>
-  `new Promise((resolve) => {
-  const count = () => document.querySelectorAll(${JSON.stringify(selector)}).length
-  const until = Date.now() + ${waitMs}
-  const look = () => (count() > 0 || Date.now() >= until ? resolve(count()) : setTimeout(look, 25))
-  look()
-})`
+// Expressão para o `probe`: quantos elementos casam com `selector` no instante
+// em que ela roda. Não espera por nenhum: com espera, o que aparecesse com a
+// chamada já no main entraria na conta.
+export const countNow = (selector: string): string =>
+  `document.querySelectorAll(${JSON.stringify(selector)}).length`
 
 // A chamada que o espião de `channel` viu, ou null se ela ainda não veio.
 export function tappedInvoke(app: MainApp, channel: string): Promise<InvokeTap | null> {

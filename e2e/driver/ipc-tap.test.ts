@@ -1,6 +1,6 @@
 import type { ElectronApplication } from 'playwright'
 import { afterEach, describe, expect, it } from 'vitest'
-import { countWhenPresent, tapNextInvoke, tappedInvoke } from './ipc-tap'
+import { countNow, tapNextInvoke, tappedInvoke } from './ipc-tap'
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
@@ -47,35 +47,34 @@ afterEach(() => {
 })
 
 // Como o executeJavaScript: a expressão roda no escopo global da janela.
-const runInWindow = (code: string): Promise<unknown> => (0, eval)(code)
+const runInWindow = (code: string): unknown => (0, eval)(code)
 const addTab = (): void => {
   const tab = document.createElement('div')
-  tab.className = 'dv-default-tab'
-  tab.title = 'Fechar (X) encerra a filha'
+  tab.className = 'dv-tab'
   document.body.append(tab)
 }
-const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
+const TAB = '.dv-tab'
+// A aba que só abre `ms` depois, como a de um reveal que ainda espera o main.
+const addTabLater = (ms: number): Promise<void> =>
+  new Promise((resolve) =>
+    setTimeout(() => {
+      addTab()
+      resolve()
+    }, ms),
+  )
+// A janela que chamou, de verdade: o probe roda no documento do teste.
+const windowSender = () => ({
+  sender: { executeJavaScript: async (code: string) => runInWindow(code) },
+})
 
-describe('countWhenPresent', () => {
-  it('elemento já na tela: conta na hora', async () => {
+describe('countNow', () => {
+  it('conta o que está na janela na hora da leitura', () => {
+    expect(runInWindow(countNow(TAB))).toBe(0)
+
     addTab()
-    const started = Date.now()
+    addTab()
 
-    expect(await runInWindow(countWhenPresent(CHILD_TAB, 2000))).toBe(1)
-    expect(Date.now() - started).toBeLessThan(500)
-  })
-
-  it('elemento que aparece dentro do prazo: espera por ele', async () => {
-    setTimeout(addTab, 40)
-
-    expect(await runInWindow(countWhenPresent(CHILD_TAB, 2000))).toBe(1)
-  })
-
-  it('elemento que não aparece: devolve 0 quando o prazo vence', async () => {
-    const started = Date.now()
-
-    expect(await runInWindow(countWhenPresent(CHILD_TAB, 80))).toBe(0)
-    expect(Date.now() - started).toBeGreaterThanOrEqual(80)
+    expect(runInWindow(countNow(TAB))).toBe(2)
   })
 })
 
@@ -113,6 +112,30 @@ describe('tapNextInvoke', () => {
     expect(second).toBe('ok')
     expect(order).toEqual(['probe abas()', 'handler', 'handler'])
     expect(await tappedInvoke(app, CHANNEL)).toEqual({ probed: 0, args: ['primeira'] })
+  })
+
+  it('aba que abre com o envio já no main: fica fora da leitura', async () => {
+    const { handlers, app } = fakeMain()
+    handlers.set(CHANNEL, () => 'ok')
+    await tapNextInvoke(app, CHANNEL, countNow(TAB))
+
+    const opened = addTabLater(40)
+    await handlers.get(CHANNEL)?.(windowSender(), 'recado')
+
+    expect((await tappedInvoke(app, CHANNEL))?.probed).toBe(0)
+    await opened
+    expect(document.querySelectorAll(TAB)).toHaveLength(1)
+  })
+
+  it('aba aberta antes de o envio chegar ao main: entra na leitura', async () => {
+    const { handlers, app } = fakeMain()
+    handlers.set(CHANNEL, () => 'ok')
+    await tapNextInvoke(app, CHANNEL, countNow(TAB))
+
+    addTab()
+    await handlers.get(CHANNEL)?.(windowSender(), 'recado')
+
+    expect((await tappedInvoke(app, CHANNEL))?.probed).toBe(1)
   })
 
   it('canal sem handler: devolve false e não registra nenhum', async () => {

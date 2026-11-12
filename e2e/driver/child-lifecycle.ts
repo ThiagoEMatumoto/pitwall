@@ -33,3 +33,18 @@ export const undoOk = (read: UndoRead): boolean =>
   read.handoff === 'running' &&
   read.abaDeVolta === 1 &&
   read.avisoAMae === null
+
+// As abas que o passo "recado do usuário à filha fora da tela" contou: todas as
+// da janela antes do Enter, na chegada do envio ao main (null se o espião não o
+// viu) e depois dele; e, no fim, as que levam o rótulo da filha.
+export interface SendTabsRead {
+  antes: number
+  noEnvio: number | null
+  depois: number
+  daFilha: number
+}
+
+// O envio encontrou a aba da filha aberta: uma aba a mais já na chegada, nenhuma
+// outra depois, e a que entrou é a da filha.
+export const tabOpenAtSend = (read: SendTabsRead): boolean =>
+  read.noEnvio === read.antes + 1 && read.depois === read.noEnvio && read.daFilha === 1

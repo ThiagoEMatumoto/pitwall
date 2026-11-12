@@ -41,7 +41,14 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Locator } from 'playwright'
-import { ENDED_BY_USER, endedNoticeSince, undoOk, type UndoRead } from '../driver/child-lifecycle'
+import {
+  ENDED_BY_USER,
+  endedNoticeSince,
+  tabOpenAtSend,
+  undoOk,
+  type SendTabsRead,
+  type UndoRead,
+} from '../driver/child-lifecycle'
 import {
   cleanCopy,
   closeOverlays,
@@ -53,7 +60,7 @@ import {
 } from '../driver/crew-seed'
 import { argvFlag, createFakeHome } from '../driver/fake-home'
 import { queryDb } from '../driver/inspect'
-import { countWhenPresent, tapNextInvoke, tappedInvoke } from '../driver/ipc-tap'
+import { countNow, tapNextInvoke, tappedInvoke } from '../driver/ipc-tap'
 import { copyRealUserData, launchApp, writeCopyPrefs } from '../driver/launch'
 import { createLinkWatch, type Link, type LinkRead } from '../driver/link-watch'
 import { goToArea, waitReady } from '../driver/nav'
@@ -80,15 +87,18 @@ const KILL_AFTER_MS = 5000 + 750 + 2500
 // transcript) + folga para o /exit sair.
 const HIBERNATE_WAIT_MS = 270_000
 const CHILD_TAB = '.dv-default-tab[title*="encerra a filha"]'
+// A aba como o dockview a cria, com ou sem o rótulo já pintado.
+const TAB = '.dv-tab'
 // Painel dos menus abertos por portal (chip de 2º plano, "Mais ações" do card).
 const MENU_PANEL = 'div.fixed.min-w-40'
 const LINK_POLL_MS = 250
 const SEND_PROMPT = 'sessions:send-prompt'
-// Abas da filha na janela quando o envio chega ao main. Enquanto o handler não
-// responde, o submit do QuickComposer está parado no await do envio: uma aba que
-// só abrisse depois dele não aparece aqui. A espera é para o React pintar a aba
-// que o store já tem.
-const CHILD_TABS_AT_SEND = countWhenPresent(CHILD_TAB, 2000)
+// Abas na janela no instante em que o envio chega ao main, sem espera: a que
+// abrisse com o envio já a caminho fica fora da conta. Conta TAB e não CHILD_TAB:
+// o dockview cria a aba no mesmo commit em que a pane entra no store, antes de o
+// submit sair do await que a abriu. O rótulo da filha o React só pinta uma
+// tarefa depois, e a leitura podia chegar antes dele.
+const TABS_AT_SEND = countNow(TAB)
 
 const LABELS: Record<number, string> = {
   1: 'minimizar a aba da filha: o chip mostra 1 e o processo segue vivo',
@@ -731,7 +741,8 @@ try {
       await quick.getByTestId('when-on-idle').click()
       await input.fill(text)
       const abasAntes = await childTab.count()
-      const espiado = await tapNextInvoke(app, SEND_PROMPT, CHILD_TABS_AT_SEND)
+      const todasAntes = await page.locator(TAB).count()
+      const espiado = await tapNextInvoke(app, SEND_PROMPT, TABS_AT_SEND)
       await input.press('Enter')
       const abriu = await waitFor(
         'aba aberta pelo envio',
@@ -745,6 +756,12 @@ try {
       )
       const envio = await tappedInvoke(app, SEND_PROMPT)
       const alvo = (envio?.args[0] as { sessionId?: string } | undefined)?.sessionId ?? null
+      const abas: SendTabsRead = {
+        antes: todasAntes,
+        noEnvio: typeof envio?.probed === 'number' ? envio.probed : null,
+        depois: await page.locator(TAB).count(),
+        daFilha: await childTab.count(),
+      }
       const recusa = fechou
         ? null
         : await quick
@@ -763,7 +780,7 @@ try {
           listada &&
           abasAntes === 0 &&
           alvo === id &&
-          envio?.probed === 1 &&
+          tabOpenAtSend(abas) &&
           abriu &&
           fechou &&
           chegou,
@@ -772,7 +789,7 @@ try {
           abasDaFilhaAntes: abasAntes,
           envioEspiado: espiado,
           envioParaAFilha: alvo === id,
-          abasDaFilhaNoEnvio: envio?.probed ?? null,
+          abas,
           abaAbriu: abriu,
           quickComposerFechou: fechou,
           recusa,
