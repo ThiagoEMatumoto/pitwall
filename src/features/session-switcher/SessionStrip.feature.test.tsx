@@ -269,6 +269,39 @@ describe('SessionStrip — filhas em segundo plano', () => {
       expect(screen.getByTestId('session-strip-more')).toHaveTextContent('+2')
     })
 
+    // `visibility: visible` num descendente vence o `hidden` herdado do chip: com
+    // o ponteiro parado em cima na hora do corte, a faixa de ações (Encerrar
+    // inclusive) reaparecia solta e clicável, de uma sessão que não está à vista.
+    it('chip cortado não revela as ações do hover', () => {
+      restore = stubRects({
+        bar: [100, 600],
+        chips: [
+          [60, 150],
+          [260, 380],
+        ],
+        background: [],
+      })
+      sessions.push(named('mae'), named('outra'))
+      setup([node('mae'), node('outra')], false)
+
+      const [cut, shown] = [...document.querySelectorAll<HTMLElement>('[data-strip-chip]')].map(
+        (chip) => ({
+          chip,
+          classes: chip
+            .querySelector<HTMLElement>('[data-testid="strip-chip-actions"]')!
+            .className.split(/\s+/),
+        }),
+      )
+      expect(cut.chip.dataset.clippedHidden).toBe('true')
+      expect(cut.classes).toContain('invisible')
+      expect(cut.classes).not.toContain('group-hover:visible')
+      expect(cut.classes).not.toContain('group-focus-within:visible')
+
+      expect(shown.chip.dataset.clippedHidden).toBeUndefined()
+      expect(shown.classes).toContain('group-hover:visible')
+      expect(shown.classes).toContain('group-focus-within:visible')
+    })
+
     it('mãe cortada some, mas o chip agregado com filha aguardando fica', () => {
       restore = stubRects({
         bar: [100, 600],

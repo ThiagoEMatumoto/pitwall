@@ -569,13 +569,14 @@ function Chip({
           largura, afastadas do começo dela: a aba de nome curto alarga só o que
           falta para os glifos e o início do nome ficarem fora delas — sobrepostas
           com `absolute`, cobriam o botão inteiro e o clique caía nelas. `relative`
-          as mantém por cima do conteúdo; a margem negativa leva até a borda. */}
+          as mantém por cima do conteúdo; a margem negativa leva até a borda.
+          Chip cortado não as revela: `visible` aqui venceria o `hidden` herdado. */}
       <span
         data-testid="strip-chip-actions"
         style={{ marginLeft: leadGlyphs * LEAD_GLYPH_PX + LEAD_NAME_PX }}
-        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible group-focus-within:visible group-hover:visible ${
-          depth > 0 ? '-mr-2' : '-mr-2.5'
-        }`}
+        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
+          hidden ? '' : 'group-focus-within:visible group-hover:visible'
+        } ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}
       >
         {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
         {onToggleMother && (
