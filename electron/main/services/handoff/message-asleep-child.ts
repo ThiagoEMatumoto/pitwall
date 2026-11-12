@@ -10,6 +10,7 @@ import { waitPtyReady } from '../dormant-panes'
 import * as handoffStore from '../handoff-store'
 import { ptyManager } from '../pty-manager'
 import { tuiMenuWatch } from '../tui-menu-watch'
+import { attr, sanitizeBody } from './envelope-text'
 import { getWakeQueue } from './handoff-wake'
 import { wakeHandoffChild } from './spawn-child'
 import type { Handoff } from '../../../../shared/types/ipc'
@@ -22,19 +23,21 @@ export interface AsleepChildDelivery {
 }
 
 // O que a filha lê ao acordar. O apelido da mãe é o `to` do SendMessage; sem ele
-// vale a regra do briefing (o `from` da mensagem que ela já recebeu).
+// vale a regra do briefing (o `from` da mensagem que ela já recebeu). O texto da
+// mãe sai sem caracteres de controle: a fila o escreve num bracketed-paste, e um
+// ESC[201~ fecharia o paste com o resto virando tecla crua.
 export function asleepChildMessage(
   handoffId: string,
   motherAlias: string | null,
   text: string,
 ): string {
   const to = motherAlias
-    ? `SendMessage({ to: "${motherAlias}" })`
+    ? `SendMessage({ to: "${attr(motherAlias)}" })`
     : 'SendMessage (o `to` é o `from` das mensagens que ela já te mandou)'
   return [
     `[Pitwall] Você dormia e a sua mãe te acordou com a mensagem abaixo. O handoff ${handoffId} já foi entregue e continua concluído: responda a ela por ${to}, não por handoff_report.`,
     '',
-    text,
+    sanitizeBody(text),
   ].join('\n')
 }
 

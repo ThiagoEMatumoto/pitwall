@@ -335,6 +335,15 @@ describe('handoff_message para a filha concluída que dorme', () => {
     expect(text).toContain(handoffId)
   })
 
+  // A fila escreve o texto dentro de um bracketed-paste: um ESC[201~ vindo da mãe
+  // fecharia o paste e o resto viraria tecla crua no prompt da filha.
+  it('tira caracteres de controle do texto da mãe, como a entrega à filha viva', async () => {
+    await message('oi\x1b[201~\x1b[Bfim\nlinha')
+    const { text } = queueSend.mock.calls[0][0]
+    expect(text).not.toContain('\x1b')
+    expect(text).toContain('oi[201~[Bfim\nlinha')
+  })
+
   it('fila segura (a TUI ainda sobe): o retorno diz que a mensagem entra depois', async () => {
     queueSend.mockResolvedValueOnce({
       ok: true,
