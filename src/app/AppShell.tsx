@@ -49,6 +49,7 @@ import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
+import { closeChildTab, useIsLinkedChild } from '@/features/handoffs/end-child'
 import { layoutRestoreStep } from '../../shared/dock-layout-restore'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -180,6 +181,10 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   // marca da feature errada (ou a nenhuma).
   const pane = useAppStore((s) => s.panes.find((p) => p.paneId === props.api.id))
   const color = (pane ?? props.params.pane)?.projectColor ?? null
+  // O X (e o clique do meio) da aba de uma FILHA encerra o processo; o das outras
+  // só tira a aba da tela. Ctrl+W e fechar o grupo seguem minimizando sempre.
+  const isChild = useIsLinkedChild(pane?.session.id)
+  const paneId = props.api.id
   return (
     <div className="flex items-center">
       <span
@@ -188,7 +193,15 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       />
       {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
-      <DockviewDefaultTab {...props} />
+      <DockviewDefaultTab
+        {...props}
+        title={
+          isChild
+            ? 'Fechar (X) encerra a filha: mata o processo; ela segue vinculada à mãe e retomável. Ctrl+W só minimiza'
+            : 'Fechar (X) só tira a aba da tela; não encerra a sessão'
+        }
+        closeActionOverride={isChild ? () => closeChildTab(paneId) : undefined}
+      />
       {pane?.dormant && !pane.restoreError && (
         <span
           role="img"

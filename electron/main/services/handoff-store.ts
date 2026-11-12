@@ -3,6 +3,7 @@ import { getDb, handoffsInterruptedAtOpen } from './db'
 import { findTranscriptPath } from './transcript-path'
 import { resolveHandoffWorkDir } from './work-dir'
 import { CHILD_CONVERSATION_MATCH, childConversationParams } from './handoff/child-conversation'
+import { ENDED_BY_USER_ERROR } from './handoff/ended-by-user'
 import { isLedByMother } from '../../../shared/handoff-lead'
 import * as requests from './handoff-requests'
 import type { CreateRequestInput, HandoffRequest } from '../../../shared/types/handoff-request'
@@ -45,6 +46,8 @@ interface HandoffRow {
   predecessor_session_id: string | null
   // Diretório de trabalho da filha (migration 057): chave da posse.
   work_dir: string | null
+  // Encerrada pelo usuário (migration 070).
+  ended_by_user_at: number | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
 }
@@ -138,6 +141,7 @@ function toEntity(row: HandoffRow): Handoff {
     outcome: (row.outcome as HandoffOutcome | null) ?? null,
     dismissedAt: row.dismissed_at,
     predecessorSessionId: row.predecessor_session_id,
+    endedByUserAt: row.ended_by_user_at,
     resumable: isResumable(row),
   }
 }
@@ -447,7 +451,7 @@ export function markRunning(id: string, childSessionId: string): Handoff {
   try {
     getDb()
       .prepare(
-        'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, updated_at = ? WHERE id = ?',
+        'UPDATE handoffs SET status = ?, child_session_id = ?, dismissed_at = NULL, ended_by_user_at = NULL, updated_at = ? WHERE id = ?',
       )
       .run('running', childSessionId, Date.now(), id)
   } catch (err) {
@@ -657,23 +661,34 @@ export function reconcileStuck(
   // quem mudou). O predicado é idêntico ao do UPDATE.
   const stuck = db
     .prepare(
-      `SELECT id, status FROM handoffs
+      `SELECT id, status, ended_by_user_at FROM handoffs
        WHERE status IN ('running','needs_input')
          AND (child_session_id IS NULL
               OR child_session_id NOT IN (SELECT id FROM sessions WHERE status = 'running'))`,
     )
-    .all() as Array<{ id: string; status: string }>
+    .all() as Array<{ id: string; status: string; ended_by_user_at: number | null }>
+  // A encerrada pelo usuário que o exit handler não reconciliou leva o mesmo
+  // motivo que ele gravaria (e que o sweep do boot grava): é o que a mãe lê.
   const res = db
     .prepare(
-      `UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ?
+      `UPDATE handoffs
+          SET status = 'interrupted',
+              error = CASE WHEN ended_by_user_at IS NOT NULL THEN ? ELSE ? END,
+              updated_at = ?
        WHERE status IN ('running','needs_input')
          AND (child_session_id IS NULL
               OR child_session_id NOT IN (SELECT id FROM sessions WHERE status = 'running'))`,
     )
-    .run(error, Date.now())
+    .run(ENDED_BY_USER_ERROR, error, Date.now())
   for (const h of stuck) {
     requests.cancelOpen(h.id, 'reconcileStuck')
-    logEvent(h.id, 'reconcileStuck', 'interrupted', h.status, error)
+    logEvent(
+      h.id,
+      'reconcileStuck',
+      'interrupted',
+      h.status,
+      h.ended_by_user_at != null ? ENDED_BY_USER_ERROR : error,
+    )
     onInterrupted?.(h.id)
   }
   return res.changes + (killChildPty ? killFailedChildren(killChildPty) : 0)
@@ -786,6 +801,36 @@ export function undismiss(id: string): Handoff {
   return fresh(id)
 }
 
+export { ENDED_BY_USER_ERROR }
+
+// O usuário encerrou a filha de propósito (ou desfez isso na janela do Desfazer).
+// Só a marca muda: status e child_session_id ficam como estão — encerrar não
+// desvincula, e quem transiciona o handoff é o exit da PTY. Quem lê: o exit
+// handler (motivo gravado e aviso à mãe) e o boot (não ressuscita a encerrada).
+// Quem limpa além do Desfazer: markRunning e relink com a filha viva — uma filha
+// viva não está encerrada. Idempotente: o instante original e a trilha não se
+// repetem a cada clique.
+export function setEndedByUser(id: string, ended: boolean): Handoff {
+  const status = currentStatus(id)
+  if (status === null) throw new Error(`handoff not found: ${id}`)
+  const now = Date.now()
+  const res = ended
+    ? getDb()
+        .prepare(
+          'UPDATE handoffs SET ended_by_user_at = ?, updated_at = ? WHERE id = ? AND ended_by_user_at IS NULL',
+        )
+        .run(now, now, id)
+    : getDb()
+        .prepare(
+          'UPDATE handoffs SET ended_by_user_at = NULL, updated_at = ? WHERE id = ? AND ended_by_user_at IS NOT NULL',
+        )
+        .run(now, id)
+  if (res.changes > 0) {
+    logEvent(id, ended ? 'ended_by_user' : 'ended_by_user_undone', status, status)
+  }
+  return fresh(id)
+}
+
 // Soltar do painel: o humano CORTA o vínculo mãe→filha, de propósito, devolvendo
 // a sessão à condição de sessão normal. É onde difere de `dismiss`, que só tira o
 // card de vista MANTENDO handoffs.child_session_id apontando pra sessão: aqui o
@@ -878,8 +923,10 @@ export function relink(
     db.transaction(() => {
       db.prepare(
         `UPDATE handoffs SET status = ?, child_session_id = ?, mother_session_id = ?,
-                dismissed_at = NULL, updated_at = ? WHERE id = ?`,
-      ).run(to, opts.childSessionId, mother, now, id)
+                dismissed_at = NULL,
+                ended_by_user_at = CASE WHEN ? THEN NULL ELSE ended_by_user_at END,
+                updated_at = ? WHERE id = ?`,
+      ).run(to, opts.childSessionId, mother, opts.childAlive ? 1 : 0, now, id)
       if (mother !== row.mother_session_id) {
         const detail = JSON.stringify({ from: row.mother_session_id, to: mother })
         logEvent(id, 'mother_changed', to, row.status, detail)

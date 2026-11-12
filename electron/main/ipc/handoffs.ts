@@ -151,6 +151,11 @@ const setMotherSchema = z.object({
   motherSessionId: z.string().min(1),
 })
 
+const setChildEndedSchema = z.object({
+  sessionId: z.string().min(1),
+  ended: z.boolean(),
+})
+
 const setOutcomeSchema = z.object({
   id: z.string().min(1),
   outcome: z.enum(['useful', 'wrong', 'partial']),
@@ -313,6 +318,19 @@ export function registerHandoffsIpc(): void {
   // filha (a denylist do HANDOFF_CHILD_SETTINGS_JSON vale até um relançamento).
   ipcMain.handle('handoffs:release', (_e, id: string): Handoff => {
     const handoff = store.release(id)
+    broadcast('handoff:updated', handoff)
+    return handoff
+  })
+
+  // Encerrar pelo usuário (e o Desfazer dele). O renderer chama para qualquer
+  // sessão encerrada; se ela é filha vinculada, decide o banco. O handoff é o
+  // MESMO que o exit handler da PTY vai transicionar (getByChildSession); a
+  // conversa cobre a linha que um resume fora do relink deixou sem ponteiro.
+  ipcMain.handle('handoffs:set-child-ended', (_e, raw: unknown): Handoff | null => {
+    const { sessionId, ended } = setChildEndedSchema.parse(raw)
+    const linked = store.getByChildSession(sessionId) ?? store.getByChildConversation(sessionId)
+    if (!linked) return null
+    const handoff = store.setEndedByUser(linked.id, ended)
     broadcast('handoff:updated', handoff)
     return handoff
   })

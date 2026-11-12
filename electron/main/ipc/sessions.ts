@@ -813,7 +813,11 @@ export function resumeHandoffChild(
   // fica ilegível pra ambos). Se a PTY já está no ar, não spawna — devolve a
   // sessão existente pro chamador focar o pane que já existe.
   if (childRow && ptyManager.isRunning(handoff.childSessionId)) {
-    return { handoff, session: toSession(childRow), alreadyRunning: true }
+    return {
+      handoff: clearEndedByUser(handoff),
+      session: toSession(childRow),
+      alreadyRunning: true,
+    }
   }
 
   // Posse do diretório ANTES do spawn: o markRunning lá embaixo reativa o handoff
@@ -840,7 +844,9 @@ export function resumeHandoffChild(
   // passa a apontar para a linha viva, sem spawn.
   const alive = findAliveByCc(ccSessionId)
   if (alive) {
-    if (delivered) return { handoff, session: toSession(alive), alreadyRunning: true }
+    if (delivered) {
+      return { handoff: clearEndedByUser(handoff), session: toSession(alive), alreadyRunning: true }
+    }
     const relinked = handoffStore.markRunning(id, alive.id)
     broadcast('handoff:updated', relinked)
     return { handoff: relinked, session: toSession(alive), alreadyRunning: true }
@@ -949,6 +955,7 @@ export function resumeHandoffChild(
   clearConversationHibernated(db, ccSessionId)
 
   if (delivered) {
+    clearEndedByUser(handoff)
     // Quem re-aponta o child_session_id para a linha nova é o
     // adoptResumedConversation, dentro do transferLeadershipToResumed.
     transferLeadershipToResumed(priorSessionIds, namedSession, opts.origin ?? 'main')
@@ -968,6 +975,16 @@ export function resumeHandoffChild(
   // os wake_failed dela saem de novo (vale para handoffs:resume, adopt e relink).
   transferLeadershipToResumed(priorSessionIds, namedSession, opts.origin ?? 'main')
   return { handoff: updated, session: namedSession, alreadyRunning: false }
+}
+
+// Retomar é trazer a filha de volta: viva, ela não está mais "encerrada pelo
+// usuário". Os ramos que passam por markRunning já limpam a marca no mesmo
+// UPDATE; este cobre os que não passam (PTY ainda viva, handoff done).
+function clearEndedByUser(handoff: Handoff): Handoff {
+  if (handoff.endedByUserAt == null) return handoff
+  const cleared = handoffStore.setEndedByUser(handoff.id, false)
+  broadcast('handoff:updated', cleared)
+  return cleared
 }
 
 // PTY viva do Pitwall com esta conversa, em qualquer linha de sessions (cada
@@ -1344,9 +1361,13 @@ export function registerSessionIpc(): void {
           linkedHandoff &&
           (linkedHandoff.status === 'running' || linkedHandoff.status === 'needs_input')
         ) {
+          // Encerrada pelo usuário: o motivo gravado é esse, e é ele que vai no
+          // aviso à mãe — a filha não caiu, e a mãe não deve re-despachar.
           const reconciled = handoffStore.failIfRunning(
             linkedHandoff.id,
-            `Sessão-filha encerrou (${e.exitCode === 0 ? 'exit' : 'crash'}) sem chamar handoff_report.`,
+            linkedHandoff.endedByUserAt != null
+              ? handoffStore.ENDED_BY_USER_ERROR
+              : `Sessão-filha encerrou (${e.exitCode === 0 ? 'exit' : 'crash'}) sem chamar handoff_report.`,
           )
           if (reconciled) {
             broadcast('handoff:updated', reconciled)

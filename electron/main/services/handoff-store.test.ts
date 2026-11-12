@@ -21,6 +21,7 @@ vi.mock('./transcript-path', () => ({
 }))
 
 import * as store from './handoff-store'
+import { ORPHANED_AT_BOOT_ERROR, sweepInFlightHandoffs } from './handoff/boot-sweep'
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -543,14 +544,8 @@ describe('handoff-store', () => {
   }
 
   describe('boot sweep (handoffs órfãos do boot anterior → interrupted)', () => {
-    // O sweep vive em db.ts (getDb), acoplado a electron.app; aqui exercemos o
-    // MESMO SQL literal contra o testDb pra travar o contrato.
     function bootSweep(): void {
-      testDb
-        .prepare(
-          "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",
-        )
-        .run('Sessão-filha órfã: app reiniciou sem reconciliar o handoff', Date.now())
+      sweepInFlightHandoffs(testDb)
     }
 
     it('running/needs_input → interrupted; done/rejected/failed permanecem intactos', () => {
@@ -579,7 +574,7 @@ describe('handoff-store', () => {
 
       const swept = store.get(running.id)
       expect(swept?.status).toBe('interrupted')
-      expect(swept?.error).toBe('Sessão-filha órfã: app reiniciou sem reconciliar o handoff')
+      expect(swept?.error).toBe(ORPHANED_AT_BOOT_ERROR)
       expect(store.get(asking.id)?.status).toBe('interrupted')
       expect(store.get(done.id)?.status).toBe('done')
       expect(store.get(rejected.id)?.status).toBe('rejected')
@@ -666,6 +661,38 @@ describe('handoff-store', () => {
       // 2ª passada: interrupted não está em ('running','needs_input') → ignorado.
       expect(store.reconcileStuck()).toBe(0)
       expect(store.get(h.id)?.status).toBe('interrupted')
+    })
+
+    // O exit handler pode não ter reconciliado (algo lançou antes): quem chega
+    // primeiro é esta passada, e a mãe lê o error que ela grava.
+    it('filha encerrada pelo usuário leva o motivo do encerramento; a que caiu, o genérico', () => {
+      const ended = newHandoff('r1')
+      store.approve(ended.id, {})
+      spawnChild(ended.id, 's-ended', 'running')
+      store.setEndedByUser(ended.id, true)
+      testDb.prepare("UPDATE sessions SET status = 'exited' WHERE id = 's-ended'").run()
+      const crashed = newHandoff('r2')
+      store.approve(crashed.id, {})
+      spawnChild(crashed.id, 's-crashed', 'crashed')
+
+      const woken: string[] = []
+      expect(store.reconcileStuck(undefined, (id) => woken.push(id))).toBe(2)
+
+      const after = store.get(ended.id)
+      expect(after?.status).toBe('interrupted')
+      expect(after?.error).toBe(store.ENDED_BY_USER_ERROR)
+      expect(after?.endedByUserAt).not.toBeNull()
+      expect(after?.childSessionId).toBe('s-ended')
+      expect(events(ended.id).at(-1)).toMatchObject({
+        event: 'reconcileStuck',
+        detail: store.ENDED_BY_USER_ERROR,
+      })
+      expect(store.get(crashed.id)?.error).toBe('Sessão-filha encerrada sem reportar conclusão')
+      expect(events(crashed.id).at(-1)).toMatchObject({
+        event: 'reconcileStuck',
+        detail: 'Sessão-filha encerrada sem reportar conclusão',
+      })
+      expect(woken.sort()).toEqual([ended.id, crashed.id].sort())
     })
   })
 
@@ -1350,6 +1377,66 @@ describe('handoff-store', () => {
       const done = childOf('m-old', 'c3')
       store.report(done.id, 'feito')
       expect(store.listRelinkableByMother('m-old').map((h) => h.id)).toEqual([c1.id])
+    })
+  })
+
+  describe('encerrada pelo usuário (ended_by_user_at)', () => {
+    function runningChild(): string {
+      const h = newHandoff()
+      store.markRunning(h.id, 's-kid')
+      return h.id
+    }
+
+    it('nasce sem a marca; marcar e desmarcar não mexem no status nem no vínculo', () => {
+      const id = runningChild()
+      expect(store.get(id)?.endedByUserAt).toBeNull()
+
+      const marked = store.setEndedByUser(id, true)
+      expect(marked.endedByUserAt).toEqual(expect.any(Number))
+      expect(marked.status).toBe('running')
+      expect(marked.childSessionId).toBe('s-kid')
+
+      const cleared = store.setEndedByUser(id, false)
+      expect(cleared.endedByUserAt).toBeNull()
+      expect(cleared.status).toBe('running')
+      expect(cleared.childSessionId).toBe('s-kid')
+    })
+
+    it('marcar duas vezes preserva o instante e grava um evento só', () => {
+      const id = runningChild()
+      const first = store.setEndedByUser(id, true).endedByUserAt
+      expect(store.setEndedByUser(id, true).endedByUserAt).toBe(first)
+      expect(store.listEvents(id).filter((e) => e.event === 'ended_by_user')).toHaveLength(1)
+    })
+
+    it('a marca sobrevive à PTY morrer: interrupted, ainda vinculada', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      const out = store.failIfRunning(id, 'encerrada')
+      expect(out?.status).toBe('interrupted')
+      expect(out?.endedByUserAt).not.toBeNull()
+      expect(out?.childSessionId).toBe('s-kid')
+    })
+
+    it('markRunning (filha viva de novo) limpa a marca', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      store.failIfRunning(id, 'encerrada')
+      expect(store.markRunning(id, 's-kid-2').endedByUserAt).toBeNull()
+    })
+
+    it('relink com a filha viva limpa a marca; com a filha morta, mantém', () => {
+      const id = runningChild()
+      store.setEndedByUser(id, true)
+      store.failIfRunning(id, 'encerrada')
+      const dead = store.relink(id, { childSessionId: 's-kid', childAlive: false })
+      expect(dead.endedByUserAt).not.toBeNull()
+      const alive = store.relink(id, { childSessionId: 's-kid', childAlive: true })
+      expect(alive.endedByUserAt).toBeNull()
+    })
+
+    it('handoff inexistente lança', () => {
+      expect(() => store.setEndedByUser('nope', true)).toThrow(/handoff not found/)
     })
   })
 })

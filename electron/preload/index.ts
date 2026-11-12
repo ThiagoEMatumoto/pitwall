@@ -428,6 +428,8 @@ const api: Api = {
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
     undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
+    setChildEnded: (input: { sessionId: string; ended: boolean }) =>
+      invoke('handoffs:set-child-ended', input),
     learnChildRule: (input: { tool?: string; command?: string }) =>
       invoke('handoffs:learn-child-rule', input),
     childLink: (sessionId: string) => invoke('handoffs:child-link', sessionId),

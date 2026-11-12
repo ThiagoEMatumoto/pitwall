@@ -55,6 +55,8 @@ interface Props {
   toggleDisabledReason?: string | null
   onMinimize: () => void
   onEndSession: () => void
+  // Filha vinculada: o rótulo do Encerrar diz que ela segue ligada à mãe.
+  linkedChild?: boolean
   // Passar o bastão: sobe uma sessão LIMPA com o briefing destilado desta. Fica
   // sempre à mão (não só com o contexto no fim) porque trocar de sessão também é
   // decisão deliberada — ex.: virar de assunto sem arrastar a conversa antiga.
@@ -110,6 +112,7 @@ export function SessionHeader({
   toggleDisabledReason = null,
   onMinimize,
   onEndSession,
+  linkedChild = false,
   onPassBaton,
   onAdopt,
   adoptLabel,
@@ -425,7 +428,11 @@ export function SessionHeader({
           type="button"
           onClick={onEndSession}
           disabled={exited}
-          title="Encerrar o processo claude e fechar a sessão (some do strip)"
+          title={
+            linkedChild
+              ? 'Encerrar a filha — mata o processo; ela segue vinculada à mãe e pode ser retomada'
+              : 'Encerrar o processo claude e fechar a sessão (some do strip)'
+          }
           aria-label="Encerrar"
           className="rounded p-1 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-danger)] disabled:opacity-40"
         >

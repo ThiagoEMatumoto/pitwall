@@ -3,6 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // appStore importa @/lib/ipc, que lê window.api no module-eval. O spy de kill
 // precisa existir ANTES do import dinâmico do store (top-level await garante).
 const killSpy = vi.fn(() => Promise.resolve())
+// handoffs.setChildEnded e sessions.resume: os dois IPCs que os testes de
+// "encerrada pelo usuário" observam ou controlam.
+const setChildEndedSpy = vi.fn((_input: { sessionId: string; ended: boolean }) =>
+  Promise.resolve<unknown>(null),
+)
+const resumeSpy = vi.fn((_input: unknown) => Promise.resolve<unknown>(undefined))
+const spies: Record<string, (...args: never[]) => unknown> = {
+  kill: killSpy,
+  setChildEnded: setChildEndedSpy,
+  resume: resumeSpy,
+}
 Object.assign(window, {
   api: new Proxy(
     {},
@@ -10,7 +21,7 @@ Object.assign(window, {
       get: () =>
         new Proxy(
           {},
-          { get: (_t, prop) => (prop === 'kill' ? killSpy : () => Promise.resolve()) },
+          { get: (_t, prop) => spies[prop as string] ?? (() => Promise.resolve()) },
         ),
     },
   ),
@@ -51,6 +62,10 @@ function seedSession(sessionId: string): void {
 beforeEach(() => {
   vi.useFakeTimers()
   killSpy.mockClear()
+  setChildEndedSpy.mockReset()
+  setChildEndedSpy.mockImplementation(() => Promise.resolve(null))
+  resumeSpy.mockReset()
+  resumeSpy.mockImplementation(() => Promise.resolve(undefined))
   useAppStore.setState({ panes: [], liveSessions: [] })
   useToastStore.setState({ toasts: [] })
 })
@@ -94,6 +109,101 @@ describe('endSession (janela de undo)', () => {
     expect(useAppStore.getState().liveSessions.map((l) => l.id)).toEqual(['s2'])
     vi.advanceTimersByTime(GRACE_MS + TOAST_MS)
     expect(killSpy).not.toHaveBeenCalled()
+  })
+})
+
+// A marca "encerrada pelo usuário" (handoffs.ended_by_user_at) é gravada pelo
+// main; o store só diz QUANDO: no clique do Encerrar com janela de undo (para o
+// quit dentro da janela não ressuscitar a filha) e some se o usuário desfaz.
+describe('endSession marca a filha como encerrada pelo usuário', () => {
+  it('marca no clique, antes de qualquer timer, e o kill segue na hora de sempre', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+
+    expect(setChildEndedSpy).toHaveBeenCalledTimes(1)
+    expect(setChildEndedSpy).toHaveBeenCalledWith({ sessionId: 's1', ended: true })
+    expect(killSpy).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(TOAST_MS + GRACE_MS)
+    expect(killSpy).toHaveBeenCalledWith('s1')
+    expect(setChildEndedSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('Desfazer dentro da janela desmarca', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+    useAppStore.getState().undoEndSession('s1')
+
+    expect(setChildEndedSpy.mock.calls.map(([input]) => input)).toEqual([
+      { sessionId: 's1', ended: true },
+      { sessionId: 's1', ended: false },
+    ])
+  })
+
+  it('Desfazer tarde demais não desmarca: o kill já foi', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+    vi.advanceTimersByTime(TOAST_MS + GRACE_MS)
+    useAppStore.getState().undoEndSession('s1')
+
+    expect(setChildEndedSpy).toHaveBeenCalledTimes(1)
+    expect(setChildEndedSpy).toHaveBeenCalledWith({ sessionId: 's1', ended: true })
+  })
+
+  it('immediate (Reabrir) não marca', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1', { immediate: true })
+
+    expect(killSpy).toHaveBeenCalledWith('s1')
+    expect(setChildEndedSpy).not.toHaveBeenCalled()
+  })
+
+  it('clique repetido na janela não marca de novo', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+    useAppStore.getState().endSession('s1')
+
+    expect(setChildEndedSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a marca falhou (IPC rejeitou): o encerramento pedido acontece assim mesmo', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setChildEndedSpy.mockImplementation(() => Promise.reject(new Error('db locked')))
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+    await vi.advanceTimersByTimeAsync(TOAST_MS + GRACE_MS)
+
+    expect(killSpy).toHaveBeenCalledWith('s1')
+    expect(logged).toHaveBeenCalled()
+    logged.mockRestore()
+  })
+
+  // A guarda do main re-anexa a PTY viva (ainda na janela de undo): quem retomou a
+  // quer viva. O kill agendado cai, e a marca cai junto.
+  it('retomada na janela (re-attach) cancela o kill e desmarca', async () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1')
+    const session = { id: 's1', ccSessionId: 'cc-s1', title: null }
+    resumeSpy.mockImplementation(() => Promise.resolve({ session, reattached: true }))
+
+    await useAppStore.getState().resumeSession(null, null, null, null, 'cc-s1')
+
+    expect(setChildEndedSpy).toHaveBeenLastCalledWith({ sessionId: 's1', ended: false })
+    vi.advanceTimersByTime(TOAST_MS + GRACE_MS)
+    expect(killSpy).not.toHaveBeenCalled()
+  })
+
+  it('toast da filha diz que ela segue vinculada; o da sessão comum não muda', () => {
+    seedSession('s1')
+    useAppStore.getState().endSession('s1', { linkedChild: true })
+    expect(useToastStore.getState().toasts[0]?.title).toBe(
+      'Filha encerrada · segue vinculada à mãe',
+    )
+
+    useToastStore.setState({ toasts: [] })
+    seedSession('s2')
+    useAppStore.getState().endSession('s2')
+    expect(useToastStore.getState().toasts[0]?.title).toBe('Sessão encerrada')
   })
 })
 

@@ -12,6 +12,8 @@ export function resumeSweptChildren(sweptIds: readonly string[], resume: ResumeC
   for (const id of sweptIds) {
     const h = store.get(id)
     if (!h || h.status !== 'interrupted' || h.dismissedAt != null || !h.resumable) continue
+    // Encerrada pelo usuário: segue vinculada e retomável, mas só volta por ação dele.
+    if (h.endedByUserAt != null) continue
     try {
       resume(id, { origin: 'main' })
       resumed.push(id)

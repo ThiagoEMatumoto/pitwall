@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { handoffsApi, motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
@@ -260,15 +260,28 @@ const pendingEnds = new Map<
   }
 >()
 
+// "Encerrada pelo usuário" mora no handoff da filha (o main resolve se a sessão é
+// filha vinculada; se não for, é no-op). Gravada no clique, e não no kill, para o
+// quit dentro da janela de undo não ressuscitar a filha no boot. Falha não segura
+// o encerramento pedido: sem a marca, a mãe é avisada como se a filha tivesse
+// caído e o boot a retoma — o comportamento de antes desta marca.
+function markEndedByUser(sessionId: string, ended: boolean): void {
+  handoffsApi.setChildEnded({ sessionId, ended }).catch((err: unknown) => {
+    console.error('[sessions] falha ao gravar "encerrada pelo usuário":', err)
+  })
+}
+
 // A guarda do main re-anexa a PTY viva da conversa, inclusive uma que está na
 // janela de undo de um endSession: quem acabou de retomá-la a quer viva, então o
-// kill agendado (e o toast de desfazer, que não teria mais o que desfazer) caem.
+// kill agendado (e o toast de desfazer, que não teria mais o que desfazer) caem,
+// e com eles a marca de encerrada.
 function cancelPendingEnd(sessionId: string): void {
   const pending = pendingEnds.get(sessionId)
   if (!pending) return
   clearTimeout(pending.timer)
   pendingEnds.delete(sessionId)
   dismissToast(pending.toastId)
+  markEndedByUser(sessionId, false)
 }
 
 // Ids na janela de undo do Encerrar. O SessionStrip exclui esses do prune de
@@ -371,6 +384,9 @@ export function isHibernatedSession(sessionId: string): boolean {
 // sessions.id das PTYs que já saíram. O Terminal fecha a própria aba no pty:exit
 // (closePane): ali o aviso não pode dizer que a sessão segue rodando.
 const exitedSessionIds = new Set<string>()
+export function hasSessionExited(sessionId: string): boolean {
+  return exitedSessionIds.has(sessionId)
+}
 let offOom: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
@@ -851,8 +867,9 @@ interface AppState {
   // Encerramento com undo: some da UI na hora, toast "Desfazer" por ~5s; o kill
   // efetivo da PTY só dispara quando a janela expira. `immediate: true` pula a
   // janela de undo e mata na hora (ex.: Reabrir uma sessão já exited — não há
-  // o que desfazer e o toast só confundiria).
-  endSession: (sessionId: string, opts?: { immediate?: boolean }) => void
+  // o que desfazer e o toast só confundiria). `linkedChild` só troca o texto do
+  // toast: a filha encerrada segue vinculada à mãe e retomável.
+  endSession: (sessionId: string, opts?: { immediate?: boolean; linkedChild?: boolean }) => void
   // Desfazer dentro da janela: cancela o kill agendado e restaura pane/chip.
   undoEndSession: (sessionId: string) => void
   // Clique simples na lista: foca a pane se já exibida; senão resume/abre (sem
@@ -1298,6 +1315,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       liveSessions: s.liveSessions.filter((x) => x.id !== sessionId),
     }))
     schedulePersist(get().panes)
+    // Só neste ramo (com Desfazer): o `immediate` é o Reabrir, que segue com a conversa.
+    markEndedByUser(sessionId, true)
     // Kill só depois do toast sumir (graça): ver comentário em END_KILL_GRACE_MS.
     const timer = setTimeout(() => {
       pendingEnds.delete(sessionId)
@@ -1308,7 +1327,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }, END_UNDO_MS + END_KILL_GRACE_MS)
     const name = live ? liveSessionLabel(live) : pane?.session.title
     const toastId = showToast({
-      title: 'Sessão encerrada',
+      title: opts?.linkedChild ? 'Filha encerrada · segue vinculada à mãe' : 'Sessão encerrada',
       body: name ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => get().undoEndSession(sessionId),
@@ -1327,6 +1346,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     clearTimeout(pending.timer)
     pendingEnds.delete(sessionId)
+    // Nada foi morto: desfazer não deixa marca.
+    markEndedByUser(sessionId, false)
     set((s) => ({
       // Não duplica se algo (ex: focusOrOpenSession) já recriou a pane no meio.
       panes:
