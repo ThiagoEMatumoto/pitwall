@@ -360,8 +360,22 @@ describe('typeOpenLoop', () => {
       0,
     )
     expect(sent).toEqual([
-      { type: 'keyDown', key: 'A', code: 'KeyA', windowsVirtualKeyCode: 65, text: 'A', unmodifiedText: 'A' },
-      { type: 'keyDown', key: '7', code: 'Digit7', windowsVirtualKeyCode: 55, text: '7', unmodifiedText: '7' },
+      {
+        type: 'keyDown',
+        key: 'A',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        text: 'A',
+        unmodifiedText: 'A',
+      },
+      {
+        type: 'keyDown',
+        key: '7',
+        code: 'Digit7',
+        windowsVirtualKeyCode: 55,
+        text: '7',
+        unmodifiedText: '7',
+      },
       { type: 'keyDown', key: '.', text: '.', unmodifiedText: '.' },
       { type: 'keyDown', key: 'ç', text: 'ç', unmodifiedText: 'ç' },
     ])
