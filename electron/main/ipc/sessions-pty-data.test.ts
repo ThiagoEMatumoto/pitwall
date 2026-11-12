@@ -4,6 +4,11 @@
 // PTY (com o backlog crescendo ANTES do evento, como o deliver do pty-manager) e
 // as janelas, que guardam o que cada renderer receberia, na ordem.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  REPLAY_PENDING,
+  replayStep,
+  type ReplayEvent,
+} from '../../../src/features/sessions/backlog-replay'
 import { PTY_DATA_WINDOW_MS } from '../services/pty-data-coalescer'
 
 const seam = vi.hoisted(() => {
@@ -21,6 +26,7 @@ const seam = vi.hoisted(() => {
     listeners: new Map<string, Array<(e: unknown) => void>>(),
     backlog: new Map<string, string>(),
     backlogError: null as Error | null,
+    cap: Infinity,
     sent,
     webContentsOf,
     main,
@@ -98,8 +104,10 @@ import { registerSessionIpc } from './sessions'
 const ID = 'pty-1'
 const OTHER = 'pty-2'
 
+// O backlog guarda só a cauda acima do cap, como o deliver do pty-manager.
 function emitData(sessionId: string, data: string): void {
-  seam.backlog.set(sessionId, (seam.backlog.get(sessionId) ?? '') + data)
+  const next = (seam.backlog.get(sessionId) ?? '') + data
+  seam.backlog.set(sessionId, next.length > seam.cap ? next.slice(next.length - seam.cap) : next)
   for (const fn of seam.listeners.get('data') ?? []) fn({ sessionId, data })
 }
 
@@ -136,12 +144,30 @@ function live(sessionId: string, from: number, to = seam.sent.length): string {
     .join('')
 }
 
-// Espelho do replay de src/features/sessions/Terminal.tsx (setDataHandler +
-// getBacklog().then): o live que chegou antes da resposta só entra pela cauda que
-// o backlog ainda não cobre; o que chega depois é escrito direto.
-function replayScreen(liveBeforeReply: string, backlog: string, liveAfterReply: string): string {
-  const tail = liveBeforeReply.length > backlog.length ? liveBeforeReply.slice(backlog.length) : ''
-  return backlog + tail + liveAfterReply
+function replayEventOf(sessionId: string, channel: string, payload: unknown): ReplayEvent | null {
+  if (channel === 'sessions:backlog') {
+    const reply = payload as BacklogReply
+    return reply.backlog === undefined
+      ? { kind: 'backlog-failed' }
+      : { kind: 'backlog', backlog: reply.backlog }
+  }
+  if (channel !== 'pty:data') return null
+  const e = payload as { sessionId: string; data: string }
+  return e.sessionId === sessionId ? { kind: 'data', data: e.data } : null
+}
+
+// A tela de um terminal montado no envio de índice `mountedAt`: a regra de replay
+// que o Terminal.tsx usa, aplicada ao que a janela recebeu, na ordem em que saiu.
+function replayScreen(sessionId: string, mountedAt: number): string {
+  return seam.sent.slice(mountedAt).reduce(
+    (acc, s) => {
+      const event = replayEventOf(sessionId, s.channel, s.payload)
+      if (!event) return acc
+      const step = replayStep(acc.state, event)
+      return { state: step.state, screen: acc.screen + step.write }
+    },
+    { state: REPLAY_PENDING, screen: '' },
+  ).screen
 }
 
 describe('pty:data coalescido no ipc/sessions', () => {
@@ -151,6 +177,7 @@ describe('pty:data coalescido no ipc/sessions', () => {
     vi.useFakeTimers()
     seam.backlog.clear()
     seam.backlogError = null
+    seam.cap = Infinity
     seam.sent.length = 0
     seam.main.destroyed = false
     seam.windows = [seam.main]
@@ -271,15 +298,13 @@ describe('pty:data coalescido no ipc/sessions', () => {
     emitData(ID, 'linha 1\r\n')
     emitData(ID, 'linha 2\r\n')
 
-    const backlog = getBacklog(ID)
-    const repliedAt = seam.sent.length
+    getBacklog(ID)
 
     emitData(ID, 'linha 3\r\n')
     emitData(ID, 'linha 4\r\n')
     vi.advanceTimersByTime(PTY_DATA_WINDOW_MS * 2)
 
-    const screen = replayScreen(live(ID, mountedAt, repliedAt), backlog, live(ID, repliedAt))
-    expect(screen).toBe(seam.backlog.get(ID))
+    expect(replayScreen(ID, mountedAt)).toBe(seam.backlog.get(ID))
   })
 
   it('terminal remontado no meio do streaming: a tela do replay é o backlog', () => {
@@ -290,8 +315,7 @@ describe('pty:data coalescido no ipc/sessions', () => {
     // Remount com bytes já no backlog e ainda na janela.
     const mountedAt = seam.sent.length
     emitData(ID, 'entre mount e backlog\r\n')
-    const backlog = getBacklog(ID)
-    const repliedAt = seam.sent.length
+    getBacklog(ID)
 
     emitData(ID, 'depois 1\r\n')
     vi.advanceTimersByTime(3)
@@ -300,8 +324,40 @@ describe('pty:data coalescido no ipc/sessions', () => {
     emitData(ID, 'depois 3\r\n')
     vi.advanceTimersByTime(PTY_DATA_WINDOW_MS * 2)
 
-    const screen = replayScreen(live(ID, mountedAt, repliedAt), backlog, live(ID, repliedAt))
-    expect(screen).toBe(seam.backlog.get(ID))
+    expect(replayScreen(ID, mountedAt)).toBe(seam.backlog.get(ID))
+  })
+
+  it('backlog cortado pelo cap: a tela é o backlog mais o que veio depois, sem repetir', () => {
+    seam.cap = 16
+    const mountedAt = seam.sent.length
+    emitData(ID, 'linha 1\r\n')
+    emitData(ID, 'linha 2\r\n')
+    emitData(ID, 'linha 3\r\n')
+
+    const backlog = getBacklog(ID)
+    const repliedAt = seam.sent.length
+    expect(backlog).toBe('nha 2\r\nlinha 3\r\n')
+    expect(live(ID, mountedAt, repliedAt).length).toBeGreaterThan(backlog.length)
+
+    emitData(ID, 'linha 4\r\n')
+    emitData(ID, 'linha 5\r\n')
+    vi.advanceTimersByTime(PTY_DATA_WINDOW_MS * 2)
+
+    expect(replayScreen(ID, mountedAt)).toBe(backlog + 'linha 4\r\nlinha 5\r\n')
+  })
+
+  it('backlog que falhou: a tela fica com o live visto desde o mount, na ordem', () => {
+    emitData(ID, 'antes do mount\r\n')
+    const mountedAt = seam.sent.length
+    emitData(ID, 'linha 1\r\n')
+    emitData(ID, 'linha 2\r\n')
+    seam.backlogError = new Error('pty sumiu')
+
+    requestBacklog('r5', ID)
+    emitData(ID, 'linha 3\r\n')
+    vi.advanceTimersByTime(PTY_DATA_WINDOW_MS * 2)
+
+    expect(replayScreen(ID, mountedAt)).toBe('linha 1\r\nlinha 2\r\nlinha 3\r\n')
   })
 
   it('a cauda pendente chega antes do pty:exit e nada sai depois dele', () => {
