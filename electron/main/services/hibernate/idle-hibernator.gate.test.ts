@@ -118,6 +118,24 @@ function seedRepo(): void {
   ).run(HOME)
 }
 
+// Handoff com a sessão como filha, levado ao status pelo próprio handoff-store.
+// mode 'plan': read-only, não disputa o diretório de trabalho com outro handoff.
+function seedChildHandoff(status: 'running' | 'done' | 'failed', sessionId = PTY): void {
+  seedRepo()
+  const h = handoffStore.create({
+    targetRepoId: 'r1',
+    task: 't',
+    composedPrompt: 'p',
+    motherSessionId: null,
+    mode: 'plan',
+    status: 'approved',
+  })
+  handoffStore.markRunning(h.id, sessionId)
+  if (status === 'done') handoffStore.report(h.id, 'pronto')
+  if (status === 'failed') handoffStore.fail(h.id, 'caiu')
+  expect(handoffStore.get(h.id)?.status).toBe(status)
+}
+
 // Aba confirmada, fora de foco e com o Composer vazio: pode hibernar.
 function idlePane(paneId: string) {
   return { paneId, focused: false, composerHasText: false, composerFocused: false }
@@ -168,6 +186,29 @@ beforeEach(() => {
 afterAll(() => {
   closeDb()
   rmSync(HOME, { recursive: true, force: true })
+})
+
+describe('childHandoffKindCc (handoff-store real)', () => {
+  it('conversa que nunca foi filha → none', () => {
+    expect(handoffStore.childHandoffKindCc(CC)).toBe('none')
+  })
+
+  it('filha de handoff concluído → done', () => {
+    seedChildHandoff('done')
+    expect(handoffStore.childHandoffKindCc(CC)).toBe('done')
+  })
+
+  it.each(['running', 'failed'] as const)('filha de handoff %s → other', (status) => {
+    seedChildHandoff(status)
+    expect(handoffStore.childHandoffKindCc(CC)).toBe('other')
+  })
+
+  it('um handoff concluído e outro falhado na mesma conversa → other', () => {
+    seedSession('pty-relink', CC)
+    seedChildHandoff('failed', 'pty-relink')
+    seedChildHandoff('done')
+    expect(handoffStore.childHandoffKindCc(CC)).toBe('other')
+  })
 })
 
 describe('gate da hibernação (fontes reais)', () => {

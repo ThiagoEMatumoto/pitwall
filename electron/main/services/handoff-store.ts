@@ -15,6 +15,7 @@ import type {
   HandoffStatus,
 } from '../../../shared/types/ipc'
 import type { HandoffEvent } from '../../../shared/types/session-graph'
+import type { HandoffChildKind } from '../../../shared/hibernate'
 
 interface HandoffRow {
   id: string
@@ -1108,6 +1109,20 @@ export function isHandoffChildCc(ccSessionId: string): boolean {
     )
     .get(ccSessionId)
   return row !== undefined
+}
+
+// 'done' exige TODOS os handoffs da conversa concluídos: um em voo, falhado ou
+// interrompido ainda depende do processo vivo. Casa pelo cc, como isHandoffChildCc.
+export function childHandoffKindCc(ccSessionId: string): HandoffChildKind {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT h.status AS status FROM handoffs h
+         JOIN sessions s ON s.id = h.child_session_id
+        WHERE s.cc_session_id = ?`,
+    )
+    .all(ccSessionId) as Array<{ status: string }>
+  if (rows.length === 0) return 'none'
+  return rows.every((r) => r.status === 'done') ? 'done' : 'other'
 }
 
 // O que o bastão da MÃE carrega: as filhas que ela lidera (isLedByMother) — o

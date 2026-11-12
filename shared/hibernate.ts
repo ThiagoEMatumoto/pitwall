@@ -10,6 +10,10 @@ export function sanitizeHibernateAfterMin(raw: unknown): number {
   return Math.min(Math.floor(raw), MAX_HIBERNATE_AFTER_MIN)
 }
 
+// O que a conversa é como filha de handoff: nunca foi ('none'), todos os handoffs
+// dela terminaram em done ('done'), ou algum está em voo, falhou ou parou ('other').
+export type HandoffChildKind = 'none' | 'done' | 'other'
+
 // Um motivo por recusa (o primeiro gate que falhou). Na dúvida, o gate recusa.
 export const HIBERNATE_REFUSALS = [
   'no-pane',
