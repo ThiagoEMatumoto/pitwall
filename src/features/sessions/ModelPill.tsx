@@ -27,7 +27,7 @@ export type EffortLevel = (typeof EFFORT_LEVELS)[number]
 const SWITCH_TIMEOUT_MS = 20_000
 
 interface Props {
-  activity: SessionActivity | null
+  activity: Pick<SessionActivity, 'model'> | null
   /** Sessão ociosa — único estado em que é seguro injetar /model | /effort. */
   canSwitch: boolean
   /** Troca escolhida enquanto a sessão estava ocupada, aguardando o próximo idle. */

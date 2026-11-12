@@ -9,7 +9,11 @@ import type { ChatMessage } from '../../../../shared/types/chat'
 
 const { sessionsApiMock, transcript } = vi.hoisted(() => ({
   sessionsApiMock: { attentionMenu: vi.fn(), attentionRespond: vi.fn() },
-  transcript: { messages: [] as ChatMessage[], planFileText: null as string | null },
+  transcript: {
+    messages: [] as ChatMessage[],
+    planFileText: null as string | null,
+    listeners: new Set<() => void>(),
+  },
 }))
 
 // Qualquer outra api do preload: inerte (assinaturas devolvem o "off").
@@ -26,15 +30,27 @@ vi.mock('@/lib/ipc', () => {
     { get: (t, key: string) => (t as Record<string, unknown>)[key] ?? inert },
   )
 })
-vi.mock('./useChatTranscript', () => ({
-  useChatTranscript: () => ({
-    messages: transcript.messages,
-    loading: false,
-    transcriptExists: true,
-    lastPlanFilePath: null,
-  }),
-  usePlanFile: () => transcript.planFileText,
-}))
+// Como o hook real: transcript novo chega por estado do hook, não por re-render do
+// pai (o ChatView é memo e ignoraria um re-render com as mesmas props).
+vi.mock('./useChatTranscript', async () => {
+  const { useEffect, useReducer } = await import('react')
+  return {
+    useChatTranscript: () => {
+      const [, refresh] = useReducer((n: number) => n + 1, 0)
+      useEffect(() => {
+        transcript.listeners.add(refresh)
+        return () => void transcript.listeners.delete(refresh)
+      }, [])
+      return {
+        messages: transcript.messages,
+        loading: false,
+        transcriptExists: true,
+        lastPlanFilePath: null,
+      }
+    },
+    usePlanFile: () => transcript.planFileText,
+  }
+})
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
@@ -60,6 +76,14 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as unknown as typeof ResizeObserver
+
+// O disco mudou: o hook avisa o ChatView montado, por estado, como o hook real.
+function diskNow(messages: ChatMessage[]) {
+  act(() => {
+    transcript.messages = messages
+    transcript.listeners.forEach((refresh) => refresh())
+  })
+}
 
 beforeEach(() => {
   transcript.messages = []
@@ -378,8 +402,7 @@ describe('eco de slash command que abre diálogo da CLI', () => {
     expect(screen.getByText('enviando…')).toBeTruthy()
 
     // Quando o 'oi' chega ao disco a bolha sai de "enviando…".
-    transcript.messages = [...transcript.messages, { kind: 'user', text: 'oi' }]
-    rerender(<ChatView ref={ref} sessionId="s1" status="idle" tuiPicker={null} />)
+    diskNow([...transcript.messages, { kind: 'user', text: 'oi' }])
     await waitFor(() => expect(screen.queryByText('enviando…')).toBeNull())
     expect(screen.getAllByText('oi')).toHaveLength(1)
   })

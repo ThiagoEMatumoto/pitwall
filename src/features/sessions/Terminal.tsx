@@ -1,6 +1,6 @@
 import '@xterm/xterm/css/xterm.css'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal as Xterm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -15,7 +15,7 @@ import { exitAction } from './hibernate-exit'
 import { showToast } from '@/features/notifications/toast-store'
 import { useSession } from './useSession'
 import { Composer, type ComposerHandle } from './Composer'
-import { ComposerToolbar } from './ComposerToolbar'
+import { ComposerToolbar, type ToolbarActivity } from './ComposerToolbar'
 import { SessionHeader } from './SessionHeader'
 import { useSessionFeature } from './useSessionFeature'
 import { BatonDialog } from './BatonDialog'
@@ -65,6 +65,7 @@ import type { GpuStatus, PermissionMode, Session, SessionActivity } from '../../
 import { CLAUDE_ONLY_REASON, providerSupports } from '../../../shared/agent-providers'
 import { stripQueryReplies } from './terminal-replies'
 import { perfCount, perfEnd, perfKeyWrite, perfStart } from '@/lib/perf-probe'
+import { useStableCallback } from '@/lib/use-stable-callback'
 import { preferredSessionTitle } from '../../../shared/session-title'
 
 // Cache módulo-level: o status de GPU é imutável durante o processo (decidido no
@@ -521,19 +522,17 @@ function TerminalHost({
   const autoSummary = useAutoSummary(ccSessionId)
 
   // A palette não pode ligar o mic: o MediaRecorder vive no renderer desta pane.
-  // Ela dispara o evento e cada Terminal filtra pelo próprio ccSessionId. O ref
-  // evita re-assinar a cada render (toggle é recriado toda vez).
-  const dictateRef = useRef(dictation.toggle)
-  dictateRef.current = dictation.toggle
+  // Ela dispara o evento e cada Terminal filtra pelo próprio ccSessionId.
+  const toggleDictation = dictation.toggle
   useEffect(() => {
     if (!ccSessionId) return
     const onDictate = (e: Event) => {
       const detail = (e as CustomEvent<{ ccSessionId?: string }>).detail
-      if (detail?.ccSessionId === ccSessionId) dictateRef.current()
+      if (detail?.ccSessionId === ccSessionId) toggleDictation()
     }
     window.addEventListener('cm:voice-dictate', onDictate)
     return () => window.removeEventListener('cm:voice-dictate', onDictate)
-  }, [ccSessionId])
+  }, [ccSessionId, toggleDictation])
 
   useEffect(() => {
     if (!ccSessionId || exited) return
@@ -1346,6 +1345,92 @@ function TerminalHost({
     }
   }
 
+  // ChatView e Composer são memo: o que desce para eles tem identidade fixa (e
+  // sempre chama a função do último render), senão cada atividade nova da sessão
+  // re-renderizaria o chat inteiro e o campo de texto.
+  const toggleMode = useStableCallback(() => onToggleMode?.())
+  const respond = useStableCallback(playResponse)
+  const reparseMenu = useStableCallback(readTuiMenu)
+  const reparsePicker = useStableCallback(readTuiPicker)
+  const readInput = useStableCallback(readCliInput)
+  const readDraft = useStableCallback(readCliDraft)
+  const send = useStableCallback(sendPrompt)
+  const insert = useStableCallback(insertPrompt)
+  const answer = useStableCallback(answerMenu)
+  const pickModel = useStableCallback(selectModel)
+  const pickEffort = useStableCallback(selectEffort)
+  const pickPermission = useStableCallback(selectPermission)
+  // Shift+Tab (CSI Z) cicla o modo de permissão no TUI do claude. A CLI não tem
+  // set-exato em runtime (sem /permission) — só este ciclo nativo.
+  const cyclePermission = useStableCallback(() => {
+    if (!blockPermissionWrite()) write('\x1b[Z')
+  })
+  // Ctrl+C interrompe o claude (descoberta da ação que antes era só teclado).
+  const interrupt = useStableCallback(() => write('\x03'))
+
+  // A barra só lê status e modelo (o tipo da prop garante): recortar aqui evita
+  // refazê-la, e o Composer com ela, a cada token ou texto novo do transcript.
+  const toolbarStatus = activity?.status
+  const toolbarModel = activity?.model ?? null
+  const toolbarActivity = useMemo<ToolbarActivity | null>(
+    () => (toolbarStatus ? { status: toolbarStatus, model: toolbarModel } : null),
+    [toolbarStatus, toolbarModel],
+  )
+  const toolbarCompact = composer === 'compact'
+  const claudeOnlyReason = caps.tuiMenus ? null : CLAUDE_ONLY_REASON
+  // dictation/summarize/autoSummary entram inteiros nas deps: os hooks devolvem
+  // o mesmo objeto enquanto o estado deles não muda, e um novo quando muda.
+  const toolbar = useMemo(
+    () => (
+      <ComposerToolbar
+        compact={toolbarCompact}
+        claudeOnlyReason={claudeOnlyReason}
+        activity={toolbarActivity}
+        canSwitch={canSwitchModel}
+        pending={pending}
+        activeEffort={activeEffort}
+        xhighCapable={xhighCapable}
+        ultracodeActive={ultracodeActive}
+        currentMode={currentMode}
+        onSelectModel={pickModel}
+        onSelectEffort={pickEffort}
+        onCyclePermission={cyclePermission}
+        // Seleção direta: "pula" até o modo escolhido ciclando Shift+Tab e
+        // observando o modo parseado (selectPermission + effect acima).
+        onSelectPermission={pickPermission}
+        onInterrupt={interrupt}
+        // Ditado por voz: o texto transcrito entra no DRAFT do composer —
+        // visível/editável nos dois modos (escrever no PTY sumiria o texto
+        // em modo chat, onde o xterm fica invisible). Envio pelo submit normal.
+        voice={dictation}
+        // Controles de resumo por sessão: sem ccSessionId não há a quem
+        // pedir resumo, e a ausência da prop é o que tira o controle da barra.
+        summarize={ccSessionId ? summarize : undefined}
+        autoSummary={ccSessionId ? autoSummary : undefined}
+      />
+    ),
+    [
+      toolbarCompact,
+      claudeOnlyReason,
+      toolbarActivity,
+      canSwitchModel,
+      pending,
+      activeEffort,
+      xhighCapable,
+      ultracodeActive,
+      currentMode,
+      pickModel,
+      pickEffort,
+      cyclePermission,
+      pickPermission,
+      interrupt,
+      dictation,
+      ccSessionId,
+      summarize,
+      autoSummary,
+    ],
+  )
+
   return (
     // data-*: o dockview monta o conteúdo fora da árvore do grupo, sem id no DOM;
     // é por aqui que um cenário e2e acha o pane de UMA sessão e o modo dele.
@@ -1484,20 +1569,20 @@ function TerminalHost({
             sessionId={session.id}
             ccSessionId={ccSessionId}
             status={activity?.status}
-            onToggleMode={onToggleMode}
+            onToggleMode={onToggleMode && toggleMode}
             // Cliques nos cards interativos → teclas no PTY vivo, mesmo write()
             // do onForwardKey do composer (ver respond-keys).
-            onRespond={playResponse}
+            onRespond={respond}
             onPlanApproved={setCurrentMode}
             // Momento pendente clicável: menu TUI parseado do buffer do xterm
             // (o transcript não expõe perguntas pendentes). reparseMenu é o
             // guard de clique — re-parse fresco antes de digitar.
             tuiMenu={pendingTuiMenu}
-            reparseMenu={readTuiMenu}
+            reparseMenu={reparseMenu}
             tuiPicker={pendingTuiPicker}
-            reparsePicker={readTuiPicker}
+            reparsePicker={reparsePicker}
             cliDraft={cliDraft}
-            readCliInput={readCliInput}
+            readCliInput={readInput}
             isChild={linkState === 'active'}
           />
         )}
@@ -1580,52 +1665,20 @@ function TerminalHost({
           paneId={paneId ?? null}
           ccSessionId={ccSessionId}
           ref={composerRef}
-          onSend={sendPrompt}
-          onInsert={insertPrompt}
+          onSend={send}
+          onInsert={insert}
           // Modelo Warp: o composer encaminha teclas de controle/navegação direto pro
           // PTY (write escreve no pty, fora do xterm display-only).
-          onForwardKey={(seq) => write(seq)}
-          readMenu={readTuiMenu}
-          readPicker={readTuiPicker}
-          readCliDraft={readCliDraft}
+          onForwardKey={write}
+          readMenu={reparseMenu}
+          readPicker={reparsePicker}
+          readCliDraft={readDraft}
           openMenuFp={pendingTuiMenu ? menuFingerprint(pendingTuiMenu) : null}
-          onMenuAnswer={answerMenu}
+          onMenuAnswer={answer}
           // Recolher o dock só faz sentido no modo terminal (em chat o dock é completo).
           collapsible={mode === 'terminal' && composer === 'full'}
           compact={composer === 'compact'}
-          toolbar={
-            <ComposerToolbar
-              compact={composer === 'compact'}
-              claudeOnlyReason={caps.tuiMenus ? null : CLAUDE_ONLY_REASON}
-              activity={activity}
-              canSwitch={canSwitchModel}
-              pending={pending}
-              activeEffort={activeEffort}
-              xhighCapable={xhighCapable}
-              ultracodeActive={ultracodeActive}
-              currentMode={currentMode}
-              onSelectModel={selectModel}
-              onSelectEffort={selectEffort}
-              // Shift+Tab (CSI Z) cicla o modo de permissão no TUI do claude. A CLI
-              // não tem set-exato em runtime (sem /permission) — só este ciclo nativo.
-              onCyclePermission={() => {
-                if (!blockPermissionWrite()) write('\x1b[Z')
-              }}
-              // Seleção direta: "pula" até o modo escolhido ciclando Shift+Tab e
-              // observando o modo parseado (selectPermission + effect acima).
-              onSelectPermission={selectPermission}
-              // Ctrl+C interrompe o claude (descoberta da ação que antes era só teclado).
-              onInterrupt={() => write('\x03')}
-              // Ditado por voz: o texto transcrito entra no DRAFT do composer —
-              // visível/editável nos dois modos (escrever no PTY sumiria o texto
-              // em modo chat, onde o xterm fica invisible). Envio pelo submit normal.
-              voice={dictation}
-              // Controles de resumo por sessão: sem ccSessionId não há a quem
-              // pedir resumo, e a ausência da prop é o que tira o controle da barra.
-              summarize={ccSessionId ? summarize : undefined}
-              autoSummary={ccSessionId ? autoSummary : undefined}
-            />
-          }
+          toolbar={toolbar}
         />
       )}
 

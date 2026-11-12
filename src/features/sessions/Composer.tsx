@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
+import {
+  forwardRef,
+  memo,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { flushSync } from 'react-dom'
 import { ChevronRight, CornerDownLeft, Image as ImageIcon, Loader, TextCursorInput, X } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
@@ -129,7 +137,7 @@ const MAX_HEIGHT = 192
 // (setas, clique, seleção, multiline) que injeta no PTY vivo via bracketed-paste,
 // resolvendo a dor do Enter/Shift+Enter do input nativo do claude no xterm. É
 // aditivo: o input direto na TUI continua funcionando.
-export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
+const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   {
     sessionId,
     paneId = null,
@@ -861,3 +869,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
     </div>
   )
 })
+
+// memo: o dono da pane re-renderiza a cada atividade da sessão; o campo de texto
+// só renderiza de novo quando uma prop dele muda.
+export const Composer = memo(ComposerDock)
