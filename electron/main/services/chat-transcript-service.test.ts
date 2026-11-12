@@ -329,6 +329,28 @@ describe('watch — delta só para quem observa', () => {
     chatTranscriptService.unwatch(w.sessionId, w.sender.id)
   })
 
+  it('o watcher real numa rajada contínua entrega delta antes de a rajada parar', async () => {
+    const w = await watched([])
+    // chokidar precisa estar pronto antes do append, senão o change se perde.
+    await new Promise((r) => setTimeout(r, 300))
+
+    // 20 appends a cada 100 ms: mais apertado que a cauda do debounce (150 ms).
+    let beforeLastAppend = 0
+    for (let k = 0; k < 20; k++) {
+      beforeLastAppend = w.updates.length - 1
+      appendFileSync(
+        w.path,
+        realShapeAssistantLine(k, `msg_burst_${k}`, [{ type: 'text', text: `linha ${k}` }]) + '\n',
+      )
+      await new Promise((r) => setTimeout(r, 100))
+    }
+
+    expect(beforeLastAppend).toBeGreaterThanOrEqual(1)
+    await vi.waitFor(() => expect(w.view()).toEqual(w.full()), { timeout: 3000 })
+    expect(w.view()).toHaveLength(20)
+    chatTranscriptService.unwatch(w.sessionId, w.sender.id)
+  })
+
   it('leitura sem novidade não emite', async () => {
     const w = await watched(buildLongMotherLines(3))
     await chatTranscriptService.refresh(w.sessionId)
