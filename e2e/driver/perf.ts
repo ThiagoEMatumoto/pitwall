@@ -297,9 +297,15 @@ export interface OpenLoopTyping {
   sendIntervalMs: PerfLatencyStats
 }
 
-// Só o que os cenários digitam: letras minúsculas e espaço.
+// Letras, dígitos e espaço saem com a tecla deles. Pontuação e acento dependem do
+// layout, e um código de tecla errado vira outra tecla ('.' é 46, o Delete): vale
+// só o caractere.
 function keyParams(char: string): Record<string, unknown> {
   if (char === ' ') return { key: ' ', code: 'Space', windowsVirtualKeyCode: 32 }
+  if (/^[0-9]$/.test(char)) {
+    return { key: char, code: `Digit${char}`, windowsVirtualKeyCode: char.charCodeAt(0) }
+  }
+  if (!/^[a-z]$/i.test(char)) return { key: char }
   const upper = char.toUpperCase()
   return { key: char, code: `Key${upper}`, windowsVirtualKeyCode: upper.charCodeAt(0) }
 }
