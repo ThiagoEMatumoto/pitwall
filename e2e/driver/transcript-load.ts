@@ -5,6 +5,11 @@ import { appendFileSync } from 'node:fs'
 // desenha nada enquanto se digita.
 export const APPEND_EVERY_MS = 300
 
+// Quantos turnos a carga precisa ter para ainda estar gravando ao fim de `ms`.
+export function turnsToLast(ms: number): number {
+  return Math.ceil(ms / APPEND_EVERY_MS)
+}
+
 export interface TranscriptLoad {
   appendedLines(): number
   // Começa a gravar e devolve o que para. A rodada seguinte continua do ponto em

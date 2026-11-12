@@ -16,7 +16,7 @@ vi.mock('../../electron/main/services/session-activity', () => ({
 
 import { buildLongMotherLines } from '../../electron/main/services/__fixtures__/long-mother-jsonl'
 import { chatTranscriptService } from '../../electron/main/services/chat-transcript-service'
-import { APPEND_EVERY_MS, transcriptLoad } from './transcript-load'
+import { APPEND_EVERY_MS, transcriptLoad, turnsToLast } from './transcript-load'
 
 const BASE_TURNS = 3
 const STREAM_TURNS = 40
@@ -68,6 +68,22 @@ describe('transcriptLoad', () => {
     stop()
 
     expect(written()).toEqual([...base, ...stream.slice(0, turnLines)])
+  })
+
+  it('com turnsToLast(prazo) turnos a carga ainda grava no último tick do prazo', () => {
+    vi.useFakeTimers()
+    const deadlineMs = APPEND_EVERY_MS * 7 + 50
+    const turns = turnsToLast(deadlineMs)
+    const lines = buildLongMotherLines(BASE_TURNS + turns).slice(base.length)
+    const load = transcriptLoad(file, lines, turnLines)
+
+    const stop = load.start()
+    vi.advanceTimersByTime(deadlineMs - APPEND_EVERY_MS)
+    const before = load.appendedLines()
+    vi.advanceTimersByTime(APPEND_EVERY_MS)
+    stop()
+
+    expect(load.appendedLines()).toBe(before + turnLines)
   })
 
   // O watcher real do chat, com o debounce dele: appends mais juntos que o debounce

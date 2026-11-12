@@ -28,25 +28,32 @@ export interface XtermBufferRead {
   // falha de infraestrutura do cenário, não do que ele confere.
   terms: number
   text: string | null
+  /** Quanto a leitura ocupou a página. */
+  readMs: number
 }
 
 // O xterm DESTA sessão, na modal do mapa ou fora dela (a aba).
 // O .xterm é filho do host do TerminalHost: sobe pelos fibers a partir do host
 // até o ref que guarda a instância e junta as linhas do buffer, sem separador
-// (um texto partido na quebra de linha continua inteiro).
+// (um texto partido na quebra de linha continua inteiro). Com `tailLines`, só o
+// fim do buffer: a leitura que cai dentro de uma janela medida não o percorre todo.
 export function readXtermBuffer(
   page: Page,
   sessionId: string,
   where: 'modal' | 'aba',
+  tailLines?: number,
 ): Promise<XtermBufferRead> {
   return page.evaluate(
-    ({ sid, inModal }) => {
+    ({ sid, inModal, tail }) => {
+      const started = performance.now()
       const terms = [...document.querySelectorAll('.xterm')].filter(
         (el) =>
           (el.closest('[data-peek-lift]') != null) === inModal &&
           el.closest('[data-session-id]')?.getAttribute('data-session-id') === sid,
       )
-      if (terms.length !== 1) return { terms: terms.length, text: null }
+      if (terms.length !== 1) {
+        return { terms: terms.length, text: null, readMs: performance.now() - started }
+      }
       const host = terms[0].parentElement as unknown as Record<string, unknown> | null
       const key = host ? Object.keys(host).find((k) => k.startsWith('__reactFiber$')) : undefined
       let term: XtermLike | null = null
@@ -60,14 +67,14 @@ export function readXtermBuffer(
           }
         }
       }
-      if (!term) return { terms: 1, text: null }
+      if (!term) return { terms: 1, text: null, readMs: performance.now() - started }
       const buffer = term.buffer.active
       let text = ''
-      for (let y = 0; y < buffer.length; y++) {
+      for (let y = tail == null ? 0 : Math.max(0, buffer.length - tail); y < buffer.length; y++) {
         text += buffer.getLine(y)?.translateToString(true) ?? ''
       }
-      return { terms: 1, text }
+      return { terms: 1, text, readMs: performance.now() - started }
     },
-    { sid: sessionId, inModal: where === 'modal' },
+    { sid: sessionId, inModal: where === 'modal', tail: tailLines ?? null },
   )
 }
