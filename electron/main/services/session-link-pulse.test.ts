@@ -80,6 +80,14 @@ describe('SessionLinkPulseBus', () => {
     expect(published.at(-1)).toMatchObject({ fromSessionId: 'b', toSessionId: 'a', kind: 'answer' })
   })
 
+  it('diz quem escreveu só quando o produtor sabe que foi o usuário', () => {
+    const { bus, published } = makeBus()
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message', by: 'human' })
+    bus.emit({ fromSessionId: 'mae', toSessionId: 'filha', kind: 'message' })
+    expect(published[0].by).toBe('human')
+    expect(published[1]).not.toHaveProperty('by')
+  })
+
   it('pares diferentes não dividem a cota', () => {
     const { bus, published } = makeBus()
     for (let i = 0; i < PULSES_PER_WINDOW; i++)

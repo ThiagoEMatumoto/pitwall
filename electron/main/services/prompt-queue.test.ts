@@ -57,6 +57,7 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
   }
   const writes: string[] = []
   const deliveries: Array<[string, string | undefined]> = []
+  const authors: Array<'human' | undefined> = []
   const snapshots: PromptQueueSnapshot[] = []
   const deps: PromptQueueDeps = {
     isRunning: () => state.running,
@@ -68,7 +69,10 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
     nativeStatus: () => state.native,
     handoffAsking: () => state.asking,
     write: (id, text) => writes.push(`${id}:${text}`),
-    delivered: (id, from) => deliveries.push([id, from]),
+    delivered: (id, from, by) => {
+      deliveries.push([id, from])
+      authors.push(by)
+    },
     emit: (s) => snapshots.push(s),
     warn: () => {},
   }
@@ -76,7 +80,7 @@ function setup(opts: { screen?: Screen; status?: LiveStatus; mirrored?: boolean 
   const show = (screen: Screen) => {
     state.scan = SCANS[screen]
   }
-  return { queue, state, writes, deliveries, snapshots, show }
+  return { queue, state, writes, deliveries, authors, snapshots, show }
 }
 
 it('as capturas reais dão o shape esperado pelo gate', () => {
@@ -119,6 +123,31 @@ describe('PromptQueue — origem da mensagem (bolinha no mapa)', () => {
     const { queue, deliveries } = setup({ screen: 'permission', status: 'waiting' })
     await queue.send({ sessionId: SID, text: 'oi', when: 'now', fromSessionId: 'mae' })
     expect(deliveries).toEqual([])
+  })
+
+  it("'now' diz na entrega que foi o usuário quem escreveu", async () => {
+    const { queue, authors } = setup()
+    await queue.send({ sessionId: SID, text: 'oi', when: 'now', fromSessionId: 'mae', by: 'human' })
+    await queue.send({ sessionId: SID, text: 'oi', when: 'now', fromSessionId: 'mae' })
+    expect(authors).toEqual(['human', undefined])
+  })
+
+  it('a autoria atravessa a fila e não aparece no item público', async () => {
+    const { queue, state, authors } = setup({ status: 'working' })
+    await queue.send({
+      sessionId: SID,
+      text: 'oi',
+      when: 'on-idle',
+      fromSessionId: 'mae',
+      by: 'human',
+    })
+    expect(authors).toEqual([])
+    expect(queue.snapshot().items[0]).not.toHaveProperty('by')
+
+    state.status = 'idle'
+    queue.onTurnEnded(SID)
+    await vi.advanceTimersByTimeAsync(SETTLE_MS + 10)
+    expect(authors).toEqual(['human'])
   })
 })
 

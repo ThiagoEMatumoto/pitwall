@@ -18,6 +18,7 @@ export interface PulseInput {
   toSessionId: string | null | undefined
   kind: SessionLinkPulseKind
   label?: string
+  by?: 'human'
 }
 
 export interface PulseBusDeps {
@@ -58,6 +59,7 @@ export class SessionLinkPulseBus {
       toSessionId: to,
       kind: input.kind,
       label: input.label ?? this.deps.labelFor?.(from, to, input.kind),
+      ...(input.by ? { by: input.by } : {}),
       at: now,
     })
   }

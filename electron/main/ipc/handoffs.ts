@@ -238,6 +238,7 @@ export function registerHandoffsIpc(): void {
       fromSessionId: handoff.motherSessionId,
       toSessionId: handoff.childSessionId,
       kind: handoff.status === 'needs_input' ? 'answer' : 'message',
+      by: 'human',
     })
   })
 
@@ -260,6 +261,7 @@ export function registerHandoffsIpc(): void {
         fromSessionId: handoff.motherSessionId,
         toSessionId: handoff.childSessionId,
         kind: 'answer',
+        by: 'human',
       })
     }
     return answered
