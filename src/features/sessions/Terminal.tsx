@@ -21,6 +21,7 @@ import { useSessionFeature } from './useSessionFeature'
 import { BatonDialog } from './BatonDialog'
 import { AdoptSessionDialog } from '@/features/handoffs/AdoptSessionDialog'
 import { ChildLinkDialog } from '@/features/handoffs/ChildLinkDialog'
+import { endSessionAsked, useIsLinkedChild } from '@/features/handoffs/end-child'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { ChildLinkInfo } from '../../../shared/types/ipc'
 import { AgentHud } from './AgentHud'
@@ -304,7 +305,7 @@ function TerminalHost({
   const caps = providerSupports(session.provider)
   const mode: PaneMode = caps.chatView ? requestedMode : 'terminal'
   const { exited, exitCode, error, write, resize, setDataHandler } = useSession(session.id)
-  const endSession = useAppStore((s) => s.endSession)
+  const linkedChild = useIsLinkedChild(session.id)
   const hostRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Xterm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -1529,7 +1530,8 @@ function TerminalHost({
           onToggleMode={caps.chatView ? onToggleMode : undefined}
           toggleDisabledReason={caps.chatView ? null : CLAUDE_ONLY_REASON}
           onMinimize={onClose}
-          onEndSession={() => endSession(session.id)}
+          onEndSession={() => endSessionAsked(session.id)}
+          linkedChild={linkedChild}
           // Sem ccSessionId não há transcript pra destilar (sessão sem 1ª
           // resposta ainda) — a ação some em vez de abrir um diálogo que já
           // nasceria em erro.

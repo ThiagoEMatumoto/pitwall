@@ -15,6 +15,7 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuItem } from '@/components/ui/Menu'
 import { backgroundChildrenByMother } from '@/features/handoffs/crew'
+import { endSessionAsked } from '@/features/handoffs/end-child'
 import {
   motherOfChildMap,
   nestUnderMothers,
@@ -86,7 +87,6 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   const panes = useAppStore((s) => s.panes)
   const focusPaneId = useAppStore((s) => s.focusPaneId)
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
-  const endSession = useAppStore((s) => s.endSession)
   // Filhas de handoff sem pane aberta vivem no Crew Dock, não na barra — senão o
   // usuário fica com N chips pra monitorar. Abriu o terminal de uma, ela ganha
   // chip aqui como qualquer sessão (ver useVisibleLiveSessions).
@@ -324,7 +324,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                     // lugar (a medição seguinte não oscila).
                     hidden={clipped.hidden.includes(index)}
                     onOpen={() => void focusOrOpenSession(item)}
-                    onEnd={() => endSession(item.id)}
+                    onEnd={() => endSessionAsked(item.id)}
                     onTogglePin={() => void togglePin(item.id)}
                     onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
                   />

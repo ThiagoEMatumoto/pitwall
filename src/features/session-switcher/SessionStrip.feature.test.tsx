@@ -51,8 +51,13 @@ vi.mock('@/store/appStore', () => ({
       panes: [],
       focusPaneId: vi.fn(),
       focusOrOpenSession: openSession,
-      endSession: vi.fn(),
     }),
+}))
+// O Encerrar da barra passa pelo pedido com confirmação (end-child), não direto
+// pelo store.
+const endSessionAsked = vi.fn()
+vi.mock('@/features/handoffs/end-child', () => ({
+  endSessionAsked: (sessionId: string) => endSessionAsked(sessionId),
 }))
 
 const { SessionStrip } = await import('./SessionStrip')
@@ -371,6 +376,7 @@ describe('SessionStrip — clique no chip', () => {
     fireEvent.click(screen.getByLabelText('Encerrar o processo desta sessão'))
     fireEvent.click(screen.getByLabelText('Fixar no início da barra'))
     expect(openSession).not.toHaveBeenCalled()
+    expect(endSessionAsked).toHaveBeenCalledWith('s-curta')
   })
 
   // jsdom não tem layout. O que dá para travar é o contrato de CSS que faz o chip
