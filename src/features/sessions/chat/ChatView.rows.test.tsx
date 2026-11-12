@@ -202,14 +202,13 @@ describe('folhas do chat memoizadas (contadores da sonda)', () => {
 
   it('mensagens novas só parseiam o markdown delas', () => {
     transcript.messages = parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n'))
-    const { rerender } = render(<ChatView sessionId="memo" />)
+    render(<ChatView sessionId="memo" />)
     const before = renders('MarkdownViewer')
     expect(before).toBeGreaterThanOrEqual(2)
 
-    transcript.messages = parseChatMessages(
-      [USER, TOOLS, RESULTS, ANSWER, FOLLOW_UP, SECOND_ANSWER].join('\n'),
+    diskNow(
+      parseChatMessages([USER, TOOLS, RESULTS, ANSWER, FOLLOW_UP, SECOND_ANSWER].join('\n')),
     )
-    rerender(<ChatView sessionId="memo" />)
     expect(screen.getByText('A de a.ts.')).toBeInTheDocument()
     expect(renders('MarkdownViewer') - before).toBe(2)
   })
