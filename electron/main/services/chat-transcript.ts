@@ -429,6 +429,10 @@ export interface ChatParser {
   // Menor índice de `messages` criado ou trocado desde a última chamada; messages.length
   // quando nada mudou. Abaixo dele os objetos são os mesmos de antes.
   takeDirty(): number
+  // O meta do subagente nasce depois do tool_use que o dispara. Com `id` já acrescentado ao
+  // mapa `subagents`, troca no lugar o tool_use ainda sem resultado pelo card de subagente.
+  // false = o resultado já saiu como tool_result genérico: só relendo o arquivo inteiro.
+  promoteSubagent(id: string): boolean
 }
 
 // Núcleo do parse, alimentado em pedaços: o estado que ligava uma linha às anteriores
@@ -473,6 +477,16 @@ export function createChatParser(
   const interruptedMsgIds = new Set<string>()
   // O 2.1.317 pode regravar o mesmo tool_use (mesmo id) em outra linha: um card só.
   const seenToolUseIds = new Set<string>()
+  // Índice em `out` dos tool_use genéricos ainda sem tool_result, para promoteSubagent.
+  const pendingToolUseIdx = new Map<string, number>()
+  const subagentCard = (id: string, sub: SubagentInfo): ChatMessage => ({
+    kind: 'subagent',
+    id,
+    name: sub.name,
+    description: sub.description,
+    turnCount: sub.turnCount,
+    turns: sub.turns,
+  })
   const trackIdx = <T,>(map: Map<string, T[]>, key: string, value: T): void => {
     const list = map.get(key)
     if (list) list.push(value)
@@ -557,7 +571,10 @@ export function createChatParser(
                 ...(isInterruptedResult(obj.toolUseResult) ? { interrupted: true } : {}),
               })
             }
-            if (forId) resolvedToolIds.add(forId)
+            if (forId) {
+              resolvedToolIds.add(forId)
+              pendingToolUseIdx.delete(forId)
+            }
           } else if (item?.type === 'text' && typeof item.text === 'string') {
             // Mesma classificação fail-safe: text blocks junto de tool_results
             // costumam ser system-reminders/contexto de hook, não o humano.
@@ -600,14 +617,7 @@ export function createChatParser(
           const sub = id ? subagents?.get(id) : undefined
           if (sub) {
             if (id) subIds.add(id)
-            push({
-              kind: 'subagent',
-              id,
-              name: sub.name,
-              description: sub.description,
-              turnCount: sub.turnCount,
-              turns: sub.turns,
-            })
+            push(subagentCard(id, sub))
           } else if (item.name === 'AskUserQuestion') {
             if (id) askIds.add(id)
             push({ kind: 'ask_user_question', id, questions: parseQuestions(item.input) })
@@ -616,6 +626,7 @@ export function createChatParser(
             push({ kind: 'exit_plan_mode', id, ...parsePlan(item.input) })
           } else {
             push({ kind: 'tool_use', id, name: item.name, input: item.input })
+            if (id) pendingToolUseIdx.set(id, out.length - 1)
             if (msgId !== null && id) trackIdx(toolUseIdxByMsgId, msgId, { idx: out.length - 1, id })
           }
         }
@@ -683,6 +694,17 @@ export function createChatParser(
       const lowest = dirty
       dirty = out.length
       return lowest
+    },
+    promoteSubagent(id) {
+      const sub = subagents?.get(id)
+      // Nada emitido para trocar: o tool_use ainda não chegou, ou já nasceu como subagente.
+      if (!sub || !seenToolUseIds.has(id) || subIds.has(id)) return true
+      const idx = pendingToolUseIdx.get(id)
+      if (idx === undefined) return false
+      put(idx, subagentCard(id, sub))
+      subIds.add(id)
+      pendingToolUseIdx.delete(id)
+      return true
     },
   }
 }
