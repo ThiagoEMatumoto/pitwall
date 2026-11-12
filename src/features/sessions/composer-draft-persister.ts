@@ -76,7 +76,8 @@ export type ApplyDraft = (state: DraftState, merged: boolean) => void
 
 export interface DraftPersister {
   // Lê o rascunho salvo e o entrega ao `apply` (direto, ou juntado ao digitado).
-  hydrate(apply: ApplyDraft): Promise<void>
+  // Resolve false quando a leitura falhou: o salvo continua desconhecido.
+  hydrate(apply: ApplyDraft): Promise<boolean>
   // Estado em memória do mesmo processo (remount): é mais novo que o banco, então
   // dispensa a leitura e vale como hidratado.
   seed(state: DraftState): void
@@ -224,20 +225,24 @@ export function createDraftPersister(opts: {
       apply = fn
       if (!key) {
         hydrated = true
-        return
+        return true
       }
       let saved: ComposerDraft | null = null
+      let read = true
       try {
         saved = await api.get(key)
       } catch (err) {
+        read = false
         console.error('[composer] falha ao ler o rascunho salvo:', err)
       }
       resolveSaved(saved)
+      return read
     },
 
     seed(state) {
       hydrated = true
-      changed(state)
+      // Remount de pane já lida e vazia: o banco também está vazio, nada a gravar.
+      if (!sameState(state, latest)) changed(state)
     },
 
     update(state) {

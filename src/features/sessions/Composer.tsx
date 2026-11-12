@@ -126,8 +126,12 @@ function pushHistory(sessionId: string, value: string) {
 type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
 const attachmentsBySession = new Map<string, PersistedAttachment[]>()
 
-function hasMemoryDraft(memKey: string): boolean {
-  return drafts.has(memKey) || attachmentsBySession.has(memKey)
+// Chaves cuja leitura do app.db já chegou ao campo neste processo. Daí em diante
+// a memória acima é a verdade, mesmo vazia: o remount não relê nem trava o campo.
+const hydratedKeys = new Set<string>()
+
+function memoryIsCurrent(memKey: string): boolean {
+  return hydratedKeys.has(memKey) || drafts.has(memKey) || attachmentsBySession.has(memKey)
 }
 
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
@@ -169,7 +173,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // antes do salvo chegar seria juntada a ele depois, trocando o valor sob o
   // cursor (a tecla seguinte ia parar no fim do texto). A tecla digitada nesse
   // intervalo não entra, e o campo diz que ainda está recuperando o rascunho.
-  const [hydrating, setHydrating] = useState(() => !hasMemoryDraft(memKey))
+  const [hydrating, setHydrating] = useState(() => !memoryIsCurrent(memKey))
   // Navegação do histórico de prompts: `histIndex` null = editando o rascunho
   // atual (fora do histórico); >= 0 = posição no histórico da sessão. `savedDraft`
   // guarda o rascunho ao entrar no histórico pra restaurá-lo ao voltar pro fim.
@@ -322,7 +326,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     persisterRef.current = persister
     let lockTimer: ReturnType<typeof setTimeout> | undefined
     // Memória do mesmo processo (remount) é mais nova que o banco: dispensa a leitura.
-    if (hasMemoryDraft(memKey)) {
+    if (memoryIsCurrent(memKey)) {
       setHydrating(false)
       persister.seed({
         text: drafts.get(memKey) ?? '',
@@ -344,6 +348,11 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
               setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
             }
           })
+        })
+        .then((read) => {
+          // Leitura que falhou, ou que voltou depois do desmonte, não pôs o salvo
+          // na memória: o próximo mount tem de reler.
+          if (read && persisterRef.current === persister) hydratedKeys.add(memKey)
         })
         .finally(() => {
           clearTimeout(lockTimer)
