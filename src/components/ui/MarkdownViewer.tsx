@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes } from 'react'
+import { memo, type AnchorHTMLAttributes } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -54,7 +54,9 @@ interface Props {
   content: string
 }
 
-export function MarkdownViewer({ content }: Props) {
+// Reparsear o markdown é o custo dominante de cada bolha: com o mesmo texto, o
+// render do pai não chega aqui.
+export const MarkdownViewer = memo(function MarkdownViewer({ content }: Props) {
   perfCount('MarkdownViewer')
   return (
     <div className="markdown-body">
@@ -67,4 +69,4 @@ export function MarkdownViewer({ content }: Props) {
       </ReactMarkdown>
     </div>
   )
-}
+})

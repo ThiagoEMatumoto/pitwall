@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ChatMessage } from '../../../../shared/types/chat'
 
-const { transcript } = vi.hoisted(() => ({ transcript: { messages: [] as ChatMessage[] } }))
+const { transcript } = vi.hoisted(() => {
+  // A sonda lê a flag uma vez, na carga do módulo: liga antes dos imports.
+  ;(window as unknown as { api: unknown }).api = { perf: { enabled: true, report: () => {} } }
+  return { transcript: { messages: [] as ChatMessage[] } }
+})
 
 vi.mock('@/lib/ipc', () => {
   const inert = new Proxy(
@@ -26,6 +30,10 @@ vi.mock('./useChatTranscript', () => ({
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', getVersion: () => '0' } }))
 
 import { ChatView } from './ChatView'
+import { MessageBubble } from './MessageBubble'
+import { ToolGroup } from './ToolCard'
+import { buildChatRows, type ToolEntry } from './chat-rows'
+import { startPerfProbe } from '@/lib/perf-probe'
 import { parseChatMessages } from '../../../../electron/main/services/chat-transcript'
 
 globalThis.ResizeObserver ??= class {
@@ -33,6 +41,10 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
   disconnect() {}
 } as unknown as typeof ResizeObserver
+// O jsdom não tem PerformanceObserver; a sonda só precisa dele para long tasks e teclas.
+globalThis.PerformanceObserver ??= class {
+  observe() {}
+} as unknown as typeof PerformanceObserver
 
 // Transcript no formato que a CLI grava, passado pelo parser real.
 const L = (o: unknown) => JSON.stringify(o)
@@ -61,6 +73,12 @@ const RESULTS = L({
 const ANSWER = L({
   type: 'assistant',
   message: { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'Os dois exportam a mesma função.' }] },
+})
+
+const FOLLOW_UP = L({ type: 'user', message: { role: 'user', content: 'e qual delas é usada?' } })
+const SECOND_ANSWER = L({
+  type: 'assistant',
+  message: { id: 'm3', role: 'assistant', content: [{ type: 'text', text: 'A de a.ts.' }] },
 })
 
 function scroller(): HTMLElement {
@@ -154,5 +172,65 @@ describe('ChatView — troca de sessão na mesma instância', () => {
     transcript.messages = parseChatMessages([USER, ANSWER].join('\n'))
     rerender(<ChatView sessionId="c" />)
     expect(document.querySelectorAll('.chat-row-in').length).toBeGreaterThan(0)
+  })
+})
+
+describe('folhas do chat memoizadas (contadores da sonda)', () => {
+  startPerfProbe()
+  const renders = (name: string) => window.__cmPerf?.counters[name] ?? 0
+  const toolGroup = (messages: ChatMessage[]): ToolEntry[] => {
+    const row = buildChatRows(messages).find((r) => r.type === 'tools')
+    if (row?.type !== 'tools') throw new Error('esperava grupo')
+    return row.entries
+  }
+
+  it('mensagens novas só parseiam o markdown delas', () => {
+    transcript.messages = parseChatMessages([USER, TOOLS, RESULTS, ANSWER].join('\n'))
+    const { rerender } = render(<ChatView sessionId="memo" />)
+    const before = renders('MarkdownViewer')
+    expect(before).toBeGreaterThanOrEqual(2)
+
+    transcript.messages = parseChatMessages(
+      [USER, TOOLS, RESULTS, ANSWER, FOLLOW_UP, SECOND_ANSWER].join('\n'),
+    )
+    rerender(<ChatView sessionId="memo" />)
+    expect(screen.getByText('A de a.ts.')).toBeInTheDocument()
+    expect(renders('MarkdownViewer') - before).toBe(2)
+  })
+
+  it('bolha com as mesmas props não renderiza de novo; texto novo renderiza', () => {
+    const [answer] = parseChatMessages(ANSWER)
+    if (answer.kind !== 'assistant') throw new Error('esperava resposta')
+    const unmounted = renders('MessageBubble')
+    const { rerender } = render(<MessageBubble role="assistant" text={answer.text} />)
+    const before = renders('MessageBubble')
+    expect(before).toBe(unmounted + 1)
+
+    rerender(<MessageBubble role="assistant" text={answer.text} />)
+    expect(renders('MessageBubble')).toBe(before)
+
+    rerender(<MessageBubble role="assistant" text={`${answer.text} E mais.`} />)
+    expect(renders('MessageBubble')).toBe(before + 1)
+    expect(screen.getByText(/E mais\./)).toBeInTheDocument()
+  })
+
+  it('grupo refeito sobre as mesmas mensagens não renderiza; resultado novo renderiza', () => {
+    const pending = parseChatMessages([USER, TOOLS].join('\n'))
+    const unmounted = renders('ToolGroup')
+    const { rerender } = render(<ToolGroup entries={toolGroup(pending)} running />)
+    const before = renders('ToolGroup')
+    expect(before).toBe(unmounted + 1)
+    expect(screen.getAllByLabelText('rodando').length).toBeGreaterThan(0)
+
+    rerender(<ToolGroup entries={toolGroup(pending)} running />)
+    expect(renders('ToolGroup')).toBe(before)
+
+    const answered = [...pending, ...parseChatMessages(RESULTS)]
+    rerender(<ToolGroup entries={toolGroup(answered)} running />)
+    expect(renders('ToolGroup')).toBe(before + 1)
+    expect(screen.queryByLabelText('rodando')).not.toBeInTheDocument()
+
+    rerender(<ToolGroup entries={toolGroup(answered)} />)
+    expect(renders('ToolGroup')).toBe(before + 2)
   })
 })
