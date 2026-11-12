@@ -771,6 +771,20 @@ describe('filha de handoff done retomada', () => {
     expect(rowOf(second)).toMatchObject({ title: ALIAS, title_source: 'manual' })
   })
 
+  // A mãe (handoff_list, wake, bastão) lê o apelido por childAlias: tem de ser o
+  // mesmo endereço com que o resume relança a filha.
+  it('linha apontada pelo handoff sem title: childAlias devolve o apelido de outra linha da conversa', () => {
+    const { handoffId, cc } = doneChild()
+    const first = resume(cc)
+    exitPty(first, { hibernated: false })
+    seam.handlers.get('sessions:rename')!(null, first as never, '' as never)
+    expect(rowOf(first)).toMatchObject({ title: null, title_source: null })
+    const linked = handoffStore.get(handoffId)?.childSessionId ?? null
+    expect(linked).toBe(first)
+
+    expect(handoffStore.childAlias(linked)).toBe(ALIAS)
+  })
+
   it('handoffs:resume (painel): relança como filha e devolve o handoff ainda done', () => {
     const { handoffId, cc } = doneChild()
 
