@@ -22,6 +22,7 @@ import {
   type HibernateStats,
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
+import { perfCount, perfTime } from '../perf-probe'
 import type { ProcTreeVerdict } from './proc-tree'
 import type { TranscriptPeek } from './schedule-scan'
 
@@ -261,33 +262,40 @@ export class IdleHibernator {
     if (!on || this.ticking) return
     this.ticking = true
     try {
-      this.stats.lastTickAt = this.now()
-      const handoffCc = new Set(this.deps.activeHandoffCcSessionIds())
-      for (const candidate of this.deps.candidates()) {
-        if (this.pending.has(candidate.sessionId)) continue
-        const doneChild =
-          childAfterMin > 0 && this.deps.handoffChildKind(candidate.ccSessionId) === 'done'
-        const windowMin = doneChild ? childAfterMin : afterMin
-        // Hibernação geral desligada: só a filha concluída é avaliada. O gate lê o
-        // transcript inteiro, e isso não pode rodar para toda sessão viva.
-        if (windowMin <= 0) continue
-        const verdict = await this.evaluate(candidate, windowMin * 60_000, handoffCc, doneChild)
-        if (!verdict.ok) {
-          this.refuse(verdict.reason)
-          continue
-        }
-        // O open_panes tem debounce: a aba pode ter fechado depois do último save.
-        // E a aba focada, ou com o Composer em uso, nunca hiberna.
-        const check = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
-        const refusal = paneCheckRefusal(check, doneChild)
-        if (refusal) {
-          this.refuse(refusal)
-          continue
-        }
-        await this.hibernate(candidate, doneChild ? null : (check?.paneId ?? null), doneChild)
-      }
+      // Com CM_PERF=1 o custo do tick sai em spans['hibernate.tick'] da sonda. Um
+      // tick que hiberna alguém inclui a espera do renderer e da fila.
+      await perfTime('hibernate.tick', () => this.sweep(afterMin, childAfterMin))
     } finally {
       this.ticking = false
+    }
+  }
+
+  private async sweep(afterMin: number, childAfterMin: number): Promise<void> {
+    this.stats.lastTickAt = this.now()
+    const handoffCc = new Set(this.deps.activeHandoffCcSessionIds())
+    for (const candidate of this.deps.candidates()) {
+      if (this.pending.has(candidate.sessionId)) continue
+      const doneChild =
+        childAfterMin > 0 && this.deps.handoffChildKind(candidate.ccSessionId) === 'done'
+      const windowMin = doneChild ? childAfterMin : afterMin
+      // Hibernação geral desligada: só a filha concluída é avaliada. O gate lê o
+      // transcript inteiro, e isso não pode rodar para toda sessão viva.
+      if (windowMin <= 0) continue
+      perfCount('hibernate.evaluated')
+      const verdict = await this.evaluate(candidate, windowMin * 60_000, handoffCc, doneChild)
+      if (!verdict.ok) {
+        this.refuse(verdict.reason)
+        continue
+      }
+      // O open_panes tem debounce: a aba pode ter fechado depois do último save.
+      // E a aba focada, ou com o Composer em uso, nunca hiberna.
+      const check = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
+      const refusal = paneCheckRefusal(check, doneChild)
+      if (refusal) {
+        this.refuse(refusal)
+        continue
+      }
+      await this.hibernate(candidate, doneChild ? null : (check?.paneId ?? null), doneChild)
     }
   }
 
