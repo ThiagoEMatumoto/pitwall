@@ -16,10 +16,10 @@ export function backgroundChild(sessionId: string | null | undefined): LiveSessi
   return live
 }
 
-// focus: leva o usuário até a aba (card da filha). Sem focus a aba nasce em
-// segundo plano e ele fica onde está (mapa, Room, @alias de outra pane); as modais
-// (quick look, QuickComposer) também abrem assim e só navegam depois do envio
-// aceito, para o erro continuar visível onde ele digitou.
+// focus: leva o usuário até a aba. Sem focus a aba nasce em segundo plano e ele
+// fica onde está (mapa, Room, @alias de outra pane); o card, o quick look e o
+// QuickComposer também abrem assim e só navegam depois do envio aceito, para o
+// texto e o erro continuarem onde ele digitou.
 // Devolve a filha cuja aba abriu, ou null se não havia o que abrir. Só com
 // processo vivo: abrir antes de um envio que vai falhar deixaria uma aba morta.
 export async function revealChildOnUserMessage(

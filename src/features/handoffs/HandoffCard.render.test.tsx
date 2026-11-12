@@ -25,6 +25,7 @@ vi.mock('@/lib/ipc', () => ({
   sessionsApi: {
     kill: vi.fn().mockResolvedValue(undefined),
     clearSessionDrafts: vi.fn().mockResolvedValue(undefined),
+    adoptDraft: vi.fn().mockResolvedValue(null),
   },
   workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
@@ -524,7 +525,8 @@ describe('HandoffCard no inbox (tier wide)', () => {
 })
 
 // Decisão do usuário: a mensagem que ele manda a uma filha fora da tela abre a aba
-// dela antes do envio. O card não é modal: leva até a aba.
+// dela antes do envio. O card do inbox desmonta ao trocar de área: a aba nasce em
+// segundo plano e ele só é levado até ela com o envio aceito.
 describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
   const realFocusOrOpenSession = useAppStore.getState().focusOrOpenSession
   const focusOrOpenSession = vi.fn().mockResolvedValue(undefined)
@@ -559,21 +561,40 @@ describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
     useAppStore.setState({
       liveSessions: [],
       panes: [],
+      area: 'overview',
+      focusPaneId: null,
       focusOrOpenSession: realFocusOrOpenSession,
     })
     useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
   })
 
-  it('filha sem aba: abre a aba, leva até ela e só então envia', async () => {
+  it('filha sem aba: a aba nasce em segundo plano, o envio sai e só então leva até ela', async () => {
     send('segue por aqui')
 
-    await waitFor(() =>
-      expect(sendMessage).toHaveBeenCalledWith({ id: 'h1', text: 'segue por aqui' }),
-    )
-    expect(focusOrOpenSession).toHaveBeenCalledWith(live, { background: false })
-    expect(focusOrOpenSession.mock.invocationCallOrder[0]).toBeLessThan(
-      sendMessage.mock.invocationCallOrder[0],
-    )
+    await waitFor(() => expect(focusOrOpenSession).toHaveBeenCalledTimes(2))
+    expect(sendMessage).toHaveBeenCalledWith({ id: 'h1', text: 'segue por aqui' })
+    expect(focusOrOpenSession.mock.calls).toEqual([[live, { background: true }], [live]])
+    const [opened, taken] = focusOrOpenSession.mock.invocationCallOrder
+    const sent = sendMessage.mock.invocationCallOrder[0]
+    expect(opened).toBeLessThan(sent)
+    expect(sent).toBeLessThan(taken)
+  })
+
+  // O inbox só existe na área handoffs: sair dela antes da resposta do envio
+  // desmontaria o card com o texto digitado e o motivo da recusa.
+  it('envio recusado: o usuário fica onde está, com o texto e o motivo no card', async () => {
+    useAppStore.setState({ area: 'handoffs', focusOrOpenSession: realFocusOrOpenSession })
+    sendMessage.mockRejectedValueOnce(new Error('A filha está com um menu aberto.'))
+
+    send('segue por aqui')
+
+    expect(await screen.findByText('A filha está com um menu aberto.')).toBeTruthy()
+    expect(useAppStore.getState().area).toBe('handoffs')
+    expect(useAppStore.getState().focusPaneId).toBeNull()
+    expect(useAppStore.getState().panes.map((p) => p.session.id)).toEqual(['s-child'])
+    expect(
+      (screen.getByPlaceholderText('Enviar mensagem para a filha…') as HTMLTextAreaElement).value,
+    ).toBe('segue por aqui')
   })
 
   it('filha que já tem aba: só envia', async () => {
