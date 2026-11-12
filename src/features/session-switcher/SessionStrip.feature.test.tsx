@@ -306,3 +306,51 @@ describe('SessionStrip — filhas em segundo plano', () => {
     })
   })
 })
+
+describe('SessionStrip — clique no chip', () => {
+  function renderShortChip() {
+    sessions.push(makeSession({ id: 's-curta', ccSessionId: 'cc-curta', name: 'pw' }))
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+    useMotherPinsStore.setState({ keys: [], loaded: true })
+    useFocusFilterStore.setState({ enabled: false, loaded: true, load: async () => {} } as never)
+    render(<SessionStrip onOpenSwitcher={() => {}} />)
+    const chip = document.querySelector<HTMLElement>('[data-strip-chip]')!
+    const actions = screen.getByLabelText('Encerrar o processo desta sessão').parentElement!
+    return { chip, actions }
+  }
+
+  // Nome curto: com o ponteiro em cima, as ações do hover cobriam o nome inteiro
+  // e o clique entre os ícones delas não chegava ao botão.
+  it('clique fora dos botões de ação abre a sessão, uma vez só', () => {
+    const { chip, actions } = renderShortChip()
+
+    for (const target of [actions, chip, screen.getByText('pw')]) {
+      openSession.mockClear()
+      fireEvent.click(target)
+      expect(openSession).toHaveBeenCalledTimes(1)
+      expect(openSession).toHaveBeenCalledWith(sessions[0])
+    }
+  })
+
+  it('botão de ação não abre a sessão', () => {
+    renderShortChip()
+
+    fireEvent.click(screen.getByLabelText('Encerrar o processo desta sessão'))
+    fireEvent.click(screen.getByLabelText('Fixar no início da barra'))
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  // jsdom não tem layout. O que dá para travar é o contrato de CSS que faz o chip
+  // reservar o próprio começo: as ações ficam em fluxo e com largura mesmo
+  // invisíveis, na mesma célula de grid do conteúdo, afastadas da ponta esquerda.
+  it('as ações do hover reservam lugar no chip em vez de flutuar sobre ele', () => {
+    const { chip, actions } = renderShortChip()
+
+    const classes = actions.className.split(/\s+/)
+    expect(chip.className.split(/\s+/)).toContain('grid')
+    expect(classes).toContain('invisible')
+    expect(classes).not.toContain('absolute')
+    expect(classes).not.toContain('hidden')
+    expect(parseFloat(actions.style.marginLeft)).toBeGreaterThan(0)
+  })
+})
