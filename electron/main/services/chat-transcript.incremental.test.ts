@@ -303,3 +303,60 @@ describe('createChatParser — takeDirty', () => {
     expect(parser.takeDirty()).toBe(0)
   })
 })
+
+// O meta.json do subagente nasce depois do tool_use que o dispara: o serviço acrescenta a
+// entrada no mapa que o parser consulta e pede a troca do card já emitido.
+describe('createChatParser — meta de subagente que chega depois do tool_use', () => {
+  const [id, info] = [...SUBAGENTS][0]
+  const lines = parseTranscriptLines(MOTHER.join('\n'))
+  const full = parseChatMessages(MOTHER.join('\n'), SUBAGENTS)
+  const toolUseAt = MOTHER.findIndex((l) => l.includes(`"id":"${id}"`))
+  const resultAt = MOTHER.findIndex((l) => l.includes(`"tool_use_id":"${id}"`))
+
+  it('em todo ponto de corte: troca no lugar enquanto pendente, pede releitura depois do resultado', () => {
+    expect(toolUseAt).toBeGreaterThan(0)
+    expect(resultAt).toBeGreaterThan(toolUseAt)
+
+    for (let k = 0; k <= lines.length; k++) {
+      const subagents = new Map<string, SubagentInfo>()
+      const parser = createChatParser({ subagents })
+      parser.feed(lines.slice(0, k))
+      parser.takeDirty()
+      const before = [...parser.messages]
+
+      subagents.set(id, info)
+      const promoted = parser.promoteSubagent(id)
+
+      expect(promoted, `corte ${k}`).toBe(k <= resultAt)
+      if (!promoted) continue
+      parser.feed(lines.slice(k))
+      const dirty = parser.takeDirty()
+      expect(parser.messages, `corte ${k}`).toStrictEqual(full)
+      expect(dirty, `corte ${k}`).toBeLessThanOrEqual(firstDifference(before, parser.messages))
+      for (let i = 0; i < dirty; i++) expect(parser.messages[i], `corte ${k}`).toBe(before[i])
+    }
+  })
+
+  it('pendente: o card genérico vira o de subagente e o índice sujo aponta para ele', () => {
+    const subagents = new Map<string, SubagentInfo>()
+    const parser = createChatParser({ subagents })
+    parser.feed(lines.slice(0, toolUseAt + 1))
+    parser.takeDirty()
+    const idx = parser.messages.findIndex((m) => m.kind === 'tool_use' && m.id === id)
+    expect(idx).toBeGreaterThan(0)
+
+    subagents.set(id, info)
+    expect(parser.promoteSubagent(id)).toBe(true)
+
+    expect(parser.messages[idx]).toMatchObject({ kind: 'subagent', id, name: info.name })
+    expect(parser.takeDirty()).toBe(idx)
+  })
+
+  it('id sem meta no mapa não muda nada', () => {
+    const parser = createChatParser({ subagents: new Map() })
+    parser.feed(lines)
+    parser.takeDirty()
+    expect(parser.promoteSubagent(id)).toBe(true)
+    expect(parser.takeDirty()).toBe(parser.messages.length)
+  })
+})
