@@ -457,6 +457,33 @@ describe('fiação do crash e do boot de teste', () => {
     expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
   })
 
+  it('falha ao apagar o registro não sobe para o shutdown, e o quit tenta de novo', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+
+    // O timer de 10 min.
+    expect(() => app.watch.endProbation()).not.toThrow()
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 1 })
+
+    // O shutdown final, com o banco gravando de novo.
+    store.writesWorkAgain()
+    app.watch.endProbation()
+    expect(store.read(GPU_AUTO_PREF_KEY)).toBeNull()
+  })
+
+  it('enquanto o registro não sai do banco, um crash ainda soma strike sobre ele', () => {
+    const store = memoryPrefs()
+    const app = startProbationBoot(store)
+    store.failWritesTo(GPU_AUTO_PREF_KEY)
+    app.watch.endProbation()
+    store.writesWorkAgain()
+
+    app.watch.processGone('crashed')
+
+    expect(store.read(GPU_AUTO_PREF_KEY)).toMatchObject({ strikes: 2 })
+  })
+
   it('com a aceleração já desligada um crash não diz nada sobre o driver', () => {
     const store = memoryPrefs()
     const first = startApp(store)

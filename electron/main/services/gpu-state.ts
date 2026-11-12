@@ -252,8 +252,15 @@ export function createGpuCrashWatch(deps: GpuCrashWatchDeps): GpuCrashWatch {
     // um crash seguinte não pode somar outro na mesma execução.
     endProbation() {
       if (!onProbation || crashCount > 0) return
-      onProbation = false
-      deps.prefs.setPref(GPU_AUTO_PREF_KEY, null)
+      // Roda num timer e no shutdown final, antes de matar as PTYs e fechar o
+      // banco: falha de escrita não pode interromper nenhum dos dois. O teste só
+      // passa quando o registro sai do banco, então a próxima chamada tenta de novo.
+      try {
+        deps.prefs.setPref(GPU_AUTO_PREF_KEY, null)
+        onProbation = false
+      } catch (err) {
+        console.warn('[gpu] não apagou o registro do boot de teste:', String(err))
+      }
     },
   }
 }
