@@ -22,6 +22,7 @@ import { registerGpuIpc } from './gpu'
 import {
   autoDisableRecord,
   decideGpuBoot,
+  resolveGpuBoot,
   setGpuState,
   GPU_AUTO_PREF_KEY,
   GPU_DISABLED_BY_USER_PREF_KEY,
@@ -218,5 +219,49 @@ describe('gpu:status × toggle das Configurações', () => {
     boot({})
     handlers.get('gpu:set-ozone')!(null, false)
     expect(gpuRestartPending(status())).toBe(true)
+  })
+
+  // gpu.disabled=true sem a marca é o que o boot lê como legado do automático
+  // antigo. Uma escrita que falha no meio do gpu:set-disabled não pode deixar
+  // esse estado: o boot seguinte religaria a GPU em teste contra a escolha manual.
+  describe('escrita que falha no meio do gpu:set-disabled', () => {
+    function failWritesTo(failingKey: string): void {
+      setPref.mockImplementation((key: string, value: unknown) => {
+        if (key === failingKey) throw new Error('disk I/O error')
+        prefs.set(key, JSON.parse(JSON.stringify(value)))
+      })
+    }
+
+    const nextBoot = () =>
+      resolveGpuBoot({
+        prefs: { getPref, setPref },
+        envDisabled: false,
+        version: '1.0.0',
+        now: NOW,
+      })
+
+    it('desligar sem conseguir gravar a marca não vira legado no boot seguinte', () => {
+      failWritesTo(GPU_DISABLED_BY_USER_PREF_KEY)
+      expect(() => handlers.get('gpu:set-disabled')!(null, true)).toThrow()
+      expect(prefs.get(GPU_DISABLED_PREF_KEY)).not.toBe(true)
+      expect(nextBoot()).toEqual({ hwAccelDisabled: false, probation: false })
+      expect(prefs.get(GPU_AUTO_PREF_KEY) ?? null).toBeNull()
+    })
+
+    it('desligar sem conseguir gravar a pref deixa só a marca, que o boot ignora', () => {
+      failWritesTo(GPU_DISABLED_PREF_KEY)
+      expect(() => handlers.get('gpu:set-disabled')!(null, true)).toThrow()
+      expect(nextBoot()).toEqual({ hwAccelDisabled: false, probation: false })
+      expect(prefs.get(GPU_AUTO_PREF_KEY) ?? null).toBeNull()
+    })
+
+    it('religar sem conseguir apagar a marca não vira legado no boot seguinte', () => {
+      handlers.get('gpu:set-disabled')!(null, true)
+      failWritesTo(GPU_DISABLED_BY_USER_PREF_KEY)
+      expect(() => handlers.get('gpu:set-disabled')!(null, false)).toThrow()
+      expect(prefs.get(GPU_DISABLED_PREF_KEY)).toBe(false)
+      expect(nextBoot()).toEqual({ hwAccelDisabled: false, probation: false })
+      expect(prefs.get(GPU_AUTO_PREF_KEY) ?? null).toBeNull()
+    })
   })
 })
