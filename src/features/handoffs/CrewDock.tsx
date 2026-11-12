@@ -11,11 +11,18 @@ import {
 import { useAppStore } from '@/store/appStore'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
 import { useHandoffsStore } from '@/store/handoffsStore'
-import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTtl } from './HandoffCard'
+import {
+  HandoffCard,
+  canArchiveCard,
+  childProcessAlive,
+  crewDotColor,
+  crewDotInitial,
+  crewDotTitle,
+  useHeartbeatTtl,
+} from './HandoffCard'
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
-  crewTerminalTarget,
   dockCrew,
   orderCrew,
   resolveCrewFocus,
@@ -29,7 +36,7 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 // clique ou Ctrl+J. Quando alguma filha passa a esperar, quem avisa é a trilha:
 // O Ápice pulsa e o contador acende em âmbar, dentro dos 40px. Peek in-place: dá
 // pra ler e responder daqui, sem abrir pane (o cap de contextos WebGL é 8;
-// "Abrir terminal" continua sendo ação explícita, dentro do card).
+// "Abrir na aba" continua sendo ação explícita, dentro do card).
 // Montado como IRMÃO de <main> no AppShell — vive fora do plano de abas do
 // dockview, então não mistura com as sessões-mãe nem some fora da área projetos.
 
@@ -145,16 +152,17 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
     listRef.current?.querySelector<HTMLElement>(`[data-crew-card="${CSS.escape(id)}"]`)?.focus()
   }
 
-  // "Abrir terminal" no card: abre o peek JÁ em modo terminal — em janela, sem
-  // promover a filha a pane e sem o header de sessão (leia-se: sem o botão de
-  // encerrar ao alcance de quem só foi dar uma olhada). Se ela já tem aba, o
-  // terminal dela mora lá. Ver crewTerminalTarget.
-  function openTerminal(handoff: Handoff) {
-    const live = handoff.childSessionId ? liveById.get(handoff.childSessionId) : undefined
-    const target = crewTerminalTarget(live, useAppStore.getState().panes, 'dock')
-    if (target === 'none') return
-    if (target === 'pane') void useAppStore.getState().focusOrOpenSession(live!)
-    else openPeek(handoff.id, 'terminal')
+  // Dot da trilha: leva até AQUELA filha. Com processo, a aba dela; sem, o card
+  // (é dele que saem Retomar e Arquivar).
+  function focusChild(handoff: Handoff, live: LiveSessionInfo | undefined) {
+    if (live && childProcessAlive(live)) {
+      void useAppStore.getState().focusOrOpenSession(live)
+      return
+    }
+    expand()
+    setFocusedId(handoff.id)
+    // rAF: o expand() pode ter acabado de montar os cards.
+    requestAnimationFrame(() => focusCard(handoff.id))
   }
 
   // Pedido de foco do AppShell (Ctrl+J). Nonce, não booleano: pedir duas vezes
@@ -198,10 +206,14 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
       e.preventDefault()
       openPeek(id)
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
-      // Dispensa rápida sem tirar a mão do teclado — o par do "×" no card. O
-      // destino do cursor sai ANTES da dispensa: depois dela o card sob o dedo
-      // já não existe, e o resolveCrewFocus jogaria o foco de volta no topo.
+      // Arquivar sem tirar a mão do teclado — o par do "×" no card, com a mesma
+      // regra (só com o processo morto). O destino do cursor sai ANTES: depois
+      // o card sob o dedo já não existe, e o resolveCrewFocus jogaria o foco de
+      // volta no topo.
       e.preventDefault()
+      const handoff = crew.find((h) => h.id === id)
+      const live = handoff?.childSessionId ? liveById.get(handoff.childSessionId) : undefined
+      if (!handoff || !canArchiveCard(handoff, live)) return
       const next = crewFocusAfterDismiss(idsRef.current, id)
       void dismissHandoff(id).then(() => {
         // rAF: a lista precisa re-renderizar sem o card dispensado antes de
@@ -315,10 +327,6 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
                 focusCard(h.id)
                 openPeek(h.id)
               }}
-              onOpenTerminal={() => {
-                focusCard(h.id)
-                openTerminal(h)
-              }}
             />
           </div>
         ))}
@@ -365,14 +373,15 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
         {crew.map((h) => {
           const live = h.childSessionId ? liveById.get(h.childSessionId) : undefined
           const color = crewDotColor(h, live, liveList)
+          const dotTitle = crewDotTitle(h, live, liveList)
           return (
             <button
               key={h.id}
               type="button"
               data-testid="crew-rail-child"
-              onClick={expand}
-              title={crewDotTitle(h, live, liveList)}
-              aria-label={crewDotTitle(h, live, liveList)}
+              onClick={() => focusChild(h, live)}
+              title={`${dotTitle} · clique para ${childProcessAlive(live) ? 'abrir a aba' : 'ver o card'}`}
+              aria-label={dotTitle}
               className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 bg-[var(--color-bg)] text-[10px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-2)]"
               // Inicial da filha com o status no anel: o ponto sozinho não dizia quem era.
               style={{ borderColor: color }}

@@ -182,7 +182,8 @@ export function paneShowsLive(pane: OpenPaneRef, live: LiveSessionInfo): boolean
   return paneLiveKey(pane) === live.ccSessionId
 }
 
-// Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
+// Onde o terminal desta filha deve aparecer quando o quick look pede "Ver o
+// terminal". O card do dock não passa por aqui: "Abrir na aba" vai direto à aba.
 //
 // 'modal': dentro do quick look, em janela, sem promover a filha a pane — "só
 // vou dar uma olhada" não põe o botão de encerrar a sessão a um clique.

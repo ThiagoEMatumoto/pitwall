@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -33,13 +33,15 @@ vi.mock('./useGlobalSessions', async (importOriginal) => ({
 }))
 vi.mock('./useWaitingCount', () => ({ useWaitingCount: () => 0 }))
 // Pins têm persistência própria (prefs assíncronas) e nada a ver com a marca.
+const pinnedIds: string[] = []
+const togglePin = vi.fn()
 vi.mock('./strip-pins-store', () => ({
   useStripPinsStore: (sel: (s: unknown) => unknown) =>
     sel({
-      pinnedIds: [],
+      pinnedIds,
       loaded: true,
       load: vi.fn().mockResolvedValue(undefined),
-      togglePin: vi.fn(),
+      togglePin,
       prune: vi.fn().mockResolvedValue(undefined),
     }),
 }))
@@ -93,8 +95,10 @@ beforeAll(() => {
 beforeEach(() => {
   navigateToFeature.mockClear()
   openSession.mockClear()
+  togglePin.mockClear()
   sessions.length = 0
   background.length = 0
+  pinnedIds.length = 0
   useSessionFeatureStore.setState({
     bySessionId: { 's-1': 'f-42' },
     featureTitles: { 'f-42': 'Extração TRF4' },
@@ -391,5 +395,45 @@ describe('SessionStrip — clique no chip', () => {
     expect(classes).not.toContain('absolute')
     expect(classes).not.toContain('hidden')
     expect(parseFloat(actions.style.marginLeft)).toBeGreaterThan(0)
+  })
+})
+
+describe('SessionStrip — chip fixado', () => {
+  // O indicador de fixado dividia a célula do grid com as ações do hover, que
+  // ficam por cima: o ponteiro indo desafixar acertava "Marcar como mãe" (nome
+  // curto) ou "Encerrar" (nome longo). jsdom não tem layout: o que dá para travar
+  // é o indicador numa coluna só dele e a faixa de ações contida na dela.
+  it('o indicador de fixado fica fora da célula das ações do hover', () => {
+    sessions.push(
+      makeSession({ id: 's-fixa', ccSessionId: 'cc-fixa', name: 'pw' }),
+      makeSession({ id: 's-solta', ccSessionId: 'cc-solta', name: 'px' }),
+    )
+    pinnedIds.push('s-fixa')
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+    useMotherPinsStore.setState({ keys: [], loaded: true })
+    useFocusFilterStore.setState({ enabled: false, loaded: true, load: async () => {} } as never)
+    render(<SessionStrip onOpenSwitcher={() => {}} />)
+
+    const [pinned, loose] = [...document.querySelectorAll<HTMLElement>('[data-strip-chip]')].map(
+      (chip) => ({ chip, actions: within(chip).getByTestId('strip-chip-actions') }),
+    )
+    const unpin = within(pinned.chip).getByLabelText('Desafixar do início da barra')
+    const unpinCell = [...pinned.chip.children].find((child) => child.contains(unpin))!
+    const pinnedClasses = pinned.actions.className.split(/\s+/)
+
+    expect(pinned.actions).not.toContainElement(unpin)
+    expect(within(pinned.chip).queryByLabelText('Fixar no início da barra')).not.toBeInTheDocument()
+    expect(unpinCell.className.split(/\s+/)).toContain('col-start-2')
+    expect(pinnedClasses).toContain('col-start-1')
+    // Sem margem negativa a faixa termina na própria coluna, antes do indicador.
+    expect(pinnedClasses.filter((name) => name.startsWith('-mr-'))).toEqual([])
+
+    // Sem fixar, a faixa segue até a borda do chip e leva o botão de fixar.
+    expect(loose.actions.className.split(/\s+/)).toContain('-mr-2.5')
+    expect(within(loose.actions).getByLabelText('Fixar no início da barra')).toBeInTheDocument()
+
+    fireEvent.click(unpin)
+    expect(togglePin).toHaveBeenCalledWith('s-fixa')
+    expect(openSession).not.toHaveBeenCalled()
   })
 })

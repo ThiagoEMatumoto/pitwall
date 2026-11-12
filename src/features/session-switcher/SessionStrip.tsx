@@ -560,23 +560,30 @@ function Chip({
           <ProviderBadge provider={item.provider} />
         </button>
         <SessionFeatureChip sessionId={item.id} density="dot" />
-        {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
-        {isPinned && <PinButton isPinned onTogglePin={onTogglePin} />}
       </div>
+      {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido), em
+          coluna só dele. No fim do conteúdo ficava debaixo das ações do hover, e
+          quem ia desafixar acertava "Marcar como mãe" ou "Encerrar". */}
+      {isPinned && (
+        <span className="col-start-2 row-start-1 ml-1.5 flex items-center">
+          <PinButton isPinned onTogglePin={onTogglePin} />
+        </span>
+      )}
       {/* Ações do hover sobrepostas à ponta da aba: ao lado do nome, eram ~40px
           de vão morto em cada aba; inline no hover, a aba crescia e empurrava as
           vizinhas. Dividem a célula do grid com o conteúdo, invisíveis mas com
           largura, afastadas do começo dela: a aba de nome curto alarga só o que
           falta para os glifos e o início do nome ficarem fora delas — sobrepostas
           com `absolute`, cobriam o botão inteiro e o clique caía nelas. `relative`
-          as mantém por cima do conteúdo; a margem negativa leva até a borda.
+          as mantém por cima do conteúdo; a margem negativa leva até a borda — menos
+          no chip fixado, onde a borda é do indicador e a faixa para antes dele.
           Chip cortado não as revela: `visible` aqui venceria o `hidden` herdado. */}
       <span
         data-testid="strip-chip-actions"
         style={{ marginLeft: leadGlyphs * LEAD_GLYPH_PX + LEAD_NAME_PX }}
-        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
+        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
           hidden ? '' : 'group-focus-within:visible group-hover:visible'
-        } ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}
+        } ${isPinned ? '' : `rounded-r-lg ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}`}
       >
         {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
         {onToggleMother && (

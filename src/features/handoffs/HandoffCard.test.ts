@@ -9,7 +9,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial } = await import(
+const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial, childProcessAlive, canArchiveCard, canForceFail } = await import(
   './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -233,5 +233,59 @@ describe('crewDotInitial — a inicial da filha no trilho recolhido', () => {
     const live = { title: 'otavio-parte-c1-checkout' } as import('../../../shared/types/ipc').LiveSessionInfo
     expect(crewDotInitial(h({}), live, [])).toBe('O')
     expect(crewDotInitial(h({}), undefined, [])).toBe('L')
+  })
+})
+
+describe('childProcessAlive — o processo da filha existe?', () => {
+  it('fora da lista viva a PTY já morreu', () => {
+    expect(childProcessAlive(undefined)).toBe(false)
+    expect(childProcessAlive(null)).toBe(false)
+  })
+
+  it("'ended' ainda na lista é o mesmo fato, um tick antes do refresh", () => {
+    expect(childProcessAlive({ status: 'ended' })).toBe(false)
+  })
+
+  it('qualquer outro status tem processo', () => {
+    for (const status of ['starting', 'working', 'waiting', 'idle'] as const) {
+      expect(childProcessAlive({ status })).toBe(true)
+    }
+  })
+})
+
+// Arquivar com o processo vivo tirava o card e deixava a sessão rodando como
+// "comum", sem apelido nem permissões de filha no próximo resume.
+describe('canArchiveCard — só com o processo morto', () => {
+  it('filha viva: não arquiva (os verbos são Minimizar / Encerrar / Desvincular)', () => {
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'working' })).toBe(false)
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'waiting' })).toBe(false)
+  })
+
+  it('sem processo (nunca subiu, encerrou, caiu): arquiva', () => {
+    expect(canArchiveCard(mk({ dismissedAt: null }), undefined)).toBe(true)
+    expect(canArchiveCard(mk({ dismissedAt: null }), { status: 'ended' })).toBe(true)
+  })
+
+  it('já arquivado: repetir não faria nada', () => {
+    expect(canArchiveCard(mk({ dismissedAt: 123 }), undefined)).toBe(false)
+  })
+})
+
+// Com a filha no ar o verbo é Encerrar (deixa interrupted e retomável). Forçar
+// falha sobra para o aprovado cuja filha nunca subiu: ali não há processo.
+describe('canForceFail — só o aprovado que nunca subiu', () => {
+  it('approved: sim', () => {
+    expect(canForceFail(mk({ status: 'approved' }))).toBe(true)
+  })
+
+  it('running e needs_input: não (era o atalho que matava filha viva)', () => {
+    expect(canForceFail(mk({ status: 'running' }))).toBe(false)
+    expect(canForceFail(mk({ status: 'needs_input' }))).toBe(false)
+  })
+
+  it('os demais: não', () => {
+    for (const status of ['pending', 'done', 'failed', 'rejected', 'interrupted'] as const) {
+      expect(canForceFail(mk({ status }))).toBe(false)
+    }
   })
 })

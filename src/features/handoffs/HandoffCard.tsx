@@ -5,10 +5,10 @@ import {
   CornerDownLeft,
   Eye,
   MoreHorizontal,
+  PanelTop,
   Pause,
   Play,
   Send,
-  TerminalSquare,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -16,11 +16,12 @@ import {
 import { Icon } from '@/components/ui/Icon'
 import { Menu } from '@/components/ui/Menu'
 import { handoffsApi, prefsApi } from '@/lib/ipc'
-import { useAppStore } from '@/store/appStore'
+import { pendingEndSessionIds, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import type { PanelTier } from '@/features/sessions/use-panel-tier'
 import { TONE_COLOR, cardIndicator, indicatorText } from '@/features/session-canvas/card-indicator'
-import { crewResumedAfterQuestion, splitAlias } from './crew'
+import { crewResumedAfterQuestion, paneShowsLive, splitAlias } from './crew'
+import { endSessionAsked } from './end-child'
 import type { Handoff, HandoffOutcome, HandoffStatus, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Card de um handoff: identidade da filha (alias), estado ao vivo, último texto e
@@ -115,6 +116,37 @@ export function childIdentity(
   }
   const predecessor = liveSessions.find((s) => s.id === handoff.predecessorSessionId)
   return { title: predecessor?.title ?? null, successorPending: true }
+}
+
+// O processo da filha existe? Fora da lista viva a PTY já morreu; 'ended' é o
+// mesmo fato, visto um tick antes de a lista recarregar.
+export function childProcessAlive(
+  live: Pick<LiveSessionInfo, 'status'> | null | undefined,
+): boolean {
+  return !!live && live.status !== 'ended'
+}
+
+// Arquivar o card (carimba dismissed_at) só com o processo morto. Com a filha
+// viva ele tirava o card e deixava a sessão rodando como sessão comum, que no
+// próximo resume subia sem apelido nem permissões de filha (o relink exige
+// dismissed_at IS NULL): prometia arquivar e, na prática, soltava. Quem tira a
+// filha viva da frente é Minimizar ou Encerrar.
+export function canArchiveCard(
+  handoff: Pick<Handoff, 'dismissedAt' | 'childSessionId'>,
+  child: Pick<LiveSessionInfo, 'status'> | null | undefined,
+): boolean {
+  if (handoff.dismissedAt != null || childProcessAlive(child)) return false
+  // Encerrar com o Desfazer em aberto: a filha já saiu da lista viva, mas a PTY
+  // só morre quando a janela expira. Arquivar ali e desfazer devolvia a filha
+  // viva a um card arquivado.
+  return !handoff.childSessionId || !pendingEndSessionIds().has(handoff.childSessionId)
+}
+
+// "Forçar falha" só para o aprovado cuja filha nunca subiu: ali não há processo
+// para Encerrar. Em running ele era um segundo jeito de matar a filha, que a
+// deixava failed (sem retomada) em vez de interrupted.
+export function canForceFail(handoff: Pick<Handoff, 'status'>): boolean {
+  return handoff.status === 'approved'
 }
 
 export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
@@ -271,12 +303,9 @@ interface Props {
   // Abre o quick look (CrewPeek) desta filha. Só o dock passa — no inbox, que já
   // é uma área inteira, o overlay não acrescentaria nada.
   onPeek?: () => void
-  // Abre o TERMINAL da filha do jeito que o dono do card decidir (o dock manda
-  // pro overlay em janela; sem isto, o botão promove a filha a aba como antes).
-  onOpenTerminal?: () => void
 }
 
-export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTerminal }: Props) {
+export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
@@ -313,20 +342,15 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   // filha que acabou de cair é justamente quando mais se quer.
   const canPeek = !!onPeek && !!handoff.childSessionId
 
-  // Recovery manual: força failed via IPC handoffs:fail. Disponível pra running e
-  // pra approved travado (aprovado mas a filha nunca subiu). Confirmação evita
-  // matar uma filha viva em trabalho longo por engano.
-  const canForceFail = handoff.status === 'running' || handoff.status === 'approved'
+  // Recovery manual: força failed via IPC handoffs:fail (ver canForceFail).
+  const forceFailable = canForceFail(handoff)
 
-  // Dispensar: tira o card de vista sem tocar no status. Só some o que ainda não
-  // foi dispensado — repetir não faria nada visível.
-  const canDismiss = handoff.dismissedAt == null
-
-  // Soltar: a operação INVERSA da adoção — corta o vínculo mãe→filha e devolve a
-  // sessão à condição de sessão normal. Só faz sentido com filha atrelada; sem
-  // childSessionId não há vínculo pra cortar. Ao contrário de "Dispensar", NÃO é
-  // bloqueado com a filha viva: soltar não cria órfão invisível, é justamente o
-  // contrário — a sessão volta a aparecer na barra e no switcher.
+  // Desvincular: a operação INVERSA da adoção — corta o vínculo mãe→filha e
+  // devolve a sessão à condição de sessão normal. Só faz sentido com filha
+  // atrelada; sem childSessionId não há vínculo pra cortar. Ao contrário de
+  // "Arquivar card", NÃO é bloqueado com a filha viva: desvincular não cria órfão
+  // invisível, é justamente o contrário — a sessão volta a aparecer na barra e no
+  // switcher.
   const canRelease = handoff.childSessionId != null
 
   // Feedback de utilidade: só faz sentido pra handoffs concluídos. Persiste via
@@ -374,7 +398,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   async function forceFail() {
     if (failing) return
     const ok = window.confirm(
-      `Forçar falha deste handoff para "${repoLabel}"? A sessão-filha, se ainda estiver rodando, será encerrada.`,
+      `Forçar falha deste handoff para "${repoLabel}"? Ele foi aprovado mas a filha não subiu; o handoff vira "Falhou".`,
     )
     if (!ok) return
     setFailing(true)
@@ -401,18 +425,24 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   // adoção foi RELANÇADA com HANDOFF_CHILD_SETTINGS_JSON (denylist restritiva, ver
   // electron/main/services/spawn-flags.ts). Isso é flag de exec — soltar mexe no
   // banco, não no processo, então a sessão solta continua com as permissões de
-  // filha até ser relançada. O caminho de limpar é o normal: fechar a sessão e
+  // filha até ser relançada. O caminho de limpar é o normal: encerrar a sessão e
   // retomá-la pela barra; o sessions:resume NÃO re-vincula depois do release
   // (o relink exige dismissed_at IS NULL), então ela volta como sessão comum.
+  //
+  // detachChild, e não release(handoff.id): é o MESMO Desvincular do diálogo de
+  // vínculo da sessão (ChildLinkDialog), que solta todos os handoffs da conversa.
+  // Soltando só este, outro handoff apontando pra mesma conversa a manteria filha
+  // depois de "desvinculada".
   async function release() {
-    if (releasing) return
+    const childSessionId = handoff.childSessionId
+    if (releasing || !childSessionId) return
     const ok = window.confirm(
-      `Soltar esta sessão do painel? O vínculo com "${repoLabel}" é desfeito: ela volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, feche-a e retome pela barra.`,
+      `Desvincular esta sessão de "${repoLabel}"? Ela deixa de ser filha: volta a aparecer na barra e no switcher como sessão normal, e o handoff vira histórico.\n\nAtenção: a sessão continua rodando com as permissões restritas de filha (isso é do processo, não do registro) — para limpá-las, encerre-a e retome pela barra.`,
     )
     if (!ok) return
     setReleasing(true)
     try {
-      await handoffsApi.release(handoff.id)
+      await handoffsApi.detachChild(childSessionId)
       await load()
     } catch {
       setReleasing(false)
@@ -420,14 +450,24 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   }
 
   // A filha está num PTY enquanto o handoff está vivo (running OU needs_input —
-  // needs_input é um estado vivo dentro de running). "Abrir terminal" RE-ATTACHA
-  // uma pane à sessão viva (focusOrOpenSession → paneFromLiveSession), nunca
-  // re-spawn/--resume. Só aparece em liveSessions enquanto a PTY existe.
+  // needs_input é um estado vivo dentro de running). Só aparece em liveSessions
+  // enquanto a PTY existe.
   const isLiveHandoff = handoff.status === 'running' || handoff.status === 'needs_input'
   const childSession = handoff.childSessionId
     ? liveSessions.find((s) => s.id === handoff.childSessionId)
     : undefined
   const childLive = isLiveHandoff ? childSession : undefined
+  // O processo, qualquer que seja o status do handoff: é ele que "Abrir na aba"
+  // traz para a tela (focusOrOpenSession RE-ATTACHA uma pane à PTY viva, nunca
+  // re-spawn/--resume).
+  const childProcess = childProcessAlive(childSession) ? childSession : undefined
+  const canArchive = canArchiveCard(handoff, childSession)
+  // Aba aberta da filha: sem ela não há o que minimizar.
+  const childPaneId = useAppStore((s) =>
+    childProcess
+      ? (s.panes.find((p) => paneShowsLive(p, childProcess))?.paneId ?? null)
+      : null,
+  )
 
   // Identidade endereçável da filha: `sessions.title` carrega o alias fixado no
   // spawn (`<nome>-<escopo>`). Nome em destaque, escopo apagado embaixo.
@@ -495,9 +535,30 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
 
   // Cluster de ações. Mora na coluna lateral no inbox e no rodapé do card no
   // dock — mesmo JSX, dois lugares, pra não espremer o texto onde é estreito.
-  const hasActions = !!(childLive || canForceFail || canDismiss || canRelease || canPeek || paused)
+  const hasActions = !!(
+    childProcess ||
+    forceFailable ||
+    canArchive ||
+    canRelease ||
+    canPeek ||
+    paused
+  )
   const actions = hasActions ? (
     <div className="flex items-center gap-1">
+      {/* Primária, na frente e em accent: a aba é onde se trabalha na filha. Vai
+          direto, sem a modal do quick look no caminho. */}
+      {childProcess && (
+        <button
+          type="button"
+          onClick={() => void focusOrOpenSession(childProcess)}
+          title="Abrir esta filha numa aba. A sessão já está rodando: a aba só a traz para a tela"
+          aria-label="Abrir na aba"
+          className="flex items-center gap-1 rounded border border-[var(--color-accent)]/50 px-2 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/10"
+        >
+          <Icon as={PanelTop} size={12} />
+          {!tight && 'Abrir na aba'}
+        </button>
+      )}
       {canPeek && (
         <button
           type="button"
@@ -507,17 +568,6 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         >
           <Icon as={Eye} size={12} />
           {!tight && 'Espiar'}
-        </button>
-      )}
-      {childLive && (
-        <button
-          type="button"
-          onClick={() => (onOpenTerminal ? onOpenTerminal() : void focusOrOpenSession(childLive))}
-          title="Anexar o terminal desta sessão-filha"
-          className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-        >
-          <Icon as={TerminalSquare} size={12} />
-          {!tight && 'Abrir terminal'}
         </button>
       )}
       {paused && (
@@ -533,16 +583,39 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         </button>
       )}
       {/* Recovery manual mora no menu: é destrutivo e o card fica na periferia —
-          no mesmo peso de "Abrir terminal" seria convite a clique errado.
+          no mesmo peso de "Abrir na aba" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
-      {(canForceFail || canDismiss || canRelease) && (
+      {(childProcess || forceFailable || canArchive || canRelease) && (
         <Menu
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
           portal
           items={[
-            ...(canForceFail
+            // Os verbos da filha viva são os da barra e do X da aba, com o mesmo
+            // efeito: Minimizar é o closePane, Encerrar é o endSessionAsked.
+            ...(childPaneId
+              ? [
+                  {
+                    label: 'Minimizar',
+                    title:
+                      'Fecha só a aba. A filha segue rodando em 2º plano, no chip da mãe na barra.',
+                    onClick: () => useAppStore.getState().closePane(childPaneId),
+                  },
+                ]
+              : []),
+            ...(childProcess
+              ? [
+                  {
+                    label: 'Encerrar filha',
+                    danger: true,
+                    title:
+                      'Mata o processo. A filha segue vinculada à mãe e pode ser retomada depois.',
+                    onClick: () => endSessionAsked(childProcess.id),
+                  },
+                ]
+              : []),
+            ...(forceFailable
               ? [
                   {
                     label: failing ? 'Falhando…' : 'Forçar falha',
@@ -551,34 +624,13 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
                   },
                 ]
               : []),
-            ...(canDismiss
+            ...(canArchive
               ? [
                   {
-                    // Rótulo com o efeito no próprio nome: "Dispensar" sozinho
-                    // e "Soltar" sozinho leem como sinônimos no mesmo menu. O que
-                    // os separa é o efeito — e é isso que cada rótulo diz.
-                    //
-                    // Dizia "mantém o vínculo", e era MENTIRA na parte que o
-                    // usuário sente: o vínculo sobrevive só como REGISTRO (o
-                    // child_session_id fica gravado, e com ele a trilha do
-                    // handoff), mas a sessão dispensada volta a ser tratada como
-                    // sessão comum em todas as superfícies vivas — e, ao ser
-                    // retomada, sobe sem apelido de peer e sem as settings de
-                    // filha (o relink do sessions:resume exige dismissed_at
-                    // IS NULL). Prometer vínculo e entregar sessão comum é a
-                    // pior das duas opções: o rótulo agora diz o que acontece.
-                    label: dismissing ? 'Dispensando…' : 'Dispensar (arquiva o card)',
-                    // Já foi DESABILITADO com a filha viva, pra proteger o
-                    // acompanhamento — e o efeito foi o oposto: em needs_input
-                    // com filha viva "Forçar falha" nem é renderizado, então o
-                    // menu abria com um item só ("Soltar do painel"), e não havia
-                    // como tirar o card da frente. O bloqueio também não se
-                    // justificava: dispensar só carimba dismissed_at, não encosta
-                    // na PTY. Agora dispensa sempre, o rótulo diz o que acontece
-                    // e o toast oferece "Desfazer".
+                    label: dismissing ? 'Arquivando…' : 'Arquivar card',
                     disabled: dismissing,
                     title:
-                      'Arquiva este handoff: o card sai do dock e o registro fica no histórico. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher, notificações próprias) e, se for retomada, sobe sem o apelido nem as permissões de filha. Dá pra desfazer pelo toast.',
+                      'Tira este card do painel; o registro fica no histórico. Dá pra desfazer pelo toast.',
                     onClick: () => void dismiss(),
                   },
                 ]
@@ -586,10 +638,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
             ...(canRelease
               ? [
                   {
-                    label: releasing ? 'Soltando…' : 'Soltar do painel (desfaz o vínculo)',
+                    label: releasing ? 'Desvinculando…' : 'Desvincular',
                     disabled: releasing,
                     title:
-                      'Desfaz o vínculo mãe→filha: a sessão sai do painel e VOLTA a ser uma sessão normal (barra, switcher, notificações próprias). Não encerra a sessão — mas ela segue com as permissões restritas de filha até ser fechada e retomada.',
+                      'Desfaz o vínculo mãe→filha: a sessão deixa de ser filha e VOLTA a ser uma sessão normal (barra, switcher, notificações próprias). Não encerra a sessão — mas ela segue com as permissões restritas de filha até ser encerrada e retomada.',
                     onClick: () => void release(),
                   },
                 ]
@@ -607,10 +659,10 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
           </button>
         </Menu>
       )}
-      {/* Dispensa rápida. O "×" é o caminho de UM clique pro que antes só existia
-          enterrado no menu — e que, em needs_input com filha viva, o menu nem
-          chegava a oferecer. Fica por último, à direita, onde se procura fechar. */}
-      {canDismiss && (
+      {/* Arquivar em UM clique. Fica por último, à direita, onde se procura
+          fechar — e só existe com o processo morto (canArchiveCard): com a filha
+          viva um "×" aqui leria como o X da aba, que encerra. */}
+      {canArchive && (
         <button
           type="button"
           onClick={(e) => {
@@ -620,8 +672,8 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
             void dismiss()
           }}
           disabled={dismissing}
-          aria-label="Dispensar"
-          title="Tira este card do painel. A SESSÃO-FILHA CONTINUA RODANDO — ela volta a ser uma sessão comum (barra, switcher). Dá pra desfazer pelo toast."
+          aria-label="Arquivar card"
+          title="Arquivar card: sai do painel e o registro fica no histórico. Dá pra desfazer pelo toast."
           className="flex items-center rounded px-1 py-0.5 text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] disabled:opacity-50"
         >
           <Icon as={X} size={14} />
