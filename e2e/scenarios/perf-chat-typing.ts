@@ -103,8 +103,11 @@ const CHAT_READY_TIMEOUT_MS = 180_000
 const INTERACTION_TIMEOUT_MS = 60_000
 const TYPING_TIMEOUT_MS = 90_000
 // A marca da fase e a leitura do coletor rodam na página: com long tasks de
-// vários segundos elas demoram. Sem resposta neste prazo, é infraestrutura.
+// vários segundos elas demoram. A leitura pode falhar (a seguinte traz o mesmo
+// acumulado); sem a marca não há fase, então ela espera bem mais antes de o
+// cenário desistir do renderer.
 const RENDERER_REPLY_MS = 120_000
+const MARK_REPLY_MS = 600_000
 
 const log = (msg: string) => console.log(`[perf-typing] ${msg}`)
 const fake = createFakeHome({ parentDir: tmpdir() })
@@ -308,12 +311,16 @@ async function expectShown(shown: Opened, hidden: Opened): Promise<void> {
   if (!active) throw new Error(`a aba de ${shown.label} não ficou ativa no dockview`)
 }
 
-async function replied<T>(label: string, work: Promise<T>): Promise<T> {
+async function replied<T>(
+  label: string,
+  work: Promise<T>,
+  timeoutMs = RENDERER_REPLY_MS,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const cut = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`renderer sem resposta em ${RENDERER_REPLY_MS} ms: ${label}`)),
-      RENDERER_REPLY_MS,
+      () => reject(new Error(`renderer sem resposta em ${timeoutMs} ms: ${label}`)),
+      timeoutMs,
     )
   })
   work.catch(() => {})
@@ -326,11 +333,19 @@ async function replied<T>(label: string, work: Promise<T>): Promise<T> {
 
 const startedAt = new Date().toISOString()
 const clock: Array<{ phase: string; at: string }> = []
-const outcomes: Array<Omit<PhaseOutcome<PerfRaw>, 'collected'>> = []
+const outcomes: Array<PhaseOutcome<void>> = []
 const typing: Record<string, OpenLoopTyping> = {}
-// A última leitura do coletor. É dela que sai o resumo, mesmo se o cenário morrer
-// no meio: as fases já fechadas não se perdem.
+// A última leitura do coletor que voltou. Ela é acumulada: cobre todas as fases
+// marcadas até ali, inclusive as que ficaram sem leitura própria.
 const latest: { raw: PerfRaw | null } = { raw: null }
+// Lê o coletor sem derrubar o cenário: renderer que não responde é o sintoma.
+async function readCollector(label: string, read: Promise<PerfRaw>): Promise<void> {
+  try {
+    latest.raw = await replied(label, read)
+  } catch (err) {
+    log(`${label} falhou: ${String(err).split('\n')[0]}`)
+  }
+}
 // Desliga a carga da fase de digitação em curso; no-op fora delas.
 let stopLoad = (): void => {}
 
@@ -340,14 +355,13 @@ async function phase(
   run: (remaining: () => number) => Promise<void>,
 ): Promise<void> {
   log(`fase ${name}`)
-  await replied(`marca da fase ${name}`, markPerf(page, name))
+  await replied(`marca da fase ${name}`, markPerf(page, name), MARK_REPLY_MS)
   clock.push({ phase: name, at: new Date().toISOString() })
-  const { collected, ...outcome } = await runPhase(name, timeoutMs, run, () =>
-    replied(`leitura do coletor na fase ${name}`, peekPerf(page)),
+  const outcome = await runPhase(name, timeoutMs, run, () =>
+    readCollector(`leitura do coletor na fase ${name}`, peekPerf(page)),
   )
   // A interação cortada no prazo não chega a desligar a própria carga.
   stopLoad()
-  latest.raw = collected
   outcomes.push(outcome)
   if (outcome.blocked) {
     log(`fase ${name} BLOQUEADA em ${outcome.elapsedMs} ms: ${outcome.reason}`)
@@ -615,13 +629,14 @@ try {
     }
   })
 
-  latest.raw = await replied('coleta final', collectPerf(page))
-  out.window = { atStart: windowAtStart, atEnd: await windowState() }
+  // Fecha no main a janela da última fase. Sem resposta, vale a última leitura.
+  await readCollector('coleta final', collectPerf(page))
   out.gpu = {
     ...gpu,
-    atEnd: await replied('status final da GPU', gpuStatus()),
     features: await app.evaluate(({ app }) => app.getGPUFeatureStatus()),
+    atEnd: await replied('status final da GPU', gpuStatus()),
   }
+  out.window = { atStart: windowAtStart, atEnd: await windowState() }
   // O drain de cada marca já foi confirmado pelo main; falta o stdout dele chegar.
   await page.waitForTimeout(1000)
 } catch (err) {
@@ -644,24 +659,21 @@ fake.cleanup()
 out.appendedLines = appendedLines
 const blocked = outcomes.filter((outcome) => outcome.blocked).map((outcome) => outcome.phase)
 out.blockedPhases = blocked
-if (latest.raw) {
-  // Uma fase por marca, na ordem: a i-ésima é a do i-ésimo desfecho.
-  const summaries = summarizePerf(latest.raw).map((summary, i) => ({
-    ...outcomes[i],
-    startedAt: clock[i].at,
-    ...summary,
-    ...(typing[summary.phase] ? { typing: typing[summary.phase] } : {}),
-  }))
-  // Cada linha do main vai para a fase que a etiquetou (drain do markPerf).
-  out.phases = withMainLines(summaries, main)
-  const phaseNames = new Set(summaries.map((s) => s.phase))
-  // Boot e abertura das sessões (sem etiqueta) e o que saiu depois do fim.
-  out.mainOutsidePhases = main.filter((line) => !line.phase || !phaseNames.has(line.phase))
-  if (process.env.CM_PERF_DUMP_RAW === '1') out.raw = latest.raw
-} else {
-  // Morreu antes da primeira fase: as linhas ficam soltas.
-  out.main = main
-}
+// Uma fase por marca, na ordem: o i-ésimo resumo é o do i-ésimo desfecho. Fase
+// marcada depois da última leitura que voltou sai sem os números do renderer.
+const summaries = latest.raw ? summarizePerf(latest.raw) : []
+const phases = outcomes.map((outcome, i) => ({
+  ...outcome,
+  startedAt: clock[i].at,
+  ...(summaries[i] ?? { collectorRead: false }),
+  ...(typing[outcome.phase] ? { typing: typing[outcome.phase] } : {}),
+}))
+// Cada linha do main vai para a fase que a etiquetou (drain do markPerf).
+out.phases = withMainLines(phases, main)
+const phaseNames = new Set(phases.map((p) => p.phase))
+// Boot e abertura das sessões (sem etiqueta) e o que saiu depois do fim.
+out.mainOutsidePhases = main.filter((line) => !line.phase || !phaseNames.has(line.phase))
+if (process.env.CM_PERF_DUMP_RAW === '1') out.raw = latest.raw
 if (fatal) out.error = String(fatal)
 writeFileSync(OUT_FILE, JSON.stringify(out, null, 2))
 log(`${main.length} linha(s) [perf] do main · JSON em ${OUT_FILE}`)
