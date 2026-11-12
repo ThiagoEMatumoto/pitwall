@@ -21,6 +21,7 @@ vi.mock('./transcript-path', () => ({
 }))
 
 import * as store from './handoff-store'
+import { ORPHANED_AT_BOOT_ERROR, sweepInFlightHandoffs } from './handoff/boot-sweep'
 
 function applyAllMigrations(db: Database.Database): void {
   for (const m of migrations) {
@@ -543,14 +544,8 @@ describe('handoff-store', () => {
   }
 
   describe('boot sweep (handoffs órfãos do boot anterior → interrupted)', () => {
-    // O sweep vive em db.ts (getDb), acoplado a electron.app; aqui exercemos o
-    // MESMO SQL literal contra o testDb pra travar o contrato.
     function bootSweep(): void {
-      testDb
-        .prepare(
-          "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",
-        )
-        .run('Sessão-filha órfã: app reiniciou sem reconciliar o handoff', Date.now())
+      sweepInFlightHandoffs(testDb)
     }
 
     it('running/needs_input → interrupted; done/rejected/failed permanecem intactos', () => {
@@ -579,7 +574,7 @@ describe('handoff-store', () => {
 
       const swept = store.get(running.id)
       expect(swept?.status).toBe('interrupted')
-      expect(swept?.error).toBe('Sessão-filha órfã: app reiniciou sem reconciliar o handoff')
+      expect(swept?.error).toBe(ORPHANED_AT_BOOT_ERROR)
       expect(store.get(asking.id)?.status).toBe('interrupted')
       expect(store.get(done.id)?.status).toBe('done')
       expect(store.get(rejected.id)?.status).toBe('rejected')

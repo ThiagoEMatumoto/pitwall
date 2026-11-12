@@ -11,6 +11,7 @@ vi.mock('../transcript-path', () => ({
 import * as store from '../handoff-store'
 import { applyAllMigrations, seedRepos, seedSession } from '../attention/attention-test-harness'
 import { resumeSweptChildren } from './boot-resume'
+import { sweepInFlightHandoffs } from './boot-sweep'
 
 function ccOf(id: string): string {
   return (testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(id) as {
@@ -20,13 +21,7 @@ function ccOf(id: string): string {
 
 // O sweep do getDb no boot: em voo → interrupted (a PTY morreu com o app).
 function sweep(): string[] {
-  const ids = (
-    testDb.prepare("SELECT id FROM handoffs WHERE status IN ('running','needs_input')").all() as Array<{
-      id: string
-    }>
-  ).map((r) => r.id)
-  testDb.prepare("UPDATE handoffs SET status = 'interrupted' WHERE status IN ('running','needs_input')").run()
-  return ids
+  return sweepInFlightHandoffs(testDb)
 }
 
 const repoOf: Record<string, string> = { f1: 'r2', f2: 'r3', f3: 'r4', f4: 'r5' }
