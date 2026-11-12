@@ -119,6 +119,7 @@ function measured(channel: string, listener: IpcListener): IpcListener {
 }
 
 // Só mede o que for registrado DEPOIS da chamada.
+// Com a flag ligada, removeListener/off pela referência original não remove nada: o registrado é o embrulho.
 export function instrumentIpcMain(ipc: Pick<IpcMain, 'handle' | 'on'>): void {
   const handle = ipc.handle.bind(ipc) as (channel: string, listener: IpcListener) => void
   const on = ipc.on.bind(ipc) as (channel: string, listener: IpcListener) => unknown
