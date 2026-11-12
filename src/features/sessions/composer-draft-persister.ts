@@ -11,8 +11,9 @@ import type {
 // trabalho do usuário:
 //  - nada é gravado antes da hidratação: o estado do mount não pode sobrescrever
 //    o rascunho que ainda está sendo lido;
-//  - se o usuário digitou antes da leitura terminar, salvo e digitado são
-//    JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
+//  - o Composer fica só-leitura até a leitura terminar; se ela estourar o teto
+//    (DRAFT_HYDRATE_LOCK_MS) e o usuário digitar antes dela, salvo e digitado
+//    são JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
 //  - blur e troca de pane gravam na hora pelo flush assíncrono: não seguram o
 //    renderer à espera do main;
 //  - flushSync grava na hora por IPC síncrono (unload, pedido do main no
@@ -38,6 +39,9 @@ export interface DraftApi {
 }
 
 export const DRAFT_DEBOUNCE_MS = 500
+// Teto do campo só-leitura à espera da leitura do rascunho salvo: se o main não
+// responder, o Composer destrava e a junção salvo + digitado volta a valer.
+export const DRAFT_HYDRATE_LOCK_MS = 1000
 
 // 'pane:<id>' atravessa o restore (inclusive a sessão sem transcript que renasce
 // com outro cc no mesmo paneId); sem pane (quick look), o cc identifica a conversa.

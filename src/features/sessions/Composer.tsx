@@ -35,6 +35,7 @@ import { defaultWhen, sendRefusalReason } from '@/features/quick-composer/target
 import {
   composerDraftKey,
   createDraftPersister,
+  DRAFT_HYDRATE_LOCK_MS,
   type DraftPersister,
 } from './composer-draft-persister'
 import { installDraftFlushHooks } from './draft-flush-hooks'
@@ -125,6 +126,10 @@ function pushHistory(sessionId: string, value: string) {
 type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
 const attachmentsBySession = new Map<string, PersistedAttachment[]>()
 
+function hasMemoryDraft(memKey: string): boolean {
+  return drafts.has(memKey) || attachmentsBySession.has(memKey)
+}
+
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
 // acima (memória, sobrevive ao remount, não persiste em disco). Era uma
 // preferência GLOBAL em session-prefs-store; virou por-sessão pra colapsar um
@@ -160,6 +165,11 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   const draftKey = composerDraftKey(paneId, ccSessionId)
   const memKey = draftKey ?? sessionId
   const [text, setText] = useState(() => drafts.get(memKey) ?? '')
+  // Leitura do rascunho salvo em curso: o campo fica só-leitura. Uma tecla aceita
+  // antes do salvo chegar seria juntada a ele depois, trocando o valor sob o
+  // cursor (a tecla seguinte ia parar no fim do texto). A tecla digitada nesse
+  // intervalo não entra, e o campo diz que ainda está recuperando o rascunho.
+  const [hydrating, setHydrating] = useState(() => !hasMemoryDraft(memKey))
   // Navegação do histórico de prompts: `histIndex` null = editando o rascunho
   // atual (fora do histórico); >= 0 = posição no histórico da sessão. `savedDraft`
   // guarda o rascunho ao entrar no histórico pra restaurá-lo ao voltar pro fim.
@@ -310,27 +320,38 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
       },
     })
     persisterRef.current = persister
+    let lockTimer: ReturnType<typeof setTimeout> | undefined
     // Memória do mesmo processo (remount) é mais nova que o banco: dispensa a leitura.
-    if (drafts.has(memKey) || attachmentsBySession.has(memKey)) {
+    if (hasMemoryDraft(memKey)) {
+      setHydrating(false)
       persister.seed({
         text: drafts.get(memKey) ?? '',
         attachments: attachmentsBySession.get(memKey) ?? [],
       })
     } else {
-      // Digitou antes da leitura terminar: o persister junta salvo + digitado
-      // (nada é descartado) e avisamos. flushSync do react-dom aplica na hora,
-      // para uma tecla no meio não sobrescrever o texto juntado.
-      void persister.hydrate((draft, merged) => {
-        flushSync(() => {
-          setText(draft.text)
-          setAttached(draft.attachments.map((a) => ({ ...a, previewUrl: '' })))
-          if (merged) {
-            setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
-          }
+      // Só-leitura até a leitura terminar; o teto destrava se o main não responder.
+      // Aí o usuário pode digitar antes do salvo: o persister junta salvo +
+      // digitado (nada é descartado) e avisamos. flushSync do react-dom aplica na
+      // hora, para uma tecla no meio não sobrescrever o texto juntado.
+      setHydrating(true)
+      lockTimer = setTimeout(() => setHydrating(false), DRAFT_HYDRATE_LOCK_MS)
+      void persister
+        .hydrate((draft, merged) => {
+          flushSync(() => {
+            setText(draft.text)
+            setAttached(draft.attachments.map((a) => ({ ...a, previewUrl: '' })))
+            if (merged) {
+              setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
+            }
+          })
         })
-      })
+        .finally(() => {
+          clearTimeout(lockTimer)
+          if (persisterRef.current === persister) setHydrating(false)
+        })
     }
     return () => {
+      clearTimeout(lockTimer)
       persisterRef.current = null
       persister.dispose()
     }
@@ -733,13 +754,21 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
                   aria-hidden
                   className="pointer-events-none absolute left-0 top-0 flex items-center font-mono text-sm leading-[1.5] text-[var(--color-text-dim)]"
                 >
-                  Escreva um prompt…
-                  <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+                  {hydrating ? (
+                    'Recuperando rascunho…'
+                  ) : (
+                    <>
+                      Escreva um prompt…
+                      <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+                    </>
+                  )}
                 </div>
               )}
               <textarea
                 ref={innerRef}
                 value={text}
+                readOnly={hydrating}
+                aria-busy={hydrating}
                 onChange={(e) => {
                   setText(e.target.value)
                   setCaret(e.target.selectionStart ?? e.target.value.length)
