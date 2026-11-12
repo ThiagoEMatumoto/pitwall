@@ -182,8 +182,11 @@ export const RAW_PROMPT = 'raw> '
 // Stub do `claude` com a TTY em modo raw, como a TUI real: cada byte do stdin é
 // lido assim que chega, logado com horário ("byte: <epoch> <hex>") e ecoado na
 // hora. Sequências de escape (os marcadores do bracketed-paste) são logadas e não
-// ecoadas; o Enter fecha a linha e abre outro prompt. LC_ALL=C só depois do banner:
-// é o que faz o read devolver bytes, e não caracteres.
+// ecoadas; o Enter fecha a linha e abre outro prompt.
+// Quem lê a TTY é o perl (sysread, um hex por linha): o `read` do bash, numa TTY,
+// religa a cada byte a tradução de CR em NL e os sinais (Ctrl+C), e o modo deixaria
+// de ser raw; o od do uutils segura a saída mesmo sob stdbuf.
+// LC_ALL=C só depois do banner: é o que dá ponto decimal ao horário.
 export function fakeRawClaudeScript(sessionsDir: string, logDir: string): string {
   return `#!/usr/bin/env bash
 # Stub do claude em modo raw para cenários e2e — gerado por e2e/driver/fake-home.ts.
@@ -197,22 +200,23 @@ stty raw -echo 2>/dev/null
 exec 3>> "$LOG"
 LC_ALL=C
 printf '\\e[?2004h%s' ${shSingleQuote(RAW_PROMPT)}
-escape=0
-while IFS= read -r -N 1 c; do
-  printf -v code '%d' "'$c"
-  printf 'byte: %s %02x\\n' "$EPOCHREALTIME" $((code & 255)) >&3
-  if [ $escape -eq 1 ]; then
-    if [ "$c" = '[' ]; then escape=2; else escape=0; fi
-  elif [ $escape -eq 2 ]; then
-    case "$c" in [@-~]) escape=0 ;; esac
-  elif [ "$c" = $'\\e' ]; then
-    escape=1
-  elif [ "$c" = $'\\r' ]; then
-    printf '\\r\\n%s' ${shSingleQuote(RAW_PROMPT)}
-  else
-    printf '%s' "$c"
-  fi
-done
+perl -e '$|=1; while (sysread(STDIN, $b, 4096)) { printf("%02x\\n", ord) for split(//, $b) }' | {
+  escape=0
+  while read -r hex; do
+    printf 'byte: %s %s\\n' "$EPOCHREALTIME" "$hex" >&3
+    if [ $escape -eq 1 ]; then
+      if [ "$hex" = 5b ]; then escape=2; else escape=0; fi
+    elif [ $escape -eq 2 ]; then
+      if (( 0x$hex >= 0x40 )); then escape=0; fi
+    elif [ "$hex" = 1b ]; then
+      escape=1
+    elif [ "$hex" = 0d ]; then
+      printf '\\r\\n%s' ${shSingleQuote(RAW_PROMPT)}
+    else
+      printf "\\\\x$hex"
+    fi
+  done
+}
 `
 }
 

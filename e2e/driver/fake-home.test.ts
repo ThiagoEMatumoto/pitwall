@@ -196,6 +196,10 @@ describe('fake-claude-raw.sh', () => {
         // Tempo para um eco do kernel, se houvesse, aparecer duplicado.
         await new Promise((r) => setTimeout(r, 150))
         expect(out.split(RAW_PROMPT)[1]).toBe('ab')
+        // Em raw o Enter chega como CR e o Ctrl+C como byte: a TTY não traduz nem sinaliza.
+        child.stdin.write('\x03\r')
+        await until('CR e Ctrl+C como bytes', () => received() === 'ab\x03\r')
+        await until('prompt novo depois do Enter', () => out.split(RAW_PROMPT).length === 3)
       } finally {
         child.kill()
       }
