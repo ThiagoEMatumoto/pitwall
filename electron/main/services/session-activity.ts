@@ -572,6 +572,32 @@ interface WatchEntry {
 }
 
 const SEND_MESSAGE_POLL_MS = 2_500
+// Sessão sem transcript: a varredura de ~/.claude/projects só se repete quando a
+// entry dela muda (o 1º prompt muda o status) ou, se o JSONL nascer sem a entry
+// mudar, depois deste intervalo.
+const TRANSCRIPT_MISS_RETRY_MS = 5_000
+
+// Última leitura do transcript de uma sessão no batch global, válida enquanto o
+// arquivo tiver o mesmo mtime e o mesmo tamanho.
+interface GlobalTranscript {
+  path: string
+  mtimeMs: number
+  size: number
+  tail: string
+  lastText: string | null
+  tokens: SessionActivity['tokens']
+}
+
+const indexEntryKey = (entry: IndexEntry): string =>
+  `${entry.pid}:${entry.status}:${entry.updatedAt}`
+
+async function statOrNull(path: string): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    return await statAsync(path)
+  } catch {
+    return null
+  }
+}
 
 class SessionActivityService extends EventEmitter {
   // ccSessionId -> sessões assinadas pelo renderer.
@@ -589,6 +615,11 @@ class SessionActivityService extends EventEmitter {
   // broadcastGlobal é async e não serializado: só o batch da geração mais nova sai,
   // senão um batch velho chegando depois recoloca 'waiting' na fila do renderer.
   private globalGen = 0
+  // Batch + índice do último envio: tick que não muda nenhum dos dois não
+  // transmite. null = o assinante ainda não recebeu nada.
+  private lastGlobalSignature: string | null = null
+  private globalTranscripts = new Map<string, GlobalTranscript>()
+  private globalTranscriptMisses = new Map<string, { entryKey: string; at: number }>()
   // sessions.id → último status das PTYs sem índice nativo (Codex).
   private ptyTracked = new Map<string, SessionActivity['status']>()
   private ptyTimer: NodeJS.Timeout | null = null
@@ -683,14 +714,18 @@ class SessionActivityService extends EventEmitter {
   // Modo global: espelha o padrão watch/unwatch per-ccSessionId, mas observa
   // TODAS as sessões indexadas. Reusa o mesmo dirWatcher/debounce.
   watchGlobal(): void {
-    if (this.globalWatch) return
-    this.globalWatch = true
-    this.ensureDirWatcher()
-    this.sendMessagePoll = setInterval(
-      () => void this.pollBusyTranscripts(),
-      SEND_MESSAGE_POLL_MS,
-    )
-    this.sendMessagePoll.unref?.()
+    // Janela recarregada assina de novo sem ter dado unwatch: ela não viu batch
+    // nenhum, então o próximo sai mesmo igual ao último enviado.
+    this.lastGlobalSignature = null
+    if (!this.globalWatch) {
+      this.globalWatch = true
+      this.ensureDirWatcher()
+      this.sendMessagePoll = setInterval(
+        () => void this.pollBusyTranscripts(),
+        SEND_MESSAGE_POLL_MS,
+      )
+      this.sendMessagePoll.unref?.()
+    }
     // Snapshot inicial imediato (índice já pode estar populado).
     this.rebuildIndex()
     this.broadcastGlobal()
@@ -701,6 +736,9 @@ class SessionActivityService extends EventEmitter {
     if (this.sendMessagePoll) clearInterval(this.sendMessagePoll)
     this.sendMessagePoll = null
     this.polledTranscripts.clear()
+    this.lastGlobalSignature = null
+    this.globalTranscripts.clear()
+    this.globalTranscriptMisses.clear()
     this.maybeCloseDirWatcher()
   }
 
@@ -821,34 +859,29 @@ class SessionActivityService extends EventEmitter {
   }
 
   // Emite o batch global com TODAS as sessões indexadas. lastText/tokens vêm do
-  // tail do JSONL (mesma derivação do emitFor), sob demanda por sessão.
+  // tail do JSONL (mesma derivação do emitFor), relido só quando o arquivo muda.
+  // O payload é sempre a lista completa: o renderer descarta ids que ainda não
+  // conhece, e um delta deixaria a sessão nova sem o item dela para sempre.
   private broadcastGlobal(): Promise<void> {
     return perfTime('broadcastGlobal', () => this.emitGlobalBatch())
   }
 
   private async emitGlobalBatch(): Promise<void> {
     const gen = ++this.globalGen
+    const index = this.index
     const batch: GlobalActivityBatch = []
-    for (const [ccSessionId, entry] of this.index) {
+    for (const [ccSessionId, entry] of index) {
       const status = this.effectiveStatus(entry)
-      let lastText: string | null = null
-      let tokens: SessionActivity['tokens']
-      const transcriptPath = findTranscriptPath(ccSessionId)
-      if (transcriptPath) {
-        const tail = await readTail(transcriptPath)
-        if (tail) {
-          scanTranscriptForSendMessage(ccSessionId, tail, this.index)
-          const enrichment = deriveEnrichment(tail)
-          lastText = enrichment.lastText
-          tokens = enrichment.tokens
-        }
-      }
+      const transcript = await this.globalTranscript(ccSessionId, entry)
+      // Com o tail em cache também: uma chamada sem destino resolvido é
+      // retentada a cada tick, e o destino pode ter entrado no índice agora.
+      if (transcript) scanTranscriptForSendMessage(ccSessionId, transcript.tail, index)
       batch.push({
         ccSessionId,
         status,
         lastActivityAt: entry.updatedAt,
-        lastText,
-        tokens,
+        lastText: transcript?.lastText ?? null,
+        tokens: transcript?.tokens,
         attentionReason: await attentionReasonForCc(ccSessionId, status),
       })
     }
@@ -863,7 +896,65 @@ class SessionActivityService extends EventEmitter {
     }
     perfCount('broadcastGlobal.sessions', batch.length)
     if (gen !== this.globalGen) return
+    for (const ccSessionId of this.globalTranscripts.keys()) {
+      if (!index.has(ccSessionId)) this.globalTranscripts.delete(ccSessionId)
+    }
+    for (const ccSessionId of this.globalTranscriptMisses.keys()) {
+      if (!index.has(ccSessionId)) this.globalTranscriptMisses.delete(ccSessionId)
+    }
+    // O índice entra na comparação porque o grafo e a fila de atenção o releem
+    // a cada batch: nome e cwd não viajam no payload, mas mudam o que eles mostram.
+    const signature = JSON.stringify([batch, [...index]])
+    if (signature === this.lastGlobalSignature) {
+      perfCount('broadcastGlobal.skipped')
+      return
+    }
     broadcast('session:activity:global', batch)
+    // Só depois do envio: se ele falhar, o próximo tick tenta de novo.
+    this.lastGlobalSignature = signature
+  }
+
+  private async globalTranscript(
+    ccSessionId: string,
+    entry: IndexEntry,
+  ): Promise<GlobalTranscript | null> {
+    const known = this.globalTranscripts.get(ccSessionId)
+    if (known) {
+      const stat = await statOrNull(known.path)
+      if (stat?.mtimeMs === known.mtimeMs && stat.size === known.size) return known
+      if (stat) return this.readGlobalTranscript(ccSessionId, known.path, stat)
+      this.globalTranscripts.delete(ccSessionId)
+    }
+    const path = this.findGlobalTranscriptPath(ccSessionId, entry)
+    const stat = path ? await statOrNull(path) : null
+    return path && stat ? this.readGlobalTranscript(ccSessionId, path, stat) : null
+  }
+
+  private findGlobalTranscriptPath(ccSessionId: string, entry: IndexEntry): string | null {
+    const entryKey = indexEntryKey(entry)
+    const miss = this.globalTranscriptMisses.get(ccSessionId)
+    const now = Date.now()
+    if (miss?.entryKey === entryKey && now - miss.at < TRANSCRIPT_MISS_RETRY_MS) return null
+    const path = findTranscriptPath(ccSessionId)
+    if (path) this.globalTranscriptMisses.delete(ccSessionId)
+    else this.globalTranscriptMisses.set(ccSessionId, { entryKey, at: now })
+    return path
+  }
+
+  // O stat vem ANTES da leitura: se o arquivo crescer no meio, o cache fica com
+  // um stat velho e o próximo tick relê, em vez de guardar um tail velho como atual.
+  private async readGlobalTranscript(
+    ccSessionId: string,
+    path: string,
+    stat: { mtimeMs: number; size: number },
+  ): Promise<GlobalTranscript | null> {
+    perfCount('broadcastGlobal.tailReads')
+    const tail = await readTail(path)
+    if (!tail) return null
+    const { lastText, tokens } = deriveEnrichment(tail)
+    const read = { path, mtimeMs: stat.mtimeMs, size: stat.size, tail, lastText, tokens }
+    this.globalTranscripts.set(ccSessionId, read)
+    return read
   }
 
   // Status efetivo de uma entry do índice (mesma regra do emitFor, sem o

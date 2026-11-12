@@ -14,6 +14,7 @@ vi.mock('../services/session-activity', () => ({
 vi.mock('../services/task-store', () => ({ affectedObjectiveIds: () => [] }))
 
 import { broadcast } from '../services/notify'
+import { tuiMenuWatch } from '../services/tui-menu-watch'
 import { GRAPH_PUSH_DELAY_MS, watchSessionGraph } from './session-graph'
 
 describe('watchSessionGraph', () => {
@@ -46,6 +47,21 @@ describe('watchSessionGraph', () => {
     broadcast('feature:updated', { id: 'f1' })
     vi.advanceTimersByTime(GRAPH_PUSH_DELAY_MS)
     expect(push).toHaveBeenCalledTimes(2)
+  })
+
+  // O batch global igual ao anterior não sai mais: o menu de uma PTY sem
+  // session file só chega ao grafo por aqui.
+  it("o menu da TUI (tuiMenuWatch 'change') agenda um push, e parar desliga", () => {
+    const push = vi.fn()
+    stop = watchSessionGraph(push)
+    tuiMenuWatch.emit('change', 's1')
+    vi.advanceTimersByTime(GRAPH_PUSH_DELAY_MS)
+    expect(push).toHaveBeenCalledTimes(1)
+
+    stop()
+    tuiMenuWatch.emit('change', 's1')
+    vi.advanceTimersByTime(GRAPH_PUSH_DELAY_MS)
+    expect(push).toHaveBeenCalledTimes(1)
   })
 
   it('canais que não mexem no grafo não disparam (nem o próprio push)', () => {
