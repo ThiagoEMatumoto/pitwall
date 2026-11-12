@@ -136,17 +136,19 @@ export interface PhaseOutcome<T> {
 // sozinhas, com um erro que diz o que estava sendo esperado. Esta folga dá tempo
 // de esse erro chegar antes do corte seco, que só diz "não fechou".
 const PHASE_BACKSTOP_MS = 2000
-// O erro de uma ação do Playwright abre com o seletor e o elemento; o que ela
-// estava esperando vem depois.
-const REASON_MAX_CHARS = 700
+// O erro de uma ação do Playwright abre com o que falhou e termina no que ela
+// esperava por último; o meio é o seletor, o elemento e as tentativas repetidas.
+const REASON_HEAD_CHARS = 200
+const REASON_TAIL_CHARS = 500
 
 function oneLine(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err)
-  return message
+  const line = message
     .replace(/\u001b\[[0-9;]*m/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, REASON_MAX_CHARS)
+  if (line.length <= REASON_HEAD_CHARS + REASON_TAIL_CHARS) return line
+  return `${line.slice(0, REASON_HEAD_CHARS)} … ${line.slice(-REASON_TAIL_CHARS)}`
 }
 
 /**

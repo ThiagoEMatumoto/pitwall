@@ -399,6 +399,23 @@ describe('runPhase', () => {
     })
   })
 
+  it('motivo longo fica com o começo (o que falhou) e o fim (o que a ação esperava por último)', async () => {
+    const retries = ' - retrying click action - waiting 500ms'.repeat(40)
+    const outcome = await runPhase(
+      'chat-focus',
+      1000,
+      async () => {
+        throw new Error(
+          `locator.click: Timeout 60000ms exceeded.\nCall log:${retries}\n  - <div class="overlay"> intercepts pointer events`,
+        )
+      },
+      async () => null,
+    )
+    expect(outcome.reason).toMatch(/^locator\.click: Timeout 60000ms exceeded\. Call log: /)
+    expect(outcome.reason).toMatch(/ … .*<div class="overlay"> intercepts pointer events$/)
+    expect(outcome.reason!.length).toBeLessThanOrEqual(703)
+  })
+
   it('interação que não fecha no prazo vira fase bloqueada, e o coletor é lido depois da espera', async () => {
     vi.useFakeTimers()
     const start = Date.now()
