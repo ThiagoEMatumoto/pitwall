@@ -354,6 +354,23 @@ describe('watch — delta só para quem observa', () => {
     chatTranscriptService.unwatch(w.sessionId, w.sender.id)
   })
 
+  it('linha completa seguida de outra pela metade: só a completa é consumida', async () => {
+    const lines = buildLongMotherLines(3)
+    const w = await watched(lines.slice(0, 5))
+    const half = Math.floor(lines[6].length / 2)
+
+    appendFileSync(w.path, lines[5] + '\n' + lines[6].slice(0, half))
+    await chatTranscriptService.refresh(w.sessionId)
+    expect(w.view()).toEqual(parseChatMessages(lines.slice(0, 6).join('\n')))
+
+    appendFileSync(w.path, lines[6].slice(half) + '\n')
+    await chatTranscriptService.refresh(w.sessionId)
+    // base > 0: a metade que ficou para trás não custou uma releitura do arquivo.
+    expect(w.updates.at(-1)!.base).toBeGreaterThan(0)
+    expect(w.view()).toEqual(parseChatMessages(lines.slice(0, 7).join('\n')))
+    chatTranscriptService.unwatch(w.sessionId, w.sender.id)
+  })
+
   it('arquivo maior que um bloco de leitura: a 1ª leitura bate com o parse completo', async () => {
     const w = await watched(buildLongMotherLines(300, 16 * 1024))
     expect(statSync(w.path).size).toBeGreaterThan(4 * 1024 * 1024)

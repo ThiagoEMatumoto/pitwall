@@ -1859,14 +1859,15 @@ export function registerSessionIpc(): void {
   }
 
   ipcMain.handle('chat:get-transcript', async (_e, sessionId: string): Promise<ChatTranscript> => {
-    const read = await chatTranscriptService.read(resolveCcSessionId(sessionId))
+    const snap = await chatTranscriptService.snapshot(sessionId, resolveCcSessionId(sessionId))
     return {
       sessionId,
-      ccSessionId: read.ccSessionId,
-      path: read.path,
-      mtimeMs: read.mtimeMs,
-      messages: read.messages,
-      lastPlanFilePath: read.lastPlanFilePath,
+      ccSessionId: snap.ccSessionId,
+      path: snap.path,
+      mtimeMs: snap.mtimeMs,
+      messages: snap.messages,
+      lastPlanFilePath: snap.lastPlanFilePath,
+      rev: snap.rev,
     }
   })
 
@@ -1892,12 +1893,12 @@ export function registerSessionIpc(): void {
     }
   })
 
-  ipcMain.handle('chat:watch', (_e, sessionId: string) => {
-    chatTranscriptService.watch(sessionId, resolveCcSessionId(sessionId))
+  ipcMain.handle('chat:watch', (e, sessionId: string) => {
+    chatTranscriptService.watch(sessionId, resolveCcSessionId(sessionId), e.sender)
   })
 
-  ipcMain.handle('chat:unwatch', (_e, sessionId: string) => {
-    chatTranscriptService.unwatch(sessionId)
+  ipcMain.handle('chat:unwatch', (e, sessionId: string) => {
+    chatTranscriptService.unwatch(sessionId, e.sender.id)
   })
 
   ipcMain.handle('chat:watch-tail', (_e, sessionId: string) => {
