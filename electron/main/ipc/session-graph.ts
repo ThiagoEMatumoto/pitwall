@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { getDb } from '../services/db'
 import { broadcast, onBroadcast } from '../services/notify'
+import { perfTime } from '../services/perf-probe'
 import { buildSessionsFileIndex } from '../services/session-activity'
 import { liveSessionStates } from '../services/live-session-states'
 import { projectAndCount, readAttentionInputFrom } from '../services/attention/attention-service'
@@ -123,7 +124,7 @@ export function registerSessionGraphIpc(): void {
   let last = ''
   const tick = setInterval(() => resolveFeaturesSafely(), FEATURE_RESOLVE_TICK_MS)
   tick.unref?.()
-  watchSessionGraph(() => {
+  const pushGraph = (): void => {
     // Antes do grafo: a sessão que trocou de branch já sai no card novo. Um
     // índice de session files só para os dois.
     const index = buildSessionsFileIndex()
@@ -134,5 +135,6 @@ export function registerSessionGraphIpc(): void {
     if (serialized === last) return
     last = serialized
     broadcast('session-graph:updated', graph)
-  })
+  }
+  watchSessionGraph(() => perfTime('graph.rebuild', pushGraph))
 }

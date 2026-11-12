@@ -62,6 +62,7 @@ import { recordAttentionResponse } from '../services/attention-response-store'
 import { notifyCrewPermission } from '../services/crew-permission-notify'
 import { setRendererFocusedSession } from '../services/notifications'
 import { broadcast } from '../services/notify'
+import { perfCount } from '../services/perf-probe'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
 import { scopeOomWatch } from '../services/scope-oom-watch'
 import { OomAutoResume } from '../services/scope-oom-resume'
@@ -1232,7 +1233,10 @@ export function registerSessionIpc(): void {
         console.error('[attention] crew permission notify failed', err)
       }
     })
-    ptyManager.on('data', (e) => broadcast('pty:data', e))
+    ptyManager.on('data', (e) => {
+      perfCount('pty:data.chars', e.data.length)
+      broadcast('pty:data', e)
+    })
     scopeOomWatch.attach(ptyManager)
     const oomAutoResume = new OomAutoResume({
       ccOf: (id) =>
