@@ -31,6 +31,7 @@ vi.mock('@/lib/ipc', () => ({
 
 import { HandoffCard } from './HandoffCard'
 import { useAppStore, type ActivePane } from '@/store/appStore'
+import { useHandoffsStore } from '@/store/handoffsStore'
 import { handoffsApi, sessionsApi } from '@/lib/ipc'
 import { useToastStore } from '@/features/notifications/toast-store'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
@@ -203,6 +204,24 @@ describe('HandoffCard: "Arquivar card" só com o processo morto', () => {
   it("'ended' ainda na lista viva conta como processo morto", () => {
     mountDock({}, 'ended')
     expect(screen.getByLabelText('Arquivar card')).toBeTruthy()
+  })
+
+  it("'ended' ainda na lista viva: o toast não diz que a filha continua rodando", async () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    mountDock({}, 'ended')
+    fireEvent.click(screen.getByLabelText('Arquivar card'))
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1))
+    expect(useToastStore.getState().toasts[0].body).toBe('mauricio-melhorar-modo-chat')
+  })
+
+  // O "Dispensar" do Room não passa pelo gate do card: ali a filha pode estar viva.
+  it('arquivado com a filha viva (fora do card): o toast avisa que ela continua rodando', async () => {
+    useHandoffsStore.setState({ handoffs: [handoff] })
+    useAppStore.setState({ liveSessions: [live] })
+    await useHandoffsStore.getState().dismiss('h1')
+    expect(useToastStore.getState().toasts[0].body).toBe(
+      'mauricio-melhorar-modo-chat continua rodando — só o card saiu do painel.',
+    )
   })
 
   it('já arquivado: nada de arquivar de novo', () => {

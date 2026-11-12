@@ -126,9 +126,11 @@ export const useHandoffsStore = create<HandoffsState>((set, get) => ({
         .getState()
         .liveSessions.find((s) => s.id === handoff?.childSessionId)
       const who = child?.title?.trim() || handoff?.targetRepoLabel || 'A sessão-filha'
+      // 'ended' ainda na lista é processo morto (a lista recarrega um tick depois).
+      const running = !!child && child.status !== 'ended'
       showToast({
         title: 'Card arquivado',
-        body: child ? `${who} continua rodando — só o card saiu do painel.` : who,
+        body: running ? `${who} continua rodando — só o card saiu do painel.` : who,
         actionLabel: 'Desfazer',
         onAction: () => void get().undismiss(id),
         durationMs: DISMISS_UNDO_MS,
