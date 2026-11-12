@@ -353,6 +353,9 @@ let offPtyExit: (() => void) | null = null
 let offRoomChanged: (() => void) | null = null
 let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
+// Ciclo do watch: muda a cada start e a cada stop. Stop seguido de start durante
+// um await devolve `liveWatchStarted` a true, e só o ciclo denuncia a troca.
+let liveWatchCycle = 0
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
 let offHibernated: (() => void) | null = null
@@ -1401,6 +1404,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // StrictMode monta o effect 2x; só uma assinatura real (a outra é no-op).
     if (liveWatchStarted) return
     liveWatchStarted = true
+    liveWatchCycle++
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
@@ -1503,6 +1507,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
+    liveWatchCycle++
     lastDormantKey = null
     set({ liveSessions: [] })
   },
@@ -1510,14 +1515,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshLiveSessions: async () => {
     // Só refetcha se o watch está ativo (evita popular fora do ciclo de vida).
     if (!liveWatchStarted) return
+    const cycle = liveWatchCycle
     const list = (await sessionsApi.listLiveGlobal()).filter(
       // Sessões na janela de undo já sumiram da UI, mas a PTY ainda vive no main
       // — sem o filtro o snapshot as reintroduziria antes do kill agendado.
       (sess) => !pendingEnds.has(sess.id),
     )
     // O watch pode ter parado durante o await: a lista já foi esvaziada, e
-    // reassinar abaixo religaria o stream no main.
-    if (!liveWatchStarted) return
+    // reassinar abaixo religaria o stream no main. Se além de parar ele voltou,
+    // esta resposta é mais velha que o snapshot do start novo.
+    if (cycle !== liveWatchCycle) return
     // Preserva o status/atividade mais fresco do stream pras entradas que já
     // existiam — o snapshot pode estar atrás de um broadcast recente.
     const prev = new Map(get().liveSessions.map((s) => [s.ccSessionId, s]))
