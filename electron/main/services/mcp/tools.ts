@@ -48,6 +48,7 @@ import { inheritFeatureId } from '../feature-session-resolver'
 // Seam de injeção mãe→filha (guarded-inject → inject.ts, não ipc/sessions.ts —
 // evita arrastar electron/ipcMain pros handlers e permite mockar nos testes).
 import { injectIntoChildGuarded } from '../handoff/guarded-inject'
+import { messageAsleepChild } from '../handoff/message-asleep-child'
 // Seam de spawn da filha (impl real em ipc/sessions.ts) — mesma motivação do
 // injectIntoChild acima: nada de electron/ipcMain nos handlers.
 import { spawnHandoffChild } from '../handoff/spawn-child'
@@ -1246,7 +1247,7 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
       name: 'handoff_message',
       title: 'Message the child session',
       description:
-        'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). Read the pending blocker with handoff_result first. ANSWERING A REQUEST = handoff_answer(requestId) or handoff_message with requestId (also SendMessage to the child citing the requestId): that closes exactly that request and takes it off the queue. Without requestId the text only closes a request when exactly one non-human_only request is open; it is REFUSED when every open request is human_only (only the human resolves those — use handoff_escalate), and otherwise the return lists the requests still open.',
+        'FALLBACK channel to the child. The primary way to talk to a running child is SendMessage({ to: <alias from handoff_list>, ... }) — real-time, no PTY involved. Use handoff_message only when that path is unavailable: the child never bound a cross-session socket, or your message came back held/undelivered. It pastes the text straight into the child’s REPL, so it requires the handoff in-flight (running or needs_input) AND the child PTY alive; after delivery the child resumes (status back to running). ONE exception: a child that delivered (done) and went to sleep has no process, so SendMessage cannot reach it — handoff_message wakes it in the background and delivers the text (woke: true). The handoff stays done and is NOT reopened: the child answers over SendMessage and you will not be woken by this handoff again; new work needs a new session_handoff. A child the user ended is never woken by you (the error says so). Read the pending blocker with handoff_result first. ANSWERING A REQUEST = handoff_answer(requestId) or handoff_message with requestId (also SendMessage to the child citing the requestId): that closes exactly that request and takes it off the queue. Without requestId the text only closes a request when exactly one non-human_only request is open; it is REFUSED when every open request is human_only (only the human resolves those — use handoff_escalate), and otherwise the return lists the requests still open.',
       inputSchema: handoffMessageSchema,
       handler: (args) => {
         const { handoffId, text, requestId } = handoffMessageSchema.parse(args)
@@ -1256,6 +1257,36 @@ function handoffTools(notify: McpNotify, ctx: McpRequestContext): ToolDef[] {
         const handoff = handoffStore.get(handoffId)
         if (!handoff) throw new Error(`handoff não encontrado: ${handoffId}`)
         if (handoff.status !== 'running' && handoff.status !== 'needs_input') {
+          // Encerrada pelo usuário vem antes de tudo: a mãe não a traz de volta.
+          if (handoff.endedByUserAt != null) {
+            throw new Error(
+              `handoff ${handoffId}: o usuário encerrou esta filha no Pitwall (status: ${handoff.status}). A mãe não a acorda: ela segue vinculada e só o usuário a retoma. A mensagem não foi entregue; não re-despache este trabalho por conta própria.`,
+            )
+          }
+          // Dormindo = concluída que hibernou. Com a PTY ainda viva (o /exit não
+          // saiu) não há o que acordar, e um segundo processo escreveria no mesmo
+          // transcript.
+          if (
+            handoff.childAsleep &&
+            handoff.childSessionId &&
+            !ptyManager.isRunning(handoff.childSessionId)
+          ) {
+            return messageAsleepChild(
+              handoff,
+              text,
+              ctx.motherSessionId ?? handoff.motherSessionId,
+            ).then((woken) => {
+              const to = woken.childAlias ? `SendMessage({ to: "${woken.childAlias}" })` : 'SendMessage'
+              return ok({
+                status: handoff.status,
+                woke: true,
+                delivered: woken.delivered,
+                queued: !woken.delivered,
+                childAlias: woken.childAlias,
+                note: `A filha dormia e foi acordada em segundo plano. ${woken.delivered ? 'A mensagem foi entregue.' : 'A mensagem está na fila e entra quando a TUI dela ficar ociosa.'} O handoff continua done e não foi reaberto: ela responde por ${to}, não por handoff_report, e você não será acordada por este handoff. Trabalho novo pede um novo session_handoff.`,
+              })
+            })
+          }
           throw new Error(
             `handoff ${handoffId} não está em andamento (status: ${handoff.status}); só dá pra mandar mensagem a uma filha viva (running/needs_input).`,
           )

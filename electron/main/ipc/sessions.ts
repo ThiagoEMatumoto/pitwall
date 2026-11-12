@@ -92,7 +92,7 @@ import {
   resolveCodexModel,
 } from '../services/spawn-flags'
 import { getChildLearnedAllow } from '../services/handoff/child-learned-rules'
-import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { setSpawnHandoffChild, setWakeHandoffChild } from '../services/handoff/spawn-child'
 import { preTrustClaudeDirs } from '../services/handoff/claude-trust'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
@@ -115,6 +115,7 @@ import type {
   ChatTranscript,
   Handoff,
   HandoffStatus,
+  WokenHandoffChild,
   AgentProviderId,
   AttentionRespondInput,
   SessionRenamedEvent,
@@ -1270,6 +1271,17 @@ export function resumeConversation(
   return { session, reattached: false }
 }
 
+// A filha concluída dormiu: o handoff não muda, mas o card dela passa a
+// "Dormindo" (childAsleep é derivado da sessão) e o painel precisa recarregar.
+function announceAsleepChild(sessionId: string): void {
+  try {
+    const handoff = handoffStore.getByChildSession(sessionId)
+    if (handoff?.childAsleep) broadcast('handoff:updated', handoff)
+  } catch (err) {
+    console.error('[hibernate] failed to announce the asleep child', err)
+  }
+}
+
 // Um webContents.send por chunk de cada PTY disputava o renderer com o input;
 // agora é no máximo um por sessão a cada janela.
 const ptyData = createPtyDataCoalescer((e) => broadcast('pty:data', e))
@@ -1324,6 +1336,7 @@ export function registerSessionIpc(): void {
           console.error('[hibernate] failed to persist hibernated state', err)
         }
         broadcast('sessions:hibernated', hibernated)
+        if (hibernated.child) announceAsleepChild(e.sessionId)
       }
       broadcast('pty:exit', e)
 
@@ -1352,9 +1365,10 @@ export function registerSessionIpc(): void {
 
       // Reconciliação do handoff: se a sessão-filha morreu (exit/crash) sem ter
       // reportado conclusão (status ainda vivo: 'running' OU 'needs_input'), o
-      // handoff ficaria preso pra sempre. failIfRunning transiciona ambos→failed
-      // (não sobrescreve done/rejected). Inclui needs_input: uma filha que
-      // perguntou e cuja PTY morreu de fato não pode ficar órfã.
+      // handoff ficaria preso pra sempre. failIfRunning transiciona ambos→interrupted
+      // (não sobrescreve done/rejected: a filha concluída que hiberna segue done).
+      // Inclui needs_input: uma filha que perguntou e cuja PTY morreu de fato não
+      // pode ficar órfã.
       try {
         const linkedHandoff = handoffStore.getByChildSession(e.sessionId)
         if (
@@ -1499,6 +1513,16 @@ export function registerSessionIpc(): void {
     'handoffs:resume',
     (_e, id: string) => resumeHandoffChild(id, { kickoff: defaultResumeKickoff(id) }).handoff,
   )
+
+  // Acordar a filha concluída que dorme: o mesmo relance, sem kickoff (o trabalho
+  // foi entregue; ela volta esperando). Devolve a sessão acordada para o renderer
+  // abrir a aba dela. Já viva, devolve a que existe.
+  ipcMain.handle('handoffs:wake-child', (_e, id: string): WokenHandoffChild => {
+    const { handoff, session } = resumeHandoffChild(id)
+    return { handoff, sessionId: session.id }
+  })
+  // A mãe acorda pelo MCP (handoff_message), sem aba: a filha volta em 2º plano.
+  setWakeHandoffChild((id) => resumeHandoffChild(id).session)
 
   ipcMain.handle('sessions:list-by-repo', (_e, repoId: string): SessionSummary[] => {
     const db = getDb()

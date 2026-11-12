@@ -15,6 +15,7 @@ import type {
   HandoffStatus,
 } from '../../../shared/types/ipc'
 import type { HandoffEvent } from '../../../shared/types/session-graph'
+import type { HandoffChildKind } from '../../../shared/hibernate'
 
 interface HandoffRow {
   id: string
@@ -50,12 +51,18 @@ interface HandoffRow {
   ended_by_user_at: number | null
   // Resolvido via LEFT JOIN repos (null se o repo-alvo foi removido).
   target_repo_label: string | null
+  // sessions.hibernated_at da linha da filha (null sem filha ou acordada).
+  child_hibernated_at: number | null
 }
 
 // SELECT base com o label do repo-alvo resolvido. LEFT JOIN: handoff sobrevive à
 // remoção do repo (label vira null), mas continua listável.
-const SELECT_HANDOFF =
-  'SELECT h.*, r.label AS target_repo_label FROM handoffs h LEFT JOIN repos r ON r.id = h.target_repo_id'
+// child_hibernated_at lê a linha apontada pelo vínculo, por chave primária: é a
+// que o hibernador marca (a PTY viva), e o resume re-aponta o vínculo para a
+// linha nova (adoptResumedConversation) depois de limpar a marca da conversa.
+const SELECT_HANDOFF = `SELECT h.*, r.label AS target_repo_label,
+    (SELECT hs.hibernated_at FROM sessions hs WHERE hs.id = h.child_session_id) AS child_hibernated_at
+  FROM handoffs h LEFT JOIN repos r ON r.id = h.target_repo_id`
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -142,6 +149,7 @@ function toEntity(row: HandoffRow): Handoff {
     dismissedAt: row.dismissed_at,
     predecessorSessionId: row.predecessor_session_id,
     endedByUserAt: row.ended_by_user_at,
+    childAsleep: row.status === 'done' && row.child_hibernated_at != null,
     resumable: isResumable(row),
   }
 }
@@ -1096,18 +1104,20 @@ export function activeHandoffCcSessionIds(): string[] {
   return rows.map((r) => r.cc)
 }
 
-// A conversa é (ou foi) filha de algum handoff, em qualquer status. Casa pelo cc:
-// o relink re-aponta child_session_id para a linha nova da mesma conversa.
-export function isHandoffChildCc(ccSessionId: string): boolean {
-  const row = getDb()
+// O que a conversa é (ou foi) como filha de handoff. Casa pelo cc: o relink
+// re-aponta child_session_id para a linha nova da mesma conversa. 'done' exige
+// TODOS os handoffs dela concluídos: um em voo, falhado ou interrompido ainda
+// depende do processo vivo.
+export function childHandoffKindCc(ccSessionId: string): HandoffChildKind {
+  const rows = getDb()
     .prepare(
-      `SELECT 1 FROM handoffs h
+      `SELECT DISTINCT h.status AS status FROM handoffs h
          JOIN sessions s ON s.id = h.child_session_id
-        WHERE s.cc_session_id = ?
-        LIMIT 1`,
+        WHERE s.cc_session_id = ?`,
     )
-    .get(ccSessionId)
-  return row !== undefined
+    .all(ccSessionId) as Array<{ status: string }>
+  if (rows.length === 0) return 'none'
+  return rows.every((r) => r.status === 'done') ? 'done' : 'other'
 }
 
 // O que o bastão da MÃE carrega: as filhas que ela lidera (isLedByMother) — o

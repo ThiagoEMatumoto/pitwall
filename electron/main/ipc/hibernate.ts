@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { ptyManager } from '../services/pty-manager'
 import { getDb } from '../services/db'
 import { getPref } from '../services/prefs-store'
-import { activeHandoffCcSessionIds, isHandoffChildCc } from '../services/handoff-store'
+import { activeHandoffCcSessionIds, childHandoffKindCc } from '../services/handoff-store'
 import { findTranscriptPath } from '../services/transcript-path'
 import { isSessionPidAlive } from '../services/session-activity'
 import { getDormantPanes } from '../services/dormant-panes'
@@ -28,19 +28,29 @@ import { promptQueue } from './send-prompt'
 import { findAliveByCc } from './sessions'
 import { lazyRestoreAtBoot } from './dormant-panes'
 import {
+  CHILD_HIBERNATE_AFTER_MIN_PREF,
+  DEFAULT_CHILD_HIBERNATE_AFTER_MIN,
   HIBERNATE_AFTER_MIN_PREF,
   sanitizeHibernateAfterMin,
   type HibernateDisabledReason,
   type HibernateStatsView,
 } from '../../../shared/hibernate'
 
-// Ligação da hibernação no main: o tick só existe com o lazyRestore do boot, a
-// pref ao vivo do lazyRestore e hibernateAfterMin > 0. O prefs:set das duas prefs
-// chama reschedule (ipc/prefs); o exit da PTY emite sessions:hibernated antes do
-// pty:exit (ipc/sessions).
+// Ligação da hibernação no main. A geral só existe com o lazyRestore do boot, a
+// pref ao vivo do lazyRestore e hibernateAfterMin > 0; a da filha de handoff
+// concluído só depende da janela dela. O tick roda com qualquer uma das duas. O
+// prefs:set das três prefs chama reschedule (ipc/prefs); o exit da PTY emite
+// sessions:hibernated antes do pty:exit (ipc/sessions).
 
 function afterMinPref(): number {
   return sanitizeHibernateAfterMin(getPref<unknown>(HIBERNATE_AFTER_MIN_PREF, 0))
+}
+
+// Sem a pref gravada vale o padrão; 0 gravado desliga.
+function childAfterMinPref(): number {
+  return sanitizeHibernateAfterMin(
+    getPref<unknown>(CHILD_HIBERNATE_AFTER_MIN_PREF, DEFAULT_CHILD_HIBERNATE_AFTER_MIN),
+  )
 }
 
 export function hibernateDisabledReason(): HibernateDisabledReason | undefined {
@@ -91,6 +101,7 @@ export function createIdleHibernator(): IdleHibernator {
   return new IdleHibernator({
     lazyRestore: () => lazyRestoreAtBoot() && lazyRestoreEnabled(),
     afterMin: afterMinPref,
+    childAfterMin: childAfterMinPref,
     candidates: () => claudeCandidates(ptyManager.runningIds()),
     hasPane: (cc) => hasAwakePane(cc, (c) => getDormantPanes()?.findDormantByCc(c) != null),
     confirmPane: (sessionId, cc) => paneConfirmer.confirm(sessionId, cc),
@@ -102,10 +113,10 @@ export function createIdleHibernator(): IdleHibernator {
     isPidAlive: (file) => isSessionPidAlive(file),
     aliveSessionId: (cc) => findAliveByCc(cc)?.id ?? null,
     activeHandoffCcSessionIds,
-    isHandoffChild: isHandoffChildCc,
+    handoffChildKind: childHandoffKindCc,
     queueHas: (id) => promptQueue.snapshot().items.some((item) => item.sessionId === id),
     transcriptPath: findTranscriptPath,
-    scanTranscript: (path) => scanner.scan(path),
+    scanTranscript: (path) => scanner.peek(path),
     procTree: (pid) => inspectProcTree(pid),
     send: (input) => promptQueue.send(input),
     cancel: (id) => {

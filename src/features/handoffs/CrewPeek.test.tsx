@@ -75,6 +75,9 @@ const handoff: Handoff = {
   outcome: null,
   dismissedAt: null,
   resumable: false,
+  predecessorSessionId: null,
+  endedByUserAt: null,
+  childAsleep: false,
 }
 
 const live: LiveSessionInfo = {
@@ -97,6 +100,36 @@ function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status
   useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
   return render(<CrewPeek />)
 }
+
+// Sem processo o selo do header caía em "filha encerrou", em vermelho: para a
+// concluída que hibernou isso lia como queda.
+describe('CrewPeek — filha concluída dormindo', () => {
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    useAppStore.setState({ panes: [] })
+  })
+
+  it('o selo diz "dormindo", não "filha encerrou"', () => {
+    useHandoffsStore.setState({
+      handoffs: [{ ...handoff, status: 'done', childAsleep: true, summary: 'entregue' }],
+    })
+    useAppStore.setState({ liveSessions: [] })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(screen.getByText('dormindo')).toBeTruthy()
+    expect(screen.queryByText('filha encerrou')).toBeNull()
+  })
+
+  it('concluída sem a marca de hibernação segue como antes', () => {
+    useHandoffsStore.setState({ handoffs: [{ ...handoff, status: 'done', summary: 'entregue' }] })
+    useAppStore.setState({ liveSessions: [] })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(screen.getByText('filha encerrou')).toBeTruthy()
+  })
+})
 
 describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
   beforeEach(() => {

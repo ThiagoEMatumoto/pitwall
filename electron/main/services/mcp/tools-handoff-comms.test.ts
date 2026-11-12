@@ -47,7 +47,11 @@ import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import { tuiMenuWatch } from '../tui-menu-watch'
 import { onSessionLinkPulse } from '../session-link-pulse'
-import { setSpawnHandoffChild } from '../handoff/spawn-child'
+import { setSpawnHandoffChild, setWakeHandoffChild } from '../handoff/spawn-child'
+import { setHandoffWakeQueue } from '../handoff/handoff-wake'
+import { clearConversationHibernated, markHibernated } from '../hibernate/hibernated-store'
+import type { SendPromptInput, SendPromptResult } from '../../../../shared/types/send-prompt'
+import type { Session } from '../../../../shared/types/ipc'
 import type { SessionLinkPulse } from '../../../../shared/types/session-link-pulse'
 import {
   buildTools,
@@ -225,6 +229,184 @@ describe('handoff_message (mãe → filha)', () => {
       /não está mais viva/,
     )
     expect(injectIntoChild).not.toHaveBeenCalled()
+  })
+})
+
+// A filha concluída que hibernou não tem processo: o SendMessage nativo não a
+// alcança. handoff_message a acorda (seam do resume) e entrega pela fila on-idle.
+// O estado sai dos produtores: handoffStore.report, markHibernated e, no seam, as
+// mesmas escritas do resumeHandoffChild (linha nova da conversa, marca limpa,
+// vínculo re-apontado).
+describe('handoff_message para a filha concluída que dorme', () => {
+  const ASLEEP = 's-dorme'
+  const WOKEN = 's-acordada'
+  const MOTHER = 's-mae-dorme'
+  let handoffId: string
+  let wake: ReturnType<typeof vi.fn<(id: string) => Session>>
+  let queueSend: ReturnType<typeof vi.fn<(input: SendPromptInput) => Promise<SendPromptResult>>>
+  let wokenAlive: boolean
+
+  function wakeAsResumeDoes(id: string): Session {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, cc_session_id, title, title_source, status, started_at)
+       VALUES (?, 'r1', ?, 'otavio-dorme', 'manual', 'running', ?)`,
+    ).run(WOKEN, `cc-${ASLEEP}`, Date.now())
+    clearConversationHibernated(db, `cc-${ASLEEP}`)
+    handoffStore.adoptResumedConversation([ASLEEP], WOKEN)
+    wokenAlive = true
+    showScreen(WOKEN, IDLE_SCREEN)
+    expect(id).toBe(handoffId)
+    return { id: WOKEN } as Session
+  }
+
+  beforeEach(() => {
+    handoffId = seedRunningHandoff(ASLEEP)
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO sessions (id, repo_id, title, title_source, status, started_at)
+       VALUES (?, 'r1', 'mae', 'manual', 'running', ?)`,
+    ).run(MOTHER, Date.now())
+    db.prepare("UPDATE sessions SET title = 'otavio-dorme', title_source = 'manual' WHERE id = ?").run(
+      ASLEEP,
+    )
+    handoffStore.setMother(handoffId, MOTHER)
+    handoffStore.report(handoffId, 'entregue')
+    markHibernated(db, ASLEEP)
+    wokenAlive = false
+    isRunning.mockImplementation((id) => id === MOTHER || (id === WOKEN && wokenAlive))
+    wake = vi.fn(wakeAsResumeDoes)
+    setWakeHandoffChild(wake)
+    queueSend = vi.fn(async () => ({ ok: true, delivered: true }) as SendPromptResult)
+    setHandoffWakeQueue({ send: queueSend, replaceText: () => false, cancel: () => false })
+  })
+
+  afterEach(() => setHandoffWakeQueue(null))
+
+  type Woken = { status: string; woke: boolean; delivered: boolean; queued: boolean; note: string }
+  const message = (text = 'e o caso X?') =>
+    (async () =>
+      (await buildTools(makeNotify(), { motherSessionId: MOTHER })
+        .find((t) => t.name === 'handoff_message')!
+        .handler({ handoffId, text })) as ToolResult)().then((r) => r.structuredContent as Woken)
+
+  it('o seed é uma filha dormindo de verdade: done, vinculada, sem processo', () => {
+    expect(handoffStore.get(handoffId)).toMatchObject({
+      status: 'done',
+      childSessionId: ASLEEP,
+      childAsleep: true,
+      endedByUserAt: null,
+    })
+  })
+
+  it('acorda pelo seam e entrega pela fila; o handoff segue done e vinculado', async () => {
+    const res = await message()
+
+    expect(wake).toHaveBeenCalledWith(handoffId)
+    expect(queueSend).toHaveBeenCalledTimes(1)
+    const sent = queueSend.mock.calls[0][0]
+    expect(sent).toMatchObject({ sessionId: WOKEN, when: 'on-idle', fromSessionId: MOTHER })
+    expect(sent.text).toContain('e o caso X?')
+    expect(res).toMatchObject({ status: 'done', woke: true, delivered: true, queued: false })
+    // Não reabre: nenhuma escrita direta no PTY, nenhuma transição de status.
+    expect(injectIntoChild).not.toHaveBeenCalled()
+    expect(handoffStore.get(handoffId)).toMatchObject({
+      status: 'done',
+      childSessionId: WOKEN,
+      childAsleep: false,
+    })
+    expect(handoffStore.listEvents(handoffId).map((e) => e.toStatus).at(-1)).toBe('done')
+  })
+
+  it('o retorno diz à mãe: responde por SendMessage, trabalho novo pede session_handoff', async () => {
+    const { note } = await message()
+    expect(note).toMatch(/SendMessage/)
+    expect(note).toContain('otavio-dorme')
+    expect(note).toMatch(/não foi reaberto/i)
+    expect(note).toMatch(/session_handoff/)
+  })
+
+  it('a filha lê quem a acordou e como responder, antes do texto da mãe', async () => {
+    await message('linha 1\nlinha 2')
+    const { text } = queueSend.mock.calls[0][0]
+    expect(text.indexOf('SendMessage')).toBeLessThan(text.indexOf('linha 1\nlinha 2'))
+    expect(text).toContain('"mae"')
+    expect(text).toMatch(/handoff_report/)
+    expect(text).toContain(handoffId)
+  })
+
+  // A fila escreve o texto dentro de um bracketed-paste: um ESC[201~ vindo da mãe
+  // fecharia o paste e o resto viraria tecla crua no prompt da filha.
+  it('tira caracteres de controle do texto da mãe, como a entrega à filha viva', async () => {
+    await message('oi\x1b[201~\x1b[Bfim\nlinha')
+    const { text } = queueSend.mock.calls[0][0]
+    expect(text).not.toContain('\x1b')
+    expect(text).toContain('oi[201~[Bfim\nlinha')
+  })
+
+  it('fila segura (a TUI ainda sobe): o retorno diz que a mensagem entra depois', async () => {
+    queueSend.mockResolvedValueOnce({
+      ok: true,
+      delivered: false,
+      queued: { id: 'q1' } as never,
+    })
+    const res = await message()
+    expect(res).toMatchObject({ status: 'done', woke: true, delivered: false, queued: true })
+    expect(res.note).toMatch(/fila/)
+  })
+
+  it('encerrada pelo usuário: não acorda, e o retorno diz que foi ele quem encerrou', async () => {
+    handoffStore.setEndedByUser(handoffId, true)
+    await expect(message()).rejects.toThrow(/usuário encerrou/)
+    expect(wake).not.toHaveBeenCalled()
+    expect(queueSend).not.toHaveBeenCalled()
+  })
+
+  it('interrompida porque o usuário encerrou: mesmo aviso, sem acordar', async () => {
+    const running = seedRunningHandoff('s-encerrada')
+    handoffStore.setEndedByUser(running, true)
+    handoffStore.failIfRunning(running, handoffStore.ENDED_BY_USER_ERROR)
+    await expect(
+      callAsync('handoff_message', { handoffId: running, text: 'x' }),
+    ).rejects.toThrow(/usuário encerrou/)
+    expect(wake).not.toHaveBeenCalled()
+  })
+
+  it('done sem a marca de hibernação (processo morreu por outro motivo): erro de sempre', async () => {
+    clearConversationHibernated(getDb(), `cc-${ASLEEP}`)
+    await expect(message()).rejects.toThrow(/não está em andamento \(status: done\)/)
+    expect(wake).not.toHaveBeenCalled()
+  })
+
+  it('done com a PTY viva (o /exit ainda não saiu): erro de sempre, sem segundo processo', async () => {
+    isRunning.mockReturnValue(true)
+    await expect(message()).rejects.toThrow(/não está em andamento \(status: done\)/)
+    expect(wake).not.toHaveBeenCalled()
+  })
+
+  it('o wake falha (transcript sumiu): diz o motivo e nada entra na fila', async () => {
+    wake.mockImplementationOnce(() => {
+      throw new Error('O transcript da sessão-filha não foi encontrado')
+    })
+    await expect(message()).rejects.toThrow(/não deu para acordar.*transcript/i)
+    expect(queueSend).not.toHaveBeenCalled()
+    expect(handoffStore.get(handoffId)).toMatchObject({ status: 'done', childAsleep: true })
+  })
+
+  it('acordou e a fila recusou: a mãe sabe que ela está viva e usa SendMessage', async () => {
+    queueSend.mockResolvedValueOnce({ ok: false, error: 'menu-open' })
+    await expect(message()).rejects.toThrow(/acordada.*não foi entregue.*SendMessage/s)
+    expect(handoffStore.get(handoffId)).toMatchObject({ status: 'done', childSessionId: WOKEN })
+  })
+
+  it('acordou e o processo saiu antes de a TUI subir: nada entra na fila', async () => {
+    wake.mockImplementationOnce((id) => {
+      const session = wakeAsResumeDoes(id)
+      wokenAlive = false
+      return session
+    })
+    await expect(message()).rejects.toThrow(/não foi entregue/)
+    expect(queueSend).not.toHaveBeenCalled()
   })
 })
 

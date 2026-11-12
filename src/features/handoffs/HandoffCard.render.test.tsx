@@ -13,6 +13,7 @@ vi.mock('@/lib/ipc', () => ({
     isResumable: vi.fn().mockResolvedValue(false),
     fail: vi.fn().mockResolvedValue(undefined),
     resume: vi.fn().mockResolvedValue(undefined),
+    wakeChild: vi.fn(),
     setOutcome: vi.fn().mockResolvedValue(undefined),
     dismiss: vi.fn().mockResolvedValue(undefined),
     detachChild: vi.fn().mockResolvedValue(undefined),
@@ -70,6 +71,7 @@ const handoff: Handoff = {
   resumable: false,
   predecessorSessionId: null,
   endedByUserAt: null,
+  childAsleep: false,
 }
 
 const live: LiveSessionInfo = {
@@ -618,5 +620,141 @@ describe('HandoffCard: a mensagem do usuário abre a aba da filha', () => {
 
     await waitFor(() => expect(sendMessage).toHaveBeenCalled())
     expect(focusOrOpenSession).not.toHaveBeenCalled()
+  })
+})
+
+// Dormindo = handoff done cuja sessão hibernou (childAsleep, derivado pelo
+// handoff-store). Sem processo: o card é o único lugar de onde o usuário a acorda.
+describe('HandoffCard: filha concluída dormindo', () => {
+  const asleep: Partial<Handoff> = {
+    status: 'done',
+    childAsleep: true,
+    currentStep: null,
+    summary: 'entregue',
+  }
+  const woken: LiveSessionInfo = { ...live, id: 's-woken', status: 'idle' }
+  const wakeChild = vi.mocked(handoffsApi.wakeChild)
+
+  function mountAsleep(patch: Partial<Handoff> = {}) {
+    return render(
+      <HandoffCard
+        handoff={{ ...handoff, ...asleep, ...patch }}
+        ttlHours={2}
+        tier="mid"
+        onPeek={() => {}}
+      />,
+    )
+  }
+
+  beforeEach(() => {
+    wakeChild.mockReset()
+    vi.mocked(handoffsApi.resume).mockClear()
+    useAppStore.setState({ liveSessions: [], panes: [], area: 'overview', focusPaneId: null })
+  })
+  afterEach(() => {
+    useAppStore.setState({ liveSessions: [], panes: [], area: 'overview', focusPaneId: null })
+  })
+
+  it('diz "Dormindo" e oferece Acordar; não há processo para abrir nem para encerrar', () => {
+    mountAsleep()
+    expect(screen.getByText('Dormindo')).toBeTruthy()
+    expect(screen.queryByText('Concluído')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Acordar' })).toBeTruthy()
+    expect(screen.queryByLabelText('Abrir na aba')).toBeNull()
+    expect(screen.queryByPlaceholderText(/filha/i)).toBeNull()
+  })
+
+  it('Acordar chama handoffs.wakeChild (sem kickoff) e abre a aba da sessão acordada', async () => {
+    wakeChild.mockImplementation(async () => {
+      // A lista viva que o refresh traria: a linha nova do relance.
+      useAppStore.setState({ liveSessions: [woken] })
+      return {
+        handoff: { ...handoff, ...asleep, childAsleep: false, childSessionId: woken.id },
+        sessionId: woken.id,
+      }
+    })
+    mountAsleep()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Acordar' }))
+
+    await waitFor(() =>
+      expect(useAppStore.getState().panes.map((p) => p.session.id)).toEqual([woken.id]),
+    )
+    expect(wakeChild).toHaveBeenCalledWith('h1')
+    expect(handoffsApi.resume).not.toHaveBeenCalled()
+    expect(useAppStore.getState().area).toBe('projects')
+  })
+
+  it('não acordou: o motivo fica no card e dá pra tentar de novo', async () => {
+    wakeChild.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'handoffs:wake-child': Error: O transcript da sessão-filha não foi encontrado — não é possível retomá-la.",
+      ),
+    )
+    mountAsleep()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Acordar' }))
+
+    expect(
+      await screen.findByText(
+        'O transcript da sessão-filha não foi encontrado — não é possível retomá-la.',
+      ),
+    ).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Acordar' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+    expect(useAppStore.getState().panes).toEqual([])
+  })
+
+  it('dormindo dá pra arquivar o card e desvincular; o vínculo não some sozinho', async () => {
+    mountAsleep()
+    expect(screen.getByLabelText('Arquivar card')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('Mais ações'))
+    expect(await screen.findByText('Desvincular')).toBeTruthy()
+    expect(screen.queryByText('Encerrar filha')).toBeNull()
+  })
+
+  it('com o processo ainda vivo (o /exit não saiu) ela não está dormindo', () => {
+    useAppStore.setState({ liveSessions: [live] })
+    mountAsleep()
+    expect(screen.queryByText('Dormindo')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Acordar' })).toBeNull()
+    expect(screen.getByLabelText('Abrir na aba')).toBeTruthy()
+  })
+
+  it('concluída que não hibernou segue "Concluído", sem Acordar', () => {
+    mountAsleep({ childAsleep: false })
+    expect(screen.getByText('Concluído')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Acordar' })).toBeNull()
+  })
+})
+
+describe('HandoffCard: filha encerrada pelo usuário', () => {
+  beforeEach(() => {
+    useAppStore.setState({ liveSessions: [] })
+  })
+
+  it('pausada porque o usuário encerrou: o selo diz quem encerrou e o Retomar fica', () => {
+    render(
+      <HandoffCard
+        handoff={{ ...handoff, status: 'interrupted', resumable: true, endedByUserAt: 123 }}
+        ttlHours={2}
+        tier="mid"
+      />,
+    )
+    expect(screen.getByText('Encerrada por você')).toBeTruthy()
+    expect(screen.queryByText('Pausada')).toBeNull()
+    expect(screen.getByRole('button', { name: /Retomar/ })).toBeTruthy()
+  })
+
+  it('pausada por outro motivo (app reiniciado, aba fechada) segue "Pausada"', () => {
+    render(
+      <HandoffCard
+        handoff={{ ...handoff, status: 'interrupted', resumable: true }}
+        ttlHours={2}
+        tier="mid"
+      />,
+    )
+    expect(screen.getByText('Pausada')).toBeTruthy()
   })
 })

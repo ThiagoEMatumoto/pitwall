@@ -43,6 +43,23 @@ export function spawnHandoffChild(input: SpawnHandoffChildInput): Session {
   return impl({ ...input, featureId: inheritFeatureId(input.featureId, motherFeatureOf(input)) })
 }
 
+// Mesmo seam, para acordar a filha concluída que dorme (handoff_message da mãe):
+// a impl é o resumeHandoffChild, sem kickoff. Devolve a sessão acordada.
+type WakeHandoffChildFn = (handoffId: string) => Session
+
+let wakeImpl: WakeHandoffChildFn | null = null
+
+export function setWakeHandoffChild(fn: WakeHandoffChildFn): void {
+  wakeImpl = fn
+}
+
+export function wakeHandoffChild(handoffId: string): Session {
+  if (!wakeImpl) {
+    throw new Error('acordar a sessão-filha indisponível: o IPC de sessões não foi inicializado')
+  }
+  return wakeImpl(handoffId)
+}
+
 function motherFeatureOf(input: SpawnHandoffChildInput): string | null {
   if (input.featureId || !input.motherSessionId) return null
   const row = getDb()

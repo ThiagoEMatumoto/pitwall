@@ -137,6 +137,32 @@ describe('perf-probe', () => {
     expect(spans.async.n).toBe(1)
   })
 
+  it('perfSelfTime tira do span as esperas nomeadas, e cada espera sai no span dela', async () => {
+    const probe = await loadProbe('1')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    const run = probe.perfSelfTime('tick', async (wait) => {
+      await wait('tick.renderer', () => sleep(3_000))
+      await wait('tick.queue', () => sleep(500))
+      await wait('tick.queue', () => sleep(200))
+      return 'ok'
+    })
+    await vi.advanceTimersByTimeAsync(3_700)
+    await expect(run).resolves.toBe('ok')
+    const { spans } = probe.drainPerfWindow(10_000)
+    expect(spans.tick).toEqual({ n: 1, totalMs: 0, maxMs: 0 })
+    expect(spans['tick.renderer']).toEqual({ n: 1, totalMs: 3_000, maxMs: 3_000 })
+    expect(spans['tick.queue']).toEqual({ n: 2, totalMs: 700, maxMs: 500 })
+  })
+
+  it('perfSelfTime desligada só repassa o trecho e as esperas', async () => {
+    const probe = await loadProbe('')
+    await expect(
+      probe.perfSelfTime('tick', (wait) => wait('tick.renderer', async () => 7)),
+    ).resolves.toBe(7)
+    expect(probe.drainPerfWindow(10_000)).toEqual(EMPTY_WINDOW)
+  })
+
   it('instrumentIpcMain conta e cronometra handle e on sem mudar o resultado', async () => {
     const probe = await loadProbe('1')
     const { ipc, invoke, send } = fakeIpcMain()

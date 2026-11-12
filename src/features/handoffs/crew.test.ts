@@ -41,6 +41,8 @@ const { crewOnlyCount, crewOnlySessions, visibleLiveSessions } =
 const { motherOfChildMap } = await import('@/features/sessions/conversation-hierarchy')
 const { readHierarchyLinks } = await import('../../../electron/main/services/session-graph')
 const store = await import('../../../electron/main/services/handoff-store')
+const { markHibernated, clearConversationHibernated } =
+  await import('../../../electron/main/services/hibernate/hibernated-store')
 const { readRequestInput, readTransitions, toAttentionLive } =
   await import('../../../electron/main/services/attention/attention-service')
 const { projectAttention } = await import('../../../shared/attention/project-attention')
@@ -549,6 +551,83 @@ describe('card dispensado com a filha viva (antes de "Arquivar card")', () => {
     expect(dockCrew(handoffs).map((h) => h.id)).toEqual([kept.id])
     expect(hiddenCrewSessionIds(handoffs, sessions, new Set())).toEqual(new Set(['b']))
     expect(handoffs.find((h) => h.id === dismissed.id)?.childSessionId).toBe('a')
+  })
+})
+
+// Dormindo = handoff done cuja sessão saiu pela hibernação. O estado sai do
+// produtor: o store relê a marca que o hibernador grava (markHibernated).
+describe('filha concluída dormindo', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:')
+    testDb.pragma('foreign_keys = ON')
+    harness.applyAllMigrations(testDb)
+    harness.seedRepos(testDb)
+    harness.seedSession(testDb, 'm')
+    transcriptPath = null
+  })
+  afterEach(() => testDb.close())
+
+  function doneChild(repo: string, sid: string) {
+    return store.report(child(repo, sid).id, 'entregue')
+  }
+  const ccOf = (sid: string) =>
+    (testDb.prepare('SELECT cc_session_id FROM sessions WHERE id = ?').get(sid) as {
+      cc_session_id: string
+    }).cc_session_id
+
+  it('concluída acordada segue fora do dock', () => {
+    const done = doneChild('r1', 'a')
+    expect(done.childAsleep).toBe(false)
+    expect(dockCrew(store.list())).toEqual([])
+  })
+
+  it('hibernada entra no dock, ainda vinculada e ainda done', () => {
+    const done = doneChild('r1', 'a')
+    markHibernated(testDb, 'a')
+
+    const [asleep] = dockCrew(store.list())
+    expect(asleep).toMatchObject({
+      id: done.id,
+      status: 'done',
+      childSessionId: 'a',
+      childAsleep: true,
+    })
+  })
+
+  it('arquivada sai do dock sem perder o vínculo', () => {
+    const done = doneChild('r1', 'a')
+    markHibernated(testDb, 'a')
+    store.dismiss(done.id)
+
+    expect(dockCrew(store.list())).toEqual([])
+    expect(store.get(done.id)).toMatchObject({ childSessionId: 'a', childAsleep: true })
+  })
+
+  it('acordada (a conversa voltou a ter PTY) sai do dock', () => {
+    doneChild('r1', 'a')
+    markHibernated(testDb, 'a')
+    clearConversationHibernated(testDb, ccOf('a'))
+
+    expect(dockCrew(store.list())).toEqual([])
+  })
+
+  it('a marca de hibernação não faz dormir quem não concluiu', () => {
+    const running = child('r1', 'a')
+    markHibernated(testDb, 'a')
+
+    expect(store.get(running.id)?.childAsleep).toBe(false)
+    expect(dockCrew(store.list()).map((h) => h.id)).toEqual([running.id])
+  })
+
+  it('dormindo fica no dock sem contar como atenção', () => {
+    const done = doneChild('r1', 'a')
+    const working = child('r2', 'b')
+    markHibernated(testDb, 'a')
+
+    const { handoffs, attention } = projected([liveOf('b', 'working', null)])
+    expect(crewAttentionCount(attention, handoffs)).toBe(0)
+    const ordered = orderCrew(handoffs, attentionHandoffIds(humanQueue(attention)))
+    expect(new Set(ordered.map((h) => h.id))).toEqual(new Set([working.id, done.id]))
   })
 })
 

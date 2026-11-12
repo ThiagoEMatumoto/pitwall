@@ -132,10 +132,15 @@ import { setPref } from '../services/prefs-store'
 import { fixture, scanOf } from '../services/test-support/screen-scans'
 import { getDormantPanes } from '../services/dormant-panes'
 import { getIdleHibernator } from '../services/hibernate/idle-hibernator'
+import * as handoffStore from '../services/handoff-store'
 import { buildImageFilename } from '../services/image-temp'
 import { formatPtyInjection } from '../services/handoff/inject'
 import { LAZY_RESTORE_PREF } from '../../../shared/lazy-restore'
 import { registerSessionIpc, sweepOrphanImageTemps } from './sessions'
+import { setWakeHandoffChild } from '../services/handoff/spawn-child'
+import { clearConversationHibernated } from '../services/hibernate/hibernated-store'
+import { buildTools, type ToolResult } from '../services/mcp/tools'
+import type { Session } from '../../../shared/types/ipc'
 import { promptQueue, registerSendPromptIpc } from './send-prompt'
 import { CONFIRM_GIVEUP_MS, POLL_MS } from '../services/prompt-queue'
 import { registerDormantPanesIpc } from './dormant-panes'
@@ -189,7 +194,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  getDb().exec('DELETE FROM sessions;')
+  getDb().exec('DELETE FROM handoffs; DELETE FROM sessions;')
   seam.running = new Set([PTY, OTHER])
   seam.ptyWrites.length = 0
   seam.sent.length = 0
@@ -277,6 +282,108 @@ describe('exit da hibernação pelos handlers reais', () => {
     sweepOrphanImageTemps()
     expect(existsSync(image)).toBe(false)
     expect(existsSync(notImage)).toBe(true)
+  })
+
+  // Handoff concluído pela filha PTY, despachado pela mãe OTHER.
+  function doneChildHandoff() {
+    const db = getDb()
+    db.prepare(
+      `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('p1', 'P1', 1, 1)`,
+    ).run()
+    db.prepare(
+      `INSERT OR IGNORE INTO repos (id, project_id, label, path, position, created_at)
+       VALUES ('r1', 'p1', 'Repo 1', '/tmp/r1', 0, 1)`,
+    ).run()
+    const handoff = handoffStore.create({
+      targetRepoId: 'r1',
+      task: 't',
+      composedPrompt: 'p',
+      motherSessionId: OTHER,
+      mode: 'plan',
+      status: 'approved',
+    })
+    handoffStore.markRunning(handoff.id, PTY)
+    return handoffStore.report(handoff.id, 'pronto')
+  }
+
+  it('filha de handoff concluído: dorme sem dormant, segue done e vinculada', async () => {
+    const db = getDb()
+    const handoff = doneChildHandoff()
+
+    expect(
+      await getIdleHibernator()!.hibernate({ sessionId: PTY, ccSessionId: CC }, null, true),
+    ).toBe(true)
+    seam.sent.length = 0
+    exit(PTY)
+
+    const hibernatedAt = channels().indexOf('sessions:hibernated')
+    expect(hibernatedAt).toBeGreaterThanOrEqual(0)
+    expect(hibernatedAt).toBeLessThan(channels().indexOf('pty:exit'))
+    expect(seam.sent[hibernatedAt].payload).toEqual({
+      sessionId: PTY,
+      ccSessionId: CC,
+      paneId: null,
+      child: true,
+    })
+    expect(getDormantPanes()?.findDormantByCc(CC)).toBeNull()
+    expect(
+      db
+        .prepare('SELECT status, hibernated_at IS NOT NULL AS asleep FROM sessions WHERE id = ?')
+        .get(PTY),
+    ).toEqual({ status: 'exited', asleep: 1 })
+    // O exit não mexe no handoff: nem status, nem vínculo, nem aviso à mãe.
+    expect(handoffStore.get(handoff.id)).toMatchObject({ status: 'done', childSessionId: PTY })
+    // O que muda é o que o card mostra: o painel recarrega e a vê dormindo.
+    expect(seam.sent.filter((m) => m.channel === 'handoff:updated').map((m) => m.payload)).toEqual(
+      [expect.objectContaining({ id: handoff.id, status: 'done', childAsleep: true })],
+    )
+    await new Promise((r) => setTimeout(r, 20))
+    expect(channels()).not.toContain('sessions:wake-request')
+    expect(seam.ptyWrites).toEqual([`${PTY}:${formatPtyInjection('/exit')}`])
+  })
+
+  // Do exit real ao PTY: a marca que o handler de exit grava é a que o
+  // handoff_message lê, e a entrega sai pela PromptQueue de produção. Fake só no
+  // relance (o seam), que faz as escritas do resumeHandoffChild sem subir processo.
+  it('a mãe chama a filha que dorme: acorda, a fila entrega e o handoff segue done', async () => {
+    // Id próprio: a fila segura por um instante a sessão que acabou de receber algo.
+    const CALLED = 'pty-called-by-mother'
+    const handoff = doneChildHandoff()
+    expect(
+      await getIdleHibernator()!.hibernate({ sessionId: PTY, ccSessionId: CC }, null, true),
+    ).toBe(true)
+    exit(PTY)
+    expect(handoffStore.get(handoff.id)).toMatchObject({ status: 'done', childAsleep: true })
+
+    setWakeHandoffChild((id) => {
+      expect(id).toBe(handoff.id)
+      insertSession(CALLED, CC)
+      clearConversationHibernated(getDb(), CC)
+      handoffStore.adoptResumedConversation([PTY], CALLED)
+      seam.running.add(CALLED)
+      return { id: CALLED } as Session
+    })
+    try {
+      seam.ptyWrites.length = 0
+      const tool = buildTools(
+        { broadcast: () => {}, affectedObjectives: () => {}, affectedObjectivesForFeatureLinks: () => {} },
+        { motherSessionId: OTHER },
+      ).find((t) => t.name === 'handoff_message')!
+      const res = (await tool.handler({ handoffId: handoff.id, text: 'e o caso X?' })) as ToolResult
+
+      expect(res.structuredContent).toMatchObject({ status: 'done', woke: true, delivered: true })
+      expect(seam.ptyWrites).toHaveLength(1)
+      expect(seam.ptyWrites[0].startsWith(`${CALLED}:`)).toBe(true)
+      expect(seam.ptyWrites[0]).toContain('e o caso X?')
+      // Não reabre nem desvincula: segue done, apontando para a linha acordada.
+      expect(handoffStore.get(handoff.id)).toMatchObject({
+        status: 'done',
+        childSessionId: CALLED,
+        childAsleep: false,
+      })
+    } finally {
+      registerSessionIpc()
+    }
   })
 
   it('exit comum com item na fila: sem dormant e sem wake', async () => {
