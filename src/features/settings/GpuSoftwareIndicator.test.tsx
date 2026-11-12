@@ -256,6 +256,40 @@ describe('GpuSoftwareIndicator', () => {
     expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
   })
 
+  it('um religar que falhou no rail não vira "reiniciar" quando as Configurações religam depois', async () => {
+    crashTwice()
+    boot()
+    render(
+      <>
+        <GpuSoftwareIndicator />
+        <TerminalSection open />
+      </>,
+    )
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+    failing.key = GPU_AUTO_PREF_KEY
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+    fireEvent.click(indicator()!)
+    // Palpite em vigor até a releitura chegar.
+    await waitFor(() => expect(indicator()).toBeNull())
+    deliver()
+    await waitFor(() => expect(indicator()?.getAttribute('aria-label')).toContain('religar'))
+    await act(async () => {})
+
+    // Mesmo desfecho de religar pelas Configurações sem o clique que falhou.
+    failing.key = null
+    statusDelivery.gate = null
+    fireEvent.click(toggle)
+    await waitFor(() => expect(prefs.get(GPU_AUTO_PREF_KEY)).toBeNull())
+    await waitFor(() => expect(indicator()).toBeNull())
+    expect(screen.getByRole('button', { name: 'Reiniciar agora' })).toBeInTheDocument()
+  })
+
   it('fica no rail, logo acima do botão de Configurações', async () => {
     crashTwice()
     boot()

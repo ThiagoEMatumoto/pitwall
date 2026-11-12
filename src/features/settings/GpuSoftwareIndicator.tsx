@@ -46,7 +46,9 @@ export function GpuSoftwareIndicator() {
       return
     }
     await useGpuStatusStore.getState().setDisabled(false)
-    setReenabled(true)
+    // A escrita pode ter falhado: só religou se o registro saiu do status.
+    const after = useGpuStatusStore.getState().status
+    if (after !== null && !gpuDisableChecked(after)) setReenabled(true)
   }
 
   return (
