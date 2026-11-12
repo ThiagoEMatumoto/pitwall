@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { voiceApi } from '@/lib/ipc'
+import { useStableCallback } from '@/lib/use-stable-callback'
 
 export type SummarizeState =
   { status: 'idle' } | { status: 'running' } | { status: 'error'; message: string }
@@ -28,7 +29,7 @@ export function useSummarizeNow(ccSessionId: string | null) {
     return () => clearTimeout(timer)
   }, [state])
 
-  function run() {
+  const run = useStableCallback(() => {
     if (!ccSessionId) return
     if (state.status === 'running') return
     setState({ status: 'running' })
@@ -36,7 +37,8 @@ export function useSummarizeNow(ccSessionId: string | null) {
       if (!mountedRef.current) return
       setState(res.ok ? { status: 'idle' } : { status: 'error', message: res.error })
     })
-  }
+  })
 
-  return { state, run }
+  // Mesmo objeto enquanto o estado não muda (ver useVoiceRecorder).
+  return useMemo(() => ({ state, run }), [state, run])
 }

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefsApi, voiceApi } from '@/lib/ipc'
+import { useStableCallback } from '@/lib/use-stable-callback'
 import {
   CONDENSE_ENABLED_KEY,
   CONDENSE_THRESHOLD_KEY,
@@ -165,7 +166,7 @@ export function useVoiceRecorder(onText: (text: string) => void) {
     dispatch({ type: 'start', at: Date.now() })
   }
 
-  function toggle() {
+  const toggle = useStableCallback(() => {
     const status = stateRef.current.status
     if (status === 'recording') {
       recorderRef.current?.stop()
@@ -173,7 +174,9 @@ export function useVoiceRecorder(onText: (text: string) => void) {
     }
     if (status === 'requesting' || status === 'transcribing' || status === 'condensing') return
     void start()
-  }
+  })
 
-  return { state, toggle }
+  // Mesmo objeto enquanto o estado não muda: ele desce como prop até a barra do
+  // composer, e um objeto novo por render re-renderizaria o Composer inteiro.
+  return useMemo(() => ({ state, toggle }), [state, toggle])
 }
