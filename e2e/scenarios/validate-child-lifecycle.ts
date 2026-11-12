@@ -11,6 +11,9 @@
 //      ended_by_user_at preenchido, ainda vinculada, motivo "encerrada pelo
 //      usuário" e um aviso à mãe no ledger de wakes
 //   6. Retomar                        → mesmo handoff, running, marca limpa, apelido igual
+//   7. entregou, dormiu, a mãe chama  → handoff_message acorda (woke), o handoff
+//      segue done e vinculado, processo novo com o mesmo apelido, marca de
+//      hibernação limpa
 // Rodar (depois de npm run rebuild:native && npm run build):
 //   VCL_SHOTS=<dir> npx tsx e2e/scenarios/validate-child-lifecycle.ts
 import { execFileSync } from 'node:child_process'
@@ -360,6 +363,65 @@ try {
       resumed.child_session_id as string,
     )[0]?.title
     check(title === alias, `retomada: apelido preservado (${title})`)
+
+    // ---- 7. Entregou, dormiu, a mãe chama ----
+    // O hibernador real não roda neste harness: o stub não grava
+    // ~/.claude/sessions, e sem esse arquivo o gate recusa. O estado "dormindo" é
+    // montado como o exit da hibernação o deixa (handoff done, processo morto,
+    // sessions.hibernated_at); o que se prova daqui em diante é o app real.
+    const K2 = resumed.child_session_id as string
+    const asK = await mcpAs(userData, fake.root, K2)
+    const reported = (await asK
+      .call('handoff_report', { handoffId: H, summary: 'vcl entregue' })
+      .catch((e: Error) => ({ error: e.message }))) as { error?: string }
+    out.notes.push(`handoff_report: ${JSON.stringify(reported).slice(0, 200)}`)
+    if (check(handoffRow(H).status === 'done', `filha entregou: handoff done (${handoffRow(H).status})`)) {
+      await page.evaluate((id) => (window as any).api.sessions.kill(id), K2)
+      await waitFor(page, 'processo da filha saiu', async () => !(await isLive(K2)), 15_000)
+      const marker = new DatabaseSync(join(userData, 'app.db'))
+      try {
+        marker.exec('PRAGMA busy_timeout = 5000')
+        marker.prepare('UPDATE sessions SET hibernated_at = ? WHERE id = ?').run(Date.now(), K2)
+      } finally {
+        marker.close()
+      }
+      const called = (await asM
+        .call('handoff_message', { handoffId: H, text: 'vcl: e o caso X?' })
+        .catch((e: Error) => ({ error: e.message }))) as {
+        woke?: boolean
+        delivered?: boolean
+        queued?: boolean
+        note?: string
+        error?: string
+      }
+      out.notes.push(`handoff_message (dormindo): ${JSON.stringify(called).slice(0, 400)}`)
+      if (check(called.woke === true, `a mãe chamou: a filha acordou (${called.error ?? 'ok'})`)) {
+        check(
+          called.delivered === true || called.queued === true,
+          'a mãe chamou: mensagem entregue ou na fila on-idle',
+        )
+        check(/session_handoff/.test(called.note ?? ''), 'retorno diz que trabalho novo pede novo handoff')
+        const awake = handoffRow(H)
+        check(awake.status === 'done', `acordada: o handoff segue done (${awake.status})`)
+        check(awake.mother_session_id === M, 'acordada: mesma mãe')
+        const K3 = awake.child_session_id ?? ''
+        check(!!K3 && K3 !== K2, 'acordada: segue vinculada, numa linha nova')
+        await waitFor(page, 'filha acordada viva', async () => !!K3 && (await isLive(K3)), 15_000)
+        check(!!K3 && (await isLive(K3)), 'acordada: processo vivo')
+        const wokenTitle = db<{ title: string | null }>(
+          'SELECT title FROM sessions WHERE id = ?',
+          K3,
+        )[0]?.title
+        check(wokenTitle === alias, `acordada: apelido preservado (${wokenTitle})`)
+        const stillMarked = db<{ n: number }>(
+          'SELECT COUNT(*) AS n FROM sessions WHERE cc_session_id = ? AND hibernated_at IS NOT NULL',
+          child.cc_session_id,
+        )[0].n
+        check(stillMarked === 0, 'acordada: marca de hibernação limpa')
+        check((await page.locator(CHILD_TAB).count()) === 0, 'acordada pela mãe: nenhuma aba abre sozinha')
+        await shot('filha-acordada-pela-mae')
+      }
+    }
   }
 } catch (e) {
   failed = true
