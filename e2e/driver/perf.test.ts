@@ -15,21 +15,27 @@ type ObserverCallback = (list: { getEntries(): Entry[] }) => void
 // O jsdom não tem PerformanceObserver. Este entrega as entradas a todos os
 // observers do tipo (a sonda do app e o coletor do driver observam os mesmos) e
 // guarda em `pending` o que só sairia no takeRecords.
-const observers: Array<{ type: string; callback: ObserverCallback }> = []
+interface ObserverInit {
+  type: string
+  durationThreshold?: number
+}
+const observers: Array<{ init: ObserverInit; callback: ObserverCallback }> = []
 const pending: Record<string, Entry[]> = {}
 class FakePerformanceObserver {
   private type = ''
   constructor(private callback: ObserverCallback) {}
-  observe(init: { type: string }) {
+  observe(init: ObserverInit) {
     this.type = init.type
-    observers.push({ type: init.type, callback: this.callback })
+    observers.push({ init, callback: this.callback })
   }
   takeRecords(): Entry[] {
     return (pending[this.type] ?? []).splice(0)
   }
 }
 const emit = (type: string, entries: Entry[]) =>
-  observers.filter((o) => o.type === type).forEach((o) => o.callback({ getEntries: () => entries }))
+  observers
+    .filter((o) => o.init.type === type)
+    .forEach((o) => o.callback({ getEntries: () => entries }))
 
 // page.evaluate de mentira: roda a função "da página" neste jsdom e devolve o
 // resultado serializado, como o Playwright faz.
@@ -156,6 +162,16 @@ describe('collectPerf + summarizePerf', () => {
         counters: {},
         spans: {},
       },
+    ])
+  })
+
+  // Sem durationThreshold o Chromium usa 104 ms: toda tecla de 16-104 ms sumiria
+  // da medida e o p95 de keyToPaint cairia para "não medido" sem erro nenhum.
+  it('o coletor observa event com limiar de 16 ms e longtask', async () => {
+    await installPerfProbe(page)
+    expect(observers.map((o) => o.init)).toEqual([
+      { type: 'longtask' },
+      { type: 'event', durationThreshold: 16 },
     ])
   })
 
