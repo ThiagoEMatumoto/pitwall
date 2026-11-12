@@ -54,6 +54,15 @@ function parseLine(line: string): PerfLine {
 
 const EMPTY_WINDOW = { ipcIn: {}, ipcOut: {}, counters: {}, spans: {} }
 
+// O append é assíncrono: sem esperar, ele termina (ou falha, com o diretório já
+// removido) dentro do teste seguinte.
+async function writtenLines(dir: string, count: number): Promise<string[]> {
+  vi.useRealTimers()
+  const read = () => readFileSync(join(dir, 'perf.jsonl'), 'utf8').split('\n').filter(Boolean)
+  await vi.waitFor(() => expect(read()).toHaveLength(count))
+  return read()
+}
+
 describe('perf-probe', () => {
   let dir = ''
   beforeEach(() => {
@@ -214,9 +223,7 @@ describe('perf-probe', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     expect(lines).toHaveLength(2)
 
-    vi.useRealTimers()
-    const jsonl = lines.map((line) => `${line.slice('[perf] '.length)}\n`).join('')
-    await vi.waitFor(() => expect(readFileSync(join(dir, 'perf.jsonl'), 'utf8')).toBe(jsonl))
+    expect(await writtenLines(dir, 2)).toEqual(lines.map((l) => l.slice('[perf] '.length)))
   })
 
   it('o resumo do renderer entra na linha seguinte, por janela de origem', async () => {
@@ -244,6 +251,7 @@ describe('perf-probe', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     expect(parseLine(lines[1]).renderer).toEqual([])
     stop()
+    await writtenLines(dir, 2)
   })
 
   it('resumo do renderer fora do contrato é descartado com aviso', async () => {
@@ -262,6 +270,8 @@ describe('perf-probe', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     expect(parseLine(lines[0]).renderer).toEqual([])
     expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('fora do contrato')
     stop()
+    await writtenLines(dir, 1)
   })
 })
