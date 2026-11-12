@@ -126,17 +126,14 @@ function pushHistory(sessionId: string, value: string) {
 type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
 const attachmentsBySession = new Map<string, PersistedAttachment[]>()
 
-// Chaves cuja leitura do app.db já chegou ao campo neste processo. Daí em diante
-// a memória acima é a verdade, mesmo vazia: o remount não relê nem trava o campo.
+// Chaves cujo rascunho salvo já chegou à memória acima neste processo. Daí em
+// diante ela é a verdade, mesmo vazia: o remount não relê nem trava o campo.
+// Texto na memória não basta: digitado antes da leitura, ele ainda não tem o salvo.
 const hydratedKeys = new Set<string>()
-
-function memoryIsCurrent(memKey: string): boolean {
-  return hydratedKeys.has(memKey) || drafts.has(memKey) || attachmentsBySession.has(memKey)
-}
 
 // Sem chave durável não há rascunho salvo a ler: o campo nasce pronto.
 function needsRead(draftKey: string | null, memKey: string): boolean {
-  return draftKey != null && !memoryIsCurrent(memKey)
+  return draftKey != null && !hydratedKeys.has(memKey)
 }
 
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
@@ -334,8 +331,8 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     })
     persisterRef.current = persister
     let lockTimer: ReturnType<typeof setTimeout> | undefined
-    // Sem chave não há o que ler; memória do mesmo processo (remount) é mais nova
-    // que o banco. Nos dois casos a leitura é dispensada.
+    // Sem chave não há o que ler; memória que já recebeu o salvo neste processo
+    // (remount) é mais nova que o banco. Nos dois casos a leitura é dispensada.
     if (!needsRead(draftKey, memKey)) {
       setHydrating(false)
       persister.seed({
@@ -372,7 +369,15 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     return () => {
       clearTimeout(lockTimer)
       persisterRef.current = null
-      persister.dispose()
+      // O desmonte leu o salvo e gravou a junção com o digitado. A memória fica
+      // com ela: só com o digitado, o próximo mount regravaria por cima do salvo.
+      const merged = persister.dispose()
+      if (!merged) return
+      if (merged.text) drafts.set(memKey, merged.text)
+      else drafts.delete(memKey)
+      if (merged.attachments.length > 0) attachmentsBySession.set(memKey, merged.attachments)
+      else attachmentsBySession.delete(memKey)
+      hydratedKeys.add(memKey)
     }
     // ccSessionId/paneId só rotulam a linha; a identidade é a chave.
     // eslint-disable-next-line react-hooks/exhaustive-deps

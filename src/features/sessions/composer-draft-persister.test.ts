@@ -242,7 +242,8 @@ describe('flush assíncrono em voo', () => {
       },
     }
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const p = newPersister(api)
+    // Fora da lista do afterEach: um segundo dispose repetiria a leitura que falha.
+    const p = createDraftPersister({ key: KEY, ccSessionId: 'cc-1', paneId: 'pane-1', api })
     void p.hydrate(() => {})
     p.update({ text: 'digitado', attachments: [] })
 

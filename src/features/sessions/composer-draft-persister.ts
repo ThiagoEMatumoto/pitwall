@@ -89,8 +89,10 @@ export interface DraftPersister {
   // Envia e, SÓ se `send` confirmar (resolver true), remove o rascunho enviado.
   // Falha (false ou throw) mantém o rascunho intacto.
   sendThenClear(sentText: string, send: () => Promise<boolean>): Promise<boolean>
-  // Desmonte: grava o pendente síncrono e para de aplicar na UI.
-  dispose(): void
+  // Desmonte: grava o pendente síncrono e para de aplicar na UI. Devolve a junção
+  // salvo + digitado quando foi o próprio desmonte que leu o salvo (a leitura
+  // assíncrona não tinha voltado): a UI não a recebeu, quem desmonta a guarda.
+  dispose(): DraftState | null
 }
 
 // Persisters vivos, para o flush global (beforeunload, troca de pane, pedido do main).
@@ -281,11 +283,13 @@ export function createDraftPersister(opts: {
     dispose() {
       disposed = true
       live.delete(persister)
+      const unread = !hydrated
       // Save em voo já está na fila do IPC e o renderer segue vivo: só o que
       // ainda não saiu vai pelo síncrono.
       if (dirty) flushSync()
       // O síncrono falhou: última tentativa pelo caminho assíncrono.
       if (dirty) void write()
+      return unread && hydrated ? latest : null
     },
   }
   live.add(persister)
