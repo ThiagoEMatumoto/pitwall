@@ -69,7 +69,7 @@ export function dockCrew(handoffs: Handoff[]): Handoff[] {
 }
 
 // Dormindo e ainda no painel: arquivar o card (dismissedAt) tira daqui.
-export function isAsleepChild(h: Pick<Handoff, 'childAsleep' | 'dismissedAt'>): boolean {
+function isAsleepChild(h: Pick<Handoff, 'childAsleep' | 'dismissedAt'>): boolean {
   return h.childAsleep && h.dismissedAt == null
 }
 

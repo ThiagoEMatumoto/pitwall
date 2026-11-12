@@ -197,6 +197,8 @@ function baseHandoff(over: Partial<Handoff> = {}): Handoff {
     dismissedAt: null,
     resumable: false,
     predecessorSessionId: null,
+    endedByUserAt: null,
+    childAsleep: false,
     ...over,
   }
 }
