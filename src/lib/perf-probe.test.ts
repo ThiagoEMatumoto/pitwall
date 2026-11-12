@@ -54,7 +54,6 @@ describe('flag desligada', () => {
     probe.perfCount('ChatView')
     probe.perfKeyWrite()
     probe.perfEnd('replay', probe.perfStart())
-    expect(probe.perfTime('tui-parse:s1', () => 42)).toBe(42)
     expect(probe.perfStart()).toBe(0)
     vi.advanceTimersByTime(60_000)
 
@@ -69,7 +68,7 @@ describe('flag desligada', () => {
     delete (window as unknown as { api?: unknown }).api
     const probe = await import('./perf-probe')
     expect(() => probe.perfCount('Composer')).not.toThrow()
-    expect(probe.perfTime('x', () => 'ok')).toBe('ok')
+    expect(probe.perfStart()).toBe(0)
   })
 })
 
@@ -86,8 +85,10 @@ describe('flag ligada', () => {
     probe.perfCount('ChatView')
     probe.perfCount('MarkdownViewer', 3)
 
-    now.mockReturnValueOnce(100).mockReturnValueOnce(107.5)
-    expect(probe.perfTime('tui-parse:s1', () => 'parsed')).toBe('parsed')
+    now.mockReturnValueOnce(100)
+    const parseStart = probe.perfStart()
+    now.mockReturnValueOnce(107.5)
+    probe.perfEnd('tui-parse:s1', parseStart)
     now.mockReturnValueOnce(200)
     const replayStart = probe.perfStart()
     now.mockReturnValueOnce(260)
@@ -154,10 +155,10 @@ describe('flag ligada', () => {
     probe.startPerfProbe()
 
     probe.perfCount('ChatView')
-    probe.perfTime('tui-parse:s1', () => undefined)
+    probe.perfEnd('tui-parse:s1', probe.perfStart())
     vi.advanceTimersByTime(10_000)
     probe.perfCount('ChatView')
-    probe.perfTime('tui-parse:s1', () => undefined)
+    probe.perfEnd('tui-parse:s1', probe.perfStart())
 
     expect(window.__cmPerf).toEqual({
       counters: { ChatView: 2 },
@@ -191,21 +192,5 @@ describe('flag ligada', () => {
     vi.advanceTimersByTime(10_000)
 
     expect(report.mock.calls[0][0].keyToWrite.n).toBe(0)
-  })
-
-  it('perfTime mede também quando a função lança', async () => {
-    const now = vi.spyOn(performance, 'now').mockReturnValue(0)
-    const probe = await loadProbe(true)
-    probe.startPerfProbe()
-
-    now.mockReturnValueOnce(10).mockReturnValueOnce(14)
-    expect(() =>
-      probe.perfTime('boom', () => {
-        throw new Error('x')
-      }),
-    ).toThrow('x')
-    vi.advanceTimersByTime(10_000)
-
-    expect(report.mock.calls[0][0].spans.boom).toEqual({ n: 1, totalMs: 4, maxMs: 4 })
   })
 })

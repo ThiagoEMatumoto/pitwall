@@ -38,7 +38,7 @@ export function perfCount(name: string, by = 1): void {
   totals.counters[name] = (totals.counters[name] ?? 0) + by
 }
 
-/** Início de um trecho que termina em outro lugar (callback); 0 com a flag desligada. */
+/** Início de um trecho cronometrado, fechado por perfEnd; 0 com a flag desligada. */
 export function perfStart(): number {
   return enabled ? performance.now() : 0
 }
@@ -48,16 +48,6 @@ export function perfEnd(name: string, startedAt: number): void {
   const ms = performance.now() - startedAt
   addDuration(spans, name, ms)
   addDuration(totals.spans, name, ms)
-}
-
-export function perfTime<T>(name: string, fn: () => T): T {
-  if (!enabled) return fn()
-  const startedAt = performance.now()
-  try {
-    return fn()
-  } finally {
-    perfEnd(name, startedAt)
-  }
 }
 
 /** Chamado onde a tecla do terminal vira `sessions.write`: fecha a medida tecla→write. */

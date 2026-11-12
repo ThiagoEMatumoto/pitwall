@@ -4,6 +4,7 @@ import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { shellApi } from '@/lib/ipc'
+import { perfCount } from '@/lib/perf-probe'
 import { CopyButton } from './CopyButton'
 import { nodeText, type HastNode } from './markdown-code'
 // Tema escuro do highlight.js (estiliza as classes .hljs dos code blocks).
@@ -54,6 +55,7 @@ interface Props {
 }
 
 export function MarkdownViewer({ content }: Props) {
+  perfCount('MarkdownViewer')
   return (
     <div className="markdown-body">
       <ReactMarkdown

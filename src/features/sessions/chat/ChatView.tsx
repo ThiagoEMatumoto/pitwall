@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import type { ChatMessage, SessionActivity } from '../../../../shared/types/ipc'
+import { perfCount } from '@/lib/perf-probe'
 import { ChatStatusStrip } from './ChatStatusStrip'
 import { CommandCard, CommandOutputCard } from './CommandCard'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -170,6 +171,7 @@ function restoresConversation(menu: TuiMenu, optionIndex: number): boolean {
 export const ANSWER_HOLD_MS = 10_000
 
 export const ChatView = forwardRef<ChatViewHandle, Props>(function ChatView({ sessionId, status, onToggleMode, onRespond, onPlanApproved, tuiMenu: tuiMenuProp, reparseMenu, tuiPicker, reparsePicker, cliDraft = null, readCliInput, emptyHint, menuAnsweredElsewhere, ccSessionId, isChild, menuFromMain, artifactSide = true }, ref) {
+  perfCount('ChatView')
   const mainMenu = useMainPermissionMenu(sessionId, !!menuFromMain && tuiMenuProp == null, status)
   const tuiMenu = tuiMenuProp ?? mainMenu
   const { messages, loading, transcriptExists, lastPlanFilePath } = useChatTranscript(sessionId, ccSessionId ?? null)
