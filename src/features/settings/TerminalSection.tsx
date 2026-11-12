@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react'
 import { appApi, gpuApi } from '@/lib/ipc'
 import { useTerminalPrefsStore } from '@/lib/terminal-prefs-store'
-import {
-  gpuAutoOff,
-  gpuDisableChecked,
-  gpuRestartPending,
-  withGpuDisabled,
-} from '../../../shared/gpu-status'
+import { gpuAutoOff, gpuDisableChecked, gpuRestartPending } from '../../../shared/gpu-status'
 import type { GpuStatus } from '../../../shared/types/ipc'
+import { describeGpuAutoOff } from './gpu-auto-off-text'
+import { useGpuStatusStore } from './gpu-status-store'
+
+function gpuToggleHint(gpu: GpuStatus | null): string {
+  if (gpu?.envDisabled) {
+    return 'Desligada pela variável de ambiente CM_DISABLE_GPU=1. Esta opção só vale sem ela.'
+  }
+  if (gpu !== null && gpu.autoDisabled !== null && gpuAutoOff(gpu)) {
+    return `Desligada automaticamente ${describeGpuAutoOff(gpu.autoDisabled)}. Desmarque para religar. Requer reiniciar.`
+  }
+  return 'Use se a janela ficar preta ao abrir o app. Requer reiniciar.'
+}
 
 // Seção "Terminal" das Configurações (extraída do GeneralTab, que passou de 400
 // linhas): scrollback, navegação visual e controles de GPU. As prefs de GPU são
@@ -18,27 +25,15 @@ export function TerminalSection({ open }: { open: boolean }) {
   const setScrollback = useTerminalPrefsStore((s) => s.setScrollback)
   const visualLineNav = useTerminalPrefsStore((s) => s.visualLineNav)
   const setVisualLineNav = useTerminalPrefsStore((s) => s.setVisualLineNav)
-  const [gpu, setGpu] = useState<GpuStatus | null>(null)
+  const gpu = useGpuStatusStore((s) => s.status)
   const [isLinux, setIsLinux] = useState(false)
 
   useEffect(() => {
     if (!open) return
     void useTerminalPrefsStore.getState().load()
-    void gpuApi.status().then(setGpu)
+    void useGpuStatusStore.getState().load()
     void appApi.getInfo().then((info) => setIsLinux(info.platform === 'linux'))
   }, [open])
-
-  function updateGpuDisabled(v: boolean) {
-    if (!gpu) return
-    setGpu(withGpuDisabled(gpu, v))
-    void gpuApi.setDisabled(v)
-  }
-
-  function updateOzone(v: boolean) {
-    if (!gpu) return
-    setGpu({ ...gpu, prefOzone: v })
-    void gpuApi.setOzone(v)
-  }
 
   const restartPending = gpu !== null && gpuRestartPending(gpu)
 
@@ -89,16 +84,14 @@ export function TerminalSection({ open }: { open: boolean }) {
         <div className="min-w-0">
           <div className="text-sm text-[var(--color-text)]">Desativar aceleração de GPU</div>
           <div className="text-xs text-[var(--color-text-dim)]">
-            {gpu !== null && gpuAutoOff(gpu)
-              ? 'Desligada automaticamente depois de falhas do driver de vídeo. Desmarque para religar. Requer reiniciar.'
-              : 'Use se a janela ficar preta ao abrir o app. Requer reiniciar.'}
+            {gpuToggleHint(gpu)}
           </div>
         </div>
         <input
           type="checkbox"
           checked={gpu !== null && gpuDisableChecked(gpu)}
           disabled={gpu === null}
-          onChange={(e) => updateGpuDisabled(e.target.checked)}
+          onChange={(e) => void useGpuStatusStore.getState().setDisabled(e.target.checked)}
           className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
         />
       </label>
@@ -117,7 +110,7 @@ export function TerminalSection({ open }: { open: boolean }) {
             type="checkbox"
             checked={gpu?.prefOzone ?? true}
             disabled={gpu === null}
-            onChange={(e) => updateOzone(e.target.checked)}
+            onChange={(e) => void useGpuStatusStore.getState().setOzone(e.target.checked)}
             className="mt-1 size-4 shrink-0 accent-[var(--color-accent)]"
           />
         </label>

@@ -20,12 +20,19 @@ export const GPU_AUTO_PREF_KEY = 'gpu.autoDisabled'
 
 export interface GpuState {
   hwAccelDisabled: boolean
+  // CM_DISABLE_GPU=1 neste processo: desliga por cima das prefs.
+  envDisabled: boolean
   ozoneWayland: boolean
   // Boot que religou a GPU para testar um desligamento automático anterior.
   probation: boolean
 }
 
-let state: GpuState = { hwAccelDisabled: false, ozoneWayland: false, probation: false }
+let state: GpuState = {
+  hwAccelDisabled: false,
+  envDisabled: false,
+  ozoneWayland: false,
+  probation: false,
+}
 
 export function setGpuState(next: GpuState): void {
   state = next

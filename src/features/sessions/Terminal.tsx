@@ -42,6 +42,7 @@ import { terminalWriteBlockedNotice, type ComposerMenuRoute } from './composer-m
 import { buildPromptBytes } from './chat/prompt-bytes'
 import { MODEL_ALIASES, EFFORT_LEVELS, type ModelAlias, type EffortLevel } from './ModelPill'
 import { MODEL_LABELS } from '../../../shared/models'
+import { REPLAY_PENDING, replayStep, type ReplayEvent } from './backlog-replay'
 import { mergePending, nextPendingApply, type PendingSelection } from './model-queue'
 import { detectFooterMode, footerModeUpdate, shouldNotifyModeChange } from './permission-mode-parser'
 import { permissionModeLabel } from './permission-modes'
@@ -86,11 +87,21 @@ const FONT_LOAD_TIMEOUT_MS = 800
 const MAX_WEBGL_INSTANCES = 8
 let liveWebglCount = 0
 
+// O que o painel do dockview (props.api) sabe sobre estar à frente no próprio grupo.
+export interface PanelVisibility {
+  readonly isVisible: boolean
+  onDidVisibilityChange(listener: (event: { isVisible: boolean }) => void): { dispose(): void }
+}
+
 interface Props {
   session: Session
   // Pane do dockview que hospeda este terminal: identidade durável do rascunho
   // do Composer. Ausente fora das abas (quick look).
   paneId?: string
+  // Painel do dockview desta aba. A aba inativa de um grupo fica visibility:hidden,
+  // ainda com caixa de layout, e o IntersectionObserver a dá por visível: só o painel
+  // sabe. Ausente fora das abas (quick look, peek, mapa), onde vale só o observer.
+  panelVisibility?: PanelVisibility
   repoLabel: string
   repoPath: string
   projectName: string
@@ -163,6 +174,19 @@ function readTailText(term: Xterm, n = 40): string {
 // (nunca lê acima do viewport quando o terminal tem menos de 10 rows).
 function readFooterText(term: Xterm): string {
   return readTailText(term, Math.min(term.rows, 10))
+}
+
+// Leitor do tail para UMA passada de parse: menu e picker pedem as mesmas janelas, e
+// cada leitura percorre as linhas do buffer.
+function tailReader(term: Xterm): (n: number) => string {
+  const read = new Map<number, string>()
+  return (n) => {
+    const hit = read.get(n)
+    if (hit !== undefined) return hit
+    const text = readTailText(term, n)
+    read.set(n, text)
+    return text
+  }
 }
 
 export function Terminal(props: Props) {
@@ -255,6 +279,7 @@ export function LeasedPlaceholder({
 function TerminalHost({
   session,
   paneId,
+  panelVisibility,
   repoLabel,
   repoPath,
   projectName,
@@ -375,12 +400,17 @@ function TerminalHost({
   // driver que perdeu contexto tende a perder de novo — DOM renderer até remount.
   const webglFailedRef = useRef(false)
   // Guards de attach lidos dentro de callbacks/async: modo atual da pane e
-  // visibilidade do host no viewport (IntersectionObserver do mount effect).
+  // visibilidade da pane (IntersectionObserver + painel do dockview, no mount effect).
   const modeRef = useRef(mode)
   modeRef.current = mode
   const rendererRef = useRef(renderer)
   rendererRef.current = renderer
   const visibleRef = useRef(true)
+  // O mesmo dado em estado, só pro que precisa re-renderizar com ele (pausa do chat).
+  const [paneVisible, setPaneVisible] = useState(true)
+  // Lido pelo scan da volta, que roda de dentro do mount effect.
+  const exitedRef = useRef(exited)
+  exitedRef.current = exited
 
   // Dispose do WebGL vivo (se houver): devolve ao DOM renderer, repinta a tela
   // toda (remove restos do atlas) e libera o slot do cap global.
@@ -442,9 +472,9 @@ function TerminalHost({
   // guard de clique — re-parse imediatamente antes de digitar). A janela cresce
   // só quando 40 linhas não bastam: menus altos (preview/wrap) ficavam cortados
   // e o parser fail-closava, empurrando o usuário pro terminal.
-  function readTuiMenuFrom(t: Xterm): TuiMenu | null {
+  function readTuiMenuFrom(t: Xterm, tail = tailReader(t)): TuiMenu | null {
     if (!caps.tuiMenus) return null
-    return parseTuiMenuFull((n) => readTailText(t, n), t.buffer.active.length)
+    return parseTuiMenuFull(tail, t.buffer.active.length)
   }
   function readTuiMenu(): TuiMenu | null {
     const t = xtermRef.current
@@ -463,9 +493,9 @@ function TerminalHost({
   // buffer — mesmo papel de readTuiMenu, exposto ao ChatView como guard. Mesma
   // janela adaptativa: a lista do /config e o preview do /theme passam de 40
   // linhas com facilidade.
-  function readTuiPickerFrom(t: Xterm): TuiPicker | null {
+  function readTuiPickerFrom(t: Xterm, tail = tailReader(t)): TuiPicker | null {
     if (!caps.tuiMenus) return null
-    return parseWithGrowingWindow((n) => readTailText(t, n), parseTuiPicker, t.buffer.active.length)
+    return parseWithGrowingWindow(tail, parseTuiPicker, t.buffer.active.length)
   }
   function readTuiPicker(): TuiPicker | null {
     const t = xtermRef.current
@@ -488,6 +518,24 @@ function TerminalHost({
     )
   }
 
+  // Uma passada de leitura da tela: menu, picker, rascunho da CLI e modo de permissão.
+  // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer menu;
+  // 'starting'/'idle' (pré-transcript) só permission/trust; outros status limpam (null).
+  // O rodapé não é lido durante 'working'/'starting' (input box fora da tela).
+  function scanTui(t: Xterm) {
+    const parseStart = perfStart()
+    const tail = tailReader(t)
+    const menuOnScreen = readTuiMenuFrom(t, tail)
+    applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
+    applyTuiPicker(readTuiPickerFrom(t, tail))
+    setCliDraft(readCliInputFrom(t).draft)
+    if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
+      const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
+      if (mode) setCurrentMode(mode)
+    }
+    perfEnd('tui-parse', parseStart)
+  }
+
   // Menu TUI: parse na TRANSIÇÃO de status. Entrou num status elegível → tenta
   // parsear o que já está desenhado (o debounce do PTY cobre desenhos
   // posteriores); status inelegível → gate devolve null e limpa. 'waiting'
@@ -499,6 +547,8 @@ function TerminalHost({
       setPendingTuiPicker(null)
       return
     }
+    // Pane oculta não parseia: o scan da volta (syncVisibility) cobre.
+    if (!visibleRef.current) return
     applyTuiMenu(gateMenuByStatus(readTuiMenu(), activity?.status))
     applyTuiPicker(readTuiPicker())
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -992,14 +1042,11 @@ function TerminalHost({
     })
 
     // O processo já foi spawnado no clique, então pode já ter emitido bytes.
-    // Para o replay: acumulamos a saída live num buffer (`liveTotal`) e buscamos
-    // o backlog (snapshot do histórico no main). O backlog é prefixo do que vimos
-    // até agora; escrevemos o backlog inteiro, depois só a cauda do live que ele
-    // ainda não cobria. Assim não duplicamos os bytes que entraram em `liveTotal`
-    // enquanto o IPC do backlog estava em voo. Idempotente em remounts (StrictMode)
+    // O replay (backlog-replay.ts) decide o que vai pro xterm: o backlog (snapshot
+    // do histórico no main) já cobre o live que chegou antes da resposta dele; o
+    // que chega depois é escrito na ordem. Idempotente em remounts (StrictMode)
     // porque o term é novo e zerado a cada mount.
-    let flushed = false
-    let liveTotal = ''
+    let replay = REPLAY_PENDING
     setDataHandler((data) => {
       gotDataRef.current = true
       // Modo de permissão: relê o rodapé REAL do xterm (debounced) depois que a saída assenta.
@@ -1008,24 +1055,15 @@ function TerminalHost({
       if (permTimerRef.current != null) clearTimeout(permTimerRef.current)
       permTimerRef.current = window.setTimeout(() => {
         const t = xtermRef.current
-        if (!t) return
-        const parseStart = perfStart()
-        // Menu TUI pendente: o parse roda no MESMO debounce (a saída assentou).
-        // gateMenuByStatus decide por status × kind: 'waiting' aceita qualquer
-        // menu; 'starting'/'idle' (pré-transcript) só permission/trust; outros
-        // status limpam (null).
-        const menuOnScreen = readTuiMenuFrom(t)
-        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
-        applyTuiPicker(readTuiPickerFrom(t))
-        setCliDraft(readCliInputFrom(t).draft)
-        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          const mode = footerModeUpdate(readFooterText(t), menuOnScreen != null)
-          if (mode) setCurrentMode(mode)
-        }
-        perfEnd('tui-parse', parseStart)
+        // Pane oculta não parseia a TUI: o card e o pill só servem a esta pane, e a
+        // atenção/notificação vêm do espelho headless do main (tui-menu-watch). O
+        // timer segue armado pra cobrir a pane que volta com a saída ainda assentando.
+        if (!t || !visibleRef.current) return
+        scanTui(t)
       }, 150)
-      if (flushed) term.write(data)
-      else liveTotal += data
+      const step = replayStep(replay, { kind: 'data', data })
+      replay = step.state
+      if (step.write) term.write(step.write)
     })
     // Replay do backlog: o xterm RESPONDE às queries que estão nos bytes antigos
     // (DA, DSR, DECRQM, OSC 10/11) e essas respostas sairiam pelo onData direto
@@ -1043,34 +1081,30 @@ function TerminalHost({
 
     void sessionsApi
       .getBacklog(session.id)
-      .catch(() => '')
-      .then((backlog) => {
+      .then(
+        (backlog): ReplayEvent => ({ kind: 'backlog', backlog }),
+        (): ReplayEvent => ({ kind: 'backlog-failed' }),
+      )
+      .then((event) => {
         if (xtermRef.current !== term) return
-        if (backlog) {
+        const step = replayStep(replay, event)
+        // Antes de escrever: se o write lançar, o live seguinte não fica preso.
+        replay = step.state
+        if (event.kind === 'backlog' && step.write) {
           const replayStart = perfStart()
-          term.write(backlog, () => {
+          term.write(step.write, () => {
             replaying = false
             perfEnd('replay', replayStart)
           })
         } else {
           replaying = false
+          if (step.write) term.write(step.write)
         }
-        if (liveTotal.length > backlog.length) term.write(liveTotal.slice(backlog.length))
-        liveTotal = ''
-        flushed = true
-        // Seed do modo de permissão a partir do rodapé já renderizado (o backlog acabou de ser
-        // escrito no term). Gate de status: não lê durante 'working'/'starting'.
-        const menuOnScreen = readTuiMenuFrom(term)
-        if (statusRef.current !== 'working' && statusRef.current !== 'starting') {
-          const mode = footerModeUpdate(readFooterText(term), menuOnScreen != null)
-          if (mode) setCurrentMode(mode)
-        }
-        // Seed do menu TUI: um prompt já desenhado ANTES do mount (ex.: trust
-        // prompt numa pane remontada) não gera data event novo — sem este seed o
-        // card só apareceria no próximo byte do PTY.
-        applyTuiMenu(gateMenuByStatus(menuOnScreen, statusRef.current))
-        applyTuiPicker(readTuiPickerFrom(term))
-        setCliDraft(readCliInputFrom(term).draft)
+        // Seed do modo de permissão e do menu TUI a partir do que o backlog desenhou: um
+        // prompt já na tela ANTES do mount (ex.: trust prompt numa pane remontada) não
+        // gera data event novo — sem este seed o card só apareceria no próximo byte do
+        // PTY. Pane montada oculta espera o scan da volta.
+        if (visibleRef.current) scanTui(term)
       })
 
     // Copy-on-select: copiar automaticamente o que for selecionado.
@@ -1164,19 +1198,50 @@ function TerminalHost({
       term.options.theme = xtermTheme(tokens)
     })
 
-    // WebGL só em pane visível: host fora do viewport (aba oculta do dockview,
-    // grid rolado) → dispose libera o slot do cap; voltou a aparecer → re-attach.
+    // Pane visível = host com caixa no viewport E painel à frente no grupo. O observer
+    // cobre a troca de área (display:none) e o grid rolado; o painel do dockview cobre a
+    // aba inativa do grupo (visibility:hidden, que o observer não enxerga). Nenhum dos
+    // dois olha oclusão: pane sob modal, peek, quick look ou overlay segue visível.
+    // WebGL só em pane visível: oculta → dispose libera o slot do cap; voltou → re-attach.
+    let intersecting = true
+    let panelVisible = panelVisibility?.isVisible ?? true
+    const syncVisibility = () => {
+      const visible = intersecting && panelVisible
+      const cameBack = visible && !visibleRef.current
+      visibleRef.current = visible
+      // Voltou a aparecer: relê de uma vez o que a TUI desenhou com a pane oculta. A
+      // leitura síncrona entra no mesmo render que tira o chat da pausa, senão o card
+      // de antes de ocultar reapareceria até a segunda leitura; esta espera o write
+      // vazio drenar a fila do xterm (write é assíncrono). O modo de permissão é
+      // comparado com o visto antes de ocultar (o baseline do aviso não zera), então
+      // a troca feita pela CLI nesse meio ainda avisa. Antes do replay do backlog a
+      // tela está vazia: quem lê é o seed.
+      const rescan = cameBack && replay.replied && !exitedRef.current
+      if (rescan) scanTui(term)
+      setPaneVisible(visible)
+      if (visible) attachWebgl()
+      else detachWebgl()
+      if (!rescan) return
+      term.write('', () => {
+        if (xtermRef.current !== term || !visibleRef.current || exitedRef.current) return
+        scanTui(term)
+      })
+    }
     // threshold 0: qualquer pixel visível conta como visível.
     const io = new IntersectionObserver(
       (entries) => {
-        const visible = entries[entries.length - 1]?.isIntersecting ?? true
-        visibleRef.current = visible
-        if (visible) attachWebgl()
-        else detachWebgl()
+        intersecting = entries[entries.length - 1]?.isIntersecting ?? true
+        syncVisibility()
       },
       { threshold: 0 },
     )
     io.observe(host)
+    const panelSub = panelVisibility?.onDidVisibilityChange((event) => {
+      panelVisible = event.isVisible
+      syncVisibility()
+    })
+    // Montada já como aba inativa (restore): nasce oculta, sem esperar o observer.
+    if (!panelVisible) syncVisibility()
 
     // O cleanup NÃO mata a sessão — só desfaz o xterm e os listeners. A sessão
     // morre quando a pane é fechada (App.closePane → sessions:kill) ou via botão kill.
@@ -1186,6 +1251,7 @@ function TerminalHost({
       if (resizeRaf != null) cancelAnimationFrame(resizeRaf)
       observer.disconnect()
       io.disconnect()
+      panelSub?.dispose()
       offTheme()
       linkProvider.dispose()
       setDataHandler(null)
@@ -1584,6 +1650,7 @@ function TerminalHost({
             cliDraft={cliDraft}
             readCliInput={readInput}
             isChild={linkState === 'active'}
+            paused={!paneVisible}
           />
         )}
 

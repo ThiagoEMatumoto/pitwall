@@ -9,6 +9,7 @@ vi.stubGlobal('window', {
 
 const {
   crewOnlyCount,
+  crewOnlySessions,
   countWithCrew,
   listsCrew,
   crewOnlyLabel,
@@ -86,6 +87,8 @@ describe('crewOnlyCount — a diferença entre o mapa e o seletor, dita', () => 
       ],
     )
     expect(crewOnlyCount(sessions, visible)).toBe(1)
+    // A lista por trás do número: o chip "N em 2º plano" da barra lê a mesma.
+    expect(crewOnlySessions(sessions, visible).map((s) => s.id)).toEqual(['filha'])
     expect(crewOnlyLabel(1)).toBe('1 na equipe')
     expect(crewOnlyLabel(0)).toBeNull()
   })

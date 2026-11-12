@@ -58,9 +58,11 @@ const snapshot = (rev: number, messages: ChatMessage[]): ChatTranscript => ({
 })
 
 const seen = new Map<string, ChatMessage[]>()
-function Consumer({ id, testId }: { id: string; testId: string }) {
-  const { messages, loading } = useChatTranscript(id)
+const renders = new Map<string, number>()
+function Consumer({ id, testId, paused }: { id: string; testId: string; paused?: boolean }) {
+  const { messages, loading } = useChatTranscript(id, null, paused)
   seen.set(testId, messages)
+  renders.set(testId, (renders.get(testId) ?? 0) + 1)
   return (
     <div data-testid={testId} data-loading={String(loading)}>
       {messages.map((m) => (m.kind === 'user' ? m.text : m.kind)).join(',')}
@@ -75,6 +77,7 @@ describe('useChatTranscript', () => {
     mainWatches.clear()
     reads.length = 0
     seen.clear()
+    renders.clear()
     vi.mocked(chatApi.getTranscript).mockClear()
   })
   afterEach(cleanup)
@@ -192,6 +195,88 @@ describe('useChatTranscript', () => {
     await act(async () => reads[0]({ ...snapshot(0, []), path: null }))
     expect(screen.getByTestId('a').dataset.loading).toBe('false')
     expect(shown('a')).toBe('')
+  })
+
+  describe('em pausa (pane oculta)', () => {
+    it('os updates não renderizam o consumidor; ao retomar, a lista acumulada entra de uma vez', () => {
+      const view = render(<Consumer id="s1" testId="a" />)
+      render(<Consumer id="s1" testId="nunca-pausado" />)
+      act(() => emitFromMain(update(1, 0, [msg('m1')])))
+      const before = seen.get('a')!
+
+      view.rerender(<Consumer id="s1" testId="a" paused />)
+      const rendersPaused = renders.get('a')
+      act(() => emitFromMain(update(2, 1, [msg('m2')])))
+      act(() => emitFromMain(update(3, 2, [msg('m3')])))
+      act(() => emitFromMain(update(4, 2, [msg('m3 editada'), msg('m4')])))
+
+      expect(renders.get('a')).toBe(rendersPaused)
+      expect(shown('a')).toBe('m1')
+
+      view.rerender(<Consumer id="s1" testId="a" />)
+
+      expect(shown('a')).toBe('m1,m2,m3 editada,m4')
+      expect(seen.get('a')).toEqual(seen.get('nunca-pausado'))
+      // Uma lista nova só: o render da troca de prop mais o da publicação.
+      expect(renders.get('a')).toBe(rendersPaused! + 2)
+      expect(seen.get('a')![0]).toBe(before[0])
+    })
+
+    it('pausada desde o mount: o snapshot inicial espera; ao retomar, entra e encerra o loading', async () => {
+      const view = render(<Consumer id="s1" testId="a" paused />)
+      const rendersPaused = renders.get('a')
+
+      await act(async () => reads[0](snapshot(2, [msg('m1'), msg('m2')])))
+      act(() => emitFromMain(update(3, 2, [msg('m3')])))
+
+      expect(renders.get('a')).toBe(rendersPaused)
+      expect(screen.getByTestId('a').dataset.loading).toBe('true')
+
+      view.rerender(<Consumer id="s1" testId="a" />)
+
+      expect(shown('a')).toBe('m1,m2,m3')
+      expect(screen.getByTestId('a').dataset.loading).toBe('false')
+    })
+
+    it('delta perdido durante a pausa: o resync roda oculto e nada se perde nem duplica ao retomar', async () => {
+      const view = render(<Consumer id="s1" testId="a" />)
+      act(() => emitFromMain(update(1, 0, [msg('m1')])))
+      await act(async () => reads[0](snapshot(1, [msg('m1')])))
+
+      view.rerender(<Consumer id="s1" testId="a" paused />)
+      const rendersPaused = renders.get('a')
+      act(() => emitFromMain(update(3, 2, [msg('m3')])))
+      expect(chatApi.getTranscript).toHaveBeenCalledTimes(2)
+      await act(async () => reads[1](snapshot(3, [msg('m1'), msg('m2'), msg('m3')])))
+      act(() => emitFromMain(update(4, 3, [msg('m4')])))
+      expect(renders.get('a')).toBe(rendersPaused)
+
+      view.rerender(<Consumer id="s1" testId="a" />)
+
+      expect(shown('a')).toBe('m1,m2,m3,m4')
+      expect(chatApi.getTranscript).toHaveBeenCalledTimes(2)
+    })
+
+    it('retomar sem nada novo não troca a lista', () => {
+      const view = render(<Consumer id="s1" testId="a" />)
+      act(() => emitFromMain(update(1, 0, [msg('m1')])))
+      const before = seen.get('a')
+
+      view.rerender(<Consumer id="s1" testId="a" paused />)
+      view.rerender(<Consumer id="s1" testId="a" />)
+
+      expect(seen.get('a')).toBe(before)
+    })
+
+    it('update que chega depois de retomar volta a renderizar na hora', () => {
+      const view = render(<Consumer id="s1" testId="a" paused />)
+      act(() => emitFromMain(update(1, 0, [msg('m1')])))
+      view.rerender(<Consumer id="s1" testId="a" />)
+
+      act(() => emitFromMain(update(2, 1, [msg('m2')])))
+
+      expect(shown('a')).toBe('m1,m2')
+    })
   })
 })
 

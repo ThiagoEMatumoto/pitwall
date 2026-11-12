@@ -347,6 +347,40 @@ describe('typeOpenLoop', () => {
     })
   })
 
+  // 'Key.' com o código 46 seria a tecla Delete: fora de letras, dígitos e espaço
+  // vale só o caractere.
+  it('maiúsculas e dígitos saem com a tecla deles; pontuação e acento, só com o caractere', async () => {
+    const sent: Array<Record<string, unknown>> = []
+    await typeOpenLoop(
+      (_method, params) => {
+        if (params.type === 'keyDown') sent.push(params)
+        return Promise.resolve()
+      },
+      'A7.ç',
+      0,
+    )
+    expect(sent).toEqual([
+      {
+        type: 'keyDown',
+        key: 'A',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        text: 'A',
+        unmodifiedText: 'A',
+      },
+      {
+        type: 'keyDown',
+        key: '7',
+        code: 'Digit7',
+        windowsVirtualKeyCode: 55,
+        text: '7',
+        unmodifiedText: '7',
+      },
+      { type: 'keyDown', key: '.', text: '.', unmodifiedText: '.' },
+      { type: 'keyDown', key: 'ç', text: 'ç', unmodifiedText: 'ç' },
+    ])
+  })
+
   it('conta as teclas que o CDP recusou em vez de falhar no meio', async () => {
     vi.useFakeTimers()
     const typing = typeOpenLoop(

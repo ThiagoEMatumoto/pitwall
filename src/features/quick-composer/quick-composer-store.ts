@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
 import { sendToApi } from '@/lib/ipc'
-import { useVisibleLiveSessions } from '@/features/session-switcher/useGlobalSessions'
+import {
+  useVisibleLiveSessions,
+  withCrewSessions,
+} from '@/features/session-switcher/useGlobalSessions'
+import { useAppStore } from '@/store/appStore'
 import { useSessionGraph } from '@/features/sessions/session-graph-store'
 import { buildTargets, type SendTarget } from './target-search'
 import type { PromptQueueSnapshot } from '../../../shared/types/send-prompt'
@@ -21,10 +25,16 @@ export const useQuickComposerStore = create<QuickComposerState>((set) => ({
   close: () => set({ open: false, targetId: null }),
 }))
 
+// As visíveis mais as filhas em segundo plano: sem aba elas não estão na barra,
+// e mandar um prompt era justamente o que faltava alcançar.
 export function useSendTargets(): SendTarget[] {
-  const live = useVisibleLiveSessions()
+  const all = useAppStore((s) => s.liveSessions)
+  const visible = useVisibleLiveSessions()
   const graph = useSessionGraph()
-  return useMemo(() => buildTargets(live, graph.nodes), [live, graph.nodes])
+  return useMemo(
+    () => buildTargets(withCrewSessions(all, visible, true).items, graph.nodes),
+    [all, visible, graph.nodes],
+  )
 }
 
 const EMPTY_QUEUE: PromptQueueSnapshot = {

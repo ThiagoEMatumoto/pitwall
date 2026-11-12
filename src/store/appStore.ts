@@ -353,6 +353,9 @@ let offPtyExit: (() => void) | null = null
 let offRoomChanged: (() => void) | null = null
 let roomRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveWatchStarted = false
+// Ciclo do watch: muda a cada start e a cada stop. Stop seguido de start durante
+// um await devolve `liveWatchStarted` a true, e só o ciclo denuncia a troca.
+let liveWatchCycle = 0
 let offWakeRequest: (() => void) | null = null
 let offDormantBecameLive: (() => void) | null = null
 let offHibernated: (() => void) | null = null
@@ -365,6 +368,9 @@ const hibernatedSessionIds = new Set<string>()
 export function isHibernatedSession(sessionId: string): boolean {
   return hibernatedSessionIds.has(sessionId)
 }
+// sessions.id das PTYs que já saíram. O Terminal fecha a própria aba no pty:exit
+// (closePane): ali o aviso não pode dizer que a sessão segue rodando.
+const exitedSessionIds = new Set<string>()
 let offOom: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
@@ -1233,8 +1239,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!closed) return
     if (!closed.dormant) void sessionsApi.paneClosed(closed.session.id)
     const cancelExpiry = closed.dormant ? scheduleDraftExpiry(paneId) : () => {}
+    const running = !closed.dormant && !exitedSessionIds.has(closed.session.id)
     showToast({
-      title: 'Aba fechada',
+      // Aba dormindo ou de PTY que já saiu não tem processo: ali "segue rodando"
+      // seria mentira.
+      title: running ? 'Aba fechada · a sessão segue rodando' : 'Aba fechada',
       body: closed.session.title ?? closed.repo?.label ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => {
@@ -1330,6 +1339,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           : s.liveSessions,
     }))
     schedulePersist(get().panes)
+    // A sessão ficou fora da lista durante a janela: o batch que mudou o status
+    // dela foi descartado e o main não repete batch igual. O refresh abaixo a
+    // encontra já reinserida e preserva a cópia antiga: só assinar de novo reenvia.
+    if (pending.live && liveWatchStarted) sessionsApi.watchGlobalActivity()
     void get().refreshLiveSessions()
   },
 
@@ -1397,6 +1410,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // StrictMode monta o effect 2x; só uma assinatura real (a outra é no-op).
     if (liveWatchStarted) return
     liveWatchStarted = true
+    liveWatchCycle++
     // Antes do primeiro await: o main pode pedir wake assim que recebe o sync.
     offWakeRequest = sessionsApi.onWakeRequest((request) => void answerWakeRequest(request))
     offDormantBecameLive = sessionsApi.onDormantBecameLive(onDormantBecameLive)
@@ -1437,7 +1451,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // PTY que sai sozinha (filha do dock sem aba, antecessora do bastão, /exit)
     // não passa por mutação nenhuma do store: sem este refetch ela ficava na
     // lista — e no mapa, como "encerrada" — até outra coisa refazer o snapshot.
-    offPtyExit = sessionsApi.onExit(() => {
+    offPtyExit = sessionsApi.onExit((e) => {
+      exitedSessionIds.add(e.sessionId)
       void get().refreshLiveSessions()
     })
     // Sessão criada pela Room (mãe via room:start-mother, ou outro caminho) não
@@ -1499,6 +1514,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     sessionsApi.unwatchGlobalActivity()
     liveWatchStarted = false
+    liveWatchCycle++
     lastDormantKey = null
     set({ liveSessions: [] })
   },
@@ -1506,11 +1522,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshLiveSessions: async () => {
     // Só refetcha se o watch está ativo (evita popular fora do ciclo de vida).
     if (!liveWatchStarted) return
+    const cycle = liveWatchCycle
     const list = (await sessionsApi.listLiveGlobal()).filter(
       // Sessões na janela de undo já sumiram da UI, mas a PTY ainda vive no main
       // — sem o filtro o snapshot as reintroduziria antes do kill agendado.
       (sess) => !pendingEnds.has(sess.id),
     )
+    // O watch pode ter parado durante o await: a lista já foi esvaziada, e
+    // reassinar abaixo religaria o stream no main. Se além de parar ele voltou,
+    // esta resposta é mais velha que o snapshot do start novo.
+    if (cycle !== liveWatchCycle) return
     // Preserva o status/atividade mais fresco do stream pras entradas que já
     // existiam — o snapshot pode estar atrás de um broadcast recente.
     const prev = new Map(get().liveSessions.map((s) => [s.ccSessionId, s]))
@@ -1529,6 +1550,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }),
     })
+    // O batch que saiu durante o fetch foi descartado para a sessão que só este
+    // snapshot trouxe, e o main não repete batch igual: assinar de novo reenvia.
+    const broughtNew = list.some((sess) => !prev.has(sess.ccSessionId))
+    if (broughtNew) sessionsApi.watchGlobalActivity()
   },
 
   startMother: async (input) => {

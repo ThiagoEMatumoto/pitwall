@@ -159,6 +159,7 @@ vi.mock('../services/handoff-store', () => ({
   })),
   getByChildSession: () => null,
   failIfRunning: () => null,
+  latestManualTitleOfCc: () => null,
 }))
 
 import { registerSessionIpc, resumeHandoffChild } from './sessions'
@@ -233,10 +234,10 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
     return handlers.get('handoffs:is-resumable')!(null, id) as boolean
   }
 
-  it('rejeita resume quando o handoff está num status TERMINAL', () => {
-    for (const status of ['done', 'rejected', 'failed'] as const) {
+  it('rejeita resume de handoff rejected/failed', () => {
+    for (const status of ['rejected', 'failed'] as const) {
       handoff = baseHandoff({ status })
-      expect(() => resume()).toThrow(/não-terminal/)
+      expect(() => resume()).toThrow(/Não dá pra retomar/)
     }
     expect(markRunning).not.toHaveBeenCalled()
   })
@@ -266,6 +267,27 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
       repoRow = { path: '/tmp/repo', label: 'Repo 1' }
       expect(() => resume()).toThrow(/handoff ativo \(h2\)/)
       expect(spawns).toHaveLength(0)
+      expect(markRunning).not.toHaveBeenCalled()
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
+  // Filha que já entregou não volta a ser writer ativa: retomar não disputa a
+  // posse nem reabre o handoff.
+  it('handoff done: retoma com outro handoff ativo no diretório, sem markRunning', () => {
+    const wt = mkdtempSync(join(tmpdir(), 'wt-done-'))
+    try {
+      handoff = baseHandoff({ status: 'done', mode: 'auto-edits' })
+      workDir = wt
+      activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+      ccRow = { cc_session_id: VALID_CC }
+      transcriptPath = '/tmp/t.jsonl'
+      repoRow = { path: '/tmp/repo', label: 'Repo 1' }
+      const updated = resume() as Handoff
+      expect(spawns).toHaveLength(1)
+      expect(spawns[0].cwd).toBe(wt)
+      expect(updated.status).toBe('done')
       expect(markRunning).not.toHaveBeenCalled()
     } finally {
       rmSync(wt, { recursive: true, force: true })
@@ -308,6 +330,15 @@ describe('handoffs:resume / handoffs:is-resumable gates', () => {
       activeOwner = baseHandoff()
       resume()
       expect(spawns[0].cwd).toBe(repoDir)
+    })
+
+    it('handoff done sobe na raiz sem disputar nem transferir a posse', () => {
+      handoff = baseHandoff({ status: 'done', mode: 'auto-edits' })
+      activeOwner = baseHandoff({ id: 'h2', status: 'running', childSessionId: 'other' })
+      resume()
+      expect(spawns[0].cwd).toBe(repoDir)
+      expect(setWorkDir).not.toHaveBeenCalled()
+      expect(markRunning).not.toHaveBeenCalled()
     })
 
     it('filha plan sobe na raiz sem disputar posse', () => {
@@ -446,8 +477,20 @@ describe('sessions:resume — relink da filha de handoff', () => {
     expect(spawns[0].innerCmd).toContain('--settings')
   })
 
-  it('handoff TERMINAL não relinka — segue o caminho normal', () => {
-    for (const status of ['done', 'rejected', 'failed']) {
+  // Retomar não reabre: a filha que entregou volta com a identidade dela, e o
+  // handoff não passa por markRunning.
+  it('handoff DONE volta como filha (apelido + --settings) sem markRunning', () => {
+    linkedChild('done')
+    sessionsResume()
+
+    expect(markRunning).not.toHaveBeenCalled()
+    expect(spawns).toHaveLength(1)
+    expect(spawns[0].innerCmd).toContain("-n 'alias-filha'")
+    expect(spawns[0].innerCmd).toContain('--settings')
+  })
+
+  it('handoff rejected/failed não relinka — segue o caminho normal', () => {
+    for (const status of ['rejected', 'failed']) {
       resetSeams()
       repoRow = { path: '/tmp', label: 'Repo 1' }
       transcriptPath = '/tmp/t.jsonl'
@@ -539,6 +582,14 @@ describe('resumeHandoffChild — kickoff do relance', () => {
     expect(spawns[0].innerCmd).toContain("-n 'alias-filha'")
     expect(spawns[0].innerCmd).toContain('--settings')
     expect(markRunning).toHaveBeenCalledWith('h1', session.id)
+  })
+
+  // Trabalho entregue: o relance devolve a sessão, não manda refazer a tarefa.
+  it('handoff done: nem o kickoff do painel é injetado', () => {
+    handoff = baseHandoff({ status: 'done' })
+    handlers.get('handoffs:resume')!(null, 'h1')
+    expect(spawns).toHaveLength(1)
+    expect(injectedCommands(insertedSessionIds[0])).toHaveLength(0)
   })
 
   it('sem kickoff explícito: resumeHandoffChild não injeta nada', () => {

@@ -41,9 +41,10 @@ function enqueueEvent(prev: QueuedEvent[], queued: QueuedEvent): QueuedEvent[] {
 }
 
 // Filhas do Crew Dock não geram toast: o dock já mostra o estado delas o tempo
-// todo (dot âmbar, card "aguardando você") e ainda abre sozinho quando alguma
-// espera — o toast seria o MESMO aviso duas vezes, por cima do painel que ele
-// duplica. getState() porque isto roda no handler do evento, não no render.
+// todo (dot âmbar na trilha, card "aguardando você") e na barra acende a aba
+// dela ou o chip "em 2º plano" da mãe — o toast seria o MESMO aviso de novo. O
+// dock não se abre sozinho (ver crew-dock-store): quem avisa é a trilha e a barra.
+// getState() porque isto roda no handler do evento, não no render.
 function isCrewChild(ccSessionId: string | undefined): boolean {
   if (!ccSessionId) return false
   const { liveSessions } = useAppStore.getState()

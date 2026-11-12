@@ -243,13 +243,13 @@ function assertRepoDirExists(path: string): void {
 // lá. Filha plan não disputa posse. null = handoff sem work_dir (linha anterior à
 // 057): o chamador segue a regra antiga.
 function resolveHandoffChildCwd(
-  handoff: Pick<Handoff, 'id' | 'mode'>,
+  handoff: Pick<Handoff, 'id' | 'mode' | 'status'>,
   repoPath: string,
 ): string | null {
   const workDir = handoffStore.workDirOf(handoff.id)
   if (!workDir) return null
   if (isDirectory(workDir)) return workDir
-  if (handoff.mode !== 'plan') {
+  if (handoff.mode !== 'plan' && handoff.status !== 'done') {
     const fallback = canonicalDir(repoPath)
     const owner = handoffStore.findActiveWriterByWorkDir(fallback)
     if (owner && owner.id !== handoff.id) {
@@ -737,13 +737,20 @@ export function spawnSession(input: SpawnSessionInput): Session {
   return session
 }
 
-// Status TERMINAIS do handoff: o trabalho acabou (bem ou mal) e não há filha a
-// retomar. Todo o resto ('pending' | 'approved' | 'running' | 'needs_input' |
-// 'interrupted') é recuperável — em especial running/needs_input ÓRFÃOS, que
-// continuam com esse status até o reconcileStuck passar. Por isso o guard do
-// resume é "não-terminal", não "== interrupted".
+// Status TERMINAIS do handoff: o trabalho acabou (bem ou mal). Todo o resto
+// ('pending' | 'approved' | 'running' | 'needs_input' | 'interrupted') é
+// recuperável — em especial running/needs_input ÓRFÃOS, que continuam com esse
+// status até o reconcileStuck passar.
 export const TERMINAL_HANDOFF_STATUSES: ReadonlySet<HandoffStatus> = new Set<HandoffStatus>([
   'done',
+  'rejected',
+  'failed',
+])
+
+// Fora do relance de filha: voltam pelo resume comum. 'done' NÃO entra: a filha
+// que entregou volta com a identidade dela (apelido, permissão, --settings), e o
+// handoff segue done. O guard do resume é este conjunto, não "== interrupted".
+const UNRESUMABLE_HANDOFF_STATUSES: ReadonlySet<HandoffStatus> = new Set<HandoffStatus>([
   'rejected',
   'failed',
 ])
@@ -761,6 +768,9 @@ export interface ResumeHandoffChildResult {
 // e o --settings da filha (sem ele as mensagens da mãe voltam a ficar `held` em
 // silêncio), re-injeta o kickoff e re-aponta handoffs.child_session_id pro novo
 // sessions.id via markRunning.
+//
+// Handoff 'done': o mesmo relance devolve a identidade, mas o trabalho entregue
+// fica entregue — sem markRunning, sem kickoff e sem disputar a posse do diretório.
 //
 // Vive aqui (não em services/) porque reusa os helpers de spawn deste módulo —
 // resolveAgentCommand, mcpConfigArg, startSession, findTranscriptPath,
@@ -780,11 +790,10 @@ export function resumeHandoffChild(
   const db = getDb()
   const handoff = handoffStore.get(id)
   if (!handoff) throw new Error(`Handoff não encontrado: ${id}`)
-  if (TERMINAL_HANDOFF_STATUSES.has(handoff.status)) {
-    throw new Error(
-      `Só dá pra retomar um handoff não-terminal (status atual: ${handoff.status}).`,
-    )
+  if (UNRESUMABLE_HANDOFF_STATUSES.has(handoff.status)) {
+    throw new Error(`Não dá pra retomar um handoff com status ${handoff.status}.`)
   }
+  const delivered = handoff.status === 'done'
   if (!handoff.childSessionId) {
     throw new Error('Handoff não tem sessão-filha registrada para retomar.')
   }
@@ -811,11 +820,12 @@ export function resumeHandoffChild(
   // e o índice da 057 o recusa se outra filha que escreve já ocupa o mesmo
   // diretório (ex.: este foi substituído por force). Recusado depois do
   // startSession, a PTY já estaria no ar editando sem vínculo — o acidente que a
-  // posse existe pra evitar. Filha em 'plan' não disputa a posse.
+  // posse existe pra evitar. Filha em 'plan' não disputa a posse, nem a que já
+  // entregou (não volta a ser writer ativa).
   // Se o diretório sumiu, a recheck contra o novo é do resolveHandoffChildCwd,
   // mais abaixo e ainda antes do spawn.
   const workDir = handoffStore.workDirOf(handoff.id)
-  if (workDir && isDirectory(workDir) && handoff.mode !== 'plan') {
+  if (workDir && isDirectory(workDir) && handoff.mode !== 'plan' && !delivered) {
     const owner = handoffStore.findActiveWriterByWorkDir(workDir)
     if (owner && owner.id !== handoff.id) throw new handoffStore.HandoffDuplicateError(owner)
   }
@@ -830,6 +840,7 @@ export function resumeHandoffChild(
   // passa a apontar para a linha viva, sem spawn.
   const alive = findAliveByCc(ccSessionId)
   if (alive) {
+    if (delivered) return { handoff, session: toSession(alive), alreadyRunning: true }
     const relinked = handoffStore.markRunning(id, alive.id)
     broadcast('handoff:updated', relinked)
     return { handoff: relinked, session: toSession(alive), alreadyRunning: true }
@@ -857,7 +868,13 @@ export function resumeHandoffChild(
 
   // Alias fixado no spawn tem precedência sobre o título do transcript: trocar
   // o `-n` no resume mudaria o endereço do peer e o orquestrador perderia a filha.
-  const name = childRow?.title || readTranscriptTitle(transcript) || `handoff: ${repo.label}`
+  // A linha apontada pode não ter title (o resume comum de antes da v0.86 não o
+  // herdava): o alias vem então de outra linha da mesma conversa.
+  const name =
+    childRow?.title ||
+    handoffStore.latestManualTitleOfCc(ccSessionId) ||
+    readTranscriptTitle(transcript) ||
+    `handoff: ${repo.label}`
   const command = resolveAgentCommand()
   // A filha retomada delega adiante (vira mãe em potencial) → carimbo próprio.
   const internalSessionId = randomUUID()
@@ -900,7 +917,7 @@ export function resumeHandoffChild(
     cwd,
     innerCmd,
     featureId: handoff.featureId,
-    initialCommand: opts.kickoff,
+    initialCommand: delivered ? undefined : opts.kickoff,
     cols: opts.cols,
     rows: opts.rows,
     spawnArgs: {
@@ -928,6 +945,19 @@ export function resumeHandoffChild(
     session.id,
   )
   const namedSession: Session = { ...session, title: name, titleSource: 'manual' }
+  // Limpa só depois do spawn: se ele lançar, o próximo wake ainda reaplica.
+  clearConversationHibernated(db, ccSessionId)
+
+  if (delivered) {
+    // Quem re-aponta o child_session_id para a linha nova é o
+    // adoptResumedConversation, dentro do transferLeadershipToResumed.
+    transferLeadershipToResumed(priorSessionIds, namedSession, opts.origin ?? 'main')
+    return {
+      handoff: handoffStore.get(id) ?? handoff,
+      session: namedSession,
+      alreadyRunning: false,
+    }
+  }
 
   // Volta a running com a NOVA sessão-filha (startSession criou um novo
   // sessions.id). markRunning loga a transição via logEvent — e é ele que
@@ -969,7 +999,8 @@ export function defaultResumeKickoff(id: string): string {
 
 // O vínculo mãe→filha mora SÓ em handoffs.child_session_id. Dado o cc_session_id
 // que o usuário pediu pra retomar, descobre se ele é a filha de um handoff ainda
-// vinculado e recuperável. Dispensado CONTA: dispensar tira o card de vista, não
+// vinculado e recuperável, ou já entregue (done volta como filha, sem reabrir).
+// Dispensado CONTA: dispensar tira o card de vista, não
 // desfaz o vínculo — sem relink, a filha dispensada voltava do resume como sessão
 // comum (sem apelido, sem --settings) e reaparecia no nível de mãe. Quem foi
 // SOLTO (release) não casa: o child_session_id foi zerado. O handoff mais recente
@@ -987,7 +1018,7 @@ function findRelinkableHandoff(ccSessionId: string): { id: string; status: Hando
     )
     .get(ccSessionId) as { id: string; status: string } | undefined
   if (!row) return null
-  if (TERMINAL_HANDOFF_STATUSES.has(row.status as HandoffStatus)) return null
+  if (UNRESUMABLE_HANDOFF_STATUSES.has(row.status as HandoffStatus)) return null
   return { id: row.id, status: row.status as HandoffStatus }
 }
 

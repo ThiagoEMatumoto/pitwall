@@ -21,6 +21,7 @@ import { buildImageFilename, isImageTempFile } from './image-temp'
 import {
   composerDraftKey,
   createDraftPersister,
+  flushAllDrafts,
   type DraftApi,
 } from '../../../src/features/sessions/composer-draft-persister'
 
@@ -223,6 +224,23 @@ describe('hidratação × digitação (corrida)', () => {
     p.update({ text: 'desmontou', attachments: [] })
     p.dispose()
     expect(getComposerDraft(reopen(), KEY)?.text).toBe('desmontou')
+  })
+
+  it('flush assíncrono (blur, troca de pane) grava na hora, sem esperar o debounce', async () => {
+    // Sem o write-through, só o save durável do flush pode ter posto o texto no banco.
+    const p = createDraftPersister({
+      key: KEY,
+      ccSessionId: 'cc-1',
+      paneId: 'pane-1',
+      api: { ...realApi(() => db), writeThrough: () => {} },
+    })
+    await p.hydrate(() => {})
+    p.update({ text: 'troquei de pane', attachments: [] })
+    expect(getComposerDraft(db, KEY)).toBeNull()
+
+    await flushAllDrafts()
+
+    expect(getComposerDraft(reopen(), KEY)?.text).toBe('troquei de pane')
   })
 })
 

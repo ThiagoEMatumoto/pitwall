@@ -1958,6 +1958,9 @@ export interface AppInfo {
 // reiniciar" quando os pares divergem.
 export interface GpuStatus {
   hwAccelDisabled: boolean
+  // CM_DISABLE_GPU=1: desligada pela variável de ambiente. Nenhuma pref religa e
+  // reiniciar não muda nada enquanto ela estiver definida.
+  envDisabled: boolean
   ozoneWayland: boolean
   prefDisabled: boolean
   prefOzone: boolean
