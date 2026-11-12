@@ -439,6 +439,7 @@ const api: Api = {
       invoke('handoffs:set-mother', input),
     detachChild: (sessionId: string) => invoke('handoffs:detach-child', sessionId),
     resume: (id: string) => invoke('handoffs:resume', id),
+    wakeChild: (id: string) => invoke('handoffs:wake-child', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),
     onUpdated: (handler) => subscribe<unknown>('handoff:updated', handler),

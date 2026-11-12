@@ -92,7 +92,7 @@ import {
   resolveCodexModel,
 } from '../services/spawn-flags'
 import { getChildLearnedAllow } from '../services/handoff/child-learned-rules'
-import { setSpawnHandoffChild } from '../services/handoff/spawn-child'
+import { setSpawnHandoffChild, setWakeHandoffChild } from '../services/handoff/spawn-child'
 import { preTrustClaudeDirs } from '../services/handoff/claude-trust'
 import { MANUAL_FEATURE_SOURCE } from '../services/feature-session-resolver'
 import { getProvider, providerSupportsTuiMenus } from '../services/providers/registry'
@@ -115,6 +115,7 @@ import type {
   ChatTranscript,
   Handoff,
   HandoffStatus,
+  WokenHandoffChild,
   AgentProviderId,
   AttentionRespondInput,
   SessionRenamedEvent,
@@ -1512,6 +1513,16 @@ export function registerSessionIpc(): void {
     'handoffs:resume',
     (_e, id: string) => resumeHandoffChild(id, { kickoff: defaultResumeKickoff(id) }).handoff,
   )
+
+  // Acordar a filha concluída que dorme: o mesmo relance, sem kickoff (o trabalho
+  // foi entregue; ela volta esperando). Devolve a sessão acordada para o renderer
+  // abrir a aba dela. Já viva, devolve a que existe.
+  ipcMain.handle('handoffs:wake-child', (_e, id: string): WokenHandoffChild => {
+    const { handoff, session } = resumeHandoffChild(id)
+    return { handoff, sessionId: session.id }
+  })
+  // A mãe acorda pelo MCP (handoff_message), sem aba: a filha volta em 2º plano.
+  setWakeHandoffChild((id) => resumeHandoffChild(id).session)
 
   ipcMain.handle('sessions:list-by-repo', (_e, repoId: string): SessionSummary[] => {
     const db = getDb()

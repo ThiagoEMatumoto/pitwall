@@ -327,6 +327,13 @@ export interface Handoff {
   resumable: boolean
 }
 
+// Resposta de handoffs:wake-child: o handoff como ficou e o sessions.id da PTY
+// que agora roda a filha (linha nova do relance, ou a que já estava viva).
+export interface WokenHandoffChild {
+  handoff: Handoff
+  sessionId: string
+}
+
 // Resolve o repo-alvo de um handoff + metadados do projeto, pra UI poder spawnar
 // a sessão-filha via openSession.
 export interface HandoffSpawnContext {
@@ -2743,6 +2750,9 @@ export interface Api {
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não
     // for 'interrupted' ou se o transcript da filha não existir mais.
     resume(id: string): Promise<Handoff>
+    // Acorda a filha concluída que dorme (childAsleep): relança com a identidade
+    // dela e sem kickoff. O handoff segue done.
+    wakeChild(id: string): Promise<WokenHandoffChild>
     // Gate de UI do "Retomar": true só se o handoff está interrompido E o
     // transcript da filha ainda existe (mesma checagem do resume).
     isResumable(id: string): Promise<boolean>
