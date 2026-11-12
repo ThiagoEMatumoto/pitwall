@@ -21,6 +21,7 @@ export function registerGpuIpc(): void {
     const state = getGpuState()
     return {
       hwAccelDisabled: state.hwAccelDisabled,
+      envDisabled: state.envDisabled,
       ozoneWayland: state.ozoneWayland,
       prefDisabled: getPref(GPU_DISABLED_PREF_KEY, false),
       prefOzone: getPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT),

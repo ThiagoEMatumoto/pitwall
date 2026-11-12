@@ -30,7 +30,12 @@ import {
   OZONE_PREF_KEY,
 } from '../services/gpu-state'
 import type { GpuBootInput } from '../services/gpu-state'
-import { gpuDisableChecked, gpuRestartPending, withGpuDisabled } from '../../../shared/gpu-status'
+import {
+  gpuAutoOff,
+  gpuDisableChecked,
+  gpuRestartPending,
+  withGpuDisabled,
+} from '../../../shared/gpu-status'
 import type { GpuStatus } from '../../../shared/types/ipc'
 
 describe('gpu IPC × Wayland nativo', () => {
@@ -163,6 +168,7 @@ describe('gpu:status × toggle das Configurações', () => {
     setPref(GPU_AUTO_PREF_KEY, decision.autoDisabled)
     setGpuState({
       hwAccelDisabled: decision.hwAccelDisabled,
+      envDisabled: input.envDisabled ?? false,
       ozoneWayland: true,
       probation: decision.probation,
     })
@@ -213,6 +219,65 @@ describe('gpu:status × toggle das Configurações', () => {
     boot({ prefDisabled: true, disabledByUser: true })
     expect(gpuDisableChecked(status())).toBe(true)
     expect(gpuRestartPending(status())).toBe(false)
+  })
+
+  // Reiniciar com a variável ainda definida sobe desligado de novo: nenhum estado
+  // das prefs pode pedir um reinício que não muda nada.
+  describe('CM_DISABLE_GPU=1', () => {
+    it('sem registro: desligada pela variável, toggle livre, sem reinício pendente', () => {
+      boot({ envDisabled: true })
+      expect(status().hwAccelDisabled).toBe(true)
+      expect(status().envDisabled).toBe(true)
+      expect(gpuAutoOff(status())).toBe(false)
+      expect(gpuDisableChecked(status())).toBe(false)
+      expect(gpuRestartPending(status())).toBe(false)
+    })
+
+    it('com registro automático: quem desliga é a variável, não o automático', () => {
+      boot({ envDisabled: true, autoDisabled: crashRecord })
+      expect(status().autoDisabled).not.toBeNull()
+      expect(gpuAutoOff(status())).toBe(false)
+      expect(gpuDisableChecked(status())).toBe(false)
+      expect(gpuRestartPending(status())).toBe(false)
+    })
+
+    it('marcar e desmarcar o toggle não pede reinício', () => {
+      boot({ envDisabled: true })
+      handlers.get('gpu:set-disabled')!(null, true)
+      expect(gpuDisableChecked(status())).toBe(true)
+      expect(gpuRestartPending(status())).toBe(false)
+      handlers.get('gpu:set-disabled')!(null, false)
+      expect(gpuRestartPending(status())).toBe(false)
+    })
+
+    it('a pref do Wayland ainda pede reinício', () => {
+      boot({ envDisabled: true })
+      handlers.get('gpu:set-ozone')!(null, false)
+      expect(gpuRestartPending(status())).toBe(true)
+    })
+  })
+
+  it('sem a variável o status reporta envDisabled false', () => {
+    boot({ autoDisabled: crashRecord })
+    expect(status().envDisabled).toBe(false)
+    expect(gpuAutoOff(status())).toBe(true)
+  })
+
+  // O boot de teste do legado que morre sem registrar crash nem quit limpo deixa
+  // o registro 'legacy' regravado com a versão atual: o boot seguinte fica desligado.
+  it('legado em vigor conta como desligamento automático', () => {
+    boot({ prefDisabled: true, disabledByUser: false })
+    expect(status().hwAccelDisabled).toBe(false)
+    boot({ autoDisabled: status().autoDisabled, now: NOW + DAY_MS })
+    expect(status().hwAccelDisabled).toBe(true)
+    expect(status().autoDisabled?.reason).toBe('legacy')
+    expect(gpuAutoOff(status())).toBe(true)
+  })
+
+  it('escolha manual com registro antigo não conta como desligamento automático', () => {
+    boot({ prefDisabled: true, disabledByUser: true, autoDisabled: crashRecord })
+    expect(status().hwAccelDisabled).toBe(true)
+    expect(gpuAutoOff(status())).toBe(false)
   })
 
   it('pref do Wayland diferente do boot pede reinício', () => {

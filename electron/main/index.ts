@@ -140,9 +140,10 @@ function safeGetPref<T>(key: string, fallback: T): T {
   }
 }
 // A regra do boot e da re-tentativa vive em services/gpu-state.ts.
+const gpuEnvDisabled = process.env.CM_DISABLE_GPU === '1'
 const gpuBoot = resolveGpuBoot({
   prefs: { getPref, setPref },
-  envDisabled: process.env.CM_DISABLE_GPU === '1',
+  envDisabled: gpuEnvDisabled,
   version: app.getVersion(),
   now: Date.now(),
 })
@@ -160,7 +161,12 @@ const ozoneWayland =
   process.env.CM_DISABLE_WAYLAND !== '1' &&
   safeGetPref(OZONE_PREF_KEY, OZONE_PREF_DEFAULT)
 if (ozoneWayland) app.commandLine.appendSwitch('ozone-platform-hint', 'auto')
-setGpuState({ hwAccelDisabled: gpuOff, ozoneWayland, probation: gpuBoot.probation })
+setGpuState({
+  hwAccelDisabled: gpuOff,
+  envDisabled: gpuEnvDisabled,
+  ozoneWayland,
+  probation: gpuBoot.probation,
+})
 // Scheme privilegiado precisa ser registrado antes do ready.
 registerDesignScheme()
 
