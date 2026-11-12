@@ -9,7 +9,7 @@ vi.stubGlobal('window', {
   api: new Proxy({}, { get: () => new Proxy({}, { get: () => () => undefined }) }),
 })
 
-const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial } = await import(
+const { isStale, staleLabel, liveActivityLabel, contextLabel, liveBadgeFor, childIdentity, crewDotColor, crewDotTitle, crewDotInitial, childProcessAlive } = await import(
   './HandoffCard'
 )
 type Handoff = import('../../../shared/types/ipc').Handoff
@@ -233,5 +233,22 @@ describe('crewDotInitial — a inicial da filha no trilho recolhido', () => {
     const live = { title: 'otavio-parte-c1-checkout' } as import('../../../shared/types/ipc').LiveSessionInfo
     expect(crewDotInitial(h({}), live, [])).toBe('O')
     expect(crewDotInitial(h({}), undefined, [])).toBe('L')
+  })
+})
+
+describe('childProcessAlive — o processo da filha existe?', () => {
+  it('fora da lista viva a PTY já morreu', () => {
+    expect(childProcessAlive(undefined)).toBe(false)
+    expect(childProcessAlive(null)).toBe(false)
+  })
+
+  it("'ended' ainda na lista é o mesmo fato, um tick antes do refresh", () => {
+    expect(childProcessAlive({ status: 'ended' })).toBe(false)
+  })
+
+  it('qualquer outro status tem processo', () => {
+    for (const status of ['starting', 'working', 'waiting', 'idle'] as const) {
+      expect(childProcessAlive({ status })).toBe(true)
+    }
   })
 })

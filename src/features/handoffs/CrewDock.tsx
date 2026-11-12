@@ -15,7 +15,6 @@ import { HandoffCard, crewDotColor, crewDotInitial, crewDotTitle, useHeartbeatTt
 import {
   crewEntryFocus,
   crewFocusAfterDismiss,
-  crewTerminalTarget,
   dockCrew,
   orderCrew,
   resolveCrewFocus,
@@ -29,7 +28,7 @@ import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 // clique ou Ctrl+J. Quando alguma filha passa a esperar, quem avisa é a trilha:
 // O Ápice pulsa e o contador acende em âmbar, dentro dos 40px. Peek in-place: dá
 // pra ler e responder daqui, sem abrir pane (o cap de contextos WebGL é 8;
-// "Abrir terminal" continua sendo ação explícita, dentro do card).
+// "Abrir na aba" continua sendo ação explícita, dentro do card).
 // Montado como IRMÃO de <main> no AppShell — vive fora do plano de abas do
 // dockview, então não mistura com as sessões-mãe nem some fora da área projetos.
 
@@ -143,18 +142,6 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
 
   function focusCard(id: string) {
     listRef.current?.querySelector<HTMLElement>(`[data-crew-card="${CSS.escape(id)}"]`)?.focus()
-  }
-
-  // "Abrir terminal" no card: abre o peek JÁ em modo terminal — em janela, sem
-  // promover a filha a pane e sem o header de sessão (leia-se: sem o botão de
-  // encerrar ao alcance de quem só foi dar uma olhada). Se ela já tem aba, o
-  // terminal dela mora lá. Ver crewTerminalTarget.
-  function openTerminal(handoff: Handoff) {
-    const live = handoff.childSessionId ? liveById.get(handoff.childSessionId) : undefined
-    const target = crewTerminalTarget(live, useAppStore.getState().panes, 'dock')
-    if (target === 'none') return
-    if (target === 'pane') void useAppStore.getState().focusOrOpenSession(live!)
-    else openPeek(handoff.id, 'terminal')
   }
 
   // Pedido de foco do AppShell (Ctrl+J). Nonce, não booleano: pedir duas vezes
@@ -314,10 +301,6 @@ function CrewDockPanel({ crew, liveById, attention }: PanelProps) {
                 // as setas prontas assim que o overlay fecha.
                 focusCard(h.id)
                 openPeek(h.id)
-              }}
-              onOpenTerminal={() => {
-                focusCard(h.id)
-                openTerminal(h)
               }}
             />
           </div>

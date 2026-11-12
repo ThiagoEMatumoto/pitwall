@@ -5,10 +5,10 @@ import {
   CornerDownLeft,
   Eye,
   MoreHorizontal,
+  PanelTop,
   Pause,
   Play,
   Send,
-  TerminalSquare,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -115,6 +115,14 @@ export function childIdentity(
   }
   const predecessor = liveSessions.find((s) => s.id === handoff.predecessorSessionId)
   return { title: predecessor?.title ?? null, successorPending: true }
+}
+
+// O processo da filha existe? Fora da lista viva a PTY já morreu; 'ended' é o
+// mesmo fato, visto um tick antes de a lista recarregar.
+export function childProcessAlive(
+  live: Pick<LiveSessionInfo, 'status'> | null | undefined,
+): boolean {
+  return !!live && live.status !== 'ended'
 }
 
 export const SUCCESSOR_PENDING_BADGE: LiveBadge = {
@@ -271,12 +279,9 @@ interface Props {
   // Abre o quick look (CrewPeek) desta filha. Só o dock passa — no inbox, que já
   // é uma área inteira, o overlay não acrescentaria nada.
   onPeek?: () => void
-  // Abre o TERMINAL da filha do jeito que o dono do card decidir (o dock manda
-  // pro overlay em janela; sem isto, o botão promove a filha a aba como antes).
-  onOpenTerminal?: () => void
 }
 
-export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTerminal }: Props) {
+export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [failing, setFailing] = useState(false)
@@ -420,14 +425,17 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
   }
 
   // A filha está num PTY enquanto o handoff está vivo (running OU needs_input —
-  // needs_input é um estado vivo dentro de running). "Abrir terminal" RE-ATTACHA
-  // uma pane à sessão viva (focusOrOpenSession → paneFromLiveSession), nunca
-  // re-spawn/--resume. Só aparece em liveSessions enquanto a PTY existe.
+  // needs_input é um estado vivo dentro de running). Só aparece em liveSessions
+  // enquanto a PTY existe.
   const isLiveHandoff = handoff.status === 'running' || handoff.status === 'needs_input'
   const childSession = handoff.childSessionId
     ? liveSessions.find((s) => s.id === handoff.childSessionId)
     : undefined
   const childLive = isLiveHandoff ? childSession : undefined
+  // O processo, qualquer que seja o status do handoff: é ele que "Abrir na aba"
+  // traz para a tela (focusOrOpenSession RE-ATTACHA uma pane à PTY viva, nunca
+  // re-spawn/--resume).
+  const childProcess = childProcessAlive(childSession) ? childSession : undefined
 
   // Identidade endereçável da filha: `sessions.title` carrega o alias fixado no
   // spawn (`<nome>-<escopo>`). Nome em destaque, escopo apagado embaixo.
@@ -495,9 +503,30 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
 
   // Cluster de ações. Mora na coluna lateral no inbox e no rodapé do card no
   // dock — mesmo JSX, dois lugares, pra não espremer o texto onde é estreito.
-  const hasActions = !!(childLive || canForceFail || canDismiss || canRelease || canPeek || paused)
+  const hasActions = !!(
+    childProcess ||
+    canForceFail ||
+    canDismiss ||
+    canRelease ||
+    canPeek ||
+    paused
+  )
   const actions = hasActions ? (
     <div className="flex items-center gap-1">
+      {/* Primária, na frente e em accent: a aba é onde se trabalha na filha. Vai
+          direto, sem a modal do quick look no caminho. */}
+      {childProcess && (
+        <button
+          type="button"
+          onClick={() => void focusOrOpenSession(childProcess)}
+          title="Abrir esta filha numa aba. A sessão já está rodando: a aba só a traz para a tela"
+          aria-label="Abrir na aba"
+          className="flex items-center gap-1 rounded border border-[var(--color-accent)]/50 px-2 py-0.5 text-[11px] text-[var(--color-accent)] transition hover:bg-[var(--color-accent)]/10"
+        >
+          <Icon as={PanelTop} size={12} />
+          {!tight && 'Abrir na aba'}
+        </button>
+      )}
       {canPeek && (
         <button
           type="button"
@@ -507,17 +536,6 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         >
           <Icon as={Eye} size={12} />
           {!tight && 'Espiar'}
-        </button>
-      )}
-      {childLive && (
-        <button
-          type="button"
-          onClick={() => (onOpenTerminal ? onOpenTerminal() : void focusOrOpenSession(childLive))}
-          title="Anexar o terminal desta sessão-filha"
-          className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-dim)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
-        >
-          <Icon as={TerminalSquare} size={12} />
-          {!tight && 'Abrir terminal'}
         </button>
       )}
       {paused && (
@@ -533,7 +551,7 @@ export function HandoffCard({ handoff, ttlHours, tier = 'wide', onPeek, onOpenTe
         </button>
       )}
       {/* Recovery manual mora no menu: é destrutivo e o card fica na periferia —
-          no mesmo peso de "Abrir terminal" seria convite a clique errado.
+          no mesmo peso de "Abrir na aba" seria convite a clique errado.
           portal: a lista do dock rola (overflow), e o painel absolute seria
           recortado por ela. */}
       {(canForceFail || canDismiss || canRelease) && (

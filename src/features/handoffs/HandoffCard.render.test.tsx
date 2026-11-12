@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // Política de legibilidade do card no dock (340px): nenhum campo de origem
@@ -180,12 +180,53 @@ describe('HandoffCard: dispensar com a filha viva', () => {
   })
 })
 
+// Reabrir a filha levava três cliques e passava pela modal do quick look. A aba é
+// onde se trabalha nela: o card leva direto.
+describe('HandoffCard: "Abrir na aba" é a ação primária', () => {
+  const realFocusOrOpenSession = useAppStore.getState().focusOrOpenSession
+  const focusOrOpenSession = vi.fn().mockResolvedValue(undefined)
+
+  beforeEach(() => {
+    focusOrOpenSession.mockClear()
+    useAppStore.setState({ liveSessions: [live], focusOrOpenSession })
+  })
+  afterEach(() => {
+    useAppStore.setState({ liveSessions: [], focusOrOpenSession: realFocusOrOpenSession })
+  })
+
+  it('abre a aba da filha direto, sem passar pelo quick look', () => {
+    const onPeek = vi.fn()
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={onPeek} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir na aba' }))
+    expect(focusOrOpenSession).toHaveBeenCalledWith(live)
+    expect(onPeek).not.toHaveBeenCalled()
+  })
+
+  it('vem antes do Espiar no cluster de ações', () => {
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
+    const open = screen.getByRole('button', { name: 'Abrir na aba' })
+    const peek = screen.getByTitle('Espiar a conversa desta filha (Espaço)')
+    expect(open.compareDocumentPosition(peek) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('no dock apertado (só ícone) o botão segue com nome', () => {
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="narrow" onPeek={() => {}} />)
+    expect(screen.getByRole('button', { name: 'Abrir na aba' }).textContent).toBe('')
+  })
+
+  it('sem processo vivo não há aba a abrir', () => {
+    useAppStore.setState({ liveSessions: [] })
+    render(<HandoffCard handoff={handoff} ttlHours={2} tier="mid" onPeek={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Abrir na aba' })).toBeNull()
+  })
+})
+
 describe('HandoffCard no inbox (tier wide)', () => {
   it('mantém a coluna lateral com data e ações — lá há largura de sobra', () => {
     useAppStore.setState({ liveSessions: [live] })
     render(<HandoffCard handoff={handoff} ttlHours={2} />)
     const name = screen.getByText('mauricio-melhorar-modo-chat')
-    const terminal = screen.getByTitle('Anexar o terminal desta sessão-filha')
+    const terminal = screen.getByRole('button', { name: 'Abrir na aba' })
     const row = name.closest('.min-w-0')!.parentElement!
     expect(row.className).toContain('justify-between')
     expect(row.contains(terminal)).toBe(true)
