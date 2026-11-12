@@ -156,6 +156,7 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
       projectIcon={pane.projectIcon}
       projectColor={pane.projectColor}
       mode={pane.mode}
+      background={pane.background}
       onToggleMode={() => setPaneMode(pane.paneId, pane.mode === 'chat' ? 'terminal' : 'chat')}
       onClose={() => closePane(pane.paneId)}
       onTitleChange={(t) => props.api.setTitle(t)}

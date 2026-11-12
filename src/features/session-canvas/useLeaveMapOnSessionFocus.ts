@@ -14,7 +14,8 @@ import { useProjectsViewStore } from './projects-view-store'
 // vista explicitamente.
 export function useLeaveMapOnSessionFocus(): void {
   const focusPaneId = useAppStore((s) => s.focusPaneId)
-  // Aba nascida em segundo plano não conta: entra inativa, sem xterm atrás do mapa.
+  // Aba nascida em segundo plano não conta: o xterm dela não toma o teclado atrás
+  // do mapa (entra inativa ou, sendo a única, monta sem focar).
   const paneCount = useAppStore((s) => s.panes.filter((p) => !p.background).length)
   const restoreComplete = useAppStore((s) => s.restoreComplete)
   const prevCount = useRef(paneCount)

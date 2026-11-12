@@ -85,10 +85,11 @@ export interface ActivePane {
   // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
   // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
   dormantReason?: 'hibernated'
-  // Nasceu em segundo plano (focusOrOpenSession com background): o layout a cria
-  // como aba inativa e o mapa não cede a vista. Ativo, o terminal novo tomaria o
-  // teclado de quem digita em outra tela. Só o nascimento do painel lê; não vai
-  // ao open_panes.
+  // Nasceu em segundo plano (focusOrOpenSession com background): o mapa não cede
+  // a vista e o terminal novo não toma o teclado de quem digita em outra tela. O
+  // layout a cria como aba inativa; sem outra aba ao lado ela entra ativa (inativa,
+  // ficaria vazia) e é o Terminal que deixa de focar ao montar. Só o nascimento
+  // lê; não vai ao open_panes.
   background?: true
 }
 
@@ -1391,15 +1392,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!background) set({ focusPaneId: opened.paneId, area: 'projects' })
       return
     }
-    const pane = paneFromLiveSession(item, paneId)
-    set((s) => {
-      // Aba inativa precisa de outra ao lado; a primeira entra como qualquer aba.
-      const inactive = background && s.panes.length > 0
-      return {
-        panes: [...s.panes, inactive ? { ...pane, background: true as const } : pane],
-        ...(background ? {} : { area: 'projects' as const, focusPaneId: paneId }),
-      }
-    })
+    const live = paneFromLiveSession(item, paneId)
+    const pane = background ? { ...live, background: true as const } : live
+    set((s) => ({
+      panes: [...s.panes, pane],
+      ...(background ? {} : { area: 'projects' as const, focusPaneId: paneId }),
+    }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
   },

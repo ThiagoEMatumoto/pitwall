@@ -75,10 +75,15 @@ describe('useLeaveMapOnSessionFocus', () => {
       expect(useProjectsViewStore.getState().view).toBe('map')
     })
 
-    it('em segundo plano sem nenhuma aba: entra como aba comum e o mapa cede', async () => {
+    // O mapa aparece mesmo sem aba: quem escreve no cartão de uma filha em segundo
+    // plano tem de continuar nele para ver o aviso do envio.
+    it('em segundo plano sem nenhuma aba: o mapa fica na frente', async () => {
       renderHook(() => useLeaveMapOnSessionFocus())
+
       await open('s-child', { background: true })
-      expect(useProjectsViewStore.getState().view).toBe('terminals')
+
+      expect(useAppStore.getState().panes).toHaveLength(1)
+      expect(useProjectsViewStore.getState().view).toBe('map')
     })
 
     it('com foco: o mapa cede', async () => {

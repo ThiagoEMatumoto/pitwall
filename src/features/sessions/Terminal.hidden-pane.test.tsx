@@ -26,6 +26,7 @@ const h = vi.hoisted(() => {
     chatProps: null as { tuiMenu: { kind: string } | null; paused?: boolean } | null,
     chatRenders: [] as { kind: string | null; paused: boolean }[],
     term: null as import('@xterm/headless').Terminal | null,
+    focusCalls: 0,
     session: {
       exited: false,
       exitCode: null,
@@ -97,6 +98,9 @@ vi.mock('@xterm/xterm', async () => {
       h.term = this
     }
     open() {}
+    focus() {
+      h.focusCalls++
+    }
     refresh() {}
     registerLinkProvider() {
       return { dispose() {} }
@@ -521,5 +525,55 @@ describe('Terminal: replay do backlog', () => {
     await settle(20)
 
     expect(screenLines()).toEqual(['nha 2', 'linha 3', 'linha 4'])
+  })
+})
+
+// O xterm toma o teclado ao montar, pra digitar na TUI sem clicar. Aba nascida em
+// segundo plano (o usuário escreveu a uma filha sem aba) é a exceção: quem digita
+// está em outra tela (cartão do mapa, Room, card da equipe).
+describe('Terminal: foco ao montar', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    h.focusCalls = 0
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  const terminal = (props: Partial<React.ComponentProps<typeof Terminal>>) => (
+    <Terminal
+      session={session}
+      repoLabel="web"
+      repoPath="/tmp"
+      projectName="p"
+      mode="terminal"
+      onClose={() => {}}
+      {...props}
+    />
+  )
+
+  it('aba comum: o xterm toma o teclado', async () => {
+    render(terminal({}))
+    await settle(0)
+
+    expect(h.focusCalls).toBe(1)
+  })
+
+  it('nascida em segundo plano: o teclado fica com quem digita', async () => {
+    render(terminal({ background: true }))
+    await settle(0)
+
+    expect(h.focusCalls).toBe(0)
+  })
+
+  it('nascida em segundo plano: voltar ao modo terminal foca como em qualquer aba', async () => {
+    const view = render(terminal({ background: true }))
+    await settle(0)
+
+    view.rerender(terminal({ background: true, mode: 'chat' }))
+    view.rerender(terminal({ background: true, mode: 'terminal' }))
+
+    expect(h.focusCalls).toBe(1)
   })
 })

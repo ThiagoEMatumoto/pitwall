@@ -77,13 +77,14 @@ describe('focusOrOpenSession — abrir em segundo plano', () => {
     expect(useAppStore.getState().focusPaneId).toBeNull()
   })
 
-  // Aba inativa precisa de outra ao lado: sozinha, o layout a mostraria vazia.
-  it('em segundo plano sem nenhuma aba: entra como aba comum, sem navegar', async () => {
+  // Sem outra aba ao lado o layout a cria ativa (inativa, ficaria vazia), mas a
+  // marca segue: é ela que segura o mapa na frente e o teclado onde está.
+  it('em segundo plano sem nenhuma aba: marcada do mesmo jeito, sem navegar', async () => {
     useAppStore.setState({ panes: [] })
 
     await useAppStore.getState().focusOrOpenSession(child, { background: true })
 
-    expect(paneOf('s-child')?.background).toBeUndefined()
+    expect(paneOf('s-child')?.background).toBe(true)
     expect(useAppStore.getState().area).toBe('features')
     expect(useAppStore.getState().focusPaneId).toBeNull()
   })
