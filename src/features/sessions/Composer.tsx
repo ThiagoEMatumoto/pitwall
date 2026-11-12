@@ -36,6 +36,7 @@ import { defaultWhen, sendRefusalReason } from '@/features/quick-composer/target
 import {
   composerDraftKey,
   createDraftPersister,
+  DRAFT_HYDRATE_LOCK_MS,
   type DraftPersister,
 } from './composer-draft-persister'
 import { installDraftFlushHooks } from './draft-flush-hooks'
@@ -126,6 +127,16 @@ function pushHistory(sessionId: string, value: string) {
 type PersistedAttachment = Pick<Attachment, 'name' | 'path'>
 const attachmentsBySession = new Map<string, PersistedAttachment[]>()
 
+// Chaves cujo rascunho salvo já chegou à memória acima neste processo. Daí em
+// diante ela é a verdade, mesmo vazia: o remount não relê nem trava o campo.
+// Texto na memória não basta: digitado antes da leitura, ele ainda não tem o salvo.
+const hydratedKeys = new Set<string>()
+
+// Sem chave durável não há rascunho salvo a ler: o campo nasce pronto.
+function needsRead(draftKey: string | null, memKey: string): boolean {
+  return draftKey != null && !hydratedKeys.has(memKey)
+}
+
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
 // acima (memória, sobrevive ao remount, não persiste em disco). Era uma
 // preferência GLOBAL em session-prefs-store; virou por-sessão pra colapsar um
@@ -161,6 +172,11 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   const draftKey = composerDraftKey(paneId, ccSessionId)
   const memKey = draftKey ?? sessionId
   const [text, setText] = useState(() => drafts.get(memKey) ?? '')
+  // Leitura do rascunho salvo em curso: o campo fica só-leitura. Uma tecla aceita
+  // antes do salvo chegar seria juntada a ele depois, trocando o valor sob o
+  // cursor (a tecla seguinte ia parar no fim do texto). A tecla digitada nesse
+  // intervalo não entra, e o campo diz que ainda está recuperando o rascunho.
+  const [hydrating, setHydrating] = useState(() => needsRead(draftKey, memKey))
   // Navegação do histórico de prompts: `histIndex` null = editando o rascunho
   // atual (fora do histórico); >= 0 = posição no histórico da sessão. `savedDraft`
   // guarda o rascunho ao entrar no histórico pra restaurá-lo ao voltar pro fim.
@@ -234,6 +250,10 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // que chegar nesse estado fica na fila e é aplicado no compositionend.
   const composingRef = useRef(false)
   const pendingDictationRef = useRef<string[]>([])
+  // Ditado e imagem que chegam durante a leitura do rascunho esperam por ela:
+  // aplicados antes, seriam juntados ao salvo e trocariam o valor sob o cursor.
+  const hydratingRef = useRef(hydrating)
+  const pendingImagesRef = useRef<File[]>([])
 
   // Ditado por voz → draft. Cursor: posição atual se o textarea tem foco,
   // fim caso contrário (ditar sem foco não pode sobrescrever o meio do texto).
@@ -271,7 +291,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
       appendText: (dictated: string) => {
         // Dock recolhido esconderia o draft ditado — expande antes de inserir.
         setComposerCollapsed(false)
-        if (composingRef.current) {
+        if (composingRef.current || hydratingRef.current) {
           pendingDictationRef.current.push(dictated)
           return
         }
@@ -311,33 +331,70 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
       },
     })
     persisterRef.current = persister
-    // Memória do mesmo processo (remount) é mais nova que o banco: dispensa a leitura.
-    if (drafts.has(memKey) || attachmentsBySession.has(memKey)) {
+    let lockTimer: ReturnType<typeof setTimeout> | undefined
+    // Sem chave não há o que ler; memória que já recebeu o salvo neste processo
+    // (remount) é mais nova que o banco. Nos dois casos a leitura é dispensada.
+    if (!needsRead(draftKey, memKey)) {
+      setHydrating(false)
       persister.seed({
         text: drafts.get(memKey) ?? '',
         attachments: attachmentsBySession.get(memKey) ?? [],
       })
     } else {
-      // Digitou antes da leitura terminar: o persister junta salvo + digitado
-      // (nada é descartado) e avisamos. flushSync do react-dom aplica na hora,
-      // para uma tecla no meio não sobrescrever o texto juntado.
-      void persister.hydrate((draft, merged) => {
-        flushSync(() => {
-          setText(draft.text)
-          setAttached(draft.attachments.map((a) => ({ ...a, previewUrl: '' })))
-          if (merged) {
-            setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
-          }
+      // Só-leitura até a leitura terminar; o teto destrava se o main não responder.
+      // Aí o usuário pode digitar antes do salvo: o persister junta salvo +
+      // digitado (nada é descartado) e avisamos. flushSync do react-dom aplica na
+      // hora, para uma tecla no meio não sobrescrever o texto juntado.
+      setHydrating(true)
+      lockTimer = setTimeout(() => setHydrating(false), DRAFT_HYDRATE_LOCK_MS)
+      void persister
+        .hydrate((draft, merged) => {
+          flushSync(() => {
+            setText(draft.text)
+            setAttached(draft.attachments.map((a) => ({ ...a, previewUrl: '' })))
+            if (merged) {
+              setRouteNotice('Rascunho salvo recuperado e juntado ao que você digitou.')
+            }
+          })
         })
-      })
+        .then((read) => {
+          // Leitura que falhou, ou que voltou depois do desmonte, não pôs o salvo
+          // na memória: o próximo mount tem de reler.
+          if (read && persisterRef.current === persister) hydratedKeys.add(memKey)
+        })
+        .finally(() => {
+          clearTimeout(lockTimer)
+          if (persisterRef.current === persister) setHydrating(false)
+        })
     }
     return () => {
+      clearTimeout(lockTimer)
       persisterRef.current = null
-      persister.dispose()
+      // O desmonte leu o salvo e gravou a junção com o digitado. A memória fica
+      // com ela: só com o digitado, o próximo mount regravaria por cima do salvo.
+      const merged = persister.dispose()
+      if (!merged) return
+      if (merged.text) drafts.set(memKey, merged.text)
+      else drafts.delete(memKey)
+      if (merged.attachments.length > 0) attachmentsBySession.set(memKey, merged.attachments)
+      else attachmentsBySession.delete(memKey)
+      hydratedKeys.add(memKey)
     }
     // ccSessionId/paneId só rotulam a linha; a identidade é a chave.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, memKey])
+
+  useEffect(() => {
+    hydratingRef.current = hydrating
+    if (hydrating) return
+    const dictated = pendingDictationRef.current
+    pendingDictationRef.current = []
+    for (const d of dictated) applyDictation(d)
+    const images = pendingImagesRef.current
+    pendingImagesRef.current = []
+    if (images.length > 0) void ingestImages(images)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrating])
 
   function flushDraftNow() {
     const persister = persisterRef.current
@@ -438,6 +495,10 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // na posição do cursor — a CLI claude anexa a imagem a partir do caminho colado.
   // Nunca submete: o usuário revisa e aperta Enter.
   async function ingestImages(files: File[]) {
+    if (hydratingRef.current) {
+      pendingImagesRef.current = [...pendingImagesRef.current, ...files]
+      return
+    }
     const saved: Attachment[] = []
     for (const file of files) {
       try {
@@ -737,13 +798,21 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
                   aria-hidden
                   className="pointer-events-none absolute left-0 top-0 flex items-center font-mono text-sm leading-[1.5] text-[var(--color-text-dim)]"
                 >
-                  Escreva um prompt…
-                  <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+                  {hydrating ? (
+                    'Recuperando rascunho…'
+                  ) : (
+                    <>
+                      Escreva um prompt…
+                      <span className="pw-cursor ml-0.5 inline-block h-[15px] w-[7px] bg-[var(--color-accent)] align-text-bottom" />
+                    </>
+                  )}
                 </div>
               )}
               <textarea
                 ref={innerRef}
                 value={text}
+                readOnly={hydrating}
+                aria-busy={hydrating}
                 onChange={(e) => {
                   setText(e.target.value)
                   setCaret(e.target.selectionStart ?? e.target.value.length)
@@ -777,6 +846,12 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
                 onKeyDown={(e) => {
                   // Não deixa atalhos globais/terminal interceptarem enquanto compõe.
                   e.stopPropagation()
+                  // Rascunho ainda sendo lido: o campo parece vazio sem estar. Um Enter
+                  // aqui iria cru ao PTY e confirmaria a opção padrão do claude.
+                  if (hydrating) {
+                    e.preventDefault()
+                    return
+                  }
                   // Menu de @/# aberto: setas, Enter, Tab e Esc são dele (não da TUI).
                   const m = mention.onKey(e)
                   if (m) {
