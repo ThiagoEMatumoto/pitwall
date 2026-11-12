@@ -134,6 +134,11 @@ function memoryIsCurrent(memKey: string): boolean {
   return hydratedKeys.has(memKey) || drafts.has(memKey) || attachmentsBySession.has(memKey)
 }
 
+// Sem chave durável não há rascunho salvo a ler: o campo nasce pronto.
+function needsRead(draftKey: string | null, memKey: string): boolean {
+  return draftKey != null && !memoryIsCurrent(memKey)
+}
+
 // Recolhido do dock, por sessão — mesma natureza dos drafts/histórico/anexos
 // acima (memória, sobrevive ao remount, não persiste em disco). Era uma
 // preferência GLOBAL em session-prefs-store; virou por-sessão pra colapsar um
@@ -173,7 +178,7 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
   // antes do salvo chegar seria juntada a ele depois, trocando o valor sob o
   // cursor (a tecla seguinte ia parar no fim do texto). A tecla digitada nesse
   // intervalo não entra, e o campo diz que ainda está recuperando o rascunho.
-  const [hydrating, setHydrating] = useState(() => !memoryIsCurrent(memKey))
+  const [hydrating, setHydrating] = useState(() => needsRead(draftKey, memKey))
   // Navegação do histórico de prompts: `histIndex` null = editando o rascunho
   // atual (fora do histórico); >= 0 = posição no histórico da sessão. `savedDraft`
   // guarda o rascunho ao entrar no histórico pra restaurá-lo ao voltar pro fim.
@@ -329,8 +334,9 @@ const ComposerDock = forwardRef<ComposerHandle, Props>(function Composer(
     })
     persisterRef.current = persister
     let lockTimer: ReturnType<typeof setTimeout> | undefined
-    // Memória do mesmo processo (remount) é mais nova que o banco: dispensa a leitura.
-    if (memoryIsCurrent(memKey)) {
+    // Sem chave não há o que ler; memória do mesmo processo (remount) é mais nova
+    // que o banco. Nos dois casos a leitura é dispensada.
+    if (!needsRead(draftKey, memKey)) {
       setHydrating(false)
       persister.seed({
         text: drafts.get(memKey) ?? '',

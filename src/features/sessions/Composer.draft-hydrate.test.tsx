@@ -371,6 +371,20 @@ describe('Composer — teclas de controle durante a hidratação', () => {
   })
 })
 
+describe('Composer — sem chave durável', () => {
+  it('sem pane nem conversa não há leitura: o campo nasce pronto e o Enter dirige a TUI', () => {
+    const onForwardKey = vi.fn()
+    const box = mount(`hydrate-${paneSeq}`, { paneId: null, ccSessionId: null, onForwardKey })
+
+    expect(box.readOnly).toBe(false)
+    expect(screen.getByText('Escreva um prompt…')).toBeTruthy()
+    fireEvent.keyDown(box, { key: 'Enter' })
+
+    expect(onForwardKey).toHaveBeenCalledWith('\r')
+    expect(draftApi.getDraft).not.toHaveBeenCalled()
+  })
+})
+
 describe('Composer — remount de pane já lida', () => {
   it('pane lida e vazia: o remount não trava, não relê e não grava', async () => {
     const paneId = `hydrate-${paneSeq}`
