@@ -751,6 +751,26 @@ describe('filha de handoff done retomada', () => {
     expect(handoffStore.get(handoffId)).toMatchObject({ status: 'done', childSessionId: second })
   })
 
+  // O resume comum da v0.84/v0.85 abria a linha sem herdar o title, e o handoff
+  // done passava a apontar para ela: o apelido só existe numa linha mais antiga.
+  it('linha apontada pelo handoff sem title: o -n vem do apelido de outra linha da conversa', () => {
+    const { handoffId, cc } = doneChild()
+    const first = resume(cc)
+    exitPty(first, { hibernated: false })
+    seam.handlers.get('sessions:rename')!(null, first as never, '' as never)
+    expect(rowOf(first)).toMatchObject({ title: null, title_source: null })
+    expect(handoffStore.get(handoffId)?.childSessionId).toBe(first)
+    writeFileSync(
+      join(HOME, '.claude', 'projects', 'p', `${cc}.jsonl`),
+      `${JSON.stringify({ type: 'ai-title', aiTitle: 'Título do transcript' })}\n`,
+    )
+
+    const second = resume(cc)
+
+    expect(argvOf(second)).toContain(`-n '${ALIAS}'`)
+    expect(rowOf(second)).toMatchObject({ title: ALIAS, title_source: 'manual' })
+  })
+
   it('handoffs:resume (painel): relança como filha e devolve o handoff ainda done', () => {
     const { handoffId, cc } = doneChild()
 
