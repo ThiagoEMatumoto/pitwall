@@ -1772,8 +1772,9 @@ export function registerSessionIpc(): void {
   // da resposta. Por isso ela não é o retorno de um invoke (que ultrapassava os
   // pty:data já enfileirados quando o renderer estava atrasado, e o replay os
   // escrevia de novo): sai por sender.send, na mesma fila ordenada deles.
-  ipcMain.on('sessions:get-backlog', (e, requestId: number, sessionId: string) => {
+  ipcMain.on('sessions:get-backlog', (e, requestId: unknown, sessionId: unknown) => {
     if (e.sender.isDestroyed()) return
+    if (typeof requestId !== 'string' || typeof sessionId !== 'string') return
     let reply: BacklogReply
     try {
       // O que ficasse na janela do coalescer chegaria depois e duplicaria na tela.
