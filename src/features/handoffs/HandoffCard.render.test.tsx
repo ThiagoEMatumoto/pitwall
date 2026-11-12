@@ -27,6 +27,7 @@ vi.mock('@/lib/ipc', () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     clearSessionDrafts: vi.fn().mockResolvedValue(undefined),
     adoptDraft: vi.fn().mockResolvedValue(null),
+    listLiveGlobal: vi.fn(),
   },
   workspaceApi: { savePanes: vi.fn().mockResolvedValue(undefined) },
 }))
@@ -386,6 +387,9 @@ describe('HandoffCard: Minimizar e Encerrar no menu da filha viva', () => {
   beforeEach(() => {
     endSession.mockClear()
     closePane.mockClear()
+    // O Encerrar da filha pergunta o status ao main; sem a sessão na resposta,
+    // decide pelo liveSessions do store.
+    vi.mocked(sessionsApi.listLiveGlobal).mockResolvedValue([])
     useAppStore.setState({ liveSessions: [], panes: [], endSession, closePane })
     // "É filha" sai do grafo: hierarchyMotherId, escrito no main por
     // session-graph.ts a partir de readHierarchyLinks.
@@ -406,27 +410,27 @@ describe('HandoffCard: Minimizar e Encerrar no menu da filha viva', () => {
     useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
   })
 
-  it('Encerrar com a filha trabalhando pede confirmação; negada, nada é encerrado', () => {
+  it('Encerrar com a filha trabalhando pede confirmação; negada, nada é encerrado', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     openMenu('working')
     fireEvent.click(screen.getByText('Encerrar filha'))
-    expect(confirm).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
     expect(endSession).not.toHaveBeenCalled()
   })
 
-  it('confirmada, encerra pelo caminho da barra: mata o processo e mantém o vínculo', () => {
+  it('confirmada, encerra pelo caminho da barra: mata o processo e mantém o vínculo', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     openMenu('working')
     fireEvent.click(screen.getByText('Encerrar filha'))
-    expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true })
+    await waitFor(() => expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true }))
   })
 
-  it('filha parada encerra direto (o Desfazer do toast cobre o clique errado)', () => {
+  it('filha parada encerra direto (o Desfazer do toast cobre o clique errado)', async () => {
     const confirm = vi.spyOn(window, 'confirm')
     openMenu('idle')
     fireEvent.click(screen.getByText('Encerrar filha'))
+    await waitFor(() => expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true }))
     expect(confirm).not.toHaveBeenCalled()
-    expect(endSession).toHaveBeenCalledWith('s-child', { linkedChild: true })
   })
 
   it('Minimizar fecha só a aba dela', () => {

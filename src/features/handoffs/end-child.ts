@@ -1,6 +1,7 @@
 // Encerrar × minimizar para filhas de handoff. Encerrar mata o processo (com a
 // janela de Desfazer do endSession) e NÃO desvincula: a filha segue ligada à mãe
 // e retomável. Minimizar (closePane) só tira a aba da tela.
+import { sessionsApi } from '@/lib/ipc'
 import { hasSessionExited, useAppStore } from '@/store/appStore'
 import { motherOfChildMap } from '@/features/sessions/conversation-hierarchy'
 import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
@@ -32,14 +33,39 @@ export function confirmEndChild(
   )
 }
 
+// O status do renderer chega pelo stream global, depois do main: no clique logo
+// após a filha mudar de estado ele ainda é o anterior, e a pergunta saía trocada.
+// Vale o que o main lê na hora; sem resposta dele (ou sem a sessão nela), o do
+// renderer.
+async function liveNow(sessionId: string): Promise<Pick<LiveSessionInfo, 'status'> | null> {
+  const fromMain = await sessionsApi.listLiveGlobal().catch(() => null)
+  return (
+    fromMain?.find((s) => s.id === sessionId) ??
+    useAppStore.getState().liveSessions.find((s) => s.id === sessionId) ??
+    null
+  )
+}
+
+// Filhas com a consulta ao main em voo: o clique repetido não pergunta de novo.
+const asking = new Set<string>()
+
 // O Encerrar pedido pelo usuário, de qualquer superfície (cabeçalho, barra,
 // canvas, Room, X da aba da filha).
 export function endSessionAsked(sessionId: string): void {
-  const { liveSessions, endSession } = useAppStore.getState()
-  const live = liveSessions.find((s) => s.id === sessionId) ?? null
   const linkedChild = isLinkedChild(sessionId)
-  if (!confirmEndChild(live, linkedChild)) return
-  endSession(sessionId, { linkedChild })
+  const end = (): void => useAppStore.getState().endSession(sessionId, { linkedChild })
+  // Só a filha pode pedir confirmação: as outras encerram sem esperar o main.
+  if (!linkedChild) {
+    end()
+    return
+  }
+  if (asking.has(sessionId)) return
+  asking.add(sessionId)
+  void liveNow(sessionId)
+    .then((live) => {
+      if (confirmEndChild(live, linkedChild)) end()
+    })
+    .finally(() => asking.delete(sessionId))
 }
 
 // X da aba de uma filha: encerra de verdade. Sem processo (aba dormindo, PTY que
