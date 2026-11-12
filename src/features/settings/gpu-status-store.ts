@@ -48,6 +48,11 @@ export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
     if (!status) return
     writes += 1
     set({ status: { ...status, prefOzone: ozone } })
-    await gpuApi.setOzone(ozone)
+    try {
+      await gpuApi.setOzone(ozone)
+    } catch (err) {
+      console.warn('[gpu] não gravou a preferência de Wayland:', String(err))
+      await get().load()
+    }
   },
 }))

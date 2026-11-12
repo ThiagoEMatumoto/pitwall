@@ -312,6 +312,98 @@ describe('GpuSoftwareIndicator', () => {
   })
 })
 
+describe('gpu-status-store × escrita que falha', () => {
+  beforeEach(() => {
+    handlers.clear()
+    prefs.clear()
+    failing.key = null
+    statusDelivery.gate = null
+    useGpuStatusStore.setState({ status: null })
+    registerGpuIpc()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    cleanup()
+    failing.key = null
+    statusDelivery.gate = null
+    vi.restoreAllMocks()
+  })
+
+  const store = () => useGpuStatusStore.getState()
+
+  it('um gpu:set-ozone que falha volta ao que ficou no banco, sem rejeição solta', async () => {
+    boot()
+    await store().load()
+    expect(store().status?.prefOzone).toBe(true)
+    failing.key = OZONE_PREF_KEY
+
+    await expect(store().setOzone(false)).resolves.toBeUndefined()
+
+    expect(prefs.has(OZONE_PREF_KEY)).toBe(false)
+    expect(store().status?.prefOzone).toBe(true)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('o toggle de Wayland volta a ficar marcado quando a escrita falha', async () => {
+    boot()
+    render(<TerminalSection open />)
+    const wayland = await screen.findByRole('checkbox', { name: /Wayland nativo/ })
+    await waitFor(() => expect(wayland).not.toBeDisabled())
+    failing.key = OZONE_PREF_KEY
+
+    fireEvent.click(wayland)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+
+    await waitFor(() => expect(wayland).toBeChecked())
+    expect(screen.queryByRole('button', { name: 'Reiniciar agora' })).toBeNull()
+  })
+
+  it('outra escrita durante a reconciliação do Wayland que falhou não deixa o palpite valendo', async () => {
+    boot()
+    await store().load()
+    failing.key = OZONE_PREF_KEY
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+
+    const ozone = store().setOzone(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+    const disabled = store().setDisabled(true)
+    await waitFor(() => expect(prefs.get(GPU_DISABLED_PREF_KEY)).toBe(true))
+    deliver()
+    await Promise.all([ozone, disabled])
+
+    await waitFor(() => expect(store().status?.prefOzone).toBe(true))
+    expect(store().status?.prefDisabled).toBe(true)
+  })
+
+  it('duas escritas que falham em sequência terminam no que ficou no banco', async () => {
+    crashTwice()
+    boot()
+    await store().load()
+    // O automático avisa no console ao desligar: só contam os avisos das escritas.
+    vi.mocked(console.warn).mockClear()
+    failing.key = GPU_AUTO_PREF_KEY
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+
+    const reenable = store().setDisabled(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(1))
+    failing.key = OZONE_PREF_KEY
+    const ozone = store().setOzone(false)
+    await waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
+    deliver()
+    await Promise.all([reenable, ozone])
+
+    await waitFor(() => expect(store().status?.autoDisabled).not.toBeNull())
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
+    expect(store().status?.prefOzone).toBe(true)
+  })
+})
+
 describe('TerminalSection × CM_DISABLE_GPU=1', () => {
   beforeEach(() => {
     handlers.clear()
