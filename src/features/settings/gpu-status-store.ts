@@ -11,7 +11,9 @@ interface GpuStatusState {
 }
 
 // Um gpu:status pedido antes de uma escrita responde com as prefs antigas e pode
-// chegar depois do estado otimista: a contagem de escritas deixa descartá-lo.
+// chegar depois do estado otimista: a contagem de escritas deixa descartá-lo. O
+// descarte pede de novo, porque a resposta jogada fora pode ser a reconciliação
+// de uma escrita que falhou, e sem ela o palpite ficaria valendo.
 let writes = 0
 
 // O gpu:status visto pelo renderer. As Configurações e o aviso do rail leem
@@ -22,7 +24,8 @@ export const useGpuStatusStore = create<GpuStatusState>((set, get) => ({
   load: async () => {
     const writesAtRequest = writes
     const status = await gpuApi.status()
-    if (writes === writesAtRequest) set({ status })
+    if (writes !== writesAtRequest) return get().load()
+    set({ status })
   },
 
   setDisabled: async (disabled) => {

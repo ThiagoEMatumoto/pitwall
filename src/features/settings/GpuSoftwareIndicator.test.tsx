@@ -56,6 +56,7 @@ const {
   setGpuState,
   GPU_AUTO_PREF_KEY,
   GPU_DISABLED_PREF_KEY,
+  OZONE_PREF_KEY,
 } = await import('../../../electron/main/services/gpu-state')
 const { GpuSoftwareIndicator } = await import('./GpuSoftwareIndicator')
 const { TerminalSection } = await import('./TerminalSection')
@@ -274,6 +275,40 @@ describe('GpuSoftwareIndicator', () => {
     expect(useGpuStatusStore.getState().status?.autoDisabled).toBeNull()
     await waitFor(() => expect(toggle).not.toBeChecked())
     expect(indicator()).toBeNull()
+  })
+
+  it('outra escrita durante a reconciliação de um religar que falhou não deixa o palpite valendo', async () => {
+    crashTwice()
+    boot()
+    render(
+      <>
+        <GpuSoftwareIndicator />
+        <TerminalSection open />
+      </>,
+    )
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    const toggle = screen.getByRole('checkbox', { name: /Desativar aceleração de GPU/ })
+    const wayland = await screen.findByRole('checkbox', { name: /Wayland nativo/ })
+    failing.key = GPU_AUTO_PREF_KEY
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    let deliver = (): void => {}
+    statusDelivery.gate = new Promise<void>((resolve) => {
+      deliver = resolve
+    })
+    fireEvent.click(toggle)
+    await waitFor(() => expect(console.warn).toHaveBeenCalled())
+    fireEvent.click(wayland)
+    await waitFor(() => expect(prefs.get(OZONE_PREF_KEY)).toBe(false))
+    deliver()
+
+    // O registro ficou no banco: o aviso tem de voltar, sem desfazer o Wayland.
+    await waitFor(() => expect(indicator()).not.toBeNull())
+    expect(prefs.get(GPU_AUTO_PREF_KEY)).not.toBeNull()
+    expect(useGpuStatusStore.getState().status?.autoDisabled).not.toBeNull()
+    expect(useGpuStatusStore.getState().status?.prefOzone).toBe(false)
+    expect(toggle).toBeChecked()
+    expect(wayland).not.toBeChecked()
   })
 })
 
